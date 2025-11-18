@@ -2054,11 +2054,11 @@ class VoucherFlowTest {
 ### Phase 2 Deliverables
 
 - [x] Ktor HTTP client for Mint API
-- [ ] Proof management (selection, storage)
-- [ ] Token encoding/decoding (V4 CBOR)
+- [x] Proof management (selection, storage)
+- [x] Token encoding/decoding (V4 CBOR)
 - [ ] Voucher use cases (issue, redeem)
 - [ ] Voucher UI screens (list, issue, share, redeem)
-- [ ] Voucher repository (IndexedDB)
+- [x] Voucher repository (IndexedDB)
 - [ ] Integration tests
 
 **Total Effort**: 25 days (~4 weeks with buffer)
@@ -2068,7 +2068,7 @@ class VoucherFlowTest {
 | ID | Task | Size | Status | Commit | Notes | Dependencies |
 |----|------|------|--------|--------|-------|--------------|
 | 2.1 | Ktor HTTP Client for Mint API | M (4d) | ✅ DONE | ef864f9 | MintApiClient with getInfo, getKeySets, swapProofs, checkProofStates; HttpClientFactory with JSON config; All Cashu NUT models (NUT-00 to NUT-07) | 1.5 |
-| 2.2 | Proof Management and Token Encoding | L (5d) | 📋 TODO | - | IndexedDB storage, FIFO selection, V4 CBOR encoding | 2.1 |
+| 2.2 | Proof Management and Token Encoding | L (5d) | ✅ DONE | 21204d8 | ProofRepository interface with CRUD operations; IndexedDBProofRepository (JS) with "cashu_proofs" database; JvmProofRepository (in-memory); TokenEncoder with V4 CBOR + Bech32; FIFO coin selection algorithm; InsufficientBalanceException handling | 2.1 |
 | 2.3 | Voucher Use Cases | XL (6d) | 📋 TODO | - | IssueVoucher, RedeemVoucher, P2PK secrets, signatures | 1.3, 2.1, 2.2 |
 | 2.4 | Voucher UI Screens | XL (6d) | 📋 TODO | - | List, issue, share (QR), redeem screens | 2.3 |
 | 2.5 | Voucher Repository (IndexedDB) | M (2d) | 📋 TODO | - | Voucher persistence, status updates | 2.3 |
