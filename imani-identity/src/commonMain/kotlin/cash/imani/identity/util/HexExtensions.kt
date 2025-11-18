@@ -15,7 +15,10 @@ fun String.hexToBytes(): ByteArray {
 /**
  * Converts a ByteArray to a hex string.
  */
-fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
+fun ByteArray.toHex(): String =
+    joinToString("") { byte ->
+        byte.toUByte().toString(16).padStart(2, '0')
+    }
 
 /**
  * Validates if a string is valid hex.

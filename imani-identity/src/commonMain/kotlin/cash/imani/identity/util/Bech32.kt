@@ -14,7 +14,10 @@ object Bech32 {
      * @param data Data bytes to encode
      * @return Bech32-encoded string
      */
-    fun encode(hrp: String, data: ByteArray): String {
+    fun encode(
+        hrp: String,
+        data: ByteArray,
+    ): String {
         // TODO: Implement proper Bech32 encoding
         // For now, return a placeholder that shows the HRP and hex
         return "${hrp}1${data.toHex().take(58)}"

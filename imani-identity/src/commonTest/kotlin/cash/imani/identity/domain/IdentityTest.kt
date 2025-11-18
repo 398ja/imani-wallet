@@ -1,7 +1,6 @@
 package cash.imani.identity.domain
 
 import kotlinx.datetime.Clock
-import kotlinx.datetime.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -14,7 +13,6 @@ import kotlin.time.Duration.Companion.days
  * Tests validation, business logic, and immutability patterns.
  */
 class IdentityTest {
-
     private val validPublicKey = "0".repeat(64) // 32 bytes in hex
     private val validPrivateKey = "1".repeat(64) // 32 bytes in hex
 
@@ -33,7 +31,7 @@ class IdentityTest {
                 publicKey = validPublicKey,
                 privateKey = validPrivateKey,
                 createdAt = Clock.System.now(),
-                lastUsedAt = null
+                lastUsedAt = null,
             )
         }
         // Then: Exception thrown (implicit by assertFailsWith)
@@ -54,7 +52,7 @@ class IdentityTest {
                 publicKey = validPublicKey,
                 privateKey = validPrivateKey,
                 createdAt = Clock.System.now(),
-                lastUsedAt = null
+                lastUsedAt = null,
             )
         }
         // Then: Exception thrown (implicit by assertFailsWith)
@@ -75,7 +73,7 @@ class IdentityTest {
                 publicKey = validPublicKey,
                 privateKey = validPrivateKey,
                 createdAt = Clock.System.now(),
-                lastUsedAt = null
+                lastUsedAt = null,
             )
         }
         // Then: Exception thrown (implicit by assertFailsWith)
@@ -96,7 +94,7 @@ class IdentityTest {
                 publicKey = "0".repeat(63),
                 privateKey = validPrivateKey,
                 createdAt = Clock.System.now(),
-                lastUsedAt = null
+                lastUsedAt = null,
             )
         }
         // Then: Exception thrown (implicit by assertFailsWith)
@@ -117,7 +115,7 @@ class IdentityTest {
                 publicKey = validPublicKey,
                 privateKey = "1".repeat(65),
                 createdAt = Clock.System.now(),
-                lastUsedAt = null
+                lastUsedAt = null,
             )
         }
         // Then: Exception thrown (implicit by assertFailsWith)
@@ -131,14 +129,15 @@ class IdentityTest {
     fun `isActive returns true when last used within 90 days`() {
         // Given: Identity used 30 days ago
         val now = Clock.System.now()
-        val identity = Identity(
-            id = "test-id",
-            label = "Test",
-            publicKey = validPublicKey,
-            privateKey = validPrivateKey,
-            createdAt = now.minus(100.days),
-            lastUsedAt = now.minus(30.days)
-        )
+        val identity =
+            Identity(
+                id = "test-id",
+                label = "Test",
+                publicKey = validPublicKey,
+                privateKey = validPrivateKey,
+                createdAt = now.minus(100.days),
+                lastUsedAt = now.minus(30.days),
+            )
 
         // When: Checking if active
         val result = identity.isActive()
@@ -155,14 +154,15 @@ class IdentityTest {
     fun `isActive returns false when last used over 90 days ago`() {
         // Given: Identity last used 91 days ago
         val now = Clock.System.now()
-        val identity = Identity(
-            id = "test-id",
-            label = "Test",
-            publicKey = validPublicKey,
-            privateKey = validPrivateKey,
-            createdAt = now.minus(200.days),
-            lastUsedAt = now.minus(91.days)
-        )
+        val identity =
+            Identity(
+                id = "test-id",
+                label = "Test",
+                publicKey = validPublicKey,
+                privateKey = validPrivateKey,
+                createdAt = now.minus(200.days),
+                lastUsedAt = now.minus(91.days),
+            )
 
         // When: Checking if active
         val result = identity.isActive()
@@ -179,14 +179,15 @@ class IdentityTest {
     fun `isActive uses createdAt when lastUsedAt is null`() {
         // Given: Identity created 30 days ago, never used
         val now = Clock.System.now()
-        val identity = Identity(
-            id = "test-id",
-            label = "Test",
-            publicKey = validPublicKey,
-            privateKey = validPrivateKey,
-            createdAt = now.minus(30.days),
-            lastUsedAt = null
-        )
+        val identity =
+            Identity(
+                id = "test-id",
+                label = "Test",
+                publicKey = validPublicKey,
+                privateKey = validPrivateKey,
+                createdAt = now.minus(30.days),
+                lastUsedAt = null,
+            )
 
         // When: Checking if active
         val result = identity.isActive()
@@ -203,14 +204,15 @@ class IdentityTest {
     fun `isActive returns false when never used and created over 90 days ago`() {
         // Given: Identity created 91 days ago, never used
         val now = Clock.System.now()
-        val identity = Identity(
-            id = "test-id",
-            label = "Test",
-            publicKey = validPublicKey,
-            privateKey = validPrivateKey,
-            createdAt = now.minus(91.days),
-            lastUsedAt = null
-        )
+        val identity =
+            Identity(
+                id = "test-id",
+                label = "Test",
+                publicKey = validPublicKey,
+                privateKey = validPrivateKey,
+                createdAt = now.minus(91.days),
+                lastUsedAt = null,
+            )
 
         // When: Checking if active
         val result = identity.isActive()
@@ -227,14 +229,15 @@ class IdentityTest {
     fun `isDormant returns false for active identity`() {
         // Given: Recently used identity
         val now = Clock.System.now()
-        val activeIdentity = Identity(
-            id = "test-id",
-            label = "Test",
-            publicKey = validPublicKey,
-            privateKey = validPrivateKey,
-            createdAt = now,
-            lastUsedAt = now
-        )
+        val activeIdentity =
+            Identity(
+                id = "test-id",
+                label = "Test",
+                publicKey = validPublicKey,
+                privateKey = validPrivateKey,
+                createdAt = now,
+                lastUsedAt = now,
+            )
 
         // When: Checking if dormant
         val result = activeIdentity.isDormant()
@@ -251,14 +254,15 @@ class IdentityTest {
     fun `isDormant returns true for inactive identity`() {
         // Given: Identity last used over 90 days ago
         val now = Clock.System.now()
-        val dormantIdentity = Identity(
-            id = "test-id",
-            label = "Test",
-            publicKey = validPublicKey,
-            privateKey = validPrivateKey,
-            createdAt = now.minus(100.days),
-            lastUsedAt = now.minus(91.days)
-        )
+        val dormantIdentity =
+            Identity(
+                id = "test-id",
+                label = "Test",
+                publicKey = validPublicKey,
+                privateKey = validPrivateKey,
+                createdAt = now.minus(100.days),
+                lastUsedAt = now.minus(91.days),
+            )
 
         // When: Checking if dormant
         val result = dormantIdentity.isDormant()
@@ -274,14 +278,15 @@ class IdentityTest {
     @Test
     fun `withLabel creates new identity with updated label`() {
         // Given: Identity with original label
-        val original = Identity(
-            id = "test-id",
-            label = "Original",
-            publicKey = validPublicKey,
-            privateKey = validPrivateKey,
-            createdAt = Clock.System.now(),
-            lastUsedAt = null
-        )
+        val original =
+            Identity(
+                id = "test-id",
+                label = "Original",
+                publicKey = validPublicKey,
+                privateKey = validPrivateKey,
+                createdAt = Clock.System.now(),
+                lastUsedAt = null,
+            )
 
         // When: Updating label
         val updated = original.withLabel("Updated")
@@ -301,14 +306,15 @@ class IdentityTest {
     fun `withUpdatedUsage creates new identity with current timestamp`() {
         // Given: Identity with old lastUsedAt
         val now = Clock.System.now()
-        val original = Identity(
-            id = "test-id",
-            label = "Test",
-            publicKey = validPublicKey,
-            privateKey = validPrivateKey,
-            createdAt = now.minus(100.days),
-            lastUsedAt = now.minus(50.days)
-        )
+        val original =
+            Identity(
+                id = "test-id",
+                label = "Test",
+                publicKey = validPublicKey,
+                privateKey = validPrivateKey,
+                createdAt = now.minus(100.days),
+                lastUsedAt = now.minus(50.days),
+            )
 
         // When: Updating usage timestamp
         val updated = original.withUpdatedUsage()
@@ -326,14 +332,15 @@ class IdentityTest {
     @Test
     fun `toNpub returns bech32 encoded public key`() {
         // Given: Identity with valid public key
-        val identity = Identity(
-            id = "test-id",
-            label = "Test",
-            publicKey = validPublicKey,
-            privateKey = validPrivateKey,
-            createdAt = Clock.System.now(),
-            lastUsedAt = null
-        )
+        val identity =
+            Identity(
+                id = "test-id",
+                label = "Test",
+                publicKey = validPublicKey,
+                privateKey = validPrivateKey,
+                createdAt = Clock.System.now(),
+                lastUsedAt = null,
+            )
 
         // When: Converting to npub format
         val npub = identity.toNpub()

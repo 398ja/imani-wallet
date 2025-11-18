@@ -31,12 +31,14 @@ import kotlin.time.Duration.Companion.days
 data class Identity(
     val id: String,
     val label: String,
-    val publicKey: String, // Hex-encoded (64 chars)
-    val privateKey: String, // Hex-encoded (64 chars) - SECURITY: Handle with care
+    // Hex-encoded (64 chars)
+    val publicKey: String,
+    // Hex-encoded (64 chars) - SECURITY: Handle with care
+    val privateKey: String,
     @Contextual
     val createdAt: Instant,
     @Contextual
-    val lastUsedAt: Instant?
+    val lastUsedAt: Instant?,
 ) {
     init {
         require(id.isNotBlank()) { "Identity ID cannot be blank" }

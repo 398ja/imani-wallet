@@ -25,7 +25,7 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 data class PrivateKey(
-    private val bytes: ByteArray
+    private val bytes: ByteArray,
 ) {
     init {
         require(bytes.size == KEY_LENGTH) {
@@ -37,7 +37,10 @@ data class PrivateKey(
      * Converts the private key to hex string.
      * SECURITY WARNING: This exposes the private key. Use only when necessary.
      */
-    fun toHex(): String = bytes.joinToString("") { "%02x".format(it) }
+    fun toHex(): String =
+        bytes.joinToString("") { byte ->
+            byte.toUByte().toString(16).padStart(2, '0')
+        }
 
     /**
      * Gets the raw key bytes.

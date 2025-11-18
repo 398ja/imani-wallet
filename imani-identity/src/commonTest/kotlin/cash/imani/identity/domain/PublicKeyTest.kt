@@ -11,7 +11,6 @@ import kotlin.test.assertTrue
  * Tests validation, hex conversion, and defensive copying.
  */
 class PublicKeyTest {
-
     /**
      * Tests that PublicKey constructor validates key length is exactly
      * 32 bytes per Nostr standard, rejecting shorter or longer keys.

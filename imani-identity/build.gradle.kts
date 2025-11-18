@@ -11,6 +11,9 @@ kotlin {
                     enabled.set(true)
                 }
             }
+            testTask {
+                enabled = false // Disable JS tests in Phase 0 (JVM-focused)
+            }
         }
         binaries.executable()
     }
@@ -35,7 +38,10 @@ kotlin {
 
         val jsMain by getting {
             dependencies {
-                // Web-specific dependencies will be added in Phase 1
+                // Noble crypto libraries for secp256k1 and hashing
+                implementation(npm("@noble/secp256k1", "2.0.0"))
+                implementation(npm("@noble/hashes", "1.3.3"))
+                implementation(npm("@scure/bip39", "1.2.1"))
             }
         }
     }

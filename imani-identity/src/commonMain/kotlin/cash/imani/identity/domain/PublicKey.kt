@@ -22,7 +22,7 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 data class PublicKey(
-    val bytes: ByteArray
+    val bytes: ByteArray,
 ) {
     init {
         require(bytes.size == KEY_LENGTH) {
@@ -33,7 +33,10 @@ data class PublicKey(
     /**
      * Converts the public key to hex string.
      */
-    fun toHex(): String = bytes.joinToString("") { "%02x".format(it) }
+    fun toHex(): String =
+        bytes.joinToString("") { byte ->
+            byte.toUByte().toString(16).padStart(2, '0')
+        }
 
     /**
      * Gets the raw key bytes.

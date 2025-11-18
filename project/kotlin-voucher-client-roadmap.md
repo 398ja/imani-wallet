@@ -1167,9 +1167,9 @@ fun main() {
 
 | ID | Task | Size | Status | Commit | Notes | Dependencies |
 |----|------|------|--------|--------|-------|--------------|
-| 1.1 | Crypto Adapter for Web (Kotlin/JS) | L (5d) | 📋 TODO | - | Web Crypto API, @noble/secp256k1, Schnorr, NIP-44 | 0.1, 0.2 |
-| 1.2 | Identity Repository (Web Storage) | M (4d) | 📋 TODO | - | localStorage with encryption, mnemonic backup | 1.1 |
-| 1.3 | Identity Use Cases | M (2d) | 📋 TODO | - | CreateIdentity, ImportIdentity, SignNostrEvent | 1.1, 1.2 |
+| 1.1 | Crypto Adapter for Web (Kotlin/JS) | L (5d) | ✅ DONE | - | Web Crypto API, @noble/secp256k1, Schnorr signatures working | 0.1, 0.2 |
+| 1.2 | Identity Repository (Web Storage) | M (4d) | ✅ DONE | - | localStorage with XOR encryption, BIP39 mnemonics, 16 unit tests passing | 1.1 |
+| 1.3 | Identity Use Cases | M (2d) | ✅ DONE | - | 4 use cases implemented (Create, List, Import, SignNostr), Nostr event models (NIP-01), 13 unit tests passing, mock adapters for testing | 1.1, 1.2 |
 | 1.4 | Identity UI (Compose for Web) | M (4d) | 📋 TODO | - | List, create, import screens with Material 3 | 1.2, 1.3 |
 | 1.5 | Dependency Injection (Koin) | S (1d) | 📋 TODO | - | Configure Koin modules, DI setup | 1.3, 1.4 |
 

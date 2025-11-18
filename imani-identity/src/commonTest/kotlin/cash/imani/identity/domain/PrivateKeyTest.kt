@@ -12,7 +12,6 @@ import kotlin.test.assertTrue
  * Tests validation, hex conversion, security features, and defensive copying.
  */
 class PrivateKeyTest {
-
     /**
      * Tests that PrivateKey constructor accepts valid 32-byte key
      * per secp256k1 standard.
