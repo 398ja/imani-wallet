@@ -65,7 +65,10 @@ expect class NostrVoucherClient {
      * @param status The new status
      * @return Result indicating success or failure
      */
-    suspend fun updateVoucherStatus(voucherId: String, status: VoucherStatus): Result<Unit>
+    suspend fun updateVoucherStatus(
+        voucherId: String,
+        status: VoucherStatus,
+    ): Result<Unit>
 }
 
 /**

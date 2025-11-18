@@ -44,9 +44,8 @@ class NostrVoucherRepository(
     private val nostrClient: NostrVoucherClient,
     private val cache: VoucherCacheRepository,
     private val syncOnInit: Boolean = true,
-    private val syncThresholdMs: Long = 5 * 60 * 1000 // 5 minutes
+    private val syncThresholdMs: Long = 5 * 60 * 1000, // 5 minutes
 ) : VoucherRepository {
-
     private val syncScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var isSyncing = false
 
@@ -66,7 +65,9 @@ class NostrVoucherRepository(
             // 2. Cache locally on success
             cache.saveVoucher(voucher).onFailure { error ->
                 // Log cache failure but don't fail the operation
-                println("[NostrVoucherRepository] Warning: Failed to cache voucher ${voucher.voucherId}: ${error.message}")
+                println(
+                    "[NostrVoucherRepository] Warning: Failed to cache voucher ${voucher.voucherId}: ${error.message}",
+                )
             }
 
             println("[NostrVoucherRepository] Saved voucher ${voucher.voucherId} to Nostr and cache")
@@ -128,7 +129,10 @@ class NostrVoucherRepository(
             cached
         }
 
-    override suspend fun updateVoucherStatus(voucherId: String, status: VoucherStatus): Result<Unit> =
+    override suspend fun updateVoucherStatus(
+        voucherId: String,
+        status: VoucherStatus,
+    ): Result<Unit> =
         runCatching {
             // 1. Update on Nostr (publishes replacement event via NIP-33)
             nostrClient.updateVoucherStatus(voucherId, status).getOrThrow()
@@ -214,7 +218,9 @@ class NostrVoucherRepository(
                 // Update cache with fetched vouchers
                 allVouchers.forEach { voucher ->
                     cache.saveVoucher(voucher).onFailure { error ->
-                        println("[NostrVoucherRepository] Warning: Failed to cache voucher during sync: ${error.message}")
+                        println(
+                            "[NostrVoucherRepository] Warning: Failed to cache voucher during sync: ${error.message}",
+                        )
                     }
                 }
 
@@ -256,8 +262,7 @@ class NostrVoucherRepository(
      *
      * @return Result indicating success or failure
      */
-    suspend fun clearCache(): Result<Unit> =
-        cache.clearAll()
+    suspend fun clearCache(): Result<Unit> = cache.clearAll()
 
     /**
      * Gets cache statistics.
@@ -266,14 +271,14 @@ class NostrVoucherRepository(
      */
     suspend fun getCacheStats(): Result<Map<String, Any>> =
         runCatching {
-            val lastSync = cache.getLastSyncTime().getOrNull()
+            val lastSync: Any? = cache.getLastSyncTime().getOrNull()
             val voucherCount = cache.listVouchers().getOrNull()?.size ?: 0
 
             mapOf(
-                "lastSyncTime" to lastSync,
+                "lastSyncTime" to (lastSync ?: "never"),
                 "voucherCount" to voucherCount,
                 "syncThresholdMs" to syncThresholdMs,
-                "isSyncing" to isSyncing
+                "isSyncing" to isSyncing,
             )
         }
 
@@ -299,7 +304,7 @@ class NostrVoucherRepository(
  */
 fun createNostrVoucherRepository(
     relayUrls: List<String> = NostrConfig.DEFAULT_RELAYS,
-    syncOnInit: Boolean = true
+    syncOnInit: Boolean = true,
 ): NostrVoucherRepository {
     val nostrClient = createNostrVoucherClient(relayUrls)
     val cache = createVoucherCacheRepository()
@@ -307,6 +312,6 @@ fun createNostrVoucherRepository(
     return NostrVoucherRepository(
         nostrClient = nostrClient,
         cache = cache,
-        syncOnInit = syncOnInit
+        syncOnInit = syncOnInit,
     )
 }

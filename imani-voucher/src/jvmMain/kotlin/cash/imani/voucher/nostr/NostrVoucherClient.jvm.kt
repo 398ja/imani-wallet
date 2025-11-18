@@ -22,7 +22,7 @@ import kotlinx.serialization.json.Json
  * TODO: Integrate with xyz.tcheeric.wallet.core.nostr.NostrGatewayService from cashu-client
  */
 actual class NostrVoucherClient(
-    private val relayUrls: List<String>
+    private val relayUrls: List<String>,
 ) {
     // Temporary in-memory storage for Phase 2
     private val voucherEvents = mutableMapOf<String, NostrEvent>()
@@ -34,7 +34,9 @@ actual class NostrVoucherClient(
                 // TODO: Publish to actual Nostr relays using NostrGatewayService
                 // For Phase 2, store in memory
                 voucherEvents[voucher.voucherId] = event
-                println("[NostrVoucherClient-JVM] Published voucher ${voucher.voucherId} to ${relayUrls.size} relays (simulated)")
+                println(
+                    "[NostrVoucherClient-JVM] Published voucher ${voucher.voucherId} to ${relayUrls.size} relays (simulated)",
+                )
             }
         }
 
@@ -70,11 +72,15 @@ actual class NostrVoucherClient(
             }
         }
 
-    actual suspend fun updateVoucherStatus(voucherId: String, status: VoucherStatus): Result<Unit> =
+    actual suspend fun updateVoucherStatus(
+        voucherId: String,
+        status: VoucherStatus,
+    ): Result<Unit> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val existingEvent = voucherEvents[voucherId]
-                    ?: throw IllegalArgumentException("Voucher not found: $voucherId")
+                val existingEvent =
+                    voucherEvents[voucherId]
+                        ?: throw IllegalArgumentException("Voucher not found: $voucherId")
 
                 val voucher = parseVoucherEvent(existingEvent)
                 val updatedVoucher = voucher.copy(status = status)
@@ -91,23 +97,24 @@ actual class NostrVoucherClient(
 
     private fun createVoucherEvent(voucher: StoredVoucher): NostrEvent {
         val content = Json.encodeToString(voucher)
-        val tags = listOf(
-            listOf("d", voucher.voucherId),  // NIP-33 identifier
-            listOf("status", voucher.status.name),
-            listOf("unit", voucher.unit),
-            listOf("amount", voucher.faceValue.toString())
-        )
+        val tags =
+            listOf(
+                listOf("d", voucher.voucherId), // NIP-33 identifier
+                listOf("status", voucher.status.name),
+                listOf("unit", voucher.unit),
+                listOf("amount", voucher.faceValue.toString()),
+            )
 
         // TODO: Compute proper event ID and signature
         // For Phase 2, use simplified approach
         return NostrEvent(
-            id = "event_${voucher.voucherId}",  // Simplified ID
+            id = "event_${voucher.voucherId}", // Simplified ID
             pubkey = voucher.issuerPublicKey,
             created_at = voucher.issuedAt.epochSeconds,
             kind = VOUCHER_EVENT_KIND,
             tags = tags,
             content = content,
-            sig = voucher.issuerSignature  // Reuse voucher signature for now
+            sig = voucher.issuerSignature, // Reuse voucher signature for now
         )
     }
 

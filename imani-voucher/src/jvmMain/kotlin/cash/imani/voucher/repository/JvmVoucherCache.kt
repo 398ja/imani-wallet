@@ -78,11 +78,15 @@ class JvmVoucherCache : VoucherCacheRepository {
             }
         }
 
-    override suspend fun updateVoucherStatus(voucherId: String, status: VoucherStatus): Result<Unit> =
+    override suspend fun updateVoucherStatus(
+        voucherId: String,
+        status: VoucherStatus,
+    ): Result<Unit> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val voucher = vouchers[voucherId]
-                    ?: throw IllegalArgumentException("Voucher not found: $voucherId")
+                val voucher =
+                    vouchers[voucherId]
+                        ?: throw IllegalArgumentException("Voucher not found: $voucherId")
 
                 val updatedVoucher = voucher.copy(status = status)
                 vouchers[voucherId] = updatedVoucher
@@ -132,10 +136,11 @@ class JvmVoucherCache : VoucherCacheRepository {
      * @return Map with cache metrics (size, memory estimate, etc.)
      */
     fun getStats(): Map<String, Any> {
+        val lastSync: Any = lastSyncTime.get().takeIf { it != 0L } ?: "never"
         return mapOf(
             "size" to vouchers.size,
-            "lastSyncTime" to (lastSyncTime.get().takeIf { it != 0L }),
-            "estimatedMemoryKB" to (vouchers.size * 2) // Rough estimate: ~2KB per voucher
+            "lastSyncTime" to lastSync,
+            "estimatedMemoryKB" to (vouchers.size * 2), // Rough estimate: ~2KB per voucher
         )
     }
 

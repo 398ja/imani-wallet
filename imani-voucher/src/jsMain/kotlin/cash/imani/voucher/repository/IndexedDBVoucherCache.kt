@@ -2,7 +2,6 @@ package cash.imani.voucher.repository
 
 import cash.imani.voucher.domain.StoredVoucher
 import cash.imani.voucher.domain.VoucherStatus
-import kotlinx.coroutines.await
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlin.coroutines.resume
@@ -52,10 +51,11 @@ class IndexedDBVoucherCache : VoucherCacheRepository {
 
                     // Create vouchers object store if it doesn't exist
                     if (!database.objectStoreNames.contains(voucherStoreName)) {
-                        val voucherStore = database.createObjectStore(
-                            voucherStoreName,
-                            json("keyPath" to "voucherId")
-                        )
+                        val voucherStore =
+                            database.createObjectStore(
+                                voucherStoreName,
+                                json("keyPath" to "voucherId"),
+                            )
 
                         // Create indices for querying
                         voucherStore.createIndex("status", "status", json("unique" to false))
@@ -68,7 +68,7 @@ class IndexedDBVoucherCache : VoucherCacheRepository {
                     if (!database.objectStoreNames.contains(metadataStoreName)) {
                         database.createObjectStore(
                             metadataStoreName,
-                            json("keyPath" to "key")
+                            json("keyPath" to "key"),
                         )
 
                         console.log("[IndexedDBVoucherCache] Created metadata object store")
@@ -89,7 +89,7 @@ class IndexedDBVoucherCache : VoucherCacheRepository {
                 val error = request.error
                 console.error("[IndexedDBVoucherCache] Failed to open database:", error)
                 continuation.resumeWithException(
-                    Exception("Failed to open IndexedDB: ${error}")
+                    Exception("Failed to open IndexedDB: $error"),
                 )
             }
         }
@@ -117,7 +117,7 @@ class IndexedDBVoucherCache : VoucherCacheRepository {
                 request.onerror = {
                     console.error("[IndexedDBVoucherCache] Error saving voucher:", request.error)
                     continuation.resumeWithException(
-                        Exception("Failed to save voucher: ${request.error}")
+                        Exception("Failed to save voucher: ${request.error}"),
                     )
                 }
             }
@@ -153,7 +153,7 @@ class IndexedDBVoucherCache : VoucherCacheRepository {
                 request.onerror = {
                     console.error("[IndexedDBVoucherCache] Error getting voucher:", request.error)
                     continuation.resumeWithException(
-                        Exception("Failed to get voucher: ${request.error}")
+                        Exception("Failed to get voucher: ${request.error}"),
                     )
                 }
             }
@@ -171,10 +171,11 @@ class IndexedDBVoucherCache : VoucherCacheRepository {
                 request.onsuccess = {
                     try {
                         val results = request.result as? Array<dynamic> ?: emptyArray()
-                        val vouchers = results.map { result ->
-                            val voucherJson = JSON.stringify(result)
-                            Json.decodeFromString<StoredVoucher>(voucherJson)
-                        }
+                        val vouchers =
+                            results.map { result ->
+                                val voucherJson = JSON.stringify(result)
+                                Json.decodeFromString<StoredVoucher>(voucherJson)
+                            }
                         console.log("[IndexedDBVoucherCache] Listed ${vouchers.size} vouchers")
                         continuation.resume(vouchers)
                     } catch (e: Exception) {
@@ -186,7 +187,7 @@ class IndexedDBVoucherCache : VoucherCacheRepository {
                 request.onerror = {
                     console.error("[IndexedDBVoucherCache] Error listing vouchers:", request.error)
                     continuation.resumeWithException(
-                        Exception("Failed to list vouchers: ${request.error}")
+                        Exception("Failed to list vouchers: ${request.error}"),
                     )
                 }
             }
@@ -205,10 +206,11 @@ class IndexedDBVoucherCache : VoucherCacheRepository {
                 request.onsuccess = {
                     try {
                         val results = request.result as? Array<dynamic> ?: emptyArray()
-                        val vouchers = results.map { result ->
-                            val voucherJson = JSON.stringify(result)
-                            Json.decodeFromString<StoredVoucher>(voucherJson)
-                        }
+                        val vouchers =
+                            results.map { result ->
+                                val voucherJson = JSON.stringify(result)
+                                Json.decodeFromString<StoredVoucher>(voucherJson)
+                            }
                         console.log("[IndexedDBVoucherCache] Found ${vouchers.size} vouchers with status $status")
                         continuation.resume(vouchers)
                     } catch (e: Exception) {
@@ -220,7 +222,7 @@ class IndexedDBVoucherCache : VoucherCacheRepository {
                 request.onerror = {
                     console.error("[IndexedDBVoucherCache] Error querying by status:", request.error)
                     continuation.resumeWithException(
-                        Exception("Failed to query by status: ${request.error}")
+                        Exception("Failed to query by status: ${request.error}"),
                     )
                 }
             }
@@ -239,10 +241,11 @@ class IndexedDBVoucherCache : VoucherCacheRepository {
                 request.onsuccess = {
                     try {
                         val results = request.result as? Array<dynamic> ?: emptyArray()
-                        val vouchers = results.map { result ->
-                            val voucherJson = JSON.stringify(result)
-                            Json.decodeFromString<StoredVoucher>(voucherJson)
-                        }
+                        val vouchers =
+                            results.map { result ->
+                                val voucherJson = JSON.stringify(result)
+                                Json.decodeFromString<StoredVoucher>(voucherJson)
+                            }
                         console.log("[IndexedDBVoucherCache] Found ${vouchers.size} vouchers from issuer $issuerPubkey")
                         continuation.resume(vouchers)
                     } catch (e: Exception) {
@@ -254,17 +257,21 @@ class IndexedDBVoucherCache : VoucherCacheRepository {
                 request.onerror = {
                     console.error("[IndexedDBVoucherCache] Error querying by issuer:", request.error)
                     continuation.resumeWithException(
-                        Exception("Failed to query by issuer: ${request.error}")
+                        Exception("Failed to query by issuer: ${request.error}"),
                     )
                 }
             }
         }
 
-    override suspend fun updateVoucherStatus(voucherId: String, status: VoucherStatus): Result<Unit> =
+    override suspend fun updateVoucherStatus(
+        voucherId: String,
+        status: VoucherStatus,
+    ): Result<Unit> =
         runCatching {
             // Get existing voucher
-            val voucher = getVoucher(voucherId).getOrThrow()
-                ?: throw IllegalArgumentException("Voucher not found: $voucherId")
+            val voucher =
+                getVoucher(voucherId).getOrThrow()
+                    ?: throw IllegalArgumentException("Voucher not found: $voucherId")
 
             // Update status
             val updatedVoucher = voucher.copy(status = status)
@@ -292,7 +299,7 @@ class IndexedDBVoucherCache : VoucherCacheRepository {
                 request.onerror = {
                     console.error("[IndexedDBVoucherCache] Error deleting voucher:", request.error)
                     continuation.resumeWithException(
-                        Exception("Failed to delete voucher: ${request.error}")
+                        Exception("Failed to delete voucher: ${request.error}"),
                     )
                 }
             }
@@ -315,7 +322,7 @@ class IndexedDBVoucherCache : VoucherCacheRepository {
                 request.onerror = {
                     console.error("[IndexedDBVoucherCache] Error clearing vouchers:", request.error)
                     continuation.resumeWithException(
-                        Exception("Failed to clear vouchers: ${request.error}")
+                        Exception("Failed to clear vouchers: ${request.error}"),
                     )
                 }
             }
@@ -345,7 +352,7 @@ class IndexedDBVoucherCache : VoucherCacheRepository {
                 request.onerror = {
                     console.error("[IndexedDBVoucherCache] Error getting last sync time:", request.error)
                     continuation.resumeWithException(
-                        Exception("Failed to get last sync time: ${request.error}")
+                        Exception("Failed to get last sync time: ${request.error}"),
                     )
                 }
             }
@@ -359,10 +366,11 @@ class IndexedDBVoucherCache : VoucherCacheRepository {
                 val transaction = database.transaction(metadataStoreName, "readwrite")
                 val store = transaction.objectStore(metadataStoreName)
 
-                val metadata = json(
-                    "key" to "lastSyncTime",
-                    "value" to timestamp
-                )
+                val metadata =
+                    json(
+                        "key" to "lastSyncTime",
+                        "value" to timestamp,
+                    )
 
                 val request = store.put(metadata)
 
@@ -374,7 +382,7 @@ class IndexedDBVoucherCache : VoucherCacheRepository {
                 request.onerror = {
                     console.error("[IndexedDBVoucherCache] Error setting last sync time:", request.error)
                     continuation.resumeWithException(
-                        Exception("Failed to set last sync time: ${request.error}")
+                        Exception("Failed to set last sync time: ${request.error}"),
                     )
                 }
             }

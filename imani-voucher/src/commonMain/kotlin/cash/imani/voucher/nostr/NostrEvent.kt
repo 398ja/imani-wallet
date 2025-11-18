@@ -24,7 +24,7 @@ data class NostrEvent(
     val kind: Int,
     val tags: List<List<String>>,
     val content: String,
-    val sig: String
+    val sig: String,
 )
 
 /**
@@ -38,7 +38,7 @@ data class UnsignedNostrEvent(
     val created_at: Long,
     val kind: Int,
     val tags: List<List<String>>,
-    val content: String
+    val content: String,
 ) {
     /**
      * Computes the event ID according to NIP-01.
@@ -72,7 +72,7 @@ data class NostrFilter(
     val since: Long? = null,
     val until: Long? = null,
     val limit: Int? = null,
-    val tags: Map<String, List<String>>? = null
+    val tags: Map<String, List<String>>? = null,
 )
 
 /**

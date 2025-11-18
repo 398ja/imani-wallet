@@ -1,7 +1,5 @@
 package cash.imani.voucher.repository
 
-import kotlin.js.Promise
-
 /**
  * External declarations for IndexedDB API.
  *
@@ -29,7 +27,10 @@ external interface IDBFactory {
      * @param version Database version (for migrations)
      * @return IDBOpenDBRequest with onsuccess, onerror, onupgradeneeded callbacks
      */
-    fun open(name: String, version: Int): IDBOpenDBRequest
+    fun open(
+        name: String,
+        version: Int,
+    ): IDBOpenDBRequest
 
     /**
      * Deletes a database.
@@ -121,7 +122,10 @@ external interface IDBDatabase {
      * @param options Store options (keyPath, autoIncrement)
      * @return IDBObjectStore
      */
-    fun createObjectStore(name: String, options: dynamic = definedExternally): IDBObjectStore
+    fun createObjectStore(
+        name: String,
+        options: dynamic = definedExternally,
+    ): IDBObjectStore
 
     /**
      * Deletes an object store.
@@ -137,7 +141,10 @@ external interface IDBDatabase {
      * @param mode Transaction mode ("readonly" or "readwrite")
      * @return IDBTransaction
      */
-    fun transaction(storeNames: dynamic, mode: String = definedExternally): IDBTransaction
+    fun transaction(
+        storeNames: dynamic,
+        mode: String = definedExternally,
+    ): IDBTransaction
 
     /**
      * Closes the database connection.
@@ -194,7 +201,10 @@ external interface IDBObjectStore {
      * @param key Optional key (if keyPath not set)
      * @return IDBRequest
      */
-    fun add(value: dynamic, key: dynamic = definedExternally): IDBRequest
+    fun add(
+        value: dynamic,
+        key: dynamic = definedExternally,
+    ): IDBRequest
 
     /**
      * Adds or updates a record in the store.
@@ -203,7 +213,10 @@ external interface IDBObjectStore {
      * @param key Optional key (if keyPath not set)
      * @return IDBRequest
      */
-    fun put(value: dynamic, key: dynamic = definedExternally): IDBRequest
+    fun put(
+        value: dynamic,
+        key: dynamic = definedExternally,
+    ): IDBRequest
 
     /**
      * Gets a record by key.
@@ -235,7 +248,10 @@ external interface IDBObjectStore {
      * @param count Optional max count
      * @return IDBRequest with result as Array
      */
-    fun getAll(query: dynamic = definedExternally, count: Int = definedExternally): IDBRequest
+    fun getAll(
+        query: dynamic = definedExternally,
+        count: Int = definedExternally,
+    ): IDBRequest
 
     /**
      * Creates an index on the store.
@@ -245,7 +261,11 @@ external interface IDBObjectStore {
      * @param options Index options (unique, multiEntry)
      * @return IDBIndex
      */
-    fun createIndex(name: String, keyPath: dynamic, options: dynamic = definedExternally): IDBIndex
+    fun createIndex(
+        name: String,
+        keyPath: dynamic,
+        options: dynamic = definedExternally,
+    ): IDBIndex
 
     /**
      * Gets an existing index.
@@ -290,5 +310,8 @@ external interface IDBIndex {
      * @param count Optional max count
      * @return IDBRequest with result as Array
      */
-    fun getAll(query: dynamic = definedExternally, count: Int = definedExternally): IDBRequest
+    fun getAll(
+        query: dynamic = definedExternally,
+        count: Int = definedExternally,
+    ): IDBRequest
 }

@@ -34,7 +34,10 @@ external class SimplePool {
      * @param event The event to publish
      * @return Promise that resolves when published
      */
-    fun publish(relays: Array<String>, event: dynamic): Promise<Unit>
+    fun publish(
+        relays: Array<String>,
+        event: dynamic,
+    ): Promise<Unit>
 
     /**
      * Queries events from relays synchronously.
@@ -43,7 +46,10 @@ external class SimplePool {
      * @param filters Array of event filters
      * @return Array of matching events
      */
-    fun querySync(relays: Array<String>, filters: Array<dynamic>): Array<dynamic>
+    fun querySync(
+        relays: Array<String>,
+        filters: Array<dynamic>,
+    ): Array<dynamic>
 
     /**
      * Subscribes to events from relays.
@@ -56,7 +62,7 @@ external class SimplePool {
     fun subscribeMany(
         relays: Array<String>,
         filters: Array<dynamic>,
-        callbacks: dynamic
+        callbacks: dynamic,
     ): dynamic
 
     /**
@@ -86,7 +92,10 @@ external object Events {
      * @param privateKey Private key (hex string)
      * @return Signed event with id and sig fields
      */
-    fun finishEvent(event: dynamic, privateKey: String): dynamic
+    fun finishEvent(
+        event: dynamic,
+        privateKey: String,
+    ): dynamic
 
     /**
      * Verifies an event signature.

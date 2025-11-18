@@ -1,8 +1,6 @@
 package cash.imani.voucher.repository
 
 import cash.imani.voucher.domain.Proof
-import kotlin.js.Promise
-import kotlinx.coroutines.await
 
 /**
  * IndexedDB implementation of ProofRepository for web platform.
@@ -30,8 +28,9 @@ class IndexedDBProofRepository : ProofRepository {
      */
     private suspend fun openDatabase(): dynamic {
         return suspendCoroutine { continuation ->
-            val request = js("indexedDB.open(dbName, dbVersion)")
-                .unsafeCast<dynamic>()
+            val request =
+                js("indexedDB.open(dbName, dbVersion)")
+                    .unsafeCast<dynamic>()
 
             request.onsuccess = { event: dynamic ->
                 continuation.resume(event.target.result)

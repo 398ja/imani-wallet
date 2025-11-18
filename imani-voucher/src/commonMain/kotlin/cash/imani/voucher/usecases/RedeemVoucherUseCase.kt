@@ -1,7 +1,6 @@
 package cash.imani.voucher.usecases
 
 import cash.imani.voucher.domain.Proof
-import cash.imani.voucher.domain.StoredVoucher
 import cash.imani.voucher.domain.VoucherRedemptionException
 import cash.imani.voucher.domain.VoucherStatus
 import cash.imani.voucher.encoding.TokenEncoder

@@ -1,33 +1,67 @@
 package cash.imani.voucher.nostr
 
 /**
+ * Gets an environment variable value.
+ * Platform-specific implementation via expect/actual pattern.
+ */
+expect fun getEnvironmentVariable(name: String): String?
+
+/**
  * Nostr relay configuration for Imani Wallet.
  *
  * Provides default relay URLs and configuration options for voucher storage.
  */
 object NostrConfig {
     /**
-     * Default Nostr relays for voucher storage.
+     * Local relay for development and testing.
+     *
+     * Use this to avoid publishing test vouchers to public relays.
+     * Start a local relay with: nostr-rs-relay or knostr on ws://localhost:5555
+     */
+    val LOCAL_RELAY =
+        listOf(
+            "ws://localhost:5555",
+        )
+
+    /**
+     * Default Nostr relays for production voucher storage.
      *
      * These relays are well-established, reliable, and have good uptime.
      * Users can override these with their preferred relays.
+     *
+     * WARNING: These are public relays. Use LOCAL_RELAY for testing!
      */
-    val DEFAULT_RELAYS = listOf(
-        "wss://relay.damus.io",      // Popular iOS client relay
-        "wss://relay.snort.social",  // Popular web client relay
-        "wss://nos.lol",             // General purpose relay
-        "wss://relay.nostr.band"     // Relay with search capabilities
-    )
+    val PRODUCTION_RELAYS =
+        listOf(
+            "wss://relay.damus.io", // Popular iOS client relay
+            "wss://relay.snort.social", // Popular web client relay
+            "wss://nos.lol", // General purpose relay
+            "wss://relay.nostr.band", // Relay with search capabilities
+        )
 
     /**
-     * Test relays for development and testing.
+     * Default relays based on build configuration.
      *
-     * These may have lower reliability but are useful for testing.
+     * - Development: Uses LOCAL_RELAY (ws://localhost:5555)
+     * - Production: Uses PRODUCTION_RELAYS (public relays)
+     *
+     * Override by setting IMANI_NOSTR_ENV environment variable:
+     * - "local" or "dev": Use LOCAL_RELAY
+     * - "production" or "prod": Use PRODUCTION_RELAYS
      */
-    val TEST_RELAYS = listOf(
-        "wss://relay.damus.io",
-        "wss://relay.snort.social"
-    )
+    val DEFAULT_RELAYS: List<String>
+        get() {
+            val env = getEnvironmentVariable("IMANI_NOSTR_ENV")?.lowercase()
+            return when (env) {
+                "production", "prod" -> PRODUCTION_RELAYS
+                else -> LOCAL_RELAY // Default to local for safety
+            }
+        }
+
+    /**
+     * Test relays for unit tests (same as LOCAL_RELAY).
+     */
+    val TEST_RELAYS = LOCAL_RELAY
 
     /**
      * Query timeout in milliseconds.
