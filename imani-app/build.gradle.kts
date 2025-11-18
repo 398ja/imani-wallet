@@ -25,6 +25,8 @@ kotlin {
                 implementation(libs.voyager.navigator)
                 implementation(libs.voyager.transitions)
                 implementation(libs.koin.core)
+                implementation(libs.kotlinx.datetime)
+                implementation(libs.ktor.client.core)
             }
         }
 

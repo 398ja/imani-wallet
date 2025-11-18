@@ -1,6 +1,7 @@
 package cash.imani.app.di
 
 import cash.imani.app.ui.identity.IdentityViewModel
+import cash.imani.app.ui.voucher.VoucherViewModel
 import cash.imani.identity.crypto.Bip39Adapter
 import cash.imani.identity.crypto.CryptoAdapter
 import cash.imani.identity.crypto.createBip39Adapter
@@ -11,6 +12,14 @@ import cash.imani.identity.usecases.CreateIdentityUseCase
 import cash.imani.identity.usecases.ImportIdentityFromNsecUseCase
 import cash.imani.identity.usecases.ImportIdentityUseCase
 import cash.imani.identity.usecases.ListIdentitiesUseCase
+import cash.imani.voucher.network.MintApiClient
+import cash.imani.voucher.network.createHttpClient
+import cash.imani.voucher.repository.ProofRepository
+import cash.imani.voucher.repository.VoucherRepository
+import cash.imani.voucher.repository.createProofRepository
+import cash.imani.voucher.repository.createVoucherRepository
+import cash.imani.voucher.usecases.IssueVoucherUseCase
+import cash.imani.voucher.usecases.RedeemVoucherUseCase
 import org.koin.dsl.module
 
 /**
@@ -22,23 +31,55 @@ import org.koin.dsl.module
  * - Identity repository (platform-specific via factory functions)
  * - Identity use cases
  * - Identity ViewModel
+ * - Voucher repositories (proof and voucher)
+ * - Voucher use cases
+ * - Voucher ViewModel
  *
- * Phase 1: Single module for simplicity
- * Phase 2+: Split into feature modules (identity, voucher, etc.)
+ * Phase 1: Identity module complete
+ * Phase 2: Voucher module added
+ * Phase 3+: Split into feature modules
  */
 val appModule = module {
     // Crypto adapters - platform-specific implementations
     single<CryptoAdapter> { createCryptoAdapter() }
     single<Bip39Adapter> { createBip39Adapter() }
 
-    // Repositories
+    // Repositories - Identity
     single<IdentityRepository> { createIdentityRepository(get(), get()) }
 
-    // Use Cases
+    // Repositories - Voucher
+    single<ProofRepository> { createProofRepository() }
+    single<VoucherRepository> { createVoucherRepository() }
+
+    // HTTP Client
+    single { createHttpClient() }
+
+    // Mint API Client
+    single { MintApiClient(get(), get()) }
+
+    // Use Cases - Identity
     single { CreateIdentityUseCase(get()) }
     single { ListIdentitiesUseCase(get()) }
     single { ImportIdentityUseCase(get()) }
     single { ImportIdentityFromNsecUseCase(get()) }
+
+    // Use Cases - Voucher
+    single {
+        IssueVoucherUseCase(
+            voucherRepository = get(),
+            proofRepository = get(),
+            mintApiClient = get(),
+            cryptoAdapter = get(),
+            identityRepository = get(),
+        )
+    }
+    single {
+        RedeemVoucherUseCase(
+            voucherRepository = get(),
+            proofRepository = get(),
+            mintApiClient = get(),
+        )
+    }
 
     // ViewModels
     single {
@@ -47,6 +88,14 @@ val appModule = module {
             listIdentitiesUseCase = get(),
             importIdentityUseCase = get(),
             importIdentityFromNsecUseCase = get(),
+        )
+    }
+
+    single {
+        VoucherViewModel(
+            voucherRepository = get(),
+            issueVoucherUseCase = get(),
+            redeemVoucherUseCase = get(),
         )
     }
 }
