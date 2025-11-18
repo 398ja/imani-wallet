@@ -141,12 +141,14 @@ To become the **trusted standard** for digital voucher management in communities
 |-------|-------|----------|-------------------|
 | Phase 0 | Project Setup & Foundation | 2 weeks | Week 2 |
 | Phase 1 | Identity Module (Web) | 3 weeks | Week 5 |
-| Phase 2 | Voucher Module (Web) | 4 weeks | Week 9 |
-| Phase 3 | Web Polish & Production | 2 weeks | Week 11 |
-| Phase 4 | Android Port | 3 weeks | Week 14 |
-| Phase 5 | iOS Port | 4 weeks | Week 18 |
+| Phase 2 | Voucher Module (Web) with Nostr | 6 weeks | Week 11 |
+| Phase 3 | Web Polish & Production | 2 weeks | Week 13 |
+| Phase 4 | Android Port | 3 weeks | Week 16 |
+| Phase 5 | iOS Port | 4 weeks | Week 20 |
 
-**Total Duration**: 18 weeks (~4.5 months)
+**Total Duration**: 20 weeks (~5 months)
+
+> **Updated 2025-11-18**: Phase 2 extended from 4 weeks to 6 weeks to include Nostr-based voucher storage (Tasks 2.5-2.7). This adds 2 weeks to the overall timeline.
 
 ### Team Composition
 
@@ -1177,13 +1179,15 @@ fun main() {
 
 ---
 
-## Phase 2: Voucher Module (Web)
+## Phase 2: Voucher Module (Web) with Nostr Storage
 
-**Goal**: Implement complete voucher management (issue, share, redeem, track status).
+**Goal**: Implement complete voucher management (issue, share, redeem, track status) with Nostr-based decentralized storage and IndexedDB caching.
 
-**Duration**: 4 weeks
+**Duration**: 6 weeks (~37 days)
 
 **Depends On**: Phase 1 complete
+
+**Architecture**: Nostr-First with Browser Cache (see [Nostr Voucher Storage Design](nostr-voucher-storage-design.md))
 
 ### Tasks
 
@@ -1949,30 +1953,207 @@ actual fun QRCodeImage(data: String, modifier: Modifier) {
 
 ---
 
-#### 2.5. Voucher Repository (IndexedDB)
+#### 2.5. Nostr Voucher Client (Expect/Actual)
 
-**Implement voucher persistence**:
+> **Architecture Decision**: After reviewing cashu-client's Nostr implementation, we're adopting a **Nostr-First with Browser Cache** approach for voucher storage. Vouchers will be stored on Nostr relays (source of truth) with IndexedDB caching for offline access. See [Nostr Voucher Storage Design](nostr-voucher-storage-design.md) for full details.
+
+**Implement platform-specific Nostr clients using expect/actual pattern**:
 
 ```kotlin
-// voucher-module/commonMain/repository/VoucherRepository.kt
-interface VoucherRepository {
-    suspend fun saveVoucher(voucher: StoredVoucher): Result<Unit>
-    suspend fun listVouchers(): Result<List<StoredVoucher>>
-    suspend fun getVoucher(id: String): Result<StoredVoucher>
-    suspend fun updateVoucherStatus(id: String, status: VoucherStatus): Result<Unit>
-    suspend fun deleteVoucher(id: String): Result<Unit>
+// imani-voucher/commonMain/cash/imani/voucher/nostr/NostrVoucherClient.kt
+package cash.imani.voucher.nostr
+
+expect class NostrVoucherClient {
+    suspend fun publishVoucher(voucher: StoredVoucher): Result<Unit>
+    suspend fun queryVoucher(voucherId: String): Result<StoredVoucher?>
+    suspend fun queryVouchersByStatus(status: VoucherStatus): Result<List<StoredVoucher>>
+    suspend fun updateVoucherStatus(voucherId: String, status: VoucherStatus): Result<Unit>
 }
 
-// voucher-module/jsMain/repository/IndexedDBVoucherRepository.kt
-class IndexedDBVoucherRepository : VoucherRepository {
+expect fun createNostrVoucherClient(relayUrls: List<String>): NostrVoucherClient
+
+// imani-voucher/jvmMain/cash/imani/voucher/nostr/NostrVoucherClient.jvm.kt
+actual class NostrVoucherClient(
+    private val gateway: NostrGatewayService  // From cashu-client
+) {
+    actual suspend fun publishVoucher(voucher: StoredVoucher): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val event = createVoucherEvent(voucher)
+                gateway.publish(event)
+            }
+        }
+
+    actual suspend fun queryVoucher(voucherId: String): Result<StoredVoucher?> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val filter = NostrFilterBuilder()
+                    .kind(30078)  // NIP-33 Parameterized Replaceable Event
+                    .tag("d", voucherId)
+                    .build()
+
+                val events = gateway.queryEvents(filter, Duration.ofSeconds(3))
+                events.firstOrNull()?.let { parseVoucherEvent(it) }
+            }
+        }
+
+    private fun createVoucherEvent(voucher: StoredVoucher): NostrEvent {
+        // Create NIP-33 event with voucher data
+        return NostrEvent(
+            kind = 30078,
+            content = Json.encodeToString(voucher),
+            tags = listOf(
+                listOf("d", voucher.voucherId),
+                listOf("status", voucher.status.name),
+                listOf("unit", voucher.unit),
+                listOf("amount", voucher.faceValue.toString())
+            ),
+            pubkey = voucher.issuerPublicKey,
+            created_at = Clock.System.now().epochSeconds
+        )
+    }
+}
+
+// imani-voucher/jsMain/cash/imani/voucher/nostr/NostrVoucherClient.js.kt
+actual class NostrVoucherClient(
+    private val relayUrls: List<String>
+) {
+    private val relayPool: SimplePool = NostrTools.SimplePool()
+
+    actual suspend fun publishVoucher(voucher: StoredVoucher): Result<Unit> =
+        suspendCoroutine { continuation ->
+            val event = createVoucherEvent(voucher)
+            relayPool.publish(relayUrls.toTypedArray(), event)
+                .then {
+                    continuation.resume(Result.success(Unit))
+                }
+                .catch { error ->
+                    continuation.resume(Result.failure(Exception(error.toString())))
+                }
+        }
+
+    actual suspend fun queryVoucher(voucherId: String): Result<StoredVoucher?> =
+        runCatching {
+            val filter = js("""({
+                kinds: [30078],
+                "#d": ["$voucherId"]
+            })""")
+
+            val events = relayPool.querySync(
+                relayUrls.toTypedArray(),
+                arrayOf(filter)
+            )
+
+            events.firstOrNull()?.let { parseVoucherEvent(it) }
+        }
+}
+```
+
+**External Declarations for nostr-tools (JS)**:
+
+```kotlin
+// imani-voucher/jsMain/cash/imani/voucher/nostr/NostrToolsExternals.kt
+@JsModule("nostr-tools")
+@JsNonModule
+external object NostrTools {
+    class SimplePool {
+        fun publish(relays: Array<String>, event: dynamic): Promise<Unit>
+        fun querySync(relays: Array<String>, filters: Array<dynamic>): Array<dynamic>
+        fun subscribeMany(
+            relays: Array<String>,
+            filters: Array<dynamic>,
+            callbacks: dynamic
+        ): dynamic
+    }
+}
+```
+
+**NPM Dependencies** (add to `package.json`):
+```json
+{
+  "dependencies": {
+    "nostr-tools": "^2.1.0"
+  }
+}
+```
+
+**Acceptance Criteria**:
+- JVM implementation uses cashu-client's NostrGatewayService
+- JS implementation uses nostr-tools library
+- Can publish vouchers to Nostr relays
+- Can query vouchers by ID and status
+- NIP-33 event format correct (kind 30078)
+- Events signed and verified
+
+**Effort**: 4 days
+
+---
+
+#### 2.6. Nostr Voucher Repository with Cache
+
+**Implement hybrid repository: Nostr as source of truth + IndexedDB cache**:
+
+```kotlin
+// imani-voucher/commonMain/repository/NostrVoucherRepository.kt
+class NostrVoucherRepository(
+    private val nostrClient: NostrVoucherClient,
+    private val cache: VoucherCacheRepository
+) : VoucherRepository {
+
+    override suspend fun saveVoucher(voucher: StoredVoucher): Result<Unit> = runCatching {
+        // 1. Publish to Nostr
+        nostrClient.publishVoucher(voucher).getOrThrow()
+
+        // 2. Update cache on success
+        cache.saveVoucher(voucher).getOrThrow()
+    }
+
+    override suspend fun listVouchers(): Result<List<StoredVoucher>> = runCatching {
+        // Return cached data immediately
+        val cachedVouchers = cache.listVouchers().getOrThrow()
+
+        // Background sync from Nostr
+        backgroundSync()
+
+        cachedVouchers
+    }
+
+    override suspend fun updateVoucherStatus(
+        id: String,
+        status: VoucherStatus
+    ): Result<Unit> = runCatching {
+        // 1. Update on Nostr (NIP-33 replacement event)
+        nostrClient.updateVoucherStatus(id, status).getOrThrow()
+
+        // 2. Update cache
+        cache.updateVoucherStatus(id, status).getOrThrow()
+    }
+
+    private suspend fun backgroundSync() {
+        // TODO: Implement background sync strategy
+        // - Query Nostr for updates
+        // - Merge with cache
+        // - Resolve conflicts (first-write-wins)
+    }
+}
+
+// imani-voucher/jsMain/repository/IndexedDBVoucherCache.kt
+class IndexedDBVoucherCache : VoucherCacheRepository {
+    private val dbName = "imani_vouchers"
+
     override suspend fun saveVoucher(voucher: StoredVoucher): Result<Unit> = runCatching {
         val db = openDatabase()
         val tx = db.transaction(arrayOf("vouchers"), "readwrite")
         val store = tx.objectStore("vouchers")
 
-        val json = Json.encodeToString(StoredVoucher.serializer(), voucher)
-        store.put(json, voucher.voucherId)
+        val record = js("""({
+            voucherId: voucher.voucherId,
+            data: ${Json.encodeToString(StoredVoucher.serializer(), voucher)},
+            _syncStatus: "synced",
+            _lastSyncAt: ${Clock.System.now().toEpochMilliseconds()}
+        })""")
 
+        store.put(record)
         tx.oncomplete = { db.close() }
     }
 
@@ -1984,8 +2165,10 @@ class IndexedDBVoucherRepository : VoucherRepository {
 
         suspendCoroutine { cont ->
             request.onsuccess = {
-                val results = request.result.unsafeCast<Array<String>>()
-                val vouchers = results.map { Json.decodeFromString(StoredVoucher.serializer(), it) }
+                val results = request.result.unsafeCast<Array<dynamic>>()
+                val vouchers = results.map { record ->
+                    Json.decodeFromString<StoredVoucher>(record.data as String)
+                }
                 db.close()
                 cont.resume(vouchers.sortedByDescending { it.issuedAt })
             }
@@ -1994,18 +2177,51 @@ class IndexedDBVoucherRepository : VoucherRepository {
 }
 ```
 
-**Acceptance Criteria**:
-- Vouchers persist in IndexedDB
-- Can list, get, update, delete vouchers
-- Vouchers survive page refresh
+**IndexedDB Schema**:
 
-**Effort**: 2 days
+```javascript
+// Database: imani_vouchers
+const voucherStore = {
+  name: "vouchers",
+  keyPath: "voucherId",
+  indexes: [
+    { name: "status", keyPath: "status" },
+    { name: "issuerId", keyPath: "issuerId" },
+    { name: "issuedAt", keyPath: "issuedAt" },
+    { name: "syncStatus", keyPath: "_syncStatus" }
+  ]
+}
+```
+
+**Default Relay Configuration**:
+
+```kotlin
+// imani-voucher/commonMain/config/NostrConfig.kt
+object NostrConfig {
+    val DEFAULT_RELAYS = listOf(
+        "wss://relay.damus.io",
+        "wss://relay.snort.social",
+        "wss://nos.lol",
+        "wss://relay.nostr.band"
+    )
+}
+```
+
+**Acceptance Criteria**:
+- Vouchers published to Nostr relays
+- Vouchers cached in IndexedDB (JS) or in-memory (JVM)
+- Offline access to cached vouchers
+- Background sync updates cache from Nostr
+- NIP-33 event kind 30078 used for voucher storage
+- Events queryable by voucher ID, status, issuer
+
+**Effort**: 5 days
 
 ---
 
-#### 2.6. Integration Testing
+#### 2.7. Integration Testing
 
-**Write integration tests for voucher flows**:
+**Write integration tests for Nostr-backed voucher flows**:
 
 ```kotlin
 // voucher-module/commonTest/kotlin/usecases/VoucherFlowTest.kt
@@ -2045,9 +2261,11 @@ class VoucherFlowTest {
 
 **Acceptance Criteria**:
 - Integration tests pass
-- Full flow (issue → share → redeem) works end-to-end
+- Full Nostr flow (issue → publish to Nostr → query from relay → redeem) works end-to-end
+- IndexedDB cache tests pass
+- Offline mode tests pass
 
-**Effort**: 2 days
+**Effort**: 3 days
 
 ---
 
@@ -2059,9 +2277,13 @@ class VoucherFlowTest {
 - [x] Voucher use cases (issue, redeem)
 - [x] Voucher UI screens (list, issue, share, redeem)
 - [x] Voucher repository (in-memory for Phase 2)
-- [ ] Integration tests
+- [ ] Nostr voucher client (expect/actual for JVM and JS)
+- [ ] Nostr voucher repository with IndexedDB cache
+- [ ] Integration tests with Nostr relays
 
-**Total Effort**: 25 days (~4 weeks with buffer)
+**Total Effort**: 37 days (~5.5 weeks with buffer)
+
+> **Note**: Phase 2 duration extended due to Nostr integration. Original estimate was 4 weeks (25 days), now 5.5 weeks (37 days) to account for NostrVoucherClient (4d), NostrVoucherRepository (5d), and enhanced integration testing (3d vs 2d).
 
 ### Phase 2 Task Tracking
 
@@ -2071,8 +2293,9 @@ class VoucherFlowTest {
 | 2.2 | Proof Management and Token Encoding | L (5d) | ✅ DONE | 21204d8 | ProofRepository interface with CRUD operations; IndexedDBProofRepository (JS) with "cashu_proofs" database; JvmProofRepository (in-memory); TokenEncoder with V4 CBOR + Bech32; FIFO coin selection algorithm; InsufficientBalanceException handling | 2.1 |
 | 2.3 | Voucher Use Cases | XL (6d) | ✅ DONE | 3394fed | IssueVoucherUseCase with P2PK secret generation (NUT-11); RedeemVoucherUseCase with proof state checking; VoucherRepository interface; In-memory implementations for JS/JVM; Complete exception hierarchy; Schnorr signature verification | 1.3, 2.1, 2.2 |
 | 2.4 | Voucher UI Screens | XL (6d) | ✅ DONE | 52ef1bd | VoucherViewModel with state management; VoucherListScreen with grouped display; IssueVoucherScreen with validation; RedeemVoucherScreen with token import; ShareVoucherScreen (QR placeholder for Phase 3); VoucherNavigation with Voyager; Material 3 design; Complete DI setup | 2.3 |
-| 2.5 | Voucher Repository (IndexedDB) | M (2d) | 📋 TODO | - | Voucher persistence, status updates | 2.3 |
-| 2.6 | Integration Testing | M (2d) | 📋 TODO | - | End-to-end voucher flow tests | 2.3, 2.4, 2.5 |
+| 2.5 | Nostr Voucher Client (Expect/Actual) | M (4d) | 📋 TODO | - | Platform-specific Nostr clients: JVM using cashu-client's NostrGatewayService; JS using nostr-tools library; NIP-33 event format (kind 30078); Publish/query vouchers on Nostr relays; External declarations for nostr-tools; Default relay configuration | 1.3, 2.3 |
+| 2.6 | Nostr Voucher Repository with Cache | L (5d) | 📋 TODO | - | Hybrid repository: Nostr as source of truth + IndexedDB cache; NostrVoucherRepository with publish-first pattern; IndexedDBVoucherCache for offline access; Background sync strategy; VoucherCacheRepository interface; Conflict resolution (first-write-wins) | 2.5 |
+| 2.7 | Integration Testing (Nostr) | M (3d) | 📋 TODO | - | End-to-end Nostr voucher flow tests; Publish to relay → Query from relay → Verify cache; Offline mode tests; Cache sync tests; Multi-relay publishing tests | 2.3, 2.4, 2.6 |
 
 [↑ Back to top](#imani-wallet---kotlin-multiplatform-implementation-roadmap)
 
@@ -2496,5 +2719,6 @@ open iosApp/iosApp.xcodeproj
 | 1.1.0 | 2025-11-17 | Claude Code | Added task tracking tables for Phases 0-3 with dependencies, added back to top links |
 | 1.2.0 | 2025-11-17 | Claude Code | Rebranded as "Imani Wallet" with mission statement, brand identity, updated package names to xyz.imani.*, updated all module names |
 | 1.2.1 | 2025-11-17 | Claude Code | Changed package naming from xyz.imani.* to cash.imani.* for better domain alignment |
+| 1.3.0 | 2025-11-18 | Claude Code | **Major Update**: Integrated Nostr-based voucher storage architecture. Replaced Task 2.5 (simple IndexedDB) with Tasks 2.5-2.7 (NostrVoucherClient expect/actual, NostrVoucherRepository with cache, Nostr integration testing). Extended Phase 2 from 4 weeks to 6 weeks (+12 days). Added reference to Nostr Voucher Storage Design document. Updated timeline: total duration now 20 weeks (~5 months). Phase 2 now includes JVM integration with cashu-client's NostrGatewayService and JS integration with nostr-tools library. |
 
 [↑ Back to top](#imani-wallet---kotlin-multiplatform-implementation-roadmap)

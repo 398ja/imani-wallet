@@ -1,0 +1,23 @@
+{
+  "name": "imani-voucher",
+  "version": "1.0.0-SNAPSHOT",
+  "description": "Imani Wallet - Voucher Module (JS Dependencies)",
+  "private": true,
+  "dependencies": {
+    "nostr-tools": "^2.1.0"
+  },
+  "devDependencies": {
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/imani-cash/imani-wallet"
+  },
+  "keywords": [
+    "nostr",
+    "cashu",
+    "voucher",
+    "ecash"
+  ],
+  "author": "Imani Wallet Team",
+  "license": "MIT"
+}
