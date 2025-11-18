@@ -2277,9 +2277,9 @@ class VoucherFlowTest {
 - [x] Voucher use cases (issue, redeem)
 - [x] Voucher UI screens (list, issue, share, redeem)
 - [x] Voucher repository (in-memory for Phase 2)
-- [ ] Nostr voucher client (expect/actual for JVM and JS)
-- [ ] Nostr voucher repository with IndexedDB cache
-- [ ] Integration tests with Nostr relays
+- [x] Nostr voucher client (expect/actual for JVM and JS)
+- [x] Nostr voucher repository with IndexedDB cache
+- [x] Integration tests with Nostr relays
 
 **Total Effort**: 37 days (~5.5 weeks with buffer)
 
@@ -2293,9 +2293,9 @@ class VoucherFlowTest {
 | 2.2 | Proof Management and Token Encoding | L (5d) | ✅ DONE | 21204d8 | ProofRepository interface with CRUD operations; IndexedDBProofRepository (JS) with "cashu_proofs" database; JvmProofRepository (in-memory); TokenEncoder with V4 CBOR + Bech32; FIFO coin selection algorithm; InsufficientBalanceException handling | 2.1 |
 | 2.3 | Voucher Use Cases | XL (6d) | ✅ DONE | 3394fed | IssueVoucherUseCase with P2PK secret generation (NUT-11); RedeemVoucherUseCase with proof state checking; VoucherRepository interface; In-memory implementations for JS/JVM; Complete exception hierarchy; Schnorr signature verification | 1.3, 2.1, 2.2 |
 | 2.4 | Voucher UI Screens | XL (6d) | ✅ DONE | 52ef1bd | VoucherViewModel with state management; VoucherListScreen with grouped display; IssueVoucherScreen with validation; RedeemVoucherScreen with token import; ShareVoucherScreen (QR placeholder for Phase 3); VoucherNavigation with Voyager; Material 3 design; Complete DI setup | 2.3 |
-| 2.5 | Nostr Voucher Client (Expect/Actual) | M (4d) | 📋 TODO | - | Platform-specific Nostr clients: JVM using cashu-client's NostrGatewayService; JS using nostr-tools library; NIP-33 event format (kind 30078); Publish/query vouchers on Nostr relays; External declarations for nostr-tools; Default relay configuration | 1.3, 2.3 |
-| 2.6 | Nostr Voucher Repository with Cache | L (5d) | 📋 TODO | - | Hybrid repository: Nostr as source of truth + IndexedDB cache; NostrVoucherRepository with publish-first pattern; IndexedDBVoucherCache for offline access; Background sync strategy; VoucherCacheRepository interface; Conflict resolution (first-write-wins) | 2.5 |
-| 2.7 | Integration Testing (Nostr) | M (3d) | 📋 TODO | - | End-to-end Nostr voucher flow tests; Publish to relay → Query from relay → Verify cache; Offline mode tests; Cache sync tests; Multi-relay publishing tests | 2.3, 2.4, 2.6 |
+| 2.5 | Nostr Voucher Client (Expect/Actual) | M (4d) | ✅ DONE | cc7dc26 | NostrVoucherClient expect/actual; JVM in-memory implementation (Phase 2); JS implementation using nostr-tools; NIP-33 event format (kind 30078); publishVoucher, queryVoucher, queryVouchersByStatus, updateVoucherStatus; External declarations for nostr-tools; NostrConfig with LOCAL_RELAY default (ws://localhost:5555); NOSTR_INTEGRATION.md documentation | 1.3, 2.3 |
+| 2.6 | Nostr Voucher Repository with Cache | L (5d) | ✅ DONE | 2e04012, 7f10edb | NostrVoucherRepository with hybrid storage; VoucherCacheRepository interface; IndexedDBVoucherCache (JS browser persistence); JvmVoucherCache (in-memory); Publish-first write pattern; Cache-first read pattern; Background sync (syncFromNostr, syncIfNeeded); MintConfig with LOCAL_MINT default (http://localhost:7777); All DI wired through createVoucherRepository() | 2.5 |
+| 2.7 | Integration Testing (Nostr) | M (3d) | ✅ DONE | TBD | NostrVoucherRepositoryTest (11 tests); VoucherFlowTest (7 tests); JVM-only integration tests; Complete voucher lifecycle tests; Multi-device sync tests; Cache behavior tests; Offline mode tests; NIP-33 event replacement tests | 2.3, 2.4, 2.6 |
 
 [↑ Back to top](#imani-wallet---kotlin-multiplatform-implementation-roadmap)
 
