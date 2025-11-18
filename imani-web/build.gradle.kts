@@ -19,6 +19,7 @@ kotlin {
                 implementation(project(":imani-app"))
                 implementation(compose.ui)
                 implementation(compose.runtime)
+                implementation(libs.koin.core)
             }
         }
     }
