@@ -578,8 +578,8 @@ kotlin {
 | ID | Task | Size | Status | Commit | Notes | Dependencies |
 |----|------|------|--------|--------|-------|--------------|
 | 0.1 | Repository and Build Setup | M (3d) | ✅ DONE | d6e0b88 | Created imani-wallet project with 4 modules, Gradle version catalog, package naming cash.imani.* | None |
-| 0.2 | Convert Java Domain Models to Kotlin | M (3d) | 📋 TODO | - | Convert Identity, StoredVoucher, Proof, WalletState to Kotlin data classes | 0.1 |
-| 0.3 | Set Up Testing Infrastructure | M (2d) | 📋 TODO | - | Configure Kotlin Test, MockK, sample tests | 0.1 |
+| 0.2 | Convert Java Domain Models to Kotlin | M (3d) | ✅ DONE | 8b17f1e | Hybrid approach: Identity (with privateKey), PublicKey (32-byte), PrivateKey (with clear()), StoredVoucher, Proof (NUT-00), WalletState. ~75% code reuse. See JAVA_TO_KOTLIN_MIGRATION.md | 0.1 |
+| 0.3 | Set Up Testing Infrastructure | M (2d) | 🔶 IN PROGRESS | - | Configure Kotlin Test, MockK, sample tests | 0.1 |
 | 0.4 | CI/CD Pipeline Setup | S (1d) | 📋 TODO | - | GitHub Actions workflow for build/test | 0.1, 0.3 |
 | 0.5 | Development Tooling | S (1d) | 📋 TODO | - | IntelliJ project setup, ktlint, run configurations | 0.1 |
 
