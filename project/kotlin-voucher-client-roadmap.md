@@ -590,7 +590,7 @@ kotlin {
 - 🚫 **BLOCKED**: Waiting on dependencies
 - 📝 **DEFERRED**: Postponed to later phase
 
-[↑ Back to top](#kotlin-multiplatform-voucher-client-implementation-roadmap)
+[↑ Back to top](#imani-wallet---kotlin-multiplatform-implementation-roadmap)
 
 ---
 
@@ -1159,7 +1159,7 @@ fun main() {
 - [x] Identity repository (localStorage with encryption)
 - [x] Identity use cases (create, import, sign)
 - [x] Identity UI screens (list, create, import)
-- [ ] Dependency injection configured
+- [x] Dependency injection configured
 
 **Total Effort**: 16 days (~3 weeks with buffer)
 
@@ -1171,9 +1171,9 @@ fun main() {
 | 1.2 | Identity Repository (Web Storage) | M (4d) | ✅ DONE | 3660043 | localStorage with XOR encryption, BIP39 mnemonics, 16 unit tests passing | 1.1 |
 | 1.3 | Identity Use Cases | M (2d) | ✅ DONE | 3660043 | 4 use cases implemented (Create, List, Import, SignNostr), Nostr event models (NIP-01), 13 unit tests passing, mock adapters for testing | 1.1, 1.2 |
 | 1.4 | Identity UI (Compose for Web) | M (4d) | ✅ DONE | 9cacdbb | List, create, import screens with Material 3, ViewModel with reactive state, navigation routing, web entry point | 1.2, 1.3 |
-| 1.5 | Dependency Injection (Koin) | S (1d) | 📋 TODO | - | Configure Koin modules, DI setup | 1.3, 1.4 |
+| 1.5 | Dependency Injection (Koin) | S (1d) | ✅ DONE | 8ee0624 | Koin 3.5.3 configured, appModule with all dependencies, custom koinInject() helper for Compose KMP | 1.3, 1.4 |
 
-[↑ Back to top](#kotlin-multiplatform-voucher-client-implementation-roadmap)
+[↑ Back to top](#imani-wallet---kotlin-multiplatform-implementation-roadmap)
 
 ---
 
@@ -2074,7 +2074,7 @@ class VoucherFlowTest {
 | 2.5 | Voucher Repository (IndexedDB) | M (2d) | 📋 TODO | - | Voucher persistence, status updates | 2.3 |
 | 2.6 | Integration Testing | M (2d) | 📋 TODO | - | End-to-end voucher flow tests | 2.3, 2.4, 2.5 |
 
-[↑ Back to top](#kotlin-multiplatform-voucher-client-implementation-roadmap)
+[↑ Back to top](#imani-wallet---kotlin-multiplatform-implementation-roadmap)
 
 ---
 
@@ -2167,7 +2167,7 @@ class VoucherFlowTest {
 | 3.4 | Production Deployment | M (2d) | 📋 TODO | - | CI/CD (Vercel/Netlify), SSL, monitoring (Sentry) | 3.1, 3.2 |
 | 3.5 | End-to-End Testing | M (3d) | 📋 TODO | - | Playwright E2E tests, cross-browser, mobile responsive | 3.3, 3.4 |
 
-[↑ Back to top](#kotlin-multiplatform-voucher-client-implementation-roadmap)
+[↑ Back to top](#imani-wallet---kotlin-multiplatform-implementation-roadmap)
 
 ---
 
@@ -2234,7 +2234,7 @@ class VoucherFlowTest {
 
 **Total Effort**: 15 days (3 weeks)
 
-[↑ Back to top](#kotlin-multiplatform-voucher-client-implementation-roadmap)
+[↑ Back to top](#imani-wallet---kotlin-multiplatform-implementation-roadmap)
 
 ---
 
@@ -2301,7 +2301,7 @@ class VoucherFlowTest {
 
 **Total Effort**: 18 days (4 weeks)
 
-[↑ Back to top](#kotlin-multiplatform-voucher-client-implementation-roadmap)
+[↑ Back to top](#imani-wallet---kotlin-multiplatform-implementation-roadmap)
 
 ---
 
@@ -2390,7 +2390,7 @@ test("issue and share voucher flow") {
 }
 ```
 
-[↑ Back to top](#kotlin-multiplatform-voucher-client-implementation-roadmap)
+[↑ Back to top](#imani-wallet---kotlin-multiplatform-implementation-roadmap)
 
 ---
 
@@ -2421,7 +2421,7 @@ test("issue and share voucher flow") {
 | E2E test coverage | All critical paths | Test count |
 | Lighthouse score (Web) | ≥90 | Lighthouse CI |
 
-[↑ Back to top](#kotlin-multiplatform-voucher-client-implementation-roadmap)
+[↑ Back to top](#imani-wallet---kotlin-multiplatform-implementation-roadmap)
 
 ---
 
@@ -2451,7 +2451,7 @@ test("issue and share voucher flow") {
 **iOS-Specific**:
 - sqldelight-native-driver: 2.0.1
 
-[↑ Back to top](#kotlin-multiplatform-voucher-client-implementation-roadmap)
+[↑ Back to top](#imani-wallet---kotlin-multiplatform-implementation-roadmap)
 
 ---
 
@@ -2484,7 +2484,7 @@ cd imani-wallet
 open iosApp/iosApp.xcodeproj
 ```
 
-[↑ Back to top](#kotlin-multiplatform-voucher-client-implementation-roadmap)
+[↑ Back to top](#imani-wallet---kotlin-multiplatform-implementation-roadmap)
 
 ---
 
@@ -2497,4 +2497,4 @@ open iosApp/iosApp.xcodeproj
 | 1.2.0 | 2025-11-17 | Claude Code | Rebranded as "Imani Wallet" with mission statement, brand identity, updated package names to xyz.imani.*, updated all module names |
 | 1.2.1 | 2025-11-17 | Claude Code | Changed package naming from xyz.imani.* to cash.imani.* for better domain alignment |
 
-[↑ Back to top](#kotlin-multiplatform-voucher-client-implementation-roadmap)
+[↑ Back to top](#imani-wallet---kotlin-multiplatform-implementation-roadmap)
