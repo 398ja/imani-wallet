@@ -8,6 +8,7 @@ ktor = "2.3.7"
 koin = "3.5.3"
 sqldelight = "2.0.1"
 voyager = "1.0.0"
+kover = "0.7.5"
 
 [libraries]
 # Kotlin
@@ -55,3 +56,4 @@ kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref 
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 compose = { id = "org.jetbrains.compose", version.ref = "compose" }
 sqldelight = { id = "app.cash.sqldelight", version.ref = "sqldelight" }
+kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }
