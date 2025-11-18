@@ -17,6 +17,7 @@ kotlin {
                 implementation(project(":imani-identity"))
                 implementation(libs.kotlinx.coroutines.core)
                 implementation(libs.kotlinx.serialization.json)
+                implementation(libs.kotlinx.serialization.cbor)
                 implementation(libs.kotlinx.datetime)
                 implementation(libs.ktor.client.core)
                 implementation(libs.ktor.client.content.negotiation)
