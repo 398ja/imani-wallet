@@ -222,8 +222,15 @@ private class MockCryptoAdapter : CryptoAdapter {
     override suspend fun generateKeypair(): KeyPair {
         val privKey = generateRandomBytes(32)
         // Derive public key from private key (mock - not real crypto!)
-        val pubKey = sha256(privKey)
+        val pubKey = getPublicKey(privKey)
         return KeyPair(pubKey, privKey)
+    }
+
+    override suspend fun getPublicKey(privateKey: ByteArray): ByteArray {
+        require(privateKey.size == 32) { "Private key must be 32 bytes" }
+        // Derive public key from private key (mock - not real crypto!)
+        // Use SHA-256 for deterministic derivation
+        return sha256(privateKey)
     }
 
     // Store signatures for verification (mock only - not how real crypto works!)

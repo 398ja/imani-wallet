@@ -58,18 +58,29 @@ class WebCryptoAdapter : CryptoAdapter {
             // Generate 32 random bytes for private key
             val privKeyBytes = generateRandomBytes(32)
 
-            // Use @noble/secp256k1 to derive public key
-            // getPublicKey returns 33-byte compressed key, we need x-coordinate only (32 bytes)
-            val pubKeyPromise: Promise<dynamic> = secp256k1.getPublicKey(privKeyBytes, true)
-            val pubKeyCompressed = pubKeyPromise.await()
-
-            // Extract x-coordinate (skip first byte which is 0x02 or 0x03 compression flag)
-            val pubKeyArray = Uint8Array(pubKeyCompressed.unsafeCast<ArrayBuffer>())
-            val pubKeyBytes = ByteArray(32) { i -> pubKeyArray[i + 1] }
+            // Derive public key from private key
+            val pubKeyBytes = getPublicKey(privKeyBytes)
 
             return KeyPair(pubKeyBytes, privKeyBytes)
         } catch (e: Exception) {
             throw CryptoException("Failed to generate keypair", e)
+        }
+    }
+
+    override suspend fun getPublicKey(privateKey: ByteArray): ByteArray {
+        try {
+            require(privateKey.size == 32) { "Private key must be 32 bytes" }
+
+            // Use @noble/secp256k1 to derive public key
+            // getPublicKey returns 33-byte compressed key, we need x-coordinate only (32 bytes)
+            val pubKeyPromise: Promise<dynamic> = secp256k1.getPublicKey(privateKey, true)
+            val pubKeyCompressed = pubKeyPromise.await()
+
+            // Extract x-coordinate (skip first byte which is 0x02 or 0x03 compression flag)
+            val pubKeyArray = Uint8Array(pubKeyCompressed.unsafeCast<ArrayBuffer>())
+            return ByteArray(32) { i -> pubKeyArray[i + 1] }
+        } catch (e: Exception) {
+            throw CryptoException("Failed to derive public key from private key", e)
         }
     }
 

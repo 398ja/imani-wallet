@@ -41,6 +41,17 @@ interface CryptoAdapter {
     suspend fun generateKeypair(): KeyPair
 
     /**
+     * Derives the public key from a private key.
+     *
+     * Uses secp256k1 elliptic curve multiplication to compute
+     * the public key from the private key.
+     *
+     * @param privateKey 32-byte secp256k1 private key
+     * @return 32-byte public key (x-coordinate only, Nostr standard)
+     */
+    suspend fun getPublicKey(privateKey: ByteArray): ByteArray
+
+    /**
      * Creates a Schnorr signature over a message using secp256k1.
      *
      * Follows BIP340 Schnorr signature specification used by Nostr.

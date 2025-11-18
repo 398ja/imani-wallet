@@ -40,6 +40,14 @@ class JvmCryptoAdapter : CryptoAdapter {
         return KeyPair(publicKey, privateKey)
     }
 
+    override suspend fun getPublicKey(privateKey: ByteArray): ByteArray {
+        // TODO Phase 2: Implement proper secp256k1 public key derivation with BouncyCastle
+        throw NotImplementedError(
+            "Public key derivation not yet implemented for JVM. " +
+                "Use Web platform (Phase 1) or wait for Phase 2 JVM implementation.",
+        )
+    }
+
     override suspend fun schnorrSign(
         privateKey: ByteArray,
         message: ByteArray,

@@ -111,9 +111,49 @@ class JvmIdentityRepository(
             identity
         }
 
+    override suspend fun importFromNsec(
+        nsec: String,
+        label: String,
+    ): Result<Identity> =
+        runCatching {
+            require(label.trim().isNotEmpty()) { "Label cannot be empty" }
+
+            // Decode nsec to get private key
+            val privateKey = cash.imani.identity.util.Bech32.decodeNsec(nsec)
+
+            // Derive public key from private key
+            val publicKeyBytes = cryptoAdapter.getPublicKey(privateKey)
+
+            // Create identity
+            val now = Clock.System.now()
+            val id = UUID.randomUUID().toString()
+            val identity =
+                Identity(
+                    id = id,
+                    label = label.trim(),
+                    publicKey = publicKeyBytes.toHex(),
+                    privateKey = privateKey.toHex(),
+                    createdAt = now,
+                    lastUsedAt = now,
+                )
+
+            identities[id] = identity
+            privateKeys[id] = privateKey
+            // No mnemonic for nsec imports
+            mnemonics.remove(id)
+
+            identity
+        }
+
     override suspend fun exportMnemonic(id: String): Result<String> =
         runCatching {
             mnemonics[id] ?: throw IdentityNotFoundException(id)
+        }
+
+    override suspend fun exportNsec(id: String): Result<String> =
+        runCatching {
+            val privateKey = privateKeys[id] ?: throw IdentityNotFoundException(id)
+            cash.imani.identity.util.Bech32.encodeNsec(privateKey)
         }
 
     override suspend fun updateLastUsed(id: String): Result<Unit> =

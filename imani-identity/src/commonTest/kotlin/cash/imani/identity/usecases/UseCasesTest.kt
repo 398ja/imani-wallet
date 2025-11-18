@@ -4,6 +4,7 @@ import cash.imani.identity.MockBip39Adapter
 import cash.imani.identity.MockCryptoAdapter
 import cash.imani.identity.domain.NostrEvent
 import cash.imani.identity.repository.JvmIdentityRepository
+import cash.imani.identity.util.hexToBytes
 import kotlinx.coroutines.test.runTest
 import kotlinx.datetime.Clock
 import kotlin.test.Test
@@ -159,6 +160,89 @@ class UseCasesTest {
             val result = importUseCase(mnemonic, "")
 
             // Then: Should fail with validation error
+            assertTrue(result.isFailure)
+        }
+
+    /**
+     * Tests ImportIdentityFromNsecUseCase imports identity from nsec.
+     */
+    @Test
+    fun `ImportIdentityFromNsecUseCase imports identity from nsec`() =
+        runTest {
+            // Given: Create an identity and export its nsec
+            val createUseCase = CreateIdentityUseCase(repository)
+            val created = createUseCase("Original").getOrThrow()
+            val nsec = repository.exportNsec(created.identity.id).getOrThrow()
+
+            // When: Importing from nsec
+            val importUseCase = ImportIdentityFromNsecUseCase(repository)
+            val result = importUseCase(nsec, "Imported from nsec")
+
+            // Then: Should succeed with new identity
+            assertTrue(result.isSuccess)
+            val imported = result.getOrThrow()
+            assertEquals("Imported from nsec", imported.label)
+            // Public keys should match since derived from same private key
+            assertEquals(created.identity.publicKey, imported.publicKey)
+        }
+
+    /**
+     * Tests ImportIdentityFromNsecUseCase normalizes nsec input.
+     */
+    @Test
+    fun `ImportIdentityFromNsecUseCase normalizes nsec with extra spaces`() =
+        runTest {
+            // Given: Export nsec
+            val createUseCase = CreateIdentityUseCase(repository)
+            val created = createUseCase("Test").getOrThrow()
+            val nsec = repository.exportNsec(created.identity.id).getOrThrow()
+
+            // When: Importing with extra spaces and uppercase
+            val nsecWithSpaces = "  ${nsec.uppercase()}   "
+            val importUseCase = ImportIdentityFromNsecUseCase(repository)
+            val result = importUseCase(nsecWithSpaces, "Imported")
+
+            // Then: Should succeed (normalization works)
+            assertTrue(result.isSuccess)
+        }
+
+    /**
+     * Tests ImportIdentityFromNsecUseCase rejects empty label.
+     */
+    @Test
+    fun `ImportIdentityFromNsecUseCase rejects empty label`() =
+        runTest {
+            // Given: Valid nsec
+            val createUseCase = CreateIdentityUseCase(repository)
+            val created = createUseCase("Test").getOrThrow()
+            val nsec = repository.exportNsec(created.identity.id).getOrThrow()
+
+            // When: Importing with empty label
+            val importUseCase = ImportIdentityFromNsecUseCase(repository)
+            val result = importUseCase(nsec, "")
+
+            // Then: Should fail with validation error
+            assertTrue(result.isFailure)
+        }
+
+    /**
+     * Tests ImportIdentityFromNsecUseCase rejects invalid nsec format.
+     */
+    @Test
+    fun `ImportIdentityFromNsecUseCase rejects invalid nsec format`() =
+        runTest {
+            // Given: Invalid nsec (npub instead of nsec)
+            val createUseCase = CreateIdentityUseCase(repository)
+            val created = createUseCase("Test").getOrThrow()
+
+            // Get the public key and encode as npub (wrong format for import)
+            val npub = cash.imani.identity.util.Bech32.encodeNpub(created.identity.publicKey.hexToBytes())
+
+            // When: Trying to import with npub
+            val importUseCase = ImportIdentityFromNsecUseCase(repository)
+            val result = importUseCase(npub, "Test")
+
+            // Then: Should fail with format error
             assertTrue(result.isFailure)
         }
 

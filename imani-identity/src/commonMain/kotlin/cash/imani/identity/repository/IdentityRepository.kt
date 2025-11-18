@@ -103,6 +103,24 @@ interface IdentityRepository {
     ): Result<Identity>
 
     /**
+     * Imports an identity from an nsec (Nostr private key).
+     *
+     * Decodes the bech32-encoded nsec string to extract the private key,
+     * derives the public key using secp256k1, and stores the identity.
+     *
+     * Note: No mnemonic is generated for nsec imports, as the nsec itself
+     * serves as the backup/recovery mechanism.
+     *
+     * @param nsec Bech32-encoded private key (nsec1...)
+     * @param label User-friendly label for the identity
+     * @return Result containing the imported Identity or error
+     */
+    suspend fun importFromNsec(
+        nsec: String,
+        label: String,
+    ): Result<Identity>
+
+    /**
      * Exports the mnemonic phrase for an identity.
      *
      * Security: Returns decrypted mnemonic. Should be displayed to user
@@ -112,6 +130,17 @@ interface IdentityRepository {
      * @return Result containing the BIP39 mnemonic phrase or error
      */
     suspend fun exportMnemonic(id: String): Result<String>
+
+    /**
+     * Exports the nsec (Nostr private key) for an identity.
+     *
+     * Security: Returns the private key encoded in bech32 nsec format.
+     * Should be displayed to user with appropriate warnings about secure storage.
+     *
+     * @param id Unique identity identifier
+     * @return Result containing the nsec1... encoded private key or error
+     */
+    suspend fun exportNsec(id: String): Result<String>
 
     /**
      * Updates the lastUsedAt timestamp for an identity.

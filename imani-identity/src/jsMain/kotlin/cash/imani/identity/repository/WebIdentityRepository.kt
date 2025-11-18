@@ -192,6 +192,49 @@ class WebIdentityRepository(
             identity
         }
 
+    override suspend fun importFromNsec(
+        nsec: String,
+        label: String,
+    ): Result<Identity> =
+        runCatching {
+            // Validate label
+            require(label.trim().length in 1..100) {
+                "Identity label must be 1-100 characters"
+            }
+
+            // Decode nsec to get private key
+            val privateKey = cash.imani.identity.util.Bech32.decodeNsec(nsec)
+
+            // Derive public key from private key
+            val publicKeyBytes = cryptoAdapter.getPublicKey(privateKey)
+
+            // Create identity
+            val now = Clock.System.now()
+            val id = generateUuid()
+            val identity =
+                Identity(
+                    id = id,
+                    label = label.trim(),
+                    publicKey = publicKeyBytes.toHex(),
+                    privateKey = privateKey.toHex(),
+                    createdAt = now,
+                    lastUsedAt = now,
+                )
+
+            // Store identity
+            val identityJson = json.encodeToString(identity)
+            storage["identity_$id"] = identityJson
+
+            // Store encrypted private key
+            val encryptedPrivKey = encryptData(privateKey)
+            storage["privkey_$id"] = encryptedPrivKey
+
+            // No mnemonic for nsec imports - remove if exists
+            storage.removeItem("mnemonic_$id")
+
+            identity
+        }
+
     override suspend fun exportMnemonic(id: String): Result<String> =
         runCatching {
             val encryptedMnemonic =
@@ -200,6 +243,16 @@ class WebIdentityRepository(
 
             val mnemonicBytes = decryptData(encryptedMnemonic)
             mnemonicBytes.decodeToString()
+        }
+
+    override suspend fun exportNsec(id: String): Result<String> =
+        runCatching {
+            val encryptedPrivKey =
+                storage["privkey_$id"]
+                    ?: throw IdentityNotFoundException(id)
+
+            val privateKey = decryptData(encryptedPrivKey)
+            cash.imani.identity.util.Bech32.encodeNsec(privateKey)
         }
 
     override suspend fun updateLastUsed(id: String): Result<Unit> =
