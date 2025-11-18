@@ -581,7 +581,7 @@ kotlin {
 | 0.2 | Convert Java Domain Models to Kotlin | M (3d) | ✅ DONE | 8b17f1e | Hybrid approach: Identity (with privateKey), PublicKey (32-byte), PrivateKey (with clear()), StoredVoucher, Proof (NUT-00), WalletState. ~75% code reuse. See JAVA_TO_KOTLIN_MIGRATION.md | 0.1 |
 | 0.3 | Set Up Testing Infrastructure | M (2d) | ✅ DONE | 46fc742 | 54 test cases (744 lines) across 6 test files. Kotlin Test + coroutines-test configured. 100% coverage of domain models. Tests in commonTest for KMP. | 0.1 |
 | 0.4 | CI/CD Pipeline Setup | S (1d) | ✅ DONE | bb3b787 | GitHub Actions (build/test/coverage), Dependabot (weekly updates), Kover 0.7.5 (XML reports for Codecov). Gradle wrapper pending Task 0.5. | 0.1, 0.3 |
-| 0.5 | Development Tooling | S (1d) | 📋 TODO | - | IntelliJ project setup, ktlint, run configurations | 0.1 |
+| 0.5 | Development Tooling | S (1d) | ✅ DONE | 0e646d6 | Gradle wrapper (8.5), ktlint (12.1.0), .editorconfig, IntelliJ run configs (5), Imani brand theme (ImaniColors/Typography/Spacing), comprehensive README.md. | 0.1 |
 
 #### Legend
 - 📋 **TODO**: Ready to implement
