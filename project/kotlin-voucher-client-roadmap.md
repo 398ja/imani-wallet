@@ -2053,7 +2053,7 @@ class VoucherFlowTest {
 
 ### Phase 2 Deliverables
 
-- [ ] Ktor HTTP client for Mint API
+- [x] Ktor HTTP client for Mint API
 - [ ] Proof management (selection, storage)
 - [ ] Token encoding/decoding (V4 CBOR)
 - [ ] Voucher use cases (issue, redeem)
@@ -2067,7 +2067,7 @@ class VoucherFlowTest {
 
 | ID | Task | Size | Status | Commit | Notes | Dependencies |
 |----|------|------|--------|--------|-------|--------------|
-| 2.1 | Ktor HTTP Client for Mint API | M (4d) | 📋 TODO | - | Mint info, keySets, swap, checkState endpoints | 1.5 |
+| 2.1 | Ktor HTTP Client for Mint API | M (4d) | ✅ DONE | ef864f9 | MintApiClient with getInfo, getKeySets, swapProofs, checkProofStates; HttpClientFactory with JSON config; All Cashu NUT models (NUT-00 to NUT-07) | 1.5 |
 | 2.2 | Proof Management and Token Encoding | L (5d) | 📋 TODO | - | IndexedDB storage, FIFO selection, V4 CBOR encoding | 2.1 |
 | 2.3 | Voucher Use Cases | XL (6d) | 📋 TODO | - | IssueVoucher, RedeemVoucher, P2PK secrets, signatures | 1.3, 2.1, 2.2 |
 | 2.4 | Voucher UI Screens | XL (6d) | 📋 TODO | - | List, issue, share (QR), redeem screens | 2.3 |
