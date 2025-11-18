@@ -5,6 +5,7 @@ plugins {
     id("com.android.application") version "8.2.2" apply false
     id("com.android.library") version "8.2.2" apply false
     alias(libs.plugins.kover)
+    alias(libs.plugins.ktlint)
 }
 
 allprojects {
@@ -27,6 +28,26 @@ kover {
                 // Exclude platform-specific implementations (will be tested separately)
                 packages("cash.imani.*.platform")
             }
+        }
+    }
+}
+
+// Apply ktlint to all subprojects
+subprojects {
+    apply(plugin = "org.jlleitschuh.gradle.ktlint")
+
+    configure<org.jlleitschuh.gradle.ktlint.KtlintExtension> {
+        version.set("1.0.1")
+        android.set(false)
+        outputColorName.set("RED")
+        ignoreFailures.set(false)
+        reporters {
+            reporter(org.jlleitschuh.gradle.ktlint.reporter.ReporterType.CHECKSTYLE)
+            reporter(org.jlleitschuh.gradle.ktlint.reporter.ReporterType.HTML)
+        }
+        filter {
+            exclude("**/generated/**")
+            exclude("**/build/**")
         }
     }
 }

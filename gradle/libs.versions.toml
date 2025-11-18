@@ -9,6 +9,7 @@ koin = "3.5.3"
 sqldelight = "2.0.1"
 voyager = "1.0.0"
 kover = "0.7.5"
+ktlint = "12.1.0"
 
 [libraries]
 # Kotlin
@@ -57,3 +58,4 @@ kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", versi
 compose = { id = "org.jetbrains.compose", version.ref = "compose" }
 sqldelight = { id = "app.cash.sqldelight", version.ref = "sqldelight" }
 kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }
+ktlint = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlint" }
