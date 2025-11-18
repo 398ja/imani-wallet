@@ -17,7 +17,8 @@ data class Proof(
     val amount: Int,
     val secret: String,
     val C: String,
-    val id: String // KeySet ID
+    // KeySet ID
+    val id: String,
 ) {
     /**
      * Computes the Y value (hash-to-curve of secret) used for proof state checking.

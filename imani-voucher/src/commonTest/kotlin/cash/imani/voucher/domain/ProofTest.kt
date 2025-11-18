@@ -9,7 +9,6 @@ import kotlin.test.assertTrue
  * Tests NUT-00 compliant proof structure and Y-coordinate computation.
  */
 class ProofTest {
-
     /**
      * Tests that Proof data class correctly stores all required fields
      * per NUT-00 specification (amount, secret, C, id).
@@ -17,12 +16,13 @@ class ProofTest {
     @Test
     fun `proof has correct fields`() {
         // Given: Proof with known values
-        val proof = Proof(
-            amount = 100,
-            secret = "my-secret",
-            C = "02abcdef",
-            id = "keyset-1"
-        )
+        val proof =
+            Proof(
+                amount = 100,
+                secret = "my-secret",
+                C = "02abcdef",
+                id = "keyset-1",
+            )
 
         // When: Accessing fields
         // Then: All fields should match constructor values
@@ -39,12 +39,13 @@ class ProofTest {
     @Test
     fun `computeY returns placeholder value`() {
         // Given: Proof with test secret
-        val proof = Proof(
-            amount = 100,
-            secret = "test-secret-for-hashing",
-            C = "02abcdef",
-            id = "keyset-1"
-        )
+        val proof =
+            Proof(
+                amount = 100,
+                secret = "test-secret-for-hashing",
+                C = "02abcdef",
+                id = "keyset-1",
+            )
 
         // When: Computing Y-coordinate
         val y = proof.computeY()

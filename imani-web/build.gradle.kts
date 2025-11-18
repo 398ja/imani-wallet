@@ -17,7 +17,8 @@ kotlin {
         val jsMain by getting {
             dependencies {
                 implementation(project(":imani-app"))
-                implementation(compose.html.core)
+                implementation(compose.ui)
+                implementation(compose.runtime)
             }
         }
     }

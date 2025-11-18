@@ -20,7 +20,8 @@ kotlin {
                 implementation(compose.foundation)
                 implementation(compose.material3)
                 implementation(compose.ui)
-                implementation(compose.components.resources)
+                // Commented out for Phase 1 - will add back in Phase 2 when needed
+                // implementation(compose.components.resources)
                 implementation(libs.voyager.navigator)
                 implementation(libs.voyager.transitions)
                 implementation(libs.koin.core)

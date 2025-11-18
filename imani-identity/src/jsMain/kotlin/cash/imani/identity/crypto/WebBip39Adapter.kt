@@ -43,7 +43,7 @@ class WebBip39Adapter : Bip39Adapter {
             val seedUint8Array = seedPromise.await()
 
             // Convert Uint8Array to ByteArray
-            return Uint8Array(seedUint8Array).toByteArray()
+            return seedUint8Array.unsafeCast<Uint8Array>().toByteArray()
         } catch (e: Exception) {
             throw IllegalArgumentException("Failed to convert mnemonic to seed", e)
         }
@@ -79,7 +79,7 @@ class WebBip39Adapter : Bip39Adapter {
     private fun ByteArray.toUint8Array(): Uint8Array {
         val uint8Array = Uint8Array(this.size)
         for (i in this.indices) {
-            uint8Array[i] = this[i]
+            uint8Array.asDynamic()[i] = this[i]
         }
         return uint8Array
     }
@@ -88,6 +88,6 @@ class WebBip39Adapter : Bip39Adapter {
      * Helper to convert JavaScript Uint8Array to Kotlin ByteArray.
      */
     private fun Uint8Array.toByteArray(): ByteArray {
-        return ByteArray(this.length) { i -> this[i] }
+        return ByteArray(this.length) { i -> this.asDynamic()[i].unsafeCast<Byte>() }
     }
 }

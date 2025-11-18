@@ -80,7 +80,7 @@ class WebIdentityRepository(
             storage["privkey_$id"] = encryptedPrivKey
 
             // Store encrypted mnemonic
-            val encryptedMnemonic = encryptData(mnemonic.toByteArray())
+            val encryptedMnemonic = encryptData(mnemonic.encodeToByteArray())
             storage["mnemonic_$id"] = encryptedMnemonic
 
             identity
@@ -186,7 +186,7 @@ class WebIdentityRepository(
             storage["privkey_$id"] = encryptedPrivKey
 
             // Store encrypted mnemonic
-            val encryptedMnemonic = encryptData(mnemonic.toByteArray())
+            val encryptedMnemonic = encryptData(mnemonic.encodeToByteArray())
             storage["mnemonic_$id"] = encryptedMnemonic
 
             identity
@@ -279,7 +279,7 @@ class WebIdentityRepository(
     private suspend fun encryptData(data: ByteArray): String {
         // TODO Phase 2: Implement proper AES-GCM encryption
         // For Phase 1, use simple XOR (NOT SECURE)
-        val keyBytes = cryptoAdapter.sha256(encryptionKey.toByteArray())
+        val keyBytes = cryptoAdapter.sha256(encryptionKey.encodeToByteArray())
         val encrypted =
             ByteArray(data.size) { i ->
                 (data[i].toInt() xor keyBytes[i % keyBytes.size].toInt()).toByte()
@@ -296,8 +296,9 @@ class WebIdentityRepository(
     private suspend fun decryptData(encryptedHex: String): ByteArray {
         // TODO Phase 2: Implement proper AES-GCM decryption
         // For Phase 1, XOR decryption (symmetric with encryption)
-        val encrypted = encryptedHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-        val keyBytes = cryptoAdapter.sha256(encryptionKey.toByteArray())
+        val encryptedList = encryptedHex.chunked(2).map { it.toInt(16).toByte() }
+        val encrypted = ByteArray(encryptedList.size) { i -> encryptedList[i] }
+        val keyBytes = cryptoAdapter.sha256(encryptionKey.encodeToByteArray())
         return ByteArray(encrypted.size) { i ->
             (encrypted[i].toInt() xor keyBytes[i % keyBytes.size].toInt()).toByte()
         }
@@ -326,3 +327,11 @@ class WebIdentityRepository(
             }
     }
 }
+
+/**
+ * Web platform implementation - returns WebIdentityRepository.
+ */
+actual fun createIdentityRepository(
+    cryptoAdapter: CryptoAdapter,
+    bip39Adapter: Bip39Adapter,
+): IdentityRepository = WebIdentityRepository(cryptoAdapter, bip39Adapter)

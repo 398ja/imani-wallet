@@ -1,5 +1,7 @@
 package cash.imani.identity.repository
 
+import cash.imani.identity.crypto.Bip39Adapter
+import cash.imani.identity.crypto.CryptoAdapter
 import cash.imani.identity.domain.Identity
 
 /**
@@ -167,3 +169,16 @@ class InvalidMnemonicException(message: String) : Exception(message)
  * Exception thrown when storage operations fail.
  */
 class IdentityStorageException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+/**
+ * Factory function to create platform-specific IdentityRepository implementation.
+ *
+ * Uses Kotlin Multiplatform's expect/actual mechanism to provide
+ * the correct implementation for each target platform:
+ * - Web: WebIdentityRepository (LocalStorage)
+ * - JVM: JvmIdentityRepository (In-memory HashMap)
+ */
+expect fun createIdentityRepository(
+    cryptoAdapter: CryptoAdapter,
+    bip39Adapter: Bip39Adapter,
+): IdentityRepository

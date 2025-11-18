@@ -18,5 +18,5 @@ data class RedemptionMetadata(
     val redeemedAt: Instant,
     val redeemedBy: String? = null,
     val amountReceived: Long,
-    val transactionId: String? = null
+    val transactionId: String? = null,
 )

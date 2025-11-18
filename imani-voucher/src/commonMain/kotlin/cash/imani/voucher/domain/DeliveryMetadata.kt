@@ -18,5 +18,5 @@ data class DeliveryMetadata(
     @Contextual
     val deliveredAt: Instant,
     val recipientPubkey: String? = null,
-    val relayUrls: List<String>? = null
+    val relayUrls: List<String>? = null,
 )

@@ -20,5 +20,5 @@ enum class VoucherStatus {
     REVOKED,
 
     /** Voucher has expired (past expiration date) */
-    EXPIRED
+    EXPIRED,
 }

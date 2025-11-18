@@ -1,7 +1,6 @@
 package cash.imani.voucher.domain
 
 import kotlinx.datetime.Clock
-import kotlinx.datetime.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -12,7 +11,6 @@ import kotlin.time.Duration.Companion.days
  * Tests voucher filtering, balance calculation, and state aggregation.
  */
 class WalletStateTest {
-
     /**
      * Test data builder for creating StoredVoucher instances with customizable fields.
      * Provides sensible defaults for common test scenarios.
@@ -22,7 +20,7 @@ class WalletStateTest {
         unit: String = "sat",
         faceValue: Long = 1000,
         status: VoucherStatus = VoucherStatus.ISSUED,
-        expiresAt: Long? = null
+        expiresAt: Long? = null,
     ): StoredVoucher {
         return StoredVoucher(
             voucherId = id,
@@ -34,7 +32,7 @@ class WalletStateTest {
             issuerSignature = "sig",
             issuerPublicKey = "0".repeat(64),
             issuedAt = Clock.System.now(),
-            status = status
+            status = status,
         )
     }
 
@@ -42,12 +40,15 @@ class WalletStateTest {
      * Test data builder for creating Proof instances with customizable amount.
      * Uses consistent keyset ID unless overridden.
      */
-    private fun createProof(amount: Int, id: String = "keyset-1"): Proof {
+    private fun createProof(
+        amount: Int,
+        id: String = "keyset-1",
+    ): Proof {
         return Proof(
             amount = amount,
             secret = "secret-$amount",
             C = "C-$amount",
-            id = id
+            id = id,
         )
     }
 
@@ -59,18 +60,20 @@ class WalletStateTest {
     fun `getActiveVouchers returns only active vouchers`() {
         // Given: Mix of active, redeemed, expired, and delivered vouchers
         val now = Clock.System.now()
-        val vouchers = listOf(
-            createVoucher("v1", status = VoucherStatus.ISSUED),
-            createVoucher("v2", status = VoucherStatus.REDEEMED),
-            createVoucher("v3", status = VoucherStatus.ISSUED, expiresAt = now.minus(1.days).epochSeconds),
-            createVoucher("v4", status = VoucherStatus.DELIVERED)
-        )
+        val vouchers =
+            listOf(
+                createVoucher("v1", status = VoucherStatus.ISSUED),
+                createVoucher("v2", status = VoucherStatus.REDEEMED),
+                createVoucher("v3", status = VoucherStatus.ISSUED, expiresAt = now.minus(1.days).epochSeconds),
+                createVoucher("v4", status = VoucherStatus.DELIVERED),
+            )
 
-        val walletState = WalletState(
-            vouchers = vouchers,
-            proofs = emptyList(),
-            lastUpdated = now
-        )
+        val walletState =
+            WalletState(
+                vouchers = vouchers,
+                proofs = emptyList(),
+                lastUpdated = now,
+            )
 
         // When: Getting active vouchers
         val activeVouchers = walletState.getActiveVouchers()
@@ -87,18 +90,20 @@ class WalletStateTest {
     @Test
     fun `getActiveVoucherValue groups by unit`() {
         // Given: Vouchers in multiple units with mixed statuses
-        val vouchers = listOf(
-            createVoucher("v1", unit = "sat", faceValue = 1000, status = VoucherStatus.ISSUED),
-            createVoucher("v2", unit = "sat", faceValue = 2000, status = VoucherStatus.ISSUED),
-            createVoucher("v3", unit = "usd", faceValue = 10, status = VoucherStatus.ISSUED),
-            createVoucher("v4", unit = "sat", faceValue = 500, status = VoucherStatus.REDEEMED)
-        )
+        val vouchers =
+            listOf(
+                createVoucher("v1", unit = "sat", faceValue = 1000, status = VoucherStatus.ISSUED),
+                createVoucher("v2", unit = "sat", faceValue = 2000, status = VoucherStatus.ISSUED),
+                createVoucher("v3", unit = "usd", faceValue = 10, status = VoucherStatus.ISSUED),
+                createVoucher("v4", unit = "sat", faceValue = 500, status = VoucherStatus.REDEEMED),
+            )
 
-        val walletState = WalletState(
-            vouchers = vouchers,
-            proofs = emptyList(),
-            lastUpdated = Clock.System.now()
-        )
+        val walletState =
+            WalletState(
+                vouchers = vouchers,
+                proofs = emptyList(),
+                lastUpdated = Clock.System.now(),
+            )
 
         // When: Getting active voucher values
         val voucherValues = walletState.getActiveVoucherValue()
@@ -115,16 +120,18 @@ class WalletStateTest {
     @Test
     fun `getActiveVoucherValue returns empty map when no active vouchers`() {
         // Given: Only redeemed and revoked vouchers
-        val vouchers = listOf(
-            createVoucher("v1", status = VoucherStatus.REDEEMED),
-            createVoucher("v2", status = VoucherStatus.REVOKED)
-        )
+        val vouchers =
+            listOf(
+                createVoucher("v1", status = VoucherStatus.REDEEMED),
+                createVoucher("v2", status = VoucherStatus.REVOKED),
+            )
 
-        val walletState = WalletState(
-            vouchers = vouchers,
-            proofs = emptyList(),
-            lastUpdated = Clock.System.now()
-        )
+        val walletState =
+            WalletState(
+                vouchers = vouchers,
+                proofs = emptyList(),
+                lastUpdated = Clock.System.now(),
+            )
 
         // When: Getting active voucher values
         val voucherValues = walletState.getActiveVoucherValue()
@@ -140,17 +147,19 @@ class WalletStateTest {
     @Test
     fun `getTotalBalance returns empty map for Phase 0`() {
         // Given: Wallet with multiple proofs
-        val proofs = listOf(
-            createProof(100),
-            createProof(200),
-            createProof(500)
-        )
+        val proofs =
+            listOf(
+                createProof(100),
+                createProof(200),
+                createProof(500),
+            )
 
-        val walletState = WalletState(
-            vouchers = emptyList(),
-            proofs = proofs,
-            lastUpdated = Clock.System.now()
-        )
+        val walletState =
+            WalletState(
+                vouchers = emptyList(),
+                proofs = proofs,
+                lastUpdated = Clock.System.now(),
+            )
 
         // When: Getting total balance
         val balance = walletState.getTotalBalance()

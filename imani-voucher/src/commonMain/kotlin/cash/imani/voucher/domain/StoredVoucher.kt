@@ -39,7 +39,7 @@ data class StoredVoucher(
     val status: VoucherStatus,
     val token: String? = null,
     val deliveryMetadata: DeliveryMetadata? = null,
-    val redemptionMetadata: RedemptionMetadata? = null
+    val redemptionMetadata: RedemptionMetadata? = null,
 ) {
     /**
      * Checks if the voucher has expired based on current time.

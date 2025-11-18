@@ -13,7 +13,6 @@ import kotlin.time.Duration.Companion.seconds
  * Tests voucher lifecycle, expiration logic, and redemption rules.
  */
 class StoredVoucherTest {
-
     /**
      * Test data builder for creating StoredVoucher instances with customizable fields.
      * Provides sensible defaults for common test scenarios.
@@ -21,7 +20,7 @@ class StoredVoucherTest {
     private fun createVoucher(
         status: VoucherStatus = VoucherStatus.ISSUED,
         expiresAt: Long? = null,
-        issuedAt: Instant = Clock.System.now()
+        issuedAt: Instant = Clock.System.now(),
     ): StoredVoucher {
         return StoredVoucher(
             voucherId = "voucher-1",
@@ -33,7 +32,7 @@ class StoredVoucherTest {
             issuerSignature = "signature",
             issuerPublicKey = "0".repeat(64),
             issuedAt = issuedAt,
-            status = status
+            status = status,
         )
     }
 
@@ -94,10 +93,11 @@ class StoredVoucherTest {
     @Test
     fun `isActive returns true for issued non-expired voucher`() {
         // Given: Issued voucher expiring in future
-        val voucher = createVoucher(
-            status = VoucherStatus.ISSUED,
-            expiresAt = Clock.System.now().plus(1.days).epochSeconds
-        )
+        val voucher =
+            createVoucher(
+                status = VoucherStatus.ISSUED,
+                expiresAt = Clock.System.now().plus(1.days).epochSeconds,
+            )
 
         // When: Checking if active
         val result = voucher.isActive()
@@ -113,10 +113,11 @@ class StoredVoucherTest {
     @Test
     fun `isActive returns false for redeemed voucher`() {
         // Given: Redeemed voucher
-        val voucher = createVoucher(
-            status = VoucherStatus.REDEEMED,
-            expiresAt = Clock.System.now().plus(1.days).epochSeconds
-        )
+        val voucher =
+            createVoucher(
+                status = VoucherStatus.REDEEMED,
+                expiresAt = Clock.System.now().plus(1.days).epochSeconds,
+            )
 
         // When: Checking if active
         val result = voucher.isActive()
@@ -132,10 +133,11 @@ class StoredVoucherTest {
     @Test
     fun `isActive returns false for expired voucher`() {
         // Given: Expired voucher with ISSUED status
-        val voucher = createVoucher(
-            status = VoucherStatus.ISSUED,
-            expiresAt = Clock.System.now().minus(1.days).epochSeconds
-        )
+        val voucher =
+            createVoucher(
+                status = VoucherStatus.ISSUED,
+                expiresAt = Clock.System.now().minus(1.days).epochSeconds,
+            )
 
         // When: Checking if active
         val result = voucher.isActive()
@@ -167,10 +169,11 @@ class StoredVoucherTest {
     @Test
     fun `canRedeem returns true for issued voucher`() {
         // Given: Issued voucher expiring in future
-        val voucher = createVoucher(
-            status = VoucherStatus.ISSUED,
-            expiresAt = Clock.System.now().plus(1.days).epochSeconds
-        )
+        val voucher =
+            createVoucher(
+                status = VoucherStatus.ISSUED,
+                expiresAt = Clock.System.now().plus(1.days).epochSeconds,
+            )
 
         // When: Checking if redeemable
         val result = voucher.canRedeem()
@@ -186,10 +189,11 @@ class StoredVoucherTest {
     @Test
     fun `canRedeem returns true for delivered voucher`() {
         // Given: Delivered voucher expiring in future
-        val voucher = createVoucher(
-            status = VoucherStatus.DELIVERED,
-            expiresAt = Clock.System.now().plus(1.days).epochSeconds
-        )
+        val voucher =
+            createVoucher(
+                status = VoucherStatus.DELIVERED,
+                expiresAt = Clock.System.now().plus(1.days).epochSeconds,
+            )
 
         // When: Checking if redeemable
         val result = voucher.canRedeem()
@@ -221,10 +225,11 @@ class StoredVoucherTest {
     @Test
     fun `canRedeem returns false for expired voucher`() {
         // Given: Voucher expired 1 second ago
-        val voucher = createVoucher(
-            status = VoucherStatus.ISSUED,
-            expiresAt = Clock.System.now().minus(1.seconds).epochSeconds
-        )
+        val voucher =
+            createVoucher(
+                status = VoucherStatus.ISSUED,
+                expiresAt = Clock.System.now().minus(1.seconds).epochSeconds,
+            )
 
         // When: Checking if redeemable
         val result = voucher.canRedeem()

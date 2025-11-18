@@ -1,5 +1,6 @@
 package cash.imani.identity.crypto
 
+import kotlinx.browser.window
 import kotlinx.coroutines.await
 import org.khronos.webgl.ArrayBuffer
 import org.khronos.webgl.Uint8Array
@@ -18,12 +19,13 @@ import kotlin.js.Promise
  * - @noble/secp256k1: ^2.0.0
  * - @noble/hashes: ^1.3.3
  */
-actual fun createCryptoAdapter(): CryptoAdapter = WebCryptoAdapter()
-
 class WebCryptoAdapter : CryptoAdapter {
     // Access browser's Web Crypto API
-    private val crypto = kotlinx.browser.window.crypto
-    private val subtle = crypto.subtle
+    private val crypto: dynamic
+        get() = window.asDynamic().crypto
+
+    private val subtle: dynamic
+        get() = crypto.subtle
 
     // Dynamically import @noble/secp256k1 library
     private val secp256k1: dynamic
@@ -32,14 +34,14 @@ class WebCryptoAdapter : CryptoAdapter {
     override suspend fun generateRandomBytes(length: Int): ByteArray {
         val array = Uint8Array(length)
         crypto.getRandomValues(array)
-        return array.unsafeCast<ByteArray>()
+        return ByteArray(length) { i -> array.asDynamic()[i].unsafeCast<Byte>() }
     }
 
     override suspend fun sha256(data: ByteArray): ByteArray {
         // Convert ByteArray to Uint8Array for Web Crypto API
         val uint8Array = Uint8Array(data.size)
         for (i in data.indices) {
-            uint8Array[i] = data[i]
+            uint8Array.asDynamic()[i] = data[i]
         }
 
         // Use Web Crypto API's SubtleCrypto.digest
@@ -50,7 +52,7 @@ class WebCryptoAdapter : CryptoAdapter {
 
         // Convert ArrayBuffer back to ByteArray
         val resultArray = Uint8Array(hashBuffer)
-        return ByteArray(resultArray.length) { i -> resultArray[i] }
+        return ByteArray(resultArray.length) { i -> resultArray.asDynamic()[i].unsafeCast<Byte>() }
     }
 
     override suspend fun generateKeypair(): KeyPair {
@@ -73,12 +75,13 @@ class WebCryptoAdapter : CryptoAdapter {
 
             // Use @noble/secp256k1 to derive public key
             // getPublicKey returns 33-byte compressed key, we need x-coordinate only (32 bytes)
-            val pubKeyPromise: Promise<dynamic> = secp256k1.getPublicKey(privateKey, true)
+            val privKeyArray = privateKey.toUint8Array()
+            val pubKeyPromise: Promise<dynamic> = secp256k1.getPublicKey(privKeyArray, true)
             val pubKeyCompressed = pubKeyPromise.await()
 
             // Extract x-coordinate (skip first byte which is 0x02 or 0x03 compression flag)
             val pubKeyArray = Uint8Array(pubKeyCompressed.unsafeCast<ArrayBuffer>())
-            return ByteArray(32) { i -> pubKeyArray[i + 1] }
+            return ByteArray(32) { i -> pubKeyArray.asDynamic()[i + 1].unsafeCast<Byte>() }
         } catch (e: Exception) {
             throw CryptoException("Failed to derive public key from private key", e)
         }
@@ -99,7 +102,7 @@ class WebCryptoAdapter : CryptoAdapter {
 
             // Convert result to ByteArray
             val sigArray = Uint8Array(signature.unsafeCast<ArrayBuffer>())
-            return ByteArray(sigArray.length) { i -> sigArray[i] }
+            return ByteArray(sigArray.length) { i -> sigArray.asDynamic()[i].unsafeCast<Byte>() }
         } catch (e: Exception) {
             throw CryptoException("Failed to sign message", e)
         }
@@ -152,7 +155,7 @@ class WebCryptoAdapter : CryptoAdapter {
     private fun ByteArray.toUint8Array(): Uint8Array {
         val uint8Array = Uint8Array(this.size)
         for (i in this.indices) {
-            uint8Array[i] = this[i]
+            uint8Array.asDynamic()[i] = this[i]
         }
         return uint8Array
     }

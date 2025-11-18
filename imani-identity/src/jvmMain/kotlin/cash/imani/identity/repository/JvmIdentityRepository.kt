@@ -162,3 +162,11 @@ class JvmIdentityRepository(
             identities[id] = identity.copy(lastUsedAt = Clock.System.now())
         }
 }
+
+/**
+ * JVM platform implementation - returns JvmIdentityRepository.
+ */
+actual fun createIdentityRepository(
+    cryptoAdapter: CryptoAdapter,
+    bip39Adapter: Bip39Adapter,
+): IdentityRepository = JvmIdentityRepository(cryptoAdapter, bip39Adapter)

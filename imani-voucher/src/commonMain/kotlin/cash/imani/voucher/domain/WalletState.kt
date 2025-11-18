@@ -16,7 +16,7 @@ data class WalletState(
     val vouchers: List<StoredVoucher>,
     val proofs: List<Proof>,
     @Contextual
-    val lastUpdated: Instant
+    val lastUpdated: Instant,
 ) {
     /**
      * Calculates total balance across all unspent proofs by unit.

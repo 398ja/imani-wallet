@@ -24,61 +24,61 @@ object ImaniColors {
      * Primary brand color - Deep Purple (#6B46C1)
      * Represents trust, wisdom, and the Imani (faith) principle
      */
-    const val Primary = 0xFF6B46C1
+    const val PRIMARY = 0xFF6B46C1
 
     /**
      * Accent color - Gold (#F59E0B)
      * Represents value, warmth, and African heritage
      */
-    const val Accent = 0xFFF59E0B
+    const val ACCENT = 0xFFF59E0B
 
     /**
      * Secondary color - Deep Blue (#1E40AF)
      * Represents security and stability
      */
-    const val Secondary = 0xFF1E40AF
+    const val SECONDARY = 0xFF1E40AF
 
     /**
      * Background color - Cream (#FFFBEB)
      * Represents clarity and openness
      */
-    const val Background = 0xFFFFFBEB
+    const val BACKGROUND = 0xFFFFFBEB
 
     /**
      * Surface color - White (#FFFFFF)
      * For cards and elevated surfaces
      */
-    const val Surface = 0xFFFFFFFF
+    const val SURFACE = 0xFFFFFFFF
 
     /**
      * Error color - Red (#DC2626)
      * For error states and warnings
      */
-    const val Error = 0xFFDC2626
+    const val ERROR = 0xFFDC2626
 
     /**
      * Success color - Green (#059669)
      * For success states and confirmations
      */
-    const val Success = 0xFF059669
+    const val SUCCESS = 0xFF059669
 
     /**
      * On-primary color - White (#FFFFFF)
      * Text and icons on primary color
      */
-    const val OnPrimary = 0xFFFFFFFF
+    const val ON_PRIMARY = 0xFFFFFFFF
 
     /**
      * On-background color - Dark Gray (#1F2937)
      * Text on background
      */
-    const val OnBackground = 0xFF1F2937
+    const val ON_BACKGROUND = 0xFF1F2937
 
     /**
      * On-surface color - Dark Gray (#1F2937)
      * Text on surface
      */
-    const val OnSurface = 0xFF1F2937
+    const val ON_SURFACE = 0xFF1F2937
 }
 
 /**
@@ -93,63 +93,88 @@ object ImaniTypography {
     /**
      * Font family for headers and titles
      */
-    const val HeaderFont = "Inter"
+    const val HEADER_FONT = "Inter"
 
     /**
      * Font family for body text
      */
-    const val BodyFont = "Inter"
+    const val BODY_FONT = "Inter"
 
     /**
      * Font family for code, tokens, and technical data
      */
-    const val MonoFont = "JetBrains Mono"
+    const val MONO_FONT = "JetBrains Mono"
 
     /**
      * Font weight for headers (bold)
      */
-    const val HeaderWeight = 700
+    const val HEADER_WEIGHT = 700
 
     /**
      * Font weight for body text (regular)
      */
-    const val BodyWeight = 400
+    const val BODY_WEIGHT = 400
 
     /**
      * Font weight for emphasis (semi-bold)
      */
-    const val EmphasisWeight = 600
+    const val EMPHASIS_WEIGHT = 600
 }
 
 /**
  * Spacing constants following 8px grid system
  */
 object ImaniSpacing {
-    const val XSmall = 4
-    const val Small = 8
-    const val Medium = 16
-    const val Large = 24
-    const val XLarge = 32
-    const val XXLarge = 48
+    const val X_SMALL = 4
+    const val SMALL = 8
+    const val MEDIUM = 16
+    const val LARGE = 24
+    const val X_LARGE = 32
+    const val XX_LARGE = 48
 }
 
 /**
  * Border radius constants
  */
 object ImaniBorderRadius {
-    const val Small = 4
-    const val Medium = 8
-    const val Large = 16
-    const val XLarge = 24
+    const val SMALL = 4
+    const val MEDIUM = 8
+    const val LARGE = 16
+    const val X_LARGE = 24
 }
 
 /**
  * Shadow/elevation constants
  */
 object ImaniElevation {
-    const val None = 0
-    const val Low = 2
-    const val Medium = 4
-    const val High = 8
-    const val VeryHigh = 16
+    const val NONE = 0
+    const val LOW = 2
+    const val MEDIUM = 4
+    const val HIGH = 8
+    const val VERY_HIGH = 16
+}
+
+/**
+ * Imani Wallet Material 3 theme.
+ *
+ * Applies the Imani brand colors and typography to Material 3 components.
+ */
+@androidx.compose.runtime.Composable
+fun ImaniTheme(content: @androidx.compose.runtime.Composable () -> Unit) {
+    androidx.compose.material3.MaterialTheme(
+        colorScheme =
+            androidx.compose.material3.lightColorScheme(
+                primary = androidx.compose.ui.graphics.Color(ImaniColors.PRIMARY),
+                secondary = androidx.compose.ui.graphics.Color(ImaniColors.SECONDARY),
+                tertiary = androidx.compose.ui.graphics.Color(ImaniColors.ACCENT),
+                background = androidx.compose.ui.graphics.Color(ImaniColors.BACKGROUND),
+                surface = androidx.compose.ui.graphics.Color(ImaniColors.SURFACE),
+                error = androidx.compose.ui.graphics.Color(ImaniColors.ERROR),
+                onPrimary = androidx.compose.ui.graphics.Color(ImaniColors.ON_PRIMARY),
+                onSecondary = androidx.compose.ui.graphics.Color(ImaniColors.ON_PRIMARY),
+                onBackground = androidx.compose.ui.graphics.Color(ImaniColors.ON_BACKGROUND),
+                onSurface = androidx.compose.ui.graphics.Color(ImaniColors.ON_SURFACE),
+            ),
+        content = content,
+    )
 }

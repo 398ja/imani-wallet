@@ -19,22 +19,25 @@ dependencies {
     kover(project(":imani-voucher"))
 }
 
-kover {
-    reports {
-        filters {
-            excludes {
-                // Exclude generated code
-                classes("*.BuildConfig")
-                // Exclude platform-specific implementations (will be tested separately)
-                packages("cash.imani.*.platform")
-            }
+koverReport {
+    filters {
+        excludes {
+            // Exclude generated code
+            classes("*.BuildConfig")
+            // Exclude platform-specific implementations (will be tested separately)
+            packages("cash.imani.*.platform")
         }
     }
 }
 
-// Apply ktlint to all subprojects
+// Apply ktlint and kover to subprojects
 subprojects {
     apply(plugin = "org.jlleitschuh.gradle.ktlint")
+
+    // Apply Kover to Kotlin Multiplatform modules
+    if (name in listOf("imani-identity", "imani-voucher")) {
+        apply(plugin = "org.jetbrains.kotlinx.kover")
+    }
 
     configure<org.jlleitschuh.gradle.ktlint.KtlintExtension> {
         version.set("1.0.1")
@@ -50,8 +53,4 @@ subprojects {
             exclude("**/build/**")
         }
     }
-}
-
-tasks.register("clean", Delete::class) {
-    delete(rootProject.layout.buildDirectory)
 }
