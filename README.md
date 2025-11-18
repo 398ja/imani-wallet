@@ -54,8 +54,15 @@ imani-wallet/
 
 ## Documentation
 
-- [Implementation Roadmap](../cashu-client/docs/how-to/kotlin-voucher-client-roadmap.md)
-- [Technical Specification](../cashu-client/docs/explanation/kotlin-client-spec-detailed.md)
+### Project Documentation
+- [Implementation Roadmap](project/kotlin-voucher-client-roadmap.md)
+- [Kotlin Client Technical Specification](project/explanation/kotlin-client-spec-detailed.md)
+- [Web Client Specification (High-Level)](project/explanation/web-client-spec.md)
+- [Web Client Detailed Specification](project/explanation/web-client-spec-detailed.md)
+
+### Reference Documentation
+- [NUT Specifications Analysis](docs/reference/nut-specifications-web-client-analysis.md)
+- [How-To Guide: Kotlin Voucher Client Roadmap](docs/how-to/kotlin-voucher-client-roadmap.md)
 
 ## Technology Stack
 
