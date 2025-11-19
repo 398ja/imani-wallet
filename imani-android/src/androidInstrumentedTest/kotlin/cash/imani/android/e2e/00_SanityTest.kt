@@ -1,0 +1,78 @@
+package cash.imani.android.e2e
+
+import androidx.compose.ui.test.*
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import cash.imani.android.MainActivity
+import cash.imani.android.e2e.fixtures.ImaniTestFixtures
+import kotlinx.coroutines.test.runTest
+import org.junit.Rule
+import org.junit.Test
+
+/**
+ * Sanity E2E test: Application loads and basic UI is visible.
+ *
+ * Mirrors: e2e/tests/00-sanity.spec.ts
+ */
+class SanityTest {
+
+    @get:Rule
+    val composeTestRule = createAndroidComposeRule<MainActivity>()
+
+    /**
+     * Tests that the application loads without crashing.
+     */
+    @Test
+    fun should_load_the_application() = runTest {
+        val fixtures = ImaniTestFixtures(composeTestRule)
+
+        // Wait for app to load
+        fixtures.waitForAppLoad()
+
+        // Should see bottom navigation
+        composeTestRule.onNodeWithText("Identities").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Vouchers").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
+    }
+
+    /**
+     * Tests that the app shows initial screen (either onboarding or home).
+     */
+    @Test
+    fun should_show_initial_screen() = runTest {
+        val fixtures = ImaniTestFixtures(composeTestRule)
+        fixtures.waitForAppLoad()
+
+        // Should show either:
+        // - Empty state with "Create Identity" button, OR
+        // - Identity list screen
+
+        val hasCreateButton = composeTestRule.onAllNodesWithContentDescription("Create Identity")
+            .fetchSemanticsNodes().isNotEmpty()
+
+        val hasIdentityList = composeTestRule.onAllNodesWithText("Identities")
+            .fetchSemanticsNodes().isNotEmpty()
+
+        assert(hasCreateButton || hasIdentityList) {
+            "Expected either Create Identity button or Identity list to be visible"
+        }
+    }
+
+    /**
+     * Tests that bottom navigation works.
+     */
+    @Test
+    fun should_navigate_between_tabs() = runTest {
+        val fixtures = ImaniTestFixtures(composeTestRule)
+        fixtures.waitForAppLoad()
+
+        // Navigate to each tab
+        fixtures.gotoVouchers()
+        composeTestRule.onNodeWithText("Vouchers").assertIsDisplayed()
+
+        fixtures.gotoSettings()
+        composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
+
+        fixtures.gotoIdentities()
+        composeTestRule.onNodeWithText("Identities").assertIsDisplayed()
+    }
+}

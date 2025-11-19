@@ -88,6 +88,33 @@ kotlin {
                 implementation(libs.androidx.test.core)
             }
         }
+
+        val androidInstrumentedTest by getting {
+            dependencies {
+                // Compose UI Testing
+                implementation("androidx.compose.ui:ui-test-junit4:1.6.0")
+                implementation("androidx.compose.ui:ui-test-manifest:1.6.0")
+
+                // AndroidX Test
+                implementation("androidx.test.ext:junit:1.1.5")
+                implementation("androidx.test:runner:1.5.2")
+                implementation("androidx.test:rules:1.5.0")
+                implementation("androidx.test.espresso:espresso-core:3.5.1")
+
+                // Coroutines testing
+                implementation(libs.kotlinx.coroutines.test)
+
+                // Koin testing
+                implementation("io.insert-koin:koin-test:3.5.3")
+                implementation("io.insert-koin:koin-test-junit4:3.5.3")
+
+                // MockK for instrumentation tests
+                implementation("io.mockk:mockk-android:1.13.8")
+
+                // Turbine for Flow testing
+                implementation("app.cash.turbine:turbine:1.0.0")
+            }
+        }
     }
 }
 
@@ -140,6 +167,19 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+    }
+
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true // For Robolectric
+            isReturnDefaultValues = true
+        }
+
+        // Disable animations for faster, more reliable UI tests
+        animationsDisabled = true
+
+        // Optional: Use test orchestrator for isolated test execution
+        // execution = "ANDROIDX_TEST_ORCHESTRATOR"
     }
 }
 
