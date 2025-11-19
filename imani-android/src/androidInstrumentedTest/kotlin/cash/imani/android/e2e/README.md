@@ -8,27 +8,40 @@ End-to-end tests for Imani Wallet Android app, mirroring the Playwright tests in
 e2e/
 ├── fixtures/
 │   └── ImaniTestFixtures.kt       # Helper functions (like fixtures.ts)
-├── 00_SanityTest.kt                # Basic app loads
+├── 00_SanityTest.kt                # Basic app loads and navigation
+├── 01_BasicFlowTest.kt             # Navigation, tabs, back button
 ├── 02_IdentityFlowTest.kt          # Identity management
 ├── 03_VoucherFlowTest.kt           # Complete voucher lifecycle
+├── 04_MobileSpecificTest.kt        # Android-specific (rotation, etc.)
+├── 05_EdgeCasesTest.kt             # Edge cases and stress tests
 └── README.md                       # This file
 ```
 
 ## 🎯 Test Coverage
 
-### Sanity Tests (`00_SanityTest.kt`)
+### Sanity Tests (`00_SanityTest.kt`) - 3 tests
 - ✅ App loads without crashing
 - ✅ Bottom navigation works
-- ✅ Initial screen displays
+- ✅ Navigate between tabs
 
-### Identity Flow Tests (`02_IdentityFlowTest.kt`)
+### Basic Flow Tests (`01_BasicFlowTest.kt`) - 8 tests
+- ✅ Load application and show navigation
+- ✅ Navigate between all tabs
+- ✅ Preserve tab state when switching
+- ✅ Share data between tabs
+- ✅ Handle back navigation correctly
+- ✅ Switch to first tab on back from other tabs
+- ✅ Show empty states on fresh install
+- ✅ Handle rapid tab switching
+
+### Identity Flow Tests (`02_IdentityFlowTest.kt`) - 5 tests
 - ✅ Create new identity
 - ✅ Display identity public key
 - ✅ Show mnemonic backup phrase
 - ✅ Import identity from mnemonic
 - ✅ Reject invalid mnemonic
 
-### Voucher Flow Tests (`03_VoucherFlowTest.kt`)
+### Voucher Flow Tests (`03_VoucherFlowTest.kt`) - 8 tests
 - ✅ Complete voucher lifecycle (issue → share → redeem)
 - ✅ Voucher issuance with memo
 - ✅ Voucher history
@@ -36,6 +49,36 @@ e2e/
 - ✅ Handle already-redeemed voucher
 - ✅ Handle insufficient balance
 - ✅ Handle network errors
+- ✅ (Additional error scenarios)
+
+### Mobile-Specific Tests (`04_MobileSpecificTest.kt`) - 10 tests
+- ✅ Preserve state on screen rotation
+- ✅ Preserve navigation state on rotation
+- ✅ Preserve form input on rotation
+- ✅ Handle system back button correctly
+- ✅ Handle app backgrounding
+- ✅ Trigger share intent
+- ✅ Show biometric prompt if enabled
+- ✅ Handle memory pressure
+- ✅ Handle rapid rotations
+- ✅ Work in landscape mode
+
+### Edge Cases Tests (`05_EdgeCasesTest.kt`) - 15 tests
+- ✅ Handle very long identity label
+- ✅ Reject empty identity label
+- ✅ Handle special characters in label
+- ✅ Handle many identities (stress test)
+- ✅ Reject zero amount voucher
+- ✅ Reject negative amount voucher
+- ✅ Handle very large amount
+- ✅ Handle very long memo
+- ✅ Reject malformed voucher token
+- ✅ Prevent concurrent identity creation
+- ✅ Maintain data consistency
+- ✅ Completely clear data when requested
+- ✅ (Additional edge cases)
+
+**Total: 49 tests** (vs 21 web tests - 233% coverage due to mobile-specific tests!)
 
 ## 🚀 Running Tests
 
