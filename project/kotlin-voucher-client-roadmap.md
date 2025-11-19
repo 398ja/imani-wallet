@@ -2351,13 +2351,14 @@ class VoucherFlowTest {
 
 #### 3.4. Production Deployment
 
-- [ ] Set up CI/CD for web deployment (Vercel/Netlify)
-- [ ] Configure custom domain and SSL
-- [ ] Set up error tracking (Sentry or similar)
-- [ ] Configure analytics (privacy-respecting)
-- [ ] Write deployment documentation
+- [x] Set up CI/CD for web deployment (Vercel/Netlify)
+- [x] Configure custom domain and SSL
+- [x] Set up error tracking (Sentry or similar)
+- [x] Configure analytics (privacy-respecting)
+- [x] Write deployment documentation
 
 **Effort**: 2 days
+**Status**: ✅ COMPLETED
 
 ---
 
@@ -2378,7 +2379,7 @@ class VoucherFlowTest {
 
 - [x] Security hardened (encryption, CSP, validation)
 - [x] Performance optimized (bundle size, PWA)
-- [ ] Production deployment (CI/CD, monitoring)
+- [x] Production deployment (CI/CD, monitoring)
 - [ ] E2E tests passing
 
 **Total Effort**: 12 days (2 weeks with buffer)
@@ -2390,7 +2391,7 @@ class VoucherFlowTest {
 | 3.1 | Security Hardening | M (3d) | ✅ DONE | - | Passphrase encryption (Argon2/PBKDF2), CSP, validation | 2.6 |
 | 3.2 | Performance Optimization | M (2d) | ✅ DONE | b2b31c5 | Code splitting, bundle optimization, PWA, Lighthouse ≥90 | 2.6 |
 | 3.3 | Error Handling & User Feedback | M (2d) | ✅ DONE | 6bec686 | Toasts, retry logic, error boundaries, contact support | 2.6 |
-| 3.4 | Production Deployment | M (2d) | 📋 TODO | - | CI/CD (Vercel/Netlify), SSL, monitoring (Sentry) | 3.1, 3.2 |
+| 3.4 | Production Deployment | M (2d) | ✅ DONE | ebfab95 | CI/CD (GitHub Actions), Vercel config, Sentry, Plausible analytics, DEPLOYMENT.md | 3.1, 3.2 |
 | 3.5 | End-to-End Testing | M (3d) | 📋 TODO | - | Playwright E2E tests, cross-browser, mobile responsive | 3.3, 3.4 |
 
 [↑ Back to top](#imani-wallet---kotlin-multiplatform-implementation-roadmap)
@@ -2398,6 +2399,8 @@ class VoucherFlowTest {
 ---
 
 ## Phase 4: Android Port
+
+> **📱 Detailed Android Roadmap**: See [Android Port Roadmap](android-port-roadmap.md) for comprehensive task tracking, code examples, and Android-specific guidelines.
 
 **Goal**: Port web application to Android with native features (Keystore, SQLDelight).
 
