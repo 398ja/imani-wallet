@@ -53,6 +53,7 @@ kotlin {
         val jsMain by getting {
             dependencies {
                 implementation(libs.ktor.client.js)
+                implementation(npm("nostr-tools", "2.1.0"))
             }
         }
     }
