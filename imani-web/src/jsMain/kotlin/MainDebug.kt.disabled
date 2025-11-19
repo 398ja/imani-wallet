@@ -1,0 +1,29 @@
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.window.CanvasBasedWindow
+
+/**
+ * Minimal test to check if Compose for Web is working.
+ * Rename to Main.kt to test (backup the original Main.kt first).
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+fun main() {
+    console.log("Starting Imani Wallet (Debug Mode)...")
+
+    try {
+        CanvasBasedWindow(
+            title = "Imani Wallet - Debug",
+            canvasElementId = "ComposeTarget",
+        ) {
+            MaterialTheme {
+                Text("Hello from Imani Wallet!")
+            }
+        }
+        console.log("Compose initialized successfully")
+    } catch (e: Throwable) {
+        console.error("Error initializing Compose:", e)
+        js("document.getElementById('app-loading').innerHTML = '<div style=\"color: red;\">Error: ' + e.message + '</div>'")
+    }
+}

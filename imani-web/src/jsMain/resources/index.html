@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://testnut.cashu.space wss://*.nostr.band wss://*.nostr.info; frame-ancestors 'none'; base-uri 'self'; form-action 'self';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://testnut.cashu.space wss://*.nostr.band wss://*.nostr.info; frame-ancestors 'none'; base-uri 'self'; form-action 'self';">
 
     <!-- Primary Meta Tags -->
     <title>Imani Wallet - Built on Trust, Secured by Math</title>
@@ -118,5 +118,24 @@
     </script>
 
     <script src="imani-wallet.js"></script>
+    <script>
+        // Auto-execution should happen with binaries.executable()
+        // If we get here and nothing rendered, there's a problem
+        console.log('[Bootstrap] Script loaded. Main should auto-execute with binaries.executable()');
+
+        // Check if main was already called
+        setTimeout(function() {
+            var canvas = document.getElementById('ComposeTarget');
+            console.log('[Bootstrap] Canvas element:', canvas);
+            console.log('[Bootstrap] Canvas children:', canvas ? canvas.childNodes.length : 'N/A');
+
+            if (!canvas || canvas.childNodes.length === 0) {
+                console.error('[Bootstrap] Canvas is empty - app did not initialize!');
+                console.error('[Bootstrap] This means main() was never called or failed silently');
+            } else {
+                console.log('[Bootstrap] Canvas has content - app initialized successfully!');
+            }
+        }, 1000);
+    </script>
 </body>
 </html>
