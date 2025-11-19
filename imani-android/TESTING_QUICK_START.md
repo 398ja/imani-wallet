@@ -16,6 +16,17 @@
 2. **USB debugging** enabled (for physical devices)
 3. **Android SDK** installed and `adb` in PATH
 
+**⚠️ Important - Emulator Requirements**:
+- **Recommended API Level**: API 34 (Android 14) or below
+- **⚠️ Avoid API 36+**: Android 16 preview has breaking changes in `InputManager` that cause test failures
+- **Minimum API Level**: API 26 (Android 8.0) as per app's `minSdk`
+
+**Creating a compatible emulator** (Android Studio):
+1. Tools → Device Manager → Create Device
+2. Select: **Pixel 6** (or similar)
+3. System Image: **API 34** (Android 14.0 - recommended) or **API 33** (Android 13.0)
+4. Finish and start the emulator
+
 ### Check Connected Devices
 
 ```bash
@@ -123,6 +134,30 @@ adb uninstall cash.imani.wallet.debug
 
 # Clean and rebuild
 ./gradlew clean :imani-android:assembleDebugAndroidTest
+```
+
+### Error: "NoSuchMethodException: InputManager.getInstance"
+
+**Symptom**:
+```
+java.lang.RuntimeException: java.util.concurrent.ExecutionException:
+java.lang.RuntimeException: java.lang.NoSuchMethodException:
+android.hardware.input.InputManager.getInstance []
+```
+
+**Cause**: Android 16 (API 36) preview has breaking changes in `InputManager`.
+
+**Solution**: Use a stable API level emulator:
+
+```bash
+# Check emulator API level
+adb shell getprop ro.build.version.sdk
+# Output: 36 = Android 16 (problematic)
+# Output: 34 = Android 14 (recommended)
+
+# Solution: Create new emulator with API 34
+# Android Studio → Tools → Device Manager → Create Device
+# Select: API 34 (Android 14.0)
 ```
 
 ### Tests Timeout
