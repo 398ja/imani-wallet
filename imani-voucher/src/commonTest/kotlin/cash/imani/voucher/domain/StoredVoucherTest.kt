@@ -1,5 +1,6 @@
 package cash.imani.voucher.domain
 
+import kotlin.js.JsName
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import kotlin.test.Test
@@ -41,6 +42,7 @@ class StoredVoucherTest {
      * supporting indefinite validity for certain voucher types.
      */
     @Test
+    @JsName("isExpiredReturnsFalseWhenNoExpiryDate")
     fun `isExpired returns false when no expiry date`() {
         // Given: Voucher without expiry date
         val voucher = createVoucher(expiresAt = null)
@@ -57,6 +59,7 @@ class StoredVoucherTest {
      * allowing for time-bound redemption windows.
      */
     @Test
+    @JsName("isExpiredReturnsFalseWhenExpiryIsInFuture")
     fun `isExpired returns false when expiry is in future`() {
         // Given: Voucher expiring in 1 day
         val futureTime = Clock.System.now().plus(1.days)
@@ -74,6 +77,7 @@ class StoredVoucherTest {
      * preventing redemption of stale vouchers.
      */
     @Test
+    @JsName("isExpiredReturnsTrueWhenExpiryIsInPast")
     fun `isExpired returns true when expiry is in past`() {
         // Given: Voucher expired 1 day ago
         val pastTime = Clock.System.now().minus(1.days)
@@ -91,6 +95,7 @@ class StoredVoucherTest {
      * indicating they can be used for operations.
      */
     @Test
+    @JsName("isActiveReturnsTrueForIssuedNonExpiredVoucher")
     fun `isActive returns true for issued non-expired voucher`() {
         // Given: Issued voucher expiring in future
         val voucher =
@@ -111,6 +116,7 @@ class StoredVoucherTest {
      * preventing double-spending of vouchers.
      */
     @Test
+    @JsName("isActiveReturnsFalseForRedeemedVoucher")
     fun `isActive returns false for redeemed voucher`() {
         // Given: Redeemed voucher
         val voucher =
@@ -131,6 +137,7 @@ class StoredVoucherTest {
      * enforcing expiration policy.
      */
     @Test
+    @JsName("isActiveReturnsFalseForExpiredVoucher")
     fun `isActive returns false for expired voucher`() {
         // Given: Expired voucher with ISSUED status
         val voucher =
@@ -151,6 +158,7 @@ class StoredVoucherTest {
      * supporting voucher cancellation workflows.
      */
     @Test
+    @JsName("isActiveReturnsFalseForRevokedVoucher")
     fun `isActive returns false for revoked voucher`() {
         // Given: Revoked voucher
         val voucher = createVoucher(status = VoucherStatus.REVOKED)
@@ -167,6 +175,7 @@ class StoredVoucherTest {
      * implementing basic redemption eligibility.
      */
     @Test
+    @JsName("canRedeemReturnsTrueForIssuedVoucher")
     fun `canRedeem returns true for issued voucher`() {
         // Given: Issued voucher expiring in future
         val voucher =
@@ -187,6 +196,7 @@ class StoredVoucherTest {
      * supporting delivery tracking without blocking redemption.
      */
     @Test
+    @JsName("canRedeemReturnsTrueForDeliveredVoucher")
     fun `canRedeem returns true for delivered voucher`() {
         // Given: Delivered voucher expiring in future
         val voucher =
@@ -207,6 +217,7 @@ class StoredVoucherTest {
      * preventing double-spending.
      */
     @Test
+    @JsName("canRedeemReturnsFalseForRedeemedVoucher")
     fun `canRedeem returns false for redeemed voucher`() {
         // Given: Already redeemed voucher
         val voucher = createVoucher(status = VoucherStatus.REDEEMED)
@@ -223,6 +234,7 @@ class StoredVoucherTest {
      * enforcing temporal validity constraints.
      */
     @Test
+    @JsName("canRedeemReturnsFalseForExpiredVoucher")
     fun `canRedeem returns false for expired voucher`() {
         // Given: Voucher expired 1 second ago
         val voucher =
@@ -243,6 +255,7 @@ class StoredVoucherTest {
      * supporting issuer-initiated cancellation.
      */
     @Test
+    @JsName("canRedeemReturnsFalseForRevokedVoucher")
     fun `canRedeem returns false for revoked voucher`() {
         // Given: Revoked voucher
         val voucher = createVoucher(status = VoucherStatus.REVOKED)

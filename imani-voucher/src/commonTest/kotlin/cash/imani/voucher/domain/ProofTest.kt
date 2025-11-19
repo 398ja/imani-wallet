@@ -1,5 +1,6 @@
 package cash.imani.voucher.domain
 
+import kotlin.js.JsName
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -14,6 +15,7 @@ class ProofTest {
      * per NUT-00 specification (amount, secret, C, id).
      */
     @Test
+    @JsName("proofHasCorrectFields")
     fun `proof has correct fields`() {
         // Given: Proof with known values
         val proof =
@@ -37,6 +39,7 @@ class ProofTest {
      * as full SHA-256 hashing will be implemented in Phase 1+.
      */
     @Test
+    @JsName("computeYReturnsPlaceholderValue")
     fun `computeY returns placeholder value`() {
         // Given: Proof with test secret
         val proof =

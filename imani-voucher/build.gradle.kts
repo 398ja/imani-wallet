@@ -5,8 +5,21 @@ plugins {
 
 kotlin {
     js(IR) {
-        browser()
+        browser {
+            testTask {
+                // Configure test runner to handle backtick test names
+                useKarma {
+                    useChromeHeadless()
+                }
+            }
+        }
         binaries.executable()
+        compilations.all {
+            kotlinOptions {
+                // Generate more lenient JS code for tests
+                moduleKind = "umd"
+            }
+        }
     }
 
     jvm()

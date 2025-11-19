@@ -1,5 +1,6 @@
 package cash.imani.voucher.domain
 
+import kotlin.js.JsName
 import kotlinx.datetime.Clock
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -57,6 +58,7 @@ class WalletStateTest {
      * vouchers, returning only usable vouchers.
      */
     @Test
+    @JsName("getActiveVouchersReturnsOnlyActiveVouchers")
     fun `getActiveVouchers returns only active vouchers`() {
         // Given: Mix of active, redeemed, expired, and delivered vouchers
         val now = Clock.System.now()
@@ -88,6 +90,7 @@ class WalletStateTest {
      * supporting multi-currency wallet state tracking.
      */
     @Test
+    @JsName("getActiveVoucherValueGroupsByUnit")
     fun `getActiveVoucherValue groups by unit`() {
         // Given: Vouchers in multiple units with mixed statuses
         val vouchers =
@@ -118,6 +121,7 @@ class WalletStateTest {
      * has no active vouchers, handling edge case gracefully.
      */
     @Test
+    @JsName("getActiveVoucherValueReturnsEmptyMapWhenNoActiveVouchers")
     fun `getActiveVoucherValue returns empty map when no active vouchers`() {
         // Given: Only redeemed and revoked vouchers
         val vouchers =
@@ -145,6 +149,7 @@ class WalletStateTest {
      * as proof-based balance calculation is deferred to Phase 1+.
      */
     @Test
+    @JsName("getTotalBalanceReturnsEmptyMapForPhase0")
     fun `getTotalBalance returns empty map for Phase 0`() {
         // Given: Wallet with multiple proofs
         val proofs =
