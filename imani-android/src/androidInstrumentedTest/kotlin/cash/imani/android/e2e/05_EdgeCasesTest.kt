@@ -46,7 +46,7 @@ class EdgeCasesTest {
 
             // Try to fill very long label
             composeTestRule.onNode(
-                hasSetTextAction() and hasText("Identity Label", substring = true)
+                hasSetTextAction() and hasText("Label", substring = true)
             ).performTextInput(longLabel)
 
             composeTestRule.waitForIdle()
@@ -346,7 +346,7 @@ class EdgeCasesTest {
             composeTestRule.waitForIdle()
 
             composeTestRule.onNode(
-                hasSetTextAction() and hasText("Identity Label", substring = true)
+                hasSetTextAction() and hasText("Label", substring = true)
             ).performTextInput("First Identity")
 
             // Try to start second creation before first completes

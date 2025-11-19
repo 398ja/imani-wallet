@@ -123,7 +123,7 @@ class BasicFlowTest {
         composeTestRule.waitForIdle()
 
         // Should see Create Identity form
-        composeTestRule.onNodeWithText("Identity Label", substring = true)
+        composeTestRule.onNodeWithText("Label", substring = true)
             .assertIsDisplayed()
 
         // Press back button

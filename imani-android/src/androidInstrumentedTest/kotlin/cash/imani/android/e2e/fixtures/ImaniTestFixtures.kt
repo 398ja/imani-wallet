@@ -94,9 +94,9 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
         composeTestRule.waitForIdle()
         delay(500)
 
-        // Fill in identity label
+        // Fill in identity label (UI uses "Label" not "Identity Label")
         composeTestRule.onNode(
-            hasSetTextAction() and hasText("Identity Label", substring = true)
+            hasSetTextAction() and hasText("Label", substring = true)
         ).performTextInput(label)
 
         composeTestRule.waitForIdle()

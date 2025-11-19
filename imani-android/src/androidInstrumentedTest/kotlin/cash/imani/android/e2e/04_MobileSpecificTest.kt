@@ -77,7 +77,7 @@ class MobileSpecificTest {
         composeTestRule.waitForIdle()
 
         // Should be on Create screen
-        composeTestRule.onNodeWithText("Identity Label", substring = true)
+        composeTestRule.onNodeWithText("Label", substring = true)
             .assertIsDisplayed()
 
         // Rotate screen
@@ -86,7 +86,7 @@ class MobileSpecificTest {
         delay(1000)
 
         // Should still be on Create screen (not back to list)
-        composeTestRule.onNodeWithText("Identity Label", substring = true)
+        composeTestRule.onNodeWithText("Label", substring = true)
             .assertIsDisplayed()
     }
 
@@ -105,7 +105,7 @@ class MobileSpecificTest {
 
         // Fill in label
         composeTestRule.onNode(
-            hasSetTextAction() and hasText("Identity Label", substring = true)
+            hasSetTextAction() and hasText("Label", substring = true)
         ).performTextInput("Test Input")
 
         composeTestRule.waitForIdle()
