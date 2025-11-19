@@ -1,7 +1,15 @@
 package cash.imani.android.di
 
+import app.cash.sqldelight.db.SqlDriver
+import app.cash.sqldelight.driver.android.AndroidSqliteDriver
+import cash.imani.android.db.ImaniDatabase
 import cash.imani.android.identity.AndroidIdentityManager
+import cash.imani.android.repository.AndroidIdentityRepository
+import cash.imani.android.repository.AndroidVoucherRepository
 import cash.imani.android.security.KeystoreManager
+import cash.imani.identity.repository.IdentityRepository
+import cash.imani.voucher.repository.VoucherRepository
+import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
 
 /**
@@ -10,10 +18,9 @@ import org.koin.dsl.module
  * Provides:
  * - KeystoreManager: Android Keystore encryption for private keys
  * - AndroidIdentityManager: Android wrapper for identity management
- *
- * Future additions (Phase 4.2.2):
- * - SQLDelight database drivers
- * - Android-specific repositories
+ * - SQLDelight database: ImaniDatabase with Android driver
+ * - AndroidIdentityRepository: Identity persistence with encrypted private keys
+ * - AndroidVoucherRepository: Voucher and proof persistence
  *
  * Usage:
  * ```kotlin
@@ -38,20 +45,31 @@ val androidModule = module {
         )
     }
 
-    // TODO Phase 4.2.2: Add SQLDelight database
-    // single<SqlDriver> {
-    //     AndroidSqliteDriver(
-    //         IdentityDatabase.Schema,
-    //         androidContext(),
-    //         "identity.db"
-    //     )
-    // }
+    // SQLDelight Database Driver
+    single<SqlDriver> {
+        AndroidSqliteDriver(
+            schema = ImaniDatabase.Schema,
+            context = androidContext(),
+            name = "imani.db"
+        )
+    }
 
-    // TODO Phase 4.2.2: Add Android repositories
-    // single<IdentityRepository> {
-    //     AndroidIdentityRepository(
-    //         database = get(),
-    //         identityManager = get()
-    //     )
-    // }
+    // SQLDelight Database
+    single {
+        ImaniDatabase(driver = get())
+    }
+
+    // Repositories
+    single<IdentityRepository> {
+        AndroidIdentityRepository(
+            database = get(),
+            identityManager = get()
+        )
+    }
+
+    single<VoucherRepository> {
+        AndroidVoucherRepository(
+            database = get()
+        )
+    }
 }

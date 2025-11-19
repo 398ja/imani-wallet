@@ -1,0 +1,232 @@
+name: E2E Tests
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'imani-web/**'
+      - 'imani-app/**'
+      - 'imani-identity/**'
+      - 'imani-voucher/**'
+      - 'e2e/**'
+      - '.github/workflows/e2e-tests.yml'
+  pull_request:
+    branches:
+      - main
+      - master
+    paths:
+      - 'imani-web/**'
+      - 'imani-app/**'
+      - 'e2e/**'
+  workflow_dispatch:
+
+env:
+  GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.parallel=true
+  JAVA_VERSION: '17'
+  NODE_VERSION: '18'
+
+jobs:
+  e2e-tests:
+    name: E2E Tests (${{ matrix.project }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - chromium
+          - firefox
+          - mobile-chrome
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: 'gradle'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build web application
+        run: ./gradlew :imani-web:jsBrowserDistribution --no-daemon --stacktrace
+
+      - name: Install E2E dependencies
+        working-directory: e2e
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: e2e
+        run: npx playwright install --with-deps ${{ matrix.project == 'mobile-chrome' && 'chromium' || matrix.project }}
+
+      - name: Start dev server in background
+        run: |
+          ./gradlew :imani-web:jsBrowserDevelopmentRun --continuous > gradle-dev-server.log 2>&1 &
+          echo "DEV_SERVER_PID=$!" >> $GITHUB_ENV
+
+      - name: Wait for dev server to be ready
+        run: |
+          timeout 120 bash -c 'until curl -s http://localhost:8181 > /dev/null; do sleep 2; done'
+          echo "Dev server is ready!"
+
+      - name: Run E2E tests
+        working-directory: e2e
+        run: npx playwright test --project=${{ matrix.project }}
+        env:
+          CI: true
+          BASE_URL: http://localhost:8181
+
+      - name: Stop dev server
+        if: always()
+        run: |
+          if [ ! -z "$DEV_SERVER_PID" ]; then
+            kill $DEV_SERVER_PID || true
+          fi
+          pkill -f "jsBrowserDevelopmentRun" || true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: playwright-results-${{ matrix.project }}
+          path: |
+            e2e/test-results/
+            e2e/playwright-report/
+          retention-days: 7
+
+      - name: Upload dev server logs
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: dev-server-logs-${{ matrix.project }}
+          path: gradle-dev-server.log
+          retention-days: 7
+
+  e2e-webkit:
+    name: E2E Tests (WebKit/Safari)
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: 'gradle'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build web application
+        run: ./gradlew :imani-web:jsBrowserDistribution --no-daemon --stacktrace
+
+      - name: Install E2E dependencies
+        working-directory: e2e
+        run: npm ci
+
+      - name: Install Playwright WebKit
+        working-directory: e2e
+        run: npx playwright install --with-deps webkit
+
+      - name: Start dev server in background
+        run: |
+          ./gradlew :imani-web:jsBrowserDevelopmentRun --continuous > gradle-dev-server.log 2>&1 &
+          echo "DEV_SERVER_PID=$!" >> $GITHUB_ENV
+
+      - name: Wait for dev server
+        run: |
+          timeout 120 bash -c 'until curl -s http://localhost:8181 > /dev/null; do sleep 2; done'
+
+      - name: Run E2E tests
+        working-directory: e2e
+        run: npx playwright test --project=webkit
+        env:
+          CI: true
+          BASE_URL: http://localhost:8181
+
+      - name: Stop dev server
+        if: always()
+        run: |
+          if [ ! -z "$DEV_SERVER_PID" ]; then
+            kill $DEV_SERVER_PID || true
+          fi
+          pkill -f "jsBrowserDevelopmentRun" || true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: playwright-results-webkit
+          path: |
+            e2e/test-results/
+            e2e/playwright-report/
+          retention-days: 7
+
+  summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [e2e-tests, e2e-webkit]
+    if: always()
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+
+      - name: Create summary
+        run: |
+          echo "## E2E Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Browser | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          if [ -d "playwright-results-chromium" ]; then
+            echo "| Chromium | ✅ |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Chromium | ❌ |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ -d "playwright-results-firefox" ]; then
+            echo "| Firefox | ✅ |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Firefox | ❌ |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ -d "playwright-results-webkit" ]; then
+            echo "| WebKit | ✅ |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| WebKit | ❌ |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ -d "playwright-results-mobile-chrome" ]; then
+            echo "| Mobile Chrome | ✅ |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Mobile Chrome | ❌ |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "View detailed reports in the artifacts section." >> $GITHUB_STEP_SUMMARY

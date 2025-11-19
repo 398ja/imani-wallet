@@ -1,0 +1,131 @@
+-- Voucher.sq
+-- SQLDelight schema for Voucher and Proof storage on Android
+
+CREATE TABLE IF NOT EXISTS VoucherEntity (
+    voucherId TEXT NOT NULL PRIMARY KEY,
+    issuerId TEXT NOT NULL,
+    unit TEXT NOT NULL,
+    faceValue INTEGER NOT NULL,
+    expiresAt INTEGER,
+    memo TEXT,
+    issuerSignature TEXT NOT NULL,
+    issuerPublicKey TEXT NOT NULL,
+    issuedAt INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    token TEXT,
+    syncStatus TEXT NOT NULL DEFAULT 'pending',
+    lastSyncAt INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS ProofEntity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    voucherId TEXT,
+    amount INTEGER NOT NULL,
+    secret TEXT NOT NULL UNIQUE,
+    C TEXT NOT NULL,
+    keysetId TEXT NOT NULL,
+    mintUrl TEXT NOT NULL,
+    unit TEXT NOT NULL,
+    createdAt INTEGER NOT NULL,
+    spentAt INTEGER,
+    FOREIGN KEY (voucherId) REFERENCES VoucherEntity(voucherId) ON DELETE SET NULL
+);
+
+-- Indexes for Voucher queries
+CREATE INDEX IF NOT EXISTS idx_voucher_issuerId ON VoucherEntity(issuerId);
+CREATE INDEX IF NOT EXISTS idx_voucher_status ON VoucherEntity(status);
+CREATE INDEX IF NOT EXISTS idx_voucher_issuedAt ON VoucherEntity(issuedAt DESC);
+CREATE INDEX IF NOT EXISTS idx_voucher_expiresAt ON VoucherEntity(expiresAt);
+CREATE INDEX IF NOT EXISTS idx_voucher_syncStatus ON VoucherEntity(syncStatus);
+
+-- Indexes for Proof queries
+CREATE INDEX IF NOT EXISTS idx_proof_voucherId ON ProofEntity(voucherId);
+CREATE INDEX IF NOT EXISTS idx_proof_mintUrl ON ProofEntity(mintUrl);
+CREATE INDEX IF NOT EXISTS idx_proof_secret ON ProofEntity(secret);
+CREATE INDEX IF NOT EXISTS idx_proof_spentAt ON ProofEntity(spentAt);
+
+-- Voucher Queries
+selectAllVouchers:
+SELECT * FROM VoucherEntity ORDER BY issuedAt DESC;
+
+selectVoucherById:
+SELECT * FROM VoucherEntity WHERE voucherId = ?;
+
+selectVouchersByStatus:
+SELECT * FROM VoucherEntity WHERE status = ? ORDER BY issuedAt DESC;
+
+selectVouchersByIssuer:
+SELECT * FROM VoucherEntity WHERE issuerId = ? ORDER BY issuedAt DESC;
+
+selectExpiredVouchers:
+SELECT * FROM VoucherEntity WHERE expiresAt IS NOT NULL AND expiresAt < ? ORDER BY expiresAt DESC;
+
+selectPendingSyncVouchers:
+SELECT * FROM VoucherEntity WHERE syncStatus = 'pending' ORDER BY issuedAt ASC;
+
+insertVoucher:
+INSERT OR REPLACE INTO VoucherEntity(
+    voucherId, issuerId, unit, faceValue, expiresAt, memo,
+    issuerSignature, issuerPublicKey, issuedAt, status, token, syncStatus, lastSyncAt
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updateVoucherStatus:
+UPDATE VoucherEntity SET status = ? WHERE voucherId = ?;
+
+updateVoucherSyncStatus:
+UPDATE VoucherEntity SET syncStatus = ?, lastSyncAt = ? WHERE voucherId = ?;
+
+deleteVoucher:
+DELETE FROM VoucherEntity WHERE voucherId = ?;
+
+countVouchers:
+SELECT COUNT(*) FROM VoucherEntity;
+
+deleteAllVouchers:
+DELETE FROM VoucherEntity;
+
+-- Proof Queries
+selectAllProofs:
+SELECT * FROM ProofEntity WHERE spentAt IS NULL ORDER BY createdAt DESC;
+
+selectProofById:
+SELECT * FROM ProofEntity WHERE id = ?;
+
+selectProofBySecret:
+SELECT * FROM ProofEntity WHERE secret = ?;
+
+selectProofsByVoucher:
+SELECT * FROM ProofEntity WHERE voucherId = ? ORDER BY amount ASC;
+
+selectProofsByMint:
+SELECT * FROM ProofEntity
+WHERE mintUrl = ? AND unit = ? AND spentAt IS NULL
+ORDER BY amount ASC;
+
+selectProofsForAmount:
+SELECT * FROM ProofEntity
+WHERE mintUrl = ? AND unit = ? AND spentAt IS NULL
+ORDER BY amount ASC;
+
+insertProof:
+INSERT INTO ProofEntity(voucherId, amount, secret, C, keysetId, mintUrl, unit, createdAt, spentAt)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+markProofAsSpent:
+UPDATE ProofEntity SET spentAt = ? WHERE secret = ?;
+
+deleteProof:
+DELETE FROM ProofEntity WHERE id = ?;
+
+deleteProofsByVoucher:
+DELETE FROM ProofEntity WHERE voucherId = ?;
+
+countUnspentProofs:
+SELECT COUNT(*) FROM ProofEntity WHERE spentAt IS NULL;
+
+sumUnspentProofsByMint:
+SELECT SUM(amount) FROM ProofEntity
+WHERE mintUrl = ? AND unit = ? AND spentAt IS NULL;
+
+deleteAllProofs:
+DELETE FROM ProofEntity;

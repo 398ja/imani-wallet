@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.android.application)
     alias(libs.plugins.compose)
+    alias(libs.plugins.sqldelight)
 }
 
 kotlin {
@@ -116,6 +117,15 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+}
+
+sqldelight {
+    databases {
+        create("ImaniDatabase") {
+            packageName.set("cash.imani.android.db")
+            srcDirs.setFrom("src/commonMain/sqldelight")
         }
     }
 }

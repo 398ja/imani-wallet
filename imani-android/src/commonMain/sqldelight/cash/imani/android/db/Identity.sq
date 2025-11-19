@@ -1,0 +1,44 @@
+-- Identity.sq
+-- SQLDelight schema for Identity storage on Android
+
+CREATE TABLE IF NOT EXISTS IdentityEntity (
+    id TEXT NOT NULL PRIMARY KEY,
+    label TEXT NOT NULL,
+    publicKey TEXT NOT NULL,
+    encryptedPrivateKey BLOB NOT NULL,
+    createdAt INTEGER NOT NULL,
+    lastUsedAt INTEGER
+);
+
+-- Indexes for common queries
+CREATE INDEX IF NOT EXISTS idx_identity_lastUsedAt ON IdentityEntity(lastUsedAt DESC);
+CREATE INDEX IF NOT EXISTS idx_identity_label ON IdentityEntity(label);
+
+-- Queries
+selectAll:
+SELECT * FROM IdentityEntity ORDER BY lastUsedAt DESC;
+
+selectById:
+SELECT * FROM IdentityEntity WHERE id = ?;
+
+selectByLabel:
+SELECT * FROM IdentityEntity WHERE label LIKE '%' || ? || '%' ORDER BY lastUsedAt DESC;
+
+insert:
+INSERT OR REPLACE INTO IdentityEntity(id, label, publicKey, encryptedPrivateKey, createdAt, lastUsedAt)
+VALUES (?, ?, ?, ?, ?, ?);
+
+deleteById:
+DELETE FROM IdentityEntity WHERE id = ?;
+
+updateLastUsed:
+UPDATE IdentityEntity SET lastUsedAt = ? WHERE id = ?;
+
+updateLabel:
+UPDATE IdentityEntity SET label = ? WHERE id = ?;
+
+count:
+SELECT COUNT(*) FROM IdentityEntity;
+
+deleteAll:
+DELETE FROM IdentityEntity;
