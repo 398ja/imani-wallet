@@ -11,6 +11,16 @@ voyager = "1.0.0"
 kover = "0.7.5"
 ktlint = "12.1.0"
 
+# Android
+agp = "8.2.2"
+androidx-core = "1.12.0"
+androidx-lifecycle = "2.7.0"
+androidx-activity-compose = "1.8.2"
+androidx-biometric = "1.2.0-alpha05"
+androidx-security = "1.1.0-alpha06"
+androidx-camera = "1.3.1"
+zxing = "3.5.3"
+
 [libraries]
 # Kotlin
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
@@ -53,6 +63,31 @@ compose-components-resources = { module = "org.jetbrains.compose.components:comp
 voyager-navigator = { module = "cafe.adriel.voyager:voyager-navigator", version.ref = "voyager" }
 voyager-transitions = { module = "cafe.adriel.voyager:voyager-transitions", version.ref = "voyager" }
 
+# Android
+androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidx-core" }
+androidx-lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "androidx-lifecycle" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity-compose" }
+androidx-biometric = { module = "androidx.biometric:biometric", version.ref = "androidx-biometric" }
+androidx-security-crypto = { module = "androidx.security:security-crypto", version.ref = "androidx-security" }
+
+# Camera
+androidx-camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "androidx-camera" }
+androidx-camera-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "androidx-camera" }
+androidx-camera-view = { module = "androidx.camera:camera-view", version.ref = "androidx-camera" }
+
+# QR Code
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
+
+# SQLDelight Android
+sqldelight-android-driver = { module = "app.cash.sqldelight:android-driver", version.ref = "sqldelight" }
+
+# Ktor Android
+ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
+
+# Koin Android
+koin-android = { module = "io.insert-koin:koin-android", version.ref = "koin" }
+koin-androidx-compose = { module = "io.insert-koin:koin-androidx-compose", version.ref = "koin" }
+
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
@@ -60,3 +95,5 @@ compose = { id = "org.jetbrains.compose", version.ref = "compose" }
 sqldelight = { id = "app.cash.sqldelight", version.ref = "sqldelight" }
 kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }
 ktlint = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlint" }
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }

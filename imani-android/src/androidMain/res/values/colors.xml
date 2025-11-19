@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Imani Brand Colors -->
+    <color name="primary">#6B46C1</color> <!-- Deep Purple -->
+    <color name="accent">#F59E0B</color> <!-- Gold -->
+    <color name="secondary">#1E40AF</color> <!-- Deep Blue -->
+    <color name="background">#FFFBEB</color> <!-- Cream -->
+
+    <!-- Material 3 Defaults -->
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>
