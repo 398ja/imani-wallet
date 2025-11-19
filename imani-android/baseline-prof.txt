@@ -1,0 +1,67 @@
+# Baseline Profile for Imani Wallet Android
+#
+# This profile instructs the Android Runtime (ART) to pre-compile
+# critical paths for faster app startup and smoother performance.
+#
+# Generated using Android Studio Profiler.
+# Run: ./gradlew :imani-android:generateBaselineProfile
+
+# MainActivity startup
+Lcash/imani/android/MainActivity;->onCreate(Landroid/os/Bundle;)V
+
+# Compose initialization
+Landroidx/compose/runtime/Composer;
+
+# Koin DI initialization
+Lorg/koin/core/Koin;->get()Ljava/lang/Object;
+Lorg/koin/android/ext/android/inject()Lkotlin/Lazy;
+
+# Identity repository initialization
+Lcash/imani/android/repository/AndroidIdentityRepository;->listIdentities()Lkotlin/Result;
+Lcash/imani/android/repository/AndroidIdentityRepository;->getIdentity(Ljava/lang/String;)Lkotlin/Result;
+
+# Voucher repository initialization
+Lcash/imani/android/repository/AndroidVoucherRepository;->listVouchers()Lkotlin/Result;
+Lcash/imani/android/repository/AndroidVoucherRepository;->observeVouchers()Lkotlinx/coroutines/flow/Flow;
+
+# SQLDelight database initialization
+Lapp/cash/sqldelight/driver/android/AndroidSqliteDriver;-><init>()V
+Lcash/imani/android/db/ImaniDatabase;
+
+# Biometric authentication
+Lcash/imani/android/security/BiometricAuthenticator;->canAuthenticate()Lcash/imani/android/security/BiometricAvailability;
+Lcash/imani/android/security/BiometricAuthenticator;->authenticate()Lkotlin/Result;
+
+# Crypto operations (hot path)
+Lcash/imani/android/security/AndroidIdentityManager;->generateKeypair()Lcash/imani/identity/crypto/KeyPair;
+Lcash/imani/android/security/AndroidIdentityManager;->encryptPrivateKey([BLjava/lang/String;)[B
+Lcash/imani/android/security/AndroidIdentityManager;->decryptPrivateKey([BLjava/lang/String;)[B
+
+# Navigation screens
+Lcash/imani/android/ui/navigation/MainScreen;
+Lcash/imani/app/ui/identity/IdentityListScreen;
+Lcash/imani/app/ui/voucher/VoucherListScreen;
+Lcash/imani/android/ui/SettingsScreen;
+
+# Lock screen
+Lcash/imani/android/ui/LockScreen;
+
+# Theme
+Lcash/imani/android/ui/theme/ImaniTheme;
+
+# Common Compose components
+Landroidx/compose/material3/Surface;
+Landroidx/compose/material3/Button;
+Landroidx/compose/material3/TextField;
+Landroidx/compose/material3/NavigationBar;
+
+# Coroutines
+Lkotlinx/coroutines/CoroutineScope;
+Lkotlinx/coroutines/flow/Flow;
+Lkotlinx/coroutines/Dispatchers;
+
+# Serialization (for domain models)
+Lkotlinx/serialization/json/Json;
+Lcash/imani/identity/domain/Identity;
+Lcash/imani/voucher/domain/StoredVoucher;
+Lcash/imani/voucher/domain/Proof;
