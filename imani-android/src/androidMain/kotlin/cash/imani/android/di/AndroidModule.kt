@@ -6,6 +6,7 @@ import cash.imani.android.db.ImaniDatabase
 import cash.imani.android.identity.AndroidIdentityManager
 import cash.imani.android.repository.AndroidIdentityRepository
 import cash.imani.android.repository.AndroidVoucherRepository
+import cash.imani.android.security.BiometricAuthenticator
 import cash.imani.android.security.KeystoreManager
 import cash.imani.identity.repository.IdentityRepository
 import cash.imani.voucher.repository.VoucherRepository
@@ -17,6 +18,7 @@ import org.koin.dsl.module
  *
  * Provides:
  * - KeystoreManager: Android Keystore encryption for private keys
+ * - BiometricAuthenticator: Fingerprint/face unlock for app access
  * - AndroidIdentityManager: Android wrapper for identity management
  * - SQLDelight database: ImaniDatabase with Android driver
  * - AndroidIdentityRepository: Identity persistence with encrypted private keys
@@ -37,6 +39,13 @@ val androidModule = module {
 
     // Security - Android Keystore
     single { KeystoreManager() }
+
+    // Security - Biometric Authentication
+    single {
+        BiometricAuthenticator(
+            context = androidContext()
+        )
+    }
 
     // Identity Management - Android wrapper
     single {
