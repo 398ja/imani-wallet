@@ -1,7 +1,6 @@
 package cash.imani.app.navigation
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.navigator.Navigator
 import cafe.adriel.voyager.transitions.SlideTransition

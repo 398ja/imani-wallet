@@ -50,9 +50,10 @@ class IdentityViewModel(
                     _uiState.value = IdentityUiState.Success(identities)
                 }
                 .onFailure { error ->
-                    _uiState.value = IdentityUiState.Error(
-                        error.message ?: "Failed to load identities",
-                    )
+                    _uiState.value =
+                        IdentityUiState.Error(
+                            error.message ?: "Failed to load identities",
+                        )
                 }
         }
     }
@@ -65,16 +66,18 @@ class IdentityViewModel(
             _createState.value = CreateIdentityState.Creating
             createIdentityUseCase(label)
                 .onSuccess { result ->
-                    _createState.value = CreateIdentityState.Success(
-                        identity = result.identity,
-                        mnemonic = result.mnemonic,
-                    )
+                    _createState.value =
+                        CreateIdentityState.Success(
+                            identity = result.identity,
+                            mnemonic = result.mnemonic,
+                        )
                     loadIdentities() // Refresh list
                 }
                 .onFailure { error ->
-                    _createState.value = CreateIdentityState.Error(
-                        error.message ?: "Failed to create identity",
-                    )
+                    _createState.value =
+                        CreateIdentityState.Error(
+                            error.message ?: "Failed to create identity",
+                        )
                 }
         }
     }
@@ -94,9 +97,10 @@ class IdentityViewModel(
                     loadIdentities() // Refresh list
                 }
                 .onFailure { error ->
-                    _importState.value = ImportIdentityState.Error(
-                        error.message ?: "Failed to import from mnemonic",
-                    )
+                    _importState.value =
+                        ImportIdentityState.Error(
+                            error.message ?: "Failed to import from mnemonic",
+                        )
                 }
         }
     }
@@ -116,9 +120,10 @@ class IdentityViewModel(
                     loadIdentities() // Refresh list
                 }
                 .onFailure { error ->
-                    _importState.value = ImportIdentityState.Error(
-                        error.message ?: "Failed to import from nsec",
-                    )
+                    _importState.value =
+                        ImportIdentityState.Error(
+                            error.message ?: "Failed to import from nsec",
+                        )
                 }
         }
     }

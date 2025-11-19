@@ -39,63 +39,64 @@ import org.koin.dsl.module
  * Phase 2: Voucher module added
  * Phase 3+: Split into feature modules
  */
-val appModule = module {
-    // Crypto adapters - platform-specific implementations
-    single<CryptoAdapter> { createCryptoAdapter() }
-    single<Bip39Adapter> { createBip39Adapter() }
+val appModule =
+    module {
+        // Crypto adapters - platform-specific implementations
+        single<CryptoAdapter> { createCryptoAdapter() }
+        single<Bip39Adapter> { createBip39Adapter() }
 
-    // Repositories - Identity
-    single<IdentityRepository> { createIdentityRepository(get(), get()) }
+        // Repositories - Identity
+        single<IdentityRepository> { createIdentityRepository(get(), get()) }
 
-    // Repositories - Voucher
-    single<ProofRepository> { createProofRepository() }
-    single<VoucherRepository> { createVoucherRepository() }
+        // Repositories - Voucher
+        single<ProofRepository> { createProofRepository() }
+        single<VoucherRepository> { createVoucherRepository() }
 
-    // HTTP Client
-    single { createHttpClient() }
+        // HTTP Client
+        single { createHttpClient() }
 
-    // Mint API Client
-    single { MintApiClient(get(), get()) }
+        // Mint API Client
+        single { MintApiClient(get(), get()) }
 
-    // Use Cases - Identity
-    single { CreateIdentityUseCase(get()) }
-    single { ListIdentitiesUseCase(get()) }
-    single { ImportIdentityUseCase(get()) }
-    single { ImportIdentityFromNsecUseCase(get()) }
+        // Use Cases - Identity
+        single { CreateIdentityUseCase(get()) }
+        single { ListIdentitiesUseCase(get()) }
+        single { ImportIdentityUseCase(get()) }
+        single { ImportIdentityFromNsecUseCase(get()) }
 
-    // Use Cases - Voucher
-    single {
-        IssueVoucherUseCase(
-            voucherRepository = get(),
-            proofRepository = get(),
-            mintApiClient = get(),
-            cryptoAdapter = get(),
-            identityRepository = get(),
-        )
+        // Use Cases - Voucher
+        single {
+            IssueVoucherUseCase(
+                voucherRepository = get(),
+                proofRepository = get(),
+                mintApiClient = get(),
+                cryptoAdapter = get(),
+                identityRepository = get(),
+            )
+        }
+        single {
+            RedeemVoucherUseCase(
+                voucherRepository = get(),
+                proofRepository = get(),
+                mintApiClient = get(),
+            )
+        }
+
+        // ViewModels
+        single {
+            IdentityViewModel(
+                createIdentityUseCase = get(),
+                listIdentitiesUseCase = get(),
+                importIdentityUseCase = get(),
+                importIdentityFromNsecUseCase = get(),
+            )
+        }
+
+        single {
+            VoucherViewModel(
+                voucherRepository = get(),
+                issueVoucherUseCase = get(),
+                redeemVoucherUseCase = get(),
+            )
+        }
     }
-    single {
-        RedeemVoucherUseCase(
-            voucherRepository = get(),
-            proofRepository = get(),
-            mintApiClient = get(),
-        )
-    }
-
-    // ViewModels
-    single {
-        IdentityViewModel(
-            createIdentityUseCase = get(),
-            listIdentitiesUseCase = get(),
-            importIdentityUseCase = get(),
-            importIdentityFromNsecUseCase = get(),
-        )
-    }
-
-    single {
-        VoucherViewModel(
-            voucherRepository = get(),
-            issueVoucherUseCase = get(),
-            redeemVoucherUseCase = get(),
-        )
-    }
-}

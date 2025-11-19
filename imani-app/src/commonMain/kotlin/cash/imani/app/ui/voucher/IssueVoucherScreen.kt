@@ -36,8 +36,10 @@ import cash.imani.voucher.usecases.IssueVoucherRequest
 @Composable
 fun IssueVoucherScreen(
     viewModel: VoucherViewModel,
-    mintUrl: String = "https://testnut.cashu.space", // Default test mint for Phase 2
-    onSuccess: (String) -> Unit, // Navigate to share screen with token
+    // Default test mint for Phase 2
+    mintUrl: String = "https://testnut.cashu.space",
+    // Navigate to share screen with token
+    onSuccess: (String) -> Unit,
     onCancel: () -> Unit,
 ) {
     val issueState by viewModel.issueState.collectAsState()
@@ -100,7 +102,8 @@ fun IssueVoucherScreen(
         // Memo field
         OutlinedTextField(
             value = memo,
-            onValueChange = { memo = it.take(200) }, // Limit to 200 chars
+            // Limit to 200 chars
+            onValueChange = { memo = it.take(200) },
             label = { Text("Memo (optional)") },
             placeholder = { Text("Add a message or description") },
             modifier = Modifier.fillMaxWidth(),
@@ -168,7 +171,8 @@ fun IssueVoucherScreen(
                         mintUrl = mintUrl,
                         expiresInDays = expiryDays.toIntOrNull()?.takeIf { it > 0 },
                         memo = memo.ifBlank { null },
-                        lockToPubkey = null, // Phase 2: No P2PK support in UI yet
+                        // Phase 2: No P2PK support in UI yet
+                        lockToPubkey = null,
                     )
 
                 viewModel.issueVoucher(request)
