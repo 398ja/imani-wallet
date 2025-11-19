@@ -25,9 +25,9 @@
 
 ## Overview
 
-**Goal**: Port Imani Wallet to Android with native platform features, achieving feature parity with the web version while leveraging Android-specific capabilities.
+**Goal**: Port Imani Wallet to Android with native platform features, achieving feature parity with the web version while **heavily reusing cashu-client Java code**.
 
-**Duration**: 3 weeks (~15 days)
+**Duration**: 2 weeks (~10 days) - Reduced from 3 weeks due to ≥90% code reuse
 
 **Prerequisites**:
 - Phase 3 (Web Polish & Production) completed
@@ -49,11 +49,102 @@
 
 ---
 
+## Code Reuse Strategy: Leverage cashu-client Java Code
+
+**Critical Principle**: Android runs on JVM, so we **directly reuse cashu-client Java code** rather than rewriting in Kotlin.
+
+### What We Reuse from cashu-client (≥90% code reuse)
+
+| Component | cashu-client Module | Reuse Strategy | Notes |
+|-----------|---------------------|----------------|-------|
+| **Crypto Operations** | `identity-domain` | ✅ Direct Java dependency | secp256k1, Schnorr signatures, key generation |
+| **Nostr Integration** | `nostr-repository` | ✅ Direct Java dependency | NostrGatewayService, event publishing/querying |
+| **Proof Management** | `wallet-core-base` | ✅ Direct Java dependency | ProofRecord, proof selection, token encoding |
+| **Mint API Client** | `cashu-api-client` | ✅ Direct Java dependency | All NUT endpoints (info, keys, swap, melt, etc.) |
+| **Use Cases** | `wallet-core-base` | ✅ Direct Java dependency | IssueVoucherUseCase, RedeemVoucherUseCase |
+| **Domain Models** | `wallet-core-base`, `identity-domain` | ✅ Direct Java dependency | Identity, WalletState, Proof, etc. |
+
+### What We Add for Android (≤10% new code)
+
+| Component | Purpose | Implementation | Effort |
+|-----------|---------|----------------|--------|
+| **Storage Adapters** | Persist to Android SQLite | Wrap cashu-client repositories with SQLDelight/Room | 2 days |
+| **Keystore Wrapper** | Encrypt private keys at rest | Use Android Keystore to encrypt `PrivateKey.bytes` | 1 day |
+| **Compose UI** | Android-native UI | Reuse `imani-app` Compose code (already multiplatform) | 3 days |
+| **Android Features** | Camera, biometric, sharing | Platform-specific Android APIs | 2 days |
+
+### Architecture: Thin Android Layer Over Java Core
+
+```
+┌─────────────────────────────────────────────┐
+│         Android UI (Compose)                 │  ← 3 days (reuse imani-app)
+├─────────────────────────────────────────────┤
+│  Android Platform Features                   │  ← 2 days (camera, biometric)
+│  - QR Scanner (CameraX)                      │
+│  - Biometric Auth                            │
+│  - Share Intent                              │
+├─────────────────────────────────────────────┤
+│  Storage Adapters (SQLDelight/Room)         │  ← 2 days (thin wrapper)
+│  - IdentityRepository → Android DB          │
+│  - VoucherRepository → Android DB           │
+├─────────────────────────────────────────────┤
+│  Keystore Wrapper                           │  ← 1 day (encrypt PrivateKey)
+│  - Encrypt/decrypt private keys             │
+├═════════════════════════════════════════════┤
+│                                             │
+│      cashu-client Java Code (REUSED)       │  ← 0 days (already exists)
+│                                             │
+│  - Identity Domain (crypto, keys)          │
+│  - Nostr Repository (NostrGatewayService)  │
+│  - Wallet Core (use cases, proof mgmt)     │
+│  - Cashu API Client (mint communication)   │
+│  - All domain models and business logic    │
+│                                             │
+└─────────────────────────────────────────────┘
+```
+
+### Updated Effort Estimate
+
+| Phase | Original Estimate | Revised Estimate | Savings |
+|-------|-------------------|------------------|---------|
+| 4.1: Module Setup | 2 days | 1 day | -1 day (simpler Gradle config) |
+| 4.2: Platform Implementations | 4 days | 3 days | -1 day (no crypto rewrite) |
+| 4.3: Android UI | 5 days | 3 days | -2 days (reuse imani-app) |
+| 4.4: Testing | 4 days | 3 days | -1 day (fewer new components) |
+| **Total** | **15 days** | **10 days** | **-5 days** |
+
+**New Duration**: 2 weeks instead of 3 weeks
+
+### Dependency Configuration
+
+```kotlin
+// imani-android/build.gradle.kts
+dependencies {
+    // Reuse cashu-client Java modules directly
+    implementation(project(":cashu-client:identity-domain"))
+    implementation(project(":cashu-client:wallet-core-base"))
+    implementation(project(":cashu-client:nostr-repository"))
+    implementation(project(":cashu-client:cashu-api-client"))
+
+    // Only add Android-specific wrappers
+    implementation(project(":imani-identity"))      // Thin KMP wrapper
+    implementation(project(":imani-voucher"))       // Thin KMP wrapper
+    implementation(project(":imani-app"))           // Compose UI (shared)
+
+    // Android platform libraries
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.security.crypto)   // For Keystore
+    implementation(libs.sqldelight.android.driver)  // For storage
+}
+```
+
+---
+
 ## Phase 4.1: Android Module Setup
 
-**Goal**: Set up Android application module with proper build configuration and dependencies.
+**Goal**: Set up Android application module with proper build configuration and dependencies to **reuse cashu-client Java modules**.
 
-**Duration**: 2 days
+**Duration**: 1 day (reduced from 2 days - simpler Gradle config)
 
 ### Tasks
 
@@ -415,88 +506,70 @@ robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectr
 
 ## Phase 4.2: Platform-Specific Implementations
 
-**Goal**: Implement Android-specific adapters for crypto (Keystore) and storage (SQLDelight).
+**Goal**: Add thin Android wrappers for storage and encryption. **NO crypto reimplementation** - all delegated to cashu-client.
 
-**Duration**: 4 days
+**Duration**: 3 days (reduced from 4 days - wrapping, not rewriting)
 
 ### Tasks
 
-#### 4.2.1. Android Keystore Crypto Adapter
+#### 4.2.1. Android Keystore Wrapper (NOT Crypto Reimplementation)
 
-**Implement `CryptoAdapter` using Android Keystore for secure key storage**:
+**IMPORTANT**: We **DO NOT** reimplement crypto. We **wrap** cashu-client's Java crypto code and add Android Keystore encryption for private keys at rest.
+
+**Strategy**:
+1. ✅ **Reuse** cashu-client's `identity-domain` module for all crypto operations
+2. ✅ Add thin Android Keystore wrapper to encrypt `PrivateKey.bytes` when storing
+3. ✅ Delegate all crypto operations (signing, verification) to existing Java code
 
 ```kotlin
-// imani-identity/androidMain/kotlin/cash/imani/identity/crypto/AndroidCryptoAdapter.kt
-package cash.imani.identity.crypto
+// imani-android/src/main/kotlin/cash/imani/android/security/KeystoreManager.kt
+package cash.imani.android.security
 
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
-import fr.acinq.secp256k1.Secp256k1
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-actual class AndroidCryptoAdapter : CryptoAdapter {
+/**
+ * Manages Android Keystore for encrypting private keys at rest.
+ *
+ * NOTE: This does NOT handle cryptographic operations (signing, verification).
+ * Those are delegated to cashu-client's identity-domain module.
+ */
+class KeystoreManager {
 
     private val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-    private val secp256k1 = Secp256k1.get()
-
-    actual override suspend fun generateRandomBytes(length: Int): ByteArray {
-        return java.security.SecureRandom().generateSeed(length)
-    }
-
-    actual override suspend fun sha256(data: ByteArray): ByteArray {
-        val digest = java.security.MessageDigest.getInstance("SHA-256")
-        return digest.digest(data)
-    }
-
-    actual override suspend fun generateKeypair(): KeyPair {
-        val privateKey = generateRandomBytes(32)
-        val publicKey = secp256k1.pubKeyCompress(secp256k1.pubkeyCreate(privateKey)).copyOfRange(1, 33)
-        return KeyPair(publicKey, privateKey)
-    }
-
-    actual override suspend fun schnorrSign(privateKey: ByteArray, message: ByteArray): ByteArray {
-        return secp256k1.signSchnorr(message, privateKey, null)
-    }
-
-    actual override suspend fun schnorrVerify(
-        publicKey: ByteArray,
-        message: ByteArray,
-        signature: ByteArray
-    ): Boolean {
-        return secp256k1.verifySchnorr(signature, message, publicKey)
-    }
 
     /**
-     * Encrypts private key using Android Keystore.
+     * Encrypts PrivateKey.bytes using Android Keystore.
      *
-     * @param privateKey The private key bytes to encrypt
+     * @param privateKeyBytes The private key bytes from cashu-client's PrivateKey class
      * @param alias The keystore alias for this key
      * @return Encrypted private key with IV prepended
      */
-    suspend fun encryptPrivateKey(privateKey: ByteArray, alias: String): ByteArray {
+    fun encryptPrivateKey(privateKeyBytes: ByteArray, alias: String): ByteArray {
         val secretKey = getOrCreateSecretKey(alias)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, secretKey)
 
         val iv = cipher.iv
-        val encrypted = cipher.doFinal(privateKey)
+        val encrypted = cipher.doFinal(privateKeyBytes)
 
-        // Prepend IV to encrypted data
+        // Prepend IV to encrypted data (first 12 bytes)
         return iv + encrypted
     }
 
     /**
-     * Decrypts private key using Android Keystore.
+     * Decrypts PrivateKey.bytes using Android Keystore.
      *
      * @param encryptedData Encrypted private key with IV prepended
      * @param alias The keystore alias for this key
-     * @return Decrypted private key bytes
+     * @return Decrypted private key bytes (to reconstruct cashu-client's PrivateKey)
      */
-    suspend fun decryptPrivateKey(encryptedData: ByteArray, alias: String): ByteArray {
+    fun decryptPrivateKey(encryptedData: ByteArray, alias: String): ByteArray {
         val secretKey = getOrCreateSecretKey(alias)
 
         // Extract IV (first 12 bytes for GCM)
@@ -523,55 +596,126 @@ actual class AndroidCryptoAdapter : CryptoAdapter {
         )
             .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
             .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-            .setUserAuthenticationRequired(false)
+            .setUserAuthenticationRequired(false)  // Can be true for biometric unlock
             .build()
 
         keyGenerator.init(spec)
         return keyGenerator.generateKey()
     }
 
-    actual override suspend fun encryptNip44(
-        plaintext: String,
-        recipientPubkey: String,
-        senderPrivkey: String
-    ): String {
-        // TODO: Implement NIP-44 encryption using secp256k1 ECDH
-        TODO("NIP-44 encryption not yet implemented for Android")
+}
+```
+
+**Usage with cashu-client's Identity class**:
+
+```kotlin
+// imani-android/src/main/kotlin/cash/imani/android/repository/AndroidIdentityManager.kt
+package cash.imani.android.repository
+
+import cash.z_eus.cashu.identity.domain.Identity
+import cash.z_eus.cashu.identity.domain.PrivateKey
+import cash.z_eus.cashu.identity.domain.PublicKey
+import cash.imani.android.security.KeystoreManager
+
+/**
+ * Android wrapper for cashu-client's Identity class.
+ * Adds Android Keystore encryption for private key storage.
+ */
+class AndroidIdentityManager(
+    private val keystoreManager: KeystoreManager,
+    private val database: IdentityDatabase  // SQLDelight or Room
+) {
+
+    /**
+     * Creates new identity using cashu-client's Identity class.
+     * Private key encrypted with Android Keystore before storage.
+     */
+    fun createIdentity(label: String): Identity {
+        // Use cashu-client's Identity factory method (all crypto is in Java)
+        val identity = Identity.generateNew(label)
+
+        // Encrypt private key bytes for Android storage
+        val encryptedPrivKey = keystoreManager.encryptPrivateKey(
+            identity.privateKey.bytes,
+            "identity_${identity.id}"
+        )
+
+        // Store encrypted private key in Android database
+        database.identityQueries.insert(
+            id = identity.id,
+            label = identity.label,
+            publicKeyHex = identity.publicKey.toHex(),
+            encryptedPrivateKey = encryptedPrivKey,
+            createdAt = identity.createdAt,
+            lastUsedAt = identity.lastUsedAt
+        )
+
+        return identity
     }
 
-    actual override suspend fun decryptNip44(
-        ciphertext: String,
-        senderPubkey: String,
-        recipientPrivkey: String
-    ): String {
-        // TODO: Implement NIP-44 decryption using secp256k1 ECDH
-        TODO("NIP-44 decryption not yet implemented for Android")
+    /**
+     * Loads identity from Android database.
+     * Decrypts private key using Android Keystore.
+     */
+    fun loadIdentity(id: String): Identity {
+        val record = database.identityQueries.selectById(id).executeAsOne()
+
+        // Decrypt private key from Keystore
+        val privateKeyBytes = keystoreManager.decryptPrivateKey(
+            record.encryptedPrivateKey,
+            "identity_$id"
+        )
+
+        // Reconstruct cashu-client's Identity object
+        return Identity(
+            id = record.id,
+            label = record.label,
+            privateKey = PrivateKey(privateKeyBytes),  // cashu-client class
+            publicKey = PublicKey.fromHex(record.publicKeyHex),  // cashu-client class
+            createdAt = record.createdAt,
+            lastUsedAt = record.lastUsedAt
+        )
     }
-}
+
+    /**
+     * Signs Nostr event using cashu-client's Identity.sign() method.
+     * NO crypto reimplementation - delegates to Java.
+     */
+    fun signNostrEvent(identityId: String, event: nostr.event.BaseEvent): nostr.event.Event {
+        val identity = loadIdentity(identityId)
+
+        // Use cashu-client's sign method (Schnorr signature in Java)
+        return identity.sign(event)
+    }
 ```
 
 **Dependencies**:
 ```kotlin
-// Add to imani-identity/build.gradle.kts androidMain
+// imani-android/build.gradle.kts
 dependencies {
-    implementation("fr.acinq.secp256k1:secp256k1-kmp-jni-android:0.12.0")
+    // ✅ REUSE cashu-client Java modules (NO crypto reimplementation)
+    implementation(project(":cashu-client:identity-domain"))
+
+    // Only add Android-specific encryption for storage
+    implementation(libs.androidx.security.crypto)
 }
 ```
 
 **Acceptance Criteria**:
-- Can generate secp256k1 keypairs
-- Schnorr signatures verify correctly
-- Private keys encrypted in Android Keystore
-- Keys survive app restart
-- Works on Android 8.0+ (API 26+)
+- ✅ Reuses cashu-client's Identity class for all crypto operations
+- ✅ Private keys encrypted in Android Keystore (AES-GCM)
+- ✅ Can create, load, and sign with identities
+- ✅ Keys survive app restart
+- ✅ Works on Android 8.0+ (API 26+)
+- ❌ NO crypto reimplementation (all delegated to cashu-client)
 
-**Effort**: 2 days
+**Effort**: 1 day (reduced from 2 days - no crypto to write!)
 
 **Task Tracking**:
 
 | ID | Task | Size | Status | Commit | Notes | Dependencies |
 |----|------|------|--------|--------|-------|--------------|
-| 4.2.1 | Android Keystore Crypto Adapter | M (2d) | 📋 TODO | - | Implement CryptoAdapter using Android Keystore, secp256k1-kmp-jni-android | 4.1.1, Phase 1 complete |
+| 4.2.1 | Android Keystore Wrapper | S (1d) | 📋 TODO | - | Wrap cashu-client's Identity with Keystore encryption (NO crypto reimplementation) | 4.1.1 |
 
 ---
 
@@ -892,9 +1036,9 @@ class MainActivity : ComponentActivity() {
 
 ## Phase 4.3: Android UI Adaptations
 
-**Goal**: Adapt Compose UI for Android-specific patterns and features.
+**Goal**: **Reuse imani-app Compose UI** with Android-specific features (camera, biometric, sharing).
 
-**Duration**: 5 days
+**Duration**: 3 days (reduced from 5 days - UI already exists in imani-app)
 
 ### Tasks
 
@@ -1445,7 +1589,7 @@ fun ShareVoucherScreen(token: String, memo: String?, onDone: () -> Unit) {
 
 **Goal**: Test thoroughly and publish to Google Play Store (internal testing).
 
-**Duration**: 4 days
+**Duration**: 3 days (reduced from 4 days - fewer new components to test)
 
 ### Tasks
 
