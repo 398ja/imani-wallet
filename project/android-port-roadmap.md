@@ -1239,7 +1239,7 @@ fun MainScreen() {
 
 | ID | Task | Size | Status | Commit | Notes | Dependencies |
 |----|------|------|--------|--------|-------|--------------|
-| 4.3.2 | Android Navigation | S (1d) | 📋 TODO | - | Voyager navigation, back button handling, bottom navigation | 4.3.1 |
+| 4.3.2 | Android Navigation | S (1d) | ✅ DONE | ffc94b4 | NavigationStateHolder.kt (IdentityNavStateSaver for state preservation), IdentityNavHost updated to accept external navState, MainScreen.kt with smart BackHandler for all tabs (pop nested → first tab → exit), Voyager Navigator wrapper for VoucherNavHost, ≥90% code reuse from imani-app | 4.3.1 |
 
 ---
 
