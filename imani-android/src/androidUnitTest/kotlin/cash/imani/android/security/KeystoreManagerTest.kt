@@ -7,7 +7,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import kotlin.test.assertContentEquals
-import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -20,7 +19,6 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28]) // Android 9.0 (API 28)
 class KeystoreManagerTest {
-
     private lateinit var keystoreManager: KeystoreManager
 
     @Before
@@ -68,7 +66,10 @@ class KeystoreManagerTest {
 
         // Then: Encrypted data is longer than input (IV + ciphertext + GCM tag)
         // Expected: 12 bytes (IV) + 32 bytes (data) + 16 bytes (GCM tag) = 60 bytes
-        assertTrue(encrypted.size >= 44, "Encrypted data should be at least 44 bytes (IV + data), got ${encrypted.size}")
+        assertTrue(
+            encrypted.size >= 44,
+            "Encrypted data should be at least 44 bytes (IV + data), got ${encrypted.size}",
+        )
     }
 
     /**

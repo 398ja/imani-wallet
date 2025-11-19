@@ -1,18 +1,12 @@
 package cash.imani.android
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import cash.imani.android.security.BiometricAuthenticator
@@ -34,7 +28,6 @@ import kotlinx.coroutines.launch
  * TODO: Implement full UI navigation in Phase 4.3
  */
 class MainActivity : FragmentActivity() {
-
     private lateinit var biometricAuthenticator: BiometricAuthenticator
     private var isUnlocked = mutableStateOf(false)
     private var lockScreenState = mutableStateOf<LockScreenState>(LockScreenState.Locked)
@@ -87,7 +80,7 @@ class MainActivity : FragmentActivity() {
                                         authenticateUser()
                                     }
                                 }
-                            }
+                            },
                         )
                     }
                 }
@@ -99,21 +92,23 @@ class MainActivity : FragmentActivity() {
         lockScreenState.value = LockScreenState.Authenticating
 
         lifecycleScope.launch {
-            val result = biometricAuthenticator.authenticate(
-                activity = this@MainActivity,
-                title = "Unlock Imani Wallet",
-                subtitle = "Verify your identity to continue",
-                description = "Use your fingerprint or face to unlock"
-            )
+            val result =
+                biometricAuthenticator.authenticate(
+                    activity = this@MainActivity,
+                    title = "Unlock Imani Wallet",
+                    subtitle = "Verify your identity to continue",
+                    description = "Use your fingerprint or face to unlock",
+                )
 
             if (result.isSuccess) {
                 // Authentication successful
                 isUnlocked.value = true
             } else {
                 // Authentication failed
-                lockScreenState.value = LockScreenState.Failed(
-                    result.exceptionOrNull()?.message ?: "Authentication failed"
-                )
+                lockScreenState.value =
+                    LockScreenState.Failed(
+                        result.exceptionOrNull()?.message ?: "Authentication failed",
+                    )
             }
         }
     }

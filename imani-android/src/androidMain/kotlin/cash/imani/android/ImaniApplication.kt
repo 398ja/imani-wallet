@@ -15,7 +15,6 @@ import org.koin.core.logger.Level
  * Combines shared modules (appModule) with Android-specific modules (androidModule).
  */
 class ImaniApplication : Application() {
-
     override fun onCreate() {
         super.onCreate()
         initKoin()
@@ -26,8 +25,8 @@ class ImaniApplication : Application() {
             androidLogger(Level.ERROR)
             androidContext(this@ImaniApplication)
             modules(
-                appModule,      // Shared UI and domain logic
-                androidModule   // Android-specific implementations (Keystore, SQLDelight)
+                appModule, // Shared UI and domain logic
+                androidModule, // Android-specific implementations (Keystore, SQLDelight)
             )
         }
     }

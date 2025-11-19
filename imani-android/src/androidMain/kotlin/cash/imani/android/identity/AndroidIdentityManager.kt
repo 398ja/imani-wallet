@@ -4,7 +4,6 @@ import cash.imani.android.security.KeystoreManager
 import cash.imani.identity.domain.Identity
 import cash.imani.identity.util.hexToBytes
 import cash.imani.identity.util.toHex
-import kotlinx.datetime.Clock
 
 /**
  * Android-specific wrapper for Identity management.
@@ -21,12 +20,11 @@ import kotlinx.datetime.Clock
  * In the future, this could be adapted to wrap cashu-client's Java Identity class
  * for ≥90% code reuse on Android (which runs on JVM).
  *
- * @property keystoreManager Android Keystore manager for key encryption
+ * @property keystoreManager Android Keystore manager for key encryption (internal for mnemonic storage)
  */
 class AndroidIdentityManager(
-    private val keystoreManager: KeystoreManager
+    internal val keystoreManager: KeystoreManager,
 ) {
-
     /**
      * Encrypts an identity's private key for secure storage.
      *
@@ -50,7 +48,7 @@ class AndroidIdentityManager(
         val privateKeyBytes = identity.privateKey.hexToBytes()
         return keystoreManager.encryptPrivateKey(
             privateKeyBytes,
-            getKeystoreAlias(identity.id)
+            getKeystoreAlias(identity.id),
         )
     }
 
@@ -77,11 +75,15 @@ class AndroidIdentityManager(
      * )
      * ```
      */
-    fun decryptPrivateKey(identityId: String, encryptedPrivateKey: ByteArray): String {
-        val privateKeyBytes = keystoreManager.decryptPrivateKey(
-            encryptedPrivateKey,
-            getKeystoreAlias(identityId)
-        )
+    fun decryptPrivateKey(
+        identityId: String,
+        encryptedPrivateKey: ByteArray,
+    ): String {
+        val privateKeyBytes =
+            keystoreManager.decryptPrivateKey(
+                encryptedPrivateKey,
+                getKeystoreAlias(identityId),
+            )
         return privateKeyBytes.toHex()
     }
 
@@ -134,9 +136,10 @@ class AndroidIdentityManager(
         val encryptedPrivKey = encryptPrivateKey(identity)
 
         // Return identity without private key in memory (security best practice)
-        val secureIdentity = identity.copy(
-            privateKey = "" // Clear from memory after encryption
-        )
+        val secureIdentity =
+            identity.copy(
+                privateKey = "", // Clear from memory after encryption
+            )
 
         return secureIdentity to encryptedPrivKey
     }

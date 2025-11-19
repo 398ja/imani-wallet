@@ -35,50 +35,53 @@ import org.koin.dsl.module
  * }
  * ```
  */
-val androidModule = module {
+val androidModule =
+    module {
 
-    // Security - Android Keystore
-    single { KeystoreManager() }
+        // Security - Android Keystore
+        single { KeystoreManager() }
 
-    // Security - Biometric Authentication
-    single {
-        BiometricAuthenticator(
-            context = androidContext()
-        )
+        // Security - Biometric Authentication
+        single {
+            BiometricAuthenticator(
+                context = androidContext(),
+            )
+        }
+
+        // Identity Management - Android wrapper
+        single {
+            AndroidIdentityManager(
+                keystoreManager = get(),
+            )
+        }
+
+        // SQLDelight Database Driver
+        single<SqlDriver> {
+            AndroidSqliteDriver(
+                schema = ImaniDatabase.Schema,
+                context = androidContext(),
+                name = "imani.db",
+            )
+        }
+
+        // SQLDelight Database
+        single {
+            ImaniDatabase(driver = get())
+        }
+
+        // Repositories
+        single<IdentityRepository> {
+            AndroidIdentityRepository(
+                database = get(),
+                identityManager = get(),
+                cryptoAdapter = get(),
+                bip39Adapter = get(),
+            )
+        }
+
+        single<VoucherRepository> {
+            AndroidVoucherRepository(
+                database = get(),
+            )
+        }
     }
-
-    // Identity Management - Android wrapper
-    single {
-        AndroidIdentityManager(
-            keystoreManager = get()
-        )
-    }
-
-    // SQLDelight Database Driver
-    single<SqlDriver> {
-        AndroidSqliteDriver(
-            schema = ImaniDatabase.Schema,
-            context = androidContext(),
-            name = "imani.db"
-        )
-    }
-
-    // SQLDelight Database
-    single {
-        ImaniDatabase(driver = get())
-    }
-
-    // Repositories
-    single<IdentityRepository> {
-        AndroidIdentityRepository(
-            database = get(),
-            identityManager = get()
-        )
-    }
-
-    single<VoucherRepository> {
-        AndroidVoucherRepository(
-            database = get()
-        )
-    }
-}

@@ -1,6 +1,5 @@
 package cash.imani.android.ui
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,28 +40,29 @@ import androidx.compose.ui.unit.dp
 fun LockScreen(
     state: LockScreenState,
     onUnlockClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     Scaffold(
-        modifier = modifier.fillMaxSize()
+        modifier = modifier.fillMaxSize(),
     ) { padding ->
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(32.dp),
-            contentAlignment = Alignment.Center
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(32.dp),
+            contentAlignment = Alignment.Center,
         ) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(24.dp)
+                verticalArrangement = Arrangement.spacedBy(24.dp),
             ) {
                 // Lock Icon
                 Icon(
                     imageVector = Icons.Default.Lock,
                     contentDescription = "Locked",
                     modifier = Modifier.size(80.dp),
-                    tint = MaterialTheme.colorScheme.primary
+                    tint = MaterialTheme.colorScheme.primary,
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -71,7 +71,7 @@ fun LockScreen(
                 Text(
                     text = "Imani Wallet",
                     style = MaterialTheme.typography.headlineLarge,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
 
                 // State-specific content
@@ -81,7 +81,7 @@ fun LockScreen(
                             text = "Unlock to continue",
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center
+                            textAlign = TextAlign.Center,
                         )
 
                         Button(onClick = onUnlockClick) {
@@ -93,12 +93,12 @@ fun LockScreen(
                         Text(
                             text = "Authenticating...",
                             style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
 
                         CircularProgressIndicator(
                             modifier = Modifier.size(48.dp),
-                            color = MaterialTheme.colorScheme.primary
+                            color = MaterialTheme.colorScheme.primary,
                         )
                     }
 
@@ -107,14 +107,14 @@ fun LockScreen(
                             text = "Authentication Failed",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.error,
-                            textAlign = TextAlign.Center
+                            textAlign = TextAlign.Center,
                         )
 
                         Text(
                             text = state.reason,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center
+                            textAlign = TextAlign.Center,
                         )
 
                         Button(onClick = onUnlockClick) {
@@ -127,14 +127,14 @@ fun LockScreen(
                             text = "Biometric Not Available",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.error,
-                            textAlign = TextAlign.Center
+                            textAlign = TextAlign.Center,
                         )
 
                         Text(
                             text = state.reason,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center
+                            textAlign = TextAlign.Center,
                         )
 
                         Button(onClick = onUnlockClick) {
@@ -152,7 +152,10 @@ fun LockScreen(
  */
 sealed class LockScreenState {
     object Locked : LockScreenState()
+
     object Authenticating : LockScreenState()
+
     data class Failed(val reason: String) : LockScreenState()
+
     data class NotAvailable(val reason: String) : LockScreenState()
 }

@@ -18,7 +18,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.Navigator
 import cafe.adriel.voyager.transitions.SlideTransition
 import cash.imani.android.ui.settings.SettingsScreen
@@ -66,27 +65,29 @@ fun MainScreen() {
     val voucherViewModel: VoucherViewModel = get()
 
     // Navigation state for Identity tab (preserves state across config changes)
-    val identityNavState = rememberSaveable(saver = IdentityNavStateSaver) {
-        cash.imani.app.navigation.IdentityNavState()
-    }
+    val identityNavState =
+        rememberSaveable(saver = IdentityNavStateSaver) {
+            cash.imani.app.navigation.IdentityNavState()
+        }
 
-    val navItems = listOf(
-        NavigationItem(
-            label = "Identities",
-            icon = Icons.Default.Person,
-            screen = NavigationScreen.Identities
-        ),
-        NavigationItem(
-            label = "Vouchers",
-            icon = Icons.Default.CardGiftcard,
-            screen = NavigationScreen.Vouchers
-        ),
-        NavigationItem(
-            label = "Settings",
-            icon = Icons.Default.Settings,
-            screen = NavigationScreen.Settings
+    val navItems =
+        listOf(
+            NavigationItem(
+                label = "Identities",
+                icon = Icons.Default.Person,
+                screen = NavigationScreen.Identities,
+            ),
+            NavigationItem(
+                label = "Vouchers",
+                icon = Icons.Default.CardGiftcard,
+                screen = NavigationScreen.Vouchers,
+            ),
+            NavigationItem(
+                label = "Settings",
+                icon = Icons.Default.Settings,
+                screen = NavigationScreen.Settings,
+            ),
         )
-    )
 
     Scaffold(
         bottomBar = {
@@ -96,11 +97,11 @@ fun MainScreen() {
                         icon = { Icon(item.icon, contentDescription = item.label) },
                         label = { Text(item.label) },
                         selected = selectedIndex == index,
-                        onClick = { selectedIndex = index }
+                        onClick = { selectedIndex = index },
                     )
                 }
             }
-        }
+        },
     ) { paddingValues ->
         when (navItems[selectedIndex].screen) {
             NavigationScreen.Identities -> {
@@ -115,7 +116,7 @@ fun MainScreen() {
                 // Reuse IdentityNavHost from imani-app (100% code reuse)
                 IdentityNavHost(
                     viewModel = identityViewModel,
-                    navState = identityNavState
+                    navState = identityNavState,
                 )
             }
 
@@ -153,7 +154,7 @@ fun MainScreen() {
 private data class NavigationItem(
     val label: String,
     val icon: ImageVector,
-    val screen: NavigationScreen
+    val screen: NavigationScreen,
 )
 
 /**
@@ -162,5 +163,5 @@ private data class NavigationItem(
 private enum class NavigationScreen {
     Identities,
     Vouchers,
-    Settings
+    Settings,
 }

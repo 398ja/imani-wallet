@@ -31,7 +31,6 @@ import java.io.FileOutputStream
  * ```
  */
 object ShareUtils {
-
     /**
      * Share voucher token as plain text.
      *
@@ -41,12 +40,16 @@ object ShareUtils {
      * @param context Android context
      * @param token Cashu token string (cashuA...)
      */
-    fun shareVoucherToken(context: Context, token: String) {
-        val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, token)
-            putExtra(Intent.EXTRA_SUBJECT, "Imani Voucher")
-        }
+    fun shareVoucherToken(
+        context: Context,
+        token: String,
+    ) {
+        val intent =
+            Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, token)
+                putExtra(Intent.EXTRA_SUBJECT, "Imani Voucher")
+            }
         context.startActivity(Intent.createChooser(intent, "Share Voucher"))
     }
 
@@ -60,7 +63,11 @@ object ShareUtils {
      * @param token Cashu token string (cashuA...)
      * @param memo Optional memo to include in share message
      */
-    fun shareVoucherQR(context: Context, token: String, memo: String? = null) {
+    fun shareVoucherQR(
+        context: Context,
+        token: String,
+        memo: String? = null,
+    ) {
         try {
             // Generate QR code bitmap
             val bitmap = generateQRCode(token, size = 512)
@@ -72,20 +79,22 @@ object ShareUtils {
             }
 
             // Get content URI via FileProvider
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                file
-            )
+            val uri =
+                FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    file,
+                )
 
             // Share intent
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = "image/png"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_TEXT, memo ?: "Imani Voucher")
-                putExtra(Intent.EXTRA_SUBJECT, "Imani Voucher QR Code")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
+            val intent =
+                Intent(Intent.ACTION_SEND).apply {
+                    type = "image/png"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    putExtra(Intent.EXTRA_TEXT, memo ?: "Imani Voucher")
+                    putExtra(Intent.EXTRA_SUBJECT, "Imani Voucher QR Code")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
 
             context.startActivity(Intent.createChooser(intent, "Share QR Code"))
         } catch (e: Exception) {
@@ -103,7 +112,10 @@ object ShareUtils {
      * @param size Size of QR code in pixels (square)
      * @return Bitmap containing QR code
      */
-    fun generateQRCode(content: String, size: Int = 512): Bitmap {
+    fun generateQRCode(
+        content: String,
+        size: Int = 512,
+    ): Bitmap {
         val writer = QRCodeWriter()
         val bitMatrix = writer.encode(content, BarcodeFormat.QR_CODE, size, size)
 
@@ -114,7 +126,7 @@ object ShareUtils {
                 bitmap.setPixel(
                     x,
                     y,
-                    if (bitMatrix[x, y]) Color.BLACK else Color.WHITE
+                    if (bitMatrix[x, y]) Color.BLACK else Color.WHITE,
                 )
             }
         }
@@ -131,7 +143,11 @@ object ShareUtils {
      * @param token Cashu token string
      * @param memo Optional memo
      */
-    fun shareVoucherComplete(context: Context, token: String, memo: String? = null) {
+    fun shareVoucherComplete(
+        context: Context,
+        token: String,
+        memo: String? = null,
+    ) {
         try {
             // Generate QR code
             val bitmap = generateQRCode(token, size = 512)
@@ -140,27 +156,32 @@ object ShareUtils {
                 bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
             }
 
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                file
-            )
+            val uri =
+                FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    file,
+                )
 
             // Share with both image and text
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = "image/png"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_TEXT, buildString {
-                    if (memo != null) {
-                        append(memo)
-                        append("\n\n")
-                    }
-                    append("Imani Voucher Token:\n")
-                    append(token)
-                })
-                putExtra(Intent.EXTRA_SUBJECT, "Imani Voucher")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
+            val intent =
+                Intent(Intent.ACTION_SEND).apply {
+                    type = "image/png"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    putExtra(
+                        Intent.EXTRA_TEXT,
+                        buildString {
+                            if (memo != null) {
+                                append(memo)
+                                append("\n\n")
+                            }
+                            append("Imani Voucher Token:\n")
+                            append(token)
+                        },
+                    )
+                    putExtra(Intent.EXTRA_SUBJECT, "Imani Voucher")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
 
             context.startActivity(Intent.createChooser(intent, "Share Voucher"))
         } catch (e: Exception) {

@@ -25,7 +25,6 @@ import kotlin.test.assertTrue
  */
 @RunWith(RobolectricTestRunner::class)
 class BiometricAuthenticatorTest {
-
     private lateinit var context: Context
     private lateinit var authenticator: BiometricAuthenticator
 
@@ -51,7 +50,7 @@ class BiometricAuthenticatorTest {
         assertTrue(
             result is BiometricAvailability.Available ||
                 result is BiometricAvailability.NotAvailable ||
-                result is BiometricAvailability.NotEnrolled
+                result is BiometricAvailability.NotEnrolled,
         )
     }
 
@@ -67,9 +66,10 @@ class BiometricAuthenticatorTest {
         } returns BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED
 
         // When: Check availability (simulated)
-        val result = BiometricAvailability.NotEnrolled(
-            "No biometrics enrolled. Please set up fingerprint or face unlock in Settings."
-        )
+        val result =
+            BiometricAvailability.NotEnrolled(
+                "No biometrics enrolled. Please set up fingerprint or face unlock in Settings.",
+            )
 
         // Then
         assertTrue(result is BiometricAvailability.NotEnrolled)
@@ -113,27 +113,29 @@ class BiometricAuthenticatorTest {
     @Test
     fun `all BiometricManager error codes are mapped to availability states`() {
         // Given: All possible BiometricManager error codes
-        val errorCodes = listOf(
-            BiometricManager.BIOMETRIC_SUCCESS to BiometricAvailability.Available,
-            BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE to BiometricAvailability.NotAvailable(""),
-            BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE to BiometricAvailability.NotAvailable(""),
-            BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED to BiometricAvailability.NotEnrolled(""),
-            BiometricManager.BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED to BiometricAvailability.NotAvailable(""),
-            BiometricManager.BIOMETRIC_ERROR_UNSUPPORTED to BiometricAvailability.NotAvailable(""),
-            BiometricManager.BIOMETRIC_STATUS_UNKNOWN to BiometricAvailability.NotAvailable("")
-        )
+        val errorCodes =
+            listOf(
+                BiometricManager.BIOMETRIC_SUCCESS to BiometricAvailability.Available,
+                BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE to BiometricAvailability.NotAvailable(""),
+                BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE to BiometricAvailability.NotAvailable(""),
+                BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED to BiometricAvailability.NotEnrolled(""),
+                BiometricManager.BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED to BiometricAvailability.NotAvailable(""),
+                BiometricManager.BIOMETRIC_ERROR_UNSUPPORTED to BiometricAvailability.NotAvailable(""),
+                BiometricManager.BIOMETRIC_STATUS_UNKNOWN to BiometricAvailability.NotAvailable(""),
+            )
 
         // When/Then: Verify each error code maps to correct availability type
         errorCodes.forEach { (code, expectedType) ->
-            val actualType = when (code) {
-                BiometricManager.BIOMETRIC_SUCCESS -> BiometricAvailability.Available
-                BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> BiometricAvailability.NotEnrolled("")
-                else -> BiometricAvailability.NotAvailable("")
-            }
+            val actualType =
+                when (code) {
+                    BiometricManager.BIOMETRIC_SUCCESS -> BiometricAvailability.Available
+                    BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> BiometricAvailability.NotEnrolled("")
+                    else -> BiometricAvailability.NotAvailable("")
+                }
 
             assertTrue(
                 actualType::class == expectedType::class,
-                "Error code $code should map to ${expectedType::class.simpleName}"
+                "Error code $code should map to ${expectedType::class.simpleName}",
             )
         }
     }
@@ -155,7 +157,7 @@ class BiometricAuthenticatorTest {
         assertTrue(
             result is BiometricAvailability.Available ||
                 result is BiometricAvailability.NotAvailable ||
-                result is BiometricAvailability.NotEnrolled
+                result is BiometricAvailability.NotEnrolled,
         )
     }
 }

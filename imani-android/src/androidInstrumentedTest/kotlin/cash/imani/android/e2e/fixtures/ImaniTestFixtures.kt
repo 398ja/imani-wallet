@@ -3,8 +3,6 @@ package cash.imani.android.e2e.fixtures
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.ComposeTestRule
 import androidx.test.platform.app.InstrumentationRegistry
-import cash.imani.identity.domain.Identity
-import cash.imani.voucher.domain.StoredVoucher
 import kotlinx.coroutines.delay
 
 /**
@@ -27,7 +25,6 @@ import kotlinx.coroutines.delay
  * ```
  */
 class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
-
     // ==================== Navigation Helpers ====================
 
     /**
@@ -96,7 +93,7 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
 
         // Fill in identity label (UI uses "Label" not "Identity Label")
         composeTestRule.onNode(
-            hasSetTextAction() and hasText("Label", substring = true)
+            hasSetTextAction() and hasText("Label", substring = true),
         ).performTextInput(label)
 
         composeTestRule.waitForIdle()
@@ -109,8 +106,8 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
         composeTestRule.waitUntil(10000) {
             composeTestRule.onAllNodesWithText("I've saved it")
                 .fetchSemanticsNodes().isNotEmpty() ||
-            composeTestRule.onAllNodesWithText("Identities")
-                .fetchSemanticsNodes().isNotEmpty()
+                composeTestRule.onAllNodesWithText("Identities")
+                    .fetchSemanticsNodes().isNotEmpty()
         }
 
         // If mnemonic screen appeared, click "I've saved it"
@@ -127,7 +124,10 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
      *
      * Equivalent to Playwright: `imaniPage.importIdentity(mnemonic, label)`
      */
-    suspend fun importIdentity(mnemonic: String, label: String) {
+    suspend fun importIdentity(
+        mnemonic: String,
+        label: String,
+    ) {
         waitForAppLoad()
 
         gotoIdentities()
@@ -140,12 +140,12 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
 
         // Fill mnemonic
         composeTestRule.onNode(
-            hasSetTextAction() and hasText("Mnemonic", substring = true)
+            hasSetTextAction() and hasText("Mnemonic", substring = true),
         ).performTextInput(mnemonic)
 
         // Fill label
         composeTestRule.onNode(
-            hasSetTextAction() and hasText("Label", substring = true)
+            hasSetTextAction() and hasText("Label", substring = true),
         ).performTextInput(label)
 
         composeTestRule.waitForIdle()
@@ -165,7 +165,10 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
      *
      * Equivalent to Playwright: `imaniPage.issueVoucher(amount, memo)`
      */
-    suspend fun issueVoucher(amount: Int, memo: String? = null) {
+    suspend fun issueVoucher(
+        amount: Int,
+        memo: String? = null,
+    ) {
         gotoVouchers()
         delay(500)
 
@@ -179,13 +182,13 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
 
         // Fill amount
         composeTestRule.onNode(
-            hasSetTextAction() and hasText("Amount", substring = true)
+            hasSetTextAction() and hasText("Amount", substring = true),
         ).performTextInput(amount.toString())
 
         // Fill memo if provided
         if (memo != null) {
             composeTestRule.onNode(
-                hasSetTextAction() and hasText("Memo", substring = true)
+                hasSetTextAction() and hasText("Memo", substring = true),
             ).performTextInput(memo)
         }
 
@@ -199,8 +202,8 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
         composeTestRule.waitUntil(15000) {
             composeTestRule.onAllNodesWithText("Share Voucher")
                 .fetchSemanticsNodes().isNotEmpty() ||
-            composeTestRule.onAllNodes(hasContentDescription("Voucher item"))
-                .fetchSemanticsNodes().isNotEmpty()
+                composeTestRule.onAllNodes(hasContentDescription("Voucher item"))
+                    .fetchSemanticsNodes().isNotEmpty()
         }
 
         composeTestRule.waitForIdle()
@@ -217,10 +220,11 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
     suspend fun shareVoucher(): String {
         // Assume we're on the share screen after issuing
         // Find the token text
-        val tokenNode = composeTestRule.onNode(
-            hasTestTag("voucher-token") or
-            hasContentDescription("Voucher token")
-        )
+        val tokenNode =
+            composeTestRule.onNode(
+                hasTestTag("voucher-token") or
+                    hasContentDescription("Voucher token"),
+            )
 
         // Get token text
         var token = ""
@@ -251,7 +255,7 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
 
         // Fill token
         composeTestRule.onNode(
-            hasSetTextAction() and hasText("Token", substring = true)
+            hasSetTextAction() and hasText("Token", substring = true),
         ).performTextInput(token)
 
         composeTestRule.waitForIdle()
@@ -286,7 +290,7 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
     fun expectVoucherInList(amount: Int) {
         gotoVouchers()
         composeTestRule.onNode(
-            hasText("$amount", substring = true)
+            hasText("$amount", substring = true),
         ).assertIsDisplayed()
     }
 
@@ -296,7 +300,7 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
     fun expectBalance(amount: Int) {
         composeTestRule.onNode(
             hasTestTag("balance-display") or
-            hasContentDescription("Balance")
+                hasContentDescription("Balance"),
         ).assertTextContains(amount.toString())
     }
 
@@ -305,7 +309,7 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
      */
     fun expectErrorToast(message: String) {
         composeTestRule.onNode(
-            hasText(message, substring = true, ignoreCase = true)
+            hasText(message, substring = true, ignoreCase = true),
         ).assertIsDisplayed()
     }
 
@@ -314,7 +318,7 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
      */
     fun expectSuccessToast(message: String) {
         composeTestRule.onNode(
-            hasText(message, substring = true, ignoreCase = true)
+            hasText(message, substring = true, ignoreCase = true),
         ).assertIsDisplayed()
     }
 

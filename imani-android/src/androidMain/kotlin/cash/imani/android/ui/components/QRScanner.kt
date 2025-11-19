@@ -62,7 +62,7 @@ import java.util.concurrent.Executors
 fun QRScanner(
     onQRCodeScanned: (String) -> Unit,
     onDismiss: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     val cameraPermissionState = rememberPermissionState(Manifest.permission.CAMERA)
 
@@ -77,7 +77,7 @@ fun QRScanner(
             cameraPermissionState.status.isGranted -> {
                 CameraPreview(
                     onQRCodeScanned = onQRCodeScanned,
-                    onDismiss = onDismiss
+                    onDismiss = onDismiss,
                 )
             }
 
@@ -95,7 +95,7 @@ fun QRScanner(
 @Composable
 private fun CameraPreview(
     onQRCodeScanned: (String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -117,23 +117,25 @@ private fun CameraPreview(
                 cameraProviderFuture.addListener({
                     val cameraProvider = cameraProviderFuture.get()
 
-                    val preview = Preview.Builder().build().also {
-                        it.setSurfaceProvider(previewView.surfaceProvider)
-                    }
+                    val preview =
+                        Preview.Builder().build().also {
+                            it.setSurfaceProvider(previewView.surfaceProvider)
+                        }
 
-                    val imageAnalysis = ImageAnalysis.Builder()
-                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                        .build()
-                        .also { analysis ->
-                            analysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                                processImageProxy(imageProxy) { qrCode ->
-                                    if (!hasScanned) {
-                                        hasScanned = true
-                                        onQRCodeScanned(qrCode)
+                    val imageAnalysis =
+                        ImageAnalysis.Builder()
+                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                            .build()
+                            .also { analysis ->
+                                analysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                                    processImageProxy(imageProxy) { qrCode ->
+                                        if (!hasScanned) {
+                                            hasScanned = true
+                                            onQRCodeScanned(qrCode)
+                                        }
                                     }
                                 }
                             }
-                        }
 
                     val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
@@ -143,7 +145,7 @@ private fun CameraPreview(
                             lifecycleOwner,
                             cameraSelector,
                             preview,
-                            imageAnalysis
+                            imageAnalysis,
                         )
                     } catch (e: Exception) {
                         // Camera initialization failed
@@ -152,31 +154,33 @@ private fun CameraPreview(
 
                 previewView
             },
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize(),
         )
 
         // Close button
         FloatingActionButton(
             onClick = onDismiss,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(16.dp)
+            modifier =
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp),
         ) {
             Icon(Icons.Default.Close, contentDescription = "Close")
         }
 
         // Instructions
         Surface(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(16.dp),
+            modifier =
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(16.dp),
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
-            shape = MaterialTheme.shapes.medium
+            shape = MaterialTheme.shapes.medium,
         ) {
             Text(
                 text = "Point camera at QR code",
                 modifier = Modifier.padding(16.dp),
-                style = MaterialTheme.typography.bodyLarge
+                style = MaterialTheme.typography.bodyLarge,
             )
         }
     }
@@ -186,24 +190,25 @@ private fun CameraPreview(
 private fun PermissionRationale(onDismiss: () -> Unit) {
     Box(
         modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
+        contentAlignment = Alignment.Center,
     ) {
         Surface(
             modifier = Modifier.padding(32.dp),
-            shape = MaterialTheme.shapes.large
+            shape = MaterialTheme.shapes.large,
         ) {
             Text(
                 text = "Camera permission is required to scan QR codes. Please grant permission in Settings.",
                 modifier = Modifier.padding(24.dp),
-                style = MaterialTheme.typography.bodyLarge
+                style = MaterialTheme.typography.bodyLarge,
             )
         }
 
         FloatingActionButton(
             onClick = onDismiss,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(16.dp)
+            modifier =
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp),
         ) {
             Icon(Icons.Default.Close, contentDescription = "Close")
         }
@@ -214,24 +219,25 @@ private fun PermissionRationale(onDismiss: () -> Unit) {
 private fun PermissionDenied(onDismiss: () -> Unit) {
     Box(
         modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
+        contentAlignment = Alignment.Center,
     ) {
         Surface(
             modifier = Modifier.padding(32.dp),
-            shape = MaterialTheme.shapes.large
+            shape = MaterialTheme.shapes.large,
         ) {
             Text(
                 text = "Camera permission denied. QR scanning is not available.",
                 modifier = Modifier.padding(24.dp),
-                style = MaterialTheme.typography.bodyLarge
+                style = MaterialTheme.typography.bodyLarge,
             )
         }
 
         FloatingActionButton(
             onClick = onDismiss,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(16.dp)
+            modifier =
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp),
         ) {
             Icon(Icons.Default.Close, contentDescription = "Close")
         }
@@ -243,14 +249,15 @@ private fun PermissionDenied(onDismiss: () -> Unit) {
  */
 private fun processImageProxy(
     imageProxy: ImageProxy,
-    onQRCodeDetected: (String) -> Unit
+    onQRCodeDetected: (String) -> Unit,
 ) {
     val mediaImage = imageProxy.image
     if (mediaImage != null) {
-        val image = InputImage.fromMediaImage(
-            mediaImage,
-            imageProxy.imageInfo.rotationDegrees
-        )
+        val image =
+            InputImage.fromMediaImage(
+                mediaImage,
+                imageProxy.imageInfo.rotationDegrees,
+            )
 
         val scanner = BarcodeScanning.getClient()
         scanner.process(image)
@@ -258,7 +265,8 @@ private fun processImageProxy(
                 for (barcode in barcodes) {
                     when (barcode.valueType) {
                         Barcode.TYPE_TEXT,
-                        Barcode.TYPE_URL -> {
+                        Barcode.TYPE_URL,
+                        -> {
                             barcode.rawValue?.let { value ->
                                 onQRCodeDetected(value)
                             }

@@ -15,7 +15,6 @@ import org.junit.Test
  * Mirrors: e2e/tests/02-identity-flow.spec.ts
  */
 class IdentityFlowTest {
-
     @get:Rule
     val composeTestRule = createAndroidComposeRule<MainActivity>()
 
@@ -33,14 +32,15 @@ class IdentityFlowTest {
      * Mirrors Playwright test: "should create a new identity"
      */
     @Test
-    fun should_create_a_new_identity() = runTest {
-        // Create new identity
-        fixtures.createNewIdentity("Test Identity")
+    fun should_create_a_new_identity() =
+        runTest {
+            // Create new identity
+            fixtures.createNewIdentity("Test Identity")
 
-        // Should see the identity in the list
-        fixtures.gotoIdentities()
-        composeTestRule.onNodeWithText("Test Identity").assertIsDisplayed()
-    }
+            // Should see the identity in the list
+            fixtures.gotoIdentities()
+            composeTestRule.onNodeWithText("Test Identity").assertIsDisplayed()
+        }
 
     /**
      * Tests displaying identity public key.
@@ -48,27 +48,30 @@ class IdentityFlowTest {
      * Mirrors Playwright test: "should display identity public key"
      */
     @Test
-    fun should_display_identity_public_key() = runTest {
-        fixtures.createNewIdentity("Test Identity")
+    fun should_display_identity_public_key() =
+        runTest {
+            fixtures.createNewIdentity("Test Identity")
 
-        // Click on the identity to see details
-        composeTestRule.onNodeWithText("Test Identity").performClick()
-        composeTestRule.waitForIdle()
+            // Click on the identity to see details
+            composeTestRule.onNodeWithText("Test Identity").performClick()
+            composeTestRule.waitForIdle()
 
-        // Should see npub or public key
-        // (Implementation depends on your UI - adjust selector as needed)
-        val hasNpub = composeTestRule.onAllNodes(
-            hasText("npub", substring = true, ignoreCase = true)
-        ).fetchSemanticsNodes().isNotEmpty()
+            // Should see npub or public key
+            // (Implementation depends on your UI - adjust selector as needed)
+            val hasNpub =
+                composeTestRule.onAllNodes(
+                    hasText("npub", substring = true, ignoreCase = true),
+                ).fetchSemanticsNodes().isNotEmpty()
 
-        val hasPublicKey = composeTestRule.onAllNodes(
-            hasTestTag("public-key") or hasContentDescription("Public key")
-        ).fetchSemanticsNodes().isNotEmpty()
+            val hasPublicKey =
+                composeTestRule.onAllNodes(
+                    hasTestTag("public-key") or hasContentDescription("Public key"),
+                ).fetchSemanticsNodes().isNotEmpty()
 
-        assert(hasNpub || hasPublicKey) {
-            "Expected npub or public key to be displayed"
+            assert(hasNpub || hasPublicKey) {
+                "Expected npub or public key to be displayed"
+            }
         }
-    }
 
     /**
      * Tests showing mnemonic backup phrase.
@@ -76,35 +79,37 @@ class IdentityFlowTest {
      * Mirrors Playwright test: "should show mnemonic backup phrase"
      */
     @Test
-    fun should_show_mnemonic_backup_phrase() = runTest {
-        fixtures.createNewIdentity("Test Identity")
+    fun should_show_mnemonic_backup_phrase() =
+        runTest {
+            fixtures.createNewIdentity("Test Identity")
 
-        // Navigate to settings or backup screen
-        fixtures.gotoSettings()
-        composeTestRule.waitForIdle()
-
-        // Look for backup or mnemonic option
-        // (Adjust based on your implementation)
-        try {
-            composeTestRule.onNodeWithText("Backup", substring = true, ignoreCase = true)
-                .performClick()
-
+            // Navigate to settings or backup screen
+            fixtures.gotoSettings()
             composeTestRule.waitForIdle()
 
-            // Should see mnemonic words (12 or 24 words)
-            val hasMonospaceText = composeTestRule.onAllNodes(
-                hasTestTag("mnemonic-display") or
-                hasContentDescription("Mnemonic phrase")
-            ).fetchSemanticsNodes().isNotEmpty()
+            // Look for backup or mnemonic option
+            // (Adjust based on your implementation)
+            try {
+                composeTestRule.onNodeWithText("Backup", substring = true, ignoreCase = true)
+                    .performClick()
 
-            assert(hasMonospaceText) {
-                "Expected mnemonic phrase to be displayed"
+                composeTestRule.waitForIdle()
+
+                // Should see mnemonic words (12 or 24 words)
+                val hasMonospaceText =
+                    composeTestRule.onAllNodes(
+                        hasTestTag("mnemonic-display") or
+                            hasContentDescription("Mnemonic phrase"),
+                    ).fetchSemanticsNodes().isNotEmpty()
+
+                assert(hasMonospaceText) {
+                    "Expected mnemonic phrase to be displayed"
+                }
+            } catch (e: Exception) {
+                // Feature may not be implemented yet
+                println("Backup/mnemonic display may not be implemented yet: ${e.message}")
             }
-        } catch (e: Exception) {
-            // Feature may not be implemented yet
-            println("Backup/mnemonic display may not be implemented yet: ${e.message}")
         }
-    }
 }
 
 /**
@@ -113,7 +118,6 @@ class IdentityFlowTest {
  * Mirrors Playwright test describe: "Identity Import"
  */
 class IdentityImportTest {
-
     @get:Rule
     val composeTestRule = createAndroidComposeRule<MainActivity>()
 
@@ -134,17 +138,18 @@ class IdentityImportTest {
      * Mirrors Playwright test: "should import identity from valid mnemonic"
      */
     @Test
-    fun should_import_identity_from_valid_mnemonic() = runTest {
-        try {
-            fixtures.importIdentity(testMnemonic, "Imported Identity")
+    fun should_import_identity_from_valid_mnemonic() =
+        runTest {
+            try {
+                fixtures.importIdentity(testMnemonic, "Imported Identity")
 
-            // Should see imported identity
-            fixtures.expectIdentityExists("Imported Identity")
-        } catch (e: Exception) {
-            // Import functionality may not be fully implemented yet
-            println("Import functionality may not be fully implemented yet: ${e.message}")
+                // Should see imported identity
+                fixtures.expectIdentityExists("Imported Identity")
+            } catch (e: Exception) {
+                // Import functionality may not be fully implemented yet
+                println("Import functionality may not be fully implemented yet: ${e.message}")
+            }
         }
-    }
 
     /**
      * Tests rejecting invalid mnemonic.
@@ -152,37 +157,38 @@ class IdentityImportTest {
      * Mirrors Playwright test: "should reject invalid mnemonic"
      */
     @Test
-    fun should_reject_invalid_mnemonic() = runTest {
-        try {
-            fixtures.waitForAppLoad()
-            fixtures.gotoIdentities()
+    fun should_reject_invalid_mnemonic() =
+        runTest {
+            try {
+                fixtures.waitForAppLoad()
+                fixtures.gotoIdentities()
 
-            // Click "Import Identity" button
-            composeTestRule.onNodeWithContentDescription("Import Identity")
-                .performClick()
+                // Click "Import Identity" button
+                composeTestRule.onNodeWithContentDescription("Import Identity")
+                    .performClick()
 
-            composeTestRule.waitForIdle()
+                composeTestRule.waitForIdle()
 
-            // Enter invalid mnemonic
-            composeTestRule.onNode(
-                hasSetTextAction() and hasText("Mnemonic", substring = true)
-            ).performTextInput("invalid mnemonic phrase")
+                // Enter invalid mnemonic
+                composeTestRule.onNode(
+                    hasSetTextAction() and hasText("Mnemonic", substring = true),
+                ).performTextInput("invalid mnemonic phrase")
 
-            composeTestRule.onNode(
-                hasSetTextAction() and hasText("Label", substring = true)
-            ).performTextInput("Bad Import")
+                composeTestRule.onNode(
+                    hasSetTextAction() and hasText("Label", substring = true),
+                ).performTextInput("Bad Import")
 
-            composeTestRule.waitForIdle()
+                composeTestRule.waitForIdle()
 
-            // Try to import
-            composeTestRule.onNodeWithText("Import").performClick()
+                // Try to import
+                composeTestRule.onNodeWithText("Import").performClick()
 
-            composeTestRule.waitForIdle()
+                composeTestRule.waitForIdle()
 
-            // Should show error
-            fixtures.expectErrorToast("Invalid")
-        } catch (e: Exception) {
-            println("Import validation may not be fully implemented yet: ${e.message}")
+                // Should show error
+                fixtures.expectErrorToast("Invalid")
+            } catch (e: Exception) {
+                println("Import validation may not be fully implemented yet: ${e.message}")
+            }
         }
-    }
 }

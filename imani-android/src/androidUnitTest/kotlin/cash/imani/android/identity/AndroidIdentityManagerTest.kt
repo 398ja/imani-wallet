@@ -14,7 +14,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -25,7 +24,6 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class AndroidIdentityManagerTest {
-
     private lateinit var keystoreManager: KeystoreManager
     private lateinit var manager: AndroidIdentityManager
 
@@ -56,7 +54,7 @@ class AndroidIdentityManagerTest {
         verify {
             keystoreManager.encryptPrivateKey(
                 match { it.size == 32 }, // 32-byte private key
-                expectedAlias
+                expectedAlias,
             )
         }
 
@@ -189,9 +187,10 @@ class AndroidIdentityManagerTest {
         val invalidHex = "a".repeat(63)
 
         // When/Then: Exception thrown
-        val exception = kotlin.test.assertFailsWith<IllegalArgumentException> {
-            AndroidIdentityManager.validatePrivateKeyHex(invalidHex)
-        }
+        val exception =
+            kotlin.test.assertFailsWith<IllegalArgumentException> {
+                AndroidIdentityManager.validatePrivateKeyHex(invalidHex)
+            }
 
         assertTrue(exception.message!!.contains("64 hex characters"))
     }
@@ -232,7 +231,7 @@ class AndroidIdentityManagerTest {
             publicKey = "0".repeat(64), // 32 bytes hex
             privateKey = "1".repeat(64), // 32 bytes hex
             createdAt = now,
-            lastUsedAt = now
+            lastUsedAt = now,
         )
     }
 }

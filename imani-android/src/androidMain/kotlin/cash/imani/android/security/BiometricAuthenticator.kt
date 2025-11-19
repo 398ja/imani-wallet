@@ -35,9 +35,8 @@ import kotlin.coroutines.resume
  * - Only provides authentication gate, not data decryption
  */
 class BiometricAuthenticator(
-    private val context: Context
+    private val context: Context,
 ) {
-
     /**
      * Check if biometric authentication is available on this device.
      *
@@ -57,7 +56,9 @@ class BiometricAuthenticator(
                 BiometricAvailability.NotAvailable("Biometric hardware unavailable")
 
             BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED ->
-                BiometricAvailability.NotEnrolled("No biometrics enrolled. Please set up fingerprint or face unlock in Settings.")
+                BiometricAvailability.NotEnrolled(
+                    "No biometrics enrolled. Please set up fingerprint or face unlock in Settings.",
+                )
 
             BiometricManager.BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED ->
                 BiometricAvailability.NotAvailable("Security update required")
@@ -87,55 +88,61 @@ class BiometricAuthenticator(
         activity: FragmentActivity,
         title: String = "Authenticate",
         subtitle: String = "Verify your identity to continue",
-        description: String = "Use your fingerprint or face to unlock Imani Wallet"
-    ): Result<Unit> = suspendCancellableCoroutine { continuation ->
+        description: String = "Use your fingerprint or face to unlock Imani Wallet",
+    ): Result<Unit> =
+        suspendCancellableCoroutine { continuation ->
 
-        val executor = ContextCompat.getMainExecutor(context)
+            val executor = ContextCompat.getMainExecutor(context)
 
-        val biometricPrompt = BiometricPrompt(
-            activity,
-            executor,
-            object : BiometricPrompt.AuthenticationCallback() {
-                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                    if (continuation.isActive) {
-                        continuation.resume(Result.success(Unit))
-                    }
-                }
+            val biometricPrompt =
+                BiometricPrompt(
+                    activity,
+                    executor,
+                    object : BiometricPrompt.AuthenticationCallback() {
+                        override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                            if (continuation.isActive) {
+                                continuation.resume(Result.success(Unit))
+                            }
+                        }
 
-                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                    if (continuation.isActive) {
-                        continuation.resume(
-                            Result.failure(
-                                BiometricAuthenticationException(
-                                    "Authentication error (code $errorCode): $errString"
+                        override fun onAuthenticationError(
+                            errorCode: Int,
+                            errString: CharSequence,
+                        ) {
+                            if (continuation.isActive) {
+                                continuation.resume(
+                                    Result.failure(
+                                        BiometricAuthenticationException(
+                                            "Authentication error (code $errorCode): $errString",
+                                        ),
+                                    ),
                                 )
-                            )
-                        )
-                    }
-                }
+                            }
+                        }
 
-                override fun onAuthenticationFailed() {
-                    // Note: onAuthenticationFailed is called for each failed attempt,
-                    // but the prompt remains open. We don't resume here.
-                    // The final failure will trigger onAuthenticationError.
-                }
+                        override fun onAuthenticationFailed() {
+                            // Note: onAuthenticationFailed is called for each failed attempt,
+                            // but the prompt remains open. We don't resume here.
+                            // The final failure will trigger onAuthenticationError.
+                        }
+                    },
+                )
+
+            val promptInfo =
+                BiometricPrompt.PromptInfo.Builder()
+                    .setTitle(title)
+                    .setSubtitle(subtitle)
+                    .setDescription(description)
+                    .setNegativeButtonText("Cancel")
+                    .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+                    .build()
+
+            continuation.invokeOnCancellation {
+                biometricPrompt.cancelAuthentication()
             }
-        )
 
-        val promptInfo = BiometricPrompt.PromptInfo.Builder()
-            .setTitle(title)
-            .setSubtitle(subtitle)
-            .setDescription(description)
-            .setNegativeButtonText("Cancel")
-            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
-            .build()
-
-        continuation.invokeOnCancellation {
-            biometricPrompt.cancelAuthentication()
+            biometricPrompt.authenticate(promptInfo)
         }
-
-        biometricPrompt.authenticate(promptInfo)
-    }
 }
 
 /**
@@ -143,7 +150,9 @@ class BiometricAuthenticator(
  */
 sealed class BiometricAvailability {
     object Available : BiometricAvailability()
+
     data class NotAvailable(val reason: String) : BiometricAvailability()
+
     data class NotEnrolled(val message: String) : BiometricAvailability()
 }
 

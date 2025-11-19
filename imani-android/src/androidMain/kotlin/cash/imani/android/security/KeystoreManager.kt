@@ -22,7 +22,6 @@ import javax.crypto.spec.GCMParameterSpec
  * by the cashu-client Java library, NOT by this class.
  */
 class KeystoreManager {
-
     private val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
 
     /**
@@ -42,7 +41,10 @@ class KeystoreManager {
      * // Store encryptedBytes in SQLDelight database
      * ```
      */
-    fun encryptPrivateKey(privateKeyBytes: ByteArray, alias: String): ByteArray {
+    fun encryptPrivateKey(
+        privateKeyBytes: ByteArray,
+        alias: String,
+    ): ByteArray {
         require(privateKeyBytes.size == PRIVATE_KEY_SIZE) {
             "Private key must be exactly $PRIVATE_KEY_SIZE bytes, got ${privateKeyBytes.size}"
         }
@@ -74,7 +76,10 @@ class KeystoreManager {
      * val privateKey = PrivateKey(decryptedBytes)  // cashu-client Java class
      * ```
      */
-    fun decryptPrivateKey(encryptedData: ByteArray, alias: String): ByteArray {
+    fun decryptPrivateKey(
+        encryptedData: ByteArray,
+        alias: String,
+    ): ByteArray {
         require(encryptedData.size >= IV_SIZE) {
             "Encrypted data too short: ${encryptedData.size} bytes (expected at least $IV_SIZE)"
         }
@@ -123,20 +128,22 @@ class KeystoreManager {
         keyStore.getKey(alias, null)?.let { return it as SecretKey }
 
         // Generate new key
-        val keyGenerator = KeyGenerator.getInstance(
-            KeyProperties.KEY_ALGORITHM_AES,
-            ANDROID_KEYSTORE
-        )
+        val keyGenerator =
+            KeyGenerator.getInstance(
+                KeyProperties.KEY_ALGORITHM_AES,
+                ANDROID_KEYSTORE,
+            )
 
-        val spec = KeyGenParameterSpec.Builder(
-            alias,
-            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-        )
-            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-            .setKeySize(KEY_SIZE)
-            .setUserAuthenticationRequired(false) // Can be set to true for biometric unlock
-            .build()
+        val spec =
+            KeyGenParameterSpec.Builder(
+                alias,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+            )
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(KEY_SIZE)
+                .setUserAuthenticationRequired(false) // Can be set to true for biometric unlock
+                .build()
 
         keyGenerator.init(spec)
         return keyGenerator.generateKey()

@@ -36,30 +36,32 @@ import cash.imani.app.navigation.IdentityRoute
  * Note: Detail route restoration requires fetching the identity by ID,
  * which is deferred to Phase 4.3 when IdentityDetailScreen is implemented.
  */
-val IdentityNavStateSaver = Saver<IdentityNavState, String>(
-    save = { state ->
-        when (val route = state.currentRoute) {
-            is IdentityRoute.List -> "list"
-            is IdentityRoute.Create -> "create"
-            is IdentityRoute.Import -> "import"
-            is IdentityRoute.Detail -> "detail:${route.identity.id}"
-        }
-    },
-    restore = { saved ->
-        IdentityNavState().apply {
-            currentRoute = when {
-                saved == "list" -> IdentityRoute.List
-                saved == "create" -> IdentityRoute.Create
-                saved == "import" -> IdentityRoute.Import
-                saved.startsWith("detail:") -> {
-                    // TODO Phase 4.3: Restore identity from saved ID
-                    // For now, fallback to list (Detail screen not implemented yet)
-                    // val identityId = saved.removePrefix("detail:")
-                    // IdentityRoute.Detail(fetchIdentityById(identityId))
-                    IdentityRoute.List
-                }
-                else -> IdentityRoute.List
+val IdentityNavStateSaver =
+    Saver<IdentityNavState, String>(
+        save = { state ->
+            when (val route = state.currentRoute) {
+                is IdentityRoute.List -> "list"
+                is IdentityRoute.Create -> "create"
+                is IdentityRoute.Import -> "import"
+                is IdentityRoute.Detail -> "detail:${route.identity.id}"
             }
-        }
-    }
-)
+        },
+        restore = { saved ->
+            IdentityNavState().apply {
+                currentRoute =
+                    when {
+                        saved == "list" -> IdentityRoute.List
+                        saved == "create" -> IdentityRoute.Create
+                        saved == "import" -> IdentityRoute.Import
+                        saved.startsWith("detail:") -> {
+                            // TODO Phase 4.3: Restore identity from saved ID
+                            // For now, fallback to list (Detail screen not implemented yet)
+                            // val identityId = saved.removePrefix("detail:")
+                            // IdentityRoute.Detail(fetchIdentityById(identityId))
+                            IdentityRoute.List
+                        }
+                        else -> IdentityRoute.List
+                    }
+            }
+        },
+    )
