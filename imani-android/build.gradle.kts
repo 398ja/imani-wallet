@@ -45,6 +45,12 @@ kotlin {
                 // QR Code
                 implementation(libs.zxing.core)
 
+                // ML Kit
+                implementation(libs.mlkit.barcode.scanning)
+
+                // Accompanist
+                implementation(libs.accompanist.permissions)
+
                 // SQLDelight
                 implementation(libs.sqldelight.android.driver)
 

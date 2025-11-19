@@ -19,6 +19,8 @@ import cash.imani.android.security.BiometricAuthenticator
 import cash.imani.android.security.BiometricAvailability
 import cash.imani.android.ui.LockScreen
 import cash.imani.android.ui.LockScreenState
+import cash.imani.android.ui.navigation.MainScreen
+import cash.imani.android.ui.theme.ImaniTheme
 import kotlinx.coroutines.launch
 
 /**
@@ -67,8 +69,8 @@ class MainActivity : FragmentActivity() {
             ImaniTheme {
                 Surface(color = MaterialTheme.colorScheme.background) {
                     if (isUnlocked.value) {
-                        // Main app content
-                        Greeting("Imani Wallet")
+                        // Main app content with bottom navigation
+                        MainScreen()
                     } else {
                         // Lock screen
                         LockScreen(
@@ -114,25 +116,5 @@ class MainActivity : FragmentActivity() {
                 )
             }
         }
-    }
-}
-
-@Composable
-fun ImaniTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        content = content
-    )
-}
-
-@Composable
-fun Greeting(name: String) {
-    Text(text = "Welcome to $name")
-}
-
-@Preview(showBackground = true)
-@Composable
-fun DefaultPreview() {
-    ImaniTheme {
-        Greeting("Imani Wallet")
     }
 }
