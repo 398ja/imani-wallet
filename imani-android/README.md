@@ -105,19 +105,35 @@ adb install imani-android/build/outputs/apk/debug/imani-android-debug.apk
 ./gradlew :imani-android:testDebugUnitTest jacocoTestReport
 ```
 
-### Instrumentation Tests
+### E2E Instrumentation Tests
 
 **Requires a connected device or running emulator.**
 
+**Quick Start**: See [TESTING_QUICK_START.md](TESTING_QUICK_START.md) for detailed test running guide.
+
 ```bash
-# Run all instrumentation tests
+# Run all E2E tests (49 tests, ~10-15 minutes)
 ./gradlew :imani-android:connectedAndroidTest
 
-# Run specific test class
-./gradlew :imani-android:connectedAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=cash.imani.android.flows.IdentityFlowTest
+# Run specific test suite
+./gradlew :imani-android:connectedAndroidTest --tests "cash.imani.android.e2e.SanityTest"
+./gradlew :imani-android:connectedAndroidTest --tests "cash.imani.android.e2e.IdentityFlowTest"
+./gradlew :imani-android:connectedAndroidTest --tests "cash.imani.android.e2e.CompleteVoucherFlowTest"
+
+# Run with detailed output
+./gradlew :imani-android:connectedAndroidTest --info
 
 # With coverage
 ./gradlew :imani-android:connectedAndroidTest createDebugCoverageReport
+```
+
+**View Results**:
+```bash
+# Open HTML test report
+open imani-android/build/reports/androidTests/connected/index.html
+
+# Watch logs in real-time
+adb logcat | grep -E "TestRunner|E2E"
 ```
 
 ### Test Coverage Report
@@ -207,8 +223,12 @@ imani-android/
 ### Test Coverage
 
 - **Unit Tests**: 58 tests (repositories, security, UI)
-- **Instrumentation Tests**: 34 tests (E2E flows, navigation, biometric)
-- **Total**: 92 tests covering all critical paths
+- **E2E Instrumentation Tests**: 49 tests (100% parity with Playwright web tests + 28 Android-specific tests)
+  - Sanity tests (3), Basic flows (8), Identity flows (5), Voucher flows (8)
+  - Mobile-specific (10), Edge cases (15)
+  - See [TESTING_QUICK_START.md](TESTING_QUICK_START.md) for running tests
+  - See [E2E Test README](src/androidInstrumentedTest/kotlin/cash/imani/android/e2e/README.md) for details
+- **Total**: 107 tests (233% coverage vs web)
 
 ---
 
