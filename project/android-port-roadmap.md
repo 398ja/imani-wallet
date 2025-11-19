@@ -1009,7 +1009,7 @@ class MainActivity : ComponentActivity() {
 
 | ID | Task | Size | Status | Commit | Notes | Dependencies |
 |----|------|------|--------|--------|-------|--------------|
-| 4.2.3 | Biometric Authentication (Optional) | S (1d) | 📋 TODO | - | BiometricAuthenticator, lock screen, integration with MainActivity | 4.1.2 |
+| 4.2.3 | Biometric Authentication (Optional) | S (1d) | ✅ DONE | f2e0814 | BiometricAuthenticator (AndroidX Biometric API wrapper with coroutines), LockScreen composable (4 states: Locked, Authenticating, Failed, NotAvailable), MainActivity integration with availability check and auto-unlock fallback, 7 unit tests (Robolectric), BiometricAuthenticationException for error handling, ≥95% framework reuse | 4.1.2 |
 
 ---
 
@@ -1018,9 +1018,9 @@ class MainActivity : ComponentActivity() {
 - [x] Android Keystore crypto adapter
 - [x] SQLDelight database with Android driver
 - [x] Identity repository with encrypted storage
-- [ ] Biometric authentication (optional)
+- [x] Biometric authentication (optional)
 
-**Total Effort**: 4 days (5 days with biometric)
+**Total Effort**: 5 days (with biometric) ✅ COMPLETED
 
 ### Phase 4.2 Task Tracking Summary
 
@@ -1028,7 +1028,7 @@ class MainActivity : ComponentActivity() {
 |----|------|------|--------|--------|-------|--------------|
 | 4.2.1 | Android Keystore Wrapper | S (1d) | ✅ DONE | 2e1e2d1 | KeystoreManager (AES-GCM encryption), AndroidIdentityManager (identity wrapper), AndroidModule (DI), 21 unit tests (Robolectric + MockK) | 4.1.1 |
 | 4.2.2 | SQLDelight Android Database | M (2d) | ✅ DONE | ea4140c | Identity.sq + Voucher.sq schemas, AndroidIdentityRepository + AndroidVoucherRepository, 29 unit tests (13 identity + 16 voucher), FIFO proof selection, reactive Flow queries, 100% domain model reuse | 4.2.1 |
-| 4.2.3 | Biometric Authentication (Optional) | S (1d) | 📋 TODO | - | BiometricAuthenticator, lock screen | 4.1.2 |
+| 4.2.3 | Biometric Authentication (Optional) | S (1d) | ✅ DONE | f2e0814 | BiometricAuthenticator (AndroidX Biometric wrapper), LockScreen composable (Material 3), MainActivity integration with auto-unlock fallback, 7 unit tests, ≥95% framework reuse | 4.1.2 |
 
 [↑ Back to top](#imani-wallet---android-port-roadmap)
 
