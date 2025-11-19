@@ -3,8 +3,8 @@
 > **Product Name**: Imani Wallet
 > **Tagline**: Built on Trust, Secured by Math
 > **Document Type**: How-To Guide (Diátaxis)
-> **Version**: 1.1.0
-> **Last Updated**: 2025-11-17
+> **Version**: 1.2.0
+> **Last Updated**: 2025-11-19
 > **Related Documents**:
 > - [Kotlin Client Detailed Specification](explanation/kotlin-client-spec-detailed.md)
 > - [Web Client Specification (High-Level)](explanation/web-client-spec.md)
@@ -143,12 +143,14 @@ To become the **trusted standard** for digital voucher management in communities
 | Phase 1 | Identity Module (Web) | 3 weeks | Week 5 |
 | Phase 2 | Voucher Module (Web) with Nostr | 6 weeks | Week 11 |
 | Phase 3 | Web Polish & Production | 2 weeks | Week 13 |
-| Phase 4 | Android Port | 3 weeks | Week 16 |
-| Phase 5 | iOS Port | 4 weeks | Week 20 |
+| Phase 4 | Android Port | 2 weeks | Week 15 |
+| Phase 5 | iOS Port | 4 weeks | Week 19 |
 
-**Total Duration**: 20 weeks (~5 months)
+**Total Duration**: 19 weeks (~4.75 months)
 
 > **Updated 2025-11-18**: Phase 2 extended from 4 weeks to 6 weeks to include Nostr-based voucher storage (Tasks 2.5-2.7). This adds 2 weeks to the overall timeline.
+
+> **Updated 2025-11-19**: Phase 4 reduced from 3 weeks to 2 weeks by heavily reusing cashu-client Java code (≥90% code reuse). This saves 1 week.
 
 ### Team Composition
 
@@ -2364,14 +2366,15 @@ class VoucherFlowTest {
 
 #### 3.5. End-to-End Testing
 
-- [ ] Write Playwright E2E tests for critical flows:
+- [x] Write Playwright E2E tests for critical flows:
   - Create identity → issue voucher → share → redeem
   - Import identity from mnemonic
   - Error scenarios (expired voucher, insufficient balance)
-- [ ] Cross-browser testing (Chrome, Firefox, Safari)
-- [ ] Mobile responsive testing
+- [x] Cross-browser testing (Chrome, Firefox, Safari)
+- [x] Mobile responsive testing
 
 **Effort**: 3 days
+**Status**: ✅ COMPLETED
 
 ---
 
@@ -2380,7 +2383,7 @@ class VoucherFlowTest {
 - [x] Security hardened (encryption, CSP, validation)
 - [x] Performance optimized (bundle size, PWA)
 - [x] Production deployment (CI/CD, monitoring)
-- [ ] E2E tests passing
+- [x] E2E tests passing
 
 **Total Effort**: 12 days (2 weeks with buffer)
 
@@ -2392,7 +2395,7 @@ class VoucherFlowTest {
 | 3.2 | Performance Optimization | M (2d) | ✅ DONE | b2b31c5 | Code splitting, bundle optimization, PWA, Lighthouse ≥90 | 2.6 |
 | 3.3 | Error Handling & User Feedback | M (2d) | ✅ DONE | 6bec686 | Toasts, retry logic, error boundaries, contact support | 2.6 |
 | 3.4 | Production Deployment | M (2d) | ✅ DONE | ebfab95 | CI/CD (GitHub Actions), Vercel config, Sentry, Plausible analytics, DEPLOYMENT.md | 3.1, 3.2 |
-| 3.5 | End-to-End Testing | M (3d) | 📋 TODO | - | Playwright E2E tests, cross-browser, mobile responsive | 3.3, 3.4 |
+| 3.5 | End-to-End Testing | M (3d) | ✅ DONE | 5456d44 | Playwright E2E tests, cross-browser (Chrome/Firefox/Safari), mobile responsive, CI integration | 3.3, 3.4 |
 
 [↑ Back to top](#imani-wallet---kotlin-multiplatform-implementation-roadmap)
 
@@ -2402,11 +2405,16 @@ class VoucherFlowTest {
 
 > **📱 Detailed Android Roadmap**: See [Android Port Roadmap](android-port-roadmap.md) for comprehensive task tracking, code examples, and Android-specific guidelines.
 
-**Goal**: Port web application to Android with native features (Keystore, SQLDelight).
+**Goal**: Port web application to Android **by heavily reusing cashu-client Java code** (≥90% code reuse).
 
-**Duration**: 3 weeks
+**Duration**: 2 weeks (reduced from 3 weeks)
 
 **Depends On**: Phase 3 complete
+
+**Key Strategy**:
+- ✅ Reuse cashu-client Java modules directly (identity-domain, wallet-core-base, nostr-repository)
+- ✅ Add thin Android wrappers only for platform-specific features (Keystore encryption, SQLDelight storage)
+- ✅ NO crypto reimplementation - all delegated to existing Java code
 
 ### Tasks
 
@@ -2456,12 +2464,13 @@ class VoucherFlowTest {
 
 ### Phase 4 Deliverables
 
-- [ ] Android app with native Keystore
-- [ ] SQLDelight database
-- [ ] Android-specific UI (Material 3)
+- [ ] Android app reusing cashu-client Java code
+- [ ] Android Keystore wrapper for key encryption
+- [ ] SQLDelight database adapter
+- [ ] Android-specific UI (Material 3, reusing imani-app Compose)
 - [ ] Published to Play Store (internal)
 
-**Total Effort**: 15 days (3 weeks)
+**Total Effort**: 10 days (2 weeks) - Reduced from 15 days via ≥90% code reuse
 
 [↑ Back to top](#imani-wallet---kotlin-multiplatform-implementation-roadmap)
 
