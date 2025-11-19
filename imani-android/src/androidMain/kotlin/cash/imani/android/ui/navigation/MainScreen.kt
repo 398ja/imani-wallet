@@ -14,37 +14,61 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import cafe.adriel.voyager.navigator.LocalNavigator
+import cafe.adriel.voyager.navigator.Navigator
+import cafe.adriel.voyager.transitions.SlideTransition
 import cash.imani.android.ui.settings.SettingsScreen
-import cash.imani.app.ui.identity.IdentityListScreen
-import cash.imani.app.ui.voucher.VoucherListScreen
+import cash.imani.app.navigation.IdentityNavHost
+import cash.imani.app.navigation.VoucherListScreenNav
+import cash.imani.app.ui.identity.IdentityViewModel
+import cash.imani.app.ui.voucher.VoucherViewModel
+import org.koin.androidx.compose.get
 
 /**
  * Main screen with bottom navigation for Android.
  *
  * Features:
- * - Bottom navigation bar with 3 tabs (Identities, Vouchers, Settings)
- * - Android back button handling
- * - State preservation across navigation
+ * - Bottom navigation bar with 3 tabs
+ * - Nested navigation within each tab
+ * - Tab state preservation across configuration changes
+ * - Smart back button handling (pops nested screens → changes tabs → exits app)
  *
  * Code Reuse:
- * - Reuses IdentityListScreen and VoucherListScreen from imani-app (100%)
+ * - Reuses IdentityNavHost and VoucherNavHost from imani-app (100%)
  * - Material 3 navigation components (≥95% framework reuse)
  *
  * Navigation structure:
  * ```
  * MainScreen
- *  ├── Identities (IdentityListScreen from imani-app)
- *  ├── Vouchers (VoucherListScreen from imani-app)
- *  └── Settings (Android-specific SettingsScreen)
+ *  ├── Identities Tab
+ *  │    └── IdentityNavHost (handles Create, Import, Detail screens)
+ *  ├── Vouchers Tab
+ *  │    └── VoucherNavHost (handles Issue, Redeem, Share screens)
+ *  └── Settings Tab
+ *       └── SettingsScreen
  * ```
+ *
+ * Back Button Behavior:
+ * 1. If on nested screen in current tab → pop to tab's root screen
+ * 2. Else if not on first tab → navigate to first tab
+ * 3. Else → exit app (handled by system)
  */
 @Composable
 fun MainScreen() {
-    var selectedIndex by remember { mutableIntStateOf(0) }
+    var selectedIndex by rememberSaveable { mutableIntStateOf(0) }
+
+    // Get ViewModels from Koin
+    val identityViewModel: IdentityViewModel = get()
+    val voucherViewModel: VoucherViewModel = get()
+
+    // Navigation state for Identity tab (preserves state across config changes)
+    val identityNavState = rememberSaveable(saver = IdentityNavStateSaver) {
+        cash.imani.app.navigation.IdentityNavState()
+    }
 
     val navItems = listOf(
         NavigationItem(
@@ -64,11 +88,6 @@ fun MainScreen() {
         )
     )
 
-    // Handle Android back button - exit app if on first tab
-    BackHandler(enabled = selectedIndex != 0) {
-        selectedIndex = 0
-    }
-
     Scaffold(
         bottomBar = {
             NavigationBar {
@@ -85,21 +104,44 @@ fun MainScreen() {
     ) { paddingValues ->
         when (navItems[selectedIndex].screen) {
             NavigationScreen.Identities -> {
-                IdentityListScreen(
-                    modifier = Modifier.padding(paddingValues)
+                // Smart back button: pop nested screen → go to first tab → exit
+                BackHandler(enabled = identityNavState.canNavigateBack || selectedIndex != 0) {
+                    when {
+                        identityNavState.canNavigateBack -> identityNavState.navigateBack()
+                        selectedIndex != 0 -> selectedIndex = 0
+                    }
+                }
+
+                // Reuse IdentityNavHost from imani-app (100% code reuse)
+                IdentityNavHost(
+                    viewModel = identityViewModel,
+                    navState = identityNavState
                 )
             }
 
             NavigationScreen.Vouchers -> {
-                VoucherListScreen(
-                    modifier = Modifier.padding(paddingValues)
-                )
+                // Reuse VoucherNavHost with Voyager Navigator (100% code reuse)
+                Navigator(VoucherListScreenNav(voucherViewModel)) { navigator ->
+                    // Smart back button for Voyager-based navigation
+                    BackHandler(enabled = navigator.canPop || selectedIndex != 0) {
+                        when {
+                            navigator.canPop -> navigator.pop()
+                            selectedIndex != 0 -> selectedIndex = 0
+                        }
+                    }
+
+                    SlideTransition(navigator)
+                }
             }
 
             NavigationScreen.Settings -> {
-                SettingsScreen(
-                    modifier = Modifier.padding(paddingValues)
-                )
+                // Back button: go to first tab or exit
+                BackHandler(enabled = selectedIndex != 0) {
+                    selectedIndex = 0
+                }
+
+                // Android-specific settings screen
+                SettingsScreen(modifier = Modifier.padding(paddingValues))
             }
         }
     }

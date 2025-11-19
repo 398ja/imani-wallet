@@ -25,26 +25,62 @@ sealed class IdentityRoute {
 }
 
 /**
+ * Navigation state holder for Identity screens.
+ * Manages current route and provides navigation methods.
+ *
+ * This class is defined in commonMain to enable sharing between platforms:
+ * - Web: Uses this directly with remember { IdentityNavState() }
+ * - Android: Wraps with rememberSaveable for state persistence
+ *
+ * Platform-specific savers (like IdentityNavStateSaver) are defined in platform code.
+ */
+class IdentityNavState {
+    var currentRoute by mutableStateOf<IdentityRoute>(IdentityRoute.List)
+
+    val canNavigateBack: Boolean
+        get() = currentRoute != IdentityRoute.List
+
+    fun navigateBack() {
+        currentRoute = IdentityRoute.List
+    }
+
+    fun navigateTo(route: IdentityRoute) {
+        currentRoute = route
+    }
+}
+
+/**
  * Navigation host for identity management screens.
  *
- * Manages navigation state and screen transitions.
+ * Manages navigation state and screen transitions between:
+ * - List: Main identity list screen
+ * - Create: Create new identity with mnemonic backup
+ * - Import: Import identity from mnemonic or nsec
+ * - Detail: Identity details (TODO: Phase 4.3)
+ *
+ * @param viewModel IdentityViewModel for managing identity operations
+ * @param navState Optional external navigation state holder.
+ *                 If not provided, creates internal state with remember {}.
+ *                 Android uses this to inject rememberSaveable-wrapped state.
+ *                 Web uses default internal state.
  */
 @Composable
-fun IdentityNavHost(viewModel: IdentityViewModel) {
-    var currentRoute by remember { mutableStateOf<IdentityRoute>(IdentityRoute.List) }
-
-    when (val route = currentRoute) {
+fun IdentityNavHost(
+    viewModel: IdentityViewModel,
+    navState: IdentityNavState = remember { IdentityNavState() },
+) {
+    when (val route = navState.currentRoute) {
         is IdentityRoute.List -> {
             IdentityListScreen(
                 viewModel = viewModel,
                 onCreateClick = {
-                    currentRoute = IdentityRoute.Create
+                    navState.navigateTo(IdentityRoute.Create)
                 },
                 onImportClick = {
-                    currentRoute = IdentityRoute.Import
+                    navState.navigateTo(IdentityRoute.Import)
                 },
                 onIdentityClick = { identity ->
-                    currentRoute = IdentityRoute.Detail(identity)
+                    navState.navigateTo(IdentityRoute.Detail(identity))
                 },
             )
         }
@@ -53,10 +89,10 @@ fun IdentityNavHost(viewModel: IdentityViewModel) {
             CreateIdentityScreen(
                 viewModel = viewModel,
                 onSuccess = {
-                    currentRoute = IdentityRoute.List
+                    navState.navigateBack()
                 },
                 onCancel = {
-                    currentRoute = IdentityRoute.List
+                    navState.navigateBack()
                 },
             )
         }
@@ -65,18 +101,18 @@ fun IdentityNavHost(viewModel: IdentityViewModel) {
             ImportIdentityScreen(
                 viewModel = viewModel,
                 onSuccess = {
-                    currentRoute = IdentityRoute.List
+                    navState.navigateBack()
                 },
                 onCancel = {
-                    currentRoute = IdentityRoute.List
+                    navState.navigateBack()
                 },
             )
         }
 
         is IdentityRoute.Detail -> {
-            // TODO: Implement identity detail screen in Phase 2
+            // TODO: Implement identity detail screen in Phase 4.3
             // For now, navigate back to list
-            currentRoute = IdentityRoute.List
+            navState.navigateBack()
         }
     }
 }

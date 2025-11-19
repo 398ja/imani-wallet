@@ -115,6 +115,38 @@ class AndroidIdentityRepository(
         }
     }
 
+    override suspend fun getPrivateKey(id: String): Result<ByteArray> = withContext(Dispatchers.IO) {
+        runCatching {
+            val entity = queries.selectById(id).executeAsOneOrNull()
+                ?: throw IdentityNotFoundException(id)
+
+            // Decrypt and convert the private key hex string to bytes
+            val privateKeyHex = identityManager.decryptPrivateKey(entity.id, entity.encryptedPrivateKey)
+            hexStringToByteArray(privateKeyHex)
+        }
+    }
+
+    /**
+     * Convert a hex string to a byte array.
+     */
+    private fun hexStringToByteArray(hex: String): ByteArray {
+        val len = hex.length
+        val data = ByteArray(len / 2)
+        for (i in 0 until len step 2) {
+            data[i / 2] = ((Character.digit(hex[i], 16) shl 4) + Character.digit(hex[i + 1], 16)).toByte()
+        }
+        return data
+    }
+
+    override suspend fun importFromNsec(nsec: String, label: String): Result<Identity> = withContext(Dispatchers.IO) {
+        runCatching {
+            // NOTE: Identity import from nsec delegated to use cases (ImportIdentityUseCase)
+            throw UnsupportedOperationException(
+                "Use ImportIdentityUseCase for nsec import, then call saveIdentity()"
+            )
+        }
+    }
+
     override suspend fun exportMnemonic(id: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             // NOTE: Mnemonic export delegated to use cases (ExportMnemonicUseCase)
@@ -124,19 +156,31 @@ class AndroidIdentityRepository(
         }
     }
 
-    override suspend fun updateLabel(id: String, newLabel: String): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun exportNsec(id: String): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            // NOTE: Nsec export delegated to use cases (ExportNsecUseCase)
+            throw UnsupportedOperationException(
+                "Use ExportNsecUseCase for nsec export"
+            )
+        }
+    }
+
+    override suspend fun updateLastUsed(id: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val now = kotlinx.datetime.Clock.System.now().toEpochMilliseconds()
+            queries.updateLastUsed(lastUsedAt = now, id = id)
+        }
+    }
+
+    /**
+     * Update the label of an identity (non-interface method).
+     */
+    suspend fun updateLabel(id: String, newLabel: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             require(newLabel.trim().length in 1..100) {
                 "Label must be 1-100 characters, got ${newLabel.trim().length}"
             }
             queries.updateLabel(label = newLabel.trim(), id = id)
-        }
-    }
-
-    override suspend fun markAsUsed(id: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val now = kotlinx.datetime.Clock.System.now().toEpochMilliseconds()
-            queries.updateLastUsed(lastUsedAt = now, id = id)
         }
     }
 

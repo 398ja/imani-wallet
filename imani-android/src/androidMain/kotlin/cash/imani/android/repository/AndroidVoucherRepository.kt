@@ -55,7 +55,7 @@ class AndroidVoucherRepository(
         }
     }
 
-    override suspend fun listVouchers(): Result<List<StoredVoucher>> = withContext(Dispatchers.IO) {
+    override suspend fun getAllVouchers(): Result<List<StoredVoucher>> = withContext(Dispatchers.IO) {
         runCatching {
             voucherQueries.selectAllVouchers()
                 .executeAsList()
@@ -63,11 +63,9 @@ class AndroidVoucherRepository(
         }
     }
 
-    override suspend fun getVoucher(id: String): Result<StoredVoucher> = withContext(Dispatchers.IO) {
+    override suspend fun getVoucher(voucherId: String): Result<StoredVoucher?> = withContext(Dispatchers.IO) {
         runCatching {
-            val entity = voucherQueries.selectVoucherById(id).executeAsOneOrNull()
-                ?: throw VoucherNotFoundException(id)
-            entity.toStoredVoucher()
+            voucherQueries.selectVoucherById(voucherId).executeAsOneOrNull()?.toStoredVoucher()
         }
     }
 
@@ -89,7 +87,7 @@ class AndroidVoucherRepository(
     /**
      * Get vouchers by status.
      */
-    suspend fun getVouchersByStatus(status: VoucherStatus): Result<List<StoredVoucher>> = withContext(Dispatchers.IO) {
+    override suspend fun getVouchersByStatus(status: VoucherStatus): Result<List<StoredVoucher>> = withContext(Dispatchers.IO) {
         runCatching {
             voucherQueries.selectVouchersByStatus(status.name)
                 .executeAsList()
@@ -100,7 +98,7 @@ class AndroidVoucherRepository(
     /**
      * Get vouchers by issuer.
      */
-    suspend fun getVouchersByIssuer(issuerId: String): Result<List<StoredVoucher>> = withContext(Dispatchers.IO) {
+    override suspend fun getVouchersByIssuer(issuerId: String): Result<List<StoredVoucher>> = withContext(Dispatchers.IO) {
         runCatching {
             voucherQueries.selectVouchersByIssuer(issuerId)
                 .executeAsList()
@@ -114,8 +112,10 @@ class AndroidVoucherRepository(
     suspend fun getExpiredVouchers(): Result<List<StoredVoucher>> = withContext(Dispatchers.IO) {
         runCatching {
             val now = Clock.System.now().epochSeconds
-            voucherQueries.selectExpiredVouchers(now)
+            // SQLDelight query might return a projection type, so we fetch by filtering after retrieval
+            voucherQueries.selectAllVouchers()
                 .executeAsList()
+                .filter { it.expiresAt != null && it.expiresAt < now }
                 .map { it.toStoredVoucher() }
         }
     }
@@ -259,8 +259,11 @@ class AndroidVoucherRepository(
      */
     suspend fun getUnspentBalance(mintUrl: String, unit: String): Result<Long> = withContext(Dispatchers.IO) {
         runCatching {
-            voucherQueries.sumUnspentProofsByMint(mintUrl = mintUrl, unit = unit)
-                .executeAsOneOrNull() ?: 0L
+            // Manually calculate sum - fetch all proofs and filter/sum
+            val proofs = voucherQueries.selectAllProofs().executeAsList()
+            proofs
+                .filter { proof -> proof.mintUrl == mintUrl && proof.unit == unit }
+                .sumOf { proof -> proof.amount.toLong() }
         }
     }
 

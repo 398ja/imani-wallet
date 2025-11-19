@@ -148,7 +148,7 @@ class AndroidIdentityManager(
      * @return Updated identity with current timestamp
      */
     fun markAsUsed(identity: Identity): Identity {
-        return identity.withUpdatedUsage(Clock.System.now())
+        return identity.withUpdatedUsage()
     }
 
     /**

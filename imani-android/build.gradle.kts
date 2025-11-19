@@ -22,6 +22,11 @@ kotlin {
                 implementation(project(":imani-voucher"))
                 implementation(project(":imani-app"))
 
+                // Kotlin libraries
+                implementation(libs.kotlinx.coroutines.core)
+                implementation(libs.kotlinx.datetime)
+                implementation(libs.kotlinx.serialization.json)
+
                 // Android Core
                 implementation(libs.androidx.core.ktx)
                 implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -36,6 +41,12 @@ kotlin {
                 implementation(compose.foundation)
                 implementation(compose.material3)
                 implementation(compose.ui)
+                implementation(compose.components.resources)
+
+                // Compose Android-specific
+                implementation("androidx.compose.ui:ui-tooling-preview:1.6.0")
+                implementation("androidx.compose.material:material-icons-extended:1.6.0")
+                implementation("androidx.compose.ui:ui-tooling:1.6.0")
 
                 // Camera
                 implementation(libs.androidx.camera.camera2)
@@ -53,6 +64,7 @@ kotlin {
 
                 // SQLDelight
                 implementation(libs.sqldelight.android.driver)
+                implementation(libs.sqldelight.coroutines)
 
                 // Ktor
                 implementation(libs.ktor.client.okhttp)
@@ -118,6 +130,10 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    composeOptions {
+        kotlinCompilerExtensionVersion = "1.5.10"
     }
 
     packaging {
