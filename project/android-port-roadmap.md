@@ -1026,7 +1026,7 @@ class MainActivity : ComponentActivity() {
 
 | ID | Task | Size | Status | Commit | Notes | Dependencies |
 |----|------|------|--------|--------|-------|--------------|
-| 4.2.1 | Android Keystore Crypto Adapter | M (2d) | 📋 TODO | - | CryptoAdapter using Android Keystore, secp256k1-kmp-jni-android | 4.1.1, Phase 1 |
+| 4.2.1 | Android Keystore Wrapper | S (1d) | ✅ DONE | 2e1e2d1 | KeystoreManager (AES-GCM encryption), AndroidIdentityManager (identity wrapper), AndroidModule (DI), 21 unit tests (Robolectric + MockK) | 4.1.1 |
 | 4.2.2 | SQLDelight Android Database | M (2d) | 📋 TODO | - | SQLDelight schema, Android driver, repositories | 4.2.1 |
 | 4.2.3 | Biometric Authentication (Optional) | S (1d) | 📋 TODO | - | BiometricAuthenticator, lock screen | 4.1.2 |
 
