@@ -25,6 +25,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import cash.imani.app.util.InputValidator
+import cash.imani.app.util.ValidationResult
 import cash.imani.voucher.usecases.IssueVoucherRequest
 
 /**
@@ -91,10 +93,17 @@ fun IssueVoucherScreen(
             placeholder = { Text("Enter amount in satoshis") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.fillMaxWidth(),
-            isError = amount.isNotBlank() && (amount.toLongOrNull() ?: 0) <= 0,
+            isError =
+                amount.isNotBlank() &&
+                    InputValidator.validateAmount(amount) is ValidationResult.Error,
             supportingText = {
-                if (amount.isNotBlank() && (amount.toLongOrNull() ?: 0) <= 0) {
-                    Text("Amount must be greater than 0")
+                if (amount.isNotBlank()) {
+                    when (val result = InputValidator.validateAmount(amount)) {
+                        is ValidationResult.Error -> Text(result.message)
+                        is ValidationResult.Success -> Text("${result.value} sats")
+                    }
+                } else {
+                    Text("Required field")
                 }
             },
         )
@@ -102,14 +111,17 @@ fun IssueVoucherScreen(
         // Memo field
         OutlinedTextField(
             value = memo,
-            // Limit to 200 chars
             onValueChange = { memo = it.take(200) },
             label = { Text("Memo (optional)") },
             placeholder = { Text("Add a message or description") },
             modifier = Modifier.fillMaxWidth(),
             maxLines = 3,
+            isError = InputValidator.validateMemo(memo, 200) is ValidationResult.Error,
             supportingText = {
-                Text("${memo.length}/200")
+                when (val result = InputValidator.validateMemo(memo, 200)) {
+                    is ValidationResult.Error -> Text(result.message)
+                    is ValidationResult.Success -> Text("${memo.length}/200")
+                }
             },
         )
 
@@ -138,8 +150,12 @@ fun IssueVoucherScreen(
             label = { Text("Mint URL") },
             modifier = Modifier.fillMaxWidth(),
             enabled = false,
+            isError = InputValidator.validateUrl(mintUrl, allowHttp = true) is ValidationResult.Error,
             supportingText = {
-                Text("Using default test mint for Phase 2")
+                when (val result = InputValidator.validateUrl(mintUrl, allowHttp = true)) {
+                    is ValidationResult.Error -> Text(result.message)
+                    is ValidationResult.Success -> Text("Using default test mint for Phase 2")
+                }
             },
         )
 
@@ -158,17 +174,33 @@ fun IssueVoucherScreen(
         Button(
             onClick = {
                 errorMessage = null
-                val amountValue = amount.toLongOrNull()
-                if (amountValue == null || amountValue <= 0) {
-                    errorMessage = "Please enter a valid amount"
+
+                // Validate amount
+                val amountResult = InputValidator.validateAmount(amount)
+                if (amountResult is ValidationResult.Error) {
+                    errorMessage = amountResult.message
+                    return@Button
+                }
+
+                // Validate memo
+                val memoResult = InputValidator.validateMemo(memo, 200)
+                if (memoResult is ValidationResult.Error) {
+                    errorMessage = memoResult.message
+                    return@Button
+                }
+
+                // Validate mint URL
+                val urlResult = InputValidator.validateUrl(mintUrl, allowHttp = true)
+                if (urlResult is ValidationResult.Error) {
+                    errorMessage = urlResult.message
                     return@Button
                 }
 
                 val request =
                     IssueVoucherRequest(
-                        amount = amountValue,
+                        amount = (amountResult as ValidationResult.Success).value,
                         unit = "sat",
-                        mintUrl = mintUrl,
+                        mintUrl = (urlResult as ValidationResult.Success).value,
                         expiresInDays = expiryDays.toIntOrNull()?.takeIf { it > 0 },
                         memo = memo.ifBlank { null },
                         // Phase 2: No P2PK support in UI yet

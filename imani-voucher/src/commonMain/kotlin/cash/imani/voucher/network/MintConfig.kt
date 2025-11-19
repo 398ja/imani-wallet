@@ -27,11 +27,12 @@ object MintConfig {
      * These are public mints. Do NOT use for testing!
      * Always test against LOCAL_MINT.
      */
-    val PRODUCTION_MINTS = listOf(
-        "https://mint.minibits.cash", // Minibits wallet mint
-        "https://8333.space:3338",    // Community mint
-        "https://legend.lnbits.com",  // LNbits mint
-    )
+    val PRODUCTION_MINTS =
+        listOf(
+            "https://mint.minibits.cash", // Minibits wallet mint
+            "https://8333.space:3338", // Community mint
+            "https://legend.lnbits.com", // LNbits mint
+        )
 
     /**
      * Default mint based on environment configuration.
@@ -48,10 +49,10 @@ object MintConfig {
         get() {
             val env = getMintEnvironmentVariable("IMANI_MINT_ENV")
             return when {
-                env == null -> LOCAL_MINT  // Default to local for safety
-                env.startsWith("http://") || env.startsWith("https://") -> env  // Direct URL
-                env.lowercase() in listOf("production", "prod") -> ""  // No default for production
-                else -> LOCAL_MINT  // "local", "dev", or anything else
+                env == null -> LOCAL_MINT // Default to local for safety
+                env.startsWith("http://") || env.startsWith("https://") -> env // Direct URL
+                env.lowercase() in listOf("production", "prod") -> "" // No default for production
+                else -> LOCAL_MINT // "local", "dev", or anything else
             }
         }
 

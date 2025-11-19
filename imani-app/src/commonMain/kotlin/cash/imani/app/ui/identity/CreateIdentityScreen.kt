@@ -40,6 +40,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import cash.imani.app.util.InputValidator
+import cash.imani.app.util.ValidationResult
 
 /**
  * Screen for creating a new identity.
@@ -60,7 +62,7 @@ fun CreateIdentityScreen(
 ) {
     val createState by viewModel.createState.collectAsState()
     var label by remember { mutableStateOf("") }
-    var isLabelError by remember { mutableStateOf(false) }
+    var labelError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         viewModel.resetCreateState()
@@ -90,14 +92,17 @@ fun CreateIdentityScreen(
                         label = label,
                         onLabelChange = {
                             label = it
-                            isLabelError = false
+                            labelError = null
                         },
-                        isLabelError = isLabelError,
+                        labelError = labelError,
                         onCreateClick = {
-                            if (label.trim().isEmpty()) {
-                                isLabelError = true
-                            } else {
-                                viewModel.createIdentity(label)
+                            when (val result = InputValidator.validateLabel(label)) {
+                                is ValidationResult.Success -> {
+                                    viewModel.createIdentity(result.value)
+                                }
+                                is ValidationResult.Error -> {
+                                    labelError = result.message
+                                }
                             }
                         },
                         onCancelClick = onCancel,
@@ -157,7 +162,7 @@ fun CreateIdentityScreen(
 fun CreateIdentityForm(
     label: String,
     onLabelChange: (String) -> Unit,
-    isLabelError: Boolean,
+    labelError: String?,
     onCreateClick: () -> Unit,
     onCancelClick: () -> Unit,
 ) {
@@ -175,10 +180,12 @@ fun CreateIdentityForm(
             onValueChange = onLabelChange,
             label = { Text("Label") },
             placeholder = { Text("e.g., My Nostr Identity") },
-            isError = isLabelError,
+            isError = labelError != null,
             supportingText = {
-                if (isLabelError) {
-                    Text("Label cannot be empty")
+                if (labelError != null) {
+                    Text(labelError)
+                } else {
+                    Text("1-100 characters")
                 }
             },
             modifier = Modifier.fillMaxWidth(),

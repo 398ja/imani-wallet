@@ -217,9 +217,12 @@ class VoucherFlowTest {
                 )
 
             // Create vouchers with different statuses
-            val issued1 = createTestVoucher("issued_a_${Clock.System.now().toEpochMilliseconds()}", VoucherStatus.ISSUED)
-            val issued2 = createTestVoucher("issued_b_${Clock.System.now().toEpochMilliseconds()}", VoucherStatus.ISSUED)
-            val redeemed = createTestVoucher("redeemed_${Clock.System.now().toEpochMilliseconds()}", VoucherStatus.REDEEMED)
+            val issued1 =
+                createTestVoucher("issued_a_${Clock.System.now().toEpochMilliseconds()}", VoucherStatus.ISSUED)
+            val issued2 =
+                createTestVoucher("issued_b_${Clock.System.now().toEpochMilliseconds()}", VoucherStatus.ISSUED)
+            val redeemed =
+                createTestVoucher("redeemed_${Clock.System.now().toEpochMilliseconds()}", VoucherStatus.REDEEMED)
 
             repository.saveVoucher(issued1).getOrThrow()
             repository.saveVoucher(issued2).getOrThrow()

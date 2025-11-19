@@ -2,6 +2,8 @@ package cash.imani.identity.repository
 
 import cash.imani.identity.crypto.Bip39Adapter
 import cash.imani.identity.crypto.CryptoAdapter
+import cash.imani.identity.crypto.PassphraseEncryption
+import cash.imani.identity.crypto.PassphraseManager
 import cash.imani.identity.domain.Identity
 import cash.imani.identity.util.toHex
 import kotlinx.datetime.Clock
@@ -21,14 +23,15 @@ import kotlin.random.Random
  * - Mnemonics: `mnemonic_{id}` → Encrypted mnemonic phrase
  *
  * Encryption:
- * - Phase 1: Simple XOR with derived key (NOT production-ready)
- * - Phase 2: AES-GCM with user passphrase + PBKDF2
- * - Phase 3: Add biometric authentication option
+ * - Phase 3: AES-256-GCM with PBKDF2-derived key (600,000 iterations)
+ * - Passphrase managed by PassphraseManager (session-only storage)
+ * - Auto-lock after 15 minutes of inactivity
  *
  * Security Notes:
  * - localStorage is vulnerable to XSS attacks
  * - Content Security Policy should be enforced
- * - Consider IndexedDB for Phase 2 (larger storage, better performance)
+ * - Passphrase never persisted to disk
+ * - Consider IndexedDB for Phase 4 (larger storage, better performance)
  */
 class WebIdentityRepository(
     private val cryptoAdapter: CryptoAdapter,
@@ -41,9 +44,8 @@ class WebIdentityRepository(
             prettyPrint = false
         }
 
-    // Phase 1: Simple derived key for encryption (NOT secure - replace in Phase 2)
-    // TODO Phase 2: Derive from user passphrase using PBKDF2
-    private val encryptionKey = "imani-wallet-phase1-key-DO-NOT-USE-IN-PRODUCTION"
+    /** Passphrase-based encryption using PBKDF2 + AES-GCM */
+    private val passphraseEncryption = PassphraseEncryption()
 
     override suspend fun createIdentity(label: String): Result<Identity> =
         runCatching {
@@ -268,40 +270,34 @@ class WebIdentityRepository(
         }
 
     /**
-     * Encrypts data using simple XOR with derived key.
+     * Encrypts data using AES-256-GCM with PBKDF2-derived key.
      *
-     * Phase 1: NOT cryptographically secure - for MVP only
-     * Phase 2: Replace with AES-GCM + PBKDF2
+     * Security:
+     * - AES-256-GCM authenticated encryption
+     * - PBKDF2 key derivation (600,000 iterations)
+     * - Random salt and IV per encryption
+     * - Passphrase from PassphraseManager (session-only)
      *
      * @param data Plaintext bytes
-     * @return Hex-encoded encrypted data
+     * @return Encrypted data in format: "{salt}:{iv}:{ciphertext}"
+     * @throws IllegalStateException if session is locked
      */
     private suspend fun encryptData(data: ByteArray): String {
-        // TODO Phase 2: Implement proper AES-GCM encryption
-        // For Phase 1, use simple XOR (NOT SECURE)
-        val keyBytes = cryptoAdapter.sha256(encryptionKey.encodeToByteArray())
-        val encrypted =
-            ByteArray(data.size) { i ->
-                (data[i].toInt() xor keyBytes[i % keyBytes.size].toInt()).toByte()
-            }
-        return encrypted.toHex()
+        val passphrase = PassphraseManager.getPassphrase()
+        return passphraseEncryption.encrypt(data, passphrase)
     }
 
     /**
      * Decrypts data encrypted with encryptData.
      *
-     * @param encryptedHex Hex-encoded encrypted data
+     * @param encryptedData Encrypted string in format: "{salt}:{iv}:{ciphertext}"
      * @return Plaintext bytes
+     * @throws IllegalStateException if session is locked
+     * @throws Exception if decryption fails (wrong passphrase or corrupted data)
      */
-    private suspend fun decryptData(encryptedHex: String): ByteArray {
-        // TODO Phase 2: Implement proper AES-GCM decryption
-        // For Phase 1, XOR decryption (symmetric with encryption)
-        val encryptedList = encryptedHex.chunked(2).map { it.toInt(16).toByte() }
-        val encrypted = ByteArray(encryptedList.size) { i -> encryptedList[i] }
-        val keyBytes = cryptoAdapter.sha256(encryptionKey.encodeToByteArray())
-        return ByteArray(encrypted.size) { i ->
-            (encrypted[i].toInt() xor keyBytes[i % keyBytes.size].toInt()).toByte()
-        }
+    private suspend fun decryptData(encryptedData: String): ByteArray {
+        val passphrase = PassphraseManager.getPassphrase()
+        return passphraseEncryption.decrypt(encryptedData, passphrase)
     }
 
     /**

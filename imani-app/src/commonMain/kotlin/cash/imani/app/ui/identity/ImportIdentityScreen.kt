@@ -34,6 +34,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import cash.imani.app.util.InputValidator
+import cash.imani.app.util.ValidationResult
 
 /**
  * Screen for importing an existing identity.
@@ -174,8 +176,8 @@ fun ImportFromMnemonicForm(
 ) {
     var mnemonic by remember { mutableStateOf("") }
     var label by remember { mutableStateOf("") }
-    var mnemonicError by remember { mutableStateOf(false) }
-    var labelError by remember { mutableStateOf(false) }
+    var mnemonicError by remember { mutableStateOf<String?>(null) }
+    var labelError by remember { mutableStateOf<String?>(null) }
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -196,14 +198,16 @@ fun ImportFromMnemonicForm(
             value = mnemonic,
             onValueChange = {
                 mnemonic = it
-                mnemonicError = false
+                mnemonicError = null
             },
             label = { Text("Recovery Phrase") },
             placeholder = { Text("word1 word2 word3 ...") },
-            isError = mnemonicError,
+            isError = mnemonicError != null,
             supportingText = {
-                if (mnemonicError) {
-                    Text("Please enter a valid 12 or 24 word mnemonic")
+                if (mnemonicError != null) {
+                    Text(mnemonicError!!)
+                } else {
+                    Text("12 or 24 words separated by spaces")
                 }
             },
             modifier = Modifier.fillMaxWidth().height(120.dp),
@@ -214,14 +218,16 @@ fun ImportFromMnemonicForm(
             value = label,
             onValueChange = {
                 label = it
-                labelError = false
+                labelError = null
             },
             label = { Text("Label") },
             placeholder = { Text("e.g., Imported Identity") },
-            isError = labelError,
+            isError = labelError != null,
             supportingText = {
-                if (labelError) {
-                    Text("Label cannot be empty")
+                if (labelError != null) {
+                    Text(labelError!!)
+                } else {
+                    Text("1-100 characters")
                 }
             },
             modifier = Modifier.fillMaxWidth(),
@@ -242,17 +248,14 @@ fun ImportFromMnemonicForm(
             }
             Button(
                 onClick = {
-                    var hasError = false
-                    if (mnemonic.trim().isEmpty()) {
-                        mnemonicError = true
-                        hasError = true
-                    }
-                    if (label.trim().isEmpty()) {
-                        labelError = true
-                        hasError = true
-                    }
-                    if (!hasError) {
-                        onImport(mnemonic.trim(), label.trim())
+                    val mnemonicResult = InputValidator.validateMnemonicFormat(mnemonic)
+                    val labelResult = InputValidator.validateLabel(label)
+
+                    mnemonicError = mnemonicResult.getErrorOrNull()
+                    labelError = labelResult.getErrorOrNull()
+
+                    if (mnemonicResult.isSuccess() && labelResult.isSuccess()) {
+                        onImport(mnemonicResult.getOrNull()!!, labelResult.getOrNull()!!)
                     }
                 },
                 modifier = Modifier.weight(1f),
@@ -273,8 +276,8 @@ fun ImportFromNsecForm(
 ) {
     var nsec by remember { mutableStateOf("") }
     var label by remember { mutableStateOf("") }
-    var nsecError by remember { mutableStateOf(false) }
-    var labelError by remember { mutableStateOf(false) }
+    var nsecError by remember { mutableStateOf<String?>(null) }
+    var labelError by remember { mutableStateOf<String?>(null) }
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -295,14 +298,16 @@ fun ImportFromNsecForm(
             value = nsec,
             onValueChange = {
                 nsec = it
-                nsecError = false
+                nsecError = null
             },
             label = { Text("Private Key (nsec)") },
             placeholder = { Text("nsec1...") },
-            isError = nsecError,
+            isError = nsecError != null,
             supportingText = {
-                if (nsecError) {
-                    Text("Please enter a valid nsec key (starts with nsec1)")
+                if (nsecError != null) {
+                    Text(nsecError!!)
+                } else {
+                    Text("Bech32-encoded key starting with nsec1")
                 }
             },
             modifier = Modifier.fillMaxWidth(),
@@ -313,14 +318,16 @@ fun ImportFromNsecForm(
             value = label,
             onValueChange = {
                 label = it
-                labelError = false
+                labelError = null
             },
             label = { Text("Label") },
             placeholder = { Text("e.g., Imported Identity") },
-            isError = labelError,
+            isError = labelError != null,
             supportingText = {
-                if (labelError) {
-                    Text("Label cannot be empty")
+                if (labelError != null) {
+                    Text(labelError!!)
+                } else {
+                    Text("1-100 characters")
                 }
             },
             modifier = Modifier.fillMaxWidth(),
@@ -341,17 +348,14 @@ fun ImportFromNsecForm(
             }
             Button(
                 onClick = {
-                    var hasError = false
-                    if (nsec.trim().isEmpty()) {
-                        nsecError = true
-                        hasError = true
-                    }
-                    if (label.trim().isEmpty()) {
-                        labelError = true
-                        hasError = true
-                    }
-                    if (!hasError) {
-                        onImport(nsec.trim(), label.trim())
+                    val nsecResult = InputValidator.validateNsecFormat(nsec)
+                    val labelResult = InputValidator.validateLabel(label)
+
+                    nsecError = nsecResult.getErrorOrNull()
+                    labelError = labelResult.getErrorOrNull()
+
+                    if (nsecResult.isSuccess() && labelResult.isSuccess()) {
+                        onImport(nsecResult.getOrNull()!!, labelResult.getOrNull()!!)
                     }
                 },
                 modifier = Modifier.weight(1f),
