@@ -890,7 +890,7 @@ sqldelight {
 
 | ID | Task | Size | Status | Commit | Notes | Dependencies |
 |----|------|------|--------|--------|-------|--------------|
-| 4.2.2 | SQLDelight Android Database | M (2d) | 📋 TODO | - | Create SQLDelight schema for Identity and Voucher, AndroidIdentityRepository, AndroidVoucherRepository | 4.2.1 |
+| 4.2.2 | SQLDelight Android Database | M (2d) | ✅ DONE | ea4140c | Identity.sq + Voucher.sq schemas with comprehensive queries, AndroidIdentityRepository (encrypted private keys), AndroidVoucherRepository (vouchers + proofs), 29 unit tests, FIFO proof selection, reactive Flow queries for UI, 100% domain model reuse | 4.2.1 |
 
 ---
 
@@ -1027,7 +1027,7 @@ class MainActivity : ComponentActivity() {
 | ID | Task | Size | Status | Commit | Notes | Dependencies |
 |----|------|------|--------|--------|-------|--------------|
 | 4.2.1 | Android Keystore Wrapper | S (1d) | ✅ DONE | 2e1e2d1 | KeystoreManager (AES-GCM encryption), AndroidIdentityManager (identity wrapper), AndroidModule (DI), 21 unit tests (Robolectric + MockK) | 4.1.1 |
-| 4.2.2 | SQLDelight Android Database | M (2d) | 📋 TODO | - | SQLDelight schema, Android driver, repositories | 4.2.1 |
+| 4.2.2 | SQLDelight Android Database | M (2d) | ✅ DONE | ea4140c | Identity.sq + Voucher.sq schemas, AndroidIdentityRepository + AndroidVoucherRepository, 29 unit tests (13 identity + 16 voucher), FIFO proof selection, reactive Flow queries, 100% domain model reuse | 4.2.1 |
 | 4.2.3 | Biometric Authentication (Optional) | S (1d) | 📋 TODO | - | BiometricAuthenticator, lock screen | 4.1.2 |
 
 [↑ Back to top](#imani-wallet---android-port-roadmap)
