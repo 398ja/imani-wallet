@@ -111,7 +111,8 @@ actual class NostrVoucherClient(
         val content = Json.encodeToString(voucher)
         val tags =
             listOf(
-                listOf("d", voucher.voucherId), // NIP-33 identifier
+                // NIP-33 identifier
+                listOf("d", voucher.voucherId),
                 listOf("status", voucher.status.name),
                 listOf("unit", voucher.unit),
                 listOf("amount", voucher.faceValue.toString()),
@@ -120,13 +121,15 @@ actual class NostrVoucherClient(
         // For Phase 2, create simplified event
         // TODO: Phase 3 - Use proper event signing with private key
         return NostrEvent(
-            id = "event_${voucher.voucherId}", // Simplified ID
+            // Simplified ID
+            id = "event_${voucher.voucherId}",
             pubkey = voucher.issuerPublicKey,
             created_at = voucher.issuedAt.epochSeconds,
             kind = VOUCHER_EVENT_KIND,
             tags = tags,
             content = content,
-            sig = voucher.issuerSignature, // Reuse voucher signature
+            // Reuse voucher signature
+            sig = voucher.issuerSignature,
         )
     }
 

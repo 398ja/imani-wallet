@@ -22,7 +22,6 @@ class IdentityTest {
      * all identities have valid identifiers for storage and retrieval.
      */
     @Test
-
     @JsName("constructorValidatesIdIsNotBlank")
     fun `constructor validates id is not blank`() {
         // Given: Empty ID string
@@ -45,7 +44,6 @@ class IdentityTest {
      * (1-100 characters) to ensure labels are meaningful and displayable.
      */
     @Test
-
     @JsName("constructorValidatesLabelIsNotEmpty")
     fun `constructor validates label is not empty`() {
         // Given: Empty label string
@@ -68,7 +66,6 @@ class IdentityTest {
      * maximum length to prevent storage and display issues.
      */
     @Test
-
     @JsName("constructorValidatesLabelIsNotTooLong")
     fun `constructor validates label is not too long`() {
         // Given: Label exceeding 100 characters
@@ -91,7 +88,6 @@ class IdentityTest {
      * 64 hex characters (32 bytes) per Nostr standard.
      */
     @Test
-
     @JsName("constructorValidatesPublicKeyLength")
     fun `constructor validates public key length`() {
         // Given: Public key with incorrect length
@@ -114,7 +110,6 @@ class IdentityTest {
      * 64 hex characters (32 bytes) per secp256k1 standard.
      */
     @Test
-
     @JsName("constructorValidatesPrivateKeyLength")
     fun `constructor validates private key length`() {
         // Given: Private key with incorrect length
@@ -137,7 +132,6 @@ class IdentityTest {
      * the last 90 days, preventing premature dormancy flagging.
      */
     @Test
-
     @JsName("isactiveReturnsTrueWhenLastUsedWithin90Days")
     fun `isActive returns true when last used within 90 days`() {
         // Given: Identity used 30 days ago
@@ -164,7 +158,6 @@ class IdentityTest {
      * over 90 days ago to identify stale identities.
      */
     @Test
-
     @JsName("isactiveReturnsFalseWhenLastUsedOver90DaysAgo")
     fun `isActive returns false when last used over 90 days ago`() {
         // Given: Identity last used 91 days ago
@@ -191,7 +184,6 @@ class IdentityTest {
      * ensuring newly created identities can be evaluated for activity.
      */
     @Test
-
     @JsName("isactiveUsesCreatedatWhenLastusedatIsNull")
     fun `isActive uses createdAt when lastUsedAt is null`() {
         // Given: Identity created 30 days ago, never used
@@ -218,7 +210,6 @@ class IdentityTest {
      * as dormant to facilitate cleanup operations.
      */
     @Test
-
     @JsName("isactiveReturnsFalseWhenNeverUsedAndCreatedOver90DaysAgo")
     fun `isActive returns false when never used and created over 90 days ago`() {
         // Given: Identity created 91 days ago, never used
@@ -245,7 +236,6 @@ class IdentityTest {
      * confirming it's the logical inverse of isActive.
      */
     @Test
-
     @JsName("isdormantReturnsFalseForActiveIdentity")
     fun `isDormant returns false for active identity`() {
         // Given: Recently used identity
@@ -272,7 +262,6 @@ class IdentityTest {
      * confirming it correctly identifies stale identities.
      */
     @Test
-
     @JsName("isdormantReturnsTrueForInactiveIdentity")
     fun `isDormant returns true for inactive identity`() {
         // Given: Identity last used over 90 days ago
@@ -299,7 +288,6 @@ class IdentityTest {
      * while preserving all other fields, ensuring immutability.
      */
     @Test
-
     @JsName("withlabelCreatesNewIdentityWithUpdatedLabel")
     fun `withLabel creates new identity with updated label`() {
         // Given: Identity with original label
@@ -328,7 +316,6 @@ class IdentityTest {
      * timestamp, enabling activity tracking while maintaining immutability.
      */
     @Test
-
     @JsName("withupdatedusageCreatesNewIdentityWithCurrentTimestamp")
     fun `withUpdatedUsage creates new identity with current timestamp`() {
         // Given: Identity with old lastUsedAt
@@ -357,7 +344,6 @@ class IdentityTest {
      * with npub1 prefix per Nostr NIP-19 standard.
      */
     @Test
-
     @JsName("tonpubReturnsBech32EncodedPublicKey")
     fun `toNpub returns bech32 encoded public key`() {
         // Given: Identity with valid public key

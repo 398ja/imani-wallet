@@ -25,19 +25,14 @@ import kotlin.time.Duration.Companion.seconds
 data class RetryPolicy(
     /** Maximum number of retry attempts */
     val maxAttempts: Int = 3,
-
     /** Initial delay before first retry */
     val initialDelay: Duration = 1.seconds,
-
     /** Maximum delay between retries */
     val maxDelay: Duration = 30.seconds,
-
     /** Backoff multiplier (for exponential backoff) */
     val backoffMultiplier: Double = 2.0,
-
     /** Whether to add random jitter to delays */
     val useJitter: Boolean = true,
-
     /** Predicate to determine if an exception should trigger retry */
     val shouldRetry: (Throwable) -> Boolean = { isRetryableException(it) },
 ) {

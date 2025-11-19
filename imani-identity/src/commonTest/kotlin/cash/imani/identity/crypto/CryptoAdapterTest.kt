@@ -24,7 +24,6 @@ class CryptoAdapterTest {
      * Tests that generateRandomBytes produces non-deterministic output.
      */
     @Test
-
     @JsName("generaterandombytesProducesDifferentValuesOnSuccessiveCalls")
     fun `generateRandomBytes produces different values on successive calls`() =
         runTest {
@@ -44,7 +43,6 @@ class CryptoAdapterTest {
      * Tests that generateRandomBytes respects the requested length.
      */
     @Test
-
     @JsName("generaterandombytesReturnsCorrectLength")
     fun `generateRandomBytes returns correct length`() =
         runTest {
@@ -65,7 +63,6 @@ class CryptoAdapterTest {
      * Tests that SHA-256 produces consistent 32-byte hashes.
      */
     @Test
-
     @JsName("sha256ProducesConsistent32ByteHash")
     fun `sha256 produces consistent 32-byte hash`() =
         runTest {
@@ -87,7 +84,6 @@ class CryptoAdapterTest {
      * Tests that SHA-256 produces different hashes for different inputs.
      */
     @Test
-
     @JsName("sha256ProducesDifferentHashesForDifferentInputs")
     fun `sha256 produces different hashes for different inputs`() =
         runTest {
@@ -109,7 +105,6 @@ class CryptoAdapterTest {
      * Tests that keypair generation produces valid 32-byte keys.
      */
     @Test
-
     @JsName("generatekeypairProduces32ByteKeys")
     fun `generateKeypair produces 32-byte keys`() =
         runTest {
@@ -127,7 +122,6 @@ class CryptoAdapterTest {
      * Tests that successive keypair generations produce different keys.
      */
     @Test
-
     @JsName("generatekeypairProducesUniqueKeys")
     fun `generateKeypair produces unique keys`() =
         runTest {
@@ -146,7 +140,6 @@ class CryptoAdapterTest {
      * Tests that Schnorr signature verification succeeds for valid signatures.
      */
     @Test
-
     @JsName("schnorrsignAndSchnorrverifyWorkCorrectly")
     fun `schnorrSign and schnorrVerify work correctly`() =
         runTest {
@@ -167,7 +160,6 @@ class CryptoAdapterTest {
      * Tests that Schnorr signature verification fails for wrong message.
      */
     @Test
-
     @JsName("schnorrverifyFailsForWrongMessage")
     fun `schnorrVerify fails for wrong message`() =
         runTest {
@@ -189,7 +181,6 @@ class CryptoAdapterTest {
      * Tests that Schnorr signature verification fails for wrong public key.
      */
     @Test
-
     @JsName("schnorrverifyFailsForWrongPublicKey")
     fun `schnorrVerify fails for wrong public key`() =
         runTest {

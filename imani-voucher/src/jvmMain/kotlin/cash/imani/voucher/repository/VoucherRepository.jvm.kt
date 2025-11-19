@@ -13,7 +13,8 @@ package cash.imani.voucher.repository
  * - Environment-based relay configuration
  */
 actual fun createVoucherRepository(): VoucherRepository {
+    // Sync from Nostr on startup
     return createNostrVoucherRepository(
-        syncOnInit = true, // Sync from Nostr on startup
+        syncOnInit = true,
     )
 }

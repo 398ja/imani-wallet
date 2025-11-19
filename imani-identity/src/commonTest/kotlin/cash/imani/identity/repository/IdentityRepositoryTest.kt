@@ -27,7 +27,6 @@ class IdentityRepositoryTest {
      * Tests that createIdentity generates a valid identity.
      */
     @Test
-
     @JsName("createidentityGeneratesValidIdentityWithKeypair")
     fun `createIdentity generates valid identity with keypair`() =
         runTest {
@@ -49,7 +48,6 @@ class IdentityRepositoryTest {
      * Tests that createIdentity validates label length.
      */
     @Test
-
     @JsName("createidentityRejectsEmptyLabel")
     fun `createIdentity rejects empty label`() =
         runTest {
@@ -67,7 +65,6 @@ class IdentityRepositoryTest {
      * Tests that createIdentity rejects too-long label.
      */
     @Test
-
     @JsName("createidentityRejectsLabelLongerThan100Characters")
     fun `createIdentity rejects label longer than 100 characters`() =
         runTest {
@@ -85,7 +82,6 @@ class IdentityRepositoryTest {
      * Tests that listIdentities returns empty list initially.
      */
     @Test
-
     @JsName("listidentitiesReturnsEmptyListWhenNoIdentitiesExist")
     fun `listIdentities returns empty list when no identities exist`() =
         runTest {
@@ -104,7 +100,6 @@ class IdentityRepositoryTest {
      * Tests that listIdentities returns created identities.
      */
     @Test
-
     @JsName("listidentitiesReturnsAllCreatedIdentities")
     fun `listIdentities returns all created identities`() =
         runTest {
@@ -126,7 +121,6 @@ class IdentityRepositoryTest {
      * Tests that listIdentities sorts by lastUsedAt descending.
      */
     @Test
-
     @JsName("listidentitiesReturnsIdentitiesSortedByLastusedatDescending")
     fun `listIdentities returns identities sorted by lastUsedAt descending`() =
         runTest {
@@ -147,7 +141,6 @@ class IdentityRepositoryTest {
      * Tests that getIdentity retrieves correct identity.
      */
     @Test
-
     @JsName("getidentityRetrievesCorrectIdentityById")
     fun `getIdentity retrieves correct identity by ID`() =
         runTest {
@@ -170,7 +163,6 @@ class IdentityRepositoryTest {
      * Tests that getIdentity fails for non-existent ID.
      */
     @Test
-
     @JsName("getidentityFailsForNonExistentId")
     fun `getIdentity fails for non-existent ID`() =
         runTest {
@@ -189,7 +181,6 @@ class IdentityRepositoryTest {
      * Tests that getPrivateKey retrieves the correct key.
      */
     @Test
-
     @JsName("getprivatekeyRetrievesCorrectPrivateKey")
     fun `getPrivateKey retrieves correct private key`() =
         runTest {
@@ -210,7 +201,6 @@ class IdentityRepositoryTest {
      * Tests that deleteIdentity removes the identity.
      */
     @Test
-
     @JsName("deleteidentityRemovesIdentityAndAllAssociatedData")
     fun `deleteIdentity removes identity and all associated data`() =
         runTest {
@@ -241,7 +231,6 @@ class IdentityRepositoryTest {
      * Tests that deleteIdentity fails for non-existent ID.
      */
     @Test
-
     @JsName("deleteidentityFailsForNonExistentId")
     fun `deleteIdentity fails for non-existent ID`() =
         runTest {
@@ -259,7 +248,6 @@ class IdentityRepositoryTest {
      * Tests that exportMnemonic returns the mnemonic phrase.
      */
     @Test
-
     @JsName("exportmnemonicReturnsValidMnemonicPhrase")
     fun `exportMnemonic returns valid mnemonic phrase`() =
         runTest {
@@ -281,7 +269,6 @@ class IdentityRepositoryTest {
      * Tests that importFromMnemonic restores an identity.
      */
     @Test
-
     @JsName("importfrommnemonicCreatesIdentityFromMnemonic")
     fun `importFromMnemonic creates identity from mnemonic`() =
         runTest {
@@ -302,7 +289,6 @@ class IdentityRepositoryTest {
      * Tests that importFromMnemonic validates the mnemonic.
      */
     @Test
-
     @JsName("importfrommnemonicRejectsInvalidMnemonic")
     fun `importFromMnemonic rejects invalid mnemonic`() =
         runTest {
@@ -320,7 +306,6 @@ class IdentityRepositoryTest {
      * Tests that updateLastUsed updates the timestamp.
      */
     @Test
-
     @JsName("updatelastusedUpdatesLastusedatTimestamp")
     fun `updateLastUsed updates lastUsedAt timestamp`() =
         runTest {

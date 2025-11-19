@@ -35,7 +35,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import cash.imani.app.util.InputValidator
-import cash.imani.app.util.ValidationResult
 
 /**
  * Screen for importing an existing identity.

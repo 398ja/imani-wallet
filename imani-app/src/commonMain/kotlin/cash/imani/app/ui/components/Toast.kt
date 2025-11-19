@@ -52,7 +52,8 @@ enum class ToastType {
 data class ToastMessage(
     val message: String,
     val type: ToastType = ToastType.INFO,
-    val duration: Long = 3000L, // milliseconds
+    // milliseconds
+    val duration: Long = 3000L,
     val action: ToastAction? = null,
 )
 
@@ -212,28 +213,40 @@ class ToastHostState {
     /**
      * Show a success toast.
      */
-    fun showSuccess(message: String, duration: Long = 3000L) {
+    fun showSuccess(
+        message: String,
+        duration: Long = 3000L,
+    ) {
         showToast(ToastMessage(message, ToastType.SUCCESS, duration))
     }
 
     /**
      * Show an error toast.
      */
-    fun showError(message: String, duration: Long = 4000L) {
+    fun showError(
+        message: String,
+        duration: Long = 4000L,
+    ) {
         showToast(ToastMessage(message, ToastType.ERROR, duration))
     }
 
     /**
      * Show a warning toast.
      */
-    fun showWarning(message: String, duration: Long = 3500L) {
+    fun showWarning(
+        message: String,
+        duration: Long = 3500L,
+    ) {
         showToast(ToastMessage(message, ToastType.WARNING, duration))
     }
 
     /**
      * Show an info toast.
      */
-    fun showInfo(message: String, duration: Long = 3000L) {
+    fun showInfo(
+        message: String,
+        duration: Long = 3000L,
+    ) {
         showToast(ToastMessage(message, ToastType.INFO, duration))
     }
 

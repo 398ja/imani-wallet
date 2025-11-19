@@ -29,9 +29,12 @@ object MintConfig {
      */
     val PRODUCTION_MINTS =
         listOf(
-            "https://mint.minibits.cash", // Minibits wallet mint
-            "https://8333.space:3338", // Community mint
-            "https://legend.lnbits.com", // LNbits mint
+            // Minibits wallet mint
+            "https://mint.minibits.cash",
+            // Community mint
+            "https://8333.space:3338",
+            // LNbits mint
+            "https://legend.lnbits.com",
         )
 
     /**

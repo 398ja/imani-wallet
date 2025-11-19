@@ -133,7 +133,8 @@ class IssueVoucherUseCase(
                     faceValue = request.amount,
                     expiresAt = expiresAt,
                     memo = request.memo,
-                    issuerSignature = "", // Will be set after signing
+                    // Will be set after signing
+                    issuerSignature = "",
                     issuerPublicKey = identity.publicKey,
                     issuedAt = Clock.System.now(),
                     status = VoucherStatus.ISSUED,

@@ -44,7 +44,8 @@ class NostrVoucherRepository(
     private val nostrClient: NostrVoucherClient,
     private val cache: VoucherCacheRepository,
     private val syncOnInit: Boolean = true,
-    private val syncThresholdMs: Long = 5 * 60 * 1000, // 5 minutes
+    // 5 minutes
+    private val syncThresholdMs: Long = 5 * 60 * 1000,
 ) : VoucherRepository {
     private val syncScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var isSyncing = false

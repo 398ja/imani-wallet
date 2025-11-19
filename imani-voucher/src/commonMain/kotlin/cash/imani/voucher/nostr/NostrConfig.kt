@@ -33,10 +33,14 @@ object NostrConfig {
      */
     val PRODUCTION_RELAYS =
         listOf(
-            "wss://relay.damus.io", // Popular iOS client relay
-            "wss://relay.snort.social", // Popular web client relay
-            "wss://nos.lol", // General purpose relay
-            "wss://relay.nostr.band", // Relay with search capabilities
+            // Popular iOS client relay
+            "wss://relay.damus.io",
+            // Popular web client relay
+            "wss://relay.snort.social",
+            // General purpose relay
+            "wss://nos.lol",
+            // Relay with search capabilities
+            "wss://relay.nostr.band",
         )
 
     /**

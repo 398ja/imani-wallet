@@ -211,7 +211,8 @@ object PassphraseManager {
             CoroutineScope(Dispatchers.Default).launch {
                 delay(autoLockTimeout)
                 lock()
-                console.log("[PassphraseManager] Auto-lock triggered after ${autoLockTimeout.inWholeMinutes} minutes of inactivity")
+                val minutes = autoLockTimeout.inWholeMinutes
+                console.log("[PassphraseManager] Auto-lock triggered after $minutes minutes of inactivity")
             }
     }
 

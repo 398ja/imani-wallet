@@ -18,6 +18,7 @@ package cash.imani.voucher.repository
  */
 actual fun createVoucherRepository(): VoucherRepository {
     return createNostrVoucherRepository(
-        syncOnInit = true, // Sync from Nostr on startup
+        // Sync from Nostr on startup
+        syncOnInit = true,
     )
 }

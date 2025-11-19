@@ -43,8 +43,10 @@ data class MintInfo(
  */
 @Serializable
 data class ContactInfo(
-    val method: String, // "email", "twitter", "nostr", etc.
-    val info: String, // The actual contact (email address, handle, npub, etc.)
+    // "email", "twitter", "nostr", etc.
+    val method: String,
+    // The actual contact (email address, handle, npub, etc.)
+    val info: String,
 )
 
 /**
@@ -104,7 +106,8 @@ data class SwapRequest(
 data class BlindedMessage(
     val amount: Int,
     val id: String,
-    val B_: String, // Blinded secret
+    // Blinded secret
+    val B_: String,
 )
 
 /**
@@ -128,7 +131,8 @@ data class SwapResponse(
 data class BlindSignature(
     val amount: Int,
     val id: String,
-    val C_: String, // Blinded signature
+    // Blinded signature
+    val C_: String,
 )
 
 /**

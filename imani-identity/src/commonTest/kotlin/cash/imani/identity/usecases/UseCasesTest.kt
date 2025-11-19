@@ -28,7 +28,6 @@ class UseCasesTest {
      * Tests CreateIdentityUseCase success path.
      */
     @Test
-
     @JsName("createidentityusecaseCreatesIdentityAndReturnsMnemonic")
     fun `CreateIdentityUseCase creates identity and returns mnemonic`() =
         runTest {
@@ -53,7 +52,6 @@ class UseCasesTest {
      * Tests CreateIdentityUseCase rejects empty label.
      */
     @Test
-
     @JsName("createidentityusecaseRejectsEmptyLabel")
     fun `CreateIdentityUseCase rejects empty label`() =
         runTest {
@@ -71,7 +69,6 @@ class UseCasesTest {
      * Tests ListIdentitiesUseCase returns all identities.
      */
     @Test
-
     @JsName("listidentitiesusecaseReturnsAllIdentities")
     fun `ListIdentitiesUseCase returns all identities`() =
         runTest {
@@ -94,7 +91,6 @@ class UseCasesTest {
      * Tests ListIdentitiesUseCase filters inactive identities.
      */
     @Test
-
     @JsName("listidentitiesusecaseCanFilterInactiveIdentities")
     fun `ListIdentitiesUseCase can filter inactive identities`() =
         runTest {
@@ -116,7 +112,6 @@ class UseCasesTest {
      * Tests ImportIdentityUseCase with valid mnemonic.
      */
     @Test
-
     @JsName("importidentityusecaseImportsIdentityFromMnemonic")
     fun `ImportIdentityUseCase imports identity from mnemonic`() =
         runTest {
@@ -139,7 +134,6 @@ class UseCasesTest {
      * Tests ImportIdentityUseCase normalizes mnemonic input.
      */
     @Test
-
     @JsName("importidentityusecaseNormalizesMnemonicWithExtraSpaces")
     fun `ImportIdentityUseCase normalizes mnemonic with extra spaces`() =
         runTest {
@@ -161,7 +155,6 @@ class UseCasesTest {
      * Tests ImportIdentityUseCase rejects empty label.
      */
     @Test
-
     @JsName("importidentityusecaseRejectsEmptyLabel")
     fun `ImportIdentityUseCase rejects empty label`() =
         runTest {
@@ -182,7 +175,6 @@ class UseCasesTest {
      * Tests ImportIdentityFromNsecUseCase imports identity from nsec.
      */
     @Test
-
     @JsName("importidentityfromnsecusecaseImportsIdentityFromNsec")
     fun `ImportIdentityFromNsecUseCase imports identity from nsec`() =
         runTest {
@@ -207,7 +199,6 @@ class UseCasesTest {
      * Tests ImportIdentityFromNsecUseCase normalizes nsec input.
      */
     @Test
-
     @JsName("importidentityfromnsecusecaseNormalizesNsecWithExtraSpaces")
     fun `ImportIdentityFromNsecUseCase normalizes nsec with extra spaces`() =
         runTest {
@@ -229,7 +220,6 @@ class UseCasesTest {
      * Tests ImportIdentityFromNsecUseCase rejects empty label.
      */
     @Test
-
     @JsName("importidentityfromnsecusecaseRejectsEmptyLabel")
     fun `ImportIdentityFromNsecUseCase rejects empty label`() =
         runTest {
@@ -250,7 +240,6 @@ class UseCasesTest {
      * Tests ImportIdentityFromNsecUseCase rejects invalid nsec format.
      */
     @Test
-
     @JsName("importidentityfromnsecusecaseRejectsInvalidNsecFormat")
     fun `ImportIdentityFromNsecUseCase rejects invalid nsec format`() =
         runTest {
@@ -273,7 +262,6 @@ class UseCasesTest {
      * Tests SignNostrEventUseCase signs event successfully.
      */
     @Test
-
     @JsName("signnostreventusecaseSignsNostrEvent")
     fun `SignNostrEventUseCase signs Nostr event`() =
         runTest {
@@ -307,7 +295,6 @@ class UseCasesTest {
      * Tests SignNostrEventUseCase validates event pubkey matches identity.
      */
     @Test
-
     @JsName("signnostreventusecaseRejectsMismatchedPubkey")
     fun `SignNostrEventUseCase rejects mismatched pubkey`() =
         runTest {
@@ -337,7 +324,6 @@ class UseCasesTest {
      * Tests SignNostrEventUseCase convenience method for text notes.
      */
     @Test
-
     @JsName("signnostreventusecaseSigntextnoteCreatesAndSignsTextNote")
     fun `SignNostrEventUseCase signTextNote creates and signs text note`() =
         runTest {
@@ -360,7 +346,6 @@ class UseCasesTest {
      * Tests that signed events can be verified.
      */
     @Test
-
     @JsName("signednostreventVerifiesCorrectly")
     fun `SignedNostrEvent verifies correctly`() =
         runTest {
@@ -384,7 +369,6 @@ class UseCasesTest {
      * Tests that tampered events fail verification.
      */
     @Test
-
     @JsName("signednostreventWithTamperedContentFailsVerification")
     fun `SignedNostrEvent with tampered content fails verification`() =
         runTest {

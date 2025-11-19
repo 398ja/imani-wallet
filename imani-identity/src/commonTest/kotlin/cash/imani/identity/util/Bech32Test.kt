@@ -16,7 +16,6 @@ class Bech32Test {
      * Tests basic Bech32 encoding and decoding round-trip.
      */
     @Test
-
     @JsName("encodeAndDecodeRoundTrip")
     fun `encode and decode round trip`() {
         val hrp = "test"
@@ -33,7 +32,6 @@ class Bech32Test {
      * Tests nsec encoding and decoding.
      */
     @Test
-
     @JsName("encodensecAndDecodensecRoundTrip")
     fun `encodeNsec and decodeNsec round trip`() {
         val privateKey = ByteArray(32) { i -> (i * 7).toByte() }
@@ -49,7 +47,6 @@ class Bech32Test {
      * Tests npub encoding and decoding.
      */
     @Test
-
     @JsName("encodenpubAndDecodenpubRoundTrip")
     fun `encodeNpub and decodeNpub round trip`() {
         val publicKey = ByteArray(32) { i -> (i * 13).toByte() }
@@ -65,7 +62,6 @@ class Bech32Test {
      * Tests decodeNsec rejects npub.
      */
     @Test
-
     @JsName("decodensecRejectsNpubFormat")
     fun `decodeNsec rejects npub format`() {
         val publicKey = ByteArray(32) { i -> i.toByte() }
@@ -80,7 +76,6 @@ class Bech32Test {
      * Tests decodeNpub rejects nsec.
      */
     @Test
-
     @JsName("decodenpubRejectsNsecFormat")
     fun `decodeNpub rejects nsec format`() {
         val privateKey = ByteArray(32) { i -> i.toByte() }
@@ -95,7 +90,6 @@ class Bech32Test {
      * Tests decode rejects invalid checksum.
      */
     @Test
-
     @JsName("decodeRejectsInvalidChecksum")
     fun `decode rejects invalid checksum`() {
         val privateKey = ByteArray(32) { i -> i.toByte() }
@@ -113,7 +107,6 @@ class Bech32Test {
      * Tests encode rejects empty data.
      */
     @Test
-
     @JsName("encodeRejectsEmptyData")
     fun `encode rejects empty data`() {
         assertFailsWith<IllegalArgumentException> {
@@ -125,7 +118,6 @@ class Bech32Test {
      * Tests encodeNsec rejects wrong size private key.
      */
     @Test
-
     @JsName("encodensecRejectsNon32BytePrivateKey")
     fun `encodeNsec rejects non-32-byte private key`() {
         assertFailsWith<IllegalArgumentException> {
@@ -141,7 +133,6 @@ class Bech32Test {
      * Tests encodeNpub rejects wrong size public key.
      */
     @Test
-
     @JsName("encodenpubRejectsNon32BytePublicKey")
     fun `encodeNpub rejects non-32-byte public key`() {
         assertFailsWith<IllegalArgumentException> {
@@ -160,7 +151,6 @@ class Bech32Test {
      * must be the same case. The decode function converts to lowercase internally.
      */
     @Test
-
     @JsName("decodeHandlesLowercaseInputCorrectly")
     fun `decode handles lowercase input correctly`() {
         val privateKey = ByteArray(32) { i -> i.toByte() }
@@ -180,7 +170,6 @@ class Bech32Test {
      * This verifies compatibility with standard Nostr implementations.
      */
     @Test
-
     @JsName("decodeKnownNostrNsecTestVector")
     fun `decode known Nostr nsec test vector`() {
         // Example nsec from Nostr documentation
@@ -196,7 +185,6 @@ class Bech32Test {
      * Tests known Nostr test vector for npub.
      */
     @Test
-
     @JsName("decodeKnownNostrNpubTestVector")
     fun `decode known Nostr npub test vector`() {
         // Example npub from Nostr documentation

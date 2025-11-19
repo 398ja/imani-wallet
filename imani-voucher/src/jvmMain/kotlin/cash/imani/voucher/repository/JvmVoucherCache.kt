@@ -140,7 +140,8 @@ class JvmVoucherCache : VoucherCacheRepository {
         return mapOf(
             "size" to vouchers.size,
             "lastSyncTime" to lastSync,
-            "estimatedMemoryKB" to (vouchers.size * 2), // Rough estimate: ~2KB per voucher
+            // Rough estimate: ~2KB per voucher
+            "estimatedMemoryKB" to (vouchers.size * 2),
         )
     }
 

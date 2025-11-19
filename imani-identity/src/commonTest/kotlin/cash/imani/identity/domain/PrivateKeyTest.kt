@@ -18,7 +18,6 @@ class PrivateKeyTest {
      * per secp256k1 standard.
      */
     @Test
-
     @JsName("constructorAcceptsValid32ByteKey")
     fun `constructor accepts valid 32-byte key`() {
         // Given: Valid 32-byte array
@@ -36,7 +35,6 @@ class PrivateKeyTest {
      * 32 bytes to ensure cryptographic validity.
      */
     @Test
-
     @JsName("constructorRejectsKeyShorterThan32Bytes")
     fun `constructor rejects key shorter than 32 bytes`() {
         // Given: 31-byte array (too short)
@@ -54,7 +52,6 @@ class PrivateKeyTest {
      * 32 bytes to maintain secp256k1 standard compliance.
      */
     @Test
-
     @JsName("constructorRejectsKeyLongerThan32Bytes")
     fun `constructor rejects key longer than 32 bytes`() {
         // Given: 33-byte array (too long)
@@ -72,7 +69,6 @@ class PrivateKeyTest {
      * with correct length (64 characters for 32 bytes).
      */
     @Test
-
     @JsName("tohexConvertsBytesToHexString")
     fun `toHex converts bytes to hex string`() {
         // Given: PrivateKey with known byte pattern
@@ -92,7 +88,6 @@ class PrivateKeyTest {
      * valid hex string, enabling deserialization.
      */
     @Test
-
     @JsName("fromhexCreatesPrivatekeyFromHexString")
     fun `fromHex creates PrivateKey from hex string`() {
         // Given: Valid 64-character hex string
@@ -111,7 +106,6 @@ class PrivateKeyTest {
      * to prevent creation of invalid keys.
      */
     @Test
-
     @JsName("fromhexRejectsHexStringShorterThan64Characters")
     fun `fromHex rejects hex string shorter than 64 characters`() {
         // Given: Hex string too short (63 characters)
@@ -127,7 +121,6 @@ class PrivateKeyTest {
      * to maintain strict validation.
      */
     @Test
-
     @JsName("fromhexRejectsHexStringLongerThan64Characters")
     fun `fromHex rejects hex string longer than 64 characters`() {
         // Given: Hex string too long (65 characters)
@@ -143,7 +136,6 @@ class PrivateKeyTest {
      * preventing external modification of sensitive key material.
      */
     @Test
-
     @JsName("getrawbytesReturnsCopyOfBytes")
     fun `getRawBytes returns copy of bytes`() {
         // Given: PrivateKey with known byte values
@@ -164,7 +156,6 @@ class PrivateKeyTest {
      * maintaining API compatibility.
      */
     @Test
-
     @JsName("rawdataIsAliasForGetrawbytes")
     fun `rawData is alias for getRawBytes`() {
         // Given: PrivateKey with byte data
@@ -181,7 +172,6 @@ class PrivateKeyTest {
      * for validation and compatibility checks.
      */
     @Test
-
     @JsName("lengthReturns32")
     fun `length returns 32`() {
         // Given: PrivateKey instance
@@ -199,7 +189,6 @@ class PrivateKeyTest {
      * preventing key material from remaining in memory.
      */
     @Test
-
     @JsName("clearZerosOutTheKeyBytes")
     fun `clear zeros out the key bytes`() {
         // Given: PrivateKey with non-zero bytes
@@ -219,7 +208,6 @@ class PrivateKeyTest {
      * providing safe debug output for sensitive data.
      */
     @Test
-
     @JsName("tostringNeverExposesTheKey")
     fun `toString never exposes the key`() {
         // Given: PrivateKey with known byte pattern
@@ -238,7 +226,6 @@ class PrivateKeyTest {
      * enabling value-based equality for keys.
      */
     @Test
-
     @JsName("equalsComparesByteContent")
     fun `equals compares byte content`() {
         // Given: Multiple keys with same and different byte content
@@ -261,7 +248,6 @@ class PrivateKeyTest {
      * behavior in hash-based collections.
      */
     @Test
-
     @JsName("hashcodeIsBasedOnByteContent")
     fun `hashCode is based on byte content`() {
         // Given: Two keys with identical byte content
