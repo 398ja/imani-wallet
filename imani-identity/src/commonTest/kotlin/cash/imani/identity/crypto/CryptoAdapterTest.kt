@@ -1,5 +1,6 @@
 package cash.imani.identity.crypto
 
+import kotlin.js.JsName
 import cash.imani.identity.util.toHex
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -23,6 +24,8 @@ class CryptoAdapterTest {
      * Tests that generateRandomBytes produces non-deterministic output.
      */
     @Test
+
+    @JsName("generaterandombytesProducesDifferentValuesOnSuccessiveCalls")
     fun `generateRandomBytes produces different values on successive calls`() =
         runTest {
             // Note: This test uses a mock adapter since we can't run actual
@@ -41,6 +44,8 @@ class CryptoAdapterTest {
      * Tests that generateRandomBytes respects the requested length.
      */
     @Test
+
+    @JsName("generaterandombytesReturnsCorrectLength")
     fun `generateRandomBytes returns correct length`() =
         runTest {
             val adapter = MockCryptoAdapter()
@@ -60,6 +65,8 @@ class CryptoAdapterTest {
      * Tests that SHA-256 produces consistent 32-byte hashes.
      */
     @Test
+
+    @JsName("sha256ProducesConsistent32ByteHash")
     fun `sha256 produces consistent 32-byte hash`() =
         runTest {
             val adapter = MockCryptoAdapter()
@@ -80,6 +87,8 @@ class CryptoAdapterTest {
      * Tests that SHA-256 produces different hashes for different inputs.
      */
     @Test
+
+    @JsName("sha256ProducesDifferentHashesForDifferentInputs")
     fun `sha256 produces different hashes for different inputs`() =
         runTest {
             val adapter = MockCryptoAdapter()
@@ -100,6 +109,8 @@ class CryptoAdapterTest {
      * Tests that keypair generation produces valid 32-byte keys.
      */
     @Test
+
+    @JsName("generatekeypairProduces32ByteKeys")
     fun `generateKeypair produces 32-byte keys`() =
         runTest {
             val adapter = MockCryptoAdapter()
@@ -116,6 +127,8 @@ class CryptoAdapterTest {
      * Tests that successive keypair generations produce different keys.
      */
     @Test
+
+    @JsName("generatekeypairProducesUniqueKeys")
     fun `generateKeypair produces unique keys`() =
         runTest {
             val adapter = MockCryptoAdapter()
@@ -133,6 +146,8 @@ class CryptoAdapterTest {
      * Tests that Schnorr signature verification succeeds for valid signatures.
      */
     @Test
+
+    @JsName("schnorrsignAndSchnorrverifyWorkCorrectly")
     fun `schnorrSign and schnorrVerify work correctly`() =
         runTest {
             val adapter = MockCryptoAdapter()
@@ -152,6 +167,8 @@ class CryptoAdapterTest {
      * Tests that Schnorr signature verification fails for wrong message.
      */
     @Test
+
+    @JsName("schnorrverifyFailsForWrongMessage")
     fun `schnorrVerify fails for wrong message`() =
         runTest {
             val adapter = MockCryptoAdapter()
@@ -172,6 +189,8 @@ class CryptoAdapterTest {
      * Tests that Schnorr signature verification fails for wrong public key.
      */
     @Test
+
+    @JsName("schnorrverifyFailsForWrongPublicKey")
     fun `schnorrVerify fails for wrong public key`() =
         runTest {
             val adapter = MockCryptoAdapter()

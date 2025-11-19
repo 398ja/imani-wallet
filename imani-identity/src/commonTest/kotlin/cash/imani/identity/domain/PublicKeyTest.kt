@@ -1,5 +1,6 @@
 package cash.imani.identity.domain
 
+import kotlin.js.JsName
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -16,6 +17,8 @@ class PublicKeyTest {
      * 32 bytes per Nostr standard, rejecting shorter or longer keys.
      */
     @Test
+
+    @JsName("constructorAcceptsValid32ByteKey")
     fun `constructor accepts valid 32-byte key`() {
         // Given: Valid 32-byte array
         val validBytes = ByteArray(32) { it.toByte() }
@@ -32,6 +35,8 @@ class PublicKeyTest {
      * 32 bytes to ensure cryptographic validity.
      */
     @Test
+
+    @JsName("constructorRejectsKeyShorterThan32Bytes")
     fun `constructor rejects key shorter than 32 bytes`() {
         // Given: 31-byte array (too short)
         val tooShort = ByteArray(31) { it.toByte() }
@@ -48,6 +53,8 @@ class PublicKeyTest {
      * 32 bytes to maintain Nostr standard compliance.
      */
     @Test
+
+    @JsName("constructorRejectsKeyLongerThan32Bytes")
     fun `constructor rejects key longer than 32 bytes`() {
         // Given: 33-byte array (too long)
         val tooLong = ByteArray(33) { it.toByte() }
@@ -64,6 +71,8 @@ class PublicKeyTest {
      * with correct length (64 characters for 32 bytes).
      */
     @Test
+
+    @JsName("tohexConvertsBytesToHexString")
     fun `toHex converts bytes to hex string`() {
         // Given: PublicKey with known byte pattern
         val bytes = ByteArray(32) { (it % 16).toByte() }
@@ -82,6 +91,8 @@ class PublicKeyTest {
      * valid hex string, enabling deserialization.
      */
     @Test
+
+    @JsName("fromhexCreatesPublickeyFromHexString")
     fun `fromHex creates PublicKey from hex string`() {
         // Given: Valid 64-character hex string
         val hex = "0123456789abcdef".repeat(4)
@@ -99,6 +110,8 @@ class PublicKeyTest {
      * to prevent creation of invalid keys.
      */
     @Test
+
+    @JsName("fromhexRejectsHexStringShorterThan64Characters")
     fun `fromHex rejects hex string shorter than 64 characters`() {
         // Given: Hex string too short (63 characters)
         // When: Creating PublicKey from hex
@@ -113,6 +126,8 @@ class PublicKeyTest {
      * to maintain strict validation.
      */
     @Test
+
+    @JsName("fromhexRejectsHexStringLongerThan64Characters")
     fun `fromHex rejects hex string longer than 64 characters`() {
         // Given: Hex string too long (65 characters)
         // When: Creating PublicKey from hex
@@ -127,6 +142,8 @@ class PublicKeyTest {
      * preventing external modification of key material.
      */
     @Test
+
+    @JsName("getrawbytesReturnsCopyOfBytes")
     fun `getRawBytes returns copy of bytes`() {
         // Given: PublicKey with known byte values
         val original = ByteArray(32) { it.toByte() }
@@ -146,6 +163,8 @@ class PublicKeyTest {
      * maintaining API compatibility.
      */
     @Test
+
+    @JsName("rawdataIsAliasForGetrawbytes")
     fun `rawData is alias for getRawBytes`() {
         // Given: PublicKey with byte data
         val bytes = ByteArray(32) { it.toByte() }
@@ -161,6 +180,8 @@ class PublicKeyTest {
      * for validation and compatibility checks.
      */
     @Test
+
+    @JsName("lengthReturns32")
     fun `length returns 32`() {
         // Given: PublicKey instance
         val publicKey = PublicKey(ByteArray(32))
@@ -177,6 +198,8 @@ class PublicKeyTest {
      * enabling value-based equality for keys.
      */
     @Test
+
+    @JsName("equalsComparesByteContent")
     fun `equals compares byte content`() {
         // Given: Multiple keys with same and different byte content
         val bytes1 = ByteArray(32) { it.toByte() }
@@ -198,6 +221,8 @@ class PublicKeyTest {
      * behavior in hash-based collections.
      */
     @Test
+
+    @JsName("hashcodeIsBasedOnByteContent")
     fun `hashCode is based on byte content`() {
         // Given: Two keys with identical byte content
         val bytes1 = ByteArray(32) { it.toByte() }
@@ -216,6 +241,8 @@ class PublicKeyTest {
      * exposing full key, showing truncated hex representation.
      */
     @Test
+
+    @JsName("tostringShowsTruncatedHexForDebugging")
     fun `toString shows truncated hex for debugging`() {
         // Given: PublicKey with known byte pattern
         val publicKey = PublicKey(ByteArray(32) { 0xff.toByte() })

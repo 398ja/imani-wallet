@@ -1,5 +1,6 @@
 package cash.imani.identity.domain
 
+import kotlin.js.JsName
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -17,6 +18,8 @@ class PrivateKeyTest {
      * per secp256k1 standard.
      */
     @Test
+
+    @JsName("constructorAcceptsValid32ByteKey")
     fun `constructor accepts valid 32-byte key`() {
         // Given: Valid 32-byte array
         val validBytes = ByteArray(32) { it.toByte() }
@@ -33,6 +36,8 @@ class PrivateKeyTest {
      * 32 bytes to ensure cryptographic validity.
      */
     @Test
+
+    @JsName("constructorRejectsKeyShorterThan32Bytes")
     fun `constructor rejects key shorter than 32 bytes`() {
         // Given: 31-byte array (too short)
         val tooShort = ByteArray(31) { it.toByte() }
@@ -49,6 +54,8 @@ class PrivateKeyTest {
      * 32 bytes to maintain secp256k1 standard compliance.
      */
     @Test
+
+    @JsName("constructorRejectsKeyLongerThan32Bytes")
     fun `constructor rejects key longer than 32 bytes`() {
         // Given: 33-byte array (too long)
         val tooLong = ByteArray(33) { it.toByte() }
@@ -65,6 +72,8 @@ class PrivateKeyTest {
      * with correct length (64 characters for 32 bytes).
      */
     @Test
+
+    @JsName("tohexConvertsBytesToHexString")
     fun `toHex converts bytes to hex string`() {
         // Given: PrivateKey with known byte pattern
         val bytes = ByteArray(32) { (it % 16).toByte() }
@@ -83,6 +92,8 @@ class PrivateKeyTest {
      * valid hex string, enabling deserialization.
      */
     @Test
+
+    @JsName("fromhexCreatesPrivatekeyFromHexString")
     fun `fromHex creates PrivateKey from hex string`() {
         // Given: Valid 64-character hex string
         val hex = "0123456789abcdef".repeat(4)
@@ -100,6 +111,8 @@ class PrivateKeyTest {
      * to prevent creation of invalid keys.
      */
     @Test
+
+    @JsName("fromhexRejectsHexStringShorterThan64Characters")
     fun `fromHex rejects hex string shorter than 64 characters`() {
         // Given: Hex string too short (63 characters)
         // When: Creating PrivateKey from hex
@@ -114,6 +127,8 @@ class PrivateKeyTest {
      * to maintain strict validation.
      */
     @Test
+
+    @JsName("fromhexRejectsHexStringLongerThan64Characters")
     fun `fromHex rejects hex string longer than 64 characters`() {
         // Given: Hex string too long (65 characters)
         // When: Creating PrivateKey from hex
@@ -128,6 +143,8 @@ class PrivateKeyTest {
      * preventing external modification of sensitive key material.
      */
     @Test
+
+    @JsName("getrawbytesReturnsCopyOfBytes")
     fun `getRawBytes returns copy of bytes`() {
         // Given: PrivateKey with known byte values
         val original = ByteArray(32) { it.toByte() }
@@ -147,6 +164,8 @@ class PrivateKeyTest {
      * maintaining API compatibility.
      */
     @Test
+
+    @JsName("rawdataIsAliasForGetrawbytes")
     fun `rawData is alias for getRawBytes`() {
         // Given: PrivateKey with byte data
         val bytes = ByteArray(32) { it.toByte() }
@@ -162,6 +181,8 @@ class PrivateKeyTest {
      * for validation and compatibility checks.
      */
     @Test
+
+    @JsName("lengthReturns32")
     fun `length returns 32`() {
         // Given: PrivateKey instance
         val privateKey = PrivateKey(ByteArray(32))
@@ -178,6 +199,8 @@ class PrivateKeyTest {
      * preventing key material from remaining in memory.
      */
     @Test
+
+    @JsName("clearZerosOutTheKeyBytes")
     fun `clear zeros out the key bytes`() {
         // Given: PrivateKey with non-zero bytes
         val bytes = ByteArray(32) { 0xff.toByte() }
@@ -196,6 +219,8 @@ class PrivateKeyTest {
      * providing safe debug output for sensitive data.
      */
     @Test
+
+    @JsName("tostringNeverExposesTheKey")
     fun `toString never exposes the key`() {
         // Given: PrivateKey with known byte pattern
         val privateKey = PrivateKey(ByteArray(32) { 0xff.toByte() })
@@ -213,6 +238,8 @@ class PrivateKeyTest {
      * enabling value-based equality for keys.
      */
     @Test
+
+    @JsName("equalsComparesByteContent")
     fun `equals compares byte content`() {
         // Given: Multiple keys with same and different byte content
         val bytes1 = ByteArray(32) { it.toByte() }
@@ -234,6 +261,8 @@ class PrivateKeyTest {
      * behavior in hash-based collections.
      */
     @Test
+
+    @JsName("hashcodeIsBasedOnByteContent")
     fun `hashCode is based on byte content`() {
         // Given: Two keys with identical byte content
         val bytes1 = ByteArray(32) { it.toByte() }

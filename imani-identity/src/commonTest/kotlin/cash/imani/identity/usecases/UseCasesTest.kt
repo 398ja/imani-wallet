@@ -1,9 +1,10 @@
 package cash.imani.identity.usecases
 
+import kotlin.js.JsName
 import cash.imani.identity.MockBip39Adapter
 import cash.imani.identity.MockCryptoAdapter
 import cash.imani.identity.domain.NostrEvent
-import cash.imani.identity.repository.JvmIdentityRepository
+import cash.imani.identity.repository.createIdentityRepository
 import cash.imani.identity.util.hexToBytes
 import kotlinx.coroutines.test.runTest
 import kotlinx.datetime.Clock
@@ -21,12 +22,14 @@ import kotlin.test.assertTrue
 class UseCasesTest {
     private val cryptoAdapter = MockCryptoAdapter()
     private val bip39Adapter = MockBip39Adapter()
-    private val repository = JvmIdentityRepository(cryptoAdapter, bip39Adapter)
+    private val repository = createIdentityRepository(cryptoAdapter, bip39Adapter)
 
     /**
      * Tests CreateIdentityUseCase success path.
      */
     @Test
+
+    @JsName("createidentityusecaseCreatesIdentityAndReturnsMnemonic")
     fun `CreateIdentityUseCase creates identity and returns mnemonic`() =
         runTest {
             // Given: CreateIdentityUseCase
@@ -50,6 +53,8 @@ class UseCasesTest {
      * Tests CreateIdentityUseCase rejects empty label.
      */
     @Test
+
+    @JsName("createidentityusecaseRejectsEmptyLabel")
     fun `CreateIdentityUseCase rejects empty label`() =
         runTest {
             // Given: CreateIdentityUseCase
@@ -66,6 +71,8 @@ class UseCasesTest {
      * Tests ListIdentitiesUseCase returns all identities.
      */
     @Test
+
+    @JsName("listidentitiesusecaseReturnsAllIdentities")
     fun `ListIdentitiesUseCase returns all identities`() =
         runTest {
             // Given: Repository with two identities
@@ -87,6 +94,8 @@ class UseCasesTest {
      * Tests ListIdentitiesUseCase filters inactive identities.
      */
     @Test
+
+    @JsName("listidentitiesusecaseCanFilterInactiveIdentities")
     fun `ListIdentitiesUseCase can filter inactive identities`() =
         runTest {
             // Given: Repository with identities
@@ -107,6 +116,8 @@ class UseCasesTest {
      * Tests ImportIdentityUseCase with valid mnemonic.
      */
     @Test
+
+    @JsName("importidentityusecaseImportsIdentityFromMnemonic")
     fun `ImportIdentityUseCase imports identity from mnemonic`() =
         runTest {
             // Given: Exported mnemonic from existing identity
@@ -128,6 +139,8 @@ class UseCasesTest {
      * Tests ImportIdentityUseCase normalizes mnemonic input.
      */
     @Test
+
+    @JsName("importidentityusecaseNormalizesMnemonicWithExtraSpaces")
     fun `ImportIdentityUseCase normalizes mnemonic with extra spaces`() =
         runTest {
             // Given: Exported mnemonic
@@ -148,6 +161,8 @@ class UseCasesTest {
      * Tests ImportIdentityUseCase rejects empty label.
      */
     @Test
+
+    @JsName("importidentityusecaseRejectsEmptyLabel")
     fun `ImportIdentityUseCase rejects empty label`() =
         runTest {
             // Given: Valid mnemonic
@@ -167,6 +182,8 @@ class UseCasesTest {
      * Tests ImportIdentityFromNsecUseCase imports identity from nsec.
      */
     @Test
+
+    @JsName("importidentityfromnsecusecaseImportsIdentityFromNsec")
     fun `ImportIdentityFromNsecUseCase imports identity from nsec`() =
         runTest {
             // Given: Create an identity and export its nsec
@@ -190,6 +207,8 @@ class UseCasesTest {
      * Tests ImportIdentityFromNsecUseCase normalizes nsec input.
      */
     @Test
+
+    @JsName("importidentityfromnsecusecaseNormalizesNsecWithExtraSpaces")
     fun `ImportIdentityFromNsecUseCase normalizes nsec with extra spaces`() =
         runTest {
             // Given: Export nsec
@@ -210,6 +229,8 @@ class UseCasesTest {
      * Tests ImportIdentityFromNsecUseCase rejects empty label.
      */
     @Test
+
+    @JsName("importidentityfromnsecusecaseRejectsEmptyLabel")
     fun `ImportIdentityFromNsecUseCase rejects empty label`() =
         runTest {
             // Given: Valid nsec
@@ -229,6 +250,8 @@ class UseCasesTest {
      * Tests ImportIdentityFromNsecUseCase rejects invalid nsec format.
      */
     @Test
+
+    @JsName("importidentityfromnsecusecaseRejectsInvalidNsecFormat")
     fun `ImportIdentityFromNsecUseCase rejects invalid nsec format`() =
         runTest {
             // Given: Invalid nsec (npub instead of nsec)
@@ -250,6 +273,8 @@ class UseCasesTest {
      * Tests SignNostrEventUseCase signs event successfully.
      */
     @Test
+
+    @JsName("signnostreventusecaseSignsNostrEvent")
     fun `SignNostrEventUseCase signs Nostr event`() =
         runTest {
             // Given: Identity and unsigned event
@@ -282,6 +307,8 @@ class UseCasesTest {
      * Tests SignNostrEventUseCase validates event pubkey matches identity.
      */
     @Test
+
+    @JsName("signnostreventusecaseRejectsMismatchedPubkey")
     fun `SignNostrEventUseCase rejects mismatched pubkey`() =
         runTest {
             // Given: Identity and event with different pubkey
@@ -310,6 +337,8 @@ class UseCasesTest {
      * Tests SignNostrEventUseCase convenience method for text notes.
      */
     @Test
+
+    @JsName("signnostreventusecaseSigntextnoteCreatesAndSignsTextNote")
     fun `SignNostrEventUseCase signTextNote creates and signs text note`() =
         runTest {
             // Given: Identity
@@ -331,6 +360,8 @@ class UseCasesTest {
      * Tests that signed events can be verified.
      */
     @Test
+
+    @JsName("signednostreventVerifiesCorrectly")
     fun `SignedNostrEvent verifies correctly`() =
         runTest {
             // Given: Signed event
@@ -353,6 +384,8 @@ class UseCasesTest {
      * Tests that tampered events fail verification.
      */
     @Test
+
+    @JsName("signednostreventWithTamperedContentFailsVerification")
     fun `SignedNostrEvent with tampered content fails verification`() =
         runTest {
             // Given: Signed event
