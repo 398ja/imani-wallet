@@ -7,6 +7,10 @@ kotlin {
     js(IR) {
         browser {
             testTask {
+                // Skip browser tests if Chrome is not available
+                // Browser testing will be addressed in Phase 4/5 with E2E tests
+                enabled = System.getenv("CHROME_BIN") != null || System.getenv("CI") == "true"
+
                 // Configure test runner to handle backtick test names
                 useKarma {
                     useChromeHeadless()

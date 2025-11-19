@@ -110,6 +110,9 @@ class VoucherFlowTest {
     @Test
     fun `multi-device sync via Nostr relay`() =
         runTest {
+            // Clear simulated relay to ensure clean test
+            cash.imani.voucher.nostr.NostrVoucherClient.clearRelayForTesting()
+
             // Arrange - Device 1
             val device1 =
                 createNostrVoucherRepository(

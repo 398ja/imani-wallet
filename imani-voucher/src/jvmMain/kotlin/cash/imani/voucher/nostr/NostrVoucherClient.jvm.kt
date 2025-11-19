@@ -24,8 +24,22 @@ import kotlinx.serialization.json.Json
 actual class NostrVoucherClient(
     private val relayUrls: List<String>,
 ) {
-    // Temporary in-memory storage for Phase 2
-    private val voucherEvents = mutableMapOf<String, NostrEvent>()
+    companion object {
+        // Shared storage across all instances to simulate a real Nostr relay
+        // In a real implementation, this would be the actual Nostr relay
+        private val sharedVoucherEvents = mutableMapOf<String, NostrEvent>()
+
+        /**
+         * Clear the simulated relay storage (for testing only).
+         * In production, this would not be exposed as you can't clear a real Nostr relay.
+         */
+        fun clearRelayForTesting() {
+            sharedVoucherEvents.clear()
+        }
+    }
+
+    // Access shared storage (simulates all clients connecting to the same relay)
+    private val voucherEvents: MutableMap<String, NostrEvent> = sharedVoucherEvents
 
     actual suspend fun publishVoucher(voucher: StoredVoucher): Result<Unit> =
         withContext(Dispatchers.IO) {
