@@ -496,9 +496,9 @@ robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectr
 
 | ID | Task | Size | Status | Commit | Notes | Dependencies |
 |----|------|------|--------|--------|-------|--------------|
-| 4.1.1 | Android Application Module Creation | M (1d) | 📋 TODO | - | Create imani-android module, configure build.gradle.kts | Phase 3 complete |
-| 4.1.2 | Android Manifest and Application Class | S (0.5d) | 📋 TODO | - | AndroidManifest.xml, ImaniApplication.kt | 4.1.1 |
-| 4.1.3 | Version Catalog Updates | S (0.5d) | 📋 TODO | - | Add Android dependencies to version catalog | 4.1.1 |
+| 4.1.1 | Android Application Module Creation | M (1d) | ✅ DONE | afaa7b2 | Created complete Android module with KMP layout, build config, dependencies | Phase 3 complete |
+| 4.1.2 | Android Manifest and Application Class | S (0.5d) | ✅ DONE | afaa7b2 | AndroidManifest.xml (permissions), ImaniApplication.kt (Koin), MainActivity.kt (stub) | 4.1.1 |
+| 4.1.3 | Version Catalog Updates | S (0.5d) | ✅ DONE | afaa7b2 | Added Android Gradle Plugin, AndroidX, Camera, Biometric, SQLDelight, Koin dependencies | 4.1.1 |
 
 [↑ Back to top](#imani-wallet---android-port-roadmap)
 
