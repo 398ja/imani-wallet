@@ -45,7 +45,8 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
      * Navigates to Settings tab.
      */
     fun gotoSettings() {
-        composeTestRule.onNodeWithText("Settings").performClick()
+        // Use onAllNodesWithText()[0] to handle multiple matches (nav tab + screen title)
+        composeTestRule.onAllNodesWithText("Settings")[0].performClick()
         composeTestRule.waitForIdle()
     }
 
@@ -53,7 +54,8 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
      * Navigates to Identities tab.
      */
     fun gotoIdentities() {
-        composeTestRule.onNodeWithText("Identities").performClick()
+        // Use onAllNodesWithText()[0] to handle multiple matches (nav tab + screen title)
+        composeTestRule.onAllNodesWithText("Identities")[0].performClick()
         composeTestRule.waitForIdle()
     }
 
@@ -61,7 +63,8 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
      * Navigates to Vouchers tab.
      */
     fun gotoVouchers() {
-        composeTestRule.onNodeWithText("Vouchers").performClick()
+        // Use onAllNodesWithText()[0] to handle multiple matches (nav tab + screen title)
+        composeTestRule.onAllNodesWithText("Vouchers")[0].performClick()
         composeTestRule.waitForIdle()
     }
 
@@ -77,7 +80,7 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
         waitForAppLoad()
 
         // Navigate to Identities tab if not already there
-        composeTestRule.onNodeWithText("Identities")
+        composeTestRule.onAllNodesWithText("Identities")[0]
             .performClick()
 
         composeTestRule.waitForIdle()
