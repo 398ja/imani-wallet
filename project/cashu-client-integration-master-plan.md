@@ -2,7 +2,7 @@
 
 > **Document Type**: Reference & How-To (Diátaxis)
 > **Purpose**: Comprehensive roadmap for integrating cashu-client into imani-wallet for both identity and voucher functionality
-> **Status**: ✅ Identity 77% Complete | 📋 Voucher Ready to Start (Marketplace Model)
+> **Status**: ✅ Identity 85% Complete | 📋 Voucher Ready to Start (Marketplace Model)
 > **Version**: 2.0.0
 > **Last Updated**: 2025-11-20
 
@@ -13,7 +13,7 @@
 1. [Executive Summary](#executive-summary)
 2. [Architecture Overview](#architecture-overview)
 3. [Integration Strategy](#integration-strategy)
-4. [Phase 1: Identity Integration (77% Complete)](#phase-1-identity-integration-77-complete)
+4. [Phase 1: Identity Integration (85% Complete)](#phase-1-identity-integration-85-complete)
 5. [Phase 2: Voucher Integration (Ready to Start)](#phase-2-voucher-integration-ready-to-start)
 6. [Complete Task Tracking](#complete-task-tracking)
 7. [Timeline & Dependencies](#timeline--dependencies)
@@ -32,7 +32,7 @@ Reuse **100% of cashu-client's production-tested code** on Android/JVM while mai
 
 **Two Integration Phases**:
 
-1. ✅ **Identity Module** (Phase 1) - 77% Complete
+1. ✅ **Identity Module** (Phase 1) - 85% Complete
    - Cryptography (secp256k1, Schnorr, SHA-256)
    - **Single Identity Model**: Register/Login UX (no multi-identity support)
    - **Simplified Key Management**: npub/nsec only (no mnemonic phrases)
@@ -168,13 +168,13 @@ imani-wallet/
 
 ---
 
-## Phase 1: Identity Integration (77% Complete)
+## Phase 1: Identity Integration (85% Complete)
 
 ### Overview
 
 **Goal**: Reuse cashu-client cryptography for identity management on Android/JVM.
 
-**Status**: 10/13 tasks complete (77%)
+**Status**: 11/13 tasks complete (85%)
 
 **What's Done**:
 - ✅ CryptoAdapter and Bip39Adapter interfaces
@@ -182,12 +182,14 @@ imani-wallet/
 - ✅ AndroidIdentityRepository with Keystore encryption
 - ✅ DI configuration with proper Context injection
 - ✅ Mnemonic storage in encrypted SharedPreferences
+- ✅ Mnemonic checkbox clickable (fixed dual handler issue)
 - ✅ 54 unit tests passing
+- ✅ 12/45 E2E tests passing
 
 **What's Left**:
-- 🔄 E2E test fixes (9/45 passing, checkbox interaction issue)
 - 📋 Additional unit tests for JvmCryptoAdapter
 - 📋 Integration tests for CreateIdentityUseCase
+- 🔍 Investigate identity creation failures in E2E tests (showing "Error" instead of mnemonic screen)
 
 ### Identity Tasks
 
@@ -203,12 +205,12 @@ imani-wallet/
 | **2.4** | Implement Mnemonic Storage | M (2d) | ✅ DONE | 2cf888d | 2.1 |
 | **3.1** | Fix E2E Test Fixtures | M (2d) | ✅ DONE | 2cf888d | 2.1 |
 | **3.2** | Fix UI Padding for FAB Visibility | S (1d) | ✅ DONE | 2cf888d | 3.1 |
-| **3.3** | Make Mnemonic Checkbox Clickable | M (2d) | 🔄 IN PROGRESS | Partial | 3.2 |
+| **3.3** | Make Mnemonic Checkbox Clickable | M (2d) | ✅ DONE | 73bcd94 | Fixed dual handler issue (Row clickable + Checkbox onCheckedChange=null). 12/45 E2E tests passing (up from 9). Remaining failures due to separate identity creation issues. | 3.2 |
 | **3.4** | Add Unit Tests for JvmCryptoAdapter | M (2d) | 📋 TODO | - | 1.2 |
 | **3.5** | Add Integration Tests for CreateIdentityUseCase | M (2d) | 📋 TODO | - | 2.1 |
 
-**Total Completed**: 10/13 tasks (77%)
-**Estimated Remaining**: 6 days
+**Total Completed**: 11/13 tasks (85%)
+**Estimated Remaining**: 4 days
 
 ---
 
@@ -549,9 +551,9 @@ class IssueVoucherUseCase(
 
 | Phase | Total Tasks | Complete | In Progress | TODO | % Complete |
 |-------|------------|----------|-------------|------|------------|
-| **Phase 1: Identity** | 13 | 10 | 1 | 2 | 77% |
+| **Phase 1: Identity** | 13 | 11 | 0 | 2 | 85% |
 | **Phase 2: Voucher (Marketplace)** | 18 | 0 | 0 | 18 | 0% |
-| **TOTAL** | 31 | 10 | 1 | 20 | 32% |
+| **TOTAL** | 31 | 11 | 0 | 20 | 35% |
 
 ### All Tasks (Chronological)
 
@@ -567,7 +569,7 @@ class IssueVoucherUseCase(
 | 8 | 1 | Implement Mnemonic Storage | M | ✅ DONE | 2cf888d | Encrypted prefs |
 | 9 | 1 | Fix E2E Test Fixtures | M | ✅ DONE | 2cf888d | Button selectors |
 | 10 | 1 | Fix UI Padding for FAB Visibility | S | ✅ DONE | 2cf888d | Box wrapper |
-| 11 | 1 | Make Mnemonic Checkbox Clickable | M | 🔄 IN PROGRESS | Partial | 36/45 tests timeout |
+| 11 | 1 | Make Mnemonic Checkbox Clickable | M | ✅ DONE | 73bcd94 | Fixed dual handler issue. 12/45 E2E passing |
 | 12 | 1 | Add Unit Tests for JvmCryptoAdapter | M | 📋 TODO | - | Schnorr, key gen |
 | 13 | 1 | Add Integration Tests for CreateIdentityUseCase | M | 📋 TODO | - | E2E identity creation |
 | 14 | 2 | Define VoucherAdapter Interface | M | 📋 TODO | - | KMP interface |
