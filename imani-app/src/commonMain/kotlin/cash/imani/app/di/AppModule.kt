@@ -18,9 +18,15 @@ import cash.imani.voucher.repository.ProofRepository
 import cash.imani.voucher.repository.VoucherRepository
 import cash.imani.voucher.repository.createProofRepository
 import cash.imani.voucher.repository.createVoucherRepository
+import cash.imani.voucher.nostr.NostrConfig
+import cash.imani.voucher.nostr.NostrVoucherClient
+import cash.imani.voucher.nostr.createNostrVoucherClient
 import cash.imani.voucher.usecases.CheckInvoicePaidUseCase
 import cash.imani.voucher.usecases.CreateLightningInvoiceUseCase
+import cash.imani.voucher.usecases.CreateOfferUseCase
+import cash.imani.voucher.usecases.DiscoverMerchantOffersUseCase
 import cash.imani.voucher.usecases.IssueVoucherUseCase
+import cash.imani.voucher.usecases.PublishOfferToNostrUseCase
 import cash.imani.voucher.usecases.RedeemVoucherUseCase
 import org.koin.dsl.module
 
@@ -39,6 +45,7 @@ import org.koin.dsl.module
  *
  * Phase 1: Identity module complete
  * Phase 2: Voucher module added (including Lightning integration - NUT-04)
+ * Task 2.2.5: Offer management use cases (Create, Publish, Discover)
  * Phase 3+: Split into feature modules
  */
 val appModule =
@@ -53,6 +60,9 @@ val appModule =
         // Repositories - Voucher
         single<ProofRepository> { createProofRepository() }
         single<VoucherRepository> { createVoucherRepository() }
+
+        // Nostr - Voucher and Offer Storage
+        single<NostrVoucherClient> { createNostrVoucherClient(NostrConfig.DEFAULT_RELAYS) }
 
         // HTTP Client
         single { createHttpClient() }
@@ -91,6 +101,23 @@ val appModule =
         single {
             CheckInvoicePaidUseCase(
                 mintApiClient = get(),
+            )
+        }
+
+        // Use Cases - Offer Management (Task 2.2.5)
+        single {
+            CreateOfferUseCase()
+        }
+        single {
+            PublishOfferToNostrUseCase(
+                identityRepository = get(),
+                cryptoAdapter = get(),
+                nostrClient = get(),
+            )
+        }
+        single {
+            DiscoverMerchantOffersUseCase(
+                nostrClient = get(),
             )
         }
 
