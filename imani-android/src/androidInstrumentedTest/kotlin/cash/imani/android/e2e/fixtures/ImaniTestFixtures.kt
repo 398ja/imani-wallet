@@ -98,22 +98,29 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
 
         composeTestRule.waitForIdle()
 
-        // Click "Create Identity" button
-        composeTestRule.onNodeWithText("Create Identity")
+        // Click "Create" button
+        composeTestRule.onNodeWithText("Create")
             .performClick()
 
-        // Wait for mnemonic screen or success
+        // Wait for mnemonic screen with backup checkbox
         composeTestRule.waitUntil(10000) {
-            composeTestRule.onAllNodesWithText("I've saved it")
-                .fetchSemanticsNodes().isNotEmpty() ||
-                composeTestRule.onAllNodesWithText("Identities")
-                    .fetchSemanticsNodes().isNotEmpty()
+            composeTestRule.onAllNodesWithText("I have securely backed up my recovery phrase")
+                .fetchSemanticsNodes().isNotEmpty()
         }
 
-        // If mnemonic screen appeared, click "I've saved it"
-        composeTestRule.onNodeWithText("I've saved it")
+        composeTestRule.waitForIdle()
+        delay(1000)
+
+        // The checkbox and text are in a Row - click anywhere in that row to toggle
+        composeTestRule.onNodeWithText("I have securely backed up my recovery phrase")
             .performClick()
-            .catch { /* Already past this screen */ }
+
+        composeTestRule.waitForIdle()
+        delay(200)
+
+        // Click "Done" button
+        composeTestRule.onNodeWithText("Done")
+            .performClick()
 
         composeTestRule.waitForIdle()
         delay(500)
@@ -330,8 +337,12 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
     fun clearAppData() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
 
-        // Clear SharedPreferences
+        // Clear all SharedPreferences that the app uses
         context.getSharedPreferences("imani_prefs", android.content.Context.MODE_PRIVATE)
+            .edit().clear().commit()
+
+        // Clear identity mnemonics (used by AndroidIdentityRepository)
+        context.getSharedPreferences("imani_identity", android.content.Context.MODE_PRIVATE)
             .edit().clear().commit()
 
         // Clear database

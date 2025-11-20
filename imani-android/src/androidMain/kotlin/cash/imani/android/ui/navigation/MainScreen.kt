@@ -1,6 +1,7 @@
 package cash.imani.android.ui.navigation
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CardGiftcard
@@ -114,24 +115,30 @@ fun MainScreen() {
                 }
 
                 // Reuse IdentityNavHost from imani-app (100% code reuse)
-                IdentityNavHost(
-                    viewModel = identityViewModel,
-                    navState = identityNavState,
-                )
+                // Wrap with padding to prevent FAB from being hidden by bottom nav
+                Box(modifier = Modifier.padding(paddingValues)) {
+                    IdentityNavHost(
+                        viewModel = identityViewModel,
+                        navState = identityNavState,
+                    )
+                }
             }
 
             NavigationScreen.Vouchers -> {
                 // Reuse VoucherNavHost with Voyager Navigator (100% code reuse)
-                Navigator(VoucherListScreenNav(voucherViewModel)) { navigator ->
-                    // Smart back button for Voyager-based navigation
-                    BackHandler(enabled = navigator.canPop || selectedIndex != 0) {
-                        when {
-                            navigator.canPop -> navigator.pop()
-                            selectedIndex != 0 -> selectedIndex = 0
+                // Wrap with padding to prevent FAB from being hidden by bottom nav
+                Box(modifier = Modifier.padding(paddingValues)) {
+                    Navigator(VoucherListScreenNav(voucherViewModel)) { navigator ->
+                        // Smart back button for Voyager-based navigation
+                        BackHandler(enabled = navigator.canPop || selectedIndex != 0) {
+                            when {
+                                navigator.canPop -> navigator.pop()
+                                selectedIndex != 0 -> selectedIndex = 0
+                            }
                         }
-                    }
 
-                    SlideTransition(navigator)
+                        SlideTransition(navigator)
+                    }
                 }
             }
 

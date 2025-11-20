@@ -1,5 +1,7 @@
 package cash.imani.android.repository
 
+import android.content.Context
+import android.content.SharedPreferences
 import app.cash.sqldelight.coroutines.asFlow
 import app.cash.sqldelight.coroutines.mapToList
 import app.cash.sqldelight.coroutines.mapToOneOrNull
@@ -26,20 +28,32 @@ import java.util.UUID
  * 2. Stores encrypted private keys via AndroidIdentityManager (Android Keystore)
  * 3. Persists identity metadata in SQLDelight database
  * 4. Generates identities using CryptoAdapter and Bip39Adapter
+ * 5. Stores encrypted mnemonics in SharedPreferences
  *
  * Code Reuse:
  * - Domain model: cash.imani.identity.domain.Identity (100% reused)
  * - Encryption: AndroidIdentityManager wraps Android Keystore
  * - Persistence: SQLDelight generated queries
  * - Crypto: Platform-specific CryptoAdapter and Bip39Adapter
+ *
+ * @param context Android application context for SharedPreferences access
  */
 class AndroidIdentityRepository(
+    private val context: Context,
     private val database: ImaniDatabase,
     private val identityManager: AndroidIdentityManager,
     private val cryptoAdapter: cash.imani.identity.crypto.CryptoAdapter,
     private val bip39Adapter: cash.imani.identity.crypto.Bip39Adapter,
 ) : IdentityRepository {
     private val queries = database.identityQueries
+
+    /**
+     * SharedPreferences for storing encrypted mnemonics.
+     * Uses default shared preferences to match standard Android pattern.
+     */
+    private val prefs: SharedPreferences by lazy {
+        context.getSharedPreferences("imani_identity", Context.MODE_PRIVATE)
+    }
 
     override suspend fun createIdentity(label: String): Result<Identity> =
         withContext(Dispatchers.IO) {
@@ -300,10 +314,6 @@ class AndroidIdentityRepository(
             )
 
         // Store in SharedPreferences
-        val prefs =
-            android.preference.PreferenceManager.getDefaultSharedPreferences(
-                org.koin.core.context.GlobalContext.get().get<android.content.Context>(),
-            )
         prefs.edit()
             .putString("encrypted_mnemonic_$identityId", encryptedMnemonic.toHex())
             .apply()
@@ -316,11 +326,6 @@ class AndroidIdentityRepository(
      * @return The decrypted mnemonic phrase, or null if not found
      */
     private fun retrieveMnemonic(identityId: String): String? {
-        val prefs =
-            android.preference.PreferenceManager.getDefaultSharedPreferences(
-                org.koin.core.context.GlobalContext.get().get<android.content.Context>(),
-            )
-
         val encryptedHex = prefs.getString("encrypted_mnemonic_$identityId", null) ?: return null
         val encryptedBytes = hexStringToByteArray(encryptedHex)
 

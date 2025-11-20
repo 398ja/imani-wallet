@@ -82,8 +82,9 @@ val appModule =
             )
         }
 
-        // ViewModels
-        single {
+        // ViewModels - use factory() instead of single() to create new instances
+        // per activity. This ensures ViewModel state is reset when the activity recreates.
+        factory {
             IdentityViewModel(
                 createIdentityUseCase = get(),
                 listIdentitiesUseCase = get(),
@@ -92,7 +93,7 @@ val appModule =
             )
         }
 
-        single {
+        factory {
             VoucherViewModel(
                 voucherRepository = get(),
                 issueVoucherUseCase = get(),

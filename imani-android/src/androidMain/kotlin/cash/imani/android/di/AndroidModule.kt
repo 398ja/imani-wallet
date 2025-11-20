@@ -72,6 +72,7 @@ val androidModule =
         // Repositories
         single<IdentityRepository> {
             AndroidIdentityRepository(
+                context = androidContext(),
                 database = get(),
                 identityManager = get(),
                 cryptoAdapter = get(),
