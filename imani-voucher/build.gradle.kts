@@ -65,7 +65,17 @@ kotlin {
                 // - SendService: Nostr backup/restore (NIP-17 + NIP-44)
                 // - TokenCodec: Cashu token encoding/decoding
                 // - NostrGatewayService: Nostr relay integration
-                implementation("xyz.tcheeric:wallet-core-app:1.2.0")
+                //
+                // Exclusions for Android compatibility:
+                // - Jakarta EE (jakarta.el.*): Android doesn't support Jakarta EE
+                // - Tomcat (tomcat-embed-*): Server-side dependency not needed on Android
+                // - BouncyCastle provider conflicts: Android has its own BouncyCastle version
+                implementation("xyz.tcheeric:wallet-core-app:1.2.0") {
+                    exclude(group = "jakarta.el", module = "jakarta.el-api")
+                    exclude(group = "org.apache.tomcat.embed", module = "tomcat-embed-el")
+                    exclude(group = "org.bouncycastle", module = "bcprov-jdk15to18")
+                    exclude(group = "org.bouncycastle", module = "bcprov-jdk18on")
+                }
             }
         }
     }
