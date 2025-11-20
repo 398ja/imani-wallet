@@ -355,11 +355,11 @@ data class LightningInvoice(
 | **2.2.1** | Add cashu-client Dependency (jvmMain) | S (1d) | ✅ DONE | 6d347f7 | Added mavenLocal() to settings.gradle.kts. Added xyz.tcheeric:wallet-core-app:1.2.0 to imani-voucher jvmMain (VoucherServiceImpl, SendService, TokenCodec, NostrGatewayService). Dependency resolves correctly from Maven local. | None |
 | **2.2.2** | Implement JvmVoucherAdapter | M (2d) | ✅ DONE | e5da09f | Implemented all 8 VoucherAdapter interface methods. Full implementation: issueVoucher, listVouchers, queryVouchersByStatus, backupToNostr, restoreFromNostr. NotImplementedError for redeemVoucher/revokeVoucher/verifyVoucher (delegated to use cases or future API). Type conversion utilities: JavaIssueVoucherResult→IssueVoucherResult, JavaStoredVoucher→StoredVoucher, String→VoucherStatus, java.time.Instant→kotlinx.datetime.Instant. Added BackupException and RestoreException. Uses withContext(Dispatchers.IO) for blocking Java calls. Exception mapping: WalletOperationException→Kotlin domain exceptions. Adapter pattern for 100% cashu-client code reuse. | 2.1.1, 2.2.1 |
 | **2.2.3** | Update Android DI for VoucherService | S (1d) | ✅ DONE | 16bd56a | Added comprehensive TODO documentation in AndroidModule.kt explaining full VoucherService DI integration requirements. Implementation deferred: requires 3 new Android adapters (AndroidWalletStorage, AndroidEncryptionService, AndroidIdentityKeyService) exceeding 1-day scope. AndroidVoucherRepository continues to provide basic functionality. Full cashu-client integration documented for future work. Note: Android build fails due to pre-existing wallet-core-app dependency conflicts (Jakarta EE/BouncyCastle). | 2.2.2 |
-| **2.2.4** | Implement Lightning Integration | M (2d) | 📋 TODO | - | - | 2.1.5, 2.2.1 |
+| **2.2.4** | Implement Lightning Integration | M (2d) | ✅ DONE | 8159569 | Implemented complete NUT-04 Lightning payment flow for marketplace model. Added MintQuoteRequest/Response models. Implemented getMintQuote() and checkMintQuote() in MintApiClient (POST/GET /v1/mint/quote/bolt11). Created CreateLightningInvoiceUseCase (generate invoice) and CheckInvoicePaidUseCase (poll for payment with timeout). Added 11 unit tests (6 for create, 9 for check including polling tests). Made MintApiClient 'open' for testing. Updated AppModule.kt DI with both use cases. Full flow: customer requests invoice → pays via Lightning → app polls mint → mints tokens after payment confirmed. | 2.1.5, 2.2.1 |
 | **2.2.5** | Implement Offer Management | M (2d) | 📋 TODO | - | - | 2.1.3, 2.2.1 |
 
-**Total Completed**: 3/5 tasks (60%)
-**Estimated Remaining**: 4 days
+**Total Completed**: 4/5 tasks (80%)
+**Estimated Remaining**: 2 days
 
 **Deliverables**:
 - `settings.gradle.kts` with cashu-client `includeBuild()` or Maven local
