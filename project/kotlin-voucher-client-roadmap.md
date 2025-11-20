@@ -123,15 +123,18 @@ To become the **trusted standard** for digital voucher management in communities
 ### Application Focus: Voucher Management
 
 **Core Use Cases**:
-1. **Identity Management**: Create, import, and manage Nostr identities for voucher signing
+1. **Identity Management**: Register/Login with single Nostr identity (npub/nsec, no mnemonic)
 2. **Issue Vouchers**: Create P2PK-locked vouchers backed by Cashu proofs
 3. **Share Vouchers**: Share via QR code, URL, or Nostr relay
-4. **Redeem Vouchers**: Validate and redeem received vouchers
-5. **Track Status**: Monitor voucher lifecycle (issued → delivered → redeemed)
+4. **P2P Transfers**: Send vouchers to other customers (CustA → CustB)
+5. **Redeem Vouchers**: Validate and redeem received vouchers (merchant POS or P2P)
+6. **Track Status**: Monitor voucher lifecycle (issued → delivered → redeemed)
+7. **Wallet Backup/Restore**: Encrypted Nostr backups (NIP-17 + NIP-44)
+8. **Lightning Payments**: Invoice generation and payment checking (marketplace model)
 
 **Non-Goals** (Defer to Future):
-- Full wallet management (mint/melt operations)
-- Lightning payments
+- Full wallet management (mint/melt operations beyond marketplace needs)
+- Multi-identity support (single identity per user)
 - Multi-unit support (focus on `sat` only initially)
 - Complex proof selection (use simple FIFO)
 

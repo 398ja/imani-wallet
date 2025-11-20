@@ -34,18 +34,20 @@ Reuse **100% of cashu-client's production-tested code** on Android/JVM while mai
 
 1. ✅ **Identity Module** (Phase 1) - 77% Complete
    - Cryptography (secp256k1, Schnorr, SHA-256)
-   - BIP39 mnemonic generation
-   - Identity management (create, import, sign)
+   - **Single Identity Model**: Register/Login UX (no multi-identity support)
+   - **Simplified Key Management**: npub/nsec only (no mnemonic phrases)
+   - Nostr event signing
    - Android Keystore integration
    - **Code Reuse**: ≥95% on Android, ~70% on web
 
 2. 📋 **Voucher Module** (Phase 2) - Ready to Start (**Marketplace Model**)
    - **Merchant Features**: Create voucher offers, POS redemption, sales dashboard
    - **Customer Features**: Purchase with Lightning, redeem vouchers, partial redemption
+   - **P2P Transfers**: Send vouchers to other customers (CustA → CustB)
    - **Core Voucher Operations**: Issue, redeem, verify (P2PK-locked)
    - **Payment Integration**: Lightning invoice generation and payment checking (NUT-04)
    - **Merchant Discovery**: Nostr-based (NIP-33 parameterized events)
-   - **Nostr Backup/Restore**: NIP-17 + NIP-44 encrypted backups
+   - **Wallet Backup/Restore**: Nostr-based encrypted backups (NIP-17 + NIP-44)
    - **Code Reuse**: ≥90% on Android (cashu-client VoucherService + extensions), ~70% on web
 
 ### Approach: Adapter Pattern
@@ -220,20 +222,25 @@ imani-wallet/
 
 **Architecture Decision**: ✅ Option A (Adapter Pattern) - Approved 2025-11-20
 
-**Business Model**: Merchant-Customer Marketplace
-- Merchants create voucher offers (e.g., "100 sat coffee voucher - 30 days")
-- Customers discover merchants via Nostr npub
-- Customers purchase vouchers with Lightning payments
-- Customers redeem at merchant POS (full or partial)
-- Decentralized discovery (no central marketplace)
+**Business Model**: Merchant-Customer Marketplace + P2P Transfers
+- **Merchant → Customer**: Merchants create offers, customers purchase with Lightning
+- **Customer → Customer**: P2P voucher transfers (CustA sends 100 sat voucher to CustB)
+- **Merchant Discovery**: Customers discover merchants via Nostr npub (scan QR or paste)
+- **Redemption**: Customers redeem at merchant POS (full or partial amounts)
+- **Decentralized**: No central marketplace, all data stored on Nostr relays
 
 **What We'll Build**:
-- 📋 **Core Voucher Operations** (VoucherAdapter): Issue, redeem, verify, backup/restore
+- 📋 **Core Voucher Operations** (VoucherAdapter): Issue, redeem, verify, transfer
+- 📋 **Wallet Backup/Restore** (cashu-client integration):
+  - Encrypted Nostr backups (NIP-17 + NIP-44)
+  - One-click restore from Nostr relays
+  - Automatic background sync
 - 📋 **Marketplace Extensions**:
   - VoucherOffer management (merchant templates stored on Nostr)
   - MerchantProfile management (identity + business metadata)
   - Lightning payment integration (invoice generation, payment checking)
   - Sales tracking (dashboard aggregations)
+- 📋 **P2P Transfer Operations**: Share vouchers via QR, URL, or Nostr DM
 - 📋 JvmVoucherAdapter wrapping cashu-client VoucherService
 - 📋 WebVoucherAdapter reusing existing use cases
 - 📋 Integration with cashu-client dependencies (SendService, TokenCodec, NostrGateway)

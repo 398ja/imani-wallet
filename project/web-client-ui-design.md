@@ -38,9 +38,11 @@
 **For Customers**:
 - Discover merchants via Nostr npub (decentralized)
 - Purchase vouchers with Lightning payments
+- **Send vouchers to other customers** (P2P transfers)
 - Hold vouchers from multiple merchants in one wallet
 - Redeem vouchers (full or partial redemption)
 - Track voucher balances and expiry dates
+- **Backup/restore wallet** via encrypted Nostr
 
 **Key Innovation**: **One app, dual roles** - any user can be both customer AND merchant.
 
@@ -48,8 +50,9 @@
 
 ### Business Model
 
-**Merchant-Customer Voucher Marketplace**:
+**Merchant-Customer Marketplace + P2P Transfers**:
 
+**Merchant → Customer**:
 1. **Merchant** creates voucher offer (e.g., "100 sat coffee voucher - valid 30 days")
 2. **Merchant** shares Nostr npub with customers (QR code, social media, in-store)
 3. **Customer** discovers merchant by npub, browses voucher offers
@@ -57,7 +60,13 @@
 5. **Customer** redeems voucher at merchant (scan QR code) → merchant accepts
 6. **Partial Redemption**: 100 sat voucher used for 30 sat purchase → 70 sat balance remains
 
-**Decentralized Discovery**: No central marketplace. Merchants share npubs, customers follow/search.
+**Customer → Customer** (P2P Transfers):
+1. **CustA** has a 100 sat voucher
+2. **CustA** shares voucher token with **CustB** (QR code, URL, or Nostr DM)
+3. **CustB** redeems the token → voucher added to CustB's wallet
+4. **CustA** can no longer use that voucher (single-use tokens)
+
+**Decentralized**: No central marketplace. Merchants share npubs, customers follow/search. All data on Nostr.
 
 **Payment Flow**: Lightning → Cashu token (voucher) → Redemption
 
@@ -848,13 +857,15 @@
 │  ⚙️ Settings                                                │
 ├────────────────────────────────────────────────────────────┤
 │                                                             │
-│  Identity                                                  │
+│  Identity (Single Account)                                 │
 │  ┌─────────────────────────────────────────────────────┐  │
 │  │ 👤 My Identity                                       │  │
-│  │ npub1abc...xyz                                       │  │
-│  │ [View Mnemonic] [Export Private Key]                │  │
+│  │ npub1abc...xyz                         [Copy npub]  │  │
+│  │ [View Private Key (nsec)]                           │  │
+│  │                                                      │  │
+│  │ ⚠️ Warning: Never share your nsec (private key)     │  │
 │  └─────────────────────────────────────────────────────┘  │
-│  [+ Create New Identity] [Import Identity]                │
+│  [Logout]                                                  │
 │                                                             │
 │  Payment                                                   │
 │  ┌─────────────────────────────────────────────────────┐  │
@@ -866,16 +877,19 @@
 │                                                             │
 │  Backup & Security                                         │
 │  ┌─────────────────────────────────────────────────────┐  │
-│  │ 🔐 Encrypted Backup                                  │  │
+│  │ 🔐 Encrypted Nostr Backup                           │  │
 │  │ Last backup: 2025-11-20 10:30 AM                    │  │
-│  │ [Backup to Nostr] [Export Wallet Data]              │  │
+│  │ Status: ✅ Synced                                    │  │
+│  │                                                      │  │
+│  │ [Backup Now] [Restore from Nostr]                   │  │
 │  └─────────────────────────────────────────────────────┘  │
-│  [Restore from Backup]                                     │
+│  [Export Wallet Data (JSON)]                               │
 │                                                             │
 │  App Settings                                              │
 │  • Currency Display: [USD ▼]                               │
 │  • Language: [English ▼]                                   │
 │  • Notifications: [Enabled ▼]                              │
+│  • Auto-backup: [Enabled ▼]                                │
 │                                                             │
 │  About                                                     │
 │  Version 1.0.0                                             │
@@ -883,21 +897,29 @@
 └────────────────────────────────────────────────────────────┘
 ```
 
+**Notes**:
+- **Single Identity Model**: One account per user (no multi-identity support)
+- **No Mnemonic**: Uses npub/nsec format only (Nostr standard)
+- **Automatic Backup**: Wallet state backed up to Nostr relays (NIP-17 + NIP-44)
+- **Restore**: One-click restore from Nostr on new device/browser
+
 ---
 
 ## User Flows
 
 ### Flow 1: First-Time Merchant Setup (<3 minutes)
 
-**Goal**: Coffee shop owner sets up merchant profile and creates first voucher offer
+**Goal**: Coffee shop owner registers, sets up merchant profile, creates first voucher offer
 
 ```
 1. User opens app (first time)
    ↓
-2. /settings → Create Identity
-   • Enter label: "My Coffee Shop"
-   • Generate keys → Display mnemonic
-   • User copies mnemonic (backup)
+2. Landing page → [Register]
+   • Generate new keys automatically
+   • Display npub (public key): "npub1abc...xyz"
+   • Display nsec (private key): "nsec1def...uvw"
+   • ⚠️ "Save your nsec securely - this is your login!"
+   • [Copy npub] [Copy nsec] [I've saved my keys →]
    ↓
 3. /merchant → Edit Profile
    • Business name: "Coffee Shop Downtown"
@@ -919,6 +941,8 @@
 6. Merchant shares npub on social media, in-store signage
    ✅ Setup complete (<3 minutes)
 ```
+
+**Note**: No mnemonic phrase - users save their nsec (private key) directly. Simpler UX.
 
 ---
 
@@ -1004,6 +1028,72 @@
    ↓
 4. Download CSV report (optional)
    ✅ Sales insights gained
+```
+
+---
+
+### Flow 5: P2P Voucher Transfer (<30 seconds)
+
+**Goal**: CustA sends 100 sat voucher to CustB (friend/family)
+
+```
+1. CustA: /shop → My Vouchers
+   • Has "Coffee Voucher - 100 sat"
+   ↓
+2. CustA: Tap voucher → [Send to Friend]
+   • Display QR code with token: "cashuA..."
+   • [Copy Token] [Share via...]
+   ↓
+3. CustA shares token with CustB
+   • Option 1: Show QR code, CustB scans
+   • Option 2: Copy token, send via WhatsApp/Telegram
+   • Option 3: Send via Nostr DM (future)
+   ↓
+4. CustB: Opens app → /shop/discover → [Redeem Token]
+   • Paste token: "cashuA..."
+   • [Redeem]
+   ↓
+5. Success!
+   • CustA: Voucher marked as transferred (no longer in wallet)
+   • CustB: Voucher added to wallet (100 sat balance)
+   • CustB can now redeem at merchant or send to someone else
+   ✅ P2P transfer complete (<30 seconds)
+```
+
+**Note**: P2P transfers work because Cashu tokens are bearer assets. Whoever has the token owns the voucher.
+
+---
+
+### Flow 6: Wallet Backup & Restore (<1 minute)
+
+**Goal**: User backs up wallet to Nostr, restores on new device
+
+**Backup**:
+```
+1. User: /settings → Backup & Security
+   ↓
+2. [Backup Now]
+   • Encrypts wallet state (NIP-44)
+   • Publishes to Nostr relays (NIP-17)
+   • Status: ✅ Synced
+   ✅ Backup complete
+```
+
+**Restore** (on new device):
+```
+1. New device: Open app → [Login]
+   • Enter nsec (private key)
+   ↓
+2. [Restore from Nostr]
+   • Queries Nostr relays for encrypted backups
+   • Decrypts with nsec
+   • Restores vouchers, proofs, merchant profile
+   ↓
+3. Success!
+   • All vouchers restored
+   • Merchant offers restored
+   • Ready to use
+   ✅ Restore complete (<1 minute)
 ```
 
 ---
