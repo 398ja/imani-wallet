@@ -221,7 +221,7 @@ imani-wallet/
 
 **Goal**: Build merchant-customer voucher marketplace on top of cashu-client VoucherService.
 
-**Status**: 5/18 tasks complete (28%) *(Extended from 12 tasks)*
+**Status**: 6/18 tasks complete (33%) *(Extended from 12 tasks)*
 
 **Architecture Decision**: ✅ Option A (Adapter Pattern) - Approved 2025-11-20
 
@@ -350,13 +350,16 @@ data class LightningInvoice(
 
 #### Sub-Phase 2.2: Android Implementation + Marketplace Extensions (7 days)
 
-| ID | Task | Size | Status | Dependencies |
-|----|------|------|--------|--------------|
-| **2.2.1** | Add cashu-client Dependency (jvmMain) | S (1d) | 📋 TODO | None |
-| **2.2.2** | Implement JvmVoucherAdapter | M (2d) | 📋 TODO | 2.1.1, 2.2.1 |
-| **2.2.3** | Update Android DI for VoucherService | S (1d) | 📋 TODO | 2.2.2 |
-| **2.2.4** | Implement Lightning Integration | M (2d) | 📋 TODO | 2.1.5, 2.2.1 |
-| **2.2.5** | Implement Offer Management | M (2d) | 📋 TODO | 2.1.3, 2.2.1 |
+| ID | Task | Size | Status | Commit | Notes | Dependencies |
+|----|------|------|--------|--------|-------|--------------|
+| **2.2.1** | Add cashu-client Dependency (jvmMain) | S (1d) | ✅ DONE | 6d347f7 | Added mavenLocal() to settings.gradle.kts. Added xyz.tcheeric:wallet-core-app:1.2.0 to imani-voucher jvmMain (VoucherServiceImpl, SendService, TokenCodec, NostrGatewayService). Dependency resolves correctly from Maven local. | None |
+| **2.2.2** | Implement JvmVoucherAdapter | M (2d) | 📋 TODO | - | - | 2.1.1, 2.2.1 |
+| **2.2.3** | Update Android DI for VoucherService | S (1d) | 📋 TODO | - | - | 2.2.2 |
+| **2.2.4** | Implement Lightning Integration | M (2d) | 📋 TODO | - | - | 2.1.5, 2.2.1 |
+| **2.2.5** | Implement Offer Management | M (2d) | 📋 TODO | - | - | 2.1.3, 2.2.1 |
+
+**Total Completed**: 1/5 tasks (20%)
+**Estimated Remaining**: 6 days
 
 **Deliverables**:
 - `settings.gradle.kts` with cashu-client `includeBuild()` or Maven local
