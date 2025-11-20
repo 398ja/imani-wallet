@@ -4,6 +4,7 @@
 > **Purpose**: Complete UI/UX specification for Imani Wallet web application
 > **Platform**: Web (Kotlin/JS + Compose Multiplatform)
 > **Design System**: Material 3 (Imani Brand Theme)
+> **Version**: 2.0.0
 > **Last Updated**: 2025-11-20
 
 ---
@@ -25,26 +26,50 @@
 
 ### Application Purpose
 
-**Imani Wallet** is a web-based self-custody digital voucher wallet that allows users to:
-- Create and manage Nostr identities
-- Issue cryptographically-signed vouchers
-- Share vouchers via QR codes or links
-- Redeem received vouchers
-- Track voucher lifecycle (issued → delivered → redeemed)
+**Imani Wallet** is a web-based self-custody digital voucher marketplace that enables:
+
+**For Merchants**:
+- Create and manage merchant profiles (Nostr-based)
+- Issue voucher offers (e.g., "100 sat coffee voucher")
+- Receive Lightning payments for voucher sales
+- Accept voucher redemptions (online and in-person POS)
+- Track sales and redemptions
+
+**For Customers**:
+- Discover merchants via Nostr npub (decentralized)
+- Purchase vouchers with Lightning payments
+- Hold vouchers from multiple merchants in one wallet
+- Redeem vouchers (full or partial redemption)
+- Track voucher balances and expiry dates
+
+**Key Innovation**: **One app, dual roles** - any user can be both customer AND merchant.
+
+---
+
+### Business Model
+
+**Merchant-Customer Voucher Marketplace**:
+
+1. **Merchant** creates voucher offer (e.g., "100 sat coffee voucher - valid 30 days")
+2. **Merchant** shares Nostr npub with customers (QR code, social media, in-store)
+3. **Customer** discovers merchant by npub, browses voucher offers
+4. **Customer** purchases voucher → pays Lightning invoice → receives Cashu token
+5. **Customer** redeems voucher at merchant (scan QR code) → merchant accepts
+6. **Partial Redemption**: 100 sat voucher used for 30 sat purchase → 70 sat balance remains
+
+**Decentralized Discovery**: No central marketplace. Merchants share npubs, customers follow/search.
+
+**Payment Flow**: Lightning → Cashu token (voucher) → Redemption
+
+---
 
 ### Target Users
 
-- **Primary**: Individuals sending digital gifts (birthdays, holidays, thanks)
-- **Secondary**: Small merchants issuing store credit
-- **Technical Level**: Non-technical users (simple interface) to power users (advanced features)
-
-### Key User Needs
-
-1. **Simple**: Create voucher in <3 clicks
-2. **Secure**: Self-custody (keys never leave browser)
-3. **Private**: No account required, no tracking
-4. **Trustworthy**: Visual verification of cryptographic signatures
-5. **Accessible**: Works on desktop and mobile web browsers
+| User Type | Primary Goal | Technical Level |
+|-----------|--------------|-----------------|
+| **Small Merchants** | Issue vouchers, boost customer loyalty, accept Lightning | Low (simple POS interface) |
+| **Customers** | Buy vouchers for discounts, support local businesses | Very low (familiar shopping UX) |
+| **Power Users** | Manage multiple merchant profiles, bulk operations | Medium (advanced features) |
 
 ---
 
@@ -54,816 +79,1374 @@
 
 **Color Palette**:
 - **Primary**: Deep Purple (#6B46C1) - Trust, wisdom
-- **Accent**: Gold (#F59E0B) - Value, warmth
 - **Secondary**: Deep Blue (#1E40AF) - Security
+- **Tertiary**: Gold (#F59E0B) - Value, warmth
 - **Background**: Cream (#FFFBEB) - Clarity
 - **Surface**: White (#FFFFFF)
-- **Error**: Red (#DC2626)
-- **Success**: Green (#10B981)
+- **Success**: Green (#10B981) - Voucher active, payment received
+- **Warning**: Orange (#F59E0B) - Expiring soon
+- **Error**: Red (#DC2626) - Expired, payment failed
 
 **Typography**:
 - **Headers**: Inter Bold, 24-40px
 - **Body**: Inter Regular, 14-16px
 - **Captions**: Inter Regular, 12px
-- **Monospace**: JetBrains Mono (for keys, tokens)
+- **Monospace**: JetBrains Mono (for Nostr npub, Lightning invoices)
 
-**Spacing**:
-- **Base Unit**: 8px
-- **Small**: 8px, **Medium**: 16px, **Large**: 24px, **XLarge**: 32px
+**Spacing**: 8dp base unit (8px, 16px, 24px, 32px)
 
 **Elevation** (Material 3):
-- **Cards**: 2dp (subtle shadow)
-- **FAB**: 6dp (prominent)
-- **Modals**: 8dp (overlay)
+- Cards: 2dp, FAB: 6dp, Modals: 8dp
+
+---
 
 ### UI Principles
 
-1. **Progressive Disclosure**: Show advanced features only when needed
-2. **Feedback First**: Every action shows immediate feedback (loading, success, error)
-3. **Offline-Capable**: All operations work offline, sync when online
-4. **Forgiving**: Easy undo, clear error messages, auto-save
-5. **Consistent**: Same patterns across all screens
+1. **Role Clarity**: Clear distinction between Customer Mode and Merchant Mode
+2. **Progressive Disclosure**: Advanced features hidden until needed
+3. **Instant Feedback**: Loading states, success animations, clear errors
+4. **Offline-First**: All operations work offline, sync when online
+5. **Self-Custody**: Keys never leave browser, Lightning invoices paid externally
+6. **Forgiving**: Easy undo, auto-save, recoverable actions
 
 ---
 
 ## Navigation Structure
 
-### Primary Navigation (Top App Bar)
+### Primary Navigation (Bottom Tabs)
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│  🔷 Imani Wallet          [Identities] [Vouchers] [⚙️]     │
+│                       Content Area                          │
+│                                                             │
+│                                                             │
+├────────────────────────────────────────────────────────────┤
+│   [🛒 Shop]        [💼 Merchant]        [⚙️ Settings]      │
 └────────────────────────────────────────────────────────────┘
 ```
 
-**Layout**:
-- **Left**: Logo + App Title
-- **Center**: Tab Navigation (Identities, Vouchers)
-- **Right**: Settings Icon
+**Tab Navigation**:
+- **Shop** (Customer Mode): Browse merchants, my vouchers, purchase history
+- **Merchant** (Merchant Mode): My profile, create offers, sales dashboard, POS
+- **Settings**: Identity management, payment settings, backup/restore
 
-**Behavior**:
-- Sticky header (always visible)
-- Active tab highlighted with purple underline
-- Smooth transitions between tabs
+**Why Bottom Tabs?**:
+- Mobile-friendly (thumb-reachable on phones)
+- Clear role separation (Shop vs. Merchant)
+- Familiar pattern (similar to WhatsApp, Instagram)
 
-### Tab Structure
+---
 
-| Tab | Icon | Route | Primary Action |
-|-----|------|-------|----------------|
-| **Identities** | 👤 | `/identities` | Create Identity (FAB) |
-| **Vouchers** | 🎁 | `/vouchers` | Issue Voucher (FAB) |
-| **Settings** | ⚙️ | `/settings` | N/A (config screen) |
+### Shop Tab (Customer Mode)
 
-### Navigation Flow
+**Default View**: My Vouchers (grouped by merchant)
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Imani Wallet (/)                          │
-│                         ↓                                    │
-│              Auto-redirect to /identities                    │
-└─────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│  🛒 Shop                                    [+ Add Merchant]│
+├────────────────────────────────────────────────────────────┤
+│                                                             │
+│  My Vouchers (3)                                           │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ ☕ Coffee Shop Downtown                              │  │
+│  │ Coffee Voucher       Balance: 70/100 sat  [Redeem] │  │
+│  │ Expires in 25 days                                  │  │
+│  └─────────────────────────────────────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ 🍕 Pizza Palace                                      │  │
+│  │ Large Pizza Voucher  Balance: 500/500 sat [Redeem] │  │
+│  │ Expires in 10 days                                  │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                             │
+│  Discover Merchants                                        │
+│  [Enter Nostr npub or scan QR code]                       │
+└────────────────────────────────────────────────────────────┘
+```
 
-┌──────────────┬──────────────┬──────────────────────────────┐
-│  Identities  │   Vouchers   │          Settings            │
-│  /identities │   /vouchers  │          /settings           │
-└──────┬───────┴──────┬───────┴──────────────────────────────┘
-       │              │
-       ↓              ↓
-┌──────────────┐  ┌──────────────────────────────────────────┐
-│ Create       │  │ Issue Voucher                            │
-│ /identities/ │  │ /vouchers/issue                          │
-│ create       │  │   ↓                                      │
-│   ↓          │  │ Share Voucher                            │
-│ View Mnemonic│  │ /vouchers/share/:id                      │
-│   ↓          │  │                                          │
-│ Back to List │  │ Redeem Voucher                           │
-└──────────────┘  │ /vouchers/redeem                         │
-                  │   ↓                                      │
-┌──────────────┐  │ Voucher Details                          │
-│ Import       │  │ /vouchers/:id                            │
-│ /identities/ │  └──────────────────────────────────────────┘
-│ import       │
-└──────────────┘
+**Sub-Screens**:
+- My Vouchers (default)
+- Discover Merchants (enter npub, scan QR)
+- Merchant Detail (view offers)
+- Purchase Voucher (Lightning payment)
+- Redeem Voucher (show QR or enter merchant npub)
+- Purchase History
+
+---
+
+### Merchant Tab (Merchant Mode)
+
+**Default View**: Sales Dashboard
+
+```
+┌────────────────────────────────────────────────────────────┐
+│  💼 Merchant                               [Edit Profile]  │
+├────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ☕ Coffee Shop Downtown                                   │
+│  npub1abc...xyz                            [Copy] [QR]     │
+│                                                             │
+│  Today's Sales                                             │
+│  ┌──────────────┬──────────────┬─────────────────┐        │
+│  │ 15 vouchers  │ 1,500 sat    │ 3 redemptions   │        │
+│  │ sold         │ revenue      │ today           │        │
+│  └──────────────┴──────────────┴─────────────────┘        │
+│                                                             │
+│  Active Offers (2)                     [+ Create Offer]    │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ Coffee Voucher - 100 sat - 30 days                  │  │
+│  │ 45 sold, 12 redeemed                      [Edit]    │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                             │
+│  [Scan Voucher to Redeem (POS)]                           │
+└────────────────────────────────────────────────────────────┘
+```
+
+**Sub-Screens**:
+- Sales Dashboard (default)
+- My Merchant Profile (edit name, logo, description)
+- Create Voucher Offer
+- Edit Voucher Offer
+- Sales Reports (daily, weekly, monthly)
+- Redeem Voucher (POS scanner)
+
+---
+
+### Settings Tab
+
+**Default View**: Identity + Payment Settings
+
+```
+┌────────────────────────────────────────────────────────────┐
+│  ⚙️ Settings                                                │
+├────────────────────────────────────────────────────────────┤
+│                                                             │
+│  Identity                                                  │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ 👤 My Identity                                       │  │
+│  │ npub1abc...xyz                       [View Mnemonic]│  │
+│  └─────────────────────────────────────────────────────┘  │
+│  [+ Create New Identity] [Import Identity]                │
+│                                                             │
+│  Payment                                                   │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ ⚡ Lightning Wallet                                  │  │
+│  │ Connected: Alby                          [Change]   │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                             │
+│  Backup & Security                                         │
+│  [Backup to Nostr] [Export Wallet Data]                   │
+│                                                             │
+│  About                                                     │
+│  Version 1.0.0 • Privacy Policy • Terms                   │
+└────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## Screen Specifications
 
-### 1. Identity List Screen (`/identities`)
+### 1. My Vouchers Screen (`/shop`)
 
-**Purpose**: View and manage Nostr identities used for voucher signing.
+**Purpose**: View all vouchers owned by the customer, grouped by merchant
 
 **Layout**:
 ```
 ┌────────────────────────────────────────────────────────────┐
-│  🔷 Imani Wallet    [Identities] Vouchers ⚙️               │
+│  🛒 Shop                                    [+ Add Merchant]│
 ├────────────────────────────────────────────────────────────┤
 │                                                             │
-│  Identities                                                │
+│  My Vouchers (3)                            [Sort ▼]       │
 │                                                             │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ 👤 My Main Identity                         ✅ Active│  │
-│  │ npub1abc...xyz (32 chars truncated)                 │  │
-│  │ Created 2 days ago · Last used 5 min ago            │  │
-│  └──────────────────────────────────────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ ☕ Coffee Shop Downtown                              │  │
+│  │ ─────────────────────────────────────────────────── │  │
+│  │ Coffee Voucher                                      │  │
+│  │ Balance: 70 / 100 sat                    [Redeem ›] │  │
+│  │ Expires: 2025-12-20 (25 days)                      │  │
+│  │                                                      │  │
+│  │ 🟢 Active                                            │  │
+│  └─────────────────────────────────────────────────────┘  │
 │                                                             │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ 👤 Store Account                           ⚪ Inactive│ │
-│  │ npub1def...uvw                                       │  │
-│  │ Created 30 days ago · Last used 25 days ago         │  │
-│  └──────────────────────────────────────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ 🍕 Pizza Palace                                      │  │
+│  │ ─────────────────────────────────────────────────── │  │
+│  │ Large Pizza Voucher                                 │  │
+│  │ Balance: 500 / 500 sat                   [Redeem ›] │  │
+│  │ Expires: 2025-11-30 (10 days)                      │  │
+│  │                                                      │  │
+│  │ 🟠 Expiring Soon                                     │  │
+│  └─────────────────────────────────────────────────────┘  │
 │                                                             │
-│  [Empty State if no identities]                            │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │         🔑                                           │  │
-│  │   No identities yet                                  │  │
-│  │   Create your first identity to start issuing       │  │
-│  │   vouchers                                           │  │
-│  │                                                       │  │
-│  │   [Create Identity Button]                           │  │
-│  └──────────────────────────────────────────────────────┘  │
-│                                                             │
-│                                                       [+]   │ FAB
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ No vouchers yet?                                     │  │
+│  │ Discover merchants and purchase your first voucher  │  │
+│  │                                                      │  │
+│  │               [Discover Merchants]                   │  │
+│  └─────────────────────────────────────────────────────┘  │
 └────────────────────────────────────────────────────────────┘
 ```
 
 **Components**:
-- **Identity Card** (per identity):
-  - Icon: 👤
-  - Label: User-defined name
-  - Status Badge: Active (green) / Inactive (gray)
-  - Npub: First 12 + last 8 chars (e.g., `npub1abc...xyz`)
-  - Metadata: Created date, Last used date
-  - Click: Navigate to identity details
-- **FAB**: "+" button → Navigate to `/identities/create`
-- **Empty State**: Shows when no identities exist
+- **Voucher Card**: Merchant logo, name, voucher type, balance, expiry, status badge
+- **Status Badges**: 🟢 Active, 🟠 Expiring Soon (<7 days), 🔴 Expired, ⚫ Redeemed
+- **Sort Options**: By expiry (default), by merchant, by balance
+- **Empty State**: Prompt to discover merchants
 
 **Actions**:
-- **Click Card**: View identity details (npub, private key export)
-- **Click FAB**: Create new identity
-- **Top-right Menu** (on card hover):
-  - Edit Label
-  - Export Mnemonic
-  - Delete Identity
-
-**Data Display**:
-- **Active Status**: Last used within 90 days
-- **Sort Order**: Active identities first, then by last used date
+- Tap voucher card → Voucher Details Screen
+- [+ Add Merchant] → Discover Merchants Screen
+- [Redeem] → Redeem Voucher Screen
 
 ---
 
-### 2. Create Identity Screen (`/identities/create`)
+### 2. Discover Merchants Screen (`/shop/discover`)
 
-**Purpose**: Generate new Nostr identity with mnemonic backup.
-
-**Layout** (Step 1 - Enter Label):
-```
-┌────────────────────────────────────────────────────────────┐
-│  ← Back                Create Identity                     │
-├────────────────────────────────────────────────────────────┤
-│                                                             │
-│  Step 1 of 2: Choose a Name                                │
-│                                                             │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ Identity Label                                       │  │
-│  │ ┌──────────────────────────────────────────────────┐ │  │
-│  │ │ My Main Identity                                 │ │  │
-│  │ └──────────────────────────────────────────────────┘ │  │
-│  │ 1-100 characters                                     │  │
-│  └──────────────────────────────────────────────────────┘  │
-│                                                             │
-│  💡 This is just a nickname. You can change it later.      │
-│                                                             │
-│  [Cancel]                           [Create Identity →]    │
-│                                                             │
-└────────────────────────────────────────────────────────────┘
-```
-
-**Layout** (Step 2 - Mnemonic Backup):
-```
-┌────────────────────────────────────────────────────────────┐
-│  ← Back                Create Identity                     │
-├────────────────────────────────────────────────────────────┤
-│                                                             │
-│  Step 2 of 2: Back Up Your Recovery Phrase                │
-│                                                             │
-│  ⚠️  Critical: Save This Recovery Phrase                   │
-│  This is the ONLY way to recover your identity.           │
-│  Write it down and store it safely.                        │
-│                                                             │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  1. abandon    5. ecology     9. merge             │  │
-│  │  2. ability    6. edge        10. merit            │  │
-│  │  3. able       7. edit        11. merry            │  │
-│  │  4. about      8. educate     12. mesh             │  │
-│  └──────────────────────────────────────────────────────┘  │
-│                                                             │
-│  [📋 Copy to Clipboard]                                    │
-│                                                             │
-│  ☐ I have securely backed up my recovery phrase           │
-│                                                             │
-│  [← Back]                                    [Done]        │
-│                                                             │
-└────────────────────────────────────────────────────────────┘
-```
-
-**Flow**:
-1. **Enter Label** → Click "Create Identity"
-2. **Show Loading** (Generating keys... ~500ms)
-3. **Display Mnemonic** → User copies/saves
-4. **Check Confirmation Box** → "Done" button enables
-5. **Click Done** → Navigate to `/identities` with success toast
-
-**Validation**:
-- Label: 1-100 characters, trimmed
-- Confirmation: Checkbox must be checked to enable "Done"
-
-**Security**:
-- Mnemonic displayed only once (not stored in state after navigation)
-- Warning text in red/orange
-- Copy button for convenience
-
----
-
-### 3. Import Identity Screen (`/identities/import`)
-
-**Purpose**: Restore identity from 12-word mnemonic.
+**Purpose**: Find merchants by Nostr npub or QR code scan
 
 **Layout**:
 ```
 ┌────────────────────────────────────────────────────────────┐
-│  ← Back                Import Identity                     │
+│  [←] Discover Merchants                                     │
 ├────────────────────────────────────────────────────────────┤
 │                                                             │
-│  Restore from Recovery Phrase                              │
+│  Find a merchant by their Nostr public key                 │
 │                                                             │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ Recovery Phrase (12 words)                           │  │
-│  │ ┌──────────────────────────────────────────────────┐ │  │
-│  │ │ abandon ability able about...                    │ │  │
-│  │ │                                                  │ │  │
-│  │ └──────────────────────────────────────────────────┘ │  │
-│  │ Separate words with spaces                           │  │
-│  └──────────────────────────────────────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ npub1...                                    [Scan QR] │  │
+│  └─────────────────────────────────────────────────────┘  │
 │                                                             │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ Identity Label                                       │  │
-│  │ ┌──────────────────────────────────────────────────┐ │  │
-│  │ │ Restored Identity                                │ │  │
-│  │ └──────────────────────────────────────────────────┘ │  │
-│  └──────────────────────────────────────────────────────┘  │
+│  [Search]                                                  │
 │                                                             │
-│  [Cancel]                                  [Import]        │
+│  Recent Merchants                                          │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ ☕ Coffee Shop Downtown                              │  │
+│  │ npub1abc...xyz                             [View ›]  │  │
+│  └─────────────────────────────────────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ 🍕 Pizza Palace                                      │  │
+│  │ npub1def...xyz                             [View ›]  │  │
+│  └─────────────────────────────────────────────────────┘  │
 │                                                             │
-└────────────────────────────────────────────────────────────┘
-```
-
-**Validation**:
-- Mnemonic: Exactly 12 words from BIP39 wordlist
-- Label: 1-100 characters
-- Show error if invalid mnemonic
-
-**Flow**:
-1. **Paste/Enter Mnemonic** → Validates on blur
-2. **Enter Label** → Pre-filled with "Restored Identity"
-3. **Click Import** → Derives keys, saves identity
-4. **Success** → Navigate to `/identities` with toast
-
----
-
-### 4. Voucher List Screen (`/vouchers`)
-
-**Purpose**: View all vouchers (issued, received, redeemed).
-
-**Layout**:
-```
-┌────────────────────────────────────────────────────────────┐
-│  🔷 Imani Wallet    Identities [Vouchers] ⚙️               │
-├────────────────────────────────────────────────────────────┤
-│                                                             │
-│  Vouchers                                     [🔽 Filter]   │
-│                                                             │
-│  ── Issued ─────────────────────────────────────────────   │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ 🎁 Birthday Gift                          1000 sat   │  │
-│  │ Issued 2 hours ago                       📤 Shared   │  │
-│  │ Expires in 88 days                                   │  │
-│  └──────────────────────────────────────────────────────┘  │
-│                                                             │
-│  ── Received ───────────────────────────────────────────   │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ 🎁 Thank You!                              500 sat   │  │
-│  │ Received 1 day ago                    ✅ Redeemed    │  │
-│  └──────────────────────────────────────────────────────┘  │
-│                                                             │
-│  [Empty State if no vouchers]                              │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │         🎁                                           │  │
-│  │   No vouchers yet                                    │  │
-│  │   Issue your first voucher to get started           │  │
-│  │                                                       │  │
-│  │   [Issue Voucher]  [Redeem Voucher]                 │  │
-│  └──────────────────────────────────────────────────────┘  │
-│                                                             │
-│                                            [+] [Redeem]    │ FAB
+│  💡 Tip: Ask merchants for their Nostr npub or scan       │
+│     their QR code in-store                                 │
 └────────────────────────────────────────────────────────────┘
 ```
 
 **Components**:
-- **Voucher Card**:
-  - Icon: 🎁
-  - Memo: User-defined or "Voucher {id}"
-  - Amount: Face value + unit (sat)
-  - Status Badge: Issued (blue), Delivered (cyan), Redeemed (green), Expired (gray)
-  - Metadata: Issued/received date, expiry
-  - Click: Navigate to voucher details
-- **Filter Dropdown**: All / Issued / Received / Redeemed
-- **Dual FAB**:
-  - Primary: "+" → Issue voucher
-  - Secondary: "Redeem" → Redeem voucher
+- **Search Input**: Text field for pasting Nostr npub (npub1... format)
+- **Scan QR Button**: Opens camera to scan merchant QR code
+- **Recent Merchants**: List of previously viewed merchants
+- **Validation**: Check npub format, show error if invalid
 
-**Grouping**:
-- **Issued**: Vouchers created by user
-- **Received**: Vouchers redeemed by user
-- **Sort**: Newest first within each group
+**Actions**:
+- Enter npub → [Search] → Merchant Detail Screen
+- [Scan QR] → Camera opens → Scans npub → Merchant Detail Screen
+- Tap recent merchant → Merchant Detail Screen
 
 ---
 
-### 5. Issue Voucher Screen (`/vouchers/issue`)
+### 3. Merchant Detail Screen (`/shop/merchant/:npub`)
 
-**Purpose**: Create new voucher locked to recipient's public key.
-
-**Layout** (Step 1 - Voucher Details):
-```
-┌────────────────────────────────────────────────────────────┐
-│  ← Back                 Issue Voucher                      │
-├────────────────────────────────────────────────────────────┤
-│                                                             │
-│  Step 1 of 2: Voucher Details                              │
-│                                                             │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ Amount (sats)                                        │  │
-│  │ ┌──────────────────────────────────────────────────┐ │  │
-│  │ │ 1000                                             │ │  │
-│  │ └──────────────────────────────────────────────────┘ │  │
-│  └──────────────────────────────────────────────────────┘  │
-│                                                             │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ Memo (optional)                                      │  │
-│  │ ┌──────────────────────────────────────────────────┐ │  │
-│  │ │ Happy Birthday!                                  │ │  │
-│  │ └──────────────────────────────────────────────────┘ │  │
-│  └──────────────────────────────────────────────────────┘  │
-│                                                             │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ Expires In (days)                                    │  │
-│  │ ┌──────────────────────────────────────────────────┐ │  │
-│  │ │ 90                                               │ │  │
-│  │ └──────────────────────────────────────────────────┘ │  │
-│  │ Leave blank for no expiry                            │  │
-│  └──────────────────────────────────────────────────────┘  │
-│                                                             │
-│  🔒 Advanced Options (collapsed)                           │
-│                                                             │
-│  [Cancel]                              [Continue →]        │
-│                                                             │
-└────────────────────────────────────────────────────────────┘
-```
-
-**Layout** (Step 2 - Share):
-```
-┌────────────────────────────────────────────────────────────┐
-│  ← Back                 Share Voucher                      │
-├────────────────────────────────────────────────────────────┤
-│                                                             │
-│  ✅ Voucher Issued Successfully                            │
-│                                                             │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │                                                       │  │
-│  │         [QR CODE - 200x200px]                        │  │
-│  │                                                       │  │
-│  │                                                       │  │
-│  └──────────────────────────────────────────────────────┘  │
-│                                                             │
-│  Scan QR code to redeem                                    │
-│                                                             │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ cashuAbc123...xyz456                                 │  │
-│  │ (Token truncated, click to expand)                   │  │
-│  └──────────────────────────────────────────────────────┘  │
-│                                                             │
-│  [📋 Copy Token]  [🔗 Copy Link]  [📧 Email]  [💬 SMS]     │
-│                                                             │
-│  [← Back to Vouchers]                        [Done]        │
-│                                                             │
-└────────────────────────────────────────────────────────────┘
-```
-
-**Flow**:
-1. **Enter Details** → Validate (amount > 0)
-2. **Click Continue** → Issue voucher (calls VoucherAdapter)
-3. **Show Loading** → "Issuing voucher..."
-4. **Display QR + Token** → Share options
-5. **Click Done** → Navigate to `/vouchers`
-
-**Validation**:
-- Amount: Positive integer
-- Memo: Optional, max 200 chars
-- Expiry: Positive integer or blank
-
-**Advanced Options** (collapsed by default):
-- Lock to recipient pubkey (P2PK)
-- Select mint URL
-
----
-
-### 6. Redeem Voucher Screen (`/vouchers/redeem`)
-
-**Purpose**: Claim received voucher by scanning QR or pasting token.
+**Purpose**: View merchant profile and available voucher offers
 
 **Layout**:
 ```
 ┌────────────────────────────────────────────────────────────┐
-│  ← Back                Redeem Voucher                      │
+│  [←] Coffee Shop Downtown                                   │
 ├────────────────────────────────────────────────────────────┤
 │                                                             │
-│  Scan QR Code or Paste Token                               │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │             [Merchant Logo]                          │  │
+│  │                                                      │  │
+│  │  ☕ Coffee Shop Downtown                             │  │
+│  │  Best coffee in town since 2020                     │  │
+│  │                                                      │  │
+│  │  npub1abc...xyz                  [Copy] [QR] [⭐]   │  │
+│  └─────────────────────────────────────────────────────┘  │
 │                                                             │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │                                                       │  │
-│  │         [QR Scanner - 300x300px]                     │  │
-│  │         (Camera access required)                     │  │
-│  │                                                       │  │
-│  └──────────────────────────────────────────────────────┘  │
+│  Available Vouchers (3)                                    │
 │                                                             │
-│  ─── or ────────────────────────────────────────────────   │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ Coffee Voucher                                       │  │
+│  │ 100 sat • Valid 30 days                              │  │
+│  │ Get any regular coffee                               │  │
+│  │                                                      │  │
+│  │                                       [Buy for 100]  │  │
+│  └─────────────────────────────────────────────────────┘  │
 │                                                             │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ Voucher Token                                        │  │
-│  │ ┌──────────────────────────────────────────────────┐ │  │
-│  │ │ cashuAbc123...                                   │ │  │
-│  │ │                                                  │ │  │
-│  │ └──────────────────────────────────────────────────┘ │  │
-│  │ Paste Cashu token (cashuA...)                        │  │
-│  └──────────────────────────────────────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ Pastry Voucher                                       │  │
+│  │ 50 sat • Valid 30 days                               │  │
+│  │ Any pastry or cookie                                 │  │
+│  │                                                      │  │
+│  │                                        [Buy for 50]  │  │
+│  └─────────────────────────────────────────────────────┘  │
 │                                                             │
-│  [Cancel]                                 [Redeem]         │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ Lunch Combo                                          │  │
+│  │ 500 sat • Valid 30 days                              │  │
+│  │ Sandwich + coffee + pastry                           │  │
+│  │                                                      │  │
+│  │                                       [Buy for 500]  │  │
+│  └─────────────────────────────────────────────────────┘  │
 │                                                             │
 └────────────────────────────────────────────────────────────┘
 ```
 
+**Components**:
+- **Merchant Header**: Logo, name, description, npub (truncated)
+- **Actions**: Copy npub, show QR code, favorite merchant (⭐)
+- **Voucher Offer Cards**: Name, price, validity, description, [Buy] button
+- **Empty State**: "No active offers" if merchant has no vouchers
+
+**Actions**:
+- Tap [Buy for X sat] → Purchase Voucher Screen (Lightning payment)
+- [Copy] → Copy npub to clipboard
+- [QR] → Show QR code with npub (for sharing)
+- [⭐] → Favorite merchant (shows in "Favorites" section)
+
+---
+
+### 4. Purchase Voucher Screen (`/shop/purchase/:offerId`)
+
+**Purpose**: Pay Lightning invoice to purchase voucher
+
+**Layout (Step 1: Confirm Purchase)**:
+```
+┌────────────────────────────────────────────────────────────┐
+│  [←] Purchase Voucher                                       │
+├────────────────────────────────────────────────────────────┤
+│                                                             │
+│  You're buying:                                            │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ ☕ Coffee Shop Downtown                              │  │
+│  │ ─────────────────────────────────────────────────── │  │
+│  │ Coffee Voucher                                       │  │
+│  │ 100 sat • Valid 30 days                              │  │
+│  │ Get any regular coffee                               │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                             │
+│  Payment Details                                           │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ Amount:          100 sat                             │  │
+│  │ Network Fee:     ~2 sat (Lightning)                  │  │
+│  │ Total:           102 sat                             │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                             │
+│  Payment Method                                            │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ ⚡ Lightning Wallet (Alby)              [Change]    │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                             │
+│  [Cancel]                              [Confirm Purchase]  │
+└────────────────────────────────────────────────────────────┘
+```
+
+**Layout (Step 2: Lightning Payment)**:
+```
+┌────────────────────────────────────────────────────────────┐
+│  [←] Pay Lightning Invoice                                  │
+├────────────────────────────────────────────────────────────┤
+│                                                             │
+│  Scan with your Lightning wallet                           │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │                                                      │  │
+│  │         [QR Code: Lightning Invoice]                │  │
+│  │              lnbc102...                              │  │
+│  │                                                      │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                             │
+│  Or copy invoice:                                          │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ lnbc102n1...                            [Copy]       │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                             │
+│  [Open in Alby]  [Open in Zeus]  [Open in Phoenix]        │
+│                                                             │
+│  ⏳ Waiting for payment...                                 │
+│                                                             │
+│  [Cancel]                                                  │
+└────────────────────────────────────────────────────────────┘
+```
+
+**Layout (Step 3: Success)**:
+```
+┌────────────────────────────────────────────────────────────┐
+│  [×] Purchase Complete                                      │
+├────────────────────────────────────────────────────────────┤
+│                                                             │
+│              ✅                                             │
+│                                                             │
+│  Payment received!                                         │
+│                                                             │
+│  Your voucher is ready:                                    │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ ☕ Coffee Shop Downtown                              │  │
+│  │ Coffee Voucher                                       │  │
+│  │ Balance: 100/100 sat                                 │  │
+│  │ Expires: 2025-12-20                                  │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                             │
+│  [View Voucher]                       [Buy Another]        │
+└────────────────────────────────────────────────────────────┘
+```
+
 **Flow**:
-1. **Scan QR** or **Paste Token**
-2. **Click Redeem** → Validate token format
-3. **Show Loading** → "Verifying voucher..."
-4. **Verify Proofs** → Check mint for unspent status
-5. **Import Proofs** → Add to wallet
-6. **Show Success** → Display amount received
-7. **Navigate** → `/vouchers` with success toast
+1. Confirm purchase details → [Confirm Purchase]
+2. Merchant generates Lightning invoice → Display QR code
+3. Customer scans QR with external Lightning wallet (Alby, Zeus, Phoenix)
+4. Payment received → Merchant issues Cashu token voucher
+5. Voucher added to customer's wallet → Success screen
 
 **Error Handling**:
-- Invalid token format → "Invalid voucher token"
-- Already redeemed → "This voucher has already been redeemed"
-- Expired → "This voucher has expired"
-- Network error → "Could not verify voucher. Try again?"
+- **Invoice expired** (default 5 min): "Invoice expired. Try again?"
+- **Payment failed**: "Payment failed. Check your Lightning wallet balance."
+- **Merchant offline**: "Merchant is offline. Try again later."
 
 ---
 
-### 7. Voucher Details Screen (`/vouchers/:id`)
+### 5. Redeem Voucher Screen (`/shop/redeem/:voucherId`)
 
-**Purpose**: View voucher details, status, and actions.
+**Purpose**: Redeem voucher at merchant (full or partial)
+
+**Layout (Customer View)**:
+```
+┌────────────────────────────────────────────────────────────┐
+│  [←] Redeem Voucher                                         │
+├────────────────────────────────────────────────────────────┤
+│                                                             │
+│  Show this to the merchant:                                │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │                                                      │  │
+│  │         [QR Code: Voucher Token]                    │  │
+│  │          cashuA...                                   │  │
+│  │                                                      │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                             │
+│  ☕ Coffee Shop Downtown                                   │
+│  Coffee Voucher                                            │
+│  Balance: 70 / 100 sat                                     │
+│  Expires: 2025-12-20 (25 days)                             │
+│                                                             │
+│  ⏳ Waiting for merchant to scan...                        │
+│                                                             │
+│  Or enter redemption amount:                               │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ Amount to redeem: [____] sat (max 70)               │  │
+│  └─────────────────────────────────────────────────────┘  │
+│  [Submit Redemption]                                       │
+│                                                             │
+│  [Cancel]                                                  │
+└────────────────────────────────────────────────────────────┘
+```
+
+**Layout (Merchant Scanning - Success)**:
+```
+┌────────────────────────────────────────────────────────────┐
+│  [×] Redemption Complete                                    │
+├────────────────────────────────────────────────────────────┤
+│                                                             │
+│              ✅                                             │
+│                                                             │
+│  30 sat redeemed                                           │
+│                                                             │
+│  Remaining balance: 40 sat                                 │
+│                                                             │
+│  ☕ Coffee Shop Downtown                                   │
+│  Coffee Voucher                                            │
+│                                                             │
+│  [Done]                                                    │
+└────────────────────────────────────────────────────────────┘
+```
+
+**Flow**:
+1. Customer selects voucher → [Redeem]
+2. Display QR code with Cashu token
+3. **Option A (In-Person POS)**: Merchant scans QR → Enters amount → Confirms redemption
+4. **Option B (Manual)**: Customer enters amount → Merchant confirms via their app
+5. Voucher balance updated → Success screen
+
+**Partial Redemption Logic**:
+- Voucher balance: 100 sat
+- Purchase amount: 30 sat
+- After redemption: 70 sat balance remains
+- Voucher still active (can be redeemed again until balance = 0)
+
+---
+
+### 6. Sales Dashboard Screen (`/merchant`)
+
+**Purpose**: Overview of merchant's sales, active offers, and redemptions
 
 **Layout**:
 ```
 ┌────────────────────────────────────────────────────────────┐
-│  ← Back                Voucher Details                     │
+│  💼 Merchant                               [Edit Profile]  │
 ├────────────────────────────────────────────────────────────┤
 │                                                             │
-│  🎁 Birthday Gift                                          │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ Amount:        1000 sat                              │  │
-│  │ Status:        ✅ Redeemed                            │  │
-│  │ Issued:        Dec 15, 2025 at 3:45 PM              │  │
-│  │ Redeemed:      Dec 16, 2025 at 10:20 AM             │  │
-│  │ Expires:       Mar 15, 2026 (88 days left)          │  │
-│  │ Issuer:        npub1abc...xyz                        │  │
-│  └──────────────────────────────────────────────────────┘  │
+│  ☕ Coffee Shop Downtown                                   │
+│  npub1abc...xyz                            [Copy] [QR]     │
 │                                                             │
-│  Memo                                                      │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ Happy Birthday! Enjoy this gift from the team.      │  │
-│  └──────────────────────────────────────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ Share your profile:                                  │  │
+│  │ [QR Code: npub1abc...]         [Print QR for Store] │  │
+│  └─────────────────────────────────────────────────────┘  │
 │                                                             │
-│  Signature                                                 │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ a1b2c3d4e5f6... (64 hex chars)                       │  │
-│  │ ✅ Valid signature                                    │  │
-│  └──────────────────────────────────────────────────────┘  │
+│  Today's Sales                              [View Report]  │
+│  ┌────────────┬────────────┬────────────┬──────────────┐  │
+│  │ 15 vouchers│ 1,500 sat  │ 3 redeemed │ 1,400 sat    │  │
+│  │ sold       │ revenue    │ today      │ outstanding  │  │
+│  └────────────┴────────────┴────────────┴──────────────┘  │
 │                                                             │
-│  [🗑️ Delete]  [📤 Share Again]  [⬇️ Export JSON]          │
+│  Active Offers (2)                     [+ Create Offer]    │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ Coffee Voucher - 100 sat - 30 days                  │  │
+│  │ 45 sold, 12 redeemed, 33 active                     │  │
+│  │                                         [Edit] [⋮]   │  │
+│  └─────────────────────────────────────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ Pastry Voucher - 50 sat - 30 days                   │  │
+│  │ 20 sold, 5 redeemed, 15 active                      │  │
+│  │                                         [Edit] [⋮]   │  │
+│  └─────────────────────────────────────────────────────┘  │
 │                                                             │
+│  [Scan Voucher to Redeem (POS)]                           │
+│                                                             │
+│  Recent Redemptions                                        │
+│  • Coffee Voucher - 100 sat - 2 min ago                   │
+│  • Coffee Voucher - 30 sat (partial) - 15 min ago         │
+│  • Pastry Voucher - 50 sat - 1 hour ago                   │
 └────────────────────────────────────────────────────────────┘
 ```
+
+**Components**:
+- **Merchant Header**: Name, npub, QR code for sharing
+- **Sales Metrics**: Vouchers sold today, revenue, redemptions, outstanding balance
+- **Active Offers**: List of voucher offers with sales stats
+- **POS Button**: Large button to scan customer vouchers
+- **Recent Redemptions**: Real-time feed of redemptions
 
 **Actions**:
-- **Share Again**: Show QR code + token (if issued by user)
-- **Export JSON**: Download voucher metadata
-- **Delete**: Remove from local storage (confirm dialog)
-
-**Data Display**:
-- Amounts in sats (no decimals)
-- Dates in local timezone (Dec 15, 2025 at 3:45 PM)
-- Status with color-coded badge
-- Signature validation indicator
+- [Edit Profile] → Edit Merchant Profile Screen
+- [View Report] → Sales Reports Screen (daily, weekly, monthly)
+- [+ Create Offer] → Create Voucher Offer Screen
+- [Edit] → Edit Voucher Offer Screen
+- [⋮] → More options (pause, delete offer)
+- [Scan Voucher to Redeem] → POS Redemption Screen
 
 ---
 
-### 8. Settings Screen (`/settings`)
+### 7. Create Voucher Offer Screen (`/merchant/create-offer`)
 
-**Purpose**: Configure app preferences and view system info.
+**Purpose**: Merchant creates new voucher offer
 
 **Layout**:
 ```
 ┌────────────────────────────────────────────────────────────┐
-│  🔷 Imani Wallet    Identities Vouchers [⚙️ Settings]      │
+│  [←] Create Voucher Offer                                   │
 ├────────────────────────────────────────────────────────────┤
 │                                                             │
-│  Settings                                                  │
+│  Voucher Details                                           │
 │                                                             │
-│  ── General ────────────────────────────────────────────   │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ Default Mint URL                                     │  │
-│  │ http://localhost:7777                     [Edit]     │  │
-│  └──────────────────────────────────────────────────────┘  │
+│  Voucher Name                                              │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ Coffee Voucher                                       │  │
+│  └─────────────────────────────────────────────────────┘  │
 │                                                             │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ Default Currency Unit                                │  │
-│  │ sat                                       [Change]   │  │
-│  └──────────────────────────────────────────────────────┘  │
+│  Description                                               │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ Get any regular coffee (hot or iced)                │  │
+│  └─────────────────────────────────────────────────────┘  │
 │                                                             │
-│  ── Nostr ──────────────────────────────────────────────   │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ Relays (4 configured)                     [Manage]   │  │
-│  │ • wss://relay.damus.io                               │  │
-│  │ • wss://relay.snort.social                           │  │
-│  │ • wss://nos.lol                                      │  │
-│  │ • wss://relay.nostr.band                             │  │
-│  └──────────────────────────────────────────────────────┘  │
+│  Price (sat)                                               │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ 100                                                  │  │
+│  └─────────────────────────────────────────────────────┘  │
 │                                                             │
-│  ── Privacy ────────────────────────────────────────────   │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ ☑ Auto-backup vouchers to Nostr                      │  │
-│  │ ☐ Share anonymous usage analytics                    │  │
-│  └──────────────────────────────────────────────────────┘  │
+│  Validity Period                                           │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ [○ 7 days] [○ 30 days] [●] [○ 90 days] [○ Custom] │  │
+│  └─────────────────────────────────────────────────────┘  │
 │                                                             │
-│  ── Storage ────────────────────────────────────────────   │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ IndexedDB Storage: 2.3 MB / 50 MB                    │  │
-│  │ [Clear Cache]  [Export All Data]                     │  │
-│  └──────────────────────────────────────────────────────┘  │
+│  ☑️ Allow partial redemption                               │
+│  ☑️ Allow multiple redemptions per voucher                 │
 │                                                             │
-│  ── About ──────────────────────────────────────────────   │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ Imani Wallet v1.0.0                                  │  │
-│  │ Built with ❤️ for self-custody                        │  │
-│  │ [Documentation]  [GitHub]  [Report Issue]            │  │
-│  └──────────────────────────────────────────────────────┘  │
+│  Preview                                                   │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ Coffee Voucher                                       │  │
+│  │ 100 sat • Valid 30 days                              │  │
+│  │ Get any regular coffee (hot or iced)                │  │
+│  └─────────────────────────────────────────────────────┘  │
 │                                                             │
+│  [Cancel]                              [Create Offer]      │
 └────────────────────────────────────────────────────────────┘
 ```
 
-**Sections**:
-1. **General**: Mint URL, currency unit
-2. **Nostr**: Relay configuration
-3. **Privacy**: Auto-backup, analytics
-4. **Storage**: Cache size, export data
-5. **About**: Version, links
+**Form Fields**:
+- **Voucher Name** (required): Short name (e.g., "Coffee Voucher")
+- **Description** (optional): What customer gets (e.g., "Any regular coffee")
+- **Price** (required): Amount in sats (e.g., 100)
+- **Validity Period** (required): 7/30/90 days or custom
+- **Partial Redemption** (checkbox): Allow using voucher multiple times until balance = 0
+- **Multiple Redemptions** (checkbox): Allow redeeming same voucher multiple times
+
+**Validation**:
+- Price > 0
+- Voucher name not empty
+- Validity period > 0
+
+**Actions**:
+- [Create Offer] → Offer published to Nostr → Success message → Back to Sales Dashboard
+- [Cancel] → Discard changes → Back to Sales Dashboard
+
+---
+
+### 8. POS Redemption Screen (`/merchant/redeem`)
+
+**Purpose**: Merchant scans customer voucher QR code and confirms redemption
+
+**Layout (Step 1: Scan QR)**:
+```
+┌────────────────────────────────────────────────────────────┐
+│  [←] Redeem Voucher (POS)                                   │
+├────────────────────────────────────────────────────────────┤
+│                                                             │
+│  Scan customer's voucher QR code                           │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │                                                      │  │
+│  │         [Camera View: QR Scanner]                   │  │
+│  │                                                      │  │
+│  │                                                      │  │
+│  │         Point camera at voucher QR code             │  │
+│  │                                                      │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                             │
+│  Or enter voucher code manually:                           │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ cashuA...                                            │  │
+│  └─────────────────────────────────────────────────────┘  │
+│  [Submit]                                                  │
+│                                                             │
+│  [Cancel]                                                  │
+└────────────────────────────────────────────────────────────┘
+```
+
+**Layout (Step 2: Confirm Redemption)**:
+```
+┌────────────────────────────────────────────────────────────┐
+│  [←] Confirm Redemption                                     │
+├────────────────────────────────────────────────────────────┤
+│                                                             │
+│  Voucher Details                                           │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ Coffee Voucher                                       │  │
+│  │ Balance: 70 / 100 sat                                │  │
+│  │ Expires: 2025-12-20 (25 days)                       │  │
+│  │ Status: ✅ Valid                                     │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                             │
+│  Redemption Amount                                         │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ Amount (sat): [30____]           (max 70 sat)       │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                             │
+│  [Quick Fill: 10] [25] [50] [70 (Full)]                   │
+│                                                             │
+│  After Redemption                                          │
+│  • Customer balance: 40 sat remaining                      │
+│  • Your revenue: +30 sat                                   │
+│                                                             │
+│  [Cancel]                              [Confirm Redeem]    │
+└────────────────────────────────────────────────────────────┘
+```
+
+**Layout (Step 3: Success)**:
+```
+┌────────────────────────────────────────────────────────────┐
+│  [×] Redemption Complete                                    │
+├────────────────────────────────────────────────────────────┤
+│                                                             │
+│              ✅                                             │
+│                                                             │
+│  30 sat redeemed                                           │
+│                                                             │
+│  Customer balance: 40 sat remaining                        │
+│                                                             │
+│  [Scan Another]                         [Done]             │
+└────────────────────────────────────────────────────────────┘
+```
+
+**Flow**:
+1. Merchant opens POS → Camera activates
+2. Customer shows voucher QR code → Merchant scans
+3. Voucher details displayed → Merchant enters redemption amount
+4. [Confirm Redeem] → Voucher balance updated → Success screen
+
+**Error Handling**:
+- **Invalid voucher**: "This voucher is not from your store"
+- **Expired voucher**: "Voucher expired on [date]"
+- **Already redeemed**: "Voucher fully redeemed"
+- **Amount > balance**: "Amount exceeds voucher balance (max 70 sat)"
+
+---
+
+### 9. Edit Merchant Profile Screen (`/merchant/profile/edit`)
+
+**Purpose**: Edit merchant name, description, logo
+
+**Layout**:
+```
+┌────────────────────────────────────────────────────────────┐
+│  [←] Edit Merchant Profile                                  │
+├────────────────────────────────────────────────────────────┤
+│                                                             │
+│  Merchant Logo                                             │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │         [Current Logo or Placeholder]                │  │
+│  └─────────────────────────────────────────────────────┘  │
+│  [Upload New Logo]                                         │
+│                                                             │
+│  Business Name                                             │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ Coffee Shop Downtown                                 │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                             │
+│  Description                                               │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ Best coffee in town since 2020. We source organic   │  │
+│  │ beans from local farms and roast in-house.          │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                             │
+│  Contact (optional)                                        │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ Email: coffee@example.com                            │  │
+│  │ Phone: +1234567890                                   │  │
+│  │ Website: https://coffeeshop.com                      │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                             │
+│  Nostr Identity (read-only)                                │
+│  npub1abc...xyz                            [Copy]          │
+│                                                             │
+│  [Cancel]                              [Save Changes]      │
+└────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 10. Settings Screen (`/settings`)
+
+**Purpose**: Manage identity, payment settings, backup, app settings
+
+**Layout**:
+```
+┌────────────────────────────────────────────────────────────┐
+│  ⚙️ Settings                                                │
+├────────────────────────────────────────────────────────────┤
+│                                                             │
+│  Identity                                                  │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ 👤 My Identity                                       │  │
+│  │ npub1abc...xyz                                       │  │
+│  │ [View Mnemonic] [Export Private Key]                │  │
+│  └─────────────────────────────────────────────────────┘  │
+│  [+ Create New Identity] [Import Identity]                │
+│                                                             │
+│  Payment                                                   │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ ⚡ Lightning Wallet                                  │  │
+│  │ Connected: Alby                                      │  │
+│  │ [Change Wallet] [Disconnect]                         │  │
+│  └─────────────────────────────────────────────────────┘  │
+│  [+ Add Payment Method]                                   │
+│                                                             │
+│  Backup & Security                                         │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ 🔐 Encrypted Backup                                  │  │
+│  │ Last backup: 2025-11-20 10:30 AM                    │  │
+│  │ [Backup to Nostr] [Export Wallet Data]              │  │
+│  └─────────────────────────────────────────────────────┘  │
+│  [Restore from Backup]                                     │
+│                                                             │
+│  App Settings                                              │
+│  • Currency Display: [USD ▼]                               │
+│  • Language: [English ▼]                                   │
+│  • Notifications: [Enabled ▼]                              │
+│                                                             │
+│  About                                                     │
+│  Version 1.0.0                                             │
+│  [Privacy Policy] [Terms of Service] [Help & Support]     │
+└────────────────────────────────────────────────────────────┘
+```
 
 ---
 
 ## User Flows
 
-### Flow 1: First-Time User Journey
+### Flow 1: First-Time Merchant Setup (<3 minutes)
+
+**Goal**: Coffee shop owner sets up merchant profile and creates first voucher offer
 
 ```
-1. User visits https://wallet.imani.cash
+1. User opens app (first time)
    ↓
-2. Lands on /identities (empty state)
-   "No identities yet. Create your first identity to start issuing vouchers"
+2. /settings → Create Identity
+   • Enter label: "My Coffee Shop"
+   • Generate keys → Display mnemonic
+   • User copies mnemonic (backup)
    ↓
-3. Clicks "Create Identity"
+3. /merchant → Edit Profile
+   • Business name: "Coffee Shop Downtown"
+   • Description: "Best coffee in town"
+   • Upload logo (optional)
+   • [Save]
    ↓
-4. /identities/create
-   - Enters label: "My Main Identity"
-   - Clicks "Create Identity"
+4. /merchant → [+ Create Offer]
+   • Voucher name: "Coffee Voucher"
+   • Price: 100 sat
+   • Validity: 30 days
+   • ✓ Allow partial redemption
+   • [Create Offer]
    ↓
-5. Sees mnemonic:
-   "abandon ability able about..."
-   - Copies to password manager
-   - Checks "I have securely backed up my recovery phrase"
-   - Clicks "Done"
+5. Success! Merchant Dashboard shows:
+   • QR code with npub (print for in-store display)
+   • Active offer: "Coffee Voucher - 100 sat"
    ↓
-6. Returns to /identities
-   ✅ Success toast: "Identity created successfully"
-   Shows identity card with npub
-   ↓
-7. Navigates to /vouchers (empty state)
-   "No vouchers yet. Issue your first voucher to get started"
-   ↓
-8. Clicks "Issue Voucher" FAB
-   ↓
-9. /vouchers/issue
-   - Amount: 1000
-   - Memo: "Happy Birthday!"
-   - Expiry: 90 days
-   - Clicks "Continue"
-   ↓
-10. Sees QR code + token
-    - Clicks "Copy Link"
-    - Shares via WhatsApp
-    ↓
-11. Returns to /vouchers
-    ✅ Success toast: "Voucher issued and shared"
-    Shows voucher card with status "Issued"
+6. Merchant shares npub on social media, in-store signage
+   ✅ Setup complete (<3 minutes)
 ```
-
-**Time to First Voucher**: <2 minutes
 
 ---
 
-### Flow 2: Redeem Received Voucher
+### Flow 2: Customer Purchases and Redeems Voucher (<2 minutes)
+
+**Goal**: Customer discovers merchant, buys voucher, redeems at POS
 
 ```
-1. Recipient receives WhatsApp message with link:
-   https://wallet.imani.cash/vouchers/redeem?token=cashuAbc...
+1. Customer sees QR code at coffee shop (in-store)
    ↓
-2. Opens link → Auto-fills token field
+2. Opens app → /shop/discover → [Scan QR]
+   • Scans merchant QR code → Merchant Detail Screen
    ↓
-3. /vouchers/redeem (pre-filled)
-   - Shows token preview
-   - Clicks "Redeem"
+3. Views available vouchers
+   • "Coffee Voucher - 100 sat - Valid 30 days"
+   • [Buy for 100]
    ↓
-4. Loading: "Verifying voucher..."
+4. Purchase flow:
+   • Confirm purchase → Lightning invoice generated
+   • Scan QR with Alby wallet → Pay 102 sat (including fee)
+   • Payment confirmed → Voucher added to wallet
    ↓
-5. Success screen:
-   "✅ Redeemed 1000 sat"
-   "Happy Birthday!"
+5. Customer orders coffee at counter
    ↓
-6. Navigates to /vouchers
-   Shows voucher in "Received" section
-   Status: "Redeemed"
+6. /shop → My Vouchers → Tap "Coffee Voucher" → [Redeem]
+   • Display QR code to merchant
+   ↓
+7. Merchant scans QR code
+   • Enters redemption amount: 100 sat (full redemption)
+   • [Confirm Redeem]
+   ↓
+8. Success! Voucher redeemed
+   • Customer wallet: Voucher marked as redeemed
+   • Merchant dashboard: +100 sat revenue
+   ✅ Transaction complete (<2 minutes from purchase to redemption)
 ```
-
-**Time to Redeem**: <30 seconds
 
 ---
 
-### Flow 3: Recover Wallet
+### Flow 3: Partial Redemption (<1 minute)
+
+**Goal**: Customer uses 100 sat voucher for 30 sat purchase, balance remains
 
 ```
-1. User on new device visits https://wallet.imani.cash
+1. Customer has voucher: Balance 100/100 sat
    ↓
-2. /identities (empty state)
+2. Customer buys 30 sat item at coffee shop
    ↓
-3. Clicks "Import Identity" (secondary button)
+3. Customer: /shop → My Vouchers → [Redeem]
+   • Shows QR code
    ↓
-4. /identities/import
-   - Pastes mnemonic: "abandon ability able..."
-   - Label: "Restored Identity"
-   - Clicks "Import"
+4. Merchant: /merchant → [Scan Voucher to Redeem]
+   • Scans customer QR
+   • Voucher details: "Balance 100 sat"
+   • Enter amount: 30 sat
+   • [Confirm Redeem]
    ↓
-5. Returns to /identities
-   ✅ "Identity restored successfully"
+5. Success!
+   • Customer balance: 70 sat remaining
+   • Merchant revenue: +30 sat
+   • Voucher still active (can be used again)
+   ✅ Partial redemption complete
+```
+
+---
+
+### Flow 4: Merchant Views Sales Report
+
+**Goal**: Coffee shop owner checks daily sales and redemptions
+
+```
+1. Merchant: /merchant (Sales Dashboard)
    ↓
-6. Navigates to /settings
-   - Clicks "Export All Data"
-   - Downloads JSON backup
+2. Today's Sales:
+   • 15 vouchers sold → 1,500 sat revenue
+   • 3 redemptions → 300 sat redeemed
+   • Outstanding: 1,200 sat (unredeemed vouchers)
    ↓
-7. Checks /vouchers
-   - If auto-backup enabled: Vouchers sync from Nostr
-   - If not: Manually import from backup JSON
+3. [View Report] → Sales Reports Screen
+   • Daily: 15 vouchers, 1,500 sat
+   • Weekly: 78 vouchers, 7,800 sat
+   • Monthly: 320 vouchers, 32,000 sat
+   ↓
+4. Download CSV report (optional)
+   ✅ Sales insights gained
 ```
 
 ---
 
 ## Component Library
 
-### Core Components
+### 1. VoucherCard (Reusable)
 
-#### 1. **ImaniCard**
+**Purpose**: Display voucher summary in lists (customer and merchant views)
+
+**Code**:
 ```kotlin
 @Composable
-fun ImaniCard(
-    title: String,
-    subtitle: String? = null,
-    badge: String? = null,
-    badgeColor: Color = Color.Blue,
-    onClick: () -> Unit = {}
+fun VoucherCard(
+    merchantName: String,
+    merchantLogo: String? = null,
+    voucherName: String,
+    balance: Int, // Current balance
+    originalAmount: Int, // Original amount
+    expiresAt: Long, // Epoch seconds
+    status: VoucherStatus, // ACTIVE, EXPIRING_SOON, EXPIRED, REDEEMED
+    onClick: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(2.dp)
+        elevation = CardDefaults.cardElevation(2.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        )
     ) {
-        Row(modifier = Modifier.padding(16.dp)) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.titleMedium)
-                subtitle?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall)
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Merchant logo
+                if (merchantLogo != null) {
+                    Image(
+                        painter = rememberImagePainter(merchantLogo),
+                        contentDescription = null,
+                        modifier = Modifier.size(40.dp).clip(CircleShape)
+                    )
+                    Spacer(Modifier.width(12.dp))
+                }
+
+                // Merchant name
+                Text(
+                    text = merchantName,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Spacer(Modifier.height(8.dp))
+            Divider()
+            Spacer(Modifier.height(8.dp))
+
+            // Voucher name
+            Text(
+                text = voucherName,
+                style = MaterialTheme.typography.bodyLarge
+            )
+
+            Spacer(Modifier.height(4.dp))
+
+            // Balance
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Balance: $balance / $originalAmount sat",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Button(
+                    onClick = onClick,
+                    modifier = Modifier.height(36.dp)
+                ) {
+                    Text("Redeem")
                 }
             }
-            badge?.let {
-                StatusBadge(text = it, color = badgeColor)
-            }
+
+            Spacer(Modifier.height(4.dp))
+
+            // Expiry
+            val daysUntilExpiry = calculateDaysUntil(expiresAt)
+            Text(
+                text = "Expires: ${formatDate(expiresAt)} ($daysUntilExpiry days)",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            // Status badge
+            StatusBadge(status = status)
         }
     }
 }
 ```
 
-#### 2. **StatusBadge**
+---
+
+### 2. StatusBadge
+
+**Purpose**: Display voucher status with color-coded badge
+
+**Code**:
 ```kotlin
+enum class VoucherStatus {
+    ACTIVE, EXPIRING_SOON, EXPIRED, REDEEMED
+}
+
 @Composable
-fun StatusBadge(text: String, color: Color) {
-    Surface(
-        color = color.copy(alpha = 0.1f),
-        shape = RoundedCornerShape(12.dp)
+fun StatusBadge(status: VoucherStatus) {
+    val (color, icon, text) = when (status) {
+        VoucherStatus.ACTIVE -> Triple(
+            Color(0xFF10B981), // Green
+            Icons.Default.CheckCircle,
+            "Active"
+        )
+        VoucherStatus.EXPIRING_SOON -> Triple(
+            Color(0xFFF59E0B), // Orange
+            Icons.Default.Warning,
+            "Expiring Soon"
+        )
+        VoucherStatus.EXPIRED -> Triple(
+            Color(0xFFDC2626), // Red
+            Icons.Default.Cancel,
+            "Expired"
+        )
+        VoucherStatus.REDEEMED -> Triple(
+            Color(0xFF6B7280), // Gray
+            Icons.Default.Check,
+            "Redeemed"
+        )
+    }
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .background(color.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 6.dp)
     ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = color,
+            modifier = Modifier.size(16.dp)
+        )
+        Spacer(Modifier.width(6.dp))
         Text(
             text = text,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-            style = MaterialTheme.typography.labelSmall,
-            color = color
+            style = MaterialTheme.typography.labelMedium,
+            color = color,
+            fontWeight = FontWeight.Medium
         )
     }
 }
 ```
 
-#### 3. **ImaniButton**
+---
+
+### 3. QRCodeDisplay
+
+**Purpose**: Display QR code for voucher redemption or merchant profile sharing
+
+**Code**:
 ```kotlin
 @Composable
-fun ImaniButton(
-    text: String,
-    onClick: () -> Unit,
-    enabled: Boolean = true,
-    variant: ButtonVariant = ButtonVariant.Primary
-) {
-    val colors = when (variant) {
-        ButtonVariant.Primary -> ButtonDefaults.buttonColors(
-            containerColor = ImaniColors.Primary
-        )
-        ButtonVariant.Secondary -> ButtonDefaults.outlinedButtonColors()
-    }
-
-    Button(
-        onClick = onClick,
-        enabled = enabled,
-        colors = colors,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Text(text)
-    }
-}
-```
-
-#### 4. **QRCodeDisplay**
-```kotlin
-@Composable
-fun QRCodeDisplay(data: String, size: Dp = 200.dp) {
-    Box(
-        modifier = Modifier.size(size),
-        contentAlignment = Alignment.Center
-    ) {
-        // Use qrcode.js library via JS interop
-        QRCodeCanvas(data = data)
-    }
-}
-```
-
-#### 5. **EmptyState**
-```kotlin
-@Composable
-fun EmptyState(
-    icon: String,
-    title: String,
-    message: String,
-    primaryAction: (() -> Unit)? = null,
-    primaryActionText: String = "Get Started"
+fun QRCodeDisplay(
+    data: String, // Voucher token or Nostr npub
+    size: Dp = 250.dp,
+    label: String? = null
 ) {
     Column(
-        modifier = Modifier.fillMaxWidth().padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Text(icon, fontSize = 64.sp)
-        Spacer(Modifier.height(16.dp))
-        Text(title, style = MaterialTheme.typography.titleLarge)
+        // QR Code (using external library or Canvas)
+        Box(
+            modifier = Modifier
+                .size(size)
+                .background(Color.White, RoundedCornerShape(8.dp))
+                .padding(16.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            // TODO: Implement QR code generation (using qrcode.js or kotlinx-qrcode)
+            Text("QR CODE", fontFamily = FontFamily.Monospace)
+        }
+
+        if (label != null) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        // Data preview (truncated)
+        SelectionContainer {
+            Text(
+                text = data.take(20) + "..." + data.takeLast(20),
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
         Spacer(Modifier.height(8.dp))
-        Text(message, style = MaterialTheme.typography.bodyMedium)
-        primaryAction?.let {
-            Spacer(Modifier.height(24.dp))
-            Button(onClick = it) {
-                Text(primaryActionText)
+
+        OutlinedButton(
+            onClick = { copyToClipboard(data) }
+        ) {
+            Icon(Icons.Default.ContentCopy, contentDescription = null)
+            Spacer(Modifier.width(4.dp))
+            Text("Copy")
+        }
+    }
+}
+```
+
+---
+
+### 4. LightningInvoiceDisplay
+
+**Purpose**: Display Lightning invoice QR code and payment options
+
+**Code**:
+```kotlin
+@Composable
+fun LightningInvoiceDisplay(
+    invoice: String, // lnbc...
+    amount: Int, // sats
+    onPaymentReceived: () -> Unit
+) {
+    var paymentStatus by remember { mutableStateOf(PaymentStatus.PENDING) }
+
+    LaunchedEffect(invoice) {
+        // Poll for payment confirmation
+        while (paymentStatus == PaymentStatus.PENDING) {
+            delay(2000)
+            val isPaid = checkInvoicePaid(invoice) // API call
+            if (isPaid) {
+                paymentStatus = PaymentStatus.PAID
+                onPaymentReceived()
+            }
+        }
+    }
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(
+            text = "Scan with your Lightning wallet",
+            style = MaterialTheme.typography.titleMedium
+        )
+
+        Spacer(Modifier.height(16.dp))
+
+        // QR Code
+        QRCodeDisplay(data = invoice, size = 250.dp)
+
+        Spacer(Modifier.height(16.dp))
+
+        // Amount
+        Text(
+            text = "$amount sat",
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFFF59E0B) // Gold
+        )
+
+        Spacer(Modifier.height(24.dp))
+
+        // Quick links to open in wallets
+        Text(
+            text = "Or open in:",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Spacer(Modifier.height(8.dp))
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(onClick = { openInAlby(invoice) }) {
+                Text("Alby")
+            }
+            OutlinedButton(onClick = { openInZeus(invoice) }) {
+                Text("Zeus")
+            }
+            OutlinedButton(onClick = { openInPhoenix(invoice) }) {
+                Text("Phoenix")
+            }
+        }
+
+        Spacer(Modifier.height(24.dp))
+
+        // Payment status
+        when (paymentStatus) {
+            PaymentStatus.PENDING -> {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "Waiting for payment...",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+            PaymentStatus.PAID -> {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = Color(0xFF10B981)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "Payment received!",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFF10B981)
+                    )
+                }
+            }
+            PaymentStatus.EXPIRED -> {
+                Text(
+                    text = "Invoice expired. Please try again.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
+}
+
+enum class PaymentStatus {
+    PENDING, PAID, EXPIRED
+}
+```
+
+---
+
+### 5. MerchantProfileCard
+
+**Purpose**: Display merchant profile in discovery/detail screens
+
+**Code**:
+```kotlin
+@Composable
+fun MerchantProfileCard(
+    name: String,
+    description: String,
+    npub: String,
+    logo: String? = null,
+    isFavorite: Boolean = false,
+    onFavoriteClick: () -> Unit = {},
+    onViewProfile: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onViewProfile),
+        elevation = CardDefaults.cardElevation(2.dp)
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Logo + Name
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (logo != null) {
+                        Image(
+                            painter = rememberImagePainter(logo),
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp).clip(CircleShape)
+                        )
+                        Spacer(Modifier.width(12.dp))
+                    }
+
+                    Column {
+                        Text(
+                            text = name,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = npub.take(12) + "...",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                // Favorite button
+                IconButton(onClick = onFavoriteClick) {
+                    Icon(
+                        imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarOutline,
+                        contentDescription = "Favorite",
+                        tint = if (isFavorite) Color(0xFFF59E0B) else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            // Description
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            // Actions
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { copyToClipboard(npub) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Copy")
+                }
+
+                Button(
+                    onClick = onViewProfile,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("View Offers")
+                }
             }
         }
     }
@@ -876,25 +1459,82 @@ fun EmptyState(
 
 ### Breakpoints
 
-| Breakpoint | Width | Layout |
-|------------|-------|--------|
-| **Mobile** | <640px | Single column, full-width cards |
-| **Tablet** | 640-1024px | Centered content, max-width 768px |
-| **Desktop** | >1024px | Centered content, max-width 1024px, side margins |
+| Device | Width | Layout Strategy |
+|--------|-------|-----------------|
+| **Mobile** | < 640px | Single column, bottom tabs, stacked content |
+| **Tablet** | 640-1024px | Two-column layout for lists, side-by-side forms |
+| **Desktop** | > 1024px | Three-column dashboard, persistent navigation rail |
 
-### Mobile Adaptations
+---
 
-- **Navigation**: Bottom navigation bar (Material 3 pattern)
-- **Cards**: Full-width with 16px horizontal padding
-- **Forms**: Full-width inputs, stacked buttons
-- **QR Codes**: Responsive sizing (min 150px, max 300px)
-- **FAB**: Bottom-right, 16px from edges
+### Mobile (<640px)
 
-### Desktop Enhancements
+**Layout**:
+- Bottom navigation tabs (Shop, Merchant, Settings)
+- Single-column content
+- Full-width cards
+- Large touch targets (48x48dp minimum)
+- Bottom sheets for modals
 
-- **Hover States**: Cards elevate on hover
-- **Keyboard Shortcuts**: Ctrl+N (new voucher), Ctrl+I (import)
-- **Multi-column**: Voucher list can show 2 columns on wide screens
+**Example** (My Vouchers):
+```
+┌──────────────────────┐
+│  🛒 Shop   [+ Add]   │ TopAppBar
+├──────────────────────┤
+│                      │
+│  [Voucher Card 1]    │ Full width
+│  [Voucher Card 2]    │
+│  [Voucher Card 3]    │
+│                      │
+├──────────────────────┤
+│ [Shop] [Merchant] [⚙️]│ Bottom tabs
+└──────────────────────┘
+```
+
+---
+
+### Tablet (640-1024px)
+
+**Layout**:
+- Side navigation rail (left) + content (right)
+- Two-column grid for voucher lists
+- Side-by-side forms (2 fields per row)
+- Modal dialogs instead of bottom sheets
+
+**Example** (My Vouchers):
+```
+┌────────────────────────────────────────┐
+│ [Shop]   │  My Vouchers        [+ Add] │
+│ [Merchant]├──────────────────────────────┤
+│ [Settings]│  [Voucher 1]  [Voucher 2]  │
+│           │  [Voucher 3]  [Voucher 4]  │
+│           │                             │
+└────────────────────────────────────────┘
+```
+
+---
+
+### Desktop (>1024px)
+
+**Layout**:
+- Three-column layout: Nav rail (left) + Main content (center) + Details panel (right)
+- Grid layouts for vouchers (3-4 columns)
+- Persistent navigation rail
+- Multi-window support (open multiple vouchers in tabs)
+
+**Example** (Sales Dashboard):
+```
+┌────────────────────────────────────────────────────────────┐
+│ [Shop]     │  Sales Dashboard         │ Voucher Details   │
+│ [Merchant] ├───────────────────────────┤                   │
+│ [Settings] │  Today's Sales            │ Coffee Voucher    │
+│            │  [15 sold] [1,500 sat]   │ Balance: 70/100   │
+│            │                           │                   │
+│            │  Active Offers            │ [Redeem]          │
+│            │  [Offer 1] [Offer 2]     │                   │
+│            │  [Offer 3] [Offer 4]     │                   │
+└────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -902,63 +1542,51 @@ fun EmptyState(
 
 ### WCAG 2.1 Level AA Compliance
 
-**Visual**:
-- Contrast ratio ≥4.5:1 for text
-- Focus indicators on all interactive elements
-- No color-only information (use icons + text)
-
-**Keyboard**:
-- Tab navigation in logical order
-- Escape key closes modals
-- Enter key activates primary button
-
-**Screen Readers**:
-- Semantic HTML via Compose for Web
-- ARIA labels on icons
-- Status announcements for async actions
-
-**Motion**:
-- Respects `prefers-reduced-motion`
-- No auto-play animations
-- Smooth scrolling optional
+| Guideline | Implementation |
+|-----------|----------------|
+| **Contrast** | Text-background contrast ≥ 4.5:1 (normal), ≥ 3:1 (large 18px+) |
+| **Keyboard Navigation** | All interactive elements focusable via Tab, Enter/Space activates |
+| **Screen Readers** | Semantic HTML, ARIA labels for icons, descriptive alt text |
+| **Touch Targets** | Minimum 48x48dp (12mm) for buttons, 8dp spacing between targets |
+| **Focus Indicators** | Visible focus ring (2px solid, high contrast) |
+| **Color Blindness** | Status uses icons + text (not color alone) |
 
 ---
 
-## Implementation Notes
+### Keyboard Shortcuts (Desktop)
 
-### Technology Stack
-
-- **Framework**: Compose Multiplatform (Kotlin/JS)
-- **Routing**: Voyager Navigator
-- **State**: StateFlow (ViewModel pattern)
-- **Storage**: IndexedDB (via JS interop)
-- **HTTP**: Ktor Client (JS engine)
-- **Crypto**: Web Crypto API (@noble/secp256k1)
-- **QR**: qrcode.js library
-
-### Performance Targets
-
-| Metric | Target |
-|--------|--------|
-| **Initial Load** | <3s (on 3G) |
-| **Interaction Response** | <100ms |
-| **Voucher Issuance** | <2s |
-| **QR Generation** | <500ms |
-
-### Browser Support
-
-- Chrome/Edge: Latest 2 versions
-- Firefox: Latest 2 versions
-- Safari: Latest 2 versions
-- Mobile: iOS Safari 14+, Chrome Android 90+
+| Shortcut | Action |
+|----------|--------|
+| `Tab` | Navigate between interactive elements |
+| `Enter` / `Space` | Activate button or link |
+| `Ctrl + C` | Copy selected text (npub, invoice) |
+| `Esc` | Close modal/bottom sheet |
+| `Ctrl + 1/2/3` | Switch tabs (Shop, Merchant, Settings) |
+| `Ctrl + F` | Search merchants |
 
 ---
 
-## Related Documentation
+### Screen Reader Support
 
-- [Android Client UI Design](android-client-ui-design.md) - Android app design
-- [cashu-client Integration Master Plan](cashu-client-integration-master-plan.md) - Implementation roadmap
-- [Kotlin Voucher Client Roadmap](kotlin-voucher-client-roadmap.md) - Main project roadmap
+**Example Announcements**:
+- "Coffee Shop Downtown voucher, balance 70 out of 100 satoshis, expires in 25 days, active, redeem button"
+- "Lightning invoice for 100 satoshis, scan QR code or copy invoice to clipboard"
+- "Merchant profile: Coffee Shop Downtown, Nostr public key npub1abc, copy button, view offers button"
+
+---
+
+## Technology Stack
+
+| Layer | Technology | Purpose |
+|-------|-----------|---------|
+| **UI Framework** | Compose Multiplatform (Kotlin/JS) | Declarative UI, shared code with Android |
+| **Navigation** | Voyager Navigator | Type-safe navigation with deep linking |
+| **State Management** | StateFlow + ViewModel | Reactive state updates |
+| **Storage** | IndexedDB (via JS interop) | Persistent browser storage |
+| **Crypto** | Web Crypto API + @noble/secp256k1 | secp256k1, Schnorr signatures |
+| **QR Codes** | kotlinx-qrcode or qrcode.js | Generate QR codes for vouchers |
+| **HTTP Client** | Ktor Client (Kotlin/JS) | Lightning invoice fetching |
+| **Styling** | Material 3 (Compose) | Design system |
 
 ---
 
@@ -966,4 +1594,12 @@ fun EmptyState(
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 1.0.0 | 2025-11-20 | Initial web client UI/UX specification |
+| 1.0.0 | 2025-11-20 | Initial P2P voucher design (deprecated) |
+| 2.0.0 | 2025-11-20 | **Complete redesign for merchant-customer marketplace**. New navigation (Shop/Merchant/Settings tabs), Lightning payment integration, partial redemption, Nostr-based merchant discovery, dual-role UX (customer + merchant in one app). |
+
+---
+
+**Related Documents**:
+- [Android Client UI/UX Design](android-client-ui-design.md)
+- [Cashu Client Integration Master Plan](cashu-client-integration-master-plan.md)
+- [Kotlin Voucher Client Roadmap](kotlin-voucher-client-roadmap.md)
