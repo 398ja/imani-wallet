@@ -84,5 +84,11 @@ kotlin {
                 }
             }
         }
+
+        val jvmTest by getting {
+            dependencies {
+                implementation("io.mockk:mockk:1.13.9")
+            }
+        }
     }
 }

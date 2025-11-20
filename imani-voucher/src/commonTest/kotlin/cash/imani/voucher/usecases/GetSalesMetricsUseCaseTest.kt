@@ -258,7 +258,7 @@ class GetSalesMetricsUseCaseTest {
 
         override suspend fun deleteVoucher(voucherId: String): Result<Unit> = Result.success(Unit)
 
-        override suspend fun queryVouchersByStatus(status: VoucherStatus): Result<List<StoredVoucher>> =
+        override suspend fun getVouchersByStatus(status: VoucherStatus): Result<List<StoredVoucher>> =
             Result.success(vouchers.filter { it.status == status })
     }
 }
