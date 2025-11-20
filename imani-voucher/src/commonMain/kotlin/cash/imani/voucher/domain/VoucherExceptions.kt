@@ -111,3 +111,19 @@ sealed class VoucherRedemptionException(message: String, cause: Throwable? = nul
         fun alreadyRedeemed(voucherId: String) = AlreadyRedeemed(voucherId)
     }
 }
+
+/**
+ * Exception thrown when Nostr backup operation fails.
+ */
+class BackupException(
+    message: String,
+    cause: Throwable? = null,
+) : VoucherException(message, cause)
+
+/**
+ * Exception thrown when Nostr restore operation fails.
+ */
+class RestoreException(
+    message: String,
+    cause: Throwable? = null,
+) : VoucherException(message, cause)
