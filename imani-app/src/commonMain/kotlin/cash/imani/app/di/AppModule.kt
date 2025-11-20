@@ -27,6 +27,7 @@ import cash.imani.voucher.usecases.CheckInvoicePaidUseCase
 import cash.imani.voucher.usecases.CreateLightningInvoiceUseCase
 import cash.imani.voucher.usecases.CreateOfferUseCase
 import cash.imani.voucher.usecases.DiscoverMerchantOffersUseCase
+import cash.imani.voucher.usecases.GetSalesMetricsUseCase
 import cash.imani.voucher.usecases.IssueVoucherUseCase
 import cash.imani.voucher.usecases.PublishOfferToNostrUseCase
 import cash.imani.voucher.usecases.RedeemVoucherUseCase
@@ -128,6 +129,11 @@ val appModule =
         single {
             DiscoverMerchantOffersUseCase(
                 nostrClient = get(),
+            )
+        }
+        single {
+            GetSalesMetricsUseCase(
+                voucherRepository = get(),
             )
         }
 
