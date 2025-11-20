@@ -85,4 +85,60 @@ val androidModule =
                 database = get(),
             )
         }
+
+        // TODO: VoucherService Integration (Task 2.2.3)
+        //
+        // To fully integrate cashu-client VoucherService with JvmVoucherAdapter:
+        //
+        // 1. Implement required Android adapters:
+        //    - AndroidWalletStorage: WalletStorage adapter backed by SQLDelight
+        //    - AndroidEncryptionService: EncryptionService using Android Keystore
+        //    - AndroidIdentityKeyService: IdentityKeyService wrapping AndroidIdentityManager
+        //
+        // 2. Add cashu-client services to DI:
+        //    single<SendService> {
+        //        SendServiceImpl(
+        //            walletStorage = get(),
+        //            mintApiClient = get(),
+        //            tokenCodec = get()
+        //        )
+        //    }
+        //
+        //    single<TokenCodec> {
+        //        TokenCodecImpl() // From cashu-client
+        //    }
+        //
+        //    single<VoucherBackupService> {
+        //        VoucherBackupServiceImpl(
+        //            nostrGateway = get(),
+        //            encryptionService = get()
+        //        )
+        //    }
+        //
+        // 3. Wire up VoucherService:
+        //    single<VoucherService> {
+        //        VoucherServiceImpl(
+        //            walletStorage = get(),
+        //            encryptionService = get(),
+        //            backupService = get(),
+        //            identityKeyService = get(),
+        //            sendService = get(),
+        //            tokenCodec = get()
+        //        ).apply {
+        //            init(WalletConfig(
+        //                defaultMintUrl = "http://localhost:7777",
+        //                defaultUnit = "sat"
+        //            ))
+        //        }
+        //    }
+        //
+        // 4. Create JvmVoucherAdapter:
+        //    single<VoucherAdapter> {
+        //        JvmVoucherAdapter(voucherService = get())
+        //    }
+        //
+        // 5. Update use cases to use VoucherAdapter instead of repositories
+        //
+        // For now, AndroidVoucherRepository provides basic functionality.
+        // Full cashu-client integration requires significant adapter work.
     }
