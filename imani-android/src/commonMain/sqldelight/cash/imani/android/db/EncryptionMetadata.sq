@@ -1,0 +1,31 @@
+-- EncryptionMetadata.sq
+-- SQLDelight schema for cashu-client EncryptionService metadata storage
+--
+-- Stores encryption configuration: enabled status, KDF parameters, salt, DEK IV/CT.
+-- Single-row table (id=1) to match cashu-client EncryptionMetadataRepository behavior.
+
+CREATE TABLE IF NOT EXISTS EncryptionMetadataEntity (
+    id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    enabled INTEGER NOT NULL DEFAULT 0,
+    version TEXT NOT NULL,
+    kdf TEXT NOT NULL,
+    kdfIter INTEGER NOT NULL,
+    salt BLOB NOT NULL,
+    dekIv BLOB NOT NULL,
+    dekCt BLOB NOT NULL,
+    updatedAt INTEGER NOT NULL
+);
+
+-- Queries
+selectMetadata:
+SELECT * FROM EncryptionMetadataEntity WHERE id = 1;
+
+insertOrReplaceMetadata:
+INSERT OR REPLACE INTO EncryptionMetadataEntity(id, enabled, version, kdf, kdfIter, salt, dekIv, dekCt, updatedAt)
+VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?);
+
+deleteMetadata:
+DELETE FROM EncryptionMetadataEntity WHERE id = 1;
+
+checkMetadataExists:
+SELECT EXISTS(SELECT 1 FROM EncryptionMetadataEntity WHERE id = 1);
