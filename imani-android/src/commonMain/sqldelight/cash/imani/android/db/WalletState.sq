@@ -1,0 +1,35 @@
+-- WalletState.sq
+-- SQLDelight schema for cashu-client WalletState storage
+--
+-- Stores WalletState as JSON blob for cashu-client VoucherService compatibility.
+-- WalletState contains: tokens, vouchers, history, mnemonic, derivation counters, backup state
+
+CREATE TABLE IF NOT EXISTS WalletStateEntity (
+    walletId TEXT NOT NULL PRIMARY KEY,
+    stateJson TEXT NOT NULL,
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL
+);
+
+-- Index for timestamp queries
+CREATE INDEX IF NOT EXISTS idx_walletstate_updatedAt ON WalletStateEntity(updatedAt DESC);
+
+-- Queries
+selectWalletState:
+SELECT * FROM WalletStateEntity WHERE walletId = ?;
+
+insertOrReplaceWalletState:
+INSERT OR REPLACE INTO WalletStateEntity(walletId, stateJson, createdAt, updatedAt)
+VALUES (?, ?, ?, ?);
+
+deleteWalletState:
+DELETE FROM WalletStateEntity WHERE walletId = ?;
+
+checkWalletExists:
+SELECT EXISTS(SELECT 1 FROM WalletStateEntity WHERE walletId = ?);
+
+countWalletStates:
+SELECT COUNT(*) FROM WalletStateEntity;
+
+selectAllWalletIds:
+SELECT walletId FROM WalletStateEntity ORDER BY updatedAt DESC;

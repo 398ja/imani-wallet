@@ -22,6 +22,10 @@ kotlin {
                 implementation(project(":imani-voucher"))
                 implementation(project(":imani-app"))
 
+                // cashu-client dependencies (for Android adapters)
+                implementation("xyz.tcheeric:wallet-core-base:1.2.0")
+                implementation("xyz.tcheeric:wallet-core-cashu:1.2.0")
+
                 // Kotlin libraries
                 implementation(libs.kotlinx.coroutines.core)
                 implementation(libs.kotlinx.datetime)
@@ -64,6 +68,12 @@ kotlin {
 
                 // Guava (for CameraX ListenableFuture)
                 implementation("com.google.guava:guava:31.1-android")
+
+                // Jackson (for WalletState JSON serialization in AndroidWalletStorage)
+                implementation("com.fasterxml.jackson.core:jackson-databind:2.18.2")
+                implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.18.2")
+                implementation("com.fasterxml.jackson.datatype:jackson-datatype-jdk8:2.18.2")
+                implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.18.2")
 
                 // SQLDelight
                 implementation(libs.sqldelight.android.driver)
