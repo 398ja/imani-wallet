@@ -4,7 +4,9 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import cash.imani.android.MainActivity
 import cash.imani.android.e2e.fixtures.ImaniTestFixtures
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -14,6 +16,16 @@ import org.junit.Test
  *
  * Mirrors: e2e/tests/01-basic-flow.spec.ts
  */
+private const val DEFAULT_TEST_TIMEOUT_MS = 30_000L
+
+private fun runE2ETest(block: suspend CoroutineScope.() -> Unit) {
+    runBlocking {
+        withTimeout(DEFAULT_TEST_TIMEOUT_MS) {
+            block()
+        }
+    }
+}
+
 class BasicFlowTest {
     @get:Rule
     val composeTestRule = createAndroidComposeRule<MainActivity>()
@@ -33,7 +45,7 @@ class BasicFlowTest {
      */
     @Test
     fun should_load_application_and_show_navigation() =
-        runTest {
+        runE2ETest {
             fixtures.waitForAppLoad()
 
             // Should see all three navigation tabs (may have duplicates: nav tab + screen title)
@@ -47,7 +59,7 @@ class BasicFlowTest {
      */
     @Test
     fun should_navigate_between_all_tabs() =
-        runTest {
+        runE2ETest {
             fixtures.waitForAppLoad()
 
             // Navigate to each tab and verify content
@@ -73,7 +85,7 @@ class BasicFlowTest {
      */
     @Test
     fun should_preserve_tab_state_when_switching() =
-        runTest {
+        runE2ETest {
             // Create an identity
             fixtures.createNewIdentity("Test Identity")
 
@@ -98,7 +110,7 @@ class BasicFlowTest {
      */
     @Test
     fun should_share_data_between_tabs() =
-        runTest {
+        runE2ETest {
             // Create identity in Identities tab
             fixtures.createNewIdentity("Shared Identity")
             composeTestRule.onNodeWithText("Shared Identity").assertIsDisplayed()
@@ -117,7 +129,7 @@ class BasicFlowTest {
      */
     @Test
     fun should_handle_back_navigation_correctly() =
-        runTest {
+        runE2ETest {
             fixtures.waitForAppLoad()
             fixtures.gotoIdentities()
 
@@ -145,7 +157,7 @@ class BasicFlowTest {
      */
     @Test
     fun should_switch_to_first_tab_on_back_from_other_tabs() =
-        runTest {
+        runE2ETest {
             fixtures.waitForAppLoad()
 
             // Go to Vouchers tab (second tab)
@@ -166,7 +178,7 @@ class BasicFlowTest {
      */
     @Test
     fun should_show_empty_states_on_fresh_install() =
-        runTest {
+        runE2ETest {
             fixtures.waitForAppLoad()
 
             // Identities tab should show empty state or create button
@@ -185,7 +197,7 @@ class BasicFlowTest {
      */
     @Test
     fun should_handle_rapid_tab_switching() =
-        runTest {
+        runE2ETest {
             fixtures.waitForAppLoad()
 
             // Rapidly switch between tabs

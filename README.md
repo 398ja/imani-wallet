@@ -192,6 +192,7 @@ The web app will automatically reload when you make changes to the code.
 ### Reference Documentation
 - [NUT Specifications Analysis](docs/reference/nut-specifications-web-client-analysis.md)
 - [How-To Guide: Kotlin Voucher Client Roadmap](docs/how-to/kotlin-voucher-client-roadmap.md)
+- [How-To Guide: Reusing cashu-client on Android/JVM](docs/how-to/reuse-cashu-client-on-android.md)
 
 ## Technology Stack
 

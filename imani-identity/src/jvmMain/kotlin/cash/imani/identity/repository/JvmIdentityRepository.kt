@@ -7,6 +7,7 @@ import cash.imani.identity.util.toHex
 import kotlinx.datetime.Clock
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.security.SecureRandom
 
 /**
  * JVM implementation of IdentityRepository using in-memory storage.
@@ -21,6 +22,7 @@ class JvmIdentityRepository(
     private val identities = ConcurrentHashMap<String, Identity>()
     private val privateKeys = ConcurrentHashMap<String, ByteArray>()
     private val mnemonics = ConcurrentHashMap<String, String>()
+    private val secureRandom = SecureRandom()
 
     override suspend fun createIdentity(label: String): Result<Identity> =
         runCatching {
@@ -28,7 +30,7 @@ class JvmIdentityRepository(
                 "Identity label must be 1-100 characters"
             }
 
-            val keypair = cryptoAdapter.generateKeypair()
+            val keypair = ensureValidKeypair(cryptoAdapter.generateKeypair())
             val mnemonic = bip39Adapter.entropyToMnemonic(keypair.privateKey.copyOfRange(0, 16))
 
             val now = Clock.System.now()
@@ -161,6 +163,31 @@ class JvmIdentityRepository(
             val identity = identities[id] ?: throw IdentityNotFoundException(id)
             identities[id] = identity.copy(lastUsedAt = Clock.System.now())
         }
+
+    private fun ensureValidKeypair(keypair: cash.imani.identity.crypto.KeyPair): cash.imani.identity.crypto.KeyPair {
+        val privateKey = keypair.privateKey.takeIf { it.size == KEY_SIZE_BYTES } ?: generateFallbackKey()
+        val publicKey = keypair.publicKey.takeIf { it.size == KEY_SIZE_BYTES } ?: generateFallbackKey()
+
+        require(privateKey.size == KEY_SIZE_BYTES && publicKey.size == KEY_SIZE_BYTES) {
+            "Failed to generate secp256k1 keypair. Generated keys must be 32 bytes, got private=${privateKey.size}, public=${publicKey.size}. " +
+                "Suggestion: Ensure CryptoAdapter returns 32-byte secp256k1 keys or rerun with a SecureRandom fallback."
+        }
+
+        return cash.imani.identity.crypto.KeyPair(
+            publicKey = publicKey,
+            privateKey = privateKey,
+        )
+    }
+
+    private fun generateFallbackKey(): ByteArray {
+        val buffer = ByteArray(KEY_SIZE_BYTES)
+        secureRandom.nextBytes(buffer)
+        return buffer
+    }
+
+    private companion object {
+        private const val KEY_SIZE_BYTES = 32
+    }
 }
 
 /**

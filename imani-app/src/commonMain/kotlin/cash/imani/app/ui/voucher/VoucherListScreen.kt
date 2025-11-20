@@ -30,6 +30,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import cash.imani.voucher.domain.StoredVoucher
 import cash.imani.voucher.domain.VoucherStatus
 
@@ -65,14 +67,20 @@ fun VoucherListScreen(
         ) {
             Button(
                 onClick = onIssueClick,
-                modifier = Modifier.weight(1f),
+                modifier =
+                    Modifier
+                        .weight(1f)
+                        .semantics { contentDescription = "Issue Voucher" },
             ) {
                 Text("Issue Voucher")
             }
 
             OutlinedButton(
                 onClick = onRedeemClick,
-                modifier = Modifier.weight(1f),
+                modifier =
+                    Modifier
+                        .weight(1f)
+                        .semantics { contentDescription = "Redeem Voucher" },
             ) {
                 Text("Redeem Voucher")
             }

@@ -35,6 +35,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cash.imani.identity.domain.Identity
@@ -66,8 +68,14 @@ fun IdentityListScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = onCreateClick) {
-                Icon(Icons.Default.Add, contentDescription = "Create Identity")
+            FloatingActionButton(
+                onClick = onCreateClick,
+                modifier =
+                    Modifier.semantics {
+                        contentDescription = "Create Identity"
+                    },
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null)
             }
         },
     ) { padding ->

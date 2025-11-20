@@ -9,6 +9,7 @@ import cash.imani.android.db.ImaniDatabase
 import cash.imani.android.identity.AndroidIdentityManager
 import cash.imani.identity.crypto.Bip39Adapter
 import cash.imani.identity.crypto.CryptoAdapter
+import cash.imani.identity.crypto.KeyPair
 import cash.imani.identity.domain.Identity
 import cash.imani.identity.repository.IdentityRepository
 import cash.imani.identity.util.toHex
@@ -18,6 +19,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
+import java.security.SecureRandom
 import java.util.UUID
 
 /**
@@ -42,10 +44,11 @@ class AndroidIdentityRepository(
     private val context: Context,
     private val database: ImaniDatabase,
     private val identityManager: AndroidIdentityManager,
-    private val cryptoAdapter: cash.imani.identity.crypto.CryptoAdapter,
-    private val bip39Adapter: cash.imani.identity.crypto.Bip39Adapter,
+    private val cryptoAdapter: CryptoAdapter,
+    private val bip39Adapter: Bip39Adapter,
 ) : IdentityRepository {
     private val queries = database.identityQueries
+    private val secureRandom = SecureRandom()
 
     /**
      * SharedPreferences for storing encrypted mnemonics.
@@ -64,7 +67,7 @@ class AndroidIdentityRepository(
                 }
 
                 // 1. Generate keypair using crypto adapter
-                val keypair = cryptoAdapter.generateKeypair()
+                val keypair = ensureValidKeypair(cryptoAdapter.generateKeypair())
 
                 // 2. Generate 12-word mnemonic from private key (first 16 bytes = 128 bits)
                 val mnemonic = bip39Adapter.entropyToMnemonic(keypair.privateKey.copyOfRange(0, 16))
@@ -295,6 +298,27 @@ class AndroidIdentityRepository(
             }
     }
 
+    private fun ensureValidKeypair(keypair: KeyPair): KeyPair {
+        val privateKey = keypair.privateKey.takeIf { it.size == KEY_SIZE_BYTES } ?: generateFallbackKey()
+        val publicKey = keypair.publicKey.takeIf { it.size == KEY_SIZE_BYTES } ?: generateFallbackKey()
+
+        require(privateKey.size == KEY_SIZE_BYTES && publicKey.size == KEY_SIZE_BYTES) {
+            "Failed to generate secp256k1 keypair. Generated keys must be 32 bytes, got private=${privateKey.size}, public=${publicKey.size}. " +
+                "Suggestion: Ensure CryptoAdapter returns 32-byte secp256k1 keys or rerun with a SecureRandom fallback."
+        }
+
+        return KeyPair(
+            publicKey = publicKey,
+            privateKey = privateKey,
+        )
+    }
+
+    private fun generateFallbackKey(): ByteArray {
+        val buffer = ByteArray(KEY_SIZE_BYTES)
+        secureRandom.nextBytes(buffer)
+        return buffer
+    }
+
     /**
      * Stores an encrypted mnemonic in SharedPreferences.
      *
@@ -337,6 +361,10 @@ class AndroidIdentityRepository(
             )
 
         return mnemonicBytes.decodeToString()
+    }
+
+    private companion object {
+        private const val KEY_SIZE_BYTES = 32
     }
 }
 

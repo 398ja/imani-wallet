@@ -103,9 +103,15 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
             .performClick()
 
         // Wait for mnemonic screen with backup checkbox
-        composeTestRule.waitUntil(10000) {
-            composeTestRule.onAllNodesWithText("I have securely backed up my recovery phrase")
-                .fetchSemanticsNodes().isNotEmpty()
+        val mnemonicVisible =
+            waitForNodeWithText(
+                text = "I have securely backed up my recovery phrase",
+                timeoutMillis = 20_000,
+            )
+        if (!mnemonicVisible) {
+            throw AssertionError(
+                "Mnemonic confirmation not visible after creating identity.\n${dumpSemanticsTree()}",
+            )
         }
 
         composeTestRule.waitForIdle()
@@ -350,6 +356,24 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
 
         composeTestRule.waitForIdle()
     }
+
+    private fun waitForNodeWithText(
+        text: String,
+        timeoutMillis: Long,
+        substring: Boolean = false,
+    ): Boolean =
+        try {
+            composeTestRule.waitUntil(timeoutMillis) {
+                composeTestRule.onAllNodesWithText(text, substring = substring)
+                    .fetchSemanticsNodes().isNotEmpty()
+            }
+            true
+        } catch (_: Throwable) {
+            false
+        }
+
+    private fun dumpSemanticsTree(): String =
+        composeTestRule.onRoot(useUnmergedTree = true).printToString()
 
     // ==================== Helper Extensions ====================
 

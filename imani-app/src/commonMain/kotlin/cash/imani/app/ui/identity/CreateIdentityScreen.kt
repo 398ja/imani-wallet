@@ -38,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -311,12 +312,15 @@ fun MnemonicBackupView(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { hasBackedUp = !hasBackedUp },
+                .clickable(
+                    role = Role.Checkbox,
+                    onClick = { hasBackedUp = !hasBackedUp }
+                ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Checkbox(
                 checked = hasBackedUp,
-                onCheckedChange = { hasBackedUp = it },
+                onCheckedChange = null, // Let the Row handle clicks
             )
             Spacer(Modifier.width(8.dp))
             Text(
