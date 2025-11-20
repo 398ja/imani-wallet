@@ -879,12 +879,102 @@ val signedEvent = signUseCase(identity.id, event).getOrThrow()
 
 ---
 
+## Extending to Voucher Integration
+
+### Same Pattern for Vouchers
+
+The **Adapter Pattern** used successfully for identity integration (77% complete) will be extended to voucher functionality:
+
+**VoucherAdapter** (following CryptoAdapter pattern):
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    imani-voucher (KMP)                       │
+├─────────────────────────────────────────────────────────────┤
+│  commonMain/                                                 │
+│    └── VoucherAdapter.kt (interface)                        │
+│        - issueVoucher(request): Result<IssueVoucherResult>  │
+│        - redeemVoucher(token): Result<RedeemVoucherResult>  │
+│        - revokeVoucher(id): Result<Unit>                    │
+│        - verifyVoucher(id): Result<VerifyVoucherResult>     │
+│                                                              │
+│  jvmMain/ (Android)              jsMain/ (Web)              │
+│    └── JvmVoucherAdapter         └── WebVoucherAdapter      │
+│        └─→ Wraps                     └─→ Reuses existing    │
+│           cashu-client                  KMP use cases       │
+│           VoucherService                                     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Benefits of Reusing This Pattern
+
+✅ **Proven Approach**: Identity integration already 77% complete using same strategy
+✅ **Consistent Architecture**: All platform abstractions follow same pattern
+✅ **Zero Learning Curve**: Team already familiar with expect/actual and adapter pattern
+✅ **High Code Reuse**: Android gets ≥95% reuse from cashu-client VoucherService
+
+### cashu-client Voucher Features (Available on Android)
+
+From `cashu-client/wallet-plugin/wallet-core-app/src/main/java/xyz/tcheeric/wallet/core/VoucherService.java`:
+
+- **Issue vouchers**: Creates P2PK-locked vouchers with proof selection (SendService)
+- **Redeem vouchers**: Verifies and claims vouchers
+- **Revoke vouchers**: Publishes revocation to Nostr ledger
+- **Verify vouchers**: Ed25519 signature verification (NUT-11 compliance)
+- **Backup to Nostr**: NIP-17 + NIP-44 encrypted backups
+- **Restore from Nostr**: Recovers vouchers from relays
+- **Refresh status**: Queries Nostr ledger for current status
+- **List/query vouchers**: Full voucher management
+
+### Implementation Timeline
+
+Following the same phased approach as identity integration:
+
+| Phase | Focus | Duration | Status |
+|-------|-------|----------|--------|
+| **Phase 1** | VoucherAdapter interface (commonMain) | 2 days | 📋 TODO |
+| **Phase 2** | JvmVoucherAdapter (wrap cashu-client) | 3 days | 📋 TODO |
+| **Phase 3** | WebVoucherAdapter (reuse KMP use cases) | 2 days | 📋 TODO |
+| **Phase 4** | Migration from current implementation | 2 days | 📋 TODO |
+| **Phase 5** | Integration testing | 2 days | 📋 TODO |
+
+**Total Estimated Effort**: 11 days (~2 weeks)
+
+### Key Differences from Identity Integration
+
+**Similarities**:
+- ✅ Adapter pattern (expect/actual)
+- ✅ JVM wrapper delegates to cashu-client
+- ✅ Web uses existing KMP code
+- ✅ Domain models in commonMain
+
+**Differences**:
+- ⚠️ **More complex**: VoucherService depends on SendService, TokenCodec, NostrGatewayService
+- ⚠️ **DI dependencies**: Requires WalletStorage, EncryptionService, VoucherBackupService
+- ⚠️ **State management**: Vouchers have lifecycle (issued → delivered → redeemed)
+
+### Next Steps
+
+1. ✅ **Identity integration complete** (Phase 1-2, 77% done) ← **Current**
+2. 🔄 **Finish identity testing** (Phase 3, Task 3.3-3.6)
+3. 📋 **Start voucher integration** (Phase 1: Define VoucherAdapter)
+4. 📋 **Android implementation** (Phase 2: Wrap cashu-client VoucherService)
+5. 📋 **Web implementation** (Phase 3: Reuse existing use cases)
+
+### Related Documentation
+
+**For Voucher Integration**:
+- [Integrate cashu-client Vouchers](integrate-cashu-client-vouchers.md) - Complete implementation guide
+- [Voucher Integration Architectures](../explanation/voucher-integration-architectures.md) - Architecture comparison (Option A chosen)
+
+---
+
 ## Related Documentation
 
 - [Android Port Roadmap](../../project/android-port-roadmap.md)
 - [Kotlin Client Specification](../../project/explanation/kotlin-client-spec-detailed.md)
 - [Java to Kotlin Migration](../../project/JAVA_TO_KOTLIN_MIGRATION.md)
 - [Testing Guide](device-testing-guide.md)
+- [Integrate cashu-client Vouchers](integrate-cashu-client-vouchers.md) ← **Next Phase**
 
 ---
 
@@ -894,3 +984,4 @@ val signedEvent = signUseCase(identity.id, event).getOrThrow()
 |---------|------|---------|
 | 1.0.0 | 2025-11-19 | Initial version with integration steps |
 | 2.0.0 | 2025-11-20 | **Major rewrite**: Added phases, task breakdown, current status, troubleshooting, task tracking |
+| 2.1.0 | 2025-11-20 | Added "Extending to Voucher Integration" section, documenting Option A (Adapter Pattern) for vouchers following same pattern as identity |

@@ -2,18 +2,42 @@
 
 > **Document Type**: How-To Guide (Diátaxis)
 > **Purpose**: Guide for integrating cashu-client's VoucherService into imani-wallet for both Android and web platforms
-> **Related**: [Reuse cashu-client on Android](reuse-cashu-client-on-android.md), [Kotlin Voucher Client Roadmap](../../project/kotlin-voucher-client-roadmap.md)
+> **Status**: ✅ **Option A (Adapter Pattern) APPROVED** - Ready for implementation
+> **Last Updated**: 2025-11-20
+> **Related**: [Reuse cashu-client on Android](reuse-cashu-client-on-android.md), [Kotlin Voucher Client Roadmap](../../project/kotlin-voucher-client-roadmap.md), [Architecture Comparison](../explanation/voucher-integration-architectures.md)
 
 ## Table of Contents
 
-1. [Overview](#overview)
-2. [Architecture Decision](#architecture-decision)
-3. [Phase 1: VoucherAdapter Abstraction Layer](#phase-1-voucheradapter-abstraction-layer)
-4. [Phase 2: Android Implementation (Reuse cashu-client)](#phase-2-android-implementation-reuse-cashu-client)
-5. [Phase 3: Web Implementation (KMP-Compatible)](#phase-3-web-implementation-kmp-compatible)
-6. [Phase 4: Migration from Current Implementation](#phase-4-migration-from-current-implementation)
-7. [Testing Strategy](#testing-strategy)
-8. [Troubleshooting](#troubleshooting)
+1. [Decision Summary](#decision-summary)
+2. [Overview](#overview)
+3. [Architecture Decision](#architecture-decision)
+4. [Phase 1: VoucherAdapter Abstraction Layer](#phase-1-voucheradapter-abstraction-layer)
+5. [Phase 2: Android Implementation (Reuse cashu-client)](#phase-2-android-implementation-reuse-cashu-client)
+6. [Phase 3: Web Implementation (KMP-Compatible)](#phase-3-web-implementation-kmp-compatible)
+7. [Phase 4: Migration from Current Implementation](#phase-4-migration-from-current-implementation)
+8. [Testing Strategy](#testing-strategy)
+9. [Troubleshooting](#troubleshooting)
+
+---
+
+## Decision Summary
+
+**✅ DECISION: Use Option A - Adapter Pattern**
+
+**Date**: 2025-11-20
+
+**Reasoning**:
+1. **Aligns with Imani Principles**: Self-sovereign (keys on device), privacy-first (no backend), offline-capable
+2. **Proven Pattern**: Successfully used for identity integration (77% complete, Phase 1-2 done)
+3. **Fast Implementation**: 2 weeks vs 3 weeks (BFF) or 3 months (KMP port)
+4. **No Deployment Overhead**: Works offline, no server hosting/monitoring required
+5. **Good Enough**: 95% code reuse on Android (primary target), 70% on web (acceptable)
+
+**Rejected Alternatives**:
+- ❌ **Option B (Ktor BFF)**: Violates self-custody principle, requires backend deployment, adds latency
+- ❌ **Option C (Port to KMP)**: 3-month effort, high maintenance burden, premature optimization
+
+**See**: [Architecture Comparison](../explanation/voucher-integration-architectures.md) for detailed analysis
 
 ---
 
