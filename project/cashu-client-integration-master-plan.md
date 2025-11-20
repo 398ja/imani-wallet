@@ -353,13 +353,13 @@ data class LightningInvoice(
 | ID | Task | Size | Status | Commit | Notes | Dependencies |
 |----|------|------|--------|--------|-------|--------------|
 | **2.2.1** | Add cashu-client Dependency (jvmMain) | S (1d) | ✅ DONE | 6d347f7 | Added mavenLocal() to settings.gradle.kts. Added xyz.tcheeric:wallet-core-app:1.2.0 to imani-voucher jvmMain (VoucherServiceImpl, SendService, TokenCodec, NostrGatewayService). Dependency resolves correctly from Maven local. | None |
-| **2.2.2** | Implement JvmVoucherAdapter | M (2d) | 📋 TODO | - | - | 2.1.1, 2.2.1 |
+| **2.2.2** | Implement JvmVoucherAdapter | M (2d) | ✅ DONE | e5da09f | Implemented all 8 VoucherAdapter interface methods. Full implementation: issueVoucher, listVouchers, queryVouchersByStatus, backupToNostr, restoreFromNostr. NotImplementedError for redeemVoucher/revokeVoucher/verifyVoucher (delegated to use cases or future API). Type conversion utilities: JavaIssueVoucherResult→IssueVoucherResult, JavaStoredVoucher→StoredVoucher, String→VoucherStatus, java.time.Instant→kotlinx.datetime.Instant. Added BackupException and RestoreException. Uses withContext(Dispatchers.IO) for blocking Java calls. Exception mapping: WalletOperationException→Kotlin domain exceptions. Adapter pattern for 100% cashu-client code reuse. | 2.1.1, 2.2.1 |
 | **2.2.3** | Update Android DI for VoucherService | S (1d) | 📋 TODO | - | - | 2.2.2 |
 | **2.2.4** | Implement Lightning Integration | M (2d) | 📋 TODO | - | - | 2.1.5, 2.2.1 |
 | **2.2.5** | Implement Offer Management | M (2d) | 📋 TODO | - | - | 2.1.3, 2.2.1 |
 
-**Total Completed**: 1/5 tasks (20%)
-**Estimated Remaining**: 6 days
+**Total Completed**: 2/5 tasks (40%)
+**Estimated Remaining**: 4 days
 
 **Deliverables**:
 - `settings.gradle.kts` with cashu-client `includeBuild()` or Maven local
