@@ -106,8 +106,7 @@ data class MerchantProfile(
      *
      * @return true if at least one contact method is provided
      */
-    fun hasContactInfo(): Boolean =
-        contactEmail != null || contactPhone != null || website != null
+    fun hasContactInfo(): Boolean = contactEmail != null || contactPhone != null || website != null
 
     /**
      * Returns a copy of this profile with updated timestamp.
@@ -116,6 +115,5 @@ data class MerchantProfile(
      *
      * @return New profile with current updatedAt timestamp
      */
-    fun withUpdatedTimestamp(): MerchantProfile =
-        copy(updatedAt = kotlinx.datetime.Clock.System.now())
+    fun withUpdatedTimestamp(): MerchantProfile = copy(updatedAt = kotlinx.datetime.Clock.System.now())
 }

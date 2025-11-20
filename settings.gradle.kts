@@ -15,6 +15,7 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        mavenLocal() // For cashu-client dependencies (xyz.tcheeric:wallet-core-app:1.2.0)
         maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
     }
 }

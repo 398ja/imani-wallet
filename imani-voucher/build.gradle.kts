@@ -56,5 +56,17 @@ kotlin {
                 implementation(npm("nostr-tools", "2.1.0"))
             }
         }
+
+        val jvmMain by getting {
+            dependencies {
+                // cashu-client wallet-core-app dependency (VoucherService, SendService, TokenCodec)
+                // Version 1.2.0 includes:
+                // - VoucherServiceImpl: Issue, redeem, revoke, verify vouchers
+                // - SendService: Nostr backup/restore (NIP-17 + NIP-44)
+                // - TokenCodec: Cashu token encoding/decoding
+                // - NostrGatewayService: Nostr relay integration
+                implementation("xyz.tcheeric:wallet-core-app:1.2.0")
+            }
+        }
     }
 }
