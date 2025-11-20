@@ -23,8 +23,27 @@ kotlin {
                 implementation(project(":imani-app"))
 
                 // cashu-client dependencies (for Android adapters)
-                implementation("xyz.tcheeric:wallet-core-base:1.2.0")
-                implementation("xyz.tcheeric:wallet-core-cashu:1.2.0")
+                // Same exclusions as imani-voucher module for Android compatibility
+                implementation("xyz.tcheeric:wallet-core-base:1.2.0") {
+                    exclude(group = "jakarta.el", module = "jakarta.el-api")
+                    exclude(group = "org.apache.tomcat.embed", module = "tomcat-embed-el")
+                    exclude(group = "org.bouncycastle", module = "bcprov-jdk15to18")
+                    exclude(group = "org.bouncycastle", module = "bcprov-jdk18on")
+                    exclude(group = "org.springframework")
+                    exclude(group = "org.springframework.boot")
+                    exclude(group = "org.springframework.data")
+                    exclude(group = "org.springframework.hateoas")
+                }
+                implementation("xyz.tcheeric:wallet-core-cashu:1.2.0") {
+                    exclude(group = "jakarta.el", module = "jakarta.el-api")
+                    exclude(group = "org.apache.tomcat.embed", module = "tomcat-embed-el")
+                    exclude(group = "org.bouncycastle", module = "bcprov-jdk15to18")
+                    exclude(group = "org.bouncycastle", module = "bcprov-jdk18on")
+                    exclude(group = "org.springframework")
+                    exclude(group = "org.springframework.boot")
+                    exclude(group = "org.springframework.data")
+                    exclude(group = "org.springframework.hateoas")
+                }
 
                 // Kotlin libraries
                 implementation(libs.kotlinx.coroutines.core)

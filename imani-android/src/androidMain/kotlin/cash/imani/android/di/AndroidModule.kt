@@ -86,7 +86,26 @@ val androidModule =
             )
         }
 
-        // TODO: VoucherService Integration (Task 2.2.3)
+        // ===== cashu-client Integration =====
+        // Android adapters for cashu-client VoucherService
+        // Implemented: AndroidWalletStorage, AndroidEncryptionService, AndroidIdentityKeyService
+
+        // AndroidWalletStorage - Implements WalletStorage using SQLDelight
+        single<cash.imani.android.adapter.AndroidWalletStorage> {
+            cash.imani.android.adapter.AndroidWalletStorage(database = get())
+        }
+
+        // AndroidEncryptionService - Factory function creates EncryptionService with Android repository
+        single<xyz.tcheeric.wallet.core.security.EncryptionService> {
+            cash.imani.android.adapter.createAndroidEncryptionService(database = get())
+        }
+
+        // AndroidIdentityKeyService - Wraps AndroidIdentityRepository for IdentityKeyService
+        single<xyz.tcheeric.wallet.core.security.IdentityKeyService> {
+            cash.imani.android.adapter.AndroidIdentityKeyService(identityRepository = get())
+        }
+
+        // TODO: VoucherService Integration (Task 2.2.3 - Future Work)
         //
         // To fully integrate cashu-client VoucherService with JvmVoucherAdapter:
         //
