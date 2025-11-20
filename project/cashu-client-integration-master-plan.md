@@ -215,13 +215,13 @@ imani-wallet/
 
 ---
 
-## Phase 2: Voucher Integration (Ready to Start)
+## Phase 2: Voucher Integration (In Progress)
 
 ### Overview
 
 **Goal**: Build merchant-customer voucher marketplace on top of cashu-client VoucherService.
 
-**Status**: 0/18 tasks complete (0%) *(Extended from 12 tasks)*
+**Status**: 5/18 tasks complete (28%) *(Extended from 12 tasks)*
 
 **Architecture Decision**: ✅ Option A (Adapter Pattern) - Approved 2025-11-20
 
@@ -267,13 +267,16 @@ From `cashu-client/wallet-plugin/wallet-core-app/src/main/java/xyz/tcheeric/wall
 
 #### Sub-Phase 2.1: Abstraction Layer + Marketplace Domain Models (3 days)
 
-| ID | Task | Size | Status | Dependencies |
-|----|------|------|--------|--------------|
-| **2.1.1** | Define VoucherAdapter Interface (commonMain) | M (1d) | 📋 TODO | None |
-| **2.1.2** | Update StoredVoucher Domain Model | S (0.5d) | 📋 TODO | 2.1.1 |
-| **2.1.3** | Define VoucherOffer Domain Model | S (0.5d) | 📋 TODO | 2.1.1 |
-| **2.1.4** | Define MerchantProfile Domain Model | S (0.5d) | 📋 TODO | 2.1.1 |
-| **2.1.5** | Define LightningInvoice Domain Model | S (0.5d) | 📋 TODO | 2.1.1 |
+| ID | Task | Size | Status | Commit | Notes | Dependencies |
+|----|------|------|--------|--------|-------|--------------|
+| **2.1.1** | Define VoucherAdapter Interface (commonMain) | M (1d) | ✅ DONE | b33942e | 8 methods: issue, redeem, revoke, verify, list, queryByStatus, backupToNostr, restoreFromNostr. Comprehensive KDoc with JVM/Web implementation examples. | None |
+| **2.1.2** | Update StoredVoucher Domain Model | S (0.5d) | ✅ DONE | 27a85bc | Added @SerialName annotations for Java interop, Nostr NIP-33, and IndexedDB compatibility. | 2.1.1 |
+| **2.1.3** | Define VoucherOffer Domain Model | S (0.5d) | ✅ DONE | 27a85bc | Merchant offering template with price, validity, redemption rules. Stored as NIP-33 kind 30078. Helper methods: isAvailable(), calculateExpiration(). | 2.1.1 |
+| **2.1.4** | Define MerchantProfile Domain Model | S (0.5d) | ✅ DONE | 27a85bc | Business profile with metadata (name, description, contact). Validation: businessName (1-100), description (1-500). Helper methods: hasContactInfo(), withUpdatedTimestamp(). | 2.1.1 |
+| **2.1.5** | Define LightningInvoice Domain Model | S (0.5d) | ✅ DONE | 27a85bc | Lightning payment request for voucher purchase (NUT-04). Tracks quoteId, paymentRequest, paid status, expiration. Helper methods: isExpired(), isValid(), canMint(), markAsPaid(). | 2.1.1 |
+
+**Total Completed**: 5/5 tasks (100%)
+**Estimated Remaining**: 0 days
 
 **Deliverables**:
 - `imani-voucher/src/commonMain/kotlin/cash/imani/voucher/adapter/VoucherAdapter.kt`
