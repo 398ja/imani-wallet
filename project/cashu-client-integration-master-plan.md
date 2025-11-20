@@ -435,10 +435,10 @@ class PublishOfferToNostrUseCase(
 
 #### Sub-Phase 2.3: Web Implementation (2 days)
 
-| ID | Task | Size | Status | Dependencies |
-|----|------|------|--------|--------------|
-| **2.3.1** | Implement WebVoucherAdapter | M (2d) | 📋 TODO | 2.1.1 |
-| **2.3.2** | Update Web DI for VoucherAdapter | S (1d) | 📋 TODO | 2.3.1 |
+| ID | Task | Size | Status | Commit | Dependencies |
+|----|------|------|--------|--------|--------------|
+| **2.3.1** | Implement WebVoucherAdapter | M (2d) | ✅ DONE | d4d0f22 | 2.1.1 |
+| **2.3.2** | Update Web DI for VoucherAdapter | S (1d) | ✅ DONE | d4d0f22 | 2.3.1 |
 
 **Deliverables**:
 - `imani-voucher/src/jsMain/kotlin/cash/imani/voucher/adapter/WebVoucherAdapter.kt`
