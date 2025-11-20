@@ -12,6 +12,8 @@ import cash.imani.identity.usecases.CreateIdentityUseCase
 import cash.imani.identity.usecases.ImportIdentityFromNsecUseCase
 import cash.imani.identity.usecases.ImportIdentityUseCase
 import cash.imani.identity.usecases.ListIdentitiesUseCase
+import cash.imani.voucher.adapter.VoucherAdapter
+import cash.imani.voucher.adapter.createVoucherAdapter
 import cash.imani.voucher.network.MintApiClient
 import cash.imani.voucher.network.createHttpClient
 import cash.imani.voucher.repository.ProofRepository
@@ -40,12 +42,14 @@ import org.koin.dsl.module
  * - Identity use cases
  * - Identity ViewModel
  * - Voucher repositories (proof and voucher)
+ * - Voucher adapters (platform-specific: WebVoucherAdapter for JS, JvmVoucherAdapter for JVM)
  * - Voucher use cases (issue, redeem, Lightning invoice generation/checking)
  * - Voucher ViewModel
  *
  * Phase 1: Identity module complete
  * Phase 2: Voucher module added (including Lightning integration - NUT-04)
  * Task 2.2.5: Offer management use cases (Create, Publish, Discover)
+ * Task 2.3.2: VoucherAdapter added with platform-specific implementations
  * Phase 3+: Split into feature modules
  */
 val appModule =
@@ -63,6 +67,17 @@ val appModule =
 
         // Nostr - Voucher and Offer Storage
         single<NostrVoucherClient> { createNostrVoucherClient(NostrConfig.DEFAULT_RELAYS) }
+
+        // Adapters - Voucher (Task 2.3.2)
+        single<VoucherAdapter> {
+            createVoucherAdapter(
+                issueVoucherUseCase = get(),
+                redeemVoucherUseCase = get(),
+                voucherRepository = get(),
+                nostrClient = get(),
+                cryptoAdapter = get(),
+            )
+        }
 
         // HTTP Client
         single { createHttpClient() }

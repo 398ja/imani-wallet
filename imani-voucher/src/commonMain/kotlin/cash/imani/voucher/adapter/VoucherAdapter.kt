@@ -312,3 +312,26 @@ interface VoucherAdapter {
      */
     suspend fun restoreFromNostr(): Result<List<StoredVoucher>>
 }
+
+/**
+ * Factory function for creating platform-specific VoucherAdapter.
+ *
+ * **JVM Platform**: Returns JvmVoucherAdapter wrapping cashu-client Java libraries
+ * **Web Platform**: Returns WebVoucherAdapter delegating to Kotlin/JS use cases
+ *
+ * Implementation provided via expect/actual pattern.
+ *
+ * @param issueVoucherUseCase Use case for voucher issuance
+ * @param redeemVoucherUseCase Use case for voucher redemption
+ * @param voucherRepository Repository for voucher storage
+ * @param nostrClient Client for Nostr relay operations
+ * @param cryptoAdapter Cryptographic adapter for signatures
+ * @return Platform-specific VoucherAdapter implementation
+ */
+expect fun createVoucherAdapter(
+    issueVoucherUseCase: cash.imani.voucher.usecases.IssueVoucherUseCase,
+    redeemVoucherUseCase: cash.imani.voucher.usecases.RedeemVoucherUseCase,
+    voucherRepository: cash.imani.voucher.repository.VoucherRepository,
+    nostrClient: cash.imani.voucher.nostr.NostrVoucherClient,
+    cryptoAdapter: cash.imani.identity.crypto.CryptoAdapter,
+): VoucherAdapter
