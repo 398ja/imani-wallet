@@ -62,6 +62,9 @@ kotlin {
                 // Accompanist
                 implementation(libs.accompanist.permissions)
 
+                // Guava (for CameraX ListenableFuture)
+                implementation("com.google.guava:guava:31.1-android")
+
                 // SQLDelight
                 implementation(libs.sqldelight.android.driver)
                 implementation(libs.sqldelight.coroutines)
@@ -168,6 +171,12 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
             excludes += "/META-INF/LICENSE.md"
             excludes += "/META-INF/LICENSE-notice.md"
+            // Exclude duplicate files from transitive dependencies
+            excludes += "README.md"  // argon2-jvm, lombok
+            excludes += "COPYRIGHT.txt"  // resilience4j
+            // Pick first for META-INF files from server-side dependencies
+            pickFirsts += "META-INF/INDEX.LIST"  // undertow, logback, xnio, jboss
+            pickFirsts += "META-INF/spring.factories"  // spring framework (if not excluded)
         }
     }
 

@@ -70,11 +70,17 @@ kotlin {
                 // - Jakarta EE (jakarta.el.*): Android doesn't support Jakarta EE
                 // - Tomcat (tomcat-embed-*): Server-side dependency not needed on Android
                 // - BouncyCastle provider conflicts: Android has its own BouncyCastle version
+                // - Spring Framework: Server-side dependency not needed on Android
                 implementation("xyz.tcheeric:wallet-core-app:1.2.0") {
                     exclude(group = "jakarta.el", module = "jakarta.el-api")
                     exclude(group = "org.apache.tomcat.embed", module = "tomcat-embed-el")
                     exclude(group = "org.bouncycastle", module = "bcprov-jdk15to18")
                     exclude(group = "org.bouncycastle", module = "bcprov-jdk18on")
+                    // Exclude all Spring Framework dependencies (server-side only)
+                    exclude(group = "org.springframework")
+                    exclude(group = "org.springframework.boot")
+                    exclude(group = "org.springframework.data")
+                    exclude(group = "org.springframework.hateoas")
                 }
             }
         }
