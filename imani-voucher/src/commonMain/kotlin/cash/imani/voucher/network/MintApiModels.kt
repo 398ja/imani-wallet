@@ -168,3 +168,37 @@ data class ProofState(
     val state: String,
     val witness: String? = null,
 )
+
+// ==================== NUT-04: Minting Tokens (Lightning) ====================
+
+/**
+ * Request to create a mint quote for Lightning payment (NUT-04).
+ *
+ * POST /v1/mint/quote/bolt11
+ *
+ * @property amount Amount in specified unit (e.g., satoshis)
+ * @property unit Unit of account (e.g., "sat")
+ */
+@Serializable
+data class MintQuoteRequest(
+    val amount: Int,
+    val unit: String,
+)
+
+/**
+ * Response from creating a mint quote (NUT-04).
+ *
+ * Contains the quote ID and Lightning invoice for payment.
+ *
+ * @property quote Quote ID used for minting after payment
+ * @property request BOLT11 Lightning invoice string (lnbc...)
+ * @property paid Whether the invoice has been paid
+ * @property expiry Expiration timestamp (Unix seconds)
+ */
+@Serializable
+data class MintQuoteResponse(
+    val quote: String,
+    val request: String,
+    val paid: Boolean,
+    val expiry: Long,
+)

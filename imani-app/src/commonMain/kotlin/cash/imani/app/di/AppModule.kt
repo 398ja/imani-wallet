@@ -18,6 +18,8 @@ import cash.imani.voucher.repository.ProofRepository
 import cash.imani.voucher.repository.VoucherRepository
 import cash.imani.voucher.repository.createProofRepository
 import cash.imani.voucher.repository.createVoucherRepository
+import cash.imani.voucher.usecases.CheckInvoicePaidUseCase
+import cash.imani.voucher.usecases.CreateLightningInvoiceUseCase
 import cash.imani.voucher.usecases.IssueVoucherUseCase
 import cash.imani.voucher.usecases.RedeemVoucherUseCase
 import org.koin.dsl.module
@@ -32,11 +34,11 @@ import org.koin.dsl.module
  * - Identity use cases
  * - Identity ViewModel
  * - Voucher repositories (proof and voucher)
- * - Voucher use cases
+ * - Voucher use cases (issue, redeem, Lightning invoice generation/checking)
  * - Voucher ViewModel
  *
  * Phase 1: Identity module complete
- * Phase 2: Voucher module added
+ * Phase 2: Voucher module added (including Lightning integration - NUT-04)
  * Phase 3+: Split into feature modules
  */
 val appModule =
@@ -78,6 +80,16 @@ val appModule =
             RedeemVoucherUseCase(
                 voucherRepository = get(),
                 proofRepository = get(),
+                mintApiClient = get(),
+            )
+        }
+        single {
+            CreateLightningInvoiceUseCase(
+                mintApiClient = get(),
+            )
+        }
+        single {
+            CheckInvoicePaidUseCase(
                 mintApiClient = get(),
             )
         }
