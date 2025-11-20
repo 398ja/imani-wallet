@@ -2,7 +2,8 @@
 
 > **Document Type**: Reference & How-To (Diátaxis)
 > **Purpose**: Comprehensive roadmap for integrating cashu-client into imani-wallet for both identity and voucher functionality
-> **Status**: ✅ Identity 77% Complete | 📋 Voucher Ready to Start
+> **Status**: ✅ Identity 77% Complete | 📋 Voucher Ready to Start (Marketplace Model)
+> **Version**: 2.0.0
 > **Last Updated**: 2025-11-20
 
 ---
@@ -38,12 +39,14 @@ Reuse **100% of cashu-client's production-tested code** on Android/JVM while mai
    - Android Keystore integration
    - **Code Reuse**: ≥95% on Android, ~70% on web
 
-2. 📋 **Voucher Module** (Phase 2) - Ready to Start
-   - Voucher issuance (P2PK-locked)
-   - Redemption and verification
-   - Nostr backup/restore (NIP-17 + NIP-44)
-   - Proof selection and token encoding
-   - **Code Reuse**: ≥95% on Android, ~70% on web
+2. 📋 **Voucher Module** (Phase 2) - Ready to Start (**Marketplace Model**)
+   - **Merchant Features**: Create voucher offers, POS redemption, sales dashboard
+   - **Customer Features**: Purchase with Lightning, redeem vouchers, partial redemption
+   - **Core Voucher Operations**: Issue, redeem, verify (P2PK-locked)
+   - **Payment Integration**: Lightning invoice generation and payment checking (NUT-04)
+   - **Merchant Discovery**: Nostr-based (NIP-33 parameterized events)
+   - **Nostr Backup/Restore**: NIP-17 + NIP-44 encrypted backups
+   - **Code Reuse**: ≥90% on Android (cashu-client VoucherService + extensions), ~70% on web
 
 ### Approach: Adapter Pattern
 
@@ -211,17 +214,28 @@ imani-wallet/
 
 ### Overview
 
-**Goal**: Reuse cashu-client VoucherService for voucher operations on Android/JVM.
+**Goal**: Build merchant-customer voucher marketplace on top of cashu-client VoucherService.
 
-**Status**: 0/12 tasks complete (0%)
+**Status**: 0/18 tasks complete (0%) *(Extended from 12 tasks)*
 
 **Architecture Decision**: ✅ Option A (Adapter Pattern) - Approved 2025-11-20
 
+**Business Model**: Merchant-Customer Marketplace
+- Merchants create voucher offers (e.g., "100 sat coffee voucher - 30 days")
+- Customers discover merchants via Nostr npub
+- Customers purchase vouchers with Lightning payments
+- Customers redeem at merchant POS (full or partial)
+- Decentralized discovery (no central marketplace)
+
 **What We'll Build**:
-- 📋 VoucherAdapter interface (commonMain)
+- 📋 **Core Voucher Operations** (VoucherAdapter): Issue, redeem, verify, backup/restore
+- 📋 **Marketplace Extensions**:
+  - VoucherOffer management (merchant templates stored on Nostr)
+  - MerchantProfile management (identity + business metadata)
+  - Lightning payment integration (invoice generation, payment checking)
+  - Sales tracking (dashboard aggregations)
 - 📋 JvmVoucherAdapter wrapping cashu-client VoucherService
 - 📋 WebVoucherAdapter reusing existing use cases
-- 📋 Refactor existing use cases to thin wrappers
 - 📋 Integration with cashu-client dependencies (SendService, TokenCodec, NostrGateway)
 
 ### cashu-client VoucherService Features
@@ -241,33 +255,113 @@ From `cashu-client/wallet-plugin/wallet-core-app/src/main/java/xyz/tcheeric/wall
 
 ### Voucher Tasks
 
-#### Sub-Phase 2.1: Abstraction Layer (2 days)
+#### Sub-Phase 2.1: Abstraction Layer + Marketplace Domain Models (3 days)
 
 | ID | Task | Size | Status | Dependencies |
 |----|------|------|--------|--------------|
 | **2.1.1** | Define VoucherAdapter Interface (commonMain) | M (1d) | 📋 TODO | None |
-| **2.1.2** | Update StoredVoucher Domain Model | S (1d) | 📋 TODO | 2.1.1 |
+| **2.1.2** | Update StoredVoucher Domain Model | S (0.5d) | 📋 TODO | 2.1.1 |
+| **2.1.3** | Define VoucherOffer Domain Model | S (0.5d) | 📋 TODO | 2.1.1 |
+| **2.1.4** | Define MerchantProfile Domain Model | S (0.5d) | 📋 TODO | 2.1.1 |
+| **2.1.5** | Define LightningInvoice Domain Model | S (0.5d) | 📋 TODO | 2.1.1 |
 
 **Deliverables**:
 - `imani-voucher/src/commonMain/kotlin/cash/imani/voucher/adapter/VoucherAdapter.kt`
 - Methods: `issueVoucher()`, `redeemVoucher()`, `revokeVoucher()`, `verifyVoucher()`, `listVouchers()`, `backupToNostr()`, `restoreFromNostr()`
 - Updated `StoredVoucher` with `@SerialName` annotations matching cashu-client
 
+**New Marketplace Domain Models**:
+
+```kotlin
+// imani-voucher/src/commonMain/kotlin/cash/imani/voucher/domain/VoucherOffer.kt
+package cash.imani.voucher.domain
+
+@Serializable
+data class VoucherOffer(
+    val offerId: String,
+    val merchantId: String, // Nostr npub
+    val name: String, // "Coffee Voucher"
+    val description: String, // "Get any regular coffee"
+    val price: Int, // sats
+    val validityDays: Int, // 30
+    val allowPartialRedemption: Boolean = true,
+    @Contextual val createdAt: Instant,
+    val active: Boolean = true
+) {
+    init {
+        require(name.isNotBlank()) { "Offer name cannot be blank" }
+        require(price > 0) { "Price must be positive, got $price" }
+        require(validityDays > 0) { "Validity days must be positive, got $validityDays" }
+    }
+}
+
+// imani-voucher/src/commonMain/kotlin/cash/imani/voucher/domain/MerchantProfile.kt
+package cash.imani.voucher.domain
+
+@Serializable
+data class MerchantProfile(
+    val merchantId: String, // Nostr npub
+    val businessName: String,
+    val description: String,
+    val logoUrl: String? = null,
+    val contactEmail: String? = null,
+    val contactPhone: String? = null,
+    val website: String? = null,
+    @Contextual val createdAt: Instant,
+    @Contextual val updatedAt: Instant
+) {
+    init {
+        require(businessName.isNotBlank()) { "Business name cannot be blank" }
+        require(description.isNotBlank()) { "Description cannot be blank" }
+    }
+}
+
+// imani-voucher/src/commonMain/kotlin/cash/imani/voucher/domain/LightningInvoice.kt
+package cash.imani.voucher.domain
+
+@Serializable
+data class LightningInvoice(
+    val quoteId: String, // Mint quote ID (NUT-04)
+    val paymentRequest: String, // lnbc...
+    val amount: Int, // sats
+    val paid: Boolean = false,
+    @Contextual val expiresAt: Instant,
+    @Contextual val createdAt: Instant
+) {
+    fun isExpired(): Boolean = Clock.System.now() > expiresAt
+    fun isValid(): Boolean = !paid && !isExpired()
+}
+```
+
 ---
 
-#### Sub-Phase 2.2: Android Implementation (3 days)
+#### Sub-Phase 2.2: Android Implementation + Marketplace Extensions (7 days)
 
 | ID | Task | Size | Status | Dependencies |
 |----|------|------|--------|--------------|
 | **2.2.1** | Add cashu-client Dependency (jvmMain) | S (1d) | 📋 TODO | None |
 | **2.2.2** | Implement JvmVoucherAdapter | M (2d) | 📋 TODO | 2.1.1, 2.2.1 |
 | **2.2.3** | Update Android DI for VoucherService | S (1d) | 📋 TODO | 2.2.2 |
+| **2.2.4** | Implement Lightning Integration | M (2d) | 📋 TODO | 2.1.5, 2.2.1 |
+| **2.2.5** | Implement Offer Management | M (2d) | 📋 TODO | 2.1.3, 2.2.1 |
 
 **Deliverables**:
 - `settings.gradle.kts` with cashu-client `includeBuild()` or Maven local
 - `imani-voucher/src/jvmMain/kotlin/cash/imani/voucher/adapter/JvmVoucherAdapter.kt`
 - Wraps `VoucherServiceImpl`, `SendService`, `TokenCodec`
 - DI configuration in `AndroidModule.kt`
+
+**Task 2.2.4 - Lightning Integration**:
+- `imani-voucher/src/commonMain/kotlin/cash/imani/voucher/usecases/CreateLightningInvoiceUseCase.kt`
+- `imani-voucher/src/commonMain/kotlin/cash/imani/voucher/usecases/CheckInvoicePaidUseCase.kt`
+- Uses Ktor Client to call mint `/v1/mint/quote/bolt11` (NUT-04)
+- Polls for payment confirmation
+
+**Task 2.2.5 - Offer Management**:
+- `imani-voucher/src/commonMain/kotlin/cash/imani/voucher/usecases/CreateOfferUseCase.kt`
+- `imani-voucher/src/commonMain/kotlin/cash/imani/voucher/usecases/PublishOfferToNostrUseCase.kt`
+- `imani-voucher/src/commonMain/kotlin/cash/imani/voucher/usecases/DiscoverMerchantOffersUseCase.kt`
+- Uses Nostr NIP-33 parameterized replaceable events (kind 30078)
 
 **Key Implementation**:
 ```kotlin
@@ -281,6 +375,43 @@ class JvmVoucherAdapter(
                 javaResult.toKotlin()
             }
         }
+}
+
+// Lightning Integration Example
+class CreateLightningInvoiceUseCase(
+    private val mintApiClient: MintApiClient
+) {
+    suspend operator fun invoke(amount: Int, mintUrl: String): Result<LightningInvoice> = runCatching {
+        val quoteResponse = mintApiClient.getMintQuote(mintUrl, amount, "sat").getOrThrow()
+        LightningInvoice(
+            quoteId = quoteResponse.quote,
+            paymentRequest = quoteResponse.request,
+            amount = amount,
+            paid = false,
+            expiresAt = Clock.System.now() + 10.minutes,
+            createdAt = Clock.System.now()
+        )
+    }
+}
+
+// Offer Management Example
+class PublishOfferToNostrUseCase(
+    private val nostrClient: NostrVoucherClient
+) {
+    suspend operator fun invoke(offer: VoucherOffer): Result<Unit> = runCatching {
+        val event = NostrEvent(
+            kind = 30078, // NIP-33
+            content = Json.encodeToString(offer),
+            tags = listOf(
+                listOf("d", offer.offerId), // Unique identifier
+                listOf("price", offer.price.toString()),
+                listOf("name", offer.name)
+            ),
+            pubkey = offer.merchantId,
+            created_at = Clock.System.now().epochSeconds
+        )
+        nostrClient.publishEvent(event).getOrThrow()
+    }
 }
 ```
 
@@ -311,19 +442,46 @@ class WebVoucherAdapter(
 
 ---
 
-#### Sub-Phase 2.4: Migration & Cleanup (2 days)
+#### Sub-Phase 2.4: Migration & Cleanup + Sales Tracking (3 days)
 
 | ID | Task | Size | Status | Dependencies |
 |----|------|------|--------|--------------|
 | **2.4.1** | Refactor IssueVoucherUseCase to Use Adapter | M (1d) | 📋 TODO | 2.2.2, 2.3.1 |
 | **2.4.2** | Refactor RedeemVoucherUseCase to Use Adapter | M (1d) | 📋 TODO | 2.2.2, 2.3.1 |
 | **2.4.3** | Remove Duplicate Voucher Logic | M (1d) | 📋 TODO | 2.4.1, 2.4.2 |
+| **2.4.4** | Add Sales Tracking Use Case | M (1d) | 📋 TODO | 2.2.2 |
 
 **Deliverables**:
 - Simplified use cases (thin wrappers around VoucherAdapter)
 - Removed direct MintApiClient usage
 - Removed duplicate proof selection logic
 - Removed duplicate token encoding logic
+
+**Task 2.4.4 - Sales Tracking**:
+- `imani-voucher/src/commonMain/kotlin/cash/imani/voucher/usecases/GetSalesMetricsUseCase.kt`
+- Aggregates voucher data (total sales, redemption rate, revenue by offer)
+- Returns `SalesMetrics` domain model for merchant dashboard
+
+```kotlin
+@Serializable
+data class SalesMetrics(
+    val totalVouchersIssued: Int,
+    val totalVouchersRedeemed: Int,
+    val totalRevenue: Int, // sats
+    val redemptionRate: Double, // 0.0-1.0
+    val salesByOffer: Map<String, OfferSales>, // offerId -> stats
+    @Contextual val periodStart: Instant,
+    @Contextual val periodEnd: Instant
+)
+
+@Serializable
+data class OfferSales(
+    val offerName: String,
+    val issued: Int,
+    val redeemed: Int,
+    val revenue: Int
+)
+```
 
 **Before**:
 ```kotlin
@@ -349,21 +507,32 @@ class IssueVoucherUseCase(
 
 ---
 
-#### Sub-Phase 2.5: Testing (2 days)
+#### Sub-Phase 2.5: Testing (3 days)
 
 | ID | Task | Size | Status | Dependencies |
 |----|------|------|--------|--------------|
 | **2.5.1** | Unit Tests for JvmVoucherAdapter | M (1d) | 📋 TODO | 2.2.2 |
 | **2.5.2** | Unit Tests for WebVoucherAdapter | M (1d) | 📋 TODO | 2.3.1 |
-| **2.5.3** | Integration Tests (Full Voucher Flow) | M (2d) | 📋 TODO | 2.4.3 |
+| **2.5.3** | Integration Tests (Full Voucher Flow) | M (1d) | 📋 TODO | 2.4.3 |
+| **2.5.4** | Test Marketplace Flows | M (1d) | 📋 TODO | 2.2.4, 2.2.5, 2.4.4 |
 
 **Deliverables**:
 - `JvmVoucherAdapterTest.kt` - Verifies delegation to cashu-client
 - `WebVoucherAdapterTest.kt` - Verifies delegation to use cases
 - `VoucherIntegrationTest.kt` - Issue → redeem flow
 
-**Total Tasks**: 12
-**Estimated Effort**: 11 days (~2 weeks)
+**Task 2.5.4 - Marketplace Flow Testing**:
+- `MarketplaceFlowTest.kt` - Complete customer journey:
+  1. Merchant creates offer → publishes to Nostr
+  2. Customer discovers merchant via npub
+  3. Customer purchases voucher → Lightning payment
+  4. Customer redeems at POS
+  5. Merchant dashboard shows sales metrics
+- `LightningIntegrationTest.kt` - Invoice generation and payment checking
+- `OfferManagementTest.kt` - Create, publish, discover offers
+
+**Total Tasks**: 18 (was 12, +6 marketplace tasks)
+**Estimated Effort**: 15 days (~3 weeks, was 11 days)
 
 ---
 
@@ -374,8 +543,8 @@ class IssueVoucherUseCase(
 | Phase | Total Tasks | Complete | In Progress | TODO | % Complete |
 |-------|------------|----------|-------------|------|------------|
 | **Phase 1: Identity** | 13 | 10 | 1 | 2 | 77% |
-| **Phase 2: Voucher** | 12 | 0 | 0 | 12 | 0% |
-| **TOTAL** | 25 | 10 | 1 | 14 | 40% |
+| **Phase 2: Voucher (Marketplace)** | 18 | 0 | 0 | 18 | 0% |
+| **TOTAL** | 31 | 10 | 1 | 20 | 32% |
 
 ### All Tasks (Chronological)
 
@@ -416,9 +585,11 @@ class IssueVoucherUseCase(
 ```
 Week 1-2:  ████████ Phase 1: Identity (DONE - 77%)
 Week 2:    ██ Phase 1: Identity Testing (IN PROGRESS)
-Week 3-4:  ████████ Phase 2: Voucher Integration
+Week 3-4:  ████████████ Phase 2: Voucher Integration (Marketplace Model)
 Week 5:    ████ Phase 2: Testing & Cleanup
 ```
+
+**Note**: Phase 2 extended from 11 days to 15 days (~3 weeks) due to marketplace model additions.
 
 ### Critical Path
 
@@ -429,29 +600,36 @@ Phase 1 (Identity) - 77% Complete
   ├── 3.1-3.2: UI Fixes ✅ DONE
   └── 3.3-3.5: Testing 🔄 IN PROGRESS (blocking voucher start)
 
-Phase 2 (Voucher) - Ready to Start (after 3.3 completes)
-  ├── 2.1: Abstraction Layer (2 days)
+Phase 2 (Voucher - Marketplace Model) - Ready to Start (after 3.3 completes)
+  ├── 2.1: Abstraction Layer + Marketplace Domain Models (3 days) ← was 2 days
   │   ├── 2.1.1: VoucherAdapter interface
-  │   └── 2.1.2: Update StoredVoucher
+  │   ├── 2.1.2: Update StoredVoucher
+  │   ├── 2.1.3: Define VoucherOffer (NEW)
+  │   ├── 2.1.4: Define MerchantProfile (NEW)
+  │   └── 2.1.5: Define LightningInvoice (NEW)
   │
-  ├── 2.2: Android Implementation (3 days)
+  ├── 2.2: Android Implementation + Marketplace Extensions (7 days) ← was 3 days
   │   ├── 2.2.1: Add cashu-client dependency
   │   ├── 2.2.2: JvmVoucherAdapter ← depends on 2.1.1
-  │   └── 2.2.3: DI configuration ← depends on 2.2.2
+  │   ├── 2.2.3: DI configuration ← depends on 2.2.2
+  │   ├── 2.2.4: Lightning Integration (NEW - 2d)
+  │   └── 2.2.5: Offer Management (NEW - 2d)
   │
   ├── 2.3: Web Implementation (2 days) ← parallel to 2.2
   │   ├── 2.3.1: WebVoucherAdapter
   │   └── 2.3.2: DI configuration
   │
-  ├── 2.4: Migration (2 days) ← depends on 2.2.3, 2.3.2
+  ├── 2.4: Migration + Sales Tracking (3 days) ← was 2 days
   │   ├── 2.4.1: Refactor IssueVoucherUseCase
   │   ├── 2.4.2: Refactor RedeemVoucherUseCase
-  │   └── 2.4.3: Remove duplicates
+  │   ├── 2.4.3: Remove duplicates
+  │   └── 2.4.4: Add Sales Tracking (NEW)
   │
-  └── 2.5: Testing (2 days) ← depends on 2.4.3
+  └── 2.5: Testing (3 days) ← was 2 days
       ├── 2.5.1: JvmVoucherAdapter tests
       ├── 2.5.2: WebVoucherAdapter tests
-      └── 2.5.3: Integration tests
+      ├── 2.5.3: Integration tests
+      └── 2.5.4: Marketplace Flow Tests (NEW)
 ```
 
 ### Estimated Timeline
@@ -460,16 +638,18 @@ Phase 2 (Voucher) - Ready to Start (after 3.3 completes)
 |-------|----------|-------|-----|--------------|
 | **Phase 1: Identity** | 13 days | Week 1 | Week 2 | ✅ 77% complete |
 | Phase 1 Testing (remaining) | 3 days | Now | Week 2 | Task 3.3-3.5 |
-| **Phase 2: Voucher** | 11 days | Week 3 | Week 4 | Phase 1 complete |
-| Phase 2.1: Abstraction | 2 days | Week 3 | Week 3 | None |
-| Phase 2.2: Android | 3 days | Week 3 | Week 3 | 2.1 complete |
+| **Phase 2: Voucher (Marketplace)** | **15 days** | Week 3 | Week 5 | Phase 1 complete |
+| Phase 2.1: Abstraction + Domain | **3 days** | Week 3 | Week 3 | None |
+| Phase 2.2: Android + Marketplace | **7 days** | Week 3 | Week 4 | 2.1 complete |
 | Phase 2.3: Web | 2 days | Week 3 | Week 3 | 2.1 complete (parallel to 2.2) |
-| Phase 2.4: Migration | 2 days | Week 4 | Week 4 | 2.2, 2.3 complete |
-| Phase 2.5: Testing | 2 days | Week 4 | Week 5 | 2.4 complete |
+| Phase 2.4: Migration + Sales | **3 days** | Week 4 | Week 5 | 2.2, 2.3 complete |
+| Phase 2.5: Testing + Marketplace | **3 days** | Week 5 | Week 5 | 2.4 complete |
 
-**Total Project Duration**: 5 weeks (~24 days actual work)
+**Total Project Duration**: **5.5 weeks** (~28 days actual work, **was 24 days**)
 **Current Progress**: Week 2 (77% of Phase 1 complete)
-**Remaining**: 3 weeks (~17 days)
+**Remaining**: **3.5 weeks** (~21 days, **was 17 days**)
+
+**Marketplace Model Impact**: +4 days (+36% complexity) due to 6 new tasks
 
 ---
 
@@ -541,6 +721,7 @@ Phase 2 (Voucher) - Ready to Start (after 3.3 completes)
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.0.0 | 2025-11-20 | **Major Update**: Adopted merchant-customer marketplace model. Phase 2 extended from 12 tasks (11 days) to 18 tasks (15 days). Added 6 new marketplace tasks: 3 domain models (VoucherOffer, MerchantProfile, LightningInvoice), Lightning integration, offer management, sales tracking, marketplace flow testing. Total project duration: 24d → 28d (+36% complexity). |
 | 1.0.0 | 2025-11-20 | Initial master plan combining identity (77% complete) and voucher integration (ready to start) |
 
 ---
