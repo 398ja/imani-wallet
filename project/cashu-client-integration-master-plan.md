@@ -208,10 +208,10 @@ imani-wallet/
 | **3.2** | Fix UI Padding for FAB Visibility | S (1d) | ✅ DONE | 2cf888d | 3.1 |
 | **3.3** | Make Mnemonic Checkbox Clickable | M (2d) | ✅ DONE | 73bcd94 | Fixed dual handler issue (Row clickable + Checkbox onCheckedChange=null). 12/45 E2E tests passing (up from 9). Remaining failures due to separate identity creation issues. | 3.2 |
 | **3.4** | Add Unit Tests for JvmCryptoAdapter | M (2d) | ✅ DONE | da38920 | 20 tests covering random gen, SHA-256, keypair gen, and NotImplementedError verification. All tests passing. | 1.2 |
-| **3.5** | Add Integration Tests for CreateIdentityUseCase | M (2d) | 📋 TODO | - | 2.1 |
+| **3.5** | Add Integration Tests for CreateIdentityUseCase | M (2d) | ✅ DONE | 19f33ec | 16 integration tests covering end-to-end identity creation flow: successful creation, persistence, mnemonic export, label validation, BIP39 validation, keypair generation. 15 tests (14 passed, 1 skipped due to JvmBip39Adapter placeholder). Total: 89 unit tests. | 2.1 |
 
-**Total Completed**: 12/13 tasks (92%)
-**Estimated Remaining**: 2 days
+**Total Completed**: 13/13 tasks (100%)
+**Estimated Remaining**: 0 days
 
 ---
 
