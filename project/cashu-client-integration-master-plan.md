@@ -460,12 +460,12 @@ class WebVoucherAdapter(
 
 #### Sub-Phase 2.4: Migration & Cleanup + Sales Tracking (3 days)
 
-| ID | Task | Size | Status | Dependencies |
-|----|------|------|--------|--------------|
-| **2.4.1** | Refactor IssueVoucherUseCase to Use Adapter | M (1d) | 📋 TODO | 2.2.2, 2.3.1 |
-| **2.4.2** | Refactor RedeemVoucherUseCase to Use Adapter | M (1d) | 📋 TODO | 2.2.2, 2.3.1 |
-| **2.4.3** | Remove Duplicate Voucher Logic | M (1d) | 📋 TODO | 2.4.1, 2.4.2 |
-| **2.4.4** | Add Sales Tracking Use Case | M (1d) | 📋 TODO | 2.2.2 |
+| ID | Task | Size | Status | Commit | Notes | Dependencies |
+|----|------|------|--------|--------|-------|--------------|
+| **2.4.1** | Refactor IssueVoucherUseCase to Use Adapter | M (1d) | ✅ DONE | fce12df | Moved all business logic from IssueVoucherUseCase (294→63 lines, -78%) to WebVoucherAdapter (240→464 lines, +93%). Use case now thin wrapper delegating to adapter. Updated factory signature: added ProofRepository, MintApiClient, IdentityRepository dependencies. Broke circular dependency (WebVoucherAdapter was delegating to use case, now contains implementation). WebVoucherAdapter implements: proof selection, P2PK secret generation, mint swapping, voucher signing, token encoding. Added helper methods: createP2PKSecret(), generateRandomSecret(), signVoucher(), blindSecret(), generateVoucherId(). Updated DI: IssueVoucherUseCase now depends only on VoucherAdapter. Compilation verified. | 2.2.2, 2.3.1 |
+| **2.4.2** | Refactor RedeemVoucherUseCase to Use Adapter | M (1d) | 📋 TODO | - | - | 2.2.2, 2.3.1 |
+| **2.4.3** | Remove Duplicate Voucher Logic | M (1d) | 📋 TODO | - | - | 2.4.1, 2.4.2 |
+| **2.4.4** | Add Sales Tracking Use Case | M (1d) | 📋 TODO | - | - | 2.2.2 |
 
 **Deliverables**:
 - Simplified use cases (thin wrappers around VoucherAdapter)
