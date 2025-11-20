@@ -435,10 +435,10 @@ class PublishOfferToNostrUseCase(
 
 #### Sub-Phase 2.3: Web Implementation (2 days)
 
-| ID | Task | Size | Status | Commit | Dependencies |
-|----|------|------|--------|--------|--------------|
-| **2.3.1** | Implement WebVoucherAdapter | M (2d) | ✅ DONE | d4d0f22 | 2.1.1 |
-| **2.3.2** | Update Web DI for VoucherAdapter | S (1d) | ✅ DONE | d4d0f22 | 2.3.1 |
+| ID | Task | Size | Status | Commit | Notes | Dependencies |
+|----|------|------|--------|--------|-------|--------------|
+| **2.3.1** | Implement WebVoucherAdapter | M (2d) | ✅ DONE | d4d0f22 | Implemented all 8 VoucherAdapter interface methods. Delegates to existing use cases: issueVoucher→IssueVoucherUseCase, redeemVoucher→RedeemVoucherUseCase (~70% code reuse). Direct implementations: revokeVoucher (VoucherRepository + NostrVoucherClient), verifyVoucher (CryptoAdapter.schnorrVerify), listVouchers/queryVouchersByStatus (VoucherRepository), backupToNostr/restoreFromNostr (NostrVoucherClient). Uses IndexedDB via VoucherRepository for browser persistence, nostr-tools library via NostrVoucherClient for relay operations, Web Crypto API via CryptoAdapter for signature verification. Added hexToBytes helper. 240 lines in jsMain/adapter/WebVoucherAdapter.kt. | 2.1.1 |
+| **2.3.2** | Update Web DI for VoucherAdapter | S (1d) | ✅ DONE | d4d0f22 | Added expect fun createVoucherAdapter() to VoucherAdapter.kt (commonMain). Created VoucherAdapterFactory.kt with actual implementation (jsMain, 41 lines). Updated AppModule.kt to register VoucherAdapter singleton with Koin DI (5 dependencies: IssueVoucherUseCase, RedeemVoucherUseCase, VoucherRepository, NostrVoucherClient, CryptoAdapter). Follows existing repository factory pattern. Compilation verified with :imani-voucher:jsMainClasses and :imani-app:jsMainClasses. | 2.3.1 |
 
 **Deliverables**:
 - `imani-voucher/src/jsMain/kotlin/cash/imani/voucher/adapter/WebVoucherAdapter.kt`
