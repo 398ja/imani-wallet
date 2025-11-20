@@ -321,8 +321,9 @@ interface VoucherAdapter {
  *
  * Implementation provided via expect/actual pattern.
  *
- * **Phase 2.4.1 Update**: Added dependencies for full adapter implementation.
- * Web adapter no longer delegates to use cases but implements logic directly.
+ * **Phase 2.4.1 Update**: Added dependencies for IssueVoucherUseCase logic.
+ * **Phase 2.4.2 Update**: Removed RedeemVoucherUseCase dependency, all logic in adapter.
+ * Web adapter no longer delegates to use cases but implements all logic directly.
  *
  * @param voucherRepository Repository for voucher storage
  * @param proofRepository Repository for proof management
@@ -330,7 +331,6 @@ interface VoucherAdapter {
  * @param identityRepository Repository for identity management
  * @param nostrClient Client for Nostr relay operations
  * @param cryptoAdapter Cryptographic adapter for signatures
- * @param redeemVoucherUseCase Use case for voucher redemption (temporary, until Phase 2.4.2)
  * @return Platform-specific VoucherAdapter implementation
  */
 expect fun createVoucherAdapter(
@@ -340,5 +340,4 @@ expect fun createVoucherAdapter(
     identityRepository: cash.imani.identity.repository.IdentityRepository,
     nostrClient: cash.imani.voucher.nostr.NostrVoucherClient,
     cryptoAdapter: cash.imani.identity.crypto.CryptoAdapter,
-    redeemVoucherUseCase: cash.imani.voucher.usecases.RedeemVoucherUseCase,
 ): VoucherAdapter

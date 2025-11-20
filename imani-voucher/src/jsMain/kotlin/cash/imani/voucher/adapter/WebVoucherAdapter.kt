@@ -6,6 +6,7 @@ import cash.imani.identity.util.toHex
 import cash.imani.voucher.domain.Proof
 import cash.imani.voucher.domain.StoredVoucher
 import cash.imani.voucher.domain.VoucherIssuanceException
+import cash.imani.voucher.domain.VoucherRedemptionException
 import cash.imani.voucher.domain.VoucherStatus
 import cash.imani.voucher.encoding.TokenEncoder
 import cash.imani.voucher.network.BlindedMessage
@@ -17,7 +18,6 @@ import cash.imani.voucher.repository.VoucherRepository
 import cash.imani.voucher.usecases.IssueVoucherRequest
 import cash.imani.voucher.usecases.IssueVoucherResult
 import cash.imani.voucher.usecases.RedeemVoucherResult
-import cash.imani.voucher.usecases.RedeemVoucherUseCase
 import kotlinx.datetime.Clock
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -36,6 +36,7 @@ import kotlin.time.Duration.Companion.days
  * - Web Crypto API for cryptographic operations
  *
  * **Phase 2.4.1 Refactoring**: Moved all business logic from IssueVoucherUseCase into this adapter.
+ * **Phase 2.4.2 Refactoring**: Moved all business logic from RedeemVoucherUseCase into this adapter.
  * Use cases are now thin wrappers that delegate to this adapter.
  *
  * @param voucherRepository Repository for local voucher storage (IndexedDB)
@@ -44,7 +45,6 @@ import kotlin.time.Duration.Companion.days
  * @param identityRepository Repository for identity management
  * @param nostrClient Client for Nostr relay operations (nostr-tools)
  * @param cryptoAdapter Web Crypto API adapter for cryptographic operations
- * @param redeemVoucherUseCase Use case for voucher redemption (still used until Phase 2.4.2)
  *
  * @see VoucherAdapter
  * @see cash.imani.voucher.repository.NostrVoucherRepository
@@ -56,7 +56,6 @@ class WebVoucherAdapter(
     private val identityRepository: IdentityRepository,
     private val nostrClient: NostrVoucherClient,
     private val cryptoAdapter: CryptoAdapter,
-    private val redeemVoucherUseCase: RedeemVoucherUseCase,
 ) : VoucherAdapter {
     /**
      * Issues a voucher with complete business logic implementation.
@@ -202,10 +201,95 @@ class WebVoucherAdapter(
     override suspend fun redeemVoucher(
         token: String,
         voucherId: String?,
-    ): Result<RedeemVoucherResult> {
-        println("[WebVoucherAdapter] Redeeming voucher via RedeemVoucherUseCase")
-        return redeemVoucherUseCase(token)
-    }
+    ): Result<RedeemVoucherResult> =
+        runCatching {
+            println("[WebVoucherAdapter] Redeeming voucher with full implementation")
+
+            // 1. Decode token
+            val tokenData =
+                try {
+                    TokenEncoder.decodeV4(token)
+                } catch (e: Exception) {
+                    throw VoucherRedemptionException.InvalidToken("Failed to decode token: ${e.message}", e)
+                }
+
+            // 2. Check if this is a known voucher (for tracking)
+            val storedVoucher = voucherId?.let { voucherRepository.getVoucher(it).getOrNull() }
+
+            // 3. Validate expiration if voucher is known
+            storedVoucher?.let { voucher ->
+                if (voucher.isExpired()) {
+                    throw VoucherRedemptionException.Expired(
+                        voucher.voucherId,
+                        voucher.expiresAt ?: 0,
+                    )
+                }
+            }
+
+            // 4. Check proof states with mint
+            val secrets = tokenData.proofs.map { it.secret }
+            val statesResponse =
+                try {
+                    mintApiClient.checkProofStates(tokenData.mint, secrets).getOrThrow()
+                } catch (e: Exception) {
+                    throw VoucherRedemptionException.StateCheckFailed(
+                        "Failed to check proof states: ${e.message}",
+                        e,
+                    )
+                }
+
+            // 5. Filter for unspent proofs
+            val unspentStates = statesResponse.states.filter { it.state == "UNSPENT" }
+            if (unspentStates.isEmpty()) {
+                throw VoucherRedemptionException.alreadyRedeemed(
+                    storedVoucher?.voucherId ?: "unknown",
+                )
+            }
+
+            // 6. Convert to domain Proof objects (all proofs, assuming they're unspent)
+            // Note: In production, we'd need to map Y values back to secrets
+            // Phase 2: Simplified - we assume all proofs in token are unspent
+            val proofsToImport =
+                tokenData.proofs
+                    .map { tokenProof ->
+                        Proof(
+                            amount = tokenProof.amount,
+                            secret = tokenProof.secret,
+                            C = tokenProof.C,
+                            id = tokenProof.id,
+                        )
+                    }
+
+            // 7. Import proofs to wallet
+            try {
+                proofRepository.saveProofs(proofsToImport, tokenData.mint, tokenData.unit).getOrThrow()
+            } catch (e: Exception) {
+                throw VoucherRedemptionException.ImportFailed(
+                    "Failed to import proofs: ${e.message}",
+                    e,
+                )
+            }
+
+            // 8. Update voucher status if known
+            storedVoucher?.let { voucher ->
+                voucherRepository.updateVoucherStatus(voucher.voucherId, VoucherStatus.REDEEMED)
+            }
+
+            // 9. Calculate total amount received
+            val amountReceived = proofsToImport.sumOf { it.amount.toLong() }
+
+            RedeemVoucherResult(
+                voucherId = storedVoucher?.voucherId ?: "redeemed-${generateRedemptionId()}",
+                status = VoucherStatus.REDEEMED,
+                message = "Redeemed $amountReceived ${tokenData.unit} from ${tokenData.mint}",
+                proofsReceived = proofsToImport,
+                amountReceived = amountReceived,
+                mintUrl = tokenData.mint,
+                unit = tokenData.unit,
+                memo = tokenData.memo,
+                redeemedAt = Clock.System.now(),
+            )
+        }
 
     /**
      * Revokes a voucher by updating its status and publishing to Nostr.
@@ -450,6 +534,13 @@ class WebVoucherAdapter(
      * @return Random 16-byte hex string
      */
     private suspend fun generateVoucherId(): String = cryptoAdapter.generateRandomBytes(16).toHex()
+
+    /**
+     * Generates a unique redemption ID.
+     *
+     * @return Timestamp-based redemption ID
+     */
+    private fun generateRedemptionId(): String = Clock.System.now().toEpochMilliseconds().toString()
 
     /**
      * Converts hex string to byte array.

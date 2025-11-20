@@ -68,7 +68,7 @@ val appModule =
         // Nostr - Voucher and Offer Storage
         single<NostrVoucherClient> { createNostrVoucherClient(NostrConfig.DEFAULT_RELAYS) }
 
-        // Adapters - Voucher (Task 2.3.2, updated in Task 2.4.1)
+        // Adapters - Voucher (Task 2.3.2, updated in Tasks 2.4.1 and 2.4.2)
         single<VoucherAdapter> {
             createVoucherAdapter(
                 voucherRepository = get(),
@@ -77,7 +77,6 @@ val appModule =
                 identityRepository = get(),
                 nostrClient = get(),
                 cryptoAdapter = get(),
-                redeemVoucherUseCase = get(),
             )
         }
 
@@ -101,9 +100,7 @@ val appModule =
         }
         single {
             RedeemVoucherUseCase(
-                voucherRepository = get(),
-                proofRepository = get(),
-                mintApiClient = get(),
+                voucherAdapter = get(),
             )
         }
         single {

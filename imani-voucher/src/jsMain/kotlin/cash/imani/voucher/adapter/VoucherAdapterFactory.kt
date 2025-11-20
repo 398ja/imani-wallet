@@ -6,8 +6,6 @@ import cash.imani.voucher.network.MintApiClient
 import cash.imani.voucher.nostr.NostrVoucherClient
 import cash.imani.voucher.repository.ProofRepository
 import cash.imani.voucher.repository.VoucherRepository
-import cash.imani.voucher.usecases.IssueVoucherUseCase
-import cash.imani.voucher.usecases.RedeemVoucherUseCase
 
 /**
  * JS platform implementation of VoucherAdapter factory.
@@ -21,8 +19,9 @@ import cash.imani.voucher.usecases.RedeemVoucherUseCase
  * - Nostr relay backup using nostr-tools library
  * - Web Crypto API for cryptographic operations
  *
- * **Phase 2.4.1 Refactoring**: WebVoucherAdapter now contains all business logic.
- * IssueVoucherUseCase will become a thin wrapper that delegates to this adapter.
+ * **Phase 2.4.1 Refactoring**: WebVoucherAdapter contains IssueVoucherUseCase business logic.
+ * **Phase 2.4.2 Refactoring**: WebVoucherAdapter contains RedeemVoucherUseCase business logic.
+ * Use cases are now thin wrappers that delegate to this adapter.
  *
  * Browser Requirements:
  * - IndexedDB support (Chrome 24+, Firefox 16+, Safari 10+)
@@ -38,7 +37,6 @@ actual fun createVoucherAdapter(
     identityRepository: IdentityRepository,
     nostrClient: NostrVoucherClient,
     cryptoAdapter: CryptoAdapter,
-    redeemVoucherUseCase: RedeemVoucherUseCase,
 ): VoucherAdapter {
     return WebVoucherAdapter(
         voucherRepository = voucherRepository,
@@ -47,6 +45,5 @@ actual fun createVoucherAdapter(
         identityRepository = identityRepository,
         nostrClient = nostrClient,
         cryptoAdapter = cryptoAdapter,
-        redeemVoucherUseCase = redeemVoucherUseCase,
     )
 }
