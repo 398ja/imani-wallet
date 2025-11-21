@@ -22,7 +22,31 @@ import kotlin.js.Promise
  */
 
 /**
+ * Import SimplePool from nostr-tools/pool submodule.
+ * This provides direct access to the ESM named export.
+ */
+@JsModule("nostr-tools/pool")
+external object NostrPool {
+    @JsName("SimplePool")
+    class SimplePool {
+        fun publish(relays: Array<String>, event: dynamic): Promise<Unit>
+        fun querySync(relays: Array<String>, filters: Array<dynamic>): Array<dynamic>
+        fun subscribeMany(relays: Array<String>, filters: Array<dynamic>, callbacks: dynamic): dynamic
+        fun close(relays: Array<String>)
+    }
+}
+
+/**
+ * Factory function to create SimplePool instance.
+ * Uses the imported NostrPool module.
+ */
+fun createSimplePool(): dynamic {
+    return js("new cash.imani.voucher.nostr.NostrPool.SimplePool()")
+}
+
+/**
  * Simple relay pool for publishing and querying events.
+ * @deprecated Use NostrPool.SimplePool instead
  */
 @JsModule("nostr-tools")
 @JsNonModule
