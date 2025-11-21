@@ -17,6 +17,18 @@ fun Identity.toNpub(): String {
 }
 
 /**
+ * Converts the identity's private key to nsec (Nostr secret key) format.
+ *
+ * SECURITY WARNING: This exposes the private key in bech32 format.
+ * Only use this when the user explicitly requests to view their secret key.
+ *
+ * @return Bech32-encoded private key (nsec1...)
+ */
+fun Identity.toNsec(): String {
+    return Bech32.encodeNsec(privateKey.hexToBytes())
+}
+
+/**
  * Gets a shortened version of the npub for display.
  *
  * @param prefixLength Number of characters to show at start (default: 8)

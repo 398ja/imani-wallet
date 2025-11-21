@@ -110,9 +110,12 @@ fun IdentityNavHost(
         }
 
         is IdentityRoute.Detail -> {
-            // TODO: Implement identity detail screen in Phase 4.3
-            // For now, navigate back to list
-            navState.navigateBack()
+            cash.imani.app.ui.identity.IdentityDetailScreen(
+                identity = (navState.currentRoute as IdentityRoute.Detail).identity,
+                onNavigateBack = {
+                    navState.navigateBack()
+                },
+            )
         }
     }
 }
