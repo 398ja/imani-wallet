@@ -128,6 +128,9 @@ class PassphraseEncryption {
         val passphraseBytes = passphrase.encodeToByteArray()
         val passphraseKey = importPassphrase(passphraseBytes)
 
+        // Convert salt to Uint8Array for JavaScript
+        val saltArray = salt.toUint8Array()
+
         // Derive key using PBKDF2
         val derivedKeyBuffer =
             js(
@@ -135,7 +138,7 @@ class PassphraseEncryption {
             crypto.subtle.deriveKey(
                 {
                     name: 'PBKDF2',
-                    salt: new Uint8Array(salt),
+                    salt: saltArray,
                     iterations: $PBKDF2_ITERATIONS,
                     hash: 'SHA-256'
                 },
@@ -157,12 +160,15 @@ class PassphraseEncryption {
      * Imports passphrase bytes as CryptoKey for PBKDF2.
      */
     private suspend fun importPassphrase(passphraseBytes: ByteArray): CryptoKey {
+        // Convert to Uint8Array for JavaScript
+        val passphraseBytesArray = passphraseBytes.toUint8Array()
+
         val promise =
             js(
                 """
             crypto.subtle.importKey(
                 'raw',
-                new Uint8Array(passphraseBytes),
+                passphraseBytesArray,
                 { name: 'PBKDF2' },
                 false,
                 ['deriveKey']
@@ -181,16 +187,20 @@ class PassphraseEncryption {
         key: CryptoKey,
         iv: ByteArray,
     ): ByteArray {
+        // Convert to Uint8Arrays for JavaScript
+        val dataArray = data.toUint8Array()
+        val ivArray = iv.toUint8Array()
+
         val encryptedBuffer =
             js(
                 """
             crypto.subtle.encrypt(
                 {
                     name: 'AES-GCM',
-                    iv: new Uint8Array(iv)
+                    iv: ivArray
                 },
                 key,
-                new Uint8Array(data)
+                dataArray
             )
             """,
             ) as Promise<ArrayBuffer>
@@ -207,16 +217,20 @@ class PassphraseEncryption {
         key: CryptoKey,
         iv: ByteArray,
     ): ByteArray {
+        // Convert to Uint8Arrays for JavaScript
+        val ciphertextArray = ciphertext.toUint8Array()
+        val ivArray = iv.toUint8Array()
+
         val decryptedBuffer =
             js(
                 """
             crypto.subtle.decrypt(
                 {
                     name: 'AES-GCM',
-                    iv: new Uint8Array(iv)
+                    iv: ivArray
                 },
                 key,
-                new Uint8Array(ciphertext)
+                ciphertextArray
             )
             """,
             ) as Promise<ArrayBuffer>
@@ -242,6 +256,17 @@ class PassphraseEncryption {
         return chunked(2)
             .map { it.toInt(16).toByte() }
             .toByteArray()
+    }
+
+    /**
+     * Converts Kotlin ByteArray to JavaScript Uint8Array.
+     */
+    private fun ByteArray.toUint8Array(): Uint8Array {
+        val uint8Array = Uint8Array(this.size)
+        for (i in this.indices) {
+            uint8Array.asDynamic()[i] = this[i]
+        }
+        return uint8Array
     }
 }
 
