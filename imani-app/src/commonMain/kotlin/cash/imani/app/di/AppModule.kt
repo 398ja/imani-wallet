@@ -1,6 +1,7 @@
 package cash.imani.app.di
 
 import cash.imani.app.ui.identity.IdentityViewModel
+import cash.imani.app.ui.shop.MerchantDetailViewModel
 import cash.imani.app.ui.shop.MerchantDiscoveryViewModel
 import cash.imani.app.ui.voucher.VoucherViewModel
 import cash.imani.identity.crypto.Bip39Adapter
@@ -159,5 +160,11 @@ val appModule =
 
         factory {
             MerchantDiscoveryViewModel()
+        }
+
+        factory {
+            MerchantDetailViewModel(
+                discoverOffersUseCase = get(),
+            )
         }
     }
