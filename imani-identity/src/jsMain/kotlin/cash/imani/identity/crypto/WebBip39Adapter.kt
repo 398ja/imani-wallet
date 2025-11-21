@@ -5,74 +5,51 @@ import org.khronos.webgl.Uint8Array
 /**
  * Web implementation of Bip39Adapter using @scure/bip39 library.
  *
- * Provides BIP39 mnemonic operations via JavaScript interop.
+ * PHASE 1 NOTE: BIP39 functionality disabled for Phase 1.
+ * Nostr identities only need secp256k1 keypairs (nsec/npub), not mnemonics.
+ * BIP39 will be re-enabled in Phase 2 for wallet functionality.
+ *
+ * All methods throw UnsupportedOperationException until Phase 2.
  */
 actual fun createBip39Adapter(): Bip39Adapter = WebBip39Adapter()
 
 class WebBip39Adapter : Bip39Adapter {
     override suspend fun entropyToMnemonic(entropyBytes: ByteArray): String {
-        try {
-            // Use dynamic require() to load wordlist at runtime
-            val wordlistModule: dynamic = js("require('@scure/bip39/wordlists/english')")
-            val wordlist: dynamic = wordlistModule.wordlist
-
-            // Debug: Check wordlist
-            console.log("[WebBip39Adapter] wordlist type:", js("typeof wordlist"))
-            console.log("[WebBip39Adapter] wordlist value:", wordlist)
-            console.log("[WebBip39Adapter] wordlist length:", wordlist.length)
-            console.log("[WebBip39Adapter] wordlist is array:", js("Array.isArray(wordlist)"))
-
-            // Use @scure/bip39 via external declarations
-            // Generate mnemonic with 128 bits (12 words)
-            val mnemonic: String = generateMnemonic(wordlist, 128)
-            return mnemonic
-        } catch (e: Exception) {
-            console.error("[WebBip39Adapter] Error generating mnemonic:", e)
-            throw IllegalArgumentException("Failed to generate mnemonic from entropy", e)
-        }
+        throw UnsupportedOperationException(
+            "BIP39 mnemonic generation is not available in Phase 1. " +
+                "Nostr identities only require secp256k1 keypairs (nsec/npub). " +
+                "BIP39 will be enabled in Phase 2 for wallet functionality.",
+        )
     }
 
     override suspend fun mnemonicToSeed(
         mnemonic: String,
         passphrase: String,
     ): ByteArray {
-        try {
-            // Use @scure/bip39's sync mnemonicToSeedSync
-            val seedUint8Array = mnemonicToSeedSync(mnemonic, passphrase)
-
-            // Convert Uint8Array to ByteArray
-            return seedUint8Array.toByteArray()
-        } catch (e: Exception) {
-            throw IllegalArgumentException("Failed to convert mnemonic to seed", e)
-        }
+        throw UnsupportedOperationException(
+            "BIP39 mnemonic-to-seed conversion is not available in Phase 1. " +
+                "Nostr identities only require secp256k1 keypairs (nsec/npub). " +
+                "BIP39 will be enabled in Phase 2 for wallet functionality.",
+        )
     }
 
     override suspend fun validateMnemonic(mnemonic: String): Boolean {
-        return try {
-            // Use dynamic require() to load wordlist at runtime
-            val wordlistModule: dynamic = js("require('@scure/bip39/wordlists/english')")
-            val wordlist: dynamic = wordlistModule.wordlist
-            cash.imani.identity.crypto.validateMnemonic(mnemonic, wordlist)
-        } catch (e: Exception) {
-            console.error("[WebBip39Adapter] Error validating mnemonic:", e)
-            false
-        }
+        throw UnsupportedOperationException(
+            "BIP39 mnemonic validation is not available in Phase 1. " +
+                "Nostr identities only require secp256k1 keypairs (nsec/npub). " +
+                "BIP39 will be enabled in Phase 2 for wallet functionality.",
+        )
     }
 
     override suspend fun derivePrivateKey(
         seed: ByteArray,
         path: String,
     ): ByteArray {
-        // TODO Phase 1.2: Implement BIP32 key derivation
-        // For now, use simple HMAC-SHA512 derivation (NOT BIP32 compliant)
-        // This will be replaced with proper BIP32 in Phase 1.2 when adding @scure/bip32
-
-        // Temporary: Use first 32 bytes of seed as private key
-        // WARNING: This is NOT BIP32 compliant - for Phase 1 MVP only
-        if (seed.size < 32) {
-            throw IllegalArgumentException("Seed must be at least 32 bytes")
-        }
-        return seed.copyOfRange(0, 32)
+        throw UnsupportedOperationException(
+            "BIP32 key derivation is not available in Phase 1. " +
+                "Nostr identities only require secp256k1 keypairs (nsec/npub). " +
+                "BIP32 will be enabled in Phase 2 for wallet functionality.",
+        )
     }
 
     /**
