@@ -136,13 +136,13 @@ class PassphraseEncryption {
                 {
                     name: 'PBKDF2',
                     salt: new Uint8Array(salt),
-                    iterations: PBKDF2_ITERATIONS,
+                    iterations: $PBKDF2_ITERATIONS,
                     hash: 'SHA-256'
                 },
                 passphraseKey,
                 {
                     name: 'AES-GCM',
-                    length: AES_KEY_LENGTH
+                    length: $AES_KEY_LENGTH
                 },
                 false, // not extractable
                 ['encrypt', 'decrypt']
