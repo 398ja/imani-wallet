@@ -12,7 +12,9 @@ actual fun createBip39Adapter(): Bip39Adapter = WebBip39Adapter()
 class WebBip39Adapter : Bip39Adapter {
     override suspend fun entropyToMnemonic(entropyBytes: ByteArray): String {
         try {
-            val wordlist = EnglishWordlistModule.wordlist
+            // Use dynamic require() to load wordlist at runtime
+            val wordlistModule: dynamic = js("require('@scure/bip39/wordlists/english')")
+            val wordlist: dynamic = wordlistModule.wordlist
 
             // Debug: Check wordlist
             console.log("[WebBip39Adapter] wordlist type:", js("typeof wordlist"))
@@ -25,6 +27,7 @@ class WebBip39Adapter : Bip39Adapter {
             val mnemonic: String = generateMnemonic(wordlist, 128)
             return mnemonic
         } catch (e: Exception) {
+            console.error("[WebBip39Adapter] Error generating mnemonic:", e)
             throw IllegalArgumentException("Failed to generate mnemonic from entropy", e)
         }
     }
@@ -46,9 +49,12 @@ class WebBip39Adapter : Bip39Adapter {
 
     override suspend fun validateMnemonic(mnemonic: String): Boolean {
         return try {
-            val wordlist = EnglishWordlistModule.wordlist
+            // Use dynamic require() to load wordlist at runtime
+            val wordlistModule: dynamic = js("require('@scure/bip39/wordlists/english')")
+            val wordlist: dynamic = wordlistModule.wordlist
             cash.imani.identity.crypto.validateMnemonic(mnemonic, wordlist)
         } catch (e: Exception) {
+            console.error("[WebBip39Adapter] Error validating mnemonic:", e)
             false
         }
     }
