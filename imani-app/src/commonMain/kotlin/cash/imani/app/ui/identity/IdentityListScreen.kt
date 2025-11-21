@@ -216,7 +216,12 @@ fun EmptyIdentitiesView(
                 TextButton(onClick = onCreateClick) {
                     Text("Create New")
                 }
-                TextButton(onClick = onImportClick) {
+                TextButton(
+                    onClick = onImportClick,
+                    modifier = Modifier.semantics {
+                        contentDescription = "Import Identity"
+                    },
+                ) {
                     Text("Import Existing")
                 }
             }

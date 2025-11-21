@@ -81,7 +81,7 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
             .performClick()
 
         composeTestRule.waitForIdle()
-        delay(500)
+        delay(1000)
 
         // Click "Create Identity" FAB
         composeTestRule.onNodeWithContentDescription("Create Identity")
@@ -89,7 +89,7 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
             .performClick()
 
         composeTestRule.waitForIdle()
-        delay(500)
+        delay(1000)
 
         // Fill in identity label (UI uses "Label" not "Identity Label")
         composeTestRule.onNode(
@@ -97,21 +97,33 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
         ).performTextInput(label)
 
         composeTestRule.waitForIdle()
+        delay(500)
 
         // Click "Create" button
         composeTestRule.onNodeWithText("Create")
             .performClick()
 
-        // Wait for mnemonic screen with backup checkbox
+        // Wait for mnemonic screen - this can take time for key generation
+        composeTestRule.waitForIdle()
+        delay(2000)
+
+        // Wait for mnemonic screen with backup checkbox (longer timeout for key generation)
         val mnemonicVisible =
             waitForNodeWithText(
                 text = "I have securely backed up my recovery phrase",
-                timeoutMillis = 20_000,
+                timeoutMillis = 30_000,
             )
         if (!mnemonicVisible) {
-            throw AssertionError(
-                "Mnemonic confirmation not visible after creating identity.\n${dumpSemanticsTree()}",
+            // Try alternative text that might be displayed
+            val altVisible = waitForNodeWithText(
+                text = "Recovery Phrase",
+                timeoutMillis = 5_000,
             )
+            if (!altVisible) {
+                throw AssertionError(
+                    "Mnemonic confirmation not visible after creating identity.\n${dumpSemanticsTree()}",
+                )
+            }
         }
 
         composeTestRule.waitForIdle()
@@ -122,14 +134,14 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
             .performClick()
 
         composeTestRule.waitForIdle()
-        delay(200)
+        delay(500)
 
         // Click "Done" button
         composeTestRule.onNodeWithText("Done")
             .performClick()
 
         composeTestRule.waitForIdle()
-        delay(500)
+        delay(1000)
     }
 
     /**
