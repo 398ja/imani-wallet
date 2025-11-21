@@ -12,10 +12,10 @@ actual fun createBip39Adapter(): Bip39Adapter = WebBip39Adapter()
 class WebBip39Adapter : Bip39Adapter {
     override suspend fun entropyToMnemonic(entropyBytes: ByteArray): String {
         try {
-            // Debug: Check wordlist
+            // Debug: Check wordlist (wordlist is already dynamic, no need for asDynamic())
             console.log("[WebBip39Adapter] wordlist type:", js("typeof wordlist"))
             console.log("[WebBip39Adapter] wordlist value:", wordlist)
-            console.log("[WebBip39Adapter] wordlist length:", wordlist.asDynamic().length)
+            console.log("[WebBip39Adapter] wordlist length:", wordlist.length)
             console.log("[WebBip39Adapter] wordlist is array:", js("Array.isArray(wordlist)"))
 
             // Use @scure/bip39 via external declarations
