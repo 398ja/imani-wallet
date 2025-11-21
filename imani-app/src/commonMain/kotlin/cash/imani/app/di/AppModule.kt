@@ -1,5 +1,7 @@
 package cash.imani.app.di
 
+import cash.imani.app.repository.FavoritesRepository
+import cash.imani.app.repository.createFavoritesRepository
 import cash.imani.app.ui.identity.IdentityViewModel
 import cash.imani.app.ui.merchant.CreateOfferViewModel
 import cash.imani.app.ui.merchant.MerchantDashboardViewModel
@@ -76,6 +78,9 @@ val appModule =
 
         // Nostr - Voucher and Offer Storage
         single<NostrVoucherClient> { createNostrVoucherClient(NostrConfig.DEFAULT_RELAYS) }
+
+        // Repositories - Favorites (Phase 4.2)
+        single<FavoritesRepository> { createFavoritesRepository() }
 
         // Adapters - Voucher (Task 2.3.2, updated in Tasks 2.4.1 and 2.4.2)
         single<VoucherAdapter> {
@@ -171,6 +176,7 @@ val appModule =
         factory {
             MerchantDetailViewModel(
                 discoverOffersUseCase = get(),
+                favoritesRepository = get(),
             )
         }
 

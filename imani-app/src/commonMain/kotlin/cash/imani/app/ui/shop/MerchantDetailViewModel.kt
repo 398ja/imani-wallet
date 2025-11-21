@@ -1,5 +1,6 @@
 package cash.imani.app.ui.shop
 
+import cash.imani.app.repository.FavoritesRepository
 import cash.imani.voucher.domain.MerchantOffer
 import cash.imani.voucher.domain.OfferStatus
 import cash.imani.voucher.usecases.DiscoverMerchantOffersUseCase
@@ -17,26 +18,20 @@ import kotlinx.coroutines.launch
  * Manages:
  * - Merchant profile loading (Nostr NIP-01 kind:0 event)
  * - Merchant offers discovery (Nostr NIP-33 kind:30078 events)
- * - Favorite merchant toggling
+ * - Favorite merchant toggling (persisted via FavoritesRepository)
  * - Copy npub, show QR actions
  *
- * Phase 2.3 Implementation:
- * - Placeholder merchant profile (TODO Phase 3: Nostr profile lookup)
- * - Discover offers using DiscoverMerchantOffersUseCase
- * - Filter to show ACTIVE offers only
- * - Favorite toggling (in-memory for now)
+ * Phase 4.2 Update:
+ * - Integrated FavoritesRepository for persistent favorites
  *
- * See: project/web-marketplace-ui-implementation.md Phase 2, Task 2.3
- *
- * TODO Phase 3:
- * - Fetch actual merchant profile from Nostr (NIP-01 kind:0)
- * - Persist favorites to localStorage
- * - Cache merchant profiles
+ * See: project/web-marketplace-ui-implementation.md Phase 4, Task 4.2
  *
  * @param discoverOffersUseCase Use case for discovering merchant offers
+ * @param favoritesRepository Repository for managing favorites
  */
 class MerchantDetailViewModel(
     private val discoverOffersUseCase: DiscoverMerchantOffersUseCase,
+    private val favoritesRepository: FavoritesRepository,
 ) {
     private val viewModelScope = CoroutineScope(Dispatchers.Main)
 
@@ -81,9 +76,8 @@ class MerchantDetailViewModel(
                         logo = null,
                     )
 
-                // Check if merchant is favorited
-                // TODO Phase 3: Load from localStorage
-                _isFavorite.value = false
+                // Check if merchant is favorited (Phase 4.2)
+                _isFavorite.value = favoritesRepository.isFavorite(merchantNpub)
             } catch (e: Exception) {
                 _error.value = "Failed to load merchant profile: ${e.message}"
             } finally {
@@ -134,14 +128,12 @@ class MerchantDetailViewModel(
     /**
      * Toggles merchant favorite status.
      *
-     * TODO Phase 3: Persist to localStorage.
-     * For Phase 2, toggles in-memory state only.
+     * Phase 4.2: Persisted via FavoritesRepository.
      */
     fun toggleFavorite() {
+        val npub = _merchantProfile.value?.npub ?: return
         viewModelScope.launch {
-            _isFavorite.value = !_isFavorite.value
-
-            // TODO Phase 3: Persist to localStorage
+            _isFavorite.value = favoritesRepository.toggleFavorite(npub)
             println(
                 "[MerchantDetailViewModel] Merchant favorite toggled: ${_isFavorite.value}",
             )
