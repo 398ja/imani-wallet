@@ -14,7 +14,7 @@ class WebBip39Adapter : Bip39Adapter {
         try {
             // Use @scure/bip39 via external declarations
             // Generate mnemonic with 128 bits (12 words)
-            val mnemonic: String = generateMnemonic(EnglishWordlist.wordlist, 128)
+            val mnemonic: String = generateMnemonic(wordlist, 128)
             return mnemonic
         } catch (e: Exception) {
             throw IllegalArgumentException("Failed to generate mnemonic from entropy", e)
@@ -38,7 +38,7 @@ class WebBip39Adapter : Bip39Adapter {
 
     override suspend fun validateMnemonic(mnemonic: String): Boolean {
         return try {
-            cash.imani.identity.crypto.validateMnemonic(mnemonic, EnglishWordlist.wordlist)
+            cash.imani.identity.crypto.validateMnemonic(mnemonic, wordlist)
         } catch (e: Exception) {
             false
         }
