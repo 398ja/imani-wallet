@@ -68,11 +68,10 @@ class IdentityViewModel(
         viewModelScope.launch {
             _createState.value = CreateIdentityState.Creating
             createIdentityUseCase(label)
-                .onSuccess { result ->
+                .onSuccess { identity ->
                     _createState.value =
                         CreateIdentityState.Success(
-                            identity = result.identity,
-                            mnemonic = result.mnemonic,
+                            identity = identity,
                         )
                     loadIdentities() // Refresh list
                 }
@@ -188,7 +187,6 @@ sealed class CreateIdentityState {
 
     data class Success(
         val identity: Identity,
-        val mnemonic: String,
     ) : CreateIdentityState()
 
     data class Error(val message: String) : CreateIdentityState()

@@ -9,15 +9,16 @@ import cash.imani.identity.repository.IdentityRepository
  * Responsibilities:
  * - Validates input (label)
  * - Delegates keypair generation to CryptoAdapter (via repository)
- * - Generates BIP39 mnemonic for backup
  * - Stores identity securely
- * - Returns created identity with mnemonic phrase
+ * - Returns created identity (nsec/npub)
  *
  * Business Rules:
  * - Label must be 1-100 characters
  * - Generates 32-byte secp256k1 keypair
- * - Creates 12-word BIP39 mnemonic
  * - Private key encrypted at rest
+ *
+ * Note (Phase 1): BIP39 mnemonic generation deferred to Phase 2 (wallet functionality).
+ * Nostr identities only require secp256k1 keys (nsec/npub), not mnemonics.
  *
  * Design: Command pattern with single responsibility
  */
@@ -28,9 +29,9 @@ class CreateIdentityUseCase(
      * Executes the use case to create a new identity.
      *
      * @param label User-friendly label for the identity
-     * @return Result containing CreateIdentityResult with identity and mnemonic
+     * @return Result containing the created Identity
      */
-    suspend operator fun invoke(label: String): Result<CreateIdentityResult> =
+    suspend operator fun invoke(label: String): Result<Identity> =
         runCatching {
             // Validate label (repository will also validate, but fail fast here)
             require(label.trim().isNotEmpty()) {
@@ -38,25 +39,6 @@ class CreateIdentityUseCase(
             }
 
             // Create identity via repository
-            val identity = identityRepository.createIdentity(label.trim()).getOrThrow()
-
-            // Retrieve mnemonic for display to user
-            val mnemonic = identityRepository.exportMnemonic(identity.id).getOrThrow()
-
-            CreateIdentityResult(
-                identity = identity,
-                mnemonic = mnemonic,
-            )
+            identityRepository.createIdentity(label.trim()).getOrThrow()
         }
 }
-
-/**
- * Result of creating a new identity.
- *
- * @property identity The created identity with metadata
- * @property mnemonic The BIP39 mnemonic phrase (12 words) for backup
- */
-data class CreateIdentityResult(
-    val identity: Identity,
-    val mnemonic: String,
-)

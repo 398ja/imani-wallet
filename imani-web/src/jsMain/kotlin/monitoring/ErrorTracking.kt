@@ -7,7 +7,6 @@ package cash.imani.monitoring
  * in production deployments.
  */
 object ErrorTracking {
-
     /**
      * Initialize error tracking with Sentry.
      * Only activates in production builds with valid DSN.
@@ -29,7 +28,9 @@ object ErrorTracking {
             }
 
             // Initialize Sentry with configuration
-            js("Sentry").asDynamic().init(js("""{
+            js("Sentry").asDynamic().init(
+                js(
+                    """{
                 dsn: sentryDsn,
                 environment: 'production',
                 release: 'imani-wallet@unknown',
@@ -40,7 +41,9 @@ object ErrorTracking {
                     'NetworkError',
                     'Failed to fetch'
                 ]
-            }"""))
+            }""",
+                ),
+            )
 
             console.log("[ErrorTracking] Sentry initialized successfully")
         } catch (e: Throwable) {
@@ -52,7 +55,10 @@ object ErrorTracking {
      * Capture an exception manually.
      */
     @Suppress("UNUSED_PARAMETER")
-    fun captureException(error: Throwable, context: Map<String, Any>? = null) {
+    fun captureException(
+        error: Throwable,
+        context: Map<String, Any>? = null,
+    ) {
         if (js("typeof Sentry === 'undefined'") as Boolean) {
             return
         }

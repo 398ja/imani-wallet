@@ -54,11 +54,8 @@ class WebIdentityRepository(
                 "Identity label must be 1-100 characters"
             }
 
-            // Generate keypair
+            // Generate secp256k1 keypair for Nostr identity
             val keypair = cryptoAdapter.generateKeypair()
-
-            // Generate 12-word mnemonic from private key
-            val mnemonic = bip39Adapter.entropyToMnemonic(keypair.privateKey.copyOfRange(0, 16))
 
             // Create identity
             val now = Clock.System.now()
@@ -81,9 +78,8 @@ class WebIdentityRepository(
             val encryptedPrivKey = encryptData(keypair.privateKey)
             storage["privkey_$id"] = encryptedPrivKey
 
-            // Store encrypted mnemonic
-            val encryptedMnemonic = encryptData(mnemonic.encodeToByteArray())
-            storage["mnemonic_$id"] = encryptedMnemonic
+            // Note: Mnemonic generation deferred to Phase 2 (wallet functionality)
+            // Nostr identities only need nsec/npub, not BIP39 mnemonics
 
             identity
         }

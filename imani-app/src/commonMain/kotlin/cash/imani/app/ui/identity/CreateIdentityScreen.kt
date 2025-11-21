@@ -48,12 +48,14 @@ import cash.imani.app.util.ValidationResult
 /**
  * Screen for creating a new identity.
  *
- * Flow:
+ * Flow (Phase 1):
  * 1. User enters a label
  * 2. Click Create button
- * 3. Mnemonic phrase is displayed
- * 4. User must confirm they've backed up the mnemonic
- * 5. Navigate back to list
+ * 3. Identity created (secp256k1 keypair → nsec/npub)
+ * 4. Navigate back to list
+ *
+ * Note: BIP39 mnemonic generation deferred to Phase 2 (wallet functionality).
+ * Nostr identities only require nsec/npub keys, not mnemonics.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -121,13 +123,32 @@ fun CreateIdentityScreen(
                 }
 
                 is CreateIdentityState.Success -> {
-                    MnemonicBackupView(
-                        mnemonic = state.mnemonic,
-                        onConfirm = {
-                            viewModel.resetCreateState()
-                            onSuccess()
-                        },
-                    )
+                    // Identity created successfully - navigate back
+                    // Note: Mnemonic backup deferred to Phase 2 (wallet functionality)
+                    LaunchedEffect(Unit) {
+                        viewModel.resetCreateState()
+                        onSuccess()
+                    }
+
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                        ) {
+                            Text(
+                                text = "✓ Identity Created",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            Text(
+                                text = "Your Nostr identity (npub/nsec) has been created",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
                 }
 
                 is CreateIdentityState.Error -> {

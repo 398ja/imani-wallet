@@ -10,7 +10,6 @@ package cash.imani.monitoring
  * - Has minimal performance impact
  */
 object Analytics {
-
     private var initialized = false
 
     /**
@@ -32,7 +31,8 @@ object Analytics {
 
         try {
             // Inject Plausible script
-            js("""
+            js(
+                """
                 (function() {
                     var script = document.createElement('script');
                     script.defer = true;
@@ -40,7 +40,8 @@ object Analytics {
                     script.src = 'https://plausible.io/js/script.js';
                     document.head.appendChild(script);
                 })()
-            """)
+            """,
+            )
 
             initialized = true
             console.log("[Analytics] Plausible initialized for domain:", domain)
@@ -56,7 +57,10 @@ object Analytics {
      * @param props Optional properties to attach to the event
      */
     @Suppress("UNUSED_PARAMETER")
-    fun trackEvent(eventName: String, props: Map<String, Any>? = null) {
+    fun trackEvent(
+        eventName: String,
+        props: Map<String, Any>? = null,
+    ) {
         if (!initialized) {
             return
         }
