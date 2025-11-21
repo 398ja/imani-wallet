@@ -27,7 +27,7 @@ class GetSalesMetricsUseCaseTest {
      * with issued and redeemed vouchers within the period.
      */
     @Test
-    fun `should calculate basic metrics for vouchers in period`() =
+    fun shouldCalculateBasicMetricsForVouchersInPeriod() =
         runTest {
             // Given: Repository with 5 issued vouchers, 3 redeemed
             val vouchers =
@@ -57,7 +57,7 @@ class GetSalesMetricsUseCaseTest {
      * Tests that vouchers outside the period are excluded from metrics.
      */
     @Test
-    fun `should exclude vouchers outside period`() =
+    fun shouldExcludeVouchersOutsidePeriod() =
         runTest {
             // Given: Vouchers both inside and outside the period
             val vouchers =
@@ -85,7 +85,7 @@ class GetSalesMetricsUseCaseTest {
      * Tests handling of empty voucher list (no sales in period).
      */
     @Test
-    fun `should return zero metrics when no vouchers in period`() =
+    fun shouldReturnZeroMetricsWhenNoVouchersInPeriod() =
         runTest {
             // Given: Empty repository
             val repository = FakeVoucherRepository(emptyList())
@@ -107,7 +107,7 @@ class GetSalesMetricsUseCaseTest {
      * Tests calculation of redemption rate with different scenarios.
      */
     @Test
-    fun `should calculate correct redemption rate`() =
+    fun shouldCalculateCorrectRedemptionRate() =
         runTest {
             // Given: 10 issued, 7 redeemed
             val vouchers =
@@ -131,7 +131,7 @@ class GetSalesMetricsUseCaseTest {
      * Tests grouping of sales by offer ID extracted from voucher memos.
      */
     @Test
-    fun `should group sales by offer ID from memo`() =
+    fun shouldGroupSalesByOfferIdFromMemo() =
         runTest {
             // Given: Vouchers with offer IDs in memo
             val vouchers =
@@ -168,7 +168,7 @@ class GetSalesMetricsUseCaseTest {
      * Tests validation of period start/end order.
      */
     @Test
-    fun `should fail when period start is after period end`() =
+    fun shouldFailWhenPeriodStartIsAfterPeriodEnd() =
         runTest {
             // Given: Invalid period (start > end)
             val repository = FakeVoucherRepository(emptyList())
@@ -186,7 +186,7 @@ class GetSalesMetricsUseCaseTest {
      * Tests helper methods on SalesMetrics.
      */
     @Test
-    fun `should calculate average voucher value correctly`() =
+    fun shouldCalculateAverageVoucherValueCorrectly() =
         runTest {
             // Given: Vouchers with known values
             val vouchers =
