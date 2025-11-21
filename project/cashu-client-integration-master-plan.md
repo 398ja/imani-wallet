@@ -530,7 +530,7 @@ class IssueVoucherUseCase(
 | **2.5.1** | Unit Tests for JvmVoucherAdapter | M (1d) | ✅ DONE | 2.2.2 |
 | **2.5.2** | Unit Tests for WebVoucherAdapter | M (1d) | ✅ DONE | 2.3.1 |
 | **2.5.3** | Integration Tests (Full Voucher Flow) | M (1d) | ✅ DONE | 2.4.3 |
-| **2.5.4** | Test Marketplace Flows | M (1d) | 📋 TODO | 2.2.4, 2.2.5, 2.4.4 |
+| **2.5.4** | Test Marketplace Flows | M (1d) | ✅ DONE | 2.2.4, 2.2.5, 2.4.4 |
 
 **Deliverables**:
 - `JvmVoucherAdapterTest.kt` - Verifies delegation to cashu-client
