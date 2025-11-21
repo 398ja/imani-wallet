@@ -5,6 +5,7 @@ import cash.imani.app.ui.merchant.CreateOfferViewModel
 import cash.imani.app.ui.merchant.MerchantDashboardViewModel
 import cash.imani.app.ui.merchant.MerchantProfileViewModel
 import cash.imani.app.ui.merchant.POSViewModel
+import cash.imani.app.ui.merchant.SalesReportsViewModel
 import cash.imani.app.ui.shop.MerchantDetailViewModel
 import cash.imani.app.ui.shop.MerchantDiscoveryViewModel
 import cash.imani.app.ui.shop.PurchaseViewModel
@@ -207,6 +208,12 @@ val appModule =
         factory {
             POSViewModel(
                 redeemVoucherUseCase = get(),
+            )
+        }
+
+        factory {
+            SalesReportsViewModel(
+                getSalesMetricsUseCase = get(),
             )
         }
     }
