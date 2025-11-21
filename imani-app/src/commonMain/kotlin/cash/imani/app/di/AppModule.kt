@@ -4,6 +4,7 @@ import cash.imani.app.ui.identity.IdentityViewModel
 import cash.imani.app.ui.merchant.CreateOfferViewModel
 import cash.imani.app.ui.merchant.MerchantDashboardViewModel
 import cash.imani.app.ui.merchant.MerchantProfileViewModel
+import cash.imani.app.ui.merchant.POSViewModel
 import cash.imani.app.ui.shop.MerchantDetailViewModel
 import cash.imani.app.ui.shop.MerchantDiscoveryViewModel
 import cash.imani.app.ui.shop.PurchaseViewModel
@@ -200,6 +201,12 @@ val appModule =
                 identityRepository = get(),
                 createOfferUseCase = get(),
                 publishOfferUseCase = get(),
+            )
+        }
+
+        factory {
+            POSViewModel(
+                redeemVoucherUseCase = get(),
             )
         }
     }
