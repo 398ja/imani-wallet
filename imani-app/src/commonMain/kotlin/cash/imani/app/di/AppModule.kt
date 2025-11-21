@@ -1,6 +1,7 @@
 package cash.imani.app.di
 
 import cash.imani.app.ui.identity.IdentityViewModel
+import cash.imani.app.ui.merchant.CreateOfferViewModel
 import cash.imani.app.ui.merchant.MerchantDashboardViewModel
 import cash.imani.app.ui.merchant.MerchantProfileViewModel
 import cash.imani.app.ui.shop.MerchantDetailViewModel
@@ -191,6 +192,14 @@ val appModule =
         factory {
             MerchantProfileViewModel(
                 identityRepository = get(),
+            )
+        }
+
+        factory {
+            CreateOfferViewModel(
+                identityRepository = get(),
+                createOfferUseCase = get(),
+                publishOfferUseCase = get(),
             )
         }
     }
