@@ -12,7 +12,7 @@ import org.khronos.webgl.Uint8Array
  */
 
 external fun generateMnemonic(
-    wordlist: Array<String>,
+    wordlist: dynamic,
     strength: Int = definedExternally,
 ): String
 
@@ -23,5 +23,5 @@ external fun mnemonicToSeedSync(
 
 external fun validateMnemonic(
     mnemonic: String,
-    wordlist: Array<String>,
+    wordlist: dynamic,
 ): Boolean

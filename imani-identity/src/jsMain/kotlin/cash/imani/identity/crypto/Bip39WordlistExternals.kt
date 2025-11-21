@@ -6,7 +6,8 @@ package cash.imani.identity.crypto
  * The English wordlist for BIP39 mnemonic generation and validation.
  *
  * Note: @scure/bip39/wordlists/english exports a named export `wordlist`
+ * Using dynamic type for better JavaScript array interop
  */
 @JsModule("@scure/bip39/wordlists/english")
 @JsNonModule
-external val wordlist: Array<String>
+external val wordlist: dynamic
