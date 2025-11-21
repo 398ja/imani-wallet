@@ -1,6 +1,7 @@
 package cash.imani.app.di
 
 import cash.imani.app.ui.identity.IdentityViewModel
+import cash.imani.app.ui.merchant.MerchantDashboardViewModel
 import cash.imani.app.ui.shop.MerchantDetailViewModel
 import cash.imani.app.ui.shop.MerchantDiscoveryViewModel
 import cash.imani.app.ui.shop.PurchaseViewModel
@@ -174,6 +175,15 @@ val appModule =
                 createInvoiceUseCase = get(),
                 checkInvoicePaidUseCase = get(),
                 issueVoucherUseCase = get(),
+            )
+        }
+
+        factory {
+            MerchantDashboardViewModel(
+                identityRepository = get(),
+                voucherRepository = get(),
+                discoverOffersUseCase = get(),
+                getSalesMetricsUseCase = get(),
             )
         }
     }
