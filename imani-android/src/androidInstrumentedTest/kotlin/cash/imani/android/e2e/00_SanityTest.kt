@@ -4,7 +4,9 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import cash.imani.android.MainActivity
 import cash.imani.android.e2e.fixtures.ImaniTestFixtures
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Rule
 import org.junit.Test
 
@@ -13,6 +15,16 @@ import org.junit.Test
  *
  * Mirrors: e2e/tests/00-sanity.spec.ts
  */
+private const val DEFAULT_TEST_TIMEOUT_MS = 30_000L
+
+private fun runE2ETest(block: suspend CoroutineScope.() -> Unit) {
+    runBlocking {
+        withTimeout(DEFAULT_TEST_TIMEOUT_MS) {
+            block()
+        }
+    }
+}
+
 class SanityTest {
     @get:Rule
     val composeTestRule = createAndroidComposeRule<MainActivity>()
@@ -22,7 +34,7 @@ class SanityTest {
      */
     @Test
     fun should_load_the_application() =
-        runTest {
+        runE2ETest {
             val fixtures = ImaniTestFixtures(composeTestRule)
 
             // Wait for app to load
@@ -40,7 +52,7 @@ class SanityTest {
      */
     @Test
     fun should_show_initial_screen() =
-        runTest {
+        runE2ETest {
             val fixtures = ImaniTestFixtures(composeTestRule)
             fixtures.waitForAppLoad()
 
@@ -66,7 +78,7 @@ class SanityTest {
      */
     @Test
     fun should_navigate_between_tabs() =
-        runTest {
+        runE2ETest {
             val fixtures = ImaniTestFixtures(composeTestRule)
             fixtures.waitForAppLoad()
 

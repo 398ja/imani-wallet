@@ -6,7 +6,9 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import cash.imani.android.MainActivity
 import cash.imani.android.e2e.fixtures.ImaniTestFixtures
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -21,6 +23,16 @@ import org.junit.Test
  * - Deep linking
  * - Share functionality
  */
+private const val DEFAULT_TEST_TIMEOUT_MS = 30_000L
+
+private fun runE2ETest(block: suspend CoroutineScope.() -> Unit) {
+    runBlocking {
+        withTimeout(DEFAULT_TEST_TIMEOUT_MS) {
+            block()
+        }
+    }
+}
+
 class MobileSpecificTest {
     @get:Rule
     val composeTestRule = createAndroidComposeRule<MainActivity>()
@@ -38,7 +50,7 @@ class MobileSpecificTest {
      */
     @Test
     fun should_preserve_state_on_screen_rotation() =
-        runTest {
+        runE2ETest {
             // Create identity
             fixtures.createNewIdentity("Rotation Test")
 
@@ -68,7 +80,7 @@ class MobileSpecificTest {
      */
     @Test
     fun should_preserve_navigation_state_on_rotation() =
-        runTest {
+        runE2ETest {
             fixtures.createNewIdentity("Nav Test")
 
             // Navigate to Create Identity screen (nested)
@@ -96,7 +108,7 @@ class MobileSpecificTest {
      */
     @Test
     fun should_preserve_form_input_on_rotation() =
-        runTest {
+        runE2ETest {
             fixtures.waitForAppLoad()
             fixtures.gotoIdentities()
 
@@ -127,7 +139,7 @@ class MobileSpecificTest {
      */
     @Test
     fun should_handle_system_back_button_correctly() =
-        runTest {
+        runE2ETest {
             fixtures.createNewIdentity("Back Button Test")
 
             // Scenario 1: Back from nested screen → returns to list
@@ -161,7 +173,7 @@ class MobileSpecificTest {
      */
     @Test
     fun should_handle_app_backgrounding() =
-        runTest {
+        runE2ETest {
             // Create data
             fixtures.createNewIdentity("Background Test")
             fixtures.gotoIdentities()
@@ -182,7 +194,7 @@ class MobileSpecificTest {
      */
     @Test
     fun should_trigger_share_intent() =
-        runTest {
+        runE2ETest {
             try {
                 // Create identity and issue voucher
                 fixtures.createNewIdentity("Share Test")
@@ -219,7 +231,7 @@ class MobileSpecificTest {
      */
     @Test
     fun should_show_biometric_prompt_if_enabled() =
-        runTest {
+        runE2ETest {
             try {
                 // This test would require:
                 // 1. Enabling biometric lock in settings
@@ -252,7 +264,7 @@ class MobileSpecificTest {
      */
     @Test
     fun should_handle_memory_pressure() =
-        runTest {
+        runE2ETest {
             // Create multiple identities to test memory handling
             repeat(10) { index ->
                 try {
@@ -278,7 +290,7 @@ class MobileSpecificTest {
      */
     @Test
     fun should_handle_rapid_rotations() =
-        runTest {
+        runE2ETest {
             fixtures.createNewIdentity("Rotation Stress")
 
             // Rapidly rotate screen multiple times
@@ -303,7 +315,7 @@ class MobileSpecificTest {
      */
     @Test
     fun should_work_in_landscape_mode() =
-        runTest {
+        runE2ETest {
             // Rotate to landscape
             composeTestRule.activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
             composeTestRule.waitForIdle()

@@ -4,7 +4,9 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import cash.imani.android.MainActivity
 import cash.imani.android.e2e.fixtures.ImaniTestFixtures
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -15,6 +17,16 @@ import org.junit.Test
  *
  * Mirrors: e2e/tests/03-voucher-flow.spec.ts
  */
+private const val DEFAULT_TEST_TIMEOUT_MS = 30_000L
+
+private fun runE2ETest(block: suspend CoroutineScope.() -> Unit) {
+    runBlocking {
+        withTimeout(DEFAULT_TEST_TIMEOUT_MS) {
+            block()
+        }
+    }
+}
+
 class CompleteVoucherFlowTest {
     @get:Rule
     val composeTestRule = createAndroidComposeRule<MainActivity>()
@@ -42,7 +54,7 @@ class CompleteVoucherFlowTest {
      */
     @Test
     fun should_complete_full_voucher_lifecycle() =
-        runTest {
+        runE2ETest {
             try {
                 // Step 1: Create identity as Alice (issuer)
                 println("[E2E] Creating Alice identity...")
@@ -88,7 +100,7 @@ class CompleteVoucherFlowTest {
      */
     @Test
     fun should_handle_voucher_issuance_with_memo() =
-        runTest {
+        runE2ETest {
             fixtures.createNewIdentity("Test User")
 
             try {
@@ -117,7 +129,7 @@ class CompleteVoucherFlowTest {
      */
     @Test
     fun should_show_voucher_history() =
-        runTest {
+        runE2ETest {
             fixtures.createNewIdentity("Test User")
 
             try {
@@ -150,6 +162,8 @@ class CompleteVoucherFlowTest {
  *
  * Mirrors Playwright test describe: "Voucher Error Scenarios"
  */
+
+
 class VoucherErrorScenariosTest {
     @get:Rule
     val composeTestRule = createAndroidComposeRule<MainActivity>()
@@ -169,7 +183,7 @@ class VoucherErrorScenariosTest {
      */
     @Test
     fun should_reject_invalid_voucher_token() =
-        runTest {
+        runE2ETest {
             fixtures.createNewIdentity("Test User")
 
             try {
@@ -205,7 +219,7 @@ class VoucherErrorScenariosTest {
      */
     @Test
     fun should_handle_already_redeemed_voucher() =
-        runTest {
+        runE2ETest {
             try {
                 // Step 1: Create identity and issue voucher
                 println("[E2E] Creating identity and issuing voucher...")
@@ -263,7 +277,7 @@ class VoucherErrorScenariosTest {
      */
     @Test
     fun should_handle_insufficient_balance_for_issuance() =
-        runTest {
+        runE2ETest {
             fixtures.createNewIdentity("Test User")
 
             try {
@@ -302,7 +316,7 @@ class VoucherErrorScenariosTest {
      */
     @Test
     fun should_handle_network_errors_gracefully() =
-        runTest {
+        runE2ETest {
             fixtures.createNewIdentity("Test User")
 
             try {

@@ -4,7 +4,9 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import cash.imani.android.MainActivity
 import cash.imani.android.e2e.fixtures.ImaniTestFixtures
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -14,6 +16,16 @@ import org.junit.Test
  *
  * Tests unusual inputs, boundary conditions, and stress scenarios.
  */
+private const val DEFAULT_TEST_TIMEOUT_MS = 30_000L
+
+private fun runE2ETest(block: suspend CoroutineScope.() -> Unit) {
+    runBlocking {
+        withTimeout(DEFAULT_TEST_TIMEOUT_MS) {
+            block()
+        }
+    }
+}
+
 class EdgeCasesTest {
     @get:Rule
     val composeTestRule = createAndroidComposeRule<MainActivity>()
@@ -33,7 +45,7 @@ class EdgeCasesTest {
      */
     @Test
     fun should_handle_very_long_identity_label() =
-        runTest {
+        runE2ETest {
             try {
                 val longLabel = "A".repeat(200) // 200 characters
 
@@ -67,7 +79,7 @@ class EdgeCasesTest {
      */
     @Test
     fun should_reject_empty_identity_label() =
-        runTest {
+        runE2ETest {
             try {
                 fixtures.waitForAppLoad()
                 fixtures.gotoIdentities()
@@ -94,7 +106,7 @@ class EdgeCasesTest {
      */
     @Test
     fun should_handle_special_characters_in_label() =
-        runTest {
+        runE2ETest {
             val specialLabels =
                 listOf(
                     "Test 🎉 Identity", // Emoji
@@ -125,7 +137,7 @@ class EdgeCasesTest {
      */
     @Test
     fun should_handle_many_identities() =
-        runTest {
+        runE2ETest {
             try {
                 // Create 20 identities
                 repeat(20) { index ->
@@ -154,7 +166,7 @@ class EdgeCasesTest {
      */
     @Test
     fun should_reject_zero_amount_voucher() =
-        runTest {
+        runE2ETest {
             try {
                 fixtures.createNewIdentity("Test User")
                 fixtures.gotoVouchers()
@@ -187,7 +199,7 @@ class EdgeCasesTest {
      */
     @Test
     fun should_reject_negative_amount_voucher() =
-        runTest {
+        runE2ETest {
             try {
                 fixtures.createNewIdentity("Test User")
                 fixtures.gotoVouchers()
@@ -220,7 +232,7 @@ class EdgeCasesTest {
      */
     @Test
     fun should_handle_very_large_amount() =
-        runTest {
+        runE2ETest {
             try {
                 fixtures.createNewIdentity("Test User")
                 fixtures.gotoVouchers()
@@ -253,7 +265,7 @@ class EdgeCasesTest {
      */
     @Test
     fun should_handle_very_long_memo() =
-        runTest {
+        runE2ETest {
             try {
                 fixtures.createNewIdentity("Test User")
                 fixtures.gotoVouchers()
@@ -292,7 +304,7 @@ class EdgeCasesTest {
      */
     @Test
     fun should_reject_malformed_voucher_token() =
-        runTest {
+        runE2ETest {
             try {
                 fixtures.createNewIdentity("Test User")
                 fixtures.gotoVouchers()
@@ -346,7 +358,7 @@ class EdgeCasesTest {
      */
     @Test
     fun should_prevent_concurrent_identity_creation() =
-        runTest {
+        runE2ETest {
             try {
                 fixtures.waitForAppLoad()
                 fixtures.gotoIdentities()
@@ -377,7 +389,7 @@ class EdgeCasesTest {
      */
     @Test
     fun should_maintain_data_consistency() =
-        runTest {
+        runE2ETest {
             // Create data
             fixtures.createNewIdentity("Persistent Identity")
             fixtures.issueVoucher(100, "Persistent Voucher")
@@ -399,7 +411,7 @@ class EdgeCasesTest {
      */
     @Test
     fun should_completely_clear_data_when_requested() =
-        runTest {
+        runE2ETest {
             // Create data
             fixtures.createNewIdentity("To Be Deleted")
             fixtures.gotoIdentities()

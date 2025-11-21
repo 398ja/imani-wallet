@@ -4,7 +4,9 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import cash.imani.android.MainActivity
 import cash.imani.android.e2e.fixtures.ImaniTestFixtures
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -14,6 +16,16 @@ import org.junit.Test
  *
  * Mirrors: e2e/tests/02-identity-flow.spec.ts
  */
+private const val DEFAULT_TEST_TIMEOUT_MS = 30_000L
+
+private fun runE2ETest(block: suspend CoroutineScope.() -> Unit) {
+    runBlocking {
+        withTimeout(DEFAULT_TEST_TIMEOUT_MS) {
+            block()
+        }
+    }
+}
+
 class IdentityFlowTest {
     @get:Rule
     val composeTestRule = createAndroidComposeRule<MainActivity>()
@@ -33,7 +45,7 @@ class IdentityFlowTest {
      */
     @Test
     fun should_create_a_new_identity() =
-        runTest {
+        runE2ETest {
             // Create new identity
             fixtures.createNewIdentity("Test Identity")
 
@@ -49,7 +61,7 @@ class IdentityFlowTest {
      */
     @Test
     fun should_display_identity_public_key() =
-        runTest {
+        runE2ETest {
             fixtures.createNewIdentity("Test Identity")
 
             // Click on the identity to see details
@@ -80,7 +92,7 @@ class IdentityFlowTest {
      */
     @Test
     fun should_show_mnemonic_backup_phrase() =
-        runTest {
+        runE2ETest {
             fixtures.createNewIdentity("Test Identity")
 
             // Navigate to settings or backup screen
@@ -117,6 +129,8 @@ class IdentityFlowTest {
  *
  * Mirrors Playwright test describe: "Identity Import"
  */
+
+
 class IdentityImportTest {
     @get:Rule
     val composeTestRule = createAndroidComposeRule<MainActivity>()
@@ -139,7 +153,7 @@ class IdentityImportTest {
      */
     @Test
     fun should_import_identity_from_valid_mnemonic() =
-        runTest {
+        runE2ETest {
             try {
                 fixtures.importIdentity(testMnemonic, "Imported Identity")
 
@@ -158,7 +172,7 @@ class IdentityImportTest {
      */
     @Test
     fun should_reject_invalid_mnemonic() =
-        runTest {
+        runE2ETest {
             try {
                 fixtures.waitForAppLoad()
                 fixtures.gotoIdentities()
