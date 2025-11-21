@@ -96,14 +96,73 @@ object PassphraseManager {
     /**
      * Gets the current passphrase if unlocked.
      *
+     * PHASE 1 AUTO-UNLOCK: For development, automatically unlocks with a default passphrase.
+     * Phase 3 will implement proper passphrase setup UI.
+     *
      * @return Current passphrase
      * @throws IllegalStateException if session is locked
      */
     fun getPassphrase(): String {
+        // PHASE 1: Auto-unlock with default passphrase for development
+        if (passphrase == null) {
+            console.warn(
+                "[PassphraseManager] Auto-unlocking with default passphrase for Phase 1 development. " +
+                    "Phase 3 will implement proper passphrase setup.",
+            )
+            unlock(getDefaultPassphrase())
+        }
+
         resetAutoLockTimer() // Reset timer on each access
         return passphrase ?: throw IllegalStateException(
             "Session is locked. Call unlock() first.",
         )
+    }
+
+    /**
+     * Gets the default passphrase for Phase 1 development.
+     *
+     * SECURITY NOTE: This is ONLY for Phase 1 development.
+     * Phase 3 will implement proper passphrase setup with user-provided passphrase.
+     *
+     * Strategy:
+     * 1. Check sessionStorage for existing session passphrase
+     * 2. If not found, generate a random passphrase and store in sessionStorage
+     * 3. This provides basic encryption while avoiding user friction in Phase 1
+     *
+     * @return Default passphrase for current session
+     */
+    private fun getDefaultPassphrase(): String {
+        val storage = kotlinx.browser.window.sessionStorage
+        val key = "imani_dev_passphrase"
+
+        // Check if session already has a passphrase
+        val existingPassphrase = storage.getItem(key)
+        if (existingPassphrase != null) {
+            return existingPassphrase
+        }
+
+        // Generate a random passphrase for this session
+        val randomPassphrase = generateRandomPassphrase()
+        storage.setItem(key, randomPassphrase)
+
+        console.log("[PassphraseManager] Generated session passphrase for Phase 1 development")
+        return randomPassphrase
+    }
+
+    /**
+     * Generates a cryptographically random passphrase.
+     *
+     * @return Random 32-character hex string
+     */
+    private fun generateRandomPassphrase(): String {
+        val crypto = window.asDynamic().crypto
+        val array = js("new Uint8Array(16)").unsafeCast<org.khronos.webgl.Uint8Array>()
+        crypto.getRandomValues(array)
+
+        return (0 until array.length).joinToString("") { i ->
+            val byte = array.asDynamic()[i].unsafeCast<Int>()
+            byte.toString(16).padStart(2, '0')
+        }
     }
 
     /**
