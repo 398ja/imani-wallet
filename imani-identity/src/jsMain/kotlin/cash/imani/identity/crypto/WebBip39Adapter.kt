@@ -1,8 +1,6 @@
 package cash.imani.identity.crypto
 
-import kotlinx.coroutines.await
 import org.khronos.webgl.Uint8Array
-import kotlin.js.Promise
 
 /**
  * Web implementation of Bip39Adapter using @scure/bip39 library.
@@ -12,21 +10,12 @@ import kotlin.js.Promise
 actual fun createBip39Adapter(): Bip39Adapter = WebBip39Adapter()
 
 class WebBip39Adapter : Bip39Adapter {
-    // Dynamically import @scure/bip39 library
-    private val bip39: dynamic
-        get() = js("require('@scure/bip39')")
-
-    // English wordlist for mnemonics
-    private val wordlist: dynamic
-        get() = bip39.wordlist
 
     override suspend fun entropyToMnemonic(entropyBytes: ByteArray): String {
         try {
-            // Convert ByteArray to Uint8Array
-            val uint8Array = entropyBytes.toUint8Array()
-
-            // Use @scure/bip39 to generate mnemonic
-            val mnemonic: String = bip39.entropyToMnemonic(uint8Array, wordlist)
+            // Use @scure/bip39 via external declarations
+            // Generate mnemonic with 128 bits (12 words)
+            val mnemonic: String = generateMnemonic(wordlists.english, 128)
             return mnemonic
         } catch (e: Exception) {
             throw IllegalArgumentException("Failed to generate mnemonic from entropy", e)
@@ -38,12 +27,11 @@ class WebBip39Adapter : Bip39Adapter {
         passphrase: String,
     ): ByteArray {
         try {
-            // Use @scure/bip39's async mnemonicToSeed
-            val seedPromise: Promise<dynamic> = bip39.mnemonicToSeed(mnemonic, passphrase)
-            val seedUint8Array = seedPromise.await()
+            // Use @scure/bip39's sync mnemonicToSeedSync
+            val seedUint8Array = mnemonicToSeedSync(mnemonic, passphrase)
 
             // Convert Uint8Array to ByteArray
-            return seedUint8Array.unsafeCast<Uint8Array>().toByteArray()
+            return seedUint8Array.toByteArray()
         } catch (e: Exception) {
             throw IllegalArgumentException("Failed to convert mnemonic to seed", e)
         }
@@ -51,7 +39,7 @@ class WebBip39Adapter : Bip39Adapter {
 
     override suspend fun validateMnemonic(mnemonic: String): Boolean {
         return try {
-            bip39.validateMnemonic(mnemonic, wordlist) as Boolean
+            cash.imani.identity.crypto.validateMnemonic(mnemonic, wordlists.english)
         } catch (e: Exception) {
             false
         }

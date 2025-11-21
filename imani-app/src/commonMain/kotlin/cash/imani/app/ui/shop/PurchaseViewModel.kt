@@ -187,6 +187,7 @@ class PurchaseViewModel(
      * @param offer Merchant offer being purchased
      * @param invoice Lightning invoice that was paid
      */
+    @Suppress("UNUSED_PARAMETER")
     private fun issueVoucher(
         offer: MerchantOffer,
         invoice: LightningInvoice,

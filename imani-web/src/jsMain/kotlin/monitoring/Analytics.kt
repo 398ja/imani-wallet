@@ -55,6 +55,7 @@ object Analytics {
      * @param eventName Name of the event (e.g., "Voucher Created", "Settings Opened")
      * @param props Optional properties to attach to the event
      */
+    @Suppress("UNUSED_PARAMETER")
     fun trackEvent(eventName: String, props: Map<String, Any>? = null) {
         if (!initialized) {
             return
@@ -80,6 +81,7 @@ object Analytics {
      * Track page view (usually automatic with Plausible).
      * Only needed for SPA manual navigation tracking.
      */
+    @Suppress("UNUSED_PARAMETER")
     fun trackPageView(path: String) {
         if (!initialized) {
             return

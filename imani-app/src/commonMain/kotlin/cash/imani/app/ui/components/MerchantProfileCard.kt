@@ -68,7 +68,7 @@ fun MerchantProfileCard(
     name: String,
     description: String,
     npub: String,
-    logo: String? = null,
+    @Suppress("UNUSED_PARAMETER") logo: String? = null,
     isFavorite: Boolean = false,
     onFavoriteClick: () -> Unit = {},
     onViewProfile: () -> Unit,

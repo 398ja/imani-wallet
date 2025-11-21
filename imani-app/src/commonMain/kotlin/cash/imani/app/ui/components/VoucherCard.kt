@@ -62,7 +62,7 @@ import kotlin.time.Duration.Companion.seconds
 @Composable
 fun VoucherCard(
     merchantName: String,
-    merchantLogo: String? = null,
+    @Suppress("UNUSED_PARAMETER") merchantLogo: String? = null,
     voucherName: String,
     balance: Int,
     originalAmount: Int,

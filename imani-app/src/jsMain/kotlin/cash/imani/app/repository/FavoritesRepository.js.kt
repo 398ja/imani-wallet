@@ -15,9 +15,8 @@ class BrowserFavoritesRepository : FavoritesRepository {
 
     private fun loadFromStorage(): List<String> {
         return try {
-            val jsonString = localStorage.getItem(storageKey) ?: "[]"
-            val parsed = js("JSON.parse(jsonString)").unsafeCast<Array<String>>()
-            parsed.toList()
+            val stored = localStorage.getItem(storageKey) ?: "[]"
+            JSON.parse<Array<String>>(stored).toList()
         } catch (e: Exception) {
             println("[FavoritesRepository] Error loading favorites: ${e.message}")
             emptyList()
@@ -26,9 +25,8 @@ class BrowserFavoritesRepository : FavoritesRepository {
 
     private fun saveToStorage() {
         try {
-            val array = _favorites.value.toTypedArray()
-            val jsonString = js("JSON.stringify(array)").unsafeCast<String>()
-            localStorage.setItem(storageKey, jsonString)
+            val favoritesList = _favorites.value.toTypedArray()
+            localStorage.setItem(storageKey, JSON.stringify(favoritesList))
         } catch (e: Exception) {
             println("[FavoritesRepository] Error saving favorites: ${e.message}")
         }

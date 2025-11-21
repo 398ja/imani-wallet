@@ -574,16 +574,7 @@ private fun LogoutConfirmationDialog(
     )
 }
 
-/**
- * Helper function to convert Identity to npub format.
- *
- * TODO: Move to Identity domain model extension function.
- */
-private fun Identity.toNpub(): String {
-    // For now, return placeholder
-    // In actual implementation, use Bech32 encoding
-    return "npub1" + publicKey.take(58)
-}
+// Note: Using Identity.toNpub() from domain model directly
 
 /**
  * Helper function to convert Identity to nsec format.

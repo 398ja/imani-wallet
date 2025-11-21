@@ -96,7 +96,7 @@ data class ErrorInfo(
 @Composable
 fun ErrorBoundary(
     errorInfo: ErrorInfo?,
-    componentName: String,
+    @Suppress("UNUSED_PARAMETER") componentName: String,
     onError: (ErrorInfo) -> Unit = {},
     onReset: () -> Unit = {},
     modifier: Modifier = Modifier,

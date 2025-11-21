@@ -195,6 +195,7 @@ fun LightningInvoiceDisplay(
  * @param invoice Lightning invoice to check
  * @return true if paid, false otherwise
  */
+@Suppress("UNUSED_PARAMETER")
 private suspend fun checkInvoicePaid(invoice: String): Boolean {
     // Mock implementation - always returns false for now
     // In Phase 2.4, this will call:

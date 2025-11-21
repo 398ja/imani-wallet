@@ -337,7 +337,7 @@ private fun PaymentPendingView(
 @Composable
 private fun PurchaseSuccessView(
     voucher: cash.imani.voucher.domain.StoredVoucher,
-    token: String,
+    @Suppress("UNUSED_PARAMETER") token: String,
     onDone: () -> Unit,
     modifier: Modifier = Modifier,
 ) {

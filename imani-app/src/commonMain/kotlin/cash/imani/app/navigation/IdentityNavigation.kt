@@ -69,7 +69,7 @@ fun IdentityNavHost(
     viewModel: IdentityViewModel,
     navState: IdentityNavState = remember { IdentityNavState() },
 ) {
-    when (val route = navState.currentRoute) {
+    when (navState.currentRoute) {
         is IdentityRoute.List -> {
             IdentityListScreen(
                 viewModel = viewModel,

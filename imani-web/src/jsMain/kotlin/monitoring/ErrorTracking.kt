@@ -51,6 +51,7 @@ object ErrorTracking {
     /**
      * Capture an exception manually.
      */
+    @Suppress("UNUSED_PARAMETER")
     fun captureException(error: Throwable, context: Map<String, Any>? = null) {
         if (js("typeof Sentry === 'undefined'") as Boolean) {
             return
@@ -69,6 +70,7 @@ object ErrorTracking {
     /**
      * Set user context for error reports.
      */
+    @Suppress("UNUSED_PARAMETER")
     fun setUser(userId: String) {
         if (js("typeof Sentry === 'undefined'") as Boolean) {
             return

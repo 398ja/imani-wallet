@@ -8,6 +8,7 @@ kotlin {
         browser {
             commonWebpackConfig {
                 outputFileName = "imani-wallet.js"
+                devServer = devServer?.copy(port = 8181)
             }
         }
         binaries.executable()

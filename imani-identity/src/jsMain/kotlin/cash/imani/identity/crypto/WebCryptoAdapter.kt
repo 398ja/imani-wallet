@@ -5,6 +5,8 @@ import kotlinx.coroutines.await
 import org.khronos.webgl.ArrayBuffer
 import org.khronos.webgl.Uint8Array
 import kotlin.js.Promise
+import cash.imani.identity.crypto.getPublicKey as nobleGetPublicKey
+import cash.imani.identity.crypto.schnorr
 
 /**
  * Web Crypto API implementation of CryptoAdapter.
@@ -26,10 +28,6 @@ class WebCryptoAdapter : CryptoAdapter {
 
     private val subtle: dynamic
         get() = crypto.subtle
-
-    // Dynamically import @noble/secp256k1 library
-    private val secp256k1: dynamic
-        get() = js("require('@noble/secp256k1')")
 
     override suspend fun generateRandomBytes(length: Int): ByteArray {
         val array = Uint8Array(length)
@@ -76,12 +74,10 @@ class WebCryptoAdapter : CryptoAdapter {
             // Use @noble/secp256k1 to derive public key
             // getPublicKey returns 33-byte compressed key, we need x-coordinate only (32 bytes)
             val privKeyArray = privateKey.toUint8Array()
-            val pubKeyPromise: Promise<dynamic> = secp256k1.getPublicKey(privKeyArray, true)
-            val pubKeyCompressed = pubKeyPromise.await()
+            val pubKeyCompressed = nobleGetPublicKey(privKeyArray, true)
 
             // Extract x-coordinate (skip first byte which is 0x02 or 0x03 compression flag)
-            val pubKeyArray = Uint8Array(pubKeyCompressed.unsafeCast<ArrayBuffer>())
-            return ByteArray(32) { i -> pubKeyArray.asDynamic()[i + 1].unsafeCast<Byte>() }
+            return ByteArray(32) { i -> pubKeyCompressed.asDynamic()[i + 1].unsafeCast<Byte>() }
         } catch (e: Exception) {
             throw CryptoException("Failed to derive public key from private key", e)
         }
@@ -97,12 +93,10 @@ class WebCryptoAdapter : CryptoAdapter {
             val messageArray = message.toUint8Array()
 
             // Use @noble/secp256k1's Schnorr signature (BIP340)
-            val sigPromise: Promise<dynamic> = secp256k1.schnorr.sign(messageArray, privKeyArray)
-            val signature = sigPromise.await()
+            val signature = schnorr.sign(messageArray, privKeyArray)
 
             // Convert result to ByteArray
-            val sigArray = Uint8Array(signature.unsafeCast<ArrayBuffer>())
-            return ByteArray(sigArray.length) { i -> sigArray.asDynamic()[i].unsafeCast<Byte>() }
+            return ByteArray(signature.length) { i -> signature.asDynamic()[i].unsafeCast<Byte>() }
         } catch (e: Exception) {
             throw CryptoException("Failed to sign message", e)
         }
@@ -119,8 +113,7 @@ class WebCryptoAdapter : CryptoAdapter {
             val sigArray = signature.toUint8Array()
 
             // Schnorr verification returns boolean
-            val result: Promise<Boolean> = secp256k1.schnorr.verify(sigArray, messageArray, pubKeyArray)
-            result.await()
+            schnorr.verify(sigArray, messageArray, pubKeyArray)
         } catch (e: Exception) {
             false // Invalid signature
         }

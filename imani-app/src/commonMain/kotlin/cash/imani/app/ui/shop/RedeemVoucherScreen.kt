@@ -77,7 +77,7 @@ import cash.imani.voucher.domain.VoucherStatus
 fun RedeemVoucherScreen(
     voucherId: String,
     viewModel: VoucherViewModel,
-    onRedeemed: () -> Unit,
+    @Suppress("UNUSED_PARAMETER") onRedeemed: () -> Unit,
     onBack: () -> Unit,
 ) {
     val uiState by viewModel.uiState.collectAsState()
