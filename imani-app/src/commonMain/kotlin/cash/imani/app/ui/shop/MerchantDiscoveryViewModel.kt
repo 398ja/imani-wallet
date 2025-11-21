@@ -202,16 +202,23 @@ sealed class SearchState {
  * Lightweight model for recent merchants list.
  * Full profile is fetched when navigating to detail screen.
  *
+ * Phase 3.2: Added contact info fields for profile editing
  * TODO Phase 3: Fetch from Nostr profile (NIP-01 kind:0 event)
  *
  * @param npub Merchant Nostr public key
- * @param name Merchant business name
- * @param description Short merchant description
+ * @param name Merchant business name (1-100 chars)
+ * @param description Short merchant description (1-500 chars)
  * @param logo URL to merchant logo (optional)
+ * @param email Contact email (optional)
+ * @param phone Contact phone (optional)
+ * @param website Website URL (optional)
  */
 data class MerchantProfile(
     val npub: String,
     val name: String,
     val description: String,
     val logo: String? = null,
+    val email: String? = null,
+    val phone: String? = null,
+    val website: String? = null,
 )
