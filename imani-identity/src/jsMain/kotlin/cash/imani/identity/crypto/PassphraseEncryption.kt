@@ -13,6 +13,39 @@ import kotlin.random.Random
  */
 external class CryptoKey
 
+external interface SubtleCrypto {
+    fun deriveKey(
+        algorithm: dynamic,
+        baseKey: CryptoKey,
+        derivedKeyAlgorithm: dynamic,
+        extractable: Boolean,
+        keyUsages: Array<String>
+    ): Promise<CryptoKey>
+
+    fun importKey(
+        format: String,
+        keyData: dynamic,
+        algorithm: dynamic,
+        extractable: Boolean,
+        keyUsages: Array<String>
+    ): Promise<CryptoKey>
+
+    fun encrypt(
+        algorithm: dynamic,
+        key: CryptoKey,
+        data: dynamic
+    ): Promise<ArrayBuffer>
+
+    fun decrypt(
+        algorithm: dynamic,
+        key: CryptoKey,
+        data: dynamic
+    ): Promise<ArrayBuffer>
+}
+
+// Access global crypto.subtle
+private val cryptoSubtle: SubtleCrypto = js("crypto.subtle")
+
 /**
  * Passphrase-based encryption using PBKDF2 + AES-GCM for secure storage.
  *
@@ -131,29 +164,18 @@ class PassphraseEncryption {
         // Convert salt to Uint8Array for JavaScript
         val saltArray = salt.toUint8Array()
 
-        // Derive key using PBKDF2
-        val derivedKeyBuffer =
-            js(
-                """
-            crypto.subtle.deriveKey(
-                {
-                    name: 'PBKDF2',
-                    salt: saltArray,
-                    iterations: $PBKDF2_ITERATIONS,
-                    hash: 'SHA-256'
-                },
-                passphraseKey,
-                {
-                    name: 'AES-GCM',
-                    length: $AES_KEY_LENGTH
-                },
-                false, // not extractable
-                ['encrypt', 'decrypt']
-            )
-            """,
-            ) as Promise<CryptoKey>
+        // Create algorithm objects
+        val pbkdf2Params = js("({name: 'PBKDF2', salt: saltArray, iterations: $PBKDF2_ITERATIONS, hash: 'SHA-256'})")
+        val aesParams = js("({name: 'AES-GCM', length: $AES_KEY_LENGTH})")
 
-        return derivedKeyBuffer.await()
+        // Derive key using PBKDF2
+        return cryptoSubtle.deriveKey(
+            algorithm = pbkdf2Params,
+            baseKey = passphraseKey,
+            derivedKeyAlgorithm = aesParams,
+            extractable = false,
+            keyUsages = arrayOf("encrypt", "decrypt")
+        ).await()
     }
 
     /**
@@ -163,20 +185,15 @@ class PassphraseEncryption {
         // Convert to Uint8Array for JavaScript
         val passphraseBytesArray = passphraseBytes.toUint8Array()
 
-        val promise =
-            js(
-                """
-            crypto.subtle.importKey(
-                'raw',
-                passphraseBytesArray,
-                { name: 'PBKDF2' },
-                false,
-                ['deriveKey']
-            )
-            """,
-            ) as Promise<CryptoKey>
+        val algorithm = js("({name: 'PBKDF2'})")
 
-        return promise.await()
+        return cryptoSubtle.importKey(
+            format = "raw",
+            keyData = passphraseBytesArray,
+            algorithm = algorithm,
+            extractable = false,
+            keyUsages = arrayOf("deriveKey")
+        ).await()
     }
 
     /**
@@ -191,21 +208,14 @@ class PassphraseEncryption {
         val dataArray = data.toUint8Array()
         val ivArray = iv.toUint8Array()
 
-        val encryptedBuffer =
-            js(
-                """
-            crypto.subtle.encrypt(
-                {
-                    name: 'AES-GCM',
-                    iv: ivArray
-                },
-                key,
-                dataArray
-            )
-            """,
-            ) as Promise<ArrayBuffer>
+        val algorithm = js("({name: 'AES-GCM', iv: ivArray})")
 
-        val arrayBuffer = encryptedBuffer.await()
+        val arrayBuffer = cryptoSubtle.encrypt(
+            algorithm = algorithm,
+            key = key,
+            data = dataArray
+        ).await()
+
         return Uint8Array(arrayBuffer).toByteArray()
     }
 
@@ -221,21 +231,14 @@ class PassphraseEncryption {
         val ciphertextArray = ciphertext.toUint8Array()
         val ivArray = iv.toUint8Array()
 
-        val decryptedBuffer =
-            js(
-                """
-            crypto.subtle.decrypt(
-                {
-                    name: 'AES-GCM',
-                    iv: ivArray
-                },
-                key,
-                ciphertextArray
-            )
-            """,
-            ) as Promise<ArrayBuffer>
+        val algorithm = js("({name: 'AES-GCM', iv: ivArray})")
 
-        val arrayBuffer = decryptedBuffer.await()
+        val arrayBuffer = cryptoSubtle.decrypt(
+            algorithm = algorithm,
+            key = key,
+            data = ciphertextArray
+        ).await()
+
         return Uint8Array(arrayBuffer).toByteArray()
     }
 

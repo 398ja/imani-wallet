@@ -1,6 +1,7 @@
 package cash.imani.app.ui.utils
 
 import kotlinx.browser.window
+import kotlinx.coroutines.await
 
 /**
  * Copies text to the system clipboard using the Web Clipboard API.
@@ -10,7 +11,7 @@ import kotlinx.browser.window
  */
 actual suspend fun copyToClipboard(text: String): Boolean {
     return try {
-        window.navigator.clipboard.writeText(text)
+        window.navigator.clipboard.writeText(text).await()
         true
     } catch (e: Exception) {
         console.error("Failed to copy to clipboard", e)
