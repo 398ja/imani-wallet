@@ -61,6 +61,15 @@ data class Identity(
     }
 
     /**
+     * Converts the private key to Nostr nsec format (bech32-encoded).
+     *
+     * WARNING: This exposes the private key. Only use for backup/export purposes.
+     */
+    fun toNsec(): String {
+        return Bech32.encode("nsec", privateKey.hexToBytes())
+    }
+
+    /**
      * Checks if the identity has been used within the last 90 days.
      * An identity is considered active if it was used in the last 90 days,
      * or if it has never been used but was created in the last 90 days.
