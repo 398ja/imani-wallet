@@ -207,4 +207,3 @@ data class DiscoverOffersFilter(
     val includeExpired: Boolean = false,
     val limit: Int = 100,
 )
-

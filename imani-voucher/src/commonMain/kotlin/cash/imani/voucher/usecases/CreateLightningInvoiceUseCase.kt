@@ -4,7 +4,6 @@ import cash.imani.voucher.domain.LightningInvoice
 import cash.imani.voucher.network.MintApiClient
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
-import kotlin.time.Duration.Companion.minutes
 
 /**
  * Use case for creating a Lightning invoice for voucher purchase.

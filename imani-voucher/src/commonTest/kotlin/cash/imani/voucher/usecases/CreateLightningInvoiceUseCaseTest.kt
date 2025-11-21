@@ -9,7 +9,6 @@ import kotlinx.datetime.Clock
 import kotlin.js.JsName
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.minutes

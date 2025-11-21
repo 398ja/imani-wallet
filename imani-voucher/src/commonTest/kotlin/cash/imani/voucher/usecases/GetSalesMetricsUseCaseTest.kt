@@ -1,6 +1,5 @@
 package cash.imani.voucher.usecases
 
-import cash.imani.voucher.domain.SalesMetrics
 import cash.imani.voucher.domain.StoredVoucher
 import cash.imani.voucher.domain.VoucherStatus
 import cash.imani.voucher.repository.VoucherRepository

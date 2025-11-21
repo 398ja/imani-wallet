@@ -99,9 +99,10 @@ fun SalesReportsScreen(
         },
     ) { padding ->
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .padding(padding),
         ) {
             // Period tabs
             TabRow(selectedTabIndex = currentPeriod.ordinal) {
@@ -116,18 +117,20 @@ fun SalesReportsScreen(
 
             if (loading) {
                 Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp),
+                    modifier =
+                        Modifier
+                            .fillMaxSize()
+                            .padding(16.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     CircularProgressIndicator()
                 }
             } else if (error != null) {
                 Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp),
+                    modifier =
+                        Modifier
+                            .fillMaxSize()
+                            .padding(16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
@@ -146,10 +149,11 @@ fun SalesReportsScreen(
             } else {
                 metrics?.let { m ->
                     Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(rememberScrollState())
-                            .padding(16.dp),
+                        modifier =
+                            Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState())
+                                .padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
                         // Summary card
@@ -182,9 +186,10 @@ private fun SummaryCard(
     Card(
         modifier = modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF6B46C1), // Imani Purple
-        ),
+        colors =
+            CardDefaults.cardColors(
+                containerColor = Color(0xFF6B46C1), // Imani Purple
+            ),
     ) {
         Column(
             modifier = Modifier.padding(24.dp),
@@ -331,17 +336,19 @@ private fun ChartPlaceholder(
             Spacer(Modifier.height(16.dp))
 
             // Simple progress bar as chart placeholder
-            val progress = if (metrics.totalVouchersIssued > 0) {
-                metrics.totalVouchersRedeemed.toFloat() / metrics.totalVouchersIssued
-            } else {
-                0f
-            }
+            val progress =
+                if (metrics.totalVouchersIssued > 0) {
+                    metrics.totalVouchersRedeemed.toFloat() / metrics.totalVouchersIssued
+                } else {
+                    0f
+                }
 
             LinearProgressIndicator(
                 progress = { progress },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(24.dp),
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .height(24.dp),
                 color = Color(0xFF10B981), // Green
                 trackColor = MaterialTheme.colorScheme.surfaceVariant,
             )

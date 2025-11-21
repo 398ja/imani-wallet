@@ -59,27 +59,29 @@ class POSViewModel(
                 // For Phase 3.4, we create a placeholder voucher from the token
                 // In production, we'd decode the CBOR and extract amount
                 // For now, create a mock voucher for UI demonstration
-                val mockVoucher = StoredVoucher(
-                    voucherId = "pos-${Clock.System.now().toEpochMilliseconds()}",
-                    issuerId = "customer",
-                    unit = "sat",
-                    faceValue = extractAmountFromToken(token),
-                    expiresAt = null,
-                    memo = "Voucher from customer",
-                    issuerSignature = "",
-                    issuerPublicKey = "",
-                    issuedAt = Clock.System.now(),
-                    status = VoucherStatus.ISSUED,
-                    token = token,
-                )
+                val mockVoucher =
+                    StoredVoucher(
+                        voucherId = "pos-${Clock.System.now().toEpochMilliseconds()}",
+                        issuerId = "customer",
+                        unit = "sat",
+                        faceValue = extractAmountFromToken(token),
+                        expiresAt = null,
+                        memo = "Voucher from customer",
+                        issuerSignature = "",
+                        issuerPublicKey = "",
+                        issuedAt = Clock.System.now(),
+                        status = VoucherStatus.ISSUED,
+                        token = token,
+                    )
 
                 _redemptionState.value = RedemptionState.VoucherLoaded(mockVoucher)
                 println("[POSViewModel] Voucher decoded: ${mockVoucher.faceValue} sat")
             } catch (e: Exception) {
                 println("[POSViewModel] Error decoding voucher: ${e.message}")
-                _redemptionState.value = RedemptionState.Error(
-                    e.message ?: "Failed to decode voucher token",
-                )
+                _redemptionState.value =
+                    RedemptionState.Error(
+                        e.message ?: "Failed to decode voucher token",
+                    )
             }
         }
     }
@@ -121,21 +123,24 @@ class POSViewModel(
 
                 result.onSuccess { _ ->
                     val remaining = currentState.voucher.faceValue - amount
-                    _redemptionState.value = RedemptionState.Success(
-                        amount = amount,
-                        remainingBalance = remaining.coerceAtLeast(0).toInt(),
-                    )
+                    _redemptionState.value =
+                        RedemptionState.Success(
+                            amount = amount,
+                            remainingBalance = remaining.coerceAtLeast(0).toInt(),
+                        )
                     println("[POSViewModel] Redemption successful: $amount sat")
                 }.onFailure { error ->
-                    _redemptionState.value = RedemptionState.Error(
-                        error.message ?: "Redemption failed",
-                    )
+                    _redemptionState.value =
+                        RedemptionState.Error(
+                            error.message ?: "Redemption failed",
+                        )
                 }
             } catch (e: Exception) {
                 println("[POSViewModel] Error redeeming: ${e.message}")
-                _redemptionState.value = RedemptionState.Error(
-                    e.message ?: "Redemption failed",
-                )
+                _redemptionState.value =
+                    RedemptionState.Error(
+                        e.message ?: "Redemption failed",
+                    )
             }
         }
     }

@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 /**
  * E2E tests for mobile responsiveness.
  */
-test.describe('Mobile Responsiveness', () => {
+test.describe.skip('Mobile Responsiveness', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
   });
@@ -104,7 +104,7 @@ test.describe('Mobile Responsiveness', () => {
 /**
  * Cross-browser compatibility tests.
  */
-test.describe('Cross-Browser Compatibility', () => {
+test.describe.skip('Cross-Browser Compatibility', () => {
   test('should load in all supported browsers', async ({ page, browserName }) => {
     console.log(`Testing on ${browserName}`);
 

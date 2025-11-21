@@ -6,7 +6,6 @@ import org.khronos.webgl.ArrayBuffer
 import org.khronos.webgl.Uint8Array
 import kotlin.js.Promise
 import cash.imani.identity.crypto.getPublicKey as nobleGetPublicKey
-import cash.imani.identity.crypto.schnorr
 
 /**
  * Web Crypto API implementation of CryptoAdapter.

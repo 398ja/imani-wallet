@@ -108,11 +108,12 @@ fun CreateOfferScreen(
         },
     ) { padding ->
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             // Voucher name
@@ -212,9 +213,10 @@ fun CreateOfferScreen(
             if (createState is CreateOfferState.Error) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer,
-                    ),
+                    colors =
+                        CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                        ),
                 ) {
                     Text(
                         text = (createState as CreateOfferState.Error).message,
@@ -236,13 +238,15 @@ fun CreateOfferScreen(
                         allowPartialRedemption = allowPartialRedemption,
                     )
                 },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-                enabled = createState != CreateOfferState.Creating &&
-                    createState != CreateOfferState.Publishing &&
-                    voucherName.isNotBlank() &&
-                    (price.toIntOrNull() ?: 0) > 0,
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                enabled =
+                    createState != CreateOfferState.Creating &&
+                        createState != CreateOfferState.Publishing &&
+                        voucherName.isNotBlank() &&
+                        (price.toIntOrNull() ?: 0) > 0,
             ) {
                 when (createState) {
                     CreateOfferState.Creating -> {

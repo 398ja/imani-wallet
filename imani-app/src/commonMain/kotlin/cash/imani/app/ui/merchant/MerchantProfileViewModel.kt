@@ -48,10 +48,11 @@ class MerchantProfileViewModel(
      */
     fun loadProfile() {
         viewModelScope.launch {
-            val identities = identityRepository.listIdentities().getOrElse {
-                println("[MerchantProfileViewModel] Error loading identity: ${it.message}")
-                return@launch
-            }
+            val identities =
+                identityRepository.listIdentities().getOrElse {
+                    println("[MerchantProfileViewModel] Error loading identity: ${it.message}")
+                    return@launch
+                }
 
             val merchantIdentity = identities.firstOrNull()
             if (merchantIdentity == null) {
@@ -59,15 +60,16 @@ class MerchantProfileViewModel(
                 return@launch
             }
 
-            _profile.value = MerchantProfile(
-                npub = merchantIdentity.toNpub(),
-                name = merchantIdentity.label,
-                description = "Merchant powered by Imani Wallet", // TODO: Load from Nostr
-                logo = null,
-                email = null,
-                phone = null,
-                website = null,
-            )
+            _profile.value =
+                MerchantProfile(
+                    npub = merchantIdentity.toNpub(),
+                    name = merchantIdentity.label,
+                    description = "Merchant powered by Imani Wallet", // TODO: Load from Nostr
+                    logo = null,
+                    email = null,
+                    phone = null,
+                    website = null,
+                )
         }
     }
 
@@ -102,8 +104,9 @@ class MerchantProfileViewModel(
             try {
                 // Update identity label (name)
                 val identities = identityRepository.listIdentities().getOrThrow()
-                val merchantIdentity = identities.firstOrNull()
-                    ?: throw Exception("No merchant identity found")
+                val merchantIdentity =
+                    identities.firstOrNull()
+                        ?: throw Exception("No merchant identity found")
 
                 // TODO Phase 3.2+: Update identity label if changed
                 // The IdentityRepository doesn't support label updates yet
@@ -113,15 +116,16 @@ class MerchantProfileViewModel(
                 }
 
                 // Update local profile state
-                _profile.value = MerchantProfile(
-                    npub = merchantIdentity.toNpub(),
-                    name = name,
-                    description = description,
-                    logo = null, // TODO Phase 3.2+: Logo upload
-                    email = email?.ifBlank { null },
-                    phone = phone?.ifBlank { null },
-                    website = website?.ifBlank { null },
-                )
+                _profile.value =
+                    MerchantProfile(
+                        npub = merchantIdentity.toNpub(),
+                        name = name,
+                        description = description,
+                        logo = null, // TODO Phase 3.2+: Logo upload
+                        email = email?.ifBlank { null },
+                        phone = phone?.ifBlank { null },
+                        website = website?.ifBlank { null },
+                    )
 
                 // TODO Phase 3.2+: Publish to Nostr (NIP-01 kind:0 event)
                 // val profileEvent = createNip01ProfileEvent(name, description, email, website)
@@ -147,29 +151,33 @@ class MerchantProfileViewModel(
         email: String?,
         website: String?,
     ): ValidationErrors {
-        val nameError = when {
-            name.isBlank() -> "Business name is required"
-            name.length > 100 -> "Business name must be 100 characters or less"
-            else -> null
-        }
+        val nameError =
+            when {
+                name.isBlank() -> "Business name is required"
+                name.length > 100 -> "Business name must be 100 characters or less"
+                else -> null
+            }
 
-        val descriptionError = when {
-            description.isBlank() -> "Description is required"
-            description.length > 500 -> "Description must be 500 characters or less"
-            else -> null
-        }
+        val descriptionError =
+            when {
+                description.isBlank() -> "Description is required"
+                description.length > 500 -> "Description must be 500 characters or less"
+                else -> null
+            }
 
-        val emailError = if (!email.isNullOrBlank() && !isValidEmail(email)) {
-            "Invalid email format"
-        } else {
-            null
-        }
+        val emailError =
+            if (!email.isNullOrBlank() && !isValidEmail(email)) {
+                "Invalid email format"
+            } else {
+                null
+            }
 
-        val websiteError = if (!website.isNullOrBlank() && !isValidUrl(website)) {
-            "Invalid website URL"
-        } else {
-            null
-        }
+        val websiteError =
+            if (!website.isNullOrBlank() && !isValidUrl(website)) {
+                "Invalid website URL"
+            } else {
+                null
+            }
 
         return ValidationErrors(
             nameError = nameError,
@@ -206,9 +214,13 @@ class MerchantProfileViewModel(
  */
 sealed class SaveState {
     data object Idle : SaveState()
+
     data object Saving : SaveState()
+
     data object ValidationFailed : SaveState()
+
     data object Success : SaveState()
+
     data class Error(val message: String) : SaveState()
 }
 

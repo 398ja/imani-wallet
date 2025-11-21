@@ -76,45 +76,47 @@ class SalesReportsViewModel(
                 val today = now.toLocalDateTime(timezone).date
 
                 // Calculate period start based on selected period
-                val periodStart = when (period) {
-                    ReportPeriod.DAILY -> {
-                        // Start of today
-                        LocalDateTime(
-                            year = today.year,
-                            monthNumber = today.monthNumber,
-                            dayOfMonth = today.dayOfMonth,
-                            hour = 0,
-                            minute = 0,
-                        ).toInstant(timezone)
+                val periodStart =
+                    when (period) {
+                        ReportPeriod.DAILY -> {
+                            // Start of today
+                            LocalDateTime(
+                                year = today.year,
+                                monthNumber = today.monthNumber,
+                                dayOfMonth = today.dayOfMonth,
+                                hour = 0,
+                                minute = 0,
+                            ).toInstant(timezone)
+                        }
+                        ReportPeriod.WEEKLY -> {
+                            // 7 days ago
+                            val weekAgo = today.minus(7, DateTimeUnit.DAY)
+                            LocalDateTime(
+                                year = weekAgo.year,
+                                monthNumber = weekAgo.monthNumber,
+                                dayOfMonth = weekAgo.dayOfMonth,
+                                hour = 0,
+                                minute = 0,
+                            ).toInstant(timezone)
+                        }
+                        ReportPeriod.MONTHLY -> {
+                            // 30 days ago
+                            val monthAgo = today.minus(30, DateTimeUnit.DAY)
+                            LocalDateTime(
+                                year = monthAgo.year,
+                                monthNumber = monthAgo.monthNumber,
+                                dayOfMonth = monthAgo.dayOfMonth,
+                                hour = 0,
+                                minute = 0,
+                            ).toInstant(timezone)
+                        }
                     }
-                    ReportPeriod.WEEKLY -> {
-                        // 7 days ago
-                        val weekAgo = today.minus(7, DateTimeUnit.DAY)
-                        LocalDateTime(
-                            year = weekAgo.year,
-                            monthNumber = weekAgo.monthNumber,
-                            dayOfMonth = weekAgo.dayOfMonth,
-                            hour = 0,
-                            minute = 0,
-                        ).toInstant(timezone)
-                    }
-                    ReportPeriod.MONTHLY -> {
-                        // 30 days ago
-                        val monthAgo = today.minus(30, DateTimeUnit.DAY)
-                        LocalDateTime(
-                            year = monthAgo.year,
-                            monthNumber = monthAgo.monthNumber,
-                            dayOfMonth = monthAgo.dayOfMonth,
-                            hour = 0,
-                            minute = 0,
-                        ).toInstant(timezone)
-                    }
-                }
 
-                val result = getSalesMetricsUseCase(
-                    periodStart = periodStart,
-                    periodEnd = now,
-                )
+                val result =
+                    getSalesMetricsUseCase(
+                        periodStart = periodStart,
+                        periodEnd = now,
+                    )
 
                 result.onSuccess { metrics ->
                     _metrics.value = metrics
@@ -141,14 +143,15 @@ class SalesReportsViewModel(
         val currentMetrics = _metrics.value ?: return
 
         // Build CSV content
-        val csv = buildString {
-            appendLine("Metric,Value")
-            appendLine("Period,${_currentPeriod.value.label}")
-            appendLine("Vouchers Issued,${currentMetrics.totalVouchersIssued}")
-            appendLine("Vouchers Redeemed,${currentMetrics.totalVouchersRedeemed}")
-            appendLine("Total Revenue (sat),${currentMetrics.totalRevenue}")
-            appendLine("Redemption Rate,${(currentMetrics.redemptionRate * 100).toInt()}%")
-        }
+        val csv =
+            buildString {
+                appendLine("Metric,Value")
+                appendLine("Period,${_currentPeriod.value.label}")
+                appendLine("Vouchers Issued,${currentMetrics.totalVouchersIssued}")
+                appendLine("Vouchers Redeemed,${currentMetrics.totalVouchersRedeemed}")
+                appendLine("Total Revenue (sat),${currentMetrics.totalRevenue}")
+                appendLine("Redemption Rate,${(currentMetrics.redemptionRate * 100).toInt()}%")
+            }
 
         println("[SalesReportsViewModel] CSV Export:\n$csv")
         // TODO Phase 3.5+: Trigger browser download

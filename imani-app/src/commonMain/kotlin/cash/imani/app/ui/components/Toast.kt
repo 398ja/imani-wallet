@@ -179,7 +179,9 @@ private fun getToastBackgroundColor(type: ToastType): Color =
  * Get content color (text/icon) for toast type.
  */
 @Composable
-private fun getToastContentColor(@Suppress("UNUSED_PARAMETER") type: ToastType): Color = Color.White
+private fun getToastContentColor(
+    @Suppress("UNUSED_PARAMETER") type: ToastType,
+): Color = Color.White
 
 /**
  * Get icon for toast type.

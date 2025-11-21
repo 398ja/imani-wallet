@@ -431,7 +431,9 @@ class WebVoucherAdapter(
             // Import to local storage
             issuedVouchers.forEach { voucher ->
                 voucherRepository.saveVoucher(voucher).getOrElse { error ->
-                    println("[WebVoucherAdapter] Warning: Failed to restore voucher ${voucher.voucherId}: ${error.message}")
+                    println(
+                        "[WebVoucherAdapter] Warning: Failed to restore voucher ${voucher.voucherId}: ${error.message}",
+                    )
                 }
             }
 

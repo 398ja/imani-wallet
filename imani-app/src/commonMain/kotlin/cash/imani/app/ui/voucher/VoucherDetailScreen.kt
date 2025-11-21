@@ -81,10 +81,11 @@ fun VoucherDetailScreen(
     val uiState by viewModel.uiState.collectAsState()
     var showSendDialog by remember { mutableStateOf(false) }
 
-    val voucher = when (val state = uiState) {
-        is VoucherUiState.Success -> state.vouchers.find { it.voucherId == voucherId }
-        else -> null
-    }
+    val voucher =
+        when (val state = uiState) {
+            is VoucherUiState.Success -> state.vouchers.find { it.voucherId == voucherId }
+            else -> null
+        }
 
     Scaffold(
         topBar = {
@@ -103,9 +104,10 @@ fun VoucherDetailScreen(
     ) { padding ->
         if (voucher == null) {
             Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .padding(padding),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
@@ -116,11 +118,12 @@ fun VoucherDetailScreen(
             }
         } else {
             Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .verticalScroll(rememberScrollState())
-                    .padding(16.dp),
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .padding(padding)
+                        .verticalScroll(rememberScrollState())
+                        .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 // Voucher amount card
@@ -158,9 +161,10 @@ fun VoucherDetailScreen(
                 } else {
                     // Show status message for non-issued vouchers
                     Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        ),
+                        colors =
+                            CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            ),
                     ) {
                         Text(
                             text = getStatusMessage(voucher.status),
@@ -194,9 +198,10 @@ fun VoucherDetailScreen(
 private fun VoucherAmountCard(voucher: StoredVoucher) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF6B46C1), // Imani Purple
-        ),
+        colors =
+            CardDefaults.cardColors(
+                containerColor = Color(0xFF6B46C1), // Imani Purple
+            ),
     ) {
         Column(
             modifier = Modifier.padding(24.dp),
@@ -252,11 +257,12 @@ private fun VoucherDetailsCard(voucher: StoredVoucher) {
                 DetailRow(
                     label = "Expires",
                     value = formatEpochSeconds(expiresAt),
-                    valueColor = if (voucher.isExpired()) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        null
-                    },
+                    valueColor =
+                        if (voucher.isExpired()) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            null
+                        },
                 )
             }
         }
@@ -270,9 +276,10 @@ private fun VoucherDetailsCard(voucher: StoredVoucher) {
 private fun TokenPreviewCard(token: String) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-        ),
+        colors =
+            CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            ),
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -357,12 +364,13 @@ fun SendVoucherDialog(
                 voucher.token?.let { token ->
                     // QR Code placeholder
                     Box(
-                        modifier = Modifier
-                            .size(200.dp)
-                            .background(
-                                Color.White,
-                                RoundedCornerShape(8.dp),
-                            ),
+                        modifier =
+                            Modifier
+                                .size(200.dp)
+                                .background(
+                                    Color.White,
+                                    RoundedCornerShape(8.dp),
+                                ),
                         contentAlignment = Alignment.Center,
                     ) {
                         // TODO Phase 4.3: Real QR code with jsQR
@@ -386,9 +394,10 @@ fun SendVoucherDialog(
 
                     // Token display
                     Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        ),
+                        colors =
+                            CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            ),
                     ) {
                         Text(
                             text = token.take(40) + "...",
@@ -450,13 +459,14 @@ fun SendVoucherDialog(
 /**
  * Returns a message describing the voucher status.
  */
-private fun getStatusMessage(status: VoucherStatus): String = when (status) {
-    VoucherStatus.ISSUED -> "This voucher is ready to use"
-    VoucherStatus.DELIVERED -> "This voucher has been sent to someone"
-    VoucherStatus.REDEEMED -> "This voucher has been redeemed"
-    VoucherStatus.REVOKED -> "This voucher has been revoked"
-    VoucherStatus.EXPIRED -> "This voucher has expired"
-}
+private fun getStatusMessage(status: VoucherStatus): String =
+    when (status) {
+        VoucherStatus.ISSUED -> "This voucher is ready to use"
+        VoucherStatus.DELIVERED -> "This voucher has been sent to someone"
+        VoucherStatus.REDEEMED -> "This voucher has been redeemed"
+        VoucherStatus.REVOKED -> "This voucher has been revoked"
+        VoucherStatus.EXPIRED -> "This voucher has expired"
+    }
 
 /**
  * Formats Instant to readable date string.

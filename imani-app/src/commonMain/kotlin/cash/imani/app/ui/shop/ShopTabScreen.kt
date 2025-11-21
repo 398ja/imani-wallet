@@ -26,7 +26,9 @@ import cash.imani.app.ui.voucher.VoucherViewModel
  * @param modifier Modifier for styling
  */
 @Composable
-fun ShopTabScreen(@Suppress("UNUSED_PARAMETER") modifier: Modifier = Modifier) {
+fun ShopTabScreen(
+    @Suppress("UNUSED_PARAMETER") modifier: Modifier = Modifier,
+) {
     val viewModel: VoucherViewModel = koinInject()
 
     MyVouchersScreen(

@@ -1,10 +1,6 @@
 package cash.imani.app.ui.theme
 
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.defaultMinSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -58,10 +54,11 @@ const val MinContrastRatioLarge = 3.0f
  * }
  * ```
  */
-fun Modifier.minTouchTarget(): Modifier = this.defaultMinSize(
-    minWidth = MinTouchTargetSize,
-    minHeight = MinTouchTargetSize,
-)
+fun Modifier.minTouchTarget(): Modifier =
+    this.defaultMinSize(
+        minWidth = MinTouchTargetSize,
+        minHeight = MinTouchTargetSize,
+    )
 
 /**
  * Modifier to add semantic content description for screen readers.
@@ -73,33 +70,40 @@ fun Modifier.minTouchTarget(): Modifier = this.defaultMinSize(
  * )
  * ```
  */
-fun Modifier.accessibilityLabel(label: String): Modifier = this.semantics {
-    contentDescription = label
-}
+fun Modifier.accessibilityLabel(label: String): Modifier =
+    this.semantics {
+        contentDescription = label
+    }
 
 /**
  * Modifier to mark an element as a button for screen readers.
  */
-fun Modifier.accessibilityButton(label: String): Modifier = this.semantics {
-    contentDescription = label
-    role = Role.Button
-}
+fun Modifier.accessibilityButton(label: String): Modifier =
+    this.semantics {
+        contentDescription = label
+        role = Role.Button
+    }
 
 /**
  * Modifier to mark an element as an image for screen readers.
  */
-fun Modifier.accessibilityImage(label: String): Modifier = this.semantics {
-    contentDescription = label
-    role = Role.Image
-}
+fun Modifier.accessibilityImage(label: String): Modifier =
+    this.semantics {
+        contentDescription = label
+        role = Role.Image
+    }
 
 /**
  * Modifier to mark an element as a checkbox for screen readers.
  */
-fun Modifier.accessibilityCheckbox(label: String, checked: Boolean): Modifier = this.semantics {
-    contentDescription = if (checked) "$label, checked" else "$label, unchecked"
-    role = Role.Checkbox
-}
+fun Modifier.accessibilityCheckbox(
+    label: String,
+    checked: Boolean,
+): Modifier =
+    this.semantics {
+        contentDescription = if (checked) "$label, checked" else "$label, unchecked"
+        role = Role.Checkbox
+    }
 
 /**
  * Content descriptions for common UI elements.

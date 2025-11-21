@@ -343,7 +343,9 @@ class IndexedDBVoucherCache : VoucherCacheRepository {
                         console.log("[IndexedDBVoucherCache] No last sync time found")
                         continuation.resume(null)
                     } else {
-                        val timestamp = result.asDynamic().value as? Long
+                        @Suppress("UNCHECKED_CAST_TO_EXTERNAL_INTERFACE")
+                        val resultObj = result.unsafeCast<dynamic>()
+                        val timestamp = (resultObj.value as? Number)?.toLong()
                         console.log("[IndexedDBVoucherCache] Last sync time: $timestamp")
                         continuation.resume(timestamp)
                     }

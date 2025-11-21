@@ -44,8 +44,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import cash.imani.app.di.koinInject
+import cash.imani.app.ui.identity.CreateIdentityScreen
+import cash.imani.app.ui.identity.IdentityNavigationState
 import cash.imani.app.ui.identity.IdentityUiState
 import cash.imani.app.ui.identity.IdentityViewModel
+import cash.imani.app.ui.identity.ImportIdentityScreen
 import cash.imani.identity.domain.Identity
 
 /**
@@ -75,9 +78,37 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     // Inject ViewModel
     val identityViewModel: IdentityViewModel = koinInject()
     val uiState by identityViewModel.uiState.collectAsState()
+    val navigationState by identityViewModel.navigationState.collectAsState()
 
     var showNsecDialog by remember { mutableStateOf(false) }
     var showLogoutDialog by remember { mutableStateOf(false) }
+
+    // Handle navigation state
+    when (navigationState) {
+        is IdentityNavigationState.CreateIdentity -> {
+            CreateIdentityScreen(
+                viewModel = identityViewModel,
+                onSuccess = {
+                    identityViewModel.resetNavigationState()
+                    identityViewModel.loadIdentities()
+                },
+                onCancel = { identityViewModel.resetNavigationState() },
+            )
+            return
+        }
+        is IdentityNavigationState.ImportIdentity -> {
+            ImportIdentityScreen(
+                viewModel = identityViewModel,
+                onSuccess = {
+                    identityViewModel.resetNavigationState()
+                    identityViewModel.loadIdentities()
+                },
+                onCancel = { identityViewModel.resetNavigationState() },
+            )
+            return
+        }
+        is IdentityNavigationState.None -> { /* Continue to show settings */ }
+    }
 
     Scaffold(
         modifier = modifier,
@@ -107,7 +138,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                 val activeIdentity = state.identities.firstOrNull()
 
                 if (activeIdentity == null) {
-                    // No identity - should navigate to create identity
+                    // No identity - show create/import options
                     Column(
                         modifier =
                             Modifier
@@ -117,9 +148,40 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
                     ) {
-                        Text("No identity found")
+                        Icon(
+                            imageVector = Icons.Default.Person,
+                            contentDescription = null,
+                            modifier = Modifier.size(64.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
                         Spacer(modifier = Modifier.height(16.dp))
-                        Text("Please create or import an identity first")
+                        Text(
+                            text = "No Identity Found",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Create a new identity or import an existing one to get started.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(modifier = Modifier.height(24.dp))
+                        Button(
+                            onClick = { identityViewModel.showCreateIdentity() },
+                            modifier = Modifier.fillMaxWidth(0.8f),
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Create New Identity")
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedButton(
+                            onClick = { identityViewModel.showImportIdentity() },
+                            modifier = Modifier.fillMaxWidth(0.8f),
+                        ) {
+                            Text("Import Existing Identity")
+                        }
                     }
                 } else {
                     // Show settings with active identity
@@ -559,7 +621,9 @@ private fun LogoutConfirmationDialog(
             Text("Confirm Logout")
         },
         text = {
-            Text("Are you sure you want to logout? Make sure you have backed up your private key (nsec) before logging out.")
+            Text(
+                "Are you sure you want to logout? Make sure you have backed up your private key (nsec) before logging out.",
+            )
         },
         confirmButton = {
             Button(onClick = onConfirm) {

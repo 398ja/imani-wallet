@@ -50,16 +50,18 @@ fun QRScannerPlaceholder(
     onClose: () -> Unit,
 ) {
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black),
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black),
         contentAlignment = Alignment.Center,
     ) {
         IconButton(
             onClick = onClose,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(16.dp),
+            modifier =
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp),
         ) {
             Icon(
                 Icons.Default.Close,

@@ -201,11 +201,11 @@ android {
             excludes += "/META-INF/LICENSE.md"
             excludes += "/META-INF/LICENSE-notice.md"
             // Exclude duplicate files from transitive dependencies
-            excludes += "README.md"  // argon2-jvm, lombok
-            excludes += "COPYRIGHT.txt"  // resilience4j
+            excludes += "README.md" // argon2-jvm, lombok
+            excludes += "COPYRIGHT.txt" // resilience4j
             // Pick first for META-INF files from server-side dependencies
-            pickFirsts += "META-INF/INDEX.LIST"  // undertow, logback, xnio, jboss
-            pickFirsts += "META-INF/spring.factories"  // spring framework (if not excluded)
+            pickFirsts += "META-INF/INDEX.LIST" // undertow, logback, xnio, jboss
+            pickFirsts += "META-INF/spring.factories" // spring framework (if not excluded)
         }
     }
 

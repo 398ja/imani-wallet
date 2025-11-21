@@ -3,7 +3,6 @@ package cash.imani.voucher.usecases
 import cash.imani.voucher.domain.MerchantOffer
 import cash.imani.voucher.domain.OfferStatus
 import kotlinx.datetime.Clock
-import kotlinx.datetime.Instant
 import kotlin.random.Random
 import kotlin.time.Duration
 

@@ -47,14 +47,15 @@ class AndroidIdentityKeyService(
     override fun loadOrCreate(): IdentityKey =
         runBlocking {
             // Get first identity from repository (acts as "active" identity)
-            val identities = identityRepository.listIdentities().getOrElse { error ->
-                throw IllegalStateException(
-                    "Failed to load identities from repository. " +
-                        "Reason: ${error.message}. " +
-                        "Suggestion: Verify database is initialized and accessible.",
-                    error,
-                )
-            }
+            val identities =
+                identityRepository.listIdentities().getOrElse { error ->
+                    throw IllegalStateException(
+                        "Failed to load identities from repository. " +
+                            "Reason: ${error.message}. " +
+                            "Suggestion: Verify database is initialized and accessible.",
+                        error,
+                    )
+                }
 
             val activeIdentity =
                 identities.firstOrNull()

@@ -35,6 +35,9 @@ class IdentityViewModel(
     private val _importState = MutableStateFlow<ImportIdentityState>(ImportIdentityState.Idle)
     val importState: StateFlow<ImportIdentityState> = _importState.asStateFlow()
 
+    private val _navigationState = MutableStateFlow<IdentityNavigationState>(IdentityNavigationState.None)
+    val navigationState: StateFlow<IdentityNavigationState> = _navigationState.asStateFlow()
+
     init {
         loadIdentities()
     }
@@ -141,6 +144,27 @@ class IdentityViewModel(
     fun resetImportState() {
         _importState.value = ImportIdentityState.Idle
     }
+
+    /**
+     * Navigate to create identity screen.
+     */
+    fun showCreateIdentity() {
+        _navigationState.value = IdentityNavigationState.CreateIdentity
+    }
+
+    /**
+     * Navigate to import identity screen.
+     */
+    fun showImportIdentity() {
+        _navigationState.value = IdentityNavigationState.ImportIdentity
+    }
+
+    /**
+     * Reset navigation state after navigation handled.
+     */
+    fun resetNavigationState() {
+        _navigationState.value = IdentityNavigationState.None
+    }
 }
 
 /**
@@ -181,4 +205,15 @@ sealed class ImportIdentityState {
     data class Success(val identity: Identity) : ImportIdentityState()
 
     data class Error(val message: String) : ImportIdentityState()
+}
+
+/**
+ * Navigation state for identity screens.
+ */
+sealed class IdentityNavigationState {
+    data object None : IdentityNavigationState()
+
+    data object CreateIdentity : IdentityNavigationState()
+
+    data object ImportIdentity : IdentityNavigationState()
 }

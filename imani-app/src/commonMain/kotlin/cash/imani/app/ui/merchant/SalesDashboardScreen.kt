@@ -40,7 +40,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import cash.imani.app.ui.components.MerchantProfileCard
-import cash.imani.app.ui.shop.MerchantProfile
 import cash.imani.voucher.domain.MerchantOffer
 import cash.imani.voucher.domain.SalesMetrics
 import cash.imani.voucher.domain.StoredVoucher

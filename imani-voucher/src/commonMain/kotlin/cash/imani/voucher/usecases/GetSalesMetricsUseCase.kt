@@ -141,7 +141,9 @@ class GetSalesMetricsUseCase(
      * @param vouchers List of vouchers to analyze
      * @return Map of offer ID to OfferSales metrics
      */
-    private fun calculateSalesByOffer(vouchers: List<cash.imani.voucher.domain.StoredVoucher>): Map<String, OfferSales> {
+    private fun calculateSalesByOffer(
+        vouchers: List<cash.imani.voucher.domain.StoredVoucher>,
+    ): Map<String, OfferSales> {
         // Extract offerId from memo (format: "offer:<offerId>|...")
         val vouchersByOffer =
             vouchers.mapNotNull { voucher ->

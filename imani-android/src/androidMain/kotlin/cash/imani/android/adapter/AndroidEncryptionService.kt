@@ -3,7 +3,6 @@ package cash.imani.android.adapter
 import cash.imani.android.db.ImaniDatabase
 import xyz.tcheeric.wallet.core.security.EncryptionMetadataRepository
 import xyz.tcheeric.wallet.core.security.EncryptionService
-import xyz.tcheeric.wallet.core.security.KeyDerivationService
 import java.lang.reflect.Field
 
 /**

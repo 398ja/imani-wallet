@@ -129,8 +129,8 @@ export const test = base.extend<{ imaniPage: ImaniPage }>({
       async createNewIdentity(label: string) {
         await this.waitForCanvas();
 
-        // Look for "Create Identity" or "Get Started" button
-        await clickByTextOrTestId(page, /Create Identity|Get Started/i, 'create-identity-button');
+        // Look for "Create New", "Create Identity", or "Get Started" button
+        await clickByTextOrTestId(page, /Create New|Create Identity|Get Started/i, 'create-identity-button');
         await page.waitForTimeout(500);
 
         // Fill in label - try input first, then keyboard

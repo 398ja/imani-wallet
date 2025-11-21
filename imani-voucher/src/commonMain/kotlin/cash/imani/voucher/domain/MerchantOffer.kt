@@ -51,16 +51,14 @@ data class MerchantOffer(
      *
      * @return true if expiresAt is set and in the past, false otherwise
      */
-    fun isExpired(now: Instant): Boolean =
-        expiresAt?.let { it < now } ?: false
+    fun isExpired(now: Instant): Boolean = expiresAt?.let { it < now } ?: false
 
     /**
      * Checks if offer is active and available for purchase.
      *
      * @return true if status is ACTIVE and not expired
      */
-    fun isAvailable(now: Instant): Boolean =
-        status == OfferStatus.ACTIVE && !isExpired(now)
+    fun isAvailable(now: Instant): Boolean = status == OfferStatus.ACTIVE && !isExpired(now)
 
     /**
      * Calculates discount percentage if price is less than amount.

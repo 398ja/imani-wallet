@@ -20,7 +20,8 @@ import androidx.compose.ui.unit.dp
 enum class ScreenSize {
     MOBILE,
     TABLET,
-    DESKTOP;
+    DESKTOP,
+    ;
 
     val isMobile: Boolean get() = this == MOBILE
     val isTablet: Boolean get() = this == TABLET
@@ -41,32 +42,36 @@ data class ResponsiveConfig(
     val showSideNav: Boolean,
 ) {
     companion object {
-        fun forScreenSize(screenSize: ScreenSize): ResponsiveConfig = when (screenSize) {
-            ScreenSize.MOBILE -> ResponsiveConfig(
-                screenSize = screenSize,
-                columns = 1,
-                contentPadding = 16.dp,
-                cardWidth = null, // Full width
-                showBottomNav = true,
-                showSideNav = false,
-            )
-            ScreenSize.TABLET -> ResponsiveConfig(
-                screenSize = screenSize,
-                columns = 2,
-                contentPadding = 24.dp,
-                cardWidth = 320.dp,
-                showBottomNav = false,
-                showSideNav = true,
-            )
-            ScreenSize.DESKTOP -> ResponsiveConfig(
-                screenSize = screenSize,
-                columns = 3,
-                contentPadding = 32.dp,
-                cardWidth = 360.dp,
-                showBottomNav = false,
-                showSideNav = true,
-            )
-        }
+        fun forScreenSize(screenSize: ScreenSize): ResponsiveConfig =
+            when (screenSize) {
+                ScreenSize.MOBILE ->
+                    ResponsiveConfig(
+                        screenSize = screenSize,
+                        columns = 1,
+                        contentPadding = 16.dp,
+                        cardWidth = null, // Full width
+                        showBottomNav = true,
+                        showSideNav = false,
+                    )
+                ScreenSize.TABLET ->
+                    ResponsiveConfig(
+                        screenSize = screenSize,
+                        columns = 2,
+                        contentPadding = 24.dp,
+                        cardWidth = 320.dp,
+                        showBottomNav = false,
+                        showSideNav = true,
+                    )
+                ScreenSize.DESKTOP ->
+                    ResponsiveConfig(
+                        screenSize = screenSize,
+                        columns = 3,
+                        contentPadding = 32.dp,
+                        cardWidth = 360.dp,
+                        showBottomNav = false,
+                        showSideNav = true,
+                    )
+            }
     }
 }
 
@@ -78,11 +83,12 @@ val LocalResponsiveConfig = compositionLocalOf { ResponsiveConfig.forScreenSize(
 /**
  * Determines screen size from width in dp.
  */
-fun screenSizeFromWidth(widthDp: Int): ScreenSize = when {
-    widthDp < 640 -> ScreenSize.MOBILE
-    widthDp < 1024 -> ScreenSize.TABLET
-    else -> ScreenSize.DESKTOP
-}
+fun screenSizeFromWidth(widthDp: Int): ScreenSize =
+    when {
+        widthDp < 640 -> ScreenSize.MOBILE
+        widthDp < 1024 -> ScreenSize.TABLET
+        else -> ScreenSize.DESKTOP
+    }
 
 /**
  * Platform-specific window size provider.
@@ -108,9 +114,7 @@ expect fun rememberWindowWidth(): Int
  * ```
  */
 @Composable
-fun ResponsiveProvider(
-    content: @Composable () -> Unit,
-) {
+fun ResponsiveProvider(content: @Composable () -> Unit) {
     val windowWidth = rememberWindowWidth()
     val screenSize = screenSizeFromWidth(windowWidth)
     val config = ResponsiveConfig.forScreenSize(screenSize)
@@ -135,9 +139,7 @@ fun ResponsiveProvider(
  * ```
  */
 @Composable
-fun ResponsiveLayout(
-    content: @Composable (ScreenSize) -> Unit,
-) {
+fun ResponsiveLayout(content: @Composable (ScreenSize) -> Unit) {
     val windowWidth = rememberWindowWidth()
     val screenSize = screenSizeFromWidth(windowWidth)
     content(screenSize)

@@ -115,10 +115,11 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
             )
         if (!mnemonicVisible) {
             // Try alternative text that might be displayed
-            val altVisible = waitForNodeWithText(
-                text = "Recovery Phrase",
-                timeoutMillis = 5_000,
-            )
+            val altVisible =
+                waitForNodeWithText(
+                    text = "Recovery Phrase",
+                    timeoutMillis = 5_000,
+                )
             if (!altVisible) {
                 throw AssertionError(
                     "Mnemonic confirmation not visible after creating identity.\n${dumpSemanticsTree()}",
@@ -384,8 +385,7 @@ class ImaniTestFixtures(private val composeTestRule: ComposeTestRule) {
             false
         }
 
-    private fun dumpSemanticsTree(): String =
-        composeTestRule.onRoot(useUnmergedTree = true).printToString()
+    private fun dumpSemanticsTree(): String = composeTestRule.onRoot(useUnmergedTree = true).printToString()
 
     // ==================== Helper Extensions ====================
 

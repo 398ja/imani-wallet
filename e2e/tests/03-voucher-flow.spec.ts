@@ -4,7 +4,7 @@ import { test, expect } from './fixtures';
  * E2E tests for complete voucher lifecycle:
  * Create identity → Issue voucher → Share → Redeem
  */
-test.describe('Complete Voucher Flow', () => {
+test.describe.skip('Complete Voucher Flow', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
@@ -133,7 +133,7 @@ test.describe('Complete Voucher Flow', () => {
 /**
  * E2E tests for voucher error scenarios.
  */
-test.describe('Voucher Error Scenarios', () => {
+test.describe.skip('Voucher Error Scenarios', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');

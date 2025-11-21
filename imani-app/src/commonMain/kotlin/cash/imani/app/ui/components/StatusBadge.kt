@@ -18,7 +18,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import cash.imani.voucher.domain.VoucherStatus
 
@@ -47,35 +46,40 @@ fun StatusBadge(
 ) {
     val (color, icon, label) =
         when (status) {
-            VoucherStatus.ISSUED -> Triple(
-                Color(0xFF2196F3), // Blue
-                Icons.Default.CheckCircle,
-                "Active",
-            )
+            VoucherStatus.ISSUED ->
+                Triple(
+                    Color(0xFF2196F3), // Blue
+                    Icons.Default.CheckCircle,
+                    "Active",
+                )
 
-            VoucherStatus.DELIVERED -> Triple(
-                Color(0xFF00BCD4), // Cyan
-                Icons.Default.CheckCircle,
-                "Delivered",
-            )
+            VoucherStatus.DELIVERED ->
+                Triple(
+                    Color(0xFF00BCD4), // Cyan
+                    Icons.Default.CheckCircle,
+                    "Delivered",
+                )
 
-            VoucherStatus.REDEEMED -> Triple(
-                Color(0xFF9E9E9E), // Gray
-                Icons.Default.CheckCircle,
-                "Redeemed",
-            )
+            VoucherStatus.REDEEMED ->
+                Triple(
+                    Color(0xFF9E9E9E), // Gray
+                    Icons.Default.CheckCircle,
+                    "Redeemed",
+                )
 
-            VoucherStatus.REVOKED -> Triple(
-                Color(0xFFF44336), // Red
-                Icons.Default.Close,
-                "Revoked",
-            )
+            VoucherStatus.REVOKED ->
+                Triple(
+                    Color(0xFFF44336), // Red
+                    Icons.Default.Close,
+                    "Revoked",
+                )
 
-            VoucherStatus.EXPIRED -> Triple(
-                Color(0xFF757575), // Dark Gray
-                Icons.Default.Warning,
-                "Expired",
-            )
+            VoucherStatus.EXPIRED ->
+                Triple(
+                    Color(0xFF757575), // Dark Gray
+                    Icons.Default.Warning,
+                    "Expired",
+                )
         }
 
     Row(
@@ -135,29 +139,33 @@ fun UiStatusBadge(
 ) {
     val (color, icon, label) =
         when (status) {
-            VoucherUiStatus.Active -> Triple(
-                Color(0xFF4CAF50), // Green
-                Icons.Default.CheckCircle,
-                "Active",
-            )
+            VoucherUiStatus.Active ->
+                Triple(
+                    Color(0xFF4CAF50), // Green
+                    Icons.Default.CheckCircle,
+                    "Active",
+                )
 
-            VoucherUiStatus.ExpiringSoon -> Triple(
-                Color(0xFFFF9800), // Orange
-                Icons.Default.Warning,
-                "Expiring Soon",
-            )
+            VoucherUiStatus.ExpiringSoon ->
+                Triple(
+                    Color(0xFFFF9800), // Orange
+                    Icons.Default.Warning,
+                    "Expiring Soon",
+                )
 
-            VoucherUiStatus.Expired -> Triple(
-                Color(0xFF757575), // Gray
-                Icons.Default.Close,
-                "Expired",
-            )
+            VoucherUiStatus.Expired ->
+                Triple(
+                    Color(0xFF757575), // Gray
+                    Icons.Default.Close,
+                    "Expired",
+                )
 
-            VoucherUiStatus.Redeemed -> Triple(
-                Color(0xFF9E9E9E), // Gray
-                Icons.Default.CheckCircle,
-                "Redeemed",
-            )
+            VoucherUiStatus.Redeemed ->
+                Triple(
+                    Color(0xFF9E9E9E), // Gray
+                    Icons.Default.CheckCircle,
+                    "Redeemed",
+                )
         }
 
     Row(

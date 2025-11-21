@@ -310,12 +310,13 @@ fun MnemonicBackupView(
 
         // Backup confirmation checkbox
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(
-                    role = Role.Checkbox,
-                    onClick = { hasBackedUp = !hasBackedUp }
-                ),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .clickable(
+                        role = Role.Checkbox,
+                        onClick = { hasBackedUp = !hasBackedUp },
+                    ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Checkbox(

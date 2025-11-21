@@ -34,29 +34,39 @@ class MemoryCache<K, V>(
     /**
      * Gets a cached value, or null if not present or expired.
      */
-    suspend fun get(key: K): V? = mutex.withLock {
-        val entry = cache[key] ?: return@withLock null
-        if (Clock.System.now() > entry.expiresAt) {
-            cache.remove(key)
-            return@withLock null
+    suspend fun get(key: K): V? =
+        mutex.withLock {
+            val entry = cache[key] ?: return@withLock null
+            if (Clock.System.now() > entry.expiresAt) {
+                cache.remove(key)
+                return@withLock null
+            }
+            entry.value
         }
-        entry.value
-    }
 
     /**
      * Puts a value in the cache with optional custom TTL.
      */
-    suspend fun put(key: K, value: V, ttl: Duration = defaultTtl) = mutex.withLock {
-        cache[key] = CacheEntry(
-            value = value,
-            expiresAt = Clock.System.now() + ttl,
-        )
+    suspend fun put(
+        key: K,
+        value: V,
+        ttl: Duration = defaultTtl,
+    ) = mutex.withLock {
+        cache[key] =
+            CacheEntry(
+                value = value,
+                expiresAt = Clock.System.now() + ttl,
+            )
     }
 
     /**
      * Gets a cached value or computes it if not present.
      */
-    suspend fun getOrPut(key: K, ttl: Duration = defaultTtl, compute: suspend () -> V): V {
+    suspend fun getOrPut(
+        key: K,
+        ttl: Duration = defaultTtl,
+        compute: suspend () -> V,
+    ): V {
         get(key)?.let { return it }
         val value = compute()
         put(key, value, ttl)
@@ -66,33 +76,37 @@ class MemoryCache<K, V>(
     /**
      * Removes a value from the cache.
      */
-    suspend fun remove(key: K): Unit = mutex.withLock {
-        cache.remove(key)
-        Unit
-    }
+    suspend fun remove(key: K): Unit =
+        mutex.withLock {
+            cache.remove(key)
+            Unit
+        }
 
     /**
      * Clears all cached values.
      */
-    suspend fun clear(): Unit = mutex.withLock {
-        cache.clear()
-    }
+    suspend fun clear(): Unit =
+        mutex.withLock {
+            cache.clear()
+        }
 
     /**
      * Returns the number of cached entries.
      */
-    suspend fun size(): Int = mutex.withLock {
-        cache.size
-    }
+    suspend fun size(): Int =
+        mutex.withLock {
+            cache.size
+        }
 
     /**
      * Removes expired entries from the cache.
      */
-    suspend fun evictExpired(): Unit = mutex.withLock {
-        val now = Clock.System.now()
-        val expiredKeys = cache.entries.filter { it.value.expiresAt < now }.map { it.key }
-        expiredKeys.forEach { cache.remove(it) }
-    }
+    suspend fun evictExpired(): Unit =
+        mutex.withLock {
+            val now = Clock.System.now()
+            val expiredKeys = cache.entries.filter { it.value.expiresAt < now }.map { it.key }
+            expiredKeys.forEach { cache.remove(it) }
+        }
 }
 
 /**
@@ -100,8 +114,11 @@ class MemoryCache<K, V>(
  */
 object CacheKeys {
     fun merchantProfile(npub: String) = "merchant:$npub"
+
     fun merchantOffers(npub: String) = "offers:$npub"
+
     fun voucherDetails(id: String) = "voucher:$id"
+
     fun nostrQuery(filter: String) = "nostr:$filter"
 }
 

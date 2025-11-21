@@ -218,9 +218,10 @@ fun EmptyIdentitiesView(
                 }
                 TextButton(
                     onClick = onImportClick,
-                    modifier = Modifier.semantics {
-                        contentDescription = "Import Identity"
-                    },
+                    modifier =
+                        Modifier.semantics {
+                            contentDescription = "Import Identity"
+                        },
                 ) {
                     Text("Import Existing")
                 }

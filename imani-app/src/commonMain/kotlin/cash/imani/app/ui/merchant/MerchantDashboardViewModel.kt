@@ -87,12 +87,14 @@ class MerchantDashboardViewModel(
 
             try {
                 // Load merchant profile
-                val identities = identityRepository.listIdentities().getOrElse {
-                    throw Exception("Failed to load identity: ${it.message}")
-                }
+                val identities =
+                    identityRepository.listIdentities().getOrElse {
+                        throw Exception("Failed to load identity: ${it.message}")
+                    }
 
-                val merchantIdentity = identities.firstOrNull()
-                    ?: throw Exception("No merchant identity found. Create one first.")
+                val merchantIdentity =
+                    identities.firstOrNull()
+                        ?: throw Exception("No merchant identity found. Create one first.")
 
                 _merchantProfile.value =
                     MerchantProfile(
@@ -133,18 +135,20 @@ class MerchantDashboardViewModel(
             val today = now.toLocalDateTime(TimeZone.currentSystemDefault()).date
 
             // Start of today (midnight)
-            val startOfDay = LocalDateTime(
-                year = today.year,
-                monthNumber = today.monthNumber,
-                dayOfMonth = today.dayOfMonth,
-                hour = 0,
-                minute = 0,
-            ).toInstant(TimeZone.currentSystemDefault())
+            val startOfDay =
+                LocalDateTime(
+                    year = today.year,
+                    monthNumber = today.monthNumber,
+                    dayOfMonth = today.dayOfMonth,
+                    hour = 0,
+                    minute = 0,
+                ).toInstant(TimeZone.currentSystemDefault())
 
-            val result = getSalesMetricsUseCase(
-                periodStart = startOfDay,
-                periodEnd = now,
-            )
+            val result =
+                getSalesMetricsUseCase(
+                    periodStart = startOfDay,
+                    periodEnd = now,
+                )
 
             result.onSuccess { metrics ->
                 _todayMetrics.value = metrics
@@ -180,13 +184,14 @@ class MerchantDashboardViewModel(
      */
     private suspend fun loadActiveOffers(merchantNpub: String) {
         try {
-            val result = discoverOffersUseCase(
-                DiscoverOffersFilter(
-                    merchantId = merchantNpub,
-                    status = OfferStatus.ACTIVE,
-                    includeExpired = false,
-                ),
-            )
+            val result =
+                discoverOffersUseCase(
+                    DiscoverOffersFilter(
+                        merchantId = merchantNpub,
+                        status = OfferStatus.ACTIVE,
+                        includeExpired = false,
+                    ),
+                )
 
             result.onSuccess { offers ->
                 _activeOffers.value = offers
@@ -211,10 +216,11 @@ class MerchantDashboardViewModel(
             val result = voucherRepository.getAllVouchers()
 
             result.onSuccess { allVouchers ->
-                val redeemed = allVouchers
-                    .filter { it.status == VoucherStatus.REDEEMED }
-                    .sortedByDescending { it.redemptionMetadata?.redeemedAt ?: it.issuedAt }
-                    .take(10)
+                val redeemed =
+                    allVouchers
+                        .filter { it.status == VoucherStatus.REDEEMED }
+                        .sortedByDescending { it.redemptionMetadata?.redeemedAt ?: it.issuedAt }
+                        .take(10)
 
                 _recentRedemptions.value = redeemed
                 println("[MerchantDashboardViewModel] Loaded ${redeemed.size} recent redemptions")

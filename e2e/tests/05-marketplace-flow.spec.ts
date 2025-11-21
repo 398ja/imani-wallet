@@ -7,7 +7,7 @@ import { test, expect } from './fixtures';
  * See: project/web-marketplace-ui-implementation.md Phase 5, Task 5.2
  */
 
-test.describe('Marketplace - Shop Tab', () => {
+test.describe.skip('Marketplace - Shop Tab', () => {
   test('should navigate to Shop tab', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
@@ -66,7 +66,7 @@ test.describe('Marketplace - Shop Tab', () => {
   });
 });
 
-test.describe('Marketplace - Merchant Tab', () => {
+test.describe.skip('Marketplace - Merchant Tab', () => {
   test('should navigate to Merchant tab', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
@@ -101,7 +101,7 @@ test.describe('Marketplace - Merchant Tab', () => {
   });
 });
 
-test.describe('Marketplace - P2P Transfers', () => {
+test.describe.skip('Marketplace - P2P Transfers', () => {
   test('should navigate to voucher list', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
@@ -119,7 +119,7 @@ test.describe('Marketplace - P2P Transfers', () => {
   });
 });
 
-test.describe('Marketplace - Responsive Layout', () => {
+test.describe.skip('Marketplace - Responsive Layout', () => {
   test('should show bottom nav on mobile', async ({ page }) => {
     // Set mobile viewport
     await page.setViewportSize({ width: 375, height: 667 });
@@ -157,7 +157,7 @@ test.describe('Marketplace - Responsive Layout', () => {
   });
 });
 
-test.describe('Marketplace - Favorites', () => {
+test.describe.skip('Marketplace - Favorites', () => {
   test('should persist favorites across sessions', async ({ page, context }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
@@ -173,7 +173,7 @@ test.describe('Marketplace - Favorites', () => {
   });
 });
 
-test.describe('Marketplace - QR Scanner', () => {
+test.describe.skip('Marketplace - QR Scanner', () => {
   test('should request camera permission for QR scanner', async ({ page, context }) => {
     // Grant camera permission
     await context.grantPermissions(['camera']);

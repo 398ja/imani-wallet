@@ -76,30 +76,34 @@ class CreateOfferViewModel(
             try {
                 // Get merchant identity
                 val identities = identityRepository.listIdentities().getOrThrow()
-                val merchantIdentity = identities.firstOrNull()
-                    ?: throw Exception("No merchant identity found. Create one first.")
+                val merchantIdentity =
+                    identities.firstOrNull()
+                        ?: throw Exception("No merchant identity found. Create one first.")
 
                 // Build offer description
-                val fullDescription = if (description.isNotBlank()) {
-                    "$name - $description"
-                } else {
-                    name
-                }
+                val fullDescription =
+                    if (description.isNotBlank()) {
+                        "$name - $description"
+                    } else {
+                        name
+                    }
 
                 // Create offer
-                val offer = createOfferUseCase(
-                    merchantId = merchantIdentity.toNpub(),
-                    amount = price.toLong(), // For simplicity, face value = price
-                    price = price.toLong(),
-                    description = fullDescription,
-                    mintUrl = MintConfig.LOCAL_MINT, // TODO: User-selectable mint
-                    unit = "sat",
-                    expiryDuration = validityDays.days,
-                    metadata = mapOf(
-                        "allowPartialRedemption" to allowPartialRedemption.toString(),
-                        "name" to name,
-                    ),
-                ).getOrThrow()
+                val offer =
+                    createOfferUseCase(
+                        merchantId = merchantIdentity.toNpub(),
+                        amount = price.toLong(), // For simplicity, face value = price
+                        price = price.toLong(),
+                        description = fullDescription,
+                        mintUrl = MintConfig.LOCAL_MINT, // TODO: User-selectable mint
+                        unit = "sat",
+                        expiryDuration = validityDays.days,
+                        metadata =
+                            mapOf(
+                                "allowPartialRedemption" to allowPartialRedemption.toString(),
+                                "name" to name,
+                            ),
+                    ).getOrThrow()
 
                 println("[CreateOfferViewModel] Offer created: ${offer.offerId}")
 
@@ -121,18 +125,23 @@ class CreateOfferViewModel(
     /**
      * Validates offer parameters.
      */
-    private fun validateOffer(name: String, price: Int): OfferValidationErrors {
-        val nameError = when {
-            name.isBlank() -> "Voucher name is required"
-            name.length > 100 -> "Name must be 100 characters or less"
-            else -> null
-        }
+    private fun validateOffer(
+        name: String,
+        price: Int,
+    ): OfferValidationErrors {
+        val nameError =
+            when {
+                name.isBlank() -> "Voucher name is required"
+                name.length > 100 -> "Name must be 100 characters or less"
+                else -> null
+            }
 
-        val priceError = when {
-            price <= 0 -> "Price must be greater than 0"
-            price > 1_000_000 -> "Price cannot exceed 1,000,000 sats"
-            else -> null
-        }
+        val priceError =
+            when {
+                price <= 0 -> "Price must be greater than 0"
+                price > 1_000_000 -> "Price cannot exceed 1,000,000 sats"
+                else -> null
+            }
 
         return OfferValidationErrors(
             nameError = nameError,
@@ -154,10 +163,15 @@ class CreateOfferViewModel(
  */
 sealed class CreateOfferState {
     data object Idle : CreateOfferState()
+
     data object ValidationFailed : CreateOfferState()
+
     data object Creating : CreateOfferState()
+
     data object Publishing : CreateOfferState()
+
     data class Success(val offer: MerchantOffer) : CreateOfferState()
+
     data class Error(val message: String) : CreateOfferState()
 }
 

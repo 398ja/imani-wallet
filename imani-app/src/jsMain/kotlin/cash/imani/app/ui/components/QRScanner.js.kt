@@ -69,9 +69,12 @@ actual fun QRScannerView(
             canvasElement = canvas
 
             // Request camera access
-            val constraints = js("""({
+            val constraints =
+                js(
+                    """({
                 video: { facingMode: "environment" }
-            })""")
+            })""",
+                )
 
             val mediaDevices = window.navigator.asDynamic().mediaDevices
             if (mediaDevices == undefined) {
@@ -148,9 +151,10 @@ actual fun QRScannerView(
 
     // UI overlay
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Transparent),
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .background(Color.Transparent),
     ) {
         // Close button
         IconButton(
@@ -158,9 +162,10 @@ actual fun QRScannerView(
                 scannerState = ScannerState.Closed
                 onClose()
             },
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(16.dp),
+            modifier =
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp),
         ) {
             Icon(
                 Icons.Default.Close,
@@ -174,9 +179,10 @@ actual fun QRScannerView(
         when (val state = scannerState) {
             is ScannerState.Initializing -> {
                 Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.7f)),
+                    modifier =
+                        Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.7f)),
                     contentAlignment = Alignment.Center,
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -189,9 +195,10 @@ actual fun QRScannerView(
 
             is ScannerState.Error -> {
                 Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.9f)),
+                    modifier =
+                        Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.9f)),
                     contentAlignment = Alignment.Center,
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -225,9 +232,10 @@ actual fun QRScannerView(
 
             is ScannerState.Success -> {
                 Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.7f)),
+                    modifier =
+                        Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.7f)),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
@@ -250,8 +258,12 @@ actual fun QRScannerView(
  */
 private sealed class ScannerState {
     data object Initializing : ScannerState()
+
     data object Scanning : ScannerState()
+
     data class Success(val data: String) : ScannerState()
+
     data class Error(val message: String) : ScannerState()
+
     data object Closed : ScannerState()
 }

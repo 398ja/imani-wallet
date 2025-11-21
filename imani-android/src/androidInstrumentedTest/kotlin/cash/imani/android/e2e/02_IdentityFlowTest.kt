@@ -130,7 +130,6 @@ class IdentityFlowTest {
  * Mirrors Playwright test describe: "Identity Import"
  */
 
-
 class IdentityImportTest {
     @get:Rule
     val composeTestRule = createAndroidComposeRule<MainActivity>()

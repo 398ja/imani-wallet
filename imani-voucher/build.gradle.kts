@@ -53,7 +53,8 @@ kotlin {
         val jsMain by getting {
             dependencies {
                 implementation(libs.ktor.client.js)
-                implementation(npm("nostr-tools", "2.1.0"))
+                // Nostr library deferred - nostr-tools has ESM/CJS issues, nostrify uses JSR packages
+                // TODO: Implement direct WebSocket-based Nostr client in Phase 3
             }
         }
 
@@ -64,7 +65,6 @@ kotlin {
                 // - VoucherServiceImpl: Issue, redeem, revoke, verify vouchers
                 // - SendService: Nostr backup/restore (NIP-17 + NIP-44)
                 // - TokenCodec: Cashu token encoding/decoding
-                // - NostrGatewayService: Nostr relay integration
                 //
                 // Exclusions for Android compatibility:
                 // - Jakarta EE (jakarta.el.*): Android doesn't support Jakarta EE
@@ -81,6 +81,14 @@ kotlin {
                     exclude(group = "org.springframework.boot")
                     exclude(group = "org.springframework.data")
                     exclude(group = "org.springframework.hateoas")
+                }
+
+                // cashu-client wallet-core-nostr for Nostr relay communication
+                // Provides: NostrGatewayService, NostrRelayClient, VoucherConverter,
+                // relay health monitoring, event verification
+                implementation("xyz.tcheeric:wallet-core-nostr:1.2.0") {
+                    exclude(group = "org.springframework")
+                    exclude(group = "org.springframework.boot")
                 }
             }
         }

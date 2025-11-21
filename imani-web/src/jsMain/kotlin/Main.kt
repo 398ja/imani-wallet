@@ -2,8 +2,6 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.window.CanvasBasedWindow
 import cash.imani.app.ImaniApp
 import cash.imani.app.di.appModule
-import cash.imani.monitoring.Analytics
-import cash.imani.monitoring.ErrorTracking
 import org.koin.core.context.startKoin
 
 /**
@@ -17,9 +15,9 @@ fun main() {
 
     try {
         // Initialize error tracking and analytics
-        console.log("[Imani] Initializing monitoring...")
-        ErrorTracking.initialize()
-        Analytics.initialize()
+        // console.log("[Imani] Initializing monitoring...")
+        // ErrorTracking.initialize()
+        // Analytics.initialize()
 
         // Initialize Koin for dependency injection
         console.log("[Imani] Initializing Koin...")
@@ -44,9 +42,9 @@ fun main() {
         console.error("[Imani] Error stack:", e.stackTraceToString())
 
         // Report error to Sentry if configured
-        ErrorTracking.captureException(e, mapOf(
-            "phase" to "initialization",
-            "location" to "main"
-        ))
+        // ErrorTracking.captureException(e, mapOf(
+        //     "phase" to "initialization",
+        //     "location" to "main"
+        // ))
     }
 }

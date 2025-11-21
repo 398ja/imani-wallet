@@ -163,7 +163,6 @@ class CompleteVoucherFlowTest {
  * Mirrors Playwright test describe: "Voucher Error Scenarios"
  */
 
-
 class VoucherErrorScenariosTest {
     @get:Rule
     val composeTestRule = createAndroidComposeRule<MainActivity>()
