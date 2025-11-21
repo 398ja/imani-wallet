@@ -12,7 +12,9 @@ actual fun createBip39Adapter(): Bip39Adapter = WebBip39Adapter()
 class WebBip39Adapter : Bip39Adapter {
     override suspend fun entropyToMnemonic(entropyBytes: ByteArray): String {
         try {
-            // Debug: Check wordlist (wordlist is already dynamic, no need for asDynamic())
+            val wordlist = EnglishWordlistModule.wordlist
+
+            // Debug: Check wordlist
             console.log("[WebBip39Adapter] wordlist type:", js("typeof wordlist"))
             console.log("[WebBip39Adapter] wordlist value:", wordlist)
             console.log("[WebBip39Adapter] wordlist length:", wordlist.length)
@@ -44,6 +46,7 @@ class WebBip39Adapter : Bip39Adapter {
 
     override suspend fun validateMnemonic(mnemonic: String): Boolean {
         return try {
+            val wordlist = EnglishWordlistModule.wordlist
             cash.imani.identity.crypto.validateMnemonic(mnemonic, wordlist)
         } catch (e: Exception) {
             false
