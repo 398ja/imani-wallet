@@ -149,6 +149,14 @@ val appModule =
                 voucherRepository = get(),
             )
         }
+        single<cash.imani.voucher.repository.MerchantProfileRepository> {
+            cash.imani.voucher.repository.IndexedDBMerchantProfileRepository()
+        }
+        single {
+            cash.imani.voucher.usecases.UpdateMerchantProfileUseCase(
+                merchantProfileRepository = get(),
+            )
+        }
 
         // ViewModels - use factory() instead of single() to create new instances
         // per activity. This ensures ViewModel state is reset when the activity recreates.
