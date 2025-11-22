@@ -46,6 +46,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import cash.imani.app.ui.components.QRCodeImage
 import cash.imani.voucher.domain.StoredVoucher
 import cash.imani.voucher.domain.VoucherStatus
 import kotlinx.datetime.Instant
@@ -362,30 +363,22 @@ fun SendVoucherDialog(
                 )
 
                 voucher.token?.let { token ->
-                    // QR Code placeholder
-                    Box(
-                        modifier =
-                            Modifier
-                                .size(200.dp)
-                                .background(
-                                    Color.White,
-                                    RoundedCornerShape(8.dp),
-                                ),
-                        contentAlignment = Alignment.Center,
+                    // QR Code (Phase 4.3)
+                    Card(
+                        modifier = Modifier.size(220.dp),
+                        colors =
+                            CardDefaults.cardColors(
+                                containerColor = Color.White,
+                            ),
+                        elevation = CardDefaults.cardElevation(4.dp),
                     ) {
-                        // TODO Phase 4.3: Real QR code with jsQR
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
+                        Box(
+                            modifier = Modifier.fillMaxSize().padding(10.dp),
+                            contentAlignment = Alignment.Center,
                         ) {
-                            Icon(
-                                Icons.Default.Add, // TODO: Use QrCode icon
-                                contentDescription = null,
-                                modifier = Modifier.size(80.dp),
-                                tint = Color.Black,
-                            )
-                            Text(
-                                text = "QR Code",
-                                style = MaterialTheme.typography.bodySmall,
+                            QRCodeImage(
+                                data = token,
+                                modifier = Modifier.size(200.dp),
                             )
                         }
                     }

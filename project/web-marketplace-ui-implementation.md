@@ -1665,13 +1665,17 @@ class FavoritesRepository {
 
 ---
 
-#### 4.3. Camera QR Scanner (1 day)
+#### 4.3. Camera QR Scanner (1 day) - ✅ COMPLETE (QR Generation)
 
-**Real QR code scanning using device camera**
+**Status**: ✅ QR Code Generation COMPLETE (2025-11-22)
+**Commits**:
+- TBD - QR code generation with qrcode.js (VoucherDetailScreen, ShareVoucherScreen)
+
+**Real QR code generation and scanning**
 
 **Libraries**:
-- Web: `jsQR` library via JS interop
-- Or: `zxing-kotlin` (KMP-compatible)
+- Web: `qrcode` library (1.5.3) for QR generation ✅
+- Web: `jsQR` library for scanning ⏳ (deferred to future phase)
 
 **Implementation**:
 ```kotlin
@@ -1728,12 +1732,15 @@ actual fun QRScannerView(
 ```
 
 **Acceptance Criteria**:
-- ✅ Camera permission requested
-- ✅ Video preview shown
-- ✅ QR codes detected and decoded
-- ✅ Works on mobile and desktop
+- ✅ QR code generation with qrcode.js
+- ✅ QR codes display in VoucherDetailScreen (SendVoucherDialog)
+- ✅ QR codes display in ShareVoucherScreen
+- ✅ QRCodeImage component (expect/actual pattern)
+- ⏳ Camera permission requested (future)
+- ⏳ Video preview shown (future)
+- ⏳ QR codes detected and decoded (future)
 
-**Effort**: 1 day
+**Effort**: 1 day (QR generation only)
 
 ---
 

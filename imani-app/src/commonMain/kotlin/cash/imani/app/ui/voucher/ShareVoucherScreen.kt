@@ -30,6 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import cash.imani.app.ui.components.QRCodeImage
 
 /**
  * Screen for sharing a voucher token.
@@ -65,39 +66,23 @@ fun ShareVoucherScreen(
 
         Spacer(Modifier.height(16.dp))
 
-        // QR Code placeholder (Phase 3)
+        // QR Code (Phase 4.3)
         Card(
-            modifier = Modifier.size(300.dp),
+            modifier = Modifier.size(320.dp),
             elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+            colors =
+                CardDefaults.cardColors(
+                    containerColor = Color.White,
+                ),
         ) {
             Box(
-                modifier = Modifier.fillMaxSize().background(Color.White),
+                modifier = Modifier.fillMaxSize().padding(10.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(
-                        text = "QR Code",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = Color.Gray,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Text(
-                        text = "Coming in Phase 3",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color.Gray,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = "For now, share the token text below",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.Gray,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 32.dp),
-                    )
-                }
+                QRCodeImage(
+                    data = token,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
         }
 

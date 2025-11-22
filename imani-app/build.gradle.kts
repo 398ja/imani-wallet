@@ -39,6 +39,8 @@ kotlin {
         val jsMain by getting {
             dependencies {
                 implementation(compose.html.core)
+                implementation(npm("qrcode", "1.5.3"))
+                implementation(npm("@types/qrcode", "1.5.5"))
             }
         }
     }
