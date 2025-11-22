@@ -80,6 +80,7 @@ import cash.imani.voucher.domain.StoredVoucher
  * @param onCreateOffer Callback to navigate to create offer screen
  * @param onEditOffer Callback to navigate to edit offer screen (offerId)
  * @param onPOSRedeem Callback to navigate to POS redemption screen
+ * @param onViewReports Callback to navigate to sales reports screen
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -89,6 +90,7 @@ fun SalesDashboardScreen(
     onCreateOffer: () -> Unit,
     onEditOffer: (String) -> Unit,
     onPOSRedeem: () -> Unit,
+    onViewReports: () -> Unit,
 ) {
     val merchantProfile by viewModel.merchantProfile.collectAsState()
     val todayMetrics by viewModel.todayMetrics.collectAsState()
@@ -196,6 +198,7 @@ fun SalesDashboardScreen(
                     todayMetrics?.let { metrics ->
                         SalesMetricsCard(
                             metrics = metrics,
+                            onViewReports = onViewReports,
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                         )
                     }
@@ -290,11 +293,13 @@ fun SalesDashboardScreen(
  * Sales metrics card - displays today's sales statistics.
  *
  * @param metrics Sales metrics for today
+ * @param onViewReports Callback to navigate to sales reports screen
  * @param modifier Modifier for styling
  */
 @Composable
 fun SalesMetricsCard(
     metrics: SalesMetrics,
+    onViewReports: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Card(
@@ -329,6 +334,15 @@ fun SalesMetricsCard(
                     label = "Redeemed",
                     modifier = Modifier.weight(1f),
                 )
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            OutlinedButton(
+                onClick = onViewReports,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("View Detailed Reports")
             }
         }
     }

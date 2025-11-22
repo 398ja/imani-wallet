@@ -26,8 +26,9 @@ import cash.imani.app.di.koinInject
  * - Navigate to POS redemption screen
  * - Scan/enter voucher token, redeem
  *
- * TODO Phase 3 Next Tasks:
- * - Sales Reports (Task 3.5)
+ * Phase 3.5: Sales Reports (IMPLEMENTED)
+ * - Navigate to sales reports screen
+ * - View daily/weekly/monthly metrics
  *
  * See: project/web-marketplace-ui-implementation.md Phase 3
  */
@@ -37,11 +38,13 @@ fun MerchantTabScreen() {
     val profileViewModel: MerchantProfileViewModel = koinInject()
     val createOfferViewModel: CreateOfferViewModel = koinInject()
     val posViewModel: POSViewModel = koinInject()
+    val salesReportsViewModel: SalesReportsViewModel = koinInject()
 
     // Navigation state
     var showEditProfile by remember { mutableStateOf(false) }
     var showCreateOffer by remember { mutableStateOf(false) }
     var showPOSRedeem by remember { mutableStateOf(false) }
+    var showSalesReports by remember { mutableStateOf(false) }
 
     // Load dashboard data on first composition
     LaunchedEffect(Unit) {
@@ -94,6 +97,16 @@ fun MerchantTabScreen() {
             )
         }
 
+        showSalesReports -> {
+            // Phase 3.5: Sales Reports Screen
+            SalesReportsScreen(
+                viewModel = salesReportsViewModel,
+                onBack = {
+                    showSalesReports = false
+                },
+            )
+        }
+
         else -> {
             // Phase 3.1: Sales Dashboard (default view)
             SalesDashboardScreen(
@@ -110,6 +123,9 @@ fun MerchantTabScreen() {
                 },
                 onPOSRedeem = {
                     showPOSRedeem = true
+                },
+                onViewReports = {
+                    showSalesReports = true
                 },
             )
         }
