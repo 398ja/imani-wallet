@@ -1026,18 +1026,23 @@ fun SalesMetricsCard(metrics: SalesMetrics) {
 
 ---
 
-#### 3.2. Edit Merchant Profile Screen (1 day)
+#### 3.2. Edit Merchant Profile Screen (1 day) - ✅ COMPLETE
 
 **Allow merchant to edit business name, description, logo**
+
+**Status**: ✅ COMPLETE (2025-11-22)
+**Commits**:
+- `32d360d` - Infrastructure (repository, use case, DI)
+- `41a7270` - Navigation wiring (Merchant tab)
 
 **Design Spec**: Lines 807-846
 
 **Features**:
-- Upload logo (image picker)
-- Edit business name (1-100 chars)
-- Edit description (1-500 chars)
-- Contact info (email, phone, website)
-- Nostr npub (read-only)
+- Upload logo (image picker) - TODO: Phase 3.2+
+- Edit business name (1-100 chars) ✅
+- Edit description (1-500 chars) ✅
+- Contact info (email, phone, website) ✅
+- Nostr npub (read-only) ✅
 
 **Implementation**:
 ```kotlin
