@@ -22,8 +22,11 @@ import cash.imani.app.di.koinInject
  * - Navigate to create offer screen
  * - Publish offer to Nostr
  *
+ * Phase 3.4: POS Redemption (IMPLEMENTED)
+ * - Navigate to POS redemption screen
+ * - Scan/enter voucher token, redeem
+ *
  * TODO Phase 3 Next Tasks:
- * - POS Redemption (Task 3.4)
  * - Sales Reports (Task 3.5)
  *
  * See: project/web-marketplace-ui-implementation.md Phase 3
@@ -33,10 +36,12 @@ fun MerchantTabScreen() {
     val dashboardViewModel: MerchantDashboardViewModel = koinInject()
     val profileViewModel: MerchantProfileViewModel = koinInject()
     val createOfferViewModel: CreateOfferViewModel = koinInject()
+    val posViewModel: POSViewModel = koinInject()
 
     // Navigation state
     var showEditProfile by remember { mutableStateOf(false) }
     var showCreateOffer by remember { mutableStateOf(false) }
+    var showPOSRedeem by remember { mutableStateOf(false) }
 
     // Load dashboard data on first composition
     LaunchedEffect(Unit) {
@@ -74,6 +79,21 @@ fun MerchantTabScreen() {
             )
         }
 
+        showPOSRedeem -> {
+            // Phase 3.4: POS Redemption Screen
+            POSRedemptionScreen(
+                viewModel = posViewModel,
+                onRedeemed = {
+                    showPOSRedeem = false
+                    // Reload dashboard to show updated redemptions
+                    dashboardViewModel.loadDashboard()
+                },
+                onBack = {
+                    showPOSRedeem = false
+                },
+            )
+        }
+
         else -> {
             // Phase 3.1: Sales Dashboard (default view)
             SalesDashboardScreen(
@@ -89,8 +109,7 @@ fun MerchantTabScreen() {
                     println("[MerchantTabScreen] Edit offer clicked: $offerId (TODO)")
                 },
                 onPOSRedeem = {
-                    // TODO Phase 3.4: Navigate to POS redemption
-                    println("[MerchantTabScreen] Open POS clicked (TODO)")
+                    showPOSRedeem = true
                 },
             )
         }
