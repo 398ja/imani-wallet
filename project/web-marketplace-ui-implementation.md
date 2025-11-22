@@ -1626,7 +1626,7 @@ fun SendVoucherDialog(
 
 **Status**: ✅ COMPLETE (2025-11-22)
 **Commits**:
-- TBD - Favorites UI implementation (ShopTabScreen with FavoritesSection, horizontal scroll)
+- `234bfca` - Favorites UI implementation (ShopTabScreen with FavoritesSection, horizontal scroll)
 
 **Save favorite merchants for quick access**
 
