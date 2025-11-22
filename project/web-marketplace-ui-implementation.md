@@ -1253,19 +1253,24 @@ fun CreateOfferScreen(
 
 ---
 
-#### 3.4. POS Redemption Screen (3 days)
+#### 3.4. POS Redemption Screen (3 days) - ✅ COMPLETE
 
 **Merchant scans customer QR code and redeems voucher**
+
+**Status**: ✅ COMPLETE (2025-11-22)
+**Commits**:
+- Infrastructure already existed (POSRedemptionScreen, POSViewModel, RedeemVoucherUseCase)
+- `09a844b` - Navigation wiring (Merchant tab)
 
 **Design Spec**: Lines 717-804
 
 **Features**:
-- Camera QR scanner
-- Manual token entry
-- Show voucher details
-- Enter redemption amount
-- Quick fill buttons (10, 25, 50, Full)
-- Confirm redemption
+- Camera QR scanner - TODO: Phase 3.4+ (manual entry working)
+- Manual token entry ✅
+- Show voucher details ✅
+- Enter redemption amount ✅
+- Quick fill buttons (10, 25, 50, Full) ✅
+- Confirm redemption ✅
 
 **Implementation**:
 ```kotlin
