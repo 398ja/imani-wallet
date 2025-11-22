@@ -1669,7 +1669,7 @@ class FavoritesRepository {
 
 **Status**: ✅ QR Code Generation COMPLETE (2025-11-22)
 **Commits**:
-- TBD - QR code generation with qrcode.js (VoucherDetailScreen, ShareVoucherScreen)
+- `e0deb9f` - QR code generation with qrcode.js (VoucherDetailScreen, ShareVoucherScreen)
 
 **Real QR code generation and scanning**
 
