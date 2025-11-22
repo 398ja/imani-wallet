@@ -18,8 +18,11 @@ import cash.imani.app.di.koinInject
  * - Navigate to edit profile screen
  * - Save changes to Nostr and IndexedDB
  *
+ * Phase 3.3: Create Voucher Offer (IMPLEMENTED)
+ * - Navigate to create offer screen
+ * - Publish offer to Nostr
+ *
  * TODO Phase 3 Next Tasks:
- * - Create Voucher Offer (Task 3.3)
  * - POS Redemption (Task 3.4)
  * - Sales Reports (Task 3.5)
  *
@@ -29,47 +32,67 @@ import cash.imani.app.di.koinInject
 fun MerchantTabScreen() {
     val dashboardViewModel: MerchantDashboardViewModel = koinInject()
     val profileViewModel: MerchantProfileViewModel = koinInject()
+    val createOfferViewModel: CreateOfferViewModel = koinInject()
 
     // Navigation state
     var showEditProfile by remember { mutableStateOf(false) }
+    var showCreateOffer by remember { mutableStateOf(false) }
 
     // Load dashboard data on first composition
     LaunchedEffect(Unit) {
         dashboardViewModel.loadDashboard()
     }
 
-    if (showEditProfile) {
-        // Phase 3.2: Edit Profile Screen
-        EditMerchantProfileScreen(
-            viewModel = profileViewModel,
-            onSaved = {
-                showEditProfile = false
-                // Reload dashboard to show updated profile
-                dashboardViewModel.loadDashboard()
-            },
-            onBack = {
-                showEditProfile = false
-            },
-        )
-    } else {
-        // Phase 3.1: Sales Dashboard (default view)
-        SalesDashboardScreen(
-            viewModel = dashboardViewModel,
-            onEditProfile = {
-                showEditProfile = true
-            },
-            onCreateOffer = {
-                // TODO Phase 3.3: Navigate to create offer
-                println("[MerchantTabScreen] Create offer clicked (TODO)")
-            },
-            onEditOffer = { offerId ->
-                // TODO Phase 3.3: Navigate to edit offer
-                println("[MerchantTabScreen] Edit offer clicked: $offerId (TODO)")
-            },
-            onPOSRedeem = {
-                // TODO Phase 3.4: Navigate to POS redemption
-                println("[MerchantTabScreen] Open POS clicked (TODO)")
-            },
-        )
+    when {
+        showEditProfile -> {
+            // Phase 3.2: Edit Profile Screen
+            EditMerchantProfileScreen(
+                viewModel = profileViewModel,
+                onSaved = {
+                    showEditProfile = false
+                    // Reload dashboard to show updated profile
+                    dashboardViewModel.loadDashboard()
+                },
+                onBack = {
+                    showEditProfile = false
+                },
+            )
+        }
+
+        showCreateOffer -> {
+            // Phase 3.3: Create Offer Screen
+            CreateOfferScreen(
+                viewModel = createOfferViewModel,
+                onCreated = {
+                    showCreateOffer = false
+                    // Reload dashboard to show new offer
+                    dashboardViewModel.loadDashboard()
+                },
+                onCancel = {
+                    showCreateOffer = false
+                },
+            )
+        }
+
+        else -> {
+            // Phase 3.1: Sales Dashboard (default view)
+            SalesDashboardScreen(
+                viewModel = dashboardViewModel,
+                onEditProfile = {
+                    showEditProfile = true
+                },
+                onCreateOffer = {
+                    showCreateOffer = true
+                },
+                onEditOffer = { offerId ->
+                    // TODO Phase 3.3+: Navigate to edit offer
+                    println("[MerchantTabScreen] Edit offer clicked: $offerId (TODO)")
+                },
+                onPOSRedeem = {
+                    // TODO Phase 3.4: Navigate to POS redemption
+                    println("[MerchantTabScreen] Open POS clicked (TODO)")
+                },
+            )
+        }
     }
 }
