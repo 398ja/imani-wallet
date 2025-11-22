@@ -7,6 +7,7 @@ import cafe.adriel.voyager.transitions.SlideTransition
 import cash.imani.app.ui.voucher.IssueVoucherScreen
 import cash.imani.app.ui.voucher.RedeemVoucherScreen
 import cash.imani.app.ui.voucher.ShareVoucherScreen
+import cash.imani.app.ui.voucher.VoucherDetailScreen
 import cash.imani.app.ui.voucher.VoucherListScreen
 import cash.imani.app.ui.voucher.VoucherViewModel
 
@@ -15,12 +16,14 @@ import cash.imani.app.ui.voucher.VoucherViewModel
  *
  * Provides navigation between:
  * - Voucher list (main screen)
+ * - Voucher detail (Phase 4.1: P2P transfers)
  * - Issue voucher
  * - Redeem voucher
  * - Share voucher
  *
  * Phase 2: Basic navigation implementation
  * Phase 3: Integration with main app navigation
+ * Phase 4.1: P2P voucher transfers with VoucherDetailScreen
  */
 @Composable
 fun VoucherNavHost(viewModel: VoucherViewModel) {
@@ -48,11 +51,8 @@ class VoucherListScreenNav(
                 navigator.push(RedeemVoucherScreenNav(viewModel))
             },
             onVoucherClick = { voucher ->
-                // Phase 2: Simple click handler
-                // Phase 3: Navigate to voucher detail screen
-                voucher.token?.let { token ->
-                    navigator.push(ShareVoucherScreenNav(token))
-                }
+                // Phase 4.1: Navigate to voucher detail screen
+                navigator.push(VoucherDetailScreenNav(voucher.voucherId, viewModel))
             },
         )
     }
@@ -119,6 +119,39 @@ class ShareVoucherScreenNav(
             onDone = {
                 // Navigate back to list
                 navigator.popUntil { screen -> screen is VoucherListScreenNav }
+            },
+        )
+    }
+}
+
+/**
+ * Voucher detail screen with P2P transfer capability.
+ *
+ * Phase 4.1: P2P Voucher Transfers
+ */
+class VoucherDetailScreenNav(
+    private val voucherId: String,
+    private val viewModel: VoucherViewModel,
+) : Screen {
+    @Composable
+    override fun Content() {
+        val navigator = cafe.adriel.voyager.navigator.LocalNavigator.current ?: return
+
+        VoucherDetailScreen(
+            voucherId = voucherId,
+            viewModel = viewModel,
+            onSendToFriend = { voucher ->
+                // Mark voucher as delivered/sent
+                println("[VoucherDetailScreen] Voucher sent to friend: ${voucher.voucherId}")
+                // TODO Phase 4.1+: Update voucher status to DELIVERED
+            },
+            onRedeem = { voucher ->
+                // Navigate to redeem screen (merchant POS)
+                println("[VoucherDetailScreen] Redeem voucher: ${voucher.voucherId}")
+                // TODO Phase 4.1+: Navigate to merchant POS for redemption
+            },
+            onBack = {
+                navigator.pop()
             },
         )
     }
