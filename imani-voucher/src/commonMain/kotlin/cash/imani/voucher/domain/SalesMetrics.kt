@@ -48,9 +48,12 @@ import kotlinx.serialization.Serializable
 data class SalesMetrics(
     val totalVouchersIssued: Int,
     val totalVouchersRedeemed: Int,
-    val totalRevenue: Long, // sats
-    val redemptionRate: Double, // 0.0-1.0
-    val salesByOffer: Map<String, OfferSales> = emptyMap(), // offerId -> stats
+    // Total revenue in sats
+    val totalRevenue: Long,
+    // Redemption rate (0.0-1.0)
+    val redemptionRate: Double,
+    // Sales by offer (offerId -> stats)
+    val salesByOffer: Map<String, OfferSales> = emptyMap(),
     @Contextual val periodStart: Instant,
     @Contextual val periodEnd: Instant,
 ) {
@@ -107,7 +110,8 @@ data class SalesMetrics(
 data class OfferSales(
     val vouchersIssued: Int,
     val vouchersRedeemed: Int,
-    val revenue: Long, // sats
+    // Revenue in sats
+    val revenue: Long,
 ) {
     /**
      * Calculates redemption rate for this offer.

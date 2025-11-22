@@ -19,7 +19,7 @@ external interface SubtleCrypto {
         baseKey: CryptoKey,
         derivedKeyAlgorithm: dynamic,
         extractable: Boolean,
-        keyUsages: Array<String>
+        keyUsages: Array<String>,
     ): Promise<CryptoKey>
 
     fun importKey(
@@ -27,19 +27,19 @@ external interface SubtleCrypto {
         keyData: dynamic,
         algorithm: dynamic,
         extractable: Boolean,
-        keyUsages: Array<String>
+        keyUsages: Array<String>,
     ): Promise<CryptoKey>
 
     fun encrypt(
         algorithm: dynamic,
         key: CryptoKey,
-        data: dynamic
+        data: dynamic,
     ): Promise<ArrayBuffer>
 
     fun decrypt(
         algorithm: dynamic,
         key: CryptoKey,
-        data: dynamic
+        data: dynamic,
     ): Promise<ArrayBuffer>
 }
 
@@ -181,7 +181,7 @@ class PassphraseEncryption {
             baseKey = passphraseKey,
             derivedKeyAlgorithm = aesParams,
             extractable = false,
-            keyUsages = arrayOf("encrypt", "decrypt")
+            keyUsages = arrayOf("encrypt", "decrypt"),
         ).await()
     }
 
@@ -200,7 +200,7 @@ class PassphraseEncryption {
             keyData = passphraseBytesArray,
             algorithm = algorithm,
             extractable = false,
-            keyUsages = arrayOf("deriveKey")
+            keyUsages = arrayOf("deriveKey"),
         ).await()
     }
 
@@ -220,11 +220,12 @@ class PassphraseEncryption {
         algorithm.name = "AES-GCM"
         algorithm.iv = ivArray
 
-        val arrayBuffer = cryptoSubtle.encrypt(
-            algorithm = algorithm,
-            key = key,
-            data = dataArray
-        ).await()
+        val arrayBuffer =
+            cryptoSubtle.encrypt(
+                algorithm = algorithm,
+                key = key,
+                data = dataArray,
+            ).await()
 
         return Uint8Array(arrayBuffer).toByteArray()
     }
@@ -245,11 +246,12 @@ class PassphraseEncryption {
         algorithm.name = "AES-GCM"
         algorithm.iv = ivArray
 
-        val arrayBuffer = cryptoSubtle.decrypt(
-            algorithm = algorithm,
-            key = key,
-            data = ciphertextArray
-        ).await()
+        val arrayBuffer =
+            cryptoSubtle.decrypt(
+                algorithm = algorithm,
+                key = key,
+                data = ciphertextArray,
+            ).await()
 
         return Uint8Array(arrayBuffer).toByteArray()
     }

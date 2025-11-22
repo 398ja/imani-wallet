@@ -48,7 +48,7 @@ fun MainScreen() {
         // Content area - display selected tab screen
         when (selectedTab) {
             AppTab.SHOP -> ShopTabScreen(Modifier.padding(padding))
-            AppTab.MERCHANT -> MerchantTabScreen(Modifier.padding(padding))
+            AppTab.MERCHANT -> MerchantTabScreen()
             AppTab.SETTINGS -> SettingsTabScreen(Modifier.padding(padding))
         }
     }

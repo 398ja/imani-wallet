@@ -11,6 +11,7 @@ import kotlin.js.Promise
  */
 external interface Clipboard {
     fun writeText(text: String): Promise<Unit>
+
     fun readText(): Promise<String>
 }
 

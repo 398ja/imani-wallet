@@ -119,6 +119,7 @@ class CheckInvoicePaidUseCase(
         quoteId: String,
         mintUrl: String,
         pollInterval: Duration = 2.seconds,
-        timeout: Duration = 300.seconds, // 5 minutes
+        // Timeout: 5 minutes
+        timeout: Duration = 300.seconds,
     ): Result<Boolean> = invoke(quoteId, mintUrl, pollInterval, timeout)
 }

@@ -3,8 +3,6 @@
 
 package cash.imani.identity.crypto
 
-import org.khronos.webgl.Uint8Array
-
 /**
  * External declarations for @scure/bip39 library.
  *
