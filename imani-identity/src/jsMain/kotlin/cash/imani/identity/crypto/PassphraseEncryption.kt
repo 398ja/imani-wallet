@@ -164,9 +164,16 @@ class PassphraseEncryption {
         // Convert salt to Uint8Array for JavaScript
         val saltArray = salt.toUint8Array()
 
-        // Create algorithm objects
-        val pbkdf2Params = js("({name: 'PBKDF2', salt: saltArray, iterations: $PBKDF2_ITERATIONS, hash: 'SHA-256'})")
-        val aesParams = js("({name: 'AES-GCM', length: $AES_KEY_LENGTH})")
+        // Create algorithm objects using dynamic construction
+        val pbkdf2Params = js("{}").asDynamic()
+        pbkdf2Params.name = "PBKDF2"
+        pbkdf2Params.salt = saltArray
+        pbkdf2Params.iterations = PBKDF2_ITERATIONS
+        pbkdf2Params.hash = "SHA-256"
+
+        val aesParams = js("{}").asDynamic()
+        aesParams.name = "AES-GCM"
+        aesParams.length = AES_KEY_LENGTH
 
         // Derive key using PBKDF2
         return cryptoSubtle.deriveKey(
@@ -185,7 +192,8 @@ class PassphraseEncryption {
         // Convert to Uint8Array for JavaScript
         val passphraseBytesArray = passphraseBytes.toUint8Array()
 
-        val algorithm = js("({name: 'PBKDF2'})")
+        val algorithm = js("{}").asDynamic()
+        algorithm.name = "PBKDF2"
 
         return cryptoSubtle.importKey(
             format = "raw",
@@ -208,7 +216,9 @@ class PassphraseEncryption {
         val dataArray = data.toUint8Array()
         val ivArray = iv.toUint8Array()
 
-        val algorithm = js("({name: 'AES-GCM', iv: ivArray})")
+        val algorithm = js("{}").asDynamic()
+        algorithm.name = "AES-GCM"
+        algorithm.iv = ivArray
 
         val arrayBuffer = cryptoSubtle.encrypt(
             algorithm = algorithm,
@@ -231,7 +241,9 @@ class PassphraseEncryption {
         val ciphertextArray = ciphertext.toUint8Array()
         val ivArray = iv.toUint8Array()
 
-        val algorithm = js("({name: 'AES-GCM', iv: ivArray})")
+        val algorithm = js("{}").asDynamic()
+        algorithm.name = "AES-GCM"
+        algorithm.iv = ivArray
 
         val arrayBuffer = cryptoSubtle.decrypt(
             algorithm = algorithm,
