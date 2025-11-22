@@ -1622,14 +1622,18 @@ fun SendVoucherDialog(
 
 ---
 
-#### 4.2. Favorite Merchants (1 day)
+#### 4.2. Favorite Merchants (1 day) - ✅ COMPLETE
+
+**Status**: ✅ COMPLETE (2025-11-22)
+**Commits**:
+- TBD - Favorites UI implementation (ShopTabScreen with FavoritesSection, horizontal scroll)
 
 **Save favorite merchants for quick access**
 
 **Features**:
-- Star icon on merchant detail
-- Favorites section in Shop tab
-- Persist to localStorage
+- Star icon on merchant detail ✅
+- Favorites section in Shop tab ✅
+- Persist to localStorage ✅
 
 **Implementation**:
 ```kotlin
