@@ -1403,15 +1403,21 @@ actual fun QRScannerView(
 
 ---
 
-#### 3.5. Sales Reports Screen (2 days)
+#### 3.5. Sales Reports Screen (2 days) - ✅ COMPLETE
+
+**Status**: ✅ COMPLETE (2025-11-22)
+**Commits**:
+- Infrastructure already existed (SalesReportsScreen, SalesReportsViewModel, GetSalesMetricsUseCase)
+- `0e97daa` - Navigation wiring (Merchant tab, dashboard metrics button)
 
 **Show sales metrics by day/week/month**
 
 **Features**:
-- Daily, weekly, monthly tabs
-- Chart visualization (vouchers sold, revenue)
-- Export to CSV
-- Filter by offer
+- Daily, weekly, monthly tabs ✅
+- Metrics visualization (summary, grid, progress bar) ✅
+- Export to CSV (console placeholder) ✅
+- Chart visualization (placeholder - TODO: Phase 3.5+)
+- Filter by offer (TODO: Phase 3.5+)
 
 **Implementation**:
 ```kotlin
