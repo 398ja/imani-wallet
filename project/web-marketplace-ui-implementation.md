@@ -1748,7 +1748,7 @@ actual fun QRScannerView(
 
 **Status**: ✅ COMPLETE (2025-11-22)
 **Commits**:
-- TBD - Responsive navigation (SideNavigation, MainScreen responsive layout)
+- `d186aae` - Responsive navigation (SideNavigation, MainScreen responsive layout)
 
 **Optimize layouts for mobile/tablet/desktop**
 
