@@ -1825,7 +1825,7 @@ fun MainScreen() {
 
 **Status**: ✅ COMPLETE (2025-11-22)
 **Commits**:
-- TBD - Accessibility audit documentation (ACCESSIBILITY.md)
+- `09e421e` - Accessibility audit documentation (ACCESSIBILITY.md)
 
 **Design Spec**: Lines 1631-1665
 
