@@ -1117,19 +1117,24 @@ fun EditMerchantProfileScreen(
 
 ---
 
-#### 3.3. Create Voucher Offer Screen (2 days)
+#### 3.3. Create Voucher Offer Screen (2 days) - ✅ COMPLETE
 
 **Merchant creates new voucher offer template**
+
+**Status**: ✅ COMPLETE (2025-11-22)
+**Commits**:
+- Infrastructure already existed (CreateOfferScreen, CreateOfferViewModel, use cases)
+- `6287189` - Navigation wiring (Merchant tab)
 
 **Design Spec**: Lines 652-714
 
 **Features**:
-- Voucher name (required)
-- Description (optional)
-- Price in sats (required, >0)
-- Validity period (7/30/90 days or custom)
-- Partial redemption checkbox
-- Preview card
+- Voucher name (required) ✅
+- Description (optional) ✅
+- Price in sats (required, >0) ✅
+- Validity period (7/30/90 days or custom) ✅
+- Partial redemption checkbox ✅
+- Preview card ✅
 
 **Implementation**:
 ```kotlin
