@@ -1,0 +1,209 @@
+import type { WalletTransaction } from './transactions'
+
+/**
+ * The merchant half of NUT-18V: asking a customer to pay.
+ *
+ * The customer half already exists — `ScanPage` reads the QR and `PayPage` pays
+ * it — so this is only the request side. The generator is ALREADY IN THE PAGE:
+ * `src/main.tsx` loads imani-apps' `shared/nut18v.js` as a classic script, which
+ * installs `window.NUT18V` with `generate`, `parse`, `generatePaymentId` and
+ * `isExpired` on it.
+ *
+ * So possa-merchant's `src/lib/vreq/nut18v.ts` is deliberately NOT ported, and
+ * neither is `cborg`. Two CBOR encoders for one wire format is exactly the kind
+ * of duplication that drifts: the field order in that encoder matches
+ * `VoucherPaymentRequest.java`'s `@JsonPropertyOrder`, and a second
+ * implementation would have to keep matching it forever.
+ *
+ * HOW FULFILMENT IS DETECTED, and why there is no polling here: paying a vreq
+ * goes through `POST /api/v1/atomic-send`, whose saga DMs the token to
+ * `recipientPubkey` — which `lib/pay.ts` sets to the request's `issuerId`, i.e.
+ * this merchant. A merchant running this wallet already has `startDmPoll` going,
+ * so the payment arrives through the ordinary receive pipeline and shows up as a
+ * wallet change. possa-merchant polls `/merchant/payment-requests/check` every
+ * 30s instead, but that endpoint does not exist on this stack.
+ */
+
+/** possa-merchant's default, and the shim's: one day. */
+export const DEFAULT_EXPIRY_SECONDS = 86_400
+
+export interface VoucherPaymentRequest {
+  paymentId: string
+  /** The `vreqA…` string itself. */
+  requestString: string
+  /** `cashu:vreqA…` — what the QR encodes, so a scanner can route it. */
+  clickableUri: string
+  /** Minor units. */
+  amount: number
+  unit: string
+  description?: string
+  /** Epoch SECONDS, matching the wire format. */
+  expiresAt: number
+  createdAt: number
+  status: 'pending' | 'fulfilled' | 'expired'
+  /** Set once paid: which wallet transaction settled it. */
+  settledBy?: string
+  receivedAmount?: number
+}
+
+/** The shape `window.NUT18V` exposes. Only what this module uses. */
+interface Nut18vShim {
+  generate(options: {
+    amount: number
+    unit: string
+    issuerId: string
+    description?: string | null
+    singleUse?: boolean
+    expiresAt?: number | null
+  }): { paymentId: string; requestString: string; clickableUri: string }
+}
+
+function shim(): Nut18vShim {
+  const nut18v = (window as unknown as { NUT18V?: Nut18vShim }).NUT18V
+  // Loud rather than a TypeError three frames deeper. The script is loaded by
+  // main.tsx as a side effect, so absence means the bundle changed, not that the
+  // caller did something wrong.
+  if (!nut18v?.generate) throw new Error('The payment request encoder is not loaded.')
+  return nut18v
+}
+
+/**
+ * Build a payment request for this merchant.
+ *
+ * `issuerId` MUST be the authenticated merchant's own pubkey. The shim rejects
+ * an empty one, but not a wrong one — and a request carrying someone else's
+ * issuer id sends the customer's payment to that someone else. possa-merchant
+ * validates this explicitly (`paymentRequest.ts:116`) and so do we.
+ */
+export function createRequest({
+  amount,
+  unit,
+  issuerPubkey,
+  description,
+  expirySeconds = DEFAULT_EXPIRY_SECONDS,
+}: {
+  amount: number
+  unit: string
+  issuerPubkey: string
+  description?: string
+  expirySeconds?: number
+}): VoucherPaymentRequest {
+  if (!issuerPubkey || issuerPubkey.length !== 64) {
+    throw new Error('Invalid merchant pubkey: a payment request must name its issuer.')
+  }
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error('The amount must be more than zero.')
+  }
+
+  const expiresAt = Math.floor(Date.now() / 1000) + expirySeconds
+  const generated = shim().generate({
+    amount,
+    unit,
+    issuerId: issuerPubkey,
+    description: description?.trim() || null,
+    singleUse: true,
+    expiresAt,
+  })
+
+  return {
+    paymentId: generated.paymentId,
+    requestString: generated.requestString,
+    clickableUri: generated.clickableUri,
+    amount,
+    unit,
+    description: description?.trim() || undefined,
+    expiresAt,
+    createdAt: Date.now(),
+    status: 'pending',
+  }
+}
+
+// Same `imani-wallet:` prefix and pubkey scoping as the profile and merchant
+// records. possa-merchant stores the equivalent under `possa:payment-requests`.
+const key = (pubkey: string) => `imani-wallet:payment-requests:${pubkey}`
+
+export function loadRequests(pubkey: string): VoucherPaymentRequest[] {
+  try {
+    const raw = localStorage.getItem(key(pubkey))
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as VoucherPaymentRequest[]
+    return Array.isArray(parsed) ? parsed.filter((r) => typeof r?.paymentId === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+export function saveRequests(pubkey: string, requests: VoucherPaymentRequest[]): void {
+  localStorage.setItem(key(pubkey), JSON.stringify(requests))
+}
+
+/**
+ * Mark every lapsed pending request expired.
+ *
+ * Run on load, as possa-merchant does in its `useState` initialiser: a request
+ * whose deadline passed while the app was closed is not pending, and showing it
+ * as such invites a merchant to wait for a payment that can no longer arrive.
+ */
+export function expireRequests(
+  requests: VoucherPaymentRequest[],
+  now = Date.now(),
+): VoucherPaymentRequest[] {
+  return requests.map((request) =>
+    request.status === 'pending' && request.expiresAt * 1000 <= now
+      ? { ...request, status: 'expired' as const }
+      : request,
+  )
+}
+
+/**
+ * Which pending request, if any, does this incoming payment settle?
+ *
+ * The matching discipline is ported from possa-merchant's `fulfillPaymentRequest`
+ * — it is the valuable part of that file, and each rule is there for a reason:
+ *
+ * 1. Already-settled transactions never match again. Without the dedup a single
+ *    payment re-settles a second request every time the wallet re-notifies.
+ * 2. Exact `paymentId` first. `lib/pay.ts` threads the request's payment id
+ *    through `buildSendParams`, so when the gateway echoes it back this is
+ *    unambiguous.
+ * 3. Amount + unit only as a FALLBACK, and only when EXACTLY ONE pending request
+ *    matches. Two requests for the same amount are genuinely ambiguous, and
+ *    guessing would mark the wrong sale paid.
+ * 4. Underpayment is rejected; overpayment is accepted and recorded. A customer
+ *    paying more than asked has still paid.
+ *
+ * Returns null when nothing matches, which is the common case — most wallet
+ * changes are unrelated to any open request.
+ */
+export function matchPayment(
+  requests: VoucherPaymentRequest[],
+  transaction: Pick<WalletTransaction, 'id' | 'amount' | 'unit'> & { paymentId?: string },
+): VoucherPaymentRequest | null {
+  const settled = new Set(requests.map((r) => r.settledBy).filter(Boolean))
+  if (settled.has(transaction.id)) return null
+
+  const pending = requests.filter((r) => r.status === 'pending')
+
+  const byId = transaction.paymentId
+    ? pending.find((r) => r.paymentId === transaction.paymentId)
+    : undefined
+
+  const candidate =
+    byId ??
+    (() => {
+      const sameValue = pending.filter(
+        (r) => r.unit === transaction.unit && transaction.amount >= r.amount,
+      )
+      return sameValue.length === 1 ? sameValue[0] : undefined
+    })()
+
+  if (!candidate) return null
+  if (transaction.amount < candidate.amount) return null
+
+  return {
+    ...candidate,
+    status: 'fulfilled',
+    settledBy: transaction.id,
+    receivedAmount: transaction.amount,
+  }
+}

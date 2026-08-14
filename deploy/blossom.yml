@@ -1,0 +1,51 @@
+# Config for the local Blossom media server (ghcr.io/hzrd149/blossom-server).
+#
+# The whole file exists for one setting. Everything else here is the server's own
+# default, restated only where the default is wrong for us.
+#
+# `publicDomain` is deliberately unset: empty means "derive from the Host header",
+# which is exactly right here. The browser reaches this server at
+# http://localhost:28089, so that is the host it sees and the URL it puts in the
+# blob descriptor — the URL that ends up saved in a kind-0 profile. Pinning a
+# domain here would hand out URLs nobody in this stack can fetch.
+
+storage:
+  backend: local
+  local:
+    dir: ./data/blobs
+
+  # THE reason this file exists. The server's default retention for images is
+  # "1 month", and expiry is measured from LAST ACCESS, not upload — so a profile
+  # picture nobody looked at for a month is pruned and every screen showing it
+  # breaks. Avatars and banners are not a cache, they are the profile. 100 years
+  # is how this server spells "never": `expiration` takes a human-readable
+  # duration and has no infinite option.
+  #
+  # Ordered: first match wins, and a MIME type matching NO rule is rejected 415,
+  # so the trailing catch-all is what keeps non-image uploads working at all.
+  rules:
+    - type: "image/*"
+      expiration: "100 years"
+    - type: "video/*"
+      expiration: "1 week"
+    - type: "*"
+      expiration: "1 week"
+
+# BUD-05. Off by default on this server, and the wallet uploads through it — it
+# PUTs /media, not /upload, because /media is the endpoint that transcodes and
+# strips EXIF server-side. With it disabled every avatar upload fails with
+# "Media endpoint is disabled on this server", which is a 403 from a server that
+# is otherwise working perfectly: /upload answers, the landing page renders, the
+# blob store is fine.
+media:
+  enabled: true
+  requireAuth: true
+
+upload:
+  enabled: true
+  # BUD-01 signed auth, the server's default, kept explicit because it is a
+  # security property rather than an incidental one: an upload must carry a
+  # kind-24242 event signed by the uploader. The wallet already signs
+  # (`src/lib/blossom.ts` passes a SignFn into @imani/blossom-upload), so this
+  # costs nothing and stops the box becoming an open file drop on the LAN.
+  requireAuth: true

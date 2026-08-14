@@ -1,0 +1,63 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "types": ["vite/client"],
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    /* Relaxed from the Vite template default. Because the @imani/* packages are
+       aliased to their TypeScript SOURCES, tsc typechecks them as part of this
+       project and applies our flags to their code. They compile clean under
+       their own tsconfigs; these three flags are stylistic and their violations
+       are all in imani-apps, not here. Turning them off is cheaper and less
+       invasive than editing nine upstream packages to satisfy this app's
+       preferences. Everything under "strict" stays on. */
+    "verbatimModuleSyntax": false,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "strict": true,
+    /* Stays OFF, and the dead-code check lives in ESLint instead. The vite
+       aliases pull imani-apps' own sources into this program, so the flag fails
+       the build on THEIR unused locals (imani-qr's QrScanner) — someone else's
+       repo, shared with other projects. `npm run lint` already errors on unused
+       vars via tseslint's recommended set and only sees this repo's files. */
+    "noUnusedLocals": false,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": false,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true,
+
+    /* Mirror of vite.config.ts resolve.alias — Vite handles bundling, tsc needs
+       these to typecheck against the same sources. Keep the two in sync. */
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@imani/nap-core": ["../nap/packages/nap-core/src/index.ts"],
+      "@imani/nap-client-http": ["../nap/packages/nap-client-http/src/index.ts"],
+      "@imani/nap-client-web": ["../nap/packages/nap-client-web/src/index.ts"],
+      "@imani/nap-client-nip46": ["../nap/packages/nap-client-nip46/src/index.ts"],
+      "@imani/nap-react": ["../nap/packages/nap-react/src/index.ts"],
+      "@imani/wallet-storage": ["../imani-apps/packages/wallet-storage/src/index.ts"],
+      "@imani/nostr-vouchers": ["../imani-apps/packages/nostr-vouchers/src/index.ts"],
+      "@imani/nostr-transactions": ["../imani-apps/packages/nostr-transactions/src/index.ts"],
+      "@imani/wallet-balance": ["../imani-apps/packages/wallet-balance/src/index.ts"],
+      "@imani/voucher-send": ["../imani-apps/packages/voucher-send/src/index.ts"],
+      "@imani/profile-service": ["../imani-apps/packages/profile-service/src/index.ts"],
+      "@imani/blossom-upload": ["../imani-apps/packages/blossom-upload/src/index.ts"],
+      "@imani/gateway-client": ["../imani-apps/packages/gateway-client/src/index.ts"],
+      "@imani/dm-poll": ["../imani-apps/packages/dm-poll/src/index.ts"],
+      "@imani/money": ["../imani-apps/packages/money/src/index.ts"],
+      "imani-qr": ["../imani-apps/packages/imani-qr/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}
