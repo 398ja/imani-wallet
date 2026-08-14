@@ -1,0 +1,64 @@
+import { useNavigate } from 'react-router-dom'
+
+import { Avatar, Screen, BackLink, Button } from '../components/ui'
+import { profileName, type Profile } from '../lib/profile'
+
+/**
+ * Your own profile, as others see it.
+ *
+ * Rendered straight from the local record with no fetch — the copy is refreshed
+ * from the relay on login and after every save, so re-fetching here would only
+ * add a spinner to a screen that already has the answer. (bottin does the same
+ * for one's own profile, and fetches only when viewing someone else's.)
+ *
+ * Only the current user's profile. Looking at a farmer is FarmerPage's job.
+ */
+export function ProfilePage({ profile }: { profile: Profile }) {
+  const navigate = useNavigate()
+
+  return (
+    <Screen>
+      <BackLink to="/" label="Wallet" />
+
+      {profile.banner && (
+        <div
+          className="mb-4 h-28 rounded-2xl bg-mono-200 bg-cover bg-center dark:bg-mono-800"
+          style={{ backgroundImage: `url(${profile.banner})` }}
+        />
+      )}
+
+      <div className="flex flex-col items-center gap-3 text-center">
+        <Avatar src={profile.picture} name={profileName(profile)} size="xl" />
+        <div>
+          <h1 className="text-xl font-semibold text-mono-900 dark:text-mono-50">
+            {profileName(profile)}
+          </h1>
+          {profile.nip05 && <p className="font-mono text-sm text-mono-500">{profile.nip05}</p>}
+        </div>
+
+        {profile.about && (
+          <p className="max-w-xs whitespace-pre-wrap text-sm text-mono-600 dark:text-mono-300">
+            {profile.about}
+          </p>
+        )}
+
+        {profile.website && (
+          <a
+            href={profile.website}
+            target="_blank"
+            // noreferrer as well as noopener: the target must not be handed
+            // window.opener, nor the URL of the wallet screen it came from.
+            rel="noopener noreferrer"
+            className="break-all text-sm text-mono-500 underline hover:text-mono-900 dark:hover:text-mono-50"
+          >
+            {profile.website}
+          </a>
+        )}
+
+        <Button variant="secondary" className="mt-2" onClick={() => navigate('/settings/profile')}>
+          Edit profile
+        </Button>
+      </div>
+    </Screen>
+  )
+}

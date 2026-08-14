@@ -1,0 +1,248 @@
+import { VoucherGrouper } from '@imani/voucher-send'
+import type { Voucher, MerchantGroup } from '@imani/voucher-send'
+import type { VoucherRow } from '@imani/wallet-storage'
+
+import { toEpochMs } from './format'
+
+/**
+ * A farmer, as the wallet's home screen thinks of one: an issuer pubkey plus
+ * everything we hold from them.
+ *
+ * This is NOT the same shape as VoucherGrouper's MerchantGroup. That groups on
+ * `merchantId-unit-issuanceRatio`, so a single farmer selling in two currencies
+ * — or who changed their issuance ratio between market days — produces several
+ * groups. Correct for send-side selection (you can't merge coupons across units
+ * or ratios), wrong for a farmer list, which wants one row per person.
+ */
+export interface Farmer {
+  /** Issuer pubkey, normalised. The farmer's identity. */
+  pubkey: string
+  /** Display name from voucher metadata; callers may override via profile lookup. */
+  name: string
+  /** One entry per (unit, ratio) combination held from this farmer. */
+  groups: MerchantGroup[]
+  /** Total coupons held, across all groups. */
+  voucherCount: number
+}
+
+/**
+ * Bridge wallet-storage's VoucherRow to voucher-send's Voucher.
+ *
+ * The two shapes agree on nearly everything, but `expires_at` does not:
+ * VoucherRow is TYPED as Unix epoch seconds, Voucher expects an ISO-8601
+ * string, and VoucherGrouper's expiry filter calls `new Date(expires_at)`.
+ * Passing the raw epoch number through would make `new Date(1788…)` — a date in
+ * 1970 — so every live coupon would read as expired and the farmer list would
+ * render empty.
+ *
+ * The stored value is not reliably a number either: `_persistRedeemed` writes
+ * the ISO string `/inspect` returned. `toEpochMs` reads both, which is why the
+ * conversion goes through it rather than a bare `* 1000` — that multiplication
+ * on an ISO string is NaN, and `new Date(NaN).toISOString()` THROWS.
+ *
+ * "No expiry" must cover null and 0, not just undefined. The gateway populates
+ * expires_at ASYNCHRONOUSLY: for roughly 5–10 seconds after a voucher already
+ * reports status=ISSUED / payment_state=CONFIRMED, the field is still JSON
+ * null. A freshly received coupon therefore lands in the wallet with a null
+ * expiry, and `null === undefined` is false — so a guard that only checks
+ * undefined falls through to new Date(0), the coupon reads as expired, and the
+ * farmer silently disappears from the list until the next sync. Verified
+ * against the live gateway.
+ */
+export function toVoucher(row: VoucherRow): Voucher {
+  const expiresMs = toEpochMs(row.expires_at)
+  return {
+    voucher_id: row.voucher_id ?? row.token_id,
+    token: row.token,
+    face_value: row.face_value ?? row.amount,
+    face_unit: row.face_unit ?? 'SAT',
+    face_decimals: row.face_decimals ?? 0,
+    token_amount: row.token_amount ?? row.amount,
+    backing_strategy: row.backing_strategy,
+    // Part of VoucherGrouper's group key (`merchantId-unit-issuanceRatio`), and
+    // it reads `voucher.issuance_ratio || 1`. Omitting it collapsed every
+    // coupon onto ratio 1, so coupons backed at genuinely different ratios
+    // merged into one group — and the screens format a farmer's total with
+    // `groups[0]`. Derived when the row predates issuance_ratio being stored.
+    issuance_ratio: issuanceRatioOf(row),
+    issuer_id: row.issuer_id,
+    status: row.status,
+    expires_at: expiresMs === undefined ? undefined : new Date(expiresMs).toISOString(),
+    created_at: row.created_at,
+  } as Voucher
+}
+
+/**
+ * A coupon's issuance ratio: face MINOR UNITS PER SAT.
+ *
+ * Stored value first, else computed — same arithmetic as imani-apps'
+ * `calculateIssuanceRatio` (face_value / token_amount) and as the vanilla app's
+ * group builder, which back-computes `totalFaceValue / totalTokenAmount`.
+ *
+ * The fallback is not just for old rows: the ratio is a property of the coupon
+ * itself, so anything displaying or grouping by it should get the same answer
+ * whether or not the field happened to be persisted. Rows written before this
+ * was stored read back as an explicit `null` (WalletStorage normalises absent
+ * optionals), which `??` catches.
+ */
+export function issuanceRatioOf(row: VoucherRow): number | undefined {
+  const stored = row.issuance_ratio
+  if (typeof stored === 'number' && Number.isFinite(stored) && stored > 0) return stored
+
+  const face = row.face_value
+  const sats = row.token_amount
+  if (typeof face !== 'number' || typeof sats !== 'number' || sats <= 0) return undefined
+  return face / sats
+}
+
+/**
+ * Group stored coupons into farmers, one entry per issuer pubkey.
+ *
+ * Sorted by total face value descending — the farmer you hold the most with
+ * leads the list.
+ */
+export function toFarmers(rows: VoucherRow[]): Farmer[] {
+  const grouper = new VoucherGrouper()
+  const groups = grouper.groupToArray(rows.map(toVoucher))
+
+  const byPubkey = new Map<string, Farmer>()
+  for (const group of groups) {
+    const existing = byPubkey.get(group.merchantId)
+    if (existing) {
+      existing.groups.push(group)
+      existing.voucherCount += group.voucherCount
+      // Keep the first non-placeholder name we see.
+      if (existing.name === existing.pubkey && group.merchantName) {
+        existing.name = group.merchantName
+      }
+    } else {
+      byPubkey.set(group.merchantId, {
+        pubkey: group.merchantId,
+        name: group.merchantName || group.merchantId,
+        groups: [group],
+        voucherCount: group.voucherCount,
+      })
+    }
+  }
+
+  return [...byPubkey.values()].sort(
+    (a, b) => totalFaceValue(b) - totalFaceValue(a),
+  )
+}
+
+/**
+ * Sum of face value across a farmer's groups.
+ *
+ * ponytail: naive sum across units — a farmer selling in both EUR and SAT gets
+ * a meaningless total. Fine while the pilot is single-currency per farmer; if
+ * that stops being true, render per-unit subtotals instead of one number.
+ */
+export function totalFaceValue(farmer: Farmer): number {
+  return farmer.groups.reduce((sum, g) => sum + g.totalFaceValue, 0)
+}
+
+/**
+ * The single farmer matching a pubkey, or undefined.
+ *
+ * Through `issuerKey`, not a bare `toLowerCase()`: `Farmer.pubkey` comes from
+ * the grouper, so the lookup has to normalise the same way — an `npub1…` route
+ * param or the `unknown` bucket would otherwise never match.
+ */
+export function findFarmer(rows: VoucherRow[], pubkey: string): Farmer | undefined {
+  const target = issuerKey(pubkey)
+  return toFarmers(rows).find((f) => f.pubkey === target)
+}
+
+/**
+ * Is this coupon still live?
+ *
+ * Mirrors VoucherGrouper's expiry filter, which is why `toFarmers` and
+ * `couponsFor` agree on what a farmer holds. Absent, null and 0 all mean "no
+ * expiry" — see toVoucher's note on the gateway populating expires_at
+ * asynchronously.
+ */
+function isLive(row: VoucherRow): boolean {
+  const ms = toEpochMs(row.expires_at)
+  return ms === undefined || ms > Date.now()
+}
+
+/**
+ * The issuer id the way `VoucherGrouper` derives it, so this file agrees with
+ * the grouping it builds `Farmer`s from.
+ *
+ * A mirror of the grouper's private `normalizeIssuerId` plus `getMerchantId`'s
+ * `issuer_id || 'unknown'` — neither is exported from `@imani/voucher-send`, so
+ * there is nothing to reuse. The parity test over `toFarmers` and `couponsFor`
+ * is what catches this drifting.
+ *
+ * The `'unknown'` case is the whole reason it exists. `couponsFor` used to match
+ * `row.issuer_id?.toLowerCase()`, which is `undefined` for a row with no issuer,
+ * while the grouper maps that same row to a farmer called `unknown`. So a coupon
+ * that arrived without an issuer — a legacy human-readable DM, which
+ * `parseTextMessage` gives no issuerId — showed up on the farmer list with a
+ * balance and a count, and then that farmer's own page reported 0 coupons and an
+ * empty list. Real money, unreachable.
+ */
+export function issuerKey(issuerId: string | undefined | null): string {
+  const id = issuerId || 'unknown'
+  // npub stays as-is: the grouper says it would decode to hex but does not.
+  if (id.startsWith('npub1')) return id
+  return /^[0-9a-f]{64}$/i.test(id) ? id.toLowerCase() : id
+}
+
+/**
+ * A farmer's coupons as STORED ROWS, newest first.
+ *
+ * Deliberately not `farmer.groups[].vouchers`. Those are voucher-send Vouchers
+ * produced by `toVoucher`, which drops `token_id` and maps
+ * `voucher_id: row.voucher_id ?? row.token_id`. `voucher_id` is a merchant
+ * TEMPLATE id — two coupons issued from the same template share it — so it can
+ * neither key a React list nor address a detail route. `token_id` is the store's
+ * primary key and is content-derived, so it is unique per coupon.
+ *
+ * The count here must match `findFarmer(...).voucherCount`, which comes from
+ * VoucherGrouper; `isLive` exists to keep those two in step, and a test pins it.
+ */
+export function couponsFor(rows: VoucherRow[], pubkey: string): VoucherRow[] {
+  const target = issuerKey(pubkey)
+  return rows
+    .filter((row) => issuerKey(row.issuer_id) === target && isLive(row))
+    .sort((a, b) => String(b.created_at ?? '').localeCompare(String(a.created_at ?? '')))
+}
+
+/** A balance in one currency, in that currency's minor units. */
+export interface UnitTotal {
+  unit: string
+  decimals: number
+  minor: number
+}
+
+/**
+ * What the wallet holds in total, split by currency.
+ *
+ * Returns one entry per unit rather than a single number, because face values in
+ * different currencies cannot be added — the same reason `totalFaceValue` carries
+ * its ponytail note. Summing a farmer's EUR against another's SAT would produce a
+ * confident, meaningless figure on the home screen. Largest first.
+ */
+export function walletTotals(farmers: Farmer[]): UnitTotal[] {
+  const byUnit = new Map<string, UnitTotal>()
+
+  for (const farmer of farmers) {
+    for (const group of farmer.groups) {
+      const unit = group.unit ?? 'UNKNOWN'
+      const existing = byUnit.get(unit)
+      if (existing) {
+        existing.minor += group.totalFaceValue
+      } else {
+        byUnit.set(unit, {
+          unit,
+          decimals: group.decimals ?? 0,
+          minor: group.totalFaceValue,
+        })
+      }
+    }
+  }
+
+  return [...byUnit.values()].sort((a, b) => b.minor - a.minor)
+}
