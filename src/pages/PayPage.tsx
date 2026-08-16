@@ -26,6 +26,11 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   const raw = params.get('paymentRequest') ?? ''
 
   const [farmers, setFarmers] = useState<Farmer[] | null>(null)
+  // When this screen loaded, in ms. The clock is read in the effect below and
+  // kept here because `Date.now()` in a render body is impure — the same rule
+  // MerchantHomePage's expiry list follows. Zero until the load lands, which
+  // never renders: the screen shows "Checking your coupons…" until then.
+  const [loadedAt, setLoadedAt] = useState(0)
   const [status, setStatus] = useState<Status>({ step: 'review' })
 
   type Parsed = { ok: true; request: NUT18VRequest } | { ok: false; error: string }
@@ -42,7 +47,10 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   }, [raw])
 
   useEffect(() => {
-    listVouchers().then((rows) => setFarmers(toFarmers(rows)))
+    listVouchers().then((rows) => {
+      setFarmers(toFarmers(rows))
+      setLoadedAt(Date.now())
+    })
   }, [])
 
   // Before the early returns, and so before `farmer` exists — hooks cannot be
@@ -82,7 +90,11 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   }
   const issuerLabel = identityLabel(request.issuerId, issuerIdentity)
 
-  const expired = request.expiry !== undefined && request.expiry * 1000 < Date.now()
+  // `expiresAt` is what the parser emits, in SECONDS. This read `request.expiry`
+  // — a name nothing writes — so `expired` was permanently false and a lapsed
+  // request stayed payable: the customer's coupons went out against a request
+  // the issuer had already timed out.
+  const expired = request.expiresAt !== undefined && request.expiresAt * 1000 < loadedAt
   const shortfall = request.amount - available
   // Same check payRequest selects with, so the button and the send agree on
   // what is payable — a coupon divisible on one and not the other would let the

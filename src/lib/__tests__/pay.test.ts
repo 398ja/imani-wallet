@@ -7,6 +7,7 @@ import {
   checkSplittable,
   loadPendingSends,
   minSplitStep,
+  payRequest,
   reconcilePendingSends,
   replaceVoucherToken,
   selectVouchers,
@@ -48,14 +49,14 @@ const coupon = (over: Partial<Voucher> = {}): Voucher =>
     ...over,
   }) as Voucher
 
-const request = (amount: number): NUT18VRequest =>
+const request = (amount: number, over: Partial<NUT18VRequest> = {}): NUT18VRequest =>
   ({
     paymentId: 'pay-1',
     issuerId: 'f'.repeat(64),
     amount,
     unit: 'EUR',
-    decimals: 2,
     description: 'Half a punnet',
+    ...over,
   }) as unknown as NUT18VRequest
 
 describe('buildSendParams', () => {
@@ -502,5 +503,28 @@ describe('reconcilePendingSends', () => {
     // A network answer is not a payment answer.
     expect(loadPendingSends(PK)).toHaveLength(1)
     error.mockRestore()
+  })
+})
+
+describe('payRequest and expiry', () => {
+  const farmer = { pubkey: 'f'.repeat(64), name: 'Farmer', groups: [], voucherCount: 0 }
+  const payer = 'c'.repeat(64)
+
+  it('refuses a request that has already lapsed', async () => {
+    const lapsed = request(500, { expiresAt: Math.floor(Date.now() / 1000) - 1 })
+
+    await expect(
+      payRequest({ request: lapsed, raw: 'vreqA…', farmer, payer }),
+    ).rejects.toThrow(/expired/i)
+  })
+
+  it('does not refuse one that is still live', async () => {
+    // Reaches the gateway client and fails there instead — which is the point:
+    // the guard let it through. A live request must not be stopped by expiry.
+    const live = request(500, { expiresAt: Math.floor(Date.now() / 1000) + 3600 })
+
+    await expect(
+      payRequest({ request: live, raw: 'vreqA…', farmer, payer }),
+    ).rejects.toThrow(/Gateway API client is not loaded/)
   })
 })
