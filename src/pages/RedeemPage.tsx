@@ -223,6 +223,8 @@ function RequestDisplay({
     }
   }
 
+  const canShare = typeof navigator.share === 'function'
+
   const share = async () => {
     try {
       await navigator.share({ text: request.clickableUri })
@@ -290,17 +292,17 @@ function RequestDisplay({
             {request.requestString.slice(0, 48)}…
           </p>
 
-          <div className="mt-3 grid grid-cols-2 gap-2">
+          {/* Copy alone on a desktop browser: the old fallback put a second
+              "New request" here, next to the primary one below. */}
+          <div
+            className={`mt-3 grid gap-2 ${canShare ? 'grid-cols-2' : 'grid-cols-1'}`}
+          >
             <Button variant="outline" onClick={copy}>
               <Copy className="mr-2 h-4 w-4" /> {copied ? 'Copied' : 'Copy'}
             </Button>
-            {typeof navigator.share === 'function' ? (
+            {canShare && (
               <Button variant="outline" onClick={share}>
                 <Share2 className="mr-2 h-4 w-4" /> Share
-              </Button>
-            ) : (
-              <Button variant="outline" onClick={onNew}>
-                New request
               </Button>
             )}
           </div>
