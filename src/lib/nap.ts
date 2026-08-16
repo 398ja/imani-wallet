@@ -12,7 +12,8 @@ export interface NUT18VRequest {
   amount: number
   unit: string
   description?: string
-  expiry?: number
+  /** Unix SECONDS. `expiresAt` is the name the parser emits — see PayPage. */
+  expiresAt?: number
   transports: { type: string; target: string; relays?: string[] }[]
   mints?: string[]
 }

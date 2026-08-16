@@ -546,6 +546,14 @@ export async function payRequest({
   farmer: Farmer
   payer: string
 }): Promise<string> {
+  // Checked HERE and not only on the screen, because this is the one door the
+  // money leaves by. PayPage reads the clock when it loads — a request that
+  // lapses while the customer is deciding would walk straight past that check,
+  // and the coupons would go out against a request the issuer has timed out.
+  if (request.expiresAt !== undefined && request.expiresAt * 1000 < Date.now()) {
+    throw new Error('This payment request has expired.')
+  }
+
   // Brings up imani-apps' api.js as a classic script and, critically, its
   // NIP-98 credentials — /api/v1/atomic-send is authenticated.
   const api = (await legacyApi()) as unknown as {
