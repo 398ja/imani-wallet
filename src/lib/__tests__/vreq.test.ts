@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
 
+import { describe, it, expect } from 'vitest'
+import { getDecimals } from '@imani/money'
+
+import { formatFace } from '../format'
 import { expireRequests, matchPayment, type VoucherPaymentRequest } from '../vreq'
 
 const request = (over: Partial<VoucherPaymentRequest> = {}): VoucherPaymentRequest => ({
@@ -124,5 +128,52 @@ describe('matchPayment', () => {
     // Unknown time fails closed: a request left pending makes a merchant wait,
     // a request wrongly marked paid makes them hand over goods for nothing.
     expect(matchPayment([request()], payment({ at: 0 }))).toBeNull()
+  })
+})
+
+/**
+ * What the customer's side can and cannot learn from a request string.
+ *
+ * The generator is a classic script — `main.tsx` loads imani-apps'
+ * shared/nut18v.js for its side effect on `window` — so the shim is loaded the
+ * same way here rather than mocked. Mocking it would prove nothing: the whole
+ * question is what the REAL encoder puts on the wire.
+ */
+describe('the NUT-18V wire format', () => {
+  const shim = (() => {
+    const scope = globalThis as unknown as { window?: unknown; NUT18V?: unknown }
+    scope.window = scope
+    new Function(readFileSync(new URL('../../../shared/nut18v.js', import.meta.url), 'utf8'))()
+    return scope.NUT18V as {
+      generate(o: { amount: number; unit: string; issuerId: string }): { requestString: string }
+      parse(s: string): { amount: number; unit: string }
+    }
+  })()
+
+  const roundTrip = (amount: number, unit: string) =>
+    shim.parse(shim.generate({ amount, unit, issuerId: 'a'.repeat(64) }).requestString)
+
+  it('carries minor units and NO decimals, so the reader must resolve them itself', () => {
+    // The bug this pins: PayPage read `request.decimals ?? 0`, a field the
+    // encoder never writes, and rendered a £1.00 request as "100 GBP" to every
+    // customer without a coupon group to borrow decimals from.
+    const parsed = roundTrip(100, 'GBP')
+
+    expect(parsed.amount).toBe(100)
+    expect('decimals' in parsed).toBe(false)
+    expect(formatFace(parsed.amount, { unit: parsed.unit, decimals: getDecimals(parsed.unit) })).toBe(
+      '£1.00',
+    )
+  })
+
+  it('leaves a zero-decimal unit alone', () => {
+    // The same lookup must NOT invent decimals: 100 sats is 100 sats. Intl says
+    // 2 for SAT, which is why the currency registry answers this, not Intl.
+    // (The word order is Intl's — see formatFace; only the scale matters here.)
+    const parsed = roundTrip(100, 'SAT')
+
+    expect(getDecimals(parsed.unit)).toBe(0)
+    // Matched loosely: Intl separates with a non-breaking space.
+    expect(formatFace(parsed.amount, { unit: parsed.unit, decimals: 0 })).toMatch(/^SAT\s100$/)
   })
 })

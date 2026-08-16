@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, CheckCircle2 } from 'lucide-react'
+import { getDecimals } from '@imani/money'
 
 import { listVouchers } from '../lib/wallet'
 import { toFarmers, type Farmer } from '../lib/farmers'
 import { formatFace } from '../lib/format'
-import { identityLabel, useIdentity } from '../lib/identity'
+import { identityLabel, identitySubLabel, useIdentity } from '../lib/identity'
 import { payRequest, splitObstacle } from '../lib/pay'
 import type { NUT18VRequest } from '../lib/nap'
-import { Button, Centered, Fatal, Alert } from '../components/ui'
+import { Avatar, Button, Centered, Fatal, Alert } from '../components/ui'
 
 type Status =
   | { step: 'review' }
@@ -59,13 +60,27 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   )
   const group = farmer?.groups.find((g) => g.unit.toUpperCase() === request.unit.toUpperCase())
   const available = group?.totalFaceValue ?? 0
+  // How to read `request.amount`, which is MINOR UNITS.
+  //
+  // The NUT-18V wire carries no decimals at all — round-tripping a request
+  // through the shim returns `{paymentId, issuerId, amount, unit, singleUse,
+  // offlineVerification, mints, expiresAt, transports}` and nothing else — so
+  // the old `request.decimals ?? 0` fallback was always 0, and a £1.00 request
+  // read as "100 GBP" for anyone not already holding this farmer's coupons.
+  // The currency registry is the same source VoucherGrouper resolves group
+  // decimals from, so the two halves of this screen agree; the group still wins
+  // when there is one, because a farmer may trade in a unit registered at
+  // runtime that the registry does not know.
+  const denom = group ?? { unit: request.unit, decimals: getDecimals(request.unit) }
   // The farmer's own coupons name them too (`merchantName`), and that name is
   // there before any fetch — so it is the fallback while kind-0 is in flight, or
   // when they have published none.
-  const issuerLabel = identityLabel(request.issuerId, {
+  const issuerIdentity = {
     name: issuer?.name ?? farmer?.name,
     nip05: issuer?.nip05,
-  })
+    picture: issuer?.picture,
+  }
+  const issuerLabel = identityLabel(request.issuerId, issuerIdentity)
 
   const expired = request.expiry !== undefined && request.expiry * 1000 < Date.now()
   const shortfall = request.amount - available
@@ -81,7 +96,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
         <CheckCircle2 className="h-12 w-12 text-green-600" />
         <h1 className="text-xl font-semibold text-mono-900 dark:text-mono-50">Paid</h1>
         <p className="text-sm text-mono-500">
-          {formatFace(request.amount, group)} to {issuerLabel}
+          {formatFace(request.amount, denom)} to {issuerLabel}
         </p>
         <p className="font-mono text-xs text-mono-400">{status.reference}</p>
         <Button className="mt-4 w-full" onClick={() => navigate('/')}>
@@ -103,19 +118,36 @@ export function PayPage({ pubkey }: { pubkey: string }) {
       <h1 className="mb-1 text-xl font-semibold text-mono-900 dark:text-mono-50">
         Confirm payment
       </h1>
-      <p className="mb-6 text-sm text-mono-500">
-        to {issuerLabel}
-      </p>
+      {/* Who is being paid, named the way every other screen names them —
+          picture, display name, handle underneath. The label doubles as the
+          avatar's alt text and initials, so an issuer with no picture still
+          reads as themselves rather than as a stray letter. */}
+      <div className="mb-6 flex items-center gap-3">
+        <Avatar
+          src={issuerIdentity.picture}
+          name={issuerLabel}
+          pubkey={request.issuerId}
+          size="md"
+          className="shrink-0"
+        />
+        <div className="min-w-0">
+          <p className="text-xs uppercase tracking-wide text-mono-400">To</p>
+          <p className="truncate text-sm text-mono-900 dark:text-mono-50">{issuerLabel}</p>
+          {identitySubLabel(issuerIdentity) && (
+            <p className="truncate text-xs text-mono-500">{identitySubLabel(issuerIdentity)}</p>
+          )}
+        </div>
+      </div>
 
       <div className="mb-6 rounded-2xl border border-mono-200 p-5 dark:border-mono-800">
         <p className="text-3xl font-semibold text-mono-900 dark:text-mono-50">
-          {formatFace(request.amount, group ?? { unit: request.unit, decimals: request.decimals ?? 0 })}
+          {formatFace(request.amount, denom)}
         </p>
         {request.description && (
           <p className="mt-2 text-sm text-mono-500">{request.description}</p>
         )}
         <dl className="mt-4 space-y-1 text-sm">
-          <Row label="Your balance" value={formatFace(available, group)} />
+          <Row label="Your balance" value={formatFace(available, denom)} />
           <Row label="Coupons held" value={String(group?.voucherCount ?? 0)} />
         </dl>
       </div>
@@ -128,7 +160,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
         <Alert>You have no coupons from this farmer in {request.unit}.</Alert>
       )}
       {!expired && group && shortfall > 0 && (
-        <Alert>Short by {formatFace(shortfall, group)}.</Alert>
+        <Alert>Short by {formatFace(shortfall, denom)}.</Alert>
       )}
       {/* Holding enough is not the same as being able to pay it: a coupon
           cannot be divided below one sat's worth of face value. Surfaced here

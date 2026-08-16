@@ -8,9 +8,9 @@ import { createWalletSigner, type WalletSigner } from './signer'
 export interface NUT18VRequest {
   paymentId: string
   issuerId: string
+  /** MINOR units. The wire format carries no decimals — see PayPage. */
   amount: number
   unit: string
-  decimals?: number
   description?: string
   expiry?: number
   transports: { type: string; target: string; relays?: string[] }[]
