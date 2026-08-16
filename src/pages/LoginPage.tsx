@@ -74,7 +74,7 @@ export function LoginPage({ onUnlock }: { onUnlock: (privkeyHex: string) => Prom
       )}
 
       <div className="flex flex-col items-center gap-3 text-center">
-        {profile && <Avatar src={profile.picture} name={profileName(profile)} size="xl" />}
+        {profile && <Avatar src={profile.picture} name={profileName(profile)} pubkey={profile.pubkey} size="xl" />}
         <div>
           <h1 className="text-xl font-semibold text-mono-900 dark:text-mono-50">
             {profile ? profileName(profile) : 'Welcome back'}

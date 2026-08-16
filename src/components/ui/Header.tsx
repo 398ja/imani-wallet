@@ -49,7 +49,7 @@ export function Header({
             className="flex cursor-pointer list-none items-center rounded-full outline-none ring-mono-400 focus-visible:ring-2 [&::-webkit-details-marker]:hidden"
             aria-label="Account menu"
           >
-            <Avatar src={profile.picture} name={profileName(profile)} size="sm" />
+            <Avatar src={profile.picture} name={profileName(profile)} pubkey={profile.pubkey} size="sm" />
           </summary>
 
           <nav className="absolute left-0 top-full mt-2 min-w-44 overflow-hidden rounded-2xl border border-mono-200 bg-white shadow-lg dark:border-mono-800 dark:bg-mono-900">

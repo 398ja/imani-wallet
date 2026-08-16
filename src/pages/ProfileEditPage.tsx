@@ -105,7 +105,12 @@ export function ProfileEditPage({
           onUploaded={setPicture}
           onRemove={() => setPicture(undefined)}
           preview={
-            <Avatar src={picture} name={profileName({ ...profile, displayName })} size="lg" />
+            <Avatar
+              src={picture}
+              name={profileName({ ...profile, displayName })}
+              pubkey={profile.pubkey}
+              size="lg"
+            />
           }
         />
 
