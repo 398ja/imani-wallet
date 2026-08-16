@@ -16,15 +16,20 @@ import { createDmCryptoAdapter, toLegacyMetadata } from './dmCrypto'
 import { getWallet, notifyWalletChanged } from './wallet'
 import { legacyApi } from './legacyBridge'
 
-/** Gateway REST, same-origin via the Vite /customer proxy → customer-wallet:28082. */
-const GATEWAY = '/customer'
+/**
+ * Gateway REST, same-origin: `/api/v1/...` reaches customer-wallet through the
+ * proxy rule that already routes `/api`. See branding.ts for why the old
+ * `/customer` prefix went away — the edge rewrite that would reproduce it drops
+ * the query string, and the SSE subscription below is all query string.
+ */
+const GATEWAY = ''
 
 /**
  * Reads go through the gateway's nostrdb, never straight to a relay — that is
  * @imani/dm-poll's stated contract, and it is what gives us server-side chunk
  * reassembly. Writes (sending) still go browser → relay.
  */
-function nostrdbAdapter(): NostrdbAdapter {
+export function nostrdbAdapter(): NostrdbAdapter {
   return {
     isAvailable: () => true,
 
@@ -70,7 +75,22 @@ function nostrdbAdapter(): NostrdbAdapter {
           onError(error instanceof Error ? error : new Error(String(error)))
         }
       }
-      source.onerror = () => onError(new Error('nostr SSE subscription failed'))
+      // Not every `error` here is a failure. The gateway caps every nostr SSE
+      // stream at ten minutes (gateway-customer NostrQueryController
+      // SSE_TIMEOUT_MS) and expects the client to come back — verified on
+      // staging, where the backend logs `sse_cleanup reason=timeout` exactly
+      // 600s after `sse_register`. EventSource handles that itself: it goes to
+      // CONNECTING and redials. Reporting it as an error made DmPollService
+      // abandon SSE and drop to 30s polling for the rest of the session, ten
+      // minutes into every session, with a red console error to match.
+      //
+      // CLOSED is the real signal — the browser only gives up when the request
+      // itself is unusable (401/404/502, wrong content-type), which is exactly
+      // when the polling fallback is worth taking.
+      source.onerror = () => {
+        if (source.readyState !== EventSource.CLOSED) return
+        onError(new Error('nostr SSE subscription failed'))
+      }
 
       return {
         id: `giftwrap-${filter.pTags?.[0]?.slice(0, 8) ?? 'all'}`,

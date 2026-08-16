@@ -1,0 +1,72 @@
+{
+  "name": "@imani/voucher-send",
+  "version": "0.2.0",
+  "description": "Voucher sending library for Imani wallet - handles splitting, recipient resolution, and DM transmission",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./adapters": {
+      "types": "./dist/adapters/index.d.ts",
+      "import": "./dist/adapters/index.js"
+    },
+    "./types": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/types/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src tests",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "peerDependencies": {
+    "@imani/nostr-vouchers": "^0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@imani/nostr-vouchers": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@imani/money": "file:../money",
+    "nostr-tools": "^2.10.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.9"
+  },
+  "keywords": [
+    "imani",
+    "voucher",
+    "cashu",
+    "nostr",
+    "send",
+    "dm",
+    "payment"
+  ],
+  "author": "Imani",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ArcadeLabsInc/imani-apps",
+    "directory": "packages/voucher-send"
+  }
+}

@@ -111,18 +111,35 @@ export async function allAddressable(
   dPrefix: string,
   relays: string[] = [RELAY_URL],
 ): Promise<Event[]> {
+  const events = await allEvents(pubkey, kind, relays)
+
+  const newest = new Map<string, Event>()
+  for (const event of events) {
+    const d = event.tags.find(([name]) => name === 'd')?.[1]
+    if (!d?.startsWith(dPrefix)) continue
+    const seen = newest.get(d)
+    if (!seen || event.created_at > seen.created_at) newest.set(d, event)
+  }
+  return [...newest.values()]
+}
+
+/**
+ * Every event of one kind for a pubkey, UNDEDUPED.
+ *
+ * `allAddressable`'s newest-per-`d` rule is the right one for a ledger, where
+ * the latest record supersedes. It is the wrong one for coupons, where a
+ * "this is spent" tombstone must win over the record of the coupon even if
+ * both land in the same second and the relay replays them in either order —
+ * see `voucherRecords.restoreVouchers`. That reduction needs the raw list.
+ */
+export async function allEvents(
+  pubkey: string,
+  kind: number,
+  relays: string[] = [RELAY_URL],
+): Promise<Event[]> {
   const pool = new SimplePool()
   try {
-    const events = await pool.querySync(relays, { authors: [pubkey], kinds: [kind] })
-
-    const newest = new Map<string, Event>()
-    for (const event of events) {
-      const d = event.tags.find(([name]) => name === 'd')?.[1]
-      if (!d?.startsWith(dPrefix)) continue
-      const seen = newest.get(d)
-      if (!seen || event.created_at > seen.created_at) newest.set(d, event)
-    }
-    return [...newest.values()]
+    return await pool.querySync(relays, { authors: [pubkey], kinds: [kind] })
   } finally {
     pool.close(relays)
   }

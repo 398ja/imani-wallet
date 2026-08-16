@@ -174,9 +174,23 @@ export function mergeKind0(profile: Profile, content: string, createdAt = 0): Pr
  * which is the entire reason a local copy exists.
  */
 export async function refreshProfile(pubkey: string): Promise<Profile> {
-  const current = loadProfile(pubkey) ?? emptyProfile(pubkey)
   try {
     const newest = await fetchNewestKind0(pubkey)
+    // The stored copy is READ AFTER THE FETCH, not before it.
+    //
+    // This runs concurrently with itself on every login: OnboardingPage awaits
+    // one call, the app mounts and starts another, and React's StrictMode makes
+    // that two in development. The fetch takes SECONDS (measured: 2.0s, 4.0s,
+    // 4.1s for the three calls of one login), which is ample time for one of
+    // them to finish and save while the others are still waiting.
+    //
+    // A snapshot taken before the await is a stale empty profile by the time it
+    // is returned, and the caller — `App.tsx`, which puts the result straight
+    // into state — then renders an anonymous header over a profile that has
+    // already arrived. That was the "log back in and my name and avatar are
+    // gone until I refresh" bug: the refresh worked because by then the winning
+    // call's result was in localStorage.
+    const current = loadProfile(pubkey) ?? emptyProfile(pubkey)
     if (newest === null) return current
     const merged = mergeKind0(current, newest.content, newest.createdAt)
     // Unchanged when the fetched event was not newer — no write, no churn.
@@ -184,7 +198,7 @@ export async function refreshProfile(pubkey: string): Promise<Profile> {
     saveProfile(merged)
     return merged
   } catch {
-    return current
+    return loadProfile(pubkey) ?? emptyProfile(pubkey)
   }
 }
 

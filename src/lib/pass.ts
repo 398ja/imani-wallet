@@ -105,6 +105,21 @@ export interface PassJson {
  */
 export interface MerchantBranding {
   organizationName?: string
+  /**
+   * Their NIP-05 handle (`name@domain`), from kind-0 `nip05`.
+   *
+   * Not in the Java `MerchantBranding` — ours, like `userInfo.issuer`. It is
+   * here rather than in a second lookup because every screen that wants to name
+   * someone already resolves them through `merchantBranding`, and a separate
+   * fetch would double the requests for a string that arrives in the same event.
+   *
+   * UNVERIFIED, deliberately. NIP-05 verification means fetching the domain's
+   * `.well-known/nostr.json` and checking it maps back to this pubkey; we
+   * display what the profile claims. It is a label, not an authorisation — the
+   * pubkey is what money is addressed to — but a handle shown here is a handle
+   * anyone can put in their own kind-0.
+   */
+  nip05?: string
   logoUrl?: string
   bannerUrl?: string
   storeDescription?: string
@@ -149,6 +164,10 @@ function userInfo(
 ): Record<string, string> {
   const info: Record<string, string> = { voucherId }
   if (present(issuer)) info.issuer = issuer
+  // The handle the card shows under the name. `issuer` stays in the dictionary
+  // regardless: it is the unforgeable identifier, and it is what the card falls
+  // back to for an issuer who has published no handle.
+  if (present(branding.nip05)) info.issuerNip05 = branding.nip05
   if (present(branding.logoUrl)) info.logoUrl = branding.logoUrl
   if (present(branding.bannerUrl)) info.stripUrl = branding.bannerUrl
   return info

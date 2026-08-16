@@ -11,8 +11,9 @@ import { useNavigate } from 'react-router-dom'
 import { QrCode, ScanLine } from 'lucide-react'
 
 import { Button, Screen, PageHeader, Panel, Pass } from '../components/ui'
-import { listVouchers, onWalletChanged } from '../lib/wallet'
-import { toFarmers, walletTotals, type Farmer } from '../lib/farmers'
+import { listTransactions, listVouchers, onWalletChanged } from '../lib/wallet'
+import { toFarmers, walletTotals, withPastFarmers, type Farmer } from '../lib/farmers'
+import { toTransaction } from '../lib/transactions'
 import { toFarmerPass, EMPTY_BRANDING, type MerchantBranding } from '../lib/pass'
 import { merchantBranding } from '../lib/branding'
 import { formatFace } from '../lib/format'
@@ -182,7 +183,12 @@ export function FarmersPage() {
   const [branding, setBranding] = useState<Record<string, MerchantBranding>>({})
 
   useEffect(() => {
-    const load = () => listVouchers().then((rows) => setFarmers(toFarmers(rows)))
+    // Coupons AND history: a farmer you have spent everything with still belongs
+    // on this list, because it is the only route to the record of what you spent.
+    const load = async () => {
+      const [rows, txs] = await Promise.all([listVouchers(), listTransactions()])
+      setFarmers(withPastFarmers(toFarmers(rows), txs.map(toTransaction)))
+    }
     load()
     // WalletStorage broadcasts on every write, including coupons arriving by DM
     // while this screen is open, so the list stays live without polling.

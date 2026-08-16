@@ -38,11 +38,13 @@ export const LOGOUT_WARNING =
 
 /**
  * @param confirm injected so tests can exercise both answers without a DOM.
+ * @param reload injected for the same reason — a test cannot navigate.
  * @returns whether the user went through with it
  */
 export async function logout(
   pubkey: string,
   confirm: (message: string) => boolean = window.confirm.bind(window),
+  reload: () => void = () => window.location.replace('/'),
 ): Promise<boolean> {
   if (!confirm(LOGOUT_WARNING)) return false
 
@@ -88,5 +90,31 @@ export async function logout(
 
   // Without this, createSession() hands the next login the shut-down session.
   resetSession()
+
+  // And now throw the document away, rather than routing to the login screen in
+  // place. Everything above erases what was STORED; a SPA transition leaves
+  // every module-level cache of the logged-out user alive in the page, and one
+  // of them silently costs the next user money.
+  //
+  // legacyBridge memoises loadLegacyRedemption() for the life of the document,
+  // and that memo pointed walletStorageIntegration at the exact WalletStorage
+  // instance wipeWallet() has just closed and deleted. The next login builds a
+  // NEW instance for the UI, so an arriving coupon got swapped at the mint and
+  // then written to the dead one:
+  //
+  //   WalletStorageNotInitializedError: atomicallyWrite() called before init()
+  //   RedemptionSaveError: Voucher swap succeeded but local save failed
+  //
+  // — proofs burnt, coupon nowhere, no kind-7375 backup published, nothing on
+  // any relay to restore from. That is why a wallet that logged out and back in
+  // showed no balance however often it was refreshed. lib/branding.ts's farmer
+  // cache is the same class of residue, holding the previous user's profiles
+  // (and their failed lookups) until the page goes.
+  //
+  // Rebinding the bridge would fix the write and still leave that module's own
+  // voucher cache full of the previous account's rows. A document that has held
+  // one identity does not host the next one — the reload is what makes "erases
+  // all your data from this browser" true of memory as well as of disk.
+  reload()
   return true
 }

@@ -1,4 +1,6 @@
-import { defineConfig } from 'vite'
+// `vitest/config`, not `vite`: this file now carries a `test` block, and vite's
+// own defineConfig does not type it.
+import { defineConfig } from 'vitest/config'
 import type { Connect, Plugin, ViteDevServer, PreviewServer } from 'vite'
 import react from '@vitejs/plugin-react'
 import { fileURLToPath } from 'node:url'
@@ -8,12 +10,19 @@ const r = (p: string) => fileURLToPath(new URL(p, import.meta.url))
 
 // Consume @imani/* and @imani/nap-* straight from source — no build step, no
 // npm link. This is nap's own convention (its packages point `exports` at
-// ./src/index.ts and ship no dist/), and every imani-apps package is plain
+// ./src/index.ts and ship no dist/), and every one of these packages is plain
 // framework-agnostic TS, so there is nothing React-specific to compile first.
 //
 // Because aliasing bypasses each package's own node_modules, their runtime deps
 // (nostr-tools, qr-scanner, @gandlaf21/bc-ur, buffer) are installed here.
-const imani = (name: string) => r(`../imani-apps/packages/${name}/src/index.ts`)
+//
+// `imani` now points INSIDE this repo. The 11 wallet packages were copied out of
+// imani-apps and this repo owns them, which is what makes a Docker build
+// possible at all: a build context rooted here could never see ../imani-apps.
+// nap is deliberately still a sibling — it is a separate product with other
+// consumers — so the image reproduces the ../nap layout via a second build
+// context. See Dockerfile.
+const imani = (name: string) => r(`./packages/${name}/src/index.ts`)
 const nap = (name: string) => r(`../nap/packages/${name}/src/index.ts`)
 
 /**
@@ -217,15 +226,17 @@ const proxy = {
   // every authenticated wallet call fail with 401 AUTH_002 "URL mismatch" —
   // which reads as a credential problem, not a proxy one.
   '/api': { target: 'http://localhost:28082', changeOrigin: false },
-  '/customer': {
-    target: 'http://localhost:28082',
-    changeOrigin: true,
-    rewrite: (p: string) => p.replace(/^\/customer/, ''),
-  },
 }
 
 export default defineConfig({
   plugins: [react(), portalEdgeAuth()],
+  // Scoped to src/, because `packages/` now lives in this repo and ships its own
+  // suites — dm-poll's and wallet-storage's among them, the latter wanting
+  // `fake-indexeddb`, which is not a dependency here. Without this, `npm test`
+  // goes red on tests this app does not own and did not break.
+  //
+  // Run a package's own suite from its own directory, as imani-apps did.
+  test: { include: ['src/**/*.test.{ts,tsx}'] },
   resolve: {
     // ONE React, or the production build renders a blank page.
     //

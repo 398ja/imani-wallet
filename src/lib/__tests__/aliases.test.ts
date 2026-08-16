@@ -29,9 +29,9 @@ const entrypoints = {
   // the two subpaths the wallet actually uses so this check still fails loudly
   // if the scan/pay path breaks, without tripping over dead animated-QR code.
   'imani-qr/detector': () =>
-    import('../../../../imani-apps/packages/imani-qr/src/detector/index'),
+    import('../../../packages/imani-qr/src/detector/index'),
   'imani-qr/handlers': () =>
-    import('../../../../imani-apps/packages/imani-qr/src/handlers/index'),
+    import('../../../packages/imani-qr/src/handlers/index'),
   '@imani/nap-core': () => import('@imani/nap-core'),
   '@imani/nap-client-http': () => import('@imani/nap-client-http'),
   '@imani/nap-client-web': () => import('@imani/nap-client-web'),

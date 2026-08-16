@@ -11,7 +11,7 @@ import {
   TransactionListItem,
 } from '../components/ui'
 import { listVouchers, transactionsWith, onWalletChanged } from '../lib/wallet'
-import { couponsFor, findFarmer } from '../lib/farmers'
+import { couponsFor, findFarmer, findFarmerWithHistory } from '../lib/farmers'
 import type { WalletTransaction } from '../lib/transactions'
 
 /**
@@ -81,8 +81,12 @@ export function TransactionsPage() {
 
   useEffect(() => {
     const load = async () => {
-      setTransactions(await transactionsWith(pubkey))
-      setName(findFarmer(await listVouchers(), pubkey)?.name ?? '')
+      const [rows, history] = await Promise.all([listVouchers(), transactionsWith(pubkey)])
+      setTransactions(history)
+      // Through the history as well: on this page especially, a farmer you hold
+      // no coupons from is the normal case, and `findFarmer` alone leaves the
+      // subtitle reading "3 with this farmer".
+      setName(findFarmerWithHistory(rows, history, pubkey)?.name ?? '')
     }
     load()
     return onWalletChanged(load)

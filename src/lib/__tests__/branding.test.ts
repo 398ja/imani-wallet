@@ -1,6 +1,69 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { brandingFromKind0 } from '../branding'
+import {
+  brandingFromKind0,
+  clearBrandingCache,
+  fetchNewestKind0,
+  merchantBranding,
+} from '../branding'
+import { allEvents } from '../relay'
+
+vi.mock('../relay', () => ({ allEvents: vi.fn() }))
+
+const gatewayReturns = (body: unknown, ok = true) =>
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue({ ok, json: async () => body } as unknown as Response),
+  )
+
+const PUBKEY = 'ab'.repeat(32)
+
+describe('fetchNewestKind0', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.mocked(allEvents).mockReset()
+  })
+
+  it('falls back to the relay when the gateway cache has nothing', async () => {
+    // The failure this exists for: the wallet PUBLISHES profiles to the relay
+    // and READS them from the gateway's nostrdb, so a cold or lagging cache
+    // reports no profile for a profile that is sitting on the relay — a blank
+    // avatar after login, and farmers' coupons with no farmer on them.
+    gatewayReturns({ events: [] })
+    vi.mocked(allEvents).mockResolvedValue([
+      { content: '{"name":"Older"}', created_at: 100 },
+      { content: '{"name":"Rosa Green Farm"}', created_at: 900 },
+    ] as never)
+
+    expect(await fetchNewestKind0(PUBKEY)).toEqual({
+      content: '{"name":"Rosa Green Farm"}',
+      createdAt: 900,
+    })
+  })
+
+  it('falls back when the gateway rejects the request outright', async () => {
+    gatewayReturns({}, false)
+    vi.mocked(allEvents).mockResolvedValue([{ content: '{}', created_at: 1 }] as never)
+
+    expect(await fetchNewestKind0(PUBKEY)).not.toBeNull()
+  })
+
+  it('does not touch the relay when the gateway answers', async () => {
+    // The cache is the cheap read and answers almost always; the relay query
+    // opens a WebSocket, and one per farmer on the market page is not free.
+    gatewayReturns({ events: [{ content: '{"name":"Rosa"}', createdAt: 900 }] })
+
+    expect(await fetchNewestKind0(PUBKEY)).toEqual({ content: '{"name":"Rosa"}', createdAt: 900 })
+    expect(allEvents).not.toHaveBeenCalled()
+  })
+
+  it('returns null, not a rejection, when neither store answers', async () => {
+    gatewayReturns({ events: [] })
+    vi.mocked(allEvents).mockRejectedValue(new Error('no relay'))
+
+    expect(await fetchNewestKind0(PUBKEY)).toBeNull()
+  })
+})
 
 describe('brandingFromKind0', () => {
   it('maps a kind-0 profile onto MerchantBranding', () => {
@@ -9,6 +72,7 @@ describe('brandingFromKind0', () => {
     const branding = brandingFromKind0(
       JSON.stringify({
         name: 'Rosa Green Farm',
+        nip05: 'rosa@x.test',
         picture: 'https://example.test/logo.png',
         banner: 'https://example.test/banner.png',
         about: 'Organic veg, Saturdays',
@@ -16,6 +80,9 @@ describe('brandingFromKind0', () => {
     )
 
     expect(branding.organizationName).toBe('Rosa Green Farm')
+    // Carried so every screen that names someone gets their handle from the
+    // fetch it already makes, instead of a second lookup per farmer.
+    expect(branding.nip05).toBe('rosa@x.test')
     expect(branding.logoUrl).toBe('https://example.test/logo.png')
     expect(branding.bannerUrl).toBe('https://example.test/banner.png')
     expect(branding.storeDescription).toBe('Organic veg, Saturdays')
@@ -88,5 +155,37 @@ describe('brandingFromKind0', () => {
 
     expect(branding.organizationName).toBe('Rosa Green Farm')
     expect(branding.logoUrl).toBeUndefined()
+  })
+})
+
+describe('merchantBranding', () => {
+  afterEach(() => {
+    clearBrandingCache()
+    vi.unstubAllGlobals()
+    vi.mocked(allEvents).mockReset()
+  })
+
+  const answers = (events: unknown[]) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false } as unknown as Response))
+    vi.mocked(allEvents).mockResolvedValue(events as never)
+  }
+
+  it('caches a farmer that was found — one fetch, not one per card', async () => {
+    answers([{ content: '{"name":"Rosa Green Farm"}', created_at: 900 }])
+
+    expect((await merchantBranding(PUBKEY)).organizationName).toBe('Rosa Green Farm')
+    expect((await merchantBranding(PUBKEY)).organizationName).toBe('Rosa Green Farm')
+    expect(allEvents).toHaveBeenCalledOnce()
+  })
+
+  it('does NOT cache a lookup that found nothing', async () => {
+    // Caching the miss is what pinned a farmer's coupons to a truncated pubkey
+    // and "Gift Card" for the life of the page, with the profile on the relay
+    // the whole time.
+    answers([])
+    expect(await merchantBranding(PUBKEY)).toEqual({})
+
+    answers([{ content: '{"name":"Rosa Green Farm"}', created_at: 900 }])
+    expect((await merchantBranding(PUBKEY)).organizationName).toBe('Rosa Green Farm')
   })
 })

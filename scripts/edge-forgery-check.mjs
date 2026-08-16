@@ -13,8 +13,12 @@ import { finalizeEvent, getPublicKey, nip19 } from 'nostr-tools'
 import { hexToBytes, bytesToHex } from '@noble/hashes/utils'
 import { sha256 } from '@noble/hashes/sha2'
 
-const CORE = 'http://localhost:28081'
-const VITE = 'http://localhost:5199'
+// Override both to point at a deployed environment, where the edge is nginx +
+// nap_auth.lua rather than Vite's middleware. The assertion is identical:
+//   CORE=https://wallet.staging.398ja.xyz EDGE=https://wallet.staging.398ja.xyz \
+//     node scripts/edge-forgery-check.mjs <sk-hex>
+const CORE = process.env.CORE ?? 'http://localhost:28081'
+const VITE = process.env.EDGE ?? 'http://localhost:5199'
 const priv = hexToBytes(process.argv[2])
 const pubkey = getPublicKey(priv)
 

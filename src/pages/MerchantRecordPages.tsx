@@ -16,7 +16,8 @@ import {
 } from '../components/ui'
 import { getTransactionRow, listTransactions, onWalletChanged } from '../lib/wallet'
 import { toTransaction, type WalletTransaction } from '../lib/transactions'
-import { formatDate, formatFace, shortPubkey } from '../lib/format'
+import { formatDate, formatFace } from '../lib/format'
+import { identityLabel, useIdentity } from '../lib/identity'
 
 /**
  * The merchant's two history screens.
@@ -160,6 +161,10 @@ export function IssuedCouponPage() {
     return onWalletChanged(load)
   }, [voucherId])
 
+  // Before the early returns — hooks cannot be conditional. Undefined until the
+  // row loads, which the hook handles.
+  const customer = useIdentity(state?.tx?.counterparty)
+
   if (state === undefined) return <Centered>Loading…</Centered>
   if (state.tx === null) return <Centered>No record of this coupon.</Centered>
 
@@ -189,7 +194,10 @@ export function IssuedCouponPage() {
             // Kept even when absent, unlike the rest: "expires 3 Sep" and "never
             // expires" are different facts, and a missing row reads as the second.
             ['Expires', formatDate(tx.expiresAt) || 'No expiry'],
-            ['Customer', tx.counterparty],
+            // Who they are, not their key. The key itself is one tap away in
+            // the raw details below, where a merchant chasing a specific
+            // customer can still find it.
+            ['Customer', tx.counterparty && identityLabel(tx.counterparty, customer)],
             ['Coupon id', tx.voucherId],
             // The link back to the movement, in the record itself rather than
             // only in the nav — this is the pairing the two screens are built on.
@@ -203,11 +211,14 @@ export function IssuedCouponPage() {
       </ListSection>
 
       <RawDetails
-        entries={[
-          ['Raw type', tx.type],
-          ['Face decimals', String(tx.decimals)],
-          ['Unit', tx.unit],
-        ]}
+        entries={(
+          [
+            ['Raw type', tx.type],
+            ['Customer pubkey', tx.counterparty],
+            ['Face decimals', String(tx.decimals)],
+            ['Unit', tx.unit],
+          ] as Array<[string, string | undefined]>
+        ).filter((e): e is [string, string] => Boolean(e[1]))}
       />
     </Screen>
   )
@@ -218,6 +229,9 @@ function IssuedCouponRow({ tx, now }: { tx: WalletTransaction; now: number }) {
   // long do I have?"), so it leads the second line rather than hiding in detail.
   // `now` is the load time, not a fresh clock read — see useMerchantTransactions.
   const expired = tx.expiresAt !== undefined && tx.expiresAt <= now
+  // One fetch per customer, not per row: `merchantBranding` caches by pubkey,
+  // and a merchant's list is mostly repeat customers.
+  const customer = useIdentity(tx.counterparty)
 
   return (
     <Link
@@ -241,7 +255,7 @@ function IssuedCouponRow({ tx, now }: { tx: WalletTransaction; now: number }) {
             : expired
               ? `Expired ${formatDate(tx.expiresAt)}`
               : `Expires ${formatDate(tx.expiresAt)}`}
-          {tx.counterparty ? ` · ${shortPubkey(tx.counterparty)}` : ''}
+          {tx.counterparty ? ` · ${identityLabel(tx.counterparty, customer)}` : ''}
         </p>
       </div>
       <p className="shrink-0 text-right text-mono-900 dark:text-mono-50">

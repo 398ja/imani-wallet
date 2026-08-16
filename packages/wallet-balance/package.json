@@ -1,0 +1,76 @@
+{
+  "name": "@imani/wallet-balance",
+  "version": "0.1.3",
+  "description": "Balance calculation and aggregation for Imani wallet",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./integrations": {
+      "import": {
+        "types": "./dist/integrations/index.d.ts",
+        "default": "./dist/integrations/index.js"
+      },
+      "require": {
+        "types": "./dist/integrations/index.d.cts",
+        "default": "./dist/integrations/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "peerDependencies": {
+    "@imani/nostr-vouchers": "^0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@imani/nostr-vouchers": {
+      "optional": true
+    },
+    "@imani/nostr-transactions": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@vitest/coverage-v8": "^2.1.9",
+    "tsup": "^8.0.1",
+    "typescript": "^5.3.3",
+    "vitest": "^2.0.0"
+  },
+  "keywords": [
+    "imani",
+    "wallet",
+    "balance",
+    "voucher",
+    "currency",
+    "nostr"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ArcadeLabsInc/imani-apps.git",
+    "directory": "packages/wallet-balance"
+  }
+}

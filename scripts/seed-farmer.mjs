@@ -271,13 +271,22 @@ const faceValueMinor = Number(arg('--face', '500'))
 const currency = arg('--currency', 'EUR')
 
 const farmer = loadOrCreateFarmer(name)
-const customer = loadOrCreateFarmer(arg('--customer', 'demo-customer'))
+// `--customer-pubkey` delivers to an account that already exists — one
+// registered in the wallet itself — instead of minting a throwaway identity
+// here. That is the only way to seed the app you are actually looking at, and
+// it keeps a real nsec out of the terminal, which is the reason it exists.
+const customerPubkey = arg('--customer-pubkey', '')
+const customer = customerPubkey
+  ? { pk: customerPubkey, sk: null }
+  : loadOrCreateFarmer(arg('--customer', 'demo-customer'))
 
 console.log(`farmer    ${name}`)
 console.log(`  pubkey  ${farmer.pk}`)
 console.log(`customer  ${nip19.npubEncode(customer.pk)}`)
 console.log(`  pubkey  ${customer.pk}`)
-console.log(`  nsec    ${nip19.nsecEncode(customer.sk)}   <- import into your NIP-07 extension`)
+if (customer.sk) {
+  console.log(`  nsec    ${nip19.nsecEncode(customer.sk)}   <- import into your NIP-07 extension`)
+}
 console.log(`\nissuing ${quantity} x ${faceValueMinor / 100} ${currency}\n`)
 
 const before = await countGiftWraps(customer.pk)

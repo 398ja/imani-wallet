@@ -27,6 +27,32 @@ const MAX_BANNER_BYTES = 10 * 1024 * 1024
 export const ACCEPT_ATTRIBUTE = ALLOWED.join(',')
 
 /**
+ * Hosts that answer BUD-05 `PUT /media` with 401 and no
+ * `Access-Control-Allow-Origin`.
+ *
+ * The package falls back to `/upload` when the probe fails, so uploads work
+ * either way — but the browser prints the blocked cross-origin request to the
+ * console before any of our code runs, and nothing in JS can suppress that. The
+ * only way to lose the error is not to send the request. Skipping the probe
+ * costs us `/media`'s server-side EXIF stripping, which we never had here:
+ * Primal rejects every `/media` call, so every upload has always landed on
+ * `/upload` anyway.
+ *
+ * Scoped to the host rather than set unconditionally because
+ * `blossom_server_url` is gateway config — point it at a server that really
+ * implements BUD-05 and the probe should resume.
+ */
+const NO_BUD05 = /(^|\.)primal\.net$/
+
+function preferEndpoint(url: string): 'auto' | 'upload' {
+  try {
+    return NO_BUD05.test(new URL(url).hostname) ? 'upload' : 'auto'
+  } catch {
+    return 'auto'
+  }
+}
+
+/**
  * Bridge nap's signer to the package's SignFn.
  *
  * The package never sees the key — it hands over an unsigned event and gets a
@@ -54,6 +80,7 @@ export async function blossomServer(): Promise<BlossomServerConfig | null> {
     maxAvatarBytes: MAX_AVATAR_BYTES,
     maxBannerBytes: MAX_BANNER_BYTES,
     allowedMimeTypes: ALLOWED,
+    preferEndpoint: preferEndpoint(blossomServerUrl),
   }
 }
 

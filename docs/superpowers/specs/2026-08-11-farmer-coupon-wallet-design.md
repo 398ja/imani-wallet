@@ -2238,3 +2238,123 @@ run that seemed to show a surviving record was a mis-clicked Log out, not a wipe
 Verified end to end on the deployed stack: wipe → log in with only the nsec → both fields restored in
 the stored record, and both `<img>` elements report `naturalWidth > 0` on the profile screen, i.e.
 actually decoded rather than merely present.
+
+## 18. Dockerised, and wired into imani-deploy (2026-08-14)
+
+Plan: `~/.claude/plans/delightful-drifting-lake.md`. Phases 1-3 are done; phase 5 (retirement)
+deliberately is not — see the end.
+
+### 18.1 The wallet now owns its packages
+
+`imani-wallet` could not be built anywhere but this machine: **16 of its 17 aliases pointed
+outside the repo**, and 13 more imports reached into `../imani-apps/shared/*.js` by raw relative
+path. A build context rooted here could never see them.
+
+So the 11 `@imani/*` packages and the 10 `shared/*.js` files the legacy bridge loads were copied
+in — `packages/` and `shared/`, 7 MB with `node_modules` and `dist` excluded (the source
+directory is 3.1 GB with them). `vite.config.ts`'s `imani()` and the `tsconfig.app.json` paths
+mirror now point at `./packages`; the five nap entries are untouched, because nap is a separate
+product with other consumers and stays a sibling.
+
+**Copied, not moved.** imani-apps still imports these packages from ~50 places, several of them
+*source-contract tests* that read the package files as text — a ~50-test rewrite that must not
+block this. Drift in the window is one-directional and harmless: the imani-apps frontend is being
+retired, so nobody writes to its copies.
+
+Two configs break the moment `packages/` exists inside the repo, and both were caught by running
+the checks rather than by reading: **vitest** starts collecting the packages' own suites (one
+wants `fake-indexeddb`, not a dependency here), so `test.include` is now scoped to `src/`; and
+**eslint** starts linting them, so `packages` and `shared` are in `globalIgnores`.
+
+`/customer` is gone. It was a second prefix existing only so the dev proxy could strip it, and
+reproducing that at the edge needs a capture-into-variable rewrite whose obvious form silently
+drops the query string — which is exactly where dm-poll's subscription filter lives.
+`branding.ts` and `dmPoll.ts` now use same-origin `/api/v1/...`, served by the `/api` rule that
+already existed.
+
+### 18.2 The image, and the two things that nearly broke it
+
+`Dockerfile` + `.dockerignore` + `deploy/nginx.conf`: a `node:20-alpine` builder into
+`nginx:alpine` on **9546** (deliberately not imani-apps' 9545, so a stale `set` during cutover
+fails loudly instead of quietly hitting the new app). Two build contexts — the primary one and
+`nap=../nap` — reproducing the sibling layout at `/build/{imani-wallet,nap}` so neither config
+file needs a Docker-only variant to drift.
+
+**First build failed**, and the error pointed at the wrong thing: `tsc` reporting "Cannot find
+module 'react'" against `../nap` sources reads like a tsconfig problem. It was ordering. nap is an
+npm **workspaces** root, so react, `@types/react` and nostr-tools are declared by the workspace
+packages — installing with `packages/` absent gets the root's five devDeps and nothing else. The
+copy now precedes the install.
+
+**The second hazard did not fire, and that is the point of checking.** That same `npm ci`
+reintroduces react 19.2.4 beside the wallet's 19.2.3 — the duplicate `resolve.dedupe` exists to
+collapse, whose failure mode is a **blank page in a production build only**. `curl` cannot see it:
+a blank page is still a 200 with a well-formed `index.html`. Driven in a browser, the built image
+renders the login screen with no console errors.
+
+Also verified on the builder stage, where `COPY . .` happens (checking the runtime stage proves
+nothing): `.seed-keys.json`, `graphify-out` and `.playwright-mcp` are all absent, and
+`VITE_RELAY_URL` is compiled into the bundle.
+
+### 18.3 The edge, which is where the dev server's second job went
+
+The Vite dev server was also the edge proxy: seven `/api` rules across three backends plus the
+`portal-edge-auth` middleware. In production that is nginx, and `nginx/conf.d/wallet.staging.conf`
+(and `wallet.prod.conf`) is the production half of `vite.config.ts` — if a route works in dev and
+404s in staging, the difference is in those two files.
+
+Both are **separate files mounted alongside** `imani.conf` rather than blocks inside it. nginx
+loads every `conf.d/*.conf`, so this adds a host without touching the 26 KB config that serves
+everything else, and — the reason it matters for prod — without changing which server block is
+the implicit default. Prod mounts the same `imani.conf` whose every `server_name` is a *staging*
+name, so its API traffic lands on the first block by default; forking that file would have moved
+the default out from under it.
+
+Three things the config must get right, none of them obvious:
+
+- **`Host` must survive.** `proxy_params` already sets `proxy_set_header Host $host`, which is
+  what keeps the NIP-98 `u` tag matching the URL the gateway reconstructs. This is the edge
+  equivalent of `changeOrigin: false`, and "improving" it to `$proxy_host` 401s every
+  authenticated call.
+- **SSE needs its own exact-match location** with `proxy_buffering off`. `dmPoll.ts` opens an
+  `EventSource`; buffered, the receive pipeline looks hung rather than broken.
+- **Two ungated longer prefixes** — `/api/v1/portal/cashback/{public,by-code}/` — must sit beside
+  the gated `/api/v1/portal/`, because nginx picks the longest prefix regardless of order and the
+  claim ref IS the credential there.
+
+### 18.4 Verified against the real edge, locally
+
+`openresty -t` passes for both files. Better than that: because the local stack's compose service
+names match the ones the edge config uses, the whole thing runs here. An openresty container with
+`wallet.staging.conf` plus the wallet image, both on the stack network:
+
+| Request (Host: wallet.staging.398ja.xyz) | Result |
+| --- | --- |
+| `/` and `/sell` | 200 html — SPA fallback |
+| `/api/v1/config` | account-app answers |
+| `POST /api/v1/nostr/query` | 200 — customer-wallet, proving the `/customer` removal |
+| `POST /portal/vouchers`, forged permissions, no cookie | **401** from `nap_auth.lua` |
+| merchant session, honest | **201**, voucher issued |
+| customer session, honest | **403** |
+| customer session + forged `X-Auth-Permissions` | **403** |
+| customer session + forged permissions **and the real edge secret** | **403** |
+
+The last row is the one worth keeping: the lua strips client-supplied headers before it validates,
+so knowing the secret buys nothing. This is the first time the permission chain has been proven
+through **real nginx + nap_auth.lua** rather than through Vite's stand-in.
+
+### 18.5 What is deliberately NOT done
+
+**The two frontends are still deployed and still serving.** Retirement is phase 5 of the plan, and
+it comes after a staging deploy and the checks above run there — because that ordering is the
+rollback story: everything so far is additive, so reverting it changes nothing users touch. Once
+the old hosts 301 and their services are deleted, rolling back means restarting them, which only
+works while `IMANI_APPS_IMAGE` and `POSSA_MERCHANT_IMAGE` still resolve.
+
+Two things to carry into that deploy:
+
+- **DNS and TLS for `wallet.staging.398ja.xyz` / `wallet.imani.casa` do not exist yet**, and are
+  outside this repo. Nothing is reachable until they do.
+- **`lnbits-api` is built from the imani-apps repo** (`scripts/deploy-staging.sh`, a standalone
+  `docker build` outside the service loop). The imani-apps *frontend* is retirable; the repo is
+  not. Both scripts now carry a comment saying so.

@@ -8,7 +8,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 // ends with `window.NUT18V = NUT18V`, and imani-qr's PaymentRequestHandler looks
 // the parser up as globalThis.NUT18V — so importing the file wires both sides.
 // Cheaper and safer than reimplementing its CBOR codec.
-import '../../imani-apps/shared/nut18v.js'
+import '../shared/nut18v.js'
 
 import App from './App.tsx'
 import './index.css'
