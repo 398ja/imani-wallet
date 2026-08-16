@@ -161,11 +161,22 @@ export function expireRequests(
  * The matching discipline is ported from possa-merchant's `fulfillPaymentRequest`
  * — it is the valuable part of that file, and each rule is there for a reason:
  *
+ * 0. Only money coming IN, and only what arrived after the request was made.
+ *    `RedeemPage` sweeps the entire transaction history the moment a request is
+ *    shown, so every rule below was being applied to coupons this merchant
+ *    received or issued days ago: the amount fallback matched one instantly and
+ *    the screen jumped from the form to "Paid" without ever drawing the QR.
+ *    A transaction with no readable timestamp (`at` 0) fails this rule too, and
+ *    that is the safe direction — a request left pending makes the merchant
+ *    wait, a request wrongly marked paid makes them hand over the goods.
  * 1. Already-settled transactions never match again. Without the dedup a single
  *    payment re-settles a second request every time the wallet re-notifies.
  * 2. Exact `paymentId` first. `lib/pay.ts` threads the request's payment id
  *    through `buildSendParams`, so when the gateway echoes it back this is
- *    unambiguous.
+ *    unambiguous. Today it never does: `_buildReceiveTransactionRow` in
+ *    shared/tokenRedemption.js writes no request reference at all, so rule 3 is
+ *    what actually settles every real payment. Kept because the id survives the
+ *    payer's side and only the receive row has to catch up.
  * 3. Amount + unit only as a FALLBACK, and only when EXACTLY ONE pending request
  *    matches. Two requests for the same amount are genuinely ambiguous, and
  *    guessing would mark the wrong sale paid.
@@ -177,12 +188,18 @@ export function expireRequests(
  */
 export function matchPayment(
   requests: VoucherPaymentRequest[],
-  transaction: Pick<WalletTransaction, 'id' | 'amount' | 'unit'> & { paymentId?: string },
+  transaction: Pick<WalletTransaction, 'id' | 'amount' | 'unit' | 'at' | 'direction'> & {
+    paymentId?: string
+  },
 ): VoucherPaymentRequest | null {
+  if (transaction.direction !== 'in') return null
+
   const settled = new Set(requests.map((r) => r.settledBy).filter(Boolean))
   if (settled.has(transaction.id)) return null
 
-  const pending = requests.filter((r) => r.status === 'pending')
+  const pending = requests.filter(
+    (r) => r.status === 'pending' && transaction.at >= r.createdAt,
+  )
 
   const byId = transaction.paymentId
     ? pending.find((r) => r.paymentId === transaction.paymentId)

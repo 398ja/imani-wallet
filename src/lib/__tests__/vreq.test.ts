@@ -14,10 +14,23 @@ const request = (over: Partial<VoucherPaymentRequest> = {}): VoucherPaymentReque
   ...over,
 })
 
-const payment = (over: Partial<{ id: string; amount: number; unit: string; paymentId: string }> = {}) => ({
+const payment = (
+  over: Partial<{
+    id: string
+    amount: number
+    unit: string
+    paymentId: string
+    at: number
+    direction: 'in' | 'out'
+  }> = {},
+) => ({
   id: 'tx1',
   amount: 500,
   unit: 'EUR',
+  // Later than the request, and incoming — a payment that settles a request is
+  // always both. Tests that care override these.
+  at: Date.now() + 1000,
+  direction: 'in' as const,
   ...over,
 })
 
@@ -88,5 +101,28 @@ describe('matchPayment', () => {
 
   it('returns null when nothing is open — the common case', () => {
     expect(matchPayment([], payment())).toBeNull()
+  })
+
+  it('ignores a transaction that predates the request', () => {
+    // The bug this rule exists for: RedeemPage sweeps the WHOLE transaction
+    // history the moment a request is shown, so without it any older coupon of
+    // the same unit and value settled the request instantly. The merchant never
+    // saw the QR — the screen went straight to "Paid" for a sale nobody paid.
+    const older = payment({ at: Date.now() - 60_000 })
+    expect(matchPayment([request()], older)).toBeNull()
+    expect(matchPayment([request()], { ...older, paymentId: 'p1' })).toBeNull()
+  })
+
+  it('ignores money leaving the wallet', () => {
+    // A merchant issuing a 5 EUR coupon writes an outgoing row of exactly the
+    // amount they are asking for — the likeliest false match of all.
+    expect(matchPayment([request()], payment({ direction: 'out' }))).toBeNull()
+  })
+
+  it('ignores a transaction with no usable timestamp', () => {
+    // toTransaction yields at=0 when the row carries no readable timestamp.
+    // Unknown time fails closed: a request left pending makes a merchant wait,
+    // a request wrongly marked paid makes them hand over goods for nothing.
+    expect(matchPayment([request()], payment({ at: 0 }))).toBeNull()
   })
 })
