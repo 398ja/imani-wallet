@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { ClipboardPaste, Check } from 'lucide-react'
 
 import { Button, Screen, BackLink, PageHeader, Alert, Panel, Input } from '../components/ui'
-import { issueAndDeliver, toPubkeyHex, type IssueStage } from '../lib/issue'
-import { currencyDecimals, formatFace, parseAmountToMinor, shortPubkey } from '../lib/format'
+import { issueAndDeliver, toRecipientPubkey, type IssueStage } from '../lib/issue'
+import { identityLabel, identitySubLabel, useIdentity } from '../lib/identity'
+import { currencyDecimals, formatFace, parseAmountToMinor } from '../lib/format'
 import type { MerchantProfile } from '../lib/merchant'
 
 /**
@@ -12,8 +13,8 @@ import type { MerchantProfile } from '../lib/merchant'
  *
  * Three screens — scan, amount, progress — because the flow is deliberately the
  * simplified one: no cart, no line items, no payment method. The merchant scans
- * the npub the customer's own `/receive` screen is already showing, types what
- * they owe, and sends.
+ * the address the customer's own `/receive` screen is already showing — their
+ * NIP-05 handle — types what they owe, and sends.
  *
  * This is NOT possa-merchant's cashback flow, which mints a bearer QR with a
  * one-time claim key and never learns who the customer is. Here the coupon is
@@ -54,35 +55,52 @@ export function SellPage({ pubkey, merchant }: { pubkey: string; merchant: Merch
 }
 
 /**
- * Read the customer's npub off their screen.
+ * Read the customer's address off their screen.
  *
  * Same shape as ScanPage: dynamic `qr-scanner` import, a `cancelled` flag so the
  * async import losing the race with unmount cannot start a scanner nobody will
  * stop, and a paste fallback for when the camera is unavailable.
+ *
+ * What comes back is a NIP-05 handle, which `toRecipientPubkey` resolves. npub
+ * and hex still work — coupons are addressed to a pubkey either way, and on a
+ * dev machine, where no handle resolves, they are the only forms that do.
  */
 function ScanCustomer({ onFound }: { onFound: (pubkey: string) => void }) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [error, setError] = useState<string | null>(null)
   const [manual, setManual] = useState('')
+  const [looking, setLooking] = useState(false)
 
   useEffect(() => {
     let scanner: { start(): Promise<void>; destroy(): void } | undefined
     let cancelled = false
 
-    const accept = (text: string) => {
-      const hex = toPubkeyHex(text)
-      if (!hex) {
-        setError('That code is not a customer account.')
-        return
+    // A handle costs a round trip to resolve, and the scanner fires several
+    // times a second on the same code — without this the merchant's phone opens
+    // a dozen identical lookups while the first is still in flight.
+    let resolving = false
+
+    const accept = async (text: string) => {
+      if (resolving) return
+      resolving = true
+      try {
+        const hex = await toRecipientPubkey(text)
+        if (cancelled) return
+        if (!hex) {
+          setError('That code is not a customer account.')
+          return
+        }
+        onFound(hex)
+      } finally {
+        resolving = false
       }
-      onFound(hex)
     }
 
     ;(async () => {
       const { default: QrScanner } = await import('qr-scanner')
       if (cancelled || !videoRef.current) return
 
-      scanner = new QrScanner(videoRef.current, (result) => accept(result.data), {
+      scanner = new QrScanner(videoRef.current, (result) => void accept(result.data), {
         highlightScanRegion: true,
         highlightCodeOutline: true,
       })
@@ -105,10 +123,13 @@ function ScanCustomer({ onFound }: { onFound: (pubkey: string) => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const submitManual = () => {
-    const hex = toPubkeyHex(manual)
+  const submitManual = async () => {
+    setError(null)
+    setLooking(true)
+    const hex = await toRecipientPubkey(manual)
+    setLooking(false)
     if (!hex) {
-      setError('That is not a valid customer code.')
+      setError('That is not a customer we can find.')
       return
     }
     onFound(hex)
@@ -128,13 +149,18 @@ function ScanCustomer({ onFound }: { onFound: (pubkey: string) => void }) {
 
       <div className="mt-4 space-y-2">
         <Input
-          label="Or enter their code"
-          placeholder="npub1…"
+          label="Or enter their address"
+          placeholder="name@domain"
           value={manual}
           onChange={(e) => setManual(e.target.value)}
         />
-        <Button variant="outline" className="w-full" onClick={submitManual}>
-          Continue
+        <Button
+          variant="outline"
+          className="w-full"
+          disabled={looking}
+          onClick={() => void submitManual()}
+        >
+          {looking ? 'Looking them up…' : 'Continue'}
         </Button>
         <Button
           variant="ghost"
@@ -172,6 +198,7 @@ function IssueForm({
   const [stage, setStage] = useState<IssueStage | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [sent, setSent] = useState<number | null>(null)
+  const customerIdentity = useIdentity(customer)
 
   // ISO decimals, which is what the sats backing needs — see currencyDecimals.
   // The gateway labels every coupon 2-decimal regardless; that mismatch is its
@@ -217,7 +244,7 @@ function IssueForm({
               {formatFace(sent, { unit: merchant.issuanceCurrency, decimals })}
             </p>
             <p className="mt-1 text-sm text-mono-500">
-              Sent to {shortPubkey(customer)}. It is in their wallet now.
+              Sent to {identityLabel(customer, customerIdentity)}. It is in their wallet now.
             </p>
           </div>
         </Panel>
@@ -249,9 +276,12 @@ function IssueForm({
         <div className="flex items-center justify-between">
           <div>
             <p className="text-xs uppercase tracking-wide text-mono-400">Customer</p>
-            <p className="font-mono text-sm text-mono-900 dark:text-mono-50">
-              {shortPubkey(customer)}
+            <p className="text-sm text-mono-900 dark:text-mono-50">
+              {identityLabel(customer, customerIdentity)}
             </p>
+            {identitySubLabel(customerIdentity) && (
+              <p className="text-xs text-mono-500">{identitySubLabel(customerIdentity)}</p>
+            )}
           </div>
           <Button variant="ghost" size="sm" onClick={onRescan} disabled={busy}>
             Change

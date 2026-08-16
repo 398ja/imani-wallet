@@ -107,12 +107,15 @@ describe('toCouponPass', () => {
   it('prefers branding over the fallbacks', () => {
     const pass = toCouponPass(row(), {
       organizationName: 'Rosa Green Farm',
+      nip05: 'rosa@x.test',
       logoUrl: 'https://example.test/logo.png',
       bannerUrl: 'https://example.test/banner.png',
       backgroundColor: 'rgb(10,80,40)',
     })
 
     expect(pass.organizationName).toBe('Rosa Green Farm')
+    // The card shows this under the name, in place of the short pubkey.
+    expect(pass.userInfo.issuerNip05).toBe('rosa@x.test')
     expect(pass.logoText).toBe('Rosa Green Farm')
     expect(pass.backgroundColor).toBe('rgb(10,80,40)')
     // pass.json has no image fields; URLs ride in userInfo under these keys.

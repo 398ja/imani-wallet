@@ -31,7 +31,7 @@ vi.mock('../wallet', () => ({
 }))
 
 vi.mock('../legacyBridge', () => ({ legacyApi: async () => stubs.api }))
-import { tokenIdFrom } from '../../../../imani-apps/packages/wallet-storage/src/tokenId'
+import { tokenIdFrom } from '../../../packages/wallet-storage/src/tokenId'
 import type { NUT18VRequest } from '../nap'
 
 /** A €5.00 coupon, the only denomination this stack issues. */

@@ -1,10 +1,10 @@
 import { nip19 } from 'nostr-tools'
 
+import { resolveNip05 } from './identity'
 import { signedFetch } from './nip98'
 import { INTERNAL_RELAY_URL } from './relay'
 import { getWallet, notifyWalletChanged } from './wallet'
-import { buildIssueTransaction, toTransaction } from './transactions'
-import { publishIssued } from './issuedRecords'
+import { buildIssueTransaction } from './transactions'
 import { currencyDecimals } from './format'
 
 /**
@@ -65,6 +65,32 @@ export function toPubkeyHex(input: string): string | null {
     return null
   }
   return null
+}
+
+/**
+ * The same, plus NIP-05 handles — what the scanner and the paste box use.
+ *
+ * The customer's `/receive` screen now shows their handle, so `alice@domain` is
+ * the ordinary case and the key forms are the fallback. Handles are resolved
+ * through `/api/v1/resolve` (see `lib/identity.ts`), which is a network call, so
+ * this is async where `toPubkeyHex` is not; the sync one stays for callers that
+ * already hold a key form and must not await.
+ *
+ * The handle test is deliberately loose — one `@`, something either side. A
+ * stricter pattern would reject a valid handle we had not thought of and leave
+ * the merchant with "not a customer account" and no way forward, while a loose
+ * one costs at most one 404 from an endpoint that answers null.
+ *
+ * Returns null rather than throwing, for the camera loop.
+ */
+export async function toRecipientPubkey(input: string): Promise<string | null> {
+  const direct = toPubkeyHex(input)
+  if (direct) return direct
+
+  const raw = input.trim().replace(/^nostr:/i, '')
+  if (!/^[^\s@]+@[^\s@]+$/.test(raw)) return null
+
+  return resolveNip05(raw)
 }
 
 /** Poll budget for the issuance saga: 30 x 2s = 60s. */
@@ -343,15 +369,12 @@ export async function issueAndDeliver(
       at: Date.now(),
     })
 
+    // The relay copy rides along with the write: `openWallet` wraps
+    // `addTransaction` so every row is published, encrypted to this merchant's
+    // own key, and the sale survives this device (lib/txRecords.ts). Publishing
+    // from here as well would write the same sale twice.
     await getWallet().addTransaction(row)
     notifyWalletChanged()
-
-    // And to the relay, encrypted to this merchant's own key, so the sale
-    // survives this device. Awaited rather than fired and forgotten: the screen
-    // is already showing a progress state, and a backup that silently loses the
-    // race with the confirmation is not a backup. Never throws — see
-    // publishIssued.
-    await publishIssued(toTransaction(row))
   } catch (error) {
     console.error('[issue] delivered, but not recorded in local history', error)
   }

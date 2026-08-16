@@ -1,6 +1,16 @@
 import { describe, it, expect } from 'vitest'
 import type { VoucherRow } from '@imani/wallet-storage'
-import { toFarmers, toVoucher, totalFaceValue, couponsFor, walletTotals, findFarmer } from '../farmers'
+import {
+  toFarmers,
+  toVoucher,
+  totalFaceValue,
+  couponsFor,
+  walletTotals,
+  findFarmer,
+  withPastFarmers,
+  findFarmerWithHistory,
+} from '../farmers'
+import type { WalletTransaction } from '../transactions'
 import { formatSats } from '../format'
 
 const PUBKEY_A = 'a'.repeat(64)
@@ -282,5 +292,76 @@ describe('walletTotals', () => {
 
   it('is empty for an empty wallet', () => {
     expect(walletTotals([])).toEqual([])
+  })
+})
+
+const tx = (over: Partial<WalletTransaction> = {}): WalletTransaction => ({
+  id: `payment:${(seq += 1)}`,
+  type: 'payment',
+  direction: 'out',
+  at: 1_755_000_000_000,
+  amount: 100,
+  unit: 'EUR',
+  decimals: 2,
+  merchantId: PUBKEY_A,
+  ...over,
+})
+
+describe('withPastFarmers', () => {
+  it('adds a farmer known only from history', () => {
+    // The whole point of the customer restore: spend the last coupon and the
+    // farmer must stay on the home screen, because their card is the only route
+    // to the record of what was spent.
+    const farmers = withPastFarmers([], [tx({ merchantId: PUBKEY_B, merchantName: 'Bea' })])
+
+    expect(farmers.map((f) => f.pubkey)).toEqual([PUBKEY_B])
+    expect(farmers[0].name).toBe('Bea')
+    expect(farmers[0].voucherCount).toBe(0)
+    expect(totalFaceValue(farmers[0])).toBe(0)
+  })
+
+  it('does not duplicate a farmer whose coupons are still held', () => {
+    const held = toFarmers([row({ issuer_id: PUBKEY_A })])
+
+    expect(withPastFarmers(held, [tx({ merchantId: PUBKEY_A })]).map((f) => f.pubkey)).toEqual([
+      PUBKEY_A,
+    ])
+  })
+
+  it('takes the first real name, whatever order the rows arrive in', () => {
+    // Only some rows carry merchantName, and history is not sorted by it.
+    const farmers = withPastFarmers(
+      [],
+      [tx({ merchantId: PUBKEY_C }), tx({ merchantId: PUBKEY_C, merchantName: 'Cara' })],
+    )
+
+    expect(farmers).toHaveLength(1)
+    expect(farmers[0].name).toBe('Cara')
+  })
+
+  it('skips a row with no counterparty', () => {
+    // 'unknown' is the grouper's bucket for several different people at once.
+    expect(withPastFarmers([], [tx({ merchantId: undefined })])).toEqual([])
+  })
+
+  it('falls back to counterparty when there is no merchantId', () => {
+    expect(
+      withPastFarmers([], [tx({ merchantId: undefined, counterparty: PUBKEY_B })]).map(
+        (f) => f.pubkey,
+      ),
+    ).toEqual([PUBKEY_B])
+  })
+})
+
+describe('findFarmerWithHistory', () => {
+  it('resolves a farmer holding no coupons — the screen would say "No coupons from this farmer"', () => {
+    expect(findFarmerWithHistory([], [tx({ merchantId: PUBKEY_B })], PUBKEY_B)?.pubkey).toBe(
+      PUBKEY_B,
+    )
+    expect(findFarmer([], PUBKEY_B)).toBeUndefined()
+  })
+
+  it('is undefined for a farmer in neither', () => {
+    expect(findFarmerWithHistory([], [], PUBKEY_B)).toBeUndefined()
   })
 })

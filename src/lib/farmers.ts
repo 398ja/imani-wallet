@@ -3,6 +3,7 @@ import type { Voucher, MerchantGroup } from '@imani/voucher-send'
 import type { VoucherRow } from '@imani/wallet-storage'
 
 import { toEpochMs } from './format'
+import type { WalletTransaction } from './transactions'
 
 /**
  * A farmer, as the wallet's home screen thinks of one: an issuer pubkey plus
@@ -139,6 +140,50 @@ export function toFarmers(rows: VoucherRow[]): Farmer[] {
  */
 export function totalFaceValue(farmer: Farmer): number {
   return farmer.groups.reduce((sum, g) => sum + g.totalFaceValue, 0)
+}
+
+/**
+ * The farmer list, plus everyone you have a history with but hold nothing from.
+ *
+ * Every customer screen is rooted in `listVouchers()` — the home list, and
+ * therefore the only route to `/farmer/:pubkey` and to the transactions on it.
+ * So a farmer whose coupons are all spent disappeared completely, taking the
+ * record of what was spent with them; and a device restored from the relay
+ * before coupon backup existed showed "No coupons yet" over a full history.
+ * Past farmers come back with an empty `groups`, which every consumer already
+ * tolerates — `toFarmerPass` reads `groups[0]?.unit`, and `totalFaceValue`
+ * sums to 0.
+ */
+export function withPastFarmers(farmers: Farmer[], transactions: WalletTransaction[]): Farmer[] {
+  const held = new Set(farmers.map((f) => f.pubkey))
+  const past = new Map<string, Farmer>()
+
+  for (const tx of transactions) {
+    const key = issuerKey(tx.merchantId ?? tx.counterparty)
+    // 'unknown' is the grouper's bucket for a coupon with no issuer. A farmer
+    // page for it would be a page about several different people.
+    if (key === 'unknown' || held.has(key)) continue
+
+    const existing = past.get(key)
+    if (!existing) {
+      past.set(key, { pubkey: key, name: tx.merchantName || key, groups: [], voucherCount: 0 })
+    } else if (existing.name === key && tx.merchantName) {
+      // Rows are not ordered, and only some carry a name. Take the first real one.
+      existing.name = tx.merchantName
+    }
+  }
+
+  return [...farmers, ...past.values()]
+}
+
+/** `findFarmer`, but a farmer known only from history still resolves. */
+export function findFarmerWithHistory(
+  rows: VoucherRow[],
+  transactions: WalletTransaction[],
+  pubkey: string,
+): Farmer | undefined {
+  const target = issuerKey(pubkey)
+  return withPastFarmers(toFarmers(rows), transactions).find((f) => f.pubkey === target)
 }
 
 /**

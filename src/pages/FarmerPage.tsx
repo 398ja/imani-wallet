@@ -12,7 +12,7 @@ import {
   TransactionListItem,
 } from '../components/ui'
 import { listVouchers, transactionsWith, onWalletChanged } from '../lib/wallet'
-import { findFarmer, couponsFor, type Farmer } from '../lib/farmers'
+import { findFarmerWithHistory, couponsFor, type Farmer } from '../lib/farmers'
 import { toFarmerPass, EMPTY_BRANDING, type MerchantBranding } from '../lib/pass'
 import { merchantBranding } from '../lib/branding'
 import type { WalletTransaction } from '../lib/transactions'
@@ -37,12 +37,15 @@ export function FarmerPage() {
 
   useEffect(() => {
     const load = async () => {
-      const rows = await listVouchers()
-      setFarmer(findFarmer(rows, pubkey) ?? null)
+      const [rows, history] = await Promise.all([listVouchers(), transactionsWith(pubkey)])
+      // Through the history too, or a farmer whose coupons are all spent bounces
+      // off the `farmer === null` branch below with "No coupons from this
+      // farmer." — over a screen whose whole other half is the history with them.
+      setFarmer(findFarmerWithHistory(rows, history, pubkey) ?? null)
       // Rows, not farmer.groups[].vouchers — only the row carries token_id, and
       // that is what addresses a coupon's detail screen.
       setCouponCount(couponsFor(rows, pubkey).length)
-      setTransactions(await transactionsWith(pubkey))
+      setTransactions(history)
     }
     load()
     return onWalletChanged(load)

@@ -1,0 +1,75 @@
+{
+  "name": "@imani/dm-poll",
+  "version": "0.4.1",
+  "description": "NIP-17 DM polling and auto-redemption service for Cashu tokens",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./adapters": {
+      "import": {
+        "types": "./dist/adapters/index.d.ts",
+        "default": "./dist/adapters/index.js"
+      },
+      "require": {
+        "types": "./dist/adapters/index.d.cts",
+        "default": "./dist/adapters/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "peerDependencies": {
+    "nostr-tools": "^2.10.0"
+  },
+  "peerDependenciesMeta": {
+    "nostr-tools": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.3",
+    "tsup": "^8.0.1",
+    "vitest": "^2.0.0",
+    "nostr-tools": "^2.10.4"
+  },
+  "keywords": [
+    "imani",
+    "nostr",
+    "nip-17",
+    "dm",
+    "cashu",
+    "token",
+    "redemption",
+    "gift-wrap"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ArcadeLabsInc/imani-apps.git",
+    "directory": "packages/dm-poll"
+  }
+}

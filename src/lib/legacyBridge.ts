@@ -36,21 +36,21 @@ import * as NostrTools from 'nostr-tools'
 
 // `?url` rather than a hardcoded /@fs path: Vite rewrites these to the served
 // URL in dev and emits them as assets on build, so the same code works in both.
-import formatUrl from '../../../imani-apps/shared/format.js?url'
-import gatewayConfigUrl from '../../../imani-apps/shared/gateway-config.js?url'
-import tokenSecurityLibUrl from '../../../imani-apps/shared/lib/token-security.browser.js?url'
-import tokenSecurityUrl from '../../../imani-apps/shared/tokenSecurityIntegration.js?url'
-import nostrUrl from '../../../imani-apps/shared/nostr.js?url'
-import apiUrl from '../../../imani-apps/shared/api.js?url'
-import walletStorageUrl from '../../../imani-apps/shared/walletStorageIntegration.js?url'
-import tokenRedemptionUrl from '../../../imani-apps/shared/tokenRedemption.js?url'
+import formatUrl from '../../shared/format.js?url'
+import gatewayConfigUrl from '../../shared/gateway-config.js?url'
+import tokenSecurityLibUrl from '../../shared/lib/token-security.browser.js?url'
+import tokenSecurityUrl from '../../shared/tokenSecurityIntegration.js?url'
+import nostrUrl from '../../shared/nostr.js?url'
+import apiUrl from '../../shared/api.js?url'
+import walletStorageUrl from '../../shared/walletStorageIntegration.js?url'
+import tokenRedemptionUrl from '../../shared/tokenRedemption.js?url'
 
 import { getWallet } from './wallet'
 import { getSigner } from './nap'
 // Not re-exported from the package index, so imported from source — the alias
 // already points at src/, and this is the exact derivation the store itself
 // uses, which is the whole point of not recomputing it here.
-import { tokenIdFrom } from '../../../imani-apps/packages/wallet-storage/src/tokenId'
+import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
 
 declare global {
   interface Window {
@@ -168,7 +168,7 @@ export function loadLegacyRedemption(): Promise<void> {
     // Do not hand-shim this. A guessed shim does not sit alongside the mirror,
     // it suppresses it — which surfaced as
     // `__currencyApi.normalizeFaceUnit is not a function` deep in _doRedeem.
-    const currency = await import('../../../imani-apps/shared/currency.js')
+    const currency = await import('../../shared/currency.js')
     window.ImaniCurrency ??= Object.freeze({
       UNKNOWN: currency.UNKNOWN,
       normalizeFaceUnit: currency.normalizeFaceUnit,

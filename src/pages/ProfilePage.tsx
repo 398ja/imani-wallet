@@ -33,7 +33,8 @@ export function ProfilePage({ profile }: { profile: Profile }) {
           <h1 className="text-xl font-semibold text-mono-900 dark:text-mono-50">
             {profileName(profile)}
           </h1>
-          {profile.nip05 && <p className="font-mono text-sm text-mono-500">{profile.nip05}</p>}
+          {/* Not monospaced — a handle is a word, not a key. */}
+          {profile.nip05 && <p className="text-sm text-mono-500">{profile.nip05}</p>}
         </div>
 
         {profile.about && (

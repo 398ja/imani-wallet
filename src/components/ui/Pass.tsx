@@ -75,6 +75,7 @@ export function Pass({ pass, to }: PassProps) {
   const logoUrl = pass.userInfo.logoUrl
   const stripUrl = pass.userInfo.stripUrl
   const issuer = pass.userInfo.issuer
+  const nip05 = pass.userInfo.issuerNip05
 
   const card = (
     <div
@@ -103,18 +104,25 @@ export function Pass({ pass, to }: PassProps) {
               {pass.description}
             </p>
             {/*
-              The pubkey, whenever a NAME is being shown instead of it. kind-0 is
-              self-published and unverified: a second pubkey can publish the same
-              name and picture, and coupons are per-issuer, so a customer paying
-              the wrong "Rosa Green Farm" is a real outcome. Skipped when the two
-              are equal — unbranded, the name IS the pubkey already.
+              WHO, under the name. kind-0 is self-published and unverified: a
+              second pubkey can publish the same name and picture, and coupons
+              are per-issuer, so a customer paying the wrong "Rosa Green Farm" is
+              a real outcome — the card has to say which one this is.
+
+              Their NIP-05 handle when they have one, because a short pubkey is
+              unreadable and nobody compares one. The handle is weaker evidence
+              (also self-published, and not checked against its domain here), but
+              a name a person can actually read is a disambiguator they will use.
+              Falls back to the short pubkey, which is still the unforgeable one.
+              Skipped when the name IS the pubkey — unbranded, it is on screen
+              already.
             */}
             {issuer && issuer !== pass.organizationName && (
               <p
-                className="truncate font-mono text-[10px]"
+                className={`truncate text-[10px] ${nip05 ? '' : 'font-mono'}`}
                 style={{ color: pass.labelColor, opacity: 0.55 }}
               >
-                {shortPubkey(issuer)}
+                {nip05 ?? shortPubkey(issuer)}
               </p>
             )}
           </div>

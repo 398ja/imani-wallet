@@ -7,7 +7,9 @@ import { createSession, resetSession } from './lib/nap'
 import { openWallet } from './lib/wallet'
 import { startDmPoll } from './lib/dmPoll'
 import { reconcilePendingSends } from './lib/pay'
-import { restoreIssued, backfillIssued } from './lib/issuedRecords'
+import { restoreIssued } from './lib/issuedRecords'
+import { restoreTx, backfillTx } from './lib/txRecords'
+import { restoreVouchers, backfillVouchers } from './lib/voucherRecords'
 import { logout as runLogout } from './lib/logout'
 import { emptyProfile, loadProfile, refreshProfile, type Profile } from './lib/profile'
 import {
@@ -90,21 +92,42 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           if (settled > 0) console.info(`[app] settled ${settled} pending payment(s)`)
         })
 
-        // Rebuild the merchant's books from the relay. Logout wipes the device,
-        // so on a fresh browser — or a new phone — this is what puts the sales
-        // back. Runs on every login rather than only an empty wallet, so a sale
-        // made on another device shows up here too; rows are keyed on the
-        // voucher id, so re-writing one is an overwrite, not a duplicate.
+        // Rebuild the books from the relay. Logout wipes the device, so on a
+        // fresh browser — or a new phone — this is what puts the history back.
+        // Runs on every login rather than only an empty wallet, so a payment
+        // made on another device shows up here too; rows are keyed on their own
+        // id, so re-writing one is an overwrite, not a duplicate.
         //
         // Deliberately after setReady: it is a background reconciliation, and
         // holding the whole app on a relay round-trip would make every login
-        // wait for a network that may not answer. Neither call throws.
-        void restoreIssued(pubkey).then((restored) => {
-          if (restored > 0) console.info(`[app] restored ${restored} sales from the relay`)
-          // And push up anything the relay is missing — sales made before this
-          // existed, or while a relay was refusing writes.
-          return backfillIssued(pubkey)
-        })
+        // wait for a network that may not answer. None of these throw.
+        //
+        // restoreIssued first, and only until the next release: it reads the
+        // old kind-30078 `imani:issued:` records that predate txRecords. Rows it
+        // restores are republished in the new shape by the backfill below, so
+        // nothing is stranded when it goes.
+        //
+        // Coupons FIRST. They are the customer's money and the root of every
+        // customer screen — the farmer list is built from what the wallet holds,
+        // so until they are back the app reads "No coupons yet" no matter how
+        // much history has been restored behind it.
+        void restoreVouchers(pubkey)
+          .then((coupons) => {
+            if (coupons > 0) console.info(`[app] restored ${coupons} coupon(s) from the relay`)
+            return backfillVouchers(pubkey)
+          })
+          .then(() => restoreIssued(pubkey))
+          .then((sales) => {
+            if (sales > 0) console.info(`[app] restored ${sales} legacy sale record(s)`)
+            return restoreTx(pubkey)
+          })
+          .then((restored) => {
+            if (restored > 0) console.info(`[app] restored ${restored} transactions from the relay`)
+            // And push up anything the relay is missing — transactions made
+            // before this existed, while a relay was refusing writes, or whose
+            // publish lost the race with a closing tab.
+            return backfillTx(pubkey)
+          })
       },
       (e) => live && setError(e as Error),
     )
@@ -204,7 +227,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         )}
         <Route path="/scan" element={<ScanPage />} />
         <Route path="/pay" element={<PayPage pubkey={pubkey} />} />
-        <Route path="/receive" element={<ReceivePage pubkey={pubkey} />} />
+        <Route path="/receive" element={<ReceivePage profile={profile} />} />
         <Route path="/farmer/:pubkey" element={<FarmerPage />} />
         <Route path="/farmer/:pubkey/coupons" element={<CouponsPage />} />
         <Route path="/farmer/:pubkey/transactions" element={<TransactionsPage />} />

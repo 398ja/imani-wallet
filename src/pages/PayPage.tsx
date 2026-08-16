@@ -4,7 +4,8 @@ import { ArrowLeft, CheckCircle2 } from 'lucide-react'
 
 import { listVouchers } from '../lib/wallet'
 import { toFarmers, type Farmer } from '../lib/farmers'
-import { formatFace, shortPubkey } from '../lib/format'
+import { formatFace } from '../lib/format'
+import { identityLabel, useIdentity } from '../lib/identity'
 import { payRequest, splitObstacle } from '../lib/pay'
 import type { NUT18VRequest } from '../lib/nap'
 import { Button, Centered, Fatal, Alert } from '../components/ui'
@@ -43,6 +44,11 @@ export function PayPage({ pubkey }: { pubkey: string }) {
     listVouchers().then((rows) => setFarmers(toFarmers(rows)))
   }, [])
 
+  // Before the early returns, and so before `farmer` exists — hooks cannot be
+  // called conditionally. It is the same fetch the farmer pages make, cached per
+  // pubkey, so asking here costs nothing extra.
+  const issuer = useIdentity(parsed.ok ? parsed.request.issuerId : undefined)
+
   if (!parsed.ok) return <Fatal title="Cannot read this request" detail={parsed.error} />
   const request = parsed.request
 
@@ -53,6 +59,13 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   )
   const group = farmer?.groups.find((g) => g.unit.toUpperCase() === request.unit.toUpperCase())
   const available = group?.totalFaceValue ?? 0
+  // The farmer's own coupons name them too (`merchantName`), and that name is
+  // there before any fetch — so it is the fallback while kind-0 is in flight, or
+  // when they have published none.
+  const issuerLabel = identityLabel(request.issuerId, {
+    name: issuer?.name ?? farmer?.name,
+    nip05: issuer?.nip05,
+  })
 
   const expired = request.expiry !== undefined && request.expiry * 1000 < Date.now()
   const shortfall = request.amount - available
@@ -68,7 +81,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
         <CheckCircle2 className="h-12 w-12 text-green-600" />
         <h1 className="text-xl font-semibold text-mono-900 dark:text-mono-50">Paid</h1>
         <p className="text-sm text-mono-500">
-          {formatFace(request.amount, group)} to {farmer?.name ?? shortPubkey(request.issuerId)}
+          {formatFace(request.amount, group)} to {issuerLabel}
         </p>
         <p className="font-mono text-xs text-mono-400">{status.reference}</p>
         <Button className="mt-4 w-full" onClick={() => navigate('/')}>
@@ -91,7 +104,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
         Confirm payment
       </h1>
       <p className="mb-6 text-sm text-mono-500">
-        to {farmer?.name ?? shortPubkey(request.issuerId)}
+        to {issuerLabel}
       </p>
 
       <div className="mb-6 rounded-2xl border border-mono-200 p-5 dark:border-mono-800">

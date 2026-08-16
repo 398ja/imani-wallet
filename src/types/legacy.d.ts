@@ -5,7 +5,7 @@
  * is nothing meaningful to type. Declaring them keeps `strict` on for our own
  * code instead of switching off `noImplicitAny` project-wide.
  */
-declare module '*/imani-apps/shared/nut18v.js'
+declare module '*/shared/nut18v.js'
 
 /**
  * The classic scripts are loaded via <script> tags, not imported — `?url` just
@@ -21,7 +21,7 @@ declare module '*.js?url' {
  * one tokenRedemption prefers. Typed because we pass its functions on rather
  * than importing it purely for effect.
  */
-declare module '*/imani-apps/shared/currency.js' {
+declare module '*/shared/currency.js' {
   export const UNKNOWN: string
   export function normalizeFaceUnit(input: unknown): string | null
   export function resolveFaceUnit(inputs: unknown): { faceUnit: string; source: string }

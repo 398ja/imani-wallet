@@ -1,6 +1,20 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { buildProfileEvent, emptyProfile, mergeKind0, profileName, type Profile } from '../profile'
+import {
+  buildProfileEvent,
+  emptyProfile,
+  mergeKind0,
+  profileName,
+  refreshProfile,
+  saveProfile,
+  type Profile,
+} from '../profile'
+import { fetchNewestKind0 } from '../branding'
+
+vi.mock('../branding', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../branding')>()),
+  fetchNewestKind0: vi.fn(),
+}))
 
 const PUBKEY = '4728fd8ad6a2f5c8930f4065347907e22186fba6c73bd04e145dfd780b98e451'
 
@@ -149,5 +163,49 @@ describe('buildProfileEvent', () => {
 
   it('trims values', () => {
     expect(parse(base({ displayName: '  Alice  ' })).name).toBe('Alice')
+  })
+})
+
+describe('refreshProfile', () => {
+  beforeEach(() => {
+    const store = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => store.set(k, v),
+      removeItem: (k: string) => store.delete(k),
+    })
+    vi.mocked(fetchNewestKind0).mockReset()
+  })
+
+  it('returns what is stored WHEN THE FETCH ENDS, not what was stored when it began', async () => {
+    // Every login runs this concurrently with itself — the onboarding page
+    // awaits one call and the app mounts another — and the fetch takes seconds.
+    // A snapshot taken before the await comes back stale, and App.tsx puts the
+    // result straight into state: the header rendered anonymous over a profile
+    // that had already arrived, until the user reloaded the page.
+    vi.mocked(fetchNewestKind0).mockImplementation(async () => {
+      saveProfile({ ...emptyProfile(PUBKEY), displayName: 'Alice', eventAt: 500 })
+      return null
+    })
+
+    expect((await refreshProfile(PUBKEY)).displayName).toBe('Alice')
+  })
+
+  it('merges against the stored copy the winner left behind', async () => {
+    vi.mocked(fetchNewestKind0).mockImplementation(async () => {
+      saveProfile({ ...emptyProfile(PUBKEY), displayName: 'Alice', eventAt: 500 })
+      return { content: content({ name: 'Alice', picture: 'https://farm.example/a.png' }), createdAt: 900 }
+    })
+
+    const merged = await refreshProfile(PUBKEY)
+    expect(merged.picture).toBe('https://farm.example/a.png')
+    expect(merged.eventAt).toBe(900)
+  })
+
+  it('falls back to the stored profile when both stores are unreachable', async () => {
+    saveProfile({ ...emptyProfile(PUBKEY), displayName: 'Alice' })
+    vi.mocked(fetchNewestKind0).mockRejectedValue(new Error('offline'))
+
+    expect((await refreshProfile(PUBKEY)).displayName).toBe('Alice')
   })
 })

@@ -46,17 +46,17 @@
       "@imani/nap-client-web": ["../nap/packages/nap-client-web/src/index.ts"],
       "@imani/nap-client-nip46": ["../nap/packages/nap-client-nip46/src/index.ts"],
       "@imani/nap-react": ["../nap/packages/nap-react/src/index.ts"],
-      "@imani/wallet-storage": ["../imani-apps/packages/wallet-storage/src/index.ts"],
-      "@imani/nostr-vouchers": ["../imani-apps/packages/nostr-vouchers/src/index.ts"],
-      "@imani/nostr-transactions": ["../imani-apps/packages/nostr-transactions/src/index.ts"],
-      "@imani/wallet-balance": ["../imani-apps/packages/wallet-balance/src/index.ts"],
-      "@imani/voucher-send": ["../imani-apps/packages/voucher-send/src/index.ts"],
-      "@imani/profile-service": ["../imani-apps/packages/profile-service/src/index.ts"],
-      "@imani/blossom-upload": ["../imani-apps/packages/blossom-upload/src/index.ts"],
-      "@imani/gateway-client": ["../imani-apps/packages/gateway-client/src/index.ts"],
-      "@imani/dm-poll": ["../imani-apps/packages/dm-poll/src/index.ts"],
-      "@imani/money": ["../imani-apps/packages/money/src/index.ts"],
-      "imani-qr": ["../imani-apps/packages/imani-qr/src/index.ts"]
+      "@imani/wallet-storage": ["./packages/wallet-storage/src/index.ts"],
+      "@imani/nostr-vouchers": ["./packages/nostr-vouchers/src/index.ts"],
+      "@imani/nostr-transactions": ["./packages/nostr-transactions/src/index.ts"],
+      "@imani/wallet-balance": ["./packages/wallet-balance/src/index.ts"],
+      "@imani/voucher-send": ["./packages/voucher-send/src/index.ts"],
+      "@imani/profile-service": ["./packages/profile-service/src/index.ts"],
+      "@imani/blossom-upload": ["./packages/blossom-upload/src/index.ts"],
+      "@imani/gateway-client": ["./packages/gateway-client/src/index.ts"],
+      "@imani/dm-poll": ["./packages/dm-poll/src/index.ts"],
+      "@imani/money": ["./packages/money/src/index.ts"],
+      "imani-qr": ["./packages/imani-qr/src/index.ts"]
     }
   },
   "include": ["src"]

@@ -6,7 +6,7 @@ import { legacyApi } from './legacyBridge'
 import { couponsFor, toVoucher, type Farmer } from './farmers'
 import { buildPaymentTransaction } from './transactions'
 import type { NUT18VRequest } from './nap'
-import { tokenIdFrom } from '../../../imani-apps/packages/wallet-storage/src/tokenId'
+import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
 
 /**
  * Paying a farmer's voucher payment request.

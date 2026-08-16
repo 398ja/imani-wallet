@@ -1,5 +1,6 @@
 import type { MerchantBranding } from './pass'
 import { EMPTY_BRANDING } from './pass'
+import { allEvents } from './relay'
 
 /**
  * Merchant branding for a farmer's pass, from their Nostr identity.
@@ -20,8 +21,16 @@ import { EMPTY_BRANDING } from './pass'
  * bootstrap endpoint.
  */
 
-/** Same-origin via the Vite `/customer` proxy → customer-wallet:28082. */
-const GATEWAY = '/customer'
+/**
+ * Same-origin, no prefix: `/api/v1/...` reaches customer-wallet through the
+ * proxy rule that already routes `/api`.
+ *
+ * This was `/customer`, a second prefix that existed only so the dev proxy could
+ * strip it. Reproducing that at the edge means a capture-into-variable rewrite,
+ * and the obvious form of it silently drops the query string — which is where
+ * dm-poll's subscription filter lives. One prefix, one rule, no rewrite.
+ */
+const GATEWAY = ''
 
 interface RawEvent {
   kind?: number
@@ -39,6 +48,7 @@ interface RawEvent {
 interface Kind0Content {
   name?: unknown
   display_name?: unknown
+  nip05?: unknown
   picture?: unknown
   banner?: unknown
   about?: unknown
@@ -118,6 +128,8 @@ export function brandingFromKind0(content: string): MerchantBranding {
     // `display_name` is the friendlier of the two when both are set, but `name`
     // is what MerchantBranding's javadoc names, so it wins.
     organizationName: str(parsed.name) ?? str(parsed.display_name),
+    // Taken verbatim and NOT verified against the domain — see MerchantBranding.
+    nip05: str(parsed.nip05),
     logoUrl: imageUrl(parsed.picture),
     bannerUrl: imageUrl(parsed.banner),
     storeDescription: str(parsed.about),
@@ -144,8 +156,38 @@ const cache = new Map<string, Promise<MerchantBranding>>()
  *
  * Uncached deliberately — `merchantBranding` caches per session, but the profile
  * editor needs to see a save it just made.
+ *
+ * THE GATEWAY IS ASKED FIRST, THE RELAY SECOND. The gateway's nostrdb cache is
+ * the cheap read and usually has the event, but it is not where this wallet
+ * WRITES — profiles are published straight to the relay (lib/relay.ts), so a
+ * cache that is lagging, cold for a pubkey it has never seen, or unauthenticated
+ * for this request answers "no such profile" about a profile that plainly
+ * exists. That is how a user came back from a login to a blank avatar and no
+ * display name, and how a farmer's coupons rendered under a truncated pubkey and
+ * "Gift Card". `newestAddressable` already refuses the cache for exactly this
+ * reason; this is the same argument applied to kind 0.
  */
 export async function fetchNewestKind0(
+  pubkey: string,
+): Promise<{ content: string; createdAt: number } | null> {
+  const cached = await gatewayKind0(pubkey).catch(() => null)
+  if (cached) return cached
+
+  try {
+    // Sort rather than trust order — querySync merges replies from several
+    // relays. kind 0 is replaceable, but relays are not obliged to have dropped
+    // the copy they replaced.
+    const newest = (await allEvents(pubkey, 0)).sort((a, b) => b.created_at - a.created_at)[0]
+    return newest ? { content: newest.content, createdAt: newest.created_at } : null
+  } catch {
+    // Both stores unreachable. Callers all have a defensible fallback — the
+    // stored profile, or the pass defaults — and none of them should throw at a
+    // user over an avatar.
+    return null
+  }
+}
+
+async function gatewayKind0(
   pubkey: string,
 ): Promise<{ content: string; createdAt: number } | null> {
   const response = await fetch(`${GATEWAY}/api/v1/nostr/query`, {
@@ -193,7 +235,19 @@ export function merchantBranding(pubkey: string): Promise<MerchantBranding> {
   const key = pubkey.toLowerCase()
   let pending = cache.get(key)
   if (!pending) {
-    pending = fetchBranding(key)
+    // FAILURES ARE NOT CACHED, only answers. The cache exists so a farmer's
+    // kind-0 is fetched once instead of once per card, and that argument holds
+    // for a profile that was found. An empty result is the opposite: it means
+    // the lookup lost a race with login, or both stores were briefly
+    // unreachable, and caching it pins "no such farmer" for the life of the
+    // document. That is what left coupons rendering under a truncated pubkey
+    // and "Gift Card" until the user reloaded — with the name sitting on the
+    // relay the whole time. Dropping the entry costs one refetch on the next
+    // render and lets the farmer appear.
+    pending = fetchBranding(key).then((branding) => {
+      if (branding === EMPTY_BRANDING) cache.delete(key)
+      return branding
+    })
     cache.set(key, pending)
   }
   return pending

@@ -3,7 +3,7 @@ import QRCode from 'qrcode'
 import { nip19 } from 'nostr-tools'
 
 import { Screen, BackLink, PageHeader, Alert } from '../components/ui'
-import { shortPubkey } from '../lib/format'
+import type { Profile } from '../lib/profile'
 
 /**
  * Receive: show this customer's address as a QR code for the farmer to scan.
@@ -11,40 +11,48 @@ import { shortPubkey } from '../lib/format'
  * Display only — no scanning, no transaction. The farmer scans this and sends
  * coupons to it as a NIP-17 DM.
  *
- * The design called for a nip05 here. This shows the npub instead, and the
- * reason is worth recording rather than quietly reverting later: a nip05 is an
- * alias that a sender resolves to exactly this pubkey, so the npub is the same
- * destination without the human-readable name — but nothing in this stack can
- * produce the alias. Registration belongs to bottin (out of scope, §2),
- * bottin's `.well-known/nostr.json` here is `{"names":{}}`, and no per-pubkey
- * reverse-lookup endpoint exists on any tier — the `/api/v1/identity/{pubkey}`
- * this used to call 404s, having been written from assumption. Calling a
- * guessed endpoint for absent data is what produced the failing screen.
+ * **The QR carries the NIP-05 handle**, not the npub. Both name the same
+ * destination, but only one of them is something a person can read back over a
+ * market stall, and "npub1qq…" on a customer's screen is the single most
+ * confusing thing in this app. Registration writes `handle@domain` into the
+ * profile and publishes it in kind-0 (`lib/registration.ts`), and the merchant's
+ * scanner resolves it back to the pubkey through `/api/v1/resolve` before
+ * addressing anything.
  *
- * ponytail: npub only. Show the nip05 when a customer actually has one — which
- * needs a bottin registration flow and a real lookup endpoint, not a guess.
+ * An earlier version of this comment said nothing in the stack could produce the
+ * alias. That was true of the endpoint it had guessed at and is no longer true
+ * of the stack: probed live, `/api/v1/resolve/{nip05}` answers 200 with
+ * `hex_pubkey` for every registered handle on staging.
+ *
+ * The npub remains the fallback, for accounts registered before handles existed
+ * — and it is what a local dev machine falls back to in practice, since
+ * `/api/v1/resolve` resolves only publicly served domains and `imani.local` is
+ * not one.
  */
-export function ReceivePage({ pubkey }: { pubkey: string }) {
+export function ReceivePage({ profile }: { profile: Profile }) {
   const [dataUrl, setDataUrl] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [qrError, setQrError] = useState<string | null>(null)
 
   const npub = (() => {
     try {
-      return nip19.npubEncode(pubkey)
+      return nip19.npubEncode(profile.pubkey)
     } catch {
       return null
     }
   })()
 
+  const code = profile.nip05 ?? npub
+
   useEffect(() => {
-    if (!npub) {
-      setError('This account has no usable public key.')
-      return
-    }
-    QRCode.toDataURL(npub, { width: 512, margin: 1 }).then(setDataUrl, (e: Error) =>
-      setError(e.message),
+    if (!code) return
+    QRCode.toDataURL(code, { width: 512, margin: 1 }).then(setDataUrl, (e: Error) =>
+      setQrError(e.message),
     )
-  }, [npub])
+  }, [code])
+
+  // Derived, not stored: "no address at all" is a fact about the profile, known
+  // at render, and setting it from the effect is a cascading render.
+  const error = code ? qrError : 'This account has no usable address.'
 
   return (
     <Screen>
@@ -57,13 +65,22 @@ export function ReceivePage({ pubkey }: { pubkey: string }) {
         <div className="flex flex-col items-center gap-4">
           <img
             src={dataUrl}
-            alt={`QR code for ${npub}`}
+            alt={`QR code for ${code}`}
             className="w-full max-w-xs rounded-2xl bg-white p-4"
           />
-          <p className="break-all text-center font-mono text-sm text-mono-900 dark:text-mono-50">
-            {npub}
+          {profile.displayName && (
+            <p className="text-center text-lg font-semibold text-mono-900 dark:text-mono-50">
+              {profile.displayName}
+            </p>
+          )}
+          {/* Monospace only when it is the npub: a handle is a word, not a key. */}
+          <p
+            className={`break-all text-center text-sm text-mono-500 ${
+              profile.nip05 ? '' : 'font-mono'
+            }`}
+          >
+            {code}
           </p>
-          <p className="font-mono text-xs text-mono-400">{shortPubkey(pubkey)}</p>
         </div>
       )}
     </Screen>
