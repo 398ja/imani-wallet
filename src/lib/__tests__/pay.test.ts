@@ -1,15 +1,36 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { Voucher } from '@imani/voucher-send'
 import type { VoucherRow } from '@imani/wallet-storage'
 
 import {
   buildSendParams,
   checkSplittable,
+  loadPendingSends,
   minSplitStep,
+  reconcilePendingSends,
   replaceVoucherToken,
   selectVouchers,
   splitObstacle,
 } from '../pay'
+
+// Stand-ins for the wallet store and imani-apps' classic-script API client. The
+// reconcile path is the only thing here that reaches for either; every other
+// test in this file works on values.
+const stubs = vi.hoisted(() => ({
+  wallet: {} as Record<string, unknown>,
+  api: {} as Record<string, unknown>,
+  notified: { count: 0 },
+}))
+
+vi.mock('../wallet', () => ({
+  getWallet: () => stubs.wallet,
+  listVouchers: async () => [],
+  notifyWalletChanged: () => {
+    stubs.notified.count += 1
+  },
+}))
+
+vi.mock('../legacyBridge', () => ({ legacyApi: async () => stubs.api }))
 import { tokenIdFrom } from '../../../../imani-apps/packages/wallet-storage/src/tokenId'
 import type { NUT18VRequest } from '../nap'
 
@@ -325,6 +346,161 @@ describe('replaceVoucherToken', () => {
     expect(removed).toEqual([])
     expect(saved[0].token).toBe(NEW_TOKEN)
     expect(error).toHaveBeenCalled()
+    error.mockRestore()
+  })
+})
+
+/**
+ * The path that pays for a 20s poll being wrong.
+ *
+ * Staging send as_fc6bd90785a74a9e finished 7m48s after DM_SENT — long after the
+ * poll gave up. The gateway was right and the wallet was silent: the farmer had
+ * the coupon, the customer's wallet still listed one whose proofs were burnt,
+ * their history showed no payment, and £9.00 of change sat unclaimed.
+ */
+describe('reconcilePendingSends', () => {
+  const PK = 'c'.repeat(64)
+  const KEEP_TOKEN = `cashuB${'k'.repeat(30)}`
+  const KEY = `imani-wallet:pending-sends:${PK}`
+
+  const store = new Map<string, string>()
+
+  const pending = (over: Record<string, unknown> = {}) => ({
+    sendId: 'as_fc6bd90785a74a9e',
+    tokenId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    amount: 300,
+    unit: 'GBP',
+    decimals: 2,
+    farmerPubkey: 'f'.repeat(64),
+    farmerName: 'Hill Farm',
+    voucherId: '71fa3948-0f65-4b54-b1eb-09d19a01e210',
+    memo: 'Saturday veg box',
+    sourceFaceValue: 1200,
+    at: Date.now() - 60_000,
+    ...over,
+  })
+
+  const sourceRow = {
+    token_id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    token: `cashuB${'o'.repeat(30)}`,
+    face_value: 1200,
+    face_unit: 'GBP',
+    face_decimals: 2,
+    token_amount: 1200,
+    amount: 1200,
+    issuer_id: 'f'.repeat(64),
+    status: 'active',
+  } as unknown as VoucherRow
+
+  /** @returns what the fake store ended up holding. */
+  function wallet(row: VoucherRow | null) {
+    const saved: VoucherRow[] = []
+    const transactions: Record<string, unknown>[] = []
+    const removed: string[] = []
+    Object.assign(stubs.wallet, {
+      getVoucher: async (id: string) => (row && id === row.token_id ? row : null),
+      removeVoucher: async (id: string) => {
+        removed.push(id)
+        return Boolean(row && id === row.token_id)
+      },
+      saveVoucher: async (next: VoucherRow) => void saved.push(next),
+      addTransaction: async (tx: Record<string, unknown>) => void transactions.push(tx),
+    })
+    return { saved, transactions, removed }
+  }
+
+  beforeEach(() => {
+    store.clear()
+    stubs.notified.count = 0
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    })
+  })
+
+  it('settles a send that completed after the wallet stopped waiting', async () => {
+    store.set(KEY, JSON.stringify([pending()]))
+    const acked: string[] = []
+    Object.assign(stubs.api, {
+      getAtomicSendStatus: async () => ({
+        status: 'COMPLETED',
+        keep_token: KEEP_TOKEN,
+        keep_face_value: 900,
+      }),
+      ackKeepToken: async (id: string) => void acked.push(id),
+      reclaimAtomicSend: async () => ({}),
+    })
+    const { saved, transactions } = wallet(sourceRow)
+
+    expect(await reconcilePendingSends(PK)).toBe(1)
+
+    // The change coupon carries the gateway's face value, not a local
+    // subtraction — the split rounds and the token is what it is.
+    expect(saved[0].face_value).toBe(900)
+    expect(saved[0].token).toBe(KEEP_TOKEN)
+    // And the spend is in the history, at the time it was made.
+    expect(transactions[0].amount).toBe(300)
+    expect(transactions[0].direction).toBe('out')
+    // Acked only after the local write, so the gateway keeps the change until
+    // this wallet has it.
+    expect(acked).toEqual(['as_fc6bd90785a74a9e'])
+    expect(loadPendingSends(PK)).toEqual([])
+    expect(stubs.notified.count).toBe(1)
+  })
+
+  it('keeps waiting on a send that is still in flight', async () => {
+    store.set(KEY, JSON.stringify([pending()]))
+    Object.assign(stubs.api, {
+      getAtomicSendStatus: async () => ({ status: 'DM_SENT' }),
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    const { saved, transactions, removed } = wallet(sourceRow)
+
+    expect(await reconcilePendingSends(PK)).toBe(0)
+
+    expect([saved, transactions, removed]).toEqual([[], [], []])
+    expect(loadPendingSends(PK)).toHaveLength(1)
+  })
+
+  it('does not settle twice when the coupon is already gone', async () => {
+    store.set(KEY, JSON.stringify([pending()]))
+    Object.assign(stubs.api, {
+      getAtomicSendStatus: async () => ({ status: 'COMPLETED', keep_token: KEEP_TOKEN }),
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    // No source row: the live path already settled this one.
+    const { saved, transactions } = wallet(null)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    expect(await reconcilePendingSends(PK)).toBe(0)
+
+    // Writing the change again would re-key it from a null row and strip its
+    // issuer, unit and decimals.
+    expect(saved).toEqual([])
+    expect(transactions).toEqual([])
+    expect(loadPendingSends(PK)).toEqual([])
+    warn.mockRestore()
+  })
+
+  it('keeps the record when the gateway cannot be reached', async () => {
+    store.set(KEY, JSON.stringify([pending()]))
+    Object.assign(stubs.api, {
+      getAtomicSendStatus: async () => {
+        throw new Error('Failed to fetch')
+      },
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    wallet(sourceRow)
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    expect(await reconcilePendingSends(PK)).toBe(0)
+
+    // A network answer is not a payment answer.
+    expect(loadPendingSends(PK)).toHaveLength(1)
     error.mockRestore()
   })
 })
