@@ -198,9 +198,12 @@ async function waitForToken(voucherId: string): Promise<IssuedVoucher> {
   let last: IssuedVoucher = { voucher_id: voucherId }
 
   for (let i = 0; i < POLL_ATTEMPTS; i += 1) {
-    const response = await fetch(`/api/v1/wallet/vouchers/${voucherId}`, {
-      credentials: 'include',
-    })
+    // Signed, not plain: /api/v1/wallet is a NIP-98-protected prefix and the
+    // filter authenticates reads as well as writes now, so an unsigned GET here
+    // 401s and the poll silently never sees a token. The 2s interval keeps each
+    // signature's created_at distinct, so the replay cache does not reject the
+    // repeats. signedFetch carries credentials: 'include' already.
+    const response = await signedFetch(`/api/v1/wallet/vouchers/${voucherId}`, 'GET')
     if (response.ok) {
       last = (await response.json()) as IssuedVoucher
       if (last.token && last.status === 'ISSUED') return last
@@ -234,9 +237,8 @@ async function waitForExpiry(voucher: IssuedVoucher): Promise<IssuedVoucher> {
     if (seconds && seconds * 1000 > Date.now() + 3_600_000) return last
 
     await sleep(POLL_INTERVAL_MS)
-    const response = await fetch(`/api/v1/wallet/vouchers/${last.voucher_id}`, {
-      credentials: 'include',
-    })
+    // Signed for the same reason as waitForToken above.
+    const response = await signedFetch(`/api/v1/wallet/vouchers/${last.voucher_id}`, 'GET')
     if (response.ok) last = (await response.json()) as IssuedVoucher
   }
 
