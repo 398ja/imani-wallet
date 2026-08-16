@@ -294,6 +294,56 @@ export function mergeMerchantEvent(
 }
 
 /**
+ * Is SOMEONE ELSE trading as a merchant?
+ *
+ * The same question `isMerchant` answers about the signed-in user, asked about a
+ * pubkey we do not own: has that key published a live `imani:merchant` record.
+ * There is still no role flag anywhere to read — see this module's header — so
+ * the record itself is the answer, and an unparseable one still counts, because
+ * publishing it is the act that makes someone a merchant. Only an explicit
+ * `active: false` retires them.
+ *
+ * Cached per session and keyed by pubkey: the avatar asks this every time it
+ * renders and a coupon deck renders the same issuer on every card. Only a
+ * POSITIVE answer is cached, for the reason `merchantBranding` gives at length —
+ * a lookup that lost a race with login, or a relay that was briefly unreachable,
+ * would otherwise pin "not a merchant" on a real stall for the life of the
+ * document, and the badge would stay missing until the user reloaded.
+ *
+ * Never rejects. A badge is decoration; nobody should see an error over one.
+ */
+const merchantCache = new Map<string, Promise<boolean>>()
+
+export function isMerchantPubkey(pubkey: string): Promise<boolean> {
+  const key = pubkey.toLowerCase()
+  let pending = merchantCache.get(key)
+  if (!pending) {
+    pending = fetchIsMerchant(key).then((yes) => {
+      if (!yes) merchantCache.delete(key)
+      return yes
+    })
+    merchantCache.set(key, pending)
+  }
+  return pending
+}
+
+async function fetchIsMerchant(pubkey: string): Promise<boolean> {
+  // The copy we already hold, first. For the signed-in user that is always
+  // present — `refreshMerchant` saved it at login — so their own badge costs no
+  // round trip at all. Nothing is saved for anyone else: their record is not
+  // ours to keep, and the session cache above is enough.
+  if (isMerchant(loadMerchant(pubkey))) return true
+
+  try {
+    const event = await newestAddressable(pubkey, MERCHANT_KIND, MERCHANT_D_TAG)
+    if (event === null) return false
+    return isMerchant(mergeMerchantEvent(emptyMerchant(pubkey), event.content, event.created_at))
+  } catch {
+    return false
+  }
+}
+
+/**
  * Reconcile the stored record with the relay, as `refreshProfile` does for kind-0.
  *
  * Never throws: an unreachable relay means we show the copy we already have,

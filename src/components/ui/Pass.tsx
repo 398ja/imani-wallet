@@ -97,7 +97,12 @@ export function Pass({ pass, to }: PassProps) {
 
       <div className="p-5">
         <div className="flex items-center gap-3">
-          <Avatar src={logoUrl} name={displayName(pass.organizationName)} size="md" />
+          <Avatar
+            src={logoUrl}
+            name={displayName(pass.organizationName)}
+            pubkey={issuer}
+            size="md"
+          />
           <div className="min-w-0">
             <p className="truncate font-semibold">{displayName(pass.organizationName)}</p>
             <p className="truncate text-xs" style={{ color: pass.labelColor, opacity: 0.7 }}>

@@ -19,6 +19,8 @@ import { shortPubkey } from './format'
 export interface Identity {
   name?: string
   nip05?: string
+  /** kind-0 `picture`, already narrowed to https/data by `imageUrl`. */
+  picture?: string
 }
 
 /**
@@ -113,7 +115,11 @@ export function useIdentity(pubkey: string | undefined): Identity | undefined {
       if (!cancelled) {
         setResolved({
           pubkey,
-          identity: { name: branding.organizationName, nip05: branding.nip05 },
+          identity: {
+            name: branding.organizationName,
+            nip05: branding.nip05,
+            picture: branding.logoUrl,
+          },
         })
       }
     })

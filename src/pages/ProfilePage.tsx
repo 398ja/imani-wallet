@@ -28,7 +28,7 @@ export function ProfilePage({ profile }: { profile: Profile }) {
       )}
 
       <div className="flex flex-col items-center gap-3 text-center">
-        <Avatar src={profile.picture} name={profileName(profile)} size="xl" />
+        <Avatar src={profile.picture} name={profileName(profile)} pubkey={profile.pubkey} size="xl" />
         <div>
           <h1 className="text-xl font-semibold text-mono-900 dark:text-mono-50">
             {profileName(profile)}
