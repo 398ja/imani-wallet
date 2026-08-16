@@ -295,6 +295,212 @@ async function reclaim(
 }
 
 /**
+ * A send whose outcome we never saw.
+ *
+ * Everything `settleSend` needs, because by the time this is read back the
+ * coupon, the farmer and the request are all long out of scope. Stored rather
+ * than re-derived: the source coupon is exactly what a settle DELETES, so a
+ * record that pointed at it by lookup would be unreadable in the one case that
+ * matters.
+ */
+export interface PendingSend {
+  sendId: string
+  /** Primary key of the source row — see `replaceVoucherToken`. */
+  tokenId: string
+  /** Minor units actually paid, never the coupon's face value. */
+  amount: number
+  unit: string
+  decimals: number
+  farmerPubkey: string
+  farmerName?: string
+  voucherId?: string
+  memo?: string
+  /** Source coupon's face, for the change when the gateway omits keep_face_value. */
+  sourceFaceValue: number
+  at: number
+}
+
+// Same `imani-wallet:` prefix and pubkey scoping as the profile, merchant and
+// payment-request records.
+const pendingKey = (pubkey: string) => `imani-wallet:pending-sends:${pubkey}`
+
+export function loadPendingSends(pubkey: string): PendingSend[] {
+  try {
+    const raw = localStorage.getItem(pendingKey(pubkey))
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as PendingSend[]
+    return Array.isArray(parsed) ? parsed.filter((p) => typeof p?.sendId === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function savePendingSends(pubkey: string, sends: PendingSend[]): void {
+  if (sends.length === 0) localStorage.removeItem(pendingKey(pubkey))
+  else localStorage.setItem(pendingKey(pubkey), JSON.stringify(sends))
+}
+
+/** Records a send we stopped waiting for. Keyed on send id, so a retry overwrites. */
+function rememberPendingSend(pubkey: string, pending: PendingSend): void {
+  const others = loadPendingSends(pubkey).filter((p) => p.sendId !== pending.sendId)
+  savePendingSends(pubkey, [pending, ...others].slice(0, 20))
+}
+
+/**
+ * Settle the local side of a COMPLETED send.
+ *
+ * The proofs are already gone from the source coupon: either the whole thing was
+ * sent, or the backend split it and handed back the change as keep_token.
+ * Acknowledging lets the backend erase its copy, so it must come after the local
+ * write, never before.
+ *
+ * Shared by the live path and `reconcilePendingSends` deliberately — two
+ * settle implementations would be two chances to get the change coupon wrong,
+ * and that is the money-losing edit in this file.
+ *
+ * Returns false when the source row is already gone, which means a settle has
+ * happened before (another tab, or a reconcile racing the live path). Bailing
+ * there is not fussiness: `replaceVoucherToken` spreads the row it found, so a
+ * second pass would rewrite the change coupon from `null` and strip its issuer,
+ * unit and decimals.
+ */
+async function settleSend(
+  api: { ackKeepToken(sendId: string): Promise<void> },
+  wallet: ReturnType<typeof getWallet>,
+  pending: PendingSend,
+  status: SendStatus,
+): Promise<boolean> {
+  const spentTokenId = pending.tokenId
+  const source = await wallet.getVoucher(spentTokenId)
+  if (!source) {
+    console.warn('[pay] source coupon already settled, skipping:', pending.sendId)
+    await api.ackKeepToken(pending.sendId).catch(() => {})
+    return false
+  }
+
+  if (status.keep_token) {
+    // Partial send: what comes back is the change. Prefer the server's
+    // keep_face_value — the split can round, so a local subtraction is not
+    // guaranteed to agree with the token actually issued.
+    await replaceVoucherToken(
+      wallet,
+      spentTokenId,
+      status.keep_token,
+      status.keep_face_value ?? pending.sourceFaceValue - pending.amount,
+    )
+  } else {
+    // Full send: the coupon is gone. Remove by its real key and say so loudly if
+    // it did not match, because a silent no-op here leaves the customer looking
+    // at a coupon they have already spent.
+    const removed = await wallet.removeVoucher(spentTokenId)
+    if (!removed) {
+      console.error('[pay] spent coupon was not removed from the wallet, key:', spentTokenId)
+    }
+  }
+
+  // Record the spend so the farmer's history shows both sides. Written after the
+  // coupon settles, not before: a transaction row is a record, and the coupon is
+  // the money. If this throws, the payment still happened and the coupon is
+  // correctly gone — a missing history entry beats a phantom coupon, so it is
+  // non-fatal but never silent.
+  try {
+    await wallet.addTransaction(
+      buildPaymentTransaction({
+        tokenId: spentTokenId,
+        amount: pending.amount,
+        unit: pending.unit,
+        decimals: pending.decimals,
+        merchantId: pending.farmerPubkey,
+        merchantName: pending.farmerName,
+        voucherId: pending.voucherId,
+        memo: pending.memo,
+        at: pending.at,
+      }),
+    )
+  } catch (error) {
+    console.error('[pay] payment recorded at the gateway but not in local history', error)
+  }
+
+  await api.ackKeepToken(pending.sendId).catch(() => {
+    // Non-fatal: the backend expires its copy anyway, and the money has moved.
+  })
+  return true
+}
+
+/**
+ * Finish sends this wallet stopped waiting for.
+ *
+ * The poll below gives up after 20s, which is not a verdict on the payment: on
+ * 2026-08-16 a saga blocked at the gateway for 7m48s and then completed
+ * normally. Until this existed the send id was reported to the customer and then
+ * forgotten, so a saga that finished late finished only at the gateway — the
+ * farmer had the coupon, while the customer's wallet still listed a coupon whose
+ * proofs the mint had burnt, showed no payment in its history, and left the
+ * change (`keep_token`) unclaimed until the gateway cleared it 48 hours later.
+ *
+ * Run on login, beside the other reconciliations. Never throws: a wallet must
+ * open whether or not the gateway is reachable.
+ */
+export async function reconcilePendingSends(pubkey: string): Promise<number> {
+  const pending = loadPendingSends(pubkey)
+  if (pending.length === 0) return 0
+
+  let api: {
+    getAtomicSendStatus(sendId: string): Promise<SendStatus>
+    ackKeepToken(sendId: string): Promise<void>
+    reclaimAtomicSend(sendId: string): Promise<{ reclaimed_token?: string }>
+  }
+  try {
+    api = (await legacyApi()) as never
+  } catch (error) {
+    console.error('[pay] cannot reconcile pending sends, API client unavailable', error)
+    return 0
+  }
+
+  const wallet = getWallet()
+  const unresolved: PendingSend[] = []
+  let settled = 0
+
+  for (const send of pending) {
+    try {
+      const status = await api.getAtomicSendStatus(send.sendId)
+
+      if (!TERMINAL.includes(String(status.status))) {
+        // Still in flight at the gateway. Keep waiting — but not forever: a send
+        // the gateway no longer recognises would otherwise be retried on every
+        // login for the life of the wallet. The saga's own expiry is well inside
+        // this window, so anything still non-terminal after a week is a row that
+        // is never going to answer.
+        if (Date.now() - send.at < 7 * 24 * 60 * 60 * 1000) unresolved.push(send)
+        else console.error('[pay] giving up on a send that never reached a terminal state:', send.sendId)
+        continue
+      }
+
+      if (status.status === 'COMPLETED') {
+        if (await settleSend(api, wallet, send, status)) settled += 1
+        continue
+      }
+
+      // Terminal but not completed. Same reasoning as the live path: the saga
+      // has already burnt the source coupon's proofs and is holding the
+      // replacement, so failing without reclaiming leaves the money in an escrow
+      // the customer cannot see.
+      const note = await reclaim(api, wallet, send.sendId, send.tokenId, status)
+      console.warn(`[pay] pending send ${send.sendId} ended as ${status.status}.${note}`)
+    } catch (error) {
+      // A status call that fails is a network answer, not a payment answer —
+      // keep the record and try again next login.
+      console.error('[pay] could not check pending send', send.sendId, error)
+      unresolved.push(send)
+    }
+  }
+
+  savePendingSends(pubkey, unresolved)
+  if (settled > 0) notifyWalletChanged()
+  return settled
+}
+
+/**
  * The body for `POST /api/v1/atomic-send`.
  *
  * Extracted so the one invariant that matters can be tested without a gateway:
@@ -333,6 +539,7 @@ export function buildSendParams(
 export async function payRequest({
   request,
   farmer,
+  payer,
 }: {
   request: NUT18VRequest
   raw: string
@@ -433,6 +640,22 @@ export async function payRequest({
 
   const wallet = getWallet()
 
+  // Everything a settle needs, captured while the coupon and the request are
+  // still in scope — see PendingSend.
+  const pending: PendingSend = {
+    sendId,
+    tokenId: sourceRow.token_id,
+    amount: request.amount,
+    unit: voucher.face_unit ?? request.unit ?? '',
+    decimals: voucher.face_decimals ?? 2,
+    farmerPubkey: farmer.pubkey,
+    farmerName: farmer.name === farmer.pubkey ? undefined : farmer.name,
+    voucherId: voucher.voucher_id,
+    memo: request.description,
+    sourceFaceValue: voucher.face_value ?? 0,
+    at: Date.now(),
+  }
+
   // Running out of polls is NOT a failed payment, and must not be reported as
   // one. A saga still mid-flight has a non-terminal status, which used to fall
   // into the branch below and tell the customer "Payment did not complete" —
@@ -442,12 +665,12 @@ export async function payRequest({
   //
   // The local coupon is deliberately left untouched: we do not know the outcome,
   // and deleting a coupon for a send that may yet fail is worse than showing one
-  // that may already be spent.
-  //
-  // ponytail: no reconciliation on the next load — the send id is reported to
-  // the customer and then forgotten. A pending-send ledger, re-checked at
-  // startup, is the real fix and is its own piece of work.
+  // that may already be spent. What is NOT left is the send itself — it goes in
+  // the pending ledger so `reconcilePendingSends` can finish it on the next
+  // login. Before that, a saga that completed late completed only at the
+  // gateway; see that function for what it cost.
   if (!TERMINAL.includes(String(status.status))) {
+    rememberPendingSend(payer, pending)
     throw new Error(
       `This payment is still going through at the gateway (send ${sendId}, ` +
         `${status.status ?? 'no status'}). It has NOT failed and your coupon is ` +
@@ -469,61 +692,7 @@ export async function payRequest({
     )
   }
 
-  // Settle the local side. The proofs are already gone from the source coupon:
-  // either the whole thing was sent, or the backend split it and handed back the
-  // change as keep_token. Acknowledging lets the backend erase its copy, so it
-  // must come after the local write, never before.
-  //
-  // Both branches below change the row: a full send deletes it, and a partial one
-  // re-keys it to the change token's hash. This is the identity of the coupon
-  // that was spent, taken from the row we selected rather than looked up again.
-  const spentTokenId = sourceRow.token_id
-
-  if (status.keep_token) {
-    // Partial send: what comes back is the change. Prefer the server's
-    // keep_face_value — the split can round, so a local subtraction is not
-    // guaranteed to agree with the token actually issued.
-    await replaceVoucherToken(
-      wallet,
-      spentTokenId,
-      status.keep_token,
-      status.keep_face_value ?? (voucher.face_value ?? 0) - request.amount,
-    )
-  } else {
-    // Full send: the coupon is gone. Remove by its real key and say so loudly if
-    // it did not match, because a silent no-op here leaves the customer looking
-    // at a coupon they have already spent.
-    const removed = await wallet.removeVoucher(spentTokenId)
-    if (!removed) {
-      console.error('[pay] spent coupon was not removed from the wallet, key:', spentTokenId)
-    }
-  }
-  // Record the spend so the farmer's history shows both sides. Written after the
-  // coupon settles, not before: a transaction row is a record, and the coupon is
-  // the money. If this throws, the payment still happened and the coupon is
-  // correctly gone — a missing history entry beats a phantom coupon, so it is
-  // non-fatal but never silent.
-  try {
-    await wallet.addTransaction(
-      buildPaymentTransaction({
-        tokenId: spentTokenId,
-        amount: request.amount,
-        unit: voucher.face_unit ?? request.unit ?? '',
-        decimals: voucher.face_decimals ?? 2,
-        merchantId: farmer.pubkey,
-        merchantName: farmer.name === farmer.pubkey ? undefined : farmer.name,
-        voucherId: voucher.voucher_id,
-        memo: request.description,
-        at: Date.now(),
-      }),
-    )
-  } catch (error) {
-    console.error('[pay] payment recorded at the gateway but not in local history', error)
-  }
-
-  await api.ackKeepToken(sendId).catch(() => {
-    // Non-fatal: the backend expires its copy anyway, and the money has moved.
-  })
+  await settleSend(api, wallet, pending, status)
 
   notifyWalletChanged()
   return request.paymentId

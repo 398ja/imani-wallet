@@ -6,6 +6,7 @@ import type { NapSession } from '@imani/nap-client-web'
 import { createSession, resetSession } from './lib/nap'
 import { openWallet } from './lib/wallet'
 import { startDmPoll } from './lib/dmPoll'
+import { reconcilePendingSends } from './lib/pay'
 import { restoreIssued, backfillIssued } from './lib/issuedRecords'
 import { logout as runLogout } from './lib/logout'
 import { emptyProfile, loadProfile, refreshProfile, type Profile } from './lib/profile'
@@ -79,6 +80,15 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         // Receiving coupons is imani-apps' pipeline verbatim: DmPollService
         // reading gift wraps through the gateway's nostrdb, never the relay.
         startDmPoll(pubkey)
+
+        // Finish any send this wallet stopped waiting for. The 20s poll in
+        // pay.ts is not a verdict — a saga can complete minutes later — and
+        // until this ran, one that did left the customer holding a coupon whose
+        // proofs were already burnt, with no payment in their history and their
+        // change unclaimed. Never throws; see reconcilePendingSends.
+        void reconcilePendingSends(pubkey).then((settled) => {
+          if (settled > 0) console.info(`[app] settled ${settled} pending payment(s)`)
+        })
 
         // Rebuild the merchant's books from the relay. Logout wipes the device,
         // so on a fresh browser — or a new phone — this is what puts the sales
