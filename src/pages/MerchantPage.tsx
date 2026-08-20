@@ -61,7 +61,7 @@ export function MerchantPage() {
 
   return (
     <Screen>
-      <BackLink to="/" label="Shops" />
+      <BackLink to="/" label="Merchants" />
 
       <div className="mb-6">
         <Pass pass={toMerchantPass(merchant, branding)} to={`/merchants/${pubkey}/coupons`} />
