@@ -42,10 +42,8 @@ export function MerchantEditPage({
     const base = merchant ?? emptyMerchant(pubkey)
     return {
       active: base.active,
-      businessType: base.businessType,
       categories: base.categories,
       location: base.location,
-      storeDescription: base.storeDescription,
       issuanceCurrency: base.issuanceCurrency,
       voucherValidityDays: base.voucherValidityDays,
     }

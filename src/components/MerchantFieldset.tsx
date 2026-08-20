@@ -1,4 +1,4 @@
-import { Input } from './ui'
+import { LocationField } from './LocationField'
 import {
   CATEGORIES,
   CURRENCIES,
@@ -8,6 +8,11 @@ import {
 
 /**
  * The merchant metadata fields.
+ *
+ * What a stall IS — its name and the line describing it — is not here. That is
+ * the account's own profile, asked for one step earlier at signup and edited at
+ * /profile after, and `merchantBranding` already reads a stall's description
+ * out of its kind-0 `about`. Asking twice produced two answers that drifted.
  *
  * One component rather than two because setting a stall up and editing it later
  * ask about the same record — possa-merchant splits them across `BusinessStep`
@@ -52,15 +57,7 @@ export function MerchantFieldset({
     )
 
   return (
-    <div className="flex flex-col gap-4">
-      <Input
-        label="Business name or type"
-        placeholder="Coffee shop"
-        value={value.businessType ?? ''}
-        onChange={(e) => set('businessType', e.target.value)}
-        disabled={disabled}
-      />
-
+    <div className="flex flex-col gap-7">
       <div>
         <span className="mb-2 block text-sm font-medium text-mono-700 dark:text-mono-300">
           What do you sell?
@@ -91,31 +88,12 @@ export function MerchantFieldset({
 
       {/* Settings only — see the note on `mode`. */}
       {mode === 'edit' && (
-        <Input
-          label="Where you trade"
-          placeholder="Independent coffee shop on Bridge Street"
-          value={value.location ?? ''}
-          onChange={(e) => set('location', e.target.value)}
+        <LocationField
+          value={value.location}
+          onChange={(location) => set('location', location)}
           disabled={disabled}
         />
       )}
-
-      <div>
-        <label
-          htmlFor="store-description"
-          className="mb-1.5 block text-sm font-medium text-mono-700 dark:text-mono-300"
-        >
-          About your business
-        </label>
-        <textarea
-          id="store-description"
-          rows={3}
-          value={value.storeDescription ?? ''}
-          onChange={(e) => set('storeDescription', e.target.value)}
-          disabled={disabled}
-          className="w-full rounded-2xl border border-mono-200 bg-white px-3.5 py-2.5 text-sm text-mono-900 placeholder:text-mono-400 focus:border-mono-900 focus:outline-none disabled:opacity-50 dark:border-mono-800 dark:bg-mono-950 dark:text-mono-50 dark:focus:border-mono-50"
-        />
-      </div>
 
       {/* Settings only. A new stall issues in the default currency until its
           owner says otherwise, which is one less question at the market stall. */}
