@@ -17,7 +17,7 @@ import {
  * But they are not the same *set* of fields, and `mode` is what differs:
  *
  * - **create** asks only what a stall cannot open without. Where you trade and
- *   which currency you issue in are settings, not signup questions — a farmer
+ *   which currency you issue in are settings, not signup questions — a merchant
  *   registering at the market does not need them to make the first sale, and the
  *   currency has a working default.
  * - **edit** adds those two, and shows **coupon validity as read-only**. Validity
@@ -55,7 +55,7 @@ export function MerchantFieldset({
     <div className="flex flex-col gap-4">
       <Input
         label="Business name or type"
-        placeholder="Market garden"
+        placeholder="Coffee shop"
         value={value.businessType ?? ''}
         onChange={(e) => set('businessType', e.target.value)}
         disabled={disabled}
@@ -93,7 +93,7 @@ export function MerchantFieldset({
       {mode === 'edit' && (
         <Input
           label="Where you trade"
-          placeholder="Saturday market, north stalls"
+          placeholder="Independent coffee shop on Bridge Street"
           value={value.location ?? ''}
           onChange={(e) => set('location', e.target.value)}
           disabled={disabled}
@@ -105,7 +105,7 @@ export function MerchantFieldset({
           htmlFor="store-description"
           className="mb-1.5 block text-sm font-medium text-mono-700 dark:text-mono-300"
         >
-          About your stall
+          About your shop
         </label>
         <textarea
           id="store-description"
@@ -125,7 +125,7 @@ export function MerchantFieldset({
             htmlFor="issuance-currency"
             className="mb-1.5 block text-sm font-medium text-mono-700 dark:text-mono-300"
           >
-            Coupon currency
+            Voucher currency
           </label>
           <select
             id="issuance-currency"
@@ -142,13 +142,13 @@ export function MerchantFieldset({
           </select>
           {/* Not editable per sale on purpose: every coupon this stall issues is
               in one currency, which is what makes a single balance meaningful. */}
-          <p className="mt-1.5 text-xs text-mono-500">Every coupon you issue uses this currency.</p>
+          <p className="mt-1.5 text-xs text-mono-500">Every voucher you issue uses this currency.</p>
         </div>
       )}
 
       <div>
         <span className="mb-2 block text-sm font-medium text-mono-700 dark:text-mono-300">
-          Coupons stay valid for
+          Vouchers stay valid for
         </span>
 
         {mode === 'create' ? (
@@ -188,7 +188,7 @@ export function MerchantFieldset({
               {value.voucherValidityDays} days
             </p>
             <p className="mt-1.5 text-xs text-mono-500">
-              Fixed when you started selling. Coupons already issued keep their own expiry date.
+              Fixed when you started selling. Vouchers already issued keep their own expiry date.
             </p>
           </>
         )}

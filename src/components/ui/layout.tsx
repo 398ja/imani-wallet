@@ -5,7 +5,7 @@ import { ArrowLeft } from 'lucide-react'
  * The visual vocabulary every screen is built from.
  *
  * These were file-local components copied between pages — the back button
- * existed four times byte-for-byte, the red alert pill twice, and FarmerPage's
+ * existed four times byte-for-byte, the red alert pill twice, and MerchantPage's
  * `Line` and PayPage's `Row` differed only in padding. Extracting them is what
  * lets four new screens be written without a fifth copy of each.
  */
@@ -20,7 +20,7 @@ export function Screen({ children }: { children: React.ReactNode }) {
  *
  * Always an explicit destination, never `navigate(-1)`, so a screen reached by
  * deep link still goes somewhere sensible. The label names the parent — the
- * convention `/farmer/:pubkey` already set with its "Farmers" back link.
+ * convention `/merchants/:pubkey` already set with its "Shops" back link.
  */
 export function BackLink({ to, label }: { to: string; label: string }) {
   return (
@@ -119,7 +119,7 @@ export function EmptyRow({ children }: { children: React.ReactNode }) {
  * em-dash: on this stack a DM-received coupon has no expiry and no memo, so a
  * fixed field list would be mostly blanks.
  */
-export function RawDetails({ entries }: { entries: Array<[string, string]> }) {
+export function RawDetails({ entries }: { entries: Array<[string, React.ReactNode]> }) {
   if (entries.length === 0) return null
 
   return (
@@ -127,11 +127,23 @@ export function RawDetails({ entries }: { entries: Array<[string, string]> }) {
       <summary className="cursor-pointer text-sm text-mono-500">Details</summary>
       <div className="mt-2 divide-y divide-mono-200 overflow-hidden rounded-2xl border border-mono-200 dark:divide-mono-800 dark:border-mono-800">
         {entries.map(([label, value]) => (
-          <div key={label} className="flex items-baseline justify-between gap-4 p-4">
+          // Strings are record fields — ids, hashes — and keep the monospace
+          // treatment. Anything else renders itself: a person is shown as a
+          // person, not as the hex key that identifies them in the record.
+          <div
+            key={label}
+            className={`flex justify-between gap-4 p-4 ${
+              typeof value === 'string' ? 'items-baseline' : 'items-center'
+            }`}
+          >
             <span className="shrink-0 text-sm text-mono-500">{label}</span>
-            <span className="min-w-0 break-all text-right font-mono text-xs text-mono-400">
-              {value}
-            </span>
+            {typeof value === 'string' ? (
+              <span className="min-w-0 break-all text-right font-mono text-xs text-mono-400">
+                {value}
+              </span>
+            ) : (
+              value
+            )}
           </div>
         ))}
       </div>

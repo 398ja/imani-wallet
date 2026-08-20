@@ -10,7 +10,7 @@ import { currencyDecimals } from './format'
 /**
  * Issuing a coupon and delivering it to a customer.
  *
- * This is `scripts/seed-farmer.mjs` moved into the app. That script is the only
+ * This is `scripts/seed-merchant.mjs` moved into the app. That script is the only
  * verified implementation of this flow in the repo, and every wait in it is
  * load-bearing — its comments record what breaks without them. Read them before
  * changing the sequence here.
@@ -26,7 +26,7 @@ import { currencyDecimals } from './format'
  * Issuing is a merchant action, so it goes to gateway-portal's
  * PortalVoucherController. The issuer pubkey is NEVER a request field — it comes
  * from whoever the portal authenticated, which is the point: the coupon is
- * stamped with the farmer's identity key.
+ * stamped with the merchant's identity key.
  *
  * AUTH: the seed script sends `X-Auth-Pubkey` + `X-Edge-Auth` because it stands
  * in for the edge proxy that a real deployment runs. A browser is not that proxy
@@ -140,7 +140,7 @@ export type IssueStage = 'issuing' | 'minting' | 'delivering'
 /**
  * Epoch SECONDS, from whatever the gateway returned.
  *
- * Straight from seed-farmer.mjs, and the reason is worth keeping: a voucher's
+ * Straight from seed-merchant.mjs, and the reason is worth keeping: a voucher's
  * `expires_at` has been seen as both an ISO-8601 string and a number, and the
  * number itself could be seconds or milliseconds. Sending milliseconds where
  * seconds are expected dates the coupon to the year 58000; sending an ISO string
@@ -199,19 +199,19 @@ async function createVoucher(params: IssueParams): Promise<IssuedVoucher> {
     // fixed portal would use, and what the DM endpoint below actually enforces.
   )
 
-  if (!response.ok) throw new Error(await detail(response, 'Could not issue the coupon'))
+  if (!response.ok) throw new Error(await detail(response, 'Could not issue the voucher'))
 
   const body = (await response.json()) as { items?: IssuedVoucher[] } | IssuedVoucher[]
   const items = Array.isArray(body) ? body : (body.items ?? [])
   const voucher = items[0]
-  if (!voucher?.voucher_id) throw new Error('The portal issued no coupon.')
+  if (!voucher?.voucher_id) throw new Error('The portal issued no voucher.')
   return voucher
 }
 
 /**
  * Wait until the coupon actually carries a Cashu token.
  *
- * Issuance returns PENDING behind a bolt11 top-up invoice — the farmer starts at
+ * Issuance returns PENDING behind a bolt11 top-up invoice — the merchant starts at
  * 0 sats, so backing takes the insufficient_balance_fallback path. phoenixd-mock
  * auto-settles it about two seconds later, and only THEN does the voucher carry
  * a real token. Delivering before that DMs an empty token, which the customer
@@ -238,7 +238,7 @@ async function waitForToken(voucherId: string): Promise<IssuedVoucher> {
   }
 
   throw new Error(
-    `The coupon never finished minting (status ${last.status ?? 'unknown'}, ` +
+    `The voucher never finished minting (status ${last.status ?? 'unknown'}, ` +
       `payment ${last.payment_state ?? 'unknown'}). It has NOT been delivered.`,
   )
 }
@@ -279,8 +279,8 @@ async function waitForExpiry(voucher: IssuedVoucher): Promise<IssuedVoucher> {
  * the kind-1059 gift wrap in exactly the shape the receive pipeline parses, so
  * hand-rolling it here would only risk drifting from that format.
  *
- * The DM is signed with the gateway's own identity rather than the farmer's, but
- * farmer attribution rides on `issuer_id` inside the payload — which is also
+ * The DM is signed with the gateway's own identity rather than the merchant's, but
+ * merchant attribution rides on `issuer_id` inside the payload — which is also
  * what the wallet groups coupons by — not on the signed envelope.
  */
 async function deliver(
@@ -310,8 +310,8 @@ async function deliver(
 
   if (!response.ok) {
     throw new Error(
-      `${await detail(response, 'The coupon was issued but could not be delivered')} ` +
-        `It is held under coupon ${voucher.voucher_id.slice(0, 8)}.`,
+      `${await detail(response, 'The voucher was issued but could not be delivered')} ` +
+        `It is held under voucher ${voucher.voucher_id.slice(0, 8)}.`,
     )
   }
   return (await response.json()) as { event_id?: string; eventId?: string }

@@ -34,8 +34,8 @@ describe('merchantStats', () => {
     expect(stats.issuedValue).toBe(750)
   })
 
-  it('counts only OUR coupons coming back as redemptions', () => {
-    // A merchant is also a customer. Coupons received from another farmer are
+  it('counts only OUR vouchers coming back as redemptions', () => {
+    // A merchant is also a customer. Coupons received from another merchant are
     // incoming rows too, and counting them would inflate the rate with money
     // that has nothing to do with this merchant's own issuance.
     const stats = merchantStats(
@@ -77,7 +77,7 @@ describe('merchantStats', () => {
     expect(stats.issuedCount).toBe(1)
   })
 
-  it('splits still-valid from expired over ALL issued coupons, not just the range', () => {
+  it('splits still-valid from expired over ALL issued vouchers, not just the range', () => {
     // "How many of mine are still out there" is not a question about a window.
     const stats = merchantStats(
       [
@@ -90,7 +90,7 @@ describe('merchantStats', () => {
     expect(stats.expired).toBe(1)
   })
 
-  it('never reports a negative count of live coupons', () => {
+  it('never reports a negative count of live vouchers', () => {
     const stats = merchantStats([returned({ id: '1' })], opts)
     expect(stats.active).toBe(0)
   })
@@ -112,7 +112,7 @@ describe('merchantStats', () => {
 })
 
 describe('expiringSoon', () => {
-  it('returns coupons inside the window, soonest first', () => {
+  it('returns vouchers inside the window, soonest first', () => {
     const rows = [
       issued({ id: 'later', expiresAt: NOW + 5 * DAY }),
       issued({ id: 'sooner', expiresAt: NOW + DAY }),
@@ -130,7 +130,7 @@ describe('expiringSoon', () => {
     expect(expiringSoon(rows, { now: NOW, withinDays: 30 })).toHaveLength(1)
   })
 
-  it('ignores coupons with no expiry and rows that are not issuances', () => {
+  it('ignores vouchers with no expiry and rows that are not issuances', () => {
     const rows = [issued({ id: '1' }), returned({ id: '2', expiresAt: NOW + DAY })]
     expect(expiringSoon(rows, { now: NOW })).toHaveLength(0)
   })

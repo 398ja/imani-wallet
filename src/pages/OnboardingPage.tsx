@@ -47,9 +47,9 @@ export function OnboardingPage({ onUnlock }: { onUnlock: (privkeyHex: string) =>
   return (
     <div className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-6 p-6">
       <div className="text-center">
-        <h1 className="text-2xl font-semibold text-mono-900 dark:text-mono-50">Coupon wallet</h1>
+        <h1 className="text-2xl font-semibold text-mono-900 dark:text-mono-50">Voucher wallet</h1>
         {step === 'start' && (
-          <p className="mt-1 text-sm text-mono-500">Farmers&apos; market coupons, on your phone.</p>
+          <p className="mt-1 text-sm text-mono-500">Vouchers for the shops you actually go to.</p>
         )}
       </div>
 
@@ -196,7 +196,7 @@ function CreateForm({
     return (
       <div className="space-y-4">
         <div>
-          <h2 className="text-lg font-semibold text-mono-900 dark:text-mono-50">Your stall</h2>
+          <h2 className="text-lg font-semibold text-mono-900 dark:text-mono-50">Your shop</h2>
           {/* No longer mentions currency — that moved to settings, along with
               where you trade. Both have sensible defaults, so neither is worth a
               question while someone is setting up at a market stall. */}
@@ -289,7 +289,7 @@ function CreateForm({
           both roles, and this only decides whether there is a second screen. */}
       <Switch
         label="I am a merchant"
-        hint="Issue coupons and take them as payment."
+        hint="Issue vouchers and take them as payment."
         checked={isMerchant}
         disabled={busy}
         onChange={setIsMerchant}

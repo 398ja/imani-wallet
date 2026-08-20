@@ -12,7 +12,7 @@
 **/dist
 *.tsbuildinfo
 
-# REAL KEY MATERIAL. scripts/seed-farmer.mjs writes farmer and customer secret
+# REAL KEY MATERIAL. scripts/seed-merchant.mjs writes merchant and customer secret
 # keys here in hex, which is exactly as sensitive as an nsec. Already gitignored;
 # this is the second lock, because a build context is not a git tree and
 # `COPY . .` does not care what git thinks.

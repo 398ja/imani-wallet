@@ -94,7 +94,7 @@ export function ProfileEditPage({
   return (
     <Screen>
       <BackLink to="/settings" label="Settings" />
-      <PageHeader title="Profile" subtitle="How you appear to the farmers you buy from." />
+      <PageHeader title="Profile" subtitle="How you appear to the shops you buy from." />
 
       <div className="space-y-5">
         <ImagePicker

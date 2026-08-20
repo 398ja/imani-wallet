@@ -21,10 +21,10 @@ vi.mock('../nap', () => ({
   }),
 }))
 
-const FARMER = '7952939535a79edc46d86e103785cee6f8119e8533787de8352257b051548448'
+const MERCHANT = '7952939535a79edc46d86e103785cee6f8119e8533787de8352257b051548448'
 
 /**
- * Captured verbatim from a live delivery — farmer issues via gateway-portal,
+ * Captured verbatim from a live delivery — merchant issues via gateway-portal,
  * Lightning auto-settles, the gateway NIP-17 gift-wraps it, and this is the
  * rumor content the customer decrypts.
  */
@@ -32,7 +32,7 @@ const DELIVERED = JSON.stringify({
   type: 'cashu_token_transfer',
   version: '1.0',
   token: 'cashuBv2F0gb9haUgA4zcuYdBWBWFwhr9hYRkBAGFzeQS8WyJWT1VDSEVSIiwi',
-  memo: 'Rosa Green Farm — market coupon',
+  memo: 'Rosa Green Farm — market voucher',
   unit: 'EUR',
   voucher_id: '17be770a-0000-4000-8000-000000000000',
   face_value: 500,
@@ -40,8 +40,8 @@ const DELIVERED = JSON.stringify({
   face_decimals: 2,
   token_amount: 500,
   backing_strategy: 'PROPORTIONAL',
-  issuer_id: FARMER,
-  sender_pubkey: FARMER,
+  issuer_id: MERCHANT,
+  sender_pubkey: MERCHANT,
   created_at: 1786570642,
   // Epoch SECONDS. Verified against a live delivery by decrypting the gift wrap
   // off the gateway's nostrdb — 1794346639 is 2026-11-10, the issuer's 90 days.
@@ -55,11 +55,11 @@ describe('dm-poll CryptoAdapter', () => {
   it('maps the gateway JSON envelope into TokenMetadata', () => {
     // The wire format is snake_case; TokenMetadata is camelCase. Getting this
     // wrong loses issuerId, and a coupon with no issuer cannot be attributed to
-    // a farmer — it just silently fails to appear under anyone.
+    // a merchant — it just silently fails to appear under anyone.
     const meta = crypto.parseTokenTransferMessage(DELIVERED)
 
     expect(meta).not.toBeNull()
-    expect(meta!.issuerId).toBe(FARMER)
+    expect(meta!.issuerId).toBe(MERCHANT)
     expect(meta!.faceValue).toBe(500)
     expect(meta!.faceUnit).toBe('EUR')
     expect(meta!.faceDecimals).toBe(2)
@@ -134,7 +134,7 @@ describe('dm-poll CryptoAdapter', () => {
     expect(crypto.extractToken('{"type":"something_else"}')).toBeNull()
   })
 
-  it('fingerprints by content so a redelivered coupon collapses to one row', () => {
+  it('fingerprints by content so a redelivered voucher collapses to one row', () => {
     const token = 'cashuBv2F0gb9haUg'
     expect(crypto.getTokenFingerprint(token)).toBe(crypto.getTokenFingerprint(token))
     expect(crypto.getTokenFingerprint(token)).toHaveLength(32)
@@ -145,7 +145,7 @@ describe('dm-poll CryptoAdapter', () => {
     // Regression guard for a silent failure, not a hypothetical: dm-poll's
     // TokenMetadata is camelCase, tokenRedemption reads snake_case, and the
     // mismatch persisted a coupon with issuer_id null. Nothing threw — the
-    // farmer list groups by issuer, so the coupon simply never appeared.
+    // merchant list groups by issuer, so the coupon simply never appeared.
     const parsed = crypto.parseTokenTransferMessage(
       JSON.stringify({
         type: 'cashu_token_transfer',
@@ -156,14 +156,14 @@ describe('dm-poll CryptoAdapter', () => {
         face_decimals: 2,
         token_amount: 500,
         backing_strategy: 'PROPORTIONAL',
-        issuer_id: 'farmerpubkey',
+        issuer_id: 'merchantpubkey',
         memo: 'market day',
         expires_at: 1794346639,
       }),
     )
     const legacy = toLegacyMetadata(parsed as unknown as Record<string, unknown>, 'senderpubkey')
 
-    expect(legacy.issuer_id).toBe('farmerpubkey')
+    expect(legacy.issuer_id).toBe('merchantpubkey')
     expect(legacy.face_value).toBe(500)
     expect(legacy.face_unit).toBe('EUR')
     expect(legacy.face_decimals).toBe(2)

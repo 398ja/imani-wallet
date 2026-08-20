@@ -95,14 +95,14 @@ describe('toTransaction', () => {
 })
 
 describe('buildPaymentTransaction', () => {
-  const farmer = 'f'.repeat(64)
+  const merchant = 'f'.repeat(64)
   const payment = () =>
     buildPaymentTransaction({
       tokenId: 'ce4f3df2c561debdf260d4fdc77ed8b8',
       amount: 500,
       unit: 'EUR',
       decimals: 2,
-      merchantId: farmer,
+      merchantId: merchant,
       merchantName: 'Rosa Green Farm',
       voucherId: 'v-1',
       memo: 'Two boxes of tomatoes',
@@ -124,12 +124,12 @@ describe('buildPaymentTransaction', () => {
   })
 
   it('carries the merchantId that transactionsWith filters on', () => {
-    // transactionsWith matches merchantId against the farmer pubkey. Get this
-    // wrong and the payment is stored but never appears on the farmer screen.
-    expect(toTransaction(payment()).merchantId).toBe(farmer)
+    // transactionsWith matches merchantId against the merchant pubkey. Get this
+    // wrong and the payment is stored but never appears on the merchant screen.
+    expect(toTransaction(payment()).merchantId).toBe(merchant)
   })
 
-  it('is keyed by the spent coupon, so re-recording overwrites', () => {
+  it('is keyed by the spent voucher, so re-recording overwrites', () => {
     expect(payment().id).toBe('payment:ce4f3df2c561debdf260d4fdc77ed8b8')
     expect(payment().id).toBe(payment().id)
   })
@@ -144,10 +144,10 @@ describe('buildPaymentTransaction', () => {
       amount: 1,
       unit: 'EUR',
       decimals: 2,
-      merchantId: farmer,
+      merchantId: merchant,
       at: 1,
     })
-    expect(toTransaction(noMemo).memo).toBe('Payment to farmer')
+    expect(toTransaction(noMemo).memo).toBe('Payment to shop')
   })
 })
 
@@ -197,7 +197,7 @@ describe('buildIssueTransaction', () => {
 
   it('falls back to a default memo rather than an empty label', () => {
     const tx = toTransaction(buildIssueTransaction({ ...input, memo: undefined }))
-    expect(tx.memo).toBe('Coupon issued')
+    expect(tx.memo).toBe('Voucher issued')
   })
 })
 

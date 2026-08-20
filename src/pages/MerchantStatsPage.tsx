@@ -94,7 +94,7 @@ export function MerchantStatsPage({
         <>
           {/* The five possa shows: issued, redeemed, rate, and the two values. */}
           <div className="mb-6 grid grid-cols-2 gap-3">
-            <Tile label="Coupons issued" value={String(stats.issuedCount)} />
+            <Tile label="Vouchers issued" value={String(stats.issuedCount)} />
             <Tile label="Came back" value={String(stats.redeemedCount)} />
             <Tile label="Value issued" value={money(stats.issuedValue)} />
             <Tile label="Value taken" value={money(stats.redeemedValue)} />
@@ -105,7 +105,7 @@ export function MerchantStatsPage({
             />
           </div>
 
-          <ListSection title="Coupons you have issued">
+          <ListSection title="Vouchers you have issued">
             <DetailRow label="Still valid" value={String(stats.active)} />
             <DetailRow label="Expired" value={String(stats.expired)} />
             {/*
@@ -178,7 +178,7 @@ function ActivityChart({ activity }: { activity: MerchantStats['activity'] }) {
   const peak = Math.max(1, ...activity.map((d) => Math.max(d.issued, d.redeemed)))
 
   return (
-    <div className="flex h-32 items-end gap-px" role="img" aria-label="Daily coupon activity">
+    <div className="flex h-32 items-end gap-px" role="img" aria-label="Daily voucher activity">
       {activity.map((day) => (
         <div key={day.day} className="flex h-full flex-1 items-end justify-center gap-px">
           <span

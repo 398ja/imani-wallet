@@ -66,8 +66,8 @@ describe('mergeMerchantEvent', () => {
   })
 
   it('leaves absent fields alone rather than wiping them', () => {
-    const merged = mergeMerchantEvent(base({ location: 'North stalls' }), JSON.stringify({}), 300)
-    expect(merged.location).toBe('North stalls')
+    const merged = mergeMerchantEvent(base({ location: 'North shops' }), JSON.stringify({}), 300)
+    expect(merged.location).toBe('North shops')
     expect(merged.businessType).toBe('Market garden')
   })
 
@@ -90,7 +90,7 @@ describe('mergeMerchantEvent', () => {
     expect(mergeMerchantEvent(base(), JSON.stringify({ active: false }), 300).active).toBe(false)
   })
 
-  it('rejects a nonsense validity rather than issuing coupons that never expire', () => {
+  it('rejects a nonsense validity rather than issuing vouchers that never expire', () => {
     const merged = mergeMerchantEvent(
       base(),
       JSON.stringify({ voucherValidityDays: 'soon' }),
@@ -100,7 +100,7 @@ describe('mergeMerchantEvent', () => {
   })
 
   it('round-trips through build', () => {
-    const original = base({ location: 'North stalls', voucherValidityDays: 90 })
+    const original = base({ location: 'North shops', voucherValidityDays: 90 })
     const event = buildMerchantEvent(original)
     const merged = mergeMerchantEvent(emptyMerchant(original.pubkey), event.content, 500)
 
@@ -123,13 +123,13 @@ describe('canTrade', () => {
   const merchantPerms = ['coupon:issue', 'coupon:redeem', 'coupon:pay', 'coupon:receive']
   const customerPerms = ['coupon:pay', 'coupon:receive']
 
-  it('needs the permission AND the stall', () => {
+  it('needs the permission AND the shop', () => {
     expect(canTrade(merchantPerms, base())).toBe(true)
     expect(canTrade(merchantPerms, null)).toBe(false)
     expect(canTrade(merchantPerms, base({ active: false }))).toBe(false)
   })
 
-  it('refuses a customer session even when a stall record is present', () => {
+  it('refuses a customer session even when a shop record is present', () => {
     // The record is what a stolen or stale local copy would give you; the
     // session is what the server actually granted.
     expect(canTrade(customerPerms, base())).toBe(false)

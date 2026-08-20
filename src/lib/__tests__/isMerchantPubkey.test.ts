@@ -25,7 +25,7 @@ beforeEach(() => {
 })
 
 describe('isMerchantPubkey', () => {
-  it('is true for a live stall record, and asks the relay only once', async () => {
+  it('is true for a live shop record, and asks the relay only once', async () => {
     const pubkey = nextPubkey()
     query.mockResolvedValue(record({ categories: ['food'] }))
 
@@ -39,7 +39,7 @@ describe('isMerchantPubkey', () => {
     expect(await isMerchantPubkey(nextPubkey())).toBe(true)
   })
 
-  it('is false once the stall is retired', async () => {
+  it('is false once the shop is retired', async () => {
     query.mockResolvedValue(record({ active: false }))
     expect(await isMerchantPubkey(nextPubkey())).toBe(false)
   })

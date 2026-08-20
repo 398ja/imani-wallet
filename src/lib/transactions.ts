@@ -74,7 +74,7 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     // it puts an incoming arrow on money leaving the wallet.
     // 'issued' joins 'payment' on the outgoing side: a merchant handing a
     // customer a coupon is value leaving this wallet, exactly as paying a
-    // farmer is. Anything else is incoming.
+    // merchant is. Anything else is incoming.
     direction: type === 'payment' || type === 'issued' ? 'out' : 'in',
     at: toEpochMs(r.timestamp ?? r.created_at),
     amount: Number(r.amount ?? 0),
@@ -94,7 +94,7 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
 }
 
 /**
- * The row to store when this wallet pays a farmer.
+ * The row to store when this wallet pays a merchant.
  *
  * Written in the SAME camelCase shape as imani-apps'
  * `_buildReceiveTransactionRow`, deliberately — `toTransaction` is the only
@@ -135,7 +135,7 @@ export function buildPaymentTransaction(input: {
     counterparty: input.merchantId,
     voucherId: input.voucherId,
     tokenId: input.tokenId,
-    memo: input.memo || 'Payment to farmer',
+    memo: input.memo || 'Payment to shop',
   } as unknown as TransactionRow
 }
 
@@ -187,7 +187,7 @@ export function buildIssueTransaction(input: {
     decimals: input.decimals,
     counterparty: input.recipientPubkey,
     voucherId: input.voucherId,
-    memo: input.memo || 'Coupon issued',
+    memo: input.memo || 'Voucher issued',
     expiresAt: input.expiresAt,
   } as unknown as TransactionRow
 }

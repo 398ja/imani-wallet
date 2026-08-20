@@ -1,6 +1,7 @@
 import { WalletStorage } from '@imani/wallet-storage'
 import type { VoucherRow, TransactionRow } from '@imani/wallet-storage'
 
+import { burnIfSelfIssued } from './burn'
 import { toTransaction, type WalletTransaction } from './transactions'
 import { publishTx } from './txRecords'
 import { publishVoucher, tombstoneVoucher } from './voucherRecords'
@@ -105,8 +106,8 @@ export function backUpWrites(ws: WalletStorage): RawWriters {
     await rawAtomic(input)
     for (const row of input.transactions ?? []) void publishTx(row)
     // Transaction rows can go straight back out — they carry their own `id`.
-    // Voucher rows cannot, hence `publishWritten`. See its doc comment.
-    void publishWritten(ws, input.vouchers ?? [])
+    // Voucher rows cannot, hence `mirrorWritten`. See its doc comment.
+    void mirrorWritten(ws, input.vouchers ?? [])
   }
 
   ws.saveVoucher = async (row: VoucherRow) => {
@@ -115,6 +116,7 @@ export function backUpWrites(ws: WalletStorage): RawWriters {
     // back up a coupon with no primary key, and `d` is that key.
     const saved = await rawSave(row)
     void publishVoucher(saved)
+    void burnIfSelfIssued(saved, currentUserId ?? '')
     return saved
   }
 
@@ -139,7 +141,7 @@ export function backUpWrites(ws: WalletStorage): RawWriters {
     for (const row of before) {
       if (row.token_id && !kept.has(row.token_id)) void tombstoneVoucher(row.token_id)
     }
-    void publishWritten(ws, rows)
+    void mirrorWritten(ws, rows)
   }
 
   return { addTransaction: rawAdd, saveVoucher: rawSave }
@@ -165,11 +167,17 @@ export function backUpWrites(ws: WalletStorage): RawWriters {
  * The re-read is what `saveVoucher`'s wrapper gets for free by publishing the
  * merged row it is handed back.
  */
-async function publishWritten(ws: WalletStorage, written: VoucherRow[]): Promise<void> {
+async function mirrorWritten(ws: WalletStorage, written: VoucherRow[]): Promise<void> {
   const tokens = new Set(written.map((row) => row.token).filter(Boolean))
   if (tokens.size === 0) return
   for (const row of await ws.getAllVouchers()) {
-    if (row.token && tokens.has(row.token)) void publishVoucher(row)
+    if (!row.token || !tokens.has(row.token)) continue
+    void publishVoucher(row)
+    // The same re-read serves the burn: a coupon coming back to the merchant
+    // who issued it arrives on THIS path — imani-apps' TokenRedemption writes
+    // through `atomicallyWrite`, never through `saveVoucher` — so a hook on the
+    // DM poller alone would miss every redemption. See burn.ts.
+    void burnIfSelfIssued(row, currentUserId ?? '')
   }
 }
 
@@ -278,7 +286,7 @@ export async function listTransactions(): Promise<TransactionRow[]> {
 }
 
 /**
- * Transactions with one farmer, newest first.
+ * Transactions with one merchant, newest first.
  *
  * Field names follow the WRITER, which is tokenRedemption's
  * `_buildReceiveTransactionRow`: it emits `merchantId` / `counterparty` /

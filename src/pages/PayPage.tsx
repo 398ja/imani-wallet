@@ -4,7 +4,7 @@ import { ArrowLeft, CheckCircle2 } from 'lucide-react'
 import { getDecimals } from '@imani/money'
 
 import { listVouchers } from '../lib/wallet'
-import { toFarmers, type Farmer } from '../lib/farmers'
+import { toMerchants, type Merchant } from '../lib/merchants'
 import { formatFace } from '../lib/format'
 import { identityLabel, identitySubLabel, useIdentity } from '../lib/identity'
 import { payRequest, splitObstacle } from '../lib/pay'
@@ -25,7 +25,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   const [params] = useSearchParams()
   const raw = params.get('paymentRequest') ?? ''
 
-  const [farmers, setFarmers] = useState<Farmer[] | null>(null)
+  const [merchants, setMerchants] = useState<Merchant[] | null>(null)
   // When this screen loaded, in ms. The clock is read in the effect below and
   // kept here because `Date.now()` in a render body is impure — the same rule
   // MerchantHomePage's expiry list follows. Zero until the load lands, which
@@ -48,25 +48,25 @@ export function PayPage({ pubkey }: { pubkey: string }) {
 
   useEffect(() => {
     listVouchers().then((rows) => {
-      setFarmers(toFarmers(rows))
+      setMerchants(toMerchants(rows))
       setLoadedAt(Date.now())
     })
   }, [])
 
-  // Before the early returns, and so before `farmer` exists — hooks cannot be
-  // called conditionally. It is the same fetch the farmer pages make, cached per
+  // Before the early returns, and so before `merchant` exists — hooks cannot be
+  // called conditionally. It is the same fetch the merchant pages make, cached per
   // pubkey, so asking here costs nothing extra.
   const issuer = useIdentity(parsed.ok ? parsed.request.issuerId : undefined)
 
   if (!parsed.ok) return <Fatal title="Cannot read this request" detail={parsed.error} />
   const request = parsed.request
 
-  if (farmers === null) return <Centered>Checking your coupons…</Centered>
+  if (merchants === null) return <Centered>Checking your vouchers…</Centered>
 
-  const farmer = farmers.find(
+  const merchant = merchants.find(
     (f) => f.pubkey.toLowerCase() === request.issuerId.toLowerCase(),
   )
-  const group = farmer?.groups.find((g) => g.unit.toUpperCase() === request.unit.toUpperCase())
+  const group = merchant?.groups.find((g) => g.unit.toUpperCase() === request.unit.toUpperCase())
   const available = group?.totalFaceValue ?? 0
   // How to read `request.amount`, which is MINOR UNITS.
   //
@@ -74,17 +74,17 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   // through the shim returns `{paymentId, issuerId, amount, unit, singleUse,
   // offlineVerification, mints, expiresAt, transports}` and nothing else — so
   // the old `request.decimals ?? 0` fallback was always 0, and a £1.00 request
-  // read as "100 GBP" for anyone not already holding this farmer's coupons.
+  // read as "100 GBP" for anyone not already holding this merchant's coupons.
   // The currency registry is the same source VoucherGrouper resolves group
   // decimals from, so the two halves of this screen agree; the group still wins
-  // when there is one, because a farmer may trade in a unit registered at
+  // when there is one, because a merchant may trade in a unit registered at
   // runtime that the registry does not know.
   const denom = group ?? { unit: request.unit, decimals: getDecimals(request.unit) }
-  // The farmer's own coupons name them too (`merchantName`), and that name is
+  // The merchant's own coupons name them too (`merchantName`), and that name is
   // there before any fetch — so it is the fallback while kind-0 is in flight, or
   // when they have published none.
   const issuerIdentity = {
-    name: issuer?.name ?? farmer?.name,
+    name: issuer?.name ?? merchant?.name,
     nip05: issuer?.nip05,
     picture: issuer?.picture,
   }
@@ -100,7 +100,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   // what is payable — a coupon divisible on one and not the other would let the
   // user tap Pay only to be refused.
   const obstacle = group ? splitObstacle(group.vouchers, request.amount) : null
-  const payable = !expired && !!farmer && !!group && shortfall <= 0 && !obstacle
+  const payable = !expired && !!merchant && !!group && shortfall <= 0 && !obstacle
 
   if (status.step === 'done') {
     return (
@@ -160,16 +160,16 @@ export function PayPage({ pubkey }: { pubkey: string }) {
         )}
         <dl className="mt-4 space-y-1 text-sm">
           <Row label="Your balance" value={formatFace(available, denom)} />
-          <Row label="Coupons held" value={String(group?.voucherCount ?? 0)} />
+          <Row label="Vouchers held" value={String(group?.voucherCount ?? 0)} />
         </dl>
       </div>
 
       {expired && <Alert>This payment request has expired.</Alert>}
-      {!expired && !farmer && (
-        <Alert>You have no coupons from this farmer.</Alert>
+      {!expired && !merchant && (
+        <Alert>You have no vouchers from this shop.</Alert>
       )}
-      {!expired && farmer && !group && (
-        <Alert>You have no coupons from this farmer in {request.unit}.</Alert>
+      {!expired && merchant && !group && (
+        <Alert>You have no coupons from this shop in {request.unit}.</Alert>
       )}
       {!expired && group && shortfall > 0 && (
         <Alert>Short by {formatFace(shortfall, denom)}.</Alert>
@@ -187,7 +187,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
         onClick={async () => {
           setStatus({ step: 'paying' })
           try {
-            const reference = await payRequest({ request, raw, farmer: farmer!, payer: pubkey })
+            const reference = await payRequest({ request, raw, merchant: merchant!, payer: pubkey })
             setStatus({ step: 'done', reference })
           } catch (e) {
             setStatus({

@@ -17,4 +17,5 @@ export {
   Fatal,
 } from './layout'
 export { Pass } from './Pass'
+export { IdentityInline } from './IdentityInline'
 export { CouponListItem, TransactionListItem } from './records'

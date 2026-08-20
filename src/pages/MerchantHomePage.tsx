@@ -12,7 +12,7 @@ import {
   TransactionListItem,
 } from '../components/ui'
 import { listTransactions, listVouchers, onWalletChanged } from '../lib/wallet'
-import { toFarmers, walletTotals } from '../lib/farmers'
+import { toMerchants, walletTotals } from '../lib/merchants'
 import { toTransaction, type WalletTransaction } from '../lib/transactions'
 import { expiringSoon } from '../lib/stats'
 import { formatDate, formatFace } from '../lib/format'
@@ -22,7 +22,7 @@ import type { MerchantProfile } from '../lib/merchant'
 /**
  * Home, for a merchant.
  *
- * Same skeleton as FarmersPage — balance panel, then the two things you can do —
+ * Same skeleton as MerchantsPage — balance panel, then the two things you can do —
  * with Sell and Redeem where a customer has Pay and Receive. The balance is
  * genuinely the same figure from the same store: coupons a customer paid with
  * arrive in this wallet as ordinary vouchers, so `walletTotals` needs no
@@ -30,7 +30,7 @@ import type { MerchantProfile } from '../lib/merchant'
  *
  * Deliberately not the dashboard — that lives at /merchant/stats. This screen is
  * the till, and a till should open on the two buttons you press all day, with
- * the last few movements under them the way the farmer pass shows three and a
+ * the last few movements under them the way the shop pass shows three and a
  * "See all", plus anything about to expire while it can still be spent.
  */
 export function MerchantHomePage({
@@ -49,7 +49,7 @@ export function MerchantHomePage({
     const load = async () => {
       const [vouchers, transactions] = await Promise.all([listVouchers(), listTransactions()])
       const rows = transactions.map(toTransaction)
-      setTotals(walletTotals(toFarmers(vouchers)))
+      setTotals(walletTotals(toMerchants(vouchers)))
       setRecent([...rows].sort((a, b) => b.at - a.at).slice(0, 3))
       // `Date.now()` here in the effect, not in the render body — an expiry that
       // silently flips between renders is the impurity lint catches elsewhere.
@@ -72,7 +72,7 @@ export function MerchantHomePage({
       />
 
       <Panel className="mb-6 p-5">
-        <p className="text-sm text-mono-500">Taken in coupons</p>
+        <p className="text-sm text-mono-500">Taken in vouchers</p>
         <p className="text-balance text-mono-900 dark:text-mono-50">
           {primary ? formatFace(primary.minor, primary) : formatFace(0, undefined)}
         </p>
@@ -99,7 +99,7 @@ export function MerchantHomePage({
           <EmptyRow>Loading…</EmptyRow>
         ) : recent.length === 0 ? (
           <EmptyRow>
-            Sell issues a coupon to a customer. Redeem takes coupons as payment.
+            Sell issues a voucher to a customer. Redeem takes vouchers as payment.
           </EmptyRow>
         ) : (
           recent.map((tx) => <TransactionListItem key={tx.id} tx={tx} />)
@@ -141,7 +141,7 @@ export function MerchantHomePage({
                 <Clock className="h-4 w-4 shrink-0 text-red-500" />
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-medium text-mono-900 dark:text-mono-50">
-                    {tx.memo || 'Coupon issued'}
+                    {tx.memo || 'Voucher issued'}
                   </p>
                   <p className="truncate text-sm text-mono-500">
                     Expires {formatDate(tx.expiresAt)}

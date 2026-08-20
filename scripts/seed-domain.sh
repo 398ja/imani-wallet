@@ -25,7 +25,7 @@ set -euo pipefail
 DOMAIN="${BOTTIN_DEFAULT_DOMAIN:-imani.local}"
 BOTTIN="${BOTTIN_URL:-http://localhost:28086}"
 AUTH="${BOTTIN_ADMIN_USERNAME:-imani}:${BOTTIN_ADMIN_PASSWORD:-test-bottin-admin-9ace19b7fb61b5007225f745}"
-# Owner is the demo farmer; bottin only stores it, nothing in the wallet reads it.
+# Owner is the demo merchant; bottin only stores it, nothing in the wallet reads it.
 OWNER="${DOMAIN_OWNER_PUBKEY:-7952939535a79edc46d86e103785cee6f8119e8533787de8352257b051548448}"
 
 # 201 on first run. Re-running gives 400 INVALID_ARGUMENT "Domain already

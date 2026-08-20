@@ -21,7 +21,7 @@ export function formatFace(
       minimumFractionDigits: decimals,
     }).format(value)
   } catch {
-    // `unit` is not always an ISO 4217 code (SAT, or a farmer's own unit).
+    // `unit` is not always an ISO 4217 code (SAT, or a merchant's own unit).
     return `${value.toFixed(decimals)} ${unit}`.trim()
   }
 }
@@ -73,7 +73,7 @@ export function currencyDecimals(currency: string): number {
  *
  * Accepts both separators because the decimal mark is a comma across most of the
  * markets in the issuance currency list, and a phone keypad offers whichever the
- * device locale prefers. Rejecting "1,50" from a French farmer would be a bug,
+ * device locale prefers. Rejecting "1,50" from a French merchant would be a bug,
  * not validation.
  *
  * Rounds rather than truncates: `Math.round` on the scaled value, because

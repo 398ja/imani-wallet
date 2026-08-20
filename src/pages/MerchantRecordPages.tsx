@@ -118,15 +118,15 @@ export function IssuedCouponsPage() {
 
   return (
     <ListFrame
-      title="Issued coupons"
+      title="Issued vouchers"
       subtitle={
-        issued === null ? 'Loading…' : `${issued.length} ${issued.length === 1 ? 'coupon' : 'coupons'}`
+        issued === null ? 'Loading…' : `${issued.length} ${issued.length === 1 ? 'voucher' : 'vouchers'}`
       }
     >
       {issued === null ? (
         <EmptyRow>Loading…</EmptyRow>
       ) : issued.length === 0 ? (
-        <EmptyRow>None yet. Coupons you sell show up here.</EmptyRow>
+        <EmptyRow>None yet. Vouchers you sell show up here.</EmptyRow>
       ) : (
         issued.map((tx) => <IssuedCouponRow key={tx.id} tx={tx} now={state?.loadedAt ?? 0} />)
       )}
@@ -166,7 +166,7 @@ export function IssuedCouponPage() {
   const customer = useIdentity(state?.tx?.counterparty)
 
   if (state === undefined) return <Centered>Loading…</Centered>
-  if (state.tx === null) return <Centered>No record of this coupon.</Centered>
+  if (state.tx === null) return <Centered>No record of this voucher.</Centered>
 
   const tx = state.tx
   const expired = tx.expiresAt !== undefined && tx.expiresAt <= state.loadedAt
@@ -180,10 +180,10 @@ export function IssuedCouponPage() {
         <p className="text-balance text-mono-900 dark:text-mono-50">
           {formatFace(tx.amount, { unit: tx.unit, decimals: tx.decimals })}
         </p>
-        <p className="truncate text-sm text-mono-500">{tx.memo || 'Coupon issued'}</p>
+        <p className="truncate text-sm text-mono-500">{tx.memo || 'Voucher issued'}</p>
       </Panel>
 
-      <ListSection title="Coupon">
+      <ListSection title="Voucher">
         {(
           [
             // No "spent / unspent". Whether the customer has used it is not
@@ -198,7 +198,7 @@ export function IssuedCouponPage() {
             // the raw details below, where a merchant chasing a specific
             // customer can still find it.
             ['Customer', tx.counterparty && identityLabel(tx.counterparty, customer)],
-            ['Coupon id', tx.voucherId],
+            ['Voucher id', tx.voucherId],
             // The link back to the movement, in the record itself rather than
             // only in the nav — this is the pairing the two screens are built on.
             ['Transaction id', tx.id],
@@ -241,7 +241,7 @@ function IssuedCouponRow({ tx, now }: { tx: WalletTransaction; now: number }) {
       <Clock className={`h-4 w-4 shrink-0 ${expired ? 'text-red-500' : 'text-mono-400'}`} />
       <div className="min-w-0 flex-1">
         <p className="truncate font-medium text-mono-900 dark:text-mono-50">
-          {tx.memo || 'Coupon issued'}
+          {tx.memo || 'Voucher issued'}
         </p>
         <p className="truncate text-sm text-mono-500">
           {/*

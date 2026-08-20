@@ -12,7 +12,7 @@ dist
 dist-ssr
 *.local
 
-# Secret keys. scripts/seed-farmer.mjs generates a farmer and a customer
+# Secret keys. scripts/seed-merchant.mjs generates a merchant and a customer
 # identity and writes BOTH SECRET KEYS here in hex, so this file is exactly as
 # sensitive as an nsec. It is real key material for whatever those identities
 # hold, and it must never be committed.

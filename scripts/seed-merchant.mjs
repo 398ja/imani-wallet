@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Seed a farmer and issue real coupons from them.
+ * Seed a merchant and issue real coupons from them.
  *
  * Why the portal tier and not the customer gateway: voucher issuance on
  * customer-wallet is refused by design —
@@ -13,7 +13,7 @@
  *
  * Issuing is a merchant action, so it goes to gateway-portal's
  * PortalVoucherController. The issuer pubkey is never a request field — it comes
- * from whoever the portal authenticated, which is the point: the farmer's
+ * from whoever the portal authenticated, which is the point: the merchant's
  * identity is their key.
  *
  * Auth: the portal accepts either NIP-98 or a pubkey forwarded by the trusted
@@ -23,8 +23,8 @@
  * path is built below too and is what a real merchant client would use.
  *
  * Usage:
- *   node scripts/seed-farmer.mjs                      # default farmer + 3 coupons
- *   node scripts/seed-farmer.mjs --name "Rosa" --quantity 5 --face 750
+ *   node scripts/seed-merchant.mjs                      # default merchant + 3 coupons
+ *   node scripts/seed-merchant.mjs --name "Rosa" --quantity 5 --face 750
  */
 import { finalizeEvent, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
@@ -50,13 +50,13 @@ function arg(flag, fallback) {
 }
 
 /**
- * Stable farmer identities across runs.
+ * Stable merchant identities across runs.
  *
  * Regenerating keys every run would orphan previously issued coupons under a
- * pubkey nothing references any more, and the farmer list would fill with
+ * pubkey nothing references any more, and the merchant list would fill with
  * duplicates of the same person.
  */
-function loadOrCreateFarmer(name) {
+function loadOrCreateMerchant(name) {
   const store = existsSync(KEYS) ? JSON.parse(readFileSync(KEYS, 'utf8')) : {}
   if (!store[name]) {
     const sk = generateSecretKey()
@@ -83,7 +83,7 @@ function nip98(sk, url, method, body) {
   return `Nostr ${Buffer.from(JSON.stringify(event)).toString('base64')}`
 }
 
-async function issue(farmer, { quantity, faceValueMinor, currency, memo }) {
+async function issue(merchant, { quantity, faceValueMinor, currency, memo }) {
   const url = `${PORTAL}/api/v1/portal/vouchers`
   const body = JSON.stringify({
     face_value_minor: faceValueMinor,
@@ -99,12 +99,12 @@ async function issue(farmer, { quantity, faceValueMinor, currency, memo }) {
       'Content-Type': 'application/json',
       // Both paths are sent. Whichever the deployed portal build honours wins;
       // they agree on the pubkey, so there is no ambiguity about the issuer.
-      Authorization: nip98(farmer.sk, url, 'POST', body),
-      'X-Auth-Pubkey': farmer.pk,
+      Authorization: nip98(merchant.sk, url, 'POST', body),
+      'X-Auth-Pubkey': merchant.pk,
       'X-Edge-Auth': EDGE_SECRET,
       // Issuance is now guarded by `coupon:issue` on the portal side, resolved
       // from the caller's NAP session and forwarded by the edge. This script IS
-      // the edge here, and a seeded farmer is a merchant by definition, so it
+      // the edge here, and a seeded identity issues by definition, so it
       // asserts the permission the same way the proxy would. Without it every
       // seed run 403s on a request that used to be accepted.
       'X-Auth-Permissions': 'coupon:issue',
@@ -123,7 +123,7 @@ async function issue(farmer, { quantity, faceValueMinor, currency, memo }) {
 /**
  * A voucher is not deliverable the moment it is created.
  *
- * Issuance returns PENDING with a bolt11 top-up invoice (the farmer starts with
+ * Issuance returns PENDING with a bolt11 top-up invoice (the merchant starts with
  * 0 sats, so PROPORTIONAL backing takes the insufficient_balance_fallback path).
  * phoenixd-mock auto-settles it ~2s later, and only then does the voucher carry
  * a real Cashu token. Sending before that would DM an empty token.
@@ -182,8 +182,8 @@ async function waitForExpiry(voucherId, issued, deadline) {
  * the kind-1059 gift wrap in exactly the shape the receive pipeline parses, so
  * hand-rolling it here would only risk drifting from that format.
  *
- * The DM is signed by the gateway's own identity rather than the farmer's — but
- * farmer attribution rides on `issuer_id` inside the payload (which is also what
+ * The DM is signed by the gateway's own identity rather than the merchant's — but
+ * merchant attribution rides on `issuer_id` inside the payload (which is also what
  * the wallet groups by), not on who signed the envelope.
  */
 /**
@@ -204,7 +204,7 @@ function toEpochSeconds(value) {
   return Number.isNaN(ms) ? null : Math.floor(ms / 1000)
 }
 
-async function deliver(voucher, farmer, customerPubkey) {
+async function deliver(voucher, merchant, customerPubkey) {
   const url = `${WALLET}/api/v1/dm/tokens/send`
   const body = JSON.stringify({
       recipient_pubkey: customerPubkey,
@@ -216,8 +216,8 @@ async function deliver(voucher, farmer, customerPubkey) {
       face_decimals: voucher.face_decimals,
       token_amount: voucher.token_amount,
       backing_strategy: voucher.backing_strategy,
-      issuer_id: farmer.pk,
-      sender_pubkey: farmer.pk,
+      issuer_id: merchant.pk,
+      sender_pubkey: merchant.pk,
       // SendTokenDmRequest declares `@JsonProperty("expires_at") Long` — epoch
       // SECONDS as a number. The gateway only forwards what the sender supplies
       // (TokenDmController:132 is a straight `request.expiresAt()` passthrough),
@@ -231,13 +231,46 @@ async function deliver(voucher, farmer, customerPubkey) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: nip98(farmer.sk, url, 'POST', body),
+      Authorization: nip98(merchant.sk, url, 'POST', body),
     },
     body,
   })
   const text = await r.text()
   if (!r.ok) throw new Error(`deliver failed ${r.status}: ${text}`)
   return JSON.parse(text)
+}
+
+/**
+ * Publish the shop's kind-0 profile to the relay.
+ *
+ * Without this the wallet has no name, avatar or `about` for the issuer, and
+ * `lib/branding.ts` falls back to `EMPTY_BRANDING` — every voucher then renders
+ * under a truncated pubkey and the default "Gift Card" title. Seeded vouchers
+ * looked broken for exactly this reason. It is published straight to the relay,
+ * not through the gateway, because that is where the wallet writes profiles and
+ * where `fetchNewestKind0` falls back to when the nostrdb cache is cold.
+ */
+async function publishProfile(shop, about) {
+  const { SimplePool, useWebSocketImplementation } = await import('nostr-tools/pool')
+  const { default: WebSocket } = await import('ws')
+  useWebSocketImplementation(WebSocket)
+
+  const pool = new SimplePool()
+  try {
+    const event = finalizeEvent(
+      {
+        kind: 0,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [],
+        content: JSON.stringify({ name: shop.name, display_name: shop.name, about }),
+      },
+      shop.sk,
+    )
+    await Promise.any(pool.publish([RELAY], event))
+    return event.id
+  } finally {
+    pool.close([RELAY])
+  }
 }
 
 /**
@@ -269,8 +302,10 @@ const name = arg('--name', 'Rosa Green Farm')
 const quantity = Number(arg('--quantity', '3'))
 const faceValueMinor = Number(arg('--face', '500'))
 const currency = arg('--currency', 'EUR')
+const memo = arg('--memo', `${name} — voucher`)
+const about = arg('--about', '')
 
-const farmer = loadOrCreateFarmer(name)
+const merchant = loadOrCreateMerchant(name)
 // `--customer-pubkey` delivers to an account that already exists — one
 // registered in the wallet itself — instead of minting a throwaway identity
 // here. That is the only way to seed the app you are actually looking at, and
@@ -278,10 +313,10 @@ const farmer = loadOrCreateFarmer(name)
 const customerPubkey = arg('--customer-pubkey', '')
 const customer = customerPubkey
   ? { pk: customerPubkey, sk: null }
-  : loadOrCreateFarmer(arg('--customer', 'demo-customer'))
+  : loadOrCreateMerchant(arg('--customer', 'demo-customer'))
 
-console.log(`farmer    ${name}`)
-console.log(`  pubkey  ${farmer.pk}`)
+console.log(`merchant    ${name}`)
+console.log(`  pubkey  ${merchant.pk}`)
 console.log(`customer  ${nip19.npubEncode(customer.pk)}`)
 console.log(`  pubkey  ${customer.pk}`)
 if (customer.sk) {
@@ -291,18 +326,23 @@ console.log(`\nissuing ${quantity} x ${faceValueMinor / 100} ${currency}\n`)
 
 const before = await countGiftWraps(customer.pk)
 
-const { items } = await issue(farmer, {
+// Before issuing, not after: the wallet renders a voucher the moment the DM
+// lands, and a profile that arrives later leaves the first render showing a
+// truncated pubkey.
+console.log(`profile   kind-0 ${(await publishProfile(merchant, about)).slice(0, 12)}…`)
+
+const { items } = await issue(merchant, {
   quantity,
   faceValueMinor,
   currency,
-  memo: `${name} — market coupon`,
+  memo,
 })
 console.log(`issued ${items.length}, waiting for Lightning settlement…`)
 
 let delivered = 0
 for (const item of items) {
   const voucher = await waitForToken(item.voucher_id)
-  const result = await deliver(voucher, farmer, customer.pk)
+  const result = await deliver(voucher, merchant, customer.pk)
   delivered += 1
   // Expiry is printed because it has bitten twice: the gateway populates it
   // asynchronously (null for ~5-10s after ISSUED), and a null here is the

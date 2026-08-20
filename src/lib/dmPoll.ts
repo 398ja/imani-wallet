@@ -151,7 +151,7 @@ function readSet(key: string): Set<string> {
 
 /**
  * Vouchers land in the same IndexedDB the rest of the wallet reads, so an
- * arriving coupon shows up on the farmer list through WalletStorage's existing
+ * arriving coupon shows up on the merchant list through WalletStorage's existing
  * broadcast — no extra plumbing between receive and render.
  */
 /**

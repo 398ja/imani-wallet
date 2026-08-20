@@ -8,9 +8,9 @@ import {
   DEFAULT_FOREGROUND_COLOR,
   TERMS,
   toCouponPass,
-  toFarmerPass,
+  toMerchantPass,
 } from '../pass'
-import { toFarmers } from '../farmers'
+import { toMerchants } from '../merchants'
 
 const ISSUER = '7952939535a79edc46d86e103785cee6f8119e8533787de8352257b051548448'
 const VOUCHER_ID = 'bbc1c485-122e-46c6-abc5-ee9f7174ecff'
@@ -87,7 +87,7 @@ describe('toCouponPass', () => {
     // expirationDate already conveys expiry, so it is not a void.
     ['expired', false],
     ['active', false],
-  ])('marks a %s coupon voided=%s', (status, expected) => {
+  ])('marks a %s voucher voided=%s', (status, expected) => {
     expect(toCouponPass(row({ status })).voided).toBe(expected)
   })
 
@@ -123,7 +123,7 @@ describe('toCouponPass', () => {
     expect(pass.userInfo.stripUrl).toBe('https://example.test/banner.png')
   })
 
-  it('prefers the coupon memo over the store description', () => {
+  it('prefers the voucher memo over the store description', () => {
     const pass = toCouponPass(row({ memo: 'Market day' }), { storeDescription: 'Organic veg' })
     expect(pass.description).toBe('Market day')
   })
@@ -154,14 +154,22 @@ describe('toCouponPass', () => {
     const pass = toCouponPass(row({ voucher_id: undefined }))
     expect(pass.serialNumber).toBe('e8c77f87a391a72391fafdaaef73918b')
   })
+
+  it('carries no redemption code once redeemed', () => {
+    // The proofs behind a redeemed coupon are burnt (burn.ts). Still showing
+    // the QR would invite a cashier to scan a sale that already happened.
+    const pass = toCouponPass(row({ status: 'redeemed' }))
+    expect(pass.voided).toBe(true)
+    expect(pass.barcodes).toBeUndefined()
+  })
 })
 
-describe('toFarmerPass', () => {
-  const farmerFrom = (rows: VoucherRow[]) => toFarmers(rows)[0]
+describe('toMerchantPass', () => {
+  const merchantFrom = (rows: VoucherRow[]) => toMerchants(rows)[0]
 
-  it('totals every coupon held from that farmer', () => {
-    const farmer = farmerFrom([row(), row({ token_id: 'b'.repeat(32), voucher_id: 'other' })])
-    const [balance] = toFarmerPass(farmer).storeCard.primaryFields!
+  it('totals every voucher held from that shop', () => {
+    const merchant = merchantFrom([row(), row({ token_id: 'b'.repeat(32), voucher_id: 'other' })])
+    const [balance] = toMerchantPass(merchant).storeCard.primaryFields!
 
     expect(balance.value).toBe(10_000)
     expect(balance.currencyCode).toBe('XAF')
@@ -171,14 +179,14 @@ describe('toFarmerPass', () => {
     // A barcode is a redemption id for ONE voucher. A merchant-level card has no
     // single voucher to redeem, and emitting one would aim a cashier's scanner
     // at an arbitrary coupon from the pile.
-    const pass = toFarmerPass(farmerFrom([row()]))
+    const pass = toMerchantPass(merchantFrom([row()]))
 
     expect(pass.barcodes).toBeUndefined()
     expect(pass.storeCard.backFields).toBeUndefined()
   })
 
-  it('is keyed by the farmer, not by a coupon', () => {
-    const pass = toFarmerPass(farmerFrom([row()]))
+  it('is keyed by the shop, not by a voucher', () => {
+    const pass = toMerchantPass(merchantFrom([row()]))
 
     expect(pass.serialNumber).toBe(ISSUER)
     expect(pass.userInfo.voucherId).toBe(ISSUER)

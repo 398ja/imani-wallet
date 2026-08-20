@@ -8,7 +8,7 @@ import { shortPubkey } from './format'
  *
  * Nostr identifiers are the wrong thing to put in front of someone buying
  * vegetables: `npub1…` and a 64-character hex key are both unreadable, and
- * neither tells you which farmer you are looking at. Everywhere a person is
+ * neither tells you which merchant you are looking at. Everywhere a person is
  * named, the wallet shows their display name with their NIP-05 handle under it,
  * and falls back down that ladder only when a profile is missing.
  *
@@ -37,8 +37,8 @@ export function identityLabel(pubkey: string, identity: Identity | undefined): s
 /**
  * A name, unless it is a key wearing a name's clothes.
  *
- * `toFarmers` fills `name` with `merchantName || merchantId`, so an unbranded
- * farmer's "name" is a 64-character pubkey. Left alone it defeats the whole
+ * `toMerchants` fills `name` with `merchantName || merchantId`, so an unbranded
+ * merchant's "name" is a 64-character pubkey. Left alone it defeats the whole
  * point of this module and overflows every card it lands on.
  */
 function humanName(name: string | undefined): string | undefined {
@@ -96,7 +96,7 @@ export async function resolveNip05(address: string): Promise<string | null> {
  *
  * Returns `undefined` until it arrives, so callers render `identityLabel`'s
  * short-key fallback for a moment rather than an empty gap. Matches the
- * `merchantBranding(pubkey).then(setState)` pattern the farmer pages already
+ * `merchantBranding(pubkey).then(setState)` pattern the merchant pages already
  * use; `pubkey` may be empty, for the screens that name a counterparty which
  * some rows do not have.
  */

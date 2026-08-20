@@ -118,8 +118,8 @@ export type MerchantFields = Pick<
 
 /**
  * The one rule that gates submission: a stall has to sell something, in a
- * currency. Everything else is optional — a farmer with one crop and no website
- * is still a merchant.
+ * currency. Everything else is optional — a one-line stall with no website is
+ * still a merchant.
  */
 export function merchantFieldsValid(fields: MerchantFields): boolean {
   return fields.categories.length > 0 && fields.issuanceCurrency.trim() !== ''

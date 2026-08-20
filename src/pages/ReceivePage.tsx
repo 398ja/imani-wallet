@@ -6,9 +6,9 @@ import { Screen, BackLink, PageHeader, Alert } from '../components/ui'
 import type { Profile } from '../lib/profile'
 
 /**
- * Receive: show this customer's address as a QR code for the farmer to scan.
+ * Receive: show this customer's address as a QR code for the merchant to scan.
  *
- * Display only — no scanning, no transaction. The farmer scans this and sends
+ * Display only — no scanning, no transaction. The merchant scans this and sends
  * coupons to it as a NIP-17 DM.
  *
  * **The QR carries the NIP-05 handle**, not the npub. Both name the same
@@ -57,7 +57,7 @@ export function ReceivePage({ profile }: { profile: Profile }) {
   return (
     <Screen>
       <BackLink to="/" label="Back" />
-      <PageHeader title="Receive" subtitle="Show this to the farmer." />
+      <PageHeader title="Receive" subtitle="Show this to the shop." />
 
       {error && <Alert>Could not load your address: {error}</Alert>}
 

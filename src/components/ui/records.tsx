@@ -3,10 +3,11 @@ import { ChevronRight, ArrowDownLeft, ArrowUpRight } from 'lucide-react'
 import type { VoucherRow } from '@imani/wallet-storage'
 
 import { formatFace, formatDate } from '../../lib/format'
+import { isRedeemed } from '../../lib/merchants'
 import { counterpartyOf, transactionLabel, type WalletTransaction } from '../../lib/transactions'
 
 /**
- * The two record rows, shared by the capped lists on the farmer screen and the
+ * The two record rows, shared by the capped lists on the merchant screen and the
  * full lists behind "See all". One definition each, so a coupon looks the same
  * wherever it appears and only one file changes when it shouldn't.
  *
@@ -14,18 +15,36 @@ import { counterpartyOf, transactionLabel, type WalletTransaction } from '../../
  * screen behind the row carries everything else.
  */
 
-/** A coupon: face value, when it arrived. */
+/**
+ * A coupon: face value, when it arrived.
+ *
+ * A redeemed one is dimmed and says so. It is a receipt, not money — the value
+ * behind it was burnt when it came back (burn.ts) — and one row that looks like
+ * every other is exactly how a used coupon gets handed out a second time.
+ */
 export function CouponListItem({ row }: { row: VoucherRow }) {
+  const redeemed = isRedeemed(row)
   return (
     <Link
       to={`/coupon/${encodeURIComponent(row.token_id)}`}
-      className="flex items-center gap-3 p-4 transition-colors hover:bg-mono-100 dark:hover:bg-mono-900"
+      className={`flex items-center gap-3 p-4 transition-colors hover:bg-mono-100 dark:hover:bg-mono-900 ${
+        redeemed ? 'opacity-60' : ''
+      }`}
     >
       <div className="min-w-0 flex-1">
-        <p className="font-medium text-mono-900 dark:text-mono-50">
+        <p
+          className={
+            redeemed
+              ? 'font-medium text-mono-500 line-through'
+              : 'font-medium text-mono-900 dark:text-mono-50'
+          }
+        >
           {formatFace(row.face_value ?? 0, { unit: row.face_unit ?? '', decimals: row.face_decimals ?? 0 })}
         </p>
-        <p className="text-sm text-mono-500">{formatDate(row.created_at)}</p>
+        <p className="text-sm text-mono-500">
+          {redeemed ? 'Redeemed · ' : ''}
+          {formatDate(row.created_at)}
+        </p>
       </div>
       <ChevronRight className="h-4 w-4 shrink-0 text-mono-400" />
     </Link>

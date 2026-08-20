@@ -30,9 +30,9 @@ import { wipeWallet } from './wallet'
  */
 export const LOGOUT_WARNING =
   'This erases your key AND all your data from this browser.\n\n' +
-  'Your account, your stall and your sales come back when you log in with your ' +
+  'Your account, your shop and your sales come back when you log in with your ' +
   'backup key (nsec) — they are stored under your key, not on this device. ' +
-  'Coupons you are holding are restored from the relay as they are received ' +
+  'Vouchers you are holding are restored from the relay as they are received ' +
   'again.\n\nThe only way back in is your backup key or a backup file from ' +
   'Settings → Backup. There is no password reset.\n\nLog out anyway?'
 
@@ -107,7 +107,7 @@ export async function logout(
   //
   // — proofs burnt, coupon nowhere, no kind-7375 backup published, nothing on
   // any relay to restore from. That is why a wallet that logged out and back in
-  // showed no balance however often it was refreshed. lib/branding.ts's farmer
+  // showed no balance however often it was refreshed. lib/branding.ts's merchant
   // cache is the same class of residue, holding the previous user's profiles
   // (and their failed lookups) until the page goes.
   //

@@ -48,7 +48,7 @@ function dayOf(at: number): number {
  * Is this incoming row one of THIS merchant's coupons coming home?
  *
  * The discriminator matters, because a merchant is also a customer: coupons they
- * received from some other farmer arrive as ordinary incoming rows too, and
+ * received from some other merchant arrive as ordinary incoming rows too, and
  * counting those as redemptions would inflate the rate with money that has
  * nothing to do with their own issuance.
  *
