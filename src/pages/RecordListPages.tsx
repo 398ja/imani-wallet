@@ -9,9 +9,10 @@ import {
   EmptyRow,
   CouponListItem,
   TransactionListItem,
+  IdentityInline,
 } from '../components/ui'
 import { listVouchers, transactionsWith, onWalletChanged } from '../lib/wallet'
-import { couponsFor, findMerchant, findMerchantWithHistory, redeemedFor } from '../lib/merchants'
+import { couponsFor, redeemedFor } from '../lib/merchants'
 import type { WalletTransaction } from '../lib/transactions'
 
 /**
@@ -35,8 +36,15 @@ function ListFrame({
 }) {
   return (
     <Screen>
-      <BackLink to={`/merchants/${pubkey}`} label="Shop" />
+      <BackLink to={`/merchants/${pubkey}`} label="Merchant" />
       <PageHeader title={title} subtitle={subtitle} />
+      {/* Whose list this is, as a person. The subtitle used to say it in words
+          — from `Merchant.name`, which is `merchantName || merchantId`, so a
+          merchant who has published no kind-0 named the page with 64 hex
+          characters. IdentityInline never renders a full key. */}
+      <div className="mb-4">
+        <IdentityInline pubkey={pubkey} size="md" />
+      </div>
       <div className="divide-y divide-mono-200 overflow-hidden rounded-2xl border border-mono-200 dark:divide-mono-800 dark:border-mono-800">
         {children}
       </div>
@@ -48,14 +56,12 @@ export function CouponsPage() {
   const { pubkey = '' } = useParams()
   const [coupons, setCoupons] = useState<VoucherRow[]>([])
   const [redeemed, setRedeemed] = useState<VoucherRow[]>([])
-  const [name, setName] = useState('')
 
   useEffect(() => {
     const load = async () => {
       const rows = await listVouchers()
       setCoupons(couponsFor(rows, pubkey))
       setRedeemed(redeemedFor(rows, pubkey))
-      setName(findMerchant(rows, pubkey)?.name ?? '')
     }
     load()
     return onWalletChanged(load)
@@ -65,10 +71,10 @@ export function CouponsPage() {
     <ListFrame
       pubkey={pubkey}
       title="Vouchers"
-      // The count is the LIVE count, matching the shop card. Redeemed ones sit
-      // below under their own heading rather than swelling this number: they are
-      // receipts for value already burnt, not vouchers this wallet holds.
-      subtitle={`${coupons.length} from ${name || 'this shop'}`}
+      // The count is the LIVE count, matching the merchant card. Redeemed ones
+      // sit below under their own heading rather than swelling this number: they
+      // are receipts for value already burnt, not vouchers this wallet holds.
+      subtitle={coupons.length === 1 ? '1 voucher' : `${coupons.length} vouchers`}
     >
       {coupons.length === 0 ? (
         <EmptyRow>No vouchers.</EmptyRow>
@@ -92,16 +98,10 @@ export function CouponsPage() {
 export function TransactionsPage() {
   const { pubkey = '' } = useParams()
   const [transactions, setTransactions] = useState<WalletTransaction[]>([])
-  const [name, setName] = useState('')
 
   useEffect(() => {
     const load = async () => {
-      const [rows, history] = await Promise.all([listVouchers(), transactionsWith(pubkey)])
-      setTransactions(history)
-      // Through the history as well: on this page especially, a merchant you hold
-      // no coupons from is the normal case, and `findMerchant` alone leaves the
-      // subtitle reading "3 with this merchant".
-      setName(findMerchantWithHistory(rows, history, pubkey)?.name ?? '')
+      setTransactions(await transactionsWith(pubkey))
     }
     load()
     return onWalletChanged(load)
@@ -111,7 +111,7 @@ export function TransactionsPage() {
     <ListFrame
       pubkey={pubkey}
       title="Transactions"
-      subtitle={`${transactions.length} with ${name || 'this shop'}`}
+      subtitle={transactions.length === 1 ? '1 entry' : `${transactions.length} entries`}
     >
       {transactions.length === 0 ? (
         <EmptyRow>Nothing yet.</EmptyRow>

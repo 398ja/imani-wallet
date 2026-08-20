@@ -206,10 +206,18 @@ function organizationName(row: VoucherRow, branding: MerchantBranding): string {
   return 'Unknown shop'
 }
 
-function description(row: VoucherRow, branding: MerchantBranding): string {
-  if (present(row.memo)) return row.memo
-  if (present(branding.storeDescription)) return branding.storeDescription
-  return DEFAULT_DESCRIPTION
+/**
+ * The line under the merchant's name on a COUPON, which describes the coupon —
+ * the memo they sent it with.
+ *
+ * The merchant's kind-0 `about` is deliberately NOT a fallback here, though the
+ * Java mapper allows it: a shop's standing blurb ("Organic veg, Tue & Sat") is
+ * about the shop, not about this voucher, and on the coupon card it sat in the
+ * one line the holder reads to tell one coupon from another. It still carries
+ * the merchant card on the home deck, where it is about the right thing.
+ */
+function description(row: VoucherRow): string {
+  return present(row.memo) ? row.memo : DEFAULT_DESCRIPTION
 }
 
 /**
@@ -293,7 +301,7 @@ export function toCouponPass(row: VoucherRow, branding: MerchantBranding = EMPTY
     passTypeIdentifier: PASS_TYPE_IDENTIFIER,
     teamIdentifier: TEAM_IDENTIFIER,
     serialNumber: voucherId,
-    description: description(row, branding),
+    description: description(row),
     organizationName: organizationName(row, branding),
     // Branding-only, matching the Java: absent when there is no branding, while
     // organizationName still falls back to the issuer id.

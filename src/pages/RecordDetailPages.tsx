@@ -129,7 +129,7 @@ export function CouponPage() {
           // The issuer's own record id, NOT the token id shown above — same
           // screen, two different ids, and one name for both said nothing.
           ['Issuance id', row.voucher_id],
-          ['Shop', row.issuer_id],
+          ['Merchant', row.issuer_id ? <IdentityInline pubkey={row.issuer_id} /> : undefined],
           ['Face decimals', row.face_decimals === undefined ? undefined : String(row.face_decimals)],
           ['Updated', formatDate(row.updated_at)],
           ['Source', row.source_transport],
@@ -196,7 +196,7 @@ export function TransactionPage() {
           ['Raw type', tx.type],
           // Both of these are people, and the drawer is where someone looks to
           // see WHO — the hex key answered a question nobody asked.
-          ['Shop', tx.merchantId ? <IdentityInline pubkey={tx.merchantId} /> : undefined],
+          ['Merchant', tx.merchantId ? <IdentityInline pubkey={tx.merchantId} /> : undefined],
           ['Counterparty', tx.counterparty ? <IdentityInline pubkey={tx.counterparty} /> : undefined],
           ['Voucher id', tx.tokenId],
           ['Issuance id', tx.voucherId],

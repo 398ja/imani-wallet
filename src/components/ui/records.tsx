@@ -4,7 +4,7 @@ import type { VoucherRow } from '@imani/wallet-storage'
 
 import { formatFace, formatDate } from '../../lib/format'
 import { isRedeemed } from '../../lib/merchants'
-import { counterpartyOf, transactionLabel, type WalletTransaction } from '../../lib/transactions'
+import { transactionLabel, type WalletTransaction } from '../../lib/transactions'
 
 /**
  * The two record rows, shared by the capped lists on the merchant screen and the
@@ -83,6 +83,3 @@ export function TransactionListItem({ tx }: { tx: WalletTransaction }) {
     </Link>
   )
 }
-
-/** Kept for the detail screens' hero line. */
-export { counterpartyOf }

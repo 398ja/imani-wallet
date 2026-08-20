@@ -123,9 +123,13 @@ describe('toCouponPass', () => {
     expect(pass.userInfo.stripUrl).toBe('https://example.test/banner.png')
   })
 
-  it('prefers the voucher memo over the store description', () => {
-    const pass = toCouponPass(row({ memo: 'Market day' }), { storeDescription: 'Organic veg' })
-    expect(pass.description).toBe('Market day')
+  it('describes the voucher by its memo, never by the shop blurb', () => {
+    const branding = { storeDescription: 'Organic veg, Tue & Sat' }
+
+    expect(toCouponPass(row({ memo: 'Market day' }), branding).description).toBe('Market day')
+    // The merchant's kind-0 `about` is about the merchant. On a coupon card it
+    // took the one line that tells this coupon from the next one.
+    expect(toCouponPass(row({ memo: undefined }), branding).description).toBe(DEFAULT_DESCRIPTION)
   })
 
   it('puts provenance on the back, and never the signature', () => {
