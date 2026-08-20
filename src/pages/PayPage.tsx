@@ -6,10 +6,10 @@ import { getDecimals } from '@imani/money'
 import { listVouchers } from '../lib/wallet'
 import { toMerchants, type Merchant } from '../lib/merchants'
 import { formatFace } from '../lib/format'
-import { identityLabel, identitySubLabel, useIdentity } from '../lib/identity'
+import { identityLabel, useIdentity } from '../lib/identity'
 import { payRequest, splitObstacle } from '../lib/pay'
 import type { NUT18VRequest } from '../lib/nap'
-import { Avatar, Button, Centered, Fatal, Alert } from '../components/ui'
+import { Button, Centered, Fatal, Alert, IdentityInline } from '../components/ui'
 
 type Status =
   | { step: 'review' }
@@ -134,21 +134,13 @@ export function PayPage({ pubkey }: { pubkey: string }) {
           picture, display name, handle underneath. The label doubles as the
           avatar's alt text and initials, so an issuer with no picture still
           reads as themselves rather than as a stray letter. */}
-      <div className="mb-6 flex items-center gap-3">
-        <Avatar
-          src={issuerIdentity.picture}
-          name={issuerLabel}
+      <div className="mb-6">
+        <IdentityInline
           pubkey={request.issuerId}
+          label="To"
           size="md"
-          className="shrink-0"
+          fallbackName={merchant?.name}
         />
-        <div className="min-w-0">
-          <p className="text-xs uppercase tracking-wide text-mono-400">To</p>
-          <p className="truncate text-sm text-mono-900 dark:text-mono-50">{issuerLabel}</p>
-          {identitySubLabel(issuerIdentity) && (
-            <p className="truncate text-xs text-mono-500">{identitySubLabel(issuerIdentity)}</p>
-          )}
-        </div>
       </div>
 
       <div className="mb-6 rounded-2xl border border-mono-200 p-5 dark:border-mono-800">
