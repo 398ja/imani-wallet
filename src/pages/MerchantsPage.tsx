@@ -16,6 +16,12 @@ import { toMerchants, walletTotals, withPastMerchants, type Merchant } from '../
 import { toTransaction } from '../lib/transactions'
 import { toMerchantPass, EMPTY_BRANDING, type MerchantBranding } from '../lib/pass'
 import { merchantBranding } from '../lib/branding'
+import {
+  animateSpring,
+  prefersReducedMotion,
+  project,
+  rubberband,
+} from '../lib/spring'
 import { formatFace } from '../lib/format'
 
 /** A child React already gave a stable key, so the deck can reuse it. */
@@ -23,10 +29,30 @@ function isKeyed(child: ReactNode): child is ReactElement & { key: string } {
   return isValidElement(child) && child.key !== null
 }
 
-/** Past this many pixels a drag is a swipe, and advances one card. */
-const SWIPE_THRESHOLD = 40
 /** Past this, the gesture was a swipe and the click that follows it is not a tap. */
 const TAP_SLOP = 8
+/**
+ * Velocity is read over the tail of the gesture, not the whole of it. A drag
+ * that wandered for a second and then stopped dead has no momentum, and
+ * averaging over its whole length would invent some.
+ */
+const VELOCITY_WINDOW_MS = 80
+
+interface Drag {
+  startX: number
+  startScroll: number
+  moved: number
+  samples: Array<{ x: number; t: number }>
+}
+
+/** Pointer speed in px/s at release, from the tail of the movement history. */
+function releaseVelocity(samples: Drag['samples']): number {
+  const last = samples[samples.length - 1]
+  if (!last) return 0
+  const first = samples.find((s) => last.t - s.t <= VELOCITY_WINDOW_MS) ?? samples[0]
+  const elapsed = last.t - first.t
+  return elapsed > 0 ? ((last.x - first.x) / elapsed) * 1000 : 0
+}
 
 /**
  * A swipeable deck: one full-width card per page, one flick per card.
@@ -36,25 +62,106 @@ const TAP_SLOP = 8
  * fills the page, there is no scrollbar, and releasing always settles on
  * exactly one card.
  *
- * CSS still does the settling (`snap-x snap-mandatory`), because a hand-rolled
- * animation would have to reimplement momentum and would fight the browser's
- * own touch scrolling. Pointer events only add what CSS cannot: dragging with a
- * mouse, and treating a short flick as a full page turn.
+ * The scroll container stays, because on a touchscreen the browser already does
+ * the whole job — 1:1 tracking, momentum, bounce at the ends, and a flick you
+ * can grab mid-flight — with a smoothness no main-thread loop can match. Pointer
+ * handling adds the same behaviour for a mouse, where the platform gives none of
+ * it, and replaces the two browser behaviours that are not good enough either
+ * way: the page turn was chosen by distance dragged, which ignores a fast short
+ * flick entirely, and the settle was `scrollTo({behavior: 'smooth'})`, a fixed
+ * animation that cannot be interrupted or re-aimed once it is running.
  */
 function SwipeDeck({ children, label }: { children: ReactNode[]; label: string }) {
   const rail = useRef<HTMLDivElement>(null)
-  const drag = useRef<{ startX: number; startScroll: number; moved: number } | null>(null)
+  const drag = useRef<Drag | null>(null)
   const lastMoved = useRef(0)
+  /** Cancels whatever spring is running, so a new gesture can take the value over. */
+  const stop = useRef<(() => void) | null>(null)
+  /** Live rubber-band offset — read on interrupt so a new spring starts from it. */
+  const offset = useRef(0)
   const [index, setIndex] = useState(0)
 
   const pageWidth = () => rail.current?.clientWidth || 1
+  const maxScroll = () => Math.max(0, (children.length - 1) * pageWidth())
 
-  const goTo = (next: number) => {
+  const setOffset = (px: number) => {
+    offset.current = px
+    const el = rail.current
+    if (el) el.style.transform = px ? `translateX(${px}px)` : ''
+  }
+
+  const cancelSprings = () => {
+    stop.current?.()
+    stop.current = null
+  }
+
+  /**
+   * Settle onto a card, continuing at the speed the gesture was already moving.
+   *
+   * Two springs, not one: scroll position and rubber-band offset are separate
+   * axes with separate velocities, and driving both off a single spring would
+   * make each wait for the other.
+   */
+  const settle = (targetScroll: number, velocity: number) => {
     const el = rail.current
     if (!el) return
+    cancelSprings()
+
+    const to = Math.max(0, Math.min(maxScroll(), targetScroll))
+    const restore = () => {
+      el.scrollLeft = to
+      // Mandatory snapping fights a scrollLeft set by hand — the browser keeps
+      // yanking back to the nearest snap point. Off while we drive it, on once
+      // we are parked exactly on a snap point anyway.
+      el.style.scrollSnapType = ''
+    }
+
+    if (prefersReducedMotion()) {
+      setOffset(0)
+      restore()
+      return
+    }
+
+    el.style.scrollSnapType = 'none'
+    // Critically damped. A paging deck that overshoots shows a slice of the card
+    // it is not settling on, which reads as a mistake rather than as momentum.
+    const stopScroll = animateSpring({
+      from: el.scrollLeft,
+      to,
+      velocity,
+      damping: 1,
+      response: 0.4,
+      onFrame: (value) => {
+        el.scrollLeft = value
+      },
+      onRest: restore,
+    })
+    const stopOffset = offset.current
+      ? animateSpring({
+          from: offset.current,
+          to: 0,
+          damping: 1,
+          response: 0.3,
+          onFrame: setOffset,
+          onRest: () => setOffset(0),
+        })
+      : null
+
+    stop.current = () => {
+      stopScroll()
+      stopOffset?.()
+    }
+  }
+
+  /**
+   * `velocity` is the seam. A dot tap starts from rest, but a released flick has
+   * to hand its speed to the spring or the card visibly stalls at the moment the
+   * finger leaves and then starts again.
+   */
+  const goTo = (next: number, velocity = 0) => {
     const clamped = Math.max(0, Math.min(children.length - 1, next))
-    el.scrollTo({ left: clamped * pageWidth(), behavior: 'smooth' })
     setIndex(clamped)
+    settle(clamped * pageWidth(), velocity)
   }
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -68,31 +175,51 @@ function SwipeDeck({ children, label }: { children: ReactNode[]; label: string }
     // rail — used to leave this above the slop, and the next genuine tap was
     // then suppressed and the merchant did not open.
     lastMoved.current = 0
-    drag.current = { startX: e.clientX, startScroll: el.scrollLeft, moved: 0 }
+    drag.current = {
+      startX: e.clientX,
+      startScroll: el.scrollLeft,
+      moved: 0,
+      samples: [{ x: e.clientX, t: e.timeStamp }],
+    }
   }
 
   const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
     const el = rail.current
     const d = drag.current
     if (!el || !d) return
-    const dx = e.clientX - d.startX
     const wasDragging = d.moved > TAP_SLOP
-    d.moved = Math.max(d.moved, Math.abs(dx))
+    d.moved = Math.max(d.moved, Math.abs(e.clientX - d.startX))
+    d.samples.push({ x: e.clientX, t: e.timeStamp })
+    if (d.samples.length > 8) d.samples.shift()
 
     // Capture only once this is definitely a drag, NOT on pointerdown. Capturing
     // early retargets the click that follows to the rail, so the card's own link
     // never sees it and a plain tap silently stopped opening the merchant.
     if (!wasDragging && d.moved > TAP_SLOP) {
       el.setPointerCapture(e.pointerId)
-      // Mandatory snapping fights a scrollLeft set by hand — the browser keeps
-      // yanking back to the nearest snap point mid-drag. Off for the drag, on
-      // for the release, which is what makes the card settle instead of drift.
+      // A card still flying to its target is now under the finger. The spring
+      // lets go and the drag picks up from wherever it had got to — which is why
+      // both baselines are re-read here rather than kept from pointerdown: the
+      // scroll has moved since, and re-baselining also swallows the slop instead
+      // of jumping the card by it.
+      cancelSprings()
       el.style.scrollSnapType = 'none'
+      d.startX = e.clientX
+      d.startScroll = el.scrollLeft
+      return
     }
-    if (d.moved > TAP_SLOP) el.scrollLeft = d.startScroll - dx
+    if (!wasDragging) return
+
+    const raw = d.startScroll - (e.clientX - d.startX)
+    const max = maxScroll()
+    const overshoot = raw < 0 ? raw : raw > max ? raw - max : 0
+    el.scrollLeft = raw - overshoot
+    // scrollLeft cannot go past its bounds, so the resistance has to live on a
+    // transform. Negated because scroll runs opposite to the content.
+    setOffset(overshoot ? -rubberband(overshoot, pageWidth()) : 0)
   }
 
-  const endDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
+  const endDrag = () => {
     const el = rail.current
     const d = drag.current
     if (!el || !d) return
@@ -100,13 +227,22 @@ function SwipeDeck({ children, label }: { children: ReactNode[]; label: string }
     lastMoved.current = d.moved
     if (d.moved <= TAP_SLOP) return // a tap: leave it entirely alone
 
-    el.style.scrollSnapType = ''
-    const dx = e.clientX - d.startX
-    const from = Math.round(d.startScroll / pageWidth())
-    // A short flick still turns the page. Snapping to whichever card is nearest
-    // would swallow it, since a 50px flick leaves the original card nearest.
-    goTo(Math.abs(dx) > SWIPE_THRESHOLD ? from + (dx < 0 ? 1 : -1) : from)
+    // scrollLeft increases as the finger moves left, hence the sign flip.
+    const velocity = -releaseVelocity(d.samples)
+    const page = pageWidth()
+    const from = Math.round(d.startScroll / page)
+    // Where the flick is *going*, not where it stopped. A 30px flick and a 30px
+    // drag end in the same place and mean opposite things; only the projection
+    // tells them apart. Held to one card either way — this is a deck, not a rail.
+    const projected = Math.round((el.scrollLeft + project(velocity)) / page)
+    const target = Math.max(from - 1, Math.min(from + 1, projected))
+
+    goTo(target, velocity)
   }
+
+  // Nothing should outlive the screen: a spring still writing scrollLeft into a
+  // detached node is a leak with no symptom until it is a lot of them.
+  useEffect(() => cancelSprings, [])
 
   return (
     <div>
@@ -159,7 +295,7 @@ function SwipeDeck({ children, label }: { children: ReactNode[]; label: string }
               className="group rounded-full p-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-400"
             >
               <span
-                className={`block h-2 rounded-full transition-all ${
+                className={`block h-2 rounded-full transition-[width,background-color] duration-200 ease-out motion-reduce:transition-none ${
                   i === index
                     ? 'w-5 bg-mono-900 dark:bg-mono-100'
                     : 'w-2 bg-mono-300 dark:bg-mono-700'
