@@ -2,8 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
 @layer base {
   :root {
     --background: 250 250 250;
@@ -35,7 +33,7 @@
 
   body {
     @apply bg-mono-50 text-mono-900 dark:bg-mono-950 dark:text-mono-50;
-    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    @apply font-sans;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     margin: 0;
