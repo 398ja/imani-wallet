@@ -115,7 +115,7 @@ export function CouponPage() {
       </ListSection>
 
       <RawDetails
-        entries={present([
+        entries={present<React.ReactNode>([
           // The backing trio, kept together: how many sats, under which
           // strategy, at what ratio. `token_amount` is the authoritative sats
           // field — imani-apps reads it at every display site and never decodes
@@ -192,7 +192,7 @@ export function TransactionPage() {
       </ListSection>
 
       <RawDetails
-        entries={present([
+        entries={present<React.ReactNode>([
           ['Raw type', tx.type],
           // Both of these are people, and the drawer is where someone looks to
           // see WHO — the hex key answered a question nobody asked.
