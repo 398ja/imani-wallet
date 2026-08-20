@@ -2,9 +2,18 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ClipboardPaste, Check } from 'lucide-react'
 
-import { Avatar, Button, Screen, BackLink, PageHeader, Alert, Panel, Input } from '../components/ui'
+import {
+  Button,
+  Screen,
+  BackLink,
+  PageHeader,
+  Alert,
+  Panel,
+  Input,
+  IdentityInline,
+} from '../components/ui'
 import { issueAndDeliver, toRecipientPubkey, type IssueStage } from '../lib/issue'
-import { identityLabel, identitySubLabel, useIdentity } from '../lib/identity'
+import { identityLabel, useIdentity } from '../lib/identity'
 import { currencyDecimals, formatFace, parseAmountToMinor } from '../lib/format'
 import type { MerchantProfile } from '../lib/merchant'
 
@@ -274,26 +283,7 @@ function IssueForm({
     <>
       <Panel className="p-4">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {/* Named by the same label the panel prints, so the initials fallback
-                reads as that customer rather than as a stray letter. */}
-            <Avatar
-              src={customerIdentity?.picture}
-              name={identityLabel(customer, customerIdentity)}
-              pubkey={customer}
-              size="md"
-              className="shrink-0"
-            />
-            <div>
-              <p className="text-xs uppercase tracking-wide text-mono-400">Customer</p>
-              <p className="text-sm text-mono-900 dark:text-mono-50">
-                {identityLabel(customer, customerIdentity)}
-              </p>
-              {identitySubLabel(customerIdentity) && (
-                <p className="text-xs text-mono-500">{identitySubLabel(customerIdentity)}</p>
-              )}
-            </div>
-          </div>
+          <IdentityInline pubkey={customer} label="Customer" size="md" />
           <Button variant="ghost" size="sm" onClick={onRescan} disabled={busy}>
             Change
           </Button>
