@@ -104,16 +104,19 @@ export const VALIDITY_DAYS = [30, 60, 90] as const
 export const DEFAULT_CURRENCY = 'EUR'
 export const DEFAULT_VALIDITY_DAYS = 30
 
-/** The user-editable subset — everything except the bookkeeping fields. */
+/**
+ * The subset this app's forms edit.
+ *
+ * Narrower than it was: `businessType` and `storeDescription` are no longer
+ * asked for, because the profile's display name and `about` are the same two
+ * facts and were being asked for twice. They stay on `MerchantProfile` and in
+ * both event functions on purpose — records written by possa-merchant, or by an
+ * older build of this one, carry them, and a merge that dropped them would
+ * quietly erase another client's data on the next save.
+ */
 export type MerchantFields = Pick<
   MerchantProfile,
-  | 'active'
-  | 'businessType'
-  | 'categories'
-  | 'location'
-  | 'storeDescription'
-  | 'issuanceCurrency'
-  | 'voucherValidityDays'
+  'active' | 'categories' | 'location' | 'issuanceCurrency' | 'voucherValidityDays'
 >
 
 /**

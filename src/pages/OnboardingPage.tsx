@@ -29,7 +29,12 @@ import {
  * Registration is the same for both roles, so being a merchant is a switch on
  * the account form rather than a screen of its own — the extra stall questions
  * only appear once it is on. A customer answers one screen; a merchant answers
- * two, and neither is asked anything the previous answer did not make relevant.
+ * three, and none of them asks anything a previous answer did not make relevant.
+ *
+ * The merchant's two extra screens are in this order for a reason: the profile
+ * comes FIRST, because the name and description customers see are the stall's
+ * own, and the metadata screen that follows deliberately no longer repeats
+ * them. Asking for a business name after a display name got two answers.
  *
  * A returning user never sees any of this: `Entry` in App.tsx checks
  * `hasStoredKey()` and sends a browser that already holds a key straight to
@@ -116,7 +121,9 @@ function CreateForm({
   // reaches 'merchant' while the switch is on, so a customer never meets the
   // stall questions at all.
   const [isMerchant, setIsMerchant] = useState(false)
-  const [step, setStep] = useState<'account' | 'merchant'>('account')
+  const [step, setStep] = useState<'account' | 'profile' | 'merchant'>('account')
+  const [displayName, setDisplayName] = useState('')
+  const [about, setAbout] = useState('')
   const [merchant, setMerchant] = useState<MerchantFields>(() => ({
     active: true,
     categories: [],
@@ -171,7 +178,15 @@ function CreateForm({
       // register() stashes the backup key and logs in as its last two steps, in
       // that order — the login remounts the app, and the backup screen is what
       // the remount renders.
-      await register(handle, passphrase, onUnlock, isMerchant ? merchant : undefined)
+      await register(
+        handle,
+        passphrase,
+        onUnlock,
+        isMerchant ? merchant : undefined,
+        isMerchant
+          ? { displayName: displayName.trim() || undefined, about: about.trim() || undefined }
+          : undefined,
+      )
     } catch (e) {
       // A taken handle is a field problem, not a failed registration: the key is
       // kept, nothing was persisted, and changing one word fixes it.
@@ -192,16 +207,68 @@ function CreateForm({
 
   // Step two. Rendered instead of the account form rather than below it, so the
   // merchant questions cannot be mistaken for more account questions.
-  if (step === 'merchant') {
+  //
+  // No photo here. Uploading one needs a Blossom auth event, and at this point
+  // in the flow the key exists but nothing has been claimed or stored yet — the
+  // avatar is one tap away at /profile the moment the account is real.
+  if (step === 'profile') {
     return (
       <div className="space-y-4">
         <div>
           <h2 className="text-lg font-semibold text-mono-900 dark:text-mono-50">Your business</h2>
+          <p className="mt-0.5 text-sm text-mono-500">
+            The name and description customers see on your vouchers.
+          </p>
+        </div>
+
+        <Input
+          label="Display name"
+          placeholder="Bridge Street Coffee"
+          value={displayName}
+          maxLength={128}
+          onChange={(e) => setDisplayName(e.target.value)}
+          disabled={busy}
+        />
+
+        <div>
+          <label
+            htmlFor="about"
+            className="mb-2 block text-sm font-medium text-mono-600 dark:text-mono-400"
+          >
+            About
+          </label>
+          <textarea
+            id="about"
+            rows={3}
+            maxLength={1000}
+            value={about}
+            onChange={(e) => setAbout(e.target.value)}
+            disabled={busy}
+            placeholder="Independent coffee shop on Bridge Street"
+            className="w-full rounded-xl border border-mono-200 bg-white px-4 py-3 text-mono-900 placeholder:text-mono-400 focus:border-mono-400 focus:outline-none disabled:opacity-50 dark:border-mono-700 dark:bg-mono-800 dark:text-mono-50"
+          />
+        </div>
+
+        <Button size="lg" className="w-full" disabled={busy} onClick={() => setStep('merchant')}>
+          Continue
+        </Button>
+
+        <BackButton disabled={busy} onClick={() => setStep('account')} />
+      </div>
+    )
+  }
+
+  // Step three.
+  if (step === 'merchant') {
+    return (
+      <div className="space-y-4">
+        <div>
+          <h2 className="text-lg font-semibold text-mono-900 dark:text-mono-50">What you sell</h2>
           {/* No longer mentions currency — that moved to settings, along with
               where you trade. Both have sensible defaults, so neither is worth a
               question while someone is setting up at a market stall. */}
           <p className="mt-0.5 text-sm text-mono-500">
-            Customers see this. You can add more in settings later.
+            You can add more in settings later.
           </p>
         </div>
 
@@ -302,7 +369,17 @@ function CreateForm({
         size="lg"
         className="w-full"
         disabled={busy || !complete}
-        onClick={isMerchant ? () => setStep('merchant') : submit}
+        onClick={
+          isMerchant
+            ? () => {
+                // Seeded from the handle rather than left blank: a merchant who
+                // taps straight through still ends up with the name they just
+                // chose, not an anonymous npub on every coupon.
+                if (displayName === '') setDisplayName(handle)
+                setStep('profile')
+              }
+            : submit
+        }
       >
         {isMerchant ? 'Continue' : busy ? 'Creating your account…' : 'Create account'}
       </Button>

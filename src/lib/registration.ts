@@ -4,7 +4,13 @@ import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 import { gatewayConfig } from './config'
 import { signedFetch, type RequestSigner } from './nip98'
 import { RELAY_URL, publish } from './relay'
-import { buildProfileEvent, emptyProfile, saveProfile, type Profile } from './profile'
+import {
+  buildProfileEvent,
+  emptyProfile,
+  saveProfile,
+  type Profile,
+  type ProfileFields,
+} from './profile'
 import {
   buildMerchantEvent,
   emptyMerchant,
@@ -166,12 +172,16 @@ async function claimHandle(
  *                 metadata is published as a kind-30078 record beside the
  *                 kind-0. Absent means a customer, which is the whole of the
  *                 role model — see lib/merchant.ts.
+ * @param profileFields what goes in the first kind-0. Only the merchant signup
+ *                 asks for it; a customer gets the handle as a display name and
+ *                 fills the rest in later at /profile.
  */
 export async function register(
   handle: string,
   passphrase: string,
   login: (privkeyHex: string) => Promise<void>,
   merchant?: MerchantFields,
+  profileFields?: ProfileFields,
 ): Promise<RegistrationOutcome> {
   const minted = mintKey()
   const { privkeyHex, pubkey } = minted
@@ -194,8 +204,11 @@ export async function register(
 
   const profile: Profile = {
     ...emptyProfile(pubkey),
+    ...profileFields,
     nip05: `${handle}@${nip05Domain}`,
-    displayName: handle,
+    // The handle is the fallback, not the default: a merchant who cleared the
+    // name field still gets something the header and every coupon can render.
+    displayName: profileFields?.displayName?.trim() || handle,
     updatedAt: Date.now(),
   }
   saveProfile(profile)
