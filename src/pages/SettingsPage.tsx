@@ -63,8 +63,8 @@ export function SettingsPage({
             <SettingRow
               to="/settings/merchant"
               icon={Store}
-              label="Your stall"
-              hint="Categories, location, coupon currency"
+              label="Your shop"
+              hint="Categories, location, voucher currency"
             />
           </ListSection>
         </div>

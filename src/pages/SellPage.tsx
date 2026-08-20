@@ -23,10 +23,10 @@ import type { MerchantProfile } from '../lib/merchant'
  */
 
 const STAGE_LABEL: Record<IssueStage, string> = {
-  issuing: 'Issuing the coupon…',
+  issuing: 'Issuing the voucher…',
   // Named for what is actually happening: the coupon exists but has no Cashu
   // token yet, because its Lightning backing is still settling.
-  minting: 'Waiting for the coupon to be backed…',
+  minting: 'Waiting for the voucher to be backed…',
   delivering: 'Delivering to the customer…',
 }
 
@@ -315,7 +315,7 @@ function IssueForm({
 
         <Input
           label="Note (optional)"
-          placeholder="Two boxes of tomatoes"
+          placeholder="£5 welcome voucher"
           value={memo}
           onChange={(e) => setMemo(e.target.value)}
           disabled={busy}
@@ -327,7 +327,7 @@ function IssueForm({
           disabled={busy || minor === null}
           onClick={submit}
         >
-          {stage ? STAGE_LABEL[stage] : 'Send coupon'}
+          {stage ? STAGE_LABEL[stage] : 'Send voucher'}
         </Button>
 
         {busy && (

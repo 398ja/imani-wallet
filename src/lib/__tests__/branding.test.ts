@@ -28,7 +28,7 @@ describe('fetchNewestKind0', () => {
     // The failure this exists for: the wallet PUBLISHES profiles to the relay
     // and READS them from the gateway's nostrdb, so a cold or lagging cache
     // reports no profile for a profile that is sitting on the relay — a blank
-    // avatar after login, and farmers' coupons with no farmer on them.
+    // avatar after login, and merchants' coupons with no merchant on them.
     gatewayReturns({ events: [] })
     vi.mocked(allEvents).mockResolvedValue([
       { content: '{"name":"Older"}', created_at: 100 },
@@ -50,7 +50,7 @@ describe('fetchNewestKind0', () => {
 
   it('does not touch the relay when the gateway answers', async () => {
     // The cache is the cheap read and answers almost always; the relay query
-    // opens a WebSocket, and one per farmer on the market page is not free.
+    // opens a WebSocket, and one per merchant on the market page is not free.
     gatewayReturns({ events: [{ content: '{"name":"Rosa"}', createdAt: 900 }] })
 
     expect(await fetchNewestKind0(PUBKEY)).toEqual({ content: '{"name":"Rosa"}', createdAt: 900 })
@@ -81,7 +81,7 @@ describe('brandingFromKind0', () => {
 
     expect(branding.organizationName).toBe('Rosa Green Farm')
     // Carried so every screen that names someone gets their handle from the
-    // fetch it already makes, instead of a second lookup per farmer.
+    // fetch it already makes, instead of a second lookup per merchant.
     expect(branding.nip05).toBe('rosa@x.test')
     expect(branding.logoUrl).toBe('https://example.test/logo.png')
     expect(branding.bannerUrl).toBe('https://example.test/banner.png')
@@ -147,7 +147,7 @@ describe('brandingFromKind0', () => {
   })
 
   it('keeps the name even when the picture is rejected', () => {
-    // A bad image must not cost the farmer their name — the pass still needs to
+    // A bad image must not cost the merchant their name — the pass still needs to
     // say who it is from.
     const branding = brandingFromKind0(
       JSON.stringify({ name: 'Rosa Green Farm', picture: 'javascript:alert(1)' }),
@@ -170,7 +170,7 @@ describe('merchantBranding', () => {
     vi.mocked(allEvents).mockResolvedValue(events as never)
   }
 
-  it('caches a farmer that was found — one fetch, not one per card', async () => {
+  it('caches a shop that was found — one fetch, not one per card', async () => {
     answers([{ content: '{"name":"Rosa Green Farm"}', created_at: 900 }])
 
     expect((await merchantBranding(PUBKEY)).organizationName).toBe('Rosa Green Farm')
@@ -179,7 +179,7 @@ describe('merchantBranding', () => {
   })
 
   it('does NOT cache a lookup that found nothing', async () => {
-    // Caching the miss is what pinned a farmer's coupons to a truncated pubkey
+    // Caching the miss is what pinned a merchant's coupons to a truncated pubkey
     // and "Gift Card" for the life of the page, with the profile on the relay
     // the whole time.
     answers([])

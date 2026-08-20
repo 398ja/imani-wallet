@@ -209,7 +209,7 @@ function RevealKey() {
         ) : (
           <>
             <p className="text-sm text-mono-500">
-              Anyone with this key controls your account and your coupons. Only show it somewhere
+              Anyone with this key controls your account and your vouchers. Only show it somewhere
               private.
             </p>
             <Input

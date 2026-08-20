@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import type { VoucherRow } from '@imani/wallet-storage'
 
 import {
@@ -11,38 +11,14 @@ import {
   RawDetails,
   Centered,
   Pass,
+  IdentityInline,
 } from '../components/ui'
 import { getVoucherRow, getTransactionRow, onWalletChanged } from '../lib/wallet'
-import { issuanceRatioOf } from '../lib/farmers'
+import { issuanceRatioOf } from '../lib/merchants'
 import { formatFace, formatDate, formatSats } from '../lib/format'
 import { toCouponPass, TERMS, EMPTY_BRANDING, type MerchantBranding } from '../lib/pass'
 import { merchantBranding } from '../lib/branding'
 import { toTransaction, transactionLabel, type WalletTransaction } from '../lib/transactions'
-
-/**
- * The way from a movement to the coupon it moved, when there is one.
- *
- * Two different destinations, because a merchant's issued coupon is not in this
- * wallet — it was given away, so there is no voucher row and `/coupon/:tokenId`
- * would find nothing. Its detail is rebuilt from the issuance record instead.
- *
- * Rendered as the section's `action`, the same slot `SeeAll` uses elsewhere.
- */
-function couponLink(tx: WalletTransaction) {
-  const to =
-    tx.type === 'issued' && tx.voucherId
-      ? `/merchant/coupon/${encodeURIComponent(tx.voucherId)}`
-      : tx.tokenId
-        ? `/coupon/${encodeURIComponent(tx.tokenId)}`
-        : null
-
-  if (!to) return undefined
-  return (
-    <Link to={to} className="text-sm text-mono-500 hover:text-mono-900 dark:hover:text-mono-50">
-      View coupon
-    </Link>
-  )
-}
 
 /**
  * One record, in full.
@@ -74,8 +50,8 @@ function ratioLabel(row: VoucherRow): string | undefined {
 }
 
 /** Drop empty entries so the details block only ever shows real data. */
-function present(entries: Array<[string, string | undefined | null]>): Array<[string, string]> {
-  return entries.filter((e): e is [string, string] => Boolean(e[1]))
+function present<T>(entries: Array<[string, T | undefined | null]>): Array<[string, T]> {
+  return entries.filter((e): e is [string, T] => Boolean(e[1]))
 }
 
 export function CouponPage() {
@@ -87,13 +63,13 @@ export function CouponPage() {
     const load = async () => {
       const found = await getVoucherRow(tokenId)
       setRow(found)
-      // The pass renders the farmer's name from branding, so there is no
-      // findFarmer lookup here. There used to be, and it survived the pass
-      // rewrite as a full listVouchers() + toFarmers() pass over every coupon in
+      // The pass renders the merchant's name from branding, so there is no
+      // findMerchant lookup here. There used to be, and it survived the pass
+      // rewrite as a full listVouchers() + toMerchants() pass over every coupon in
       // the wallet — on mount and again on every wallet write — feeding a state
       // value no JSX read.
       if (found?.issuer_id) {
-        // Never rejects; an unbranded farmer falls back to the pass defaults.
+        // Never rejects; an unbranded merchant falls back to the pass defaults.
         merchantBranding(found.issuer_id).then(setBranding)
       }
     }
@@ -103,9 +79,9 @@ export function CouponPage() {
   }, [tokenId])
 
   if (row === undefined) return <Centered>Loading…</Centered>
-  if (row === null) return <Centered>This coupon is no longer in your wallet.</Centered>
+  if (row === null) return <Centered>This voucher is no longer in your wallet.</Centered>
 
-  const backTo = row.issuer_id ? `/farmer/${row.issuer_id}` : '/'
+  const backTo = row.issuer_id ? `/merchants/${row.issuer_id}` : '/'
 
   return (
     <Screen>
@@ -121,7 +97,7 @@ export function CouponPage() {
         <Pass pass={toCouponPass(row, branding)} />
       </div>
 
-      <ListSection title="Coupon">
+      <ListSection title="Voucher">
         {present([
           ['Status', row.status ?? 'active'],
           ['Received', formatDate(row.created_at)],
@@ -132,7 +108,7 @@ export function CouponPage() {
           ['Expires', formatDate(row.expires_at) || 'No expiry'],
           // The id identifies the record, so it stays visible rather than
           // collapsing into Details with the derived and diagnostic fields.
-          ['Coupon id', row.token_id],
+          ['Voucher id', row.token_id],
         ]).map(([label, value]) => (
           <DetailRow key={label} label={label} value={value} />
         ))}
@@ -150,14 +126,16 @@ export function CouponPage() {
           ['Backing', row.token_amount ? `${formatSats(row.token_amount)} sats` : undefined],
           ['Backing strategy', row.backing_strategy],
           ['Issuance ratio', ratioLabel(row)],
-          ['Voucher id', row.voucher_id],
-          ['Farmer', row.issuer_id],
+          // The issuer's own record id, NOT the token id shown above — same
+          // screen, two different ids, and one name for both said nothing.
+          ['Issuance id', row.voucher_id],
+          ['Shop', row.issuer_id],
           ['Face decimals', row.face_decimals === undefined ? undefined : String(row.face_decimals)],
           ['Updated', formatDate(row.updated_at)],
           ['Source', row.source_transport],
           ['Received via', row.received_via_event_id],
           // The pass's back fields are voucherId / issuer / terms. The first two
-          // are already above as "Voucher id" and "Farmer", so only the terms
+          // are already above as "Voucher id" and "Merchant", so only the terms
           // are new — repeating the other two to mirror the record's grouping
           // would show the same value twice in one block.
           ['Terms', TERMS],
@@ -184,7 +162,7 @@ export function TransactionPage() {
   if (tx === null) return <Centered>This transaction is no longer in your wallet.</Centered>
 
   const outgoing = tx.direction === 'out'
-  const backTo = tx.merchantId ? `/farmer/${tx.merchantId}` : '/'
+  const backTo = tx.merchantId ? `/merchants/${tx.merchantId}` : '/'
 
   return (
     <Screen>
@@ -201,7 +179,7 @@ export function TransactionPage() {
         </p>
       </Panel>
 
-      <ListSection title="Transaction" action={couponLink(tx)}>
+      <ListSection title="Transaction">
         {present([
           ['Type', transactionLabel(tx)],
           ['Date', formatDate(tx.at)],
@@ -216,10 +194,12 @@ export function TransactionPage() {
       <RawDetails
         entries={present([
           ['Raw type', tx.type],
-          ['Farmer', tx.merchantId],
-          ['Counterparty', tx.counterparty],
-          ['Coupon id', tx.tokenId],
-          ['Voucher id', tx.voucherId],
+          // Both of these are people, and the drawer is where someone looks to
+          // see WHO — the hex key answered a question nobody asked.
+          ['Shop', tx.merchantId ? <IdentityInline pubkey={tx.merchantId} /> : undefined],
+          ['Counterparty', tx.counterparty ? <IdentityInline pubkey={tx.counterparty} /> : undefined],
+          ['Voucher id', tx.tokenId],
+          ['Issuance id', tx.voucherId],
           ['Bundle id', tx.bundleId],
         ])}
       />

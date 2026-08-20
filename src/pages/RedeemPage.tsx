@@ -23,7 +23,7 @@ import { toTransaction } from '../lib/transactions'
  *
  * The merchant asks for an amount, the app shows a NUT-18V request as a QR, and
  * the customer pays it from their own wallet's `/scan` → `/pay` path. No
- * customer-side work at all: that half already existed for paying farmers.
+ * customer-side work at all: that half already existed for paying merchants.
  *
  * HOW FULFILMENT IS SEEN: paying goes through `POST /api/v1/atomic-send`, whose
  * saga DMs the token to the request's issuer — this merchant. The merchant's own
@@ -108,7 +108,7 @@ function RequestForm({
       />
       <Input
         label="Note (optional)"
-        placeholder="Saturday veg box"
+        placeholder="Flat white and a pastry"
         value={memo}
         onChange={(e) => setMemo(e.target.value)}
       />

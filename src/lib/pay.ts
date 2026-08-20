@@ -3,13 +3,13 @@ import type { VoucherRow } from '@imani/wallet-storage'
 
 import { getWallet, listVouchers, notifyWalletChanged } from './wallet'
 import { legacyApi } from './legacyBridge'
-import { couponsFor, toVoucher, type Farmer } from './farmers'
+import { couponsFor, toVoucher, type Merchant } from './merchants'
 import { buildPaymentTransaction } from './transactions'
 import type { NUT18VRequest } from './nap'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
 
 /**
- * Paying a farmer's voucher payment request.
+ * Paying a merchant's voucher payment request.
  *
  * This follows imani-apps' OWN send path, which is not the one this file
  * originally reached for. Their send screen (`voucher/js/send.js`) drives
@@ -94,7 +94,7 @@ function satsInToken(token: string): number | null {
  * request, so it is a validation rather than an input constraint.
  *
  * At this stack's ratio of 1.0 with 2-decimal EUR this is one cent, so it never
- * bites today. It becomes real the moment a farmer issues at a ratio above 1 —
+ * bites today. It becomes real the moment a merchant issues at a ratio above 1 —
  * a 5000 XAF coupon backed by 200 sats has a floor of 25 XAF.
  */
 export function minSplitStep(voucher: Voucher): number {
@@ -111,7 +111,7 @@ export type SplitCheck = { ok: true } | { ok: false; reason: string }
  *
  * A full send needs no split and is always allowed — that is the path a 1-sat
  * coupon still has. Anything else has to leave at least one whole sat on BOTH
- * sides: the farmer cannot be sent a fraction of a proof, and neither can the
+ * sides: the merchant cannot be sent a fraction of a proof, and neither can the
  * change. imani-apps enforces the send side by stepping its input and the keep
  * side by capping it at `floor(max / step)`; both are checked explicitly here.
  */
@@ -120,23 +120,23 @@ export function checkSplittable(voucher: Voucher, amount: number): SplitCheck {
   const sats = voucher.token_amount ?? 0
 
   if (amount <= 0) return { ok: false, reason: 'The amount must be more than zero.' }
-  if (amount > face) return { ok: false, reason: 'This coupon is worth less than the amount.' }
+  if (amount > face) return { ok: false, reason: 'This voucher is worth less than the amount.' }
   if (amount === face) return { ok: true } // full send — no split involved
 
   // Below here a split is required.
   if (sats <= 0) {
-    return { ok: false, reason: 'This coupon has no sats backing, so it cannot be split.' }
+    return { ok: false, reason: 'This voucher has no sats backing, so it cannot be split.' }
   }
   if (sats <= 1) {
     return {
       ok: false,
-      reason: 'This coupon is backed by a single sat and can only be spent whole.',
+      reason: 'This voucher is backed by a single sat and can only be spent whole.',
     }
   }
 
   const step = minSplitStep(voucher)
   if (amount < step) {
-    return { ok: false, reason: `The smallest amount this coupon can be split into is ${step}.` }
+    return { ok: false, reason: `The smallest amount this voucher can be split into is ${step}.` }
   }
   if (face - amount < step) {
     return {
@@ -148,6 +148,18 @@ export function checkSplittable(voucher: Voucher, amount: number): SplitCheck {
 }
 
 /**
+ * Still has value to send?
+ *
+ * `'spent'` is voucher-send's own vocabulary; `'redeemed'` is a merchant's
+ * coupon that came home and was burnt (burn.ts). Offering either would build a
+ * send the mint refuses, after the confirmation screen has already promised it.
+ */
+function isUnspent(voucher: Voucher): boolean {
+  const status = (voucher.status ?? '').toLowerCase()
+  return status !== 'spent' && status !== 'redeemed'
+}
+
+/**
  * Coupons that could pay this amount, best first.
  *
  * Exact matches lead — they need no split at all — then the smallest coupons
@@ -156,7 +168,7 @@ export function checkSplittable(voucher: Voucher, amount: number): SplitCheck {
  */
 export function selectVouchers(vouchers: Voucher[], amount: number): Voucher[] {
   const usable = vouchers
-    .filter((v) => v.token && v.status !== 'spent' && checkSplittable(v, amount).ok)
+    .filter((v) => v.token && isUnspent(v) && checkSplittable(v, amount).ok)
     .sort((a, b) => (a.face_value ?? 0) - (b.face_value ?? 0))
   return [
     ...usable.filter((v) => v.face_value === amount),
@@ -175,7 +187,7 @@ export function splitObstacle(vouchers: Voucher[], amount: number): string | nul
   if (selectVouchers(vouchers, amount).length > 0) return null
 
   const best = vouchers
-    .filter((v) => v.token && v.status !== 'spent')
+    .filter((v) => v.token && isUnspent(v))
     .sort((a, b) => (b.face_value ?? 0) - (a.face_value ?? 0))[0]
   if (!best) return null
 
@@ -204,7 +216,7 @@ export const POLL_INTERVAL_MS = 500
  * a token_id, matched nothing, and returned null — the removal below silently
  * no-opped, leaving the just-spent coupon in the wallet at full face value while
  * `{...row}` spread nothing and the change row lost its issuer, unit and
- * decimals. `couponsFor`'s doc in farmers.ts already spells out why voucher_id
+ * decimals. `couponsFor`'s doc in merchants.ts already spells out why voucher_id
  * cannot address one coupon: it is a merchant TEMPLATE id, shared between
  * coupons issued together, so even a hit could have returned the wrong row.
  *
@@ -279,7 +291,7 @@ async function reclaim(
 
     await replaceVoucherToken(wallet, tokenId, result.reclaimed_token)
     notifyWalletChanged()
-    return ' Your coupon has been returned to your wallet.'
+    return ' Your voucher has been returned to your wallet.'
   } catch (error) {
     // Best-effort by design. A throw here would REPLACE the real failure with a
     // secondary one, hiding why the payment failed at all. On this stack reclaim
@@ -288,7 +300,7 @@ async function reclaim(
     // be told the coupon is parked rather than silently gone.
     console.error('[pay] reclaim failed', error)
     return (
-      ` Your coupon is held by the gateway (send ${sendId}) and could not be` +
+      ` Your voucher is held by the gateway (send ${sendId}) and could not be` +
       ` returned automatically: ${error instanceof Error ? error.message : String(error)}`
     )
   }
@@ -298,7 +310,7 @@ async function reclaim(
  * A send whose outcome we never saw.
  *
  * Everything `settleSend` needs, because by the time this is read back the
- * coupon, the farmer and the request are all long out of scope. Stored rather
+ * coupon, the merchant and the request are all long out of scope. Stored rather
  * than re-derived: the source coupon is exactly what a settle DELETES, so a
  * record that pointed at it by lookup would be unreadable in the one case that
  * matters.
@@ -311,8 +323,8 @@ export interface PendingSend {
   amount: number
   unit: string
   decimals: number
-  farmerPubkey: string
-  farmerName?: string
+  merchantPubkey: string
+  merchantName?: string
   voucherId?: string
   memo?: string
   /** Source coupon's face, for the change when the gateway omits keep_face_value. */
@@ -324,12 +336,35 @@ export interface PendingSend {
 // payment-request records.
 const pendingKey = (pubkey: string) => `imani-wallet:pending-sends:${pubkey}`
 
+/**
+ * What a pre-rename build wrote. These two fields were `farmerPubkey` and
+ * `farmerName` until the merchant rename, and a send in flight across the
+ * upgrade is read back by the new code.
+ *
+ * ponytail: read-side fallback rather than a migration pass — nothing else reads
+ * this record, and the whole store is capped at 20 entries with a lifetime of one
+ * saga. Delete both this type and the coalesces in `loadPendingSends` once no
+ * wallet can still be mid-send from a build that predates the rename.
+ */
+type LegacyPendingSend = PendingSend & { farmerPubkey?: string; farmerName?: string }
+
 export function loadPendingSends(pubkey: string): PendingSend[] {
   try {
     const raw = localStorage.getItem(pendingKey(pubkey))
     if (!raw) return []
-    const parsed = JSON.parse(raw) as PendingSend[]
-    return Array.isArray(parsed) ? parsed.filter((p) => typeof p?.sendId === 'string') : []
+    const parsed = JSON.parse(raw) as LegacyPendingSend[]
+    if (!Array.isArray(parsed)) return []
+    // Normalised HERE and nowhere else, so `settleSend` and
+    // `reconcilePendingSends` only ever see the current field names. Without it
+    // an in-flight send settles with `merchantId: undefined` and the finished
+    // transaction loses the counterparty it was paid to.
+    return parsed
+      .filter((p) => typeof p?.sendId === 'string')
+      .map((p) => ({
+        ...p,
+        merchantPubkey: p.merchantPubkey ?? p.farmerPubkey,
+        merchantName: p.merchantName ?? p.farmerName,
+      }))
   } catch {
     return []
   }
@@ -398,7 +433,7 @@ async function settleSend(
     }
   }
 
-  // Record the spend so the farmer's history shows both sides. Written after the
+  // Record the spend so the merchant's history shows both sides. Written after the
   // coupon settles, not before: a transaction row is a record, and the coupon is
   // the money. If this throws, the payment still happened and the coupon is
   // correctly gone — a missing history entry beats a phantom coupon, so it is
@@ -410,8 +445,8 @@ async function settleSend(
         amount: pending.amount,
         unit: pending.unit,
         decimals: pending.decimals,
-        merchantId: pending.farmerPubkey,
-        merchantName: pending.farmerName,
+        merchantId: pending.merchantPubkey,
+        merchantName: pending.merchantName,
         voucherId: pending.voucherId,
         memo: pending.memo,
         at: pending.at,
@@ -434,7 +469,7 @@ async function settleSend(
  * 2026-08-16 a saga blocked at the gateway for 7m48s and then completed
  * normally. Until this existed the send id was reported to the customer and then
  * forgotten, so a saga that finished late finished only at the gateway — the
- * farmer had the coupon, while the customer's wallet still listed a coupon whose
+ * merchant had the coupon, while the customer's wallet still listed a coupon whose
  * proofs the mint had burnt, showed no payment in its history, and left the
  * change (`keep_token`) unclaimed until the gateway cleared it 48 hours later.
  *
@@ -509,7 +544,7 @@ export async function reconcilePendingSends(pubkey: string): Promise<number> {
  * gateway-core splits for `send.faceValue() != null ? send.faceValue() :
  * send.amount()` (AtomicSendService), so `faceValue` here IS the send amount.
  * Passing the source coupon's face value instead made a €2.50 request against a
- * €5.00 coupon complete as `is_full_send=true` — the farmer got the whole
+ * €5.00 coupon complete as `is_full_send=true` — the merchant got the whole
  * coupon, the customer got no change, and the transaction row recorded €2.50
  * while €5.00 left the wallet. imani-apps passes `amount` and `faceValue` as the
  * same send amount (voucher/js/send.js:3380-3383); only unit and decimals
@@ -538,12 +573,12 @@ export function buildSendParams(
 
 export async function payRequest({
   request,
-  farmer,
+  merchant,
   payer,
 }: {
   request: NUT18VRequest
   raw: string
-  farmer: Farmer
+  merchant: Merchant
   payer: string
 }): Promise<string> {
   // Checked HERE and not only on the screen, because this is the one door the
@@ -567,19 +602,19 @@ export async function payRequest({
   }
   if (!api?.initiateAtomicSend) throw new Error('Gateway API client is not loaded.')
 
-  // `couponsFor` rather than a local filter, so the pay screen and the farmer
-  // screens share ONE definition of "this farmer's coupons". The local filter was
-  // `v.issuer_id === farmer.pubkey`, comparing a raw issuer id against a
+  // `couponsFor` rather than a local filter, so the pay screen and the merchant
+  // screens share ONE definition of "this merchant's coupons". The local filter was
+  // `v.issuer_id === merchant.pubkey`, comparing a raw issuer id against a
   // VoucherGrouper-normalised pubkey; every other comparison in the app
   // lowercases first, so any row whose issuer_id differed only in case was
-  // invisible here while its coupon sat on the farmer's card. It also filters
+  // invisible here while its coupon sat on the merchant's card. It also filters
   // expired coupons, which the send would have failed on anyway.
   //
   // The ROW is kept beside each Voucher: `toVoucher` drops `token_id`, and that
   // is the only thing that can address one coupon in the store. Object identity
   // is safe as the map key because `selectVouchers` filters and sorts — it never
   // clones — so the candidates it returns are these same objects.
-  const rows = couponsFor(await listVouchers(), farmer.pubkey)
+  const rows = couponsFor(await listVouchers(), merchant.pubkey)
   const rowOf = new Map<Voucher, VoucherRow>()
   const mine = rows.map((row) => {
     const voucher = toVoucher(row)
@@ -591,7 +626,7 @@ export async function payRequest({
     // Says why, not just that it failed — "cannot be split below 25" is
     // actionable in a way that "no coupon covers 10" is not.
     throw new Error(
-      splitObstacle(mine, request.amount) ?? 'You have no coupon from this farmer for that amount.',
+      splitObstacle(mine, request.amount) ?? 'You have no voucher from this shop for that amount.',
     )
   }
 
@@ -628,7 +663,7 @@ export async function payRequest({
 
   if (!initiated || !voucher || !sourceRow) {
     throw new Error(
-      `Every coupon from this farmer is tied up in an unfinished send. ${lastRefusal?.message ?? ''}`.trim(),
+      `Every voucher from this shop is tied up in an unfinished send. ${lastRefusal?.message ?? ''}`.trim(),
     )
   }
 
@@ -656,8 +691,8 @@ export async function payRequest({
     amount: request.amount,
     unit: voucher.face_unit ?? request.unit ?? '',
     decimals: voucher.face_decimals ?? 2,
-    farmerPubkey: farmer.pubkey,
-    farmerName: farmer.name === farmer.pubkey ? undefined : farmer.name,
+    merchantPubkey: merchant.pubkey,
+    merchantName: merchant.name === merchant.pubkey ? undefined : merchant.name,
     voucherId: voucher.voucher_id,
     memo: request.description,
     sourceFaceValue: voucher.face_value ?? 0,
@@ -667,7 +702,7 @@ export async function payRequest({
   // Running out of polls is NOT a failed payment, and must not be reported as
   // one. A saga still mid-flight has a non-terminal status, which used to fall
   // into the branch below and tell the customer "Payment did not complete" —
-  // while the farmer went on to receive the coupon moments later. `reclaim`
+  // while the merchant went on to receive the coupon moments later. `reclaim`
   // could not soften it either: a non-terminal status is not in RECLAIMABLE, so
   // it returned '' and nothing was reclaimed.
   //
@@ -681,8 +716,8 @@ export async function payRequest({
     rememberPendingSend(payer, pending)
     throw new Error(
       `This payment is still going through at the gateway (send ${sendId}, ` +
-        `${status.status ?? 'no status'}). It has NOT failed and your coupon is ` +
-        `unchanged here — check the farmer's history again in a moment before retrying.`,
+        `${status.status ?? 'no status'}). It has NOT failed and your voucher is ` +
+        `unchanged here — check the shop's history again in a moment before retrying.`,
     )
   }
 

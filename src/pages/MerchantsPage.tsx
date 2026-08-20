@@ -10,11 +10,11 @@ import {
 import { useNavigate } from 'react-router-dom'
 import { QrCode, ScanLine } from 'lucide-react'
 
-import { Button, Screen, PageHeader, Panel, Pass } from '../components/ui'
+import { Button, Screen, Panel, Pass } from '../components/ui'
 import { listTransactions, listVouchers, onWalletChanged } from '../lib/wallet'
-import { toFarmers, walletTotals, withPastFarmers, type Farmer } from '../lib/farmers'
+import { toMerchants, walletTotals, withPastMerchants, type Merchant } from '../lib/merchants'
 import { toTransaction } from '../lib/transactions'
-import { toFarmerPass, EMPTY_BRANDING, type MerchantBranding } from '../lib/pass'
+import { toMerchantPass, EMPTY_BRANDING, type MerchantBranding } from '../lib/pass'
 import { merchantBranding } from '../lib/branding'
 import { formatFace } from '../lib/format'
 
@@ -66,7 +66,7 @@ function SwipeDeck({ children, label }: { children: ReactNode[]; label: string }
     // Cleared HERE, where the gesture starts, not only in the click handler. A
     // drag that ends without a click — pointercancel, or a release outside the
     // rail — used to leave this above the slop, and the next genuine tap was
-    // then suppressed and the farmer did not open.
+    // then suppressed and the merchant did not open.
     lastMoved.current = 0
     drag.current = { startX: e.clientX, startScroll: el.scrollLeft, moved: 0 }
   }
@@ -81,7 +81,7 @@ function SwipeDeck({ children, label }: { children: ReactNode[]; label: string }
 
     // Capture only once this is definitely a drag, NOT on pointerdown. Capturing
     // early retargets the click that follows to the rail, so the card's own link
-    // never sees it and a plain tap silently stopped opening the farmer.
+    // never sees it and a plain tap silently stopped opening the merchant.
     if (!wasDragging && d.moved > TAP_SLOP) {
       el.setPointerCapture(e.pointerId)
       // Mandatory snapping fights a scrollLeft set by hand — the browser keeps
@@ -130,7 +130,7 @@ function SwipeDeck({ children, label }: { children: ReactNode[]; label: string }
         className="no-scrollbar flex snap-x snap-mandatory overflow-x-auto"
       >
         {children.map((child, i) => (
-          // Keyed off the CHILD's key, not the index. `toFarmers` sorts by
+          // Keyed off the CHILD's key, not the index. `toMerchants` sorts by
           // balance descending and the deck re-renders on every wallet write, so
           // spending a coupon can reorder the list underneath a stationary
           // scroll position — with index keys React reuses the wrong wrapper and
@@ -174,20 +174,20 @@ function SwipeDeck({ children, label }: { children: ReactNode[]; label: string }
 }
 
 /**
- * Home: what this customer holds in total, the farmers it came from, and the
+ * Home: what this customer holds in total, the merchants it came from, and the
  * two things they can do with it.
  */
-export function FarmersPage() {
+export function MerchantsPage() {
   const navigate = useNavigate()
-  const [farmers, setFarmers] = useState<Farmer[] | null>(null)
+  const [merchants, setMerchants] = useState<Merchant[] | null>(null)
   const [branding, setBranding] = useState<Record<string, MerchantBranding>>({})
 
   useEffect(() => {
-    // Coupons AND history: a farmer you have spent everything with still belongs
+    // Coupons AND history: a merchant you have spent everything with still belongs
     // on this list, because it is the only route to the record of what you spent.
     const load = async () => {
       const [rows, txs] = await Promise.all([listVouchers(), listTransactions()])
-      setFarmers(withPastFarmers(toFarmers(rows), txs.map(toTransaction)))
+      setMerchants(withPastMerchants(toMerchants(rows), txs.map(toTransaction)))
     }
     load()
     // WalletStorage broadcasts on every write, including coupons arriving by DM
@@ -196,39 +196,28 @@ export function FarmersPage() {
   }, [])
 
   useEffect(() => {
-    if (!farmers?.length) return
+    if (!merchants?.length) return
     let live = true
-    // One request per farmer, but merchantBranding caches per pubkey for the
+    // One request per merchant, but merchantBranding caches per pubkey for the
     // session — and this effect re-runs on every wallet write, which is often.
-    // None of these reject: an unbranded farmer keeps the pass defaults.
+    // None of these reject: an unbranded merchant keeps the pass defaults.
     Promise.all(
-      farmers.map((f) => merchantBranding(f.pubkey).then((b) => [f.pubkey, b] as const)),
+      merchants.map((f) => merchantBranding(f.pubkey).then((b) => [f.pubkey, b] as const)),
     ).then((entries) => {
       if (live) setBranding(Object.fromEntries(entries))
     })
     return () => {
       live = false
     }
-  }, [farmers])
+  }, [merchants])
 
   // One figure per currency. Adding EUR to SAT would be a confident lie, so a
   // second unit gets its own line rather than being folded into the first.
-  const totals = farmers ? walletTotals(farmers) : []
+  const totals = merchants ? walletTotals(merchants) : []
   const [primary, ...rest] = totals
 
   return (
     <Screen>
-      <PageHeader
-        title="Coupon wallet"
-        subtitle={
-          farmers === null
-            ? 'Loading…'
-            : farmers.length === 0
-              ? 'No coupons yet'
-              : `${farmers.length} farmer${farmers.length === 1 ? '' : 's'}`
-        }
-      />
-
       <Panel className="mb-6 p-5">
         <p className="text-sm text-mono-500">Total balance</p>
         <p className="text-balance text-mono-900 dark:text-mono-50">
@@ -250,27 +239,27 @@ export function FarmersPage() {
         </Button>
       </div>
 
-      {farmers?.length === 0 && (
+      {merchants?.length === 0 && (
         <p className="rounded-2xl bg-mono-100 p-5 text-center text-sm text-mono-500 dark:bg-mono-900">
-          When a farmer sends you coupons, they show up here.
+          When a shop sends you vouchers, they show up here.
         </p>
       )}
 
       {/*
-        The same pass the farmer and coupon screens show, one farmer per card:
-        the design IS the way in, so a farmer is recognised by their card rather
+        The same pass the merchant and coupon screens show, one merchant per card:
+        the design IS the way in, so a merchant is recognised by their card rather
         than by a truncated pubkey. Swiped through, and tapped to open.
       */}
-      {farmers && farmers.length > 0 && (
-        <SwipeDeck label="Farmer">
-          {farmers.map((farmer) => (
-            <div key={farmer.pubkey}>
+      {merchants && merchants.length > 0 && (
+        <SwipeDeck label="Shop">
+          {merchants.map((merchant) => (
+            <div key={merchant.pubkey}>
               <Pass
-                pass={toFarmerPass(farmer, branding[farmer.pubkey] ?? EMPTY_BRANDING)}
-                to={`/farmer/${farmer.pubkey}`}
+                pass={toMerchantPass(merchant, branding[merchant.pubkey] ?? EMPTY_BRANDING)}
+                to={`/merchants/${merchant.pubkey}`}
               />
               <p className="mt-2 text-center text-sm text-mono-500">
-                {farmer.voucherCount} coupon{farmer.voucherCount === 1 ? '' : 's'}
+                {merchant.voucherCount} voucher{merchant.voucherCount === 1 ? '' : 's'}
               </p>
             </div>
           ))}

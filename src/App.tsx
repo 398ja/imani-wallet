@@ -7,6 +7,7 @@ import { createSession, resetSession } from './lib/nap'
 import { openWallet } from './lib/wallet'
 import { startDmPoll } from './lib/dmPoll'
 import { reconcilePendingSends } from './lib/pay'
+import { sweepBurnable } from './lib/burn'
 import { restoreIssued } from './lib/issuedRecords'
 import { restoreTx, backfillTx } from './lib/txRecords'
 import { restoreVouchers, backfillVouchers } from './lib/voucherRecords'
@@ -24,7 +25,7 @@ import { Header } from './components/ui/Header'
 import { LoginPage } from './pages/LoginPage'
 import { OnboardingPage } from './pages/OnboardingPage'
 import { WelcomePage } from './pages/WelcomePage'
-import { FarmersPage } from './pages/FarmersPage'
+import { MerchantsPage } from './pages/MerchantsPage'
 import { MerchantHomePage } from './pages/MerchantHomePage'
 import {
   MerchantTransactionsPage,
@@ -35,7 +36,7 @@ import { MerchantEditPage } from './pages/MerchantEditPage'
 import { SellPage } from './pages/SellPage'
 import { MerchantStatsPage } from './pages/MerchantStatsPage'
 import { RedeemPage } from './pages/RedeemPage'
-import { FarmerPage } from './pages/FarmerPage'
+import { MerchantPage } from './pages/MerchantPage'
 import { CouponsPage, TransactionsPage } from './pages/RecordListPages'
 import { CouponPage, TransactionPage } from './pages/RecordDetailPages'
 import { ScanPage } from './pages/ScanPage'
@@ -108,12 +109,19 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         // nothing is stranded when it goes.
         //
         // Coupons FIRST. They are the customer's money and the root of every
-        // customer screen — the farmer list is built from what the wallet holds,
+        // customer screen — the shop list is built from what the wallet holds,
         // so until they are back the app reads "No coupons yet" no matter how
         // much history has been restored behind it.
         void restoreVouchers(pubkey)
           .then((coupons) => {
             if (coupons > 0) console.info(`[app] restored ${coupons} coupon(s) from the relay`)
+            // After the restore, so a coupon that came back from the relay is
+            // swept too. Catches any redemption whose burn failed at the time —
+            // until it runs, a coupon this merchant issued is spendable again.
+            return sweepBurnable(pubkey)
+          })
+          .then((burnt) => {
+            if (burnt > 0) console.info(`[app] burnt ${burnt} redeemed coupon(s)`)
             return backfillVouchers(pubkey)
           })
           .then(() => restoreIssued(pubkey))
@@ -209,7 +217,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route
           path="/"
           element={
-            trading ? <MerchantHomePage profile={profile} merchant={merchant} /> : <FarmersPage />
+            trading ? <MerchantHomePage profile={profile} merchant={merchant} /> : <MerchantsPage />
           }
         />
         {trading && (
@@ -228,9 +236,9 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route path="/scan" element={<ScanPage />} />
         <Route path="/pay" element={<PayPage pubkey={pubkey} />} />
         <Route path="/receive" element={<ReceivePage profile={profile} />} />
-        <Route path="/farmer/:pubkey" element={<FarmerPage />} />
-        <Route path="/farmer/:pubkey/coupons" element={<CouponsPage />} />
-        <Route path="/farmer/:pubkey/transactions" element={<TransactionsPage />} />
+        <Route path="/merchants/:pubkey" element={<MerchantPage />} />
+        <Route path="/merchants/:pubkey/coupons" element={<CouponsPage />} />
+        <Route path="/merchants/:pubkey/transactions" element={<TransactionsPage />} />
         <Route path="/coupon/:tokenId" element={<CouponPage />} />
         <Route path="/transaction/:id" element={<TransactionPage />} />
         <Route path="/profile" element={<ProfilePage profile={profile} />} />
@@ -279,7 +287,7 @@ function Gate({ session, onLoggedOut }: { session: NapSession; onLoggedOut: () =
   if (!pubkey) return <Centered>Reading identity…</Centered>
   // `key` so an identity change REMOUNTS everything below rather than
   // re-rendering it. Screens subscribe to the wallet in effects, and several
-  // (FarmersPage) do so with `[]` deps — on a re-render those keep the previous
+  // (MerchantsPage) do so with `[]` deps — on a re-render those keep the previous
   // user's subscription and never reload. Remounting tears them down, and it is
   // one attribute against auditing every screen's dependency array.
   return <AuthedApp key={pubkey} pubkey={pubkey} onLoggedOut={onLoggedOut} />

@@ -1,7 +1,7 @@
 import type { VoucherRow } from '@imani/wallet-storage'
 
 import { toEpochMs } from './format'
-import { totalFaceValue, type Farmer } from './farmers'
+import { totalFaceValue, type Merchant } from './merchants'
 
 /**
  * A coupon as a wallet pass.
@@ -198,12 +198,12 @@ function barcode(voucherId: string): Barcode {
  * when present; otherwise the issuer id stands in, exactly as the Java mapper
  * falls back. Unlike the Java, an absent issuer does not throw — a DM-received
  * coupon can reach the wallet without one, and a screen that throws is worse
- * than a card that says "Unknown farmer".
+ * than a card that says "Unknown merchant".
  */
 function organizationName(row: VoucherRow, branding: MerchantBranding): string {
   if (present(branding.organizationName)) return branding.organizationName
   if (present(row.issuer_id)) return row.issuer_id
-  return 'Unknown farmer'
+  return 'Unknown shop'
 }
 
 function description(row: VoucherRow, branding: MerchantBranding): string {
@@ -310,13 +310,16 @@ export function toCouponPass(row: VoucherRow, branding: MerchantBranding = EMPTY
       auxiliaryFields: expires === undefined ? undefined : [expiryField(expires)],
       backFields: backFields(row, voucherId),
     },
-    barcodes: [barcode(voucherId)],
+    // A voided coupon carries NO redemption code. Its proofs are burnt, so a
+    // cashier scanning it would be reading a code for a sale that already
+    // happened — the one thing this screen must not invite twice.
+    barcodes: isVoided(row.status) ? undefined : [barcode(voucherId)],
     userInfo: userInfo(branding, voucherId, row.issuer_id),
   }
 }
 
 /**
- * A farmer as a pass, carrying everything held from them.
+ * A merchant as a pass, carrying everything held from them.
  *
  * **No barcode and no back fields, deliberately.** A barcode is a redemption
  * identifier for ONE voucher; a merchant-level card has no single voucher to
@@ -325,29 +328,29 @@ export function toCouponPass(row: VoucherRow, branding: MerchantBranding = EMPTY
  * reason. This card is a summary and a way in to the coupon list — the coupon's
  * own pass is where a redemption code belongs.
  *
- * The total is `totalFaceValue`, which sums naively across the farmer's groups;
- * a farmer selling in two currencies gets a meaningless figure, exactly as the
- * farmer screen's balance did before. Unchanged here so the pass and the rest of
+ * The total is `totalFaceValue`, which sums naively across the merchant's groups;
+ * a merchant selling in two currencies gets a meaningless figure, exactly as the
+ * merchant screen's balance did before. Unchanged here so the pass and the rest of
  * the app agree.
  */
-export function toFarmerPass(
-  farmer: Farmer,
+export function toMerchantPass(
+  merchant: Merchant,
   branding: MerchantBranding = EMPTY_BRANDING,
 ): PassJson {
-  const group = farmer.groups[0]
+  const group = merchant.groups[0]
   const foreground = orDefault(branding.foregroundColor, DEFAULT_FOREGROUND_COLOR)
 
   return {
     formatVersion: FORMAT_VERSION,
     passTypeIdentifier: PASS_TYPE_IDENTIFIER,
     teamIdentifier: TEAM_IDENTIFIER,
-    serialNumber: farmer.pubkey,
+    serialNumber: merchant.pubkey,
     description: present(branding.storeDescription)
       ? branding.storeDescription
       : DEFAULT_DESCRIPTION,
     organizationName: present(branding.organizationName)
       ? branding.organizationName
-      : farmer.name || farmer.pubkey,
+      : merchant.name || merchant.pubkey,
     logoText: present(branding.organizationName) ? branding.organizationName : undefined,
     backgroundColor: orDefault(branding.backgroundColor, DEFAULT_BACKGROUND_COLOR),
     foregroundColor: foreground,
@@ -355,9 +358,9 @@ export function toFarmerPass(
     voided: false,
     storeCard: {
       primaryFields: [
-        balanceField(totalFaceValue(farmer), group?.unit ?? '', group?.decimals ?? 0),
+        balanceField(totalFaceValue(merchant), group?.unit ?? '', group?.decimals ?? 0),
       ],
     },
-    userInfo: userInfo(branding, farmer.pubkey, farmer.pubkey),
+    userInfo: userInfo(branding, merchant.pubkey, merchant.pubkey),
   }
 }

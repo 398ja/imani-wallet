@@ -6,21 +6,21 @@ import { toEpochMs } from './format'
 import type { WalletTransaction } from './transactions'
 
 /**
- * A farmer, as the wallet's home screen thinks of one: an issuer pubkey plus
+ * A merchant, as the wallet's home screen thinks of one: an issuer pubkey plus
  * everything we hold from them.
  *
  * This is NOT the same shape as VoucherGrouper's MerchantGroup. That groups on
- * `merchantId-unit-issuanceRatio`, so a single farmer selling in two currencies
+ * `merchantId-unit-issuanceRatio`, so a single merchant selling in two currencies
  * — or who changed their issuance ratio between market days — produces several
  * groups. Correct for send-side selection (you can't merge coupons across units
- * or ratios), wrong for a farmer list, which wants one row per person.
+ * or ratios), wrong for a merchant list, which wants one row per person.
  */
-export interface Farmer {
-  /** Issuer pubkey, normalised. The farmer's identity. */
+export interface Merchant {
+  /** Issuer pubkey, normalised. The merchant's identity. */
   pubkey: string
   /** Display name from voucher metadata; callers may override via profile lookup. */
   name: string
-  /** One entry per (unit, ratio) combination held from this farmer. */
+  /** One entry per (unit, ratio) combination held from this merchant. */
   groups: MerchantGroup[]
   /** Total coupons held, across all groups. */
   voucherCount: number
@@ -33,7 +33,7 @@ export interface Farmer {
  * VoucherRow is TYPED as Unix epoch seconds, Voucher expects an ISO-8601
  * string, and VoucherGrouper's expiry filter calls `new Date(expires_at)`.
  * Passing the raw epoch number through would make `new Date(1788…)` — a date in
- * 1970 — so every live coupon would read as expired and the farmer list would
+ * 1970 — so every live coupon would read as expired and the merchant list would
  * render empty.
  *
  * The stored value is not reliably a number either: `_persistRedeemed` writes
@@ -47,7 +47,7 @@ export interface Farmer {
  * null. A freshly received coupon therefore lands in the wallet with a null
  * expiry, and `null === undefined` is false — so a guard that only checks
  * undefined falls through to new Date(0), the coupon reads as expired, and the
- * farmer silently disappears from the list until the next sync. Verified
+ * merchant silently disappears from the list until the next sync. Verified
  * against the live gateway.
  */
 export function toVoucher(row: VoucherRow): Voucher {
@@ -63,7 +63,7 @@ export function toVoucher(row: VoucherRow): Voucher {
     // Part of VoucherGrouper's group key (`merchantId-unit-issuanceRatio`), and
     // it reads `voucher.issuance_ratio || 1`. Omitting it collapsed every
     // coupon onto ratio 1, so coupons backed at genuinely different ratios
-    // merged into one group — and the screens format a farmer's total with
+    // merged into one group — and the screens format a merchant's total with
     // `groups[0]`. Derived when the row predates issuance_ratio being stored.
     issuance_ratio: issuanceRatioOf(row),
     issuer_id: row.issuer_id,
@@ -97,16 +97,16 @@ export function issuanceRatioOf(row: VoucherRow): number | undefined {
 }
 
 /**
- * Group stored coupons into farmers, one entry per issuer pubkey.
+ * Group stored coupons into merchants, one entry per issuer pubkey.
  *
- * Sorted by total face value descending — the farmer you hold the most with
+ * Sorted by total face value descending — the merchant you hold the most with
  * leads the list.
  */
-export function toFarmers(rows: VoucherRow[]): Farmer[] {
+export function toMerchants(rows: VoucherRow[]): Merchant[] {
   const grouper = new VoucherGrouper()
-  const groups = grouper.groupToArray(rows.map(toVoucher))
+  const groups = grouper.groupToArray(spendable(rows).map(toVoucher))
 
-  const byPubkey = new Map<string, Farmer>()
+  const byPubkey = new Map<string, Merchant>()
   for (const group of groups) {
     const existing = byPubkey.get(group.merchantId)
     if (existing) {
@@ -132,35 +132,35 @@ export function toFarmers(rows: VoucherRow[]): Farmer[] {
 }
 
 /**
- * Sum of face value across a farmer's groups.
+ * Sum of face value across a merchant's groups.
  *
- * ponytail: naive sum across units — a farmer selling in both EUR and SAT gets
- * a meaningless total. Fine while the pilot is single-currency per farmer; if
+ * ponytail: naive sum across units — a merchant selling in both EUR and SAT gets
+ * a meaningless total. Fine while the pilot is single-currency per merchant; if
  * that stops being true, render per-unit subtotals instead of one number.
  */
-export function totalFaceValue(farmer: Farmer): number {
-  return farmer.groups.reduce((sum, g) => sum + g.totalFaceValue, 0)
+export function totalFaceValue(merchant: Merchant): number {
+  return merchant.groups.reduce((sum, g) => sum + g.totalFaceValue, 0)
 }
 
 /**
- * The farmer list, plus everyone you have a history with but hold nothing from.
+ * The merchant list, plus everyone you have a history with but hold nothing from.
  *
  * Every customer screen is rooted in `listVouchers()` — the home list, and
- * therefore the only route to `/farmer/:pubkey` and to the transactions on it.
- * So a farmer whose coupons are all spent disappeared completely, taking the
+ * therefore the only route to `/merchants/:pubkey` and to the transactions on it.
+ * So a merchant whose coupons are all spent disappeared completely, taking the
  * record of what was spent with them; and a device restored from the relay
  * before coupon backup existed showed "No coupons yet" over a full history.
- * Past farmers come back with an empty `groups`, which every consumer already
- * tolerates — `toFarmerPass` reads `groups[0]?.unit`, and `totalFaceValue`
+ * Past merchants come back with an empty `groups`, which every consumer already
+ * tolerates — `toMerchantPass` reads `groups[0]?.unit`, and `totalFaceValue`
  * sums to 0.
  */
-export function withPastFarmers(farmers: Farmer[], transactions: WalletTransaction[]): Farmer[] {
-  const held = new Set(farmers.map((f) => f.pubkey))
-  const past = new Map<string, Farmer>()
+export function withPastMerchants(merchants: Merchant[], transactions: WalletTransaction[]): Merchant[] {
+  const held = new Set(merchants.map((f) => f.pubkey))
+  const past = new Map<string, Merchant>()
 
   for (const tx of transactions) {
     const key = issuerKey(tx.merchantId ?? tx.counterparty)
-    // 'unknown' is the grouper's bucket for a coupon with no issuer. A farmer
+    // 'unknown' is the grouper's bucket for a coupon with no issuer. A merchant
     // page for it would be a page about several different people.
     if (key === 'unknown' || held.has(key)) continue
 
@@ -173,36 +173,36 @@ export function withPastFarmers(farmers: Farmer[], transactions: WalletTransacti
     }
   }
 
-  return [...farmers, ...past.values()]
+  return [...merchants, ...past.values()]
 }
 
-/** `findFarmer`, but a farmer known only from history still resolves. */
-export function findFarmerWithHistory(
+/** `findMerchant`, but a merchant known only from history still resolves. */
+export function findMerchantWithHistory(
   rows: VoucherRow[],
   transactions: WalletTransaction[],
   pubkey: string,
-): Farmer | undefined {
+): Merchant | undefined {
   const target = issuerKey(pubkey)
-  return withPastFarmers(toFarmers(rows), transactions).find((f) => f.pubkey === target)
+  return withPastMerchants(toMerchants(rows), transactions).find((f) => f.pubkey === target)
 }
 
 /**
- * The single farmer matching a pubkey, or undefined.
+ * The single merchant matching a pubkey, or undefined.
  *
- * Through `issuerKey`, not a bare `toLowerCase()`: `Farmer.pubkey` comes from
+ * Through `issuerKey`, not a bare `toLowerCase()`: `Merchant.pubkey` comes from
  * the grouper, so the lookup has to normalise the same way — an `npub1…` route
  * param or the `unknown` bucket would otherwise never match.
  */
-export function findFarmer(rows: VoucherRow[], pubkey: string): Farmer | undefined {
+export function findMerchant(rows: VoucherRow[], pubkey: string): Merchant | undefined {
   const target = issuerKey(pubkey)
-  return toFarmers(rows).find((f) => f.pubkey === target)
+  return toMerchants(rows).find((f) => f.pubkey === target)
 }
 
 /**
  * Is this coupon still live?
  *
- * Mirrors VoucherGrouper's expiry filter, which is why `toFarmers` and
- * `couponsFor` agree on what a farmer holds. Absent, null and 0 all mean "no
+ * Mirrors VoucherGrouper's expiry filter, which is why `toMerchants` and
+ * `couponsFor` agree on what a merchant holds. Absent, null and 0 all mean "no
  * expiry" — see toVoucher's note on the gateway populating expires_at
  * asynchronously.
  */
@@ -212,20 +212,42 @@ function isLive(row: VoucherRow): boolean {
 }
 
 /**
+ * Has this coupon been redeemed and burnt? Reads the row's own status, the
+ * same value `pass.ts`'s `isVoided` keys on.
+ */
+export function isRedeemed(row: Pick<VoucherRow, 'status'>): boolean {
+  return (row.status ?? '').toLowerCase() === 'redeemed'
+}
+
+/**
+ * The rows that are still MONEY.
+ *
+ * A redeemed coupon's proofs are burnt (burn.ts), so counting one would put
+ * value on the home screen that exists nowhere any more, and offering it to pay
+ * with would produce a spend the mint refuses. Both `toMerchants` and
+ * `couponsFor` drop them, which is what keeps a shop card's count and its
+ * coupon list agreeing; the receipts come back separately through
+ * `redeemedFor`.
+ */
+export function spendable(rows: VoucherRow[]): VoucherRow[] {
+  return rows.filter((row) => !isRedeemed(row))
+}
+
+/**
  * The issuer id the way `VoucherGrouper` derives it, so this file agrees with
- * the grouping it builds `Farmer`s from.
+ * the grouping it builds `Merchant`s from.
  *
  * A mirror of the grouper's private `normalizeIssuerId` plus `getMerchantId`'s
  * `issuer_id || 'unknown'` — neither is exported from `@imani/voucher-send`, so
- * there is nothing to reuse. The parity test over `toFarmers` and `couponsFor`
+ * there is nothing to reuse. The parity test over `toMerchants` and `couponsFor`
  * is what catches this drifting.
  *
  * The `'unknown'` case is the whole reason it exists. `couponsFor` used to match
  * `row.issuer_id?.toLowerCase()`, which is `undefined` for a row with no issuer,
- * while the grouper maps that same row to a farmer called `unknown`. So a coupon
+ * while the grouper maps that same row to a merchant called `unknown`. So a coupon
  * that arrived without an issuer — a legacy human-readable DM, which
- * `parseTextMessage` gives no issuerId — showed up on the farmer list with a
- * balance and a count, and then that farmer's own page reported 0 coupons and an
+ * `parseTextMessage` gives no issuerId — showed up on the merchant list with a
+ * balance and a count, and then that merchant's own page reported 0 coupons and an
  * empty list. Real money, unreachable.
  */
 export function issuerKey(issuerId: string | undefined | null): string {
@@ -236,22 +258,41 @@ export function issuerKey(issuerId: string | undefined | null): string {
 }
 
 /**
- * A farmer's coupons as STORED ROWS, newest first.
+ * A merchant's coupons as STORED ROWS, newest first.
  *
- * Deliberately not `farmer.groups[].vouchers`. Those are voucher-send Vouchers
+ * Deliberately not `merchant.groups[].vouchers`. Those are voucher-send Vouchers
  * produced by `toVoucher`, which drops `token_id` and maps
  * `voucher_id: row.voucher_id ?? row.token_id`. `voucher_id` is a merchant
  * TEMPLATE id — two coupons issued from the same template share it — so it can
  * neither key a React list nor address a detail route. `token_id` is the store's
  * primary key and is content-derived, so it is unique per coupon.
  *
- * The count here must match `findFarmer(...).voucherCount`, which comes from
+ * The count here must match `findMerchant(...).voucherCount`, which comes from
  * VoucherGrouper; `isLive` exists to keep those two in step, and a test pins it.
  */
 export function couponsFor(rows: VoucherRow[], pubkey: string): VoucherRow[] {
+  return byIssuer(spendable(rows).filter(isLive), pubkey)
+}
+
+/**
+ * A merchant's REDEEMED coupons as stored rows, newest first.
+ *
+ * The receipts: burnt at the mint, worth nothing, kept so the merchant can see
+ * which of their coupons came back. Separate from `couponsFor` rather than
+ * mixed into it because the shop card's count is the money count — a list that
+ * mixed the two would show more coupons than the card above it claims.
+ *
+ * No expiry filter. A coupon redeemed before it lapsed is still a sale that
+ * happened, and dropping the record on its expiry date would erase it.
+ */
+export function redeemedFor(rows: VoucherRow[], pubkey: string): VoucherRow[] {
+  return byIssuer(rows.filter(isRedeemed), pubkey)
+}
+
+function byIssuer(rows: VoucherRow[], pubkey: string): VoucherRow[] {
   const target = issuerKey(pubkey)
   return rows
-    .filter((row) => issuerKey(row.issuer_id) === target && isLive(row))
+    .filter((row) => issuerKey(row.issuer_id) === target)
     .sort((a, b) => String(b.created_at ?? '').localeCompare(String(a.created_at ?? '')))
 }
 
@@ -267,14 +308,14 @@ export interface UnitTotal {
  *
  * Returns one entry per unit rather than a single number, because face values in
  * different currencies cannot be added — the same reason `totalFaceValue` carries
- * its ponytail note. Summing a farmer's EUR against another's SAT would produce a
+ * its ponytail note. Summing a merchant's EUR against another's SAT would produce a
  * confident, meaningless figure on the home screen. Largest first.
  */
-export function walletTotals(farmers: Farmer[]): UnitTotal[] {
+export function walletTotals(merchants: Merchant[]): UnitTotal[] {
   const byUnit = new Map<string, UnitTotal>()
 
-  for (const farmer of farmers) {
-    for (const group of farmer.groups) {
+  for (const merchant of merchants) {
+    for (const group of merchant.groups) {
       const unit = group.unit ?? 'UNKNOWN'
       const existing = byUnit.get(unit)
       if (existing) {

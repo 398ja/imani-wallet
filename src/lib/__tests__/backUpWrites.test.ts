@@ -45,7 +45,7 @@ const arrived = (token: string) => ({ voucher_id: `v-${token}`, token }) as Vouc
 describe('backUpWrites', () => {
   beforeEach(() => vi.mocked(publishVoucher).mockClear())
 
-  it('backs up a coupon that arrived WITHOUT a token_id', async () => {
+  it('backs up a voucher that arrived WITHOUT a token_id', async () => {
     // The regression, and it cost a staging customer their coupons: `token_id`
     // is the backup event's `d` tag, the store derives it during the write, and
     // publishing the caller's row instead of the stored one meant every coupon
@@ -80,7 +80,7 @@ describe('backUpWrites', () => {
     expect(vi.mocked(publishVoucher).mock.calls[0][0].token_id).toBe('id-of-cashuB')
   })
 
-  it('reads nothing back when a write carried no coupons', async () => {
+  it('reads nothing back when a write carried no vouchers', async () => {
     // Every receive writes a transaction row; only some write coupons. A
     // getAllVouchers() per transaction row would be a scan of the whole store
     // for nothing.

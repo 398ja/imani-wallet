@@ -3,7 +3,7 @@ import { EMPTY_BRANDING } from './pass'
 import { allEvents } from './relay'
 
 /**
- * Merchant branding for a farmer's pass, from their Nostr identity.
+ * Merchant branding for a merchant's pass, from their Nostr identity.
  *
  * cashu-voucher's `MerchantBranding` javadoc names its source exactly:
  * `organizationName` is kind-0 `name`, `logoUrl` is kind-0 `picture`,
@@ -139,7 +139,7 @@ export function brandingFromKind0(content: string): MerchantBranding {
 /**
  * One profile per pubkey per session.
  *
- * A farmer's kind-0 does not change while someone looks at their coupons, and
+ * A merchant's kind-0 does not change while someone looks at their coupons, and
  * the pass renders on two screens plus every coupon under them — refetching per
  * render would put a request behind each card.
  */
@@ -163,7 +163,7 @@ const cache = new Map<string, Promise<MerchantBranding>>()
  * cache that is lagging, cold for a pubkey it has never seen, or unauthenticated
  * for this request answers "no such profile" about a profile that plainly
  * exists. That is how a user came back from a login to a blank avatar and no
- * display name, and how a farmer's coupons rendered under a truncated pubkey and
+ * display name, and how a merchant's coupons rendered under a truncated pubkey and
  * "Gift Card". `newestAddressable` already refuses the cache for exactly this
  * reason; this is the same argument applied to kind 0.
  */
@@ -224,7 +224,7 @@ async function fetchBranding(pubkey: string): Promise<MerchantBranding> {
     const newest = await fetchNewestKind0(pubkey)
     return newest === null ? EMPTY_BRANDING : brandingFromKind0(newest.content)
   } catch {
-    // Branding is decoration. A farmer whose profile cannot be fetched still has
+    // Branding is decoration. A merchant whose profile cannot be fetched still has
     // coupons worth showing, so this never propagates.
     return EMPTY_BRANDING
   }
@@ -235,15 +235,15 @@ export function merchantBranding(pubkey: string): Promise<MerchantBranding> {
   const key = pubkey.toLowerCase()
   let pending = cache.get(key)
   if (!pending) {
-    // FAILURES ARE NOT CACHED, only answers. The cache exists so a farmer's
+    // FAILURES ARE NOT CACHED, only answers. The cache exists so a merchant's
     // kind-0 is fetched once instead of once per card, and that argument holds
     // for a profile that was found. An empty result is the opposite: it means
     // the lookup lost a race with login, or both stores were briefly
-    // unreachable, and caching it pins "no such farmer" for the life of the
+    // unreachable, and caching it pins "no such merchant" for the life of the
     // document. That is what left coupons rendering under a truncated pubkey
     // and "Gift Card" until the user reloaded — with the name sitting on the
     // relay the whole time. Dropping the entry costs one refetch on the next
-    // render and lets the farmer appear.
+    // render and lets the merchant appear.
     pending = fetchBranding(key).then((branding) => {
       if (branding === EMPTY_BRANDING) cache.delete(key)
       return branding

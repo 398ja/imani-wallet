@@ -25,7 +25,7 @@ const received = {
   counterparty: 'aa'.repeat(32),
   voucherId: '71fa3948-0f65-4b54-b1eb-09d19a01e210',
   tokenId: '9a79fa249ca599ced49ee39957503fd5',
-  memo: 'Market stall',
+  memo: 'Market shop',
 } as unknown as TransactionRow
 
 const payment = buildPaymentTransaction({
@@ -46,7 +46,7 @@ const issued = buildIssueTransaction({
   unit: 'XOF',
   decimals: 0,
   recipientPubkey: 'cc'.repeat(32),
-  memo: 'Coupon issued',
+  memo: 'Voucher issued',
   expiresAt: 1789483362,
   at: 1786891362412,
 })
@@ -95,7 +95,7 @@ describe('toContent / toRow', () => {
     expect(JSON.parse(serialised)).not.toHaveProperty('token')
   })
 
-  it('keeps the coupon expiry, which NIP-60 has no slot for', () => {
+  it('keeps the voucher expiry, which NIP-60 has no slot for', () => {
     expect(toContent(toTransaction(issued)).expires_at).toBe(1789483362)
   })
 

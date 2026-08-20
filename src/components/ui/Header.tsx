@@ -24,7 +24,7 @@ export function Header({
   onLogout,
 }: {
   profile: Profile
-  /** Trading as a merchant — changes the title only; the menu is the same. */
+  /** Trading as a merchant — adds the Stats entry; the rest of the menu is the same. */
   merchant?: boolean
   onLogout: () => void
 }) {
@@ -57,7 +57,7 @@ export function Header({
               Profile
             </MenuLink>
             {/* Merchants only: there is nothing to count for a customer, whose
-                own history already lives on the farmer screens. */}
+                own history already lives on the shop screens. */}
             {merchant && (
               <MenuLink to="/merchant/stats" onClick={close}>
                 Stats
@@ -79,8 +79,22 @@ export function Header({
           </nav>
         </details>
 
-        <Link to="/" className="min-w-0 flex-1 truncate font-medium text-mono-900 dark:text-mono-50">
-          {merchant ? 'Coupon till' : 'Coupon wallet'}
+        {/* The imani lockup, same construction as imani-www: mark.svg's one
+            evenodd path plus live text, both currentColor so the theme carries
+            them. Inlined rather than <img src>, which would not inherit colour. */}
+        <Link
+          to="/"
+          aria-label="Imani home"
+          className="flex min-w-0 flex-1 items-center gap-2 font-semibold tracking-tight text-mono-900 dark:text-mono-50"
+        >
+          <svg viewBox="0 0 48 48" className="h-5 w-5 shrink-0" aria-hidden="true" focusable="false">
+            <path
+              fill="currentColor"
+              fillRule="evenodd"
+              d="M10 2 H24 A8 8 0 0 1 32 10 V24 A8 8 0 0 1 24 32 H10 A8 8 0 0 1 2 24 V10 A8 8 0 0 1 10 2 Z M24 16 H38 A8 8 0 0 1 46 24 V38 A8 8 0 0 1 38 46 H24 A8 8 0 0 1 16 38 V24 A8 8 0 0 1 24 16 Z"
+            />
+          </svg>
+          imani
         </Link>
       </div>
     </header>

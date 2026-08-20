@@ -1,20 +1,23 @@
-# Briefing — farmer coupon wallet, resume from NAP authorization
+# Briefing — merchant coupon wallet, resume from NAP authorization
 
 Paste the block below into a fresh session started in `/home/eric/IdeaProjects/imani-wallet`.
 
 ---
 
 You are picking up a working prototype mid-flight. **Read
-`docs/superpowers/specs/2026-08-11-farmer-coupon-wallet-design.md` before touching anything** —
+`docs/superpowers/specs/2026-08-11-farmer-coupon-wallet-design.md` before touching anything**
+(its filename and its wording predate the farmer → merchant rename; it is kept as the record of what
+was decided that day) —
 §10 (what is proven vs merely written), §11 (issuance, NIP-17 delivery, the legacy bridge) and
 especially **§15, the merchant role**, which is the most recent work and records every trap that has
 already cost a debugging round.
 
 ## What this is
 
-A coupon wallet for farmers' markets: React 19 + Vite + TS, consuming imani-apps' `@imani/*`
-packages and nap **aliased from source** (`vite.config.ts` — no build step). It now serves **both
-sides**: customers hold coupons and pay farmers; merchants issue coupons and take them as payment.
+A coupon wallet for merchants of any kind — it began at farmers' markets, hence the older naming in
+the spec: React 19 + Vite + TS, consuming imani-apps' `@imani/*` packages and nap **aliased from
+source** (`vite.config.ts` — no build step). It now serves **both sides**: customers hold coupons and
+pay merchants; merchants issue coupons and take them as payment.
 
 ## Current state
 

@@ -96,7 +96,7 @@ function loadScript(src: string): Promise<void> {
  * returns null on a missing `token_id`, because the atomic write keys on the
  * content-derived id (Principle III). Observed directly: `atomicallyWrite`
  * received `token_id: null` and `transactions: []`, so the coupon persisted and
- * its receive transaction silently did not. The farmer screen's Transactions
+ * its receive transaction silently did not. The merchant screen's Transactions
  * section was empty by construction, for every coupon ever received.
  *
  * The voucher row itself survived because WalletStorage auto-derives the id on
@@ -213,7 +213,7 @@ export function loadLegacyRedemption(): Promise<void> {
     // the better one and the reason a receive-transaction row exists at all.
     //
     // It gets THE SAME WalletStorage instance the UI reads, so an arriving
-    // coupon lands in the store the farmer list is already subscribed to.
+    // coupon lands in the store the merchant list is already subscribed to.
     if (!window.walletStorageIntegration) {
       throw new Error('walletStorageIntegration.js loaded but its global is unset')
     }

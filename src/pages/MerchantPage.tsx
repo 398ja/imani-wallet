@@ -12,8 +12,8 @@ import {
   TransactionListItem,
 } from '../components/ui'
 import { listVouchers, transactionsWith, onWalletChanged } from '../lib/wallet'
-import { findFarmerWithHistory, couponsFor, type Farmer } from '../lib/farmers'
-import { toFarmerPass, EMPTY_BRANDING, type MerchantBranding } from '../lib/pass'
+import { findMerchantWithHistory, couponsFor, type Merchant } from '../lib/merchants'
+import { toMerchantPass, EMPTY_BRANDING, type MerchantBranding } from '../lib/pass'
 import { merchantBranding } from '../lib/branding'
 import type { WalletTransaction } from '../lib/transactions'
 
@@ -21,16 +21,16 @@ import type { WalletTransaction } from '../lib/transactions'
 const PREVIEW = 3
 
 /**
- * One farmer: their pass, and the history with them.
+ * One merchant: their pass, and the history with them.
  *
  * The pass carries the total and IS the way into the coupon list — which is why
  * there is no separate balance panel and no inline coupon list here. Two totals
  * on one screen is worse than one, and the coupon list now lives one level
- * deeper at `/farmer/:pubkey/coupons`.
+ * deeper at `/merchants/:pubkey/coupons`.
  */
-export function FarmerPage() {
+export function MerchantPage() {
   const { pubkey = '' } = useParams()
-  const [farmer, setFarmer] = useState<Farmer | null | undefined>(undefined)
+  const [merchant, setMerchant] = useState<Merchant | null | undefined>(undefined)
   const [couponCount, setCouponCount] = useState(0)
   const [transactions, setTransactions] = useState<WalletTransaction[]>([])
   const [branding, setBranding] = useState<MerchantBranding>(EMPTY_BRANDING)
@@ -38,11 +38,11 @@ export function FarmerPage() {
   useEffect(() => {
     const load = async () => {
       const [rows, history] = await Promise.all([listVouchers(), transactionsWith(pubkey)])
-      // Through the history too, or a farmer whose coupons are all spent bounces
-      // off the `farmer === null` branch below with "No coupons from this
-      // farmer." — over a screen whose whole other half is the history with them.
-      setFarmer(findFarmerWithHistory(rows, history, pubkey) ?? null)
-      // Rows, not farmer.groups[].vouchers — only the row carries token_id, and
+      // Through the history too, or a merchant whose coupons are all spent bounces
+      // off the `merchant === null` branch below with "No coupons from this
+      // merchant." — over a screen whose whole other half is the history with them.
+      setMerchant(findMerchantWithHistory(rows, history, pubkey) ?? null)
+      // Rows, not merchant.groups[].vouchers — only the row carries token_id, and
       // that is what addresses a coupon's detail screen.
       setCouponCount(couponsFor(rows, pubkey).length)
       setTransactions(history)
@@ -52,21 +52,21 @@ export function FarmerPage() {
   }, [pubkey])
 
   useEffect(() => {
-    // Never rejects — an unbranded farmer falls back to the pass defaults.
+    // Never rejects — an unbranded merchant falls back to the pass defaults.
     merchantBranding(pubkey).then(setBranding)
   }, [pubkey])
 
-  if (farmer === undefined) return <Centered>Loading…</Centered>
-  if (farmer === null) return <Centered>No coupons from this farmer.</Centered>
+  if (merchant === undefined) return <Centered>Loading…</Centered>
+  if (merchant === null) return <Centered>No vouchers from this shop.</Centered>
 
   return (
     <Screen>
-      <BackLink to="/" label="Farmers" />
+      <BackLink to="/" label="Shops" />
 
       <div className="mb-6">
-        <Pass pass={toFarmerPass(farmer, branding)} to={`/farmer/${pubkey}/coupons`} />
+        <Pass pass={toMerchantPass(merchant, branding)} to={`/merchants/${pubkey}/coupons`} />
         <p className="mt-2 text-center text-sm text-mono-500">
-          {couponCount === 1 ? '1 coupon' : `${couponCount} coupons`} · tap to see them
+          {couponCount === 1 ? '1 voucher' : `${couponCount} vouchers`} · tap to see them
         </p>
       </div>
 
@@ -74,7 +74,7 @@ export function FarmerPage() {
         title="Transactions"
         action={
           transactions.length > PREVIEW ? (
-            <SeeAll to={`/farmer/${pubkey}/transactions`} count={transactions.length} />
+            <SeeAll to={`/merchants/${pubkey}/transactions`} count={transactions.length} />
           ) : undefined
         }
       >

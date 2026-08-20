@@ -1,6 +1,7 @@
 import type { EventTemplate, Event } from 'nostr-tools'
 import type { VoucherRow } from '@imani/wallet-storage'
 
+import { isRedeemed } from './merchants'
 import { getSigner } from './nap'
 import { allEvents, publish } from './relay'
 import { legacyApi } from './legacyBridge'
@@ -45,7 +46,7 @@ export const NIP60_TOKEN_KIND = 7375
  *
  * The row goes in VERBATIM rather than field-by-field. It is already the shape
  * `saveVoucher` accepts, the store re-derives `token_id` on write, and a
- * hand-picked subset is how a field like `issuance_ratio` — which every farmer
+ * hand-picked subset is how a field like `issuance_ratio` — which every merchant
  * total is computed from — goes missing on the device that restores.
  */
 export interface TokenRecord {
@@ -83,7 +84,7 @@ export async function publishVoucher(row: VoucherRow): Promise<void> {
       // their coupons: `token_id` is derived by the store, so a row taken from
       // a writer's ARGUMENT rather than from the store has none, and every
       // coupon went unbacked-up with nothing in the console to say so. Callers
-      // now hand over stored rows (`publishWritten` in wallet.ts); a row
+      // now hand over stored rows (`mirrorWritten` in wallet.ts); a row
       // reaching here without an id is a bug in a caller, not a normal case.
       console.warn('[voucherRecords] coupon has no token_id — not backed up', {
         voucher_id: row.voucher_id,
@@ -203,7 +204,10 @@ export async function restoreVouchers(pubkey: string): Promise<number> {
     // phone. Logins are already past `setReady`, so nothing is waiting on this.
     let restored = 0
     for (const row of candidates) {
-      if (!(await isStillLive(row.token))) continue
+      // A burnt coupon is SPENT at the mint BY DESIGN — that is what redeeming
+      // one does (see burn.ts). Asking the mint about it would discard the
+      // receipt the merchant is meant to keep, so the status answers first.
+      if (!isRedeemed(row) && !(await isStillLive(row.token))) continue
       await addRestoredVoucher(row)
       restored += 1
     }

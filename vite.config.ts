@@ -188,7 +188,7 @@ const proxy = {
   // exactly, sent DIRECTLY to :28084 with no proxy in the way, still comes back
   // 401 `NIP-98 authentication required`. The portal's Nip98AuthFilter does not
   // authenticate on this build; only NapProxyAuthFilter's edge path does. That
-  // is why scripts/seed-farmer.mjs sends both and says "whichever the deployed
+  // is why scripts/seed-merchant.mjs sends both and says "whichever the deployed
   // portal build honours wins" — on this stack it is always the edge one.
   //
   // So Vite plays the edge proxy, which is what a real deployment puts here. The

@@ -55,14 +55,14 @@ describe('mergeKind0', () => {
   it('keeps existing values when a field is absent', () => {
     // A sparse kind-0, or one written by a client that does not know every
     // field, must not silently wipe the user's profile on login.
-    const merged = mergeKind0(base({ about: 'Farmer', website: 'https://farm.example' }), content({ name: 'alice' }))
-    expect(merged.about).toBe('Farmer')
+    const merged = mergeKind0(base({ about: 'Shop', website: 'https://farm.example' }), content({ name: 'alice' }))
+    expect(merged.about).toBe('Shop')
     expect(merged.website).toBe('https://farm.example')
   })
 
   it('keeps existing values when a field is present but empty', () => {
-    const merged = mergeKind0(base({ about: 'Farmer' }), content({ about: '   ' }))
-    expect(merged.about).toBe('Farmer')
+    const merged = mergeKind0(base({ about: 'Shop' }), content({ about: '   ' }))
+    expect(merged.about).toBe('Shop')
   })
 
   it('drops picture and banner URLs that are not https or data', () => {
@@ -152,7 +152,7 @@ describe('buildProfileEvent', () => {
     // This wallet has no lightning address. Writing an empty one would erase a
     // value the user may have set in another client.
     const parsed = parse(
-      base({ displayName: 'Alice', about: 'Farmer', website: 'https://farm.example' }),
+      base({ displayName: 'Alice', about: 'Shop', website: 'https://farm.example' }),
     )
     expect(parsed).not.toHaveProperty('lud16')
   })

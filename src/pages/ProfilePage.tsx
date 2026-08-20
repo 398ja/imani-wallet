@@ -11,7 +11,7 @@ import { profileName, type Profile } from '../lib/profile'
  * add a spinner to a screen that already has the answer. (bottin does the same
  * for one's own profile, and fetches only when viewing someone else's.)
  *
- * Only the current user's profile. Looking at a farmer is FarmerPage's job.
+ * Only the current user's profile. Looking at a merchant is MerchantPage's job.
  */
 export function ProfilePage({ profile }: { profile: Profile }) {
   const navigate = useNavigate()

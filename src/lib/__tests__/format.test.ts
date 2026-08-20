@@ -36,7 +36,7 @@ describe('formatFace', () => {
 
   it('does not throw on a non-ISO currency like SAT', () => {
     // Intl rejects unknown currency codes; formatFace falls back rather than
-    // letting a farmer's own unit crash the screen.
+    // letting a merchant's own unit crash the screen.
     expect(() => formatFace(1000, { unit: 'SAT', decimals: 0 })).not.toThrow()
     // Grouping separators are locale-dependent, so assert the unit and the
     // digits rather than an exact string.

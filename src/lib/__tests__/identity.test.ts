@@ -16,8 +16,8 @@ describe('identityLabel', () => {
   })
 
   it('does not treat a pubkey standing in for a name as a name', () => {
-    // `toFarmers` fills `name` with `merchantName || merchantId`, so an
-    // unbranded farmer's "name" is 64 hex characters. Passing it through would
+    // `toMerchants` fills `name` with `merchantName || merchantId`, so an
+    // unbranded merchant's "name" is 64 hex characters. Passing it through would
     // put back exactly the string this module exists to remove.
     expect(identityLabel(HEX, { name: HEX, nip05: 'rosa@x.test' })).toBe('rosa@x.test')
     expect(identityLabel(HEX, { name: HEX })).toBe('aaaaaaaa…aaaa')

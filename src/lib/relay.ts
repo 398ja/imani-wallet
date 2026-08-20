@@ -28,7 +28,7 @@ export const RELAY_URL: string = import.meta.env.VITE_RELAY_URL ?? 'ws://localho
  * gateway does the publishing from inside the compose network where
  * `localhost` is its own container.
  *
- * scripts/seed-farmer.mjs draws the same distinction, for the same reason.
+ * scripts/seed-merchant.mjs draws the same distinction, for the same reason.
  *
  * ponytail: hardcoded dev default like RELAY_URL above, overridable with
  * VITE_INTERNAL_RELAY_URL. Both should come from GET /api/v1/config eventually.
@@ -87,7 +87,7 @@ export async function publish(event: Event, relays: string[] = [RELAY_URL]): Pro
  * key has published — `imani:settings`, and everything else possa-merchant
  * writes under this kind.
  *
- * No `ws` polyfill here, unlike scripts/seed-farmer.mjs — that is a Node 20
+ * No `ws` polyfill here, unlike scripts/seed-merchant.mjs — that is a Node 20
  * problem (no global WebSocket, and the failure is silent because the promise
  * inside `publish()` still resolves). Browsers have had WebSocket all along.
  */

@@ -7,7 +7,7 @@ import { formatDate, formatFace, shortPubkey } from '../../lib/format'
 import { Avatar } from './Avatar'
 
 /**
- * A coupon, or a farmer's whole holding, rendered as a wallet pass.
+ * A coupon, or a merchant's whole holding, rendered as a wallet pass.
  *
  * The layout is not invented here — it is `PassJson`'s, from cashu-voucher's
  * `cashu-voucher-pass` module: a banner strip, an organisation with a logo, one
@@ -159,7 +159,7 @@ export function Pass({ pass, to }: PassProps) {
 
         {pass.voided && (
           <p className="mt-4 inline-block rounded-full bg-red-50 px-3 py-1 text-xs font-medium text-red-700">
-            This coupon has been used
+            This voucher has been used
           </p>
         )}
 
@@ -173,7 +173,7 @@ export function Pass({ pass, to }: PassProps) {
   )
 
   // `voided` dims the card, but only when it is not a link — a dimmed control
-  // reads as disabled, and a farmer's card is always tappable.
+  // reads as disabled, and a merchant's card is always tappable.
   if (!to) return <div className={pass.voided ? 'opacity-60' : undefined}>{card}</div>
 
   return (

@@ -6,7 +6,7 @@ import { PaymentRequestHandler } from 'imani-qr'
 import { Button, Screen, BackLink, PageHeader, Alert } from '../components/ui'
 
 /**
- * Pay: scan a farmer's voucher payment request QR (NUT-18V, `vreqA…`).
+ * Pay: scan a merchant's voucher payment request QR (NUT-18V, `vreqA…`).
  *
  * Detection and normalisation come from imani-qr's PaymentRequestHandler, which
  * also accepts the `cashu:` URI form. On a hit we hand off to /pay via the

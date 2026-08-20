@@ -16,7 +16,7 @@ import { getSigner } from './nap'
  * `PayloadBuilder.DmPayload`, the sender-side type in @imani/voucher-send, is
  * camelCase (`faceValue`, `issuerId`). They are NOT the same shape, and reading
  * a received DM with the sender's type yields undefined for every field that
- * matters, including the issuer the farmer list groups by.
+ * matters, including the issuer the merchant list groups by.
  */
 interface TokenTransferPayload {
   type: 'cashu_token_transfer'
@@ -149,7 +149,7 @@ export function createDmCryptoAdapter(): CryptoAdapter {
  * `metadata.issuer_id`, `.face_value`, `.face_unit`, `.face_decimals`,
  * `.token_amount`, `.backing_strategy`, `.memo`, `.sender_pubkey`. Every one of
  * them was silently undefined, and nothing threw: the coupon persisted with
- * issuer_id null, and since the farmer list groups by issuer, it rendered as
+ * issuer_id null, and since the merchant list groups by issuer, it rendered as
  * nothing at all.
  *
  * `expires_at` is the same defect, found later and one field short of the

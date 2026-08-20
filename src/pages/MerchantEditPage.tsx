@@ -96,9 +96,9 @@ export function MerchantEditPage({
     <Screen>
       <BackLink to="/settings" label="Settings" />
       <PageHeader
-        title={existing ? 'Your stall' : 'Start selling'}
+        title={existing ? 'Your shop' : 'Start selling'}
         subtitle={
-          existing ? undefined : 'Set up a stall and you can issue coupons and take them as payment.'
+          existing ? undefined : 'Set up a shop and you can issue vouchers and take them as payment.'
         }
       />
 
@@ -106,7 +106,7 @@ export function MerchantEditPage({
         <div className="mb-4">
           <Switch
             label="Open for business"
-            hint="Turn this off to hide Sell and Redeem. Your coupons and history stay."
+            hint="Turn this off to hide Sell and Redeem. Your vouchers and history stay."
             checked={fields.active}
             disabled={busy}
             onChange={(active) => setFields({ ...fields, active })}
@@ -162,7 +162,7 @@ export function MerchantEditPage({
           already holding. */}
       {existing && (
         <p className="mt-4 text-center text-xs text-mono-400">
-          Coupons you have already issued keep the currency they were issued in.
+          Vouchers you have already issued keep the currency they were issued in.
         </p>
       )}
     </Screen>

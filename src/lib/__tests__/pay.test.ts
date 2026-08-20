@@ -60,10 +60,10 @@ const request = (amount: number, over: Partial<NUT18VRequest> = {}): NUT18VReque
   }) as unknown as NUT18VRequest
 
 describe('buildSendParams', () => {
-  it('sends the requested amount, not the coupon it is taken from', () => {
+  it('sends the requested amount, not the voucher it is taken from', () => {
     // The regression that matters. gateway-core splits for `faceValue` in
     // preference to `amount`, so passing the coupon's 500 here made a €2.50
-    // request complete as is_full_send=true: the farmer received the whole
+    // request complete as is_full_send=true: the merchant received the whole
     // €5.00 coupon and the customer got no change back.
     const params = buildSendParams(request(250), coupon())
 
@@ -80,7 +80,7 @@ describe('buildSendParams', () => {
     expect(params.amount).toBe(500)
   })
 
-  it('takes unit and decimals from the coupon, since they describe the money', () => {
+  it('takes unit and decimals from the voucher, since they describe the money', () => {
     const params = buildSendParams(request(250), coupon({ face_unit: 'XAF', face_decimals: 0 }))
 
     expect(params.faceUnit).toBe('XAF')
@@ -162,17 +162,17 @@ describe('checkSplittable', () => {
     expect(check.ok === false && check.reason).toContain('behind')
   })
 
-  it('refuses to split a coupon backed by a single sat', () => {
+  it('refuses to split a voucher backed by a single sat', () => {
     const check = checkSplittable(xaf({ token_amount: 1 }), 25)
     expect(check.ok).toBe(false)
     expect(check.ok === false && check.reason).toContain('single sat')
   })
 
-  it('refuses a coupon with no backing at all', () => {
+  it('refuses a voucher with no backing at all', () => {
     expect(checkSplittable(xaf({ token_amount: 0 }), 25).ok).toBe(false)
   })
 
-  it('refuses an amount the coupon cannot cover, or a nonsense one', () => {
+  it('refuses an amount the voucher cannot cover, or a nonsense one', () => {
     expect(checkSplittable(xaf(), 6000).ok).toBe(false)
     expect(checkSplittable(xaf(), 0).ok).toBe(false)
     expect(checkSplittable(xaf(), -25).ok).toBe(false)
@@ -187,7 +187,7 @@ describe('checkSplittable', () => {
 })
 
 describe('selectVouchers and splitObstacle', () => {
-  it('offers only coupons that can actually produce the amount', () => {
+  it('offers only vouchers that can actually produce the amount', () => {
     const divisible = xaf()
     const indivisible = xaf({ voucher_id: 'v-1sat', token_amount: 1 })
 
@@ -207,6 +207,23 @@ describe('selectVouchers and splitObstacle', () => {
     expect(splitObstacle([xaf()], 10)).toContain('25')
     expect(splitObstacle([xaf()], 25)).toBeNull()
     expect(splitObstacle([], 25)).toBeNull()
+  })
+
+  it('never offers a spent or redeemed coupon', () => {
+    // A redeemed coupon's proofs were burnt at the mint (burn.ts), so a send
+    // built on one fails there. Offering it puts the failure in the customer's
+    // face at the till instead of keeping it off the list.
+    // `VoucherStatus` in the vendored voucher-send package predates the burn, so
+    // 'redeemed' is cast in — the same widening `toVoucher` does, since the
+    // store's own status is a plain string.
+    const dead = [
+      { ...xaf({ voucher_id: 'v-redeemed' }), status: 'redeemed' } as unknown as Voucher,
+      xaf({ status: 'spent' }),
+    ]
+
+    expect(selectVouchers(dead, 25)).toEqual([])
+    // ...and it is not counted as a candidate the split merely failed to fit.
+    expect(splitObstacle(dead, 25)).toBeNull()
   })
 })
 
@@ -233,7 +250,7 @@ describe('replaceVoucherToken', () => {
       face_unit: 'XAF',
       face_decimals: 0,
       token_amount: 200,
-      issuer_id: 'farmerpubkey',
+      issuer_id: 'merchantpubkey',
       issuance_ratio: 25,
       status: 'active',
       created_at: '2026-08-12T09:00:00.000Z',
@@ -264,7 +281,7 @@ describe('replaceVoucherToken', () => {
     }
   }
 
-  it('removes the spent coupon by its primary key', async () => {
+  it('removes the spent voucher by its primary key', async () => {
     const row = sourceRow()
     const { wallet, removed } = fakeWallet(row)
 
@@ -282,8 +299,8 @@ describe('replaceVoucherToken', () => {
     await replaceVoucherToken(wallet, row.token_id, NEW_TOKEN, 2500)
 
     // Losing these is what made change coupons render unit-less under the
-    // synthetic "unknown" farmer.
-    expect(saved[0].issuer_id).toBe('farmerpubkey')
+    // synthetic "unknown" merchant.
+    expect(saved[0].issuer_id).toBe('merchantpubkey')
     expect(saved[0].face_unit).toBe('XAF')
     expect(saved[0].face_decimals).toBe(0)
     expect(saved[0].issuance_ratio).toBe(25)
@@ -355,7 +372,7 @@ describe('replaceVoucherToken', () => {
  * The path that pays for a 20s poll being wrong.
  *
  * Staging send as_fc6bd90785a74a9e finished 7m48s after DM_SENT — long after the
- * poll gave up. The gateway was right and the wallet was silent: the farmer had
+ * poll gave up. The gateway was right and the wallet was silent: the merchant had
  * the coupon, the customer's wallet still listed one whose proofs were burnt,
  * their history showed no payment, and £9.00 of change sat unclaimed.
  */
@@ -372,8 +389,8 @@ describe('reconcilePendingSends', () => {
     amount: 300,
     unit: 'GBP',
     decimals: 2,
-    farmerPubkey: 'f'.repeat(64),
-    farmerName: 'Hill Farm',
+    merchantPubkey: 'f'.repeat(64),
+    merchantName: 'Hill Farm',
     voucherId: '71fa3948-0f65-4b54-b1eb-09d19a01e210',
     memo: 'Saturday veg box',
     sourceFaceValue: 1200,
@@ -450,6 +467,30 @@ describe('reconcilePendingSends', () => {
     expect(stubs.notified.count).toBe(1)
   })
 
+  // The one case still written in the old vocabulary, deliberately: a send left
+  // in flight by a build that predates the merchant rename stored `farmerPubkey`
+  // / `farmerName`, and settling it must not lose who was paid. Delete this
+  // alongside `LegacyPendingSend` in lib/pay.ts.
+  it('settles a pre-rename pending send without losing the counterparty', async () => {
+    const { merchantPubkey, merchantName, ...rest } = pending()
+    store.set(KEY, JSON.stringify([{ ...rest, farmerPubkey: merchantPubkey, farmerName: merchantName }]))
+    Object.assign(stubs.api, {
+      getAtomicSendStatus: async () => ({
+        status: 'COMPLETED',
+        keep_token: KEEP_TOKEN,
+        keep_face_value: 900,
+      }),
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    const { transactions } = wallet(sourceRow)
+
+    expect(await reconcilePendingSends(PK)).toBe(1)
+
+    expect(transactions[0].merchantId).toBe(merchantPubkey)
+    expect(transactions[0].merchantName).toBe(merchantName)
+  })
+
   it('keeps waiting on a send that is still in flight', async () => {
     store.set(KEY, JSON.stringify([pending()]))
     Object.assign(stubs.api, {
@@ -465,7 +506,7 @@ describe('reconcilePendingSends', () => {
     expect(loadPendingSends(PK)).toHaveLength(1)
   })
 
-  it('does not settle twice when the coupon is already gone', async () => {
+  it('does not settle twice when the voucher is already gone', async () => {
     store.set(KEY, JSON.stringify([pending()]))
     Object.assign(stubs.api, {
       getAtomicSendStatus: async () => ({ status: 'COMPLETED', keep_token: KEEP_TOKEN }),
@@ -507,14 +548,14 @@ describe('reconcilePendingSends', () => {
 })
 
 describe('payRequest and expiry', () => {
-  const farmer = { pubkey: 'f'.repeat(64), name: 'Farmer', groups: [], voucherCount: 0 }
+  const merchant = { pubkey: 'f'.repeat(64), name: 'Shop', groups: [], voucherCount: 0 }
   const payer = 'c'.repeat(64)
 
   it('refuses a request that has already lapsed', async () => {
     const lapsed = request(500, { expiresAt: Math.floor(Date.now() / 1000) - 1 })
 
     await expect(
-      payRequest({ request: lapsed, raw: 'vreqA…', farmer, payer }),
+      payRequest({ request: lapsed, raw: 'vreqA…', merchant, payer }),
     ).rejects.toThrow(/expired/i)
   })
 
@@ -524,7 +565,7 @@ describe('payRequest and expiry', () => {
     const live = request(500, { expiresAt: Math.floor(Date.now() / 1000) + 3600 })
 
     await expect(
-      payRequest({ request: live, raw: 'vreqA…', farmer, payer }),
+      payRequest({ request: live, raw: 'vreqA…', merchant, payer }),
     ).rejects.toThrow(/Gateway API client is not loaded/)
   })
 })
