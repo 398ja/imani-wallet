@@ -176,8 +176,15 @@ export function Pass({ pass, to }: PassProps) {
   // reads as disabled, and a merchant's card is always tappable.
   if (!to) return <div className={pass.voided ? 'opacity-60' : undefined}>{card}</div>
 
+  // Feedback on the press, not on the release. Waiting for the tap to complete
+  // before acknowledging it is where directness falls off a cliff: the card is
+  // the way into a merchant, and until it moves the user cannot tell a slow
+  // navigation from a missed tap. `active:` fires on pointer-down.
   return (
-    <Link to={to} className="block transition-opacity hover:opacity-90">
+    <Link
+      to={to}
+      className="block transition duration-100 ease-out hover:opacity-90 active:scale-[0.98] active:opacity-90 motion-reduce:transition-opacity motion-reduce:active:scale-100"
+    >
       {card}
     </Link>
   )
