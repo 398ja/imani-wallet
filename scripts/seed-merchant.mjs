@@ -306,6 +306,12 @@ const memo = arg('--memo', `${name} — voucher`)
 const about = arg('--about', '')
 
 const merchant = loadOrCreateMerchant(name)
+// `--issuer-pubkey` attributes the coupons to a merchant that already exists in
+// the app. The portal reads the issuer from X-Auth-Pubkey and the DM payload
+// carries `issuer_id`, so neither needs that merchant's secret key — this
+// script still signs as itself, which is all the NIP-98 check asks for.
+const issuerPubkey = arg('--issuer-pubkey', '')
+if (issuerPubkey) merchant.pk = issuerPubkey
 // `--customer-pubkey` delivers to an account that already exists — one
 // registered in the wallet itself — instead of minting a throwaway identity
 // here. That is the only way to seed the app you are actually looking at, and
@@ -315,7 +321,7 @@ const customer = customerPubkey
   ? { pk: customerPubkey, sk: null }
   : loadOrCreateMerchant(arg('--customer', 'demo-customer'))
 
-console.log(`merchant    ${name}`)
+console.log(`merchant    ${issuerPubkey ? `existing issuer (signed by ${name})` : name}`)
 console.log(`  pubkey  ${merchant.pk}`)
 console.log(`customer  ${nip19.npubEncode(customer.pk)}`)
 console.log(`  pubkey  ${customer.pk}`)
@@ -329,7 +335,13 @@ const before = await countGiftWraps(customer.pk)
 // Before issuing, not after: the wallet renders a voucher the moment the DM
 // lands, and a profile that arrives later leaves the first render showing a
 // truncated pubkey.
-console.log(`profile   kind-0 ${(await publishProfile(merchant, about)).slice(0, 12)}…`)
+// A merchant that already exists in the app published their own kind-0; ours
+// would be signed by the wrong key and would not replace it.
+if (issuerPubkey) {
+  console.log('profile   published by the issuer already')
+} else {
+  console.log(`profile   kind-0 ${(await publishProfile(merchant, about)).slice(0, 12)}…`)
+}
 
 const { items } = await issue(merchant, {
   quantity,
