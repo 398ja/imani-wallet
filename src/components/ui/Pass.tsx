@@ -63,7 +63,7 @@ function PassBarcode({ format, message, altText }: { format: string; message: st
     <div className="flex flex-col items-center gap-2 rounded-xl bg-white p-3">
       <img src={dataUrl} alt={`Redemption code ${altText}`} className="w-40" />
       {/* For a cashier to key in when the scanner fails — the bare id, no prefix. */}
-      <p className="break-all text-center font-mono text-[10px] text-mono-500">{altText}</p>
+      <p className="break-all text-center font-mono text-[0.625rem] text-mono-500">{altText}</p>
     </div>
   )
 }
@@ -124,7 +124,7 @@ export function Pass({ pass, to }: PassProps) {
             */}
             {issuer && issuer !== pass.organizationName && (
               <p
-                className={`truncate text-[10px] ${nip05 ? '' : 'font-mono'}`}
+                className={`truncate text-[0.625rem] ${nip05 ? '' : 'font-mono'}`}
                 style={{ color: pass.labelColor, opacity: 0.55 }}
               >
                 {nip05 ?? shortPubkey(issuer)}
@@ -141,7 +141,7 @@ export function Pass({ pass, to }: PassProps) {
             >
               {balance.label}
             </p>
-            <p className="text-balance">{fieldValue(balance)}</p>
+            <p className="text-amount">{fieldValue(balance)}</p>
           </div>
         )}
 

@@ -356,7 +356,7 @@ export function MerchantsPage() {
     <Screen>
       <Panel className="mb-6 p-5">
         <p className="text-sm text-mono-500">Total balance</p>
-        <p className="text-balance text-mono-900 dark:text-mono-50">
+        <p className="text-amount text-mono-900 dark:text-mono-50">
           {primary ? formatFace(primary.minor, primary) : formatFace(0, undefined)}
         </p>
         {rest.map((total) => (

@@ -246,7 +246,7 @@ function RequestDisplay({
             {STATUS_LABEL[request.status]}
           </span>
 
-          <p className="text-balance font-semibold text-mono-900 dark:text-mono-50">
+          <p className="text-amount text-mono-900 dark:text-mono-50">
             {formatFace(request.amount, { unit: request.unit, decimals })}
           </p>
 
@@ -288,7 +288,7 @@ function RequestDisplay({
 
       {request.status === 'pending' && (
         <>
-          <p className="mt-3 break-all text-center font-mono text-[11px] text-mono-400">
+          <p className="mt-3 break-all text-center font-mono text-[0.6875rem] text-mono-400">
             {request.requestString.slice(0, 48)}…
           </p>
 

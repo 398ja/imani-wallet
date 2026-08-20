@@ -174,7 +174,7 @@ export function IssuedCouponPage() {
       <BackLink to={`/transaction/${encodeURIComponent(tx.id)}`} label="Transaction" />
 
       <Panel className="mb-6 p-5">
-        <p className="text-balance text-mono-900 dark:text-mono-50">
+        <p className="text-amount text-mono-900 dark:text-mono-50">
           {formatFace(tx.amount, { unit: tx.unit, decimals: tx.decimals })}
         </p>
         <p className="truncate text-sm text-mono-500">{tx.memo || 'Voucher issued'}</p>

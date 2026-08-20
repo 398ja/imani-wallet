@@ -169,7 +169,7 @@ export function TransactionPage() {
       <BackLink to={backTo} label="Back" />
 
       <Panel className="mb-6 p-5">
-        <p className="text-balance text-mono-900 dark:text-mono-50">
+        <p className="text-amount text-mono-900 dark:text-mono-50">
           {outgoing ? '−' : '+'}
           {formatFace(tx.amount, { unit: tx.unit, decimals: tx.decimals })}
         </p>

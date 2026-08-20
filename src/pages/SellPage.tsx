@@ -249,7 +249,7 @@ function IssueForm({
             <div className="mb-3 rounded-full bg-green-600/10 p-3">
               <Check className="h-7 w-7 text-green-600" />
             </div>
-            <p className="text-balance font-semibold text-mono-900 dark:text-mono-50">
+            <p className="text-amount text-mono-900 dark:text-mono-50">
               {formatFace(sent, { unit: merchant.issuanceCurrency, decimals })}
             </p>
             <p className="mt-1 text-sm text-mono-500">
