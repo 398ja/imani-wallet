@@ -85,7 +85,7 @@ export function Header({
         <Link
           to="/"
           aria-label="Imani home"
-          className="flex min-w-0 flex-1 items-center gap-2 font-semibold tracking-tight text-mono-900 dark:text-mono-50"
+          className="flex min-w-0 flex-1 items-center justify-end gap-2 font-semibold tracking-tight text-mono-900 dark:text-mono-50"
         >
           <svg viewBox="0 0 48 48" className="h-5 w-5 shrink-0" aria-hidden="true" focusable="false">
             <path
