@@ -76,7 +76,7 @@ export function MerchantStatsPage({
               type="button"
               onClick={() => setDays(range.days)}
               aria-pressed={active}
-              className={`rounded-2xl border py-2 text-sm font-medium transition-colors ${
+              className={`pressable rounded-2xl border py-2 text-sm font-medium ${
                 active
                   ? 'border-mono-900 bg-mono-900 text-mono-50 dark:border-mono-50 dark:bg-mono-50 dark:text-mono-900'
                   : 'border-mono-200 text-mono-600 hover:bg-mono-100 dark:border-mono-800 dark:text-mono-300 dark:hover:bg-mono-900'

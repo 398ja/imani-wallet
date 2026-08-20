@@ -96,9 +96,9 @@ export function MerchantEditPage({
     <Screen>
       <BackLink to="/settings" label="Settings" />
       <PageHeader
-        title={existing ? 'Your shop' : 'Start selling'}
+        title={existing ? 'Your business' : 'Start selling'}
         subtitle={
-          existing ? undefined : 'Set up a shop and you can issue vouchers and take them as payment.'
+          existing ? undefined : 'Set up as a merchant and you can issue vouchers and take them as payment.'
         }
       />
 

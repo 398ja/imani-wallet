@@ -94,7 +94,7 @@ export function ProfileEditPage({
   return (
     <Screen>
       <BackLink to="/settings" label="Settings" />
-      <PageHeader title="Profile" subtitle="How you appear to the shops you buy from." />
+      <PageHeader title="Profile" subtitle="How you appear to the merchants you buy from." />
 
       <div className="space-y-5">
         <ImagePicker
@@ -269,7 +269,7 @@ function ImagePicker({
         <button
           type="button"
           onClick={onRemove}
-          className="shrink-0 text-sm text-mono-500 underline hover:text-mono-900 dark:hover:text-mono-50"
+          className="pressable shrink-0 text-sm text-mono-500 underline hover:text-mono-900 dark:hover:text-mono-50"
         >
           Remove
         </button>

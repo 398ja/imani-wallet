@@ -26,7 +26,7 @@ export function Switch({
   return (
     <label
       className={`flex items-center justify-between gap-4 rounded-2xl border border-mono-200 p-4 dark:border-mono-800 ${
-        disabled ? 'opacity-50' : 'cursor-pointer'
+        disabled ? 'opacity-50' : 'press-row cursor-pointer'
       }`}
     >
       <span className="min-w-0">
@@ -43,10 +43,10 @@ export function Switch({
           disabled={disabled}
           onChange={(e) => onChange(e.target.checked)}
         />
-        <span className="h-6 w-11 rounded-full bg-mono-300 transition-colors peer-checked:bg-mono-900 peer-focus-visible:ring-2 peer-focus-visible:ring-mono-900 peer-focus-visible:ring-offset-2 dark:bg-mono-700 dark:peer-checked:bg-mono-50 dark:peer-focus-visible:ring-mono-50" />
+        <span className="h-6 w-11 rounded-full bg-mono-300 transition-colors duration-150 ease-out peer-checked:bg-mono-900 peer-focus-visible:ring-2 peer-focus-visible:ring-mono-900 peer-focus-visible:ring-offset-2 dark:bg-mono-700 dark:peer-checked:bg-mono-50 dark:peer-focus-visible:ring-mono-50" />
         {/* Inverted against the track the way MethodCard inverts in dark, so the
             knob stays visible in all four track/theme combinations. */}
-        <span className="pointer-events-none absolute left-0.5 h-5 w-5 rounded-full bg-mono-50 shadow-sm ring-1 ring-mono-900/10 transition-transform peer-checked:translate-x-5 dark:bg-mono-900 dark:ring-0" />
+        <span className="pointer-events-none absolute left-0.5 h-5 w-5 rounded-full bg-mono-50 shadow-sm ring-1 ring-mono-900/10 transition-transform duration-150 ease-out peer-checked:translate-x-5 motion-reduce:transition-none dark:bg-mono-900 dark:ring-0" />
       </span>
     </label>
   )

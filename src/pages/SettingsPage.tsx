@@ -63,7 +63,7 @@ export function SettingsPage({
             <SettingRow
               to="/settings/merchant"
               icon={Store}
-              label="Your shop"
+              label="Your business"
               hint="Categories, location, voucher currency"
             />
           </ListSection>
@@ -93,7 +93,7 @@ function SettingRow({
   return (
     <Link
       to={to}
-      className="flex items-center gap-3 p-4 transition-colors hover:bg-mono-100 dark:hover:bg-mono-900"
+      className="flex items-center gap-3 p-4 press-row"
     >
       <Icon className="h-5 w-5 shrink-0 text-mono-400" />
       <div className="min-w-0 flex-1">

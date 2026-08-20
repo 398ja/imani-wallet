@@ -46,42 +46,63 @@
 }
 
 @layer components {
-  .btn {
-    @apply inline-flex items-center justify-center rounded-xl px-6 py-3 font-medium transition-all duration-200;
+  /*
+   * Press feedback, per Apple's first rule of fluid interfaces: the reaction
+   * belongs on pointer-DOWN, not on release. `:active` is exactly that event,
+   * so the platform gives it for free — no JS, no pointer handlers.
+   *
+   * 100ms, because the whole point is that no lag is perceptible; the 200ms the
+   * dead `.btn` class used reads as a delay on a press.
+   *
+   * One class for every kind of control: `transform` does not apply to inline
+   * elements, so a text link takes only the dim and a button takes both,
+   * without either caller having to know which it is.
+   */
+  .pressable {
+    @apply transition duration-100 ease-out active:scale-[0.98] active:opacity-70 motion-reduce:active:scale-100;
   }
 
-  .btn-primary {
-    @apply bg-mono-900 text-mono-50 hover:bg-mono-800 dark:bg-mono-50 dark:text-mono-900 dark:hover:bg-mono-200;
+  /*
+   * The same feedback for a full-bleed row in a divided list, where a scale
+   * would lift the row off its own dividers and clip against the neighbours.
+   * A tint carries the press instead — deeper than the hover, so a touch device
+   * (which has no hover) still gets a distinct pressed state.
+   */
+  .press-row {
+    @apply transition-colors duration-100 ease-out hover:bg-mono-100 active:bg-mono-200 dark:hover:bg-mono-900 dark:active:bg-mono-800;
   }
 
-  .btn-secondary {
-    @apply bg-mono-100 text-mono-900 hover:bg-mono-200 dark:bg-mono-800 dark:text-mono-50 dark:hover:bg-mono-700;
+  /*
+   * Floating chrome as a translucent material, with content passing underneath
+   * rather than stopping at an opaque strip.
+   *
+   * The scroll edge is a gradient fade below the surface rather than a 1px
+   * border: a hard divider is drawn whether or not anything is behind it, while
+   * the fade only reads where content actually meets the chrome.
+   */
+  .material {
+    @apply bg-mono-50/80 backdrop-blur-xl backdrop-saturate-150 dark:bg-mono-950/80;
   }
 
-  .btn-ghost {
-    @apply bg-transparent hover:bg-mono-100 dark:hover:bg-mono-800;
+  .material::after {
+    content: '';
+    @apply pointer-events-none absolute inset-x-0 top-full h-4 bg-gradient-to-b from-mono-50/80 to-transparent dark:from-mono-950/80;
   }
 
-  .card {
-    @apply rounded-2xl bg-white p-6 shadow-sm dark:bg-mono-900;
+  /*
+   * Menus and popovers grow from the control that opened them, so the link
+   * between trigger and content is spatial rather than something to work out.
+   * `<details>` cannot animate its close, so this is the open half only.
+   */
+  .materialize {
+    animation: materialize 200ms cubic-bezier(0.32, 0.72, 0, 1);
   }
 
-  .input {
-    @apply w-full rounded-xl border border-mono-200 bg-white px-4 py-3 text-mono-900 placeholder:text-mono-400 focus:border-mono-400 focus:outline-none focus:ring-0 dark:border-mono-700 dark:bg-mono-800 dark:text-mono-50 dark:placeholder:text-mono-500;
-  }
-}
-
-@layer utilities {
-  .balance-text {
-    @apply text-4xl font-semibold tracking-tight md:text-5xl;
-  }
-
-  .safe-bottom {
-    padding-bottom: env(safe-area-inset-bottom, 1rem);
-  }
-
-  .safe-top {
-    padding-top: env(safe-area-inset-top, 0);
+  @keyframes materialize {
+    from {
+      opacity: 0;
+      transform: scale(0.92);
+    }
   }
 }
 
@@ -93,4 +114,44 @@
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+/*
+ * The three accessibility signals, answered once for the whole app.
+ *
+ * Reduced motion is not "no feedback" — colour and opacity still respond, and
+ * only the movement goes. Reduced transparency and increased contrast both make
+ * the floating chrome solid; contrast additionally puts the border back, since
+ * without translucency there is nothing else separating the layer.
+ */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .materialize {
+    animation: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .material {
+    @apply bg-mono-50 dark:bg-mono-950;
+    backdrop-filter: none;
+  }
+
+  .material::after {
+    display: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .material {
+    @apply border-b border-mono-900 bg-mono-50 dark:border-mono-50 dark:bg-mono-950;
+    backdrop-filter: none;
+  }
+
+  .material::after {
+    display: none;
+  }
 }

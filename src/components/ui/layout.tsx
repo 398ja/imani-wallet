@@ -20,11 +20,14 @@ export function Screen({ children }: { children: React.ReactNode }) {
  *
  * Always an explicit destination, never `navigate(-1)`, so a screen reached by
  * deep link still goes somewhere sensible. The label names the parent — the
- * convention `/merchants/:pubkey` already set with its "Shops" back link.
+ * convention `/merchants/:pubkey` already set with its "Merchants" back link.
  */
 export function BackLink({ to, label }: { to: string; label: string }) {
   return (
-    <Link to={to} className="mb-4 flex items-center gap-1 text-sm text-mono-500">
+    <Link
+      to={to}
+      className="pressable -m-2 mb-2 inline-flex items-center gap-1 p-2 text-sm text-mono-500"
+    >
       <ArrowLeft className="h-4 w-4" /> {label}
     </Link>
   )
@@ -83,7 +86,10 @@ export function ListSection({
 /** "See all (12)" — the link out of a capped list. */
 export function SeeAll({ to, count }: { to: string; count: number }) {
   return (
-    <Link to={to} className="text-sm text-mono-500 hover:text-mono-900 dark:hover:text-mono-50">
+    <Link
+      to={to}
+      className="pressable text-sm text-mono-500 hover:text-mono-900 dark:hover:text-mono-50"
+    >
       See all ({count})
     </Link>
   )
@@ -135,7 +141,7 @@ export function RawDetails({ entries }: { entries: Array<[string, React.ReactNod
 
   return (
     <details className="mb-6">
-      <summary className="cursor-pointer text-sm text-mono-500">Details</summary>
+      <summary className="pressable inline-block cursor-pointer py-1 text-sm text-mono-500">Details</summary>
       <div className="mt-2 divide-y divide-mono-200 overflow-hidden rounded-2xl border border-mono-200 dark:divide-mono-800 dark:border-mono-800">
         {entries.map(([label, value]) => (
           // Strings are record fields — ids, hashes — and keep the monospace

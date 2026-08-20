@@ -131,7 +131,10 @@ function StrengthBar({ strength }: { strength: Strength }) {
   return (
     <div className="mt-2 flex items-center gap-2">
       <div className="h-1 flex-1 overflow-hidden rounded-full bg-mono-200 dark:bg-mono-800">
-        <div className={`h-full transition-all ${className}`} style={{ width }} />
+        <div
+          className={`h-full transition-all duration-200 ease-out motion-reduce:transition-none ${className}`}
+          style={{ width }}
+        />
       </div>
       <span className="text-xs capitalize text-mono-500">{strength}</span>
     </div>

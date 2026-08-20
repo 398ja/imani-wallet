@@ -50,7 +50,7 @@ export function BackupPage({ profile }: { profile: Profile }) {
       <p className="text-sm text-mono-500">
         A backup file will not help if you forget your passphrase. For that you need your backup key,
         under{' '}
-        <Link to="/settings/security" className="underline hover:text-mono-900 dark:hover:text-mono-50">
+        <Link to="/settings/security" className="pressable underline hover:text-mono-900 dark:hover:text-mono-50">
           Security
         </Link>
         .
@@ -150,7 +150,7 @@ export function RestorePage({ onUnlock }: { onUnlock: (privkeyHex: string) => Pr
       {error && <Alert>{error}</Alert>}
 
       <p className="text-center text-sm text-mono-500">
-        <Link to="/onboarding" className="underline hover:text-mono-900 dark:hover:text-mono-50">
+        <Link to="/onboarding" className="pressable underline hover:text-mono-900 dark:hover:text-mono-50">
           Back
         </Link>
       </p>

@@ -203,7 +203,7 @@ function barcode(voucherId: string): Barcode {
 function organizationName(row: VoucherRow, branding: MerchantBranding): string {
   if (present(branding.organizationName)) return branding.organizationName
   if (present(row.issuer_id)) return row.issuer_id
-  return 'Unknown shop'
+  return 'Unknown merchant'
 }
 
 /**

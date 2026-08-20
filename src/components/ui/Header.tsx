@@ -16,7 +16,8 @@ import { profileName, type Profile } from '../../lib/profile'
  * keyboard activation for free, all of which bottin hand-rolled and only
  * partially got (its dropdown needs a document-level click listener and still
  * cannot be closed with a key). The one thing <details> does not do is close on
- * an outside click, which is the blur handler below.
+ * an outside click, which is the blur handler below. It also cannot animate
+ * its own close, so the menu materialises on open and closes instantly.
  */
 export function Header({
   profile,
@@ -33,7 +34,7 @@ export function Header({
   const close = () => menu.current?.removeAttribute('open')
 
   return (
-    <header className="sticky top-0 z-10 border-b border-mono-200 bg-mono-50/90 backdrop-blur dark:border-mono-800 dark:bg-mono-950/90">
+    <header className="material sticky top-0 z-10">
       <div className="mx-auto flex max-w-md items-center gap-3 p-4">
         <details
           ref={menu}
@@ -46,18 +47,18 @@ export function Header({
           }}
         >
           <summary
-            className="flex cursor-pointer list-none items-center rounded-full outline-none ring-mono-400 focus-visible:ring-2 [&::-webkit-details-marker]:hidden"
+            className="pressable flex cursor-pointer list-none items-center rounded-full outline-none ring-mono-400 focus-visible:ring-2 [&::-webkit-details-marker]:hidden"
             aria-label="Account menu"
           >
             <Avatar src={profile.picture} name={profileName(profile)} pubkey={profile.pubkey} size="sm" />
           </summary>
 
-          <nav className="absolute left-0 top-full mt-2 min-w-44 overflow-hidden rounded-2xl border border-mono-200 bg-white shadow-lg dark:border-mono-800 dark:bg-mono-900">
+          <nav className="materialize absolute left-0 top-full mt-2 min-w-44 origin-top-left overflow-hidden rounded-2xl border border-mono-200 bg-white shadow-lg dark:border-mono-800 dark:bg-mono-900">
             <MenuLink to="/profile" onClick={close}>
               Profile
             </MenuLink>
             {/* Merchants only: there is nothing to count for a customer, whose
-                own history already lives on the shop screens. */}
+                own history already lives on the merchant screens. */}
             {merchant && (
               <MenuLink to="/merchant/stats" onClick={close}>
                 Stats
@@ -72,7 +73,7 @@ export function Header({
                 close()
                 onLogout()
               }}
-              className="block w-full px-4 py-3 text-left text-sm text-red-600 transition-colors hover:bg-mono-100 dark:text-red-400 dark:hover:bg-mono-800"
+              className="press-row block w-full px-4 py-3 text-left text-sm text-red-600 dark:text-red-400"
             >
               Log out
             </button>
@@ -85,7 +86,7 @@ export function Header({
         <Link
           to="/"
           aria-label="Imani home"
-          className="flex min-w-0 flex-1 items-center justify-end gap-2 font-semibold tracking-tight text-mono-900 dark:text-mono-50"
+          className="pressable flex min-w-0 flex-1 items-center justify-end gap-2 font-semibold tracking-tight text-mono-900 dark:text-mono-50"
         >
           <svg viewBox="0 0 48 48" className="h-5 w-5 shrink-0" aria-hidden="true" focusable="false">
             <path
@@ -114,7 +115,7 @@ function MenuLink({
     <Link
       to={to}
       onClick={onClick}
-      className="block px-4 py-3 text-sm text-mono-900 transition-colors hover:bg-mono-100 dark:text-mono-50 dark:hover:bg-mono-800"
+      className="press-row block px-4 py-3 text-sm text-mono-900 dark:text-mono-50"
     >
       {children}
     </Link>

@@ -73,7 +73,7 @@ export function WelcomePage({
             type="button"
             onClick={() => setRevealed((r) => !r)}
             aria-label={revealed ? 'Hide key' : 'Show key'}
-            className="shrink-0 rounded-xl border border-mono-200 p-2 text-mono-500 hover:bg-mono-100 dark:border-mono-700 dark:hover:bg-mono-800"
+            className="pressable shrink-0 rounded-xl border border-mono-200 p-2 text-mono-500 hover:bg-mono-100 dark:border-mono-700 dark:hover:bg-mono-800"
           >
             {revealed ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
           </button>

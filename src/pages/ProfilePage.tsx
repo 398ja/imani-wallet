@@ -50,7 +50,7 @@ export function ProfilePage({ profile }: { profile: Profile }) {
             // noreferrer as well as noopener: the target must not be handed
             // window.opener, nor the URL of the wallet screen it came from.
             rel="noopener noreferrer"
-            className="break-all text-sm text-mono-500 underline hover:text-mono-900 dark:hover:text-mono-50"
+            className="pressable break-all text-sm text-mono-500 underline hover:text-mono-900 dark:hover:text-mono-50"
           >
             {profile.website}
           </a>

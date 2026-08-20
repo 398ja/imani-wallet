@@ -49,7 +49,7 @@ export function OnboardingPage({ onUnlock }: { onUnlock: (privkeyHex: string) =>
       <div className="text-center">
         <h1 className="text-2xl font-semibold text-mono-900 dark:text-mono-50">Voucher wallet</h1>
         {step === 'start' && (
-          <p className="mt-1 text-sm text-mono-500">Vouchers for the shops you actually go to.</p>
+          <p className="mt-1 text-sm text-mono-500">Vouchers for the merchants you actually go to.</p>
         )}
       </div>
 
@@ -72,7 +72,7 @@ export function OnboardingPage({ onUnlock }: { onUnlock: (privkeyHex: string) =>
               to /login on its own. */}
           <p className="pt-2 text-center text-sm text-mono-500">
             Already set up on this device?{' '}
-            <Link to="/login" className="underline hover:text-mono-900 dark:hover:text-mono-50">
+            <Link to="/login" className="pressable underline hover:text-mono-900 dark:hover:text-mono-50">
               Unlock
             </Link>
           </p>
@@ -196,7 +196,7 @@ function CreateForm({
     return (
       <div className="space-y-4">
         <div>
-          <h2 className="text-lg font-semibold text-mono-900 dark:text-mono-50">Your shop</h2>
+          <h2 className="text-lg font-semibold text-mono-900 dark:text-mono-50">Your business</h2>
           {/* No longer mentions currency — that moved to settings, along with
               where you trade. Both have sensible defaults, so neither is worth a
               question while someone is setting up at a market stall. */}
@@ -331,7 +331,10 @@ function StrengthBar({ strength }: { strength: Strength }) {
   return (
     <div className="mt-2 flex items-center gap-2">
       <div className="h-1 flex-1 overflow-hidden rounded-full bg-mono-200 dark:bg-mono-800">
-        <div className={`h-full transition-all ${className}`} style={{ width }} />
+        <div
+          className={`h-full transition-all duration-200 ease-out motion-reduce:transition-none ${className}`}
+          style={{ width }}
+        />
       </div>
       <span className="text-xs capitalize text-mono-500">{strength}</span>
     </div>

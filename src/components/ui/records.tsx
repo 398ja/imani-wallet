@@ -27,7 +27,7 @@ export function CouponListItem({ row }: { row: VoucherRow }) {
   return (
     <Link
       to={`/coupon/${encodeURIComponent(row.token_id)}`}
-      className={`flex items-center gap-3 p-4 transition-colors hover:bg-mono-100 dark:hover:bg-mono-900 ${
+      className={`flex items-center gap-3 p-4 press-row ${
         redeemed ? 'opacity-60' : ''
       }`}
     >
@@ -65,7 +65,7 @@ export function TransactionListItem({ tx }: { tx: WalletTransaction }) {
   return (
     <Link
       to={`/transaction/${encodeURIComponent(tx.id)}`}
-      className="flex items-center gap-3 p-4 transition-colors hover:bg-mono-100 dark:hover:bg-mono-900"
+      className="flex items-center gap-3 p-4 press-row"
     >
       <Arrow className={`h-4 w-4 shrink-0 ${outgoing ? 'text-mono-500' : 'text-green-600'}`} />
       <div className="min-w-0 flex-1">

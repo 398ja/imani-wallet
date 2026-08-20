@@ -57,7 +57,7 @@ export function ReceivePage({ profile }: { profile: Profile }) {
   return (
     <Screen>
       <BackLink to="/" label="Back" />
-      <PageHeader title="Receive" subtitle="Show this to the shop." />
+      <PageHeader title="Receive" subtitle="Show this to the merchant." />
 
       {error && <Alert>Could not load your address: {error}</Alert>}
 

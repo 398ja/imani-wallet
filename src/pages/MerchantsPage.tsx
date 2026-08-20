@@ -377,7 +377,7 @@ export function MerchantsPage() {
 
       {merchants?.length === 0 && (
         <p className="rounded-2xl bg-mono-100 p-5 text-center text-sm text-mono-500 dark:bg-mono-900">
-          When a shop sends you vouchers, they show up here.
+          When a merchant sends you vouchers, they show up here.
         </p>
       )}
 
@@ -387,7 +387,7 @@ export function MerchantsPage() {
         than by a truncated pubkey. Swiped through, and tapped to open.
       */}
       {merchants && merchants.length > 0 && (
-        <SwipeDeck label="Shop">
+        <SwipeDeck label="Merchant">
           {merchants.map((merchant) => (
             <div key={merchant.pubkey}>
               <Pass
