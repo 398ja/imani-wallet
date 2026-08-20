@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <!--
+    The imani mark, the same single evenodd path the header lockup draws — one
+    definition of the shape, so the tab icon and the in-app logo cannot drift.
+
+    A favicon inherits nothing from the page, so the colour is declared here.
+    It follows the browser's theme for the same reason every surface in the app
+    does: a near-black mark disappears into a dark tab strip.
+  -->
+  <style>
+    path { fill: #171717 }
+    @media (prefers-color-scheme: dark) { path { fill: #fafafa } }
+  </style>
+  <path fill="#171717" fill-rule="evenodd" d="M10 2 H24 A8 8 0 0 1 32 10 V24 A8 8 0 0 1 24 32 H10 A8 8 0 0 1 2 24 V10 A8 8 0 0 1 10 2 Z M24 16 H38 A8 8 0 0 1 46 24 V38 A8 8 0 0 1 38 46 H24 A8 8 0 0 1 16 38 V24 A8 8 0 0 1 24 16 Z"/>
+</svg>
