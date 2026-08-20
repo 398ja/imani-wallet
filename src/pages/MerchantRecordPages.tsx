@@ -13,6 +13,7 @@ import {
   DetailRow,
   RawDetails,
   Centered,
+  IdentityInline,
 } from '../components/ui'
 import { getTransactionRow, listTransactions, onWalletChanged } from '../lib/wallet'
 import { toTransaction, type WalletTransaction } from '../lib/transactions'
@@ -161,10 +162,6 @@ export function IssuedCouponPage() {
     return onWalletChanged(load)
   }, [voucherId])
 
-  // Before the early returns — hooks cannot be conditional. Undefined until the
-  // row loads, which the hook handles.
-  const customer = useIdentity(state?.tx?.counterparty)
-
   if (state === undefined) return <Centered>Loading…</Centered>
   if (state.tx === null) return <Centered>No record of this voucher.</Centered>
 
@@ -194,17 +191,17 @@ export function IssuedCouponPage() {
             // Kept even when absent, unlike the rest: "expires 3 Sep" and "never
             // expires" are different facts, and a missing row reads as the second.
             ['Expires', formatDate(tx.expiresAt) || 'No expiry'],
-            // Who they are, not their key. The key itself is one tap away in
-            // the raw details below, where a merchant chasing a specific
-            // customer can still find it.
-            ['Customer', tx.counterparty && identityLabel(tx.counterparty, customer)],
+            // Who they are, not their key: face, name, handle. The key itself
+            // is one tap away in the raw details below, where a merchant
+            // chasing a specific customer can still find it.
+            ['Customer', tx.counterparty ? <IdentityInline pubkey={tx.counterparty} /> : undefined],
             ['Voucher id', tx.voucherId],
             // The link back to the movement, in the record itself rather than
             // only in the nav — this is the pairing the two screens are built on.
             ['Transaction id', tx.id],
-          ] as Array<[string, string | undefined]>
+          ] as Array<[string, React.ReactNode]>
         )
-          .filter((e): e is [string, string] => Boolean(e[1]))
+          .filter((e): e is [string, React.ReactNode] => Boolean(e[1]))
           .map(([label, value]) => (
             <DetailRow key={label} label={label} value={value} />
           ))}

@@ -90,11 +90,22 @@ export function SeeAll({ to, count }: { to: string; count: number }) {
 }
 
 /** Label left, value right. */
-export function DetailRow({ label, value }: { label: string; value: string }) {
+export function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex items-baseline justify-between gap-4 p-4">
+    // Same split as RawDetails: a string is a field and gets the field
+    // treatment, anything else renders itself — which is how a person appears
+    // as a person rather than as the name of one.
+    <div
+      className={`flex justify-between gap-4 p-4 ${
+        typeof value === 'string' ? 'items-baseline' : 'items-center'
+      }`}
+    >
       <span className="shrink-0 text-sm text-mono-500">{label}</span>
-      <span className="min-w-0 break-all text-right text-mono-900 dark:text-mono-50">{value}</span>
+      {typeof value === 'string' ? (
+        <span className="min-w-0 break-all text-right text-mono-900 dark:text-mono-50">{value}</span>
+      ) : (
+        value
+      )}
     </div>
   )
 }
