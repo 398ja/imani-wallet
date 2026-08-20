@@ -233,7 +233,7 @@ function IssuedCouponRow({ tx, now }: { tx: WalletTransaction; now: number }) {
   return (
     <Link
       to={`/transaction/${encodeURIComponent(tx.id)}`}
-      className="flex items-center gap-3 p-4 transition-colors hover:bg-mono-100 dark:hover:bg-mono-900"
+      className="flex items-center gap-3 p-4 press-row"
     >
       <Clock className={`h-4 w-4 shrink-0 ${expired ? 'text-red-500' : 'text-mono-400'}`} />
       <div className="min-w-0 flex-1">

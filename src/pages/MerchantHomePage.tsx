@@ -118,7 +118,7 @@ export function MerchantHomePage({
       <div className="mt-3 text-right">
         <Link
           to="/merchant/transactions"
-          className="text-sm text-mono-500 hover:text-mono-900 dark:hover:text-mono-50"
+          className="pressable text-sm text-mono-500 hover:text-mono-900 dark:hover:text-mono-50"
         >
           All transactions
         </Link>
@@ -136,7 +136,7 @@ export function MerchantHomePage({
               <Link
                 key={tx.id}
                 to={`/merchant/coupon/${encodeURIComponent(tx.voucherId ?? '')}`}
-                className="flex items-center gap-3 p-4 transition-colors hover:bg-mono-100 dark:hover:bg-mono-900"
+                className="flex items-center gap-3 p-4 press-row"
               >
                 <Clock className="h-4 w-4 shrink-0 text-red-500" />
                 <div className="min-w-0 flex-1">

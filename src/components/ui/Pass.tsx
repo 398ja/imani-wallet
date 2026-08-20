@@ -183,7 +183,7 @@ export function Pass({ pass, to }: PassProps) {
   return (
     <Link
       to={to}
-      className="block transition duration-100 ease-out hover:opacity-90 active:scale-[0.98] active:opacity-90 motion-reduce:transition-opacity motion-reduce:active:scale-100"
+      className="pressable block hover:opacity-90"
     >
       {card}
     </Link>

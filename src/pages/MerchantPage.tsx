@@ -57,7 +57,7 @@ export function MerchantPage() {
   }, [pubkey])
 
   if (merchant === undefined) return <Centered>Loading…</Centered>
-  if (merchant === null) return <Centered>No vouchers from this shop.</Centered>
+  if (merchant === null) return <Centered>No vouchers from this merchant.</Centered>
 
   return (
     <Screen>

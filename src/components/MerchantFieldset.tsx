@@ -75,7 +75,7 @@ export function MerchantFieldset({
                 onClick={() => toggleCategory(category)}
                 disabled={disabled}
                 aria-pressed={active}
-                className={`rounded-full border px-3 py-1.5 text-sm capitalize transition-colors disabled:opacity-50 ${
+                className={`pressable rounded-full border px-3 py-1.5 text-sm capitalize disabled:opacity-50 ${
                   active
                     ? 'border-mono-900 bg-mono-900 text-mono-50 dark:border-mono-50 dark:bg-mono-50 dark:text-mono-900'
                     : 'border-mono-200 text-mono-600 hover:bg-mono-100 dark:border-mono-800 dark:text-mono-300 dark:hover:bg-mono-900'
@@ -105,7 +105,7 @@ export function MerchantFieldset({
           htmlFor="store-description"
           className="mb-1.5 block text-sm font-medium text-mono-700 dark:text-mono-300"
         >
-          About your shop
+          About your business
         </label>
         <textarea
           id="store-description"
@@ -163,7 +163,7 @@ export function MerchantFieldset({
                     onClick={() => set('voucherValidityDays', days)}
                     disabled={disabled}
                     aria-pressed={active}
-                    className={`rounded-2xl border py-2.5 text-sm font-medium transition-colors disabled:opacity-50 ${
+                    className={`pressable rounded-2xl border py-2.5 text-sm font-medium disabled:opacity-50 ${
                       active
                         ? 'border-mono-900 bg-mono-900 text-mono-50 dark:border-mono-50 dark:bg-mono-50 dark:text-mono-900'
                         : 'border-mono-200 text-mono-600 hover:bg-mono-100 dark:border-mono-800 dark:text-mono-300 dark:hover:bg-mono-900'

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, CheckCircle2 } from 'lucide-react'
+import { CheckCircle2 } from 'lucide-react'
 import { getDecimals } from '@imani/money'
 
 import { listVouchers } from '../lib/wallet'
@@ -9,7 +9,16 @@ import { formatFace } from '../lib/format'
 import { identityLabel, useIdentity } from '../lib/identity'
 import { payRequest, splitObstacle } from '../lib/pay'
 import type { NUT18VRequest } from '../lib/nap'
-import { Button, Centered, Fatal, Alert, IdentityInline } from '../components/ui'
+import {
+  Button,
+  Centered,
+  Fatal,
+  Alert,
+  IdentityInline,
+  Screen,
+  BackLink,
+  Panel,
+} from '../components/ui'
 
 type Status =
   | { step: 'review' }
@@ -119,13 +128,8 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   }
 
   return (
-    <div className="mx-auto max-w-md p-5">
-      <button
-        onClick={() => navigate('/')}
-        className="mb-4 flex items-center gap-1 text-sm text-mono-500"
-      >
-        <ArrowLeft className="h-4 w-4" /> Cancel
-      </button>
+    <Screen>
+      <BackLink to="/" label="Cancel" />
 
       <h1 className="mb-1 text-xl font-semibold text-mono-900 dark:text-mono-50">
         Confirm payment
@@ -143,8 +147,8 @@ export function PayPage({ pubkey }: { pubkey: string }) {
         />
       </div>
 
-      <div className="mb-6 rounded-2xl border border-mono-200 p-5 dark:border-mono-800">
-        <p className="text-3xl font-semibold text-mono-900 dark:text-mono-50">
+      <Panel className="mb-6 p-5">
+        <p className="text-amount text-mono-900 dark:text-mono-50">
           {formatFace(request.amount, denom)}
         </p>
         {request.description && (
@@ -154,14 +158,14 @@ export function PayPage({ pubkey }: { pubkey: string }) {
           <Row label="Your balance" value={formatFace(available, denom)} />
           <Row label="Vouchers held" value={String(group?.voucherCount ?? 0)} />
         </dl>
-      </div>
+      </Panel>
 
       {expired && <Alert>This payment request has expired.</Alert>}
       {!expired && !merchant && (
-        <Alert>You have no vouchers from this shop.</Alert>
+        <Alert>You have no vouchers from this merchant.</Alert>
       )}
       {!expired && merchant && !group && (
-        <Alert>You have no coupons from this shop in {request.unit}.</Alert>
+        <Alert>You have no vouchers from this merchant in {request.unit}.</Alert>
       )}
       {!expired && group && shortfall > 0 && (
         <Alert>Short by {formatFace(shortfall, denom)}.</Alert>
@@ -191,7 +195,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
       >
         {status.step === 'paying' ? 'Paying…' : 'Pay'}
       </Button>
-    </div>
+    </Screen>
   )
 }
 

@@ -111,10 +111,10 @@ export function LoginPage({ onUnlock }: { onUnlock: (privkeyHex: string) => Prom
       {error && <Alert>{error}</Alert>}
 
       <div className="flex justify-center gap-4 text-sm text-mono-500">
-        <Link to="/onboarding" className="underline hover:text-mono-900 dark:hover:text-mono-50">
+        <Link to="/onboarding" className="pressable underline hover:text-mono-900 dark:hover:text-mono-50">
           Use a different account
         </Link>
-        <Link to="/restore" className="underline hover:text-mono-900 dark:hover:text-mono-50">
+        <Link to="/restore" className="pressable underline hover:text-mono-900 dark:hover:text-mono-50">
           Restore from backup
         </Link>
       </div>

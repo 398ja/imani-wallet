@@ -135,7 +135,7 @@ export function buildPaymentTransaction(input: {
     counterparty: input.merchantId,
     voucherId: input.voucherId,
     tokenId: input.tokenId,
-    memo: input.memo || 'Payment to shop',
+    memo: input.memo || 'Payment to merchant',
   } as unknown as TransactionRow
 }
 

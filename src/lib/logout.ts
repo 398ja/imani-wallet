@@ -30,7 +30,7 @@ import { wipeWallet } from './wallet'
  */
 export const LOGOUT_WARNING =
   'This erases your key AND all your data from this browser.\n\n' +
-  'Your account, your shop and your sales come back when you log in with your ' +
+  'Your account, your business and your sales come back when you log in with your ' +
   'backup key (nsec) — they are stored under your key, not on this device. ' +
   'Vouchers you are holding are restored from the relay as they are received ' +
   'again.\n\nThe only way back in is your backup key or a backup file from ' +

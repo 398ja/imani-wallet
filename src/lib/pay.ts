@@ -626,7 +626,7 @@ export async function payRequest({
     // Says why, not just that it failed — "cannot be split below 25" is
     // actionable in a way that "no coupon covers 10" is not.
     throw new Error(
-      splitObstacle(mine, request.amount) ?? 'You have no voucher from this shop for that amount.',
+      splitObstacle(mine, request.amount) ?? 'You have no voucher from this merchant for that amount.',
     )
   }
 
@@ -663,7 +663,7 @@ export async function payRequest({
 
   if (!initiated || !voucher || !sourceRow) {
     throw new Error(
-      `Every voucher from this shop is tied up in an unfinished send. ${lastRefusal?.message ?? ''}`.trim(),
+      `Every voucher from this merchant is tied up in an unfinished send. ${lastRefusal?.message ?? ''}`.trim(),
     )
   }
 
@@ -717,7 +717,7 @@ export async function payRequest({
     throw new Error(
       `This payment is still going through at the gateway (send ${sendId}, ` +
         `${status.status ?? 'no status'}). It has NOT failed and your voucher is ` +
-        `unchanged here — check the shop's history again in a moment before retrying.`,
+        `unchanged here — check the merchant's history again in a moment before retrying.`,
     )
   }
 

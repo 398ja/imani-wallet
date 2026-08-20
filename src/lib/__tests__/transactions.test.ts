@@ -147,7 +147,7 @@ describe('buildPaymentTransaction', () => {
       merchantId: merchant,
       at: 1,
     })
-    expect(toTransaction(noMemo).memo).toBe('Payment to shop')
+    expect(toTransaction(noMemo).memo).toBe('Payment to merchant')
   })
 })
 
