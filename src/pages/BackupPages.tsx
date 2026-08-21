@@ -43,7 +43,7 @@ export function BackupPage({ profile }: { profile: Profile }) {
           <Download className="h-4 w-4" />
           <span className="ml-2">Download backup file</span>
         </Button>
-        {done && <p className="mt-2 text-sm text-green-600">Backup downloaded.</p>}
+        {done && <p className="mt-2 text-sm text-green-700 dark:text-green-500">Backup downloaded.</p>}
         {error && <Alert>{error}</Alert>}
       </Panel>
 

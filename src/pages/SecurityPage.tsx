@@ -112,7 +112,7 @@ function ChangePassphrase() {
         <Button className="w-full" disabled={busy || !complete} onClick={() => void change()}>
           {busy ? 'Changing…' : 'Change passphrase'}
         </Button>
-        {done && <p className="text-sm text-green-600">Passphrase changed.</p>}
+        {done && <p className="text-sm text-green-700 dark:text-green-500">Passphrase changed.</p>}
         {error && <Alert>{error}</Alert>}
       </div>
     </ListSection>
