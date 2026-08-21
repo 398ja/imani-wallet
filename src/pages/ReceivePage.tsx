@@ -3,6 +3,7 @@ import QRCode from 'qrcode'
 import { nip19 } from 'nostr-tools'
 
 import { Screen, BackLink, PageHeader, Alert } from '../components/ui'
+import { handleLabel } from '../lib/format'
 import type { Profile } from '../lib/profile'
 
 /**
@@ -73,13 +74,23 @@ export function ReceivePage({ profile }: { profile: Profile }) {
               {profile.displayName}
             </p>
           )}
-          {/* Monospace only when it is the npub: a handle is a word, not a key. */}
+          {/*
+            The label is `@song`; the QR above still carries the full
+            `song@domain`. They differ deliberately — the merchant's scanner
+            resolves the address by fetching the domain, so the machine-readable
+            side needs both halves, while the half a person reads back across a
+            stall is the one that is theirs.
+
+            Monospace only when it is the npub: a handle is a word, not a key.
+          */}
           <p
-            className={`break-all text-center text-sm text-mono-500 ${
-              profile.nip05 ? '' : 'font-mono'
+            className={`break-all text-center text-sm ${
+              profile.nip05
+                ? 'text-mono-900 dark:text-mono-50'
+                : 'font-mono text-mono-500'
             }`}
           >
-            {code}
+            {profile.nip05 ? handleLabel(profile.nip05) : code}
           </p>
         </div>
       )}

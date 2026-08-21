@@ -5,6 +5,7 @@ import { Download } from 'lucide-react'
 import { Screen, BackLink, PageHeader, Panel, Button, Input, Alert } from '../components/ui'
 import { applyBackup, backupFilename, createBackup, parseBackup, type ParsedBackup } from '../lib/backup'
 import { downloadText } from '../lib/download'
+import { handleLabel } from '../lib/format'
 import { keyStore } from '../lib/nap'
 import type { Profile } from '../lib/profile'
 
@@ -85,7 +86,8 @@ export function RestorePage({ onUnlock }: { onUnlock: (privkeyHex: string) => Pr
     try {
       const backup = parseBackup(await file.text())
       setParsed(backup)
-      setLoaded(backup.profile?.nip05 ?? backup.profile?.displayName ?? file.name)
+      const nip05 = backup.profile?.nip05
+      setLoaded((nip05 && handleLabel(nip05)) ?? backup.profile?.displayName ?? file.name)
     } catch (e) {
       setParsed(null)
       setLoaded(null)

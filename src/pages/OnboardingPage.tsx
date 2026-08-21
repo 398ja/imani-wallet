@@ -324,7 +324,7 @@ function CreateForm({
           ) : availability === 'free' ? (
             <span className="text-green-700 dark:text-green-500">Looks available.</span>
           ) : domain ? (
-            `You will be ${handle || 'your-handle'}@${domain}`
+            `You will be @${handle || 'your-handle'}`
           ) : (
             ' '
           )}

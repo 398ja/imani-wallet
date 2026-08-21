@@ -5,6 +5,7 @@ import { hexToBytes } from '@noble/hashes/utils'
 
 import { Avatar, Button, Input, Alert, Centered } from '../components/ui'
 import { keyStore, hasStoredKey } from '../lib/nap'
+import { handleLabel } from '../lib/format'
 import { loadProfile, profileName, refreshProfile, type Profile } from '../lib/profile'
 
 /**
@@ -79,7 +80,9 @@ export function LoginPage({ onUnlock }: { onUnlock: (privkeyHex: string) => Prom
           <h1 className="text-xl font-semibold text-mono-900 dark:text-mono-50">
             {profile ? profileName(profile) : 'Welcome back'}
           </h1>
-          {profile?.nip05 && <p className="font-mono text-sm text-mono-500">{profile.nip05}</p>}
+          {profile?.nip05 && (
+            <p className="text-sm text-mono-900 dark:text-mono-50">{handleLabel(profile.nip05)}</p>
+          )}
         </div>
       </div>
 

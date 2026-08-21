@@ -1,6 +1,7 @@
 import { nip19, type EventTemplate } from 'nostr-tools'
 
 import { fetchNewestKind0, imageUrl, str } from './branding'
+import { handleLabel } from './format'
 
 /**
  * The current user's own profile.
@@ -120,7 +121,25 @@ export function emptyProfile(pubkey: string): Profile {
  * derive initials from.
  */
 export function profileName(profile: Profile): string {
-  return profile.displayName ?? profile.nip05 ?? `${profile.npub.slice(0, 10)}…`
+  const nip05 = profile.nip05
+  return profile.displayName ?? (nip05 ? handleLabel(nip05) : undefined) ?? `${profile.npub.slice(0, 10)}…`
+}
+
+/**
+ * The line UNDER a profile's name, or nothing.
+ *
+ * Absent when `profileName` is ALREADY the handle, for the reason
+ * `identitySubLabel` gives: nobody needs it twice. That is what the displayName
+ * check is — not a check that a name exists, but the fallback chain above read
+ * backwards.
+ *
+ * Receive deliberately does not use this: the heading there is "Receive", so the
+ * handle is the only identity on the screen and has to render either way. It
+ * calls `handleLabel` directly.
+ */
+export function profileHandle(profile: Profile): string | undefined {
+  if (!profile.displayName || !profile.nip05) return undefined
+  return handleLabel(profile.nip05)
 }
 
 /**

@@ -90,6 +90,24 @@ export function parseAmountToMinor(input: string, decimals: number): number | nu
   return Math.round(value * 10 ** decimals)
 }
 
+/**
+ * A NIP-05 as it is READ: `@song`, the local part with the domain dropped.
+ *
+ * Every account on a deployment shares the domain, so it is the half that
+ * identifies nobody, and `song@staging.398ja.xyz` under a name reads as an email
+ * address rather than as who you are. This is the one form the wallet shows,
+ * everywhere it names a person.
+ *
+ * Display ONLY, and the one exception proves it: the Receive QR encodes the full
+ * `name@domain` under a label rendered by this function, because resolution is a
+ * fetch against the domain and the local part alone addresses nobody. Anything
+ * machine-readable — `toRecipientPubkey`, the claim request, the stored kind-0 —
+ * keeps both halves.
+ */
+export function handleLabel(nip05: string): string {
+  return `@${nip05.split('@')[0]}`
+}
+
 /** Short form of a pubkey for display. */
 export function shortPubkey(pubkey: string): string {
   return pubkey.length > 16 ? `${pubkey.slice(0, 8)}…${pubkey.slice(-4)}` : pubkey

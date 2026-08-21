@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import { merchantBranding } from './branding'
-import { shortPubkey } from './format'
+import { handleLabel, shortPubkey } from './format'
 
 /**
  * Who a pubkey is, in words a customer can read.
@@ -31,7 +31,8 @@ export interface Identity {
  * worse than an ugly answer.
  */
 export function identityLabel(pubkey: string, identity: Identity | undefined): string {
-  return humanName(identity?.name) ?? identity?.nip05 ?? shortPubkey(pubkey)
+  const nip05 = identity?.nip05
+  return humanName(identity?.name) ?? (nip05 ? handleLabel(nip05) : undefined) ?? shortPubkey(pubkey)
 }
 
 /**
@@ -55,7 +56,7 @@ function humanName(name: string | undefined): string | undefined {
  * record screens' raw-details drawer for anyone who needs it.
  */
 export function identitySubLabel(identity: Identity | undefined): string | undefined {
-  return humanName(identity?.name) && identity?.nip05 ? identity.nip05 : undefined
+  return humanName(identity?.name) && identity?.nip05 ? handleLabel(identity.nip05) : undefined
 }
 
 /**

@@ -4,6 +4,7 @@ import {
   buildProfileEvent,
   emptyProfile,
   mergeKind0,
+  profileHandle,
   profileName,
   refreshProfile,
   saveProfile,
@@ -33,12 +34,29 @@ describe('emptyProfile', () => {
 describe('profileName', () => {
   it('prefers the display name, then the handle, then a short npub', () => {
     expect(profileName(base({ displayName: 'Alice', nip05: 'alice@imani.local' }))).toBe('Alice')
-    expect(profileName(base({ nip05: 'alice@imani.local' }))).toBe('alice@imani.local')
+    expect(profileName(base({ nip05: 'alice@imani.local' }))).toBe('@alice')
     expect(profileName(base())).toBe('npub1gu50m…')
   })
 
   it('always returns something — Avatar derives initials from it', () => {
     expect(profileName(base())).not.toBe('')
+  })
+})
+
+describe('profileHandle', () => {
+  it('is the local part, prefixed', () => {
+    expect(profileHandle(base({ displayName: 'Alice', nip05: 'song@staging.398ja.xyz' }))).toBe(
+      '@song',
+    )
+  })
+
+  it('is absent when the name above it is already the handle', () => {
+    // No displayName means `profileName` renders the nip-05 itself.
+    expect(profileHandle(base({ nip05: 'song@staging.398ja.xyz' }))).toBeUndefined()
+  })
+
+  it('is absent when there is no handle to show', () => {
+    expect(profileHandle(base({ displayName: 'Alice' }))).toBeUndefined()
   })
 })
 

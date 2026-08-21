@@ -4,6 +4,7 @@ import { Copy, Check, Download, Eye, EyeOff } from 'lucide-react'
 import { Button, Panel } from '../components/ui'
 import type { Profile } from '../lib/profile'
 import { downloadText } from '../lib/download'
+import { handleLabel } from '../lib/format'
 
 /**
  * Save your key. The only screen in the app that cannot be undone by trying
@@ -48,7 +49,9 @@ export function WelcomePage({
       <div className="text-center">
         <h1 className="text-2xl font-semibold text-mono-900 dark:text-mono-50">You are all set</h1>
         {profile.nip05 && (
-          <p className="mt-1 font-mono text-sm text-mono-500">{profile.nip05}</p>
+          <p className="mt-1 text-sm text-mono-900 dark:text-mono-50">
+            {handleLabel(profile.nip05)}
+          </p>
         )}
       </div>
 
