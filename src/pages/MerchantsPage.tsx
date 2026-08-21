@@ -371,7 +371,7 @@ export function MerchantsPage() {
 
       <div className="mb-6 grid grid-cols-2 gap-3">
         <Button size="lg" onClick={() => navigate('/scan')}>
-          <ScanLine className="mr-2 h-5 w-5" /> Pay
+          <ScanLine className="mr-2 h-5 w-5" /> Scan
         </Button>
         <Button size="lg" variant="outline" onClick={() => navigate('/receive')}>
           <QrCode className="mr-2 h-5 w-5" /> Receive

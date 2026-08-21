@@ -382,6 +382,24 @@ describe('withPastMerchants', () => {
       ),
     ).toEqual([PUBKEY_B])
   })
+
+  it('never turns the person a voucher was sent to into a merchant', () => {
+    // A 'sent' row's counterparty is a FRIEND. The fallback above would put them
+    // on the home deck as a merchant, with a merchant page and a coupon list
+    // belonging to nobody. The issuer is what the row is filed under.
+    const merchants = withPastMerchants(
+      [],
+      [tx({ type: 'sent', merchantId: PUBKEY_A, counterparty: PUBKEY_B })],
+    )
+
+    expect(merchants.map((f) => f.pubkey)).toEqual([PUBKEY_A])
+  })
+
+  it('drops a sent row that somehow has no issuer, rather than inventing one', () => {
+    expect(
+      withPastMerchants([], [tx({ type: 'sent', merchantId: undefined, counterparty: PUBKEY_B })]),
+    ).toEqual([])
+  })
 })
 
 describe('findMerchantWithHistory', () => {

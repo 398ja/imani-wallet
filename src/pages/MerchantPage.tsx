@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
+import { Send } from 'lucide-react'
 
 import {
+  Button,
   Screen,
   BackLink,
   ListSection,
@@ -30,6 +32,7 @@ const PREVIEW = 3
  */
 export function MerchantPage() {
   const { pubkey = '' } = useParams()
+  const navigate = useNavigate()
   const [merchant, setMerchant] = useState<Merchant | null | undefined>(undefined)
   const [couponCount, setCouponCount] = useState(0)
   const [transactions, setTransactions] = useState<WalletTransaction[]>([])
@@ -69,6 +72,20 @@ export function MerchantPage() {
           {couponCount === 1 ? '1 voucher' : `${couponCount} vouchers`} · tap to see them
         </p>
       </div>
+
+      {/* The other way into /send: the voucher is already settled by being on
+          this page, so it opens on the recipient rather than on the picker.
+          Hidden with nothing to send — a button that can only refuse is worse
+          than no button. */}
+      {couponCount > 0 && (
+        <Button
+          size="lg"
+          className="mb-6 w-full"
+          onClick={() => navigate(`/send?from=${pubkey}`)}
+        >
+          <Send className="mr-2 h-5 w-5" /> Send a voucher
+        </Button>
+      )}
 
       <ListSection
         title="Transactions"

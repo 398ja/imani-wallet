@@ -4,6 +4,7 @@ import type { VoucherRow } from '@imani/wallet-storage'
 
 import {
   buildSendParams,
+  sendVouchers,
   checkSplittable,
   loadPendingSends,
   minSplitStep,
@@ -21,11 +22,13 @@ const stubs = vi.hoisted(() => ({
   wallet: {} as Record<string, unknown>,
   api: {} as Record<string, unknown>,
   notified: { count: 0 },
+  /** What `listVouchers` answers. Empty unless a test fills it. */
+  rows: [] as unknown[],
 }))
 
 vi.mock('../wallet', () => ({
   getWallet: () => stubs.wallet,
-  listVouchers: async () => [],
+  listVouchers: async () => stubs.rows,
   notifyWalletChanged: () => {
     stubs.notified.count += 1
   },
@@ -567,5 +570,184 @@ describe('payRequest and expiry', () => {
     await expect(
       payRequest({ request: live, raw: 'vreqA…', merchant, payer }),
     ).rejects.toThrow(/Gateway API client is not loaded/)
+  })
+})
+
+
+describe('sendVouchers', () => {
+  const PAYER = 'c'.repeat(64)
+  const FRIEND = 'd'.repeat(64)
+  const ISSUER = 'f'.repeat(64)
+
+  const merchant = { pubkey: ISSUER, name: 'Hill Farm', groups: [], voucherCount: 0 }
+
+  const row = (over: Record<string, unknown> = {}) =>
+    ({
+      token_id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      token: `cashuB${'o'.repeat(30)}`,
+      voucher_id: 'v-1',
+      face_value: 1000,
+      face_unit: 'EUR',
+      face_decimals: 2,
+      token_amount: 1000,
+      amount: 1000,
+      issuer_id: ISSUER,
+      status: 'active',
+      ...over,
+    }) as unknown as VoucherRow
+
+  /** @returns what the fake store ended up holding. */
+  function wallet(rows: VoucherRow[]) {
+    const transactions: Record<string, unknown>[] = []
+    const removed: string[] = []
+    Object.assign(stubs.wallet, {
+      getVoucher: async (id: string) => rows.find((r) => r.token_id === id) ?? null,
+      removeVoucher: async (id: string) => {
+        removed.push(id)
+        return rows.some((r) => r.token_id === id)
+      },
+      saveVoucher: async () => {},
+      addTransaction: async (tx: Record<string, unknown>) => void transactions.push(tx),
+    })
+    return { transactions, removed }
+  }
+
+  /** A gateway that accepts everything and reports the send already complete. */
+  function gateway() {
+    const sent: Array<Record<string, unknown>> = []
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async (params: Record<string, unknown>) => {
+        sent.push(params)
+        return { send_id: `as_${sent.length}`, status: 'COMPLETED' }
+      },
+      getAtomicSendStatus: async () => ({ status: 'COMPLETED' }),
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    return sent
+  }
+
+  beforeEach(() => {
+    stubs.rows = []
+    stubs.notified.count = 0
+  })
+
+  it('refuses to send to yourself', async () => {
+    // Not a no-op: the saga burns the source voucher and hands back an equal
+    // one, costing a round trip and a mint fee to end up where you started.
+    await expect(
+      sendVouchers({
+        payer: PAYER,
+        recipient: { pubkey: PAYER.toUpperCase() },
+        merchant,
+        unit: 'EUR',
+        amount: 500,
+      }),
+    ).rejects.toThrow(/yourself/i)
+  })
+
+  it('sends the amount asked for, to the person, with no payment request', async () => {
+    stubs.rows = [row()]
+    const sent = gateway()
+    wallet([row()])
+
+    await sendVouchers({
+      payer: PAYER,
+      recipient: { pubkey: FRIEND, name: 'Ama' },
+      merchant,
+      unit: 'EUR',
+      amount: 250,
+    })
+
+    // The same invariant `buildSendParams` protects: gateway-core splits for
+    // `faceValue ?? amount`, so the source voucher's 1000 here would send the
+    // whole voucher and return no change.
+    expect(sent[0].faceValue).toBe(250)
+    expect(sent[0].amount).toBe(250)
+    expect(sent[0].recipientPubkey).toBe(FRIEND)
+    // The one thing that makes this a person-to-person send rather than a
+    // redemption.
+    expect(sent[0].paymentRequestId).toBeUndefined()
+  })
+
+  it('records the issuer as the merchant and the recipient as the counterparty', async () => {
+    stubs.rows = [row()]
+    gateway()
+    const { transactions } = wallet([row()])
+
+    await sendVouchers({
+      payer: PAYER,
+      recipient: { pubkey: FRIEND, name: 'Ama' },
+      merchant,
+      unit: 'EUR',
+      amount: 250,
+    })
+
+    const tx = transactions[0]
+    expect(tx.type).toBe('sent')
+    expect(tx.direction).toBe('out')
+    // The split that keeps a friend off the home deck: `withPastMerchants` turns
+    // a transaction counterparty into a merchant card, so the ISSUER goes in
+    // `merchantId` and the friend in `counterparty`.
+    expect(tx.merchantId).toBe(ISSUER)
+    expect(tx.counterparty).toBe(FRIEND)
+    expect(tx.recipientName).toBe('Ama')
+  })
+
+  it('will not spend a voucher in another currency', async () => {
+    // A voucher cannot be split across units, so a merchant selling in two of
+    // them holds two separate balances. Without the filter, "5.00" typed against
+    // the EUR balance goes out as 5 SAT from whichever voucher sorts first.
+    stubs.rows = [row({ face_unit: 'SAT', face_decimals: 0, face_value: 5000 })]
+    const sent = gateway()
+    wallet([])
+
+    await expect(
+      sendVouchers({
+        payer: PAYER,
+        recipient: { pubkey: FRIEND },
+        merchant,
+        unit: 'EUR',
+        amount: 250,
+      }),
+    ).rejects.toThrow(/no EUR voucher/)
+    expect(sent).toEqual([])
+  })
+
+  it('walks past a voucher whose previous send is still in flight', async () => {
+    // On this stack that state is permanent for any send that failed at DM
+    // delivery, since reclaim is unavailable — one stuck voucher must not block
+    // a wallet holding good ones.
+    const busy = row({ token_id: 'b'.repeat(32), voucher_id: 'v-busy', face_value: 400 })
+    const good = row({ token_id: 'g'.repeat(32), voucher_id: 'v-good', face_value: 600 })
+    stubs.rows = [busy, good]
+    const tried: string[] = []
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async (params: Record<string, unknown>) => {
+        tried.push(String(params.voucherId))
+        if (params.voucherId === 'v-busy') {
+          throw new Error('An active send already exists for voucher v-busy')
+        }
+        return { send_id: 'as_2', status: 'COMPLETED' }
+      },
+      getAtomicSendStatus: async () => ({ status: 'COMPLETED' }),
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    const { transactions } = wallet([busy, good])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await sendVouchers({
+      payer: PAYER,
+      recipient: { pubkey: FRIEND },
+      merchant,
+      unit: 'EUR',
+      amount: 250,
+    })
+
+    // Smallest first, so the busy one is reached before the good one.
+    expect(tried).toEqual(['v-busy', 'v-good'])
+    expect(transactions[0].voucherId).toBe('v-good')
+    warn.mockRestore()
   })
 })

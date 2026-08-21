@@ -159,7 +159,12 @@ export function withPastMerchants(merchants: Merchant[], transactions: WalletTra
   const past = new Map<string, Merchant>()
 
   for (const tx of transactions) {
-    const key = issuerKey(tx.merchantId ?? tx.counterparty)
+    // `counterparty` on a 'sent' row is the PERSON the voucher went to, not its
+    // issuer — falling back to it would put a friend on the home deck as a
+    // merchant, with a merchant page and a coupon list belonging to nobody.
+    // `buildSentTransaction` always writes `merchantId`; this guard is what
+    // makes a row that somehow lacks one drop out instead of inventing one.
+    const key = issuerKey(tx.type === 'sent' ? tx.merchantId : tx.merchantId ?? tx.counterparty)
     // 'unknown' is the grouper's bucket for a coupon with no issuer. A merchant
     // page for it would be a page about several different people.
     if (key === 'unknown' || held.has(key)) continue

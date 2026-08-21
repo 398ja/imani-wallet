@@ -1,41 +1,67 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ClipboardPaste } from 'lucide-react'
 import { PaymentRequestHandler } from 'imani-qr'
 
 import { Button, Screen, BackLink, PageHeader, Alert } from '../components/ui'
+import { toRecipientPubkey } from '../lib/issue'
+import { readClipboard } from '../lib/native'
 
 /**
- * Pay: scan a merchant's voucher payment request QR (NUT-18V, `vreqA…`).
+ * Scan: the one camera for both things a customer points it at.
  *
- * Detection and normalisation come from imani-qr's PaymentRequestHandler, which
- * also accepts the `cashu:` URI form. On a hit we hand off to /pay via the
- * paymentRequest query param — the same paramKey the vanilla app's QR router
- * uses, so both entry points agree and the URL is replayable when debugging.
+ * Two kinds of code exist, and this screen only routes between them:
+ *
+ *  - a merchant's voucher payment request (NUT-18V, `vreqA…`) → `/pay`.
+ *    Detection and normalisation come from imani-qr's PaymentRequestHandler,
+ *    which also accepts the `cashu:` URI form. The `paymentRequest` param is the
+ *    same paramKey the vanilla app's QR router uses, so both entry points agree
+ *    and the URL is replayable when debugging.
+ *  - somebody's address — a NIP-05 handle, npub, or raw hex, which is what the
+ *    `/receive` screen shows → `/send`.
+ *
+ * The payment request is tried first because it is the cheaper answer: a local
+ * string check, where an address costs a round trip to resolve.
  */
 export function ScanPage() {
   const navigate = useNavigate()
   const videoRef = useRef<HTMLVideoElement>(null)
   const [error, setError] = useState<string | null>(null)
+  // A handle costs a round trip to resolve, and the scanner fires several times
+  // a second on the same code — without this the phone opens a dozen identical
+  // lookups while the first is still in flight. A ref, not state: it must be
+  // read and written within one call, before any re-render could deliver it.
+  const resolving = useRef(false)
 
-  const accept = (text: string) => {
-    const handler = new PaymentRequestHandler()
-    if (!handler.validate(text)) {
-      setError('That is not a voucher payment request.')
-      return
-    }
-    navigate(`/pay?paymentRequest=${encodeURIComponent(text.trim())}`)
-  }
+  /** The one router, so a pasted code goes exactly where a scanned one does. */
+  const accept = useCallback(
+    async (text: string) => {
+      if (resolving.current) return
+      resolving.current = true
+      try {
+        if (new PaymentRequestHandler().validate(text)) {
+          navigate(`/pay?paymentRequest=${encodeURIComponent(text.trim())}`)
+          return
+        }
+        const hex = await toRecipientPubkey(text)
+        if (hex) navigate(`/send?to=${hex}`)
+        else setError('That is not a payment request or an account we can find.')
+      } finally {
+        resolving.current = false
+      }
+    },
+    [navigate],
+  )
 
   useEffect(() => {
     let scanner: { start(): Promise<void>; destroy(): void } | undefined
     let cancelled = false
 
-    ;(async () => {
+    void (async () => {
       const { default: QrScanner } = await import('qr-scanner')
       if (cancelled || !videoRef.current) return
 
-      scanner = new QrScanner(videoRef.current, (result) => accept(result.data), {
+      scanner = new QrScanner(videoRef.current, (result) => void accept(result.data), {
         highlightScanRegion: true,
         highlightCodeOutline: true,
       })
@@ -44,8 +70,8 @@ export function ScanPage() {
       } catch (e) {
         setError(
           e instanceof Error
-            ? `Camera unavailable: ${e.message}. Paste the request instead.`
-            : 'Camera unavailable. Paste the request instead.',
+            ? `Camera unavailable: ${e.message}. Paste the code instead.`
+            : 'Camera unavailable. Paste the code instead.',
         )
       }
     })()
@@ -54,31 +80,36 @@ export function ScanPage() {
       cancelled = true
       scanner?.destroy()
     }
-    // accept closes over navigate only, which is stable.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  const paste = async () => {
-    try {
-      accept(await navigator.clipboard.readText())
-    } catch {
-      setError('Could not read the clipboard.')
-    }
-  }
+  }, [accept])
 
   return (
     <Screen>
       <BackLink to="/" label="Back" />
-      <PageHeader title="Scan to pay" />
+      <PageHeader title="Scan" subtitle="A payment request, or someone's code" />
 
       <div className="overflow-hidden rounded-2xl bg-mono-900">
         <video ref={videoRef} className="aspect-square w-full object-cover" />
       </div>
 
-      {error && <div className="mt-3"><Alert>{error}</Alert></div>}
+      {error && (
+        <div className="mt-3">
+          <Alert>{error}</Alert>
+        </div>
+      )}
 
-      <Button variant="outline" className="mt-4 w-full" onClick={paste}>
-        <ClipboardPaste className="mr-2 h-4 w-4" /> Paste request
+      <Button
+        variant="outline"
+        className="mt-4 w-full"
+        onClick={async () => {
+          // `navigator.clipboard.readText()` is not implemented in the Android
+          // WebView, so this button threw on every device it mattered on — and a
+          // camera that will not open is exactly when it matters. See readClipboard.
+          const text = await readClipboard()
+          if (text === null) setError('Could not read the clipboard.')
+          else await accept(text)
+        }}
+      >
+        <ClipboardPaste className="mr-2 h-4 w-4" /> Paste code
       </Button>
     </Screen>
   )
