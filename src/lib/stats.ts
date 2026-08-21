@@ -24,7 +24,17 @@ export interface MerchantStats {
   /** Coupons THIS merchant issued that have come back as payment. */
   redeemedCount: number
   redeemedValue: number
-  /** redeemedCount / issuedCount, 0 when nothing has been issued. */
+  /**
+   * redeemedValue / issuedValue, 0 when nothing has been issued.
+   *
+   * Value, not count: a coupon can come back part-spent, and a merchant asking
+   * "how much of what I put out has been claimed" is asking about money. Ten
+   * 5-euro coupons and one 500-euro coupon are not the same exposure, and a
+   * count would rate them the same.
+   *
+   * Can exceed 1 at the edge of a window, when a coupon issued before `from`
+   * comes back inside it — same reason `active` needs its floor.
+   */
   redemptionRate: number
   /** Issued, not expired, not yet seen coming back. */
   active: number
@@ -82,6 +92,8 @@ export function merchantStats(
   const redeemed = matching.filter((tx) => isOwnRedemption(tx, pubkey))
 
   const sum = (rows: WalletTransaction[]) => rows.reduce((total, tx) => total + tx.amount, 0)
+  const issuedValue = sum(issued)
+  const redeemedValue = sum(redeemed)
 
   // Status counts run over ALL issued coupons, not just the range: "how many of
   // mine are still out there" is not a question about a date window.
@@ -110,10 +122,10 @@ export function merchantStats(
 
   return {
     issuedCount: issued.length,
-    issuedValue: sum(issued),
+    issuedValue,
     redeemedCount: redeemed.length,
-    redeemedValue: sum(redeemed),
-    redemptionRate: issued.length === 0 ? 0 : redeemed.length / issued.length,
+    redeemedValue,
+    redemptionRate: issuedValue === 0 ? 0 : redeemedValue / issuedValue,
     // Never negative: redemptions in range can outnumber issues in range when a
     // coupon issued before the window comes back inside it.
     active: Math.max(0, allIssued.length - expired),
