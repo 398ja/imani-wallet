@@ -94,17 +94,21 @@
 
   /*
    * Floating chrome as a translucent material, with content passing underneath
-   * rather than stopping at an opaque strip.
-   *
-   * The scroll edge is a gradient fade below the surface rather than a 1px
-   * border: a hard divider is drawn whether or not anything is behind it, while
-   * the fade only reads where content actually meets the chrome.
+   * rather than stopping at an opaque strip. The blur is the whole point: it is
+   * what makes a layer read as ABOVE the page rather than as part of it, which
+   * is why the menu wears it too.
    */
   .material {
     @apply bg-mono-50/80 backdrop-blur-xl backdrop-saturate-150 dark:bg-mono-950/80;
   }
 
-  .material::after {
+  /*
+   * The header's bottom edge, kept separate from the material itself so that a
+   * popover can be the same surface without trailing a gradient off its own
+   * bottom. A fade rather than a 1px border: a hard divider is drawn whether or
+   * not anything is behind it, while this only reads where content meets chrome.
+   */
+  .scroll-edge::after {
     content: '';
     @apply pointer-events-none absolute inset-x-0 top-full h-4 bg-gradient-to-b from-mono-50/80 to-transparent dark:from-mono-950/80;
   }
@@ -160,7 +164,7 @@
     backdrop-filter: none;
   }
 
-  .material::after {
+  .scroll-edge::after {
     display: none;
   }
 }
@@ -171,7 +175,7 @@
     backdrop-filter: none;
   }
 
-  .material::after {
+  .scroll-edge::after {
     display: none;
   }
 }
