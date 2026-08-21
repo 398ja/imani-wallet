@@ -35,7 +35,7 @@ export function SecurityPage({ onLogout }: { onLogout: () => void }) {
           <p className="mb-3 text-sm text-mono-500">
             Logging out erases your key from this browser. Make sure you have your backup key first.
           </p>
-          <Button variant="outline" className="w-full !text-red-600" onClick={onLogout}>
+          <Button variant="outline" className="w-full !text-red-600 dark:!text-red-400" onClick={onLogout}>
             Log out
           </Button>
         </div>
@@ -97,7 +97,7 @@ function ChangePassphrase() {
             autoComplete="new-password"
           />
           {next !== '' && <StrengthBar strength={passphraseStrength(next)} />}
-          {nextError && <p className="mt-1 text-xs text-red-600">{nextError}</p>}
+          {nextError && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{nextError}</p>}
         </div>
         <div>
           <Input
@@ -107,7 +107,7 @@ function ChangePassphrase() {
             onChange={(e) => setConfirm(e.target.value)}
             autoComplete="new-password"
           />
-          {confirmError && <p className="mt-1 text-xs text-red-600">{confirmError}</p>}
+          {confirmError && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{confirmError}</p>}
         </div>
         <Button className="w-full" disabled={busy || !complete} onClick={() => void change()}>
           {busy ? 'Changing…' : 'Change passphrase'}

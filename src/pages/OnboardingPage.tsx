@@ -316,9 +316,9 @@ function CreateForm({
         </div>
         <p className="mt-1 text-xs text-mono-500">
           {handleError ? (
-            <span className="text-red-600">{handleError}</span>
+            <span className="text-red-600 dark:text-red-400">{handleError}</span>
           ) : availability === 'taken' ? (
-            <span className="text-red-600">Already taken.</span>
+            <span className="text-red-600 dark:text-red-400">Already taken.</span>
           ) : availability === 'checking' ? (
             'Checking…'
           ) : availability === 'free' ? (
@@ -340,7 +340,9 @@ function CreateForm({
           autoComplete="new-password"
         />
         {passphrase !== '' && <StrengthBar strength={passphraseStrength(passphrase)} />}
-        {passphraseError && <p className="mt-1 text-xs text-red-600">{passphraseError}</p>}
+        {passphraseError && (
+          <p className="mt-1 text-xs text-red-600 dark:text-red-400">{passphraseError}</p>
+        )}
       </div>
 
       <div>
@@ -351,7 +353,9 @@ function CreateForm({
           onChange={(e) => setConfirm(e.target.value)}
           autoComplete="new-password"
         />
-        {confirmError && <p className="mt-1 text-xs text-red-600">{confirmError}</p>}
+        {confirmError && (
+          <p className="mt-1 text-xs text-red-600 dark:text-red-400">{confirmError}</p>
+        )}
       </div>
 
       {/* Last, under the fields it does not change: everything above is asked of
@@ -496,7 +500,9 @@ function ImportForm({
           autoComplete="new-password"
         />
         {passphrase !== '' && <StrengthBar strength={passphraseStrength(passphrase)} />}
-        {passphraseError && <p className="mt-1 text-xs text-red-600">{passphraseError}</p>}
+        {passphraseError && (
+          <p className="mt-1 text-xs text-red-600 dark:text-red-400">{passphraseError}</p>
+        )}
       </div>
       <div>
         <Input
@@ -506,7 +512,9 @@ function ImportForm({
           onChange={(e) => setConfirm(e.target.value)}
           autoComplete="new-password"
         />
-        {confirmError && <p className="mt-1 text-xs text-red-600">{confirmError}</p>}
+        {confirmError && (
+          <p className="mt-1 text-xs text-red-600 dark:text-red-400">{confirmError}</p>
+        )}
       </div>
 
       <Button size="lg" className="w-full" disabled={busy || !complete} onClick={submit}>
