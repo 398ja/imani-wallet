@@ -109,6 +109,51 @@ function loadScript(src: string): Promise<void> {
  * synthesis living in the extracted package rather than in the 10.5k-line
  * storage.js we decline to load — Wave 3, same place this whole bridge goes.
  */
+/**
+ * Correlation the DM carries and the redemption path cannot pass through.
+ *
+ * `_buildReceiveTransactionRow` reads `metadata.bundle_id` and nothing else of
+ * this kind, and the rebuild branch below calls it with `{}` — which is the
+ * live branch for DM receives, so extending `toLegacyMetadata` alone would
+ * still land a row with no bundle and no request on it. Rather than patch the
+ * vendored file, the poller registers what it knows against the token id and
+ * the write stamps it on, whichever branch built the row.
+ *
+ * Keyed on token_id because that is the only identifier both ends agree on:
+ * the poller derives it from the token, and every row is keyed
+ * `${type}:${tokenId}`.
+ */
+const correlations = new Map<string, { bundleId?: string; requestId?: string }>()
+
+/** Register a DM's bundle/request ids for the row its token is about to write. */
+export function correlateOnReceive(
+  tokenId: string,
+  ids: { bundleId?: string; requestId?: string },
+): void {
+  if (!tokenId || (!ids.bundleId && !ids.requestId)) return
+  correlations.set(tokenId, ids)
+}
+
+/** Fill in bundle/request ids the row's builder had no way to know. */
+function stampCorrelation(rows: unknown[]): unknown[] {
+  return rows.map((row) => {
+    const t = row as Record<string, unknown>
+    const key = String(t.tokenId ?? t.token_id ?? '')
+    const ids = correlations.get(key)
+    if (!ids) return row
+    // Consumed once: the row is written, so the entry has done its job. An
+    // entry whose redemption failed outlives its use, which is why this is a
+    // Map of two short strings and not a cache of anything.
+    correlations.delete(key)
+    // `||`, not `??` — the vendored builder writes `null`, not `undefined`.
+    return {
+      ...t,
+      bundleId: t.bundleId || ids.bundleId,
+      requestId: t.requestId || ids.requestId,
+    }
+  })
+}
+
 function installTokenIdFill(): void {
   const wsi = window.walletStorageIntegration
   if (!wsi) return
@@ -131,7 +176,7 @@ function installTokenIdFill(): void {
         ? input.transactions
         : vouchers.map((v) => buildRow(v, {})).filter(Boolean)
 
-    return write({ vouchers, transactions })
+    return write({ vouchers, transactions: transactions && stampCorrelation(transactions) })
   }
 }
 

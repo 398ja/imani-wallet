@@ -14,7 +14,7 @@ import {
 
 import { createDmCryptoAdapter, toLegacyMetadata } from './dmCrypto'
 import { getWallet, notifyWalletChanged } from './wallet'
-import { legacyApi } from './legacyBridge'
+import { correlateOnReceive, legacyApi } from './legacyBridge'
 
 /**
  * Gateway REST, same-origin: `/api/v1/...` reaches customer-wallet through the
@@ -246,6 +246,32 @@ function redemptionAdapter(): RedemptionAdapter {
       if (!redemption) throw new Error('TokenRedemption unavailable')
 
       const opts = options as unknown as Record<string, unknown> | undefined
+      // Before the redeem, because the write happens inside it. The ids come
+      // off the DM payload (see dmCrypto) and the row builder has no other way
+      // to reach them — this is what lets a merchant's till recognise two
+      // arriving coupons as the two halves of one payment request.
+      const meta = opts?.metadata as Record<string, unknown> | undefined
+      const ids = {
+        bundleId: meta?.bundleId as string | undefined,
+        requestId: meta?.requestId as string | undefined,
+      }
+      // Under both spellings of the id. The two derivations in play disagree on
+      // exactly one input: `tokenIdFrom` (wallet-storage, spec 017) strips a
+      // leading `cashu:` before hashing and `getTokenFingerprint` does not, so
+      // a prefixed token gets one id from the row builder and another from
+      // here. Registering both costs two short strings; picking wrong costs a
+      // payment that never settles.
+      const adapter = createDmCryptoAdapter()
+      const bare = token.startsWith('cashu:') ? token.slice(6) : token
+      // Awaited because dm-poll's adapter type allows a promise, even though
+      // ours is synchronous — `Promise.all` costs nothing on plain strings.
+      const keys = new Set(
+        await Promise.all([adapter.getTokenFingerprint(token), adapter.getTokenFingerprint(bare)]),
+      )
+      for (const key of keys) {
+        correlateOnReceive(key, ids)
+      }
+
       const voucher = (await redemption.redeem(token, {
         ...options,
         metadata: toLegacyMetadata(

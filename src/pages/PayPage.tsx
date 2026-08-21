@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { CheckCircle2 } from 'lucide-react'
+import { AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { getDecimals } from '@imani/money'
 
 import { listVouchers } from '../lib/wallet'
 import { toMerchants, type Merchant } from '../lib/merchants'
 import { formatFace } from '../lib/format'
 import { identityLabel, useIdentity } from '../lib/identity'
-import { payRequest, splitObstacle } from '../lib/pay'
+import { payRequest, splitObstacle, type SendResult } from '../lib/pay'
 import type { NUT18VRequest } from '../lib/nap'
 import {
   Button,
@@ -23,7 +23,7 @@ import {
 type Status =
   | { step: 'review' }
   | { step: 'paying' }
-  | { step: 'done'; reference: string }
+  | { step: 'done'; result: SendResult }
   | { step: 'failed'; message: string }
 
 /**
@@ -112,14 +112,35 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   const payable = !expired && !!merchant && !!group && shortfall <= 0 && !obstacle
 
   if (status.step === 'done') {
+    // A payment drawn across several coupons can land in pieces, and what landed
+    // cannot be taken back. The delivered figure is therefore what the screen
+    // reports: showing the asking price would send the customer away believing
+    // the sale is settled when the merchant is still short.
+    const partial = status.result.delivered < status.result.requested
     return (
       <div className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center gap-3 p-5 text-center">
-        <CheckCircle2 className="h-12 w-12 text-green-600" />
-        <h1 className="text-xl font-semibold text-mono-900 dark:text-mono-50">Paid</h1>
+        {partial ? (
+          <AlertTriangle className="h-12 w-12 text-amber-600" />
+        ) : (
+          <CheckCircle2 className="h-12 w-12 text-green-600" />
+        )}
+        <h1 className="text-xl font-semibold text-mono-900 dark:text-mono-50">
+          {partial ? 'Partly paid' : 'Paid'}
+        </h1>
         <p className="text-sm text-mono-500">
-          {formatFace(request.amount, denom)} to {issuerLabel}
+          {formatFace(status.result.delivered, denom)}
+          {partial ? ` of ${formatFace(status.result.requested, denom)}` : ''} to {issuerLabel}
         </p>
-        <p className="font-mono text-xs text-mono-400">{status.reference}</p>
+        {partial && (
+          <Alert>
+            The rest was not paid and your remaining vouchers are untouched — the
+            merchant's request is still open for the difference.
+            {status.result.shortfall ? ` (${status.result.shortfall})` : ''}
+          </Alert>
+        )}
+        {/* The request's own id, not the send's: it is what the merchant's till
+            settles by, so it is the reference both sides can match on. */}
+        <p className="font-mono text-xs text-mono-400">{request.paymentId}</p>
         <Button className="mt-4 w-full" onClick={() => navigate('/')}>
           Done
         </Button>
@@ -183,8 +204,8 @@ export function PayPage({ pubkey }: { pubkey: string }) {
         onClick={async () => {
           setStatus({ step: 'paying' })
           try {
-            const reference = await payRequest({ request, raw, merchant: merchant!, payer: pubkey })
-            setStatus({ step: 'done', reference })
+            const result = await payRequest({ request, raw, merchant: merchant!, payer: pubkey })
+            setStatus({ step: 'done', result })
           } catch (e) {
             setStatus({
               step: 'failed',

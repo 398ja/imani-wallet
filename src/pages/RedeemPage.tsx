@@ -11,6 +11,8 @@ import {
   expireRequests,
   loadRequests,
   matchPayment,
+  groupArrivals,
+  partialFor,
   saveRequests,
   type VoucherPaymentRequest,
 } from '../lib/vreq'
@@ -154,6 +156,8 @@ function RequestDisplay({
 }) {
   const [qr, setQr] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  /** Minor units received against this request so far, when it is not yet paid. */
+  const [received, setReceived] = useState(0)
   // From the request rather than the stall: a request already carries the unit
   // it was created with, and re-reading the merchant record here would relabel
   // an open request if the currency were changed in settings mid-sale.
@@ -188,15 +192,22 @@ function RequestDisplay({
     // land between the request being shown and this effect subscribing.
     const check = async () => {
       try {
-        const transactions = (await listTransactions()).map(toTransaction)
+        // Grouped, not raw: a payment drawn across several coupons arrives as
+        // one row per coupon, and each on its own is an underpayment that
+        // `matchPayment` rejects. See `groupArrivals`.
+        const arrivals = groupArrivals((await listTransactions()).map(toTransaction))
         if (!live) return
-        for (const transaction of transactions) {
-          const settled = matchPayment([request], transaction)
+        for (const arrival of arrivals) {
+          const settled = matchPayment([request], arrival)
           if (settled) {
             settle(settled)
             return
           }
         }
+        // Nothing settles it yet. If part of it has landed, say so — the
+        // alternative is a screen that looks identical to no payment at all
+        // while the merchant is holding half the money.
+        setReceived(partialFor(request, arrivals))
       } catch {
         // A wallet read that fails leaves the request pending, which is the
         // honest state — never mark it paid on an error path.
@@ -259,6 +270,13 @@ function RequestDisplay({
 
           {request.description && (
             <p className="mt-1 text-sm text-mono-500">{request.description}</p>
+          )}
+
+          {request.status === 'pending' && received > 0 && received < request.amount && (
+            <p className="mt-2 text-sm text-amber-600" role="status" aria-live="polite">
+              {formatFace(received, { unit: request.unit, decimals })} of{' '}
+              {formatFace(request.amount, { unit: request.unit, decimals })} received
+            </p>
           )}
 
           {/* Only while pending: a QR for a paid or dead request is a trap — it

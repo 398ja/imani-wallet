@@ -36,6 +36,27 @@ interface TokenTransferPayload {
   /** Unix epoch SECONDS. Absent or null when the issuer set no expiry. */
   expires_at?: number | null
   expired?: boolean
+  /**
+   * Correlation, both forwarded end to end and both dropped here until now.
+   *
+   * `request_id` is the NUT-18V payment request the sender was paying, and
+   * `bundle_id` groups the parts of one multi-voucher send. Verified along the
+   * whole chain rather than assumed: gateway-core's `Nip17DmSendPublisher`
+   * puts `payment_request_id` and `bundle_*` in the body it POSTs to
+   * customer-wallet, `WalletInternalController.sendTokenDm` extracts every one
+   * of them onto `SendTokenDmRequest`, and `TokenTransferMessage` serialises
+   * them as `request_id` / `bundle_id` / `bundle_total` / `bundle_part_index`
+   * / `bundle_part_count` in the rumor this parses.
+   *
+   * Without them a merchant's till cannot tell that two arriving coupons are
+   * one €7 payment for one request, and settles neither.
+   *
+   * Only these two are read. The other three are derivable from the rows the
+   * till already has — summing the parts of a bundle answers "how much
+   * arrived" without trusting a count the sender chose.
+   */
+  request_id?: string | null
+  bundle_id?: string | null
 }
 
 function asPayload(content: string): TokenTransferPayload | null {
@@ -127,7 +148,14 @@ export function createDmCryptoAdapter(): CryptoAdapter {
       // what left every DM-received coupon with a null expiry: /inspect is the
       // only other source tokenRedemption will take an expiry from, and it 404s
       // on this deployment, so the DM payload is the sole one that arrives.
-      return { ...metadata, expiresAt: payload.expires_at ?? undefined } as TokenMetadata
+      // `requestId` and `bundleId` ride the same intersection, and for the same
+      // reason: neither is on dm-poll's published TokenMetadata either.
+      return {
+        ...metadata,
+        expiresAt: payload.expires_at ?? undefined,
+        requestId: payload.request_id ?? undefined,
+        bundleId: payload.bundle_id ?? undefined,
+      } as TokenMetadata
     },
 
     extractToken(content: string): string | null {
@@ -176,6 +204,8 @@ export function toLegacyMetadata(
     backing_strategy: m.backingStrategy,
     memo: m.memo,
     expires_at: m.expiresAt,
+    request_id: m.requestId,
+    bundle_id: m.bundleId,
     sender_pubkey: senderPubkey,
   }
 }
