@@ -159,8 +159,8 @@ function ScanCustomer({ onFound }: { onFound: (pubkey: string) => void }) {
 
       <div className="mt-4 space-y-2">
         <Input
-          label="Or enter their address"
-          placeholder="name@domain"
+          label="Or enter their handle"
+          placeholder="name"
           value={manual}
           onChange={(e) => setManual(e.target.value)}
         />

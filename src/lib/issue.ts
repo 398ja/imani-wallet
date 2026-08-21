@@ -1,5 +1,6 @@
 import { nip19 } from 'nostr-tools'
 
+import { gatewayConfig } from './config'
 import { resolveNip05 } from './identity'
 import { signedFetch } from './nip98'
 import { INTERNAL_RELAY_URL } from './relay'
@@ -81,16 +82,47 @@ export function toPubkeyHex(input: string): string | null {
  * the merchant with "not a customer account" and no way forward, while a loose
  * one costs at most one 404 from an endpoint that answers null.
  *
+ * A bare `song` is completed to `song@<the gateway's domain>` — see
+ * `completeHandle`. A leading `@` is stripped first, because `@song` is how this
+ * app prints a handle everywhere else, so it is also how people type one back.
+ *
  * Returns null rather than throwing, for the camera loop.
  */
 export async function toRecipientPubkey(input: string): Promise<string | null> {
   const direct = toPubkeyHex(input)
   if (direct) return direct
 
-  const raw = input.trim().replace(/^nostr:/i, '')
-  if (!/^[^\s@]+@[^\s@]+$/.test(raw)) return null
+  const raw = input.trim().replace(/^nostr:/i, '').replace(/^@/, '')
+  const address = raw.includes('@') ? raw : await completeHandle(raw)
+  if (!address || !/^[^\s@]+@[^\s@]+$/.test(address)) return null
 
-  return resolveNip05(raw)
+  return resolveNip05(address)
+}
+
+/**
+ * `song` → `song@staging.398ja.xyz`.
+ *
+ * Nearly every customer a merchant serves is registered on the same gateway the
+ * merchant is logged into, so making them type that domain — the one domain
+ * they cannot get wrong — is keystrokes for nothing. The full `name@domain` is
+ * still accepted, and is the only form that reaches a customer somewhere else.
+ *
+ * The charset is NIP-05's own name grammar rather than the loose test above.
+ * This path runs on strings the camera decoded, and without it a scanned
+ * `https://example.test/menu` — no spaces, no `@` — would look like a localpart
+ * and cost a lookup that cannot succeed.
+ *
+ * Null when there is nothing to complete, or when the gateway cannot say what
+ * its domain is: this is a resolver that answers null, not one that throws.
+ */
+async function completeHandle(localpart: string): Promise<string | null> {
+  if (!/^[a-z0-9._-]+$/i.test(localpart)) return null
+  try {
+    const { nip05Domain } = await gatewayConfig()
+    return `${localpart}@${nip05Domain}`
+  } catch {
+    return null
+  }
 }
 
 /** Poll budget for the issuance saga: 30 x 2s = 60s. */

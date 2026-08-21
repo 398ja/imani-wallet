@@ -3,6 +3,7 @@ import { nip19 } from 'nostr-tools'
 
 import { identityLabel, identitySubLabel, resolveNip05 } from '../identity'
 import { toRecipientPubkey } from '../issue'
+import { clearConfigCache } from '../config'
 
 const HEX = 'a'.repeat(64)
 
@@ -58,7 +59,12 @@ describe('resolveNip05', () => {
 })
 
 describe('toRecipientPubkey', () => {
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    // The gateway config is cached for the session; a domain stubbed in one
+    // case must not answer the next one's fetch that never happened.
+    clearConfigCache()
+  })
 
   it('takes hex and npub without asking the network', async () => {
     const fetchSpy = vi.fn()
@@ -76,6 +82,24 @@ describe('toRecipientPubkey', () => {
     expect(await toRecipientPubkey('  rosa@x.test ')).toBe(HEX)
     expect(await toRecipientPubkey('nostr:rosa@x.test')).toBe(HEX)
     expect(fetchSpy.mock.calls[0][0]).toBe('/api/v1/resolve/rosa%40x.test')
+  })
+
+  it('completes a bare localpart with the gateway own domain', async () => {
+    // Nearly every customer a merchant serves is registered on the merchant's
+    // own gateway, so typing that domain is keystrokes for nothing.
+    const fetchSpy = vi.fn().mockImplementation((url: string) =>
+      Promise.resolve({
+        ok: true,
+        json: async () =>
+          url === '/api/v1/config' ? { nip05_domain: 'x.test' } : { hex_pubkey: HEX },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchSpy)
+
+    expect(await toRecipientPubkey('rosa')).toBe(HEX)
+    // `@rosa` is how the app prints a handle, so it is how one gets typed back.
+    expect(await toRecipientPubkey('@rosa')).toBe(HEX)
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe('/api/v1/resolve/rosa%40x.test')
   })
 
   it('does not call the resolver for something that is not an address', async () => {
