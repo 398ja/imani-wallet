@@ -9,6 +9,7 @@ import {
   loadPendingSends,
   minSplitStep,
   payRequest,
+  planParts,
   reconcilePendingSends,
   replaceVoucherToken,
   selectVouchers,
@@ -212,6 +213,15 @@ describe('selectVouchers and splitObstacle', () => {
     expect(splitObstacle([], 25)).toBeNull()
   })
 
+  it('stays silent when no single coupon covers the amount but a bundle does', () => {
+    // The Continue button and the send have to agree. `selectVouchers` answers
+    // for one coupon only, so without the bundle plan this refuses an amount
+    // `sendVouchers` would happily draw across three.
+    const half = () => xaf({ face_value: 300, token_amount: 300, issuance_ratio: 1 })
+
+    expect(splitObstacle([half(), half()], 500)).toBeNull()
+  })
+
   it('never offers a spent or redeemed coupon', () => {
     // A redeemed coupon's proofs were burnt at the mint (burn.ts), so a send
     // built on one fails there. Offering it puts the failure in the customer's
@@ -227,6 +237,59 @@ describe('selectVouchers and splitObstacle', () => {
     expect(selectVouchers(dead, 25)).toEqual([])
     // ...and it is not counted as a candidate the split merely failed to fit.
     expect(splitObstacle(dead, 25)).toBeNull()
+  })
+})
+
+describe('planParts', () => {
+  const at = (days: number) => new Date(Date.now() + days * 864e5).toISOString()
+
+  it('spends the coupon closest to expiring first', () => {
+    // The ordering rule ported from `_sortByExpiryFirst`, and the only one that
+    // is about the customer rather than the mint: a coupon that expires on
+    // Friday is worth nothing on Saturday, so it goes first even when a coupon
+    // with no expiry would cover the amount on its own.
+    const soon = coupon({ voucher_id: 'v-soon', face_value: 300, expires_at: at(2) })
+    const later = coupon({ voucher_id: 'v-later', face_value: 900, expires_at: at(60) })
+
+    const plan = planParts([later, soon], 300)
+
+    expect(plan.remaining).toBe(0)
+    expect(plan.parts).toHaveLength(1)
+    expect(plan.parts[0].voucher.voucher_id).toBe('v-soon')
+  })
+
+  it('draws across several coupons when no single one covers the amount', () => {
+    const a = coupon({ voucher_id: 'v-a' })
+    const b = coupon({ voucher_id: 'v-b' })
+    const c = coupon({ voucher_id: 'v-c' })
+
+    const plan = planParts([a, b, c], 1200)
+
+    expect(plan.remaining).toBe(0)
+    // Whole coupons first and one partial draw last, which is what keeps the
+    // splittable check to a single part.
+    expect(plan.parts.map((p) => p.amount)).toEqual([500, 500, 200])
+  })
+
+  it('reports what it could not draw when the coupons do not add up', () => {
+    const plan = planParts([coupon()], 800)
+
+    expect(plan.remaining).toBe(300)
+    expect(plan.parts.map((p) => p.amount)).toEqual([500])
+  })
+
+  it('skips a coupon that cannot be split down to the residue', () => {
+    // Upstream's `_buildPlan` takes `min(face, remaining)` with no splittable
+    // check, and would hand the gateway a split it refuses — halfway through a
+    // bundle, after earlier parts have already been delivered and cannot be
+    // recalled. At ratio 25 nothing below 25 XAF can come off the coupon.
+    const whole = xaf({ voucher_id: 'v-whole', face_value: 100, token_amount: 100, issuance_ratio: 1 })
+    const coarse = xaf({ voucher_id: 'v-coarse', face_value: 50, token_amount: 2 })
+
+    const plan = planParts([whole, coarse], 110)
+
+    expect(plan.remaining).toBe(10)
+    expect(plan.parts.map((p) => p.voucher.voucher_id)).toEqual(['v-whole'])
   })
 })
 
@@ -749,5 +812,178 @@ describe('sendVouchers', () => {
     expect(tried).toEqual(['v-busy', 'v-good'])
     expect(transactions[0].voucherId).toBe('v-good')
     warn.mockRestore()
+  })
+
+  /** Three coupons no one of which covers 1000 — the reason bundles exist. */
+  const trio = () => [
+    row({ token_id: '1'.repeat(32), voucher_id: 'v-1', face_value: 400, token_amount: 400 }),
+    row({ token_id: '2'.repeat(32), voucher_id: 'v-2', face_value: 400, token_amount: 400 }),
+    row({ token_id: '3'.repeat(32), voucher_id: 'v-3', face_value: 400, token_amount: 400 }),
+  ]
+
+  it('sends one coupon, with no bundle metadata, when one will do', async () => {
+    // The gateway rejects a half-filled metadata set (`bundle_metadata_incomplete`)
+    // and glues consecutive sends into a synthetic bundle of its own when it sees
+    // none — so a single send has to carry nothing at all, not empty fields.
+    stubs.rows = [row()]
+    const sent = gateway()
+    wallet([row()])
+
+    const result = await sendVouchers({
+      payer: PAYER,
+      recipient: { pubkey: FRIEND },
+      merchant,
+      unit: 'EUR',
+      amount: 250,
+    })
+
+    expect(result).toMatchObject({ requested: 250, delivered: 250, parts: 1 })
+    expect(result.shortfall).toBeUndefined()
+    expect(sent).toHaveLength(1)
+    expect(sent[0].bundleId).toBeUndefined()
+    expect(sent[0].bundlePartId).toBeUndefined()
+  })
+
+  it('draws across several coupons and tags every part of the bundle', async () => {
+    stubs.rows = trio()
+    const sent = gateway()
+    wallet(trio())
+
+    const result = await sendVouchers({
+      payer: PAYER,
+      recipient: { pubkey: FRIEND },
+      merchant,
+      unit: 'EUR',
+      amount: 1000,
+    })
+
+    expect(result).toMatchObject({ requested: 1000, delivered: 1000, parts: 3 })
+    expect(sent.map((s) => s.amount)).toEqual([400, 400, 200])
+
+    // 32 lowercase hex, because dm-poll's TokenParser matches
+    // `Bundle-Id: /([0-9a-f]{32})/` — any other shape and the recipient sees
+    // three unexplained vouchers instead of one arrival of 10.00.
+    expect(result.id).toMatch(/^[0-9a-f]{32}$/)
+    expect(new Set(sent.map((s) => s.bundleId))).toEqual(new Set([result.id]))
+
+    sent.forEach((part, index) => {
+      expect(part.bundleTotal).toBe(1000)
+      expect(part.bundlePartIndex).toBe(index)
+      expect(part.bundlePartCount).toBe(3)
+      // AtomicSendService.validateBundleMetadata refuses anything else with
+      // `invalid_bundle_part_id`; the format is the gateway's, not ours.
+      expect(part.bundlePartId).toBe(`${result.id}:${index}`)
+    })
+  })
+
+  it('reports what landed when a later part fails, instead of throwing', async () => {
+    // The first two parts are gone: proofs burnt at the mint, NIP-17 DMs
+    // published. An exception here reads as "nothing happened" on the confirm
+    // screen and invites a second send on top of money that already left.
+    stubs.rows = trio()
+    const tried: string[] = []
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async (params: Record<string, unknown>) => {
+        tried.push(String(params.voucherId))
+        if (tried.length === 3) throw new Error('mint refused the split')
+        return { send_id: `as_${tried.length}`, status: 'COMPLETED' }
+      },
+      getAtomicSendStatus: async () => ({ status: 'COMPLETED' }),
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    const { transactions } = wallet(trio())
+
+    const result = await sendVouchers({
+      payer: PAYER,
+      recipient: { pubkey: FRIEND },
+      merchant,
+      unit: 'EUR',
+      amount: 1000,
+    })
+
+    expect(result).toMatchObject({ requested: 1000, delivered: 800, parts: 2 })
+    expect(result.shortfall).toMatch(/mint refused/)
+    // Two parts delivered means two rows in the history, both filed under the
+    // same bundle so the screens can present them as one send.
+    expect(transactions).toHaveLength(2)
+    expect(transactions.map((t) => t.bundleId)).toEqual([result.id, result.id])
+  })
+
+  it('throws when the first part fails, because nothing has moved', async () => {
+    stubs.rows = trio()
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async () => {
+        throw new Error('mint refused the split')
+      },
+      getAtomicSendStatus: async () => ({ status: 'COMPLETED' }),
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    const { transactions } = wallet(trio())
+
+    await expect(
+      sendVouchers({
+        payer: PAYER,
+        recipient: { pubkey: FRIEND },
+        merchant,
+        unit: 'EUR',
+        amount: 1000,
+      }),
+    ).rejects.toThrow(/mint refused/)
+    expect(transactions).toEqual([])
+  })
+
+  it('records the send before waiting for it, and forgets it once settled', async () => {
+    // The window this closes: a send the gateway has accepted, abandoned during
+    // the wait — app closed, or killed in the background by Android. Written
+    // afterwards, as it was, that send left no record anywhere, so the next
+    // login saw a coupon at full face value whose proofs the mint had burnt.
+    // A bundle multiplies the window by its part count.
+    stubs.rows = [row()]
+    let duringWait: unknown[] = []
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async () => ({ send_id: 'as_1' }),
+      getAtomicSendStatus: async () => {
+        duringWait = loadPendingSends(PAYER)
+        return { status: 'COMPLETED' }
+      },
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    wallet([row()])
+
+    await sendVouchers({
+      payer: PAYER,
+      recipient: { pubkey: FRIEND },
+      merchant,
+      unit: 'EUR',
+      amount: 250,
+    })
+
+    expect(duringWait.map((p) => (p as { sendId: string }).sendId)).toContain('as_1')
+    // ...and dropped on the way out, or the next login would settle it twice:
+    // `settleSend` bails safely when the coupon is gone but still re-acks the
+    // keep token, reporting work that finished seconds after the tap.
+    expect(loadPendingSends(PAYER).map((p) => p.sendId)).not.toContain('as_1')
+  })
+
+  it('refuses an amount the coupons cannot reach, before sending any of them', async () => {
+    // The obstacle is reported instead of two parts going out against a total
+    // that was never achievable.
+    stubs.rows = trio()
+    const sent = gateway()
+    wallet(trio())
+
+    await expect(
+      sendVouchers({
+        payer: PAYER,
+        recipient: { pubkey: FRIEND },
+        merchant,
+        unit: 'EUR',
+        amount: 1500,
+      }),
+    ).rejects.toThrow(/no EUR voucher/)
+    expect(sent).toEqual([])
   })
 })
