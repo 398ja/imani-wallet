@@ -1,6 +1,6 @@
 import { useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { Menu } from 'lucide-react'
+import { BarChart3, LogOut, Menu, Settings, User, type LucideIcon } from 'lucide-react'
 
 import { Avatar } from './Avatar'
 import { profileHandle, profileName, type Profile } from '../../lib/profile'
@@ -25,6 +25,13 @@ import { profileHandle, profileName, type Profile } from '../../lib/profile'
  * still honoured, so it costs nothing where it is not needed. It belongs on the
  * header rather than on `#root` because the header is sticky: padding the page
  * would slide back under the status bar on the first scroll.
+ *
+ * The panel is an iOS context menu: the same translucent material as the header
+ * so it reads as a layer floating over the page rather than a card pasted onto
+ * it, a 14px radius, hairline separators, and every row a label on the leading
+ * edge with its glyph on the trailing one. That last part is the tell — Apple
+ * puts the icon where the eye lands after the word, not before it — and it is
+ * why the destructive row tints its glyph red as well as its label.
  *
  * The menu is built on <details>/<summary> rather than useState. That is not
  * cleverness for its own sake: the element gives open/close, Escape, focus
@@ -52,7 +59,7 @@ export function Header({
   const handle = profileHandle(profile)
 
   return (
-    <header className="material sticky top-0 z-10 pt-[env(safe-area-inset-top)]">
+    <header className="material scroll-edge sticky top-0 z-10 pt-[env(safe-area-inset-top)]">
       <div className="mx-auto flex max-w-md items-center gap-3 p-4">
         <Link
           to="/profile"
@@ -112,18 +119,20 @@ export function Header({
             <Menu className="h-6 w-6" aria-hidden="true" />
           </summary>
 
-          <nav className="materialize absolute right-0 top-full mt-2 min-w-44 origin-top-right overflow-hidden rounded-2xl border border-mono-200 bg-white shadow-lg dark:border-mono-800 dark:bg-mono-900">
-            <MenuLink to="/profile" onClick={close}>
+          {/* w-56, not min-w: an iOS menu is a fixed slab whose rows share one
+              trailing edge, so the glyphs line up however long the labels are. */}
+          <nav className="materialize material absolute right-0 top-full mt-2 w-56 origin-top-right divide-y divide-mono-900/[0.07] overflow-hidden rounded-[14px] shadow-xl shadow-mono-950/20 ring-1 ring-mono-900/5 dark:divide-mono-50/[0.08] dark:ring-mono-50/10">
+            <MenuLink to="/profile" icon={User} onClick={close}>
               Profile
             </MenuLink>
             {/* Merchants only: there is nothing to count for a customer, whose
                 own history already lives on the merchant screens. */}
             {merchant && (
-              <MenuLink to="/merchant/stats" onClick={close}>
+              <MenuLink to="/merchant/stats" icon={BarChart3} onClick={close}>
                 Stats
               </MenuLink>
             )}
-            <MenuLink to="/settings" onClick={close}>
+            <MenuLink to="/settings" icon={Settings} onClick={close}>
               Settings
             </MenuLink>
             <button
@@ -132,9 +141,10 @@ export function Header({
                 close()
                 onLogout()
               }}
-              className="press-row block w-full px-4 py-3 text-left text-sm text-red-600 dark:text-red-400"
+              className={`${ROW} text-red-600 dark:text-red-400`}
             >
               Log out
+              <LogOut className={GLYPH} aria-hidden="true" />
             </button>
           </nav>
         </details>
@@ -143,22 +153,28 @@ export function Header({
   )
 }
 
+/**
+ * `min-h-11` is the 44px Apple asks of anything tappable, as a floor rather than
+ * a height — a row that ever wraps grows instead of clipping.
+ */
+const ROW = 'press-row flex w-full min-h-11 items-center justify-between gap-6 px-4 text-left text-[15px]'
+const GLYPH = 'h-[18px] w-[18px] shrink-0'
+
 function MenuLink({
   to,
+  icon: Icon,
   onClick,
   children,
 }: {
   to: string
+  icon: LucideIcon
   onClick: () => void
   children: React.ReactNode
 }) {
   return (
-    <Link
-      to={to}
-      onClick={onClick}
-      className="press-row block px-4 py-3 text-sm text-mono-900 dark:text-mono-50"
-    >
+    <Link to={to} onClick={onClick} className={`${ROW} text-mono-900 dark:text-mono-50`}>
       {children}
+      <Icon className={GLYPH} aria-hidden="true" />
     </Link>
   )
 }
