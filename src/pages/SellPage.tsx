@@ -14,7 +14,8 @@ import {
 } from '../components/ui'
 import { issueAndDeliver, toRecipientPubkey, type IssueStage } from '../lib/issue'
 import { identityLabel, useIdentity } from '../lib/identity'
-import { currencyDecimals, formatFace, parseAmountToMinor } from '../lib/format'
+import { currencyDecimals, formatDate, formatFace, parseAmountToMinor } from '../lib/format'
+import { ValidityPicker } from '../components/ValidityPicker'
 import type { MerchantProfile } from '../lib/merchant'
 
 /**
@@ -207,6 +208,13 @@ function IssueForm({
   const [stage, setStage] = useState<IssueStage | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [sent, setSent] = useState<number | null>(null)
+  // What this coupon actually got, once the gateway has settled it — which is
+  // not always what was asked for, hence `waitForExpiry` in lib/issue.ts.
+  const [sentExpiry, setSentExpiry] = useState<string>('')
+  // The stall's default, for this sale only. Never sticky between sales: an
+  // expiry that quietly persisted would mint a 7-day coupon an hour later with
+  // nothing on screen to explain it. Null while a custom term is half-typed.
+  const [validity, setValidity] = useState<number | null>(merchant.voucherValidityDays)
   const customerIdentity = useIdentity(customer)
 
   // ISO decimals, which is what the sats backing needs — see currencyDecimals.
@@ -217,20 +225,21 @@ function IssueForm({
   const busy = stage !== null
 
   const submit = async () => {
-    if (minor === null) return
+    if (minor === null || validity === null) return
     setError(null)
     try {
-      await issueAndDeliver(
+      const { voucher } = await issueAndDeliver(
         {
           faceValueMinor: minor,
           currency: merchant.issuanceCurrency,
-          expiryDays: merchant.voucherValidityDays,
+          expiryDays: validity,
           memo: memo.trim() || undefined,
           recipientPubkey: customer,
           issuerPubkey,
         },
         setStage,
       )
+      setSentExpiry(formatDate(voucher.expires_at))
       setSent(minor)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -255,6 +264,12 @@ function IssueForm({
             <p className="mt-1 text-sm text-mono-500">
               Sent to {identityLabel(customer, customerIdentity)}. It is in their wallet now.
             </p>
+            {/* The expiry the coupon was actually granted, not the one asked
+                for. Blank when the gateway never returned one, which is a
+                degraded coupon rather than a failed sale — see lib/issue.ts. */}
+            {sentExpiry && (
+              <p className="mt-1 text-sm text-mono-500">Valid until {sentExpiry}.</p>
+            )}
           </div>
         </Panel>
 
@@ -266,6 +281,7 @@ function IssueForm({
               setSent(null)
               setAmount('')
               setMemo('')
+              setValidity(merchant.voucherValidityDays)
               onRescan()
             }}
           >
@@ -311,10 +327,18 @@ function IssueForm({
           disabled={busy}
         />
 
+        <ValidityPicker
+          label="Voucher valid for"
+          value={validity}
+          defaultDays={merchant.voucherValidityDays}
+          onChange={setValidity}
+          disabled={busy}
+        />
+
         <Button
           size="lg"
           className="w-full"
-          disabled={busy || minor === null}
+          disabled={busy || minor === null || validity === null}
           onClick={submit}
         >
           {stage ? STAGE_LABEL[stage] : 'Send voucher'}

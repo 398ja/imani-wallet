@@ -6,6 +6,7 @@ import { getSigner } from '../lib/nap'
 import { publish } from '../lib/relay'
 import {
   buildMerchantEvent,
+  DEFAULT_VALIDITY_DAYS,
   emptyMerchant,
   merchantFieldsValid,
   saveMerchant,
@@ -61,13 +62,17 @@ export function MerchantEditPage({
     const next: MerchantProfile = {
       ...(merchant ?? emptyMerchant(pubkey)),
       ...fields,
-      // The two answers given once. The fieldset stops showing them as controls
-      // after creation, but "fixed" is an invariant of the record and not of one
-      // component's render, so it is enforced where the record is written:
-      // coupons already issued carry this unit and this expiry, and a later save
-      // that quietly re-denominated the stall would misdescribe every one of them.
+      // The answer given once. The fieldset stops showing it as a control after
+      // creation, but "fixed" is an invariant of the record and not of one
+      // component's render, so it is enforced where the record is written: every
+      // coupon already issued carries this unit, and a later save that quietly
+      // re-denominated the stall would misdescribe all of them.
       issuanceCurrency: merchant?.issuanceCurrency ?? fields.issuanceCurrency,
-      voucherValidityDays: merchant?.voucherValidityDays ?? fields.voucherValidityDays,
+      // The validity is NOT pinned — it is the default for coupons issued from
+      // here on, and issued coupons carry the expiry they were granted. The `??`
+      // is narrowing, not policy: `merchantFieldsValid` above has already
+      // refused a null, which only occurs mid-typing.
+      voucherValidityDays: fields.voucherValidityDays ?? DEFAULT_VALIDITY_DAYS,
       updatedAt: Date.now(),
     }
 
@@ -132,8 +137,7 @@ export function MerchantEditPage({
         </div>
       )}
 
-      {/* 'create' for a customer opening a stall — they still choose the
-          validity that is fixed from then on. 'edit' once it exists. */}
+      {/* 'create' for a customer opening a stall, 'edit' once it exists. */}
       <MerchantFieldset
         value={fields}
         onChange={setFields}

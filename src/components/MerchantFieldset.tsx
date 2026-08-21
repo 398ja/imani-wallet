@@ -1,7 +1,10 @@
+import { useState } from 'react'
+
 import { CurrencySelect } from './CurrencySelect'
 import { LocationField } from './LocationField'
+import { ValidityPicker } from './ValidityPicker'
 import { currencyLabel } from '../lib/currencies'
-import { CATEGORIES, VALIDITY_DAYS, type MerchantFields } from '../lib/merchant'
+import { CATEGORIES, DEFAULT_VALIDITY_DAYS, type MerchantFields } from '../lib/merchant'
 
 /**
  * The merchant metadata fields.
@@ -18,16 +21,20 @@ import { CATEGORIES, VALIDITY_DAYS, type MerchantFields } from '../lib/merchant'
  *
  * But they are not the same *set* of fields, and `mode` is what differs:
  *
- * - **create** asks what a stall cannot open without, plus the two answers that
- *   are only ever given once: **currency and coupon validity**. Where you trade
- *   is the one thing left to settings — a merchant registering at the market
- *   does not need a map pin to make the first sale.
- * - **edit** adds where you trade, and shows **currency and validity as
- *   read-only**. Both are chosen at creation and fixed after, because coupons
- *   already issued carry the unit and the expiry they were issued with:
- *   changing either later would describe the stall's history inaccurately
- *   without altering a single live coupon. A single currency is also what makes
- *   one balance meaningful, on both sides of the counter.
+ * - **create** asks what a stall cannot open without, plus the one answer that
+ *   is only ever given once: its **currency**. Where you trade is the one thing
+ *   left to settings — a merchant registering at the market does not need a map
+ *   pin to make the first sale.
+ * - **edit** adds where you trade, and shows **currency as read-only**.
+ *
+ * Currency and validity used to be a pair, "the two answers given once". They
+ * are not, and the reasons never did apply equally. A single currency is what
+ * makes one balance meaningful on both sides of the counter, and re-denominating
+ * a stall would misdescribe every coupon it has issued. An expiry is per-coupon
+ * by nature: each issued coupon carries its own, granted at issuance and unmoved
+ * by anything decided later, so a stall changing the term it offers from now on
+ * says nothing false about the ones already out there. The validity here is the
+ * **default** — Sell can take a different term for the sale in hand.
  *
  * Controlled by the caller so each host owns its own save semantics: signup
  * publishes once at the end of `register`, settings publishes on submit.
@@ -44,6 +51,11 @@ export function MerchantFieldset({
   /** 'create' when the stall does not exist yet; 'edit' once it does. */
   mode: 'create' | 'edit'
 }) {
+  // Frozen at mount: the term the stall had when this form opened. Reading it
+  // off `value` each render would move the leading chip to 30 the moment
+  // `Custom` nulls the value, rearranging the row under the finger that tapped.
+  const [defaultDays] = useState(() => value.voucherValidityDays ?? DEFAULT_VALIDITY_DAYS)
+
   const set = <K extends keyof MerchantFields>(field: K, fieldValue: MerchantFields[K]) =>
     onChange({ ...value, [field]: fieldValue })
 
@@ -94,7 +106,7 @@ export function MerchantFieldset({
         />
       )}
 
-      {/* Same shape as validity below, and for the same reason — see `mode`. */}
+      {/* Locked after creation, unlike the validity below — see `mode`. */}
       <div>
         {mode === 'create' ? (
           <>
@@ -125,53 +137,21 @@ export function MerchantFieldset({
         )}
       </div>
 
-      <div>
-        <span className="mb-2 block text-sm font-medium text-mono-700 dark:text-mono-300">
-          Vouchers stay valid for
-        </span>
-
-        {mode === 'create' ? (
-          <>
-            <div className="grid grid-cols-3 gap-2">
-              {VALIDITY_DAYS.map((days) => {
-                const active = value.voucherValidityDays === days
-                return (
-                  <button
-                    key={days}
-                    type="button"
-                    onClick={() => set('voucherValidityDays', days)}
-                    disabled={disabled}
-                    aria-pressed={active}
-                    className={`pressable rounded-2xl border py-2.5 text-sm font-medium disabled:opacity-50 ${
-                      active
-                        ? 'border-mono-900 bg-mono-900 text-mono-50 dark:border-mono-50 dark:bg-mono-50 dark:text-mono-900'
-                        : 'border-mono-200 text-mono-600 hover:bg-mono-100 dark:border-mono-800 dark:text-mono-300 dark:hover:bg-mono-900'
-                    }`}
-                  >
-                    {days} days
-                  </button>
-                )
-              })}
-            </div>
-            {/* Said before it is chosen, not after it is locked. */}
-            <p className="mt-1.5 text-xs text-mono-500">
-              Choose carefully — this cannot be changed later.
-            </p>
-          </>
-        ) : (
-          // Rendered as a plain value rather than a disabled control: a greyed-out
-          // set of buttons reads as "temporarily unavailable" and invites a hunt
-          // for whatever would re-enable them. Nothing will.
-          <>
-            <p className="rounded-2xl border border-mono-200 px-3.5 py-2.5 text-sm text-mono-900 dark:border-mono-800 dark:text-mono-50">
-              {value.voucherValidityDays} days
-            </p>
-            <p className="mt-1.5 text-xs text-mono-500">
-              Fixed when you started selling. Vouchers already issued keep their own expiry date.
-            </p>
-          </>
-        )}
-      </div>
+      {/* The default leads its own row, so it is whatever this stall last saved
+          rather than the app's 30 — except at signup, where there is no stall
+          yet and 30 is the only sensible thing to lead with. */}
+      <ValidityPicker
+        label="Vouchers stay valid for"
+        value={value.voucherValidityDays}
+        defaultDays={defaultDays}
+        onChange={(days) => set('voucherValidityDays', days)}
+        disabled={disabled}
+        hint={
+          mode === 'create'
+            ? 'You can change this later, and pick a different length on any single sale.'
+            : 'Applies to vouchers you issue from now on. Vouchers already issued keep their own expiry date, and you can pick a different length on any single sale.'
+        }
+      />
     </div>
   )
 }
