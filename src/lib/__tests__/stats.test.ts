@@ -55,6 +55,17 @@ describe('merchantStats', () => {
     expect(stats.redeemedCount).toBe(1)
   })
 
+  it('rates by value, not by headcount', () => {
+    // Two coupons out worth 750, one back worth 250. A third of the money has
+    // been claimed — a count would say half, and a merchant asking how much of
+    // what they put out has come back is asking about the money.
+    const stats = merchantStats(
+      [issued({ id: '1' }), issued({ id: '2', amount: 250 }), returned({ id: '3', amount: 250 })],
+      opts,
+    )
+    expect(stats.redemptionRate).toBeCloseTo(250 / 750)
+  })
+
   it('reports a redemption rate, and 0 rather than NaN when nothing was issued', () => {
     expect(merchantStats([issued({ id: '1' }), returned({ id: '2' })], opts).redemptionRate).toBe(1)
     expect(merchantStats([], opts).redemptionRate).toBe(0)
