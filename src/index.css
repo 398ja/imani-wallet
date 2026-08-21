@@ -42,6 +42,26 @@
   #root {
     min-height: 100vh;
     min-height: 100dvh;
+    /* Gesture-navigation bar. 0px everywhere else, including every browser. */
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  /*
+   * Android WebView tells, and only the ones that are safe to suppress.
+   *
+   * The grey flash on tap is a WebView default that no native app has; the
+   * `.press` class above is the feedback we actually want. `overscroll-behavior`
+   * kills both the pull-to-refresh gesture and the blue stretch at the ends of
+   * a scroll, neither of which does anything here.
+   *
+   * Deliberately NOT setting `user-select: none`. It is the usual third item on
+   * this list, but this is a wallet: npubs, cashu tokens and the backup nsec all
+   * have to be selectable by hand when copy-to-clipboard fails. Losing that to
+   * make scrolling feel marginally more native is a bad trade.
+   */
+  html {
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
   }
 }
 

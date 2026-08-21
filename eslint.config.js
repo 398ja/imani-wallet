@@ -11,7 +11,10 @@ export default defineConfig([
   // findings about code this change did not write. `shared/` is vanilla JS and
   // would not match the files glob today anyway — listed so that adding a JS
   // block later does not silently pull 500 KB of it in.
-  globalIgnores(['dist', 'packages', 'shared']),
+  // `android/` is Capacitor's generated native project. Its build output
+  // contains a copy of the web bundle plus Capacitor's own `native-bridge.js`,
+  // none of which this repo authors.
+  globalIgnores(['dist', 'packages', 'shared', 'android']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
