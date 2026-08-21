@@ -219,7 +219,10 @@ describe('selectVouchers and splitObstacle', () => {
     // `sendVouchers` would happily draw across three.
     const half = () => xaf({ face_value: 300, token_amount: 300, issuance_ratio: 1 })
 
-    expect(splitObstacle([half(), half()], 500)).toBeNull()
+    expect(splitObstacle([half(), half()], 500, { bundle: true })).toBeNull()
+    // ...and the door that cannot bundle says so, rather than falling silent
+    // and letting Pay go live on a request `payRequest` will refuse.
+    expect(splitObstacle([half(), half()], 500)).toMatch(/No single voucher/)
   })
 
   it('never offers a spent or redeemed coupon', () => {
