@@ -38,4 +38,17 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+        The QR scanner. Without this the WebView's getUserMedia is refused
+        before any prompt is shown, and every scanning screen falls back to
+        "Camera unavailable — paste their code instead". Capacitor's
+        BridgeWebChromeClient asks for the runtime grant on the WebView's
+        behalf, but only for permissions declared here.
+
+        `required="false"` so the app still installs on a device with no camera:
+        scanning is one way into every screen that offers it, never the only one.
+    -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 </manifest>
