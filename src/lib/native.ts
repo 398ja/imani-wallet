@@ -22,10 +22,13 @@ export function initNative(): void {
     else App.exitApp()
   })
 
-  // Reserve the status bar area rather than drawing under it. The alternative
-  // — overlay plus `env(safe-area-inset-top)` padding — puts the page
-  // background behind the clock instead of the sticky Header's own surface,
-  // which looks like a rendering bug on every scrolled screen.
+  // Ask for the status bar area to be reserved rather than drawn under.
+  //
+  // Android 15 ignores this: targetSdk 35 enforces edge-to-edge, and a Pixel
+  // duly rendered the header behind the clock where it could not be tapped. So
+  // Header pads itself with `env(safe-area-inset-top)`, which is the case this
+  // call was meant to avoid. It stays for everything older, where it IS
+  // honoured and the inset is then 0 — the two do not double up.
   StatusBar.setOverlaysWebView({ overlay: false })
   // --background, light theme. Matched by hand: Tailwind's tokens are CSS
   // variables the native layer cannot read.
