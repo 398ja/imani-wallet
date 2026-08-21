@@ -176,22 +176,97 @@ export function selectVouchers(vouchers: Voucher[], amount: number): Voucher[] {
   ]
 }
 
+/** One draw against one coupon. Several of them make a bundle. */
+export type SendPart = { voucher: Voucher; amount: number }
+
 /**
- * Why no coupon can pay this, for the confirmation screen.
+ * How an amount is drawn across several coupons — a bundle, when one won't do.
  *
- * Reports against the coupon that came closest — the largest one, which is the
- * most likely to be splittable — so the message names a real obstacle rather
- * than a generic refusal.
+ * `remaining` is what could not be planned; zero means the plan covers the
+ * amount. Reported rather than thrown so `splitObstacle` can say what is in the
+ * way without running the walk twice.
+ */
+export type SendPlan = { parts: SendPart[]; remaining: number }
+
+/**
+ * Plan a draw across coupons, soonest-expiring first.
+ *
+ * Ported from imani-apps' `_buildPlan` + `_sortByExpiryFirst`
+ * (shared/bundleSendOrchestrator.js:748), with its ordering rules intact:
+ * expiry first, so the coupon closest to being lost is the one spent; then
+ * largest face, which keeps the part count — and so the number of mint splits
+ * and NIP-17 DMs — as low as it can go; then voucher id, so the same wallet
+ * plans the same way twice.
+ *
+ * What upstream's planner does NOT do is check that a draw is possible. Taking
+ * `min(face, remaining)` from each coupon in turn is right about arithmetic and
+ * silent about the mint: a coupon cannot be divided below one sat's worth of
+ * face value, so a part that leaves dust behind is a split the gateway refuses
+ * halfway through a bundle — after earlier parts have already been delivered
+ * and cannot be taken back. Greedy full draws make that easy to contain: every
+ * part but the last takes a whole coupon, so only the last is ever a partial
+ * draw, and only it needs `checkSplittable`. A coupon that cannot supply the
+ * residue is skipped and the next one tried.
+ */
+export function planParts(vouchers: Voucher[], amount: number): SendPlan {
+  const usable = vouchers
+    .filter((v) => v.token && isUnspent(v) && (v.face_value ?? 0) > 0)
+    .sort((a, b) => {
+      const byExpiry = expiryMs(a) - expiryMs(b)
+      if (byExpiry !== 0) return byExpiry
+      const byFace = (b.face_value ?? 0) - (a.face_value ?? 0)
+      if (byFace !== 0) return byFace
+      return String(a.voucher_id ?? '').localeCompare(String(b.voucher_id ?? ''))
+    })
+
+  const parts: SendPart[] = []
+  let remaining = amount
+  for (const voucher of usable) {
+    if (remaining <= 0) break
+    const face = voucher.face_value ?? 0
+    if (face <= remaining) {
+      parts.push({ voucher, amount: face })
+      remaining -= face
+    } else if (checkSplittable(voucher, remaining).ok) {
+      parts.push({ voucher, amount: remaining })
+      remaining = 0
+    }
+  }
+  return { parts, remaining }
+}
+
+/** Sortable expiry. No expiry sorts last — it is the coupon in least danger. */
+function expiryMs(voucher: Voucher): number {
+  const parsed = Date.parse(voucher.expires_at ?? '')
+  return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed
+}
+
+/**
+ * Why this amount cannot be sent, for the amount screen.
+ *
+ * Asked in the same order the send itself asks: one coupon if one will do, a
+ * bundle otherwise. Holding enough is not the same as being able to send it —
+ * what stops a send now is not "no coupon is big enough" but "the last piece
+ * cannot be broken off anything", so the message reports against the residue
+ * the plan could not draw, and against the largest coupon it did not already
+ * spend on the earlier parts.
+ *
+ * Returns null when the total is simply short: the screen says that better,
+ * with the figure.
  */
 export function splitObstacle(vouchers: Voucher[], amount: number): string | null {
   if (selectVouchers(vouchers, amount).length > 0) return null
 
+  const plan = planParts(vouchers, amount)
+  if (plan.remaining === 0) return null
+
+  const spent = new Set(plan.parts.map((p) => p.voucher))
   const best = vouchers
-    .filter((v) => v.token && isUnspent(v))
+    .filter((v) => v.token && isUnspent(v) && !spent.has(v))
     .sort((a, b) => (b.face_value ?? 0) - (a.face_value ?? 0))[0]
   if (!best) return null
 
-  const check = checkSplittable(best, amount)
+  const check = checkSplittable(best, plan.remaining)
   return check.ok ? null : check.reason
 }
 
@@ -337,6 +412,13 @@ export interface PendingSend {
   recipientName?: string
   voucherId?: string
   memo?: string
+  /**
+   * Set when this send was one part of a bundle, so the history can show three
+   * rows as one send of the total rather than three unexplained ones. Carried
+   * on the pending record because a reconcile finishing a part on the next
+   * login has no other way back to the bundle it belonged to.
+   */
+  bundleId?: string
   /** Source coupon's face, for the change when the gateway omits keep_face_value. */
   sourceFaceValue: number
   at: number
@@ -389,6 +471,22 @@ function savePendingSends(pubkey: string, sends: PendingSend[]): void {
 function rememberPendingSend(pubkey: string, pending: PendingSend): void {
   const others = loadPendingSends(pubkey).filter((p) => p.sendId !== pending.sendId)
   savePendingSends(pubkey, [pending, ...others].slice(0, 20))
+}
+
+/**
+ * Drops a send whose outcome we did watch, terminal either way.
+ *
+ * The ledger exists for sends nobody saw the end of. Leaving a finished one in
+ * it costs a pointless status call on every login, and worse: a settled send
+ * gets settled again. `settleSend` bails safely when the source coupon is
+ * already gone, but it still re-acks the keep token, so the next login would
+ * report finishing work that finished seconds after the tap.
+ */
+function forgetPendingSend(pubkey: string, sendId: string): void {
+  savePendingSends(
+    pubkey,
+    loadPendingSends(pubkey).filter((p) => p.sendId !== sendId),
+  )
 }
 
 /**
@@ -470,6 +568,7 @@ async function settleSend(
             ...common,
             recipientPubkey: pending.recipientPubkey,
             recipientName: pending.recipientName,
+            bundleId: pending.bundleId,
           })
         : buildPaymentTransaction(common),
     )
@@ -677,8 +776,15 @@ async function initiateOnFirstFree(
     }
   }
 
+  // A bundle part is offered exactly one coupon — the plan's arithmetic is tied
+  // to that coupon's face value, so there is nothing to walk on to. Saying
+  // "every voucher" there would be a lie about a wallet that may hold plenty.
   throw new Error(
-    `Every voucher from this merchant is tied up in an unfinished send. ${lastRefusal?.message ?? ''}`.trim(),
+    `${
+      candidates.length === 1
+        ? 'That voucher is'
+        : 'Every voucher from this merchant is'
+    } tied up in an unfinished send. ${lastRefusal?.message ?? ''}`.trim(),
   )
 }
 
@@ -700,6 +806,17 @@ async function awaitAndSettle(
   // SSE on this stack drops with ERR_INCOMPLETE_CHUNKED_ENCODING (§11.4), and a
   // dropped stream would read as a stuck payment. Swap to SSE when that is
   // fixed; the terminal-state handling below is the same either way.
+  // Written to the ledger BEFORE the wait, not after it. The ledger's whole job
+  // is to survive a wallet that stops looking, and the loop below is where that
+  // happens: twenty seconds with the screen open is twenty seconds in which the
+  // app can be closed, backgrounded to death by Android, or killed. Until this
+  // moved up, a send accepted by the gateway and then abandoned here left no
+  // record anywhere — the coupon sat in the wallet at full face value while the
+  // mint had already burned its proofs, and nothing on the next login went
+  // looking. A bundle multiplies that window by its part count, which is what
+  // brought it to light.
+  rememberPendingSend(payer, pending)
+
   let status: SendStatus = { status: initialStatus }
   for (let i = 0; i < POLL_ATTEMPTS && !TERMINAL.includes(String(status.status)); i += 1) {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
@@ -723,7 +840,6 @@ async function awaitAndSettle(
   // login. Before that, a saga that completed late completed only at the
   // gateway; see that function for what it cost.
   if (!TERMINAL.includes(String(status.status))) {
-    rememberPendingSend(payer, pending)
     throw new Error(
       `This ${noun} is still going through at the gateway (send ${pending.sendId}, ` +
         `${status.status ?? 'no status'}). It has NOT failed and your voucher is ` +
@@ -738,6 +854,7 @@ async function awaitAndSettle(
     // would still be listed locally while being unspendable. The backend says
     // as much on DM_ERROR: "sender should reclaim via RECLAIM_FROM_DM_ERROR".
     const note = await reclaim(api, wallet, pending.sendId, pending.tokenId, status)
+    forgetPendingSend(payer, pending.sendId)
     throw new Error(
       `This ${noun} did not complete (${status.status ?? 'no status'})` +
         `${status.error_message ?? status.error ? `: ${status.error_message ?? status.error}` : ''}` +
@@ -746,6 +863,7 @@ async function awaitAndSettle(
   }
 
   await settleSend(api, wallet, pending, status)
+  forgetPendingSend(payer, pending.sendId)
   notifyWalletChanged()
 }
 
@@ -815,21 +933,174 @@ export async function payRequest({
 }
 
 /**
- * Send a voucher to another person — the customer-to-customer path.
+ * What a send actually achieved. Returned rather than assumed, because a bundle
+ * can land in pieces: see `sendVouchers`.
+ */
+export type SendResult = {
+  /** The bundle id when several coupons were drawn, the send id when one was. */
+  id: string
+  /** Minor units asked for. */
+  requested: number
+  /** Minor units that reached the recipient. Equal to `requested` on success. */
+  delivered: number
+  parts: number
+  /** Why the rest did not go, when `delivered` fell short. */
+  shortfall?: string
+}
+
+/** Bundle correlation for one part. All five fields or none — the gateway rejects half a set. */
+type BundleTag = { bundleId: string; total: number; index: number; count: number }
+
+/** Everything a part needs that does not change between parts. */
+type SendContext = {
+  api: SendApi
+  payer: string
+  recipient: { pubkey: string; name?: string }
+  merchant: Merchant
+  memo?: string
+  rowOf: Map<Voucher, VoucherRow>
+}
+
+/**
+ * One draw: initiate, wait for the saga, settle the local side. Throws unless
+ * the recipient has it.
+ *
+ * Each part is a whole send in its own right — its own row in the history, its
+ * own change coupon, its own entry in the pending ledger. That is what makes a
+ * bundle safe to interrupt without a journal: there is no half-applied bundle
+ * state to recover, only sends that finished and sends that did not, which is
+ * what `reconcilePendingSends` already knows how to sort out on the next login.
+ * imani-apps needs `bundleSendJournal.js` for this because its parts share one
+ * localStorage mutation; ours do not.
+ */
+async function sendPart(
+  ctx: SendContext,
+  candidates: Voucher[],
+  amount: number,
+  bundle: BundleTag | null,
+): Promise<string> {
+  const { sendId, status, voucher, sourceRow } = await initiateOnFirstFree(
+    ctx.api,
+    candidates,
+    ctx.rowOf,
+    (candidate) => ({
+      token: candidate.token,
+      amount,
+      recipientPubkey: ctx.recipient.pubkey,
+      memo: ctx.memo,
+      // The SEND amount, never the voucher's face value — gateway-core splits
+      // for `faceValue ?? amount`, so passing the source voucher's face here
+      // sends the whole voucher and returns no change. See `buildSendParams`.
+      faceValue: amount,
+      faceUnit: candidate.face_unit,
+      faceDecimals: candidate.face_decimals,
+      voucherId: candidate.voucher_id,
+      issuerId: candidate.issuer_id,
+      // No paymentRequestId: there is no request. That single omission is the
+      // whole difference between a redemption and a person-to-person send.
+      ...(bundle
+        ? {
+            bundleId: bundle.bundleId,
+            bundleTotal: bundle.total,
+            bundlePartIndex: bundle.index,
+            bundlePartCount: bundle.count,
+            // Format is not ours to choose: AtomicSendService rejects anything
+            // but `${bundle_id}:${bundle_part_index}` with invalid_bundle_part_id.
+            bundlePartId: `${bundle.bundleId}:${bundle.index}`,
+            bundleAttempt: 0,
+          }
+        : {}),
+    }),
+    // Keyed so a double-tap dedupes to one send while walking to the next
+    // coupon does not collide with the key the refused one already used. The
+    // bundle form is upstream's (`bundle:<id>:<part>:<attempt>`), which is what
+    // the gateway's own retry handling expects to see.
+    (candidate) =>
+      bundle
+        ? `bundle:${bundle.bundleId}:${bundle.index}:0`
+        : `c2c_${ctx.recipient.pubkey}_${amount}_${candidate.voucher_id}`,
+  )
+
+  await awaitAndSettle(
+    ctx.api,
+    ctx.payer,
+    {
+      sendId,
+      tokenId: sourceRow.token_id,
+      amount,
+      unit: voucher.face_unit ?? '',
+      decimals: voucher.face_decimals ?? 2,
+      merchantPubkey: ctx.merchant.pubkey,
+      merchantName:
+        ctx.merchant.name === ctx.merchant.pubkey ? undefined : ctx.merchant.name,
+      recipientPubkey: ctx.recipient.pubkey,
+      recipientName: ctx.recipient.name,
+      voucherId: voucher.voucher_id,
+      memo: ctx.memo,
+      sourceFaceValue: voucher.face_value ?? 0,
+      at: Date.now(),
+      bundleId: bundle?.bundleId,
+    },
+    status,
+  )
+
+  return sendId
+}
+
+/**
+ * 32 lowercase hex — the width the recipient's parser matches.
+ *
+ * Not a stylistic choice: dm-poll's `Bundle-Id: /([0-9a-f]{32})/` is what turns
+ * several arriving coupons into one receipt, and a bundle id of any other shape
+ * simply does not match, leaving the recipient with N unexplained vouchers.
+ */
+function newBundleId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * Send vouchers to another person — the customer-to-customer path.
  *
  * The same saga as `payRequest`, minus the payment request: the gateway's
  * `/api/v1/atomic-send` has always taken a plain `recipientPubkey`, and a
  * merchant redemption is only that call with a `paymentRequestId` attached. So
  * there is no second engine here, and no special case for sending TO a merchant
- * either — the difference is a line of copy on the confirmation screen, not a
- * different code path.
+ * either — the difference is a line of copy on the confirmation screen.
  *
  * What DOES differ is the record: `recipientPubkey` on the pending send is what
  * makes `settleSend` write a 'sent' row instead of a 'payment' one. See
  * `buildSentTransaction` for why the issuer, not the recipient, goes in
  * `merchantId`.
  *
- * Returns the send id, which is the only handle on the saga afterwards.
+ * ## One coupon, or several
+ *
+ * One coupon is tried first and used when one will do: fewer mint splits, one
+ * DM, and the path `payRequest` has already proven. Only when no single coupon
+ * covers the amount does this bundle, drawing across several — which is the
+ * common case for a wallet holding a handful of small coupons from one shop.
+ *
+ * ## Why a bundle can land in pieces
+ *
+ * Each part is delivered by its own saga, and a delivered part CANNOT be taken
+ * back: the mint has burned its proofs and the NIP-17 DM is published. So when
+ * a later part fails, the honest answer is not an exception — an error on the
+ * confirmation screen reads as "nothing happened", and the customer sends
+ * again, on top of money that already left. This returns what actually landed
+ * and lets the screen say so.
+ *
+ * A first-part failure is different: nothing has moved, so it throws and the
+ * wallet is exactly where it started.
+ *
+ * Ported from imani-apps' `bundleSendOrchestrator.send`
+ * (shared/bundleSendOrchestrator.js) with its two host seams replaced rather
+ * than its store: `_awaitTerminal` subscribes over SSE, which drops on this
+ * stack (§11.4) and would hang every part to a five-minute timeout, so parts
+ * poll through `awaitAndSettle`; and `_applyKeepToken` writes through
+ * `shared/storage.js`, a second authority on the same money, so parts settle
+ * through `settleSend` into `@imani/wallet-storage`. What that leaves behind is
+ * upstream's journal, retryRemainder and dismissPartial — all of which exist to
+ * reconstruct per-part state that this wallet already keeps per part.
  */
 export async function sendVouchers({
   payer,
@@ -845,8 +1116,8 @@ export async function sendVouchers({
   /** Whose vouchers are being spent — the issuer, chosen on the picker step. */
   merchant: Merchant
   /**
-   * Which of that merchant's currencies. A merchant selling in two units holds
-   * two groups, and a voucher cannot be split across them — without this, a
+   * Which of the merchant's currencies. A merchant selling in two units holds
+   * two groups, and a voucher cannot be split across them — without this,
    * "5.00" typed against a EUR group could go out as 5 SAT from whichever
    * voucher happened to sort first.
    */
@@ -854,11 +1125,11 @@ export async function sendVouchers({
   /** Minor units, as `parseAmountToMinor` produces. */
   amount: number
   memo?: string
-}): Promise<string> {
+}): Promise<SendResult> {
   // Refused here and not only on the screen, for the same reason the expiry
-  // check lives in `payRequest`: this is the door the money leaves by. A send
-  // to yourself is not a no-op — it burns the source voucher and hands back an
-  // equal one, costing a round trip and a mint fee to end where you started.
+  // check lives in `payRequest`: this is the door money leaves by. A send to
+  // yourself is not a no-op — it burns the source voucher and hands back an
+  // equal one, costing a round trip and a mint fee to end up where you started.
   if (recipient.pubkey.toLowerCase() === payer.toLowerCase()) {
     throw new Error('You cannot send a voucher to yourself.')
   }
@@ -868,61 +1139,47 @@ export async function sendVouchers({
   const inUnit = mine.filter(
     (v) => (v.face_unit ?? '').toUpperCase() === unit.toUpperCase(),
   )
+  const ctx: SendContext = { api, payer, recipient, merchant, memo, rowOf }
 
-  const candidates = selectVouchers(inUnit, amount)
-  if (candidates.length === 0) {
+  const single = selectVouchers(inUnit, amount)
+  if (single.length > 0) {
+    const sendId = await sendPart(ctx, single, amount, null)
+    return { id: sendId, requested: amount, delivered: amount, parts: 1 }
+  }
+
+  const plan = planParts(inUnit, amount)
+  if (plan.remaining > 0) {
     throw new Error(
       splitObstacle(inUnit, amount) ??
         `You have no ${unit} voucher from this merchant for that amount.`,
     )
   }
 
-  const { sendId, status, voucher, sourceRow } = await initiateOnFirstFree(
-    api,
-    candidates,
-    rowOf,
-    (candidate) => ({
-      token: candidate.token,
-      amount,
-      recipientPubkey: recipient.pubkey,
-      memo,
-      // The SEND amount, never the voucher's face value — gateway-core splits
-      // for `faceValue ?? amount`, so passing the source voucher's face here
-      // sends the whole voucher and returns no change. See `buildSendParams`.
-      faceValue: amount,
-      faceUnit: candidate.face_unit,
-      faceDecimals: candidate.face_decimals,
-      voucherId: candidate.voucher_id,
-      issuerId: candidate.issuer_id,
-      // No paymentRequestId: there is no request. That single omission is the
-      // whole difference between a redemption and a person-to-person send.
-    }),
-    // Keyed by recipient, amount AND voucher: a double-tap must dedupe to one
-    // send, while walking to the next voucher must not collide with the key the
-    // refused one already used.
-    (candidate) => `c2c_${recipient.pubkey}_${amount}_${candidate.voucher_id}`,
-  )
+  const bundleId = newBundleId()
+  let delivered = 0
+  for (const [index, part] of plan.parts.entries()) {
+    try {
+      await sendPart(ctx, [part.voucher], part.amount, {
+        bundleId,
+        total: amount,
+        index,
+        count: plan.parts.length,
+      })
+      delivered += part.amount
+    } catch (error) {
+      // Nothing has moved yet, so there is nothing to explain away.
+      if (delivered === 0) throw error
+      // Money has left. Stop — a part that failed at the mint will fail again,
+      // and every further attempt risks delivering more than was intended.
+      return {
+        id: bundleId,
+        requested: amount,
+        delivered,
+        parts: index,
+        shortfall: error instanceof Error ? error.message : String(error),
+      }
+    }
+  }
 
-  await awaitAndSettle(
-    api,
-    payer,
-    {
-      sendId,
-      tokenId: sourceRow.token_id,
-      amount,
-      unit: voucher.face_unit ?? '',
-      decimals: voucher.face_decimals ?? 2,
-      merchantPubkey: merchant.pubkey,
-      merchantName: merchant.name === merchant.pubkey ? undefined : merchant.name,
-      recipientPubkey: recipient.pubkey,
-      recipientName: recipient.name,
-      voucherId: voucher.voucher_id,
-      memo,
-      sourceFaceValue: voucher.face_value ?? 0,
-      at: Date.now(),
-    },
-    status,
-  )
-
-  return sendId
+  return { id: bundleId, requested: amount, delivered, parts: plan.parts.length }
 }

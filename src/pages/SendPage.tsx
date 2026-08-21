@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Check, ChevronRight } from 'lucide-react'
+import { AlertTriangle, Check, ChevronRight } from 'lucide-react'
 import type { Voucher } from '@imani/voucher-send'
 
 import {
@@ -19,7 +19,7 @@ import { listVouchers } from '../lib/wallet'
 import { toMerchants, type Merchant } from '../lib/merchants'
 import { formatFace, parseAmountToMinor } from '../lib/format'
 import { identityLabel, useIdentity } from '../lib/identity'
-import { sendVouchers, splitObstacle } from '../lib/pay'
+import { sendVouchers, splitObstacle, type SendResult } from '../lib/pay'
 
 /**
  * Send a voucher to someone — a friend, or a merchant redeeming it.
@@ -95,7 +95,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
   const [memo, setMemo] = useState('')
   const [confirming, setConfirming] = useState(false)
   const [status, setStatus] = useState<Status>({ step: 'idle' })
-  const [sent, setSent] = useState<number | null>(null)
+  const [sent, setSent] = useState<SendResult | null>(null)
 
   useEffect(() => {
     listVouchers().then((rows) => setMerchants(toMerchants(rows)))
@@ -145,23 +145,46 @@ export function SendPage({ pubkey }: { pubkey: string }) {
   const verb = asMerchant ? 'Redeem at' : 'Send to'
 
   if (sent !== null && chosen) {
+    // A bundle can land in pieces, and what landed cannot be taken back. So the
+    // screen reports the delivered figure rather than the one that was typed —
+    // showing the full amount here would send the customer away believing money
+    // arrived that never did.
+    const partial = sent.delivered < sent.requested
     return (
       <Screen>
-        <PageHeader title={asMerchant ? 'Redeemed' : 'Sent'} />
+        <PageHeader title={partial ? 'Partly sent' : asMerchant ? 'Redeemed' : 'Sent'} />
         <Panel>
           <div className="flex flex-col items-center py-4 text-center">
-            <div className="mb-3 rounded-full bg-green-600/10 p-3">
-              <Check className="h-7 w-7 text-green-600" />
+            <div
+              className={`mb-3 rounded-full p-3 ${partial ? 'bg-amber-500/10' : 'bg-green-600/10'}`}
+            >
+              {partial ? (
+                <AlertTriangle className="h-7 w-7 text-amber-600" />
+              ) : (
+                <Check className="h-7 w-7 text-green-600" />
+              )}
             </div>
             <p className="text-amount text-mono-900 dark:text-mono-50">
-              {formatFace(sent, chosen)}
+              {formatFace(sent.delivered, chosen)}
             </p>
             <p className="mt-1 text-sm text-mono-500">
-              {asMerchant ? 'Redeemed at' : 'Sent to'} {recipientLabel}.
-              {asMerchant ? '' : ' It is in their wallet now.'}
+              {partial
+                ? `of ${formatFace(sent.requested, chosen)} reached ${recipientLabel}.`
+                : `${asMerchant ? 'Redeemed at' : 'Sent to'} ${recipientLabel}.${
+                    asMerchant ? '' : ' It is in their wallet now.'
+                  }`}
             </p>
           </div>
         </Panel>
+        {partial && (
+          <div className="mt-3">
+            <Alert>
+              The rest was not sent and your remaining vouchers are untouched — send
+              the difference again if you still mean to.
+              {sent.shortfall ? ` (${sent.shortfall})` : ''}
+            </Alert>
+          </div>
+        )}
         <Button size="lg" className="mt-4 w-full" onClick={() => navigate('/')}>
           Done
         </Button>
@@ -214,7 +237,9 @@ export function SendPage({ pubkey }: { pubkey: string }) {
   const minor = parseAmountToMinor(amount, chosen.decimals)
   // The same check `sendVouchers` selects with, so the button and the send agree
   // on what is sendable — a voucher divisible on one and not the other would let
-  // the user tap Send only to be refused.
+  // the user tap Send only to be refused. It answers for a bundle too: holding
+  // enough across several coupons is sendable, and the button must not refuse
+  // what the send would happily do.
   const obstacle = minor === null || minor <= 0 ? null : splitObstacle(chosen.vouchers, minor)
   const short = minor !== null && minor > chosen.totalFaceValue
 
@@ -263,7 +288,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
             onClick={async () => {
               setStatus({ step: 'sending' })
               try {
-                await sendVouchers({
+                const result = await sendVouchers({
                   payer: pubkey,
                   recipient: {
                     pubkey: recipient,
@@ -277,7 +302,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
                   amount: minor,
                   memo: memo.trim() || undefined,
                 })
-                setSent(minor)
+                setSent(result)
                 setStatus({ step: 'idle' })
               } catch (e) {
                 setStatus({

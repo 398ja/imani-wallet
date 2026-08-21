@@ -233,6 +233,13 @@ export function buildSentTransaction(input: {
   recipientName?: string
   voucherId?: string
   memo?: string
+  /**
+   * Set when this row is one part of a multi-voucher send. Several rows share
+   * it, which is what lets the history present them as one send of the total
+   * instead of three unexplained ones — and it is the same id the recipient's
+   * wallet reads off the DM's `Bundle-Id:` line.
+   */
+  bundleId?: string
   at: number
 }): TransactionRow {
   return {
@@ -250,6 +257,7 @@ export function buildSentTransaction(input: {
     recipientName: input.recipientName ?? null,
     voucherId: input.voucherId,
     tokenId: input.tokenId,
+    bundleId: input.bundleId,
     memo: input.memo || 'Voucher sent',
   } as unknown as TransactionRow
 }
