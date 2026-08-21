@@ -82,7 +82,11 @@ export const CATEGORIES = [
   'other',
 ] as const
 
-/** Issuance currencies, from possa-merchant's `IssuanceStep.tsx`. */
+/**
+ * The currencies offered before a merchant types anything, from
+ * possa-merchant's `IssuanceStep.tsx`. Not the limit: `searchCurrencies` in
+ * ./currencies reaches every code the runtime knows.
+ */
 export const CURRENCIES = [
   'EUR',
   'USD',

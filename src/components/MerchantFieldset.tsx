@@ -1,10 +1,7 @@
+import { CurrencySelect } from './CurrencySelect'
 import { LocationField } from './LocationField'
-import {
-  CATEGORIES,
-  CURRENCIES,
-  VALIDITY_DAYS,
-  type MerchantFields,
-} from '../lib/merchant'
+import { currencyLabel } from '../lib/currencies'
+import { CATEGORIES, VALIDITY_DAYS, type MerchantFields } from '../lib/merchant'
 
 /**
  * The merchant metadata fields.
@@ -101,25 +98,12 @@ export function MerchantFieldset({
       <div>
         {mode === 'create' ? (
           <>
-            <label
-              htmlFor="issuance-currency"
-              className="mb-2 block text-sm font-medium text-mono-700 dark:text-mono-300"
-            >
-              Voucher currency
-            </label>
-            <select
-              id="issuance-currency"
+            <CurrencySelect
+              label="Voucher currency"
               value={value.issuanceCurrency}
-              onChange={(e) => set('issuanceCurrency', e.target.value)}
+              onChange={(code) => set('issuanceCurrency', code)}
               disabled={disabled}
-              className="w-full rounded-2xl border border-mono-200 bg-white px-3.5 py-2.5 text-sm text-mono-900 focus:border-mono-900 focus:outline-none disabled:opacity-50 dark:border-mono-800 dark:bg-mono-950 dark:text-mono-50 dark:focus:border-mono-50"
-            >
-              {CURRENCIES.map((currency) => (
-                <option key={currency} value={currency}>
-                  {currency}
-                </option>
-              ))}
-            </select>
+            />
             {/* Said before it is chosen, not after it is locked. */}
             <p className="mt-1.5 text-xs text-mono-500">
               Every voucher you issue uses this currency. Choose carefully — this cannot be changed
@@ -132,7 +116,7 @@ export function MerchantFieldset({
               Voucher currency
             </span>
             <p className="rounded-2xl border border-mono-200 px-3.5 py-2.5 text-sm text-mono-900 dark:border-mono-800 dark:text-mono-50">
-              {value.issuanceCurrency}
+              {currencyLabel(value.issuanceCurrency)}
             </p>
             <p className="mt-1.5 text-xs text-mono-500">
               Fixed when you started selling. Every voucher you have issued is in this currency.
