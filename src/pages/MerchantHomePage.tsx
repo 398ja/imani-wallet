@@ -5,7 +5,6 @@ import { Clock, QrCode, Send } from 'lucide-react'
 import {
   Button,
   Screen,
-  PageHeader,
   Panel,
   ListSection,
   EmptyRow,
@@ -14,19 +13,19 @@ import {
 import { listTransactions, listVouchers, onWalletChanged } from '../lib/wallet'
 import { toMerchants, walletTotals } from '../lib/merchants'
 import { toTransaction, type WalletTransaction } from '../lib/transactions'
-import { expiringSoon } from '../lib/stats'
-import { formatDate, formatFace } from '../lib/format'
-import { profileHandle, profileName, type Profile } from '../lib/profile'
+import { expiringSoon, outstandingLiability } from '../lib/stats'
+import { currencyDecimals, formatDate, formatFace } from '../lib/format'
 import type { MerchantProfile } from '../lib/merchant'
 
 /**
  * Home, for a merchant.
  *
  * Same skeleton as MerchantsPage — balance panel, then the two things you can do —
- * with Sell and Redeem where a customer has Pay and Receive. The balance is
- * genuinely the same figure from the same store: coupons a customer paid with
- * arrive in this wallet as ordinary vouchers, so `walletTotals` needs no
- * merchant-specific variant.
+ * with Sell and Redeem where a customer has Pay and Receive. The figure differs
+ * though: a customer's headline is what they hold, a merchant's is what they
+ * owe. Coupons taken in still show, on the line under it, from the same
+ * `walletTotals` the customer screen uses — they arrive here as ordinary
+ * vouchers, so that needs no merchant-specific variant.
  *
  * Deliberately not the dashboard — that lives at /merchant/stats. This screen is
  * the till, and a till should open on the two buttons you press all day, with
@@ -34,14 +33,15 @@ import type { MerchantProfile } from '../lib/merchant'
  * "See all", plus anything about to expire while it can still be spent.
  */
 export function MerchantHomePage({
-  profile,
+  pubkey,
   merchant,
 }: {
-  profile: Profile
+  pubkey: string
   merchant: MerchantProfile
 }) {
   const navigate = useNavigate()
   const [totals, setTotals] = useState<ReturnType<typeof walletTotals> | null>(null)
+  const [owed, setOwed] = useState(0)
   const [recent, setRecent] = useState<WalletTransaction[] | null>(null)
   const [expiring, setExpiring] = useState<WalletTransaction[]>([])
 
@@ -50,6 +50,9 @@ export function MerchantHomePage({
       const [vouchers, transactions] = await Promise.all([listVouchers(), listTransactions()])
       const rows = transactions.map(toTransaction)
       setTotals(walletTotals(toMerchants(vouchers)))
+      setOwed(
+        outstandingLiability(rows, { pubkey, unit: merchant.issuanceCurrency, now: Date.now() }),
+      )
       setRecent([...rows].sort((a, b) => b.at - a.at).slice(0, 3))
       // `Date.now()` here in the effect, not in the render body — an expiry that
       // silently flips between renders is the impurity lint catches elsewhere.
@@ -60,28 +63,30 @@ export function MerchantHomePage({
     // while this screen is open must show up without a refresh. It is also what
     // makes the Redeem screen's own fulfilment watcher trustworthy.
     return onWalletChanged(load)
-  }, [])
+  }, [pubkey, merchant.issuanceCurrency])
 
   const [primary, ...rest] = totals ?? []
 
   return (
     <Screen>
-      <PageHeader
-        title={profileName(profile)}
-        handle={profileHandle(profile)}
-        subtitle={merchant.businessType ?? merchant.categories.join(', ') ?? undefined}
-      />
-
+      {/*
+        No name-and-handle heading: the app header carries both on every screen,
+        and printing them again here was the same two lines twice.
+      */}
       <Panel className="mb-6 p-5">
-        <p className="text-sm text-mono-500">Taken in vouchers</p>
+        <p className="text-sm text-mono-500">Outstanding vouchers</p>
         <p className="text-amount text-mono-900 dark:text-mono-50">
-          {primary ? formatFace(primary.minor, primary) : formatFace(0, undefined)}
+          {formatFace(owed, {
+            unit: merchant.issuanceCurrency,
+            decimals: currencyDecimals(merchant.issuanceCurrency),
+          })}
         </p>
-        {rest.map((total) => (
-          <p key={total.unit} className="text-sm text-mono-500">
-            + {formatFace(total.minor, total)}
-          </p>
-        ))}
+        {/* What is held, under what is owed — still worth a glance, and it is
+            the customer wallet's headline figure. */}
+        <p className="text-sm text-mono-500">
+          Taken in {primary ? formatFace(primary.minor, primary) : formatFace(0, undefined)}
+          {rest.map((total) => ` + ${formatFace(total.minor, total)}`).join('')}
+        </p>
       </Panel>
 
       <div className="mb-6 grid grid-cols-2 gap-3">

@@ -10,7 +10,7 @@ import {
 import { useNavigate } from 'react-router-dom'
 import { QrCode, ScanLine } from 'lucide-react'
 
-import { Button, Screen, Panel, PageHeader, Pass } from '../components/ui'
+import { Button, Screen, Panel, Pass } from '../components/ui'
 import { listTransactions, listVouchers, onWalletChanged } from '../lib/wallet'
 import { toMerchants, walletTotals, withPastMerchants, type Merchant } from '../lib/merchants'
 import { toTransaction } from '../lib/transactions'
@@ -23,7 +23,6 @@ import {
   rubberband,
 } from '../lib/spring'
 import { formatFace } from '../lib/format'
-import { profileHandle, profileName, type Profile } from '../lib/profile'
 
 /** A child React already gave a stable key, so the deck can reuse it. */
 function isKeyed(child: ReactNode): child is ReactElement & { key: string } {
@@ -314,7 +313,7 @@ function SwipeDeck({ children, label }: { children: ReactNode[]; label: string }
  * Home: what this customer holds in total, the merchants it came from, and the
  * two things they can do with it.
  */
-export function MerchantsPage({ profile }: { profile: Profile }) {
+export function MerchantsPage() {
   const navigate = useNavigate()
   const [merchants, setMerchants] = useState<Merchant[] | null>(null)
   const [branding, setBranding] = useState<Record<string, MerchantBranding>>({})
@@ -355,11 +354,9 @@ export function MerchantsPage({ profile }: { profile: Profile }) {
 
   return (
     <Screen>
-      {/* Who you are, before what you hold — the same two lines a merchant's own
-          home leads with, so the handle a customer gives out to be paid is on
-          screen rather than three taps away in /profile. */}
-      <PageHeader title={profileName(profile)} handle={profileHandle(profile)} />
-
+      {/* No name-and-handle heading: the app header carries both on every
+          screen, so the handle a customer gives out to be paid is already up
+          there — printing it again here was the same two lines twice. */}
       <Panel className="mb-6 p-5">
         <p className="text-sm text-mono-500">Total balance</p>
         <p className="text-amount text-mono-900 dark:text-mono-50">

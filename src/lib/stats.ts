@@ -138,6 +138,39 @@ export function merchantStats(
 }
 
 /**
+ * What this merchant still owes the street, in minor units.
+ *
+ * The face value of coupons issued and still valid, minus the value that has
+ * already come back. It is the figure a merchant needs before the till balance:
+ * money taken in is theirs, this is the claim customers can still walk in with.
+ *
+ * Both halves are all-time, not windowed — a coupon sold last year is still a
+ * liability today — and one currency only, for `merchantStats`' reason: adding
+ * XAF to EUR would be a confident lie.
+ *
+ * An approximation in one place, and knowingly: redemptions are matched to
+ * issuance in aggregate rather than per coupon, because an incoming row carries
+ * the id of the voucher the customer paid with, not of the one we sold them. A
+ * coupon part-spent and then expired therefore subtracts from a total it is no
+ * longer in, which is why the result has a floor. It errs low, which is the
+ * right direction for a liability the merchant may have to honour.
+ */
+export function outstandingLiability(
+  transactions: WalletTransaction[],
+  { pubkey, unit, now }: { pubkey: string; unit: string; now: number },
+): number {
+  const sum = (rows: WalletTransaction[]) => rows.reduce((total, tx) => total + tx.amount, 0)
+  const mine = transactions.filter((tx) => tx.unit === unit)
+
+  const live = sum(
+    mine.filter(
+      (tx) => tx.type === 'issued' && !(tx.expiresAt !== undefined && tx.expiresAt <= now),
+    ),
+  )
+  return Math.max(0, live - sum(mine.filter((tx) => isOwnRedemption(tx, pubkey))))
+}
+
+/**
  * Issued coupons running out soon, soonest first.
  *
  * A merchant's actionable list: these are customers who still hold value that is

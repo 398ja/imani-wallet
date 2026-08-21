@@ -217,7 +217,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route
           path="/"
           element={
-            trading ? <MerchantHomePage profile={profile} merchant={merchant} /> : <MerchantsPage profile={profile} />
+            trading ? <MerchantHomePage pubkey={pubkey} merchant={merchant} /> : <MerchantsPage />
           }
         />
         {trading && (

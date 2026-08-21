@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-import { merchantStats, expiringSoon } from '../stats'
+import { merchantStats, expiringSoon, outstandingLiability } from '../stats'
 import type { WalletTransaction } from '../transactions'
 
 const ME = 'a'.repeat(64)
@@ -144,5 +144,31 @@ describe('expiringSoon', () => {
   it('ignores vouchers with no expiry and rows that are not issuances', () => {
     const rows = [issued({ id: '1' }), returned({ id: '2', expiresAt: NOW + DAY })]
     expect(expiringSoon(rows, { now: NOW })).toHaveLength(0)
+  })
+})
+
+describe('outstandingLiability', () => {
+  const owed = (rows: WalletTransaction[]) =>
+    outstandingLiability(rows, { pubkey: ME, unit: 'EUR', now: NOW })
+
+  it('is what was issued, less what has come back', () => {
+    expect(owed([issued({ id: '1' }), issued({ id: '2', amount: 250 })])).toBe(750)
+    expect(owed([issued({ id: '1' }), returned({ id: '2', amount: 200 })])).toBe(300)
+  })
+
+  it('drops expired coupons, and ignores other merchants and other currencies', () => {
+    // An expired coupon is nobody's claim any more. A coupon received from
+    // another merchant is money we hold, not money we owe.
+    expect(owed([issued({ id: '1', expiresAt: NOW - DAY })])).toBe(0)
+    expect(owed([issued({ id: '1', expiresAt: NOW + DAY })])).toBe(500)
+    expect(owed([issued({ id: '1' }), returned({ id: '2', merchantId: OTHER })])).toBe(500)
+    expect(owed([issued({ id: '1' }), issued({ id: '2', unit: 'XAF', amount: 900 })])).toBe(500)
+  })
+
+  it('never goes negative', () => {
+    // Aggregate matching: a coupon part-spent and then expired subtracts from a
+    // total it has already left. The floor is what keeps that from reading as
+    // the customers owing the merchant.
+    expect(owed([returned({ id: '1' })])).toBe(0)
   })
 })
