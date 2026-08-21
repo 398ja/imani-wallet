@@ -253,12 +253,32 @@ function expiryMs(voucher: Voucher): number {
  *
  * Returns null when the total is simply short: the screen says that better,
  * with the figure.
+ *
+ * `bundle` says whether the CALLER can draw across several coupons, and it
+ * defaults to false because only one door can. `sendVouchers` bundles;
+ * `payRequest` does not, because the till settles a request by matching one
+ * incoming transaction against it (`matchPayment` in lib/vreq.ts) and rejects
+ * anything under the asking price — so three parts of a €7 request would settle
+ * nothing while the merchant held €7 of vouchers. Answering "no obstacle" to a
+ * caller that cannot bundle is worse than the old refusal: the button goes
+ * live and the send fails afterwards, on a wallet that visibly holds enough.
  */
-export function splitObstacle(vouchers: Voucher[], amount: number): string | null {
+export function splitObstacle(
+  vouchers: Voucher[],
+  amount: number,
+  { bundle = false }: { bundle?: boolean } = {},
+): string | null {
   if (selectVouchers(vouchers, amount).length > 0) return null
 
   const plan = planParts(vouchers, amount)
-  if (plan.remaining === 0) return null
+  if (plan.remaining === 0) {
+    // Several coupons cover it. Silence is only the right answer for the door
+    // that can draw them; the other one has to say where that door is, since
+    // "no voucher for that amount" is a lie to someone holding twice it.
+    return bundle
+      ? null
+      : 'No single voucher covers that amount. Open the merchant and use Send to pay it across several.'
+  }
 
   const spent = new Set(plan.parts.map((p) => p.voucher))
   const best = vouchers
@@ -1150,7 +1170,7 @@ export async function sendVouchers({
   const plan = planParts(inUnit, amount)
   if (plan.remaining > 0) {
     throw new Error(
-      splitObstacle(inUnit, amount) ??
+      splitObstacle(inUnit, amount, { bundle: true }) ??
         `You have no ${unit} voucher from this merchant for that amount.`,
     )
   }
