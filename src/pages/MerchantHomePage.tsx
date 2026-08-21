@@ -66,6 +66,12 @@ export function MerchantHomePage({
   }, [pubkey, merchant.issuanceCurrency])
 
   const [primary, ...rest] = totals ?? []
+  // The merchant's own currency stands in when there is nothing held yet:
+  // `formatFace(0, undefined)` has no unit to work with and renders a bare "0".
+  const issuance = {
+    unit: merchant.issuanceCurrency,
+    decimals: currencyDecimals(merchant.issuanceCurrency),
+  }
 
   return (
     <Screen>
@@ -76,15 +82,12 @@ export function MerchantHomePage({
       <Panel className="mb-6 p-5">
         <p className="text-sm text-mono-500">Outstanding vouchers</p>
         <p className="text-amount text-mono-900 dark:text-mono-50">
-          {formatFace(owed, {
-            unit: merchant.issuanceCurrency,
-            decimals: currencyDecimals(merchant.issuanceCurrency),
-          })}
+          {formatFace(owed, issuance)}
         </p>
         {/* What is held, under what is owed — still worth a glance, and it is
             the customer wallet's headline figure. */}
         <p className="text-sm text-mono-500">
-          Taken in {primary ? formatFace(primary.minor, primary) : formatFace(0, undefined)}
+          Taken in {formatFace(primary?.minor ?? 0, primary ?? issuance)}
           {rest.map((total) => ` + ${formatFace(total.minor, total)}`).join('')}
         </p>
       </Panel>
