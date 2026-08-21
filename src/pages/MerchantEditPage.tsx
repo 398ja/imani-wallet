@@ -61,6 +61,13 @@ export function MerchantEditPage({
     const next: MerchantProfile = {
       ...(merchant ?? emptyMerchant(pubkey)),
       ...fields,
+      // The two answers given once. The fieldset stops showing them as controls
+      // after creation, but "fixed" is an invariant of the record and not of one
+      // component's render, so it is enforced where the record is written:
+      // coupons already issued carry this unit and this expiry, and a later save
+      // that quietly re-denominated the stall would misdescribe every one of them.
+      issuanceCurrency: merchant?.issuanceCurrency ?? fields.issuanceCurrency,
+      voucherValidityDays: merchant?.voucherValidityDays ?? fields.voucherValidityDays,
       updatedAt: Date.now(),
     }
 
@@ -152,16 +159,6 @@ export function MerchantEditPage({
         <div className="mt-3">
           <Alert>{error}</Alert>
         </div>
-      )}
-
-      {/* Edit only — there is no currency field while creating. Changing it does
-          not touch coupons already issued, which carry their own unit; saying so
-          avoids a merchant assuming a switch re-denominates what customers are
-          already holding. */}
-      {existing && (
-        <p className="mt-4 text-center text-xs text-mono-400">
-          Vouchers you have already issued keep the currency they were issued in.
-        </p>
       )}
     </Screen>
   )

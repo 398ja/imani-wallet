@@ -21,14 +21,16 @@ import {
  *
  * But they are not the same *set* of fields, and `mode` is what differs:
  *
- * - **create** asks only what a stall cannot open without. Where you trade and
- *   which currency you issue in are settings, not signup questions — a merchant
- *   registering at the market does not need them to make the first sale, and the
- *   currency has a working default.
- * - **edit** adds those two, and shows **coupon validity as read-only**. Validity
- *   is chosen once, at creation, and fixed after: coupons already issued carry
- *   the expiry they were issued with, so changing it later would describe the
- *   stall's history inaccurately without altering a single live coupon.
+ * - **create** asks what a stall cannot open without, plus the two answers that
+ *   are only ever given once: **currency and coupon validity**. Where you trade
+ *   is the one thing left to settings — a merchant registering at the market
+ *   does not need a map pin to make the first sale.
+ * - **edit** adds where you trade, and shows **currency and validity as
+ *   read-only**. Both are chosen at creation and fixed after, because coupons
+ *   already issued carry the unit and the expiry they were issued with:
+ *   changing either later would describe the stall's history inaccurately
+ *   without altering a single live coupon. A single currency is also what makes
+ *   one balance meaningful, on both sides of the counter.
  *
  * Controlled by the caller so each host owns its own save semantics: signup
  * publishes once at the end of `register`, settings publishes on submit.
@@ -95,34 +97,49 @@ export function MerchantFieldset({
         />
       )}
 
-      {/* Settings only. A new stall issues in the default currency until its
-          owner says otherwise, which is one less question at the market stall. */}
-      {mode === 'edit' && (
-        <div>
-          <label
-            htmlFor="issuance-currency"
-            className="mb-1.5 block text-sm font-medium text-mono-700 dark:text-mono-300"
-          >
-            Voucher currency
-          </label>
-          <select
-            id="issuance-currency"
-            value={value.issuanceCurrency}
-            onChange={(e) => set('issuanceCurrency', e.target.value)}
-            disabled={disabled}
-            className="w-full rounded-2xl border border-mono-200 bg-white px-3.5 py-2.5 text-sm text-mono-900 focus:border-mono-900 focus:outline-none disabled:opacity-50 dark:border-mono-800 dark:bg-mono-950 dark:text-mono-50 dark:focus:border-mono-50"
-          >
-            {CURRENCIES.map((currency) => (
-              <option key={currency} value={currency}>
-                {currency}
-              </option>
-            ))}
-          </select>
-          {/* Not editable per sale on purpose: every coupon this stall issues is
-              in one currency, which is what makes a single balance meaningful. */}
-          <p className="mt-1.5 text-xs text-mono-500">Every voucher you issue uses this currency.</p>
-        </div>
-      )}
+      {/* Same shape as validity below, and for the same reason — see `mode`. */}
+      <div>
+        {mode === 'create' ? (
+          <>
+            <label
+              htmlFor="issuance-currency"
+              className="mb-2 block text-sm font-medium text-mono-700 dark:text-mono-300"
+            >
+              Voucher currency
+            </label>
+            <select
+              id="issuance-currency"
+              value={value.issuanceCurrency}
+              onChange={(e) => set('issuanceCurrency', e.target.value)}
+              disabled={disabled}
+              className="w-full rounded-2xl border border-mono-200 bg-white px-3.5 py-2.5 text-sm text-mono-900 focus:border-mono-900 focus:outline-none disabled:opacity-50 dark:border-mono-800 dark:bg-mono-950 dark:text-mono-50 dark:focus:border-mono-50"
+            >
+              {CURRENCIES.map((currency) => (
+                <option key={currency} value={currency}>
+                  {currency}
+                </option>
+              ))}
+            </select>
+            {/* Said before it is chosen, not after it is locked. */}
+            <p className="mt-1.5 text-xs text-mono-500">
+              Every voucher you issue uses this currency. Choose carefully — this cannot be changed
+              later.
+            </p>
+          </>
+        ) : (
+          <>
+            <span className="mb-2 block text-sm font-medium text-mono-700 dark:text-mono-300">
+              Voucher currency
+            </span>
+            <p className="rounded-2xl border border-mono-200 px-3.5 py-2.5 text-sm text-mono-900 dark:border-mono-800 dark:text-mono-50">
+              {value.issuanceCurrency}
+            </p>
+            <p className="mt-1.5 text-xs text-mono-500">
+              Fixed when you started selling. Every voucher you have issued is in this currency.
+            </p>
+          </>
+        )}
+      </div>
 
       <div>
         <span className="mb-2 block text-sm font-medium text-mono-700 dark:text-mono-300">

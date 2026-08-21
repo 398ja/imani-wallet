@@ -264,11 +264,13 @@ function CreateForm({
       <div className="space-y-4">
         <div>
           <h2 className="text-lg font-semibold text-mono-900 dark:text-mono-50">What you sell</h2>
-          {/* No longer mentions currency — that moved to settings, along with
-              where you trade. Both have sensible defaults, so neither is worth a
-              question while someone is setting up at a market stall. */}
+          {/* Currency and validity are on this screen because they are the two
+              answers that cannot be revised — better asked while someone is
+              still deciding than found locked in settings afterwards. Where you
+              trade is not, and can wait. */}
           <p className="mt-0.5 text-sm text-mono-500">
-            You can add more in settings later.
+            The currency and expiry are fixed once you start selling. Everything else you can change
+            in settings later.
           </p>
         </div>
 
