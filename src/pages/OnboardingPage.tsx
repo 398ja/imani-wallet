@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { getPublicKey } from 'nostr-tools'
 import { hexToBytes } from '@noble/hashes/utils'
 
@@ -43,11 +43,23 @@ import {
  * Steps rather than routes, deliberately. The whole flow is one decision tree
  * with shared draft state, and a half-filled `/onboarding/account` URL is not
  * something anyone should be able to link to or reload into.
+ *
+ * Each step does push a history entry, though — same URL, the step carried in
+ * the router's location state. Android's back gesture is the platform's primary
+ * navigation, and a WebView with nothing to pop exits the app: without this,
+ * back from three screens into registration means goodbye rather than back.
  */
-type Step = 'start' | 'account' | 'import'
+type Step = 'start' | 'account' | 'profile' | 'merchant' | 'import'
 
 export function OnboardingPage({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<void> }) {
-  const [step, setStep] = useState<Step>('start')
+  // The step lives in history rather than in `useState`, so back walks the flow
+  // instead of leaving it. `navigate('.')` re-pushes this same URL, so the step
+  // rides in location state and the address bar never names it.
+  const location = useLocation()
+  const navigate = useNavigate()
+  const step = (location.state as { step?: Step } | null)?.step ?? 'start'
+  const push = (next: Step) => navigate('.', { state: { step: next } })
+  const back = () => navigate(-1)
 
   return (
     <div className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-6 p-6">
@@ -60,14 +72,14 @@ export function OnboardingPage({ onUnlock }: { onUnlock: (privkeyHex: string) =>
 
       {step === 'start' && (
         <div className="space-y-3">
-          <Button size="lg" className="w-full" onClick={() => setStep('account')}>
+          <Button size="lg" className="w-full" onClick={() => push('account')}>
             Register
           </Button>
           <Button
             size="lg"
             variant="outline"
             className="w-full"
-            onClick={() => setStep('import')}
+            onClick={() => push('import')}
           >
             Log in
           </Button>
@@ -84,9 +96,11 @@ export function OnboardingPage({ onUnlock }: { onUnlock: (privkeyHex: string) =>
         </div>
       )}
 
-      {step === 'account' && <CreateForm onUnlock={onUnlock} onBack={() => setStep('start')} />}
+      {(step === 'account' || step === 'profile' || step === 'merchant') && (
+        <CreateForm step={step} onStep={push} onUnlock={onUnlock} onBack={back} />
+      )}
 
-      {step === 'import' && <ImportForm onUnlock={onUnlock} onBack={() => setStep('start')} />}
+      {step === 'import' && <ImportForm onUnlock={onUnlock} onBack={back} />}
     </div>
   )
 }
@@ -103,9 +117,13 @@ function BackButton({ onClick, disabled }: { onClick: () => void; disabled?: boo
 type Availability = 'idle' | 'checking' | 'free' | 'taken'
 
 function CreateForm({
+  step,
+  onStep,
   onUnlock,
   onBack,
 }: {
+  step: 'account' | 'profile' | 'merchant'
+  onStep: (next: 'profile' | 'merchant') => void
   onUnlock: (privkeyHex: string) => Promise<void>
   onBack: () => void
 }) {
@@ -121,7 +139,6 @@ function CreateForm({
   // reaches 'merchant' while the switch is on, so a customer never meets the
   // stall questions at all.
   const [isMerchant, setIsMerchant] = useState(false)
-  const [step, setStep] = useState<'account' | 'profile' | 'merchant'>('account')
   const [displayName, setDisplayName] = useState('')
   const [about, setAbout] = useState('')
   const [merchant, setMerchant] = useState<MerchantFields>(() => ({
@@ -171,6 +188,11 @@ function CreateForm({
   const complete =
     handle !== '' && passphrase !== '' && confirm !== '' && !handleError && !passphraseError && !confirmError
 
+  // Reloading restores the step from history but not the draft above it, which
+  // would leave a merchant screen ready to submit an empty account. Only the
+  // step you could have reached honestly renders.
+  const current = complete ? step : 'account'
+
   const submit = async () => {
     setBusy(true)
     setError(null)
@@ -211,7 +233,7 @@ function CreateForm({
   // No photo here. Uploading one needs a Blossom auth event, and at this point
   // in the flow the key exists but nothing has been claimed or stored yet — the
   // avatar is one tap away at /profile the moment the account is real.
-  if (step === 'profile') {
+  if (current === 'profile') {
     return (
       <div className="space-y-4">
         <div>
@@ -249,17 +271,17 @@ function CreateForm({
           />
         </div>
 
-        <Button size="lg" className="w-full" disabled={busy} onClick={() => setStep('merchant')}>
+        <Button size="lg" className="w-full" disabled={busy} onClick={() => onStep('merchant')}>
           Continue
         </Button>
 
-        <BackButton disabled={busy} onClick={() => setStep('account')} />
+        <BackButton disabled={busy} onClick={onBack} />
       </div>
     )
   }
 
   // Step three.
-  if (step === 'merchant') {
+  if (current === 'merchant') {
     return (
       <div className="space-y-4">
         <div>
@@ -285,7 +307,7 @@ function CreateForm({
           {busy ? 'Creating your account…' : 'Create merchant account'}
         </Button>
 
-        <BackButton disabled={busy} onClick={() => setStep('account')} />
+        <BackButton disabled={busy} onClick={onBack} />
 
         {error && <Alert>{error}</Alert>}
       </div>
@@ -382,7 +404,7 @@ function CreateForm({
                 // taps straight through still ends up with the name they just
                 // chose, not an anonymous npub on every coupon.
                 if (displayName === '') setDisplayName(handle)
-                setStep('profile')
+                onStep('profile')
               }
             : submit
         }
