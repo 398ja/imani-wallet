@@ -120,10 +120,17 @@ function RequestForm({
   )
 }
 
+/*
+ * Two shades per colour, not one. These are xs text on a tinted fill, so they
+ * need 4.5:1 in BOTH themes, and no single step of the ramp gives it: green 600
+ * is 3.3:1 on white, and red 500 is 3.8:1. The darker step carries the light
+ * theme and the lighter one carries the dark, which is the same pairing the
+ * mono row below already uses and the same red as every other error in the app.
+ */
 const STATUS_STYLE: Record<VoucherPaymentRequest['status'], string> = {
   pending: 'bg-mono-100 text-mono-600 dark:bg-mono-900 dark:text-mono-300',
-  fulfilled: 'bg-green-600/10 text-green-600',
-  expired: 'bg-red-500/10 text-red-500',
+  fulfilled: 'bg-green-600/10 text-green-700 dark:text-green-500',
+  expired: 'bg-red-600/10 text-red-600 dark:text-red-400',
 }
 
 const STATUS_LABEL: Record<VoucherPaymentRequest['status'], string> = {
