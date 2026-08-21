@@ -11,7 +11,7 @@ describe('identityLabel', () => {
     expect(identityLabel(HEX, { name: 'Rosa Green Farm', nip05: 'rosa@x.test' })).toBe(
       'Rosa Green Farm',
     )
-    expect(identityLabel(HEX, { nip05: 'rosa@x.test' })).toBe('rosa@x.test')
+    expect(identityLabel(HEX, { nip05: 'rosa@x.test' })).toBe('@rosa')
     expect(identityLabel(HEX, undefined)).toBe('aaaaaaaa…aaaa')
   })
 
@@ -19,12 +19,12 @@ describe('identityLabel', () => {
     // `toMerchants` fills `name` with `merchantName || merchantId`, so an
     // unbranded merchant's "name" is 64 hex characters. Passing it through would
     // put back exactly the string this module exists to remove.
-    expect(identityLabel(HEX, { name: HEX, nip05: 'rosa@x.test' })).toBe('rosa@x.test')
+    expect(identityLabel(HEX, { name: HEX, nip05: 'rosa@x.test' })).toBe('@rosa')
     expect(identityLabel(HEX, { name: HEX })).toBe('aaaaaaaa…aaaa')
   })
 
   it('shows the handle under the name, and never under itself', () => {
-    expect(identitySubLabel({ name: 'Rosa', nip05: 'rosa@x.test' })).toBe('rosa@x.test')
+    expect(identitySubLabel({ name: 'Rosa', nip05: 'rosa@x.test' })).toBe('@rosa')
     expect(identitySubLabel({ nip05: 'rosa@x.test' })).toBeUndefined()
     expect(identitySubLabel({ name: 'Rosa' })).toBeUndefined()
   })

@@ -5,6 +5,7 @@ import type { UploadSlot } from '@imani/blossom-upload'
 import { Avatar, Screen, BackLink, PageHeader, Button, Input, Alert } from '../components/ui'
 import { buildProfileEvent, profileName, saveProfile, type Profile } from '../lib/profile'
 import { getSigner } from '../lib/nap'
+import { handleLabel } from '../lib/format'
 import { publish } from '../lib/relay'
 import { ACCEPT_ATTRIBUTE, blossomServer, uploadImage } from '../lib/blossom'
 import { validateWebsite } from '../lib/validate'
@@ -159,7 +160,7 @@ export function ProfileEditPage({
         </Field>
 
         <Field label="Handle">
-          <Input value={profile.nip05 ?? 'Not set'} readOnly disabled />
+          <Input value={profile.nip05 ? handleLabel(profile.nip05) : 'Not set'} readOnly disabled />
           <p className="mt-1 text-xs text-mono-500">
             Your handle was set when you created your account and cannot be changed here.
           </p>

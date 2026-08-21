@@ -5,9 +5,23 @@ import {
   formatDate,
   formatFace,
   formatSats,
+  handleLabel,
   parseAmountToMinor,
   shortPubkey,
 } from '../format'
+
+describe('handleLabel', () => {
+  it('drops the domain', () => {
+    expect(handleLabel('song@staging.398ja.xyz')).toBe('@song')
+  })
+
+  it('leaves a value with no domain alone but for the prefix', () => {
+    // Not a case the app produces — `nip05` is written as `name@domain` at
+    // registration — but a kind-0 is publishable by anyone, and this string
+    // lands in the DOM.
+    expect(handleLabel('song')).toBe('@song')
+  })
+})
 
 describe('formatDate', () => {
   it('reads epoch milliseconds and epoch seconds as the same moment', () => {

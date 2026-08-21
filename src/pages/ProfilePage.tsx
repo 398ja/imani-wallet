@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router-dom'
 
 import { Avatar, Screen, BackLink, Button } from '../components/ui'
-import { profileName, type Profile } from '../lib/profile'
+import { profileHandle, profileName, type Profile } from '../lib/profile'
 
 /**
  * Your own profile, as others see it.
@@ -15,6 +15,7 @@ import { profileName, type Profile } from '../lib/profile'
  */
 export function ProfilePage({ profile }: { profile: Profile }) {
   const navigate = useNavigate()
+  const handle = profileHandle(profile)
 
   return (
     <Screen>
@@ -33,8 +34,11 @@ export function ProfilePage({ profile }: { profile: Profile }) {
           <h1 className="text-xl font-semibold text-mono-900 dark:text-mono-50">
             {profileName(profile)}
           </h1>
-          {/* Not monospaced — a handle is a word, not a key. */}
-          {profile.nip05 && <p className="text-sm text-mono-500">{profile.nip05}</p>}
+          {/* Not monospaced — a handle is a word, not a key. In the primary ink
+              and `@song` rather than the full address, the same as both home
+              screens: this pair of lines is one answer to "who is this", and it
+              should read identically wherever it appears. */}
+          {handle && <p className="text-sm text-mono-900 dark:text-mono-50">{handle}</p>}
         </div>
 
         {profile.about && (

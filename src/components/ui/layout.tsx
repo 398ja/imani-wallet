@@ -33,10 +33,25 @@ export function BackLink({ to, label }: { to: string; label: string }) {
   )
 }
 
-export function PageHeader({ title, subtitle }: { title: string; subtitle?: string }) {
+/**
+ * `handle` sits BETWEEN the title and the subtitle, and unlike the subtitle it
+ * is in the primary ink rather than mono-500. It is not a caption on the name —
+ * it is the other half of the same answer to "who is this", and the one half a
+ * customer can actually type into Pay.
+ */
+export function PageHeader({
+  title,
+  handle,
+  subtitle,
+}: {
+  title: string
+  handle?: string
+  subtitle?: string
+}) {
   return (
     <header className="mb-6">
       <h1 className="text-xl font-semibold text-mono-900 dark:text-mono-50">{title}</h1>
+      {handle ? <p className="text-sm text-mono-900 dark:text-mono-50">{handle}</p> : null}
       {subtitle ? <p className="text-sm text-mono-500">{subtitle}</p> : null}
     </header>
   )

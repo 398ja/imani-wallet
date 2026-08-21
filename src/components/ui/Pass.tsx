@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import QRCode from 'qrcode'
 
 import type { PassField, PassJson } from '../../lib/pass'
-import { formatDate, formatFace, shortPubkey } from '../../lib/format'
+import { formatDate, formatFace, handleLabel, shortPubkey } from '../../lib/format'
 import { Avatar } from './Avatar'
 
 /**
@@ -127,7 +127,7 @@ export function Pass({ pass, to }: PassProps) {
                 className={`truncate text-[0.625rem] ${nip05 ? '' : 'font-mono'}`}
                 style={{ color: pass.labelColor, opacity: 0.55 }}
               >
-                {nip05 ?? shortPubkey(issuer)}
+                {nip05 ? handleLabel(nip05) : shortPubkey(issuer)}
               </p>
             )}
           </div>

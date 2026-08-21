@@ -16,7 +16,7 @@ import { toMerchants, walletTotals } from '../lib/merchants'
 import { toTransaction, type WalletTransaction } from '../lib/transactions'
 import { expiringSoon } from '../lib/stats'
 import { formatDate, formatFace } from '../lib/format'
-import { profileName, type Profile } from '../lib/profile'
+import { profileHandle, profileName, type Profile } from '../lib/profile'
 import type { MerchantProfile } from '../lib/merchant'
 
 /**
@@ -68,6 +68,7 @@ export function MerchantHomePage({
     <Screen>
       <PageHeader
         title={profileName(profile)}
+        handle={profileHandle(profile)}
         subtitle={merchant.businessType ?? merchant.categories.join(', ') ?? undefined}
       />
 
