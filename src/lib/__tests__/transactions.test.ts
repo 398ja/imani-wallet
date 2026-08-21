@@ -7,6 +7,7 @@ import {
   transactionLabel,
   buildPaymentTransaction,
   buildIssueTransaction,
+  buildSentTransaction,
 } from '../transactions'
 
 /**
@@ -208,5 +209,59 @@ describe('transactionLabel', () => {
     expect(at('payment')).toBe('Paid')
     expect(at('issued')).toBe('Issued')
     expect(at('received')).toBe('Received')
+  })
+})
+
+describe('buildSentTransaction', () => {
+  const ISSUER = 'f'.repeat(64)
+  const FRIEND = 'd'.repeat(64)
+
+  const sent = (over: Record<string, unknown> = {}) =>
+    buildSentTransaction({
+      tokenId: 'ce4f3df2c561debdf260d4fdc77ed8b8',
+      amount: 250,
+      unit: 'EUR',
+      decimals: 2,
+      merchantId: ISSUER,
+      merchantName: 'Rosa Green Farm',
+      recipientPubkey: FRIEND,
+      recipientName: 'Ama',
+      voucherId: 'v-1',
+      at: 1786525200000,
+      ...over,
+    })
+
+  it('files the send under the ISSUER and names the recipient beside it', () => {
+    // The split that keeps a friend off the home deck: `withPastMerchants` turns
+    // a transaction counterparty into a merchant card, so a recipient stored in
+    // `merchantId` would appear there as a shop. Keying on the issuer also puts
+    // the send in the right merchant's history — `transactionsWith` reads
+    // `merchantId ?? counterparty`.
+    const row = toTransaction(sent())
+
+    expect(row.merchantId).toBe(ISSUER)
+    expect(row.counterparty).toBe(FRIEND)
+    expect(row.recipientName).toBe('Ama')
+  })
+
+  it('is money leaving the wallet', () => {
+    expect(toTransaction(sent()).direction).toBe('out')
+  })
+
+  it('is one row per voucher spent, so re-recording overwrites', () => {
+    expect(sent().id).toBe('sent:ce4f3df2c561debdf260d4fdc77ed8b8')
+    expect(sent().id).toBe(sent({ amount: 999 }).id)
+  })
+
+  it('names the recipient, not the issuer, when the history asks who', () => {
+    // The one type whose subject is not its merchantId. Without the special case
+    // a row about handing money to a friend reads "Rosa Green Farm".
+    expect(counterpartyOf(toTransaction(sent()))).toBe('Ama')
+    // No name resolved at send time — the pubkey beats naming the wrong person.
+    expect(counterpartyOf(toTransaction(sent({ recipientName: undefined })))).toBe(FRIEND)
+  })
+
+  it('reads as Sent', () => {
+    expect(transactionLabel(toTransaction(sent()))).toBe('Sent')
   })
 })

@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ClipboardPaste, Check } from 'lucide-react'
+import { Check } from 'lucide-react'
 
 import {
   Button,
@@ -12,7 +12,8 @@ import {
   Input,
   IdentityInline,
 } from '../components/ui'
-import { issueAndDeliver, toRecipientPubkey, type IssueStage } from '../lib/issue'
+import { ScanRecipient } from '../components/ScanRecipient'
+import { issueAndDeliver, type IssueStage } from '../lib/issue'
 import { identityLabel, useIdentity } from '../lib/identity'
 import { currencyDecimals, formatDate, formatFace, parseAmountToMinor } from '../lib/format'
 import { ValidityPicker } from '../components/ValidityPicker'
@@ -50,7 +51,7 @@ export function SellPage({ pubkey, merchant }: { pubkey: string; merchant: Merch
       <PageHeader title="Sell" subtitle={customer ? undefined : "Scan the customer's code"} />
 
       {customer === null ? (
-        <ScanCustomer onFound={setCustomer} />
+        <ScanRecipient onFound={setCustomer} selfPubkey={pubkey} />
       ) : (
         <IssueForm
           customer={customer}
@@ -61,132 +62,6 @@ export function SellPage({ pubkey, merchant }: { pubkey: string; merchant: Merch
         />
       )}
     </Screen>
-  )
-}
-
-/**
- * Read the customer's address off their screen.
- *
- * Same shape as ScanPage: dynamic `qr-scanner` import, a `cancelled` flag so the
- * async import losing the race with unmount cannot start a scanner nobody will
- * stop, and a paste fallback for when the camera is unavailable.
- *
- * What comes back is a NIP-05 handle, which `toRecipientPubkey` resolves. npub
- * and hex still work — coupons are addressed to a pubkey either way, and on a
- * dev machine, where no handle resolves, they are the only forms that do.
- */
-function ScanCustomer({ onFound }: { onFound: (pubkey: string) => void }) {
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [manual, setManual] = useState('')
-  const [looking, setLooking] = useState(false)
-
-  useEffect(() => {
-    let scanner: { start(): Promise<void>; destroy(): void } | undefined
-    let cancelled = false
-
-    // A handle costs a round trip to resolve, and the scanner fires several
-    // times a second on the same code — without this the merchant's phone opens
-    // a dozen identical lookups while the first is still in flight.
-    let resolving = false
-
-    const accept = async (text: string) => {
-      if (resolving) return
-      resolving = true
-      try {
-        const hex = await toRecipientPubkey(text)
-        if (cancelled) return
-        if (!hex) {
-          setError('That code is not a customer account.')
-          return
-        }
-        onFound(hex)
-      } finally {
-        resolving = false
-      }
-    }
-
-    ;(async () => {
-      const { default: QrScanner } = await import('qr-scanner')
-      if (cancelled || !videoRef.current) return
-
-      scanner = new QrScanner(videoRef.current, (result) => void accept(result.data), {
-        highlightScanRegion: true,
-        highlightCodeOutline: true,
-      })
-      try {
-        await scanner.start()
-      } catch (e) {
-        setError(
-          e instanceof Error
-            ? `Camera unavailable: ${e.message}. Paste their code instead.`
-            : 'Camera unavailable. Paste their code instead.',
-        )
-      }
-    })()
-
-    return () => {
-      cancelled = true
-      scanner?.destroy()
-    }
-    // onFound is a setState updater, stable for the life of the page.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  const submitManual = async () => {
-    setError(null)
-    setLooking(true)
-    const hex = await toRecipientPubkey(manual)
-    setLooking(false)
-    if (!hex) {
-      setError('That is not a customer we can find.')
-      return
-    }
-    onFound(hex)
-  }
-
-  return (
-    <>
-      <div className="overflow-hidden rounded-2xl bg-mono-900">
-        <video ref={videoRef} className="aspect-square w-full object-cover" />
-      </div>
-
-      {error && (
-        <div className="mt-3">
-          <Alert>{error}</Alert>
-        </div>
-      )}
-
-      <div className="mt-4 space-y-2">
-        <Input
-          label="Or enter their handle"
-          placeholder="name"
-          value={manual}
-          onChange={(e) => setManual(e.target.value)}
-        />
-        <Button
-          variant="outline"
-          className="w-full"
-          disabled={looking}
-          onClick={() => void submitManual()}
-        >
-          {looking ? 'Looking them up…' : 'Continue'}
-        </Button>
-        <Button
-          variant="ghost"
-          className="w-full"
-          onClick={async () => {
-            try {
-              setManual(await navigator.clipboard.readText())
-            } catch {
-              setError('Could not read the clipboard.')
-            }
-          }}
-        >
-          <ClipboardPaste className="mr-2 h-4 w-4" /> Paste
-        </Button>
-      </div>
-    </>
   )
 }
 

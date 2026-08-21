@@ -41,6 +41,7 @@ import { CouponsPage, TransactionsPage } from './pages/RecordListPages'
 import { CouponPage, TransactionPage } from './pages/RecordDetailPages'
 import { ScanPage } from './pages/ScanPage'
 import { PayPage } from './pages/PayPage'
+import { SendPage } from './pages/SendPage'
 import { ReceivePage } from './pages/ReceivePage'
 import { ProfilePage } from './pages/ProfilePage'
 import { SettingsPage } from './pages/SettingsPage'
@@ -235,6 +236,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         )}
         <Route path="/scan" element={<ScanPage />} />
         <Route path="/pay" element={<PayPage pubkey={pubkey} />} />
+        <Route path="/send" element={<SendPage pubkey={pubkey} />} />
         <Route path="/receive" element={<ReceivePage profile={profile} />} />
         <Route path="/merchants/:pubkey" element={<MerchantPage />} />
         <Route path="/merchants/:pubkey/coupons" element={<CouponsPage />} />

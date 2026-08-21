@@ -37,3 +37,29 @@ export function initNative(): void {
   // light background", which reads backwards.
   StatusBar.setStyle({ style: Style.Light })
 }
+
+/**
+ * Read the clipboard, on a platform where the web API is not enough.
+ *
+ * `navigator.clipboard.readText()` is not implemented in Android's WebView, so
+ * on device every Paste button in this app threw and reported "Could not read
+ * the clipboard" — the camera being unavailable is exactly when paste matters,
+ * so the fallback was broken in the one case it existed for.
+ *
+ * Capacitor's plugin is the native path; the web API stays for `npm run dev`
+ * and the deployed web wallet, where it works and the plugin is a no-op shim.
+ * Returns null rather than throwing: every caller shows the same message, and
+ * there is nothing a caller could do differently with the reason.
+ */
+export async function readClipboard(): Promise<string | null> {
+  try {
+    if (Capacitor.isNativePlatform()) {
+      const { Clipboard } = await import('@capacitor/clipboard')
+      const { value } = await Clipboard.read()
+      return value || null
+    }
+    return (await navigator.clipboard.readText()) || null
+  } catch {
+    return null
+  }
+}

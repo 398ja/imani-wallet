@@ -28,6 +28,12 @@ export interface WalletTransaction {
   merchantId?: string
   merchantName?: string
   counterparty?: string
+  /**
+   * Display name of whoever a `'sent'` row went to. Stored at send time rather
+   * than resolved on read: `counterparty` is a bare pubkey, and the kind-0 that
+   * names it may be unreachable by the time the history is opened.
+   */
+  recipientName?: string
   voucherId?: string
   tokenId?: string
   memo?: string
@@ -74,8 +80,9 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     // it puts an incoming arrow on money leaving the wallet.
     // 'issued' joins 'payment' on the outgoing side: a merchant handing a
     // customer a coupon is value leaving this wallet, exactly as paying a
-    // merchant is. Anything else is incoming.
-    direction: type === 'payment' || type === 'issued' ? 'out' : 'in',
+    // merchant is. 'sent' is the customer's own version of the same thing —
+    // a voucher passed to someone else. Anything else is incoming.
+    direction: type === 'payment' || type === 'issued' || type === 'sent' ? 'out' : 'in',
     at: toEpochMs(r.timestamp ?? r.created_at),
     amount: Number(r.amount ?? 0),
     unit: String(r.unit ?? r.face_unit ?? 'UNKNOWN'),
@@ -86,6 +93,7 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     voucherId: str(r.voucherId) ?? str(r.voucher_id),
     tokenId: str(r.tokenId) ?? str(r.token_id),
     memo: str(r.memo),
+    recipientName: str(r.recipientName),
     bundleId: str(r.bundleId) ?? str(r.bundle_id),
     // Through the same normaliser as `timestamp`: it is written in seconds (the
     // gateway's unit) and read back for display in milliseconds.
@@ -192,13 +200,75 @@ export function buildIssueTransaction(input: {
   } as unknown as TransactionRow
 }
 
-/** Who the transaction was with, best available: name, else pubkey, else ''. */
+/**
+ * The row to store when this wallet sends a voucher to another person.
+ *
+ * The field split is the whole point of this builder, and getting it backwards
+ * is what makes the home screen wrong:
+ *
+ *  - `merchantId` is the **issuer** of the voucher being spent, NOT the person
+ *    receiving it. `withPastMerchants` (lib/merchants.ts) turns any transaction
+ *    counterparty that is not a currently-held merchant into a merchant card on
+ *    the customer's home deck — so recording a friend's pubkey there would put
+ *    that friend on the deck as a merchant, with a merchant page of their own.
+ *    Keying on the issuer also files the send in the right place: spending
+ *    Merchant A's vouchers IS Merchant A activity, and `transactionsWith` reads
+ *    `merchantId ?? counterparty`, so the row lands on their history.
+ *  - `counterparty` is the recipient, which is what the row is *about*, and
+ *    `recipientName` names them — see `counterpartyOf`.
+ *
+ * Id follows the writer's `${type}:${tokenId}` convention, keyed on the SPENT
+ * voucher's token_id: one send per voucher, so re-recording overwrites rather
+ * than duplicating.
+ */
+export function buildSentTransaction(input: {
+  tokenId: string
+  amount: number
+  unit: string
+  decimals: number
+  /** Issuer of the voucher spent — see above, this is not the recipient. */
+  merchantId: string
+  merchantName?: string
+  recipientPubkey: string
+  recipientName?: string
+  voucherId?: string
+  memo?: string
+  at: number
+}): TransactionRow {
+  return {
+    id: `sent:${input.tokenId}`,
+    txId: `sent:${input.tokenId}`,
+    type: 'sent',
+    direction: 'out',
+    timestamp: input.at,
+    amount: input.amount,
+    unit: input.unit,
+    decimals: input.decimals,
+    merchantId: input.merchantId,
+    merchantName: input.merchantName ?? null,
+    counterparty: input.recipientPubkey,
+    recipientName: input.recipientName ?? null,
+    voucherId: input.voucherId,
+    tokenId: input.tokenId,
+    memo: input.memo || 'Voucher sent',
+  } as unknown as TransactionRow
+}
+
+/**
+ * Who the transaction was with, best available: name, else pubkey, else ''.
+ *
+ * A `'sent'` row is the one type whose subject is NOT its `merchantId` — that
+ * field holds the issuer of the voucher spent, so the general fallback would
+ * name the merchant on a row about handing money to a friend.
+ */
 export function counterpartyOf(tx: WalletTransaction): string {
+  if (tx.type === 'sent') return tx.recipientName ?? tx.counterparty ?? ''
   return tx.merchantName ?? tx.merchantId ?? tx.counterparty ?? ''
 }
 
 /** Human label for the row type. */
 export function transactionLabel(tx: WalletTransaction): string {
   if (tx.type === 'payment') return 'Paid'
+  if (tx.type === 'sent') return 'Sent'
   return tx.type === 'issued' ? 'Issued' : 'Received'
 }

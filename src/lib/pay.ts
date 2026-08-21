@@ -4,7 +4,7 @@ import type { VoucherRow } from '@imani/wallet-storage'
 import { getWallet, listVouchers, notifyWalletChanged } from './wallet'
 import { legacyApi } from './legacyBridge'
 import { couponsFor, toVoucher, type Merchant } from './merchants'
-import { buildPaymentTransaction } from './transactions'
+import { buildPaymentTransaction, buildSentTransaction } from './transactions'
 import type { NUT18VRequest } from './nap'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
 
@@ -323,8 +323,18 @@ export interface PendingSend {
   amount: number
   unit: string
   decimals: number
+  /** Issuer of the coupon being spent — NEVER the person it was sent to. */
   merchantPubkey: string
   merchantName?: string
+  /**
+   * Set only on a customer-to-customer send; absent means this is a payment to
+   * the merchant named above. It is what makes `settleSend` write a 'sent' row
+   * instead of a 'payment' one, and it is stored rather than re-derived for the
+   * same reason as everything else here: by reconcile time the recipient is
+   * long out of scope, and a name resolved from kind-0 may be unreachable.
+   */
+  recipientPubkey?: string
+  recipientName?: string
   voucherId?: string
   memo?: string
   /** Source coupon's face, for the change when the gateway omits keep_face_value. */
@@ -438,19 +448,30 @@ async function settleSend(
   // the money. If this throws, the payment still happened and the coupon is
   // correctly gone — a missing history entry beats a phantom coupon, so it is
   // non-fatal but never silent.
+  //
+  // Which row depends on where the money went, and `recipientPubkey` is the only
+  // thing that knows: same saga, same settle, two records. See
+  // `buildSentTransaction` for why a send keeps the ISSUER in `merchantId`.
   try {
+    const common = {
+      tokenId: spentTokenId,
+      amount: pending.amount,
+      unit: pending.unit,
+      decimals: pending.decimals,
+      merchantId: pending.merchantPubkey,
+      merchantName: pending.merchantName,
+      voucherId: pending.voucherId,
+      memo: pending.memo,
+      at: pending.at,
+    }
     await wallet.addTransaction(
-      buildPaymentTransaction({
-        tokenId: spentTokenId,
-        amount: pending.amount,
-        unit: pending.unit,
-        decimals: pending.decimals,
-        merchantId: pending.merchantPubkey,
-        merchantName: pending.merchantName,
-        voucherId: pending.voucherId,
-        memo: pending.memo,
-        at: pending.at,
-      }),
+      pending.recipientPubkey
+        ? buildSentTransaction({
+            ...common,
+            recipientPubkey: pending.recipientPubkey,
+            recipientName: pending.recipientName,
+          })
+        : buildPaymentTransaction(common),
     )
   } catch (error) {
     console.error('[pay] payment recorded at the gateway but not in local history', error)
@@ -571,6 +592,163 @@ export function buildSendParams(
   }
 }
 
+/** The slice of imani-apps' `api` client the send saga uses. */
+type SendApi = {
+  initiateAtomicSend(
+    params: Record<string, unknown>,
+    idempotencyKey?: string | null,
+  ): Promise<{ send_id?: string; sendId?: string; status?: string }>
+  getAtomicSendStatus(sendId: string): Promise<SendStatus>
+  ackKeepToken(sendId: string): Promise<void>
+  reclaimAtomicSend(sendId: string): Promise<{ status?: string; reclaimed_token?: string }>
+}
+
+/**
+ * Bring up imani-apps' api.js as a classic script and, critically, its NIP-98
+ * credentials — /api/v1/atomic-send is authenticated.
+ */
+async function sendApi(): Promise<SendApi> {
+  const api = (await legacyApi()) as unknown as SendApi
+  if (!api?.initiateAtomicSend) throw new Error('Gateway API client is not loaded.')
+  return api
+}
+
+/**
+ * This merchant's spendable coupons, each paired with the row behind it.
+ *
+ * `couponsFor` rather than a local filter, so every screen shares ONE definition
+ * of "this merchant's coupons". The local filter was `v.issuer_id ===
+ * merchant.pubkey`, comparing a raw issuer id against a VoucherGrouper-normalised
+ * pubkey; every other comparison in the app lowercases first, so any row whose
+ * issuer_id differed only in case was invisible while its coupon sat on the
+ * merchant's card. It also filters expired coupons, which a send would have
+ * failed on anyway.
+ *
+ * The ROW is kept beside each Voucher because `toVoucher` drops `token_id`, and
+ * that is the only thing that can address one coupon in the store. Object
+ * identity is safe as the map key because `selectVouchers` filters and sorts —
+ * it never clones — so the candidates it returns are these same objects.
+ */
+async function spendableFrom(merchantPubkey: string): Promise<{
+  mine: Voucher[]
+  rowOf: Map<Voucher, VoucherRow>
+}> {
+  const rows = couponsFor(await listVouchers(), merchantPubkey)
+  const rowOf = new Map<Voucher, VoucherRow>()
+  const mine = rows.map((row) => {
+    const voucher = toVoucher(row)
+    rowOf.set(voucher, row)
+    return voucher
+  })
+  return { mine, rowOf }
+}
+
+/**
+ * Start the saga on the first candidate the gateway will accept.
+ *
+ * A coupon whose previous send is still in flight is refused outright ("An
+ * active send already exists for voucher …"). On this stack that state is
+ * permanent for any send that failed at DM delivery, since reclaim is
+ * unavailable — so a single stuck coupon must not block a wallet that holds
+ * seven good ones. Walk past the refused ones instead of failing on the first.
+ */
+async function initiateOnFirstFree(
+  api: SendApi,
+  candidates: Voucher[],
+  rowOf: Map<Voucher, VoucherRow>,
+  buildParams: (candidate: Voucher) => Record<string, unknown>,
+  keyFor: (candidate: Voucher) => string,
+): Promise<{ sendId: string; status?: string; voucher: Voucher; sourceRow: VoucherRow }> {
+  let lastRefusal: Error | null = null
+
+  for (const candidate of candidates) {
+    try {
+      const initiated = await api.initiateAtomicSend(buildParams(candidate), keyFor(candidate))
+      const sendId = initiated.send_id ?? initiated.sendId
+      if (!sendId) throw new Error('Gateway accepted the send but returned no send id.')
+      const sourceRow = rowOf.get(candidate)
+      if (!sourceRow) throw new Error('Lost track of the voucher being spent.')
+      return { sendId, status: initiated.status, voucher: candidate, sourceRow }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (!message.includes('active send already exists')) throw error
+      lastRefusal = error instanceof Error ? error : new Error(message)
+      console.warn('[pay] coupon busy, trying the next one:', candidate.voucher_id)
+    }
+  }
+
+  throw new Error(
+    `Every voucher from this merchant is tied up in an unfinished send. ${lastRefusal?.message ?? ''}`.trim(),
+  )
+}
+
+/**
+ * Wait for the saga to reach a terminal state, then settle the local side.
+ *
+ * Shared by the merchant-payment and person-to-person paths deliberately: this
+ * is where the money is either recorded or lost, and two copies would be two
+ * chances to get the change coupon wrong.
+ */
+async function awaitAndSettle(
+  api: SendApi,
+  payer: string,
+  pending: PendingSend,
+  initialStatus: string | undefined,
+): Promise<void> {
+  // ponytail: poll rather than subscribe. The saga also streams over SSE
+  // (api.subscribeAtomicSendEvents), which is what the vanilla app uses — but
+  // SSE on this stack drops with ERR_INCOMPLETE_CHUNKED_ENCODING (§11.4), and a
+  // dropped stream would read as a stuck payment. Swap to SSE when that is
+  // fixed; the terminal-state handling below is the same either way.
+  let status: SendStatus = { status: initialStatus }
+  for (let i = 0; i < POLL_ATTEMPTS && !TERMINAL.includes(String(status.status)); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
+    status = await api.getAtomicSendStatus(pending.sendId)
+  }
+
+  const wallet = getWallet()
+  const noun = pending.recipientPubkey ? 'send' : 'payment'
+
+  // Running out of polls is NOT a failure, and must not be reported as one. A
+  // saga still mid-flight has a non-terminal status, which used to fall into the
+  // branch below and tell the customer "Payment did not complete" — while the
+  // recipient went on to receive the coupon moments later. `reclaim` could not
+  // soften it either: a non-terminal status is not in RECLAIMABLE, so it
+  // returned '' and nothing was reclaimed.
+  //
+  // The local coupon is deliberately left untouched: we do not know the outcome,
+  // and deleting a coupon for a send that may yet fail is worse than showing one
+  // that may already be spent. What is NOT left is the send itself — it goes in
+  // the pending ledger so `reconcilePendingSends` can finish it on the next
+  // login. Before that, a saga that completed late completed only at the
+  // gateway; see that function for what it cost.
+  if (!TERMINAL.includes(String(status.status))) {
+    rememberPendingSend(payer, pending)
+    throw new Error(
+      `This ${noun} is still going through at the gateway (send ${pending.sendId}, ` +
+        `${status.status ?? 'no status'}). It has NOT failed and your voucher is ` +
+        `unchanged here — check your history again in a moment before retrying.`,
+    )
+  }
+
+  if (status.status !== 'COMPLETED') {
+    // The saga has already burned the source coupon's proofs by this point and
+    // is holding the replacement (TOKEN_HELD). Failing without reclaiming would
+    // leave the customer's money in an escrow they cannot see — the coupon
+    // would still be listed locally while being unspendable. The backend says
+    // as much on DM_ERROR: "sender should reclaim via RECLAIM_FROM_DM_ERROR".
+    const note = await reclaim(api, wallet, pending.sendId, pending.tokenId, status)
+    throw new Error(
+      `This ${noun} did not complete (${status.status ?? 'no status'})` +
+        `${status.error_message ?? status.error ? `: ${status.error_message ?? status.error}` : ''}` +
+        note,
+    )
+  }
+
+  await settleSend(api, wallet, pending, status)
+  notifyWalletChanged()
+}
+
 export async function payRequest({
   request,
   merchant,
@@ -589,38 +767,9 @@ export async function payRequest({
     throw new Error('This payment request has expired.')
   }
 
-  // Brings up imani-apps' api.js as a classic script and, critically, its
-  // NIP-98 credentials — /api/v1/atomic-send is authenticated.
-  const api = (await legacyApi()) as unknown as {
-    initiateAtomicSend(
-      params: Record<string, unknown>,
-      idempotencyKey?: string | null,
-    ): Promise<{ send_id?: string; sendId?: string; status?: string }>
-    getAtomicSendStatus(sendId: string): Promise<SendStatus>
-    ackKeepToken(sendId: string): Promise<void>
-    reclaimAtomicSend(sendId: string): Promise<{ status?: string; reclaimed_token?: string }>
-  }
-  if (!api?.initiateAtomicSend) throw new Error('Gateway API client is not loaded.')
+  const api = await sendApi()
+  const { mine, rowOf } = await spendableFrom(merchant.pubkey)
 
-  // `couponsFor` rather than a local filter, so the pay screen and the merchant
-  // screens share ONE definition of "this merchant's coupons". The local filter was
-  // `v.issuer_id === merchant.pubkey`, comparing a raw issuer id against a
-  // VoucherGrouper-normalised pubkey; every other comparison in the app
-  // lowercases first, so any row whose issuer_id differed only in case was
-  // invisible here while its coupon sat on the merchant's card. It also filters
-  // expired coupons, which the send would have failed on anyway.
-  //
-  // The ROW is kept beside each Voucher: `toVoucher` drops `token_id`, and that
-  // is the only thing that can address one coupon in the store. Object identity
-  // is safe as the map key because `selectVouchers` filters and sorts — it never
-  // clones — so the candidates it returns are these same objects.
-  const rows = couponsFor(await listVouchers(), merchant.pubkey)
-  const rowOf = new Map<Voucher, VoucherRow>()
-  const mine = rows.map((row) => {
-    const voucher = toVoucher(row)
-    rowOf.set(voucher, row)
-    return voucher
-  })
   const candidates = selectVouchers(mine, request.amount)
   if (candidates.length === 0) {
     // Says why, not just that it failed — "cannot be split below 25" is
@@ -630,113 +779,150 @@ export async function payRequest({
     )
   }
 
-  // A coupon whose previous send is still in flight is refused outright
-  // ("An active send already exists for voucher …"). On this stack that state is
-  // permanent for any send that failed at DM delivery, since reclaim is
-  // unavailable — so a single stuck coupon must not block a wallet that holds
-  // seven good ones. Walk past the refused ones instead of failing on the first.
-  let initiated: { send_id?: string; sendId?: string; status?: string } | null = null
-  let voucher: Voucher | null = null
-  /** The stored row behind `voucher` — the only thing carrying its primary key. */
-  let sourceRow: VoucherRow | null = null
-  let lastRefusal: Error | null = null
-
-  for (const candidate of candidates) {
-    try {
-      initiated = await api.initiateAtomicSend(
-        buildSendParams(request, candidate),
-        // Keyed by payment AND coupon: a double-tap on Pay must dedupe to one
-        // send, but moving to the next coupon is a genuinely different send and
-        // must not collide with the refused one's key.
-        `pay_${request.paymentId}_${candidate.voucher_id}`,
-      )
-      voucher = candidate
-      sourceRow = rowOf.get(candidate) ?? null
-      break
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      if (!message.includes('active send already exists')) throw error
-      lastRefusal = error instanceof Error ? error : new Error(message)
-      console.warn('[pay] coupon busy, trying the next one:', candidate.voucher_id)
-    }
-  }
-
-  if (!initiated || !voucher || !sourceRow) {
-    throw new Error(
-      `Every voucher from this merchant is tied up in an unfinished send. ${lastRefusal?.message ?? ''}`.trim(),
-    )
-  }
-
-  const sendId = initiated.send_id ?? initiated.sendId
-  if (!sendId) throw new Error('Gateway accepted the send but returned no send id.')
-
-  // ponytail: poll rather than subscribe. The saga also streams over SSE
-  // (api.subscribeAtomicSendEvents), which is what the vanilla app uses — but
-  // SSE on this stack drops with ERR_INCOMPLETE_CHUNKED_ENCODING (§11.4), and a
-  // dropped stream would read as a stuck payment. Swap to SSE when that is
-  // fixed; the terminal-state handling below is the same either way.
-  let status: SendStatus = { status: initiated.status }
-  for (let i = 0; i < POLL_ATTEMPTS && !TERMINAL.includes(String(status.status)); i += 1) {
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
-    status = await api.getAtomicSendStatus(sendId)
-  }
-
-  const wallet = getWallet()
+  const { sendId, status, voucher, sourceRow } = await initiateOnFirstFree(
+    api,
+    candidates,
+    rowOf,
+    (candidate) => buildSendParams(request, candidate),
+    // Keyed by payment AND coupon: a double-tap on Pay must dedupe to one send,
+    // but moving to the next coupon is a genuinely different send and must not
+    // collide with the refused one's key.
+    (candidate) => `pay_${request.paymentId}_${candidate.voucher_id}`,
+  )
 
   // Everything a settle needs, captured while the coupon and the request are
   // still in scope — see PendingSend.
-  const pending: PendingSend = {
-    sendId,
-    tokenId: sourceRow.token_id,
-    amount: request.amount,
-    unit: voucher.face_unit ?? request.unit ?? '',
-    decimals: voucher.face_decimals ?? 2,
-    merchantPubkey: merchant.pubkey,
-    merchantName: merchant.name === merchant.pubkey ? undefined : merchant.name,
-    voucherId: voucher.voucher_id,
-    memo: request.description,
-    sourceFaceValue: voucher.face_value ?? 0,
-    at: Date.now(),
-  }
+  await awaitAndSettle(
+    api,
+    payer,
+    {
+      sendId,
+      tokenId: sourceRow.token_id,
+      amount: request.amount,
+      unit: voucher.face_unit ?? request.unit ?? '',
+      decimals: voucher.face_decimals ?? 2,
+      merchantPubkey: merchant.pubkey,
+      merchantName: merchant.name === merchant.pubkey ? undefined : merchant.name,
+      voucherId: voucher.voucher_id,
+      memo: request.description,
+      sourceFaceValue: voucher.face_value ?? 0,
+      at: Date.now(),
+    },
+    status,
+  )
 
-  // Running out of polls is NOT a failed payment, and must not be reported as
-  // one. A saga still mid-flight has a non-terminal status, which used to fall
-  // into the branch below and tell the customer "Payment did not complete" —
-  // while the merchant went on to receive the coupon moments later. `reclaim`
-  // could not soften it either: a non-terminal status is not in RECLAIMABLE, so
-  // it returned '' and nothing was reclaimed.
-  //
-  // The local coupon is deliberately left untouched: we do not know the outcome,
-  // and deleting a coupon for a send that may yet fail is worse than showing one
-  // that may already be spent. What is NOT left is the send itself — it goes in
-  // the pending ledger so `reconcilePendingSends` can finish it on the next
-  // login. Before that, a saga that completed late completed only at the
-  // gateway; see that function for what it cost.
-  if (!TERMINAL.includes(String(status.status))) {
-    rememberPendingSend(payer, pending)
-    throw new Error(
-      `This payment is still going through at the gateway (send ${sendId}, ` +
-        `${status.status ?? 'no status'}). It has NOT failed and your voucher is ` +
-        `unchanged here — check the merchant's history again in a moment before retrying.`,
-    )
-  }
-
-  if (status.status !== 'COMPLETED') {
-    // The saga has already burned the source coupon's proofs by this point and
-    // is holding the replacement (TOKEN_HELD). Failing without reclaiming would
-    // leave the customer's money in an escrow they cannot see — the coupon
-    // would still be listed locally while being unspendable. The backend says
-    // as much on DM_ERROR: "sender should reclaim via RECLAIM_FROM_DM_ERROR".
-    const note = await reclaim(api, wallet, sendId, sourceRow.token_id, status)
-    throw new Error(
-      `Payment did not complete (${status.status ?? 'no status'})` +
-        `${status.error_message ?? status.error ? `: ${status.error_message ?? status.error}` : ''}` +
-        note,
-    )
-  }
-
-  await settleSend(api, wallet, pending, status)
-
-  notifyWalletChanged()
   return request.paymentId
+}
+
+/**
+ * Send a voucher to another person — the customer-to-customer path.
+ *
+ * The same saga as `payRequest`, minus the payment request: the gateway's
+ * `/api/v1/atomic-send` has always taken a plain `recipientPubkey`, and a
+ * merchant redemption is only that call with a `paymentRequestId` attached. So
+ * there is no second engine here, and no special case for sending TO a merchant
+ * either — the difference is a line of copy on the confirmation screen, not a
+ * different code path.
+ *
+ * What DOES differ is the record: `recipientPubkey` on the pending send is what
+ * makes `settleSend` write a 'sent' row instead of a 'payment' one. See
+ * `buildSentTransaction` for why the issuer, not the recipient, goes in
+ * `merchantId`.
+ *
+ * Returns the send id, which is the only handle on the saga afterwards.
+ */
+export async function sendVouchers({
+  payer,
+  recipient,
+  merchant,
+  unit,
+  amount,
+  memo,
+}: {
+  payer: string
+  /** Who gets it. `name` is stored on the row; see `buildSentTransaction`. */
+  recipient: { pubkey: string; name?: string }
+  /** Whose vouchers are being spent — the issuer, chosen on the picker step. */
+  merchant: Merchant
+  /**
+   * Which of that merchant's currencies. A merchant selling in two units holds
+   * two groups, and a voucher cannot be split across them — without this, a
+   * "5.00" typed against a EUR group could go out as 5 SAT from whichever
+   * voucher happened to sort first.
+   */
+  unit: string
+  /** Minor units, as `parseAmountToMinor` produces. */
+  amount: number
+  memo?: string
+}): Promise<string> {
+  // Refused here and not only on the screen, for the same reason the expiry
+  // check lives in `payRequest`: this is the door the money leaves by. A send
+  // to yourself is not a no-op — it burns the source voucher and hands back an
+  // equal one, costing a round trip and a mint fee to end where you started.
+  if (recipient.pubkey.toLowerCase() === payer.toLowerCase()) {
+    throw new Error('You cannot send a voucher to yourself.')
+  }
+
+  const api = await sendApi()
+  const { mine, rowOf } = await spendableFrom(merchant.pubkey)
+  const inUnit = mine.filter(
+    (v) => (v.face_unit ?? '').toUpperCase() === unit.toUpperCase(),
+  )
+
+  const candidates = selectVouchers(inUnit, amount)
+  if (candidates.length === 0) {
+    throw new Error(
+      splitObstacle(inUnit, amount) ??
+        `You have no ${unit} voucher from this merchant for that amount.`,
+    )
+  }
+
+  const { sendId, status, voucher, sourceRow } = await initiateOnFirstFree(
+    api,
+    candidates,
+    rowOf,
+    (candidate) => ({
+      token: candidate.token,
+      amount,
+      recipientPubkey: recipient.pubkey,
+      memo,
+      // The SEND amount, never the voucher's face value — gateway-core splits
+      // for `faceValue ?? amount`, so passing the source voucher's face here
+      // sends the whole voucher and returns no change. See `buildSendParams`.
+      faceValue: amount,
+      faceUnit: candidate.face_unit,
+      faceDecimals: candidate.face_decimals,
+      voucherId: candidate.voucher_id,
+      issuerId: candidate.issuer_id,
+      // No paymentRequestId: there is no request. That single omission is the
+      // whole difference between a redemption and a person-to-person send.
+    }),
+    // Keyed by recipient, amount AND voucher: a double-tap must dedupe to one
+    // send, while walking to the next voucher must not collide with the key the
+    // refused one already used.
+    (candidate) => `c2c_${recipient.pubkey}_${amount}_${candidate.voucher_id}`,
+  )
+
+  await awaitAndSettle(
+    api,
+    payer,
+    {
+      sendId,
+      tokenId: sourceRow.token_id,
+      amount,
+      unit: voucher.face_unit ?? '',
+      decimals: voucher.face_decimals ?? 2,
+      merchantPubkey: merchant.pubkey,
+      merchantName: merchant.name === merchant.pubkey ? undefined : merchant.name,
+      recipientPubkey: recipient.pubkey,
+      recipientName: recipient.name,
+      voucherId: voucher.voucher_id,
+      memo,
+      sourceFaceValue: voucher.face_value ?? 0,
+      at: Date.now(),
+    },
+    status,
+  )
+
+  return sendId
 }
