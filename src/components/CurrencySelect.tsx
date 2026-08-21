@@ -54,6 +54,13 @@ export function CurrencySelect({
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault()
+      if (!open) {
+        // Reopens what Escape closed, without making them leave the field and
+        // come back to it.
+        setQuery('')
+        setActive(0)
+        return
+      }
       const step = e.key === 'ArrowDown' ? 1 : -1
       setActive((i) => Math.min(Math.max(i + step, 0), matches.length - 1))
       return
@@ -66,8 +73,9 @@ export function CurrencySelect({
       return
     }
     if (e.key === 'Escape') {
+      // Closes the list and keeps the caret. Blurring here would throw a
+      // keyboard user back to the top of the document on their next Tab.
       setQuery(null)
-      input.current?.blur()
     }
   }
 
@@ -143,7 +151,7 @@ export function CurrencySelect({
             {query === '' && (
               <li
                 role="presentation"
-                className="border-b border-mono-100 px-3.5 py-2 text-xs text-mono-500 dark:border-mono-800"
+                className="border-b border-mono-100 py-2 pl-10 pr-3.5 text-xs text-mono-500 dark:border-mono-800"
               >
                 Common currencies — type a name to search every other one
               </li>
@@ -154,17 +162,24 @@ export function CurrencySelect({
                 id={`${listId}-${i}`}
                 role="option"
                 aria-selected={i === active}
-                // mousedown, not click: click lands after blur, and blur has
-                // already closed the list by then.
-                onMouseDown={(e) => {
-                  e.preventDefault()
-                  choose(currency)
-                }}
+                // Two events, and each is load-bearing. pointerdown fires
+                // before focus moves and cancelling it keeps the field focused,
+                // so blur never closes the list out from under the tap — on a
+                // phone, where the synthesised mousedown arrives after the blur
+                // has already happened, that is the difference between the tap
+                // landing and nothing at all. Committing on click rather than
+                // there is what makes it a press: highlight under the finger on
+                // the way down, chosen on the way up, and cancellable by
+                // sliding off in between.
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={() => choose(currency)}
                 onMouseEnter={() => setActive(i)}
-                className={`flex cursor-pointer items-center justify-between gap-3 px-3.5 py-2.5 text-sm ${
-                  i === active
-                    ? 'bg-mono-100 dark:bg-mono-800'
-                    : 'text-mono-900 dark:text-mono-50'
+                // The press tint is spelled out rather than reusing .press-row:
+                // that class lives in the components layer, so the utility
+                // marking the active row would out-rank its :active state and
+                // the row under the finger would not respond at all.
+                className={`flex cursor-pointer items-center justify-between gap-3 py-3 pl-10 pr-3.5 text-sm transition-colors duration-100 ease-out active:bg-mono-200 dark:active:bg-mono-700 ${
+                  i === active ? 'bg-mono-100 dark:bg-mono-800' : 'text-mono-900 dark:text-mono-50'
                 }`}
               >
                 <span className="min-w-0 truncate">{currency.name}</span>
