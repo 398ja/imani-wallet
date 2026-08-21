@@ -194,7 +194,7 @@ function Field({
     <div>
       <label className="mb-1 block text-sm font-medium text-mono-500">{label}</label>
       {children}
-      {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
+      {error && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</p>}
     </div>
   )
 }
@@ -264,7 +264,7 @@ function ImagePicker({
             <p className="mt-1 text-xs text-mono-500">Media server not configured.</p>
           )}
           {busy && <p className="mt-1 text-xs text-mono-500">Uploading…</p>}
-          {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
+          {error && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</p>}
         </div>
         <button
           type="button"
