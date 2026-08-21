@@ -254,31 +254,17 @@ function expiryMs(voucher: Voucher): number {
  * Returns null when the total is simply short: the screen says that better,
  * with the figure.
  *
- * `bundle` says whether the CALLER can draw across several coupons, and it
- * defaults to false because only one door can. `sendVouchers` bundles;
- * `payRequest` does not, because the till settles a request by matching one
- * incoming transaction against it (`matchPayment` in lib/vreq.ts) and rejects
- * anything under the asking price — so three parts of a €7 request would settle
- * nothing while the merchant held €7 of vouchers. Answering "no obstacle" to a
- * caller that cannot bundle is worse than the old refusal: the button goes
- * live and the send fails afterwards, on a wallet that visibly holds enough.
+ * Both send doors bundle, so there is no "can this caller draw several?" to ask.
+ * There briefly was: while `payRequest` spent exactly one coupon, silence here
+ * put its Pay button live on an amount it would then refuse. The fix was to
+ * teach that door to bundle (see `deliver`), not to keep two answers.
  */
-export function splitObstacle(
-  vouchers: Voucher[],
-  amount: number,
-  { bundle = false }: { bundle?: boolean } = {},
-): string | null {
+export function splitObstacle(vouchers: Voucher[], amount: number): string | null {
   if (selectVouchers(vouchers, amount).length > 0) return null
 
+  // Several coupons cover it between them, which both doors can now draw.
   const plan = planParts(vouchers, amount)
-  if (plan.remaining === 0) {
-    // Several coupons cover it. Silence is only the right answer for the door
-    // that can draw them; the other one has to say where that door is, since
-    // "no voucher for that amount" is a lie to someone holding twice it.
-    return bundle
-      ? null
-      : 'No single voucher covers that amount. Open the merchant and use Send to pay it across several.'
-  }
+  if (plan.remaining === 0) return null
 
   const spent = new Set(plan.parts.map((p) => p.voucher))
   const best = vouchers
@@ -590,7 +576,7 @@ async function settleSend(
             recipientName: pending.recipientName,
             bundleId: pending.bundleId,
           })
-        : buildPaymentTransaction(common),
+        : buildPaymentTransaction({ ...common, bundleId: pending.bundleId }),
     )
   } catch (error) {
     console.error('[pay] payment recorded at the gateway but not in local history', error)
@@ -694,20 +680,45 @@ export async function reconcilePendingSends(pubkey: string): Promise<number> {
  * the coupon, the right and wrong values are the same number.
  */
 export function buildSendParams(
-  request: NUT18VRequest,
   candidate: Voucher,
+  send: {
+    /** Minor units to send FROM this coupon — a whole payment, or one part of one. */
+    amount: number
+    recipientPubkey: string
+    memo?: string
+    /**
+     * Set on a merchant redemption, absent on a person-to-person send. That
+     * single field is the whole difference between the two at the gateway, and
+     * it is what comes back to the merchant as `request_id` on the DM so their
+     * till can settle the right request — see `matchPayment`.
+     */
+    paymentRequestId?: string
+    bundle?: BundleTag | null
+  },
 ): Record<string, unknown> {
   return {
     token: candidate.token,
-    amount: request.amount,
-    recipientPubkey: request.issuerId,
-    memo: request.description,
-    faceValue: request.amount,
+    amount: send.amount,
+    recipientPubkey: send.recipientPubkey,
+    memo: send.memo,
+    faceValue: send.amount,
     faceUnit: candidate.face_unit,
     faceDecimals: candidate.face_decimals,
     voucherId: candidate.voucher_id,
     issuerId: candidate.issuer_id,
-    paymentRequestId: request.paymentId,
+    ...(send.paymentRequestId ? { paymentRequestId: send.paymentRequestId } : {}),
+    ...(send.bundle
+      ? {
+          bundleId: send.bundle.bundleId,
+          bundleTotal: send.bundle.total,
+          bundlePartIndex: send.bundle.index,
+          bundlePartCount: send.bundle.count,
+          // Format is not ours to choose: AtomicSendService rejects anything
+          // but `${bundle_id}:${bundle_part_index}` with invalid_bundle_part_id.
+          bundlePartId: `${send.bundle.bundleId}:${send.bundle.index}`,
+          bundleAttempt: 0,
+        }
+      : {}),
   }
 }
 
@@ -896,7 +907,7 @@ export async function payRequest({
   raw: string
   merchant: Merchant
   payer: string
-}): Promise<string> {
+}): Promise<SendResult> {
   // Checked HERE and not only on the screen, because this is the one door the
   // money leaves by. PayPage reads the clock when it loads — a request that
   // lapses while the customer is deciding would walk straight past that check,
@@ -907,49 +918,35 @@ export async function payRequest({
 
   const api = await sendApi()
   const { mine, rowOf } = await spendableFrom(merchant.pubkey)
+  // Filtered by the request's unit, which this door did not do while it spent
+  // exactly one coupon and `selectVouchers` compared amounts within it. Drawing
+  // across several makes a mixed-unit wallet dangerous: 300 EUR + 200 XAF add
+  // up to 500 of nothing, and the request would settle for a fraction of what
+  // was asked. Requests without a unit keep the old behaviour.
+  const inUnit = request.unit
+    ? mine.filter((v) => (v.face_unit ?? '').toUpperCase() === request.unit!.toUpperCase())
+    : mine
 
-  const candidates = selectVouchers(mine, request.amount)
-  if (candidates.length === 0) {
-    // Says why, not just that it failed — "cannot be split below 25" is
-    // actionable in a way that "no coupon covers 10" is not.
-    throw new Error(
-      splitObstacle(mine, request.amount) ?? 'You have no voucher from this merchant for that amount.',
-    )
-  }
-
-  const { sendId, status, voucher, sourceRow } = await initiateOnFirstFree(
-    api,
-    candidates,
-    rowOf,
-    (candidate) => buildSendParams(request, candidate),
-    // Keyed by payment AND coupon: a double-tap on Pay must dedupe to one send,
-    // but moving to the next coupon is a genuinely different send and must not
-    // collide with the refused one's key.
-    (candidate) => `pay_${request.paymentId}_${candidate.voucher_id}`,
-  )
-
-  // Everything a settle needs, captured while the coupon and the request are
-  // still in scope — see PendingSend.
-  await awaitAndSettle(
-    api,
-    payer,
+  return deliver(
     {
-      sendId,
-      tokenId: sourceRow.token_id,
-      amount: request.amount,
-      unit: voucher.face_unit ?? request.unit ?? '',
-      decimals: voucher.face_decimals ?? 2,
-      merchantPubkey: merchant.pubkey,
-      merchantName: merchant.name === merchant.pubkey ? undefined : merchant.name,
-      voucherId: voucher.voucher_id,
+      api,
+      payer,
+      // The merchant IS the recipient of a redemption. `paymentRequestId` below
+      // is what keeps the local record a payment rather than a send.
+      recipient: {
+        pubkey: request.issuerId,
+        name: merchant.name === merchant.pubkey ? undefined : merchant.name,
+      },
+      merchant,
       memo: request.description,
-      sourceFaceValue: voucher.face_value ?? 0,
-      at: Date.now(),
+      rowOf,
+      unit: request.unit,
+      paymentRequestId: request.paymentId,
     },
-    status,
+    inUnit,
+    request.amount,
+    request.unit,
   )
-
-  return request.paymentId
 }
 
 /**
@@ -979,6 +976,14 @@ type SendContext = {
   merchant: Merchant
   memo?: string
   rowOf: Map<Voucher, VoucherRow>
+  /** Fallback for a coupon with no `face_unit` — the unit being spent. */
+  unit?: string
+  /**
+   * Set when this is a merchant redemption. Two things hang off it: the
+   * gateway gets `paymentRequestId`, and the local row is a payment rather
+   * than a send. See `sendPart`.
+   */
+  paymentRequestId?: string
 }
 
 /**
@@ -1003,42 +1008,25 @@ async function sendPart(
     ctx.api,
     candidates,
     ctx.rowOf,
-    (candidate) => ({
-      token: candidate.token,
-      amount,
-      recipientPubkey: ctx.recipient.pubkey,
-      memo: ctx.memo,
-      // The SEND amount, never the voucher's face value — gateway-core splits
-      // for `faceValue ?? amount`, so passing the source voucher's face here
-      // sends the whole voucher and returns no change. See `buildSendParams`.
-      faceValue: amount,
-      faceUnit: candidate.face_unit,
-      faceDecimals: candidate.face_decimals,
-      voucherId: candidate.voucher_id,
-      issuerId: candidate.issuer_id,
-      // No paymentRequestId: there is no request. That single omission is the
-      // whole difference between a redemption and a person-to-person send.
-      ...(bundle
-        ? {
-            bundleId: bundle.bundleId,
-            bundleTotal: bundle.total,
-            bundlePartIndex: bundle.index,
-            bundlePartCount: bundle.count,
-            // Format is not ours to choose: AtomicSendService rejects anything
-            // but `${bundle_id}:${bundle_part_index}` with invalid_bundle_part_id.
-            bundlePartId: `${bundle.bundleId}:${bundle.index}`,
-            bundleAttempt: 0,
-          }
-        : {}),
-    }),
+    (candidate) =>
+      buildSendParams(candidate, {
+        amount,
+        recipientPubkey: ctx.recipient.pubkey,
+        memo: ctx.memo,
+        paymentRequestId: ctx.paymentRequestId,
+        bundle,
+      }),
     // Keyed so a double-tap dedupes to one send while walking to the next
     // coupon does not collide with the key the refused one already used. The
     // bundle form is upstream's (`bundle:<id>:<part>:<attempt>`), which is what
-    // the gateway's own retry handling expects to see.
+    // the gateway's own retry handling expects to see, and it is per-part, so
+    // it serves a bundled redemption as well as a bundled send.
     (candidate) =>
       bundle
         ? `bundle:${bundle.bundleId}:${bundle.index}:0`
-        : `c2c_${ctx.recipient.pubkey}_${amount}_${candidate.voucher_id}`,
+        : ctx.paymentRequestId
+          ? `pay_${ctx.paymentRequestId}_${candidate.voucher_id}`
+          : `c2c_${ctx.recipient.pubkey}_${amount}_${candidate.voucher_id}`,
   )
 
   await awaitAndSettle(
@@ -1048,13 +1036,19 @@ async function sendPart(
       sendId,
       tokenId: sourceRow.token_id,
       amount,
-      unit: voucher.face_unit ?? '',
+      unit: voucher.face_unit ?? ctx.unit ?? '',
       decimals: voucher.face_decimals ?? 2,
       merchantPubkey: ctx.merchant.pubkey,
       merchantName:
         ctx.merchant.name === ctx.merchant.pubkey ? undefined : ctx.merchant.name,
-      recipientPubkey: ctx.recipient.pubkey,
-      recipientName: ctx.recipient.name,
+      // Omitted on a redemption, and that omission is load-bearing: `settleSend`
+      // reads the presence of `recipientPubkey` to decide between a 'sent' row
+      // and a 'payment' row. Setting it here — the recipient of a redemption is
+      // the merchant, so it would be easy to — files money paid to a shop as a
+      // transfer to a friend, and puts that shop on the home deck twice.
+      ...(ctx.paymentRequestId
+        ? {}
+        : { recipientPubkey: ctx.recipient.pubkey, recipientName: ctx.recipient.name }),
       voucherId: voucher.voucher_id,
       memo: ctx.memo,
       sourceFaceValue: voucher.face_value ?? 0,
@@ -1159,19 +1153,43 @@ export async function sendVouchers({
   const inUnit = mine.filter(
     (v) => (v.face_unit ?? '').toUpperCase() === unit.toUpperCase(),
   )
-  const ctx: SendContext = { api, payer, recipient, merchant, memo, rowOf }
 
-  const single = selectVouchers(inUnit, amount)
+  return deliver({ api, payer, recipient, merchant, memo, rowOf, unit }, inUnit, amount, unit)
+}
+
+/**
+ * One coupon if one will do, several if not — the driver both send doors share.
+ *
+ * Shared deliberately, and late: `payRequest` spent a year able to draw exactly
+ * one coupon, so a customer holding two €5 coupons was told they had "no
+ * voucher for that amount" when a merchant asked for €7. The money was there;
+ * only this loop was missing. Keeping the two doors on one driver is what stops
+ * that gap reopening on whichever door gets the next change.
+ *
+ * `unitLabel` only shapes the refusal message. The caller has already filtered
+ * `vouchers` to one unit — this cannot check that, and adding coupons of two
+ * currencies is how a request settles for a fraction of what was asked.
+ */
+async function deliver(
+  ctx: SendContext,
+  vouchers: Voucher[],
+  amount: number,
+  unitLabel?: string,
+): Promise<SendResult> {
+  // One coupon first: fewer mint splits, one DM, and the path that has been
+  // carrying every payment on this stack since the beginning.
+  const single = selectVouchers(vouchers, amount)
   if (single.length > 0) {
     const sendId = await sendPart(ctx, single, amount, null)
     return { id: sendId, requested: amount, delivered: amount, parts: 1 }
   }
 
-  const plan = planParts(inUnit, amount)
+  const plan = planParts(vouchers, amount)
   if (plan.remaining > 0) {
     throw new Error(
-      splitObstacle(inUnit, amount, { bundle: true }) ??
-        `You have no ${unit} voucher from this merchant for that amount.`,
+      splitObstacle(vouchers, amount) ??
+        `You have no ${unitLabel ? `${unitLabel} ` : ''}voucher from this merchant ` +
+          'for that amount.',
     )
   }
 

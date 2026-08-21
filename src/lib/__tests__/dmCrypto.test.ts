@@ -176,4 +176,27 @@ describe('dm-poll CryptoAdapter', () => {
     expect(legacy.memo).toBe('market day')
     expect(legacy.sender_pubkey).toBe('senderpubkey')
   })
+
+  it('carries the request and bundle ids the gateway sends', () => {
+    // Both are on the wire — `TokenTransferMessage` has serialised them for as
+    // long as bundles have existed — and both were dropped here. Without them a
+    // merchant's till sees two coupons and no way to tell they are the two
+    // halves of one payment, so the request stays pending on money it has.
+    const parsed = crypto.parseTokenTransferMessage(
+      JSON.stringify({
+        type: 'cashu_token_transfer',
+        token: 'cashuBv2xyz',
+        issuer_id: 'merchantpubkey',
+        request_id: 'pay-1',
+        bundle_id: 'b'.repeat(32),
+      }),
+    ) as unknown as Record<string, unknown>
+
+    expect(parsed.requestId).toBe('pay-1')
+    expect(parsed.bundleId).toBe('b'.repeat(32))
+
+    const legacy = toLegacyMetadata(parsed)
+    expect(legacy.request_id).toBe('pay-1')
+    expect(legacy.bundle_id).toBe('b'.repeat(32))
+  })
 })

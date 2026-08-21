@@ -4,7 +4,14 @@ import { describe, it, expect } from 'vitest'
 import { getDecimals } from '@imani/money'
 
 import { formatFace } from '../format'
-import { expireRequests, matchPayment, type VoucherPaymentRequest } from '../vreq'
+import {
+  expireRequests,
+  groupArrivals,
+  matchPayment,
+  partialFor,
+  type VoucherPaymentRequest,
+} from '../vreq'
+import type { WalletTransaction } from '../transactions'
 
 const request = (over: Partial<VoucherPaymentRequest> = {}): VoucherPaymentRequest => ({
   paymentId: 'p1',
@@ -128,6 +135,98 @@ describe('matchPayment', () => {
     // Unknown time fails closed: a request left pending makes a merchant wait,
     // a request wrongly marked paid makes them hand over goods for nothing.
     expect(matchPayment([request()], payment({ at: 0 }))).toBeNull()
+  })
+})
+
+describe('groupArrivals', () => {
+  const tx = (over: Partial<WalletTransaction> = {}): WalletTransaction =>
+    ({
+      id: 'tx1',
+      type: 'received',
+      direction: 'in',
+      at: Date.now() + 1000,
+      amount: 400,
+      unit: 'EUR',
+      decimals: 2,
+      ...over,
+    }) as WalletTransaction
+
+  it('adds up the parts of one bundle, so a split payment settles its request', () => {
+    // The whole point. €7 paid from a €4 and a €3 coupon arrives as two rows,
+    // and each on its own is an underpayment `matchPayment` rejects — leaving
+    // the merchant holding €7 and looking at a request that never settles.
+    const arrivals = groupArrivals([
+      tx({ id: 'tx1', amount: 400, bundleId: 'b1', paymentId: 'p1' }),
+      tx({ id: 'tx2', amount: 300, bundleId: 'b1', paymentId: 'p1' }),
+    ])
+
+    expect(arrivals).toHaveLength(1)
+    expect(arrivals[0].amount).toBe(700)
+    expect(arrivals[0].parts).toBe(2)
+    expect(arrivals[0].id).toBe('bundle:b1')
+    expect(matchPayment([request({ amount: 700 })], arrivals[0])?.status).toBe('fulfilled')
+  })
+
+  it('dates a bundle by its earliest part', () => {
+    // Rule 0 of matchPayment rejects anything that arrived before the request
+    // was made. Taking the latest part would let a bundle whose first half
+    // predates the request settle it.
+    const early = Date.now() - 60_000
+    const arrivals = groupArrivals([
+      tx({ id: 'tx1', at: early, bundleId: 'b1' }),
+      tx({ id: 'tx2', at: Date.now() + 1000, bundleId: 'b1' }),
+    ])
+
+    expect(arrivals[0].at).toBe(early)
+    expect(matchPayment([request({ amount: 800 })], arrivals[0])).toBeNull()
+  })
+
+  it('refuses to add two currencies together', () => {
+    // 400 EUR + 400 XAF is not 800 of anything, and a request settled off that
+    // sum is goods handed over for half the price.
+    const arrivals = groupArrivals([
+      tx({ id: 'tx1', bundleId: 'b1' }),
+      tx({ id: 'tx2', bundleId: 'b1', unit: 'XAF' }),
+    ])
+
+    expect(arrivals).toHaveLength(2)
+    expect(arrivals.every((a) => a.amount === 400)).toBe(true)
+  })
+
+  it('leaves an ordinary single coupon exactly as it was', () => {
+    const arrivals = groupArrivals([tx({ amount: 500 }), tx({ id: 'tx2', direction: 'out' })])
+
+    expect(arrivals).toHaveLength(1)
+    expect(arrivals[0]).toMatchObject({ id: 'tx1', amount: 500, parts: 1 })
+  })
+})
+
+describe('partialFor', () => {
+  const arrival = (over: Record<string, unknown> = {}) => ({
+    id: 'tx1',
+    amount: 300,
+    unit: 'EUR',
+    at: Date.now() + 1000,
+    direction: 'in' as const,
+    paymentId: 'p1',
+    parts: 1,
+    ...over,
+  })
+
+  it('reports what has landed against a request that is not paid yet', () => {
+    expect(partialFor(request(), [arrival()])).toBe(300)
+  })
+
+  it('counts only arrivals that name this request', () => {
+    // By payment id ONLY: a part is smaller than the request by definition, so
+    // an amount-based guess would show a merchant progress on a sale nobody is
+    // paying for.
+    expect(partialFor(request(), [arrival({ paymentId: undefined })])).toBe(0)
+    expect(partialFor(request(), [arrival({ paymentId: 'p2' })])).toBe(0)
+  })
+
+  it('ignores anything that predates the request', () => {
+    expect(partialFor(request(), [arrival({ at: Date.now() - 60_000 })])).toBe(0)
   })
 })
 

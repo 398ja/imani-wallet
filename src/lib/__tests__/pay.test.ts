@@ -64,12 +64,20 @@ const request = (amount: number, over: Partial<NUT18VRequest> = {}): NUT18VReque
   }) as unknown as NUT18VRequest
 
 describe('buildSendParams', () => {
+  /** What `payRequest` hands the builder for a whole-request payment. */
+  const paying = (amount: number) => ({
+    amount,
+    recipientPubkey: 'f'.repeat(64),
+    memo: 'Half a punnet',
+    paymentRequestId: 'pay-1',
+  })
+
   it('sends the requested amount, not the voucher it is taken from', () => {
     // The regression that matters. gateway-core splits for `faceValue` in
     // preference to `amount`, so passing the coupon's 500 here made a €2.50
     // request complete as is_full_send=true: the merchant received the whole
     // €5.00 coupon and the customer got no change back.
-    const params = buildSendParams(request(250), coupon())
+    const params = buildSendParams(coupon(), paying(250))
 
     expect(params.faceValue).toBe(250)
     expect(params.amount).toBe(250)
@@ -79,13 +87,13 @@ describe('buildSendParams', () => {
   it('still agrees with itself when the amounts happen to match', () => {
     // Why the bug survived so long: on an exact-value payment the right and
     // wrong values are the same number, so this case proves nothing on its own.
-    const params = buildSendParams(request(500), coupon())
+    const params = buildSendParams(coupon(), paying(500))
     expect(params.faceValue).toBe(500)
     expect(params.amount).toBe(500)
   })
 
   it('takes unit and decimals from the voucher, since they describe the money', () => {
-    const params = buildSendParams(request(250), coupon({ face_unit: 'XAF', face_decimals: 0 }))
+    const params = buildSendParams(coupon({ face_unit: 'XAF', face_decimals: 0 }), paying(250))
 
     expect(params.faceUnit).toBe('XAF')
     expect(params.faceDecimals).toBe(0)
@@ -94,13 +102,45 @@ describe('buildSendParams', () => {
   })
 
   it('carries the ids the gateway and the receipt need', () => {
-    const params = buildSendParams(request(250), coupon())
+    const params = buildSendParams(coupon(), paying(250))
 
     expect(params.token).toBe('cashuBv2xyz')
     expect(params.recipientPubkey).toBe('f'.repeat(64))
     expect(params.voucherId).toBe('v-1')
     expect(params.paymentRequestId).toBe('pay-1')
     expect(params.memo).toBe('Half a punnet')
+  })
+
+  it('omits the payment request on a person-to-person send', () => {
+    // Not null, not empty — absent. That one field is the whole difference
+    // between a redemption and a send at the gateway, and a present-but-empty
+    // value is the kind of thing a `!= null` check on the far side lets through.
+    const params = buildSendParams(coupon(), {
+      amount: 250,
+      recipientPubkey: 'd'.repeat(64),
+    })
+
+    expect('paymentRequestId' in params).toBe(false)
+  })
+
+  it('writes the bundle part id the gateway insists on, or no bundle fields at all', () => {
+    // `AtomicSendService.validateBundleMetadata` rejects a part id of any other
+    // shape with invalid_bundle_part_id, and rejects a partial set of the five
+    // core fields with bundle_metadata_incomplete.
+    const id = 'a'.repeat(32)
+    const part = buildSendParams(coupon(), {
+      amount: 250,
+      recipientPubkey: 'd'.repeat(64),
+      bundle: { bundleId: id, total: 700, index: 1, count: 2 },
+    })
+
+    expect(part.bundlePartId).toBe(`${id}:1`)
+    expect(part.bundleTotal).toBe(700)
+    expect(part.bundlePartCount).toBe(2)
+
+    const alone = buildSendParams(coupon(), { amount: 250, recipientPubkey: 'd'.repeat(64) })
+    expect('bundleId' in alone).toBe(false)
+    expect('bundlePartId' in alone).toBe(false)
   })
 })
 
@@ -214,15 +254,13 @@ describe('selectVouchers and splitObstacle', () => {
   })
 
   it('stays silent when no single coupon covers the amount but a bundle does', () => {
-    // The Continue button and the send have to agree. `selectVouchers` answers
-    // for one coupon only, so without the bundle plan this refuses an amount
-    // `sendVouchers` would happily draw across three.
+    // Two €3 coupons against €5: no single one covers it, and both doors can
+    // now draw across several, so there is no obstacle to report. Reporting one
+    // here is what put "no voucher for that amount" in front of a customer
+    // holding twice it.
     const half = () => xaf({ face_value: 300, token_amount: 300, issuance_ratio: 1 })
 
-    expect(splitObstacle([half(), half()], 500, { bundle: true })).toBeNull()
-    // ...and the door that cannot bundle says so, rather than falling silent
-    // and letting Pay go live on a request `payRequest` will refuse.
-    expect(splitObstacle([half(), half()], 500)).toMatch(/No single voucher/)
+    expect(splitObstacle([half(), half()], 500)).toBeNull()
   })
 
   it('never offers a spent or redeemed coupon', () => {
@@ -640,7 +678,7 @@ describe('payRequest and expiry', () => {
 })
 
 
-describe('sendVouchers', () => {
+describe('sendVouchers and payRequest', () => {
   const PAYER = 'c'.repeat(64)
   const FRIEND = 'd'.repeat(64)
   const ISSUER = 'f'.repeat(64)
@@ -985,6 +1023,88 @@ describe('sendVouchers', () => {
         merchant,
         unit: 'EUR',
         amount: 1500,
+      }),
+    ).rejects.toThrow(/no EUR voucher/)
+    expect(sent).toEqual([])
+  })
+
+  it('pays a scanned request across several coupons', async () => {
+    // The gap this whole change exists to close: two €4 coupons against a €7
+    // request. `payRequest` used to look for one coupon covering the amount,
+    // find none, and tell a customer holding €12 that they had "no voucher for
+    // that amount".
+    stubs.rows = trio()
+    const sent = gateway()
+    wallet(trio())
+
+    const result = await payRequest({
+      request: request(700, { issuerId: ISSUER, unit: 'EUR' }),
+      raw: 'vreqA…',
+      merchant,
+      payer: PAYER,
+    })
+
+    expect(result.delivered).toBe(700)
+    expect(result.parts).toBe(2)
+    expect(sent.map((p) => p.amount)).toEqual([400, 300])
+    // Every part names the request, which is what lets the merchant's till add
+    // them up and settle it — see `groupArrivals` in lib/vreq.ts.
+    expect(sent.every((p) => p.paymentRequestId === 'pay-1')).toBe(true)
+    // ...and shares one bundle id, in the shape the recipient's parser matches.
+    expect(new Set(sent.map((p) => p.bundleId)).size).toBe(1)
+    expect(String(sent[0].bundleId)).toMatch(/^[0-9a-f]{32}$/)
+    expect(sent.map((p) => p.bundlePartId)).toEqual([
+      `${sent[0].bundleId}:0`,
+      `${sent[0].bundleId}:1`,
+    ])
+  })
+
+  it('records a redemption as a payment, not as a send to the merchant', async () => {
+    // The recipient of a redemption IS the merchant, so the obvious thing to do
+    // is to fill `recipientPubkey` — which `settleSend` reads to choose between
+    // a 'sent' row and a 'payment' one. Filing money paid to a shop as a
+    // transfer to a friend also puts that shop on the home deck twice.
+    stubs.rows = [row()]
+    gateway()
+    const { transactions } = wallet([row()])
+
+    await payRequest({
+      request: request(250, { issuerId: ISSUER, unit: 'EUR' }),
+      raw: 'vreqA…',
+      merchant,
+      payer: PAYER,
+    })
+
+    const row0 = transactions.find((t) => String(t.type) === 'payment')
+    expect(row0).toBeDefined()
+    expect(transactions.some((t) => String(t.type) === 'sent')).toBe(false)
+  })
+
+  it('will not add up coupons of two currencies to reach the asking price', async () => {
+    // 400 EUR + 400 XAF is not 700 of anything. Without the unit filter the
+    // request settles for a fraction of what was asked, in a currency nobody
+    // agreed to.
+    const mixed = [
+      row({ token_id: '1'.repeat(32), voucher_id: 'v-1', face_value: 400, token_amount: 400 }),
+      row({
+        token_id: '2'.repeat(32),
+        voucher_id: 'v-2',
+        face_value: 400,
+        token_amount: 400,
+        face_unit: 'XAF',
+        face_decimals: 0,
+      }),
+    ]
+    stubs.rows = mixed
+    const sent = gateway()
+    wallet(mixed)
+
+    await expect(
+      payRequest({
+        request: request(700, { issuerId: ISSUER, unit: 'EUR' }),
+        raw: 'vreqA…',
+        merchant,
+        payer: PAYER,
       }),
     ).rejects.toThrow(/no EUR voucher/)
     expect(sent).toEqual([])

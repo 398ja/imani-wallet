@@ -39,6 +39,16 @@ export interface WalletTransaction {
   memo?: string
   bundleId?: string
   /**
+   * The NUT-18V payment request this settles, when it settles one.
+   *
+   * On the wire as `request_id` in the gateway's `cashu_token_transfer` DM —
+   * `TokenTransferMessage` has carried it for as long as bundles have, and
+   * `matchPayment`'s comment about it never arriving described this wallet
+   * dropping it at the parser rather than the gateway omitting it. With it, a
+   * merchant's request settles by id instead of by guessing from the amount.
+   */
+  paymentId?: string
+  /**
    * When an ISSUED coupon expires, epoch milliseconds. Only set on rows this
    * merchant wrote at issuance — a received coupon's expiry lives on the voucher
    * itself, not on the transaction that delivered it.
@@ -95,6 +105,7 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     memo: str(r.memo),
     recipientName: str(r.recipientName),
     bundleId: str(r.bundleId) ?? str(r.bundle_id),
+    paymentId: str(r.paymentId) ?? str(r.requestId) ?? str(r.request_id),
     // Through the same normaliser as `timestamp`: it is written in seconds (the
     // gateway's unit) and read back for display in milliseconds.
     expiresAt: r.expiresAt === undefined ? undefined : toEpochMs(r.expiresAt),
@@ -127,6 +138,8 @@ export function buildPaymentTransaction(input: {
   merchantName?: string
   voucherId?: string
   memo?: string
+  /** Set when this row is one part of a multi-voucher payment — see below. */
+  bundleId?: string
   at: number
 }): TransactionRow {
   return {
@@ -143,6 +156,7 @@ export function buildPaymentTransaction(input: {
     counterparty: input.merchantId,
     voucherId: input.voucherId,
     tokenId: input.tokenId,
+    bundleId: input.bundleId,
     memo: input.memo || 'Payment to merchant',
   } as unknown as TransactionRow
 }

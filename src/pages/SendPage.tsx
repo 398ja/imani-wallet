@@ -240,7 +240,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
   // the user tap Send only to be refused. It answers for a bundle too: holding
   // enough across several coupons is sendable, and the button must not refuse
   // what the send would happily do.
-  const obstacle = minor === null || minor <= 0 ? null : splitObstacle(chosen.vouchers, minor, { bundle: true })
+  const obstacle = minor === null || minor <= 0 ? null : splitObstacle(chosen.vouchers, minor)
   const short = minor !== null && minor > chosen.totalFaceValue
 
   // ── Step 4: confirm ──────────────────────────────────────────────────────
