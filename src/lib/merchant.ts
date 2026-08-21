@@ -109,6 +109,44 @@ export const DEFAULT_CURRENCY = 'EUR'
 export const DEFAULT_VALIDITY_DAYS = 30
 
 /**
+ * What a coupon's life may be set to, in whole days.
+ *
+ * A bound exists because the number is now typed rather than picked: `730` is
+ * two years, past any market stall's horizon, and it is the difference between
+ * a mistyped `3000` being caught here and a coupon dated to the next decade
+ * being minted by a gateway that publishes no ceiling of its own.
+ */
+export const MIN_VALIDITY_DAYS = 1
+export const MAX_VALIDITY_DAYS = 730
+
+/**
+ * A validity, or null for anything that is not one.
+ *
+ * One gate for three callers that all reach `expiry_days` eventually: what a
+ * merchant types into either form, and what an event off the relay claims —
+ * and that last one is publishable by anyone, see `mergeMerchantEvent`.
+ */
+export function validValidityDays(value: unknown): number | null {
+  if (value === '' || value === null || value === undefined) return null
+  const days = Number(value)
+  return Number.isInteger(days) && days >= MIN_VALIDITY_DAYS && days <= MAX_VALIDITY_DAYS
+    ? days
+    : null
+}
+
+/**
+ * The terms to offer as chips, this stall's own first.
+ *
+ * The default leads rather than sitting among the presets because it is the
+ * answer almost every sale takes: the common case should be a chip that is
+ * already selected, not one to find. Deduped, so a stall defaulting to 60 is
+ * not offered 60 twice.
+ */
+export function validityChoices(defaultDays: number): number[] {
+  return [defaultDays, ...VALIDITY_DAYS.filter((days) => days !== defaultDays)]
+}
+
+/**
  * The subset this app's forms edit.
  *
  * Narrower than it was: `businessType` and `storeDescription` are no longer
@@ -120,16 +158,32 @@ export const DEFAULT_VALIDITY_DAYS = 30
  */
 export type MerchantFields = Pick<
   MerchantProfile,
-  'active' | 'categories' | 'location' | 'issuanceCurrency' | 'voucherValidityDays'
->
+  'active' | 'categories' | 'location' | 'issuanceCurrency'
+> & {
+  /**
+   * Null only while a custom term is half-typed. `MerchantProfile` keeps a
+   * number — a stall always has a default — but the form has to be able to
+   * hold "not a validity yet" for as long as the field is open, and saying so
+   * in the type is what lets one `merchantFieldsValid` gate both Save buttons.
+   */
+  voucherValidityDays: number | null
+}
 
 /**
  * The one rule that gates submission: a stall has to sell something, in a
  * currency. Everything else is optional — a one-line stall with no website is
  * still a merchant.
+ *
+ * Plus the validity, which is only ever absent mid-edit: a form that saved an
+ * unfinished custom term would silently fall back to a number the merchant did
+ * not choose, and every coupon after that would carry it.
  */
 export function merchantFieldsValid(fields: MerchantFields): boolean {
-  return fields.categories.length > 0 && fields.issuanceCurrency.trim() !== ''
+  return (
+    fields.categories.length > 0 &&
+    fields.issuanceCurrency.trim() !== '' &&
+    fields.voucherValidityDays !== null
+  )
 }
 
 /** A merchant record with nothing filled in yet. */
@@ -281,8 +335,6 @@ export function mergeMerchantEvent(
     ? parsed.categories.filter((c): c is string => typeof c === 'string')
     : merchant.categories
 
-  const validity = Number(parsed.voucherValidityDays)
-
   return {
     ...merchant,
     // Only an explicit `false` deactivates. A record missing the field is a
@@ -294,7 +346,7 @@ export function mergeMerchantEvent(
     storeDescription: str(parsed.storeDescription) ?? merchant.storeDescription,
     issuanceCurrency: str(parsed.issuanceCurrency) ?? merchant.issuanceCurrency,
     voucherValidityDays:
-      Number.isFinite(validity) && validity > 0 ? validity : merchant.voucherValidityDays,
+      validValidityDays(parsed.voucherValidityDays) ?? merchant.voucherValidityDays,
     updatedAt: Date.now(),
     eventAt: createdAt > 0 ? createdAt : merchant.eventAt,
   }

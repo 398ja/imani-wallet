@@ -5,9 +5,14 @@ import {
   canTrade,
   emptyMerchant,
   isMerchant,
+  merchantFieldsValid,
   mergeMerchantEvent,
+  validityChoices,
+  validValidityDays,
+  MAX_VALIDITY_DAYS,
   MERCHANT_D_TAG,
   MERCHANT_KIND,
+  type MerchantFields,
   type MerchantProfile,
 } from '../merchant'
 
@@ -99,6 +104,20 @@ describe('mergeMerchantEvent', () => {
     expect(merged.voucherValidityDays).toBe(30)
   })
 
+  it('rejects an out-of-range validity — the content is attacker-controllable', () => {
+    // Now that this number is a default rather than a fixture, it reaches
+    // `expiry_days` on every sale without anyone re-reading it.
+    for (const voucherValidityDays of [0, -1, 5000, 45.5]) {
+      const merged = mergeMerchantEvent(base(), JSON.stringify({ voucherValidityDays }), 300)
+      expect(merged.voucherValidityDays).toBe(30)
+    }
+  })
+
+  it('accepts a custom validity a merchant actually chose', () => {
+    const merged = mergeMerchantEvent(base(), JSON.stringify({ voucherValidityDays: 45 }), 300)
+    expect(merged.voucherValidityDays).toBe(45)
+  })
+
   it('round-trips through build', () => {
     const original = base({ location: 'North shops', voucherValidityDays: 90 })
     const event = buildMerchantEvent(original)
@@ -108,6 +127,51 @@ describe('mergeMerchantEvent', () => {
     expect(merged.location).toBe(original.location)
     expect(merged.categories).toEqual(original.categories)
     expect(merged.voucherValidityDays).toBe(90)
+  })
+})
+
+describe('validValidityDays', () => {
+  it('takes whole days inside the bounds and nothing else', () => {
+    expect(validValidityDays(1)).toBe(1)
+    expect(validValidityDays(MAX_VALIDITY_DAYS)).toBe(MAX_VALIDITY_DAYS)
+    expect(validValidityDays('45')).toBe(45)
+
+    expect(validValidityDays(0)).toBeNull()
+    expect(validValidityDays(-30)).toBeNull()
+    expect(validValidityDays(MAX_VALIDITY_DAYS + 1)).toBeNull()
+    // A typo that would date the coupon to the next decade.
+    expect(validValidityDays(3000)).toBeNull()
+    // Half a day is not a term anyone means to offer.
+    expect(validValidityDays(45.5)).toBeNull()
+    expect(validValidityDays('soon')).toBeNull()
+    expect(validValidityDays('')).toBeNull()
+    expect(validValidityDays(undefined)).toBeNull()
+    expect(validValidityDays(Infinity)).toBeNull()
+  })
+})
+
+describe('validityChoices', () => {
+  it('offers the stall its own term first, then the presets', () => {
+    expect(validityChoices(45)).toEqual([45, 30, 60, 90])
+  })
+
+  it('does not offer the same term twice', () => {
+    expect(validityChoices(60)).toEqual([60, 30, 90])
+  })
+})
+
+describe('merchantFieldsValid', () => {
+  const fields = (over: Partial<MerchantFields> = {}): MerchantFields => ({
+    active: true,
+    categories: ['food'],
+    issuanceCurrency: 'EUR',
+    voucherValidityDays: 30,
+    ...over,
+  })
+
+  it('blocks a save while a custom validity is half-typed', () => {
+    expect(merchantFieldsValid(fields())).toBe(true)
+    expect(merchantFieldsValid(fields({ voucherValidityDays: null }))).toBe(false)
   })
 })
 

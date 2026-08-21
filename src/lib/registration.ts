@@ -13,6 +13,7 @@ import {
 } from './profile'
 import {
   buildMerchantEvent,
+  DEFAULT_VALIDITY_DAYS,
   emptyMerchant,
   saveMerchant,
   type MerchantFields,
@@ -242,7 +243,14 @@ export async function register(
   //     a local record to re-publish from /settings/merchant.
   let merchantRecord: MerchantProfile | undefined
   if (merchant) {
-    merchantRecord = { ...emptyMerchant(pubkey), ...merchant, updatedAt: Date.now() }
+    merchantRecord = {
+      ...emptyMerchant(pubkey),
+      ...merchant,
+      // Narrowing the form's mid-typing null. The signup button is gated on
+      // `merchantFieldsValid`, so this is the branch that never runs.
+      voucherValidityDays: merchant.voucherValidityDays ?? DEFAULT_VALIDITY_DAYS,
+      updatedAt: Date.now(),
+    }
     saveMerchant(merchantRecord)
     try {
       const signed = await signer.signEvent(buildMerchantEvent(merchantRecord))
