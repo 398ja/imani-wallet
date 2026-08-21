@@ -117,6 +117,18 @@ export function CurrencySelect({
             role="listbox"
             className="materialize absolute inset-x-0 top-full z-10 mt-1 origin-top overflow-hidden rounded-2xl border border-mono-200 bg-white shadow-lg dark:border-mono-800 dark:bg-mono-900"
           >
+            {/* The list opens on a short list of common currencies, which reads
+                as the whole choice unless something says otherwise. It sits
+                inside the list rather than under the field because that is
+                where the eye already is once the list is open. */}
+            {query === '' && (
+              <li
+                role="presentation"
+                className="border-b border-mono-100 px-3.5 py-2 text-xs text-mono-500 dark:border-mono-800"
+              >
+                Common currencies — type a name to search every other one
+              </li>
+            )}
             {matches.map((currency, i) => (
               <li
                 key={currency.code}
