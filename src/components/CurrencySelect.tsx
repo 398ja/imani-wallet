@@ -81,6 +81,25 @@ export function CurrencySelect({
       </label>
 
       <div className="relative">
+        {/* Says "typeable" before anything is tapped — at rest the field shows a
+            chosen currency and otherwise reads as a value, not a search box.
+            Behind the input in the DOM and click-through, so tapping it focuses
+            the field like tapping anywhere else in the box does. */}
+        <svg
+          viewBox="0 0 24 24"
+          className={`pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-mono-400 ${
+            disabled ? 'opacity-50' : ''
+          }`}
+          aria-hidden="true"
+          focusable="false"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        >
+          <circle cx="11" cy="11" r="7" />
+          <path d="M16.5 16.5 21 21" />
+        </svg>
         <input
           ref={input}
           id={inputId}
@@ -108,7 +127,7 @@ export function CurrencySelect({
             setActive(0)
           }}
           onKeyDown={onKeyDown}
-          className="w-full rounded-2xl border border-mono-200 bg-white px-3.5 py-2.5 text-sm text-mono-900 placeholder:text-mono-400 focus:border-mono-900 focus:outline-none disabled:opacity-50 dark:border-mono-800 dark:bg-mono-950 dark:text-mono-50 dark:focus:border-mono-50"
+          className="w-full rounded-2xl border border-mono-200 bg-white py-2.5 pl-10 pr-3.5 text-sm text-mono-900 placeholder:text-mono-400 focus:border-mono-900 focus:outline-none disabled:opacity-50 dark:border-mono-800 dark:bg-mono-950 dark:text-mono-50 dark:focus:border-mono-50"
         />
 
         {open && matches.length > 0 && (
