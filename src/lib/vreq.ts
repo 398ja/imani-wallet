@@ -1,4 +1,5 @@
-import type { WalletTransaction } from './transactions'
+import { toTransaction, type WalletTransaction } from './transactions'
+import { listTransactions } from './wallet'
 
 /**
  * The merchant half of NUT-18V: asking a customer to pay.
@@ -315,4 +316,54 @@ export function partialFor(request: VoucherPaymentRequest, arrivals: Arrival[]):
   return arrivals
     .filter((a) => a.paymentId === request.paymentId && a.at >= request.createdAt)
     .reduce((sum, a) => sum + a.amount, 0)
+}
+
+/**
+ * Settle every stored request whose money is already in the wallet.
+ *
+ * Settlement used to live only inside `RedeemPage`'s "Waiting for payment"
+ * screen, so it ran only while the merchant was looking at that screen. The page
+ * always mounts on the amount form and nothing resumes an open request — so a
+ * merchant who walked away, or reloaded, could never mark that sale paid however
+ * much of the money was sitting in the till. That is the one wrong state that
+ * costs a merchant a sale: the coupons are here and the request says nobody
+ * paid. Reconciling on unlock and on every wallet change makes settlement a
+ * property of the wallet rather than of a screen.
+ *
+ * Matched BEFORE expiring, deliberately. A request paid ten minutes in but only
+ * reconciled a day later was paid, not missed; expiring first would bury the
+ * payment under a status `matchPayment` refuses to consider.
+ *
+ * Returns the arrivals too, because the screen that draws progress needs them
+ * for `partialFor` and a second read of the wallet is a second answer.
+ */
+export async function reconcileRequests(pubkey: string): Promise<{
+  requests: VoucherPaymentRequest[]
+  arrivals: Arrival[]
+  settled: number
+}> {
+  // Grouped, not raw: a payment drawn across several coupons lands as one row
+  // per coupon, and each on its own is an underpayment `matchPayment` rejects.
+  const arrivals = groupArrivals((await listTransactions()).map(toTransaction))
+  const stored = loadRequests(pubkey)
+
+  let requests = stored
+  let settled = 0
+  for (const arrival of arrivals) {
+    // The whole list, never one request: `matchPayment`'s dedup and its
+    // "exactly one pending match" fallback are both judgements about the set,
+    // and feeding it the accumulated list is what stops one arrival settling
+    // two requests.
+    const match = matchPayment(requests, arrival)
+    if (!match) continue
+    requests = requests.map((r) => (r.paymentId === match.paymentId ? match : r))
+    settled += 1
+  }
+
+  const next = expireRequests(requests)
+  // Only when something actually moved — this runs on every wallet change, and
+  // rewriting an unchanged list on each one is a write for nothing.
+  if (next.some((r, i) => r !== stored[i])) saveRequests(pubkey, next)
+
+  return { requests: next, arrivals, settled }
 }
