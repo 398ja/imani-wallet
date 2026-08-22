@@ -68,6 +68,65 @@ function loadOrCreateMerchant(name) {
   return { name, sk: hexToBytes(store[name].sk), pk: store[name].pk }
 }
 
+/**
+ * A NAP session cookie for the merchant, when the target is edge-guarded.
+ *
+ * Staging puts nap_auth.lua in front of `/api/v1/portal`, which answers 401
+ * "No session cookie" long before the portal ever sees the NIP-98 proof this
+ * script signs. The dev stack has no edge at all, so the cookie is optional:
+ * `napLogin` is only called when a base URL is not localhost.
+ *
+ * This is the same init/complete exchange the wallet performs at login, and the
+ * session it returns is what carries `coupon:issue` — the permission the portal
+ * actually checks. Header-injected permissions are NOT a substitute: the edge
+ * strips client-supplied X-Auth-* on the way in, by design.
+ */
+async function napLogin(base, sk) {
+  const pk = getPublicKey(sk)
+  const init = await fetch(`${base}/api/v1/auth/init`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ npub: nip19.npubEncode(pk) }),
+  })
+  const challenge = await init.json()
+  if (!challenge.challenge_id) throw new Error(`auth/init failed: ${JSON.stringify(challenge)}`)
+
+  // Signed by hash, so the body must be serialised once and sent byte for byte.
+  const raw = new TextEncoder().encode(JSON.stringify({ challenge_id: challenge.challenge_id }))
+  const proof = finalizeEvent(
+    {
+      kind: 27235,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [
+        ['u', challenge.auth_url],
+        ['method', challenge.auth_method],
+        ['payload', bytesToHex(sha256(raw))],
+        ['challenge', challenge.challenge],
+        ['challenge_id', challenge.challenge_id],
+      ],
+      content: '',
+    },
+    sk,
+  )
+  const complete = await fetch(`${base}/api/v1/auth/complete`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      Authorization: `Nostr ${Buffer.from(JSON.stringify(proof)).toString('base64')}`,
+    },
+    body: raw,
+  })
+  const session = await complete.json()
+  if (!complete.ok) throw new Error(`auth/complete failed ${complete.status}: ${JSON.stringify(session)}`)
+  const cookie = (complete.headers.get('set-cookie') ?? '').split(';')[0]
+  if (!cookie) throw new Error('auth/complete returned no session cookie')
+  console.log(`  session roles=${(session.roles ?? []).join(',')} permissions=${(session.permissions ?? []).join(',')}`)
+  return cookie
+}
+
+/** Set by the entrypoint when the target is remote; empty on the dev stack. */
+let sessionCookie = ''
+
 /** NIP-98 (kind 27235) Authorization header over an exact URL + method + body. */
 function nip98(sk, url, method, body) {
   const tags = [
@@ -108,6 +167,7 @@ async function issue(merchant, { quantity, faceValueMinor, currency, memo }) {
       // asserts the permission the same way the proxy would. Without it every
       // seed run 403s on a request that used to be accepted.
       'X-Auth-Permissions': 'coupon:issue',
+      ...(sessionCookie ? { cookie: sessionCookie } : {}),
     },
     body,
   })
@@ -141,11 +201,33 @@ async function issue(merchant, { quantity, faceValueMinor, currency, memo }) {
  * the mint-quote deadline the PENDING record was carrying. It is a best-effort
  * wait — a gateway issuing genuinely no-expiry vouchers must still seed.
  */
+/**
+ * The voucher read-back is edge-guarded on staging.
+ *
+ * `NapProxyAuthFilter` on customer-wallet wants `X-Auth-Pubkey` +
+ * `X-Edge-Auth` (`GATEWAY_CUSTOMER_EDGE_SHARED_SECRET`, the same value the
+ * portal uses). Without them the poll 401s on every attempt and the run dies
+ * with `status=undefined`, which reads as "the voucher never settled" when in
+ * fact it was never readable. The dev stack ignores the extra headers.
+ */
+function walletAuth(url) {
+  return {
+    'X-Auth-Pubkey': merchant.pk,
+    'X-Edge-Auth': EDGE_SECRET,
+    // On staging the edge does not inject NIP-98 for us and
+    // CustomerSecurityConfiguration protects /api/v1/wallet with it, so a
+    // header-only read gets 401 and the poll reports "never settled".
+    ...(url ? { Authorization: nip98(merchant.sk, url, 'GET') } : {}),
+    ...(sessionCookie ? { cookie: sessionCookie } : {}),
+  }
+}
+
 async function waitForToken(voucherId, timeoutMs = 60_000, expiryGraceMs = 20_000) {
   const deadline = Date.now() + timeoutMs
   let last = {}
   while (Date.now() < deadline) {
-    const r = await fetch(`${WALLET}/api/v1/wallet/vouchers/${voucherId}`)
+    const url = `${WALLET}/api/v1/wallet/vouchers/${voucherId}`
+    const r = await fetch(url, { headers: walletAuth(url) })
     if (r.ok) {
       last = await r.json()
       if (last.token && last.status === 'ISSUED') {
@@ -169,7 +251,8 @@ async function waitForExpiry(voucherId, issued, deadline) {
     // without assuming the issuer's expiry_days.
     if (seconds && seconds * 1000 > Date.now() + 3_600_000) return last
     await new Promise((res) => setTimeout(res, 2000))
-    const r = await fetch(`${WALLET}/api/v1/wallet/vouchers/${voucherId}`)
+    const url = `${WALLET}/api/v1/wallet/vouchers/${voucherId}`
+    const r = await fetch(url, { headers: walletAuth(url) })
     if (r.ok) last = await r.json()
   }
   return last
@@ -205,6 +288,13 @@ function toEpochSeconds(value) {
 }
 
 async function deliver(voucher, merchant, customerPubkey) {
+  // The DM leg is skippable when the point is to hand the token over by other
+  // means — pasting it into a wallet's Receive box, say, when gateway-customer's
+  // nostr query is dropping wraps and the DM never arrives.
+  if (process.env.PRINT_TOKENS) {
+    console.log(`\nTOKEN ${voucher.voucher_id}\n${voucher.token}\n`)
+    return { skipped: true }
+  }
   const url = `${WALLET}/api/v1/dm/tokens/send`
   const body = JSON.stringify({
       recipient_pubkey: customerPubkey,
@@ -232,6 +322,7 @@ async function deliver(voucher, merchant, customerPubkey) {
     headers: {
       'Content-Type': 'application/json',
       Authorization: nip98(merchant.sk, url, 'POST', body),
+      ...(sessionCookie ? { cookie: sessionCookie } : {}),
     },
     body,
   })
@@ -328,6 +419,11 @@ console.log(`  pubkey  ${customer.pk}`)
 if (customer.sk) {
   console.log(`  nsec    ${nip19.nsecEncode(customer.sk)}   <- import into your NIP-07 extension`)
 }
+if (!PORTAL.includes('localhost')) {
+  console.log(`\nlogging in at ${PORTAL}`)
+  sessionCookie = await napLogin(PORTAL, merchant.sk)
+}
+
 console.log(`\nissuing ${quantity} x ${faceValueMinor / 100} ${currency}\n`)
 
 const before = await countGiftWraps(customer.pk)

@@ -173,7 +173,7 @@ export function expireRequests(
  *    payment re-settles a second request every time the wallet re-notifies.
  * 2. Exact `paymentId` first. `lib/pay.ts` threads the request's payment id
  *    through `buildSendParams`, the gateway echoes it back as `request_id` on
- *    the DM, and `correlateOnReceive` (lib/legacyBridge.ts) now stamps it onto
+ *    the DM, and `withCorrelation` (lib/legacyBridge.ts) now stamps it onto
  *    the receive row — so this rule fires on a real payment rather than being
  *    aspirational. `_buildReceiveTransactionRow` in shared/tokenRedemption.js
  *    still writes no request reference of its own, which is why the stamping
