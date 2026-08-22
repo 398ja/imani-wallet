@@ -48,13 +48,35 @@ describe('fetchNewestKind0', () => {
     expect(await fetchNewestKind0(PUBKEY)).not.toBeNull()
   })
 
-  it('does not touch the relay when the gateway answers', async () => {
-    // The cache is the cheap read and answers almost always; the relay query
-    // opens a WebSocket, and one per merchant on the market page is not free.
+  it('prefers the relay when it holds a newer profile than the cache', async () => {
+    // The failure this exists for: the gateway's relay ingest subscribes to
+    // kind 1059 only, so a profile published to the relay never reaches its
+    // nostrdb. Answering from the cache because it answered at all pins every
+    // merchant to the profile they registered with — upload a logo, see it on
+    // your own profile, and every customer keeps seeing your initials.
     gatewayReturns({ events: [{ content: '{"name":"Rosa"}', createdAt: 900 }] })
+    vi.mocked(allEvents).mockResolvedValue([
+      { content: '{"name":"Rosa","picture":"http://blossom/logo.webp"}', created_at: 1200 },
+    ] as never)
+
+    expect(await fetchNewestKind0(PUBKEY)).toEqual({
+      content: '{"name":"Rosa","picture":"http://blossom/logo.webp"}',
+      createdAt: 1200,
+    })
+  })
+
+  it('keeps the cached profile when the relay only has an older one', async () => {
+    gatewayReturns({ events: [{ content: '{"name":"Rosa"}', createdAt: 900 }] })
+    vi.mocked(allEvents).mockResolvedValue([{ content: '{"name":"Stale"}', created_at: 100 }] as never)
 
     expect(await fetchNewestKind0(PUBKEY)).toEqual({ content: '{"name":"Rosa"}', createdAt: 900 })
-    expect(allEvents).not.toHaveBeenCalled()
+  })
+
+  it('keeps the cached profile when the relay is unreachable', async () => {
+    gatewayReturns({ events: [{ content: '{"name":"Rosa"}', createdAt: 900 }] })
+    vi.mocked(allEvents).mockRejectedValue(new Error('no relay'))
+
+    expect(await fetchNewestKind0(PUBKEY)).toEqual({ content: '{"name":"Rosa"}', createdAt: 900 })
   })
 
   it('returns null, not a rejection, when neither store answers', async () => {

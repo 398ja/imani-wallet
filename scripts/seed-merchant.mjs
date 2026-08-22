@@ -341,7 +341,7 @@ async function deliver(voucher, merchant, customerPubkey) {
  * not through the gateway, because that is where the wallet writes profiles and
  * where `fetchNewestKind0` falls back to when the nostrdb cache is cold.
  */
-async function publishProfile(shop, about) {
+async function publishProfile(shop, about, picture) {
   const { SimplePool, useWebSocketImplementation } = await import('nostr-tools/pool')
   const { default: WebSocket } = await import('ws')
   useWebSocketImplementation(WebSocket)
@@ -353,7 +353,15 @@ async function publishProfile(shop, about) {
         kind: 0,
         created_at: Math.floor(Date.now() / 1000),
         tags: [],
-        content: JSON.stringify({ name: shop.name, display_name: shop.name, about }),
+        // `picture` is omitted rather than sent empty: the wallet treats the key
+        // being absent as "fall back to initials", and an empty string as a URL
+        // to load, which is a broken image where a monogram belongs.
+        content: JSON.stringify({
+          name: shop.name,
+          display_name: shop.name,
+          about,
+          ...(picture ? { picture } : {}),
+        }),
       },
       shop.sk,
     )
@@ -395,6 +403,9 @@ const faceValueMinor = Number(arg('--face', '500'))
 const currency = arg('--currency', 'EUR')
 const memo = arg('--memo', `${name} — voucher`)
 const about = arg('--about', '')
+// A hosted URL, not a file — kind-0 carries a link. Upload the image first
+// (Blossom is at :28089) and pass what the server hands back.
+const picture = arg('--picture', '')
 
 const merchant = loadOrCreateMerchant(name)
 // `--issuer-pubkey` attributes the coupons to a merchant that already exists in
@@ -436,7 +447,7 @@ const before = await countGiftWraps(customer.pk)
 if (issuerPubkey) {
   console.log('profile   published by the issuer already')
 } else {
-  console.log(`profile   kind-0 ${(await publishProfile(merchant, about)).slice(0, 12)}…`)
+  console.log(`profile   kind-0 ${(await publishProfile(merchant, about, picture)).slice(0, 12)}…`)
 }
 
 const { items } = await issue(merchant, {
