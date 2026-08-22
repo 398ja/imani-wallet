@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Check, Copy, Share2 } from 'lucide-react'
 import QRCode from 'qrcode'
@@ -10,15 +10,12 @@ import {
   createRequest,
   expireRequests,
   loadRequests,
-  matchPayment,
-  groupArrivals,
   partialFor,
+  reconcileRequests,
   saveRequests,
   type VoucherPaymentRequest,
 } from '../lib/vreq'
-import { listTransactions } from '../lib/wallet'
 import { onWalletChanged } from '../lib/wallet'
-import { toTransaction } from '../lib/transactions'
 
 /**
  * Redeem: take a customer's coupons as payment.
@@ -169,40 +166,23 @@ function RequestDisplay({
     QRCode.toDataURL(request.clickableUri, { width: 320, margin: 1 }).then(setQr, () => setQr(null))
   }, [request.clickableUri])
 
-  /** Persist a status change to the stored list as well as to this screen. */
-  const settle = useCallback(
-    (next: VoucherPaymentRequest) => {
-      const stored = loadRequests(pubkey)
-      saveRequests(
-        pubkey,
-        stored.map((r) => (r.paymentId === next.paymentId ? next : r)),
-      )
-      onChange(next)
-    },
-    [pubkey, onChange],
-  )
-
   useEffect(() => {
     if (request.status !== 'pending') return
 
     let live = true
 
-    // Re-read the wallet and look for a transaction that settles this request.
-    // Runs once on mount as well as on every change, because the payment can
-    // land between the request being shown and this effect subscribing.
+    // The settling itself is the wallet's job, not this screen's — the same
+    // reconcile runs on unlock and on every wallet change (lib/vreq.ts), which
+    // is what lets a merchant leave this screen and still get paid. All that is
+    // left here is reading back what it decided about THIS request.
     const check = async () => {
       try {
-        // Grouped, not raw: a payment drawn across several coupons arrives as
-        // one row per coupon, and each on its own is an underpayment that
-        // `matchPayment` rejects. See `groupArrivals`.
-        const arrivals = groupArrivals((await listTransactions()).map(toTransaction))
+        const { requests, arrivals } = await reconcileRequests(pubkey)
         if (!live) return
-        for (const arrival of arrivals) {
-          const settled = matchPayment([request], arrival)
-          if (settled) {
-            settle(settled)
-            return
-          }
+        const mine = requests.find((r) => r.paymentId === request.paymentId)
+        if (mine && mine.status !== 'pending') {
+          onChange(mine)
+          return
         }
         // Nothing settles it yet. If part of it has landed, say so — the
         // alternative is a screen that looks identical to no payment at all
@@ -214,14 +194,15 @@ function RequestDisplay({
       }
     }
 
+    // Runs once on mount as well as on every change, because the payment can
+    // land between the request being shown and this effect subscribing.
     void check()
     const unsubscribe = onWalletChanged(() => void check())
 
     // Expiry is a clock event, not a wallet event, so it needs its own timer.
+    // The reconcile is what writes the status; this only wakes it up.
     const timer = setInterval(() => {
-      if (request.expiresAt * 1000 <= Date.now()) {
-        settle({ ...request, status: 'expired' })
-      }
+      if (request.expiresAt * 1000 <= Date.now()) void check()
     }, 5000)
 
     return () => {
@@ -229,7 +210,7 @@ function RequestDisplay({
       unsubscribe()
       clearInterval(timer)
     }
-  }, [request, settle])
+  }, [request, pubkey, onChange])
 
   const copy = async () => {
     try {

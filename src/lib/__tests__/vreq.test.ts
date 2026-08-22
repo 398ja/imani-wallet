@@ -1,17 +1,35 @@
 import { readFileSync } from 'node:fs'
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { getDecimals } from '@imani/money'
 
 import { formatFace } from '../format'
 import {
   expireRequests,
+  reconcileRequests,
   groupArrivals,
   matchPayment,
   partialFor,
   type VoucherPaymentRequest,
 } from '../vreq'
 import type { WalletTransaction } from '../transactions'
+
+// The wallet the reconcile reads. Mocked rather than opened: a real
+// WalletStorage needs IndexedDB, and what is under test here is the matching,
+// not the database.
+const wallet = vi.hoisted(() => ({ rows: [] as unknown[] }))
+vi.mock('../wallet', () => ({ listTransactions: async () => wallet.rows }))
+
+// Tests run in node, not jsdom, and `loadRequests`/`saveRequests` are the only
+// storage this module touches.
+const stored = new Map<string, string>()
+Object.assign(globalThis, {
+  localStorage: {
+    getItem: (k: string) => stored.get(k) ?? null,
+    setItem: (k: string, v: string) => void stored.set(k, v),
+    removeItem: (k: string) => void stored.delete(k),
+  },
+})
 
 const request = (over: Partial<VoucherPaymentRequest> = {}): VoucherPaymentRequest => ({
   paymentId: 'p1',
@@ -274,5 +292,62 @@ describe('the NUT-18V wire format', () => {
     expect(getDecimals(parsed.unit)).toBe(0)
     // Matched loosely: Intl separates with a non-breaking space.
     expect(formatFace(parsed.amount, { unit: parsed.unit, decimals: 0 })).toMatch(/^SAT\s100$/)
+  })
+})
+
+describe('reconcileRequests', () => {
+  const pubkey = 'm'.repeat(64)
+  const key = `imani-wallet:payment-requests:${pubkey}`
+  const read = () => JSON.parse(stored.get(key)!) as VoucherPaymentRequest[]
+
+  beforeEach(() => {
+    stored.clear()
+    wallet.rows = []
+  })
+
+  // The whole point of the function: a merchant who left the "Waiting for
+  // payment" screen — or reloaded, which lands on the amount form — used to
+  // have no path back to settling the sale, however much money had arrived.
+  it('settles a bundled payment with nothing mounted to watch it', async () => {
+    const asked = request({ paymentId: 'req1', amount: 800 })
+    stored.set(key, JSON.stringify([asked]))
+    // One €8 payment, two coupons, exactly as the DM pipeline writes it.
+    wallet.rows = [
+      { id: 'tx1', type: 'received', timestamp: asked.createdAt + 1000, amount: 500, unit: 'EUR', bundleId: 'b1', requestId: 'req1' },
+      { id: 'tx2', type: 'received', timestamp: asked.createdAt + 2000, amount: 300, unit: 'EUR', bundleId: 'b1', requestId: 'req1' },
+    ]
+
+    const { settled } = await reconcileRequests(pubkey)
+
+    expect(settled).toBe(1)
+    expect(read()[0].status).toBe('fulfilled')
+    expect(read()[0].receivedAmount).toBe(800)
+  })
+
+  // Matching runs BEFORE expiry: a sale paid ten minutes in and reconciled a
+  // day later was paid. Expiring first would hide it behind a status
+  // `matchPayment` will not look at, and the merchant has the money.
+  it('settles a lapsed request whose payment arrived in time', async () => {
+    const createdAt = Date.now() - 2 * 86_400_000
+    const asked = request({
+      paymentId: 'req2',
+      createdAt,
+      expiresAt: Math.floor((createdAt + 3600_000) / 1000),
+    })
+    stored.set(key, JSON.stringify([asked]))
+    wallet.rows = [
+      { id: 'tx9', type: 'received', timestamp: createdAt + 600_000, amount: 500, unit: 'EUR', requestId: 'req2' },
+    ]
+
+    await reconcileRequests(pubkey)
+
+    expect(read()[0].status).toBe('fulfilled')
+  })
+
+  it('leaves an unpaid request alone', async () => {
+    stored.set(key, JSON.stringify([request({ paymentId: 'req3' })]))
+    const { settled, requests } = await reconcileRequests(pubkey)
+    expect(settled).toBe(0)
+    expect(requests[0].status).toBe('pending')
   })
 })

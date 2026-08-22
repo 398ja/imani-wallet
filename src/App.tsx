@@ -4,9 +4,10 @@ import { NapProvider, useNapSession, useNapCallbacks } from '@imani/nap-react'
 import type { NapSession } from '@imani/nap-client-web'
 
 import { createSession, resetSession } from './lib/nap'
-import { openWallet } from './lib/wallet'
+import { openWallet, onWalletChanged } from './lib/wallet'
 import { startDmPoll } from './lib/dmPoll'
 import { reconcilePendingSends } from './lib/pay'
+import { reconcileRequests } from './lib/vreq'
 import { sweepBurnable } from './lib/burn'
 import { restoreIssued } from './lib/issuedRecords'
 import { restoreTx, backfillTx } from './lib/txRecords'
@@ -94,6 +95,17 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           if (settled > 0) console.info(`[app] settled ${settled} pending payment(s)`)
         })
 
+        // And settle any payment request whose money is already in the till.
+        // Settlement used to run only while the merchant sat on the "Waiting
+        // for payment" screen, so walking away from it left a paid sale reading
+        // as unpaid forever. See reconcileRequests.
+        void reconcileRequests(pubkey).then(
+          ({ settled }) => {
+            if (settled > 0) console.info(`[app] settled ${settled} payment request(s)`)
+          },
+          () => {},
+        )
+
         // Rebuild the books from the relay. Logout wipes the device, so on a
         // fresh browser — or a new phone — this is what puts the history back.
         // Runs on every login rather than only an empty wallet, so a payment
@@ -151,6 +163,11 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
       live = false
     }
   }, [pubkey])
+
+  // Every arriving coupon is a candidate payment for an open request, and the
+  // merchant is rarely on the screen that shows it — the till, the home screen
+  // and a closed app all have to settle a sale just the same.
+  useEffect(() => onWalletChanged(() => void reconcileRequests(pubkey).catch(() => {})), [pubkey])
 
   // Reconcile the local copy with the relay, as bottin does on every login.
   // Never throws — an unreachable relay leaves the stored profile in place.
