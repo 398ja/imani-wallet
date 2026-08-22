@@ -170,21 +170,32 @@ const cache = new Map<string, Promise<MerchantBranding>>()
 export async function fetchNewestKind0(
   pubkey: string,
 ): Promise<{ content: string; createdAt: number } | null> {
-  const cached = await gatewayKind0(pubkey).catch(() => null)
-  if (cached) return cached
-
-  try {
+  // BOTH STORES, NEWEST WINS — not "cache first, relay as fallback". The
+  // gateway's relay ingest subscribes to kind 1059 only, so a kind 0 published
+  // straight to the relay never lands in its nostrdb at all: the cache is not
+  // lagging, it is frozen at whatever profile the account was created with.
+  // Answering from it because it answered at all is how a merchant uploads a
+  // logo, sees it on their own profile, and every customer keeps seeing their
+  // initials for good.
+  const [cached, relayed] = await Promise.all([
+    gatewayKind0(pubkey).catch(() => null),
     // Sort rather than trust order — querySync merges replies from several
     // relays. kind 0 is replaceable, but relays are not obliged to have dropped
     // the copy they replaced.
-    const newest = (await allEvents(pubkey, 0)).sort((a, b) => b.created_at - a.created_at)[0]
-    return newest ? { content: newest.content, createdAt: newest.created_at } : null
-  } catch {
-    // Both stores unreachable. Callers all have a defensible fallback — the
-    // stored profile, or the pass defaults — and none of them should throw at a
-    // user over an avatar.
-    return null
-  }
+    allEvents(pubkey, 0)
+      .then((events) => {
+        const newest = events.sort((a, b) => b.created_at - a.created_at)[0]
+        return newest ? { content: newest.content, createdAt: newest.created_at } : null
+      })
+      // Both stores unreachable. Callers all have a defensible fallback — the
+      // stored profile, or the pass defaults — and none of them should throw at
+      // a user over an avatar.
+      .catch(() => null),
+  ])
+
+  if (!cached) return relayed
+  if (!relayed) return cached
+  return relayed.createdAt > cached.createdAt ? relayed : cached
 }
 
 async function gatewayKind0(
