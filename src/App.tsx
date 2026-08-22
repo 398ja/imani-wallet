@@ -167,7 +167,13 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
   // Every arriving coupon is a candidate payment for an open request, and the
   // merchant is rarely on the screen that shows it — the till, the home screen
   // and a closed app all have to settle a sale just the same.
-  useEffect(() => onWalletChanged(() => void reconcileRequests(pubkey).catch(() => {})), [pubkey])
+  // Only once the wallet is open: `onWalletChanged` subscribes to the storage
+  // itself and throws "Wallet not opened yet" if it is not there — thrown from
+  // an effect on mount, that is a blank screen instead of a login.
+  useEffect(() => {
+    if (!ready) return
+    return onWalletChanged(() => void reconcileRequests(pubkey).catch(() => {}))
+  }, [ready, pubkey])
 
   // Reconcile the local copy with the relay, as bottin does on every login.
   // Never throws — an unreachable relay leaves the stored profile in place.
