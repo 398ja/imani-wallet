@@ -1,10 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Check, Copy, Pencil, Share2 } from "lucide-react";
+import {
+  Check,
+  Clock,
+  Copy,
+  Globe,
+  Info,
+  Key,
+  Pencil,
+  Share2,
+  type LucideIcon,
+} from "lucide-react";
 import QRCode from "qrcode";
 import { nip19 } from "nostr-tools";
 
-import { Avatar, Screen, BackLink, RawDetails } from "../components/ui";
+import { Avatar, Screen, BackLink } from "../components/ui";
 import { formatDate, shortPubkey } from "../lib/format";
 import { profileName, type Profile } from "../lib/profile";
 
@@ -26,12 +36,16 @@ import { profileName, type Profile } from "../lib/profile";
  * screen that answers "how does money reach me".
  *
  * So it is built from the vocabulary this wallet already has for a thing you
- * hold — `Pass`: an optional strip, an identity row, one labelled primary
- * field, a barcode. Your identity is the one pass you carry that is not a
- * coupon, and where a coupon puts its balance, this puts your address. That is
- * what the card is for.
+ * hold — `Pass`: an optional strip, an identity row, a barcode. Your identity
+ * is the one pass you carry that is not a coupon, and where a coupon puts its
+ * balance, this puts your address. That is what the card is for.
  *
- * The primary field is the FULL `song@domain`, deliberately. `handleLabel`
+ * The address sits under the name as a contact card's second line rather than
+ * in a labelled slot of its own: "Your address" was a word spent saying what
+ * the string beneath it already looked like, on the one screen where the string
+ * is the subject. The QR and the two buttons under it say what it is for.
+ *
+ * The handle is the FULL `song@domain`, deliberately. `handleLabel`
  * shortens it to `@song` everywhere else in the app on the grounds that the
  * domain identifies nobody — true when it sits under a name in a list, wrong
  * here, where the whole point is the string a person types or scans to pay you.
@@ -65,17 +79,15 @@ export function ProfilePage({ profile }: { profile: Profile }) {
       {address && <AddressActions address={address} />}
 
       {profile.about && (
-        <section className="mt-6">
-          <h2 className="mb-2 text-sm font-medium text-mono-500">About</h2>
+        <Field icon={Info} label="About">
           <p className="whitespace-pre-wrap text-mono-900 dark:text-mono-50">
             {profile.about}
           </p>
-        </section>
+        </Field>
       )}
 
       {profile.website && (
-        <section className="mt-6">
-          <h2 className="mb-2 text-sm font-medium text-mono-500">Website</h2>
+        <Field icon={Globe} label="Website">
           <a
             href={profile.website}
             target="_blank"
@@ -86,21 +98,23 @@ export function ProfilePage({ profile }: { profile: Profile }) {
           >
             {profile.website}
           </a>
-        </section>
+        </Field>
       )}
 
-      {/* Only what the card does not already show. The address is up there in
-          full, so repeating it here would be a third copy of one string. */}
-      <div className="mt-6">
-        <RawDetails
-          entries={[
-            ...(npub
-              ? ([["Public key", npub]] as Array<[string, React.ReactNode]>)
-              : []),
-            ["Updated", formatDate(profile.updatedAt) ?? "—"],
-          ]}
-        />
-      </div>
+      {/* Only what the card does not already show. Without a NIP-05 the card's
+          own line IS this key, shortened, and printing it again underneath
+          would be one string in two truncations. */}
+      {npub && profile.nip05 && (
+        <Field icon={Key} label="Public key">
+          <p className="break-all font-mono text-xs text-mono-400">{npub}</p>
+        </Field>
+      )}
+
+      <Field icon={Clock} label="Updated">
+        <p className="text-sm text-mono-500">
+          {formatDate(profile.updatedAt) ?? "—"}
+        </p>
+      </Field>
 
       {enlarged && address && (
         <AddressDialog address={address} onClose={() => setEnlarged(false)} />
@@ -110,10 +124,50 @@ export function ProfilePage({ profile }: { profile: Profile }) {
 }
 
 /**
+ * Everything below the card: a glyph in a gutter, the content beside it.
+ *
+ * The headings this replaces — About, Website, Details — named categories, not
+ * content: the prose under "About" says it is about you, and a URL announces
+ * itself. A row of words in mono-500 down the page competed with the only text
+ * worth reading. The glyph marks the kind of field at a glance and gives the
+ * column its alignment, which is the iOS Contacts arrangement and the reason it
+ * survives on a phone.
+ *
+ * The word is not gone, it is `sr-only`: a screen reader still hears "About",
+ * because an icon with no accessible name is a decoration announced as nothing.
+ * That is also the honest cost of the trade — a glyph carries less than a word,
+ * so this only holds while the metaphors stay obvious ones.
+ */
+function Field({
+  icon: Icon,
+  label,
+  children,
+}: {
+  icon: LucideIcon;
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="mt-5 flex gap-3">
+      {/* mt-0.5 optically centres a 16px glyph on the first line of text
+          beside it; items-start alone hangs it a shade high. */}
+      <Icon
+        className="mt-0.5 h-4 w-4 shrink-0 text-mono-400"
+        aria-hidden="true"
+      />
+      <div className="min-w-0 flex-1">
+        <span className="sr-only">{label}: </span>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/**
  * The card. A `Pass` for the one thing in the wallet that is not a coupon.
  *
- * The strip, the identity row, the labelled primary field and the barcode are
- * `Pass`'s layout, on the app's own surface rather than an issuer's colours —
+ * The strip, the identity row and the barcode are `Pass`'s layout, on the app's
+ * own surface rather than an issuer's colours —
  * nobody issued this one. The merchant badge on the avatar comes free: `Avatar`
  * resolves it from the pubkey, so a stall owner's card wears the same mark here
  * that their customers see.
@@ -151,24 +205,37 @@ function IdentityCard({
             size="lg"
           />
           {/*
-            The display name and nothing else — deliberately NOT `profileName`,
-            which falls back through the handle to a shortened npub. Both of
-            those are about to appear in the primary field at twice the size,
-            and `profileName`'s fallback truncates the npub differently from
-            `shortPubkey`, so a handle-less account showed the same key twice,
-            in two different truncations, on one card.
+            Name over address, the two-line block every contact card uses —
+            deliberately NOT `profileName`, which falls back through the handle
+            to a shortened npub and would put a truncation of the key on the
+            line above the key itself.
 
-            With no display name there is no name line: the address IS the
-            identity, it is stated once, and the pencil beside the gap is the
-            invitation to give yourself a name.
+            The address takes the name's own weight when there is no name, so
+            the block always leads with something that identifies the account
+            and never states one thing twice. The pencil beside a card carrying
+            only an address is the invitation to give yourself a name.
           */}
-          {profile.displayName ? (
-            <p className="min-w-0 flex-1 truncate text-lg font-semibold text-mono-900 dark:text-mono-50">
-              {profile.displayName}
+          <div className="min-w-0 flex-1">
+            {profile.displayName && (
+              <p className="truncate text-lg font-semibold text-mono-900 dark:text-mono-50">
+                {profile.displayName}
+              </p>
+            )}
+            <p
+              className={
+                profile.displayName
+                  ? "break-words text-sm text-mono-500"
+                  : "break-words text-lg font-semibold text-mono-900 dark:text-mono-50"
+              }
+            >
+              {/* An npub is 63 characters and unreadable whole, so a keyless
+                  account gets the short form; a handle is a word and is shown
+                  as one. Either way the code below carries the full string. */}
+              {address
+                ? (profile.nip05 ?? shortPubkey(address))
+                : "No address yet"}
             </p>
-          ) : (
-            <span className="flex-1" />
-          )}
+          </div>
           {/* Edit belongs on the card, next to what it edits — not as a
               full-width button below the fold. 44px target, 16px glyph. */}
           <button
@@ -179,26 +246,6 @@ function IdentityCard({
           >
             <Pencil className="h-4 w-4" aria-hidden="true" />
           </button>
-        </div>
-
-        {/* The pass's primary field: its label treatment, its slot. */}
-        <div className="mt-6">
-          <p className="text-xs font-medium tracking-wide text-mono-500">
-            Your address
-          </p>
-          {address ? (
-            <p className="mt-1 break-words text-2xl font-semibold text-mono-900 dark:text-mono-50">
-              {/* An npub is 63 characters and unreadable whole; a handle is a
-                  word and is shown as one. Either way the code below carries
-                  the full string, and the record at the foot of the page has
-                  it in a form you can select. */}
-              {profile.nip05 ?? shortPubkey(address)}
-            </p>
-          ) : (
-            <p className="mt-1 text-sm text-mono-500">
-              This account has no usable address yet.
-            </p>
-          )}
         </div>
 
         {address && <CardBarcode address={address} onEnlarge={onEnlarge} />}
