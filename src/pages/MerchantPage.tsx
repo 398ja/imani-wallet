@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Send } from 'lucide-react'
+import { Check, Copy, Send, Share2 } from 'lucide-react'
+import { nip19 } from 'nostr-tools'
 
 import {
   Button,
@@ -73,19 +74,18 @@ export function MerchantPage() {
         </p>
       </div>
 
-      {/* The other way into /send: the voucher is already settled by being on
-          this page, so it opens on the recipient rather than on the picker.
-          Hidden with nothing to send — a button that can only refuse is worse
-          than no button. */}
-      {couponCount > 0 && (
-        <Button
-          size="lg"
-          className="mb-6 w-full"
-          onClick={() => navigate(`/send?from=${pubkey}`)}
-        >
-          <Send className="mr-2 h-5 w-5" /> Send a voucher
-        </Button>
-      )}
+      <div className={`mb-6 grid gap-3 ${couponCount > 0 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+        {/* The other way into /send: the voucher is already settled by being on
+            this page, so it opens on the recipient rather than on the picker.
+            Hidden with nothing to send — a button that can only refuse is worse
+            than no button. */}
+        {couponCount > 0 && (
+          <Button size="lg" onClick={() => navigate(`/send?from=${pubkey}`)}>
+            <Send className="mr-2 h-5 w-5" /> Send a voucher
+          </Button>
+        )}
+        <ShareMerchant pubkey={pubkey} nip05={branding.nip05} />
+      </div>
 
       <ListSection
         title="Transactions"
@@ -102,5 +102,66 @@ export function MerchantPage() {
         )}
       </ListSection>
     </Screen>
+  )
+}
+
+/**
+ * Hand this stall to somebody else.
+ *
+ * What goes out is the merchant's own handle — the full `name@domain` from
+ * their kind-0, or their npub when they have not claimed one — and nothing
+ * else. A bare string is what a wallet can consume: whoever receives it pastes
+ * it into Scan or Send and lands on this same merchant. Wrapped in a sentence
+ * it would read better and paste worse.
+ *
+ * Copy stands in where there is no share sheet, so the slot is never dead in a
+ * desktop browser. Either way it is one button doing one job, and it says which.
+ */
+function ShareMerchant({ pubkey, nip05 }: { pubkey: string; nip05?: string }) {
+  const [copied, setCopied] = useState(false)
+
+  // Encoding is fallible on a malformed key; without either form there is
+  // nothing to hand over, so the button does not appear.
+  const handle =
+    nip05 ??
+    (() => {
+      try {
+        return nip19.npubEncode(pubkey)
+      } catch {
+        return null
+      }
+    })()
+
+  if (handle === null) return null
+
+  const canShare = typeof navigator.share === 'function'
+
+  const act = async () => {
+    try {
+      if (canShare) {
+        await navigator.share({ text: handle })
+        return
+      }
+      await navigator.clipboard.writeText(handle)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // A dismissed sheet or a denied clipboard. Neither is worth a message.
+    }
+  }
+
+  return (
+    <Button size="lg" variant="outline" onClick={act}>
+      {canShare ? (
+        <Share2 className="mr-2 h-5 w-5" />
+      ) : copied ? (
+        <Check className="mr-2 h-5 w-5" />
+      ) : (
+        <Copy className="mr-2 h-5 w-5" />
+      )}
+      <span aria-live="polite">
+        {canShare ? 'Share' : copied ? 'Copied' : 'Copy handle'}
+      </span>
+    </Button>
   )
 }

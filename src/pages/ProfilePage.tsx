@@ -8,6 +8,7 @@ import {
   Info,
   Key,
   Pencil,
+  QrCode,
   Share2,
   type LucideIcon,
 } from "lucide-react";
@@ -15,7 +16,7 @@ import QRCode from "qrcode";
 import { nip19 } from "nostr-tools";
 
 import { Avatar, Screen, BackLink } from "../components/ui";
-import { formatDate, shortPubkey } from "../lib/format";
+import { formatDate, handleLabel, shortPubkey } from "../lib/format";
 import { profileName, type Profile } from "../lib/profile";
 
 /**
@@ -36,20 +37,36 @@ import { profileName, type Profile } from "../lib/profile";
  * screen that answers "how does money reach me".
  *
  * So it is built from the vocabulary this wallet already has for a thing you
- * hold — `Pass`: an optional strip, an identity row, a barcode. Your identity
- * is the one pass you carry that is not a coupon, and where a coupon puts its
- * balance, this puts your address. That is what the card is for.
+ * hold — `Pass`: an optional strip, an identity row, and the controls that act
+ * on it. Your identity is the one pass you carry that is not a coupon, and
+ * where a coupon puts its balance, this puts your handle.
  *
- * The address sits under the name as a contact card's second line rather than
- * in a labelled slot of its own: "Your address" was a word spent saying what
- * the string beneath it already looked like, on the one screen where the string
- * is the subject. The QR and the two buttons under it say what it is for.
+ * The handle sits under the name as a contact card's second line rather than in
+ * a labelled slot of its own: "Your address" was a word spent saying what the
+ * string beneath it already looked like, on the one screen where the string is
+ * the subject. The buttons under it say what it is for.
  *
- * The handle is the FULL `song@domain`, deliberately. `handleLabel`
- * shortens it to `@song` everywhere else in the app on the grounds that the
- * domain identifies nobody — true when it sits under a name in a list, wrong
- * here, where the whole point is the string a person types or scans to pay you.
- * This screen is where the full form lives.
+ * The code is behind the QR glyph on the identity row rather than open on the
+ * card. A coupon's barcode is inline because a coupon exists to be scanned; a
+ * profile is a screen you also visit alone, and a permanent white slab in the
+ * middle of it is the brightest thing there for the nine visits in ten where
+ * nobody is holding up a camera.
+ *
+ * ## Shown short, shared whole
+ *
+ * The screen says `@song`, the same form `handleLabel` gives it everywhere else
+ * in the app — every account on a deployment shares the domain, so the domain
+ * is the half that identifies nobody, and under a name it reads as an email
+ * address.
+ *
+ * What Copy, Share and the QR hand over is the FULL `song@domain`, because that
+ * is the string that resolves: `/api/v1/resolve` and a scanner both need the
+ * domain the short form drops. The two differ on purpose and nothing on screen
+ * pretends otherwise — the word is "handle" throughout, and a handle is a name
+ * for a person, not a transcription of a payload.
+ *
+ * It is also why the noun changes for an account with no NIP-05: what it has is
+ * a key, and calling an npub a handle would be the one lie in the vocabulary.
  */
 export function ProfilePage({ profile }: { profile: Profile }) {
   const [enlarged, setEnlarged] = useState(false);
@@ -64,7 +81,7 @@ export function ProfilePage({ profile }: { profile: Profile }) {
       return null;
     }
   })();
-  const address = profile.nip05 ?? npub;
+  const handle = profile.nip05 ?? npub;
 
   return (
     <Screen>
@@ -72,11 +89,11 @@ export function ProfilePage({ profile }: { profile: Profile }) {
 
       <IdentityCard
         profile={profile}
-        address={address}
+        handle={handle}
         onEnlarge={() => setEnlarged(true)}
       />
 
-      {address && <AddressActions address={address} />}
+      {handle && <HandleActions profile={profile} handle={handle} />}
 
       {profile.about && (
         <Field icon={Info} label="About">
@@ -116,10 +133,66 @@ export function ProfilePage({ profile }: { profile: Profile }) {
         </p>
       </Field>
 
-      {enlarged && address && (
-        <AddressDialog address={address} onClose={() => setEnlarged(false)} />
+      {enlarged && handle && (
+        <HandleDialog
+          profile={profile}
+          handle={handle}
+          onClose={() => setEnlarged(false)}
+        />
       )}
     </Screen>
+  );
+}
+
+/**
+ * What the screen calls this account's address, and what it shows for it.
+ *
+ * Two functions rather than one string because they are read in different
+ * places: the noun goes in button copy, the label goes where the value would.
+ */
+function handleNoun(profile: Profile): string {
+  return profile.nip05 ? "handle" : "key";
+}
+
+function handleShown(profile: Profile, handle: string): string {
+  return profile.nip05 ? handleLabel(profile.nip05) : shortPubkey(handle);
+}
+
+/**
+ * Name over handle — the two-line block every contact card uses.
+ *
+ * Shared by the card and the enlarged code so the rule lives once: the handle
+ * takes the name's own weight when there is no name, so the block always leads
+ * with something that identifies the account and never states one thing twice.
+ * Without it, a keyless account showed a truncation of its key on the line
+ * above its key.
+ */
+function IdentityLines({
+  profile,
+  shown,
+  className,
+}: {
+  profile: Profile;
+  shown: string;
+  className?: string;
+}) {
+  return (
+    <div className={className}>
+      {profile.displayName && (
+        <p className="truncate text-lg font-semibold text-mono-900 dark:text-mono-50">
+          {profile.displayName}
+        </p>
+      )}
+      <p
+        className={
+          profile.displayName
+            ? "break-words text-sm text-mono-500"
+            : "break-words text-lg font-semibold text-mono-900 dark:text-mono-50"
+        }
+      >
+        {shown}
+      </p>
+    </div>
   );
 }
 
@@ -174,11 +247,11 @@ function Field({
  */
 function IdentityCard({
   profile,
-  address,
+  handle,
   onEnlarge,
 }: {
   profile: Profile;
-  address: string | null;
+  handle: string | null;
   onEnlarge: () => void;
 }) {
   const navigate = useNavigate();
@@ -204,142 +277,151 @@ function IdentityCard({
             pubkey={profile.pubkey}
             size="lg"
           />
-          {/*
-            Name over address, the two-line block every contact card uses —
-            deliberately NOT `profileName`, which falls back through the handle
-            to a shortened npub and would put a truncation of the key on the
-            line above the key itself.
+          {/* Deliberately not `profileName`, which falls back through the
+              handle to a shortened npub — see `IdentityLines`. */}
+          <IdentityLines
+            profile={profile}
+            shown={handle ? handleShown(profile, handle) : "No handle yet"}
+            className="min-w-0 flex-1"
+          />
+          {/* Both controls belong on the card, next to what they act on — not
+              as full-width buttons below the fold. 44px targets, 16px glyphs,
+              and only the last one pulled out to the card's own padding.
 
-            The address takes the name's own weight when there is no name, so
-            the block always leads with something that identifies the account
-            and never states one thing twice. The pencil beside a card carrying
-            only an address is the invitation to give yourself a name.
-          */}
-          <div className="min-w-0 flex-1">
-            {profile.displayName && (
-              <p className="truncate text-lg font-semibold text-mono-900 dark:text-mono-50">
-                {profile.displayName}
-              </p>
-            )}
-            <p
-              className={
-                profile.displayName
-                  ? "break-words text-sm text-mono-500"
-                  : "break-words text-lg font-semibold text-mono-900 dark:text-mono-50"
-              }
+              Show, then Edit: showing the code is what this screen is for, and
+              the pencil is the rarer errand. The code itself stays behind the
+              glyph rather than sitting open on the card — you reach for it when
+              somebody is in front of you, and until then it is a white slab in
+              the middle of your own profile. */}
+          {handle && (
+            <button
+              type="button"
+              onClick={onEnlarge}
+              aria-label={`Show ${handleNoun(profile)} code`}
+              className={ICON_BUTTON}
             >
-              {/* An npub is 63 characters and unreadable whole, so a keyless
-                  account gets the short form; a handle is a word and is shown
-                  as one. Either way the code below carries the full string. */}
-              {address
-                ? (profile.nip05 ?? shortPubkey(address))
-                : "No address yet"}
-            </p>
-          </div>
-          {/* Edit belongs on the card, next to what it edits — not as a
-              full-width button below the fold. 44px target, 16px glyph. */}
+              <QrCode className="h-4 w-4" aria-hidden="true" />
+            </button>
+          )}
           <button
             type="button"
             onClick={() => navigate("/settings/profile")}
             aria-label="Edit profile"
-            className="pressable -mr-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-mono-500 outline-none ring-mono-400 hover:text-mono-900 focus-visible:ring-2 dark:hover:text-mono-50"
+            className={`${ICON_BUTTON} -mr-2`}
           >
             <Pencil className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
-
-        {address && <CardBarcode address={address} onEnlarge={onEnlarge} />}
       </div>
     </div>
   );
 }
 
+const ICON_BUTTON =
+  "pressable flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-mono-500 outline-none ring-mono-400 hover:text-mono-900 focus-visible:ring-2 dark:hover:text-mono-50";
+
 /**
- * The barcode slot.
+ * The code with the account's face in the middle of it.
  *
- * On the card rather than behind a tap, because every other pass in this wallet
- * shows its code inline and this one is no different — you open this screen in
- * front of somebody, and the code is what they came for. Tapping enlarges it,
- * for a scan across a counter or off a dim screen.
+ * The face is the point: a code held up across a counter is anonymous, and the
+ * person on the other side is being asked to trust that it is yours before they
+ * can read a single character of it. The avatar answers that at arm's length,
+ * from the same record the name above it comes from.
  *
- * A failure is silent, exactly as `Pass` treats it: a card without its code is
- * still a card, and the address is legible above it.
+ * It is only safe because a QR carries its own redundancy: `useQrCode` asks for
+ * error-correction level H, which recovers 30% of the symbol, and the face plus
+ * its white gutter covers about a quarter of the width — well inside that, and
+ * away from the three finder squares in the corners. Grow the avatar and the
+ * code stops scanning, silently, on somebody else's phone.
+ *
+ * The white gutter is not decoration either: modules touching the avatar would
+ * be read as part of it.
  */
-function CardBarcode({
-  address,
-  onEnlarge,
+function CodeWithFace({
+  profile,
+  dataUrl,
+  shown,
+  className,
 }: {
-  address: string;
-  onEnlarge: () => void;
+  profile: Profile;
+  dataUrl: string;
+  shown: string;
+  className?: string;
 }) {
-  const dataUrl = useQrCode(address);
-
-  if (!dataUrl) return null;
-
   return (
-    // Shrink-wrapped to the code and centred, which is `Pass`'s barcode exactly.
-    // Stretched full-width it becomes a slab of white — barely visible on a
-    // white card, and the brightest thing on the screen in dark mode.
-    <div className="mt-5 flex justify-center">
-      <button
-        type="button"
-        onClick={onEnlarge}
-        aria-label="Show address full screen"
-        // A white panel on a white card has no edge, so the code needs its own
-        // hairline to read as an inset object. `Pass` gets that edge free from the
-        // merchant's background colour; nobody issued this card.
-        className="pressable flex flex-col items-center gap-2 rounded-xl bg-white p-3 ring-1 ring-mono-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mono-400"
+    <div className={`relative ${className ?? ""}`}>
+      <img src={dataUrl} alt={`QR code for ${shown}`} className="w-full" />
+      {/* aria-hidden: the code above already names whose it is, and the badge
+          would otherwise announce "Merchant" in the middle of it. */}
+      <span
+        className="absolute inset-0 flex items-center justify-center"
+        aria-hidden="true"
       >
-        <img src={dataUrl} alt={`QR code for ${address}`} className="w-40" />
-        <span className="text-xs text-mono-500">Tap to enlarge</span>
-      </button>
+        <span className="rounded-full bg-white p-1.5">
+          <Avatar
+            src={profile.picture}
+            name={profileName(profile)}
+            pubkey={profile.pubkey}
+            size="lg"
+          />
+        </span>
+      </span>
     </div>
   );
 }
 
 /**
- * Copy and Share: the two ways to hand somebody an address that are not a
- * camera. Both are RedeemPage's, verbatim — same job, so the same controls and
- * the same words. Share renders only where the API exists.
+ * Copy and Share: the two ways to hand somebody a handle that are not a camera.
+ * Both are RedeemPage's, verbatim — same job, so the same controls and the same
+ * words. Share renders only where the API exists.
+ *
+ * What goes on the clipboard and into the share sheet is the FULL `song@domain`
+ * while the screen says `@song`. That is deliberate and it is the whole reason
+ * these buttons exist: the short form is a name, and the long one is the string
+ * that resolves.
  */
-function AddressActions({ address }: { address: string }) {
+function HandleActions({
+  profile,
+  handle,
+}: {
+  profile: Profile;
+  handle: string;
+}) {
   const [copied, setCopied] = useState(false);
   const canShare = typeof navigator.share === "function";
+  const noun = handleNoun(profile);
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(address);
+      await navigator.clipboard.writeText(handle);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Clipboard denied. The address is on screen to be typed.
+      // Clipboard denied. Share is the other way out, and the code still scans.
     }
   };
 
   const share = async () => {
     try {
-      await navigator.share({ text: address });
+      await navigator.share({ text: handle });
     } catch {
       // Cancelled, almost always — the button only renders where share exists.
     }
   };
 
-  const style =
-    "pressable flex min-h-11 flex-1 items-center justify-center gap-2 rounded-2xl border border-mono-200 text-sm font-medium text-mono-900 outline-none ring-mono-400 focus-visible:ring-2 dark:border-mono-800 dark:text-mono-50";
-
   return (
     <div className="mt-3 flex gap-3">
-      <button type="button" onClick={copy} className={style}>
+      <button type="button" onClick={copy} className={ACTION}>
         {copied ? (
           <Check className="h-4 w-4" aria-hidden="true" />
         ) : (
           <Copy className="h-4 w-4" aria-hidden="true" />
         )}
         {/* The control keeps its name through the action: Copy → Copied. */}
-        <span aria-live="polite">{copied ? "Copied" : "Copy address"}</span>
+        <span aria-live="polite">{copied ? "Copied" : `Copy ${noun}`}</span>
       </button>
       {canShare && (
-        <button type="button" onClick={share} className={style}>
+        <button type="button" onClick={share} className={ACTION}>
           <Share2 className="h-4 w-4" aria-hidden="true" />
           Share
         </button>
@@ -348,22 +430,32 @@ function AddressActions({ address }: { address: string }) {
   );
 }
 
+const ACTION =
+  "pressable flex min-h-11 flex-1 items-center justify-center gap-2 rounded-2xl border border-mono-200 text-sm font-medium text-mono-900 outline-none ring-mono-400 focus-visible:ring-2 dark:border-mono-800 dark:text-mono-50";
+
 /**
- * The address, big enough to scan across a counter.
+ * The code, big enough to scan across a counter, with who it belongs to.
+ *
+ * The name and handle come with it because this is the one view where the
+ * screen is turned away from its owner: the person reading it is looking at a
+ * code and a face, and the two lines are how they check they are paying the
+ * right person before they scan.
  *
  * A native `<dialog>`: the top layer, the backdrop, focus containment, Escape
  * and the returned focus all come from the platform. A hand-rolled overlay
  * would get at least three of those wrong.
  */
-function AddressDialog({
-  address,
+function HandleDialog({
+  profile,
+  handle,
   onClose,
 }: {
-  address: string;
+  profile: Profile;
+  handle: string;
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
-  const dataUrl = useQrCode(address);
+  const dataUrl = useQrCode(handle);
 
   useEffect(() => {
     ref.current?.showModal();
@@ -381,9 +473,10 @@ function AddressDialog({
     >
       <div className="material flex flex-col items-center gap-4 rounded-[20px] p-5 shadow-xl shadow-mono-950/20 ring-1 ring-mono-900/5 dark:ring-mono-50/10">
         {dataUrl ? (
-          <img
-            src={dataUrl}
-            alt={`QR code for ${address}`}
+          <CodeWithFace
+            profile={profile}
+            dataUrl={dataUrl}
+            shown={handleShown(profile, handle)}
             className="w-full rounded-2xl bg-white p-4"
           />
         ) : (
@@ -391,9 +484,11 @@ function AddressDialog({
             The code could not be drawn.
           </p>
         )}
-        <p className="break-words text-center text-lg font-semibold text-mono-900 dark:text-mono-50">
-          {address}
-        </p>
+        <IdentityLines
+          profile={profile}
+          shown={handleShown(profile, handle)}
+          className="w-full text-center"
+        />
         <button
           type="button"
           onClick={() => ref.current?.close()}
@@ -406,13 +501,23 @@ function AddressDialog({
   );
 }
 
-/** One QR, drawn once per address. Null until it lands, or if it never does. */
+/**
+ * One QR, drawn once per value. Null until it lands, or if it never does.
+ *
+ * Level H because the codes on this screen wear a face — see `CodeWithFace`.
+ * It costs modules, not legibility: a handle is short enough that the symbol
+ * stays coarse even at the highest redundancy.
+ */
 function useQrCode(message: string): string | null {
   const [dataUrl, setDataUrl] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
-    QRCode.toDataURL(message, { width: 512, margin: 1 }).then(
+    QRCode.toDataURL(message, {
+      width: 512,
+      margin: 1,
+      errorCorrectionLevel: "H",
+    }).then(
       (url) => {
         if (live) setDataUrl(url);
       },
