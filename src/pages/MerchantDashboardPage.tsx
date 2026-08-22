@@ -1,20 +1,33 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { Clock } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, Panel, ListSection, DetailRow } from '../components/ui'
-import { listTransactions, onWalletChanged } from '../lib/wallet'
-import { toTransaction } from '../lib/transactions'
-import { merchantStats, type MerchantStats } from '../lib/stats'
-import { currencyDecimals, formatFace } from '../lib/format'
+import { listTransactions, listVouchers, onWalletChanged } from '../lib/wallet'
+import { toTransaction, type WalletTransaction } from '../lib/transactions'
+import { toMerchants, walletTotals } from '../lib/merchants'
+import {
+  expiringSoon,
+  merchantStats,
+  outstandingLiability,
+  type MerchantStats,
+} from '../lib/stats'
+import { currencyDecimals, formatDate, formatFace } from '../lib/format'
 import type { MerchantProfile } from '../lib/merchant'
 
 /**
- * Stats — possa-merchant's dashboard, on data this wallet can actually stand
- * behind.
+ * Dashboard — possa-merchant's, on data this wallet can actually stand behind.
  *
  * Same three panels as `DashboardPage` there: the metric tiles, the status
  * snapshot, and the daily activity. The source is different and has to be: the
  * composite endpoint those read is live here and returns zeros, because it
  * cannot see coupons issued through the Sell flow. See `lib/stats.ts`.
+ *
+ * It also carries the money now. The till used to open on the balance, and a
+ * merchant serving a customer had their outstanding liability on screen with the
+ * customer looking at it — so what they owe, what they have taken in, and what
+ * is about to expire all moved here, behind a menu tap. The till is the two
+ * buttons and nothing else. See MerchantHomePage.
  *
  * No chart.js. possa lazy-loads ~60KB for its activity chart; this series is a
  * handful of integers per day and CSS bars draw it with no dependency at all.
@@ -29,7 +42,7 @@ const RANGES = [
 
 const DAY_MS = 86_400_000
 
-export function MerchantStatsPage({
+export function MerchantDashboardPage({
   pubkey,
   merchant,
 }: {
@@ -38,11 +51,20 @@ export function MerchantStatsPage({
 }) {
   const [days, setDays] = useState<number>(30)
   const [stats, setStats] = useState<MerchantStats | null>(null)
+  const [totals, setTotals] = useState<ReturnType<typeof walletTotals> | null>(null)
+  const [owed, setOwed] = useState(0)
+  const [expiring, setExpiring] = useState<WalletTransaction[]>([])
 
   useEffect(() => {
     const load = async () => {
-      const rows = (await listTransactions()).map(toTransaction)
+      const [vouchers, transactions] = await Promise.all([listVouchers(), listTransactions()])
+      const rows = transactions.map(toTransaction)
       const now = Date.now()
+      setTotals(walletTotals(toMerchants(vouchers)))
+      setOwed(outstandingLiability(rows, { pubkey, unit: merchant.issuanceCurrency, now }))
+      // `Date.now()` here in the effect, not in the render body — an expiry that
+      // silently flips between renders is the impurity lint catches elsewhere.
+      setExpiring(expiringSoon(rows, { now }).slice(0, 3))
       setStats(
         merchantStats(rows, {
           pubkey,
@@ -59,13 +81,59 @@ export function MerchantStatsPage({
     return onWalletChanged(load)
   }, [pubkey, merchant.issuanceCurrency, days])
 
-  const money = (minor: number) =>
-    formatFace(minor, { unit: merchant.issuanceCurrency, decimals: currencyDecimals(merchant.issuanceCurrency) })
+  const [primary, ...rest] = totals ?? []
+  // The merchant's own currency stands in when there is nothing held yet:
+  // `formatFace(0, undefined)` has no unit to work with and renders a bare "0".
+  const issuance = {
+    unit: merchant.issuanceCurrency,
+    decimals: currencyDecimals(merchant.issuanceCurrency),
+  }
+  const money = (minor: number) => formatFace(minor, issuance)
 
   return (
     <Screen>
       <BackLink to="/" label="Till" />
-      <PageHeader title="Stats" subtitle={`Your own records, last ${days} days`} />
+      <PageHeader title="Dashboard" />
+
+      {/* The balance, off the till and onto the screen you choose to open. */}
+      <Panel className="mb-6 p-5">
+        <p className="text-sm text-mono-500">Outstanding vouchers</p>
+        <p className="text-amount text-mono-900 dark:text-mono-50">{formatFace(owed, issuance)}</p>
+        {/* What is held, under what is owed — still worth a glance, and it is
+            the customer wallet's headline figure. */}
+        <p className="text-sm text-mono-500">
+          Taken in {formatFace(primary?.minor ?? 0, primary ?? issuance)}
+          {rest.map((total) => ` + ${formatFace(total.minor, total)}`).join('')}
+        </p>
+      </Panel>
+
+      {/*
+        Rendered only when there is something to act on. An "Expiring soon (0)"
+        box every day of the year trains a merchant to stop reading it, so the
+        section is absent rather than empty — its presence IS the signal.
+      */}
+      {expiring.length > 0 && (
+        <ListSection title="Expiring soon">
+          {expiring.map((tx) => (
+            <Link
+              key={tx.id}
+              to={`/merchant/coupon/${encodeURIComponent(tx.voucherId ?? '')}`}
+              className="flex items-center gap-3 p-4 press-row"
+            >
+              <Clock className="h-4 w-4 shrink-0 text-red-500" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-medium text-mono-900 dark:text-mono-50">
+                  {tx.memo || 'Voucher issued'}
+                </p>
+                <p className="truncate text-sm text-mono-500">Expires {formatDate(tx.expiresAt)}</p>
+              </div>
+              <p className="shrink-0 text-right text-mono-900 dark:text-mono-50">
+                {formatFace(tx.amount, { unit: tx.unit, decimals: tx.decimals })}
+              </p>
+            </Link>
+          ))}
+        </ListSection>
+      )}
 
       <div className="mb-6 grid grid-cols-3 gap-2">
         {RANGES.map((range) => {
