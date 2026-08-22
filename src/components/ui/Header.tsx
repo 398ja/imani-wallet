@@ -1,6 +1,14 @@
 import { useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { BarChart3, LogOut, Menu, Settings, User, type LucideIcon } from 'lucide-react'
+import {
+  LayoutDashboard,
+  LogOut,
+  Menu,
+  Receipt,
+  Settings,
+  User,
+  type LucideIcon,
+} from 'lucide-react'
 
 import { Avatar } from './Avatar'
 import { profileHandle, profileName, type Profile } from '../../lib/profile'
@@ -47,7 +55,7 @@ export function Header({
   onLogout,
 }: {
   profile: Profile
-  /** Trading as a merchant — adds the Stats entry; the rest of the menu is the same. */
+  /** Trading as a merchant — adds the merchant entries; the rest is the same. */
   merchant?: boolean
   onLogout: () => void
 }) {
@@ -126,11 +134,18 @@ export function Header({
               Profile
             </MenuLink>
             {/* Merchants only: there is nothing to count for a customer, whose
-                own history already lives on the merchant screens. */}
+                own history already lives on the merchant screens. Both entries
+                are here rather than on the till, which shows a customer
+                standing at the counter nothing but the two buttons. */}
             {merchant && (
-              <MenuLink to="/merchant/stats" icon={BarChart3} onClick={close}>
-                Stats
-              </MenuLink>
+              <>
+                <MenuLink to="/merchant/dashboard" icon={LayoutDashboard} onClick={close}>
+                  Dashboard
+                </MenuLink>
+                <MenuLink to="/merchant/transactions" icon={Receipt} onClick={close}>
+                  Transactions
+                </MenuLink>
+              </>
             )}
             <MenuLink to="/settings" icon={Settings} onClick={close}>
               Settings

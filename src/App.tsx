@@ -35,7 +35,7 @@ import {
 } from './pages/MerchantRecordPages'
 import { MerchantEditPage } from './pages/MerchantEditPage'
 import { SellPage } from './pages/SellPage'
-import { MerchantStatsPage } from './pages/MerchantStatsPage'
+import { MerchantDashboardPage } from './pages/MerchantDashboardPage'
 import { RedeemPage } from './pages/RedeemPage'
 import { MerchantPage } from './pages/MerchantPage'
 import { CouponsPage, TransactionsPage } from './pages/RecordListPages'
@@ -241,7 +241,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route
           path="/"
           element={
-            trading ? <MerchantHomePage pubkey={pubkey} merchant={merchant} /> : <MerchantsPage />
+            trading ? <MerchantHomePage /> : <MerchantsPage />
           }
         />
         {trading && (
@@ -252,8 +252,8 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             <Route path="/merchant/coupons" element={<IssuedCouponsPage />} />
             <Route path="/merchant/coupon/:voucherId" element={<IssuedCouponPage />} />
             <Route
-              path="/merchant/stats"
-              element={<MerchantStatsPage pubkey={pubkey} merchant={merchant} />}
+              path="/merchant/dashboard"
+              element={<MerchantDashboardPage pubkey={pubkey} merchant={merchant} />}
             />
           </>
         )}
