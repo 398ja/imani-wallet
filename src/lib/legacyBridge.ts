@@ -116,35 +116,43 @@ function loadScript(src: string): Promise<void> {
  * this kind, and the rebuild branch below calls it with `{}` — which is the
  * live branch for DM receives, so extending `toLegacyMetadata` alone would
  * still land a row with no bundle and no request on it. Rather than patch the
- * vendored file, the poller registers what it knows against the token id and
- * the write stamps it on, whichever branch built the row.
+ * vendored file, the poller declares what it knows for the duration of one
+ * redeem and the write stamps it on, whichever branch built the row.
  *
- * Keyed on token_id because that is the only identifier both ends agree on:
- * the poller derives it from the token, and every row is keyed
- * `${type}:${tokenId}`.
+ * Held on the in-flight redeem rather than keyed by token id, because there is
+ * no token id both ends agree on: `TokenRedemption.redeem()` SWAPS the token
+ * at the mint, so the row it writes is keyed on the fingerprint of a token
+ * that did not exist when the DM arrived. Keying the registration on the
+ * received token — the obvious thing, and what this did first — matched
+ * nothing on staging and left every arrival with `bundleId: null`, so a
+ * merchant's till could not tell that two coupons were one €7 payment.
+ *
+ * One slot is enough: `DmPollService` awaits `redeemToken` inside a sequential
+ * `for` loop at both of its call sites, so redeems never overlap.
  */
-const correlations = new Map<string, { bundleId?: string; requestId?: string }>()
+let pending: { bundleId?: string; requestId?: string } | undefined
 
-/** Register a DM's bundle/request ids for the row its token is about to write. */
-export function correlateOnReceive(
-  tokenId: string,
+/** Run one redeem with the DM's bundle/request ids attached to whatever it writes. */
+export async function withCorrelation<T>(
   ids: { bundleId?: string; requestId?: string },
-): void {
-  if (!tokenId || (!ids.bundleId && !ids.requestId)) return
-  correlations.set(tokenId, ids)
+  redeem: () => Promise<T>,
+): Promise<T> {
+  pending = ids.bundleId || ids.requestId ? ids : undefined
+  try {
+    return await redeem()
+  } finally {
+    // Cleared even when the redeem throws: a failed receive must not stamp its
+    // request id onto the next coupon that happens to arrive.
+    pending = undefined
+  }
 }
 
 /** Fill in bundle/request ids the row's builder had no way to know. */
 function stampCorrelation(rows: unknown[]): unknown[] {
+  const ids = pending
+  if (!ids) return rows
   return rows.map((row) => {
     const t = row as Record<string, unknown>
-    const key = String(t.tokenId ?? t.token_id ?? '')
-    const ids = correlations.get(key)
-    if (!ids) return row
-    // Consumed once: the row is written, so the entry has done its job. An
-    // entry whose redemption failed outlives its use, which is why this is a
-    // Map of two short strings and not a cache of anything.
-    correlations.delete(key)
     // `||`, not `??` — the vendored builder writes `null`, not `undefined`.
     return {
       ...t,
@@ -154,7 +162,8 @@ function stampCorrelation(rows: unknown[]): unknown[] {
   })
 }
 
-function installTokenIdFill(): void {
+/** Exported for the correlation test; `loadLegacyRedemption` is the real caller. */
+export function installTokenIdFill(): void {
   const wsi = window.walletStorageIntegration
   if (!wsi) return
   const write = wsi.atomicallyWrite.bind(wsi)
