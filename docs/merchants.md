@@ -60,10 +60,10 @@ many came back, and daily activity over the last 7, 30, or 90 days.
 
 ```mermaid
 flowchart LR
-    A[Tap Sell] --> B[Scan customer's Receive QR]
+    A[Tap Sell] --> B["Scan the customer's Receive QR"]
     B --> C[Type the amount]
     C --> D[Send]
-    D --> E[Customer's phone: 'on its way']
+    D --> E["Customer's phone: on its way"]
     E --> F[Coupon settles in their wallet]
 ```
 
