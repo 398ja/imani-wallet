@@ -20,6 +20,7 @@ vi.mock('../nap', () => ({
   resetSession: vi.fn(),
 }))
 vi.mock('../dmPoll', () => ({ stopDmPoll: vi.fn() }))
+vi.mock('../incomingNotifications', () => ({ stopIncomingNotifications: vi.fn() }))
 vi.mock('../wallet', () => ({
   wipeWallet: vi.fn(async () => {
     order.push('wipe')
