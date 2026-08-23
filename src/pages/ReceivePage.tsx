@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import QRCode from 'qrcode'
 import { nip19 } from 'nostr-tools'
 
 import { Screen, BackLink, PageHeader, Alert } from '../components/ui'
+import { useCashbackAvailable } from '../lib/cashback'
 import { handleLabel } from '../lib/format'
 import type { Profile } from '../lib/profile'
 
@@ -94,6 +96,31 @@ export function ReceivePage({ profile }: { profile: Profile }) {
           </p>
         </div>
       )}
+
+      <CashbackLink />
     </Screen>
+  )
+}
+
+/**
+ * The way in for money that was handed over before this wallet existed.
+ *
+ * Outside the QR block deliberately: someone redeeming a cashback code may be
+ * minutes into owning this app, and a profile whose address has not resolved
+ * yet must not also hide the one thing they came here to do.
+ */
+function CashbackLink() {
+  if (!useCashbackAvailable()) return null
+
+  return (
+    <div className="mt-8 text-center">
+      <p className="text-sm text-mono-500">Given a code by a shop?</p>
+      <Link
+        to="/receive/cashback"
+        className="pressable mt-1 inline-block text-sm font-medium text-mono-900 underline-offset-4 hover:underline dark:text-mono-50"
+      >
+        Enter a cashback code
+      </Link>
+    </div>
   )
 }
