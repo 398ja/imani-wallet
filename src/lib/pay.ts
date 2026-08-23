@@ -3,7 +3,8 @@ import type { VoucherRow } from '@imani/wallet-storage'
 
 import { getWallet, listVouchers, notifyWalletChanged } from './wallet'
 import { legacyApi } from './legacyBridge'
-import { couponsFor, toVoucher, type Merchant } from './merchants'
+import { couponsFor, issuerKey, toVoucher, type Merchant } from './merchants'
+import { merchantStatus } from './merchant'
 import { buildPaymentTransaction, buildSentTransaction } from './transactions'
 import type { NUT18VRequest } from './nap'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
@@ -1158,6 +1159,53 @@ export async function sendVouchers({
 }
 
 /**
+ * A merchant only takes back what they themselves issued.
+ *
+ * A coupon is a claim on ONE stall. Sending someone else's to a merchant hands
+ * them something they cannot honour, cannot redeem and cannot return — the
+ * customer's money simply stops. Nothing downstream catches it: the gateway's
+ * atomic send takes a plain recipient pubkey and does not care who issued what.
+ *
+ * Two questions, one rule. A recipient who is not trading as a merchant is a
+ * customer and may be sent anything; a recipient who IS gets only their own
+ * coupons back.
+ *
+ * Sits on `deliver` rather than on either door because both of them arrive here
+ * — `sendVouchers` from the Send screen, `payRequest` from a scanned request —
+ * and it must run BEFORE the first `sendPart`, while nothing has moved.
+ *
+ * Fail-closed: a lookup that could not reach the relay refuses the send rather
+ * than waving it through. The asymmetry is what decides it — a send blocked by
+ * an outage is retried a minute later, while a coupon that lands on a stall that
+ * cannot honour it is money the customer no longer holds and the merchant cannot
+ * give back. Only the second one is unrecoverable.
+ *
+ * What keeps that from being a wallet that cannot send during an outage is the
+ * order of the checks. Paying the issuer their own coupon — the overwhelmingly
+ * common case, and the one a market stall depends on — returns above without
+ * asking anything of the network at all. It is only a send to a THIRD party,
+ * whose role we genuinely do not know, that waits for the relay.
+ */
+async function refuseIfWrongMerchant(recipient: string, issuer: string): Promise<void> {
+  if (issuerKey(recipient) === issuerKey(issuer)) return // A redemption. Always fine.
+
+  const status = await merchantStatus(recipient)
+  if (status === 'customer') return // A customer. Anything goes.
+
+  if (status === 'unknown') {
+    throw new Error(
+      'Could not check who you are sending to. Connect to the network and try ' +
+        'again — nothing has been sent.',
+    )
+  }
+
+  throw new Error(
+    'This merchant only accepts vouchers they issued themselves. Send them one ' +
+      'of their own vouchers, or send this one to a friend instead.',
+  )
+}
+
+/**
  * One coupon if one will do, several if not — the driver both send doors share.
  *
  * Shared deliberately, and late: `payRequest` spent a year able to draw exactly
@@ -1176,6 +1224,8 @@ async function deliver(
   amount: number,
   unitLabel?: string,
 ): Promise<SendResult> {
+  await refuseIfWrongMerchant(ctx.recipient.pubkey, ctx.merchant.pubkey)
+
   // One coupon first: fewer mint splits, one DM, and the path that has been
   // carrying every payment on this stack since the beginning.
   const single = selectVouchers(vouchers, amount)

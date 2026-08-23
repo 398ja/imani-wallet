@@ -371,34 +371,60 @@ export function mergeMerchantEvent(
  *
  * Never rejects. A badge is decoration; nobody should see an error over one.
  */
-const merchantCache = new Map<string, Promise<boolean>>()
+const merchantCache = new Map<string, Promise<MerchantStatus>>()
 
-export function isMerchantPubkey(pubkey: string): Promise<boolean> {
+/**
+ * Three answers, not two.
+ *
+ * `customer` means the relay was asked and holds no live merchant record.
+ * `unknown` means it could not be asked at all. Collapsing those two into
+ * `false` is exactly the confusion that let a foreign coupon through to a
+ * merchant during an outage — a decoration can treat them alike, a guard on the
+ * money path cannot.
+ */
+export type MerchantStatus = 'merchant' | 'customer' | 'unknown'
+
+export function merchantStatus(pubkey: string): Promise<MerchantStatus> {
   const key = pubkey.toLowerCase()
   let pending = merchantCache.get(key)
   if (!pending) {
-    pending = fetchIsMerchant(key).then((yes) => {
-      if (!yes) merchantCache.delete(key)
-      return yes
+    pending = fetchMerchantStatus(key).then((status) => {
+      if (status !== 'merchant') merchantCache.delete(key)
+      return status
     })
     merchantCache.set(key, pending)
   }
   return pending
 }
 
-async function fetchIsMerchant(pubkey: string): Promise<boolean> {
+/**
+ * The lenient reading, for everything that only wants to draw a badge.
+ *
+ * `unknown` reads as "no" here deliberately: an avatar that threw, or that
+ * showed a merchant chip on a key it could not check, would be worse than one
+ * that quietly stays plain until the relay answers.
+ */
+export function isMerchantPubkey(pubkey: string): Promise<boolean> {
+  return merchantStatus(pubkey).then((status) => status === 'merchant')
+}
+
+async function fetchMerchantStatus(pubkey: string): Promise<MerchantStatus> {
   // The copy we already hold, first. For the signed-in user that is always
   // present — `refreshMerchant` saved it at login — so their own badge costs no
   // round trip at all. Nothing is saved for anyone else: their record is not
   // ours to keep, and the session cache above is enough.
-  if (isMerchant(loadMerchant(pubkey))) return true
+  if (isMerchant(loadMerchant(pubkey))) return 'merchant'
 
   try {
     const event = await newestAddressable(pubkey, MERCHANT_KIND, MERCHANT_D_TAG)
-    if (event === null) return false
+    if (event === null) return 'customer'
     return isMerchant(mergeMerchantEvent(emptyMerchant(pubkey), event.content, event.created_at))
+      ? 'merchant'
+      : 'customer'
   } catch {
-    return false
+    // The relay could not be reached, or answered something unusable. Nothing
+    // was learned about this key, and saying so is the whole point.
+    return 'unknown'
   }
 }
 

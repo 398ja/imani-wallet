@@ -16,6 +16,7 @@ import {
 } from '../components/ui'
 import { ScanRecipient } from '../components/ScanRecipient'
 import { listVouchers } from '../lib/wallet'
+import { merchantStatus, type MerchantStatus } from '../lib/merchant'
 import { toMerchants, type Merchant } from '../lib/merchants'
 import { formatFace, parseAmountToMinor } from '../lib/format'
 import { identityLabel, useIdentity } from '../lib/identity'
@@ -105,15 +106,77 @@ export function SendPage({ pubkey }: { pubkey: string }) {
   // cached lookup every other screen makes, so asking here costs nothing extra.
   const recipientIdentity = useIdentity(recipient ?? undefined)
 
+  /**
+   * Is the recipient trading as a merchant? Null until an answer is in.
+   *
+   * Asked so the picker can offer only what this recipient can actually accept.
+   * `deliver` refuses the rest regardless — this exists so the refusal arrives
+   * on the step where it can still be acted on, rather than after an amount has
+   * been typed and Send tapped. `merchantStatus` caches per session, so the
+   * avatar below has usually asked already.
+   *
+   * All three answers are kept, not just the yes/no: `unknown` means the relay
+   * could not be reached, which `deliver` now treats as a refusal, and a screen
+   * that showed it as "customer, anything goes" would be promising a send that
+   * is about to be turned down.
+   *
+   * Stamped with the pubkey it answers FOR, rather than cleared on a recipient
+   * change: an answer arriving after the user tapped Change would otherwise be
+   * applied to whoever they picked next.
+   */
+  const [merchantAnswer, setMerchantAnswer] = useState<{
+    pubkey: string
+    status: MerchantStatus
+  } | null>(null)
+  useEffect(() => {
+    if (recipient === null) return
+    let live = true
+    void merchantStatus(recipient).then((status) => {
+      if (live) setMerchantAnswer({ pubkey: recipient, status })
+    })
+    return () => {
+      live = false
+    }
+  }, [recipient])
+
   if (merchants === null) return <Centered>Checking your vouchers…</Centered>
 
   const options = sendOptions(merchants)
   // Narrowed to the merchant whose page we arrived from, when we arrived from
   // one. `from` naming a merchant with nothing spendable leaves this empty,
   // which lands on the same honest refusal as an empty wallet.
-  const choices = from
+  const narrowed = from
     ? options.filter((o) => o.merchant.pubkey.toLowerCase() === from.toLowerCase())
     : options
+
+  // A merchant can only honour their own coupons, so those are the only ones
+  // worth offering. Left alone while the lookup is unresolved (null): showing
+  // everything for a moment is harmless, since `deliver` still refuses a coupon
+  // this recipient cannot take.
+  const onlyFrom =
+    recipient !== null &&
+    merchantAnswer?.status === 'merchant' &&
+    merchantAnswer.pubkey === recipient
+      ? recipient
+      : null
+
+  // The relay could not be reached, so this recipient's role is genuinely
+  // unknown and `refuseIfWrongMerchant` will turn the send down.
+  const unchecked =
+    recipient !== null &&
+    merchantAnswer?.status === 'unknown' &&
+    merchantAnswer.pubkey === recipient
+
+  // ...but only for a coupon that is not already going home. A voucher sent
+  // back to its own issuer is a redemption, settled before anything is asked of
+  // the network — warning about those would be crying wolf on the one case an
+  // outage does not touch.
+  const wouldAskTheRelay = (issuer: string) =>
+    recipient !== null && issuer.toLowerCase() !== recipient.toLowerCase()
+  const choices =
+    onlyFrom === null
+      ? narrowed
+      : narrowed.filter((o) => o.merchant.pubkey.toLowerCase() === onlyFrom.toLowerCase())
 
   if (choices.length === 0) {
     return (
@@ -121,9 +184,12 @@ export function SendPage({ pubkey }: { pubkey: string }) {
         <BackLink to="/" label="Back" />
         <PageHeader title="Send" />
         <Alert>
-          {from
-            ? 'You have no vouchers left from this merchant to send.'
-            : 'You have no vouchers to send.'}
+          {onlyFrom
+            ? 'This merchant only accepts vouchers they issued themselves, and you ' +
+              'have none of theirs left.'
+            : from
+              ? 'You have no vouchers left from this merchant to send.'
+              : 'You have no vouchers to send.'}
         </Alert>
       </Screen>
     )
@@ -209,6 +275,9 @@ export function SendPage({ pubkey }: { pubkey: string }) {
       <Screen>
         <BackLink to="/" label="Cancel" />
         <PageHeader title="Which voucher?" subtitle={`${verb} ${recipientLabel}`} />
+        {unchecked && choices.some((o) => wouldAskTheRelay(o.merchant.pubkey)) && (
+          <UncheckedRecipient />
+        )}
         <div className="space-y-2">
           {choices.map((option) => (
             <button
@@ -342,6 +411,8 @@ export function SendPage({ pubkey }: { pubkey: string }) {
       <BackLink to="/" label="Cancel" />
       <PageHeader title="How much?" subtitle={`${verb} ${recipientLabel}`} />
 
+      {unchecked && wouldAskTheRelay(chosen.merchant.pubkey) && <UncheckedRecipient />}
+
       <Panel className="p-4">
         <div className="flex items-center justify-between">
           <IdentityInline
@@ -436,6 +507,29 @@ function Row({ label, value }: { label: string; value: string }) {
     <div className="flex justify-between">
       <dt className="text-mono-500">{label}</dt>
       <dd className="text-mono-900 dark:text-mono-50">{value}</dd>
+    </div>
+  )
+}
+
+/**
+ * The recipient's role could not be checked, and the send will say so.
+ *
+ * Shown while the choice is still being made rather than after Send is tapped,
+ * which is the whole reason this screen asks the question early at all.
+ *
+ * Deliberately does not disable anything. The lookup is not cached when it
+ * fails, so the send asks again a moment later and may well succeed — a screen
+ * that greyed the button out would strand a user whose connection came back
+ * between reading this and acting on it.
+ */
+function UncheckedRecipient() {
+  return (
+    <div className="mb-4">
+      <Alert>
+        Could not reach the network to check who you are sending to. You can keep
+        going — the send checks again, and will refuse rather than risk a voucher
+        they cannot use.
+      </Alert>
     </div>
   )
 }

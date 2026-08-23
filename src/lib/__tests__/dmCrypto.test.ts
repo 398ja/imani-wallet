@@ -235,6 +235,23 @@ describe('voucher metadata comes from the token, not the envelope', () => {
     expect(crypto.parseTokenTransferMessage(dmEnvelope(token))).toBeNull()
   })
 
+  it('gives GiftWrapProcessor no token to redeem for a failed signature', () => {
+    // The refusal above was cosmetic on its own: `process` reads the token
+    // first and folds a null metadata away as `?? {}`, so the forgery was still
+    // swapped at the mint and saved — with an empty envelope, which also made
+    // `refuseIfOverRedeemed` skip it. No token is what actually stops it.
+    const { token } = buildVoucherToken({}, [1000, 782], { faceValue: 10000 })
+
+    expect(crypto.extractToken(dmEnvelope(token))).toBeNull()
+  })
+
+  it('still hands over a genuine voucher, and plain ecash', () => {
+    const { token } = buildVoucherToken()
+
+    expect(crypto.extractToken(dmEnvelope(token))).toBe(token)
+    expect(crypto.extractToken(dmEnvelope('cashuBnotavoucher'))).toBe('cashuBnotavoucher')
+  })
+
   it('clamps a value inflated past the signed face value', () => {
     // A rewritten ratio on a legacy voucher looks exactly like this: proofs are
     // genuine, the derived value exceeds what was ever issued.
