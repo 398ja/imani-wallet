@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The two squares start nearly on top of each other and separate into the mark,
+  so the evenOdd hole opens as they part. Outward-from-overlap rather than
+  inward-from-apart on purpose: it keeps every frame inside the final bounds,
+  which is what the Android 12 splash icon crop requires.
+
+  pathData morphing needs both strings to share command structure exactly —
+  M H A V A H A V A Z, twice — so these are the same path translated, never
+  redrawn. Do not "tidy" either string.
+
+  fillAlpha carries the entrance (nothing appears from scale(0)) and lands well
+  before the movement settles, so the shape is legible while it is still moving.
+-->
+<set xmlns:android="http://schemas.android.com/apk/res/android">
+    <objectAnimator
+        android:propertyName="pathData"
+        android:valueType="pathType"
+        android:valueFrom="M27 19 H41 A8 8 0 0 1 49 27 V41 A8 8 0 0 1 41 49 H27 A8 8 0 0 1 19 41 V27 A8 8 0 0 1 27 19 Z M31 23 H45 A8 8 0 0 1 53 31 V45 A8 8 0 0 1 45 53 H31 A8 8 0 0 1 23 45 V31 A8 8 0 0 1 31 23 Z"
+        android:valueTo="M22 14 H36 A8 8 0 0 1 44 22 V36 A8 8 0 0 1 36 44 H22 A8 8 0 0 1 14 36 V22 A8 8 0 0 1 22 14 Z M36 28 H50 A8 8 0 0 1 58 36 V50 A8 8 0 0 1 50 58 H36 A8 8 0 0 1 28 50 V36 A8 8 0 0 1 36 28 Z"
+        android:duration="560"
+        android:interpolator="@interpolator/ease_out_strong" />
+    <objectAnimator
+        android:propertyName="fillAlpha"
+        android:valueType="floatType"
+        android:valueFrom="0"
+        android:valueTo="1"
+        android:duration="240"
+        android:interpolator="@interpolator/ease_out_strong" />
+</set>
