@@ -80,6 +80,13 @@ services:
       # We do not run edge-proxy here (Vite proxies straight to host ports), so
       # the seed script stands in for it. Dev-only value on a local stack.
       GATEWAY_PORTAL_EDGE_SHARED_SECRET: "dev-edge-secret-local-only"
+      # The cashback mint reads a voucher back to finalize it, and that read now
+      # goes to customer-wallet's /internal/v1/wallet/vouchers/{id} instead of the
+      # NIP-98-protected public one. /internal/v1/** is .authenticated() whether or
+      # not NIP-98 is enabled, so this must be set even on a stack with auth off —
+      # unset means 401 UNKNOWN_SERVICE, not a bypass. Same secret as
+      # CUSTOMER_WALLET_SVC_CRED_MERCHANT_PORTAL below.
+      CUSTOMER_WALLET_SERVICE_TOKEN: "dev-merchant-portal-token-local-only"
 
   # Two changes:
   #
@@ -228,6 +235,8 @@ services:
       GATEWAY_CUSTOMER_WALLET_NOSTR_RELAYS: "ws://nostr-relay:7777"
       # Must match GATEWAY_ATOMIC_SEND_DELIVERY_NIP17_SERVICE_TOKEN above.
       CUSTOMER_WALLET_SVC_CRED_ATOMIC_OPS: "dev-atomic-ops-token-local-only"
+      # Must match the portal's CUSTOMER_WALLET_SERVICE_TOKEN above.
+      CUSTOMER_WALLET_SVC_CRED_MERCHANT_PORTAL: "dev-merchant-portal-token-local-only"
       # Test fixtures OFF. The test compose turns them on, but
       # TestFixturesWalletPort extends JdbcWalletPort through the 4-arg
       # super(walletService, mintApi, tokenCodec, defaultMintUrl) — the
