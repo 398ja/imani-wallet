@@ -1,6 +1,12 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { nostrdbAdapter } from '../dmPoll'
+import { nostrdbAdapter, startDmPoll, stopDmPoll } from '../dmPoll'
+
+const fake = vi.hoisted(() => ({ fetchRecentDms: vi.fn(async () => []) }))
+vi.mock('@imani/dm-poll', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  createDmPollService: () => ({ ...fake, start: async () => {}, stop: () => {} }),
+}))
 
 /**
  * The gateway closes every nostr SSE stream after ten minutes and expects the
@@ -20,6 +26,7 @@ class FakeEventSource {
   readyState = FakeEventSource.OPEN
   onmessage: ((e: { data: string }) => void) | null = null
   onerror: (() => void) | null = null
+  onopen: (() => void) | null = null
   closed = false
 
   constructor(readonly url: string) {
@@ -66,5 +73,56 @@ describe('nostrdbAdapter.subscribeEvents — SSE error classification', () => {
     const { source } = subscribe()
     expect(source.url).toContain('kinds=1059')
     expect(source.url).toContain(`pTags=${'a'.repeat(64)}`)
+  })
+})
+
+/**
+ * The hole that lost a redemption: SSE carries only what arrives while the
+ * socket is up, and `start()` ran the only catch-up of the session. A wrap
+ * delivered six seconds after Android froze the WebView was never queried
+ * again, so it never reached the merchant's transaction list.
+ */
+describe('startDmPoll — catch-up after a gap', () => {
+  // The suite runs in node, where there is no DOM. Only the two listener
+  // surfaces the poller touches are needed, so a pair of maps beats pulling in
+  // jsdom for three tests.
+  const listeners = new Map<string, () => void>()
+  const target = {
+    addEventListener: (t: string, fn: () => void) => listeners.set(t, fn),
+    removeEventListener: (t: string) => listeners.delete(t),
+  }
+  const fire = (type: string) => listeners.get(type)?.()
+
+  beforeEach(() => {
+    listeners.clear()
+    vi.stubGlobal('document', { ...target, visibilityState: 'visible' })
+    vi.stubGlobal('window', target)
+  })
+
+  afterEach(() => {
+    stopDmPoll()
+    fake.fetchRecentDms.mockClear()
+  })
+
+  it('re-queries when the SSE stream reconnects', () => {
+    startDmPoll('b'.repeat(64))
+    fake.fetchRecentDms.mockClear()
+    subscribe().source.onopen!()
+    expect(fake.fetchRecentDms).toHaveBeenCalled()
+  })
+
+  it('re-queries when the app comes back to the foreground', () => {
+    startDmPoll('c'.repeat(64))
+    fake.fetchRecentDms.mockClear()
+    fire('visibilitychange')
+    expect(fake.fetchRecentDms).toHaveBeenCalled()
+  })
+
+  it('stops listening once the poller is stopped', () => {
+    startDmPoll('d'.repeat(64))
+    stopDmPoll()
+    fake.fetchRecentDms.mockClear()
+    fire('visibilitychange')
+    expect(fake.fetchRecentDms).not.toHaveBeenCalled()
   })
 })

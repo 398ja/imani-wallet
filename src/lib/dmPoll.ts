@@ -71,6 +71,14 @@ export function nostrdbAdapter(): NostrdbAdapter {
       for (const p of filter.pTags ?? []) params.append('pTags', p)
 
       const source = new EventSource(`${GATEWAY}/api/v1/nostr/subscribe?${params}`)
+      // Every reconnect is a hole. SSE only ever carries what arrives while the
+      // socket is up: the gateway does not replay, so a wrap delivered during
+      // the gap — the ten-minute stream cap, a network flap, or Android
+      // freezing a backgrounded WebView mid-stream — is gone for good unless
+      // something re-queries. Nothing did. `start()` ran the only catch-up of
+      // the session, and a coupon that landed six seconds after the WebView was
+      // frozen never reached the merchant's list.
+      source.onopen = () => onSseOpen?.()
       source.onmessage = (message) => {
         try {
           onEvent(toGiftWrap(JSON.parse(message.data) as RawEvent))
@@ -327,6 +335,18 @@ function redemptionAdapter(): RedemptionAdapter {
 let service: DmPollService | undefined
 /** Whose poller `service` is. An account switch must not inherit it. */
 let currentPubkey: string | undefined
+/** Set by `startDmPoll`, called by the SSE adapter on every (re)connect. */
+let onSseOpen: (() => void) | undefined
+
+/**
+ * Re-query the window SSE may have missed.
+ *
+ * Cheap to over-call: dm-poll skips any event already in its processed set, so
+ * a redundant catch-up costs one query and no writes.
+ */
+function catchUp(): void {
+  void service?.fetchRecentDms()
+}
 
 /**
  * Start receiving coupons.
@@ -373,7 +393,19 @@ export function startDmPoll(pubkey: string): DmPollService {
     enableAutoRedemption: true,
   })
   void service.start()
+  // The first `onopen` fires after `start()` has already caught up, so it costs
+  // one duplicate query per session — worth not special-casing.
+  onSseOpen = catchUp
+  // The socket is not the only thing a freeze breaks. Coming back to the
+  // foreground catches the case where the stream looks alive to the client but
+  // the gateway already reaped it (`sse_cleanup reason=keepalive failed`).
+  document.addEventListener('visibilitychange', onVisible)
+  window.addEventListener('online', catchUp)
   return service
+}
+
+function onVisible(): void {
+  if (document.visibilityState === 'visible') catchUp()
 }
 
 /**
@@ -387,6 +419,9 @@ export function startDmPoll(pubkey: string): DmPollService {
  * failed, and are retried after dm-poll's cooldown.
  */
 export function stopDmPoll(): void {
+  onSseOpen = undefined
+  document.removeEventListener('visibilitychange', onVisible)
+  window.removeEventListener('online', catchUp)
   void service?.stop()
   service = undefined
   currentPubkey = undefined
