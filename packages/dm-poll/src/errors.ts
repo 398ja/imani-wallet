@@ -55,3 +55,29 @@ export class AdapterError extends DmPollError {
     this.name = 'AdapterError';
   }
 }
+
+/**
+ * The recipient refused a redemption on policy grounds, before any swap.
+ *
+ * TERMINAL, and deliberately its own type rather than a message the
+ * already-redeemed matcher happens to catch. Retrying cannot change the answer:
+ * the voucher has paid out everything it was issued for, and it will still have
+ * done so on the next tick. Left unclassified, an uncaught throw is treated as
+ * transient (see runCatchupTick) and the same coupon is re-offered forever.
+ *
+ * Nothing has moved when this is raised — it is thrown before the mint swap — so
+ * the token remains the sender's and their send reclaims at their next login.
+ */
+export class RedemptionRefusedError extends DmPollError {
+  constructor(
+    message: string,
+    public readonly voucherId: string,
+    /** What was already redeemed against this voucher, in face minor units. */
+    public readonly alreadyRedeemed: number,
+    /** The issuer-signed ceiling. */
+    public readonly signedFaceValue: number,
+  ) {
+    super(message)
+    this.name = 'RedemptionRefusedError'
+  }
+}

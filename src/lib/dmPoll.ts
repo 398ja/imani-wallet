@@ -10,9 +10,12 @@ import {
   type StorageAdapter,
   type SubscriptionHandle,
   type Voucher,
+  RedemptionRefusedError,
 } from '@imani/dm-poll'
 
 import { createDmCryptoAdapter, toLegacyMetadata } from './dmCrypto'
+import { checkRedemption } from './redemptionLedger'
+import type { VoucherValidation } from './voucherToken'
 import { getWallet, notifyWalletChanged } from './wallet'
 import { legacyApi, withCorrelation } from './legacyBridge'
 
@@ -223,6 +226,43 @@ function storageAdapter(): StorageAdapter {
 }
 
 /**
+ * Refuses a coupon that would take its voucher past what the issuer signed.
+ *
+ * The only check that looks across redemptions. A signature proves the coupon
+ * is genuine and the faceValue clamp bounds any single presentation, but neither
+ * notices one genuine £10 voucher being redeemed for £10 four times.
+ *
+ * Silent when the voucher was never verified (`validation` absent, i.e. plain
+ * ecash or a pre-verification row) or carries no signed ceiling — there is
+ * nothing to enforce, and inventing a bound would refuse honest coupons.
+ *
+ * Exported for its own test: it is reached in production only through
+ * `redemptionAdapter`, which needs the legacy bridge and a live
+ * `window.TokenRedemption`, and this is the money decision in it.
+ */
+export async function refuseIfOverRedeemed(meta: Record<string, unknown> | undefined): Promise<void> {
+  const validation = meta?.validation as VoucherValidation | undefined
+  const voucherId = typeof meta?.voucherId === 'string' ? meta.voucherId : undefined
+  if (!validation?.signatureValid || !voucherId) return
+
+  const requested = Number(meta?.faceValue ?? 0)
+  const check = await checkRedemption({
+    voucherId,
+    requested,
+    signedFaceValue: validation.signedFaceValue,
+  })
+  if (check.allowed) return
+
+  throw new RedemptionRefusedError(
+    `Voucher ${voucherId} has already paid out ${check.alreadyRedeemed} of ` +
+      `${check.signedFaceValue}; refusing a further ${requested}.`,
+    voucherId,
+    check.alreadyRedeemed,
+    check.signedFaceValue,
+  )
+}
+
+/**
  * Redemption, delegated to imani-apps' canonical coordinator.
  *
  * This is the only caller of `saveVoucher` in dm-poll's flow — without a
@@ -251,6 +291,13 @@ function redemptionAdapter(): RedemptionAdapter {
       // to reach them — this is what lets a merchant's till recognise two
       // arriving coupons as the two halves of one payment request.
       const meta = opts?.metadata as Record<string, unknown> | undefined
+
+      // BEFORE the swap, which is the whole reason the check lives here rather
+      // than anywhere downstream: refusing now leaves the token untouched and
+      // still the sender's, and their send reclaims at their next login. The
+      // same refusal one line later — after redemption.redeem — would have
+      // already taken the money at the mint.
+      await refuseIfOverRedeemed(meta)
       const voucher = (await withCorrelation(
         {
           bundleId: meta?.bundleId as string | undefined,

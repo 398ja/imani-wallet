@@ -1,3 +1,4 @@
+import { RedemptionRefusedError } from '../errors';
 /**
  * DmPollService - Main service for NIP-17 DM polling and token redemption
  */
@@ -338,6 +339,32 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
       // Detect "already redeemed" errors — treat as idempotent success, not failure.
       // This handles cases where SSE re-delivers events, localStorage lost dedup state
       // (e.g., alpha browsers with unreliable storage), or page reloaded mid-redemption.
+      // Terminal, and NOT a success: the recipient refused this redemption on
+      // policy grounds before any swap happened. Mark it received so the poller
+      // stops re-offering it — retrying cannot change the answer — but emit no
+      // redemption:success, because no money arrived. An unclassified throw
+      // would be treated as transient and retried forever.
+      if (error instanceof RedemptionRefusedError) {
+        console.warn(
+          '[DmPollService] Redemption refused:',
+          error.message,
+          'voucher',
+          error.voucherId,
+        );
+        if (this.config.storageAdapter) {
+          const fingerprint = await this.config.cryptoAdapter.getTokenFingerprint(tokenDm.token);
+          await this.config.storageAdapter.markTokenAsReceived(fingerprint).catch(() => {});
+        }
+        this.emit('redemption:refused', {
+          eventId: tokenDm.eventId,
+          senderPubkey: tokenDm.senderPubkey,
+          voucherId: error.voucherId,
+          alreadyRedeemed: error.alreadyRedeemed,
+          signedFaceValue: error.signedFaceValue,
+        });
+        return null;
+      }
+
       if (this.isAlreadyRedeemedError(error)) {
         console.log('[DmPollService] Token already redeemed (idempotent):', tokenDm.eventId.substring(0, 8));
 
