@@ -19,6 +19,7 @@ import { findMerchantWithHistory, couponsFor, type Merchant } from '../lib/merch
 import { toMerchantPass, EMPTY_BRANDING, type MerchantBranding } from '../lib/pass'
 import { merchantBranding } from '../lib/branding'
 import type { WalletTransaction } from '../lib/transactions'
+import { canShare, shareText } from '../lib/native'
 
 /** How many transactions the summary list shows before deferring to a full page. */
 const PREVIEW = 3
@@ -81,7 +82,7 @@ export function MerchantPage() {
             than no button. */}
         {couponCount > 0 && (
           <Button size="lg" onClick={() => navigate(`/send?from=${pubkey}`)}>
-            <Send className="mr-2 h-5 w-5" /> Send a voucher
+            <Send className="mr-2 h-5 w-5" /> Send
           </Button>
         )}
         <ShareMerchant pubkey={pubkey} nip05={branding.nip05} />
@@ -134,25 +135,22 @@ function ShareMerchant({ pubkey, nip05 }: { pubkey: string; nip05?: string }) {
 
   if (handle === null) return null
 
-  const canShare = typeof navigator.share === 'function'
+  const shareable = canShare()
 
   const act = async () => {
+    if (await shareText(handle)) return
     try {
-      if (canShare) {
-        await navigator.share({ text: handle })
-        return
-      }
       await navigator.clipboard.writeText(handle)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch {
-      // A dismissed sheet or a denied clipboard. Neither is worth a message.
+      // Clipboard denied. Nothing a message would let them do differently.
     }
   }
 
   return (
     <Button size="lg" variant="outline" onClick={act}>
-      {canShare ? (
+      {shareable ? (
         <Share2 className="mr-2 h-5 w-5" />
       ) : copied ? (
         <Check className="mr-2 h-5 w-5" />
@@ -160,7 +158,7 @@ function ShareMerchant({ pubkey, nip05 }: { pubkey: string; nip05?: string }) {
         <Copy className="mr-2 h-5 w-5" />
       )}
       <span aria-live="polite">
-        {canShare ? 'Share' : copied ? 'Copied' : 'Copy handle'}
+        {shareable ? 'Share' : copied ? 'Copied' : 'Copy'}
       </span>
     </Button>
   )
