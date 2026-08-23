@@ -137,6 +137,7 @@ export {
   DmPollError,
   GiftWrapError,
   RedemptionError,
+  RedemptionRefusedError,
   SubscriptionError,
   AdapterError,
 } from './errors';
