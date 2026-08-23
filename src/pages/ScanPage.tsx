@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { ClipboardPaste } from 'lucide-react'
 import { PaymentRequestHandler } from 'imani-qr'
 
-import { Button, Screen, BackLink, PageHeader, Alert } from '../components/ui'
+import { Button, Screen, BackLink, PageHeader, Alert, Input } from '../components/ui'
 import { toRecipientPubkey } from '../lib/issue'
 import { readClipboard } from '../lib/native'
 
@@ -27,6 +27,13 @@ export function ScanPage() {
   const navigate = useNavigate()
   const videoRef = useRef<HTMLVideoElement>(null)
   const [error, setError] = useState<string | null>(null)
+  // Revealed only when the clipboard read fails, because then this screen has no
+  // other way in: unlike ScanRecipient it carries no standing text field, so a
+  // refused read left a camera that would not open and a button that would not
+  // paste. Reading the clipboard is not something a page can guarantee — Firefox
+  // does not give readText to web content at all, and Chrome's prompt is the
+  // user's to deny — so the fallback is a field they can long-press into.
+  const [typed, setTyped] = useState<string | null>(null)
   // A handle costs a round trip to resolve, and the scanner fires several times
   // a second on the same code — without this the phone opens a dozen identical
   // lookups while the first is still in flight. A ref, not state: it must be
@@ -105,12 +112,32 @@ export function ScanPage() {
           // WebView, so this button threw on every device it mattered on — and a
           // camera that will not open is exactly when it matters. See readClipboard.
           const text = await readClipboard()
-          if (text === null) setError('Could not read the clipboard.')
-          else await accept(text)
+          if (text === null) {
+            setError('Could not read the clipboard. Paste the code below instead.')
+            setTyped('')
+          } else await accept(text)
         }}
       >
         <ClipboardPaste className="mr-2 h-4 w-4" /> Paste code
       </Button>
+
+      {typed !== null && (
+        <div className="mt-4">
+          <Input
+            label="Code"
+            placeholder="vreqA… or an account"
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+          />
+          <Button
+            className="mt-3 w-full"
+            disabled={typed.trim() === ''}
+            onClick={() => void accept(typed.trim())}
+          >
+            Continue
+          </Button>
+        </div>
+      )}
     </Screen>
   )
 }
