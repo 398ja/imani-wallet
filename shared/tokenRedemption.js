@@ -482,6 +482,13 @@ function _buildReceiveTransactionRow(voucher, metadata = {}) {
         voucherId: voucher.voucher_id,
         tokenId,
         bundleId: metadata.bundle_id || voucher.bundle_id || null,
+        // What the wallet checked about the arriving voucher, carried onto the
+        // row so the Checks section can show it. Every other field here is
+        // named explicitly, so a pass-through blob would be dropped silently —
+        // which is exactly what happened: the verifier, the type and the UI all
+        // shipped, and the row it renders from never carried the result.
+        // Absent for plain ecash, which has no issuer claim to check.
+        validation: metadata.validation || undefined,
         memo: isPayment
             ? (voucher.memo ? `[PAYMENT] ${voucher.memo}` : '[PAYMENT] Payment to merchant')
             : (voucher.memo || 'Received via DM'),
