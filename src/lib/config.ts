@@ -14,12 +14,38 @@ export interface GatewayConfig {
   nip05Domain: string
   /** Where avatars and banners are uploaded, or null when unconfigured. */
   blossomServerUrl: string | null
+  /**
+   * Hosts a cashback claim URL may point at, lower-cased.
+   *
+   * Empty means the cashback feature is OFF for this deployment, which is the
+   * gateway's default and is deliberate (spec 010 FR-009, fail-closed): a claim
+   * URL is fetched and decrypted by this app, so an unvalidated host would be a
+   * place to send someone's claim key. Both cashback entry points are hidden
+   * when this is empty — see `cashbackEnabled`.
+   */
+  cashbackOrigins: string[]
+  /**
+   * How long a cashback code stays claimable, in days.
+   *
+   * Deployment policy rather than a merchant choice, so it is served rather
+   * than picked on the issue screen. Falls back to `DEFAULT_CASHBACK_EXPIRY_DAYS`
+   * when the gateway does not report it — an older gateway, or one that never
+   * set it. Unlike `cashbackOrigins` this does NOT fail closed: an expiry is
+   * not a trust boundary, and refusing to issue over an unset optional number
+   * would take the feature down for no safety gain.
+   */
+  cashbackExpiryDays: number
 }
+
+/** What a cashback code is worth when the gateway names no term of its own. */
+export const DEFAULT_CASHBACK_EXPIRY_DAYS = 5
 
 interface RawConfig {
   nip05_domain?: unknown
   default_domain?: unknown
   blossom_server_url?: unknown
+  cashback_origins?: unknown
+  cashback_expiry_days?: unknown
 }
 
 function str(value: unknown): string | undefined {
@@ -50,7 +76,27 @@ async function fetchConfig(): Promise<GatewayConfig> {
     // deliberately, so that "no media server" is distinguishable from a bad one.
     // Callers disable their file inputs on null rather than failing at upload.
     blossomServerUrl: str(raw.blossom_server_url) ?? null,
+    // Anything that is not a list of non-empty strings collapses to [], which
+    // reads as "cashback off" — the same answer as an absent field. A partly
+    // malformed allowlist must not be treated as a partly valid one.
+    cashbackOrigins: Array.isArray(raw.cashback_origins)
+      ? raw.cashback_origins.flatMap((o) => {
+          const host = str(o)
+          return host ? [host.toLowerCase()] : []
+        })
+      : [],
+    cashbackExpiryDays: positiveInt(raw.cashback_expiry_days) ?? DEFAULT_CASHBACK_EXPIRY_DAYS,
   }
+}
+
+/** A whole number of days, or undefined for anything that is not one. */
+function positiveInt(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined
+}
+
+/** Whether this deployment can validate a claim URL at all. */
+export function cashbackEnabled(config: GatewayConfig): boolean {
+  return config.cashbackOrigins.length > 0
 }
 
 export function gatewayConfig(): Promise<GatewayConfig> {

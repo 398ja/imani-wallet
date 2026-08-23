@@ -35,6 +35,7 @@ import {
 } from './pages/MerchantRecordPages'
 import { MerchantEditPage } from './pages/MerchantEditPage'
 import { SellPage } from './pages/SellPage'
+import { CashbackIssuePage } from './pages/CashbackIssuePage'
 import { MerchantDashboardPage } from './pages/MerchantDashboardPage'
 import { RedeemPage } from './pages/RedeemPage'
 import { MerchantPage } from './pages/MerchantPage'
@@ -44,6 +45,7 @@ import { ScanPage } from './pages/ScanPage'
 import { PayPage } from './pages/PayPage'
 import { SendPage } from './pages/SendPage'
 import { ReceivePage } from './pages/ReceivePage'
+import { CashbackRedeemPage } from './pages/CashbackRedeemPage'
 import { ProfilePage } from './pages/ProfilePage'
 import { SettingsPage } from './pages/SettingsPage'
 import { ProfileEditPage } from './pages/ProfileEditPage'
@@ -247,6 +249,10 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         {trading && (
           <>
             <Route path="/sell" element={<SellPage pubkey={pubkey} merchant={merchant} />} />
+            {/* Under /sell because it is the other half of the same job —
+                and guarded by the same `trading` check, since issuing
+                cashback needs `merchant.issuanceCurrency` exactly as Sell does. */}
+            <Route path="/sell/cashback" element={<CashbackIssuePage merchant={merchant} />} />
             <Route path="/redeem" element={<RedeemPage pubkey={pubkey} merchant={merchant} />} />
             <Route path="/merchant/transactions" element={<MerchantTransactionsPage />} />
             <Route path="/merchant/coupons" element={<IssuedCouponsPage />} />
@@ -261,6 +267,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route path="/pay" element={<PayPage pubkey={pubkey} />} />
         <Route path="/send" element={<SendPage pubkey={pubkey} />} />
         <Route path="/receive" element={<ReceivePage profile={profile} />} />
+        <Route path="/receive/cashback" element={<CashbackRedeemPage />} />
         <Route path="/merchants/:pubkey" element={<MerchantPage />} />
         <Route path="/merchants/:pubkey/coupons" element={<CouponsPage />} />
         <Route path="/merchants/:pubkey/transactions" element={<TransactionsPage />} />

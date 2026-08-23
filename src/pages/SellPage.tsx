@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { Check } from 'lucide-react'
 
 import {
@@ -17,6 +17,7 @@ import { issueAndDeliver, type IssueStage } from '../lib/issue'
 import { identityLabel, useIdentity } from '../lib/identity'
 import { currencyDecimals, formatDate, formatFace, parseAmountToMinor } from '../lib/format'
 import { ValidityPicker } from '../components/ValidityPicker'
+import { useCashbackAvailable } from '../lib/cashback'
 import type { MerchantProfile } from '../lib/merchant'
 
 /**
@@ -27,10 +28,13 @@ import type { MerchantProfile } from '../lib/merchant'
  * the address the customer's own `/receive` screen is already showing — their
  * NIP-05 handle — types what they owe, and sends.
  *
- * This is NOT possa-merchant's cashback flow, which mints a bearer QR with a
- * one-time claim key and never learns who the customer is. Here the coupon is
- * addressed to a pubkey and delivered as a DM, which is what makes it show up in
- * the customer's wallet without them doing anything.
+ * The coupon is addressed to a pubkey and delivered as a DM, which is what makes
+ * it show up in the customer's wallet without them doing anything — and what
+ * requires them to have a wallet at all.
+ *
+ * For the customer who does not, `/sell/cashback` issues a bearer code instead.
+ * It is the deliberate opposite trade: no recipient, no delivery, and whoever
+ * repeats the code back gets the money.
  */
 
 const STAGE_LABEL: Record<IssueStage, string> = {
@@ -51,7 +55,10 @@ export function SellPage({ pubkey, merchant }: { pubkey: string; merchant: Merch
       <PageHeader title="Sell" subtitle={customer ? undefined : "Scan the customer's code"} />
 
       {customer === null ? (
-        <ScanRecipient onFound={setCustomer} selfPubkey={pubkey} />
+        <>
+          <ScanRecipient onFound={setCustomer} selfPubkey={pubkey} />
+          <CashbackLink />
+        </>
       ) : (
         <IssueForm
           customer={customer}
@@ -62,6 +69,30 @@ export function SellPage({ pubkey, merchant }: { pubkey: string; merchant: Merch
         />
       )}
     </Screen>
+  )
+}
+
+/**
+ * The way out for a customer with nothing to scan.
+ *
+ * Offered on the scan step because that is exactly where the merchant discovers
+ * the problem — the customer has no app, so there is no code to point a camera
+ * at. Hidden entirely where the deployment has cashback switched off, rather
+ * than offered and then apologised for.
+ */
+function CashbackLink() {
+  if (!useCashbackAvailable()) return null
+
+  return (
+    <div className="mt-6 text-center">
+      <p className="text-sm text-mono-500">No app to scan?</p>
+      <Link
+        to="/sell/cashback"
+        className="pressable mt-1 inline-block text-sm font-medium text-mono-900 underline-offset-4 hover:underline dark:text-mono-50"
+      >
+        Give cashback instead
+      </Link>
+    </div>
   )
 }
 
