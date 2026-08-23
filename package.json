@@ -20,6 +20,7 @@
     "@capacitor/core": "^7.6.8",
     "@capacitor/keyboard": "^7.0.6",
     "@capacitor/preferences": "^7.0.4",
+    "@capacitor/share": "^7.0.4",
     "@capacitor/status-bar": "^7.0.6",
     "@gandlaf21/bc-ur": "^1.1.12",
     "@tanstack/react-query": "^5.101.4",

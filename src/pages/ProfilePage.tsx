@@ -17,6 +17,7 @@ import { nip19 } from "nostr-tools";
 import { Avatar, Screen, BackLink } from "../components/ui";
 import { formatDate, handleLabel, shortPubkey } from "../lib/format";
 import { profileName, type Profile } from "../lib/profile";
+import { canShare, shareText } from "../lib/native";
 
 /**
  * Your own profile, as others see it.
@@ -378,7 +379,7 @@ function HandleActions({
   handle: string;
 }) {
   const [copied, setCopied] = useState(false);
-  const canShare = typeof navigator.share === "function";
+  const shareable = canShare();
   const noun = handleNoun(profile);
 
   const copy = async () => {
@@ -391,12 +392,10 @@ function HandleActions({
     }
   };
 
+  // Falls back to the clipboard when the sheet could not open, so the control
+  // never does nothing. `copy` already owns the "Copied" feedback.
   const share = async () => {
-    try {
-      await navigator.share({ text: handle });
-    } catch {
-      // Cancelled, almost always — the button only renders where share exists.
-    }
+    if (!(await shareText(handle))) await copy();
   };
 
   return (
@@ -410,7 +409,7 @@ function HandleActions({
         {/* The control keeps its name through the action: Copy → Copied. */}
         <span aria-live="polite">{copied ? "Copied" : `Copy ${noun}`}</span>
       </button>
-      {canShare && (
+      {shareable && (
         <button type="button" onClick={share} className={ACTION}>
           <Share2 className="h-4 w-4" aria-hidden="true" />
           Share

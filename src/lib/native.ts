@@ -63,3 +63,43 @@ export async function readClipboard(): Promise<string | null> {
     return null
   }
 }
+
+/**
+ * Whether a share sheet can be opened at all.
+ *
+ * Android's WebView does not implement the Web Share API, so `navigator.share`
+ * is undefined inside the app — which is why the Share button was missing on
+ * the merchant's own profile while the customer's view of a stall still showed
+ * one (that button silently falls back to Copy). On native the plugin is the
+ * share sheet; on the web build the browser API is, and where neither exists
+ * there is genuinely nothing to share to and the caller should say Copy.
+ */
+export function canShare(): boolean {
+  return Capacitor.isNativePlatform() || typeof navigator.share === 'function'
+}
+
+/**
+ * Opens the share sheet with a bare string.
+ *
+ * `text`, never `url`: what goes out is a handle like `song@domain`, and Android
+ * drops a `url` that is not one. Returns false when the sheet could not open so
+ * the caller can fall back to the clipboard; a *dismissed* sheet also lands
+ * here, which is harmless — copying what someone declined to share costs them
+ * nothing.
+ */
+export async function shareText(text: string): Promise<boolean> {
+  try {
+    if (Capacitor.isNativePlatform()) {
+      const { Share } = await import('@capacitor/share')
+      await Share.share({ text })
+      return true
+    }
+    if (typeof navigator.share === 'function') {
+      await navigator.share({ text })
+      return true
+    }
+  } catch {
+    // Cancelled, or no target installed.
+  }
+  return false
+}
