@@ -13,9 +13,13 @@ import { parseLatLng } from '../lib/coords'
  * ten-line parser is cheaper than a fork of the schema.
  *
  * The map is Google's keyless `output=embed` form — no API key to configure,
- * none to leak. This app ships no Content-Security-Policy today (see
- * deploy/nginx.conf, which says so deliberately); if it ever gains one, the
- * iframe needs `frame-src https://www.google.com https://maps.google.com`.
+ * none to leak. It DOES need `frame-src https://www.google.com
+ * https://maps.google.com` in the Content-Security-Policy, and that policy does
+ * not live in this repo's `deploy/nginx.conf` (which still ships none) but in
+ * `nginx/conf.d/wallet.*.conf` on the imani-deploy host. Staging grew a CSP with
+ * no `frame-src`, so it fell through to `default-src 'self'` and every merchant
+ * watched this map fail to load — the requirement was written down here and the
+ * policy was added somewhere this file cannot see.
  */
 
 export function LocationField({

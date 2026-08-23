@@ -6,7 +6,6 @@ import {
   Copy,
   Globe,
   Info,
-  Key,
   Pencil,
   QrCode,
   Share2,
@@ -115,15 +114,6 @@ export function ProfilePage({ profile }: { profile: Profile }) {
           >
             {profile.website}
           </a>
-        </Field>
-      )}
-
-      {/* Only what the card does not already show. Without a NIP-05 the card's
-          own line IS this key, shortened, and printing it again underneath
-          would be one string in two truncations. */}
-      {npub && profile.nip05 && (
-        <Field icon={Key} label="Public key">
-          <p className="break-all font-mono text-xs text-mono-400">{npub}</p>
         </Field>
       )}
 

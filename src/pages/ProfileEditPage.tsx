@@ -143,7 +143,7 @@ export function ProfileEditPage({
           <textarea
             value={about}
             rows={3}
-            maxLength={1000}
+            maxLength={255}
             onChange={(e) => setAbout(e.target.value)}
             placeholder="A line about you"
             className="w-full rounded-xl border border-mono-200 bg-white px-4 py-3 text-mono-900 placeholder:text-mono-400 focus:border-mono-400 focus:outline-none dark:border-mono-700 dark:bg-mono-800 dark:text-mono-50"

@@ -84,12 +84,60 @@ export async function blossomServer(): Promise<BlossomServerConfig | null> {
   }
 }
 
+/**
+ * Longest edge kept, per slot. An avatar is never shown above 80px and a banner
+ * spans the screen, so anything past these is bytes nobody sees — and on a
+ * metered connection they are bytes somebody pays for twice, once to upload and
+ * again on every page that loads the profile.
+ */
+const MAX_EDGE: Record<UploadSlot, number> = { avatar: 512, banner: 1500 }
+
+/**
+ * Downscales and re-encodes an image before it leaves the device.
+ *
+ * Canvas and `createImageBitmap`, no library: the browser already decodes every
+ * format we accept. WebP because every browser that has `createImageBitmap` also
+ * encodes it, and it beats JPEG at the same quality.
+ *
+ * Returns the ORIGINAL file whenever compressing would not help — a GIF (whose
+ * animation a canvas would flatten to one frame), a decode failure, or a result
+ * that came out no smaller than what we started with. Compression is an
+ * optimisation, so it must never be the reason an upload fails.
+ */
+export async function compress(file: File, slot: UploadSlot): Promise<File> {
+  if (file.type === 'image/gif') return file
+
+  try {
+    const bitmap = await createImageBitmap(file)
+    const scale = Math.min(1, MAX_EDGE[slot] / Math.max(bitmap.width, bitmap.height))
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.round(bitmap.width * scale)
+    canvas.height = Math.round(bitmap.height * scale)
+
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return file
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+    bitmap.close()
+
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, 'image/webp', 0.82),
+    )
+    if (!blob || blob.size >= file.size) return file
+
+    return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.webp', {
+      type: 'image/webp',
+    })
+  } catch {
+    return file
+  }
+}
+
 /** @returns the URL to store on the profile. */
 export async function uploadImage(
   file: File,
   slot: UploadSlot,
   config: BlossomServerConfig,
 ): Promise<string> {
-  const result = await upload({ file, slot, config, sign })
+  const result = await upload({ file: await compress(file, slot), slot, config, sign })
   return result.url
 }
