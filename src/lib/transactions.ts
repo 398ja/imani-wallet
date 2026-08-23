@@ -250,7 +250,7 @@ export function buildIssueTransaction(input: {
  *    Merchant A's vouchers IS Merchant A activity, and `transactionsWith` reads
  *    `merchantId ?? counterparty`, so the row lands on their history.
  *  - `counterparty` is the recipient, which is what the row is *about*, and
- *    `recipientName` names them — see `counterpartyOf`.
+ *    `recipientName` names them — see `otherParty`, which special-cases this type.
  *
  * Id follows the writer's `${type}:${tokenId}` convention, keyed on the SPENT
  * voucher's token_id: one send per voucher, so re-recording overwrites rather
@@ -298,15 +298,30 @@ export function buildSentTransaction(input: {
 }
 
 /**
- * Who the transaction was with, best available: name, else pubkey, else ''.
+ * Who is on the other side of this movement, and what to call them.
  *
- * A `'sent'` row is the one type whose subject is NOT its `merchantId` — that
- * field holds the issuer of the voucher spent, so the general fallback would
- * name the merchant on a row about handing money to a friend.
+ * `counterparty` is that person by construction — the sender of an arriving
+ * coupon, the recipient of a leaving one. `merchantId` is NOT, and the two only
+ * look interchangeable from a customer's wallet, where the stall is both.
+ *
+ * Two rows break that. On a merchant's own till `merchantId` is the merchant,
+ * so reading the other party off it put the stall's own name on every
+ * redemption it took and left the customer folded away in the raw details. And
+ * on a `'sent'` row `merchantId` is the issuer of the coupon being SPENT, which
+ * would name a merchant on a row about handing money to a friend.
+ *
+ * `pubkey` is the signed-in wallet. Without it no row can be my own stall,
+ * which is the customer reading — the safe thing to be wrong about.
  */
-export function counterpartyOf(tx: WalletTransaction): string {
-  if (tx.type === 'sent') return tx.recipientName ?? tx.counterparty ?? ''
-  return tx.merchantName ?? tx.merchantId ?? tx.counterparty ?? ''
+export function otherParty(
+  tx: WalletTransaction,
+  pubkey?: string,
+): { pubkey: string; label: string } | undefined {
+  const ownStall = pubkey !== undefined && tx.merchantId === pubkey
+  const who = ownStall || tx.type === 'sent' ? tx.counterparty : (tx.merchantId ?? tx.counterparty)
+  if (!who) return undefined
+  // Only one kind of person is ever across the counter from your own stall.
+  return { pubkey: who, label: ownStall ? 'Customer' : tx.direction === 'in' ? 'From' : 'To' }
 }
 
 /** Human label for the row type. */

@@ -3,11 +3,12 @@ import type { TransactionRow } from '@imani/wallet-storage'
 
 import {
   toTransaction,
-  counterpartyOf,
+  otherParty,
   transactionLabel,
   buildPaymentTransaction,
   buildIssueTransaction,
   buildSentTransaction,
+  type WalletTransaction,
 } from '../transactions'
 
 /**
@@ -85,13 +86,6 @@ describe('toTransaction', () => {
     expect(tx.at).toBe(0)
     expect(tx.merchantId).toBeUndefined()
     expect(tx.memo).toBeUndefined()
-  })
-
-  it('prefers a name over a pubkey for the counterparty label', () => {
-    expect(counterpartyOf(toTransaction(writtenRow()))).toBe('Rosa Green Farm')
-    expect(counterpartyOf(toTransaction(writtenRow({ merchantName: undefined })))).toBe(
-      'f'.repeat(64),
-    )
   })
 })
 
@@ -255,13 +249,69 @@ describe('buildSentTransaction', () => {
 
   it('names the recipient, not the issuer, when the history asks who', () => {
     // The one type whose subject is not its merchantId. Without the special case
-    // a row about handing money to a friend reads "Rosa Green Farm".
-    expect(counterpartyOf(toTransaction(sent()))).toBe('Ama')
-    // No name resolved at send time — the pubkey beats naming the wrong person.
-    expect(counterpartyOf(toTransaction(sent({ recipientName: undefined })))).toBe(FRIEND)
+    // a row about handing money to a friend names the stall that issued it.
+    expect(otherParty(toTransaction(sent()))?.pubkey).toBe(FRIEND)
   })
 
   it('reads as Sent', () => {
     expect(transactionLabel(toTransaction(sent()))).toBe('Sent')
+  })
+})
+
+describe('otherParty', () => {
+  const ME = 'merchant-pubkey'
+  const CUSTOMER = 'customer-pubkey'
+
+  const tx = (over: Partial<WalletTransaction> = {}): WalletTransaction =>
+    ({
+      id: 'tx-1',
+      type: 'received',
+      direction: 'in',
+      at: 1_700_000_000_000,
+      amount: 1000,
+      unit: 'GBP',
+      decimals: 2,
+      ...over,
+    }) as WalletTransaction
+
+  it('names the customer on a redemption taken at my own till', () => {
+    // The reported bug: merchantId is ME here, so reading the other party off
+    // it put my own stall's name on every redemption I accepted.
+    expect(otherParty(tx({ merchantId: ME, counterparty: CUSTOMER }), ME)).toEqual({
+      pubkey: CUSTOMER,
+      label: 'Customer',
+    })
+  })
+
+  it('names the customer on a coupon I issued', () => {
+    expect(
+      otherParty(tx({ type: 'issued', direction: 'out', merchantId: ME, counterparty: CUSTOMER }), ME),
+    ).toEqual({ pubkey: CUSTOMER, label: 'Customer' })
+  })
+
+  it('names the stall on a coupon I hold as a customer', () => {
+    expect(otherParty(tx({ merchantId: 'stall', counterparty: 'stall' }), ME)).toEqual({
+      pubkey: 'stall',
+      label: 'From',
+    })
+  })
+
+  it('names the stall I paid', () => {
+    expect(
+      otherParty(tx({ type: 'payment', direction: 'out', merchantId: 'stall', counterparty: 'stall' }), ME),
+    ).toEqual({ pubkey: 'stall', label: 'To' })
+  })
+
+  it('reads a row as somebody else’s stall when the wallet is unknown', () => {
+    // The safe default: without a pubkey nothing can be MY stall, and the
+    // customer case is the one that survives being wrong.
+    expect(otherParty(tx({ merchantId: ME, counterparty: CUSTOMER }))).toEqual({
+      pubkey: ME,
+      label: 'From',
+    })
+  })
+
+  it('is absent when the row names nobody', () => {
+    expect(otherParty(tx(), ME)).toBeUndefined()
   })
 })

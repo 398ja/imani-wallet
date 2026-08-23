@@ -265,7 +265,10 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route path="/merchants/:pubkey/coupons" element={<CouponsPage />} />
         <Route path="/merchants/:pubkey/transactions" element={<TransactionsPage />} />
         <Route path="/coupon/:tokenId" element={<CouponPage />} />
-        <Route path="/transaction/:id" element={<TransactionPage trading={trading} />} />
+        <Route
+          path="/transaction/:id"
+          element={<TransactionPage pubkey={pubkey} trading={trading} />}
+        />
         <Route path="/profile" element={<ProfilePage profile={profile} />} />
         {/* `merchant !== null`, NOT `trading`: a CLOSED stall must stay reachable
             or the Open-for-business switch could never be turned back on. It is
