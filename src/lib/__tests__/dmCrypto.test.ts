@@ -3,6 +3,7 @@ import { generateSecretKey, getPublicKey, nip17 } from 'nostr-tools'
 import { bytesToHex } from '@noble/hashes/utils'
 
 import { createDmCryptoAdapter, toLegacyMetadata } from '../dmCrypto'
+import { buildVoucherToken, dmEnvelope } from './voucherFixtures'
 
 /**
  * A stand-in for the app's signer, lockable like the real one.
@@ -198,5 +199,60 @@ describe('dm-poll CryptoAdapter', () => {
     const legacy = toLegacyMetadata(parsed)
     expect(legacy.request_id).toBe('pay-1')
     expect(legacy.bundle_id).toBe('b'.repeat(32))
+  })
+})
+
+describe('voucher metadata comes from the token, not the envelope', () => {
+  const crypto = createDmCryptoAdapter()
+
+  it('overrides a lying envelope with the signed voucher', () => {
+    const { token, voucher } = buildVoucherToken()
+    // The sender claims a different issuer and 100x the value.
+    const content = dmEnvelope(token, {
+      issuer_id: 'f'.repeat(64),
+      face_value: 100000,
+      face_unit: 'EUR',
+      voucher_id: 'not-the-real-one',
+    })
+
+    const meta = crypto.parseTokenTransferMessage(content) as Record<string, unknown>
+
+    expect(meta.issuerId).toBe(voucher.issuerId)
+    expect(meta.voucherId).toBe(voucher.voucherId)
+    expect(meta.faceUnit).toBe('GBP')
+    // 1782 sats * 0.05611672278338945 = 100 minor units, not the claimed 100000.
+    expect(meta.faceValue).toBe(100)
+    expect(meta.validation).toMatchObject({ signatureValid: true, signedFaceValue: 1000 })
+  })
+
+  it('refuses a voucher whose signature does not check out', () => {
+    // Altering fields BEFORE signing just yields a different valid voucher, so
+    // the forgery has to be applied after: the blob now says 10x the face value
+    // the issuer put their name to. Refused outright rather than flagged and
+    // carried forward — tampering after issuance is the only way to produce it.
+    const { token } = buildVoucherToken({}, [1000, 782], { faceValue: 10000 })
+
+    expect(crypto.parseTokenTransferMessage(dmEnvelope(token))).toBeNull()
+  })
+
+  it('clamps a value inflated past the signed face value', () => {
+    // A rewritten ratio on a legacy voucher looks exactly like this: proofs are
+    // genuine, the derived value exceeds what was ever issued.
+    const { token } = buildVoucherToken({ issuanceRatio: 2.5 }, [1000, 782])
+    const meta = crypto.parseTokenTransferMessage(dmEnvelope(token)) as Record<string, unknown>
+
+    // 1782 * 2.5 = 4455, far past the 1000 that was issued.
+    expect(meta.faceValue).toBe(1000)
+    expect(meta.validation).toMatchObject({ cappedAtFaceValue: true })
+  })
+
+  it('leaves plain non-voucher ecash alone', () => {
+    const meta = crypto.parseTokenTransferMessage(
+      dmEnvelope('cashuBnotavoucher', { face_value: 42, issuer_id: 'abc' }),
+    ) as Record<string, unknown>
+
+    expect(meta.faceValue).toBe(42)
+    expect(meta.issuerId).toBe('abc')
+    expect(meta.validation).toBeUndefined()
   })
 })

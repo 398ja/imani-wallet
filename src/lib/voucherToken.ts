@@ -401,6 +401,44 @@ export interface VoucherVerification {
 }
 
 /**
+ * What was actually checked about a coupon, recorded on the row so the merchant
+ * can be shown it rather than asked to trust a bare tick.
+ *
+ * Absent on rows written before this existed — which must read as "not checked",
+ * never as "verified".
+ */
+export interface VoucherValidation {
+  /** The issuer's signature verified over the canonical bytes. */
+  signatureValid: boolean
+  /** Signed before the canonicalizer fix, so `issuance_ratio` is not attested. */
+  legacyCanonical: boolean
+  /** The signed, authoritative issued face value in minor units. */
+  signedFaceValue: number
+  /** True when the derived value exceeded the signed face and was clamped down. */
+  cappedAtFaceValue: boolean
+}
+
+/**
+ * The value to credit for a token, and the evidence behind it.
+ *
+ * `currentFace = tokenAmount * issuanceRatio` is how a partially-spent voucher
+ * reports what is left, but the ratio is unsigned on legacy vouchers, so it is
+ * clamped to the signed face value. That clamp is the only bound that holds
+ * against a rewritten ratio, and it needs no network.
+ */
+export function creditableFaceValue(parsed: ParsedVoucherToken): {
+  faceValue: number
+  cappedAtFaceValue: boolean
+} {
+  const { voucher, tokenAmount } = parsed
+  const derived = Math.round(tokenAmount * voucher.issuanceRatio)
+  if (voucher.faceValue > 0 && derived > voucher.faceValue) {
+    return { faceValue: voucher.faceValue, cappedAtFaceValue: true }
+  }
+  return { faceValue: derived, cappedAtFaceValue: false }
+}
+
+/**
  * Checks the issuer's BIP-340 signature over the canonical bytes.
  *
  * Tries the current form first and falls back to the pre-fix truncated one, the
