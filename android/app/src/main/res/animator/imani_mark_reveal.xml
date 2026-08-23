@@ -1,30 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The two squares start nearly on top of each other and separate into the mark,
-  so the evenOdd hole opens as they part. Outward-from-overlap rather than
+  The two squares start closer together and separate into the mark, so the
+  evenOdd hole opens as they part. Outward-from-overlap rather than
   inward-from-apart on purpose: it keeps every frame inside the final bounds,
   which is what the Android 12 splash icon crop requires.
+
+  The start state is a legible mark, not a degenerate one — 10 units of
+  separation against the final 14. An earlier version started at 4 and was the
+  scale(0) mistake in path form: the first half of the timeline drew a thin
+  sliver, so a warm launch (~1s of splash) showed an empty icon slot. Every
+  frame here reads as the mark; only the hole changes size.
 
   pathData morphing needs both strings to share command structure exactly —
   M H A V A H A V A Z, twice — so these are the same path translated, never
   redrawn. Do not "tidy" either string.
 
-  fillAlpha carries the entrance (nothing appears from scale(0)) and lands well
-  before the movement settles, so the shape is legible while it is still moving.
+  Both animators are delayed past the window-open transition. The system starts
+  them when it creates the splash window, roughly half a second before the
+  transition reveals it; without the offset the whole morph played underneath
+  and the mark arrived already settled. fillAlpha shares the offset so its drop
+  to 0 masks the frame where pathData snaps from the base drawable to valueFrom.
+
+  Total is 810ms because the splash is only guaranteed to last about a second on
+  a warm start. Do not lengthen it without re-measuring against a warm launch.
 -->
 <set xmlns:android="http://schemas.android.com/apk/res/android">
     <objectAnimator
         android:propertyName="pathData"
         android:valueType="pathType"
-        android:valueFrom="M27 19 H41 A8 8 0 0 1 49 27 V41 A8 8 0 0 1 41 49 H27 A8 8 0 0 1 19 41 V27 A8 8 0 0 1 27 19 Z M31 23 H45 A8 8 0 0 1 53 31 V45 A8 8 0 0 1 45 53 H31 A8 8 0 0 1 23 45 V31 A8 8 0 0 1 31 23 Z"
+        android:valueFrom="M24 16 H38 A8 8 0 0 1 46 24 V38 A8 8 0 0 1 38 46 H24 A8 8 0 0 1 16 38 V24 A8 8 0 0 1 24 16 Z M34 26 H48 A8 8 0 0 1 56 34 V48 A8 8 0 0 1 48 56 H34 A8 8 0 0 1 26 48 V34 A8 8 0 0 1 34 26 Z"
         android:valueTo="M22 14 H36 A8 8 0 0 1 44 22 V36 A8 8 0 0 1 36 44 H22 A8 8 0 0 1 14 36 V22 A8 8 0 0 1 22 14 Z M36 28 H50 A8 8 0 0 1 58 36 V50 A8 8 0 0 1 50 58 H36 A8 8 0 0 1 28 50 V36 A8 8 0 0 1 36 28 Z"
+        android:startOffset="250"
         android:duration="560"
-        android:interpolator="@interpolator/ease_out_strong" />
+        android:interpolator="@interpolator/ease_in_out_strong" />
     <objectAnimator
         android:propertyName="fillAlpha"
         android:valueType="floatType"
         android:valueFrom="0"
         android:valueTo="1"
+        android:startOffset="250"
         android:duration="240"
         android:interpolator="@interpolator/ease_out_strong" />
 </set>
