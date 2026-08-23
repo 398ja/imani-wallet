@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 import { Button, Screen, BackLink, PageHeader, Alert, Switch, Panel } from '../components/ui'
 import { MerchantFieldset } from '../components/MerchantFieldset'
+import { getOfflineCap, setOfflineCap, validOfflineCap } from '../lib/offlineCap'
 import { getSigner } from '../lib/nap'
 import { publish } from '../lib/relay'
 import {
@@ -49,6 +50,18 @@ export function MerchantEditPage({
       voucherValidityDays: base.voucherValidityDays,
     }
   })
+  /**
+   * Kept OUT of `fields`, and that separation is the point.
+   *
+   * `fields` becomes the kind-30078 stall record, which is published and
+   * readable by anyone. A cap in there would tell every attacker exactly how
+   * much can be taken from this stall offline — and the relay copy is
+   * attacker-controllable (`mergeMerchantEvent` clamps it because "anyone can
+   * publish a kind-30078 claiming to be you"), so a ceiling someone else could
+   * raise would fail in the worst direction. It is a risk setting, not stall
+   * metadata: it stays on the device.
+   */
+  const [offlineCap, setOfflineCapField] = useState<number | null>(() => getOfflineCap(pubkey))
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -75,6 +88,10 @@ export function MerchantEditPage({
       voucherValidityDays: fields.voucherValidityDays ?? DEFAULT_VALIDITY_DAYS,
       updatedAt: Date.now(),
     }
+
+    // Device-local, and never part of `next` — see the field's declaration.
+    // Written before the record so a relay failure below cannot lose it.
+    setOfflineCap(pubkey, validOfflineCap(offlineCap))
 
     // Local first. Everything after this point can fail without losing the edit.
     saveMerchant(next)
@@ -144,6 +161,32 @@ export function MerchantEditPage({
         disabled={busy}
         mode={existing ? 'edit' : 'create'}
       />
+
+      {/* Only for an existing stall. Asking someone opening their first shop how
+          much fraud they will absorb is a question they cannot answer yet, and
+          the default of 0 is the safe one to leave them on. */}
+      {existing && (
+        <label className="mt-6 block">
+          <span className="text-sm font-medium text-mono-900 dark:text-mono-50">
+            Offline limit
+          </span>
+          <span className="mt-1 block text-sm text-mono-500">
+            When you have no signal, coupons can be checked for a valid issuer but not
+            for whether they have already been spent. This is the most you will accept
+            that way before waiting for a connection. Leave it empty to accept none.
+          </span>
+          <input
+            type="number"
+            inputMode="numeric"
+            min={0}
+            className="input mt-2 w-full"
+            disabled={busy}
+            value={offlineCap ?? ''}
+            onChange={(e) => setOfflineCapField(validOfflineCap(e.target.value))}
+            placeholder="0"
+          />
+        </label>
+      )}
 
       <Button
         size="lg"
