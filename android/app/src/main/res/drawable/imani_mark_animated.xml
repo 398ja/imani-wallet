@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AnimatedVectorDrawable, which is an Animatable — that is the whole hook.
+     Android 12+ runs it as windowSplashScreenAnimatedIcon; below that
+     @capacitor/splash-screen finds it inside @drawable/splash_animated and
+     calls start() on it itself (SplashScreen.java, buildViews). -->
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/imani_mark">
+    <target
+        android:name="mark"
+        android:animation="@animator/imani_mark_reveal" />
+</animated-vector>

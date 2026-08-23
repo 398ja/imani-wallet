@@ -39,6 +39,28 @@ export function initNative(): void {
 }
 
 /**
+ * Dismiss the launch splash once the app is actually on screen.
+ *
+ * The splash is not decoration here: `server.url` in capacitor.config.ts points
+ * at a remote origin, so a cold start waits on a network fetch before any React
+ * code runs at all. Without this the user watches a flat colour for that whole
+ * time and cannot tell a slow connection from a dead app.
+ *
+ * Called after the first paint rather than from initNative(), which runs before
+ * render — hiding there would uncover an empty document. `launchAutoHide` still
+ * backstops it, so a boot that never paints is not stranded on the splash.
+ */
+export async function hideSplash(): Promise<void> {
+  if (!Capacitor.isNativePlatform()) return
+  try {
+    const { SplashScreen } = await import('@capacitor/splash-screen')
+    await SplashScreen.hide()
+  } catch {
+    // Already hidden by launchAutoHide, or the plugin is not installed.
+  }
+}
+
+/**
  * Read the clipboard, on a platform where the web API is not enough.
  *
  * `navigator.clipboard.readText()` is not implemented in Android's WebView, so

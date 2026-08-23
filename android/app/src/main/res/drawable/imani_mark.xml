@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Imani mark, transcribed from public/imani.svg.
+
+  Two rounded squares in ONE path with evenOdd fill, so the region where they
+  overlap is punched out rather than filled — that hole is the logo. Keeping it
+  as a single path is also what makes the reveal in imani_mark_animated.xml a
+  pathData morph rather than two independently moving drawables.
+
+  144dp is the intrinsic size only: Android 12+ scales this to its own splash
+  icon slot, and below that @capacitor/splash-screen draws it unscaled and
+  centred (androidScaleType CENTER), which is where the number matters.
+
+  The 48-unit artwork sits in a 72-unit viewport at offset +12, spanning 14..58
+  — 61% of the canvas, inside the 66.7% safe zone Android 12's splash icon
+  crops to. The animation only ever moves the squares inward from there.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="144dp"
+    android:height="144dp"
+    android:viewportWidth="72"
+    android:viewportHeight="72">
+    <path
+        android:name="mark"
+        android:fillColor="@color/splash_mark"
+        android:fillType="evenOdd"
+        android:pathData="M22 14 H36 A8 8 0 0 1 44 22 V36 A8 8 0 0 1 36 44 H22 A8 8 0 0 1 14 36 V22 A8 8 0 0 1 22 14 Z M36 28 H50 A8 8 0 0 1 58 36 V50 A8 8 0 0 1 50 58 H36 A8 8 0 0 1 28 50 V36 A8 8 0 0 1 36 28 Z" />
+</vector>
