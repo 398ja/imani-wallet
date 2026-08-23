@@ -1,4 +1,5 @@
 import type { TransactionRow } from '@imani/wallet-storage'
+import type { VoucherValidation } from './voucherToken'
 
 /**
  * A transaction, in the shape the screens actually need.
@@ -36,6 +37,14 @@ export interface WalletTransaction {
   recipientName?: string
   voucherId?: string
   tokenId?: string
+  /**
+   * What was actually checked about this coupon when it arrived.
+   *
+   * Absent on every row written before verification existed, and that absence
+   * is meaningful: it means "not checked", never "checked and fine". The UI
+   * must not render a missing record as a pass.
+   */
+  validation?: VoucherValidation
   memo?: string
   bundleId?: string
   /**
@@ -74,6 +83,14 @@ function toEpochMs(value: unknown): number {
   return Number.isNaN(parsed) ? 0 : parsed
 }
 
+function isValidation(value: unknown): value is VoucherValidation {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as VoucherValidation).signatureValid === 'boolean'
+  )
+}
+
 function str(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
@@ -102,6 +119,10 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     counterparty: str(r.counterparty),
     voucherId: str(r.voucherId) ?? str(r.voucher_id),
     tokenId: str(r.tokenId) ?? str(r.token_id),
+    // Only ever read, never defaulted: a row without it was written before the
+    // wallet verified anything, and inventing a record would turn "unknown"
+    // into "fine" — the one thing this must never do.
+    validation: isValidation(r.validation) ? r.validation : undefined,
     memo: str(r.memo),
     recipientName: str(r.recipientName),
     bundleId: str(r.bundleId) ?? str(r.bundle_id),

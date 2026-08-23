@@ -145,6 +145,56 @@ export function CouponPage() {
   )
 }
 
+/**
+ * What was checked about an arriving coupon.
+ *
+ * Deliberately a list of claims rather than one badge. A single tick next to a
+ * value derived from `issuance_ratio` would overstate what was verified — that
+ * field is not covered by the signature on any voucher issued so far — and a
+ * badge that claims more than it checked makes the wallet less trustworthy while
+ * looking like it does the opposite. Each line says one thing that is true.
+ *
+ * Absent validation means the row predates verification. It reads as "not
+ * checked", never as a pass: silence must not be mistaken for approval.
+ *
+ * `legacyCanonical` is not surfaced. It is true for every voucher issued to
+ * date, so rendering it would mark the entire existing estate as suspect and
+ * tell a merchant at a stall nothing they can act on. It comes back when the
+ * canonicalizer migration makes it a real distinction between coupons.
+ */
+function ValidationSection({ tx }: { tx: WalletTransaction }) {
+  // Only meaningful for coupons arriving here. An outgoing row is this wallet's
+  // own act, and plain ecash carries no issuer claim to check.
+  if (tx.direction !== 'in' || !tx.voucherId) return null
+
+  const v = tx.validation
+  if (!v) {
+    return (
+      <ListSection title="Checks">
+        <DetailRow label="Issuer" value="Not checked" />
+      </ListSection>
+    )
+  }
+
+  return (
+    <ListSection title="Checks">
+      <DetailRow
+        label="Issuer"
+        value={v.signatureValid ? 'Signature verified' : 'Signature did not verify'}
+      />
+      {v.cappedAtFaceValue ? (
+        <DetailRow
+          label="Value"
+          value={`Limited to the ${formatFace(v.signedFaceValue, {
+            unit: tx.unit,
+            decimals: tx.decimals,
+          })} originally issued`}
+        />
+      ) : null}
+    </ListSection>
+  )
+}
+
 export function TransactionPage() {
   const { id = '' } = useParams()
   const [tx, setTx] = useState<WalletTransaction | null | undefined>(undefined)
@@ -190,6 +240,8 @@ export function TransactionPage() {
           <DetailRow key={label} label={label} value={value} />
         ))}
       </ListSection>
+
+      <ValidationSection tx={tx} />
 
       <RawDetails
         entries={present<React.ReactNode>([
