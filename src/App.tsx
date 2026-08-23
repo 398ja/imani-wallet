@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
+import { Toaster } from 'sonner'
 import { NapProvider, useNapSession, useNapCallbacks } from '@imani/nap-react'
 import type { NapSession } from '@imani/nap-client-web'
 
 import { createSession, resetSession } from './lib/nap'
 import { openWallet, onWalletChanged } from './lib/wallet'
 import { startDmPoll } from './lib/dmPoll'
+import { startIncomingNotifications } from './lib/incomingNotifications'
 import { reconcilePendingSends } from './lib/pay'
 import { reconcileRequests } from './lib/vreq'
 import { sweepBurnable } from './lib/burn'
@@ -87,6 +89,15 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         // Receiving coupons is imani-apps' pipeline verbatim: DmPollService
         // reading gift wraps through the gateway's nostrdb, never the relay.
         startDmPoll(pubkey)
+
+        // Advance notice of an incoming payment, imani-apps' Artemis pattern.
+        // Settlement through dm-poll can lag seconds to minutes behind the
+        // moment a payer commits, so the gateway enqueues a token-free "on its
+        // way" envelope the instant the send starts; this drains that queue and
+        // raises a sonner toast. Never touches balance or history — that stays
+        // dm-poll's job on the real redemption. Stopped on logout, like the
+        // poller above, for the same StrictMode reason.
+        startIncomingNotifications(pubkey)
 
         // Finish any send this wallet stopped waiting for. The 20s poll in
         // pay.ts is not a verdict — a saga can complete minutes later — and
@@ -414,5 +425,13 @@ export default function App() {
 }
 
 function Shell({ children }: { children: React.ReactNode }) {
-  return <div className="min-h-screen bg-mono-50 dark:bg-mono-950">{children}</div>
+  return (
+    <div className="min-h-screen bg-mono-50 dark:bg-mono-950">
+      {children}
+      {/* One global toast region for the whole app. The incoming-payment drain
+          loop (lib/incomingNotifications) is the first caller; richColors gives
+          the success variant its green, matching imani-apps' pending toast. */}
+      <Toaster position="top-center" richColors closeButton />
+    </div>
+  )
 }

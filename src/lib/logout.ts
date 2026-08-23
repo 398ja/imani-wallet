@@ -1,5 +1,6 @@
 import { getSession, keyStore, resetSession } from './nap'
 import { stopDmPoll } from './dmPoll'
+import { stopIncomingNotifications } from './incomingNotifications'
 import { wipeWallet } from './wallet'
 
 /**
@@ -52,6 +53,9 @@ export async function logout(
   // to the user-scoped IndexedDB, and letting it run past the session teardown
   // means a write landing after the identity it belongs to is gone.
   stopDmPoll()
+  // Same reason: the drain loop signs NIP-98 with the session key and would keep
+  // polling for payments addressed to the account being torn down.
+  stopIncomingNotifications()
 
   try {
     // Zeroes the decrypted key, POSTs /auth/logout, and broadcasts to other tabs
