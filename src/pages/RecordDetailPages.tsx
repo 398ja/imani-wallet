@@ -195,7 +195,12 @@ function ValidationSection({ tx }: { tx: WalletTransaction }) {
   )
 }
 
-export function TransactionPage() {
+/**
+ * `trading` is the same gate App puts on the merchant routes, so it is also the
+ * answer to "does /merchant/transactions exist for this user" — routing a
+ * customer there would bounce them to the catch-all redirect.
+ */
+export function TransactionPage({ trading = false }: { trading?: boolean }) {
   const { id = '' } = useParams()
   const [tx, setTx] = useState<WalletTransaction | null | undefined>(undefined)
 
@@ -212,7 +217,15 @@ export function TransactionPage() {
   if (tx === null) return <Centered>This transaction is no longer in your wallet.</Centered>
 
   const outgoing = tx.direction === 'out'
-  const backTo = tx.merchantId ? `/merchants/${tx.merchantId}` : '/'
+  // A merchant came from their own transaction list. The merchant page behind
+  // `merchantId` is the CUSTOMER's view of a stall they hold coupons from —
+  // sending a merchant there lands them on a page about themselves that they
+  // never opened.
+  const backTo = trading
+    ? '/merchant/transactions'
+    : tx.merchantId
+      ? `/merchants/${tx.merchantId}`
+      : '/'
 
   return (
     <Screen>
