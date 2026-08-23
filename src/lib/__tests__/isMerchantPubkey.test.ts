@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-import { isMerchantPubkey } from '../merchant'
+import { isMerchantPubkey, merchantStatus } from '../merchant'
 import { newestAddressable } from '../relay'
 
 vi.mock('../relay', () => ({ newestAddressable: vi.fn() }))
@@ -59,5 +59,30 @@ describe('isMerchantPubkey', () => {
   it('never rejects when the relay is unreachable', async () => {
     query.mockRejectedValue(new Error('relay down'))
     await expect(isMerchantPubkey(nextPubkey())).resolves.toBe(false)
+  })
+})
+
+describe('merchantStatus', () => {
+  it('tells an unreachable relay apart from a key with no record', async () => {
+    // The distinction the send guard is built on. Both used to read as
+    // `false`, which is how a foreign coupon reached a merchant during an
+    // outage — the guard saw "customer, anything goes".
+    query.mockResolvedValue(null)
+    expect(await merchantStatus(nextPubkey())).toBe('customer')
+
+    query.mockRejectedValue(new Error('relay down'))
+    expect(await merchantStatus(nextPubkey())).toBe('unknown')
+  })
+
+  it('does not cache an unknown, so the next send asks again', async () => {
+    // Caching it would carry one bad moment for the life of the document,
+    // refusing every third-party send long after the relay came back.
+    const pubkey = nextPubkey()
+    query.mockRejectedValue(new Error('relay down'))
+    expect(await merchantStatus(pubkey)).toBe('unknown')
+
+    query.mockResolvedValue(record({ categories: ['food'] }))
+    expect(await merchantStatus(pubkey)).toBe('merchant')
+    expect(query).toHaveBeenCalledTimes(2)
   })
 })

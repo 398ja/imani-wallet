@@ -264,8 +264,24 @@ export function createDmCryptoAdapter(): CryptoAdapter {
       } as TokenMetadata
     },
 
+    /**
+     * Also the refusal gate, because `parseTokenTransferMessage` alone is not one.
+     *
+     * GiftWrapProcessor reads the token FIRST and then folds a null metadata away
+     * as "no metadata" (`parseTokenTransferMessage(...) ?? {}`), so REJECTED above
+     * changed nothing: a voucher whose issuer signature failed was still swapped
+     * at the mint and saved — with an EMPTY envelope, which also made
+     * `refuseIfOverRedeemed` skip it for want of a `validation`. Returning null
+     * here is what makes the rejection real: no token, so `process` drops the wrap
+     * (classified `non_token_dm` — marked processed, never retried).
+     *
+     * This is the one receive path, so it holds for a coupon arriving from a
+     * merchant and for one arriving from another customer alike.
+     */
     extractToken(content: string): string | null {
-      return asPayload(content)?.token ?? extractTokenFromText(content)
+      const payload = asPayload(content)
+      if (!payload) return extractTokenFromText(content)
+      return verifiedVoucherFrom(payload.token) === REJECTED ? null : payload.token
     },
 
     getTokenFingerprint(token: string): string {

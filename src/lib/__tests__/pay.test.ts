@@ -25,6 +25,10 @@ const stubs = vi.hoisted(() => ({
   notified: { count: 0 },
   /** What `listVouchers` answers. Empty unless a test fills it. */
   rows: [] as unknown[],
+  /** Pubkeys `merchantStatus` answers 'merchant' for. Everyone else is a customer. */
+  merchants: new Set<string>(),
+  /** Pubkeys the relay could not be asked about at all. */
+  unreachable: new Set<string>(),
 }))
 
 vi.mock('../wallet', () => ({
@@ -36,6 +40,16 @@ vi.mock('../wallet', () => ({
 }))
 
 vi.mock('../legacyBridge', () => ({ legacyApi: async () => stubs.api }))
+
+// The real one reaches a relay for a kind-30078 record. Mocked so the send
+// tests stay offline, and so a test can say who is trading as a merchant.
+vi.mock('../merchant', () => ({
+  merchantStatus: async (pubkey: string) => {
+    const key = pubkey.toLowerCase()
+    if (stubs.unreachable.has(key)) return 'unknown'
+    return stubs.merchants.has(key) ? 'merchant' : 'customer'
+  },
+}))
 import { tokenIdFrom } from '../../../packages/wallet-storage/src/tokenId'
 import type { NUT18VRequest } from '../nap'
 
@@ -734,6 +748,8 @@ describe('sendVouchers and payRequest', () => {
   beforeEach(() => {
     stubs.rows = []
     stubs.notified.count = 0
+    stubs.merchants.clear()
+    stubs.unreachable.clear()
   })
 
   it('refuses to send to yourself', async () => {
@@ -748,6 +764,108 @@ describe('sendVouchers and payRequest', () => {
         amount: 500,
       }),
     ).rejects.toThrow(/yourself/i)
+  })
+
+  it("refuses another merchant's voucher to a merchant, before anything moves", async () => {
+    // A coupon is a claim on ONE stall. This one is Hill Farm's, and the
+    // recipient runs a different one — they could not honour it if it arrived.
+    const OTHER_STALL = 'e'.repeat(64)
+    stubs.merchants.add(OTHER_STALL)
+    stubs.rows = [row()]
+    const sent = gateway()
+    wallet([row()])
+
+    await expect(
+      sendVouchers({
+        payer: PAYER,
+        recipient: { pubkey: OTHER_STALL },
+        merchant,
+        unit: 'EUR',
+        amount: 250,
+      }),
+    ).rejects.toThrow(/only accepts vouchers they issued/i)
+
+    // The refusal has to land before the first part, or the mint has already
+    // burned proofs for a coupon that was never allowed to go.
+    expect(sent).toHaveLength(0)
+  })
+
+  it('lets a merchant have their own voucher back', async () => {
+    stubs.merchants.add(ISSUER)
+    stubs.rows = [row()]
+    const sent = gateway()
+    wallet([row()])
+
+    await sendVouchers({
+      payer: PAYER,
+      recipient: { pubkey: ISSUER.toUpperCase() }, // Case must not decide this.
+      merchant,
+      unit: 'EUR',
+      amount: 250,
+    })
+
+    expect(sent).toHaveLength(1)
+  })
+
+  it('refuses a stranger when it cannot find out who they are', async () => {
+    // Fail-closed. The relay is unreachable, so nothing is known about this
+    // key — and a coupon that lands on a stall that cannot honour it is money
+    // the customer no longer holds. A blocked send is retried in a minute.
+    const STRANGER = 'd'.repeat(64)
+    stubs.unreachable.add(STRANGER)
+    stubs.rows = [row()]
+    const sent = gateway()
+    wallet([row()])
+
+    await expect(
+      sendVouchers({
+        payer: PAYER,
+        recipient: { pubkey: STRANGER },
+        merchant,
+        unit: 'EUR',
+        amount: 250,
+      }),
+    ).rejects.toThrow(/could not check who you are sending to/i)
+
+    expect(sent).toHaveLength(0)
+  })
+
+  it('still redeems at the issuer while the relay is down', async () => {
+    // What stops fail-closed from being a wallet that cannot send: paying the
+    // issuer their own coupon is the case a market stall lives on, and it is
+    // settled before anything is asked of the network.
+    stubs.unreachable.add(ISSUER)
+    stubs.rows = [row()]
+    const sent = gateway()
+    wallet([row()])
+
+    await sendVouchers({
+      payer: PAYER,
+      recipient: { pubkey: ISSUER },
+      merchant,
+      unit: 'EUR',
+      amount: 250,
+    })
+
+    expect(sent).toHaveLength(1)
+  })
+
+  it('lets a customer have anything', async () => {
+    // FRIEND has published no merchant record, so there is nothing to check
+    // against — a customer may be sent any stall's coupon.
+    stubs.rows = [row()]
+    const sent = gateway()
+    wallet([row()])
+
+    await sendVouchers({
+      payer: PAYER,
+      recipient: { pubkey: FRIEND },
+      merchant,
+      unit: 'EUR',
+      amount: 250,
+    })
+
+    expect(sent).toHaveLength(1)
   })
 
   it('sends the amount asked for, to the person, with no payment request', async () => {
