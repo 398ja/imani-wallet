@@ -18,7 +18,7 @@ import { issuanceRatioOf } from '../lib/merchants'
 import { formatFace, formatDate, formatSats } from '../lib/format'
 import { toCouponPass, TERMS, EMPTY_BRANDING, type MerchantBranding } from '../lib/pass'
 import { merchantBranding } from '../lib/branding'
-import { toTransaction, transactionLabel, type WalletTransaction } from '../lib/transactions'
+import { otherParty, toTransaction, transactionLabel, type WalletTransaction } from '../lib/transactions'
 
 /**
  * One record, in full.
@@ -200,7 +200,13 @@ function ValidationSection({ tx }: { tx: WalletTransaction }) {
  * answer to "does /merchant/transactions exist for this user" — routing a
  * customer there would bounce them to the catch-all redirect.
  */
-export function TransactionPage({ trading = false }: { trading?: boolean }) {
+export function TransactionPage({
+  pubkey,
+  trading = false,
+}: {
+  pubkey?: string
+  trading?: boolean
+}) {
   const { id = '' } = useParams()
   const [tx, setTx] = useState<WalletTransaction | null | undefined>(undefined)
 
@@ -217,6 +223,10 @@ export function TransactionPage({ trading = false }: { trading?: boolean }) {
   if (tx === null) return <Centered>This transaction is no longer in your wallet.</Centered>
 
   const outgoing = tx.direction === 'out'
+  // Whose stall this row belongs to. On the merchant's own rows `merchantId` is
+  // the merchant, so it names nobody the transaction was WITH.
+  const ownStall = tx.merchantId !== undefined && tx.merchantId === pubkey
+  const party = otherParty(tx, pubkey)
   // A merchant came from their own transaction list. The merchant page behind
   // `merchantId` is the CUSTOMER's view of a stall they hold coupons from —
   // sending a merchant there lands them on a page about themselves that they
@@ -238,9 +248,20 @@ export function TransactionPage({ trading = false }: { trading?: boolean }) {
         </p>
         <p className="truncate text-sm text-mono-500">
           {transactionLabel(tx)}
-          {tx.merchantName ? ` · ${tx.merchantName}` : ''}
+          {!ownStall && tx.merchantName ? ` · ${tx.merchantName}` : ''}
         </p>
       </Panel>
+
+      {/*
+        Out of the details drawer and onto the page. Who you dealt with is the
+        second thing anyone wants from a receipt, after the amount — and on a
+        till it is the ONLY other name in the record.
+      */}
+      {party ? (
+        <Panel className="mb-6 p-5">
+          <IdentityInline pubkey={party.pubkey} label={party.label} size="md" />
+        </Panel>
+      ) : null}
 
       <ListSection title="Transaction">
         {present([
@@ -261,8 +282,16 @@ export function TransactionPage({ trading = false }: { trading?: boolean }) {
           ['Raw type', tx.type],
           // Both of these are people, and the drawer is where someone looks to
           // see WHO — the hex key answered a question nobody asked.
-          ['Merchant', tx.merchantId ? <IdentityInline pubkey={tx.merchantId} /> : undefined],
-          ['Counterparty', tx.counterparty ? <IdentityInline pubkey={tx.counterparty} /> : undefined],
+          // Both dropped once they are the person already named above — the
+          // drawer is for what the summary left out, and on a till the merchant
+          // is the person reading the screen.
+          ['Merchant', tx.merchantId && !ownStall ? <IdentityInline pubkey={tx.merchantId} /> : undefined],
+          [
+            'Counterparty',
+            tx.counterparty && tx.counterparty !== party?.pubkey ? (
+              <IdentityInline pubkey={tx.counterparty} />
+            ) : undefined,
+          ],
           ['Voucher id', tx.tokenId],
           ['Issuance id', tx.voucherId],
           ['Bundle id', tx.bundleId],
