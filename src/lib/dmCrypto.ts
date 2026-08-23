@@ -8,6 +8,13 @@ import {
 import type { CryptoAdapter, GiftWrapEvent, UnwrappedDm, TokenMetadata } from '@imani/dm-poll'
 
 import { getSigner } from './nap'
+import {
+  creditableFaceValue,
+  parseVoucherToken,
+  verifyVoucher,
+  type ParsedVoucherToken,
+  type VoucherValidation,
+} from './voucherToken'
 
 /**
  * The JSON payload the gateway actually sends.
@@ -57,6 +64,89 @@ interface TokenTransferPayload {
    */
   request_id?: string | null
   bundle_id?: string | null
+}
+
+/**
+ * Fields that are real but are not on dm-poll's published `TokenMetadata`, so
+ * they ride an intersection rather than the interface.
+ *
+ * Dropping `expiresAt` here is what once left every DM-received coupon with a
+ * null expiry: `/inspect` is the only other source tokenRedemption will take one
+ * from, and it 404s on this deployment, so the DM payload was the sole one that
+ * arrived. `requestId` and `bundleId` are absent from the interface for the same
+ * reason.
+ */
+function ride(payload: TokenTransferPayload) {
+  return {
+    expiresAt: payload.expires_at ?? undefined,
+    requestId: payload.request_id ?? undefined,
+    bundleId: payload.bundle_id ?? undefined,
+  }
+}
+
+/** A voucher token whose issuer signature did not check out. */
+const REJECTED = Symbol('voucher-signature-invalid')
+
+/**
+ * Reads the signed voucher out of a token, if it is one and if it is genuine.
+ *
+ * Three outcomes, and the middle one is the point:
+ *
+ * - `undefined` — not a voucher token (plain ecash, or unparseable). There are no
+ *   issuer claims to check, and this must keep flowing: a customer receiving
+ *   ordinary Cashu is not doing anything wrong.
+ * - `REJECTED` — it IS a voucher and the signature failed. Not a degraded case to
+ *   carry forward with a warning flag: the only way to produce one is to alter a
+ *   voucher after the issuer signed it. Refuse the message.
+ * - the voucher — genuine, with what was checked and the value it may be credited
+ *   for.
+ */
+function verifiedVoucherFrom(token: string | undefined):
+  | { parsed: ParsedVoucherToken; validation: { faceValue: number; record: VoucherValidation } }
+  | typeof REJECTED
+  | undefined {
+  if (!token) return undefined
+
+  let parsed: ParsedVoucherToken
+  try {
+    parsed = parseVoucherToken(token)
+  } catch {
+    return undefined
+  }
+
+  const { signatureValid, legacyCanonical } = verifyVoucher(parsed.voucher)
+  if (!signatureValid) {
+    console.warn(
+      '[dmCrypto] rejecting voucher with invalid issuer signature:',
+      parsed.voucher.voucherId,
+      'claimed issuer',
+      parsed.voucher.issuerId.slice(0, 16),
+    )
+    return REJECTED
+  }
+
+  const { faceValue, cappedAtFaceValue } = creditableFaceValue(parsed)
+  if (cappedAtFaceValue) {
+    // Reached when tokenAmount * ratio exceeds what was issued, which on a
+    // legacy voucher is what a rewritten ratio looks like.
+    console.warn(
+      '[dmCrypto] voucher value clamped to signed face value:',
+      parsed.voucher.voucherId,
+    )
+  }
+
+  return {
+    parsed,
+    validation: {
+      faceValue,
+      record: {
+        signatureValid,
+        legacyCanonical,
+        signedFaceValue: parsed.voucher.faceValue,
+        cappedAtFaceValue,
+      },
+    },
+  }
 }
 
 function asPayload(content: string): TokenTransferPayload | null {
@@ -143,18 +233,34 @@ export function createDmCryptoAdapter(): CryptoAdapter {
         voucherId: payload.voucher_id,
       }
 
-      // `expiresAt` is NOT on dm-poll's published TokenMetadata, which is why it
-      // rides an intersection rather than the interface. Dropping it here is
-      // what left every DM-received coupon with a null expiry: /inspect is the
-      // only other source tokenRedemption will take an expiry from, and it 404s
-      // on this deployment, so the DM payload is the sole one that arrives.
-      // `requestId` and `bundleId` ride the same intersection, and for the same
-      // reason: neither is on dm-poll's published TokenMetadata either.
+      // Everything above came off the envelope, which the SENDER writes. The
+      // gift wrap authenticates who sent it and nothing about what they claim,
+      // and the mint never sees these fields — it checks proofs. So a genuine
+      // low-value token could be announced at any face value at all.
+      //
+      // The voucher is inside the token, signed. Prefer it, for every field it
+      // covers. `signed` stays undefined for plain (non-voucher) ecash, which
+      // has no issuer claims to check and must keep flowing.
+      const signed = verifiedVoucherFrom(payload.token)
+      if (signed === REJECTED) return null
+      if (!signed) return { ...metadata, ...ride(payload) } as TokenMetadata
+
+      const { parsed, validation } = signed
+      const v = parsed.voucher
       return {
         ...metadata,
-        expiresAt: payload.expires_at ?? undefined,
-        requestId: payload.request_id ?? undefined,
-        bundleId: payload.bundle_id ?? undefined,
+        faceValue: validation.faceValue,
+        faceUnit: v.unit,
+        faceDecimals: v.faceDecimals,
+        tokenAmount: parsed.tokenAmount,
+        backingStrategy: v.backingStrategy as TokenMetadata['backingStrategy'],
+        issuerId: v.issuerId,
+        voucherId: v.voucherId,
+        memo: v.memo ?? metadata.memo,
+        ...ride(payload),
+        // The signed expiry outranks the envelope's.
+        expiresAt: v.expiresAt ?? payload.expires_at ?? undefined,
+        validation: validation.record,
       } as TokenMetadata
     },
 
