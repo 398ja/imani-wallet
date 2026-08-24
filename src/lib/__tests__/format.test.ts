@@ -35,6 +35,10 @@ describe('formatDate', () => {
     expect(formatDate('2026-08-12T09:00:00.000Z')).toContain('2026')
   })
 
+  it('includes the clock time, which tells same-day records apart', () => {
+    expect(formatDate('2026-08-12T09:35:00.000Z')).toMatch(/\d:\d\d/)
+  })
+
   it('returns empty for absent or unparseable input so callers can omit the row', () => {
     expect(formatDate(undefined)).toBe('')
     expect(formatDate(null)).toBe('')
