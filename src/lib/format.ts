@@ -139,7 +139,11 @@ export function toEpochMs(value: number | string | undefined | null): number | u
 }
 
 /**
- * A date the way the device would write it.
+ * A date and time the way the device would write it.
+ *
+ * The clock time is here rather than in a detail-screen-only variant: two
+ * coupons received the same day are told apart by the minute, and a list that
+ * hides it makes the reader open both.
  *
  * Returns '' for absent or unparseable input so callers can omit the row rather
  * than print "Invalid Date".
@@ -152,5 +156,8 @@ export function formatDate(value: number | string | undefined | null): string {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
   }).format(new Date(ms))
 }
+
