@@ -142,3 +142,6 @@ coupon arrive in seconds, cost nothing to send, and be impossible to forge.
 
 Back to the guides: **[Shoppers](customers.md)** · **[Merchants](merchants.md)** ·
 **[README](../README.md)**
+
+For the philosophy behind these choices, and why there is no central database to
+breach, see **[The decentralised posture](decentralised-posture.md)**.

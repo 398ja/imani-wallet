@@ -13,6 +13,7 @@ No bank account, no card reader, no app store sign-in with an email and password
 > - **[I'm a shopper](docs/customers.md)** — receive coupons and pay with them.
 > - **[I sell things](docs/merchants.md)** — issue coupons and take payment.
 > - **[How it actually works](docs/how-it-works.md)** — the ideas behind it, in plain terms.
+> - **[The decentralised posture](docs/decentralised-posture.md)** — why there's no honeypot to raid.
 > - **[For developers](#for-developers)** — run and build the app.
 
 ---
