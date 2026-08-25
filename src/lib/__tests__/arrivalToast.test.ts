@@ -57,6 +57,49 @@ describe('announcing a coupon that actually arrived', () => {
     expect(props.amount).not.toContain('0.04')
   })
 
+  /**
+   * The real staging row, exactly as stored. Caught by issuing a genuine 4 XAF
+   * coupon and reading it back out of IndexedDB: `face_decimals: 2` on a
+   * currency that has none. The first version of this toast trusted that field
+   * and announced "FCFA 0.04" beside a balance card reading "FCFA 4".
+   */
+  it('ignores the decimals the gateway stamps on a zero-decimal currency', () => {
+    announceArrival({ ...VOUCHER, face_decimals: 2 })
+
+    const props = (toasts[0]!.message as { props: { amount: string } }).props
+    expect(props.amount).not.toContain('0.04')
+    expect(props.amount).toMatch(/\b4\b/)
+  })
+
+  it('still gives a two-decimal currency its decimals', () => {
+    // The fix must not flatten EUR: 450 minor units is 4.50, not 450.
+    announceArrival({
+      ...VOUCHER,
+      voucher_id: 'v-eur',
+      face_value: 450,
+      face_unit: 'EUR',
+      face_decimals: 2,
+    })
+
+    const props = (toasts[0]!.message as { props: { amount: string } }).props
+    expect(props.amount).toContain('4.50')
+  })
+
+  it('falls back to the row for a merchant own non-ISO unit', () => {
+    // `currencyDecimals` cannot resolve a made-up unit, and Intl throws rather
+    // than guessing; the row is the only remaining source.
+    announceArrival({
+      ...VOUCHER,
+      voucher_id: 'v-beans',
+      face_value: 7,
+      face_unit: 'BEANS',
+      face_decimals: 0,
+    })
+
+    const props = (toasts[0]!.message as { props: { amount: string } }).props
+    expect(props.amount).toContain('7')
+  })
+
   it('announces once per voucher, however many times dm-poll reprocesses it', () => {
     // An SSE reconnect re-queries a window it already saw, so the same gift wrap
     // can reach the redemption path twice. A second toast reads as a second
