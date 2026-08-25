@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { Toaster } from 'sonner'
+import { CheckCircle2, XCircle } from 'lucide-react'
 import { NapProvider, useNapSession, useNapCallbacks } from '@imani/nap-react'
 import type { NapSession } from '@imani/nap-client-web'
 
@@ -428,10 +429,56 @@ function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-mono-50 dark:bg-mono-950">
       {children}
-      {/* One global toast region for the whole app. The incoming-payment drain
-          loop (lib/incomingNotifications) is the first caller; richColors gives
-          the success variant its green, matching imani-apps' pending toast. */}
-      <Toaster position="top-center" richColors closeButton />
+      {/*
+        One global toast region for the whole app. The incoming-payment drain
+        loop (lib/incomingNotifications) is the first caller.
+
+        Bottom-right, so the toast never covers the page header or the amount a
+        user is reading, and it arrives from the same edge the thumb rests on.
+        Under 600px sonner makes it a full-bleed card pinned to that bottom edge
+        — the iOS notification shape, and the right call on the phone this ships
+        on. Both offsets clear the gesture-nav bar: the Toaster is `fixed`, so
+        it does not inherit #root's safe-area padding.
+
+        `unstyled` drops sonner's own chrome (a white card with a hairline and a
+        flat drop shadow) and hands the surface to `.material` — the same
+        translucent layer as the header and the menus, which already carries the
+        reduced-transparency and increased-contrast fallbacks. richColors is
+        gone with it: a saturated green fill is not a material, so the status
+        rides the icon instead, in the green-600 / red-500 the rest of the app
+        already uses for exactly this.
+      */}
+      <Toaster
+        position="bottom-right"
+        closeButton
+        offset={{ bottom: 'calc(env(safe-area-inset-bottom) + 1rem)', right: '1rem' }}
+        mobileOffset={{ bottom: 'calc(env(safe-area-inset-bottom) + 1rem)', left: '1rem', right: '1rem' }}
+        icons={{
+          success: <CheckCircle2 className="h-5 w-5 text-green-600" />,
+          error: <XCircle className="h-5 w-5 text-red-500" />,
+        }}
+        toastOptions={{
+          unstyled: true,
+          classNames: {
+            toast:
+              'material flex w-full items-start gap-3 overflow-hidden rounded-2xl border border-mono-900/5 p-4 shadow-xl shadow-mono-950/10 dark:border-mono-50/10 dark:shadow-black/40',
+            icon: 'flex h-5 w-5 shrink-0 items-center justify-center',
+            content: 'flex min-w-0 flex-1 flex-col gap-0.5',
+            // Vibrancy: over a blurred surface, text needs more weight and more
+            // contrast than it would on a flat one, and the tracking tightens
+            // as the size goes up. Flat mid-grey is what goes illegible here.
+            title: 'text-[15px] font-semibold leading-snug tracking-[-0.01em] text-mono-900 dark:text-mono-50',
+            description: 'text-[13px] leading-snug text-mono-600 dark:text-mono-300',
+            // Trailing, inline, and 28px — a tap target rather than the 20px
+            // corner circle sonner floats by default. Swipe-to-dismiss stays,
+            // but it is a gesture, so it cannot be the only way out.
+            closeButton:
+              'pressable order-last ml-1 flex h-7 w-7 self-center shrink-0 items-center justify-center rounded-full text-mono-500 hover:bg-mono-900/5 dark:text-mono-400 dark:hover:bg-mono-50/10',
+            actionButton:
+              'pressable shrink-0 self-center rounded-full bg-mono-900 px-3 py-1.5 text-[13px] font-medium text-mono-50 dark:bg-mono-50 dark:text-mono-900',
+          },
+        }}
+      />
     </div>
   )
 }
