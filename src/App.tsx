@@ -434,6 +434,15 @@ export default function App() {
    * meaningful check is the explicit pubkey comparison below, which catches a
    * cookie and a cached key that belong to different accounts — a stale tab
    * after an account switch elsewhere.
+   *
+   * Note which failures discard the cache and which do not. Only a DEFINITIVE
+   * answer clears it: a 401 (nap returns null), or an identity disagreement.
+   * A 5xx or a dead network throws, and throwing must NOT forget — the cache is
+   * the only copy of the key this tab has, and dropping it on a transient
+   * gateway blip sends the user to the passphrase screen for the rest of the
+   * tab's life over an error that would have cleared by itself. This is exactly
+   * what a gateway-down reload does, and it is what nap's own `resume()`
+   * documents about keeping a remembered signer through a 401.
    */
   useEffect(() => {
     let live = true
@@ -447,8 +456,9 @@ export default function App() {
         if (!live) return
 
         if (!restored) {
-          // Cookie is gone or expired. The cached key alone cannot authenticate,
-          // and keeping it would retry this on every reload.
+          // A definitive 401: the cookie is gone or expired. The cached key
+          // alone cannot authenticate, and keeping it would retry this on every
+          // reload forever.
           resetSession()
           forgetResume()
           return
@@ -461,11 +471,11 @@ export default function App() {
         }
         setSession(next)
       } catch (e) {
-        // Never strand the user on a broken resume: any failure falls through to
-        // the normal passphrase screen.
+        // Transient: a 5xx, a dropped connection, a gateway restart. Fall back
+        // to the passphrase screen for THIS load, but keep the cache so the next
+        // reload can resume — see the note above.
         console.warn('[app] resume failed, falling back to unlock:', e)
         resetSession()
-        forgetResume()
       } finally {
         if (live) setResuming(false)
       }
