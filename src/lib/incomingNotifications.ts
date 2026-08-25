@@ -35,6 +35,7 @@ import { createElement } from 'react'
 import { toast } from 'sonner'
 
 import { IncomingPaymentToast } from '../components/ui/IncomingPaymentToast'
+import { currencyDecimals, formatFace } from './format'
 import { signedFetch } from './nip98'
 import { validateEnvelope, type IncomingPaymentNotificationEnvelope } from './incomingNotification'
 
@@ -143,6 +144,30 @@ async function ack(notificationIds: string[]): Promise<void> {
 }
 
 /**
+ * The envelope's total, rendered in the currency's own decimals.
+ *
+ * `total.display` is pre-formatted server-side by
+ * `IncomingNotificationService.formatMinorUnits`, using the `face_decimals` the
+ * gateway stamped on the send — which is 2 for every currency, including the
+ * zero-decimal ones. A genuine FCFA 2 payment therefore reaches the queue
+ * labelled "0.02 XAF", and announcing that beside a balance in whole francs is
+ * the same defect the settlement toast had.
+ *
+ * `minorUnits` is the integer the display string was derived from, so
+ * re-rendering from it loses nothing. `currencyDecimals` asks Intl, which knows
+ * XAF and JPY carry none and returns 2 for anything it cannot place — including
+ * a merchant's own non-ISO unit, where the server's string is the better guess
+ * and is used instead.
+ */
+export function formatEnvelopeTotal(env: IncomingPaymentNotificationEnvelope): string {
+  const unit = env.currency?.unit
+  if (!unit) return env.total.display
+  const minor = env.total.minorUnits
+  if (!Number.isFinite(minor)) return env.total.display
+  return formatFace(minor, { unit, decimals: currencyDecimals(unit) })
+}
+
+/**
  * Raise the advance-notice toast for one validated envelope. Returns whether it
  * actually announced, so the caller knows to ack.
  *
@@ -163,7 +188,14 @@ function raiseToast(env: IncomingPaymentNotificationEnvelope, pubkey: string): b
 
   const message = createElement(IncomingPaymentToast, {
     pubkey: env.sender.pubkeyHex,
-    amount: env.total.display,
+    // NOT `env.total.display`, which the gateway pre-formats with the same
+    // wrong decimals it stamps everywhere else: a real FCFA 2 payment arrives
+    // on the queue as "0.02 XAF" (observed on staging, notificationId
+    // 69046b1b…). The envelope carries the honest minor-unit integer alongside
+    // it, so re-render from that and let the currency decide the decimals —
+    // exactly as the settlement toast does. Falls back to the server's string
+    // only when there is no unit to reason about.
+    amount: formatEnvelopeTotal(env),
     fallbackName: env.sender.displayName ?? undefined,
     fallbackPicture: env.sender.picture ?? undefined,
   })

@@ -43,7 +43,7 @@ vi.mock('../../components/ui/IncomingPaymentToast', () => ({
 const signedFetch = vi.fn()
 vi.mock('../nip98', () => ({ signedFetch: (...args: unknown[]) => signedFetch(...args) }))
 
-const { startIncomingNotifications, stopIncomingNotifications } = await import(
+const { startIncomingNotifications, stopIncomingNotifications, formatEnvelopeTotal } = await import(
   '../incomingNotifications'
 )
 const { computeNotificationId } = await import('../incomingNotification')
@@ -222,5 +222,54 @@ describe('the drain loop', () => {
       setItem: (k: string, v: string) => void store.set(k, v),
       removeItem: (k: string) => void store.delete(k),
     })
+  })
+})
+
+/**
+ * The gateway pre-formats `total.display` with the decimals it stamped on the
+ * send, which is 2 for every currency. Observed on staging against a genuine
+ * FCFA 2 payment (notificationId 69046b1b…): the envelope carried
+ * `display: "0.02 XAF"` for `minorUnits: 2`.
+ *
+ * Same defect the settlement toast had, on the other toast.
+ */
+describe('the amount the advance-notice toast announces', () => {
+  const base = {
+    currency: { unit: 'XAF', decimals: 0 },
+    total: { minorUnits: 2, display: '0.02 XAF' },
+  } as unknown as Parameters<typeof formatEnvelopeTotal>[0]
+
+  it('ignores the server string for a zero-decimal currency', () => {
+    const shown = formatEnvelopeTotal(base)
+    expect(shown).not.toContain('0.02')
+    expect(shown).toMatch(/\b2\b/)
+  })
+
+  it('keeps the decimals a two-decimal currency really has', () => {
+    const eur = {
+      currency: { unit: 'EUR', decimals: 2 },
+      total: { minorUnits: 250, display: '2.50 EUR' },
+    } as unknown as Parameters<typeof formatEnvelopeTotal>[0]
+
+    expect(formatEnvelopeTotal(eur)).toContain('2.50')
+  })
+
+  it('defers to the server string for a unit Intl cannot place', () => {
+    // A merchant's own unit: we have no better answer than theirs.
+    const beans = {
+      currency: { unit: 'BEANS', decimals: 0 },
+      total: { minorUnits: 7, display: '7 BEANS' },
+    } as unknown as Parameters<typeof formatEnvelopeTotal>[0]
+
+    expect(formatEnvelopeTotal(beans)).toContain('7')
+  })
+
+  it('falls back to the server string when there is no unit at all', () => {
+    const none = {
+      currency: undefined,
+      total: { minorUnits: 5, display: 'whatever the server said' },
+    } as unknown as Parameters<typeof formatEnvelopeTotal>[0]
+
+    expect(formatEnvelopeTotal(none)).toBe('whatever the server said')
   })
 })
