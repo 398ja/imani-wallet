@@ -39,6 +39,12 @@ const PORTAL = process.env.PORTAL_URL ?? 'http://localhost:28084'
 /** Must match GATEWAY_PORTAL_EDGE_SHARED_SECRET in deploy/compose.override.yml. */
 const EDGE_SECRET = process.env.EDGE_SECRET ?? 'dev-edge-secret-local-only'
 const WALLET = process.env.WALLET_URL ?? 'http://localhost:28082'
+/**
+ * Where NAP auth lives, which is NOT under the portal prefix — see the login
+ * call at the bottom. Defaults to the portal base so the local dev stack, where
+ * account-app serves both, keeps working unchanged.
+ */
+const AUTH_BASE = process.env.AUTH_URL ?? PORTAL
 /** Browser-reachable relay (host port). */
 const RELAY = process.env.RELAY_URL ?? 'ws://localhost:27778'
 /** The same relay as the gateway addresses it, on the docker network. */
@@ -431,8 +437,12 @@ if (customer.sk) {
   console.log(`  nsec    ${nip19.nsecEncode(customer.sk)}   <- import into your NIP-07 extension`)
 }
 if (!PORTAL.includes('localhost')) {
-  console.log(`\nlogging in at ${PORTAL}`)
-  sessionCookie = await napLogin(PORTAL, merchant.sk)
+  // NAP auth is NOT under the portal prefix. On staging `/api/v1/portal/` is an
+  // edge-gated location that requires the session this call is trying to create,
+  // so posting auth/init there answers "No session cookie" — which reads as an
+  // auth failure and is really a wrong URL. The auth surface is gateway-core at
+  // the host root; the portal prefix is only where issuance lives.
+  sessionCookie = await napLogin(AUTH_BASE, merchant.sk)
 }
 
 console.log(`\nissuing ${quantity} x ${faceValueMinor / 100} ${currency}\n`)
