@@ -106,9 +106,8 @@ issued and what's returned. The app tells you so on the Stats screen. Whether a
 customer has spent a coupon you gave them isn't something you can see, it's value
 in their wallet until it comes back to you.
 
-If you sell in a currency without cents (like XAF or JPY), your till shows amounts
-correctly. See [Common questions](#common-questions) for one display quirk on the
-customer's side.
+If you sell in a currency without cents (like XAF or JPY), amounts show correctly
+on your till and on your customer's screen.
 
 ## Opening and closing your stall
 
@@ -147,10 +146,11 @@ No. Once a coupon comes back to you it's used up. Partial payments leave the
 customer a smaller coupon and take the rest, with no way to double-spend.
 
 **A customer says their 2,500 coupon shows as 25.00.**
-For currencies without cents (XAF, XOF, JPY), there's a known display bug on the
-customer's coupon screen that shows the amount 100× too small. Your till and your
-history show the correct figure. If this matters to you, sell in a currency with
-cents (EUR, USD) until it's fixed upstream.
+This was a display bug affecting currencies without cents (XAF, XOF, JPY), and
+it's fixed. Amounts now show correctly on the customer's coupon screen, in their
+notifications, and on your till. There is no longer any reason to prefer EUR or
+USD over your own currency. If you still see a 100x-off figure anywhere, that's
+worth reporting, as it's a bug rather than expected behaviour.
 
 **Do I need a card reader or a merchant bank account?**
 No. Everything happens phone to phone through the app.
