@@ -177,4 +177,24 @@ describe('the reload cache', () => {
     await expect(remember(PUBKEY, PRIVKEY)).resolves.toBeUndefined()
     await expect(recover()).resolves.toBeNull()
   })
+
+  /**
+   * Caught in a real browser, not here: the first version of App.tsx called
+   * `forget()` in the catch of its resume effect, so a single 5xx from the
+   * gateway destroyed the only copy of the key this tab had. The reload after a
+   * gateway blip then asked for the passphrase, and so did every reload after
+   * it, for the life of the tab.
+   *
+   * The cache itself has to make that recoverable: a read that fails for a
+   * reason unrelated to the record must leave the record alone. This pins the
+   * half of that contract which lives here — `recover()` only clears what it
+   * has PROVEN unusable.
+   */
+  it('keeps a good record when the caller simply reads it twice', async () => {
+    await remember(PUBKEY, PRIVKEY)
+
+    expect(await recover()).not.toBeNull()
+    // A second read — the shape of a retry after a transient failure elsewhere.
+    expect(await recover()).toEqual({ pubkey: PUBKEY, privkeyHex: PRIVKEY })
+  })
 })
