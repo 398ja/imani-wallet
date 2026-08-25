@@ -1,6 +1,7 @@
 import { getSession, keyStore, resetSession } from './nap'
 import { stopDmPoll } from './dmPoll'
 import { stopIncomingNotifications } from './incomingNotifications'
+import { forget as forgetResume } from './resume'
 import { wipeWallet } from './wallet'
 
 /**
@@ -72,6 +73,12 @@ export async function logout(
   // passphrase would still unlock the wallet after "logging out", which is the
   // opposite of what the confirmation promised.
   await keyStore.clear()
+
+  // And the tab-scoped reload cache (lib/resume.ts). It holds a wrapped copy of
+  // the very key just erased, so leaving it would let the reload below walk
+  // straight back into the session the user asked to leave — the same failure as
+  // skipping keyStore.clear(), by a different door.
+  forgetResume()
 
   // Everything this app has written for anyone, not just the named keys. Logout
   // now promises the device is left clean, and a leftover key under a pubkey

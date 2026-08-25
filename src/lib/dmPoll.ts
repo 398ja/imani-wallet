@@ -13,6 +13,7 @@ import {
   RedemptionRefusedError,
 } from '@imani/dm-poll'
 
+import { announceArrival } from './arrivalToast'
 import { createDmCryptoAdapter, toLegacyMetadata } from './dmCrypto'
 import { checkRedemption } from './redemptionLedger'
 import type { VoucherValidation } from './voucherToken'
@@ -327,6 +328,18 @@ function redemptionAdapter(): RedemptionAdapter {
       // tokenRedemption wrote straight into IndexedDB, and this tab does not
       // hear its own BroadcastChannel post — see notifyWalletChanged.
       notifyWalletChanged()
+
+      // Say so on screen. This is the ONLY announcement most arrivals ever get:
+      // the "payment on its way" toast is driven by the Artemis queue, and the
+      // only thing that enqueues to it is the atomic-send saga. A coupon
+      // delivered by any other route — merchant Sell, the legacy bridge, a
+      // direct NIP-17 gift wrap — moved the balance and wrote a history row in
+      // complete silence.
+      //
+      // After notifyWalletChanged, so the balance behind the toast is already
+      // the new one when the user looks. Never throws (see announceArrival), so
+      // it cannot turn a completed redemption into a reported failure.
+      announceArrival(voucher as unknown as Parameters<typeof announceArrival>[0])
       return voucher
     },
   }
