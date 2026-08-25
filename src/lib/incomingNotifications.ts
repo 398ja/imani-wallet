@@ -23,14 +23,12 @@
  * as the rest of the wallet authenticates gateway writes.
  */
 
+import { createElement } from 'react'
 import { toast } from 'sonner'
 
+import { IncomingPaymentToast } from '../components/ui/IncomingPaymentToast'
 import { signedFetch } from './nip98'
-import {
-  formatSenderLabel,
-  validateEnvelope,
-  type IncomingPaymentNotificationEnvelope,
-} from './incomingNotification'
+import { validateEnvelope, type IncomingPaymentNotificationEnvelope } from './incomingNotification'
 
 /** Server-side Artemis producer drain endpoint. Same-origin; see dmPoll.ts. */
 const DRAIN_ENDPOINT = '/api/v1/incoming-notifications/drain'
@@ -67,16 +65,21 @@ const rejectedThisSession = new Set<string>()
  * Wording mirrors imani-apps: "on its way" (pre-settlement) is deliberately
  * distinct from dm-poll's eventual "received" so the two states read
  * differently to the user.
+ *
+ * The sender is rendered rather than described: `IncomingPaymentToast` looks up
+ * the kind-0 profile itself, so the toast can go up on the drain tick without
+ * waiting for a fetch, and fills in the face and handle when they arrive.
  */
 function raiseToast(env: IncomingPaymentNotificationEnvelope): void {
   if (toastedThisSession.has(env.notificationId)) return
   toastedThisSession.add(env.notificationId)
 
-  const sender = formatSenderLabel(env.sender)
-  const amount = env.total.display
-  const message = sender
-    ? `${sender} sent you ${amount}`
-    : `You're receiving ${amount}`
+  const message = createElement(IncomingPaymentToast, {
+    pubkey: env.sender.pubkeyHex,
+    amount: env.total.display,
+    fallbackName: env.sender.displayName ?? undefined,
+    fallbackPicture: env.sender.picture ?? undefined,
+  })
 
   // A stable id so a same-notification re-render (e.g. React StrictMode double
   // mount, or a duplicate that slipped the Set) collapses onto one toast rather
@@ -84,7 +87,9 @@ function raiseToast(env: IncomingPaymentNotificationEnvelope): void {
   // toast keyed on the same id.
   toast.success(message, {
     id: 'pending-' + env.notificationId.slice(0, 16),
-    description: 'On its way. Your balance updates once it settles.',
+    // The tick would say the money is here; it is not yet. The sender's own
+    // avatar takes that slot instead, inside the message.
+    icon: null,
     duration: 5000,
   })
 }

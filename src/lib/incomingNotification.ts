@@ -454,17 +454,3 @@ function validatePart(p: unknown): string | null {
   }
   return null
 }
-
-/**
- * Customer-friendly sender label: "Name" is preferred, then a truncated npub.
- * The wallet has no synchronous kind-0 profile cache the way imani-apps does,
- * so this is the envelope-only subset of imani-apps' `_formatSenderLabel`.
- */
-export function formatSenderLabel(sender: EnvelopeSender): string {
-  if (sender.displayName && sender.displayName.trim()) return sender.displayName.trim()
-  const npub = sender.npub
-  if (typeof npub === 'string' && npub.length >= 16) {
-    return npub.slice(0, 12) + '…' + npub.slice(-4)
-  }
-  return npub || sender.pubkeyHex.slice(0, 8)
-}
