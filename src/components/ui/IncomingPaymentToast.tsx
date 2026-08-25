@@ -67,3 +67,61 @@ export function IncomingPaymentToast({
     </span>
   )
 }
+
+/**
+ * The settlement counterpart: a coupon that has actually landed.
+ *
+ * Same face as the pending toast, deliberately — it is the same payment, one
+ * step later, and giving it a different shape would read as a different event.
+ * Three things differ, and each is the difference between the two states:
+ *
+ *   - the sub-line says the money is in the balance rather than on its way,
+ *   - the sender is optional. The advance-notice envelope always names a sender;
+ *     a redeemed voucher does not always carry `sender_pubkey`, and an arrival
+ *     from an unknown sender is still worth announcing. Without a pubkey the
+ *     avatar is dropped rather than rendered as a placeholder for nobody.
+ *   - the sonner tick is NOT suppressed. On the pending toast it would lie; here
+ *     it is exactly right.
+ */
+export function ReceivedPaymentToast({
+  pubkey,
+  amount,
+  memo,
+}: {
+  pubkey?: string
+  amount: string
+  memo?: string
+}) {
+  // Hooks cannot be called conditionally, so this runs for the anonymous case
+  // too; `useIdentity` treats an empty pubkey as "nothing to look up".
+  const fetched = useIdentity(pubkey ?? '')
+  const name = pubkey ? identityLabel(pubkey, fetched) : 'Payment received'
+  const handle = pubkey ? identitySubLabel(fetched) : undefined
+
+  return (
+    <span className="flex min-w-0 items-start gap-3">
+      {pubkey ? (
+        <Avatar src={fetched?.picture} name={name} pubkey={pubkey} size="md" className="shrink-0" />
+      ) : null}
+      <span className="min-w-0 flex-1">
+        <span className="flex items-baseline gap-2">
+          <span className="min-w-0 flex-1 truncate">{name}</span>
+          <span className="shrink-0">{amount}</span>
+        </span>
+        {handle ? (
+          <span className="block truncate text-[13px] font-normal leading-snug tracking-normal text-mono-600 dark:text-mono-300">
+            {handle}
+          </span>
+        ) : null}
+        {memo ? (
+          <span className="mt-0.5 block truncate text-[13px] font-normal leading-snug tracking-normal text-mono-600 dark:text-mono-300">
+            {memo}
+          </span>
+        ) : null}
+        <span className="mt-0.5 block text-[13px] font-normal leading-snug tracking-normal text-mono-600 dark:text-mono-300">
+          Received — it is in your balance.
+        </span>
+      </span>
+    </span>
+  )
+}

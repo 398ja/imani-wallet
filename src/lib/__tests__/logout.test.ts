@@ -21,6 +21,10 @@ vi.mock('../nap', () => ({
 }))
 vi.mock('../dmPoll', () => ({ stopDmPoll: vi.fn() }))
 vi.mock('../incomingNotifications', () => ({ stopIncomingNotifications: vi.fn() }))
+const forgetResume = vi.fn(() => {
+  order.push('forget-resume')
+})
+vi.mock('../resume', () => ({ forget: () => forgetResume() }))
 vi.mock('../wallet', () => ({
   wipeWallet: vi.fn(async () => {
     order.push('wipe')
@@ -39,6 +43,7 @@ const reload = vi.fn(() => {
 beforeEach(() => {
   order.length = 0
   reload.mockClear()
+  forgetResume.mockClear()
   vi.mocked(wipeWallet).mockClear()
   // The module clears every `imani-wallet:*` key; the test env has no DOM.
   globalThis.localStorage = { 'imani-wallet:x': '1' } as unknown as Storage
@@ -52,7 +57,20 @@ describe('logout', () => {
     expect(reload).toHaveBeenCalledOnce()
     // Order is the point: reloading first would abandon the teardown midway and
     // leave the wallet on disk.
-    expect(order).toEqual(['wipe', 'reload'])
+    expect(order).toEqual(['forget-resume', 'wipe', 'reload'])
+  })
+
+  /**
+   * The reload cache holds a wrapped copy of the very key logout erases. Leaving
+   * it would let the reload on the last line walk straight back into the session
+   * the user just asked to leave — the same failure as skipping keyStore.clear(),
+   * by a different door.
+   */
+  it('clears the reload cache, before the page comes back', async () => {
+    await logout('ab'.repeat(32), yes, reload)
+
+    expect(forgetResume).toHaveBeenCalledOnce()
+    expect(order.indexOf('forget-resume')).toBeLessThan(order.indexOf('reload'))
   })
 
   it('leaves the page alone when the user cancels', async () => {
@@ -60,5 +78,7 @@ describe('logout', () => {
 
     expect(reload).not.toHaveBeenCalled()
     expect(wipeWallet).not.toHaveBeenCalled()
+    // And the cache stays, because the user is still logged in.
+    expect(forgetResume).not.toHaveBeenCalled()
   })
 })

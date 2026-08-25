@@ -24,6 +24,7 @@ import {
   type MerchantProfile,
 } from './lib/merchant'
 import { clearPendingBackup, peekPendingBackup } from './lib/onboardingHandoff'
+import { forget as forgetResume, recover, remember } from './lib/resume'
 import { Centered, Fatal } from './components/ui'
 import { Header } from './components/ui/Header'
 import { LoginPage } from './pages/LoginPage'
@@ -384,6 +385,11 @@ export default function App() {
   // `callbacks` object is render-stable by design, so the session is built once.
   const [napState, callbacks] = useNapCallbacks()
   const [session, setSession] = useState<NapSession | null>(null)
+  // Whether the reload-resume attempt below has finished. Rendering the public
+  // routes while it is still running would flash the passphrase screen at a user
+  // who is about to be let straight back in — and worse, `Entry` would redirect
+  // to /login and replace the URL they actually reloaded.
+  const [resuming, setResuming] = useState(true)
 
   // The session cannot exist before the key does — a key-holding signer is
   // constructed from it — so login unlocks first, then builds the session.
@@ -403,10 +409,79 @@ export default function App() {
         resetSession()
         throw e
       }
+      // Cache the key for the life of this TAB so a reload does not ask for the
+      // passphrase again. Written only after login succeeds: a key that the
+      // gateway would not accept is not worth resuming into. See lib/resume.ts
+      // for why this is not simply sessionStorage.
+      const pubkey = next.getSession()?.pubkey
+      if (pubkey) void remember(pubkey, privkeyHex)
       setSession(next)
     },
     [callbacks],
   )
+
+  /**
+   * Put a reloaded tab back where it was.
+   *
+   * Two things have to line up, and BOTH are checked: the NAP session cookie
+   * must still be good (`resume()` asks the server, and returns null on 401),
+   * and this tab must still hold its wrapped copy of the key. Either one alone
+   * is not enough — a live cookie without a key gives an app that cannot
+   * decrypt a single gift wrap, and a key without a cookie is not authenticated.
+   *
+   * `verifyIdentity` is not passed: the signer here is one we just built from
+   * the cached key, so nap comparing it against itself proves nothing. The
+   * meaningful check is the explicit pubkey comparison below, which catches a
+   * cookie and a cached key that belong to different accounts — a stale tab
+   * after an account switch elsewhere.
+   */
+  useEffect(() => {
+    let live = true
+    void (async () => {
+      try {
+        const cached = await recover()
+        if (!cached || !live) return
+
+        const next = createSession(cached.privkeyHex, callbacks)
+        const restored = await next.resume()
+        if (!live) return
+
+        if (!restored) {
+          // Cookie is gone or expired. The cached key alone cannot authenticate,
+          // and keeping it would retry this on every reload.
+          resetSession()
+          forgetResume()
+          return
+        }
+        if (next.getSession()?.pubkey !== cached.pubkey) {
+          console.warn('[app] resume: session and cached key disagree on identity — refusing')
+          resetSession()
+          forgetResume()
+          return
+        }
+        setSession(next)
+      } catch (e) {
+        // Never strand the user on a broken resume: any failure falls through to
+        // the normal passphrase screen.
+        console.warn('[app] resume failed, falling back to unlock:', e)
+        resetSession()
+        forgetResume()
+      } finally {
+        if (live) setResuming(false)
+      }
+    })()
+    return () => {
+      live = false
+    }
+  }, [callbacks])
+
+  if (resuming && !session) {
+    return (
+      <Shell>
+        <Centered>Restoring your session…</Centered>
+      </Shell>
+    )
+  }
 
   return (
     <Shell>
