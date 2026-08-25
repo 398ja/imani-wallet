@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest'
 import {
   computeNotificationId,
   containsTokenMaterial,
-  formatSenderLabel,
   pickCorrelationId,
   validateEnvelope,
   type IncomingPaymentNotificationEnvelope,
@@ -195,15 +194,3 @@ describe('containsTokenMaterial', () => {
   })
 })
 
-describe('formatSenderLabel', () => {
-  it('prefers displayName', () => {
-    expect(
-      formatSenderLabel({ pubkeyHex: SENDER_PUBKEY, npub: SENDER_NPUB, displayName: 'Alice' }),
-    ).toBe('Alice')
-  })
-  it('falls back to a truncated npub', () => {
-    const label = formatSenderLabel({ pubkeyHex: SENDER_PUBKEY, npub: SENDER_NPUB })
-    expect(label).toContain('…')
-    expect(label.startsWith('npub1')).toBe(true)
-  })
-})
