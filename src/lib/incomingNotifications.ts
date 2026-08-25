@@ -308,6 +308,15 @@ async function runDrainTick(): Promise<void> {
  *
  * A boot tick runs immediately so a payment already queued at login surfaces
  * without waiting a full interval.
+ *
+ * The loop PAUSES while the tab is hidden. Every tick is a NIP-98-signed POST —
+ * a signature, a round trip and a gateway request thread — and a background tab
+ * has no toast to show for it, because sonner renders into a document nobody is
+ * looking at. A forgotten tab was doing this every 10s indefinitely: staging
+ * logs show one client draining 119 times in 20 minutes while its user was
+ * plainly elsewhere. Nothing is missed by waiting, since the envelope stays
+ * queued until acked and the visibility handler runs a catch-up tick the moment
+ * the tab comes back.
  */
 export function startIncomingNotifications(pubkey: string): void {
   if (drainTimerId !== null && activePubkey === pubkey) return
@@ -326,8 +335,26 @@ export function startIncomingNotifications(pubkey: string): void {
   void runDrainTick()
 
   drainTimerId = setInterval(() => {
+    // `document` is guarded rather than assumed: this module is unit-tested in
+    // a node environment where there is no DOM, and a bare reference would
+    // throw inside the interval where nothing catches it.
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
     void runDrainTick()
   }, DRAIN_INTERVAL_MS)
+
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onVisibilityChange)
+  }
+}
+
+/**
+ * Catch up the moment the tab is looked at again, rather than waiting out the
+ * remainder of an interval the user cannot see.
+ */
+function onVisibilityChange(): void {
+  if (document.visibilityState === 'visible' && activePubkey !== null) {
+    void runDrainTick()
+  }
 }
 
 /** Stop the drain loop and clear session state. Safe to call when not running. */
@@ -335,6 +362,12 @@ export function stopIncomingNotifications(): void {
   if (drainTimerId !== null) {
     clearInterval(drainTimerId)
     drainTimerId = null
+  }
+  // Detached with the timer. A listener outliving the loop would call
+  // runDrainTick on the next tab focus after logout — signing with a session
+  // that is being torn down, for an account that is no longer the user's.
+  if (typeof document !== 'undefined') {
+    document.removeEventListener('visibilitychange', onVisibilityChange)
   }
   activePubkey = null
   drainInFlight = false

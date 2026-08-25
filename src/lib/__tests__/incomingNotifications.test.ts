@@ -273,3 +273,69 @@ describe('the amount the advance-notice toast announces', () => {
     expect(formatEnvelopeTotal(none)).toBe('whatever the server said')
   })
 })
+
+/**
+ * A background tab should not keep signing NIP-98 requests.
+ *
+ * Every tick is a signature, a round trip and a gateway request thread, and a
+ * hidden tab has nowhere to show the toast: sonner renders into a document
+ * nobody is looking at. Staging logs showed one forgotten client draining 119
+ * times in 20 minutes. Nothing is lost by pausing — the envelope stays queued
+ * until acked, and focus triggers an immediate catch-up.
+ */
+describe('a hidden tab', () => {
+  let visibility = 'visible'
+  const listeners: Record<string, (() => void)[]> = {}
+
+  beforeEach(() => {
+    visibility = 'visible'
+    for (const k of Object.keys(listeners)) delete listeners[k]
+    vi.stubGlobal('document', {
+      get visibilityState() {
+        return visibility
+      },
+      addEventListener: (t: string, fn: () => void) => {
+        ;(listeners[t] ??= []).push(fn)
+      },
+      removeEventListener: (t: string, fn: () => void) => {
+        listeners[t] = (listeners[t] ?? []).filter((f) => f !== fn)
+      },
+    })
+  })
+
+  it('stops draining while hidden, and catches up when looked at again', async () => {
+    // Fake timers BEFORE start(), so the interval start() creates is the one
+    // under this test's control. Installing them afterwards leaves the real
+    // interval running and advanceTimersByTime moves a clock nothing is on —
+    // which makes the assertion pass whether or not the guard exists.
+    vi.useFakeTimers()
+    respondWith([])
+    startIncomingNotifications(RECIPIENT)
+    await vi.advanceTimersByTimeAsync(0)
+
+    const afterBoot = signedFetch.mock.calls.length
+    expect(afterBoot).toBeGreaterThan(0)
+
+    visibility = 'hidden'
+    await vi.advanceTimersByTimeAsync(60_000) // six intervals with nobody watching
+    expect(signedFetch.mock.calls.length).toBe(afterBoot)
+
+    // Back on screen: an immediate tick rather than waiting out the interval.
+    visibility = 'visible'
+    for (const fn of listeners['visibilitychange'] ?? []) fn()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(signedFetch.mock.calls.length).toBeGreaterThan(afterBoot)
+
+    vi.useRealTimers()
+  })
+
+  it('detaches the listener on stop', () => {
+    startIncomingNotifications(RECIPIENT)
+    expect((listeners['visibilitychange'] ?? []).length).toBe(1)
+
+    // A listener outliving the loop would drain on the next focus after logout,
+    // signing for an account that is no longer the user's.
+    stopIncomingNotifications()
+    expect((listeners['visibilitychange'] ?? []).length).toBe(0)
+  })
+})
