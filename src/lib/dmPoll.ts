@@ -13,7 +13,7 @@ import {
   RedemptionRefusedError,
 } from '@imani/dm-poll'
 
-import { announceArrival } from './arrivalToast'
+import { announceArrival, type ArrivedVoucher } from './arrivalToast'
 import { createDmCryptoAdapter, toLegacyMetadata } from './dmCrypto'
 import { checkRedemption } from './redemptionLedger'
 import type { VoucherValidation } from './voucherToken'
@@ -183,6 +183,30 @@ function issuanceRatio(v: Record<string, unknown>): number | undefined {
   return face / sats
 }
 
+/**
+ * Narrow a redeemed `Voucher` to the handful of fields the arrival toast reads.
+ *
+ * `Voucher` comes from the wallet-lib bridge and is structurally looser than
+ * `ArrivedVoucher`, so this used to be written `voucher as unknown as
+ * Parameters<typeof announceArrival>[0]`. A double cast through `unknown` tells
+ * the compiler to stop checking entirely: if `ArrivedVoucher` gained a required
+ * field, or one of these were renamed upstream, the cast would keep compiling
+ * and the toast would quietly render `undefined`. Reading the fields one by one
+ * costs nothing at runtime and puts them back under the type checker, so a
+ * rename upstream fails the build here instead of on someone's screen.
+ */
+function toArrivedVoucher(voucher: Voucher): ArrivedVoucher {
+  const v = voucher as Partial<ArrivedVoucher>
+  return {
+    voucher_id: v.voucher_id,
+    face_value: v.face_value,
+    face_unit: v.face_unit,
+    face_decimals: v.face_decimals,
+    sender_pubkey: v.sender_pubkey,
+    memo: v.memo,
+  }
+}
+
 function storageAdapter(): StorageAdapter {
   return {
     async saveVoucher(voucher: Voucher) {
@@ -339,7 +363,7 @@ function redemptionAdapter(): RedemptionAdapter {
       // After notifyWalletChanged, so the balance behind the toast is already
       // the new one when the user looks. Never throws (see announceArrival), so
       // it cannot turn a completed redemption into a reported failure.
-      announceArrival(voucher as unknown as Parameters<typeof announceArrival>[0])
+      announceArrival(toArrivedVoucher(voucher))
       return voucher
     },
   }
