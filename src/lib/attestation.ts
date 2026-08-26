@@ -39,6 +39,35 @@ import { publish } from './relay'
  * crediting 1,800 against the same coupon — both burn 2,500 sats identically.
  * The face value credited lives only here.
  *
+ * ## Publication cadence: one event per redemption
+ *
+ * A deliberate choice, not an oversight, and the one thing here that is
+ * expected to change.
+ *
+ * Per-redemption publication is the simplest thing that works and the only
+ * shape that lets a customer check their coupon the moment they are handed it —
+ * which is the point of the feature. The cost is that even with an opaque
+ * payload, the TIMING of the events is itself information: an observer
+ * watching one ledger key learns that stall's trading hours and rhythm, and
+ * roughly how busy it is, without ever reading an amount or a name.
+ *
+ * Batching (say, one event per day carrying many nullifiers) collapses that to
+ * "traded on this day". It is a strictly better privacy position and a strictly
+ * worse product one: a customer cannot verify a coupon that has not been
+ * published yet, so the trust check would go from instant to next-day.
+ *
+ * Left per-redemption until someone decides that trade differently. What that
+ * migration costs, checked against the staging relay rather than assumed:
+ *
+ * - The CUSTOMER check survives untouched. A batched event carries one `n` tag
+ *   per nullifier, and a relay matches a `#n` filter against ALL of them —
+ *   verified: a filter for a single nullifier matched an event carrying two.
+ *   So `couponCheckFilter` keeps working across the change.
+ * - The AUDITOR reader does NOT. Its content shape goes from one
+ *   `{nullifier, commitment}` to a list, and a reader written for one breaks on
+ *   the other. Whoever builds the reader should handle both from the start, or
+ *   the migration needs a version tag.
+ *
  * Design and the verification behind every claim:
  * `docs/research/redemption-attestation-privacy.md`.
  */
