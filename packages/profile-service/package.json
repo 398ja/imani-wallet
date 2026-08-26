@@ -1,0 +1,73 @@
+{
+  "name": "@imani/profile-service",
+  "version": "0.4.1",
+  "description": "Profile lookup, filtering, and follow management for Imani wallet",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./types": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/types/index.js"
+    },
+    "./adapters": {
+      "types": "./dist/adapters/index.d.ts",
+      "import": "./dist/adapters/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src tests",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "peerDependencies": {
+    "@imani/nostr-app-storage": "^0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@imani/nostr-app-storage": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "nostr-tools": "^2.10.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "fake-indexeddb": "^6.2.5",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.9"
+  },
+  "keywords": [
+    "imani",
+    "profile",
+    "nostr",
+    "nip-05",
+    "nip-65",
+    "directory",
+    "follow",
+    "merchant"
+  ],
+  "author": "Imani",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ArcadeLabsInc/imani-apps",
+    "directory": "packages/profile-service"
+  }
+}

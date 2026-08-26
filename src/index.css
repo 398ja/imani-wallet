@@ -1,0 +1,229 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 250 250 250;
+    --foreground: 23 23 23;
+    --card: 255 255 255;
+    --card-foreground: 23 23 23;
+    --border: 229 229 229;
+    --muted: 245 245 245;
+    --muted-foreground: 115 115 115;
+    --accent: 23 23 23;
+    --accent-foreground: 250 250 250;
+  }
+
+  .dark {
+    --background: 10 10 10;
+    --foreground: 250 250 250;
+    --card: 23 23 23;
+    --card-foreground: 250 250 250;
+    --border: 38 38 38;
+    --muted: 38 38 38;
+    --muted-foreground: 163 163 163;
+    --accent: 250 250 250;
+    --accent-foreground: 23 23 23;
+  }
+
+  * {
+    @apply border-mono-200 dark:border-mono-800;
+  }
+
+  body {
+    @apply bg-mono-50 text-mono-900 dark:bg-mono-950 dark:text-mono-50;
+    @apply font-sans;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    margin: 0;
+  }
+
+  #root {
+    min-height: 100vh;
+    min-height: 100dvh;
+    /* Gesture-navigation bar. 0px everywhere else, including every browser. */
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  /*
+   * Android WebView tells, and only the ones that are safe to suppress.
+   *
+   * The grey flash on tap is a WebView default that no native app has; the
+   * `.press` class above is the feedback we actually want. `overscroll-behavior`
+   * kills both the pull-to-refresh gesture and the blue stretch at the ends of
+   * a scroll, neither of which does anything here.
+   *
+   * Deliberately NOT setting `user-select: none`. It is the usual third item on
+   * this list, but this is a wallet: npubs, cashu tokens and the backup nsec all
+   * have to be selectable by hand when copy-to-clipboard fails. Losing that to
+   * make scrolling feel marginally more native is a bad trade.
+   */
+  html {
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
+  }
+}
+
+@layer components {
+  /*
+   * Press feedback, per Apple's first rule of fluid interfaces: the reaction
+   * belongs on pointer-DOWN, not on release. `:active` is exactly that event,
+   * so the platform gives it for free — no JS, no pointer handlers.
+   *
+   * 100ms, because the whole point is that no lag is perceptible; the 200ms the
+   * dead `.btn` class used reads as a delay on a press.
+   *
+   * One class for every kind of control: `transform` does not apply to inline
+   * elements, so a text link takes only the dim and a button takes both,
+   * without either caller having to know which it is.
+   */
+  .pressable {
+    @apply transition duration-100 ease-out active:scale-[0.98] active:opacity-70 motion-reduce:active:scale-100;
+  }
+
+  /*
+   * The same feedback for a full-bleed row in a divided list, where a scale
+   * would lift the row off its own dividers and clip against the neighbours.
+   * A tint carries the press instead — deeper than the hover, so a touch device
+   * (which has no hover) still gets a distinct pressed state.
+   */
+  .press-row {
+    @apply transition-colors duration-100 ease-out hover:bg-mono-100 active:bg-mono-200 dark:hover:bg-mono-900 dark:active:bg-mono-800;
+  }
+
+  /*
+   * Floating chrome as a translucent material, with content passing underneath
+   * rather than stopping at an opaque strip. The blur is the whole point: it is
+   * what makes a layer read as ABOVE the page rather than as part of it, which
+   * is why the menu wears it too.
+   */
+  .material {
+    @apply bg-mono-50/80 backdrop-blur-xl backdrop-saturate-150 dark:bg-mono-950/80;
+  }
+
+  /*
+   * The header's bottom edge, kept separate from the material itself so that a
+   * popover can be the same surface without trailing a gradient off its own
+   * bottom. A fade rather than a 1px border: a hard divider is drawn whether or
+   * not anything is behind it, while this only reads where content meets chrome.
+   */
+  .scroll-edge::after {
+    content: '';
+    @apply pointer-events-none absolute inset-x-0 top-full h-4 bg-gradient-to-b from-mono-50/80 to-transparent dark:from-mono-950/80;
+  }
+
+  /*
+   * Menus and popovers grow from the control that opened them, so the link
+   * between trigger and content is spatial rather than something to work out.
+   * `<details>` cannot animate its close, so this is the open half only.
+   */
+  .materialize {
+    animation: materialize 200ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  @keyframes materialize {
+    from {
+      opacity: 0;
+      transform: scale(0.92);
+    }
+  }
+}
+
+/* Hide scrollbar but keep functionality */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/*
+ * The three accessibility signals, answered once for the whole app.
+ *
+ * Reduced motion is not "no feedback" — colour and opacity still respond, and
+ * only the movement goes. Reduced transparency and increased contrast both make
+ * the floating chrome solid; contrast additionally puts the border back, since
+ * without translucency there is nothing else separating the layer.
+ */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .materialize {
+    animation: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .material {
+    @apply bg-mono-50 dark:bg-mono-950;
+    backdrop-filter: none;
+  }
+
+  .scroll-edge::after {
+    display: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .material {
+    @apply border-b border-mono-900 bg-mono-50 dark:border-mono-50 dark:bg-mono-950;
+    backdrop-filter: none;
+  }
+
+  .scroll-edge::after {
+    display: none;
+  }
+}
+
+/*
+ * Sonner, retimed and restacked.
+ *
+ * Why the toasts are unstyled at all (App.tsx passes `unstyled: true` and points
+ * here): sonner's own chrome is a white card with a hairline and a flat drop
+ * shadow, which reads as a foreign object on top of an app whose every floating
+ * surface is the translucent `.material` layer above — the same layer as the
+ * header and the menus, already carrying the reduced-transparency and
+ * increased-contrast fallbacks. Dropping sonner's chrome hands the surface to
+ * `.material` instead. `richColors` went with it: a saturated green fill is not
+ * a material, so status rides the icon, in the green-600 / red-500 the rest of
+ * the app already uses for exactly this.
+ *
+ * That choice is what makes the two rules below necessary: both are gated on
+ * sonner's `[data-styled='true']` internally, which unstyled toasts never match.
+ *
+ * Vibrancy note for the classNames in App.tsx: over a blurred surface text needs
+ * more weight and more contrast than on a flat one, and tracking tightens as
+ * size goes up. Flat mid-grey is what goes illegible here.
+ *
+ * Both rules are two selectors deep on purpose. Sonner injects its stylesheet
+ * at runtime, so it lands after ours in the document and wins any tie on source
+ * order; `[data-sonner-toaster] [data-sonner-toast]` outranks its own
+ * `[data-sonner-toast]` on specificity instead, which does not depend on order.
+ *
+ * 1. The transition. Sonner ships 400ms on the browser's default `ease` — over
+ *    the 300ms budget for UI motion, on a curve that starts slow at exactly the
+ *    moment the toast is being looked at. Retimed to the iOS curve `.materialize`
+ *    already uses, so a toast arrives like every other floating surface here.
+ *    Sonner's own `prefers-reduced-motion` rule is `!important`, so it still
+ *    wins over this and the movement still goes when it is asked to.
+ *
+ * 2. The collapsed stack. Sonner fades out the toasts behind the front one, but
+ *    that rule is gated on `[data-styled='true']` and we run unstyled — without
+ *    this, two payments arriving together render both messages on top of each
+ *    other. Same transition sonner gives `[data-sonner-toast] > *`.
+ */
+[data-sonner-toaster] [data-sonner-toast] {
+  transition:
+    transform 260ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 260ms cubic-bezier(0.32, 0.72, 0, 1),
+    height 260ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-expanded='false'][data-front='false'] > * {
+  opacity: 0;
+}

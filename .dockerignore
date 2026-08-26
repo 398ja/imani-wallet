@@ -1,0 +1,38 @@
+# Keep the build context small and secret-free.
+#
+# Note this file does NOT exclude deploy/nginx.conf — the runtime stage copies
+# it. Do not blanket-ignore deploy/.
+
+.git
+.gitignore
+
+# Reinstalled inside the image by `npm ci`, and packages/*/node_modules would
+# otherwise drag in hundreds of MB that the aliases never read anyway.
+**/node_modules
+**/dist
+*.tsbuildinfo
+
+# REAL KEY MATERIAL. scripts/seed-merchant.mjs writes merchant and customer secret
+# keys here in hex, which is exactly as sensitive as an nsec. Already gitignored;
+# this is the second lock, because a build context is not a git tree and
+# `COPY . .` does not care what git thinks.
+.seed-keys.json
+.env
+.env.*
+
+# Local tooling output, hundreds of MB and no business in an image.
+graphify-out
+.playwright-mcp
+.gstack
+.idea
+.vscode
+
+# Dev-only. The docs and scripts are for humans with the stack checked out, and
+# the deploy/ files below drive the LOCAL compose stack — none of it belongs in
+# a container that serves static assets.
+docs
+scripts
+deploy/compose.override.yml
+deploy/blossom.yml
+deploy/strfry.conf
+deploy/up.sh
