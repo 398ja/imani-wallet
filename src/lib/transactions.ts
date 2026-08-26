@@ -46,6 +46,15 @@ export interface WalletTransaction {
    * must not render a missing record as a pass.
    */
   validation?: VoucherValidation
+  /**
+   * The nullifier of the public attestation published for this redemption.
+   *
+   * Kept on the row because it cannot be recomputed: it hashes the RECEIVED
+   * token, and redemption swaps that token at the mint. This is the handle a
+   * merchant uses to match their own published attestations against their own
+   * history — including on a device that has been wiped and restored.
+   */
+  attestationNullifier?: string
   memo?: string
   bundleId?: string
   /**
@@ -135,6 +144,7 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     // wallet verified anything, and inventing a record would turn "unknown"
     // into "fine" — the one thing this must never do.
     validation: isValidation(r.validation) ? r.validation : undefined,
+    attestationNullifier: str(r.attestationNullifier),
     memo: str(r.memo),
     recipientName: str(r.recipientName),
     bundleId: str(r.bundleId) ?? str(r.bundle_id),

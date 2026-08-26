@@ -14,8 +14,9 @@ import {
 } from '@imani/dm-poll'
 
 import { announceArrival, type ArrivedVoucher } from './arrivalToast'
-import { attestRedemption } from './attestation'
+import { attestRedemption, nullifierFor } from './attestation'
 import { createDmCryptoAdapter, toLegacyMetadata } from './dmCrypto'
+import { loadMerchant } from './merchant'
 import { checkRedemption } from './redemptionLedger'
 import type { VoucherValidation } from './voucherToken'
 import { getWallet, notifyWalletChanged } from './wallet'
@@ -332,10 +333,28 @@ function redemptionAdapter(): RedemptionAdapter {
       // same refusal one line later — after redemption.redeem — would have
       // already taken the money at the mint.
       await refuseIfOverRedeemed(meta)
+
+      // Computed BEFORE the redeem, because it is derived from the RECEIVED
+      // token and `redeem()` swaps that token at the mint — afterwards the
+      // bytes it hashes no longer exist anywhere. Riding the correlation slot
+      // is what puts it on the row, which is what makes self-audit possible on
+      // a device that has been wiped.
+      const attestationNullifier = nullifierFor(token)
+
       const voucher = (await withCorrelation(
         {
           bundleId: meta?.bundleId as string | undefined,
           requestId: meta?.requestId as string | undefined,
+          attestationNullifier,
+          // The EXACT figures the attestation commits to, stamped alongside the
+          // nullifier so the reconciliation sweep republishes a byte-identical
+          // commitment. The row's own `amount` is NOT usable for this: it comes
+          // off the voucher (`token_amount`), while the attestation commits
+          // `meta.faceValue`, and those can differ. A sweep reading `amount`
+          // would publish a SECOND, conflicting commitment for one redemption,
+          // which is worse than the gap it set out to close.
+          attestedValue: Number(meta?.faceValue ?? 0),
+          attestedUnit: String(meta?.faceUnit ?? ''),
           // What the wallet checked about this coupon. The vendored builder
           // reads `metadata.validation`, but the row that survives is rebuilt
           // from empty metadata (see legacyBridge.withCorrelation), so without
@@ -388,11 +407,28 @@ function redemptionAdapter(): RedemptionAdapter {
       // After the redemption, and never throwing (see attestRedemption): the
       // proofs are already burnt by this point, so a relay refusing the record
       // must not turn a completed redemption into a reported failure.
-      void attestRedemption({
-        token,
-        faceValue: Number(meta?.faceValue ?? 0),
-        unit: String(meta?.faceUnit ?? ''),
-      })
+      // `validation.signatureValid`, not merely "we have a faceValue". The
+      // face value of a coupon with no verified voucher is whatever the SENDER
+      // wrote in the envelope, and signing an attestation over that would be
+      // the merchant vouching for a number nobody established.
+      const validation = meta?.validation as { signatureValid?: boolean } | undefined
+      // MERCHANTS only. dmPoll runs in every wallet, so without this a CUSTOMER
+      // receiving a coupon would publish a public record of it too — a privacy
+      // leak in a feature whose entire purpose is privacy, and a lie besides:
+      // an attestation means "I honoured this", which a customer never did.
+      //
+      // `loadMerchant(...) !== null` is the same predicate the Settings row and
+      // the /settings/ledger route use: the stall record's EXISTENCE, not
+      // `coupon:issue`. A merchant who has closed their stall still has to
+      // attest the coupons they take while winding down.
+      if (loadMerchant(currentPubkey ?? '') !== null) {
+        void attestRedemption({
+          token,
+          faceValue: Number(meta?.faceValue ?? 0),
+          unit: String(meta?.faceUnit ?? ''),
+          signatureValid: validation?.signatureValid === true,
+        })
+      }
 
       return voucher
     },

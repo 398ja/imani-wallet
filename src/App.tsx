@@ -52,6 +52,7 @@ import { ReceivePage } from './pages/ReceivePage'
 import { CashbackRedeemPage } from './pages/CashbackRedeemPage'
 import { ProfilePage } from './pages/ProfilePage'
 import { SettingsPage } from './pages/SettingsPage'
+import { LedgerPage } from './pages/LedgerPage'
 import { ProfileEditPage } from './pages/ProfileEditPage'
 import { SecurityPage } from './pages/SecurityPage'
 import { BackupPage, RestorePage } from './pages/BackupPages'
@@ -307,6 +308,15 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             ) : (
               <Navigate to="/settings" replace />
             )
+          }
+        />
+        <Route
+          path="/settings/ledger"
+          element={
+            // Merchant-only, same predicate as the stall editor: the redemption
+            // ledger is a record of coupons HONOURED, which a customer has none
+            // of, and the ledger key is meaningless for them.
+            merchant !== null ? <LedgerPage /> : <Navigate to="/settings" replace />
           }
         />
         <Route

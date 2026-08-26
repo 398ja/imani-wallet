@@ -1,10 +1,10 @@
 import { finalizeEvent, type Event, type EventTemplate } from 'nostr-tools'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha2.js'
-import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils'
+import { bytesToHex, hexToBytes, utf8ToBytes } from '@noble/hashes/utils'
 
 import { getSigner } from './nap'
-import { publish } from './relay'
+import { allEvents, publish } from './relay'
 
 /**
  * Public, pseudonymous proof that a coupon was redeemed.
@@ -83,6 +83,13 @@ import { publish } from './relay'
  */
 export const ATTESTATION_KIND = 7377
 
+/**
+ * Payload version. `1` is one attestation per event; a batched format would be
+ * `2`, carrying a list. Present from the first event so the migration is
+ * detectable rather than a guess.
+ */
+export const ATTESTATION_VERSION = '1'
+
 /** Domain separators. Versioned, so a future scheme change cannot collide. */
 const LEDGER_KEY_TAG = 'imani-ledger-key-v1'
 const NULLIFIER_TAG = 'imani-redeem-v1'
@@ -103,9 +110,31 @@ const BLIND_TAG = 'imani-blind-v1'
  *
  * Deterministic, so a merchant who wipes their device re-derives the same
  * identity and can still find and audit their own history.
+ *
+ * Hashes the key's BYTES, not its hex string. Hashing the string binds the
+ * pseudonym to an ENCODING rather than to a key: `privkeyHex()` returns
+ * whatever the caller passed to `createWalletSigner`/`setKey` verbatim, and
+ * neither normalises case. So restoring the same key in uppercase would derive
+ * a different ledger identity and silently orphan the whole published history —
+ * the exact failure the "wipes their device" line above promises against.
+ * Measured before fixing: uppercase moved the pubkey from 9d3309d7… to
+ * 92dac1d2…; hashing bytes gives a6170926… for both.
+ *
+ * Not back-compatible with the string form, which is fine: no attestation has
+ * ever been published from a released build.
  */
-export function ledgerKey(): { sk: Uint8Array; pubkey: string } {
-  const sk = sha256(utf8ToBytes(`${LEDGER_KEY_TAG}:${getSigner().privkeyHex()}`))
+function ledgerKey(): { sk: Uint8Array; pubkey: string } {
+  const priv = hexToBytes(getSigner().privkeyHex())
+  const tag = utf8ToBytes(`${LEDGER_KEY_TAG}:`)
+  const input = new Uint8Array(tag.length + priv.length)
+  input.set(tag)
+  input.set(priv, tag.length)
+  const sk = sha256(input)
+  // The raw secret never leaves this module: `ledgerKey` is module-private and
+  // callers get `ledgerPubkey()`. Exporting a function that returns a secret
+  // key is a footgun regardless of who currently calls it.
+  priv.fill(0)
+  input.fill(0)
   return { sk, pubkey: bytesToHex(schnorr.getPublicKey(sk)) }
 }
 
@@ -224,8 +253,23 @@ export function buildAttestation(a: Attestation, ledgerSk: Uint8Array): Event {
     tags: [
       ['n', a.nullifier],
       ['unit', a.unit],
+      // The payload version, as a TAG so a reader can filter on it without
+      // parsing content.
+      //
+      // The one thing a producer shipping ahead of its reader has to get
+      // right. If publication ever batches (see the cadence note above), the
+      // content shape goes from one {nullifier, commitment} to a list, and a
+      // reader written for v1 must be able to tell the difference rather than
+      // silently mis-parsing. Cheap now, impossible retrofitting later —
+      // events already published cannot be amended.
+      ['v', ATTESTATION_VERSION],
     ],
-    content: JSON.stringify({ nullifier: a.nullifier, commitment: a.commitment, unit: a.unit }),
+    content: JSON.stringify({
+      v: ATTESTATION_VERSION,
+      nullifier: a.nullifier,
+      commitment: a.commitment,
+      unit: a.unit,
+    }),
   }
   return finalizeEvent(template, ledgerSk)
 }
@@ -238,18 +282,45 @@ export function buildAttestation(a: Attestation, ledgerSk: Uint8Array): Event {
  * must not turn a completed redemption into a reported error — the same rule
  * `publishVoucher` and `announceArrival` follow.
  *
- * The cost of a lost publish is one gap in the public ledger, which the
- * reconciliation sweep can republish later. That is why "absent" must never be
- * presented to a customer as proof of a dishonest merchant without the sweep
- * having run first.
+ * The cost of a lost publish is one gap in the public ledger, which
+ * `reconcileAttestations` (below, reachable from Settings > Redemption ledger)
+ * republishes later. A review caught this comment naming that sweep while no
+ * such code existed anywhere — it was describing an intention as a mechanism.
+ * The sweep is real now, and it is only possible because the nullifier is
+ * stamped onto the row: it hashes the RECEIVED token, which is burnt by this
+ * point and cannot be recovered.
+ *
+ * That is also why "absent" must never be presented to a customer as proof of a
+ * dishonest merchant without the sweep having run first.
  */
 export async function attestRedemption(params: {
   token: string
   faceValue: number
   unit: string
+  /**
+   * Whether the issuer's signature over this coupon verified.
+   *
+   * REQUIRED, and the attestation is skipped without it. `faceValue` for a
+   * coupon with no verified voucher comes off the DM envelope, which the SENDER
+   * writes — `dmCrypto` says so directly: "a genuine low-value token could be
+   * announced at any face value at all". Committing to that number would have
+   * the merchant signing "I credited N" where N is a figure a counterparty
+   * supplied and nobody established.
+   *
+   * The card forbids exactly this shape: "A merchant may attest to what they
+   * redeemed; they may not mint a voucher on the issuer's behalf." A signature
+   * over an unestablished claim is the same error as the fabricated child
+   * voucher that retired the old ledger — it just looks more respectable.
+   *
+   * Plain ecash therefore produces no attestation. It carries no issuer claim,
+   * so there is nothing to attest to; this is the same distinction
+   * `hasValidationClaim` already draws for the Checks badge.
+   */
+  signatureValid: boolean
 }): Promise<void> {
   try {
-    const { token, faceValue, unit } = params
+    const { token, faceValue, unit, signatureValid } = params
+    if (!signatureValid) return
     if (!token || !Number.isFinite(faceValue) || faceValue < 0) return
 
     const { sk } = ledgerKey()
@@ -272,9 +343,22 @@ export async function attestRedemption(params: {
 /**
  * Re-open one's own commitment — the merchant self-audit primitive.
  *
- * Returns true when `amount` is what this attestation committed to. A merchant
- * on a new device holding only their key can re-derive every blind and check
- * their whole published history against their local rows.
+ * Returns true when `amount` is what this attestation committed to.
+ *
+ * **Needs the nullifier, and that is the constraint.** The blind is derived
+ * from `(ledgerSk, nullifier)`, so a merchant can re-derive it on any device —
+ * but only for a nullifier they still have. The nullifier is
+ * `H(tag | received token)`, and the received token is gone after redemption:
+ * `TokenRedemption.redeem` SWAPS it at the mint, so the stored row is keyed on
+ * a different token's fingerprint (`legacyBridge.ts`), and `txRecords`
+ * deliberately never writes a token to a relay because it is bearer value.
+ *
+ * So `attestationNullifier` is stamped onto the transaction row at redemption
+ * time — see `dmPoll`. That is a hash, not bearer value: it is already
+ * published, so keeping a local copy discloses nothing new, and without it
+ * self-audit after a device wipe is simply unreachable. Reviewed and caught
+ * before this shipped; the derived-blind design exists precisely to make that
+ * case work, and it would have enabled nothing.
  *
  * Only works for one's own attestations: another merchant's blind comes from
  * their ledger key, so the same amount produces a different commitment.
@@ -297,12 +381,27 @@ export function verifyOwnCommitment(
  *
  * Sums the blinds so an auditor can check `sum(C) == commit(total, sum(r))`.
  * The merchant discloses `total` and this scalar; the published commitments do
- * the rest. They cannot understate or overstate — a claimed total either
- * reconciles against commitments published before the dispute, or it does not.
+ * the rest.
+ *
+ * **Binds the total to the commitments DISCLOSED, not to the period.** An
+ * earlier version of this comment claimed the merchant "cannot understate or
+ * overstate", and that is wrong: the merchant chooses which nullifiers go into
+ * the list, so omitting a redemption and its blind reconciles perfectly at a
+ * lower total. The homomorphic sum proves the disclosed set adds up; set
+ * COMPLETENESS has to come from elsewhere — a counterparty presenting a
+ * nullifier absent from the disclosure, for instance.
  */
-export function blindSumFor(nullifiers: string[]): string {
+export function blindSumFor(entries: { nullifier: string; unit: string }[]): string {
+  // ONE currency per disclosure. A day mixing XAF and EUR sums to a number that
+  // verifies perfectly and means nothing: the curve does not know what the
+  // scalars denominate, so "total 5000" over both is arithmetic on unlike
+  // things. Refusing here is the only place it can be caught — by the time an
+  // auditor sees the total, the units are gone.
+  const units = new Set(entries.map((e) => e.unit))
+  if (units.size !== 1) throw new Error('blindSumFor: one unit per disclosure')
+
   const { sk } = ledgerKey()
-  const sum = nullifiers.reduce((acc, n) => (acc + blindFor(sk, n)) % CURVE_ORDER, 0n)
+  const sum = entries.reduce((acc, e) => (acc + blindFor(sk, e.nullifier)) % CURVE_ORDER, 0n)
   return sum.toString(16)
 }
 
@@ -320,26 +419,116 @@ export function verifyDisclosedTotal(
 ): boolean {
   try {
     if (commitments.length === 0) return false
-    const sum = commitments
-      .map((c) => schnorr.Point.fromHex(c))
-      .reduce((a, b) => a.add(b))
-    return sum.toHex(true) === commitTo(Math.round(claimedTotal), BigInt(`0x${blindSumHex}`))
+    // Reject anything that is not a 33-byte compressed point BEFORE parsing.
+    // `Point.fromHex` also accepts 65-byte uncompressed input, but the
+    // comparison below is against `toHex(true)`, so an auditor pasting an
+    // honestly-formatted uncompressed commitment would silently false-negative
+    // — a verification tool reporting "does not reconcile" for a correct set is
+    // worse than one that refuses the input.
+    if (!commitments.every((c) => /^[0-9a-fA-F]{66}$/.test(c))) return false
+
+    const sum = commitments.map((c) => schnorr.Point.fromHex(c)).reduce((a, b) => a.add(b))
+
+    // Reduce mod n, matching what `blindSumFor` emits. Without it an
+    // out-of-range scalar (hand-assembled, or summed by another tool that does
+    // not reduce) fails against a blind sum that is arithmetically equal.
+    const blindSum = BigInt(`0x${blindSumHex}`) % CURVE_ORDER
+
+    return sum.toHex(true) === commitTo(Math.round(claimedTotal), blindSum)
   } catch {
     return false
   }
 }
 
-/** Exported for the audit reader; hex, matching how the relay carries keys. */
+/**
+ * This merchant's ledger id, hex, matching how the relay carries keys.
+ *
+ * The disclosure point for the whole scheme: `ledgerSk` is derived inside this
+ * wallet and nowhere else, so without a merchant surfacing this, "fetch any
+ * merchant's attestations" is not something an auditor can actually do for a
+ * merchant they can name. Shown and copyable at Settings > Redemption ledger.
+ */
 export function ledgerPubkey(): string {
   return ledgerKey().pubkey
 }
 
-/** Present so a caller can build a filter without reaching into internals. */
-export function attestationFilter(ledgerPub: string) {
-  return { kinds: [ATTESTATION_KIND], authors: [ledgerPub] }
-}
-
-/** The filter a CUSTOMER uses to check one coupon they hold. */
+/**
+ * The filter a CUSTOMER uses to check one coupon they hold.
+ *
+ * NOT YET CALLED IN PRODUCTION, and deliberately so — that is a sequencing
+ * decision, not an oversight. A customer-facing "this stall has no record of
+ * your coupon" check is only honest once the reconciliation sweep is routine;
+ * before then a gap means a dropped publish about as often as it means a
+ * dishonest merchant, and the check becomes a false-accusation generator.
+ *
+ * Kept, rather than deleted with the other unused filter, because it pins two
+ * properties the design depends on and which are easy to lose: it filters on a
+ * TAG (so it survives a move to batched events) and it carries no author (so a
+ * customer never has to know which stall redeemed their coupon). Both are
+ * asserted below.
+ */
 export function couponCheckFilter(token: string) {
   return { kinds: [ATTESTATION_KIND], '#n': [nullifierFor(token)] }
+}
+
+/**
+ * Reconciliation sweep: which local redemptions have no attestation on the
+ * relay, and republish them.
+ *
+ * **This is the gate that makes absence mean anything.** Until it runs, a
+ * missing attestation has innocent explanations — the tab closed before the
+ * publish landed, a relay dropped the event, the coupon carried no verified
+ * issuer claim and correctly had nothing to attest. A reader that treats a gap
+ * as a merchant omitting deliberately is a false-accusation generator, which
+ * is why `docs/research/redemption-attestation-privacy.md` orders the work
+ * producer -> sweep -> reader, and why no customer-facing check ships first.
+ *
+ * The set-difference is on nullifiers, and only works because the nullifier is
+ * stamped onto the row at redemption time (`attestationNullifier`): it cannot
+ * be recomputed later, since `redeem()` swaps the token at the mint.
+ *
+ * Rows with no `attestationNullifier` are SKIPPED, not treated as gaps: they
+ * predate this feature or never qualified for attestation, and republishing
+ * them is impossible anyway (the amount's blind needs a nullifier).
+ */
+export async function reconcileAttestations(
+  // Deliberately the raw stored row (index-signature `unknown`), not
+  // `WalletTransaction`: the figures this needs are the ones stamped at
+  // redemption, and the mapped transaction type does not carry them.
+  rows: Record<string, unknown>[],
+): Promise<{ checked: number; missing: number; republished: number }> {
+  const local = rows.filter((r) => typeof r.attestationNullifier === 'string')
+  if (local.length === 0) return { checked: 0, missing: 0, republished: 0 }
+
+  const { sk, pubkey } = ledgerKey()
+  const published = await allEvents(pubkey, ATTESTATION_KIND)
+  const seen = new Set(
+    published.map((e) => e.tags.find((t) => t[0] === 'n')?.[1]).filter(Boolean) as string[],
+  )
+
+  const gaps = local.filter((r) => !seen.has(r.attestationNullifier as string))
+  let republished = 0
+  for (const row of gaps) {
+    // `attestedValue`, NOT the row's `amount`. The attestation commits
+    // `meta.faceValue` while `amount` comes off the voucher's `token_amount`,
+    // and where those differ, reading `amount` would republish a SECOND,
+    // conflicting commitment for one redemption — worse than the gap.
+    const value = row.attestedValue
+    // Only republishable when that figure is still known locally; a nullifier
+    // alone attests nothing, since there is no amount to commit to.
+    if (typeof value !== 'number') continue
+    const nullifier = row.attestationNullifier as string
+    const attestation: Attestation = {
+      nullifier,
+      commitment: commitTo(Math.round(value), blindFor(sk, nullifier)),
+      unit: typeof row.attestedUnit === 'string' && row.attestedUnit ? row.attestedUnit : 'UNKNOWN',
+    }
+    // Derived blinds make this idempotent: republishing after a partial relay
+    // failure reproduces byte-identical content rather than a second,
+    // conflicting commitment for the same redemption.
+    const result = await publish(buildAttestation(attestation, sk))
+    if (result.ok > 0) republished++
+  }
+
+  return { checked: local.length, missing: gaps.length, republished }
 }
