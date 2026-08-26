@@ -69,6 +69,44 @@ export function currencyDecimals(currency: string): number {
 }
 
 /**
+ * How many decimals to DISPLAY a stored voucher row with.
+ *
+ * The row's own `face_decimals` is a fallback, not the source of truth, because
+ * rows minted before the DEV-238 fix carry `face_decimals: 2` for every
+ * currency including the zero-decimal ones. Trusting the row renders a real
+ * 2,500 XAF coupon as "25.00" forever, and the fix at issuance only helps
+ * coupons minted after it: every coupon already in a customer's wallet stays
+ * wrong. The reviewer's point exactly — issuance was fixed, history was not.
+ *
+ * So the currency wins where we recognise it. `currencyDecimals` asks Intl,
+ * which knows XAF/XOF/JPY take no minor unit, and only when the unit is absent
+ * or non-ISO (a merchant's own "BEANS") do we fall back to what the row
+ * recorded, because there we have no better answer than theirs.
+ *
+ * DISPLAY ONLY. The minor-unit integer is never rescaled: backing runs at one
+ * sat per minor unit, so touching the number would over-back the token 100x and
+ * push it past the DM size limit — the "fix that was worse" DEV-238 records.
+ * This changes the decimal point, never the money.
+ */
+export function displayDecimals(
+  unit: string | undefined | null,
+  storedDecimals: number | undefined | null,
+): number {
+  const fallback =
+    typeof storedDecimals === 'number' && Number.isFinite(storedDecimals) && storedDecimals >= 0
+      ? storedDecimals
+      : 0
+  if (!unit) return fallback
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency: unit })
+      .resolvedOptions().maximumFractionDigits ?? fallback
+  } catch {
+    // Not an ISO code — a merchant's own unit. Their record is the best answer.
+    return fallback
+  }
+}
+
+/**
  * A typed amount, as minor units. Returns null when it is not a number.
  *
  * Accepts both separators because the decimal mark is a comma across most of the

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 
 import {
   currencyDecimals,
+  displayDecimals,
   formatDate,
   formatFace,
   formatSats,
@@ -145,5 +146,45 @@ describe('parseAmountToMinor', () => {
     expect(parseAmountToMinor('-5', 2)).toBeNull()
     expect(parseAmountToMinor('abc', 2)).toBeNull()
     expect(parseAmountToMinor('5.5.5', 2)).toBeNull()
+  })
+})
+
+describe('displayDecimals — historical rows must not render 100x wrong', () => {
+  // The DEV-238 fix corrected faceDecimals at ISSUANCE. Every coupon minted
+  // before it is still sitting in customers' wallets carrying face_decimals: 2,
+  // including the zero-decimal currencies. If display trusts the row, a real
+  // 2,500 XAF coupon reads "25.00" for the rest of its life and no amount of
+  // fixing issuance helps it. This is the exact gap the spec reviewer flagged.
+  it('overrides a stale face_decimals: 2 on a zero-decimal currency', () => {
+    expect(displayDecimals('XAF', 2)).toBe(0)
+    expect(displayDecimals('XOF', 2)).toBe(0)
+    expect(displayDecimals('JPY', 2)).toBe(0)
+  })
+
+  it('renders the reported 2,500 XAF coupon as 2,500 and not 25.00', () => {
+    const stale = { face_value: 2500, face_unit: 'XAF', face_decimals: 2 }
+    const shown = formatFace(stale.face_value, {
+      unit: stale.face_unit,
+      decimals: displayDecimals(stale.face_unit, stale.face_decimals),
+    })
+    expect(shown).not.toContain('25.00')
+    expect(shown).toContain('2,500')
+  })
+
+  it('leaves genuinely two-decimal currencies alone', () => {
+    expect(displayDecimals('EUR', 2)).toBe(2)
+    expect(displayDecimals('USD', 2)).toBe(2)
+  })
+
+  it("keeps the row's own answer for a merchant's non-ISO unit", () => {
+    // Intl throws on "BEANS"; the merchant's record is the only answer there is.
+    expect(displayDecimals('BEANS', 2)).toBe(2)
+    expect(displayDecimals('STAMPS', 0)).toBe(0)
+  })
+
+  it('falls back safely when the row has no usable decimals', () => {
+    expect(displayDecimals('BEANS', undefined)).toBe(0)
+    expect(displayDecimals('BEANS', -1)).toBe(0)
+    expect(displayDecimals(undefined, 2)).toBe(2)
   })
 })

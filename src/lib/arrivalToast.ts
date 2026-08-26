@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { toast } from 'sonner'
 
 import { ReceivedPaymentToast } from '../components/ui/IncomingPaymentToast'
-import { currencyDecimals, formatFace } from './format'
+import { displayDecimals, formatFace } from './format'
 
 /**
  * The toast that fires when a coupon has ACTUALLY arrived.
@@ -85,18 +85,14 @@ export function announceArrival(voucher: ArrivedVoucher | undefined): void {
      * the balance card beside it read "FCFA 4" — caught on staging, against a
      * genuinely-issued coupon whose row does carry `face_decimals: 2`.
      *
-     * `currencyDecimals` is the wallet's existing answer to exactly this: it
-     * asks Intl, which knows XAF and JPY take none, and falls back to 2 for a
-     * merchant's own non-ISO unit. `issue.ts` already resolves the issuing side
-     * this way for the same reason, so the two ends agree.
-     *
-     * The row's own value is the fallback rather than the source, and this is a
-     * DISPLAY decision only: the minor-unit number is never scaled, because
-     * backing is 1 sat per minor unit and rescaling it would over-back the token
-     * a hundredfold and push it past the DM size limit.
+     * `displayDecimals` is the wallet's single answer to this question, shared
+     * with the coupon list, the history statement and the wallet pass, so a
+     * pre-DEV-238 row renders the same everywhere instead of each screen
+     * picking its own fallback. It asks Intl (which knows XAF and JPY take
+     * none) and keeps the row's value only for a merchant's own non-ISO unit.
      */
     const unit = voucher.face_unit ?? ''
-    const decimals = unit ? currencyDecimals(unit) : (voucher.face_decimals ?? 0)
+    const decimals = displayDecimals(unit, voucher.face_decimals)
     const amount = formatFace(voucher.face_value ?? 0, { unit, decimals })
 
     toast.success(
