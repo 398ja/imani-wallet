@@ -68,6 +68,14 @@ function nonIsoDecimals(normalisedUnit: string): number | undefined {
     case 'MSAT':
     case 'BTC':
       return 0
+    // IQD is where the browser and the JVM genuinely disagree: ISO 4217 and
+    // java.util.Currency say the Iraqi dinar has 3 minor digits, and Node's ICU
+    // resolves it to 0 (verified on this runtime). gateway-portal mints from
+    // the JDK, so leaving Intl to answer here would label an Iraqi merchant's
+    // coupon with different decimals than it was minted with. Pinned to the ISO
+    // answer so the two ends agree.
+    case 'IQD':
+      return 3
     default:
       return undefined
   }
