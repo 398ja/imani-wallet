@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { forget, recover, remember } from '../resume'
+import { forgetResume, recover, remember } from '../resume'
 
 /**
  * Bug as reported: "after a refresh, I always have to enter the password ...
@@ -132,7 +132,7 @@ describe('the reload cache', () => {
 
   it('forgets on request, and cannot be recovered afterwards', async () => {
     await remember(PUBKEY, PRIVKEY)
-    forget()
+    forgetResume()
     // The delete is fire-and-forget; let it land.
     await new Promise((r) => setTimeout(r, 0))
 
@@ -180,7 +180,7 @@ describe('the reload cache', () => {
 
   /**
    * Caught in a real browser, not here: the first version of App.tsx called
-   * `forget()` in the catch of its resume effect, so a single 5xx from the
+   * `forgetResume()` in the catch of its resume effect, so a single 5xx from the
    * gateway destroyed the only copy of the key this tab had. The reload after a
    * gateway blip then asked for the passphrase, and so did every reload after
    * it, for the life of the tab.
