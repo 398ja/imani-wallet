@@ -162,7 +162,12 @@ Everything above was executed, not reasoned about:
 - nullifiers collide on replay, differ on legitimate partial redemption
 - commitments hide amounts against a known-amount search
 - homomorphic sum verifies a true total and rejects both an understated and an
-  overstated one
+  overstated one **over the disclosed set**. It does NOT bind the merchant to a
+  period: they choose which nullifiers to disclose, and omitting one reconciles
+  perfectly at a lower total. Set completeness must come from elsewhere — for
+  instance a counterparty presenting a nullifier missing from the disclosure.
+  An earlier draft of this document and of `blindSumFor`'s comment claimed the
+  stronger property; a review caught it
 - a merchant re-opens their own commitments from their key alone, and cannot
   open another's
 
@@ -197,8 +202,9 @@ recompute its nullifier and look it up:
 
 - present in the ledger → **the stall really did redeem my coupon, and I
   checked it myself against a public record**
-- absent → evidence, rather than a support ticket that ends in "we cannot see
-  it"
+- absent → **not yet evidence.** See the warning below: until the
+  reconciliation sweep exists, a gap and a dishonest merchant are
+  indistinguishable
 
 Nobody else can compute that nullifier, so the check proves possession without
 revealing the amount or the merchant to anyone else reading the stream.
@@ -208,6 +214,26 @@ That is the difference between *"trust us, we are honest"* and *"do not trust
 us — here is the receipt, verify it yourself"*. The second is the selling
 point, and it is only credible because the merchant cannot quietly rewrite
 history: the commitment is published before any dispute.
+
+### Not safe to expose yet: absence is not evidence
+
+**The reconciliation sweep does not exist.** Until it does, a missing
+attestation has at least four innocent explanations, and the ledger cannot tell
+them apart from a merchant omitting deliberately:
+
+1. the tab closed before the publish landed
+2. the relay rejected or dropped the event
+3. the redemption came through a path that does not attest (the cashback flow
+   calls `redemption.redeem` directly)
+4. the coupon carried no verified issuer claim, so there was correctly nothing
+   to attest
+
+A customer-facing check that reports "this stall has no record of your coupon"
+on any of those is a false-accusation generator, and it would damage exactly
+the trust the feature exists to build. **The producer shipping before the sweep
+is fine; the customer-facing interpretation shipping before the sweep is not.**
+
+Order of work: producer → reconciliation sweep → reader. Not producer → reader.
 
 ### Build it fresh
 

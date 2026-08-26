@@ -508,6 +508,18 @@ async function commitToken(token: string): Promise<void> {
   if (!redemption) throw new Error('TokenRedemption unavailable')
 
   await redemption.redeem(token, { source: 'cashback' })
+
+  // Deliberately NOT attested (lib/attestation.ts). A code review flagged this
+  // path as a gap in the ledger; it is a scope boundary rather than an
+  // oversight. An attestation is a MERCHANT's claim about a coupon they
+  // honoured. This is the opposite direction: a customer claiming cashback the
+  // gateway minted for them. There is no merchant redeeming, no issuer
+  // signature over a face value they credited, and so nothing anyone here is
+  // entitled to attest to.
+  //
+  // If cashback ever needs to appear in the public ledger, the attestation has
+  // to come from whoever actually honoured the value, not from the recipient.
+
   // The legacy layer writes straight to IndexedDB, and this tab does not hear
   // its own BroadcastChannel post.
   notifyWalletChanged()

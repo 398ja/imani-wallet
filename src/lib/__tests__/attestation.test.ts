@@ -14,34 +14,37 @@ const MERCHANT_A = 'a'.repeat(64)
 const MERCHANT_B = 'b'.repeat(64)
 
 let currentKey = MERCHANT_A
+let signerThrows = false
 vi.mock('../nap', () => ({
-  getSigner: () => ({
-    privkeyHex: () => currentKey,
-    pubkey: 'ff'.repeat(32),
-  }),
+  getSigner: () => {
+    // What a locked wallet — or an auditor with no wallet at all — looks like.
+    if (signerThrows) throw new Error('No signer — the wallet has not been unlocked.')
+    return { privkeyHex: () => currentKey, pubkey: 'ff'.repeat(32) }
+  },
 }))
 
 const published: unknown[] = []
 let publishThrows = false
+let relayHas: { tags: string[][]; content: string }[] = []
+
 vi.mock('../relay', () => ({
   publish: async (event: unknown) => {
     if (publishThrows) throw new Error('relay down')
     published.push(event)
     return { ok: 1, total: 1, errors: [] }
   },
+  allEvents: async () => relayHas,
 }))
 
 const {
   ATTESTATION_KIND,
   attestRedemption,
-  attestationFilter,
   blindSumFor,
-  buildAttestation,
   commitTo,
   couponCheckFilter,
-  ledgerKey,
   ledgerPubkey,
   nullifierFor,
+  reconcileAttestations,
   verifyDisclosedTotal,
   verifyOwnCommitment,
 } = await import('../attestation')
@@ -50,12 +53,20 @@ beforeEach(() => {
   currentKey = MERCHANT_A
   published.length = 0
   publishThrows = false
+  signerThrows = false
 })
 
 describe('the ledger key — a pseudonym, not a fig leaf', () => {
-  it('is stable, so a merchant can fetch and audit their own history', () => {
-    // Also what makes self-audit survive a device wipe: nothing is stored.
-    expect(ledgerPubkey()).toBe(ledgerPubkey())
+  it('is re-derivable from the key alone, on a device that stores nothing', () => {
+    // Asserting the DERIVATION, not that a pure function is pure. A wiped
+    // device has only the merchant's key; if the ledger identity depended on
+    // anything else, it could not be rebuilt and the merchant would lose
+    // access to their own published history.
+    const onThisDevice = ledgerPubkey()
+    currentKey = MERCHANT_B // simulate another wallet entirely
+    expect(ledgerPubkey()).not.toBe(onThisDevice)
+    currentKey = MERCHANT_A // restore: same key in, same identity out
+    expect(ledgerPubkey()).toBe(onThisDevice)
   })
 
   it('differs per merchant, so one query returns exactly one stall', () => {
@@ -112,20 +123,29 @@ describe('the commitment — amounts hidden, sums provable', () => {
     expect(n).toBeTruthy()
   })
 
-  it('lets the merchant re-open their OWN commitment', () => {
-    const n = nullifierFor('cashuAmine')
-    const { sk } = ledgerKey()
-    expect(sk).toBeInstanceOf(Uint8Array)
-    // Round-trip through the real publish path.
-    const c = JSON.parse(
-      (buildAttestation({ nullifier: n, commitment: commitTo(2500, 1n), unit: 'XAF' }, sk) as { content: string })
-        .content,
-    ).commitment
-    expect(c).toBeTruthy()
+  it('lets the merchant re-open their OWN commitment', async () => {
+    // Through the public surface: `ledgerKey` is module-private now, because a
+    // function handing out the raw ledger SECRET is a footgun no matter who
+    // currently calls it. Re-opening is what a merchant actually does, and
+    // `verifyOwnCommitment` is the API for it.
+    await attestRedemption({ token: 'cashuAmine', faceValue: 2500, unit: 'XAF', signatureValid: true })
+    const { nullifier, commitment } = JSON.parse((published[0] as { content: string }).content)
+    expect(verifyOwnCommitment(nullifier, commitment, 2500)).toBe(true)
+    expect(verifyOwnCommitment(nullifier, commitment, 2501)).toBe(false)
+  })
+
+  it('derives the SAME ledger identity from uppercase hex, so a restore cannot orphan history', () => {
+    // Hashing the hex STRING binds the pseudonym to an encoding: `privkeyHex()`
+    // returns whatever was passed to setKey, which does not normalise case. A
+    // merchant restoring their key in uppercase would have silently become a
+    // different ledger and lost their whole published history.
+    const lower = ledgerPubkey()
+    currentKey = currentKey.toUpperCase()
+    expect(ledgerPubkey()).toBe(lower)
   })
 
   it('a merchant cannot open ANOTHER merchant\'s commitment', async () => {
-    await attestRedemption({ token: 'cashuAshared', faceValue: 2500, unit: 'XAF' })
+    await attestRedemption({ token: 'cashuAshared', faceValue: 2500, unit: 'XAF', signatureValid: true })
     const ev = published[0] as { content: string }
     const { nullifier, commitment } = JSON.parse(ev.content)
 
@@ -136,15 +156,18 @@ describe('the commitment — amounts hidden, sums provable', () => {
   })
 
   it('rejects a wrong amount for one\'s own commitment', async () => {
-    await attestRedemption({ token: 'cashuAtok', faceValue: 2500, unit: 'XAF' })
+    await attestRedemption({ token: 'cashuAtok', faceValue: 2500, unit: 'XAF', signatureValid: true })
     const { nullifier, commitment } = JSON.parse((published[0] as { content: string }).content)
     expect(verifyOwnCommitment(nullifier, commitment, 2499)).toBe(false)
     expect(verifyOwnCommitment(nullifier, commitment, 2500)).toBe(true)
   })
 
   it('handles a zero-value credit without collapsing the commitment', () => {
-    // amount * G with amount 0 is the identity, which would make the point
-    // depend on the blind alone. Guarded explicitly rather than by luck.
+    // The zero branch avoids an EXCEPTION, not an identity point: verified on
+    // @noble/curves that `multiply(0n)` throws "invalid scalar: out of range"
+    // rather than returning the identity. So a zero-value commitment has to
+    // skip the G term entirely, and what it commits to is the blind alone —
+    // which is correct, since 0*G contributes nothing anyway.
     expect(() => commitTo(0, 7n)).not.toThrow()
     expect(commitTo(0, 7n)).not.toBe(commitTo(0, 8n))
   })
@@ -164,11 +187,11 @@ describe('disclosed totals — a merchant cannot lie about the sum', () => {
 
   it('verifies a true total, and rejects both understating and overstating', async () => {
     for (const d of day) {
-      await attestRedemption({ token: d.token, faceValue: d.amount, unit: 'XAF' })
+      await attestRedemption({ token: d.token, faceValue: d.amount, unit: 'XAF', signatureValid: true })
     }
     const parsed = published.map((e) => JSON.parse((e as { content: string }).content))
     const commitments = parsed.map((p) => p.commitment)
-    const blindSum = blindSumFor(parsed.map((p) => p.nullifier))
+    const blindSum = blindSumFor(parsed.map((p) => ({ nullifier: p.nullifier, unit: p.unit })))
     const total = day.reduce((s, d) => s + d.amount, 0)
 
     expect(verifyDisclosedTotal(commitments, total, blindSum)).toBe(true)
@@ -178,16 +201,28 @@ describe('disclosed totals — a merchant cannot lie about the sum', () => {
     expect(verifyDisclosedTotal(commitments, total + 500, blindSum)).toBe(false)
   })
 
-  it('an auditor needs no key — only the published commitments', () => {
-    // verifyDisclosedTotal must work for someone with no wallet at all. If it
-    // silently depended on getSigner it would be useless to the reader it is for.
-    expect(verifyDisclosedTotal([], 0, '1')).toBe(false)
+  it('an auditor needs no key — verified with the signer removed entirely', async () => {
+    // The earlier version of this test passed an empty array and hit the
+    // length-0 early return, so it would have passed even if the next line
+    // called getSigner(). This drives the REAL path with a signer that throws,
+    // which is what an auditor with no wallet actually looks like.
+    for (const d of day) {
+      await attestRedemption({ token: d.token, faceValue: d.amount, unit: 'XAF', signatureValid: true })
+    }
+    const parsed = published.map((e) => JSON.parse((e as { content: string }).content))
+    const commitments = parsed.map((p) => p.commitment)
+    const blindSum = blindSumFor(parsed.map((p) => ({ nullifier: p.nullifier, unit: p.unit })))
+    const total = day.reduce((s, d) => s + d.amount, 0)
+
+    signerThrows = true
+    expect(verifyDisclosedTotal(commitments, total, blindSum)).toBe(true)
+    expect(verifyDisclosedTotal(commitments, total + 1, blindSum)).toBe(false)
   })
 })
 
 describe('what the published event does and does not carry', () => {
   it('never contains the merchant identity, the amount, or the voucher', async () => {
-    await attestRedemption({ token: 'cashuAsecret', faceValue: 2500, unit: 'XAF' })
+    await attestRedemption({ token: 'cashuAsecret', faceValue: 2500, unit: 'XAF', signatureValid: true })
     const ev = published[0] as { pubkey: string; content: string; tags: string[][] }
     const wire = JSON.stringify(ev)
 
@@ -202,24 +237,20 @@ describe('what the published event does and does not carry', () => {
   })
 
   it('is authored by the ledger key, so one query fetches one merchant', async () => {
-    await attestRedemption({ token: 'cashuAx', faceValue: 10, unit: 'XAF' })
+    await attestRedemption({ token: 'cashuAx', faceValue: 10, unit: 'XAF', signatureValid: true })
     const ev = published[0] as { pubkey: string; kind: number }
     expect(ev.pubkey).toBe(ledgerPubkey())
     expect(ev.kind).toBe(ATTESTATION_KIND)
-    expect(attestationFilter(ledgerPubkey())).toEqual({
-      kinds: [ATTESTATION_KIND],
-      authors: [ledgerPubkey()],
-    })
   })
 
   it('carries a signature anyone can verify', async () => {
-    await attestRedemption({ token: 'cashuAy', faceValue: 10, unit: 'XAF' })
+    await attestRedemption({ token: 'cashuAy', faceValue: 10, unit: 'XAF', signatureValid: true })
     const ev = published[0] as { id: string; sig: string; pubkey: string }
     expect(schnorr.verify(hexToBytes(ev.sig), hexToBytes(ev.id), hexToBytes(ev.pubkey))).toBe(true)
   })
 
   it('is tagged so one coupon can be looked up without fetching the stream', async () => {
-    await attestRedemption({ token: 'cashuAz', faceValue: 10, unit: 'XAF' })
+    await attestRedemption({ token: 'cashuAz', faceValue: 10, unit: 'XAF', signatureValid: true })
     const ev = published[0] as { tags: string[][] }
     expect(ev.tags).toContainEqual(['n', nullifierFor('cashuAz')])
     expect(couponCheckFilter('cashuAz')).toEqual({
@@ -259,15 +290,147 @@ describe('attesting never breaks a redemption', () => {
     // turn a completed redemption into a reported failure.
     publishThrows = true
     await expect(
-      attestRedemption({ token: 'cashuAfail', faceValue: 10, unit: 'XAF' }),
+      attestRedemption({ token: 'cashuAfail', faceValue: 10, unit: 'XAF', signatureValid: true }),
     ).resolves.toBeUndefined()
     expect(published).toHaveLength(0)
   })
 
+  describe('what a disclosure refuses to do', () => {
+    it('refuses to sum blinds across two currencies', () => {
+      // The sum would verify perfectly and mean nothing: the curve does not
+      // know what the scalars denominate, so a "total" over XAF and EUR is
+      // arithmetic on unlike things. Only catchable here — by the time an
+      // auditor sees the total, the units are gone.
+      expect(() =>
+        blindSumFor([
+          { nullifier: nullifierFor('a'), unit: 'XAF' },
+          { nullifier: nullifierFor('b'), unit: 'EUR' },
+        ]),
+      ).toThrow(/one unit/)
+    })
+
+    it('rejects an uncompressed commitment rather than silently failing to reconcile', () => {
+      // Point.fromHex accepts 65-byte uncompressed input, but the comparison is
+      // against toHex(true). An honestly-formatted uncompressed commitment
+      // would report "does not reconcile" for a CORRECT set, which is worse
+      // than refusing the input.
+      // A GENUINE point in uncompressed form. An earlier version of this test
+      // used '04' + garbage, which fromHex rejects as "not on curve" — so it
+      // passed while the guard was removed, and proved nothing. Caught by
+      // mutation-testing the guard away.
+      const real = commitTo(2500, 7n)
+      const uncompressed = schnorr.Point.fromHex(real).toHex(false)
+      expect(uncompressed).toHaveLength(130)
+      expect(verifyDisclosedTotal([uncompressed], 2500, '7')).toBe(false)
+    })
+
+    it('reconciles a blind sum that was not reduced mod n', () => {
+      // An out-of-range scalar from a tool that does not reduce is
+      // arithmetically equal to the reduced one; failing it would be a false
+      // negative against a correct disclosure.
+      const n = nullifierFor('cashuA-modn')
+      const c = commitTo(2500, 7n)
+      const overflowed = (7n + schnorr.Point.Fn.ORDER).toString(16)
+      expect(n).toBeTruthy()
+      expect(verifyDisclosedTotal([c], 2500, overflowed)).toBe(true)
+    })
+  })
+
+  describe('the reconciliation sweep that makes absence meaningful', () => {
+    beforeEach(() => {
+      relayHas = []
+    })
+
+    it('republishes only the redemptions the relay never received', async () => {
+      const present = nullifierFor('cashuA-landed')
+      const gap = nullifierFor('cashuA-lost')
+      relayHas = [{ tags: [['n', present]], content: '{}' }]
+
+      const out = await reconcileAttestations([
+        { attestationNullifier: present, attestedValue: 2500, attestedUnit: 'XAF' },
+        { attestationNullifier: gap, attestedValue: 1800, attestedUnit: 'XAF' },
+      ])
+
+      expect(out).toEqual({ checked: 2, missing: 1, republished: 1 })
+      expect(published).toHaveLength(1)
+      expect(JSON.parse((published[0] as { content: string }).content).nullifier).toBe(gap)
+    })
+
+    it('reproduces a byte-identical commitment, so a republish cannot conflict', async () => {
+      // The idempotence claim in the comment: derived (not random) blinds mean
+      // a retry after a partial relay failure republishes the SAME commitment
+      // rather than a second, contradictory one for the same redemption.
+      const n = nullifierFor('cashuA-retry')
+      const row = { attestationNullifier: n, attestedValue: 2500, unit: 'XAF' }
+      await reconcileAttestations([row])
+      await reconcileAttestations([row])
+      const [a, b] = published as { content: string }[]
+      expect(JSON.parse(a.content).commitment).toBe(JSON.parse(b.content).commitment)
+    })
+
+    it('commits the attested face value, never the row amount, when they differ', async () => {
+      // The row's `amount` comes off the voucher (token_amount); the
+      // attestation committed `meta.faceValue`. Where they disagree, a sweep
+      // reading `amount` republishes a SECOND, conflicting commitment for one
+      // redemption — strictly worse than the gap it meant to close.
+      const n = nullifierFor('cashuA-divergent')
+      await reconcileAttestations([
+        { attestationNullifier: n, attestedValue: 2500, attestedUnit: 'XAF', amount: 9999 },
+      ])
+      const { commitment } = JSON.parse((published[0] as { content: string }).content)
+      expect(verifyOwnCommitment(n, commitment, 2500)).toBe(true)
+      expect(verifyOwnCommitment(n, commitment, 9999)).toBe(false)
+    })
+
+    it('skips rows with no nullifier instead of reporting them as gaps', async () => {
+      // Rows predating the feature, or that never qualified. Counting these as
+      // gaps would make the sweep report permanent phantom omissions.
+      const out = await reconcileAttestations([
+        { attestedValue: 2500, attestedUnit: 'XAF' },
+        { attestedValue: 900, attestedUnit: 'XAF' },
+      ])
+      expect(out).toEqual({ checked: 0, missing: 0, republished: 0 })
+      expect(published).toHaveLength(0)
+    })
+
+    it('does not republish a gap whose amount is no longer known locally', async () => {
+      // A nullifier alone attests nothing; there is no commitment to make.
+      const out = await reconcileAttestations([
+        { attestationNullifier: nullifierFor('cashuA-amountless') },
+      ])
+      expect(out).toEqual({ checked: 1, missing: 1, republished: 0 })
+      expect(published).toHaveLength(0)
+    })
+  })
+
+  it('stamps a payload version on both the tags and the content', async () => {
+    // A producer shipping ahead of its reader. Events already published cannot
+    // be amended, so if a batched v2 ever lands, v1 events must be
+    // distinguishable rather than mis-parsed. Pinned here so the wire format
+    // cannot drift silently.
+    await attestRedemption({ token: 'cashuAv1', faceValue: 2500, unit: 'XAF', signatureValid: true })
+    const [ev] = published as { tags: string[][]; content: string }[]
+    expect(ev.tags).toContainEqual(['v', '1'])
+    expect(JSON.parse(ev.content).v).toBe('1')
+  })
+
+  it('publishes NOTHING for a coupon whose signature did not verify', async () => {
+    // The guard that stops a merchant signing "I credited N" for a number the
+    // SENDER supplied. Asserted on the published stream, not on the argument,
+    // so removing the guard fails here rather than passing quietly.
+    await attestRedemption({
+      token: 'cashuA-unverified',
+      faceValue: 999999,
+      unit: 'XAF',
+      signatureValid: false,
+    })
+    expect(published).toHaveLength(0)
+  })
+
   it('ignores a call with nothing to attest rather than publishing junk', async () => {
-    await attestRedemption({ token: '', faceValue: 10, unit: 'XAF' })
-    await attestRedemption({ token: 'cashuAt', faceValue: Number.NaN, unit: 'XAF' })
-    await attestRedemption({ token: 'cashuAt', faceValue: -1, unit: 'XAF' })
+    await attestRedemption({ token: '', faceValue: 10, unit: 'XAF', signatureValid: true })
+    await attestRedemption({ token: 'cashuAt', faceValue: Number.NaN, unit: 'XAF', signatureValid: true })
+    await attestRedemption({ token: 'cashuAt', faceValue: -1, unit: 'XAF', signatureValid: true })
     expect(published).toHaveLength(0)
   })
 })
