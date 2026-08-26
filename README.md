@@ -124,9 +124,13 @@ npm run android    # build + sync the Capacitor Android project
 
 ### Deeper design notes
 
-The full design history, every decision and the reasoning behind it, lives in
-[`docs/superpowers/specs/2026-08-11-farmer-coupon-wallet-design.md`](docs/superpowers/specs/2026-08-11-farmer-coupon-wallet-design.md).
-Start with [`docs/how-it-works.md`](docs/how-it-works.md) for the concepts first.
+Start with [`docs/how-it-works.md`](docs/how-it-works.md) for the concepts, and
+[`docs/decentralised-posture.md`](docs/decentralised-posture.md) for why the
+architecture is shaped the way it is.
+
+The original design record was retired once the code became the authority. It is
+still in git history (`docs/superpowers/specs/2026-08-11-farmer-coupon-wallet-design.md`,
+last present at `e38ba27`) if the reasoning behind a specific decision is needed.
 
 ## License
 
