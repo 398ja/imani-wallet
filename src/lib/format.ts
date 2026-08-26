@@ -43,6 +43,37 @@ export function formatSats(sats: number | undefined | null): string {
 }
 
 /**
+ * Units whose decimals `Intl` gets wrong or refuses, resolved before we ask it.
+ *
+ * ONE list, shared by `currencyDecimals` (issuance) and `displayDecimals`
+ * (rendering), because the two answering differently for the same unit is a
+ * coupon whose label disagrees with its own backing.
+ *
+ *  - FCFA is not an ISO 4217 code at all. It is what merchants in the region
+ *    actually type and it means XAF/XOF. `Intl` throws on it.
+ *  - SAT/SATS/MSAT are our own denominations and have no minor unit.
+ *  - BTC: `Intl` cheerfully answers 2, and `java.util.Currency` throws. Neither
+ *    is what this system means by BTC, and gateway-portal's
+ *    `CurrencyUnit.decimalsFor` already answers 0. Pinning it here keeps the
+ *    three services from disagreeing about what one coupon is denominated in.
+ *
+ * Returns `undefined` when the unit is not an alias, so the caller can tell
+ * "no opinion" from a genuine 0.
+ */
+function nonIsoDecimals(normalisedUnit: string): number | undefined {
+  switch (normalisedUnit) {
+    case 'FCFA':
+    case 'SAT':
+    case 'SATS':
+    case 'MSAT':
+    case 'BTC':
+      return 0
+    default:
+      return undefined
+  }
+}
+
+/**
  * Minor units per major unit for a currency, from `Intl` rather than a table so
  * the zero-decimal currencies in the issuance list (JPY, XOF, XAF) are right
  * without maintaining that list twice.
@@ -66,8 +97,8 @@ export function formatSats(sats: number | undefined | null): string {
  */
 export function currencyDecimals(currency: string): number {
   const normalised = currency?.trim().toUpperCase() ?? ''
-  if (normalised === 'FCFA') return 0
-  if (normalised === 'SAT' || normalised === 'SATS' || normalised === 'MSAT') return 0
+  const alias = nonIsoDecimals(normalised)
+  if (alias !== undefined) return alias
   try {
     return (
       new Intl.NumberFormat(undefined, { style: 'currency', currency: normalised })
@@ -116,9 +147,8 @@ export function displayDecimals(
       : 0
   if (!unit) return fallback
   const normalised = unit.trim().toUpperCase()
-  // Non-ISO aliases that Intl would throw on, resolved before we ask it.
-  if (normalised === 'FCFA') return 0
-  if (normalised === 'SAT' || normalised === 'SATS' || normalised === 'MSAT') return 0
+  const alias = nonIsoDecimals(normalised)
+  if (alias !== undefined) return alias
   try {
     return new Intl.NumberFormat(undefined, { style: 'currency', currency: normalised })
       .resolvedOptions().maximumFractionDigits ?? fallback

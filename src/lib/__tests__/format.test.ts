@@ -179,6 +179,30 @@ describe('currencyDecimals — the issuance-side answer', () => {
   })
 })
 
+describe('the two resolvers must never disagree', () => {
+  // currencyDecimals feeds ISSUANCE (what a coupon is backed with) and
+  // displayDecimals feeds RENDERING (what the customer reads). If they answer
+  // differently for one unit, the label contradicts the money. They are
+  // separate functions for good reasons, so pin the overlap rather than
+  // trusting that whoever edits one remembers the other.
+  //
+  // BTC is here because it is exactly how this went wrong once already: Intl
+  // answers 2, java.util.Currency throws, and gateway-portal answered 0 — three
+  // services, three answers, for one unit.
+  const units = ['XAF', 'XOF', 'FCFA', 'JPY', 'EUR', 'USD', 'SAT', 'SATS', 'MSAT', 'BTC', 'KES']
+
+  it.each(units)('agrees on %s when the stored row says 2', (unit) => {
+    expect(displayDecimals(unit, 2)).toBe(currencyDecimals(unit))
+  })
+
+  it('pins the zero-decimal set explicitly', () => {
+    for (const unit of ['XAF', 'XOF', 'FCFA', 'JPY', 'SAT', 'SATS', 'MSAT', 'BTC']) {
+      expect(currencyDecimals(unit), `currencyDecimals(${unit})`).toBe(0)
+      expect(displayDecimals(unit, 2), `displayDecimals(${unit})`).toBe(0)
+    }
+  })
+})
+
 describe('displayDecimals — historical rows must not render 100x wrong', () => {
   // The DEV-238 fix corrected faceDecimals at ISSUANCE. Every coupon minted
   // before it is still sitting in customers' wallets carrying face_decimals: 2,
