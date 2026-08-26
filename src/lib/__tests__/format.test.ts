@@ -195,6 +195,25 @@ describe('the two resolvers must never disagree', () => {
     expect(displayDecimals(unit, 2)).toBe(currencyDecimals(unit))
   })
 
+  // DEV-238 is about zero-decimal currencies generally, not four of them. The
+  // wallet's picker offers every code Intl.supportedValuesOf('currency')
+  // returns (~300), so a Korean merchant can select KRW. gateway-portal mints
+  // from java.util.Currency; these must match it or a coupon is labelled with
+  // decimals it was not minted with.
+  const ISO_ZERO = ['XOF', 'RWF', 'KMF', 'CLP', 'BIF', 'PYG', 'ISK', 'KRW', 'XAF',
+                    'GNF', 'UGX', 'VND', 'JPY', 'XPF', 'VUV', 'DJF']
+  const ISO_THREE = ['OMR', 'BHD', 'KWD', 'LYD', 'IQD', 'JOD', 'TND']
+
+  it.each(ISO_ZERO)('%s carries no minor unit', (code) => {
+    expect(currencyDecimals(code)).toBe(0)
+    expect(displayDecimals(code, 2)).toBe(0)
+  })
+
+  it.each(ISO_THREE)('%s carries three minor digits', (code) => {
+    expect(currencyDecimals(code)).toBe(3)
+    expect(displayDecimals(code, 2)).toBe(3)
+  })
+
   it('pins the zero-decimal set explicitly', () => {
     for (const unit of ['XAF', 'XOF', 'FCFA', 'JPY', 'SAT', 'SATS', 'MSAT', 'BTC']) {
       expect(currencyDecimals(unit), `currencyDecimals(${unit})`).toBe(0)
