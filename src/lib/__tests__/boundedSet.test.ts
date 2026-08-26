@@ -63,8 +63,9 @@ describe('createPersistentBoundedSet', () => {
     expect(set.add('n1')).toBe(true)
     expect(set.add('n1')).toBe(false)
     expect(set.has('n1')).toBe(true)
-    // And it says so rather than pretending the write worked.
-    expect(set.persisted).toBe(false)
+    // And it reports the failure rather than swallowing it. Asserted through
+    // onWarn, not a `persisted` flag: a flag nothing in production reads is a
+    // flag nobody maintains.
     expect(warn).toHaveBeenCalled()
   })
 

@@ -36,7 +36,7 @@ import { toast } from 'sonner'
 
 import { IncomingPaymentToast } from '../components/ui/IncomingPaymentToast'
 import { createBoundedSet, createPersistentBoundedSet } from './boundedSet'
-import { currencyDecimals, formatFace } from './format'
+import { displayDecimals, formatFace } from './format'
 import { signedFetch } from './nip98'
 import { validateEnvelope, type IncomingPaymentNotificationEnvelope } from './incomingNotification'
 
@@ -155,17 +155,23 @@ async function ack(notificationIds: string[]): Promise<void> {
  * the same defect the settlement toast had.
  *
  * `minorUnits` is the integer the display string was derived from, so
- * re-rendering from it loses nothing. `currencyDecimals` asks Intl, which knows
- * XAF and JPY carry none and returns 2 for anything it cannot place — including
- * a merchant's own non-ISO unit, where the server's string is the better guess
- * and is used instead.
+ * re-rendering from it loses nothing.
+ *
+ * `displayDecimals` with the envelope's own `currency.decimals` as the
+ * fallback: the unit decides where we recognise it, and for a merchant's own
+ * non-ISO unit we defer to what the server recorded — which is the closest
+ * thing to "the server's string is the better guess" that is actually true.
+ * An earlier version of this comment claimed the code fell back to the
+ * server's display string for non-ISO units; it never did, so `5 BEANS` was
+ * re-rendered as `5.00 BEANS`. The comment described a branch that did not
+ * exist.
  */
 export function formatEnvelopeTotal(env: IncomingPaymentNotificationEnvelope): string {
   const unit = env.currency?.unit
   if (!unit) return env.total.display
   const minor = env.total.minorUnits
   if (!Number.isFinite(minor)) return env.total.display
-  return formatFace(minor, { unit, decimals: currencyDecimals(unit) })
+  return formatFace(minor, { unit, decimals: displayDecimals(unit, env.currency?.decimals) })
 }
 
 /**

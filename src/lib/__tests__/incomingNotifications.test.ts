@@ -313,14 +313,22 @@ describe('the amount the advance-notice toast announces', () => {
     expect(formatEnvelopeTotal(eur)).toContain('2.50')
   })
 
-  it('defers to the server string for a unit Intl cannot place', () => {
-    // A merchant's own unit: we have no better answer than theirs.
+  it("uses the envelope's own decimals for a unit Intl cannot place", () => {
+    // A merchant's own unit: we have no better answer than theirs, so the
+    // envelope's currency.decimals is the fallback.
+    //
+    // Asserted on the WHOLE string, not toContain('7'). Using the issuance
+    // resolver here (fallback 2) renders "0.07 BEANS" — a hundredfold error —
+    // and both `toContain('7')` and `not.toContain('7.00')` pass for that, so
+    // the obvious assertions could not detect the bug they guard. Mutation
+    // testing found this; the loose version was already in the file.
     const beans = {
       currency: { unit: 'BEANS', decimals: 0 },
       total: { minorUnits: 7, display: '7 BEANS' },
     } as unknown as Parameters<typeof formatEnvelopeTotal>[0]
 
-    expect(formatEnvelopeTotal(beans)).toContain('7')
+    const shown = formatEnvelopeTotal(beans)
+    expect(shown).toBe('7 BEANS')
   })
 
   it('falls back to the server string when there is no unit at all', () => {

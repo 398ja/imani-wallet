@@ -96,16 +96,32 @@ function nonIsoDecimals(normalisedUnit: string): number | undefined {
  * region actually type and it means XAF/XOF.
  */
 export function currencyDecimals(currency: string): number {
-  const normalised = currency?.trim().toUpperCase() ?? ''
+  // The fallback is 2 because at issuance there is no stored row to defer to:
+  // for a unit nobody recognises, two decimals is the least surprising guess.
+  return resolveDecimals(currency, 2)
+}
+
+/**
+ * The one resolution rule: alias list first, then `Intl`, then the fallback.
+ *
+ * `currencyDecimals` and `displayDecimals` differ ONLY in what they fall back
+ * to, so that is the only thing they should state separately. Written twice
+ * they drift, which is how BTC ended up meaning 0 in one service and 2 in
+ * another.
+ */
+function resolveDecimals(unit: string | undefined | null, fallback: number): number {
+  const normalised = unit?.trim().toUpperCase() ?? ''
+  if (!normalised) return fallback
   const alias = nonIsoDecimals(normalised)
   if (alias !== undefined) return alias
   try {
     return (
       new Intl.NumberFormat(undefined, { style: 'currency', currency: normalised })
-        .resolvedOptions().maximumFractionDigits ?? 2
+        .resolvedOptions().maximumFractionDigits ?? fallback
     )
   } catch {
-    return 2
+    // Not an ISO code — a merchant's own unit. The fallback is the best answer.
+    return fallback
   }
 }
 
@@ -141,21 +157,14 @@ export function displayDecimals(
   unit: string | undefined | null,
   storedDecimals: number | undefined | null,
 ): number {
+  // Here the fallback IS the stored row: for a merchant's own unit their record
+  // is the only answer there is. Clamped, because a negative or absent value
+  // must not reach the formatter.
   const fallback =
     typeof storedDecimals === 'number' && Number.isFinite(storedDecimals) && storedDecimals >= 0
       ? storedDecimals
       : 0
-  if (!unit) return fallback
-  const normalised = unit.trim().toUpperCase()
-  const alias = nonIsoDecimals(normalised)
-  if (alias !== undefined) return alias
-  try {
-    return new Intl.NumberFormat(undefined, { style: 'currency', currency: normalised })
-      .resolvedOptions().maximumFractionDigits ?? fallback
-  } catch {
-    // Not an ISO code — a merchant's own unit. Their record is the best answer.
-    return fallback
-  }
+  return resolveDecimals(unit, fallback)
 }
 
 /**
