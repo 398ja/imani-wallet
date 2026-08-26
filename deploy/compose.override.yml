@@ -1,0 +1,255 @@
+# Local overrides for imani-deploy/docker-compose.test.yml.
+#
+# Kept here rather than patched into imani-deploy so that repo stays clean.
+# Usage (see deploy/up.sh):
+#   docker compose -f ../imani-deploy/docker-compose.test.yml -f deploy/compose.override.yml ...
+
+services:
+  # Media server for avatars and banners, added to this stack because the
+  # alternative was worse: BLOSSOM_SERVER_URL used to point at
+  # https://blossom.primal.net, so every profile picture uploaded from a local dev
+  # session left the machine and landed on a public host, permanently and
+  # unretractably (a blob is addressed by its own hash — there is no delete-mine).
+  # Test avatars are still someone's face.
+  #
+  # It also makes the stack work offline, and makes the upload path testable
+  # end to end instead of "it 200s against a server we do not control".
+  #
+  # NOT on the internal network only: the BROWSER uploads here directly (the
+  # gateway just names the server via GET /api/v1/config), so the port must be
+  # published and the URL must be one a browser can resolve. That is why the
+  # default below is localhost and not http://blossom:3000, which would be
+  # unreachable from the page and fail with an opaque network error.
+  blossom:
+    image: ghcr.io/hzrd149/blossom-server:master
+    container_name: blossom-test
+    restart: unless-stopped
+    ports:
+      - "28089:3000"
+    volumes:
+      # Config is mounted read-only; see deploy/blossom.yml for why it exists at
+      # all (image retention, which defaults to a month from last access).
+      - ${WALLET_DEPLOY_DIR:-.}/blossom.yml:/app/config.yml:ro
+      - blossom-data:/app/data
+    networks:
+      - imani-internal
+
+  # The test compose pins docker.398ja.xyz/imani-vault-jpa:latest, which 404s —
+  # that repository does not exist in the registry. The image this stack actually
+  # ran with is staging/cashu-vault-jpa (confirmed from a previous container of
+  # the same name on this host).
+  imani-vault-jpa:
+    image: docker.398ja.xyz/staging/cashu-vault-jpa:latest
+
+  # Same 404 story: docker.398ja.xyz/gateway-portal does not exist, staging/ does.
+  #
+  # Needed for seeding. Voucher issuance is a MERCHANT-tier operation — the
+  # customer-wallet refuses it outright ("the customer-wallet is self-custodial,
+  # the backend MUST NOT persist vouchers... the request is routing to the wrong
+  # tier"). PortalVoucherController is where a merchant actually mints coupons.
+  # Third 404: docker.398ja.xyz/phoenixd-mock does not exist, staging/ does.
+  #
+  # Required after all — the mint backs every voucher with a Lightning invoice,
+  # so issuance calls http://phoenixd-mock:9740/createinvoice. Without it,
+  # /v1/mint/quote/voucher/bolt11 returns 500 and nothing can be issued.
+  phoenixd-mock:
+    image: docker.398ja.xyz/staging/phoenixd-mock:latest
+
+  gateway-portal:
+    # Built locally from imani-gateway-portal, NOT pulled: the registry image has
+    # no authorization at all — every edge-proxied caller gets one flat
+    # ROLE_NOSTR_USER, so anyone with a session can issue coupons as themselves.
+    # This one enforces `coupon:issue` on PortalVoucherController from the
+    # X-Auth-Permissions header (design spec §16.3).
+    #
+    #   cd ../imani-gateway-portal
+    #   mvn -pl gateway-portal-rest package jib:dockerBuild -DskipTests \
+    #       -Djib.to.image=imani-gateway-portal:acl-local
+    #
+    # Deliberately a different NAME rather than a rebuild of the registry tag, so
+    # `latest` stays whatever was pulled and this cannot be mistaken for it.
+    image: imani-gateway-portal:acl-local
+    environment:
+      # The portal authenticates merchants either by NIP-98 or by trusting the
+      # edge proxy, which forwards the NAP-verified pubkey as X-Auth-Pubkey
+      # alongside X-Edge-Auth (the raw shared secret). With no secret configured
+      # NapProxyAuthFilter fails closed by design (CRIT-4) and ignores
+      # X-Auth-Pubkey entirely — which is why every portal call returns
+      # "NIP-98 authentication required" on a stock test stack.
+      #
+      # We do not run edge-proxy here (Vite proxies straight to host ports), so
+      # the seed script stands in for it. Dev-only value on a local stack.
+      GATEWAY_PORTAL_EDGE_SHARED_SECRET: "dev-edge-secret-local-only"
+      # The cashback mint reads a voucher back to finalize it, and that read now
+      # goes to customer-wallet's /internal/v1/wallet/vouchers/{id} instead of the
+      # NIP-98-protected public one. /internal/v1/** is .authenticated() whether or
+      # not NIP-98 is enabled, so this must be set even on a stack with auth off —
+      # unset means 401 UNKNOWN_SERVICE, not a bypass. Same secret as
+      # CUSTOMER_WALLET_SVC_CRED_MERCHANT_PORTAL below.
+      CUSTOMER_WALLET_SERVICE_TOKEN: "dev-merchant-portal-token-local-only"
+
+  # Two changes:
+  #
+  # 1. Image. dockurr/strfry's entrypoint hard-codes `ulimit -n 1000000`, which
+  #    exceeds this daemon's per-container max of 524288, so it exits(1) on boot.
+  #    The compose's `ulimits: nofile: 524288` cap cannot help — strfry asks for
+  #    the larger number itself. ghcr.io/hoytech/strfry is the upstream image and
+  #    is already running fine on this host (bottin-relay, dalia-*-relay).
+  #
+  # 2. Ports. The test compose deliberately publishes none ("services reach this
+  #    via docker DNS only"). That works server-to-server, but the wallet runs in
+  #    a browser and Nostr *writes* go straight to the relay — only reads proxy
+  #    through the gateway's nostrdb cache. Publish it.
+  #    ghcr.io/hoytech/strfry's own config binds loopback-only, so strfry.conf
+  #    (bind 0.0.0.0, nofiles 524288) is mounted over it — same fix bottin's
+  #    relay uses.
+  nostr-relay:
+    image: ghcr.io/hoytech/strfry:latest
+    # Absolute via ${WALLET_DEPLOY_DIR} (exported by up.sh): compose resolves
+    # relative paths against the FIRST -f file's directory, i.e. imani-deploy,
+    # not this file's directory.
+    volumes:
+      - ${WALLET_DEPLOY_DIR}/strfry.conf:/app/strfry.conf:ro
+    ports:
+      - "27778:7777"
+
+  # customer-wallet exits(1) without these: WalletInternalController takes a
+  # hard constructor dependency on TokenDmTransferPort, which TokenDmConfiguration
+  # only supplies when a NostrGatewayService bean exists, which
+  # NostrGatewayServiceConfiguration only creates when nostr is enabled. The
+  # staging compose sets both of these; the test compose forgets to, so the
+  # service cannot start there at all.
+  #
+  # (TokenDmController guards itself with @ConditionalOnBean for exactly this
+  # case. WalletInternalController does not — that asymmetry is the real bug.)
+  # Turns the atomic-send DM leg on.
+  #
+  # Without this, /api/v1/atomic-send splits and escrows the token and then dies
+  # at delivery with DM_PUBLISHER_UNAVAILABLE — "No real DM publisher is wired in
+  # the decomposed stack yet ... FR-GAP-009 upstream blocker". That message reads
+  # as missing backend code. It is not: gateway-core ships Nip17DmSendPublisher,
+  # customer-wallet ships POST /internal/v1/wallet/dm/tokens/send, and the two
+  # only need switching on. DefaultDmPublisher registers via
+  # @ConditionalOnProperty(..., matchIfMissing = true), so an UNSET flag silently
+  # selects the stub that fails every send.
+  #
+  # gateway-core calls customer-wallet service-to-service with
+  # X-Service-Id/X-Service-Token; customer-wallet hashes the credential named by
+  # CUSTOMER_WALLET_SVC_CRED_ATOMIC_OPS at boot ("provisioned=0 skipped=3" when
+  # absent). The two values below are the same secret on both sides — dev-only,
+  # like the portal edge secret above.
+  account-app:
+    # Built locally from imani-gateway-core, NOT pulled. The registry image is on
+    # nap-java 0.1.1 and resolves no roles at all, so every session carries an
+    # empty permission list and the portal above would refuse every merchant.
+    # This one runs nap 0.6.0 and derives the role from the caller's kind-30078
+    # `d=imani:merchant` stall record (design spec §16.6).
+    #
+    #   cd ../imani-gateway-core
+    #   mvn -pl gateway-core-rest package jib:dockerBuild -DskipTests \
+    #       -Djib.to.image=imani-gateway-core:acl-local
+    #
+    # It carries migrations V31 and V32, which are what make nap 0.6.0 able to
+    # create a session and issue a challenge at all against this database. The
+    # env below was already written for a locally-built image; those two vars are
+    # what it means.
+    image: imani-gateway-core:acl-local
+    environment:
+      GATEWAY_ATOMIC_SEND_DELIVERY_NIP17_ENABLED: "true"
+      GATEWAY_ATOMIC_SEND_DELIVERY_NIP17_SERVICE_TOKEN: "dev-atomic-ops-token-local-only"
+      # Needed only once account-app is built from current gateway-core source
+      # rather than the older prebuilt image, which predates this guard.
+      #
+      # `DevModeGuard` REFUSES TO BOOT when gateway.dev-mode=true and any active
+      # profile is outside [dev, local, test]. The test compose defaults
+      # GATEWAY_DEV_MODE to "true" and gateway-core's own default profile is
+      # `receipts`, so a freshly built image exits(1) at startup with no symptom
+      # beyond the container dying.
+      #
+      # Adding `dev` alongside `receipts` does NOT work, and that is deliberate:
+      # DevProfiles applies a strict ALL-profiles rule so that a mix like
+      # `dev,receipts` cannot re-enable the bypass (its javadoc names that exact
+      # pair). Dropping `receipts` to leave `dev` alone would silently change
+      # which beans load.
+      #
+      # So dev-mode goes off instead. It exists only to bypass the SHA-256
+      # preimage check that gates escrow fund movement, for a frontend "Skip
+      # Payment" path we do not use — phoenixd-mock settles invoices for real
+      # here. Turning a cryptographic check off to make a local stack boot is
+      # the wrong trade when nothing needs it off.
+      GATEWAY_DEV_MODE: "false"
+      # Second thing the rebuilt image needs, and the same asymmetry the
+      # customer-wallet fix below documents. `NostrPreWarmer` takes a HARD
+      # constructor dependency on CachingNostrGatewayDecorator, while
+      # `NostrdbConfiguration.nostrQueryPort` takes the same bean as an optional
+      # ObjectProvider. The decorator is @ConditionalOnBean(NostrGatewayService),
+      # which is off by default — so account-app dies with "required a bean of
+      # type CachingNostrGatewayDecorator that could not be found" rather than
+      # falling back to local-only queries the way the query port would.
+      GATEWAY_CORE_NOSTR_ENABLED: "true"
+      # MUST be set alongside it. CoreNostrProperties defaults to
+      # wss://relay.imani.casa — a PUBLIC relay. Enabling nostr without pinning
+      # this would have a local test stack open WebSockets to a real relay and
+      # publish there.
+      GATEWAY_CORE_NOSTR_RELAYS: "ws://nostr-relay:7777"
+      # Bottin write credentials, for POST /api/v1/nip05 (the wallet's handle
+      # claim). The gateway does the HTTP-Basic leg to bottin-api itself.
+      #
+      # BOTTIN_USERNAME is redundant — gateway-core's application.yml:105 already
+      # falls back to MERCHANT_IDENTITY_BOTTIN_USERNAME, which the test compose
+      # sets. It is here only so the pair reads as a pair.
+      #
+      # BOTTIN_PASSWORD is NOT redundant, and this is the whole point: line 106
+      # falls back to MERCHANT_IDENTITY_BOTTIN_PASS, while the compose (and
+      # line 258 of the same application.yml, for the same credential) spells it
+      # MERCHANT_IDENTITY_BOTTIN_PASSWORD. The fallback name is a typo, so the
+      # password never binds and BottinRecordClient boots with a null Basic
+      # header — logged as `bottin_record_client_created without_credentials`,
+      # then every claim throws "Bottin write credentials are not configured".
+      # Setting BOTTIN_PASSWORD explicitly wins over the broken fallback without
+      # patching upstream.
+      BOTTIN_USERNAME: ${BOTTIN_ADMIN_USERNAME:-imani}
+      BOTTIN_PASSWORD: ${BOTTIN_ADMIN_PASSWORD:-test-bottin-admin-9ace19b7fb61b5007225f745}
+      # Where the browser uploads avatars and banners. The gateway does not proxy
+      # this — it only NAMES the server, via GET /api/v1/config, and the client
+      # PUTs straight there. So this value is consumed by a browser, and anything
+      # set here has to be resolvable from one: an internal name like
+      # http://blossom:3000 would fail in the page with an opaque network error
+      # while looking perfectly correct in the compose file.
+      #
+      # Defaults to the local `blossom` service defined at the top of this file.
+      # Override it to point somewhere else:
+      #
+      #   BLOSSOM_SERVER_URL=https://blossom.primal.net ./deploy/up.sh
+      #
+      # It used to default to that public host, which meant every avatar uploaded
+      # from a dev session left the machine for good — blobs are content-addressed,
+      # so there is no delete-mine. Unset leaves blossom_server_url null and the
+      # wallet disables its file inputs ("Media server not configured"), which is
+      # the honest failure mode if someone points this at nothing.
+      BLOSSOM_SERVER_URL: ${BLOSSOM_SERVER_URL:-http://localhost:28089}
+
+  customer-wallet:
+    environment:
+      GATEWAY_CUSTOMER_WALLET_NOSTR_ENABLED: "true"
+      GATEWAY_CUSTOMER_WALLET_NOSTR_RELAYS: "ws://nostr-relay:7777"
+      # Must match GATEWAY_ATOMIC_SEND_DELIVERY_NIP17_SERVICE_TOKEN above.
+      CUSTOMER_WALLET_SVC_CRED_ATOMIC_OPS: "dev-atomic-ops-token-local-only"
+      # Must match the portal's CUSTOMER_WALLET_SERVICE_TOKEN above.
+      CUSTOMER_WALLET_SVC_CRED_MERCHANT_PORTAL: "dev-merchant-portal-token-local-only"
+      # Test fixtures OFF. The test compose turns them on, but
+      # TestFixturesWalletPort extends JdbcWalletPort through the 4-arg
+      # super(walletService, mintApi, tokenCodec, defaultMintUrl) — the
+      # constructor WITHOUT Optional<VoucherAdapter>. So its voucherAdapter is
+      # always empty and createVoucher always trips the self-custody guard
+      # ("Voucher creation — adapter not wired"), regardless of
+      # GATEWAY_CUSTOMER_WALLET_STATE_ENABLED. Enabling fixtures therefore makes
+      # voucher issuance impossible. We want real issuance, not a 1000-sat fake
+      # balance, so they stay off.
+      GATEWAY_CUSTOMER_WALLET_TEST_FIXTURES_ENABLED: "false"
+
+# Declared here because the service that uses it is declared here. Named rather
+# than a bind mount so blobs survive `up.sh down` without leaving a
+# root-owned directory in the repo.
+volumes:
+  blossom-data:

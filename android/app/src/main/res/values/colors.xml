@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The wallet's own two tones, mono-50 and mono-900 in tailwind.config.js.
+         Duplicated here by hand because the native layer cannot read the app's
+         CSS variables — same reason StatusBar.setBackgroundColor hardcodes
+         #fafafa in src/lib/native.ts. -->
+    <color name="splash_background">#fafafa</color>
+    <color name="splash_mark">#171717</color>
+</resources>

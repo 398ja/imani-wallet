@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>@imani/nostr-transactions - Browser Example</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    body {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    h1 { color: #333; }
+    h2 { color: #555; margin-top: 30px; }
+    .card {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+    .form-group {
+      margin-bottom: 15px;
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: 500;
+    }
+    input, select, textarea {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    button {
+      background: #6366f1;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      margin-right: 10px;
+      margin-bottom: 10px;
+    }
+    button:hover {
+      background: #4f46e5;
+    }
+    button.secondary {
+      background: #6b7280;
+    }
+    button.secondary:hover {
+      background: #4b5563;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 15px;
+    }
+    .stat-card {
+      background: #f0f9ff;
+      padding: 15px;
+      border-radius: 6px;
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 24px;
+      font-weight: bold;
+      color: #0369a1;
+    }
+    .stat-label {
+      font-size: 12px;
+      color: #64748b;
+    }
+    .transaction-list {
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    .transaction-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px;
+      border-bottom: 1px solid #eee;
+    }
+    .transaction-item:last-child {
+      border-bottom: none;
+    }
+    .tx-type {
+      font-size: 12px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: #e0e7ff;
+      color: #4338ca;
+    }
+    .tx-type.received { background: #d1fae5; color: #065f46; }
+    .tx-type.sent { background: #fee2e2; color: #991b1b; }
+    .tx-amount {
+      font-weight: bold;
+      font-size: 16px;
+    }
+    .tx-amount.in { color: #059669; }
+    .tx-amount.out { color: #dc2626; }
+    .tx-memo {
+      font-size: 13px;
+      color: #64748b;
+    }
+    .tx-time {
+      font-size: 12px;
+      color: #9ca3af;
+    }
+    #log {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 15px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 12px;
+      max-height: 200px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+    .filters {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 15px;
+    }
+    .filters select, .filters input {
+      width: auto;
+      min-width: 150px;
+    }
+  </style>
+</head>
+<body>
+  <h1>@imani/nostr-transactions</h1>
+  <p>Browser example demonstrating transaction storage, querying, and sync.</p>
+
+  <!-- Stats -->
+  <div class="card">
+    <h2>Statistics</h2>
+    <div class="stats" id="stats">
+      <div class="stat-card">
+        <div class="stat-value" id="stat-total">0</div>
+        <div class="stat-label">Total Transactions</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-in">0</div>
+        <div class="stat-label">Received</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-out">0</div>
+        <div class="stat-label">Sent</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-net">0</div>
+        <div class="stat-label">Net Flow (sats)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Transaction -->
+  <div class="card">
+    <h2>Add Transaction</h2>
+    <div class="form-group">
+      <label>Type</label>
+      <select id="tx-type">
+        <option value="voucher_received">Received</option>
+        <option value="voucher_sent">Sent</option>
+        <option value="voucher_purchased">Purchased</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Amount (sats)</label>
+      <input type="number" id="tx-amount" value="1000" min="1">
+    </div>
+    <div class="form-group">
+      <label>Face Value</label>
+      <input type="number" id="tx-face-value" value="5000" min="0">
+    </div>
+    <div class="form-group">
+      <label>Currency</label>
+      <select id="tx-unit">
+        <option value="USD">USD</option>
+        <option value="EUR">EUR</option>
+        <option value="SAT">SAT</option>
+        <option value="XAF">XAF</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Counterparty Name</label>
+      <input type="text" id="tx-counterparty" placeholder="Alice">
+    </div>
+    <div class="form-group">
+      <label>Memo</label>
+      <input type="text" id="tx-memo" placeholder="Payment for coffee">
+    </div>
+    <button onclick="addTransaction()">Add Transaction</button>
+    <button class="secondary" onclick="addSampleData()">Add Sample Data</button>
+  </div>
+
+  <!-- Transaction List -->
+  <div class="card">
+    <h2>Transactions</h2>
+    <div class="filters">
+      <select id="filter-type" onchange="loadTransactions()">
+        <option value="">All Types</option>
+        <option value="voucher_received">Received</option>
+        <option value="voucher_sent">Sent</option>
+        <option value="voucher_purchased">Purchased</option>
+      </select>
+      <select id="filter-direction" onchange="loadTransactions()">
+        <option value="">All Directions</option>
+        <option value="in">Incoming</option>
+        <option value="out">Outgoing</option>
+      </select>
+      <input type="text" id="filter-search" placeholder="Search..." oninput="loadTransactions()">
+      <button class="secondary" onclick="clearFilters()">Clear Filters</button>
+    </div>
+    <div class="transaction-list" id="transaction-list">
+      <p>Loading...</p>
+    </div>
+  </div>
+
+  <!-- Query Builder -->
+  <div class="card">
+    <h2>Query Builder Demo</h2>
+    <button onclick="queryReceivedThisMonth()">Received This Month</button>
+    <button onclick="queryLargestTransactions()">Top 5 Largest</button>
+    <button onclick="queryBySearch()">Search "coffee"</button>
+    <button onclick="exportTransactions()">Export to JSON</button>
+    <div id="query-result" style="margin-top: 15px;"></div>
+  </div>
+
+  <!-- Actions -->
+  <div class="card">
+    <h2>Actions</h2>
+    <button class="secondary" onclick="clearAllTransactions()">Clear All Transactions</button>
+  </div>
+
+  <!-- Log -->
+  <div class="card">
+    <h2>Log</h2>
+    <div id="log"></div>
+  </div>
+
+  <script type="module">
+    // Import from the built library (adjust path as needed)
+    // In production, use: import { ... } from '@imani/nostr-transactions';
+    import {
+      TransactionStore,
+      TransactionType,
+      TransactionDirection,
+      formatCurrency,
+      formatRelativeTime,
+      getTransactionTypeLabel,
+      exportToJSON,
+    } from '../../dist/index.js';
+
+    // Initialize store
+    const store = new TransactionStore({
+      storage: 'indexeddb',
+      dbName: 'demo-transactions',
+    });
+
+    // Make store available globally for button handlers
+    window.store = store;
+    window.TransactionType = TransactionType;
+    window.TransactionDirection = TransactionDirection;
+    window.formatCurrency = formatCurrency;
+    window.formatRelativeTime = formatRelativeTime;
+    window.getTransactionTypeLabel = getTransactionTypeLabel;
+    window.exportToJSON = exportToJSON;
+
+    // Initialize
+    async function init() {
+      try {
+        await store.init();
+        log('Store initialized');
+        await loadStats();
+        await loadTransactions();
+      } catch (error) {
+        log('Error initializing: ' + error.message);
+      }
+    }
+
+    // Log function
+    window.log = function(message) {
+      const logEl = document.getElementById('log');
+      const time = new Date().toLocaleTimeString();
+      logEl.textContent = `[${time}] ${message}\n` + logEl.textContent;
+    };
+
+    // Load statistics
+    window.loadStats = async function() {
+      const stats = await store.getStats();
+      const total = await store.count();
+
+      document.getElementById('stat-total').textContent = total;
+      document.getElementById('stat-in').textContent = stats.countIn;
+      document.getElementById('stat-out').textContent = stats.countOut;
+      document.getElementById('stat-net').textContent = stats.netFlow.toLocaleString();
+    };
+
+    // Load transactions
+    window.loadTransactions = async function() {
+      const filterType = document.getElementById('filter-type').value;
+      const filterDirection = document.getElementById('filter-direction').value;
+      const searchText = document.getElementById('filter-search').value;
+
+      const query = store.find().newest().limit(50);
+
+      if (filterType) query.type(filterType);
+      if (filterDirection) query.direction(filterDirection);
+      if (searchText) query.search(searchText);
+
+      const result = await query.execute();
+
+      const listEl = document.getElementById('transaction-list');
+
+      if (result.transactions.length === 0) {
+        listEl.innerHTML = '<p style="color: #64748b; text-align: center;">No transactions found</p>';
+        return;
+      }
+
+      listEl.innerHTML = result.transactions.map(tx => {
+        const typeClass = tx.type.includes('received') ? 'received' :
+                          tx.type.includes('sent') ? 'sent' : '';
+        const amountClass = tx.direction === 'in' ? 'in' : 'out';
+        const sign = tx.direction === 'in' ? '+' : '-';
+
+        return `
+          <div class="transaction-item">
+            <div>
+              <span class="tx-type ${typeClass}">${getTransactionTypeLabel(tx.type)}</span>
+              <span class="tx-memo">${tx.memo || tx.counterpartyName || 'No memo'}</span>
+            </div>
+            <div style="text-align: right;">
+              <div class="tx-amount ${amountClass}">${sign}${formatCurrency(tx.faceValue, tx.faceUnit, tx.faceDecimals)}</div>
+              <div class="tx-time">${formatRelativeTime(tx.timestamp)}</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    };
+
+    // Add transaction
+    window.addTransaction = async function() {
+      const type = document.getElementById('tx-type').value;
+      const amount = parseInt(document.getElementById('tx-amount').value) || 1000;
+      const faceValue = parseInt(document.getElementById('tx-face-value').value) || 0;
+      const faceUnit = document.getElementById('tx-unit').value;
+      const counterpartyName = document.getElementById('tx-counterparty').value;
+      const memo = document.getElementById('tx-memo').value;
+
+      const direction = type.includes('sent') ? TransactionDirection.OUT : TransactionDirection.IN;
+
+      try {
+        const tx = await store.record({
+          type,
+          direction,
+          tokenAmount: amount,
+          faceValue,
+          faceUnit,
+          faceDecimals: faceUnit === 'SAT' ? 0 : 2,
+          counterpartyName,
+          memo,
+        });
+
+        log(`Added transaction: ${tx.id}`);
+        await loadStats();
+        await loadTransactions();
+      } catch (error) {
+        log('Error adding transaction: ' + error.message);
+      }
+    };
+
+    // Add sample data
+    window.addSampleData = async function() {
+      const samples = [
+        { type: TransactionType.RECEIVED, direction: TransactionDirection.IN, tokenAmount: 5000, faceValue: 2500, faceUnit: 'USD', faceDecimals: 2, counterpartyName: 'Alice', memo: 'Coffee payment' },
+        { type: TransactionType.SENT, direction: TransactionDirection.OUT, tokenAmount: 2000, faceValue: 1000, faceUnit: 'USD', faceDecimals: 2, counterpartyName: 'Bob', memo: 'Lunch split' },
+        { type: TransactionType.RECEIVED, direction: TransactionDirection.IN, tokenAmount: 10000, faceValue: 5000, faceUnit: 'USD', faceDecimals: 2, counterpartyName: 'Charlie', memo: 'Project payment' },
+        { type: TransactionType.PURCHASED, direction: TransactionDirection.IN, tokenAmount: 50000, faceValue: 25000, faceUnit: 'USD', faceDecimals: 2, issuerName: 'Gift Card Store', memo: 'Gift card purchase' },
+        { type: TransactionType.SENT, direction: TransactionDirection.OUT, tokenAmount: 1500, faceValue: 750, faceUnit: 'USD', faceDecimals: 2, counterpartyName: 'David', memo: 'Birthday gift' },
+      ];
+
+      try {
+        await store.recordBatch(samples);
+        log(`Added ${samples.length} sample transactions`);
+        await loadStats();
+        await loadTransactions();
+      } catch (error) {
+        log('Error adding samples: ' + error.message);
+      }
+    };
+
+    // Clear filters
+    window.clearFilters = function() {
+      document.getElementById('filter-type').value = '';
+      document.getElementById('filter-direction').value = '';
+      document.getElementById('filter-search').value = '';
+      loadTransactions();
+    };
+
+    // Query demos
+    window.queryReceivedThisMonth = async function() {
+      const results = await store.find()
+        .received()
+        .thisMonth()
+        .get();
+
+      const el = document.getElementById('query-result');
+      el.innerHTML = `<strong>Received This Month:</strong> ${results.length} transactions`;
+      log(`Query: Received this month = ${results.length} transactions`);
+    };
+
+    window.queryLargestTransactions = async function() {
+      const results = await store.find()
+        .largest()
+        .limit(5)
+        .get();
+
+      const el = document.getElementById('query-result');
+      el.innerHTML = `<strong>Top 5 Largest:</strong><br>` +
+        results.map(tx => `${formatCurrency(tx.faceValue, tx.faceUnit, tx.faceDecimals)} - ${tx.memo || 'No memo'}`).join('<br>');
+      log(`Query: Top 5 largest transactions`);
+    };
+
+    window.queryBySearch = async function() {
+      const results = await store.find()
+        .search('coffee')
+        .get();
+
+      const el = document.getElementById('query-result');
+      el.innerHTML = `<strong>Search "coffee":</strong> ${results.length} results`;
+      log(`Query: Search "coffee" = ${results.length} results`);
+    };
+
+    window.exportTransactions = async function() {
+      const transactions = await store.getAll();
+      const json = exportToJSON(transactions);
+
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'transactions.json';
+      a.click();
+      URL.revokeObjectURL(url);
+
+      log(`Exported ${transactions.length} transactions to JSON`);
+    };
+
+    // Clear all
+    window.clearAllTransactions = async function() {
+      if (confirm('Are you sure you want to clear all transactions?')) {
+        await store.clear();
+        log('Cleared all transactions');
+        await loadStats();
+        await loadTransactions();
+      }
+    };
+
+    // Start
+    init();
+  </script>
+</body>
+</html>

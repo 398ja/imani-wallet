@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Inverted, matching public/imani.svg's own prefers-color-scheme rule.
+         mono-950 rather than black so the mark does not float on a void. -->
+    <color name="splash_background">#0a0a0a</color>
+    <color name="splash_mark">#fafafa</color>
+</resources>
