@@ -24,7 +24,7 @@ import {
   type MerchantProfile,
 } from './lib/merchant'
 import { clearPendingBackup, peekPendingBackup } from './lib/onboardingHandoff'
-import { forget as forgetResume, recover, remember } from './lib/resume'
+import { forgetResume, recover, remember } from './lib/resume'
 import { Centered, Fatal } from './components/ui'
 import { Header } from './components/ui/Header'
 import { LoginPage } from './pages/LoginPage'
@@ -520,18 +520,12 @@ function Shell({ children }: { children: React.ReactNode }) {
 
         Bottom-right, so the toast never covers the page header or the amount a
         user is reading, and it arrives from the same edge the thumb rests on.
-        Under 600px sonner makes it a full-bleed card pinned to that bottom edge
-        — the iOS notification shape, and the right call on the phone this ships
-        on. Both offsets clear the gesture-nav bar: the Toaster is `fixed`, so
-        it does not inherit #root's safe-area padding.
+        Both offsets clear the gesture-nav bar: the Toaster is `fixed`, so it
+        does not inherit #root's safe-area padding.
 
-        `unstyled` drops sonner's own chrome (a white card with a hairline and a
-        flat drop shadow) and hands the surface to `.material` — the same
-        translucent layer as the header and the menus, which already carries the
-        reduced-transparency and increased-contrast fallbacks. richColors is
-        gone with it: a saturated green fill is not a material, so the status
-        rides the icon instead, in the green-600 / red-500 the rest of the app
-        already uses for exactly this.
+        Why `unstyled` and what `.material` then provides is documented beside
+        the CSS it belongs to, in index.css — it was restated here in full, and
+        two copies of a styling rationale drift apart the moment one is edited.
       */}
       <Toaster
         position="bottom-right"

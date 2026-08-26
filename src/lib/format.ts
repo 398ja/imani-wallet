@@ -83,10 +83,9 @@ export function currencyDecimals(currency: string): number {
  * or non-ISO (a merchant's own "BEANS") do we fall back to what the row
  * recorded, because there we have no better answer than theirs.
  *
- * DISPLAY ONLY. The minor-unit integer is never rescaled: backing runs at one
- * sat per minor unit, so touching the number would over-back the token 100x and
- * push it past the DM size limit — the "fix that was worse" DEV-238 records.
- * This changes the decimal point, never the money.
+ * DISPLAY ONLY. The minor-unit integer is never rescaled — see
+ * `currencyDecimals` above for why rescaling it is the one thing that must
+ * never happen here. This changes the decimal point, never the money.
  */
 export function displayDecimals(
   unit: string | undefined | null,

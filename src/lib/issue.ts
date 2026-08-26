@@ -389,11 +389,13 @@ export async function issueAndDeliver(
         // trusting it would file a 2,500 XAF sale in the merchant's own history
         // as 25.00 — disagreeing with the confirmation they just read.
         //
-        // This only fixes the merchant's side. The coupon still travels with
-        // face_decimals=2, so the customer sees 25.00 until the gateway derives
-        // decimals from the currency. That is a backend defect, recorded in the
-        // design spec; do not "fix" it by scaling the amount, which over-backs
-        // the coupon a hundredfold and 413s on delivery.
+        // Both ends now agree. The gateway derives face_decimals from the
+        // currency at issuance (DEV-238), and coupons minted before that fix
+        // are corrected at render time by `displayDecimals`, so a customer no
+        // longer sees 25.00 for a 2,500 XAF coupon.
+        //
+        // Still do not "fix" anything here by scaling the amount — see
+        // `currencyDecimals` in format.ts for what that costs.
       decimals: currencyDecimals(ready.face_unit ?? params.currency),
       recipientPubkey: params.recipientPubkey,
       memo: params.memo,

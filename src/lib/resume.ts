@@ -29,7 +29,7 @@
  *
  * The passphrase-encrypted keystore stays exactly as it was and remains the
  * only durable copy. This is a reload cache, not a second store, which is why
- * `forget()` is called on logout and on any identity change.
+ * `forgetResume()` is called on logout and on any identity change.
  */
 
 const DB_NAME = 'imani-wallet-resume'
@@ -174,18 +174,22 @@ export async function recover(): Promise<{ pubkey: string; privkeyHex: string } 
     return { pubkey: wrapped.pubkey, privkeyHex }
   } catch (e) {
     console.warn('[resume] discarding an unusable resume record:', e)
-    forget()
+    forgetResume()
     return null
   }
 }
 
 /**
- * Drop the cache. Called on logout and whenever a resume is rejected.
+ * Drop the resume cache. Called on logout and whenever a resume is rejected.
+ *
+ * Named for what it forgets, not just "forget": every call site was importing
+ * this as `forgetResume`, which is the module telling you the bare name was not
+ * honest enough to stand on its own at a call site.
  *
  * The wrapping key goes too, so the ciphertext left in any other tab's
  * sessionStorage becomes undecryptable rather than merely orphaned.
  */
-export function forget(): void {
+export function forgetResume(): void {
   try {
     sessionStorage.removeItem(SESSION_SLOT)
   } catch {

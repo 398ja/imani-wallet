@@ -183,6 +183,23 @@
 /*
  * Sonner, retimed and restacked.
  *
+ * Why the toasts are unstyled at all (App.tsx passes `unstyled: true` and points
+ * here): sonner's own chrome is a white card with a hairline and a flat drop
+ * shadow, which reads as a foreign object on top of an app whose every floating
+ * surface is the translucent `.material` layer above — the same layer as the
+ * header and the menus, already carrying the reduced-transparency and
+ * increased-contrast fallbacks. Dropping sonner's chrome hands the surface to
+ * `.material` instead. `richColors` went with it: a saturated green fill is not
+ * a material, so status rides the icon, in the green-600 / red-500 the rest of
+ * the app already uses for exactly this.
+ *
+ * That choice is what makes the two rules below necessary: both are gated on
+ * sonner's `[data-styled='true']` internally, which unstyled toasts never match.
+ *
+ * Vibrancy note for the classNames in App.tsx: over a blurred surface text needs
+ * more weight and more contrast than on a flat one, and tracking tightens as
+ * size goes up. Flat mid-grey is what goes illegible here.
+ *
  * Both rules are two selectors deep on purpose. Sonner injects its stylesheet
  * at runtime, so it lands after ours in the document and wins any tie on source
  * order; `[data-sonner-toaster] [data-sonner-toast]` outranks its own

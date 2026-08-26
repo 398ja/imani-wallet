@@ -1,7 +1,7 @@
 import { getSession, keyStore, resetSession } from './nap'
 import { stopDmPoll } from './dmPoll'
 import { stopIncomingNotifications } from './incomingNotifications'
-import { forget as forgetResume } from './resume'
+import { forgetResume } from './resume'
 import { wipeWallet } from './wallet'
 
 /**

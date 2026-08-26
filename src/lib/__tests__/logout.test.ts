@@ -24,7 +24,7 @@ vi.mock('../incomingNotifications', () => ({ stopIncomingNotifications: vi.fn() 
 const forgetResume = vi.fn(() => {
   order.push('forget-resume')
 })
-vi.mock('../resume', () => ({ forget: () => forgetResume() }))
+vi.mock('../resume', () => ({ forgetResume: () => forgetResume() }))
 vi.mock('../wallet', () => ({
   wipeWallet: vi.fn(async () => {
     order.push('wipe')
