@@ -56,12 +56,22 @@ export function formatSats(sats: number | undefined | null): string {
  *
  * The catch matters: a merchant may issue in a unit that is not an ISO 4217 code
  * at all, and `Intl` throws rather than guessing.
+ *
+ * FCFA and the sat denominations are resolved BEFORE Intl is asked, because
+ * they are not ISO codes and would otherwise take the catch and return 2. That
+ * is the worse half of the same bug `displayDecimals` had: this function feeds
+ * ISSUANCE, so answering 2 for a zero-decimal unit does not merely misdraw a
+ * label — it decides what the coupon is worth. FCFA is what merchants in the
+ * region actually type and it means XAF/XOF.
  */
 export function currencyDecimals(currency: string): number {
+  const normalised = currency?.trim().toUpperCase() ?? ''
+  if (normalised === 'FCFA') return 0
+  if (normalised === 'SAT' || normalised === 'SATS' || normalised === 'MSAT') return 0
   try {
     return (
-      new Intl.NumberFormat(undefined, { style: 'currency', currency }).resolvedOptions()
-        .maximumFractionDigits ?? 2
+      new Intl.NumberFormat(undefined, { style: 'currency', currency: normalised })
+        .resolvedOptions().maximumFractionDigits ?? 2
     )
   } catch {
     return 2

@@ -116,7 +116,12 @@ describe('currencyDecimals', () => {
   })
 
   it('falls back to 2 for a unit Intl does not know', () => {
-    expect(currencyDecimals('SAT')).toBe(2)
+    // 'BEANS' is the real shape of this case: a merchant's own unit, where the
+    // only defensible guess is 2. This used to assert SAT -> 2, which was
+    // simply wrong — sats have no minor unit — and passed only because SAT is
+    // not an ISO code so Intl threw. SAT is not an issuance currency (see
+    // merchant.CURRENCIES), so nothing depended on that answer.
+    expect(currencyDecimals('BEANS')).toBe(2)
     expect(currencyDecimals('')).toBe(2)
   })
 })
@@ -146,6 +151,31 @@ describe('parseAmountToMinor', () => {
     expect(parseAmountToMinor('-5', 2)).toBeNull()
     expect(parseAmountToMinor('abc', 2)).toBeNull()
     expect(parseAmountToMinor('5.5.5', 2)).toBeNull()
+  })
+})
+
+describe('currencyDecimals — the issuance-side answer', () => {
+  // This one decides BACKING, not just a label: at issuance_ratio 1.0 one minor
+  // unit costs one sat, so answering 2 for a zero-decimal unit changes what the
+  // coupon is worth. FCFA is not an ISO code, so Intl throws and the catch
+  // returned 2 — the same hole displayDecimals had, on the side where it costs
+  // money rather than pixels.
+  it('resolves FCFA and sats without asking Intl', () => {
+    expect(currencyDecimals('FCFA')).toBe(0)
+    expect(currencyDecimals('fcfa')).toBe(0)
+    expect(currencyDecimals('SAT')).toBe(0)
+    expect(currencyDecimals('SATS')).toBe(0)
+  })
+
+  it('still defers to Intl for real ISO codes', () => {
+    expect(currencyDecimals('XAF')).toBe(0)
+    expect(currencyDecimals('JPY')).toBe(0)
+    expect(currencyDecimals('EUR')).toBe(2)
+    expect(currencyDecimals('USD')).toBe(2)
+  })
+
+  it("keeps 2 for a merchant's own unit, where no better answer exists", () => {
+    expect(currencyDecimals('BEANS')).toBe(2)
   })
 })
 
