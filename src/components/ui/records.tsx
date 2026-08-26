@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom'
 import { ChevronRight, ArrowDownLeft, ArrowUpRight } from 'lucide-react'
 import type { VoucherRow } from '@imani/wallet-storage'
 
-import { formatFace, formatDate } from '../../lib/format'
+import { formatFace, formatDate, displayDecimals } from '../../lib/format'
 import { isRedeemed } from '../../lib/merchants'
 import { transactionLabel, type WalletTransaction } from '../../lib/transactions'
 
@@ -39,7 +39,11 @@ export function CouponListItem({ row }: { row: VoucherRow }) {
               : 'font-medium text-mono-900 dark:text-mono-50'
           }
         >
-          {formatFace(row.face_value ?? 0, { unit: row.face_unit ?? '', decimals: row.face_decimals ?? 0 })}
+          {formatFace(row.face_value ?? 0, {
+            unit: row.face_unit ?? '',
+            // Currency first, stored row second: pre-DEV-238 rows say 2 for XAF.
+            decimals: displayDecimals(row.face_unit, row.face_decimals),
+          })}
         </p>
         <p className="text-sm text-mono-500">
           {redeemed ? 'Redeemed · ' : ''}

@@ -1,6 +1,6 @@
 import type { VoucherRow } from '@imani/wallet-storage'
 
-import { toEpochMs } from './format'
+import { toEpochMs, displayDecimals } from './format'
 import { totalFaceValue, type Merchant } from './merchants'
 
 /**
@@ -313,7 +313,13 @@ export function toCouponPass(row: VoucherRow, branding: MerchantBranding = EMPTY
     voided: isVoided(row.status),
     storeCard: {
       primaryFields: [
-        balanceField(row.face_value ?? 0, row.face_unit ?? '', row.face_decimals ?? 0),
+        balanceField(
+          row.face_value ?? 0,
+          row.face_unit ?? '',
+          // Currency first: a pass minted from a pre-DEV-238 row would otherwise
+          // print 25.00 on a 2,500 XAF coupon, in a wallet we cannot re-issue.
+          displayDecimals(row.face_unit, row.face_decimals),
+        ),
       ],
       auxiliaryFields: expires === undefined ? undefined : [expiryField(expires)],
       backFields: backFields(row, voucherId),

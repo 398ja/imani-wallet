@@ -1,5 +1,6 @@
 import type { TransactionRow } from '@imani/wallet-storage'
 import type { VoucherValidation } from './voucherToken'
+import { displayDecimals } from './format'
 
 /**
  * A transaction, in the shape the screens actually need.
@@ -113,7 +114,18 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     at: toEpochMs(r.timestamp ?? r.created_at),
     amount: Number(r.amount ?? 0),
     unit: String(r.unit ?? r.face_unit ?? 'UNKNOWN'),
-    decimals: Number(r.decimals ?? r.face_decimals ?? 2),
+    // The unit decides, and only then the row. A history row written before
+    // DEV-238 carries decimals: 2 for XAF, so the old default rendered every
+    // pre-fix FCFA transaction 100x too small — the balance moved correctly,
+    // the statement lied about it. Display only; `amount` is untouched.
+    decimals: displayDecimals(
+      String(r.unit ?? r.face_unit ?? ''),
+      typeof r.decimals === 'number'
+        ? r.decimals
+        : typeof r.face_decimals === 'number'
+          ? r.face_decimals
+          : 2,
+    ),
     merchantId: str(r.merchantId) ?? str(r.merchant_id) ?? str(r.issuer_id),
     merchantName: str(r.merchantName),
     counterparty: str(r.counterparty),
