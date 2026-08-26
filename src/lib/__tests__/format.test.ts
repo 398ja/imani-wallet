@@ -171,6 +171,23 @@ describe('displayDecimals — historical rows must not render 100x wrong', () =>
     expect(shown).toContain('2,500')
   })
 
+  // FCFA is what merchants actually type and is NOT an ISO code, so Intl throws
+  // on it and the fallback would hand back the stale 2. Both reported defects
+  // ("FCFA 0.04" for 4, "0.02 XAF" for 2) name this unit, so the fix is worth
+  // nothing if it misses this case. Found by checking the shipped resolver
+  // against real staging rows, not by reading the ISO list.
+  it('handles FCFA, which is not an ISO code but is what merchants type', () => {
+    expect(displayDecimals('FCFA', 2)).toBe(0)
+    expect(displayDecimals('fcfa', 2)).toBe(0)
+    expect(displayDecimals(' FCFA ', 2)).toBe(0)
+  })
+
+  it('treats sat denominations as whole units', () => {
+    expect(displayDecimals('SAT', 2)).toBe(0)
+    expect(displayDecimals('sats', 2)).toBe(0)
+    expect(displayDecimals('MSAT', 2)).toBe(0)
+  })
+
   it('leaves genuinely two-decimal currencies alone', () => {
     expect(displayDecimals('EUR', 2)).toBe(2)
     expect(displayDecimals('USD', 2)).toBe(2)
