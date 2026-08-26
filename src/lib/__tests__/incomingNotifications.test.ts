@@ -223,6 +223,65 @@ describe('the drain loop', () => {
       removeItem: (k: string) => void store.delete(k),
     })
   })
+
+  // The combination, which is the one that actually resurrects the reported
+  // bug and which neither test above covers. The spec reviewer named it: the
+  // toast fix rests on the ack AND on localStorage, and if BOTH fail the
+  // server keeps redelivering an envelope nothing client-side remembers, so
+  // the user is told about the same settled payment on every 10s tick.
+  //
+  // The in-memory mirror inside createPersistentBoundedSet is what stops it.
+  it('announces once per session even when the ack fails AND localStorage is denied', async () => {
+    vi.stubGlobal('localStorage', {
+      getItem: () => {
+        throw new Error('SecurityError: storage is disabled')
+      },
+      setItem: () => {
+        throw new Error('SecurityError: storage is disabled')
+      },
+      removeItem: () => {},
+    })
+    // Ack never succeeds, so the server redelivers the same envelope forever.
+    const env = envelope()
+    signedFetch.mockImplementation(async (path: string) => {
+      if (path.endsWith('/ack')) throw new Error('gateway down')
+      return { ok: true, json: async () => ({ envelopes: [env], moreAvailable: false }) }
+    })
+
+    // A DOM whose visibility events we can fire, to drive extra drain ticks
+    // inside ONE session (a restart would legitimately reset the mirror).
+    const listeners: Record<string, Array<() => void>> = {}
+    vi.stubGlobal('document', {
+      visibilityState: 'visible',
+      addEventListener: (t: string, fn: () => void) => {
+        ;(listeners[t] ??= []).push(fn)
+      },
+      removeEventListener: (t: string, fn: () => void) => {
+        listeners[t] = (listeners[t] ?? []).filter((f) => f !== fn)
+      },
+    })
+
+    startIncomingNotifications(RECIPIENT)
+    await settle()
+    expect(toasts).toHaveLength(1)
+
+    // Three more drain ticks redelivering the very same notificationId.
+    for (let i = 0; i < 3; i++) {
+      for (const fn of listeners['visibilitychange'] ?? []) fn()
+      await settle()
+    }
+
+    expect(
+      toasts,
+      'a settled payment must be announced once per session even with no ack and no storage',
+    ).toHaveLength(1)
+
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    })
+  })
 })
 
 /**

@@ -2,6 +2,7 @@ import { createElement } from 'react'
 import { toast } from 'sonner'
 
 import { ReceivedPaymentToast } from '../components/ui/IncomingPaymentToast'
+import { createBoundedSet } from './boundedSet'
 import { displayDecimals, formatFace } from './format'
 
 /**
@@ -36,9 +37,8 @@ import { displayDecimals, formatFace } from './format'
  * a second announcement of one payment reads as a second payment.
  */
 
-/** Voucher ids already announced. Bounded; see incomingNotifications for why. */
-const announced = new Set<string>()
-const ANNOUNCED_LIMIT = 200
+/** Voucher ids already announced. Shared bounded-set policy; see boundedSet.ts. */
+const announced = createBoundedSet(200)
 
 export interface ArrivedVoucher {
   voucher_id?: string
@@ -67,13 +67,9 @@ export function announceArrival(voucher: ArrivedVoucher | undefined): void {
     // duplicate toast is a nuisance, a missed payment is the bug being fixed.
     const key = voucher.voucher_id
     if (key) {
-      if (announced.has(key)) return
-      announced.add(key)
-      if (announced.size > ANNOUNCED_LIMIT) {
-        // Sets iterate in insertion order, so this drops the oldest.
-        const oldest = announced.values().next().value
-        if (oldest !== undefined) announced.delete(oldest)
-      }
+      // add() returns false when it has seen this id, so eviction policy
+      // lives in one place rather than being restated per call site.
+      if (!announced.add(key)) return
     }
 
     /*
