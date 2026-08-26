@@ -335,6 +335,12 @@ function redemptionAdapter(): RedemptionAdapter {
         {
           bundleId: meta?.bundleId as string | undefined,
           requestId: meta?.requestId as string | undefined,
+          // What the wallet checked about this coupon. The vendored builder
+          // reads `metadata.validation`, but the row that survives is rebuilt
+          // from empty metadata (see legacyBridge.withCorrelation), so without
+          // this the merchant's Checks section reads "Not checked" on a coupon
+          // whose signature verified.
+          validation: meta?.validation as Record<string, unknown> | undefined,
         },
         () =>
           redemption.redeem(token, {
