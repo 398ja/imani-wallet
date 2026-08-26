@@ -35,6 +35,7 @@ import { createElement } from 'react'
 import { toast } from 'sonner'
 
 import { IncomingPaymentToast } from '../components/ui/IncomingPaymentToast'
+import { createBoundedSet, createPersistentBoundedSet } from './boundedSet'
 import { currencyDecimals, formatFace } from './format'
 import { signedFetch } from './nip98'
 import { validateEnvelope, type IncomingPaymentNotificationEnvelope } from './incomingNotification'
@@ -89,38 +90,38 @@ let activePubkey: string | null = null
 const SEEN_LIMIT = 500
 const seenKey = (pubkey: string) => `imani-wallet:incoming-seen:${pubkey}`
 
-function loadSeen(pubkey: string): string[] {
-  try {
-    const raw = localStorage.getItem(seenKey(pubkey))
-    if (!raw) return []
-    const parsed: unknown = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : []
-  } catch {
-    return []
+/**
+ * Per-account seen set. Cached because `createPersistentBoundedSet` keeps an
+ * in-memory mirror, and rebuilding it per call would throw that mirror away —
+ * which is the half that keeps working when localStorage is denied.
+ */
+const seenSets = new Map<string, ReturnType<typeof createPersistentBoundedSet>>()
+
+function seenSet(pubkey: string) {
+  let set = seenSets.get(pubkey)
+  if (!set) {
+    set = createPersistentBoundedSet(seenKey(pubkey), SEEN_LIMIT, (msg, e) =>
+      console.warn(LOG_PREFIX, msg + ':', e),
+    )
+    seenSets.set(pubkey, set)
   }
+  return set
 }
 
 function markSeen(pubkey: string, notificationId: string): void {
-  try {
-    const next = loadSeen(pubkey).filter((id) => id !== notificationId)
-    next.push(notificationId)
-    localStorage.setItem(seenKey(pubkey), JSON.stringify(next.slice(-SEEN_LIMIT)))
-  } catch (e) {
-    // A full or denied localStorage must not stop the toast; it only means the
-    // de-duplication degrades to the in-memory set for this session.
-    console.warn(LOG_PREFIX, 'could not persist the seen marker:', e)
-  }
+  seenSet(pubkey).add(notificationId)
 }
 
 function hasSeen(pubkey: string, notificationId: string): boolean {
-  return loadSeen(pubkey).includes(notificationId)
+  return seenSet(pubkey).has(notificationId)
 }
 
 /**
  * notificationIds whose validation already failed this session, so a stale or
  * spoofed envelope redelivered every tick warns ONCE, not every 10s.
  */
-const rejectedThisSession = new Set<string>()
+// Bounded: it was an unbounded Set, which grew for the life of the tab.
+const rejectedThisSession = createBoundedSet(SEEN_LIMIT)
 
 /**
  * Ids drained this tick that the server should stop sending us: everything we
@@ -327,6 +328,11 @@ export function startIncomingNotifications(pubkey: string): void {
 
   activePubkey = pubkey
   rejectedThisSession.clear()
+  // Drop the cached seen-set wrappers, NOT the localStorage behind them. The
+  // wrapper holds an in-memory mirror scoped to one run of the drain loop; a
+  // restart (or a reload, which is the same thing from the module's point of
+  // view) must re-read what was persisted rather than trust a stale mirror.
+  seenSets.clear()
   // NOT cleared: the seen set is persistent and per-account by design. Clearing
   // it here would restore the original bug, where every login re-announced
   // every unsettled payment still sitting on the queue.
@@ -372,4 +378,5 @@ export function stopIncomingNotifications(): void {
   activePubkey = null
   drainInFlight = false
   rejectedThisSession.clear()
+  seenSets.clear()
 }
