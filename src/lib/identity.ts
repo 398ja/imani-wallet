@@ -41,8 +41,13 @@ export function identityLabel(pubkey: string, identity: Identity | undefined): s
  * `toMerchants` fills `name` with `merchantName || merchantId`, so an unbranded
  * merchant's "name" is a 64-character pubkey. Left alone it defeats the whole
  * point of this module and overflows every card it lands on.
+ *
+ * Exported because the same trap exists wherever a stored `merchantName` is
+ * rendered directly rather than through `identityLabel` — the settlement
+ * receipt on the transaction detail screen was printing 64 hex characters
+ * beside the amount for exactly this reason. One rule, one place.
  */
-function humanName(name: string | undefined): string | undefined {
+export function humanName(name: string | undefined): string | undefined {
   if (!name) return undefined
   return /^[0-9a-f]{64}$/i.test(name.trim()) ? undefined : name
 }
