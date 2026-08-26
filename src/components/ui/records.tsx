@@ -5,6 +5,8 @@ import type { VoucherRow } from '@imani/wallet-storage'
 import { formatFace, formatDate, displayDecimals } from '../../lib/format'
 import { isRedeemed } from '../../lib/merchants'
 import { transactionLabel, type WalletTransaction } from '../../lib/transactions'
+import { hasValidationClaim } from '../../lib/validationStatus'
+import { ValidationBadge } from './ValidationBadge'
 
 /**
  * The two record rows, shared by the capped lists on the merchant screen and the
@@ -73,7 +75,19 @@ export function TransactionListItem({ tx }: { tx: WalletTransaction }) {
     >
       <Arrow className={`h-4 w-4 shrink-0 ${outgoing ? 'text-mono-500' : 'text-green-600'}`} />
       <div className="min-w-0 flex-1">
-        <p className="font-medium text-mono-900 dark:text-mono-50">{transactionLabel(tx)}</p>
+        <p className="flex items-center gap-1.5 font-medium text-mono-900 dark:text-mono-50">
+          <span className="truncate">{transactionLabel(tx)}</span>
+          {/*
+            Beside the type, not beside the amount. The amount is what the eye
+            lands on first and it must stay uncluttered; the badge qualifies
+            WHAT this row is, so it belongs with the label that says so.
+
+            Only where there is a claim to check — see hasValidationClaim. A
+            mark on every outgoing payment would be noise, and noise is how a
+            signal that matters gets ignored.
+          */}
+          {hasValidationClaim(tx) ? <ValidationBadge validation={tx.validation} /> : null}
+        </p>
         <p className="truncate text-sm text-mono-500">
           {formatDate(tx.at)}
           {tx.memo ? ` · ${tx.memo}` : ''}

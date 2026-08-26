@@ -75,20 +75,31 @@ export function Panel({
 /**
  * A titled group of rows, with an optional action in the header — which is where
  * "See all" lives on the capped lists.
+ *
+ * `adornment` is the other kind of header control, and it sits BESIDE the title
+ * rather than opposite it. Proximity implies relationship: an explainer for the
+ * section belongs against the words it explains, while "See all" is a
+ * destination and reads correctly at the far edge. Pushing an (i) to the right
+ * margin makes the reader work out what it refers to.
  */
 export function ListSection({
   title,
   action,
+  adornment,
   children,
 }: {
   title: string
   action?: React.ReactNode
+  adornment?: React.ReactNode
   children: React.ReactNode
 }) {
   return (
     <section className="mb-6">
       <div className="mb-2 flex items-baseline justify-between">
-        <h2 className="text-sm font-medium text-mono-500">{title}</h2>
+        <div className="flex items-center gap-1">
+          <h2 className="text-sm font-medium text-mono-500">{title}</h2>
+          {adornment}
+        </div>
         {action}
       </div>
       <div className="divide-y divide-mono-200 overflow-hidden rounded-2xl border border-mono-200 dark:divide-mono-800 dark:border-mono-800">

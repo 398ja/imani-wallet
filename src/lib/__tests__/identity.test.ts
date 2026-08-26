@@ -1,11 +1,38 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { nip19 } from 'nostr-tools'
 
-import { identityLabel, identitySubLabel, resolveNip05 } from '../identity'
+import { humanName, identityLabel, identitySubLabel, resolveNip05 } from '../identity'
 import { toRecipientPubkey } from '../issue'
 import { clearConfigCache } from '../config'
 
 const HEX = 'a'.repeat(64)
+
+describe('humanName', () => {
+  /**
+   * The settlement receipt on the transaction detail screen printed 64 hex
+   * characters beside the amount: `_buildReceiveTransactionRow` fills
+   * `merchantName` from the coupon's merchant metadata, and for a stall that has
+   * published no kind-0 profile that value IS the merchant_id. Every other name
+   * on that screen goes through IdentityInline, which never renders a full key.
+   */
+  it('refuses a key wearing a name\'s clothes', () => {
+    expect(humanName(HEX)).toBeUndefined()
+    expect(humanName(HEX.toUpperCase())).toBeUndefined()
+    expect(humanName(` ${HEX} `)).toBeUndefined()
+  })
+
+  it('passes a real name through untouched', () => {
+    expect(humanName('Rosa Green Farm')).toBe('Rosa Green Farm')
+    // A name that merely contains hex is still a name.
+    expect(humanName('Cafe abc123')).toBe('Cafe abc123')
+    // 63 and 65 chars are not pubkeys.
+    expect(humanName('a'.repeat(63))).toBe('a'.repeat(63))
+  })
+
+  it('has nothing to say about nothing', () => {
+    expect(humanName(undefined)).toBeUndefined()
+  })
+})
 
 describe('identityLabel', () => {
   it('prefers the display name, then the handle, then a short key', () => {

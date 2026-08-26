@@ -18,4 +18,5 @@ export {
 } from './layout'
 export { Pass } from './Pass'
 export { IdentityInline } from './IdentityInline'
+export { ValidationBadge } from './ValidationBadge'
 export { CouponListItem, TransactionListItem } from './records'

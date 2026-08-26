@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
+import { Info } from 'lucide-react'
 import type { VoucherRow } from '@imani/wallet-storage'
 
 import {
@@ -12,12 +13,20 @@ import {
   Centered,
   Pass,
   IdentityInline,
+  ValidationBadge,
 } from '../components/ui'
 import { getVoucherRow, getTransactionRow, onWalletChanged } from '../lib/wallet'
 import { issuanceRatioOf } from '../lib/merchants'
 import { formatFace, formatDate, formatSats } from '../lib/format'
 import { toCouponPass, TERMS, EMPTY_BRANDING, type MerchantBranding } from '../lib/pass'
 import { merchantBranding } from '../lib/branding'
+import { humanName } from '../lib/identity'
+import {
+  VALIDATION_SUMMARY,
+  hasValidationClaim,
+  validationStatus,
+  type ValidationStatus,
+} from '../lib/validationStatus'
 import { otherParty, toTransaction, transactionLabel, type WalletTransaction } from '../lib/transactions'
 
 /**
@@ -163,37 +172,169 @@ export function CouponPage() {
  * canonicalizer migration makes it a real distinction between coupons.
  */
 function ValidationSection({ tx }: { tx: WalletTransaction }) {
+  const [explaining, setExplaining] = useState(false)
+
   // Only meaningful for coupons arriving here. An outgoing row is this wallet's
   // own act, and plain ecash carries no issuer claim to check.
-  if (tx.direction !== 'in' || !tx.voucherId) return null
+  if (!hasValidationClaim(tx)) return null
 
   const v = tx.validation
-  if (!v) {
-    return (
-      <ListSection title="Checks">
-        <DetailRow label="Issuer" value="Not checked" />
-      </ListSection>
-    )
-  }
+  const status = validationStatus(v)
 
   return (
-    <ListSection title="Checks">
-      <DetailRow
-        label="Issuer"
-        value={v.signatureValid ? 'Signature verified' : 'Signature did not verify'}
-      />
-      {v.cappedAtFaceValue ? (
+    <>
+      <ListSection
+        title="Checks"
+        // The explainer sits in the section header rather than on a row,
+        // because it explains the whole section — putting it beside "Issuer"
+        // would promise an answer about that line alone. Grouping and mapping:
+        // a control belongs next to what it affects, which is why this is an
+        // `adornment` (beside the title) and not an `action` (at the far edge,
+        // where "See all" lives and where an (i) would refer to nothing).
+        adornment={
+          <button
+            type="button"
+            onClick={() => setExplaining(true)}
+            // 44px minimum target, per Apple's touch guidance, achieved with
+            // negative margin so the hit area is generous without the glyph
+            // pushing the header taller than its text.
+            className="pressable -m-2.5 rounded-full p-2.5 text-mono-400 outline-none ring-mono-400 transition-colors hover:text-mono-600 focus-visible:ring-2 dark:hover:text-mono-300"
+            aria-label="What do these checks mean?"
+          >
+            <Info className="h-[1.125rem] w-[1.125rem]" />
+          </button>
+        }
+      >
         <DetailRow
-          label="Value"
-          value={`Limited to the ${formatFace(v.signedFaceValue, {
-            unit: tx.unit,
-            decimals: tx.decimals,
-          })} originally issued`}
+          label="Issuer"
+          value={
+            // The same badge as the list row, so the mark someone tapped is the
+            // mark they arrive at. Spatial consistency, applied to iconography.
+            <span className="flex items-center gap-2">
+              <ValidationBadge validation={v} />
+              <span className="text-mono-900 dark:text-mono-50">
+                {v
+                  ? v.signatureValid
+                    ? 'Signature verified'
+                    : 'Signature did not verify'
+                  : 'Not checked'}
+              </span>
+            </span>
+          }
         />
+        {v?.cappedAtFaceValue ? (
+          <DetailRow
+            label="Value"
+            value={`Limited to the ${formatFace(v.signedFaceValue, {
+              unit: tx.unit,
+              decimals: tx.decimals,
+            })} originally issued`}
+          />
+        ) : null}
+      </ListSection>
+
+      {explaining ? (
+        <ValidationExplainer status={status} onClose={() => setExplaining(false)} />
       ) : null}
-    </ListSection>
+    </>
   )
 }
+
+/**
+ * What the checks on this screen actually mean.
+ *
+ * Written for the person holding the phone, not for the person who wrote the
+ * signature code: it says what was checked, what it does and does not prove,
+ * and what to do about it. A merchant at a stall with a queue behind them needs
+ * an answer in one read.
+ *
+ * The leading paragraph is about THIS coupon's state, because a dialog that
+ * opens with generic theory makes the reader hunt for the sentence that applies
+ * to them. Specific first, general second.
+ *
+ * A native `<dialog>`, matching HandleDialog on the profile screen: top layer,
+ * backdrop, focus containment, Escape and focus restoration all come from the
+ * platform, and a hand-rolled overlay would get at least three of them wrong.
+ */
+function ValidationExplainer({
+  status,
+  onClose,
+}: {
+  status: ValidationStatus
+  onClose: () => void
+}) {
+  const ref = useRef<HTMLDialogElement>(null)
+
+  useEffect(() => {
+    ref.current?.showModal()
+  }, [])
+
+  return (
+    <dialog
+      ref={ref}
+      onClose={onClose}
+      // Dim to focus: a modal task pushes everything else back.
+      className="materialize m-auto w-[calc(100%-2.5rem)] max-w-sm rounded-[20px] bg-transparent p-0 backdrop:bg-mono-950/50 backdrop:backdrop-blur-sm"
+      // A click landing on the element itself rather than on the card is a
+      // click on the backdrop, which is a click outside.
+      onClick={(e) => e.target === e.currentTarget && ref.current?.close()}
+      aria-labelledby="validation-explainer-title"
+    >
+      <div className="material flex flex-col gap-4 rounded-[20px] p-5 shadow-xl shadow-mono-950/20 ring-1 ring-mono-900/5 dark:ring-mono-50/10">
+        <div className="flex flex-col gap-1">
+          {/*
+            Tighter tracking as the size goes up — large text reads too loose at
+            default spacing. Leading tightens with it.
+          */}
+          <h2
+            id="validation-explainer-title"
+            className="text-[17px] font-semibold leading-snug tracking-[-0.01em] text-mono-900 dark:text-mono-50"
+          >
+            About these checks
+          </h2>
+          <p className="text-[13px] leading-snug text-mono-500">{VALIDATION_SUMMARY[status]}</p>
+        </div>
+
+        <div className="flex flex-col gap-3 text-[15px] leading-relaxed text-mono-600 dark:text-mono-300">
+          <p>{EXPLAINER[status]}</p>
+          <p>
+            Every coupon is signed by the stall that issued it. Your wallet checks that signature
+            on arrival, using only what is on this phone — no network, and nothing to trust but
+            the maths.
+          </p>
+          <p className="text-[13px] text-mono-500">
+            A verified signature proves who issued the coupon and that its value has not been
+            altered since. It does not prove the stall will honour it.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => ref.current?.close()}
+          className="pressable min-h-11 w-full rounded-2xl bg-mono-900 text-sm font-medium text-mono-50 outline-none ring-mono-400 focus-visible:ring-2 dark:bg-mono-50 dark:text-mono-900"
+        >
+          Done
+        </button>
+      </div>
+    </dialog>
+  )
+}
+
+/**
+ * The one paragraph that is about the coupon in front of you.
+ *
+ * Each says what happened and what to do, in that order. None of them says
+ * "valid" on its own — the word promises more than a signature check delivers.
+ */
+const EXPLAINER: Record<ValidationStatus, string> = {
+  verified:
+    'This coupon carries a signature from the stall that issued it, and that signature checks out. The issuer and the amount are exactly what they claim to be.',
+  unchecked:
+    'Nothing was verified for this one. Either it arrived before your wallet started checking signatures, or it is plain ecash, which carries no issuer claim to check. That is not a problem in itself — it just means there is nothing here to confirm.',
+  failed:
+    'Something does not add up. Either the signature did not check out, or the coupon claimed to be worth more than the stall signed for. Do not treat it as paid — take it up with the stall that issued it.',
+}
+
 
 /**
  * `trading` is the same gate App puts on the merchant routes, so it is also the
@@ -246,9 +387,22 @@ export function TransactionPage({
           {outgoing ? '−' : '+'}
           {formatFace(tx.amount, { unit: tx.unit, decimals: tx.decimals })}
         </p>
+        {/*
+          `humanName`, not the raw field. `_buildReceiveTransactionRow` fills
+          `merchantName` from the coupon's merchant metadata, which for a stall
+          that has published no kind-0 profile is the merchant_id — so this line
+          printed 64 hex characters next to the amount on the settlement
+          receipt. Everywhere else on this screen goes through IdentityInline,
+          which never renders a full key; this was the one place that did.
+
+          Dropping to just the type is right rather than falling back to a
+          shortened key: the person is already named in the panel below, and a
+          truncated hex string beside the amount tells the reader nothing they
+          can act on.
+        */}
         <p className="truncate text-sm text-mono-500">
           {transactionLabel(tx)}
-          {!ownStall && tx.merchantName ? ` · ${tx.merchantName}` : ''}
+          {!ownStall && humanName(tx.merchantName) ? ` · ${humanName(tx.merchantName)}` : ''}
         </p>
       </Panel>
 
