@@ -19,12 +19,20 @@
  * acceptable worst case for a store that must not grow without limit.
  */
 
-/** A bounded set of ids that lives only as long as the tab. */
+/**
+ * A bounded set of ids.
+ *
+ * `size` is deliberately NOT on this interface. The in-memory implementation
+ * would answer "ids I hold", the persistent one "ids I have seen THIS session"
+ * — up to `limit` more sit in storage — so one interface would be answering two
+ * different questions depending on which object you happened to have. Nothing
+ * in production needs it, so the honest move is not to offer it. The in-memory
+ * implementation exposes `size` on its own concrete type for tests.
+ */
 export interface BoundedSet {
   has(id: string): boolean
   /** Records the id. Returns true if it was NEW (i.e. the caller should act). */
   add(id: string): boolean
-  readonly size: number
   clear(): void
 }
 
@@ -34,7 +42,7 @@ export interface BoundedSet {
  * Relies on `Set` iterating in insertion order, which is specified behaviour,
  * so `values().next()` is the oldest entry.
  */
-export function createBoundedSet(limit: number): BoundedSet {
+export function createBoundedSet(limit: number): BoundedSet & { readonly size: number } {
   const ids = new Set<string>()
   return {
     has: (id) => ids.has(id),
@@ -67,19 +75,13 @@ export function createBoundedSet(limit: number): BoundedSet {
  * Degrading to in-memory keeps the toast correct for the session; only a reload
  * can then repeat it.
  */
-export interface PersistentBoundedSet extends BoundedSet {
-  /** True when the last write reached localStorage. */
-  readonly persisted: boolean
-}
-
 export function createPersistentBoundedSet(
   storageKey: string,
   limit: number,
   onWarn?: (message: string, error: unknown) => void,
-): PersistentBoundedSet {
+): BoundedSet {
   // Always consulted, and the only record when storage is unavailable.
   const memory = new Set<string>()
-  let persisted = true
 
   function load(): string[] {
     try {
@@ -111,20 +113,15 @@ export function createPersistentBoundedSet(
         const next = stored.filter((v) => v !== id)
         next.push(id)
         localStorage.setItem(storageKey, JSON.stringify(next.slice(-limit)))
-        persisted = true
       } catch (e) {
         // Non-fatal: de-duplication degrades to the in-memory mirror for this
-        // session rather than disappearing entirely.
-        persisted = false
+        // session rather than disappearing entirely. Reported through onWarn
+        // rather than exposed as a `persisted` flag — a flag nothing reads is a
+        // flag nobody maintains, and the first version was already wrong (never
+        // reset by clear(), and a failing READ left it true).
         onWarn?.('could not persist the seen marker', e)
       }
       return !known
-    },
-    get size() {
-      return memory.size
-    },
-    get persisted() {
-      return persisted
     },
     clear() {
       memory.clear()
