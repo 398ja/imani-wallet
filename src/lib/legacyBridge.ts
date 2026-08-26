@@ -130,14 +130,33 @@ function loadScript(src: string): Promise<void> {
  * One slot is enough: `DmPollService` awaits `redeemToken` inside a sequential
  * `for` loop at both of its call sites, so redeems never overlap.
  */
-let pending: { bundleId?: string; requestId?: string } | undefined
+let pending:
+  | { bundleId?: string; requestId?: string; validation?: Record<string, unknown> }
+  | undefined
 
-/** Run one redeem with the DM's bundle/request ids attached to whatever it writes. */
+/**
+ * Run one redeem with the DM's bundle/request ids — and what the wallet checked
+ * about the coupon — attached to whatever it writes.
+ *
+ * `validation` rides here for the same reason the ids do, and it is the more
+ * important passenger. The merchant's "Checks" section read **"Not checked"**
+ * on every coupon the wallet had in fact verified, because of a two-step loss:
+ *
+ *  1. The voucher reaches `_persistRedeemed` with no `token_id` (shared/storage.js,
+ *     which would synthesise it, is never loaded), so the builder returns null
+ *     and tokenRedemption writes `transactions: []`.
+ *  2. `installTokenIdFill` fills the id in and rebuilds the row — but calls
+ *     `buildRow(v, {})` with EMPTY metadata, so `metadata.validation` is gone.
+ *
+ * The builder does read `metadata.validation`, and the primary path does pass
+ * it. Neither of those facts helps, because the primary path never produces a
+ * row. Verified by driving the real vendored builder both ways.
+ */
 export async function withCorrelation<T>(
-  ids: { bundleId?: string; requestId?: string },
+  ids: { bundleId?: string; requestId?: string; validation?: Record<string, unknown> },
   redeem: () => Promise<T>,
 ): Promise<T> {
-  pending = ids.bundleId || ids.requestId ? ids : undefined
+  pending = ids.bundleId || ids.requestId || ids.validation ? ids : undefined
   try {
     return await redeem()
   } finally {
@@ -147,7 +166,7 @@ export async function withCorrelation<T>(
   }
 }
 
-/** Fill in bundle/request ids the row's builder had no way to know. */
+/** Fill in what the row's builder had no way to know. */
 function stampCorrelation(rows: unknown[]): unknown[] {
   const ids = pending
   if (!ids) return rows
@@ -158,6 +177,10 @@ function stampCorrelation(rows: unknown[]): unknown[] {
       ...t,
       bundleId: t.bundleId || ids.bundleId,
       requestId: t.requestId || ids.requestId,
+      // Only ever ADDS what the builder dropped; a row that already carries a
+      // verification result keeps its own. Absent stays absent, because absent
+      // must read as "not checked" and never as a pass.
+      validation: t.validation || ids.validation,
     }
   })
 }
