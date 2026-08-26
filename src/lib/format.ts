@@ -78,6 +78,15 @@ export function currencyDecimals(currency: string): number {
  * coupons minted after it: every coupon already in a customer's wallet stays
  * wrong. The reviewer's point exactly — issuance was fixed, history was not.
  *
+ * FCFA is handled explicitly because it is NOT an ISO 4217 code: it is what
+ * merchants in the region actually type, and it means XAF/XOF. `Intl` throws on
+ * it, which would send it down the fallback path and hand it straight back the
+ * stale `2` this function exists to override — the exact "FCFA 0.02 for a 2
+ * FCFA payment" defect, surviving the fix meant to kill it. Caught by checking
+ * the shipped resolver against real staging rows rather than trusting the ISO
+ * codes alone. gateway-portal's CurrencyUnit.decimalsFor carries the same alias
+ * for the same reason.
+ *
  * So the currency wins where we recognise it. `currencyDecimals` asks Intl,
  * which knows XAF/XOF/JPY take no minor unit, and only when the unit is absent
  * or non-ISO (a merchant's own "BEANS") do we fall back to what the row
@@ -96,8 +105,12 @@ export function displayDecimals(
       ? storedDecimals
       : 0
   if (!unit) return fallback
+  const normalised = unit.trim().toUpperCase()
+  // Non-ISO aliases that Intl would throw on, resolved before we ask it.
+  if (normalised === 'FCFA') return 0
+  if (normalised === 'SAT' || normalised === 'SATS' || normalised === 'MSAT') return 0
   try {
-    return new Intl.NumberFormat(undefined, { style: 'currency', currency: unit })
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency: normalised })
       .resolvedOptions().maximumFractionDigits ?? fallback
   } catch {
     // Not an ISO code — a merchant's own unit. Their record is the best answer.
