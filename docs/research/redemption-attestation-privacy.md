@@ -169,6 +169,57 @@ Everything above was executed, not reasoned about:
 No new dependency: `@noble/curves` and `@noble/hashes` are already used
 directly by `voucherToken.ts` for signature verification.
 
+## The audit service — internal and external
+
+The attestations are the data; the service is the product. Both readers are
+served by **one published stream** — the difference is not what is published,
+it is what each reader can *open*.
+
+| Capability | Internal | External |
+|---|---|---|
+| Verify an attestation is authentic | yes | yes |
+| Detect a token redeemed twice | yes | yes |
+| See the stream is live, count redemptions | yes | yes |
+| **Confirm a specific coupon was honoured** | yes | **yes** |
+| Read one merchant's totals | yes | only on that merchant's disclosure |
+| Identify the real stall behind a pseudonym | yes | no |
+| Cross-merchant analytics | yes | no |
+
+Internal gets more through a **disclosure granted at onboarding** — one signed
+statement linking `ledgerPub` to the stall — not through a second privileged
+feed. One stream, one format, nothing to keep in sync.
+
+### The trust moment
+
+The row that sells this is *"confirm a specific coupon was honoured"*, and it
+works for the customer themselves. A customer held the token, so they alone can
+recompute its nullifier and look it up:
+
+- present in the ledger → **the stall really did redeem my coupon, and I
+  checked it myself against a public record**
+- absent → evidence, rather than a support ticket that ends in "we cannot see
+  it"
+
+Nobody else can compute that nullifier, so the check proves possession without
+revealing the amount or the merchant to anyone else reading the stream.
+Verified.
+
+That is the difference between *"trust us, we are honest"* and *"do not trust
+us — here is the receipt, verify it yourself"*. The second is the selling
+point, and it is only credible because the merchant cannot quietly rewrite
+history: the commitment is published before any dispute.
+
+### Build it fresh
+
+The existing `cashu-ledger` repo is marked **Retire** on its own board: it
+traverses a voucher parent-child DAG that never had edges (every call site
+passed `null`), and the one site that did pass a parent fabricated children
+whose signatures could not verify. Its CLI, core and web are all organised
+around that graph.
+
+The replacement reader is a `GROUP BY` over a flat attestation stream, not a
+graph walk. Build against the stream; do not revive the traversal.
+
 ## Open decisions
 
 1. **Batching interval.** Per-event publication leaks trading rhythm even with
@@ -177,6 +228,9 @@ directly by `voucherToken.ts` for signature verification.
    it complicates multi-period audit.
 3. **Who may read the ledger at all.** The requirement says broadly readable,
    so probably nobody — but that should be a decision, not a default.
-4. **Is this wanted yet?** The mint already enforces conservation. This ledger
-   is audit *visibility*, not a control, and nothing breaks if it is delayed or
-   lossy. Shipping it should follow a named reader with a named question.
+4. **Ledger completeness vs the mint.** The mint prevents double-spend in the
+   *sats* layer; it has no concept of a voucher, so it cannot see a merchant
+   crediting 1,800 XAF against a 2,500 XAF coupon — both burn 2,500 sats
+   identically. The ledger makes the *voucher* layer inspectable. Neither is
+   redundant, and an audit procedure should use both: the mint for "was it
+   really spent", the ledger for "was it credited correctly".
