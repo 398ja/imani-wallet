@@ -14,6 +14,7 @@ import {
 } from '@imani/dm-poll'
 
 import { announceArrival, type ArrivedVoucher } from './arrivalToast'
+import { attestRedemption } from './attestation'
 import { createDmCryptoAdapter, toLegacyMetadata } from './dmCrypto'
 import { checkRedemption } from './redemptionLedger'
 import type { VoucherValidation } from './voucherToken'
@@ -370,6 +371,29 @@ function redemptionAdapter(): RedemptionAdapter {
       // the new one when the user looks. Never throws (see announceArrival), so
       // it cannot turn a completed redemption into a reported failure.
       announceArrival(toArrivedVoucher(voucher))
+
+      // The public half of the record. `txRecords` writes the merchant's own
+      // history sealed to their own key, which nobody else can read — so a
+      // customer has no way to confirm their coupon was honoured, and an
+      // auditor no way to see the books add up. This publishes the one fact
+      // that makes both possible, carrying neither the stall's identity nor
+      // the amount.
+      //
+      // The token is passed rather than the row: the nullifier must bind to
+      // the token's own bytes, which only the parties to the payment hold. A
+      // tag derived from `token_id` — which appears in the merchant's UI —
+      // could be pre-published by anyone who had seen the coupon, framing an
+      // honest redemption as a replay.
+      //
+      // After the redemption, and never throwing (see attestRedemption): the
+      // proofs are already burnt by this point, so a relay refusing the record
+      // must not turn a completed redemption into a reported failure.
+      void attestRedemption({
+        token,
+        faceValue: Number(meta?.faceValue ?? 0),
+        unit: String(meta?.faceUnit ?? ''),
+      })
+
       return voucher
     },
   }
