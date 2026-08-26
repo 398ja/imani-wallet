@@ -76,7 +76,8 @@ export function announceArrival(voucher: ArrivedVoucher | undefined): void {
      * The currency decides the decimals, NOT the stored row.
      *
      * The gateway stamps `face_decimals: 2` on every currency regardless of unit
-     * (§15.9 of the design spec). XAF is a zero-decimal currency, so the first
+     * (recorded as §15.9 of the retired design spec, now in git history only).
+     * XAF is a zero-decimal currency, so the first
      * version of this toast announced a real 4 XAF coupon as "FCFA 0.04" while
      * the balance card beside it read "FCFA 4" — caught on staging, against a
      * genuinely-issued coupon whose row does carry `face_decimals: 2`.

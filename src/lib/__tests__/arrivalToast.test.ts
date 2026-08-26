@@ -50,8 +50,8 @@ describe('announcing a coupon that actually arrived', () => {
   it('renders the amount in the sender own unit and decimals', () => {
     announceArrival(VOUCHER)
     // 4 XAF, not 0.04 — XAF is a zero-decimal currency, and the gateway's
-    // `face_decimals: 2` default on every currency is the exact trap §15.9 of
-    // the design spec records. The row carries its own decimals; we use them.
+    // `face_decimals: 2` default on every currency is the exact trap the
+    // retired design spec recorded as §15.9. The row carries its own decimals.
     const props = (toasts[0]!.message as { props: { amount: string } }).props
     expect(props.amount).toContain('4')
     expect(props.amount).not.toContain('0.04')
