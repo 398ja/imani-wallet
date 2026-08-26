@@ -222,8 +222,18 @@ graph walk. Build against the stream; do not revive the traversal.
 
 ## Open decisions
 
-1. **Batching interval.** Per-event publication leaks trading rhythm even with
-   an opaque payload. Daily is the obvious default.
+1. ~~**Batching interval.**~~ **Decided: one event per redemption for now.**
+   Per-event publication leaks trading rhythm even with an opaque payload, and
+   batching would fix that — but a customer cannot verify a coupon that has not
+   been published yet, so the trust check would go from instant to next-day.
+   The instant check is the feature; the timing leak is the price.
+
+   Revisit if per-merchant rhythm turns out to matter. The migration is cheaper
+   than it looks on the half that matters: a batched event carries one `n` tag
+   per nullifier and relays match `#n` against all of them, so the customer
+   check survives untouched (verified against the staging relay). Only the
+   auditor's reader would need to handle both content shapes — so build it to
+   accept a list from the start.
 2. **Epoch rotation.** Worth it only if long-term profiling is a real concern;
    it complicates multi-period audit.
 3. **Who may read the ledger at all.** The requirement says broadly readable,

@@ -229,6 +229,29 @@ describe('what the published event does and does not carry', () => {
   })
 })
 
+describe('the migration path to batching, if it is ever taken', () => {
+  it('keeps the customer check working, because it filters on a TAG', () => {
+    // Publication is one event per redemption today. If that becomes a daily
+    // batch, the event carries one `n` tag per nullifier and a relay matches a
+    // `#n` filter against ALL of them — verified against the staging relay.
+    // So this filter survives the change untouched, which is what protects the
+    // one capability the feature exists for.
+    const filter = couponCheckFilter('cashuAsomething')
+    expect(filter['#n']).toEqual([nullifierFor('cashuAsomething')])
+    // Deliberately NOT an author filter: a customer does not know, and must not
+    // need to know, which ledger key redeemed their coupon.
+    expect(filter).not.toHaveProperty('authors')
+  })
+
+  it('does not leak the merchant into the customer\'s query', () => {
+    // If the customer check required the merchant's ledger key, the customer
+    // would have to be told which stall to look under — which is exactly the
+    // link the pseudonym exists to break.
+    const wire = JSON.stringify(couponCheckFilter('cashuAsomething'))
+    expect(wire).not.toContain(ledgerPubkey())
+  })
+})
+
 describe('attesting never breaks a redemption', () => {
   it('swallows a publish failure — the money has already moved', async () => {
     // The row is written and the proofs are burnt before this runs. A relay
