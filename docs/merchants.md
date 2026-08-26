@@ -146,10 +146,11 @@ No. Once a coupon comes back to you it's used up. Partial payments leave the
 customer a smaller coupon and take the rest, with no way to double-spend.
 
 **A customer says their 2,500 coupon shows as 25.00.**
-This was a display bug affecting currencies without cents (XAF, XOF, JPY), and
-it's fixed. Amounts now show correctly on the customer's coupon screen, in their
-notifications, and on your till. There is no longer any reason to prefer EUR or
-USD over your own currency. If you still see a 100x-off figure anywhere, that's
+This was a display bug affecting currencies without cents — XAF, XOF, FCFA,
+JPY, KRW and the rest — and it's fixed: amounts show correctly on the
+customer's coupon screen, in their notifications, and on your till, including
+for coupons issued before the fix. There's no longer a reason to prefer EUR or
+USD over your own currency. If you still see a figure that's 100x out, that's
 worth reporting, as it's a bug rather than expected behaviour.
 
 **Do I need a card reader or a merchant bank account?**

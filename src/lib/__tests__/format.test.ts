@@ -179,6 +179,37 @@ describe('currencyDecimals — the issuance-side answer', () => {
   })
 })
 
+describe('the issuance path must not have changed what it sends', () => {
+  // currencyDecimals feeds parseAmountToMinor on SellPage/RedeemPage/
+  // CashbackIssuePage, so changing it changes the minor-unit integer sent to
+  // the gateway — and over-scaling there is what produced the 413 the DEV-238
+  // card calls "the fix that was worse". The alias additions must therefore be
+  // provably invisible to every currency a merchant can actually select.
+  //
+  // merchant.CURRENCIES is the fallback list; the picker widens to
+  // Intl.supportedValuesOf('currency'), which is ISO codes only. FCFA, SAT and
+  // BTC are not ISO codes, so none of them can be an issuanceCurrency.
+  const PICKABLE = ['EUR', 'USD', 'GBP', 'CHF', 'JPY', 'CAD', 'AUD', 'ZAR', 'NGN', 'KES', 'XOF', 'XAF']
+
+  it.each(PICKABLE)('%s converts an amount exactly as before', (code) => {
+    // 12.34 in a 2-decimal currency is 1234 minor units; in a 0-decimal one
+    // the input is whole and 12 stays 12.
+    const decimals = currencyDecimals(code)
+    const expected = decimals === 0 ? 12 : 1234
+    const input = decimals === 0 ? '12' : '12.34'
+    expect(parseAmountToMinor(input, decimals)).toBe(expected)
+  })
+
+  it('leaves every ISO issuance currency at its ISO decimals', () => {
+    // If an alias ever shadowed a real ISO code, this catches it.
+    for (const code of PICKABLE) {
+      const viaIntl = new Intl.NumberFormat(undefined, { style: 'currency', currency: code })
+        .resolvedOptions().maximumFractionDigits
+      expect(currencyDecimals(code), code).toBe(viaIntl)
+    }
+  })
+})
+
 describe('the two resolvers must never disagree', () => {
   // currencyDecimals feeds ISSUANCE (what a coupon is backed with) and
   // displayDecimals feeds RENDERING (what the customer reads). If they answer
