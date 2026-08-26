@@ -182,7 +182,8 @@ comes with it.
 
 ---
 
-*Architectural claims are drawn from the Imani Wallet source and its design record
-(`docs/superpowers/specs/2026-08-11-farmer-coupon-wallet-design.md`). For the
-plain-language version of how the wallet works, see
-[how-it-works.md](how-it-works.md).*
+*Architectural claims are drawn from the Imani Wallet source. The original design
+record (`docs/superpowers/specs/2026-08-11-farmer-coupon-wallet-design.md`) was
+retired once the code became the authority; it remains in git history if the
+reasoning behind a decision is ever needed. For the plain-language version of how
+the wallet works, see [how-it-works.md](how-it-works.md).*

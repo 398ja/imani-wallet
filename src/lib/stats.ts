@@ -7,7 +7,7 @@ import type { WalletTransaction } from './transactions'
  * possa-merchant's dashboard reads. That endpoint exists here and answers 200,
  * but it answers with zeros: it is fed by `PortalDashboardService.allMerchantVouchers`,
  * which merges kind-30078 payment-request events and the `cashback_record`
- * table and deliberately does not consult customer-wallet (§15.9). Coupons from
+ * table and deliberately does not consult customer-wallet. Coupons from
  * the Sell flow are in neither, so a merchant who has issued three coupons gets
  * `vouchers_issued: 0` back. Rendering that would be a dashboard of lies.
  *
