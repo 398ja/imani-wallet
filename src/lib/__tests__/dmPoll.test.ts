@@ -28,9 +28,24 @@ class FakeEventSource {
   onerror: (() => void) | null = null
   onopen: (() => void) | null = null
   closed = false
+  /** Listeners registered by type, as a real EventSource keeps them. */
+  readonly listeners = new Map<string, (e: { data: string }) => void>()
 
   constructor(readonly url: string) {
     FakeEventSource.last = this
+  }
+
+  addEventListener(type: string, fn: (e: { data: string }) => void) {
+    this.listeners.set(type, fn)
+  }
+
+  /**
+   * Deliver a frame the way the spec does: a NAMED frame goes only to a
+   * listener registered for that name, never to `onmessage`.
+   */
+  emit(type: string, data: string) {
+    if (type === 'message') this.onmessage?.({ data })
+    else this.listeners.get(type)?.({ data })
   }
 
   close() {
@@ -42,12 +57,13 @@ class FakeEventSource {
 function subscribe() {
   vi.stubGlobal('EventSource', FakeEventSource)
   const onError = vi.fn()
+  const onEvent = vi.fn()
   const handle = nostrdbAdapter().subscribeEvents(
     { kinds: [1059], pTags: ['a'.repeat(64)] },
-    vi.fn(),
+    onEvent,
     onError,
   )
-  return { onError, handle, source: FakeEventSource.last! }
+  return { onError, onEvent, handle, source: FakeEventSource.last! }
 }
 
 afterEach(() => {
@@ -73,6 +89,43 @@ describe('nostrdbAdapter.subscribeEvents — SSE error classification', () => {
     const { source } = subscribe()
     expect(source.url).toContain('kinds=1059')
     expect(source.url).toContain(`pTags=${'a'.repeat(64)}`)
+  })
+
+  /**
+   * The bug that made a 0.50 EUR coupon vanish while the stream was healthy.
+   *
+   * The gateway sends `SseEmitter.event().name("event")`, which puts
+   * `event: event` on the wire. Per the EventSource spec a NAMED frame is
+   * dispatched only to a listener registered for that name — `onmessage` fires
+   * for unnamed frames alone. So every gift wrap arrived, was parsed by the
+   * browser, and was dropped for want of a listener: no error, no gap, no
+   * coupon.
+   */
+  it('receives the named `event` frame the gateway actually sends', () => {
+    const { source, onEvent } = subscribe()
+    source.emit(
+      'event',
+      JSON.stringify({ id: 'ev1', pubkey: 'p', kind: 1059, createdAt: 1, tags: [], content: 'c' }),
+    )
+    expect(onEvent).toHaveBeenCalledTimes(1)
+    expect(onEvent.mock.calls[0][0]).toMatchObject({ id: 'ev1', kind: 1059 })
+  })
+
+  /** An unnamed frame still works, so a gateway change cannot break it back. */
+  it('still receives an unnamed frame', () => {
+    const { source, onEvent } = subscribe()
+    source.emit(
+      'message',
+      JSON.stringify({ id: 'ev2', pubkey: 'p', kind: 1059, createdAt: 1, tags: [], content: 'c' }),
+    )
+    expect(onEvent).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports a malformed frame rather than throwing into EventSource', () => {
+    const { source, onEvent, onError } = subscribe()
+    source.emit('event', 'not json')
+    expect(onEvent).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledTimes(1)
   })
 })
 
