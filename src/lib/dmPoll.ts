@@ -82,13 +82,27 @@ export function nostrdbAdapter(): NostrdbAdapter {
       // the session, and a coupon that landed six seconds after the WebView was
       // frozen never reached the merchant's list.
       source.onopen = () => onSseOpen?.()
-      source.onmessage = (message) => {
+      const onFrame = (message: MessageEvent) => {
         try {
           onEvent(toGiftWrap(JSON.parse(message.data) as RawEvent))
         } catch (error) {
           onError(error instanceof Error ? error : new Error(String(error)))
         }
       }
+      // BOTH, because the gateway names its frames and `onmessage` cannot hear
+      // a named one. SseEmitterManager sends `SseEmitter.event().name("event")`,
+      // which puts `event: event` on the wire, and the EventSource spec
+      // dispatches that to a listener registered for the type "event" —
+      // `onmessage` fires ONLY for frames with no name. So every gift wrap the
+      // gateway pushed was received by the browser, parsed by EventSource, and
+      // dropped on the floor for want of a listener. Silent by construction:
+      // the stream is open, the bytes arrive, nothing errors, and the coupon
+      // shows up only when the catch-up query runs on the next load.
+      //
+      // `onmessage` is kept for an unnamed frame, so a gateway that stops
+      // naming them does not break this the other way round.
+      source.onmessage = onFrame
+      source.addEventListener('event', onFrame as EventListener)
       // Not every `error` here is a failure. The gateway caps every nostr SSE
       // stream at ten minutes (gateway-customer NostrQueryController
       // SSE_TIMEOUT_MS) and expects the client to come back — verified on
