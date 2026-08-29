@@ -102,7 +102,6 @@ describe('startDmPoll — catch-up after a gap', () => {
   afterEach(() => {
     stopDmPoll()
     fake.fetchRecentDms.mockClear()
-    vi.useRealTimers()
   })
 
   it('re-queries when the SSE stream reconnects', () => {
@@ -110,38 +109,6 @@ describe('startDmPoll — catch-up after a gap', () => {
     fake.fetchRecentDms.mockClear()
     subscribe().source.onopen!()
     expect(fake.fetchRecentDms).toHaveBeenCalled()
-  })
-
-  /**
-   * The bug this heartbeat exists for: the staging gateway's SSE stream accepts
-   * the subscription and then only keepalives — it never pushes an event and so
-   * never errors, which is what dm-poll's own polling fallback waits for. Every
-   * coupon sat on the relay until someone reloaded the page.
-   */
-  it('re-queries on a timer, because a silent SSE stream never errors', () => {
-    vi.useFakeTimers()
-    startDmPoll('e'.repeat(64))
-    fake.fetchRecentDms.mockClear()
-    vi.advanceTimersByTime(60_000)
-    expect(fake.fetchRecentDms).toHaveBeenCalled()
-  })
-
-  it('does not poll while the app is in the background', () => {
-    vi.useFakeTimers()
-    vi.stubGlobal('document', { ...target, visibilityState: 'hidden' })
-    startDmPoll('f'.repeat(64))
-    fake.fetchRecentDms.mockClear()
-    vi.advanceTimersByTime(60_000)
-    expect(fake.fetchRecentDms).not.toHaveBeenCalled()
-  })
-
-  it('stops the timer once the poller is stopped', () => {
-    vi.useFakeTimers()
-    startDmPoll('g'.repeat(64))
-    stopDmPoll()
-    fake.fetchRecentDms.mockClear()
-    vi.advanceTimersByTime(60_000)
-    expect(fake.fetchRecentDms).not.toHaveBeenCalled()
   })
 
   it('re-queries when the app comes back to the foreground', () => {

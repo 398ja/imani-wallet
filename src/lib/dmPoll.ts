@@ -444,17 +444,6 @@ let service: DmPollService | undefined
 let currentPubkey: string | undefined
 /** Set by `startDmPoll`, called by the SSE adapter on every (re)connect. */
 let onSseOpen: (() => void) | undefined
-/** The heartbeat below. Cleared by `stopDmPoll`. */
-let catchUpTimer: ReturnType<typeof setInterval> | undefined
-
-/**
- * How often to re-query while the app is in front.
- *
- * Short enough that a coupon handed over at a market stall lands inside the
- * conversation that produced it, long enough that an idle wallet costs the
- * gateway four cheap queries a minute.
- */
-const CATCH_UP_MS = 15_000
 
 /**
  * Re-query the window SSE may have missed.
@@ -464,17 +453,6 @@ const CATCH_UP_MS = 15_000
  */
 function catchUp(): void {
   void service?.fetchRecentDms()
-}
-
-/**
- * The same catch-up, skipped while the app is in the background.
- *
- * A hidden tab has nobody watching the list, and `onVisible` re-queries the
- * moment it comes back — so polling through a freeze buys nothing and burns
- * battery. Mobile browsers throttle background timers anyway.
- */
-function catchUpIfVisible(): void {
-  if (document.visibilityState === 'visible') catchUp()
 }
 
 /**
@@ -530,15 +508,6 @@ export function startDmPoll(pubkey: string): DmPollService {
   // the gateway already reaped it (`sse_cleanup reason=keepalive failed`).
   document.addEventListener('visibilitychange', onVisible)
   window.addEventListener('online', catchUp)
-  // The heartbeat, and on this deployment the ONLY thing that delivers a coupon
-  // to a screen already open. Verified against staging: /api/v1/nostr/subscribe
-  // accepts the subscription, emits `event:connected` and then `:keepalive`
-  // forever — a kind-1059 published to the relay while that stream was open was
-  // never pushed, though the same wrap came straight back from
-  // /api/v1/nostr/query. dm-poll only starts its own 30s poll when SSE ERRORS,
-  // and a silent stream never errors, so nothing re-queried between page loads
-  // and every arrival waited for a refresh.
-  catchUpTimer = setInterval(catchUpIfVisible, CATCH_UP_MS)
   return service
 }
 
@@ -560,8 +529,6 @@ export function stopDmPoll(): void {
   onSseOpen = undefined
   document.removeEventListener('visibilitychange', onVisible)
   window.removeEventListener('online', catchUp)
-  if (catchUpTimer) clearInterval(catchUpTimer)
-  catchUpTimer = undefined
   void service?.stop()
   service = undefined
   currentPubkey = undefined
