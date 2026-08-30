@@ -7,6 +7,11 @@ export const VREQ_PREFIX = 'vreqa';
 export const NPUB_PREFIX = 'npub1';
 export const CASHU_A_PREFIX = 'cashua';
 export const CASHU_B_PREFIX = 'cashub';
+/**
+ * DEV-131 — the prefix `pass.ts` (`BARCODE_PREFIX`) puts on a voucher pass
+ * barcode. Lower-case, because every comparison against it lower-cases first.
+ */
+export const VOUCHER_REDEEM_PREFIX = 'voucher:';
 
 export const NIP05_PATTERN = /^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 
@@ -17,7 +22,14 @@ export const DEFAULT_PATTERNS: Partial<Record<QrType, RegExp>> = {
   [QrType.NIP05]: NIP05_PATTERN,
   // Spec 028 — NUT-16 BC-UR fragment. ur:bytes/ never collides with the
   // higher-priority cashu / nostr prefixes above.
-  [QrType.UR_FRAGMENT]: UR_FRAGMENT_PATTERN
+  [QrType.UR_FRAGMENT]: UR_FRAGMENT_PATTERN,
+  // DEV-131 — a voucher pass barcode. Collides with nothing above: it is not a
+  // cashu/vreq/npub prefix, and NIP05_PATTERN requires an `@`.
+  //
+  // `stripPrefix` removes `cashu:` and `nostr:` only, so the `voucher:` scheme
+  // reaches this pattern intact — which is what makes the payload
+  // distinguishable at all. A bare UUID would match nothing and mean nothing.
+  [QrType.VOUCHER_REDEEM]: /^voucher:.+/i
 };
 
 export const TYPE_DESCRIPTIONS: Record<QrType, string> = {
@@ -26,6 +38,7 @@ export const TYPE_DESCRIPTIONS: Record<QrType, string> = {
   [QrType.NPUB]: 'Nostr Public Key',
   [QrType.NIP05]: 'Nostr Username',
   [QrType.UR_FRAGMENT]: 'Animated QR Frame',
+  [QrType.VOUCHER_REDEEM]: 'Voucher',
   [QrType.UNKNOWN]: 'Unknown'
 };
 
