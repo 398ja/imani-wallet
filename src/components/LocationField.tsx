@@ -1,6 +1,7 @@
 import { useState } from 'react'
 
 import { Button, Input } from './ui'
+import { LocationMap } from './LocationMap'
 import { parseLatLng } from '../lib/coords'
 
 /**
@@ -12,14 +13,13 @@ import { parseLatLng } from '../lib/coords'
  * `lng` here would make every record this app writes unreadable to that one. A
  * ten-line parser is cheaper than a fork of the schema.
  *
- * The map is Google's keyless `output=embed` form — no API key to configure,
- * none to leak. It DOES need `frame-src https://www.google.com
- * https://maps.google.com` in the Content-Security-Policy, and that policy does
- * not live in this repo's `deploy/nginx.conf` (which still ships none) but in
- * `nginx/conf.d/wallet.*.conf` on the imani-deploy host. Staging grew a CSP with
- * no `frame-src`, so it fell through to `default-src 'self'` and every merchant
- * watched this map fail to load — the requirement was written down here and the
- * policy was added somewhere this file cannot see.
+ * The map itself is `LocationMap`, shared with the read-only views. It used to
+ * be an iframe written out here, which was the whole problem: the preview
+ * existed only in this edit field, so the promise below — "Customers see this
+ * as a pin on a map" — was false until that component was rendered on the
+ * pages customers actually open. Sharing it also keeps the embed URL in one
+ * place; two hand-written copies is how one of them ends up pointing somewhere
+ * else. See `LocationMap` for the CSP `frame-src` requirement it carries.
  */
 
 export function LocationField({
@@ -125,16 +125,10 @@ export function LocationField({
 
       {error && <p className="mt-1.5 text-xs text-red-600 dark:text-red-400">{error}</p>}
 
-      {parsed && (
-        <iframe
-          title="Map of where you trade"
-          // `q=lat,lng` drops a pin; `output=embed` is the form that needs no key.
-          src={`https://maps.google.com/maps?q=${parsed.lat},${parsed.lng}&z=15&output=embed`}
-          loading="lazy"
-          referrerPolicy="no-referrer-when-downgrade"
-          className="mt-3 h-44 w-full rounded-2xl border border-mono-200 dark:border-mono-800"
-        />
-      )}
+      {/* The merchant's own preview of what a customer will see. `label` is
+          omitted so the heading reads about this stall rather than a third
+          party's — the map is the same, the framing is not. */}
+      <LocationMap location={value} className="mt-3" />
 
       <p className="mt-1.5 text-xs text-mono-500">
         Customers see this as a pin on a map. Leave it blank if you move around.

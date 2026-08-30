@@ -452,3 +452,32 @@ export async function refreshMerchant(pubkey: string): Promise<MerchantProfile |
     return current
   }
 }
+
+/**
+ * Another merchant's stall record, fetched and NOT stored.
+ *
+ * `refreshMerchant` is the wrong call for somebody else's stall: it ends in
+ * `saveMerchant`, which writes to `localStorage` under that pubkey's key. A
+ * customer browsing three shops would leave three foreign stall records on
+ * their device — records that `loadMerchant` then answers with, and that
+ * `clearMerchant` (called at logout for the signed-in key alone) never removes.
+ * Caught while wiring the location map, before it shipped.
+ *
+ * So this reads and returns, keeping nothing. Their record is not ours to hold.
+ *
+ * Never throws: an unreachable relay means no location, and a stall the map
+ * cannot place still has coupons and history worth showing.
+ */
+export async function fetchMerchantRecord(pubkey: string): Promise<MerchantProfile | null> {
+  try {
+    const event = await newestAddressable(pubkey, MERCHANT_KIND, MERCHANT_D_TAG)
+    if (event === null) return null
+    const merged = mergeMerchantEvent(emptyMerchant(pubkey), event.content, event.created_at)
+    // `mergeMerchantEvent` clamps relay-sourced values because a kind-30078 is
+    // attacker-controllable — anyone can publish one claiming to be this key.
+    // Nothing here is trusted beyond being displayed.
+    return isMerchant(merged) ? merged : null
+  } catch {
+    return null
+  }
+}
