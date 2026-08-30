@@ -150,3 +150,81 @@ live('what the live response means for the burn', () => {
     expect(wouldSettle, 'an error response must not be read as SPENT').toBe(false)
   }, 60000)
 })
+
+/**
+ * The mint's own NUT-07, one layer below the gateway.
+ *
+ * The probe above stops at "token proof missing signature", because only the
+ * mint can produce a proof's `C`. But `/v1/checkstate` needs no funded proof
+ * at all — it takes Y values and reports state — so the STATE VOCABULARY the
+ * whole fix compares against can be observed directly at its source.
+ *
+ * That vocabulary is the actual contract. `alreadySpent` does
+ * `result.state.toUpperCase() === 'SPENT'`, so what matters is that a state is
+ * reported, in that spelling, on a field named `state`. If the mint said
+ * `spent`, or `is_spent`, or nested it, the fix would be dead code that no
+ * mocked test could catch.
+ *
+ * Chain confirmed while writing this, top to bottom:
+ *
+ *   mint /v1/checkstate  -> {"states":[{"state":"UNSPENT", "Y":...}]}
+ *   JdbcWalletPort       -> folds per-proof states to one overallState,
+ *                           "SPENT" if any proof is spent
+ *   TokenValidateResponse-> record(boolean valid, String state, List proofs)
+ *   alreadySpent         -> reads `.state`, compares to 'SPENT'
+ *
+ * Requires the local mint (cashu-mint-rest-dev on :7777). Gated separately
+ * from PROBE_GATEWAY because it is a different dependency:
+ *
+ *   PROBE_MINT=1 npx vitest run src/lib/__tests__/burnProbe.test.ts
+ */
+const MINT = process.env.MINT_URL ?? 'http://localhost:7777'
+const mintLive = process.env.PROBE_MINT ? describe : describe.skip
+
+mintLive("the mint's state vocabulary", () => {
+  it('supports NUT-07 checkstate at all', async () => {
+    // If the mint did not, the gateway could not report a state and
+    // `alreadySpent` could never settle a row.
+    const info = await (await fetch(`${MINT}/v1/info`)).json()
+    expect((info as { nuts?: Record<string, { supported?: boolean }> }).nuts?.['7']?.supported).toBe(
+      true,
+    )
+  }, 60000)
+
+  it('names the field `state` and spells the values as we compare them', async () => {
+    // A Y the mint has never seen. No funding needed, which is the whole
+    // reason this can run where the gateway probe cannot.
+    const response = await fetch(`${MINT}/v1/checkstate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ Ys: ['02'.padEnd(66, 'a'), '03'.padEnd(66, 'b')] }),
+    })
+    expect(response.status).toBe(200)
+
+    const body = (await response.json()) as { states?: { state?: string; Y?: string }[] }
+    const states = body.states ?? []
+    expect(states).toHaveLength(2)
+
+    for (const s of states) {
+      // The field name `alreadySpent` reads, through the gateway's passthrough.
+      expect(s.state, 'each proof must report a state').toBeDefined()
+      // The spelling it compares. A lower-case or snake_case answer would make
+      // the comparison dead code.
+      expect(s.state).toBe(String(s.state).toUpperCase())
+      expect(['UNSPENT', 'PENDING', 'SPENT']).toContain(s.state)
+    }
+  }, 60000)
+
+  it('reports UNSPENT for proofs it has never seen, which is what makes SPENT meaningful', async () => {
+    // The negative half of the contract. If everything came back SPENT, the
+    // fix would settle every coupon it ever touched — the exact catastrophe
+    // the UNSPENT/PENDING guard exists to prevent.
+    const response = await fetch(`${MINT}/v1/checkstate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ Ys: ['02'.padEnd(66, 'c')] }),
+    })
+    const body = (await response.json()) as { states?: { state?: string }[] }
+    expect(body.states?.[0]?.state).toBe('UNSPENT')
+  }, 60000)
+})
