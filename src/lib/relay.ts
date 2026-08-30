@@ -1,12 +1,16 @@
 import { SimplePool, type Event } from 'nostr-tools'
+import { gatewayEvents, newestByD } from './gatewayNostr'
 
 /**
  * Publishing to the Nostr relay.
  *
- * Reads proxy through the gateway's nostrdb cache (see lib/branding.ts), but
- * WRITES go straight to the relay from the browser. That split is why
- * deploy/compose.override.yml publishes strfry's port at all — upstream's
- * docker-compose.test.yml exposes it only on the internal Docker network.
+ * Reads go to BOTH this relay and the gateway's nostrdb cache, newest winning
+ * (see lib/gatewayNostr.ts). WRITES go straight to the relay from the browser.
+ *
+ * That write path is why deploy/compose.override.yml publishes strfry's port at
+ * all — upstream's docker-compose.test.yml exposes it only on the internal
+ * Docker network. Reads no longer DEPEND on that port being published, which is
+ * what DEV-144 was about; publishing an event still does.
  *
  * The relay URL is NOT taken from `GET /api/v1/config`. That endpoint reports
  * `wss://relay.imani.local` on this stack — a name that does not resolve from a
@@ -68,24 +72,20 @@ export async function publish(event: Event, relays: string[] = [RELAY_URL]): Pro
 
 /**
  * The newest parameterised-replaceable event (NIP-33) for a pubkey and `d` tag,
- * read STRAIGHT FROM THE RELAY.
+ * read from the relay AND the gateway's cache, newest winning.
  *
- * Deliberately not routed through the gateway's nostrdb cache the way
- * `fetchNewestKind0` in lib/branding.ts is, for two reasons that have each
- * already cost a debugging round:
+ * This read used to refuse the gateway outright. DEV-144 recorded why, and the
+ * re-check that closed it found four of those five reasons fixed upstream —
+ * see the header of lib/gatewayNostr.ts for the itemised verdict. The one that
+ * survives (a cache that can freeze silently) is harmless to a merge, because
+ * a stale copy simply loses to the relay's.
  *
- * - The cache lags the relay. Reads and writes landing in different stores is
- *   what makes `Profile.eventAt` load-bearing (§14.3); merchant metadata is
- *   written here and would be read back stale.
- * - The gateway ignores Nostr-standard tag filters — it reads its own `pTags`
- *   field and will happily hand back everything it has. A `#d` filter sent
- *   there is not a filter, it is a suggestion.
- *
- * So `#d` goes on the wire for relays that honour it, and the result is checked
- * again locally for those that do not. Without that second check a merchant's
- * `imani:merchant` record could be satisfied by any other kind-30078 the same
- * key has published — `imani:settings`, and everything else possa-merchant
- * writes under this kind.
+ * What the bypass cost was larger than what it avoided: reaching strfry from a
+ * browser needs its port published, and a real deployment does not publish it.
+ * With the relay unreachable this returned null, and null here means the
+ * merchant role disappears — the home screen reverts to a customer's, Stats
+ * resets to zero, and since logout wipes the device there is no other way back
+ * to a merchant's own books.
  *
  * No `ws` polyfill here, unlike scripts/seed-merchant.mjs — that is a Node 20
  * problem (no global WebSocket, and the failure is silent because the promise
@@ -111,16 +111,25 @@ export async function allAddressable(
   dPrefix: string,
   relays: string[] = [RELAY_URL],
 ): Promise<Event[]> {
-  const events = await allEvents(pubkey, kind, relays)
+  // BOTH STORES (DEV-144). The relay is the wallet's write target and stays
+  // authoritative on conflict, but reaching it from a browser needs a published
+  // strfry port, which a real deployment does not have — and without this read
+  // a merchant loses their entire issuance ledger. The gateway's copy is merged
+  // rather than trusted: a frozen cache costs nothing, because a newer relay
+  // event wins.
+  //
+  // No `#d` on the wire here: this is a PREFIX query, which no relay can
+  // express, so the filtering below is the only filtering there is either way.
+  const [relayed, cached] = await Promise.all([
+    allEvents(pubkey, kind, relays).catch(() => []),
+    gatewayEvents(pubkey, kind),
+  ])
 
-  const newest = new Map<string, Event>()
-  for (const event of events) {
-    const d = event.tags.find(([name]) => name === 'd')?.[1]
-    if (!d?.startsWith(dPrefix)) continue
-    const seen = newest.get(d)
-    if (!seen || event.created_at > seen.created_at) newest.set(d, event)
-  }
-  return [...newest.values()]
+  const matching = (events: Event[]) =>
+    events.filter((event) =>
+      event.tags.some(([name, value]) => name === 'd' && value?.startsWith(dPrefix)),
+    )
+  return newestByD(matching(relayed), matching(cached))
 }
 
 /**
@@ -153,9 +162,24 @@ export async function newestAddressable(
 ): Promise<Event | null> {
   const pool = new SimplePool()
   try {
-    const events = await pool.querySync(relays, { authors: [pubkey], kinds: [kind], '#d': [d] })
+    // BOTH STORES, NEWEST WINS (DEV-144) — see the header of lib/gatewayNostr.
+    // Without the gateway read, a deployment that does not publish strfry's
+    // port loses the merchant role entirely: this record IS what makes a
+    // merchant a merchant, and logout wipes the device.
+    const [relayed, cached] = await Promise.all([
+      pool
+        .querySync(relays, { authors: [pubkey], kinds: [kind], '#d': [d] })
+        .catch(() => [] as Event[]),
+      gatewayEvents(pubkey, kind, d),
+    ])
+
+    // Checked again locally on BOTH sides. `#d` now goes on the wire to each
+    // (the gateway honours a standard tag filter since the DEV-144 re-check),
+    // but a store that ignores it would otherwise satisfy `imani:merchant` with
+    // any other kind-30078 this key has published — `imani:settings` and
+    // everything else possa-merchant writes under this kind.
     return (
-      events
+      [...relayed, ...cached]
         .filter((e) => e.tags.some(([name, value]) => name === 'd' && value === d))
         // Sort rather than trust order: querySync merges several relays' replies
         // and makes no promise about which arrives first.
