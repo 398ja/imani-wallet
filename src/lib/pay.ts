@@ -8,6 +8,7 @@ import { merchantStatus } from './merchant'
 import { buildPaymentTransaction, buildSentTransaction } from './transactions'
 import type { NUT18VRequest } from './nap'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
+import { toEpochMs } from './format'
 
 /**
  * Paying a merchant's voucher payment request.
@@ -256,10 +257,30 @@ export function planParts(vouchers: Voucher[], amount: number): SendPlan {
   return { parts, remaining }
 }
 
-/** Sortable expiry. No expiry sorts last — it is the coupon in least danger. */
+/**
+ * Sortable expiry. No expiry sorts last — it is the coupon in least danger.
+ *
+ * Through `toEpochMs`, NOT `Date.parse`, because `expires_at` is not reliably
+ * an ISO string however the type declares it. `Voucher.expires_at` says
+ * `string`, and `dmPoll`'s storage adapter casts a NUMBER into it
+ * (`v.expires_at as number | undefined`), which is the shape the redemption
+ * path actually stores; `issue.ts` records the same, that it "has been seen as
+ * both an ISO-8601 string and a number, and the number itself could be seconds
+ * or milliseconds".
+ *
+ * `Date.parse(1788220800)` is NaN, so every numerically-stored expiry fell to
+ * the MAX_SAFE_INTEGER branch and sorted as "never expires" — putting the
+ * coupon in most danger LAST, the exact opposite of this function's purpose.
+ * It was invisible while this only broke ties inside `planParts`; making expiry
+ * the primary key on both send paths is what turned it into the money bug it
+ * always looked like.
+ *
+ * `toEpochMs` is the wallet's one answer to this question — it takes ISO,
+ * seconds or milliseconds, and applies the same 1e11 magnitude test used for
+ * every other timestamp here.
+ */
 function expiryMs(voucher: Voucher): number {
-  const parsed = Date.parse(voucher.expires_at ?? '')
-  return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed
+  return toEpochMs(voucher.expires_at as number | string | undefined) ?? Number.MAX_SAFE_INTEGER
 }
 
 /**
