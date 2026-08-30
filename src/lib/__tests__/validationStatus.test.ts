@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   VALIDATION_SUMMARY,
+  hasPublishedAttestation,
   hasValidationClaim,
   validationStatus,
 } from '../validationStatus'
@@ -92,5 +93,40 @@ describe('the summary line', () => {
   it('gives every status its own words', () => {
     const all = Object.values(VALIDATION_SUMMARY)
     expect(new Set(all).size).toBe(all.length)
+  })
+})
+
+/**
+ * The attestation gate (DEV-246).
+ *
+ * `RecordDetailPages` renders the "Published to the public ledger" line and the
+ * two ledger ids behind this predicate. It lives here rather than inline in the
+ * JSX precisely so it can be asserted: the repo has no DOM environment, so a
+ * rule expressed in a component is a rule nothing checks.
+ */
+describe('hasPublishedAttestation', () => {
+  it('is true only once a relay accepted the record', () => {
+    expect(hasPublishedAttestation(tx({ attestationEventId: 'e'.repeat(64) }))).toBe(true)
+  })
+
+  it('is FALSE on a row that carries only a nullifier', () => {
+    // The trap the card named, and the reason this is not a one-liner inline.
+    // Every redemption stamps a nullifier — it must be computed before the mint
+    // swap destroys the token it hashes — so gating on it would read
+    // "published" on plain ecash and on every customer row alike.
+    expect(hasPublishedAttestation(tx({ attestationNullifier: 'a'.repeat(64) }))).toBe(false)
+  })
+
+  it('is false on a row predating the feature', () => {
+    // Renders nothing rather than "not published": a merchant can do nothing
+    // about a record that was never written, and a permanent negative on a
+    // completed sale reads as a fault.
+    expect(hasPublishedAttestation(tx())).toBe(false)
+  })
+
+  it('refuses an empty string, which is not an event id', () => {
+    // A blank id would address no event, so a receipt claiming one would send
+    // an auditor looking for something that does not exist.
+    expect(hasPublishedAttestation(tx({ attestationEventId: '' }))).toBe(false)
   })
 })

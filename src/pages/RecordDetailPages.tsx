@@ -24,6 +24,7 @@ import { humanName } from '../lib/identity'
 import {
   VALIDATION_SUMMARY,
   hasValidationClaim,
+  hasPublishedAttestation,
   validationStatus,
   type ValidationStatus,
 } from '../lib/validationStatus'
@@ -247,7 +248,7 @@ function ValidationSection({ tx }: { tx: WalletTransaction }) {
           The DATE is the event's, not the row's. A sweep can publish months
           after the sale, and this line dates the publication.
         */}
-        {tx.attestationEventId ? (
+        {hasPublishedAttestation(tx) ? (
           <DetailRow
             label="Record"
             value={
@@ -487,7 +488,10 @@ export function TransactionPage({
           // already knows the amount and could recompute it, and printing it
           // beside the amount invites treating a public value as a private one.
           ['Ledger record id', tx.attestationEventId],
-          ['Ledger reference', tx.attestationEventId ? tx.attestationNullifier : undefined],
+          [
+            'Ledger reference',
+            hasPublishedAttestation(tx) ? tx.attestationNullifier : undefined,
+          ],
         ])}
       />
     </Screen>
