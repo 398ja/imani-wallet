@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { nip19 } from 'nostr-tools'
 
-import { humanName, identityLabel, identitySubLabel, resolveNip05 } from '../identity'
+import {
+  humanName,
+  identityLabel,
+  identitySubLabel,
+  nameOrNothing,
+  resolveNip05,
+} from '../identity'
 import { toRecipientPubkey } from '../issue'
 import { clearConfigCache } from '../config'
 
@@ -138,5 +144,51 @@ describe('toRecipientPubkey', () => {
     expect(await toRecipientPubkey('https://example.test/menu')).toBeNull()
     expect(await toRecipientPubkey('')).toBeNull()
     expect(fetchSpy).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * The settlement toast showed `b233db85…de1e` where a sender's name belongs.
+ *
+ * `identityLabel` ends its ladder at `shortPubkey`, which is right for a list
+ * row — a stable identifier beats an empty cell there — and wrong for a toast,
+ * where a hex fragment beside an amount names nobody. The sending wallet on
+ * staging had published no kind-0, so every rung missed and the key fell out
+ * of the bottom. The pending toast never showed this because its envelope
+ * carries a `displayName` to fall back on; the DM payload behind the
+ * settlement toast carries no such field.
+ */
+describe('nameOrNothing', () => {
+  it('is nothing when the profile never resolved, rather than a shortened key', () => {
+    expect(nameOrNothing(HEX, undefined)).toBeUndefined()
+    // The exact staging shape: a fetch that came back with no name and no handle.
+    expect(nameOrNothing(HEX, {})).toBeUndefined()
+    // And it must not be the key by any route.
+    expect(identityLabel(HEX, undefined)).toContain('…')
+  })
+
+  it('is nothing when there is no counterparty at all', () => {
+    // "no sender" and "a sender we cannot name" read the same to a person, so
+    // they collapse to one case and one set of words.
+    expect(nameOrNothing(undefined, undefined)).toBeUndefined()
+    expect(nameOrNothing('', { name: 'ignored' })).toBeUndefined()
+  })
+
+  it('is the display name when the profile has one', () => {
+    expect(nameOrNothing(HEX, { name: 'Rosa Green Farm' })).toBe('Rosa Green Farm')
+  })
+
+  it('falls back to the handle when there is no display name', () => {
+    expect(nameOrNothing(HEX, { nip05: 'rosa@x.test' })).toBe('@rosa')
+  })
+
+  /**
+   * `toMerchants` fills `name` with `merchantName || merchantId`, so an
+   * unbranded merchant's "name" is a 64-character pubkey. That must not
+   * sneak past as a name.
+   */
+  it('rejects a pubkey wearing a name field', () => {
+    expect(nameOrNothing(HEX, { name: HEX })).toBeUndefined()
+    expect(nameOrNothing(HEX, { name: HEX, nip05: 'rosa@x.test' })).toBe('@rosa')
   })
 })
