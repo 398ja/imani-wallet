@@ -328,6 +328,31 @@ describe('selectVouchers and splitObstacle', () => {
     expect(selectVouchers([a, b], 1000).map((v) => v.voucher_id)).toEqual(['v-aaa', 'v-bbb'])
   })
 
+  /**
+   * `expires_at` is typed `string` and is not reliably one. dmPoll's storage
+   * adapter casts a NUMBER into it, which is the shape the redemption path
+   * stores, and `Date.parse(1788220800)` is NaN — so every numerically-stored
+   * expiry read as "never expires" and the coupon in most danger sorted LAST.
+   *
+   * Harmless while expiry only broke ties inside planParts. Making it the
+   * primary key on both send paths is what would have turned a latent type lie
+   * into spending the wrong coupon.
+   */
+  it('reads a numeric expiry, not only an ISO string', () => {
+    const seconds = Math.floor(Date.parse('2026-09-01T00:00:00Z') / 1000)
+    const soon = xaf({ voucher_id: 'v-soon-epoch', expires_at: seconds as unknown as string })
+    const later = xaf({ voucher_id: 'v-later', face_value: 2500, expires_at: '2027-09-01T00:00:00Z' })
+
+    expect(selectVouchers([later, soon], 1000)[0].voucher_id).toBe('v-soon-epoch')
+
+    // Milliseconds too — the same field has been seen in both magnitudes.
+    const millis = xaf({
+      voucher_id: 'v-soon-millis',
+      expires_at: (seconds * 1000) as unknown as string,
+    })
+    expect(selectVouchers([later, millis], 1000)[0].voucher_id).toBe('v-soon-millis')
+  })
+
   it('explains the obstacle when nothing qualifies, and stays silent when one does', () => {
     expect(splitObstacle([xaf()], 10)).toContain('25')
     expect(splitObstacle([xaf()], 25)).toBeNull()
