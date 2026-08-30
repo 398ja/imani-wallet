@@ -34,11 +34,24 @@ import { parseLatLng } from '../lib/coords'
 export function LocationMap({
   location,
   label,
+  heading,
   className = '',
 }: {
   location?: string
-  /** Whose stall this is, for the frame's accessible name. */
+  /**
+   * Whose stall this is. Names the stall in the heading and the frame's
+   * accessible name, for someone looking at a stall that is not theirs.
+   */
   label?: string
+  /**
+   * Overrides the heading outright, for a reader who is not a visitor.
+   *
+   * The default wording is customer-facing, and the fallback used to be
+   * "Where to find them" for every unlabelled caller — which on a merchant's
+   * OWN profile calls them "them". The comment here claimed the owner's screen
+   * said "you" while no code did that; a page-level test caught it.
+   */
+  heading?: string
   className?: string
 }) {
   const parsed = parseLatLng(location)
@@ -48,9 +61,9 @@ export function LocationMap({
     <div className={className}>
       <div className="mb-2 flex items-center gap-1.5 text-sm font-medium text-mono-700 dark:text-mono-300">
         <MapPin className="h-4 w-4 text-mono-400" aria-hidden />
-        {/* Named for the reader, not the record: a customer wants "where to
-            find them", and the merchant's own screen says "you". */}
-        <span>{label ? `Find ${label}` : 'Where to find them'}</span>
+        {/* Named for the READER, not the record: a customer wants "where to
+            find them", and the stall's owner is not a "them" to themselves. */}
+        <span>{heading ?? (label ? `Find ${label}` : 'Where to find them')}</span>
       </div>
       <iframe
         title={label ? `Map showing ${label}` : 'Map showing where this stall trades'}

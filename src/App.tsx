@@ -290,7 +290,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           path="/transaction/:id"
           element={<TransactionPage pubkey={pubkey} trading={trading} />}
         />
-        <Route path="/profile" element={<ProfilePage profile={profile} />} />
+        <Route path="/profile" element={<ProfilePage profile={profile} merchant={merchant} />} />
         {/* `merchant !== null`, NOT `trading`: a CLOSED stall must stay reachable
             or the Open-for-business switch could never be turned back on. It is
             also what hides the Merchant section from customers entirely — they
