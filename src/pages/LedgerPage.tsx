@@ -3,7 +3,7 @@ import { Check, Copy, RefreshCw, ShieldCheck } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, Panel, Button } from '../components/ui'
 import { ledgerPubkey, reconcileAttestations } from '../lib/attestation'
-import { listTransactions } from '../lib/wallet'
+import { listTransactions, recordAttestationReceipt } from '../lib/wallet'
 
 /**
  * The merchant's public redemption ledger: their ledger ID, and the sweep that
@@ -58,7 +58,10 @@ export function LedgerPage() {
   const sweep = useCallback(async () => {
     setBusy(true)
     try {
-      setResult(await reconcileAttestations(await listTransactions()))
+      // The sweep stamps a receipt onto every row it can (DEV-246): the gaps it
+      // republishes, and the rows whose attestation was already published but
+      // which carry no receipt — every redemption from before that feature.
+      setResult(await reconcileAttestations(await listTransactions(), recordAttestationReceipt))
     } finally {
       // Always clears: a relay timeout must not strand the button disabled
       // with no way back except a reload.

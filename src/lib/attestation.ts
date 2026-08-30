@@ -223,6 +223,30 @@ export function commitTo(amountMinorUnits: number, blind: bigint): string {
   return point.toHex(true)
 }
 
+/**
+ * Proof that one redemption reached the public ledger.
+ *
+ * Written onto the transaction row so the merchant's receipt can say the
+ * redemption was published, and give an auditor something to look it up by.
+ *
+ * Deliberately NOT the commitment. A reader holding the row already knows the
+ * amount, and the commitment is recomputable from it — printing it beside the
+ * amount invites treating a public value as though it were a private one.
+ * `verifyOwnCommitment` is the supported way to re-open it.
+ *
+ * `at` is the EVENT's own `created_at`, not the row's timestamp and not "now".
+ * A sweep can publish an attestation months after the redemption, and the
+ * receipt has to date the publication rather than the sale.
+ */
+export interface AttestationReceipt {
+  /** The `#n` tag: what an auditor or the customer's own check looks it up by. */
+  nullifier: string
+  /** Addresses the event directly, for a reader fetching by `ids`. */
+  eventId: string
+  /** Epoch milliseconds, converted from the event's `created_at` seconds. */
+  at: number
+}
+
 /** What one attestation says, before it is signed. */
 export interface Attestation {
   /** Opaque per-token tag. A repeat is a duplicate here. */
@@ -277,6 +301,15 @@ export function buildAttestation(a: Attestation, ledgerSk: Uint8Array): Event {
 /**
  * Attest one redemption. NEVER THROWS.
  *
+ * Returns a RECEIPT when a relay took the record, and `null` otherwise —
+ * including when the coupon never qualified. The caller writes that receipt
+ * onto the row so the merchant's transaction detail can show the redemption
+ * was published (DEV-246).
+ *
+ * `null` on `result.ok === 0` is the load-bearing case: the row must not claim
+ * a public record that nothing holds. The gap is real, and
+ * `reconcileAttestations` is what finds and stamps it later.
+ *
  * The money has already moved and the row is already written when this runs. A
  * relay that will not take the record has undone neither, so a failure here
  * must not turn a completed redemption into a reported error — the same rule
@@ -317,11 +350,11 @@ export async function attestRedemption(params: {
    * `hasValidationClaim` already draws for the Checks badge.
    */
   signatureValid: boolean
-}): Promise<void> {
+}): Promise<AttestationReceipt | null> {
   try {
     const { token, faceValue, unit, signatureValid } = params
-    if (!signatureValid) return
-    if (!token || !Number.isFinite(faceValue) || faceValue < 0) return
+    if (!signatureValid) return null
+    if (!token || !Number.isFinite(faceValue) || faceValue < 0) return null
 
     const { sk } = ledgerKey()
     const nullifier = nullifierFor(token)
@@ -331,13 +364,17 @@ export async function attestRedemption(params: {
       unit: unit || 'UNKNOWN',
     }
 
-    const result = await publish(buildAttestation(attestation, sk))
+    const event = buildAttestation(attestation, sk)
+    const result = await publish(event)
     if (result.ok === 0) {
       console.warn('[attestation] no relay accepted the record', result.errors)
+      return null
     }
+    return { nullifier, eventId: event.id, at: event.created_at * 1000 }
   } catch (error) {
     console.error('[attestation] redemption not attested', error)
   }
+  return null
 }
 
 /**
@@ -490,21 +527,70 @@ export function couponCheckFilter(token: string) {
  * Rows with no `attestationNullifier` are SKIPPED, not treated as gaps: they
  * predate this feature or never qualified for attestation, and republishing
  * them is impossible anyway (the amount's blind needs a nullifier).
+ *
+ * `stamp` writes a receipt back onto a row (DEV-246). Two rows need it, and the
+ * second is easy to miss:
+ *
+ *  1. a gap this sweep republishes, which had no receipt by definition;
+ *  2. a row whose attestation is ALREADY published but which carries no
+ *     receipt — every redemption from before this feature, and any whose
+ *     write-back was lost. The event is right there in `published`, so
+ *     stamping it costs nothing and is the only way those rows ever show one.
+ *
+ * Passed in rather than imported: this module publishes to relays and knows
+ * nothing about storage, and `wallet.ts` already imports the publishing side.
  */
 export async function reconcileAttestations(
   // Deliberately the raw stored row (index-signature `unknown`), not
   // `WalletTransaction`: the figures this needs are the ones stamped at
   // redemption, and the mapped transaction type does not carry them.
   rows: Record<string, unknown>[],
+  stamp?: (rowId: string, receipt: AttestationReceipt) => Promise<void>,
 ): Promise<{ checked: number; missing: number; republished: number }> {
   const local = rows.filter((r) => typeof r.attestationNullifier === 'string')
   if (local.length === 0) return { checked: 0, missing: 0, republished: 0 }
 
   const { sk, pubkey } = ledgerKey()
   const published = await allEvents(pubkey, ATTESTATION_KIND)
-  const seen = new Set(
-    published.map((e) => e.tags.find((t) => t[0] === 'n')?.[1]).filter(Boolean) as string[],
-  )
+  // Keyed by nullifier rather than collected as a Set: the EVENT is what a
+  // receipt is made of, so a set of nullifiers could answer "is it published?"
+  // but not "publish what". Oldest wins — an attestation republished by an
+  // earlier sweep has duplicates on the relay, and the receipt should name the
+  // first time this redemption was recorded, not the most recent retry.
+  const seen = new Map<string, { id: string; created_at: number }>()
+  for (const e of published) {
+    const n = e.tags.find((t) => t[0] === 'n')?.[1]
+    if (!n) continue
+    const prior = seen.get(n)
+    if (!prior || e.created_at < prior.created_at) seen.set(n, e)
+  }
+
+  /** Never throws: a failed local write must not abort the rest of the sweep. */
+  const writeReceipt = async (row: Record<string, unknown>, receipt: AttestationReceipt) => {
+    if (!stamp) return
+    // Already carries one. Rewriting it would churn the row and, worse, could
+    // move the date if the relay returned a later duplicate.
+    if (typeof row.attestationEventId === 'string') return
+    const id = typeof row.id === 'string' ? row.id : undefined
+    if (!id) return
+    try {
+      await stamp(id, receipt)
+    } catch (error) {
+      console.error('[attestation] receipt not written back', error)
+    }
+  }
+
+  // Rows whose attestation was already on the relay, but which never got a
+  // receipt. Case 2 above.
+  for (const row of local) {
+    const event = seen.get(row.attestationNullifier as string)
+    if (!event) continue
+    await writeReceipt(row, {
+      nullifier: row.attestationNullifier as string,
+      eventId: event.id,
+      at: event.created_at * 1000,
+    })
+  }
 
   const gaps = local.filter((r) => !seen.has(r.attestationNullifier as string))
   let republished = 0
@@ -526,8 +612,18 @@ export async function reconcileAttestations(
     // Derived blinds make this idempotent: republishing after a partial relay
     // failure reproduces byte-identical content rather than a second,
     // conflicting commitment for the same redemption.
-    const result = await publish(buildAttestation(attestation, sk))
-    if (result.ok > 0) republished++
+    const event = buildAttestation(attestation, sk)
+    const result = await publish(event)
+    // Only on success. A row must never claim a public record that no relay
+    // accepted — the next sweep finds it as a gap again, which is correct.
+    if (result.ok > 0) {
+      republished++
+      await writeReceipt(row, {
+        nullifier,
+        eventId: event.id,
+        at: event.created_at * 1000,
+      })
+    }
   }
 
   return { checked: local.length, missing: gaps.length, republished }

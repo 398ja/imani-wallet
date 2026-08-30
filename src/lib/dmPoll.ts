@@ -19,7 +19,7 @@ import { createDmCryptoAdapter, toLegacyMetadata } from './dmCrypto'
 import { loadMerchant } from './merchant'
 import { checkRedemption } from './redemptionLedger'
 import type { VoucherValidation } from './voucherToken'
-import { getWallet, notifyWalletChanged } from './wallet'
+import { getWallet, notifyWalletChanged, recordReceiptByNullifier } from './wallet'
 import { legacyApi, withCorrelation } from './legacyBridge'
 
 /**
@@ -441,11 +441,22 @@ function redemptionAdapter(): RedemptionAdapter {
           faceValue: Number(meta?.faceValue ?? 0),
           unit: String(meta?.faceUnit ?? ''),
           signatureValid: validation?.signatureValid === true,
+        })
+          // Record WHERE it was published, on the row it belongs to (DEV-246).
+          //
+          // Null means no relay accepted it, and then nothing is written: a row
+          // must never claim a public record that does not exist. The sweep
+          // finds it as a gap later, and that is what stamps it.
+          //
+          // Still fire-and-forget. The write-back is as far off the redemption
+          // path as the publish it records, and for the same reason — the
+          // proofs are burnt and the row is saved before either runs.
+          .then((receipt) => (receipt ? recordReceiptByNullifier(receipt) : undefined))
           // `attestRedemption` swallows its own failures, so this catch should
           // never fire. It is here because the promise is not awaited: if that
           // contract ever broke, the rejection would be unhandled rather than
           // visible, and on a completed redemption it must be neither.
-        }).catch((error) => console.error('[dmPoll] attestation failed', error))
+          .catch((error) => console.error('[dmPoll] attestation failed', error))
       }
 
       return voucher

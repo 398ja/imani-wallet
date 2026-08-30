@@ -25,13 +25,17 @@ vi.mock('../nap', () => ({
 
 const published: unknown[] = []
 let publishThrows = false
-let relayHas: { tags: string[][]; content: string }[] = []
+/** What the relay answers a publish with. Zero = nobody took the record. */
+let publishOk = 1
+// `id` and `created_at` are read by the sweep to build a receipt (DEV-246), so
+// a stub relay has to carry them as a real event would.
+let relayHas: { id?: string; created_at?: number; tags: string[][]; content: string }[] = []
 
 vi.mock('../relay', () => ({
   publish: async (event: unknown) => {
     if (publishThrows) throw new Error('relay down')
-    published.push(event)
-    return { ok: 1, total: 1, errors: [] }
+    if (publishOk > 0) published.push(event)
+    return { ok: publishOk, total: 1, errors: publishOk === 0 ? ['refused'] : [] }
   },
   allEvents: async () => relayHas,
 }))
@@ -53,6 +57,7 @@ beforeEach(() => {
   currentKey = MERCHANT_A
   published.length = 0
   publishThrows = false
+  publishOk = 1
   signerThrows = false
 })
 
@@ -291,8 +296,51 @@ describe('attesting never breaks a redemption', () => {
     publishThrows = true
     await expect(
       attestRedemption({ token: 'cashuAfail', faceValue: 10, unit: 'XAF', signatureValid: true }),
-    ).resolves.toBeUndefined()
+      // Null, not a throw AND not a receipt: nothing was published, so there is
+      // nothing to record on the row.
+    ).resolves.toBeNull()
     expect(published).toHaveLength(0)
+  })
+
+  describe('the receipt it hands back (DEV-246)', () => {
+    it('names the event that was published, so the row can point at it', async () => {
+      const receipt = await attestRedemption({
+        token: 'cashuA-receipted',
+        faceValue: 2500,
+        unit: 'XAF',
+        signatureValid: true,
+      })
+      const event = published[0] as { id: string; created_at: number }
+      expect(receipt).toEqual({
+        nullifier: nullifierFor('cashuA-receipted'),
+        eventId: event.id,
+        // Milliseconds, converted from the event's own `created_at` seconds —
+        // NOT `Date.now()`. A sweep can publish long after the redemption, and
+        // the receipt has to date the publication.
+        at: event.created_at * 1000,
+      })
+    })
+
+    it('gives NO receipt when no relay accepted the record', async () => {
+      // The load-bearing case. A row stamped from this would claim a public
+      // record that nothing holds — worse than showing nothing, because it
+      // tells a merchant they are covered when they are not. The sweep is what
+      // finds this later.
+      publishOk = 0
+      await expect(
+        attestRedemption({ token: 'cashuA-nobody', faceValue: 10, unit: 'XAF', signatureValid: true }),
+      ).resolves.toBeNull()
+    })
+
+    it('gives no receipt for a coupon that never qualified', async () => {
+      // Plain ecash carries no issuer claim, so nothing is published and there
+      // is nothing to receipt. A UI keyed on the receipt therefore shows no
+      // ledger line here, which is correct.
+      await expect(
+        attestRedemption({ token: 'cashuAplain', faceValue: 10, unit: 'XAF', signatureValid: false }),
+      ).resolves.toBeNull()
+      expect(published).toHaveLength(0)
+    })
   })
 
   describe('what a disclosure refuses to do', () => {
@@ -400,6 +448,137 @@ describe('attesting never breaks a redemption', () => {
       ])
       expect(out).toEqual({ checked: 1, missing: 1, republished: 0 })
       expect(published).toHaveLength(0)
+    })
+
+    describe('stamping the receipt back onto the row (DEV-246)', () => {
+      it('stamps a gap it republished, so the row can show its record', async () => {
+        const gap = nullifierFor('cashuA-swept')
+        const stamped: [string, { nullifier: string; eventId: string; at: number }][] = []
+
+        await reconcileAttestations(
+          [{ id: 'received:r1', attestationNullifier: gap, attestedValue: 1800, attestedUnit: 'XAF' }],
+          async (id, receipt) => void stamped.push([id, receipt]),
+        )
+
+        const event = published[0] as { id: string; created_at: number }
+        expect(stamped).toEqual([
+          ['received:r1', { nullifier: gap, eventId: event.id, at: event.created_at * 1000 }],
+        ])
+      })
+
+      it('stamps a row whose attestation was ALREADY published but never recorded', async () => {
+        // Every redemption from before this feature is in this state: the
+        // record is on the relay, the row does not know where. Without this the
+        // sweep would report "all published" and those rows would never show a
+        // receipt, because they are not gaps and nothing else ever visits them.
+        const n = nullifierFor('cashuA-orphan')
+        relayHas = [{ id: 'ev-existing', created_at: 1000, tags: [['n', n]], content: '{}' }]
+        const stamped: [string, { eventId: string; at: number }][] = []
+
+        const out = await reconcileAttestations(
+          [{ id: 'received:r2', attestationNullifier: n, attestedValue: 2500, attestedUnit: 'XAF' }],
+          async (id, receipt) => void stamped.push([id, receipt]),
+        )
+
+        expect(out).toEqual({ checked: 1, missing: 0, republished: 0 })
+        expect(stamped).toEqual([['received:r2', { nullifier: n, eventId: 'ev-existing', at: 1000000 }]])
+      })
+
+      it('does NOT stamp a republish that no relay accepted', async () => {
+        // The row must never claim a public record that does not exist. The
+        // next sweep finds it as a gap again, which is the honest outcome.
+        publishOk = 0
+        const stamped: unknown[] = []
+
+        await reconcileAttestations(
+          [
+            {
+              id: 'received:r3',
+              attestationNullifier: nullifierFor('cashuA-refused'),
+              attestedValue: 1200,
+              attestedUnit: 'XAF',
+            },
+          ],
+          async (id, receipt) => void stamped.push([id, receipt]),
+        )
+
+        expect(stamped).toHaveLength(0)
+      })
+
+      it('leaves a row that already carries a receipt alone', async () => {
+        // Rewriting it churns the row, and a relay holding a later duplicate
+        // would move the date off the first time this redemption was recorded.
+        const n = nullifierFor('cashuA-already')
+        relayHas = [{ id: 'ev-new', created_at: 9000, tags: [['n', n]], content: '{}' }]
+        const stamped: unknown[] = []
+
+        await reconcileAttestations(
+          [
+            {
+              id: 'received:r4',
+              attestationNullifier: n,
+              attestationEventId: 'ev-old',
+              attestedValue: 2500,
+              attestedUnit: 'XAF',
+            },
+          ],
+          async (id, receipt) => void stamped.push([id, receipt]),
+        )
+
+        expect(stamped).toHaveLength(0)
+      })
+
+      it('dates a receipt from the OLDEST attestation when the relay holds duplicates', async () => {
+        // An earlier sweep can republish, leaving two events for one
+        // redemption. The receipt should name when the redemption was first
+        // recorded, not the most recent retry.
+        const n = nullifierFor('cashuA-dupes')
+        relayHas = [
+          { id: 'ev-late', created_at: 5000, tags: [['n', n]], content: '{}' },
+          { id: 'ev-first', created_at: 2000, tags: [['n', n]], content: '{}' },
+        ]
+        const stamped: { eventId: string; at: number }[] = []
+
+        await reconcileAttestations(
+          [{ id: 'received:r5', attestationNullifier: n, attestedValue: 2500, attestedUnit: 'XAF' }],
+          async (_id, receipt) => void stamped.push(receipt),
+        )
+
+        expect(stamped[0]).toMatchObject({ eventId: 'ev-first', at: 2000000 })
+      })
+
+      it('carries on sweeping when one write-back fails', async () => {
+        // A local storage failure must not abort the rest of the sweep — the
+        // publishing half is the part that matters, and it has already
+        // succeeded by the time the stamp is attempted.
+        const a = nullifierFor('cashuA-w1')
+        const b = nullifierFor('cashuA-w2')
+        const seen: string[] = []
+
+        const out = await reconcileAttestations(
+          [
+            { id: 'r-a', attestationNullifier: a, attestedValue: 100, attestedUnit: 'XAF' },
+            { id: 'r-b', attestationNullifier: b, attestedValue: 200, attestedUnit: 'XAF' },
+          ],
+          async (id) => {
+            seen.push(id)
+            if (id === 'r-a') throw new Error('IndexedDB is gone')
+          },
+        )
+
+        expect(out.republished).toBe(2)
+        expect(seen).toEqual(['r-a', 'r-b'])
+      })
+
+      it('sweeps exactly as before when no stamp callback is given', async () => {
+        // The parameter is optional, and the sweep's own contract must not
+        // depend on it — LedgerPage passes one, tests and any other caller may
+        // not.
+        const out = await reconcileAttestations([
+          { attestationNullifier: nullifierFor('cashuA-nostamp'), attestedValue: 500, attestedUnit: 'XAF' },
+        ])
+        expect(out).toEqual({ checked: 1, missing: 1, republished: 1 })
+      })
     })
   })
 
