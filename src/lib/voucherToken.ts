@@ -224,6 +224,44 @@ export interface ParsedVoucherToken {
  * `SignedVoucherCodec` does server-side), which is why `voucherCanonicalBytes`
  * has to reconstruct them rather than read them off the wire.
  */
+/**
+ * The voucher blob hex out of a NUT-10 secret, in either wire form.
+ *
+ * NUT-10 has two serialisations in the wild and this wallet meets both:
+ *
+ *  - `["VOUCHER", "<hex>", "<nonce>", [tags]]` — the flat four-element form.
+ *  - `["VOUCHER", {nonce, data, tags}]` — the object form, which is what
+ *    cashu-lib's `WellKnownSecretSerializer` actually writes today
+ *    ("Writes NUT-10's second element. Key order is nonce, data, tags").
+ *
+ * Reading only the flat form is how the merchant's Checks section went back to
+ * reading **"Not checked"** on genuinely verified coupons. `parseVoucherToken`
+ * did `hexToBytes(parsed[1])` on what was an OBJECT, threw, and
+ * `verifiedVoucherFrom` swallowed that as "not a voucher token" — so no
+ * validation record was ever produced. Silent by construction: a plain ecash
+ * token takes the same path legitimately, so nothing looked wrong.
+ *
+ * Returns null when the secret is not a VOUCHER secret at all, which is a real
+ * and expected case (plain ecash) rather than an error.
+ */
+function voucherBlobHex(secret: string): string | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(secret)
+  } catch {
+    return null
+  }
+  if (!Array.isArray(parsed) || parsed[0] !== 'VOUCHER') return null
+
+  const second = parsed[1]
+  if (typeof second === 'string') return second
+  if (second && typeof second === 'object') {
+    const data = (second as { data?: unknown }).data
+    return typeof data === 'string' ? data : null
+  }
+  return null
+}
+
 export function parseVoucherToken(token: string): ParsedVoucherToken {
   if (!token?.startsWith('cashuB')) {
     throw new Error('not a TokenV4 (cashuB) token')
@@ -237,12 +275,12 @@ export function parseVoucherToken(token: string): ParsedVoucherToken {
   const secret = proofs[0].s
   if (typeof secret !== 'string') throw new Error('proof has no NUT-10 secret')
 
-  const parsed = JSON.parse(secret) as [string, string, string, unknown[]]
-  if (!Array.isArray(parsed) || parsed[0] !== 'VOUCHER') {
+  const dataHex = voucherBlobHex(secret)
+  if (dataHex === null) {
     throw new Error('token is not a voucher (NUT-10 kind is not VOUCHER)')
   }
 
-  const blob = decodeCbor(hexToBytes(parsed[1])) as Record<string, unknown>
+  const blob = decodeCbor(hexToBytes(dataHex)) as Record<string, unknown>
   const voucher = readVoucherFields(blob)
 
   // Every proof must carry the same voucher. A bundle mixing provenance would
@@ -256,13 +294,11 @@ export function parseVoucherToken(token: string): ParsedVoucherToken {
   // the blob — the signed voucher — is shared.
   for (const p of proofs) {
     if (typeof p.s !== 'string') throw new Error('proof has no NUT-10 secret')
-    let blobHex: string
-    try {
-      blobHex = (JSON.parse(p.s) as [string, string, string, unknown[]])[1]
-    } catch {
-      throw new Error('proof secret is not a NUT-10 secret')
-    }
-    if (blobHex !== parsed[1]) throw new Error('token mixes proofs from more than one voucher')
+    // Through the same reader as above, so a bundle whose proofs use the object
+    // form is compared on its blobs rather than rejected outright.
+    const otherHex = voucherBlobHex(p.s)
+    if (otherHex === null) throw new Error('proof secret is not a NUT-10 secret')
+    if (otherHex !== dataHex) throw new Error('token mixes proofs from more than one voucher')
   }
 
   return {
