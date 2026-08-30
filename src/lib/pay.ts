@@ -163,18 +163,38 @@ function isUnspent(voucher: Voucher): boolean {
 /**
  * Coupons that could pay this amount, best first.
  *
- * Exact matches lead — they need no split at all — then the smallest coupons
- * that can be divided to it. Returns every candidate rather than one, because
- * the gateway can refuse a specific coupon (see payRequest).
+ * Soonest-expiring leads, which is the same rule `planParts` follows and for
+ * the same reason: the coupon closest to being lost is the one worth spending.
+ * This did NOT order by expiry, and the single-coupon path is the one that
+ * carries most payments — so a coupon expiring next week sat untouched while
+ * one expiring next year was spent, purely because it was smaller. The bundle
+ * path had the rule and this one did not, which meant the wallet's answer to
+ * "which coupon goes first" depended on whether one coupon happened to cover
+ * the amount.
+ *
+ * Within an expiry, exact matches lead — they need no split at all — then the
+ * smallest coupons that can be divided to it, which keeps the larger coupons
+ * whole for larger payments. Ties break on voucher id so the same wallet plans
+ * the same way twice.
+ *
+ * Returns every candidate rather than one, because the gateway can refuse a
+ * specific coupon (see payRequest).
  */
 export function selectVouchers(vouchers: Voucher[], amount: number): Voucher[] {
-  const usable = vouchers
+  return vouchers
     .filter((v) => v.token && isUnspent(v) && checkSplittable(v, amount).ok)
-    .sort((a, b) => (a.face_value ?? 0) - (b.face_value ?? 0))
-  return [
-    ...usable.filter((v) => v.face_value === amount),
-    ...usable.filter((v) => v.face_value !== amount),
-  ]
+    .sort((a, b) => {
+      const byExpiry = expiryMs(a) - expiryMs(b)
+      if (byExpiry !== 0) return byExpiry
+      // An exact match needs no split, so it beats anything else at the same
+      // expiry — including a smaller coupon that would have to be divided.
+      const exactA = a.face_value === amount ? 0 : 1
+      const exactB = b.face_value === amount ? 0 : 1
+      if (exactA !== exactB) return exactA - exactB
+      const byFace = (a.face_value ?? 0) - (b.face_value ?? 0)
+      if (byFace !== 0) return byFace
+      return String(a.voucher_id ?? '').localeCompare(String(b.voucher_id ?? ''))
+    })
 }
 
 /** One draw against one coupon. Several of them make a bundle. */
