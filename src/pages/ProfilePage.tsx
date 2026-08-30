@@ -18,6 +18,8 @@ import { Avatar, Screen, BackLink } from "../components/ui";
 import { formatDate, handleLabel, shortPubkey } from "../lib/format";
 import { profileName, type Profile } from "../lib/profile";
 import { canShare, shareText } from "../lib/native";
+import { LocationMap } from "../components/LocationMap";
+import type { MerchantProfile } from "../lib/merchant";
 
 /**
  * Your own profile, as others see it.
@@ -68,7 +70,21 @@ import { canShare, shareText } from "../lib/native";
  * It is also why the noun changes for an account with no NIP-05: what it has is
  * a key, and calling an npub a handle would be the one lie in the vocabulary.
  */
-export function ProfilePage({ profile }: { profile: Profile }) {
+export function ProfilePage({
+  profile,
+  merchant,
+}: {
+  profile: Profile;
+  /**
+   * This user's own stall record, when they have one.
+   *
+   * Passed in rather than fetched: `App` already holds it (`loadMerchant` at
+   * mount, refreshed on login), so a fetch here would be a second read of a
+   * record this screen's parent is already watching — and it would make a
+   * customer's profile do relay work to discover it has no stall.
+   */
+  merchant: MerchantProfile | null;
+}) {
   const [enlarged, setEnlarged] = useState(false);
 
   // Same fallback chain as Receive: accounts registered before handles existed
@@ -117,6 +133,30 @@ export function ProfilePage({ profile }: { profile: Profile }) {
           </a>
         </Field>
       )}
+
+      {/*
+        Where this stall trades, for a merchant looking at their own profile.
+
+        This screen is otherwise kind-0 only — "Only the current user's profile"
+        — and the location lives on the kind-30078 merchant record, so it
+        arrives from `merchant` rather than `profile`. It is still the same
+        person's page, and this is where they come to check what they have
+        published about themselves.
+
+        Absent for a customer, because they have no merchant record at all, and
+        absent for a merchant who trades no fixed pitch. `LocationMap` returns
+        null in both cases, so there is no empty row and no heading over
+        nothing.
+
+        `heading`, not `label`: both the labelled and unlabelled defaults are
+        customer wording ("Find X" / "Where to find them"), and you are not a
+        "them" to yourself. A page test caught that.
+      */}
+      <LocationMap
+        location={merchant?.location}
+        heading="Where you trade"
+        className="mt-5"
+      />
 
       <Field icon={Clock} label="Updated">
         <p className="text-sm text-mono-500">
