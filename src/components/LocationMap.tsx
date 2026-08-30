@@ -20,9 +20,12 @@ import { parseLatLng } from '../lib/coords'
  * Content-Security-Policy**, which does NOT live in this repo: it is in
  * `nginx/conf.d/wallet.*.conf` on the imani-deploy host. Staging once shipped a
  * CSP with no `frame-src`, so the iframe fell through to `default-src 'self'`
- * and every merchant watched the map fail to load. `wallet.prod.conf` still
- * lacks the directive (see DEV-227), so this WILL be blank on prod until it is
- * added — which is a policy fix, not a code one.
+ * and every merchant watched the map fail to load. Both `wallet.staging.conf`
+ * and `wallet.prod.conf` carry the directive now — prod gained it in
+ * imani-deploy `7a27f13`, added alongside this component precisely because
+ * shipping a customer-facing map under prod's old policy would have drawn a
+ * blank rectangle for every merchant. Verified in Chromium against both
+ * policies: the frame is refused under the old one and loads under the new.
  *
  * Renders nothing at all for an absent or unparseable location. A stall that
  * moves around is a normal case, not a missing value to apologise for, and an
