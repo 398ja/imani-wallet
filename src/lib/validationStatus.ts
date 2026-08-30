@@ -38,6 +38,25 @@ export function hasValidationClaim(tx: WalletTransaction): boolean {
   return tx.direction === 'in' && tx.voucherId !== undefined
 }
 
+/**
+ * Whether this row has a PUBLISHED attestation to show (DEV-246).
+ *
+ * Keyed on `attestationEventId` and never on `attestationNullifier`, and that
+ * is the whole point of the function existing. The nullifier is stamped on
+ * EVERY redemption — it has to be computed before `redeem()` swaps the token
+ * at the mint — so a UI gated on it would read "published" on plain ecash and
+ * on every customer's row alike. The event id is written only once a relay has
+ * accepted the record.
+ *
+ * Extracted from the JSX so it can be tested. `RecordDetailPages` has no test
+ * (the repo carries no DOM environment and its suites are logic-only), so a
+ * gate expressed inline there is a rule nothing can check. This is the same
+ * reasoning that put `hasValidationClaim` here rather than in the component.
+ */
+export function hasPublishedAttestation(tx: WalletTransaction): boolean {
+  return typeof tx.attestationEventId === 'string' && tx.attestationEventId.length > 0
+}
+
 /** The single reading of a coupon's checks. */
 export function validationStatus(v: VoucherValidation | undefined): ValidationStatus {
   if (!v) return 'unchecked'
