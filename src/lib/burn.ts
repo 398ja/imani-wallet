@@ -39,6 +39,38 @@ interface BurnApi {
     options?: { idempotencyKey?: string },
   ): Promise<{ receive_id?: string; receiveId?: string } | null>
   acknowledgeReceive(receiveId: string): Promise<void>
+  /** NUT-07 checkstate. `state` is 'UNSPENT' | 'PENDING' | 'SPENT'. */
+  validateToken(token: string): Promise<{ valid?: boolean; state?: string } | null>
+}
+
+/**
+ * Is this coupon's value already gone from the mint?
+ *
+ * The question the failure path has to answer, because the two reasons a burn
+ * fails need opposite handling:
+ *
+ *  - the gateway is unreachable, so the proofs are still live. The row must
+ *    stay `active` and be retried — it is still money.
+ *  - the proofs are ALREADY SPENT, which is what a second burn of the same
+ *    coupon looks like. Retrying can never succeed, and leaving the row
+ *    `active` counts value on the merchant's balance that exists nowhere.
+ *
+ * Without this the second case retried on every `saveVoucher` for the life of
+ * the row and failed identically each time, which is precisely what a reported
+ * `[burn] redeemed coupon not burnt` on a repeat looked like.
+ *
+ * Never throws: an unreachable gateway cannot distinguish either, and the
+ * caller's own fallback (leave it active, sweep later) is the safe answer.
+ */
+async function alreadySpent(api: BurnApi, token: string): Promise<boolean> {
+  try {
+    const result = await api.validateToken(token)
+    // Only an explicit SPENT settles it. `PENDING` is in flight and `UNSPENT`
+    // is live money; treating either as burnt would write off a real coupon.
+    return (result?.state ?? '').toUpperCase() === 'SPENT'
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -82,9 +114,35 @@ export async function burnIfSelfIssued(row: VoucherRow, ownPubkey: string): Prom
     notifyWalletChanged()
     return true
   } catch (error) {
+    // Already burnt? Then the row is a receipt, not money, and the burn has
+    // in effect succeeded — mark it so, or it is retried forever and keeps
+    // counting towards a balance the mint no longer backs.
+    try {
+      const api = (await legacyApi()) as unknown as BurnApi
+      if (await alreadySpent(api, row.token)) {
+        await getWallet().saveVoucher({ ...row, status: 'redeemed' })
+        notifyWalletChanged()
+        console.warn('[burn] proofs were already spent — row settled as redeemed', {
+          token_id: row.token_id,
+        })
+        return true
+      }
+    } catch {
+      // Fall through to the honest failure below. Nothing was written.
+    }
+
+    // The FIELDS, not the object. `shared/api.js` throws an Error carrying
+    // `status`, `code` and a server message, and logging the bare object
+    // renders as "Error" in the console with every one of them hidden — which
+    // is exactly what a report of this line looked like: a failure nobody
+    // could act on. An already-spent token (the benign case, see below) and a
+    // dead gateway are indistinguishable without them.
+    const e = error as { message?: string; status?: number; code?: string }
     console.error('[burn] redeemed coupon not burnt — it stays spendable until the next login', {
       token_id: row.token_id,
-      error,
+      status: e?.status,
+      code: e?.code,
+      message: e?.message ?? String(error),
     })
     return false
   }
