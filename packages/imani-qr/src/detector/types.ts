@@ -10,6 +10,16 @@ export enum QrType {
    * the standard scan event.
    */
   UR_FRAGMENT = 'ur_fragment',
+  /**
+   * DEV-131 — the barcode on a voucher pass (`voucher:<uuid>`), which names a
+   * coupon for the issuing merchant to resolve.
+   *
+   * An IDENTIFIER, never bearer value. Deliberately distinct from
+   * CASHU_TOKEN / UR_FRAGMENT, which carry the token itself: routing the two
+   * alike would have a merchant's till receive a customer's whole token
+   * instead of redeeming against it. See VoucherRedeemHandler.
+   */
+  VOUCHER_REDEEM = 'voucher_redeem',
   UNKNOWN = 'unknown'
 }
 
