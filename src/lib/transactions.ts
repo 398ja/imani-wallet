@@ -55,6 +55,20 @@ export interface WalletTransaction {
    * history — including on a device that has been wiped and restored.
    */
   attestationNullifier?: string
+  /**
+   * The id of the published attestation event, and when it was published.
+   *
+   * Present ONLY once a relay accepted the record. That is the whole point of
+   * carrying it separately from `attestationNullifier`: the nullifier is
+   * stamped on EVERY redemption, because it must be computed before the mint
+   * swap destroys the token it hashes, so its presence says nothing about
+   * whether anything was published. A row with a nullifier and no event id is
+   * simply not attested — plain ecash, a customer's own row, or a publish that
+   * no relay took. The UI must key on THIS field, never on the nullifier.
+   */
+  attestationEventId?: string
+  /** Epoch milliseconds. The EVENT's `created_at`, not the redemption's date. */
+  attestationAt?: number
   memo?: string
   bundleId?: string
   /**
@@ -145,6 +159,12 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     // into "fine" — the one thing this must never do.
     validation: isValidation(r.validation) ? r.validation : undefined,
     attestationNullifier: str(r.attestationNullifier),
+    attestationEventId: str(r.attestationEventId),
+    // Through the same magnitude-discriminating normaliser as `timestamp`: the
+    // receipt is written in milliseconds, but a row that has been round-tripped
+    // through a relay record could carry seconds, and dating a receipt to 1970
+    // reads as data loss.
+    attestationAt: r.attestationAt === undefined ? undefined : toEpochMs(r.attestationAt),
     memo: str(r.memo),
     recipientName: str(r.recipientName),
     bundleId: str(r.bundleId) ?? str(r.bundle_id),

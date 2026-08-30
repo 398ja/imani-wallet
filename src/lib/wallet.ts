@@ -281,6 +281,77 @@ export async function getTransactionRow(id: string): Promise<TransactionRow | nu
   return (await getWallet().getTransaction(id)) ?? null
 }
 
+/**
+ * Stamp a row with the receipt of the attestation published for it (DEV-246).
+ *
+ * A write-back rather than a field set at redemption time, because the receipt
+ * cannot exist yet when the row is written: `attestRedemption` runs AFTER the
+ * proofs are burnt and the row is saved, deliberately, so that a relay failure
+ * can never turn a completed redemption into a reported error. The event id and
+ * date only come into being once a relay has taken the record.
+ *
+ * `updateTransaction` merges a patch, so this touches nothing else on the row.
+ * It returns null for an id that is not there, which is not an error: the sweep
+ * reads a snapshot, and a row can be gone by the time its receipt is written.
+ *
+ * Never throws. The redemption is complete and the money has moved; failing to
+ * record where it was published must not surface as a failed redemption.
+ */
+export async function recordAttestationReceipt(
+  id: string,
+  receipt: { nullifier: string; eventId: string; at: number },
+): Promise<void> {
+  try {
+    await getWallet().updateTransaction(id, {
+      attestationNullifier: receipt.nullifier,
+      attestationEventId: receipt.eventId,
+      attestationAt: receipt.at,
+    } as unknown as Partial<TransactionRow>)
+    // The detail screen may be open on this very row. Without this the receipt
+    // appears only on the next navigation — see notifyWalletChanged: a write
+    // made by this tab is not echoed back to it by BroadcastChannel.
+    notifyWalletChanged()
+  } catch (error) {
+    console.error('[wallet] attestation receipt not recorded', error)
+  }
+}
+
+/**
+ * The same write-back, for a caller that knows the nullifier but not the row id.
+ *
+ * dmPoll is that caller. Its row id is `received:<tokenId>` where `tokenId` is
+ * the fingerprint of the token AFTER the mint swap — a value the redemption
+ * path computes internally and does not hand back. Reconstructing it here would
+ * duplicate the legacy writer's id convention in a second place, which is
+ * exactly the class of assumption that made `transactionsWith` match nothing.
+ *
+ * The nullifier is a sounder key anyway: `withCorrelation` stamped it onto the
+ * row during the very redemption being attested, and it is unique per token.
+ *
+ * A linear scan, deliberately — there is no index on this field, the store is
+ * small, and this runs once per redemption well off the hot path.
+ */
+export async function recordReceiptByNullifier(receipt: {
+  nullifier: string
+  eventId: string
+  at: number
+}): Promise<void> {
+  try {
+    const rows = await listTransactions()
+    const match = rows.find(
+      (row) =>
+        (row as unknown as Record<string, unknown>).attestationNullifier === receipt.nullifier,
+    )
+    // No row is not an error. The stamp rides `withCorrelation`, and a
+    // redemption written by some path that does not carry it has nowhere to
+    // put the receipt; the sweep will not find it either, which is honest.
+    if (!match?.id) return
+    await recordAttestationReceipt(match.id, receipt)
+  } catch (error) {
+    console.error('[wallet] attestation receipt not matched to a row', error)
+  }
+}
+
 export async function listTransactions(): Promise<TransactionRow[]> {
   return getWallet().getAllTransactions()
 }
