@@ -228,3 +228,130 @@ mintLive("the mint's state vocabulary", () => {
     expect(body.states?.[0]?.state).toBe('UNSPENT')
   }, 60000)
 })
+
+/**
+ * The case that was "not proven": a REAL proof, genuinely spent.
+ *
+ * Everything above establishes the vocabulary and the safe direction. What it
+ * could not establish is the one verdict the fix exists to act on — that a
+ * coupon whose proofs are gone actually reports SPENT — because producing one
+ * needs a mint that will sign, and the local mint cannot
+ * (ClassNotFoundException: PhoenixdGateway on every quote).
+ *
+ * Staging's mint can: NUT-04 is enabled and phoenixd-mock auto-settles the
+ * invoice. So this mints 2 sat, swaps it (the same operation `api.receive`
+ * performs, and therefore the same one a burn performs), and watches the
+ * state cross from UNSPENT to SPENT.
+ *
+ * Then it evaluates `alreadySpent`'s literal expression against that state.
+ * That is the assertion that matters: not that a mint has a SPENT state, but
+ * that OUR comparison returns true when it sees one.
+ *
+ * Costs 2 sat of mock-Lightning value on a shared staging stack, which is why
+ * it is gated behind its own flag rather than riding PROBE_MINT:
+ *
+ *   PROBE_MINT_SPEND=1 npx vitest run src/lib/__tests__/burnProbe.test.ts
+ */
+const STAGING_MINT = process.env.STAGING_MINT_URL ?? 'https://mint.staging.398ja.xyz'
+const spendLive = process.env.PROBE_MINT_SPEND ? describe : describe.skip
+
+spendLive('a genuinely spent proof', () => {
+  it('crosses UNSPENT -> SPENT, and alreadySpent reads it as settled', async () => {
+    const { blindMessage, constructProofFromPromise, serializeProof } = await import(
+      '@cashu/crypto/modules/client'
+    )
+    const { hashToCurve } = await import('@cashu/crypto/modules/common')
+    const { secp256k1 } = await import('@noble/curves/secp256k1.js')
+    const { bytesToHex, randomBytes } = await import('@noble/hashes/utils')
+
+    const post = async (path: string, body: unknown) => {
+      const r = await fetch(STAGING_MINT + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      return { status: r.status, body: (await r.json().catch(() => null)) as never }
+    }
+
+    const keysets = (await (await fetch(`${STAGING_MINT}/v1/keysets`)).json()) as {
+      keysets: { id: string; unit: string; active: boolean }[]
+    }
+    const keysetId = keysets.keysets.find((k) => k.active && k.unit === 'sat')!.id
+    const keys = (
+      (await (await fetch(`${STAGING_MINT}/v1/keys/${keysetId}`)).json()) as {
+        keysets: { keys: Record<string, string> }[]
+      }
+    ).keysets[0].keys
+
+    // Mint 2 sat. phoenixd-mock settles the invoice on its own.
+    const quote = (await post('/v1/mint/quote/bolt11', { amount: 2, unit: 'sat' })).body as {
+      quote: string
+      state: string
+    }
+    let state = quote.state
+    for (let i = 0; i < 12 && state === 'UNPAID'; i++) {
+      await new Promise((r) => setTimeout(r, 1500))
+      state = (
+        (await (
+          await fetch(`${STAGING_MINT}/v1/mint/quote/bolt11/${quote.quote}`)
+        ).json()) as { state: string }
+      ).state
+    }
+
+    // A printable secret: the mint hashes the secret STRING, so random bytes
+    // would produce a Y neither side agrees on. Cost an hour to find.
+    const secretStr = bytesToHex(randomBytes(32))
+    const secretBytes = new TextEncoder().encode(secretStr)
+    const bm = blindMessage(secretBytes, undefined)
+
+    const minted = await post('/v1/mint/bolt11', {
+      quote: quote.quote,
+      outputs: [{ amount: 2, id: keysetId, B_: bm.B_.toHex(true) }],
+    })
+    expect(minted.status, 'staging mint should sign a funded quote').toBe(200)
+
+    const sig = (minted.body as { signatures: { id: string; amount: number; C_: string }[] })
+      .signatures[0]
+    // `@cashu/crypto` bundles its own @noble/curves, so its Point type is
+    // nominally different from the one this repo resolves even though the
+    // runtime values are identical. Casting at this seam is honest about that;
+    // the assertions below are on the mint's answers, not on these types.
+    const point = (hex: string) => secp256k1.Point.fromHex(hex) as never
+    const proof = serializeProof(
+      constructProofFromPromise(
+        { id: sig.id, amount: sig.amount, C_: point(sig.C_) },
+        bm.r,
+        secretBytes,
+        point(keys[String(sig.amount)]),
+      ),
+    )
+
+    const Y = bytesToHex(hashToCurve(new TextEncoder().encode(proof.secret)).toRawBytes(true))
+    const stateOf = async () =>
+      ((await post('/v1/checkstate', { Ys: [Y] })).body as { states: { state: string }[] }).states[0]
+        .state
+
+    expect(await stateOf(), 'a freshly minted proof is live money').toBe('UNSPENT')
+
+    // Spend it. A swap is what `api.receive` does, which is what a burn does.
+    const swap = await post('/v1/swap', {
+      inputs: [proof],
+      outputs: [{ amount: 2, id: keysetId, B_: blindMessage(new TextEncoder().encode(bytesToHex(randomBytes(32))), undefined).B_.toHex(true) }],
+    })
+    expect(swap.status, 'the swap must succeed or nothing is spent').toBe(200)
+
+    const after = await stateOf()
+    expect(after, 'the mint must report the burnt proof as SPENT').toBe('SPENT')
+
+    // THE assertion: alreadySpent's literal expression, against a real verdict.
+    expect((after ?? '').toUpperCase() === 'SPENT').toBe(true)
+
+    // And a second burn of the same coupon is refused — the scenario that had
+    // the row retrying forever.
+    const again = await post('/v1/swap', {
+      inputs: [proof],
+      outputs: [{ amount: 2, id: keysetId, B_: blindMessage(new TextEncoder().encode(bytesToHex(randomBytes(32))), undefined).B_.toHex(true) }],
+    })
+    expect(again.status).toBe(400)
+  }, 120000)
+})
