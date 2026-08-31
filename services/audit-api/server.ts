@@ -46,6 +46,7 @@ import {
   findDuplicates,
   readAttestations,
   summarise,
+  tallyDefects,
   verifyDisclosedTotal,
   type AuditedAttestation,
   type RejectedAttestation,
@@ -283,10 +284,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       // not necessarily malformed — a future batched format is refused by a
       // reader that predates it, which is correct behaviour on both sides.
       refused: rejected.length,
-      refusedReasons: rejected.reduce<Record<string, number>>((acc, r) => {
-        acc[r.defect] = (acc[r.defect] ?? 0) + 1
-        return acc
-      }, {}),
+      refusedReasons: tallyDefects(rejected),
       merchants: ledgers.length,
       units: [...new Set(accepted.map((a) => a.unit))].sort(),
       conflicts: duplicates.filter((d) => !d.benign).length,

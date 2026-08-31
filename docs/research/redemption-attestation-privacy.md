@@ -187,12 +187,20 @@ it is what each reader can *open*.
 | See the stream is live, count redemptions | yes | yes |
 | **Confirm a specific coupon was honoured** | yes | **blocked — see below** |
 | Read one merchant's totals | yes | only on that merchant's disclosure |
-| Identify the real stall behind a pseudonym | yes | no |
-| Cross-merchant analytics | yes | no |
+| Identify the real stall behind a pseudonym | **not built** | no |
+| Cross-merchant analytics | **not built** | no |
 
-Internal gets more through a **disclosure granted at onboarding** — one signed
-statement linking `ledgerPub` to the stall — not through a second privileged
-feed. One stream, one format, nothing to keep in sync.
+Internal was to get more through a **disclosure granted at onboarding** — one
+signed statement linking `ledgerPub` to the stall — not through a second
+privileged feed. One stream, one format, nothing to keep in sync.
+
+> **That disclosure does not exist.** Nothing produces, stores or consumes it,
+> so the internal reader is today byte-for-byte identical to the external one.
+> Caught by the spec axis of the code review; filed as `i41dcl4gk6dd`, where the
+> first question is whether it should be built at all — a stored
+> `ledgerPub → stall` mapping is the single artefact whose breach
+> de-anonymises every merchant at once, which is the same shape of risk this
+> design rejected dual-encryption for.
 
 ### The trust moment
 
