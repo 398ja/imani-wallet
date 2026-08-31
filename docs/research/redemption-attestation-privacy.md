@@ -296,6 +296,26 @@ external reader cannot be told something an internal one would not be.
 | Merchant's own view | Settings → Redemption ledger |
 | Dashboard | Grafana → *Redemption audit ledger* |
 | Live probe | `scripts/audit-probe.mjs` |
+| Independent verifier | `scripts/verify-attestations.py` (shares no code) |
+
+### The disclosure check is reachable
+
+`POST /api/v1/audit/verify-total` with `{nullifiers, total, blindSum}` answers
+the *"read one merchant's totals — only on that merchant's disclosure"* row.
+Needs no key, which is what makes it an audit rather than a favour.
+
+It was very nearly shipped as a promise rather than a capability:
+`verifyDisclosedTotal` and `commitTo` were correct, tested, and called by
+**nothing but their own tests**, stranded inside the signing module where the
+hosted service could not import them. They now live in the reader with the other
+key-free checks, and `attestation.ts` re-exports them so merchant-side callers
+are unchanged.
+
+Verified against the live relay: a true total of 4000 over two published
+commitments verifies; understating (3000) and overstating (5000) are both
+rejected. The response carries the caveat that a `true` binds the disclosed SET
+and not a period — the merchant chooses what to disclose, so omission
+reconciles at a lower total.
 
 Three findings worth carrying forward, each from running the thing rather than
 reasoning about it:
