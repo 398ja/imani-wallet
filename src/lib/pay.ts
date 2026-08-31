@@ -8,6 +8,7 @@ import { merchantStatus } from './merchant'
 import { buildPaymentTransaction, buildSentTransaction } from './transactions'
 import type { NUT18VRequest } from './nap'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
+import { toEpochMs } from './format'
 
 /**
  * Paying a merchant's voucher payment request.
@@ -163,18 +164,38 @@ function isUnspent(voucher: Voucher): boolean {
 /**
  * Coupons that could pay this amount, best first.
  *
- * Exact matches lead — they need no split at all — then the smallest coupons
- * that can be divided to it. Returns every candidate rather than one, because
- * the gateway can refuse a specific coupon (see payRequest).
+ * Soonest-expiring leads, which is the same rule `planParts` follows and for
+ * the same reason: the coupon closest to being lost is the one worth spending.
+ * This did NOT order by expiry, and the single-coupon path is the one that
+ * carries most payments — so a coupon expiring next week sat untouched while
+ * one expiring next year was spent, purely because it was smaller. The bundle
+ * path had the rule and this one did not, which meant the wallet's answer to
+ * "which coupon goes first" depended on whether one coupon happened to cover
+ * the amount.
+ *
+ * Within an expiry, exact matches lead — they need no split at all — then the
+ * smallest coupons that can be divided to it, which keeps the larger coupons
+ * whole for larger payments. Ties break on voucher id so the same wallet plans
+ * the same way twice.
+ *
+ * Returns every candidate rather than one, because the gateway can refuse a
+ * specific coupon (see payRequest).
  */
 export function selectVouchers(vouchers: Voucher[], amount: number): Voucher[] {
-  const usable = vouchers
+  return vouchers
     .filter((v) => v.token && isUnspent(v) && checkSplittable(v, amount).ok)
-    .sort((a, b) => (a.face_value ?? 0) - (b.face_value ?? 0))
-  return [
-    ...usable.filter((v) => v.face_value === amount),
-    ...usable.filter((v) => v.face_value !== amount),
-  ]
+    .sort((a, b) => {
+      const byExpiry = expiryMs(a) - expiryMs(b)
+      if (byExpiry !== 0) return byExpiry
+      // An exact match needs no split, so it beats anything else at the same
+      // expiry — including a smaller coupon that would have to be divided.
+      const exactA = a.face_value === amount ? 0 : 1
+      const exactB = b.face_value === amount ? 0 : 1
+      if (exactA !== exactB) return exactA - exactB
+      const byFace = (a.face_value ?? 0) - (b.face_value ?? 0)
+      if (byFace !== 0) return byFace
+      return String(a.voucher_id ?? '').localeCompare(String(b.voucher_id ?? ''))
+    })
 }
 
 /** One draw against one coupon. Several of them make a bundle. */
@@ -236,10 +257,30 @@ export function planParts(vouchers: Voucher[], amount: number): SendPlan {
   return { parts, remaining }
 }
 
-/** Sortable expiry. No expiry sorts last — it is the coupon in least danger. */
+/**
+ * Sortable expiry. No expiry sorts last — it is the coupon in least danger.
+ *
+ * Through `toEpochMs`, NOT `Date.parse`, because `expires_at` is not reliably
+ * an ISO string however the type declares it. `Voucher.expires_at` says
+ * `string`, and `dmPoll`'s storage adapter casts a NUMBER into it
+ * (`v.expires_at as number | undefined`), which is the shape the redemption
+ * path actually stores; `issue.ts` records the same, that it "has been seen as
+ * both an ISO-8601 string and a number, and the number itself could be seconds
+ * or milliseconds".
+ *
+ * `Date.parse(1788220800)` is NaN, so every numerically-stored expiry fell to
+ * the MAX_SAFE_INTEGER branch and sorted as "never expires" — putting the
+ * coupon in most danger LAST, the exact opposite of this function's purpose.
+ * It was invisible while this only broke ties inside `planParts`; making expiry
+ * the primary key on both send paths is what turned it into the money bug it
+ * always looked like.
+ *
+ * `toEpochMs` is the wallet's one answer to this question — it takes ISO,
+ * seconds or milliseconds, and applies the same 1e11 magnitude test used for
+ * every other timestamp here.
+ */
 function expiryMs(voucher: Voucher): number {
-  const parsed = Date.parse(voucher.expires_at ?? '')
-  return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed
+  return toEpochMs(voucher.expires_at as number | string | undefined) ?? Number.MAX_SAFE_INTEGER
 }
 
 /**

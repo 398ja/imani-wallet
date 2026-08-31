@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.node.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.services.tsbuildinfo",
+    "types": ["node", "vitest/globals"],
+    /* The service imports src/lib/*.ts by relative path and Node runs it through
+       tsx, so extensionless TS imports resolve the same way Vite resolves them
+       for the app. */
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  /* `src/lib/audit.ts` is included, not just referenced: the audit API's whole
+     point is that it runs the SAME reader the wallet does, so a change there
+     that breaks the service must fail this build rather than the deployment.
+
+     The service reads the kind and version from `src/lib/attestationKind.ts`,
+     which is pulled in automatically as an import of audit.ts. It does NOT
+     import `attestation.ts`: the producer reaches `./nap` and `./relay`, hence
+     `@imani/nap-client-web` and `import.meta.env` — a browser dependency graph
+     and a Vite-only global that no Node service has. That split is also why the
+     API physically cannot sign an attestation. */
+  "include": ["services", "src/lib/audit.ts"]
+}

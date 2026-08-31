@@ -28,4 +28,16 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    // `services/` is Node, not React. The rules-of-hooks lint matches on the
+    // `use*` NAME, so nostr-tools' `useWebSocketImplementation` — a plain setter
+    // that installs a WebSocket class — is reported as a hook called outside a
+    // component. It is not a hook and there is no React here at all.
+    //
+    // Scoped to this directory rather than disabled inline, so the rule keeps
+    // its full force everywhere it is meaningful.
+    files: ['services/**/*.ts'],
+    languageOptions: { globals: globals.node },
+    rules: { 'react-hooks/rules-of-hooks': 'off' },
+  },
 ])

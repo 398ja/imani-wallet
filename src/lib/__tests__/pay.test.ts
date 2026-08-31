@@ -261,6 +261,98 @@ describe('selectVouchers and splitObstacle', () => {
     expect(chosen[0].voucher_id).toBe('v-exact')
   })
 
+  /**
+   * The single-coupon path carries most payments, and it did not order by
+   * expiry — only `planParts`, the bundle path, did. So a coupon expiring next
+   * week sat untouched while one expiring next year was spent, purely because
+   * it was smaller, and the wallet's answer to "which coupon goes first"
+   * depended on whether one coupon happened to cover the amount.
+   */
+  it('spends the soonest-expiring coupon first, as the bundle path does', () => {
+    const soon = xaf({
+      voucher_id: 'v-soon',
+      face_value: 5000,
+      expires_at: '2026-09-01T00:00:00Z',
+    })
+    const later = xaf({
+      voucher_id: 'v-later',
+      face_value: 2500,
+      expires_at: '2027-09-01T00:00:00Z',
+    })
+
+    // `later` is the smaller coupon, which is what the old size-only sort chose.
+    expect(selectVouchers([later, soon], 1000)[0].voucher_id).toBe('v-soon')
+    // Input order must not decide it either.
+    expect(selectVouchers([soon, later], 1000)[0].voucher_id).toBe('v-soon')
+  })
+
+  /** A coupon that never expires is the one in least danger, so it goes last. */
+  it('prefers an expiring coupon over one with no expiry at all', () => {
+    const expiring = xaf({ voucher_id: 'v-expiring', expires_at: '2026-09-01T00:00:00Z' })
+    const forever = xaf({ voucher_id: 'v-forever', face_value: 2500 })
+
+    expect(selectVouchers([forever, expiring], 1000)[0].voucher_id).toBe('v-expiring')
+  })
+
+  /**
+   * Expiry outranks the exact-match rule: a split is a mint round trip, losing
+   * a coupon is losing money. Same expiry, and the exact match leads again.
+   */
+  it('takes the sooner coupon even when a later one is an exact match', () => {
+    const soonSplit = xaf({
+      voucher_id: 'v-soon',
+      face_value: 5000,
+      expires_at: '2026-09-01T00:00:00Z',
+    })
+    const laterExact = xaf({
+      voucher_id: 'v-later-exact',
+      face_value: 1000,
+      expires_at: '2027-09-01T00:00:00Z',
+    })
+    expect(selectVouchers([laterExact, soonSplit], 1000)[0].voucher_id).toBe('v-soon')
+
+    const sameDayExact = xaf({
+      voucher_id: 'v-same-exact',
+      face_value: 1000,
+      expires_at: '2026-09-01T00:00:00Z',
+    })
+    expect(selectVouchers([soonSplit, sameDayExact], 1000)[0].voucher_id).toBe('v-same-exact')
+  })
+
+  /** Two coupons alike but for their ids must not swap order between runs. */
+  it('is deterministic when expiry and face are equal', () => {
+    const a = xaf({ voucher_id: 'v-aaa', expires_at: '2026-09-01T00:00:00Z' })
+    const b = xaf({ voucher_id: 'v-bbb', expires_at: '2026-09-01T00:00:00Z' })
+
+    expect(selectVouchers([b, a], 1000).map((v) => v.voucher_id)).toEqual(['v-aaa', 'v-bbb'])
+    expect(selectVouchers([a, b], 1000).map((v) => v.voucher_id)).toEqual(['v-aaa', 'v-bbb'])
+  })
+
+  /**
+   * `expires_at` is typed `string` and is not reliably one. dmPoll's storage
+   * adapter casts a NUMBER into it, which is the shape the redemption path
+   * stores, and `Date.parse(1788220800)` is NaN — so every numerically-stored
+   * expiry read as "never expires" and the coupon in most danger sorted LAST.
+   *
+   * Harmless while expiry only broke ties inside planParts. Making it the
+   * primary key on both send paths is what would have turned a latent type lie
+   * into spending the wrong coupon.
+   */
+  it('reads a numeric expiry, not only an ISO string', () => {
+    const seconds = Math.floor(Date.parse('2026-09-01T00:00:00Z') / 1000)
+    const soon = xaf({ voucher_id: 'v-soon-epoch', expires_at: seconds as unknown as string })
+    const later = xaf({ voucher_id: 'v-later', face_value: 2500, expires_at: '2027-09-01T00:00:00Z' })
+
+    expect(selectVouchers([later, soon], 1000)[0].voucher_id).toBe('v-soon-epoch')
+
+    // Milliseconds too — the same field has been seen in both magnitudes.
+    const millis = xaf({
+      voucher_id: 'v-soon-millis',
+      expires_at: (seconds * 1000) as unknown as string,
+    })
+    expect(selectVouchers([later, millis], 1000)[0].voucher_id).toBe('v-soon-millis')
+  })
+
   it('explains the obstacle when nothing qualifies, and stays silent when one does', () => {
     expect(splitObstacle([xaf()], 10)).toContain('25')
     expect(splitObstacle([xaf()], 25)).toBeNull()
@@ -311,6 +403,24 @@ describe('planParts', () => {
     expect(plan.remaining).toBe(0)
     expect(plan.parts).toHaveLength(1)
     expect(plan.parts[0].voucher.voucher_id).toBe('v-soon')
+  })
+
+  /**
+   * The two paths must not disagree about which coupon goes first. They did:
+   * `selectVouchers` sorted by size alone, so which coupon the wallet reached
+   * for depended on whether one happened to cover the amount — the same three
+   * coupons, a different first pick, for no reason a customer could see.
+   */
+  it('agrees with selectVouchers about which coupon leads', () => {
+    const soon = coupon({ voucher_id: 'v-soon', face_value: 500, expires_at: at(2) })
+    const later = coupon({ voucher_id: 'v-later', face_value: 300, expires_at: at(60) })
+    const forever = coupon({ voucher_id: 'v-forever', face_value: 400 })
+    const all = [forever, later, soon]
+
+    // One coupon covers 200, so the single path answers.
+    expect(selectVouchers(all, 200)[0].voucher_id).toBe('v-soon')
+    // Nothing covers 1000 alone, so the bundle path answers — same coupon first.
+    expect(planParts(all, 1000).parts[0].voucher.voucher_id).toBe('v-soon')
   })
 
   it('draws across several coupons when no single one covers the amount', () => {

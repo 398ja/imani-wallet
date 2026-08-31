@@ -236,7 +236,15 @@ export default defineConfig({
   // goes red on tests this app does not own and did not break.
   //
   // Run a package's own suite from its own directory, as imani-apps did.
-  test: { include: ['src/**/*.test.{ts,tsx}'] },
+  //
+  // `services/` is OURS, unlike `packages/`, so it is collected: the audit API
+  // is code this repo authors and its suite is the only thing standing between
+  // an auditor and a forged record auditing clean. It is listed explicitly
+  // rather than by widening the glob, so a future vendored directory does not
+  // get pulled in by accident.
+  test: {
+    include: ['src/**/*.test.{ts,tsx}', 'services/**/*.test.{ts,tsx}'],
+  },
   resolve: {
     // ONE React, or the production build renders a blank page.
     //

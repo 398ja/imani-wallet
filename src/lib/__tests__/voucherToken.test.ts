@@ -182,7 +182,57 @@ const blobHex = (() => {
 
 const secretFor = (hex: string, nonce: string) => JSON.stringify(['VOUCHER', hex, nonce, []])
 
+/**
+ * The NUT-10 secret as cashu-lib actually writes it today.
+ *
+ * `WellKnownSecretSerializer` emits `["VOUCHER", {nonce, data, tags}]` — an
+ * OBJECT as the second element, not the flat `[kind, hex, nonce, tags]` form.
+ * Every test above builds the flat form, which is why the parser could stop
+ * reading real tokens without a single test noticing.
+ */
+const objectSecretFor = (hex: string, nonce: string) =>
+  JSON.stringify(['VOUCHER', { nonce, data: hex, tags: [] }])
+
 describe('parseVoucherToken', () => {
+  /**
+   * The regression behind "Not checked" coming back on verified coupons.
+   *
+   * cashu-lib's `WellKnownSecretSerializer` writes the object form, so
+   * `hexToBytes(parsed[1])` ran against an OBJECT and threw.
+   * `verifiedVoucherFrom` catches that and treats it as "not a voucher" — the
+   * same path plain ecash takes legitimately — so no validation record was ever
+   * built and the merchant's Checks section read "Not checked" on a coupon
+   * whose signature would have verified.
+   */
+  it('reads the object-form NUT-10 secret that cashu-lib actually writes', () => {
+    const parsed = parseVoucherToken(makeToken([objectSecretFor(blobHex, 'nonce-a')]))
+    expect(parsed.voucher.voucherId).toBe(STAGING.voucherId)
+    expect(parsed.voucher.issuerId).toBe(STAGING.issuerId)
+    expect(parsed.tokenAmount).toBe(1)
+  })
+
+  it('reads a multi-proof token in the object form', () => {
+    const parsed = parseVoucherToken(
+      makeToken([objectSecretFor(blobHex, 'nonce-a'), objectSecretFor(blobHex, 'nonce-b')]),
+    )
+    expect(parsed.proofCount).toBe(2)
+    expect(parsed.tokenAmount).toBe(2)
+  })
+
+  /** The mixed-provenance guard must survive the shape change, not be lost to it. */
+  it('still rejects mixed vouchers in the object form', () => {
+    const other = blobHex.replace(/^..../, '9999')
+    expect(() =>
+      parseVoucherToken(makeToken([objectSecretFor(blobHex, 'a'), objectSecretFor(other, 'b')])),
+    ).toThrow(/more than one voucher/)
+  })
+
+  /** A VOUCHER secret whose object carries no `data` is malformed, not a voucher. */
+  it('rejects an object-form secret with no data field', () => {
+    const secret = JSON.stringify(['VOUCHER', { nonce: 'n', tags: [] }])
+    expect(() => parseVoucherToken(makeToken([secret]))).toThrow(/not a voucher/)
+  })
+
   it('accepts a multi-proof token whose proofs have different wrapper nonces', () => {
     // Every real token looks like this — proofs MUST have distinct NUT-10 nonces
     // or they would be the same proof. Comparing whole secret strings rejected

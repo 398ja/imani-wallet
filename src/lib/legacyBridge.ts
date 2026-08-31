@@ -131,7 +131,14 @@ function loadScript(src: string): Promise<void> {
  * `for` loop at both of its call sites, so redeems never overlap.
  */
 let pending:
-  | { bundleId?: string; requestId?: string; validation?: Record<string, unknown> }
+  | {
+      bundleId?: string
+      requestId?: string
+      validation?: Record<string, unknown>
+      attestationNullifier?: string
+      attestedValue?: number
+      attestedUnit?: string
+    }
   | undefined
 
 /**
@@ -153,10 +160,18 @@ let pending:
  * row. Verified by driving the real vendored builder both ways.
  */
 export async function withCorrelation<T>(
-  ids: { bundleId?: string; requestId?: string; validation?: Record<string, unknown> },
+  ids: {
+    bundleId?: string
+    requestId?: string
+    validation?: Record<string, unknown>
+    attestationNullifier?: string
+    attestedValue?: number
+    attestedUnit?: string
+  },
   redeem: () => Promise<T>,
 ): Promise<T> {
-  pending = ids.bundleId || ids.requestId || ids.validation ? ids : undefined
+  pending =
+    ids.bundleId || ids.requestId || ids.validation || ids.attestationNullifier ? ids : undefined
   try {
     return await redeem()
   } finally {
@@ -181,6 +196,22 @@ function stampCorrelation(rows: unknown[]): unknown[] {
       // verification result keeps its own. Absent stays absent, because absent
       // must read as "not checked" and never as a pass.
       validation: t.validation || ids.validation,
+      // The nullifier of the attestation published for this redemption.
+      //
+      // Kept because it CANNOT be recomputed later: it is derived from the
+      // received token, and `redeem()` swaps that token at the mint, so the row
+      // is keyed on a different token's fingerprint. Without this, a merchant
+      // on a new device can re-derive their ledger key and fetch their own
+      // attestations but has nothing to match them against — self-audit,
+      // which the whole derived-blind design exists to enable, is unreachable.
+      //
+      // A hash, not bearer value: it is already published, so a local copy
+      // discloses nothing that is not public.
+      attestationNullifier: t.attestationNullifier || ids.attestationNullifier,
+      // Ride along with the nullifier: the sweep needs the figures the
+      // attestation actually committed, not the row's own amount.
+      attestedValue: t.attestedValue ?? ids.attestedValue,
+      attestedUnit: t.attestedUnit || ids.attestedUnit,
     }
   })
 }

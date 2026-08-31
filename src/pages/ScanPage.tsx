@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ClipboardPaste } from 'lucide-react'
-import { PaymentRequestHandler } from 'imani-qr'
+import { PaymentRequestHandler, VoucherRedeemHandler } from 'imani-qr'
 
 import { Button, Screen, BackLink, PageHeader, Alert, Input } from '../components/ui'
 import { toRecipientPubkey } from '../lib/issue'
@@ -10,18 +10,23 @@ import { readClipboard } from '../lib/native'
 /**
  * Scan: the one camera for both things a customer points it at.
  *
- * Two kinds of code exist, and this screen only routes between them:
+ * Three kinds of code exist, and this screen only routes between them:
  *
  *  - a merchant's voucher payment request (NUT-18V, `vreqA…`) → `/pay`.
  *    Detection and normalisation come from imani-qr's PaymentRequestHandler,
  *    which also accepts the `cashu:` URI form. The `paymentRequest` param is the
  *    same paramKey the vanilla app's QR router uses, so both entry points agree
  *    and the URL is replayable when debugging.
+ *  - a voucher pass barcode (`voucher:<uuid>`) → the merchant's record of that
+ *    coupon. It is an IDENTIFIER, not value: scanning it looks a coupon up, it
+ *    does not move anything. Until now it fell through to "not an account we
+ *    can find", so imani's own scanner was the one thing that could not read a
+ *    pass imani had printed.
  *  - somebody's address — a NIP-05 handle, npub, or raw hex, which is what the
  *    `/receive` screen shows → `/send`.
  *
- * The payment request is tried first because it is the cheaper answer: a local
- * string check, where an address costs a round trip to resolve.
+ * The two local string checks come first, and the address last, because
+ * resolving an address costs a round trip.
  */
 export function ScanPage() {
   const navigate = useNavigate()
@@ -50,9 +55,23 @@ export function ScanPage() {
           navigate(`/pay?paymentRequest=${encodeURIComponent(text.trim())}`)
           return
         }
+        // A pass barcode. Routed to the merchant's own record of the coupon,
+        // which is the only screen that can say anything true about it: the
+        // issuance rows in this wallet are the sole record of a Sell-flow
+        // coupon (see lib/stats.ts on why the portal dashboard cannot answer).
+        //
+        // A customer scanning their own card lands on "No record of this
+        // voucher", which is honest — the coupon is not theirs to resolve, and
+        // the pass they are holding already shows them its face value.
+        const pass = new VoucherRedeemHandler()
+        if (pass.validate(text)) {
+          const { voucherId } = await pass.parse(text)
+          navigate(`/merchant/coupon/${encodeURIComponent(voucherId)}`)
+          return
+        }
         const hex = await toRecipientPubkey(text)
         if (hex) navigate(`/send?to=${hex}`)
-        else setError('That is not a payment request or an account we can find.')
+        else setError('That is not a payment request, a voucher, or an account we can find.')
       } finally {
         resolving.current = false
       }

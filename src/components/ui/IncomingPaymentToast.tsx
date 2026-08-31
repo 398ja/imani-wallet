@@ -1,5 +1,11 @@
 import { Avatar } from './Avatar'
-import { identityLabel, identitySubLabel, useIdentity } from '../../lib/identity'
+import {
+  humanName,
+  identityLabel,
+  identitySubLabel,
+  nameOrNothing,
+  useIdentity,
+} from '../../lib/identity'
 
 /**
  * The body of the "payment on its way" toast: who is paying, how much, and that
@@ -82,6 +88,19 @@ export function IncomingPaymentToast({
  *     avatar is dropped rather than rendered as a placeholder for nobody.
  *   - the sonner tick is NOT suppressed. On the pending toast it would lie; here
  *     it is exactly right.
+ *
+ * A sender with no kind-0 profile is treated as no sender at all, which is the
+ * point of `named` below. `identityLabel` ends its ladder at `shortPubkey`, so
+ * an unprofiled sender put `b233db85…de1e` where a name goes — the exact noise
+ * the identity module exists to remove, and visible on staging because the
+ * sending wallet had never published a kind-0. The pending toast never showed
+ * this: its envelope carries a `displayName` to fall back on, and the DM
+ * payload behind this one carries no such field. So rather than print a key,
+ * this says "Payment received", the same words used when there is no pubkey —
+ * both mean "we cannot name the sender", and they should not look different.
+ *
+ * The key is not lost: the transaction's raw-details drawer still has it, which
+ * is where a hex pubkey belongs.
  */
 export function ReceivedPaymentToast({
   pubkey,
@@ -95,12 +114,18 @@ export function ReceivedPaymentToast({
   // Hooks cannot be called conditionally, so this runs for the anonymous case
   // too; `useIdentity` treats an empty pubkey as "nothing to look up".
   const fetched = useIdentity(pubkey ?? '')
-  const name = pubkey ? identityLabel(pubkey, fetched) : 'Payment received'
-  const handle = pubkey ? identitySubLabel(fetched) : undefined
+  // NOT `identityLabel`, whose ladder ends at `shortPubkey`. See nameOrNothing.
+  const named = nameOrNothing(pubkey, fetched)
+  const name = named ?? 'Payment received'
+  // Only when the LABEL is the name; otherwise the label is already the handle
+  // and repeating it under itself says nothing.
+  const handle = humanName(fetched?.name) ? identitySubLabel(fetched) : undefined
 
   return (
     <span className="flex min-w-0 items-start gap-3">
-      {pubkey ? (
+      {/* Dropped along with the name: an avatar beside "Payment received" is a
+          face for someone the wallet cannot identify. */}
+      {named && pubkey ? (
         <Avatar src={fetched?.picture} name={name} pubkey={pubkey} size="md" className="shrink-0" />
       ) : null}
       <span className="min-w-0 flex-1">
