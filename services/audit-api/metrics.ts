@@ -19,7 +19,12 @@
  * rendered exposition rather than the object, for the same reason that document
  * gives.
  */
-import { findDuplicates, type AuditedAttestation, type RejectedAttestation } from '../../src/lib/audit'
+import {
+  findDuplicates,
+  tallyDefects,
+  type AuditedAttestation,
+  type RejectedAttestation,
+} from '../../src/lib/audit'
 
 export interface Metrics {
   requests: number
@@ -198,10 +203,7 @@ export function renderMetrics(snapshot?: Snapshot): string {
     // Per-defect, so a dashboard can tell "somebody is publishing junk" from
     // "a publisher is ahead of this reader" — the second is a scheduled upgrade,
     // the first may be an attack, and one number cannot distinguish them.
-    const byDefect = snapshot.rejected.reduce<Record<string, number>>((acc, r) => {
-      acc[r.defect] = (acc[r.defect] ?? 0) + 1
-      return acc
-    }, {})
+    const byDefect = tallyDefects(snapshot.rejected)
     // Full domain, so every defect series exists before the first bad event.
     for (const defect of [
       'wrong_kind',

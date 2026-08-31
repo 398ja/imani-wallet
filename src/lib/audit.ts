@@ -186,6 +186,20 @@ export function readAttestation(event: Event): AuditedAttestation | RejectedAtte
   }
 }
 
+/**
+ * How many events were refused, by reason.
+ *
+ * Lives here with the `AttestationDefect` vocabulary rather than in either
+ * consumer: the API's `/summary` and the metrics exporter each had their own
+ * copy of this reduce, which is two places to forget a new defect.
+ */
+export function tallyDefects(rejected: RejectedAttestation[]): Record<string, number> {
+  return rejected.reduce<Record<string, number>>((acc, r) => {
+    acc[r.defect] = (acc[r.defect] ?? 0) + 1
+    return acc
+  }, {})
+}
+
 /** Read a batch, partitioned into what audits and what does not. */
 export function readAttestations(events: Event[]): ReadResult {
   const accepted: AuditedAttestation[] = []
