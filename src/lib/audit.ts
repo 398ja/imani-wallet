@@ -9,9 +9,16 @@ import { ATTESTATION_KIND, ATTESTATION_VERSION } from './attestationKind'
  * The READER over the attestation stream — the audit service's whole logic.
  *
  * `attestation.ts` is the producer: it signs and publishes. This is the other
- * side, and it deliberately shares nothing with it but the kind and the version
- * constants. A reader that imported the producer's key derivation would be able
- * to forge what it is meant to check.
+ * side, and the dependency runs ONE WAY — the producer imports from here, never
+ * the reverse. That direction is the safety property: this module cannot reach
+ * the key derivation, so a reader can never forge what it is meant to check,
+ * and the hosted service can load it without loading a signer.
+ *
+ * The key-free primitives (`commitTo`, `verifyDisclosedTotal`) therefore live
+ * here and are re-exported by the producer for its own callers. An earlier
+ * version of this comment claimed the two modules "share nothing but the kind
+ * and version constants", which stopped being true the moment those moved;
+ * review caught it.
  *
  * ## Needs no key, no wallet, no account
  *

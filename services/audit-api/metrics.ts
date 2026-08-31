@@ -19,7 +19,7 @@
  * rendered exposition rather than the object, for the same reason that document
  * gives.
  */
-import type { AuditedAttestation, RejectedAttestation } from '../../src/lib/audit'
+import { findDuplicates, type AuditedAttestation, type RejectedAttestation } from '../../src/lib/audit'
 
 export interface Metrics {
   requests: number
@@ -73,6 +73,8 @@ interface Snapshot {
   accepted: AuditedAttestation[]
   rejected: RejectedAttestation[]
   fetchedAt: number
+  /** True when the relay returned a full page, so older events may be missing. */
+  truncated?: boolean
 }
 
 /**
@@ -157,6 +159,35 @@ export function renderMetrics(snapshot?: Snapshot): string {
       'Distinct ledger keys publishing.',
       [['', new Set(snapshot.accepted.map((a) => a.ledgerPubkey)).size]],
     )
+    // Conflicts IN THE LEDGER, derived from the stream itself.
+    //
+    // Not to be confused with `audit_api_coupon_checks_total{verdict=
+    // "conflicting"}`, which counts how often somebody ASKED about a conflicted
+    // coupon. Review caught the dashboard's headline fraud panel using that
+    // counter: a stall double-claiming a token nobody happens to query would
+    // have read zero forever. This gauge sees it whether or not anyone asks.
+    //
+    // Benign duplicates are excluded: a byte-identical republication is the
+    // reconciliation sweep working as designed.
+    emit(
+      'audit_ledger_conflicts',
+      'gauge',
+      'Tokens attested more than once with conflicting claims.',
+      [['', findDuplicates(snapshot.accepted).filter((d) => !d.benign).length]],
+    )
+
+    // Whether the fetch hit its limit. A truncated stream silently loses the
+    // OLDEST attestations, and a coupon whose record fell off the end reads as
+    // `missing` past the SLA — the false accusation this service exists to
+    // avoid, arriving through the back door. An operator needs to see this
+    // before a customer does.
+    emit(
+      'audit_ledger_snapshot_truncated',
+      'gauge',
+      'Whether the last fetch hit its limit, so older events may be absent.',
+      [['', snapshot.truncated ? 1 : 0]],
+    )
+
     emit(
       'audit_ledger_snapshot_age_seconds',
       'gauge',
