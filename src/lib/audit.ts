@@ -1,4 +1,7 @@
 import { verifyEvent, type Event } from 'nostr-tools'
+import { schnorr } from '@noble/curves/secp256k1.js'
+import { sha256 } from '@noble/hashes/sha2.js'
+import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils'
 
 import { ATTESTATION_KIND, ATTESTATION_VERSION } from './attestationKind'
 
@@ -341,5 +344,102 @@ export function summarise(attestations: AuditedAttestation[], ledgerPubkey: stri
     conflicts: findDuplicates(mine).filter((d) => !d.benign).length,
     firstAt: times.length ? Math.min(...times) : undefined,
     lastAt: times.length ? Math.max(...times) : undefined,
+  }
+}
+
+/**
+ * The commitment primitives, and the auditor's half of a disclosure.
+ *
+ * These live HERE rather than in `attestation.ts` because they need no key.
+ * That is the whole distinction the module split is drawn on: the producer signs
+ * and therefore must never be loaded by the hosted service, while everything an
+ * auditor can do unaided belongs to the reader. `verifyDisclosedTotal` in
+ * particular is the auditor's side by definition — it was stranded in the
+ * signing module, which is why the hosted API could not offer it and the
+ * capability table's "read one merchant's totals — only on disclosure" row was
+ * not deliverable by anyone.
+ *
+ * `attestation.ts` re-exports them, so the merchant-side callers are unchanged.
+ */
+const CURVE_ORDER = schnorr.Point.Fn.ORDER
+const G = schnorr.Point.BASE
+
+let cachedH: typeof G | undefined
+/**
+ * A second generator with unknown discrete log wrt G.
+ *
+ * If anyone knew `x` with `H = x*G` they could open a commitment to any value
+ * they liked and the binding property would be worthless. Hash-and-increment
+ * from a fixed string gives a point nobody chose.
+ */
+function pedersenH(): typeof G {
+  if (cachedH) return cachedH
+  for (let i = 0; i < 256; i++) {
+    try {
+      cachedH = schnorr.Point.fromHex(`02${bytesToHex(sha256(utf8ToBytes(`imani-pedersen-H:${i}`)))}`)
+      return cachedH
+    } catch {
+      // x was not on the curve; try the next counter. Expected about half the
+      // time, which is why this loops rather than asserting.
+    }
+  }
+  throw new Error('could not derive the Pedersen H point')
+}
+
+/** `C = amount*G + r*H` — hides the amount, but is additively homomorphic. */
+export function commitTo(amountMinorUnits: number, blind: bigint): string {
+  if (!Number.isInteger(amountMinorUnits) || amountMinorUnits < 0) {
+    throw new Error(`commitTo needs a non-negative integer amount, got ${amountMinorUnits}`)
+  }
+  const point =
+    amountMinorUnits === 0
+      ? pedersenH().multiply(blind)
+      : G.multiply(BigInt(amountMinorUnits)).add(pedersenH().multiply(blind))
+  return point.toHex(true)
+}
+
+/**
+ * Check a merchant's claimed total against their published commitments.
+ *
+ * Needs no key and no wallet, which is what makes it an audit rather than a
+ * favour: the merchant discloses `claimedTotal` and the summed blind, and the
+ * arithmetic either reconciles or does not.
+ *
+ * **Binds the total to the commitments DISCLOSED, not to a period.** The
+ * merchant chooses which nullifiers go in, so omitting a redemption and its
+ * blind reconciles perfectly at a lower total. Set completeness must come from
+ * elsewhere — a counterparty presenting a nullifier absent from the disclosure,
+ * for instance. An earlier version of this comment claimed the stronger
+ * property; a review caught it.
+ *
+ * @param commitments the published `C` values for the period
+ * @param claimedTotal the total the merchant says they credited
+ * @param blindSumHex the scalar they disclosed alongside it
+ */
+export function verifyDisclosedTotal(
+  commitments: string[],
+  claimedTotal: number,
+  blindSumHex: string,
+): boolean {
+  try {
+    if (commitments.length === 0) return false
+    // Reject anything that is not a 33-byte compressed point BEFORE parsing.
+    // `Point.fromHex` also accepts 65-byte uncompressed input, but the
+    // comparison below is against `toHex(true)`, so an auditor pasting an
+    // honestly-formatted uncompressed commitment would silently false-negative
+    // — a verification tool reporting "does not reconcile" for a correct set is
+    // worse than one that refuses the input.
+    if (!commitments.every((c) => /^[0-9a-fA-F]{66}$/.test(c))) return false
+
+    const sum = commitments.map((c) => schnorr.Point.fromHex(c)).reduce((a, b) => a.add(b))
+
+    // Reduce mod n, matching what `blindSumFor` emits. Without it an
+    // out-of-range scalar (hand-assembled, or summed by another tool that does
+    // not reduce) fails against a blind sum that is arithmetically equal.
+    const blindSum = BigInt(`0x${blindSumHex}`) % CURVE_ORDER
+
+    return sum.toHex(true) === commitTo(Math.round(claimedTotal), blindSum)
+  } catch {
+    return false
   }
 }

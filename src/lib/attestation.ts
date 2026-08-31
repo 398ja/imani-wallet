@@ -4,6 +4,7 @@ import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@noble/hashes/utils'
 
 import { ATTESTATION_KIND, ATTESTATION_VERSION } from './attestationKind'
+import { commitTo } from './audit'
 import { getSigner } from './nap'
 import { allEvents, publish } from './relay'
 
@@ -87,6 +88,9 @@ import { allEvents, publish } from './relay'
  * cannot drift apart about what is on the wire.
  */
 export { ATTESTATION_KIND, ATTESTATION_VERSION } from './attestationKind'
+// The key-free half of the scheme. One definition, re-exported so merchant-side
+// callers do not care that it lives with the reader.
+export { commitTo, verifyDisclosedTotal } from './audit'
 
 /** Domain separators. Versioned, so a future scheme change cannot collide. */
 const LEDGER_KEY_TAG = 'imani-ledger-key-v1'
@@ -164,30 +168,15 @@ export function nullifierFor(token: string): string {
 }
 
 /**
- * secp256k1 generator, and a second point with unknown discrete log wrt it.
+ * The curve order, for reducing derived blinds.
  *
- * `H` must be a nothing-up-my-sleeve point: if anyone knew `x` such that
- * `H = x*G`, they could open a commitment to any value they liked and the
- * binding property would be worthless. Hash-and-increment from a fixed string
- * gives a point nobody chose.
+ * `commitTo` and the Pedersen `H` point moved to `audit.ts` with
+ * `verifyDisclosedTotal`, because none of them needs a key: they are the
+ * AUDITOR's half, and stranding them in the signing module is what stopped the
+ * hosted service from offering the disclosure check at all. Re-exported below
+ * so every existing caller is unaffected.
  */
 const CURVE_ORDER = schnorr.Point.Fn.ORDER
-const G = schnorr.Point.BASE
-
-let cachedH: typeof G | undefined
-function pedersenH(): typeof G {
-  if (cachedH) return cachedH
-  for (let i = 0; i < 256; i++) {
-    try {
-      cachedH = schnorr.Point.fromHex(`02${bytesToHex(sha256(utf8ToBytes(`imani-pedersen-H:${i}`)))}`)
-      return cachedH
-    } catch {
-      // x was not on the curve; try the next counter. Expected roughly half the
-      // time, which is why this loops rather than asserting.
-    }
-  }
-  throw new Error('could not derive the Pedersen H point')
-}
 
 /**
  * The blinding factor for one attestation, DERIVED rather than random.
@@ -207,18 +196,6 @@ function blindFor(ledgerSk: Uint8Array, nullifier: string): bigint {
   // reduce to `amount * G`, which anyone could brute-force over plausible
   // amounts.
   return (raw % (CURVE_ORDER - 1n)) + 1n
-}
-
-/** `C = amount*G + r*H` — hides the amount, but is additively homomorphic. */
-export function commitTo(amountMinorUnits: number, blind: bigint): string {
-  if (!Number.isInteger(amountMinorUnits) || amountMinorUnits < 0) {
-    throw new Error(`commitTo needs a non-negative integer amount, got ${amountMinorUnits}`)
-  }
-  const point =
-    amountMinorUnits === 0
-      ? pedersenH().multiply(blind)
-      : G.multiply(BigInt(amountMinorUnits)).add(pedersenH().multiply(blind))
-  return point.toHex(true)
 }
 
 /**
@@ -440,40 +417,6 @@ export function blindSumFor(entries: { nullifier: string; unit: string }[]): str
   return sum.toString(16)
 }
 
-/**
- * The auditor's side of the same check. Needs no key and no wallet.
- *
- * @param commitments the published `C` values for the period
- * @param claimedTotal the total the merchant says they credited
- * @param blindSumHex the scalar they disclosed alongside it
- */
-export function verifyDisclosedTotal(
-  commitments: string[],
-  claimedTotal: number,
-  blindSumHex: string,
-): boolean {
-  try {
-    if (commitments.length === 0) return false
-    // Reject anything that is not a 33-byte compressed point BEFORE parsing.
-    // `Point.fromHex` also accepts 65-byte uncompressed input, but the
-    // comparison below is against `toHex(true)`, so an auditor pasting an
-    // honestly-formatted uncompressed commitment would silently false-negative
-    // — a verification tool reporting "does not reconcile" for a correct set is
-    // worse than one that refuses the input.
-    if (!commitments.every((c) => /^[0-9a-fA-F]{66}$/.test(c))) return false
-
-    const sum = commitments.map((c) => schnorr.Point.fromHex(c)).reduce((a, b) => a.add(b))
-
-    // Reduce mod n, matching what `blindSumFor` emits. Without it an
-    // out-of-range scalar (hand-assembled, or summed by another tool that does
-    // not reduce) fails against a blind sum that is arithmetically equal.
-    const blindSum = BigInt(`0x${blindSumHex}`) % CURVE_ORDER
-
-    return sum.toHex(true) === commitTo(Math.round(claimedTotal), blindSum)
-  } catch {
-    return false
-  }
-}
 
 /**
  * This merchant's ledger id, hex, matching how the relay carries keys.

@@ -46,6 +46,7 @@ import {
   findDuplicates,
   readAttestations,
   summarise,
+  verifyDisclosedTotal,
   type AuditedAttestation,
   type RejectedAttestation,
 } from '../../src/lib/audit'
@@ -143,6 +144,24 @@ async function snapshot(): Promise<Snapshot> {
   })()
 
   return inFlight
+}
+
+/**
+ * Read and parse a JSON request body, bounded.
+ *
+ * The cap is not ceremony: this endpoint is unauthenticated and public, so an
+ * unbounded read is a trivial way to exhaust the process's memory. 1 MB is far
+ * more than any honest disclosure — a thousand nullifiers is ~66 KB.
+ */
+async function readJson(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length
+    if (size > 1_000_000) throw new Error('body too large')
+    chunks.push(chunk as Buffer)
+  }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'))
 }
 
 const json = (res: ServerResponse, status: number, body: unknown) => {
@@ -307,6 +326,96 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
             at: o.at,
           })),
         })),
+    })
+  }
+
+  /**
+   * Check a merchant's claimed total against what they published.
+   *
+   * The row of the capability table that reads "read one merchant's totals —
+   * only on that merchant's disclosure". Until this existed the maths was
+   * correct and UNREACHABLE: `verifyDisclosedTotal` was called by nothing but
+   * its own tests, so no auditor could actually perform the check the design
+   * document advertises. The whole point of the homomorphic commitments is this
+   * endpoint.
+   *
+   * POST, not GET: a disclosure carries a list of nullifiers and a scalar, which
+   * is both too long for a query string and not something to leave in access
+   * logs and browser history.
+   *
+   * Needs NO key, which is what makes it an audit rather than a favour. The
+   * merchant supplies `total` and `blindSum` (from `blindSumFor` in their
+   * wallet); this re-derives nothing and simply checks the published
+   * commitments sum to a commitment to that total.
+   *
+   * What a `true` here does and does not mean, stated in the response because
+   * this is exactly the claim someone will overstate: the disclosed SET adds up
+   * to the disclosed total. It does NOT bind the merchant to a period — they
+   * choose which nullifiers to include, and omitting one reconciles perfectly at
+   * a lower total. Set completeness has to come from elsewhere, e.g. a customer
+   * presenting a nullifier absent from the disclosure.
+   */
+  if (path === '/api/v1/audit/verify-total' && req.method === 'POST') {
+    const body = await readJson(req).catch(() => null)
+    if (!body || typeof body !== 'object') {
+      return json(res, 400, { error: 'expected a JSON body' })
+    }
+    const { nullifiers, total, blindSum } = body as {
+      nullifiers?: unknown
+      total?: unknown
+      blindSum?: unknown
+    }
+    if (!Array.isArray(nullifiers) || nullifiers.length === 0) {
+      return json(res, 400, { error: 'nullifiers must be a non-empty array' })
+    }
+    if (typeof total !== 'number' || !Number.isFinite(total) || total < 0) {
+      return json(res, 400, { error: 'total must be a non-negative number of minor units' })
+    }
+    if (typeof blindSum !== 'string' || !/^[0-9a-f]+$/i.test(blindSum)) {
+      return json(res, 400, { error: 'blindSum must be a hex scalar' })
+    }
+
+    const { accepted } = await snapshot()
+    const byNullifier = new Map(accepted.map((a) => [a.nullifier, a]))
+    const found = nullifiers.filter((n): n is string => typeof n === 'string' && byNullifier.has(n))
+    const unknown = nullifiers.filter((n) => typeof n !== 'string' || !byNullifier.has(n))
+
+    // Refuse rather than verify a partial set. A merchant disclosing ten
+    // nullifiers of which two are not on the relay would otherwise get a
+    // cheerful `true` for a total covering eight — the reconciliation is
+    // arithmetically fine and answers a different question than the one asked.
+    if (unknown.length > 0) {
+      return json(res, 200, {
+        verified: false,
+        reason: 'some disclosed nullifiers are not published',
+        unknownNullifiers: unknown,
+      })
+    }
+
+    // One unit per disclosure, for the reason `blindSumFor` refuses to mix
+    // them: the curve does not know what the scalars denominate, so a total
+    // spanning XAF and EUR verifies perfectly and means nothing.
+    const units = [...new Set(found.map((n) => byNullifier.get(n)!.unit))]
+    if (units.length !== 1) {
+      return json(res, 200, {
+        verified: false,
+        reason: 'a disclosure must cover exactly one currency',
+        units,
+      })
+    }
+
+    const commitments = found.map((n) => byNullifier.get(n)!.commitment)
+    const verified = verifyDisclosedTotal(commitments, total, blindSum)
+    metrics.disclosureChecks[verified ? 'verified' : 'rejected'] += 1
+
+    return json(res, 200, {
+      verified,
+      redemptions: found.length,
+      unit: units[0],
+      total,
+      note: verified
+        ? 'The disclosed set sums to the disclosed total. This does NOT prove the set is complete: the merchant chooses which nullifiers to disclose, and omitting one reconciles at a lower total. Completeness must come from elsewhere.'
+        : 'The published commitments do not sum to a commitment to this total.',
     })
   }
 

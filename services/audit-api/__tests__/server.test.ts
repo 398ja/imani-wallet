@@ -73,6 +73,9 @@ const attest = (
     sk,
   )
 
+// The real commitment primitive, so disclosures are built exactly as a
+// merchant's wallet builds them rather than from a fixture that could drift.
+const { commitTo } = await import('../../../src/lib/audit')
 const { server } = await import('../server')
 const { resetMetrics } = await import('../metrics')
 
@@ -103,6 +106,15 @@ beforeEach(() => {
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Body = Record<string, any>
+
+const post = async (path: string, body: unknown) => {
+  const res = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return { status: res.status, body: (await res.json()) as Body }
+}
 
 const get = async (path: string) => {
   const res = await fetch(`${base}${path}`)
@@ -312,5 +324,127 @@ describe('metrics are exposition text, because that is what a dashboard reads', 
     await get('/api/v1/audit/summary').catch(() => undefined)
     const text = await (await fetch(`${base}/metrics`)).text()
     expect(text).toContain('audit_api_relay_up 0')
+  })
+})
+
+describe('disclosure: a merchant proving a total without revealing any amount', () => {
+  /**
+   * The capability table's "read one merchant's totals — only on that
+   * merchant's disclosure". Before this endpoint the maths was correct and
+   * reachable by nothing: `verifyDisclosedTotal` was called only by its own
+   * tests, so no auditor could perform the check the design advertises.
+   *
+   * These build the disclosure the way a merchant's wallet would — real
+   * commitments over real blinds — so the arithmetic is exercised end to end
+   * rather than against a fixture.
+   */
+  const N3 = '3'.repeat(64)
+
+  /** Commitments and the summed blind, as `blindSumFor` would produce them. */
+  const disclosure = (amounts: number[], blinds: bigint[]) => ({
+    commitments: amounts.map((a, i) => commitTo(a, blinds[i])),
+    total: amounts.reduce((x, y) => x + y, 0),
+    blindSum: blinds.reduce((x, y) => x + y, 0n).toString(16),
+  })
+
+  it('verifies a true total against the published commitments', async () => {
+    const blinds = [11111n, 22222n]
+    const d = disclosure([1500, 2500], blinds)
+    relayEvents = [
+      attest(LEDGER_A, N1, { commitment: d.commitments[0] }),
+      attest(LEDGER_A, N2, { commitment: d.commitments[1] }),
+    ]
+    const { body } = await post('/api/v1/audit/verify-total', {
+      nullifiers: [N1, N2],
+      total: d.total,
+      blindSum: d.blindSum,
+    })
+
+    expect(body.verified).toBe(true)
+    expect(body.redemptions).toBe(2)
+    // The caveat travels WITH the answer. "Verified" is the claim most likely
+    // to be overstated into "these are all their redemptions".
+    expect(String(body.note)).toContain('does NOT prove the set is complete')
+  })
+
+  it('rejects an understated total', async () => {
+    const blinds = [11111n, 22222n]
+    const d = disclosure([1500, 2500], blinds)
+    relayEvents = [
+      attest(LEDGER_A, N1, { commitment: d.commitments[0] }),
+      attest(LEDGER_A, N2, { commitment: d.commitments[1] }),
+    ]
+    const { body } = await post('/api/v1/audit/verify-total', {
+      nullifiers: [N1, N2],
+      total: 3000, // real total is 4000
+      blindSum: d.blindSum,
+    })
+    expect(body.verified).toBe(false)
+  })
+
+  it('rejects an overstated total', async () => {
+    const blinds = [11111n, 22222n]
+    const d = disclosure([1500, 2500], blinds)
+    relayEvents = [
+      attest(LEDGER_A, N1, { commitment: d.commitments[0] }),
+      attest(LEDGER_A, N2, { commitment: d.commitments[1] }),
+    ]
+    const { body } = await post('/api/v1/audit/verify-total', {
+      nullifiers: [N1, N2],
+      total: 5000,
+      blindSum: d.blindSum,
+    })
+    expect(body.verified).toBe(false)
+  })
+
+  it('refuses a disclosure naming a redemption that is not published', async () => {
+    // Otherwise a merchant disclosing ten nullifiers of which two are absent
+    // gets a cheerful `true` for a total covering eight — arithmetically fine,
+    // and an answer to a different question than the one asked.
+    const d = disclosure([1500], [11111n])
+    relayEvents = [attest(LEDGER_A, N1, { commitment: d.commitments[0] })]
+    const { body } = await post('/api/v1/audit/verify-total', {
+      nullifiers: [N1, N3],
+      total: d.total,
+      blindSum: d.blindSum,
+    })
+    expect(body.verified).toBe(false)
+    expect(body.unknownNullifiers).toEqual([N3])
+  })
+
+  it('refuses a disclosure that mixes currencies', async () => {
+    // The curve does not know what the scalars denominate, so a total spanning
+    // XAF and EUR verifies perfectly and means nothing. `blindSumFor` refuses
+    // to build one; this refuses to check one.
+    const blinds = [11111n, 22222n]
+    const d = disclosure([1500, 2500], blinds)
+    relayEvents = [
+      attest(LEDGER_A, N1, { commitment: d.commitments[0], unit: 'XAF' }),
+      attest(LEDGER_A, N2, { commitment: d.commitments[1], unit: 'EUR' }),
+    ]
+    const { body } = await post('/api/v1/audit/verify-total', {
+      nullifiers: [N1, N2],
+      total: d.total,
+      blindSum: d.blindSum,
+    })
+    expect(body.verified).toBe(false)
+    expect(body.units).toEqual(['XAF', 'EUR'])
+  })
+
+  it('refuses malformed input rather than answering it', async () => {
+    expect((await post('/api/v1/audit/verify-total', {})).status).toBe(400)
+    expect((await post('/api/v1/audit/verify-total', { nullifiers: [], total: 1, blindSum: 'ab' })).status).toBe(400)
+    expect((await post('/api/v1/audit/verify-total', { nullifiers: [N1], total: -5, blindSum: 'ab' })).status).toBe(400)
+    expect((await post('/api/v1/audit/verify-total', { nullifiers: [N1], total: 1, blindSum: 'zz' })).status).toBe(400)
+  })
+
+  it('counts both outcomes as metrics', async () => {
+    const d = disclosure([1500], [11111n])
+    relayEvents = [attest(LEDGER_A, N1, { commitment: d.commitments[0] })]
+    await post('/api/v1/audit/verify-total', { nullifiers: [N1], total: d.total, blindSum: d.blindSum })
+    await post('/api/v1/audit/verify-total', { nullifiers: [N1], total: 9999, blindSum: d.blindSum })
+    const text = await (await fetch(`${base}/metrics`)).text()
+    expect(text).toContain('audit_api_disclosure_checks_total{outcome="verified"} 1')
+    expect(text).toContain('audit_api_disclosure_checks_total{outcome="rejected"} 1')
   })
 })

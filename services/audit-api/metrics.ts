@@ -34,6 +34,8 @@ export interface Metrics {
   lastFetchOk: number
   /** Closed domain, all four pre-registered. */
   couponChecks: Record<string, number>
+  /** Disclosure checks, both outcomes pre-registered. */
+  disclosureChecks: Record<string, number>
 }
 
 export const metrics: Metrics = {
@@ -47,6 +49,7 @@ export const metrics: Metrics = {
   cacheMisses: 0,
   lastFetchOk: 0,
   couponChecks: { honoured: 0, missing: 0, pending: 0, conflicting: 0 },
+  disclosureChecks: { verified: 0, rejected: 0 },
 }
 
 /** Reset between tests. Not called in production. */
@@ -62,6 +65,7 @@ export function resetMetrics(): void {
     cacheMisses: 0,
     lastFetchOk: 0,
     couponChecks: { honoured: 0, missing: 0, pending: 0, conflicting: 0 },
+    disclosureChecks: { verified: 0, rejected: 0 },
   })
 }
 
@@ -123,6 +127,18 @@ export function renderMetrics(snapshot?: Snapshot): string {
     'counter',
     'Coupon checks answered, by verdict.',
     Object.entries(metrics.couponChecks).map(([verdict, n]) => [`{verdict="${verdict}"}`, n]),
+  )
+
+  // A merchant's claimed total either reconciled against their published
+  // commitments or did not. `rejected` climbing is the interesting one: it means
+  // somebody's books do not match what they published, or an auditor is using
+  // the endpoint wrongly. Both outcomes registered up front so a dashboard can
+  // show zero rather than nothing.
+  emit(
+    'audit_api_disclosure_checks_total',
+    'counter',
+    'Disclosed totals checked against published commitments.',
+    Object.entries(metrics.disclosureChecks).map(([outcome, n]) => [`{outcome="${outcome}"}`, n]),
   )
 
   // The ledger itself. Absent until the first successful fetch — deliberately,
