@@ -1,6 +1,6 @@
 import { verifyEvent, type Event } from 'nostr-tools'
 
-import { ATTESTATION_KIND, ATTESTATION_VERSION } from './attestation'
+import { ATTESTATION_KIND, ATTESTATION_VERSION } from './attestationKind'
 
 /**
  * The READER over the attestation stream — the audit service's whole logic.
