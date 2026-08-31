@@ -181,8 +181,28 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   }
 
   if (path === '/metrics') {
+    // Takes a SNAPSHOT rather than rendering whatever happens to be cached, and
+    // that is the difference between a working dashboard and a blank one.
+    //
+    // Rendering `cached` meant the `audit_ledger_*` gauges did not exist until
+    // somebody called an API endpoint — a scrape alone never fetched the stream.
+    // On a real deployment nothing calls this API on a schedule, so Prometheus
+    // would scrape `up`, collect the request counters, and the six panels that
+    // actually describe the LEDGER would read "No data" indefinitely. Caught by
+    // pointing real Prometheus at this service with the repo's own config and
+    // running every dashboard query: 6 of 15 came back empty.
+    //
+    // Cheap, because `snapshot()` is the same 30s cache the API uses: a 15s
+    // scrape interval mostly hits it, and two scrapes cannot stampede the relay
+    // because `inFlight` collapses concurrent misses into one query.
+    //
+    // Failure here must still render. A relay outage should show up as
+    // `audit_api_relay_up 0` beside the last known figures — which is precisely
+    // what an operator needs — not as a failed scrape that also loses the
+    // counters telling them the service is alive.
+    const snap = await snapshot().catch(() => cached)
     res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' })
-    return void res.end(renderMetrics(cached))
+    return void res.end(renderMetrics(snap))
   }
 
   if (path === '/api/v1/audit/summary') {
