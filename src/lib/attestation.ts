@@ -488,19 +488,29 @@ export function ledgerPubkey(): string {
 }
 
 /**
- * The filter a CUSTOMER uses to check one coupon they hold.
+ * The filter a CUSTOMER would use to check one coupon they hold.
  *
- * NOT YET CALLED IN PRODUCTION, and deliberately so — that is a sequencing
- * decision, not an oversight. A customer-facing "this stall has no record of
- * your coupon" check is only honest once the reconciliation sweep is routine;
- * before then a gap means a dropped publish about as often as it means a
- * dishonest merchant, and the check becomes a false-accusation generator.
+ * NOT CALLED, and it CANNOT be called from a customer's wallet today. An earlier
+ * version of this comment said the omission was a sequencing decision — waiting
+ * for the reconciliation sweep — and that was the lesser reason. The sweep now
+ * exists; this is still unreachable.
  *
- * Kept, rather than deleted with the other unused filter, because it pins two
- * properties the design depends on and which are easy to lose: it filters on a
- * TAG (so it survives a move to batched events) and it carries no author (so a
- * customer never has to know which stall redeemed their coupon). Both are
- * asserted below.
+ * **The customer never holds the token that was redeemed.** `nullifierFor` binds
+ * to the bytes the merchant RECEIVED, and on the atomic-send path those are the
+ * gateway's `send_token`, produced by the split and handed straight to the gift
+ * wrap. `AtomicSendResponse` states it outright: *"The send_token is NEVER
+ * returned during the saga — it stays server-side. Only returned via reclaim."*
+ * What the customer gets back is `keep_token`, their change. So the input this
+ * function needs does not exist in the wallet that would want to call it.
+ *
+ * Fixing it is a small gateway change — return the send token's NULLIFIER (a
+ * hash, not bearer value) to the sender on COMPLETED — and it has its own card.
+ * Until then a customer-facing check cannot be built, honestly or otherwise.
+ *
+ * Kept, rather than deleted, because it pins two properties the design depends
+ * on and which are easy to lose: it filters on a TAG (so it survives a move to
+ * batched events) and it carries no author (so a customer never has to know
+ * which stall redeemed their coupon). Both are asserted in the tests.
  */
 export function couponCheckFilter(token: string) {
   return { kinds: [ATTESTATION_KIND], '#n': [nullifierFor(token)] }
