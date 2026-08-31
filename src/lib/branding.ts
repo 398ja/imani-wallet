@@ -164,8 +164,8 @@ const cache = new Map<string, Promise<MerchantBranding>>()
  * for this request answers "no such profile" about a profile that plainly
  * exists. That is how a user came back from a login to a blank avatar and no
  * display name, and how a merchant's coupons rendered under a truncated pubkey and
- * "Gift Card". `newestAddressable` already refuses the cache for exactly this
- * reason; this is the same argument applied to kind 0.
+ * "Gift Card". `newestAddressable` reads both stores on the same reasoning
+ * (DEV-144); this is the same argument applied to kind 0.
  */
 export async function fetchNewestKind0(
   pubkey: string,

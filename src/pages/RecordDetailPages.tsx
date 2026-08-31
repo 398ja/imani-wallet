@@ -24,6 +24,7 @@ import { humanName } from '../lib/identity'
 import {
   VALIDATION_SUMMARY,
   hasValidationClaim,
+  hasPublishedAttestation,
   validationStatus,
   type ValidationStatus,
 } from '../lib/validationStatus'
@@ -229,6 +230,32 @@ function ValidationSection({ tx }: { tx: WalletTransaction }) {
               unit: tx.unit,
               decimals: tx.decimals,
             })} originally issued`}
+          />
+        ) : null}
+        {/*
+          The public half of the record (DEV-246). Present only once a relay
+          took it, because `attestationEventId` is written only then — a row
+          carries `attestationNullifier` on EVERY redemption, so keying on the
+          nullifier would read "published" on plain ecash and on every
+          customer's row alike.
+
+          Absent rather than a "not published" line: every redemption from
+          before this feature would carry it, and a merchant at a stall can do
+          nothing about a record that is missing — the sweep on Settings >
+          Redemption ledger is what closes those, and it says so there. A
+          permanent negative on a completed sale reads as a fault.
+
+          The DATE is the event's, not the row's. A sweep can publish months
+          after the sale, and this line dates the publication.
+        */}
+        {hasPublishedAttestation(tx) ? (
+          <DetailRow
+            label="Record"
+            value={
+              tx.attestationAt
+                ? `Published to the public ledger · ${formatDate(tx.attestationAt)}`
+                : 'Published to the public ledger'
+            }
           />
         ) : null}
       </ListSection>
@@ -449,6 +476,22 @@ export function TransactionPage({
           ['Voucher id', tx.tokenId],
           ['Issuance id', tx.voucherId],
           ['Bundle id', tx.bundleId],
+          // Where the machine strings live, beside the other ids. These are
+          // what an auditor looks the record up BY: the nullifier is the `#n`
+          // tag a filter matches, the event id addresses the event directly.
+          //
+          // Both gated on the event id, not on the nullifier: a nullifier with
+          // no published record identifies nothing an auditor could fetch, and
+          // showing it under a heading about the ledger would imply otherwise.
+          //
+          // The COMMITMENT is deliberately not here. A reader holding this row
+          // already knows the amount and could recompute it, and printing it
+          // beside the amount invites treating a public value as a private one.
+          ['Ledger record id', tx.attestationEventId],
+          [
+            'Ledger reference',
+            hasPublishedAttestation(tx) ? tx.attestationNullifier : undefined,
+          ],
         ])}
       />
     </Screen>

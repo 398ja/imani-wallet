@@ -120,6 +120,7 @@ npm run android    # build + sync the Capacitor Android project
 | `packages/` | Vendored `@imani/*` packages (wallet storage, dm-poll, vouchers, money) |
 | `shared/` | Classic-script modules bridged from the original app (redemption, formatting) |
 | `deploy/` | Docker compose override, nginx edge config, relay config |
+| `services/` | Standalone services built from this tree (the public audit API) |
 | `scripts/` | Seeding and verification helpers for a local stack |
 
 ### Deeper design notes

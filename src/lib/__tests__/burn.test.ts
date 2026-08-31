@@ -63,6 +63,9 @@ beforeEach(() => {
     acknowledgeReceive: async (id: string) => {
       acked.push(id)
     },
+    // Default: the mint says the proofs are still live, so a failed burn is a
+    // real failure and the row must stay spendable.
+    validateToken: async () => ({ state: 'UNSPENT' }),
   }
 })
 
@@ -133,5 +136,82 @@ describe('sweepBurnable', () => {
     ]
     expect(await sweepBurnable(MERCHANT)).toBe(1)
     expect(received).toEqual(['cashuBa'])
+  })
+})
+
+/**
+ * What happens when the mint call fails.
+ *
+ * Reported from the console as `[burn] redeemed coupon not burnt` with an
+ * `error: Error` that showed nothing. Two very different situations reach this
+ * branch and they need opposite handling, which is the bug: an unreachable
+ * gateway leaves live money that must be retried, while proofs that are
+ * ALREADY SPENT can never burn again and were being retried on every
+ * saveVoucher, forever, with the row still counted as money the mint no longer
+ * backs.
+ */
+describe('when the burn fails', () => {
+  it('settles the row when the proofs are already spent', async () => {
+    stubs.api.receive = async () => {
+      throw Object.assign(new Error('Token already spent'), { status: 400, code: 'TOKEN_SPENT' })
+    }
+    stubs.api.validateToken = async () => ({ valid: false, state: 'SPENT' })
+
+    // Reported as burnt, because the value really is gone.
+    expect(await burnIfSelfIssued(row(), MERCHANT)).toBe(true)
+    expect(stubs.saved.map((r) => r.status)).toEqual(['redeemed'])
+  })
+
+  it('leaves the row spendable when the gateway is simply unreachable', async () => {
+    // The opposite case, and the one where writing "redeemed" would destroy a
+    // merchant's record of live money. `validateToken` cannot answer either,
+    // so the honest outcome is to change nothing and sweep later.
+    stubs.api.receive = async () => {
+      throw Object.assign(new Error('Failed to fetch'), { status: 0 })
+    }
+    stubs.api.validateToken = async () => {
+      throw new Error('Failed to fetch')
+    }
+
+    expect(await burnIfSelfIssued(row(), MERCHANT)).toBe(false)
+    expect(stubs.saved).toEqual([])
+  })
+
+  it('does NOT settle a row the mint still reports as unspent', async () => {
+    // A burn that failed for some other reason on a coupon that is still live.
+    // Marking it redeemed would write off real value.
+    stubs.api.receive = async () => {
+      throw Object.assign(new Error('Internal Server Error'), { status: 500 })
+    }
+    stubs.api.validateToken = async () => ({ valid: true, state: 'UNSPENT' })
+
+    expect(await burnIfSelfIssued(row(), MERCHANT)).toBe(false)
+    expect(stubs.saved).toEqual([])
+  })
+
+  it('does not settle a PENDING token, which is still in flight', async () => {
+    stubs.api.receive = async () => {
+      throw new Error('nope')
+    }
+    stubs.api.validateToken = async () => ({ state: 'PENDING' })
+
+    expect(await burnIfSelfIssued(row(), MERCHANT)).toBe(false)
+    expect(stubs.saved).toEqual([])
+  })
+
+  it('a settled row is not retried on the next sweep', async () => {
+    // The point of settling: `isRedeemed` short-circuits, so the failing call
+    // stops repeating on every saveVoucher.
+    stubs.api.receive = async () => {
+      throw new Error('Token already spent')
+    }
+    stubs.api.validateToken = async () => ({ state: 'SPENT' })
+
+    await burnIfSelfIssued(row(), MERCHANT)
+    const settled = stubs.saved[0]
+    received.length = 0
+
+    expect(await burnIfSelfIssued(settled, MERCHANT)).toBe(false)
+    expect(received, 'a settled row must not call the mint again').toEqual([])
   })
 })

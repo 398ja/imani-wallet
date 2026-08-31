@@ -27,6 +27,14 @@ export const defaultRoutes: RouteConfigMap = {
     target: 'ProfileModal',
     paramKey: 'identifier'
   },
+  [QrType.VOUCHER_REDEEM]: {
+    // DEV-131. A 'navigate' with the id in the URL, unlike CASHU_TOKEN's
+    // handoff: the voucher id is an identifier and not bearer value, so it is
+    // safe in a URL, and it is already visible in the merchant's own UI.
+    type: 'navigate',
+    target: '/customer/vouchers.html',
+    paramKey: 'voucherId'
+  },
   [QrType.UNKNOWN]: {
     type: 'callback',
     target: 'handleUnknown',

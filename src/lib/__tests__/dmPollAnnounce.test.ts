@@ -15,12 +15,40 @@ vi.mock('../arrivalToast', () => ({
   announceArrival: (v: unknown) => void announced.push(v),
 }))
 
+// The attestation is mocked at the boundary so this file can assert WHAT the
+// redemption path hands it. attestation.test.ts covers the crypto; the bug
+// class this guards is the wiring — passing the wrong identifier here is
+// invisible to every test in that file, because the function hashes whatever
+// it is given.
+const attested: Array<Record<string, unknown>> = []
+let attestThrows = false
+// Whether this wallet has a stall record. dmPoll runs in EVERY wallet, so the
+// attestation is gated on this: a customer must never publish a record of a
+// coupon they merely received.
+let hasStall = true
+
+vi.mock('../merchant', () => ({
+  loadMerchant: () => (hasStall ? { pubkey: 'f'.repeat(64), categories: [] } : null),
+}))
+
+vi.mock('../attestation', () => ({
+  attestRedemption: async (p: Record<string, unknown>) => {
+    if (attestThrows) throw new Error('relay down')
+    attested.push(p)
+  },
+  nullifierFor: (t: string) => `nullifier-of:${t}`,
+}))
+
 // The redemption path reaches the legacy layer for the actual mint swap; the
 // question here is only what happens around it.
 const redeem = vi.fn()
+let correlation: Record<string, unknown> | undefined
 vi.mock('../legacyBridge', () => ({
   legacyApi: async () => {},
-  withCorrelation: async (_c: unknown, fn: () => unknown) => fn(),
+  withCorrelation: async (c: Record<string, unknown>, fn: () => unknown) => {
+    correlation = c
+    return fn()
+  },
 }))
 
 const notifyWalletChanged = vi.fn()
@@ -71,6 +99,10 @@ const VOUCHER = {
 beforeEach(() => {
   stopDmPoll()
   announced.length = 0
+  attested.length = 0
+  attestThrows = false
+  // Reset, or the customer test leaks into every test after it.
+  hasStall = true
   notifyWalletChanged.mockClear()
   redeem.mockReset()
   // The redemption path reads `window.TokenRedemption`, so the stub has to keep
@@ -120,5 +152,120 @@ describe('a coupon arriving through dm-poll', () => {
       captured.redemptionAdapter!.redeem('cashuAtoken', { metadata: {} }),
     ).rejects.toThrow('mint unavailable')
     expect(announced).toHaveLength(0)
+  })
+})
+
+/**
+ * The attestation wiring.
+ *
+ * These exist because a code review showed the crypto tests could not catch a
+ * wiring mistake: swapping `token` for `meta.voucherId` at the call site left
+ * all 660 tests green, because `nullifierFor` hashes whatever it is handed and
+ * the unit tests only ever compare two of its own outputs.
+ */
+describe('the attestation a redemption publishes', () => {
+  const VERIFIED = { signatureValid: true, legacyCanonical: true, signedFaceValue: 4, cappedAtFaceValue: false }
+
+  it('commits to the TOKEN, not the voucher id', async () => {
+    // The distinction that matters: a £10 voucher legitimately returns as £4
+    // then £6 under ONE voucher_id, so a voucher-keyed nullifier collides on an
+    // honest partial redemption and reports a double-spend that never happened.
+    redeem.mockResolvedValue(VOUCHER)
+    startDmPoll('f'.repeat(64))
+
+    await captured.redemptionAdapter!.redeem('cashuA-the-real-token', {
+      metadata: { faceValue: 4, faceUnit: 'XAF', voucherId: 'v-4-xaf', validation: VERIFIED },
+    })
+
+    expect(attested).toHaveLength(1)
+    expect(attested[0].token).toBe('cashuA-the-real-token')
+    expect(attested[0].token).not.toBe('v-4-xaf')
+  })
+
+  it('passes the verified face value and unit', async () => {
+    redeem.mockResolvedValue(VOUCHER)
+    startDmPoll('f'.repeat(64))
+
+    await captured.redemptionAdapter!.redeem('cashuAt', {
+      metadata: { faceValue: 4, faceUnit: 'XAF', validation: VERIFIED },
+    })
+
+    expect(attested[0]).toMatchObject({ faceValue: 4, unit: 'XAF', signatureValid: true })
+  })
+
+  it('does NOT attest plain ecash, which carries no issuer claim', async () => {
+    // The face value of an unverified coupon is whatever the SENDER wrote in
+    // the envelope. Committing to it would have the merchant signing "I
+    // credited N" for a number nobody established — the same shape as the
+    // fabricated child voucher the design explicitly forbids.
+    redeem.mockResolvedValue(VOUCHER)
+    startDmPoll('f'.repeat(64))
+
+    await captured.redemptionAdapter!.redeem('cashuA-plain', {
+      metadata: { faceValue: 999999, faceUnit: 'XAF' }, // no validation
+    })
+
+    expect(attested[0].signatureValid).toBe(false)
+  })
+
+  it('stamps the nullifier onto the row, because it cannot be recomputed later', async () => {
+    // redeem() SWAPS the token at the mint, so afterwards the bytes the
+    // nullifier hashes exist nowhere. Without this the merchant can re-derive
+    // their ledger key and fetch their own attestations but has nothing to
+    // match them against — self-audit after a device wipe is unreachable.
+    redeem.mockResolvedValue(VOUCHER)
+    startDmPoll('f'.repeat(64))
+
+    await captured.redemptionAdapter!.redeem('cashuA-swapped-away', {
+      metadata: { faceValue: 4, faceUnit: 'XAF', validation: VERIFIED },
+    })
+
+    expect(correlation?.attestationNullifier).toBe('nullifier-of:cashuA-swapped-away')
+  })
+
+  it('publishes NOTHING when the wallet has no stall — a customer is not a merchant', async () => {
+    // The privacy leak this gate exists to stop. dmPoll runs unconditionally in
+    // every wallet, so without it a customer receiving a gift-wrapped coupon
+    // would emit a permanent public event about it — in a feature whose whole
+    // point is privacy, and claiming something ("I honoured this") that is not
+    // even true of them.
+    hasStall = false
+    redeem.mockResolvedValue(VOUCHER)
+    startDmPoll('f'.repeat(64))
+
+    await captured.redemptionAdapter!.redeem('cashuA-customer', {
+      metadata: { faceValue: 2500, faceUnit: 'XAF', validation: VERIFIED },
+    })
+
+    expect(attested).toHaveLength(0)
+  })
+
+  it('stamps the attested figures too, so a sweep cannot republish a different number', async () => {
+    // The sweep rebuilds the commitment from the row. It must use the value the
+    // attestation actually committed (meta.faceValue), not the row's own
+    // `amount`, which comes off the voucher and can differ — otherwise a
+    // republish contradicts the original for the same redemption.
+    redeem.mockResolvedValue(VOUCHER)
+    startDmPoll('f'.repeat(64))
+
+    await captured.redemptionAdapter!.redeem('cashuA-figures', {
+      metadata: { faceValue: 2500, faceUnit: 'XAF', validation: VERIFIED },
+    })
+
+    expect(correlation?.attestedValue).toBe(2500)
+    expect(correlation?.attestedUnit).toBe('XAF')
+  })
+
+  it('never lets a failed attestation break the redemption', async () => {
+    // The proofs are burnt and the row written by this point.
+    attestThrows = true
+    redeem.mockResolvedValue(VOUCHER)
+    startDmPoll('f'.repeat(64))
+
+    await expect(
+      captured.redemptionAdapter!.redeem('cashuAt', {
+        metadata: { faceValue: 4, faceUnit: 'XAF', validation: VERIFIED },
+      }),
+    ).resolves.toBeDefined()
   })
 })

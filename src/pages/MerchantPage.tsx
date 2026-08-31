@@ -18,6 +18,8 @@ import { listVouchers, transactionsWith, onWalletChanged } from '../lib/wallet'
 import { findMerchantWithHistory, couponsFor, type Merchant } from '../lib/merchants'
 import { toMerchantPass, EMPTY_BRANDING, type MerchantBranding } from '../lib/pass'
 import { merchantBranding } from '../lib/branding'
+import { fetchMerchantRecord } from '../lib/merchant'
+import { LocationMap } from '../components/LocationMap'
 import type { WalletTransaction } from '../lib/transactions'
 import { canShare, shareText } from '../lib/native'
 
@@ -39,6 +41,7 @@ export function MerchantPage() {
   const [couponCount, setCouponCount] = useState(0)
   const [transactions, setTransactions] = useState<WalletTransaction[]>([])
   const [branding, setBranding] = useState<MerchantBranding>(EMPTY_BRANDING)
+  const [location, setLocation] = useState<string | undefined>(undefined)
 
   useEffect(() => {
     const load = async () => {
@@ -59,6 +62,29 @@ export function MerchantPage() {
   useEffect(() => {
     // Never rejects — an unbranded merchant falls back to the pass defaults.
     merchantBranding(pubkey).then(setBranding)
+  }, [pubkey])
+
+  useEffect(() => {
+    // A SECOND record, and it has to be: the location lives on the merchant's
+    // kind-30078 stall record, while `branding` above is their kind-0 profile.
+    // Neither carries the other's fields, so there is no one fetch that answers
+    // both.
+    //
+    // `fetchMerchantRecord`, NOT `refreshMerchant` — that one ends in
+    // `saveMerchant`, so browsing three shops would leave three foreign stall
+    // records in this device's localStorage, which `clearMerchant` at logout
+    // never removes. Their record is not ours to keep.
+    let cancelled = false
+    fetchMerchantRecord(pubkey)
+      .then((m) => {
+        if (!cancelled) setLocation(m?.location)
+      })
+      // A stall we cannot reach still has coupons and history worth showing.
+      // Losing the map is the smallest possible degradation.
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
   }, [pubkey])
 
   if (merchant === undefined) return <Centered>Loading…</Centered>
@@ -87,6 +113,16 @@ export function MerchantPage() {
         )}
         <ShareMerchant pubkey={pubkey} nip05={branding.nip05} />
       </div>
+
+      {/* Renders nothing when the stall has no location, which is the common
+          case for a trader who moves around. Named with the merchant's own
+          name when we have one, so the heading reads "Find Marlow Books"
+          rather than a pronoun for a stall the customer just opened. */}
+      <LocationMap
+        location={location}
+        label={branding.organizationName}
+        className="mb-6"
+      />
 
       <ListSection
         title="Transactions"

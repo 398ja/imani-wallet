@@ -65,6 +65,35 @@ export function identitySubLabel(identity: Identity | undefined): string | undef
 }
 
 /**
+ * The name to show for a counterparty, or nothing when we cannot name them.
+ *
+ * The difference from {@link identityLabel} is the whole point: that one ends
+ * its fallback ladder at `shortPubkey`, which is right for a list row where a
+ * stable per-row identifier beats an empty cell. It is wrong for a toast, where
+ * a 64-bit hex fragment beside an amount reads as noise and names nobody.
+ *
+ * The settlement toast printed `b233db85…de1e` for exactly this reason: the
+ * sending wallet had published no kind-0, so every rung of the ladder missed
+ * and the key fell out of the bottom. Callers that would rather say nothing
+ * than say a key use this and supply their own words.
+ *
+ * Returns undefined for an absent pubkey too, so "no sender" and "a sender we
+ * cannot name" collapse to one case — they mean the same thing to a reader.
+ */
+export function nameOrNothing(
+  pubkey: string | undefined,
+  identity: Identity | undefined,
+): string | undefined {
+  if (!pubkey) return undefined
+  // The same first two rungs as `identityLabel`, and deliberately not its
+  // third. NOT `identitySubLabel`, which answers a different question — it is
+  // the line UNDER a name and is empty when the name IS the handle, so reusing
+  // it here dropped a handle-only profile to nothing.
+  const nip05 = identity?.nip05
+  return humanName(identity?.name) ?? (nip05 ? handleLabel(nip05) : undefined)
+}
+
+/**
  * Resolve a `name@domain` handle to the hex pubkey it points at.
  *
  * `GET /api/v1/resolve/{nip05}` is unauthenticated and lives on both gateways,

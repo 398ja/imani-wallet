@@ -162,7 +162,12 @@ Everything above was executed, not reasoned about:
 - nullifiers collide on replay, differ on legitimate partial redemption
 - commitments hide amounts against a known-amount search
 - homomorphic sum verifies a true total and rejects both an understated and an
-  overstated one
+  overstated one **over the disclosed set**. It does NOT bind the merchant to a
+  period: they choose which nullifiers to disclose, and omitting one reconciles
+  perfectly at a lower total. Set completeness must come from elsewhere — for
+  instance a counterparty presenting a nullifier missing from the disclosure.
+  An earlier draft of this document and of `blindSumFor`'s comment claimed the
+  stronger property; a review caught it
 - a merchant re-opens their own commitments from their key alone, and cannot
   open another's
 
@@ -180,14 +185,22 @@ it is what each reader can *open*.
 | Verify an attestation is authentic | yes | yes |
 | Detect a token redeemed twice | yes | yes |
 | See the stream is live, count redemptions | yes | yes |
-| **Confirm a specific coupon was honoured** | yes | **yes** |
+| **Confirm a specific coupon was honoured** | yes | **blocked — see below** |
 | Read one merchant's totals | yes | only on that merchant's disclosure |
-| Identify the real stall behind a pseudonym | yes | no |
-| Cross-merchant analytics | yes | no |
+| Identify the real stall behind a pseudonym | **not built** | no |
+| Cross-merchant analytics | **not built** | no |
 
-Internal gets more through a **disclosure granted at onboarding** — one signed
-statement linking `ledgerPub` to the stall — not through a second privileged
-feed. One stream, one format, nothing to keep in sync.
+Internal was to get more through a **disclosure granted at onboarding** — one
+signed statement linking `ledgerPub` to the stall — not through a second
+privileged feed. One stream, one format, nothing to keep in sync.
+
+> **That disclosure does not exist.** Nothing produces, stores or consumes it,
+> so the internal reader is today byte-for-byte identical to the external one.
+> Caught by the spec axis of the code review; filed as `i41dcl4gk6dd`, where the
+> first question is whether it should be built at all — a stored
+> `ledgerPub → stall` mapping is the single artefact whose breach
+> de-anonymises every merchant at once, which is the same shape of risk this
+> design rejected dual-encryption for.
 
 ### The trust moment
 
@@ -197,8 +210,9 @@ recompute its nullifier and look it up:
 
 - present in the ledger → **the stall really did redeem my coupon, and I
   checked it myself against a public record**
-- absent → evidence, rather than a support ticket that ends in "we cannot see
-  it"
+- absent → **not yet evidence.** See the warning below: until the
+  reconciliation sweep exists, a gap and a dishonest merchant are
+  indistinguishable
 
 Nobody else can compute that nullifier, so the check proves possession without
 revealing the amount or the merchant to anyone else reading the stream.
@@ -208,6 +222,61 @@ That is the difference between *"trust us, we are honest"* and *"do not trust
 us — here is the receipt, verify it yourself"*. The second is the selling
 point, and it is only credible because the merchant cannot quietly rewrite
 history: the commitment is published before any dispute.
+
+> #### ⚠️ The customer cannot do this today, and the blocker is in the gateway
+>
+> **"A customer held the token" is false on the atomic-send path**, which is
+> every coupon a customer sends. Established while building the reader:
+>
+> - `nullifierFor` hashes the token the merchant **received** (`dmPoll.ts`), and
+>   that token is the gateway's `send_token`, produced by the split and handed
+>   straight to the gift wrap (`AtomicSendService`).
+> - `AtomicSendResponse` states it outright: *"The send_token is NEVER returned
+>   during the saga — it stays server-side. Only returned via reclaim."* The
+>   customer receives `keep_token`, which is their **change**.
+>
+> So the customer's wallet never sees the bytes that were redeemed and cannot
+> compute the nullifier to look up. `couponCheckFilter` is unreachable in
+> principle, not merely uncalled — its own comment attributes this to sequencing,
+> which is now known to be the lesser reason.
+>
+> **The fix is small and belongs to the gateway:** return the send token's
+> *nullifier* (not the token) to the sender on COMPLETED. It is a hash of a
+> value the gateway already holds, discloses nothing bearer, and is the only
+> thing standing between here and the headline capability. Filed as its own
+> card.
+>
+> Everything else in this table — authenticity, replay detection, per-merchant
+> audit, the merchant's own view — is built and live.
+
+### Absence is not evidence, and the SLA that makes it mean something
+
+**The reconciliation sweep now exists** (`reconcileAttestations`, reachable at
+Settings → Redemption ledger). Before it did, a missing attestation had at least
+four innocent explanations, and the ledger could not tell them apart from a
+merchant omitting deliberately:
+
+1. the tab closed before the publish landed
+2. the relay rejected or dropped the event
+3. the redemption came through a path that does not attest (the cashback flow
+   calls `redemption.redeem` directly)
+4. the coupon carried no verified issuer claim, so there was correctly nothing
+   to attest
+
+A customer-facing check that reports "this stall has no record of your coupon"
+on any of those is a false-accusation generator, and it would damage exactly
+the trust the feature exists to build. **The producer shipping before the sweep
+is fine; the customer-facing interpretation shipping before the sweep is not.**
+
+Order of work: producer → reconciliation sweep → reader. Not producer → reader.
+
+**The reader now gates absence on a one-hour SLA** (`ABSENCE_SLA_MS` in
+`src/lib/audit.ts`), which is the operational form of the rule above. Inside the
+hour a gap reads `pending` and says when that may change; past it, `missing` —
+and `missing` travels with a written caveat that it is evidence of a gap and not
+proof of dishonesty. A caller that cannot say *when* the redemption happened
+cannot obtain a `missing` verdict at all: no timestamp, no accusation.
+
 
 ### Build it fresh
 
@@ -220,10 +289,75 @@ around that graph.
 The replacement reader is a `GROUP BY` over a flat attestation stream, not a
 graph walk. Build against the stream; do not revive the traversal.
 
+## What shipped (DEV-245)
+
+The reader is `src/lib/audit.ts`, and it is the whole service's logic: verify a
+signature, detect a replay, answer "was this coupon honoured", summarise one
+ledger key. It needs no key and no wallet, so **one implementation** serves an
+external auditor, the hosted API and a merchant auditing themselves — an
+external reader cannot be told something an internal one would not be.
+
+| Surface | Where |
+|---|---|
+| Reader | `src/lib/audit.ts` |
+| Hosted API | `services/audit-api/` → `audit.staging.398ja.xyz` |
+| Merchant's own view | Settings → Redemption ledger |
+| Dashboard | Grafana → *Redemption audit ledger* |
+| Live probe | `scripts/audit-probe.mjs` |
+| Independent verifier | `scripts/verify-attestations.py` (shares no code) |
+
+### The disclosure check is reachable
+
+`POST /api/v1/audit/verify-total` with `{nullifiers, total, blindSum}` answers
+the *"read one merchant's totals — only on that merchant's disclosure"* row.
+Needs no key, which is what makes it an audit rather than a favour.
+
+It was very nearly shipped as a promise rather than a capability:
+`verifyDisclosedTotal` and `commitTo` were correct, tested, and called by
+**nothing but their own tests**, stranded inside the signing module where the
+hosted service could not import them. They now live in the reader with the other
+key-free checks, and `attestation.ts` re-exports them so merchant-side callers
+are unchanged.
+
+Verified against the live relay: a true total of 4000 over two published
+commitments verifies; understating (3000) and overstating (5000) are both
+rejected. The response carries the caveat that a `true` binds the disclosed SET
+and not a period — the merchant chooses what to disclose, so omission
+reconciles at a lower total.
+
+Three findings worth carrying forward, each from running the thing rather than
+reasoning about it:
+
+- **`verifyEvent` can be fooled by object spread.** nostr-tools memoises its
+  verdict in a `Symbol(verified)` property, and symbols survive spread — so
+  `{...genuine, sig: 'ff…'}` verifies `true` without the signature being
+  checked. Relay traffic arrives as JSON and so was never at risk, which is why
+  it could sit unnoticed. `stripCachedVerdict` removes it before every check.
+- **A batched event is already on the relay.** Event `6a3688bf…` carries two `n`
+  tags and no `v`, from this design work. An absent version defaults to v1, so
+  batches are refused structurally as well as by version.
+- **A missing WebSocket transport returns zero events from a *successful*
+  query.** In a Node service that reads as "no redemptions" rather than as an
+  outage — the API would have accused every merchant of not publishing. Guarded
+  in `/health`.
+
+Measured against staging: 30 events, 28 audit cleanly, 2 refused correctly (the
+hand-made probe above and the batch), across 9 ledger keys in EUR and XAF.
+
 ## Open decisions
 
-1. **Batching interval.** Per-event publication leaks trading rhythm even with
-   an opaque payload. Daily is the obvious default.
+1. ~~**Batching interval.**~~ **Decided: one event per redemption for now.**
+   Per-event publication leaks trading rhythm even with an opaque payload, and
+   batching would fix that — but a customer cannot verify a coupon that has not
+   been published yet, so the trust check would go from instant to next-day.
+   The instant check is the feature; the timing leak is the price.
+
+   Revisit if per-merchant rhythm turns out to matter. The migration is cheaper
+   than it looks on the half that matters: a batched event carries one `n` tag
+   per nullifier and relays match `#n` against all of them, so the customer
+   check survives untouched (verified against the staging relay). Only the
+   auditor's reader would need to handle both content shapes — so build it to
+   accept a list from the start.
 2. **Epoch rotation.** Worth it only if long-term profiling is a real concern;
    it complicates multi-period audit.
 3. **Who may read the ledger at all.** The requirement says broadly readable,
