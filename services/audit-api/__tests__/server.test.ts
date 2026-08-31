@@ -75,6 +75,12 @@ const attest = (
 
 // The real commitment primitive, so disclosures are built exactly as a
 // merchant's wallet builds them rather than from a fixture that could drift.
+// A small fetch limit, set BEFORE the service module is imported so it reads
+// this rather than the production default. The truncation path is what is under
+// test, not the size of the page: signing 5,000 real events to reach the real
+// limit takes minutes and proves nothing extra.
+process.env.AUDIT_FETCH_LIMIT = '3'
+
 const { commitTo } = await import('../../../src/lib/audit')
 const { server } = await import('../server')
 const { resetMetrics } = await import('../metrics')
@@ -187,6 +193,60 @@ describe('checking one coupon: the SLA is enforced by the API, not just document
   it('refuses a nullifier that is not 64 hex characters', async () => {
     const { status } = await get('/api/v1/audit/coupon/not-a-nullifier')
     expect(status).toBe(400)
+  })
+
+  it('CANNOT be made to accuse by backdating redeemedAt', async () => {
+    // The SLA bypass, caught in review. `redeemedAt` is supplied by whoever is
+    // asking and a `missing` verdict is quotable at a merchant, so an
+    // unvalidated value meant `?redeemedAt=0` returned `missing` instantly for
+    // any nullifier — the SLA gated the caller's honesty rather than the
+    // passage of time, which is no gate at all on a public endpoint.
+    relayEvents = []
+    expect((await get(`/api/v1/audit/coupon/${N1}?redeemedAt=0`)).status).toBe(400)
+  })
+
+  it('refuses a redeemedAt in the future', async () => {
+    // Nonsense, and it would push `reportableAt` further out rather than in, so
+    // it is refused rather than clamped.
+    relayEvents = []
+    const { status } = await get(`/api/v1/audit/coupon/${N1}?redeemedAt=${Date.now() + 86_400_000}`)
+    expect(status).toBe(400)
+  })
+
+  it('still answers for a redemption inside the judging window', async () => {
+    // The bounds must not break the honest case they exist to protect.
+    relayEvents = []
+    const { status, body } = await get(
+      `/api/v1/audit/coupon/${N1}?redeemedAt=${Date.now() - 7_200_000}`,
+    )
+    expect(status).toBe(200)
+    expect(body.verdict).toBe('missing')
+  })
+})
+
+describe('a truncated stream cannot support an accusation', () => {
+  it('downgrades missing to pending when the fetch hit its limit', async () => {
+    // Truncation drops the OLDEST attestations, so the record for this coupon
+    // may simply not be in view. `missing` would then describe our page size
+    // rather than the merchant — the false accusation this service exists to
+    // avoid, arriving by the back door.
+    relayEvents = Array.from({ length: 3 }, (_, i) =>
+      attest(LEDGER_A, i.toString(16).padStart(64, '0')),
+    )
+    const { body } = await get(`/api/v1/audit/coupon/${N1}?redeemedAt=${Date.now() - 7_200_000}`)
+
+    expect(body.verdict).toBe('pending')
+    expect(String(body.note)).toContain('truncated view')
+  })
+
+  it('reports truncation as a metric an operator can alert on', async () => {
+    relayEvents = Array.from({ length: 3 }, (_, i) =>
+      attest(LEDGER_A, i.toString(16).padStart(64, '0')),
+    )
+    await get('/api/v1/audit/summary')
+    expect(await (await fetch(`${base}/metrics`)).text()).toContain(
+      'audit_ledger_snapshot_truncated 1',
+    )
   })
 })
 
@@ -303,6 +363,22 @@ describe('metrics are exposition text, because that is what a dashboard reads', 
     const res = await fetch(`${base}/metrics`)
     expect(res.status).toBe(200)
     expect(await res.text()).toContain('audit_api_relay_up 0')
+  })
+
+  it('counts conflicts from the LEDGER, not from how often somebody asked', async () => {
+    // The dashboard's headline fraud panel used to read
+    // `audit_api_coupon_checks_total{verdict="conflicting"}`, which only moves
+    // when a conflicted coupon is queried — so a stall double-claiming a token
+    // nobody asks about read zero forever. Review caught it.
+    relayEvents = [
+      attest(LEDGER_A, N1, { commitment: commitment('1') }),
+      attest(LEDGER_B, N1, { commitment: commitment('7') }),
+    ]
+    await get('/api/v1/audit/summary')
+    // Nobody has called the coupon endpoint; the gauge must see it anyway.
+    const text = await (await fetch(`${base}/metrics`)).text()
+    expect(text).toContain('audit_ledger_conflicts 1')
+    expect(text).toContain('audit_api_coupon_checks_total{verdict="conflicting"} 0')
   })
 
   it('exposes the ledger gauges the dashboard queries by name', async () => {

@@ -85,11 +85,40 @@ const RELAY_URL = process.env.AUDIT_RELAY_URL ?? 'ws://nostr-relay:7777'
 const CACHE_MS = Number(process.env.AUDIT_CACHE_MS ?? 30_000)
 /** Bounded so a growing stream cannot turn one request into an unbounded fetch. */
 const FETCH_LIMIT = Number(process.env.AUDIT_FETCH_LIMIT ?? 5000)
+/**
+ * Most redemptions one disclosure may cover.
+ *
+ * The only caller-controlled unbounded input on this service, and it drives
+ * elliptic-curve work: 1,000 entries measured at ~82ms of blocked event loop,
+ * 5,000 at ~400ms. 500 keeps a single request comfortably sub-50ms while being
+ * far more than a stall discloses for a trading day.
+ */
+const DISCLOSURE_LIMIT = Number(process.env.AUDIT_DISCLOSURE_LIMIT ?? 500)
+/** Tolerance for a caller whose clock runs slightly ahead of this server's. */
+const CLOCK_SKEW_MS = 5 * 60 * 1000
+/**
+ * How far back a `redeemedAt` may reach before this service refuses to judge it.
+ *
+ * 30 days. Beyond that a `missing` verdict says more about how long the ledger
+ * has existed than about the merchant, and an unbounded window lets anyone
+ * backdate a claim to manufacture an accusation.
+ */
+const MAX_REDEEMED_AGE_MS = 30 * 24 * 60 * 60 * 1000
 
 interface Snapshot {
   accepted: AuditedAttestation[]
   rejected: RejectedAttestation[]
   fetchedAt: number
+  /**
+   * The relay returned a full page, so events beyond the limit are not here.
+   *
+   * Load-bearing rather than diagnostic: a truncated stream drops the OLDEST
+   * attestations, so a coupon whose record fell off the end answers `missing`
+   * past the SLA. That is the false accusation this whole service is built to
+   * avoid, arriving by the back door. Surfaced as a metric and refused as a
+   * verdict below.
+   */
+  truncated: boolean
 }
 
 let cached: Snapshot | undefined
@@ -120,10 +149,17 @@ async function snapshot(): Promise<Snapshot> {
         limit: FETCH_LIMIT,
       })
       const { accepted, rejected } = readAttestations(events)
+      const truncated = events.length >= FETCH_LIMIT
+      if (truncated) {
+        console.warn(
+          `[audit-api] relay returned ${events.length} events at the limit of ${FETCH_LIMIT}; ` +
+            'older attestations are not in this snapshot and `missing` verdicts are suppressed',
+        )
+      }
       metrics.relayQueries++
       metrics.relayQuerySeconds += (Date.now() - started) / 1000
       metrics.lastFetchOk = 1
-      cached = { accepted, rejected, fetchedAt: Date.now() }
+      cached = { accepted, rejected, fetchedAt: Date.now(), truncated }
       return cached
     } catch (error) {
       metrics.relayErrors++
@@ -187,16 +223,29 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   // when its upstream is briefly down gets the container restarted mid-incident,
   // which helps nobody. Relay reachability is reported as a metric instead.
   //
-  // It DOES assert a WebSocket implementation is installed, because the failure
-  // that causes is silent and catastrophic for this service: no transport means
-  // every query returns zero events, which reads as "no redemptions" rather than
-  // as an outage, and the API starts reporting honest merchants as `missing`.
-  // A misconfigured build should refuse to come up rather than accuse people.
+  // It DOES report whether the stream is actually readable, because the failure
+  // that hides here is silent and catastrophic: no transport means every query
+  // returns zero events, which reads as "no redemptions" rather than as an
+  // outage, and the API starts reporting honest merchants as `missing`.
+  //
+  // An earlier version tested `Boolean(WebSocketImpl)`, which is a STATIC
+  // IMPORT and therefore always truthy — the 503 branch was unreachable and the
+  // comment claiming it guarded anything was false. Review caught it.
+  //
+  // It reports rather than FAILS, and that is the deliberate half. A health
+  // check that goes red on a transient upstream error gets the container
+  // restarted mid-incident, losing the cache and helping nobody — the reason
+  // this endpoint did not touch the relay in the first place. So a degraded
+  // stream is visible in the body and in `audit_api_relay_up`, while the status
+  // stays 200 for anything short of the service being unable to serve at all.
   if (path === '/health') {
-    const transport = typeof WebSocket !== 'undefined' || Boolean(WebSocketImpl)
-    return transport
-      ? json(res, 200, { status: 'ok' })
-      : json(res, 503, { status: 'no websocket transport — every query would return zero events' })
+    return json(res, 200, {
+      status: cached && metrics.lastFetchOk === 0 ? 'degraded' : 'ok',
+      // Absent until the first fetch, so a just-started service says nothing it
+      // cannot support. Once it HAS read the relay, these are the numbers an
+      // operator needs when the dashboard looks quiet.
+      ...(cached ? { redemptions: cached.accepted.length, truncated: cached.truncated } : {}),
+    })
   }
 
   if (path === '/metrics') {
@@ -286,26 +335,64 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     // Absent, `checkCoupon` cannot return `missing` at all — no timestamp, no
     // accusation. That is the safe direction and it is enforced in the reader,
     // not here, so every caller inherits it.
+    //
+    // But `redeemedAt` is supplied by whoever is asking, and a `missing` verdict
+    // is quotable at a merchant. Unvalidated, `?redeemedAt=0` returned `missing`
+    // instantly for any nullifier — the SLA gated the caller's honesty rather
+    // than the passage of time, which is no gate at all on a public endpoint.
+    // Caught in review; measured before fixing.
+    //
+    // Two bounds, both against the SERVER's clock:
+    //   - not in the future, which is nonsense and would push `reportableAt`
+    //     out rather than in, so it is refused rather than clamped;
+    //   - not older than this window. A redemption from before the ledger
+    //     existed cannot be judged by it, and someone backdating a claim to
+    //     force `missing` is exactly the abuse this endpoint must not serve.
     const raw = url.searchParams.get('redeemedAt')
     const redeemedAt = raw === null ? undefined : Number(raw)
-    if (redeemedAt !== undefined && !Number.isFinite(redeemedAt)) {
-      return json(res, 400, { error: 'redeemedAt must be epoch milliseconds' })
+    if (redeemedAt !== undefined) {
+      if (!Number.isFinite(redeemedAt)) {
+        return json(res, 400, { error: 'redeemedAt must be epoch milliseconds' })
+      }
+      const now = Date.now()
+      if (redeemedAt > now + CLOCK_SKEW_MS) {
+        return json(res, 400, { error: 'redeemedAt is in the future' })
+      }
+      if (redeemedAt < now - MAX_REDEEMED_AGE_MS) {
+        return json(res, 400, {
+          error: `redeemedAt is further back than this service will judge (${MAX_REDEEMED_AGE_MS}ms)`,
+        })
+      }
     }
 
-    const { accepted } = await snapshot()
-    const check = checkCoupon(nullifier, accepted, redeemedAt)
-    metrics.couponChecks[check.verdict] = (metrics.couponChecks[check.verdict] ?? 0) + 1
+    const snap = await snapshot()
+    const check = checkCoupon(nullifier, snap.accepted, redeemedAt)
+
+    // A truncated snapshot cannot support an accusation. The relay hit its
+    // limit, so the OLDEST attestations are absent, and the record for this
+    // coupon may be among them — `missing` would then be a statement about our
+    // page size rather than about the merchant. Downgrade to `pending`, which
+    // is what "we cannot yet say" means everywhere else in this service.
+    //
+    // `honoured` and `conflicting` survive truncation untouched: those are
+    // claims about records we HAVE, and finding fewer records cannot make a
+    // record we found untrue.
+    const verdict = snap.truncated && check.verdict === 'missing' ? 'pending' : check.verdict
+    metrics.couponChecks[verdict] = (metrics.couponChecks[verdict] ?? 0) + 1
     return json(res, 200, {
       nullifier,
       ...check,
+      verdict,
       slaMs: ABSENCE_SLA_MS,
       // Said out loud in the payload, not just in a doc nobody reading JSON will
       // open. `missing` is the verdict most likely to be quoted at a merchant,
       // and it must never be repeated as proof of dishonesty.
       note:
-        check.verdict === 'missing'
+        verdict === 'missing'
           ? 'Past the publication window with no record. This is evidence of a gap, NOT proof of a dishonest merchant: a lost publish looks identical until the merchant runs a reconciliation sweep.'
-          : undefined,
+          : snap.truncated && check.verdict === 'missing'
+            ? 'No record found, but this service is reading a truncated view of the stream, so absence here means nothing. Retry once the snapshot is complete.'
+            : undefined,
     })
   }
 
@@ -367,6 +454,17 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     }
     if (!Array.isArray(nullifiers) || nullifiers.length === 0) {
       return json(res, 400, { error: 'nullifiers must be a non-empty array' })
+    }
+    // Upper bound as well as lower, because this endpoint is public,
+    // unauthenticated, and does elliptic-curve point addition per entry.
+    // Measured: 5,000 commitments block the event loop for ~400ms, and the 1 MB
+    // body cap alone would allow roughly 15,000 — so a handful of concurrent
+    // requests is a denial of service on a single-threaded server. A disclosure
+    // larger than this is a reporting job, not an interactive check.
+    if (nullifiers.length > DISCLOSURE_LIMIT) {
+      return json(res, 400, {
+        error: `a disclosure may cover at most ${DISCLOSURE_LIMIT} redemptions`,
+      })
     }
     if (typeof total !== 'number' || !Number.isFinite(total) || total < 0) {
       return json(res, 400, { error: 'total must be a non-negative number of minor units' })
