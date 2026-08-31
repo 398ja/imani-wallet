@@ -30,6 +30,9 @@ const DASHBOARD = resolve(
 
 interface Panel {
   title?: string
+  type?: string
+  collapsed?: boolean
+  panels?: unknown[]
   targets?: { expr: string }[]
 }
 
@@ -98,5 +101,31 @@ describe('the Grafana dashboard queries metrics this service actually emits', ()
     const exposition = renderMetrics()
     expect(exposition).toContain('audit_api_coupon_checks_total{verdict="missing"} 0')
     expect(exposition).toContain('audit_api_coupon_checks_total{verdict="conflicting"} 0')
+  })
+
+  it.runIf(dash)('every row panel carries the fields Grafana needs to render it', () => {
+    // A row without `collapsed` and `panels` is not a row Grafana can lay out.
+    // Loading the dashboard in real Grafana rendered an entirely EMPTY page —
+    // not "No data" in each panel, nothing at all, while every query returned
+    // data perfectly through the API. Nothing short of a browser catches that:
+    // the JSON is valid, the queries resolve, and the metric-name check above
+    // passes throughout.
+    const rows = dash!.panels.filter((p) => p.type === 'row')
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) {
+      expect(row, `row "${row.title}" needs collapsed`).toHaveProperty('collapsed')
+      expect(row, `row "${row.title}" needs panels`).toHaveProperty('panels')
+    }
+  })
+
+  it.runIf(dash)('panel titles are short enough not to truncate in a stat panel', () => {
+    // "Redemptions on the public ledger" rendered as "Redemptions on the …" in
+    // a quarter-width stat panel. The number is the point of those panels, and
+    // a clipped title makes the reader guess which number they are looking at.
+    // The description (the ⓘ) is where the long explanation belongs.
+    const stats = dash!.panels.filter((p) => p.type === 'stat')
+    for (const p of stats) {
+      expect((p.title ?? '').length, `stat title too long: "${p.title}"`).toBeLessThanOrEqual(24)
+    }
   })
 })
