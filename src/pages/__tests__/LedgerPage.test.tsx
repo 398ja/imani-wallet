@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { finalizeEvent, type Event } from 'nostr-tools'
 import { hexToBytes } from '@noble/hashes/utils'
@@ -41,8 +41,15 @@ vi.mock('../../lib/attestation', async () => {
   }
 })
 
+let walletThrows = false
 vi.mock('../../lib/wallet', () => ({
-  listTransactions: async () => [],
+  // Able to throw, which the original mock could not: it returned [] always, so
+  // the sweep's failure path was unreachable from jsdom and shipped broken.
+  // Driving the real screen in a real browser is what exposed it.
+  listTransactions: async () => {
+    if (walletThrows) throw new Error('Wallet not opened yet — call openWallet(userId) first.')
+    return []
+  },
   recordAttestationReceipt: async () => {},
 }))
 
@@ -87,6 +94,7 @@ afterEach(cleanup)
 beforeEach(() => {
   relayEvents = []
   relayThrows = false
+  walletThrows = false
 })
 
 describe('what the merchant is shown about their own stream', () => {
@@ -159,5 +167,36 @@ describe('when the relay cannot be reached', () => {
     paint()
     await waitFor(() => expect(screen.getByText(/Could not reach the relay/)).toBeTruthy())
     expect(screen.getByText(/records are unaffected/)).toBeTruthy()
+  })
+})
+
+describe('the sweep button', () => {
+  it('says something when the sweep fails, instead of going silent', async () => {
+    // Observed in a real browser before this was fixed: the promise rejected,
+    // the button re-enabled itself, and the screen rendered NOTHING. To a
+    // merchant that is a dead button, not a failure they can act on.
+    //
+    // The sweep reaches IndexedDB through `listTransactions`, which throws
+    // whenever the store is not open — a real state, and the exact error seen.
+    relayEvents = [attest(LEDGER_SK, 'n1')]
+    walletThrows = true
+    paint()
+    await waitFor(() => expect(screen.getByText('Redemptions published')).toBeTruthy())
+
+    fireEvent.click(screen.getByText('Check now'))
+
+    await waitFor(() => expect(screen.getByText(/Could not finish the check/)).toBeTruthy())
+    // And it must not claim anything was changed, because nothing was.
+    expect(screen.getByText(/Nothing was changed/)).toBeTruthy()
+  })
+
+  it('re-enables the button so a failure is retryable', async () => {
+    relayEvents = [attest(LEDGER_SK, 'n1')]
+    walletThrows = true
+    paint()
+    await waitFor(() => expect(screen.getByText('Redemptions published')).toBeTruthy())
+    fireEvent.click(screen.getByText('Check now'))
+    await waitFor(() => expect(screen.getByText(/Could not finish/)).toBeTruthy())
+    expect((screen.getByText('Check now').closest('button') as HTMLButtonElement).disabled).toBe(false)
   })
 })

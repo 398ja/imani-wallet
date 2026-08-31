@@ -78,6 +78,8 @@ export function LedgerPage() {
   const [conflicts, setConflicts] = useState(0)
   const [refused, setRefused] = useState(0)
   const [reading, setReading] = useState(false)
+  /** The sweep threw. Distinct from "ran and found nothing", which is a result. */
+  const [sweepFailed, setSweepFailed] = useState(false)
 
   const audit = useCallback(async () => {
     setReading(true)
@@ -119,6 +121,7 @@ export function LedgerPage() {
 
   const sweep = useCallback(async () => {
     setBusy(true)
+    setSweepFailed(false)
     try {
       // The sweep stamps a receipt onto every row it can (DEV-246): the gaps it
       // republishes, and the rows whose attestation was already published but
@@ -128,6 +131,19 @@ export function LedgerPage() {
       // STANDS rather than the state that prompted the sweep. Reading first
       // would show the gaps it had just closed.
       await audit()
+    } catch (error) {
+      // Say something. Without this the promise rejected, the button re-enabled
+      // itself, and the screen rendered NOTHING — a merchant taps "Check now"
+      // and gets silence, which reads as a dead button rather than as a
+      // failure they could act on.
+      //
+      // Found by driving the real screen in a real browser: the sweep reaches
+      // IndexedDB through `listTransactions`, which throws "Wallet not opened
+      // yet" whenever the store is not open. The jsdom tests mocked
+      // `listTransactions`, so the whole failure path was invisible to them.
+      console.error('[ledger] sweep failed', error)
+      setResult(null)
+      setSweepFailed(true)
     } finally {
       // Always clears: a relay timeout must not strand the button disabled
       // with no way back except a reload.
@@ -170,8 +186,15 @@ export function LedgerPage() {
             {/* Wrapped, not truncated. An earlier review caught a raw 64-char
                 hexpub overflowing the settlement receipt; the fix there was to
                 shorten it, but this one exists to be COPIED, so it has to be
-                shown in full and made selectable. */}
-            <p className="mt-3 break-all font-mono text-xs text-mono-600 dark:text-mono-300 select-all">
+                shown in full and made selectable.
+
+                `break-all` rather than the default: seen in a real browser, a
+                64-char hash breaks wherever the line happens to end, which
+                splits it mid-character-run and makes reading it back to an
+                auditor by eye error-prone. `select-all` means a tap still takes
+                the whole value regardless of where it wrapped, and the Copy
+                button remains the intended path. */}
+            <p className="mt-3 break-all font-mono text-xs leading-relaxed text-mono-600 dark:text-mono-300 select-all">
               {pubkey}
             </p>
             <Button variant="secondary" className="mt-3" onClick={copy}>
@@ -275,6 +298,12 @@ export function LedgerPage() {
           <RefreshCw className={`mr-2 h-4 w-4 ${busy ? 'animate-spin' : ''}`} aria-hidden />
           {busy ? 'Checking…' : 'Check now'}
         </Button>
+
+        {sweepFailed && (
+          <p className="mt-3 text-sm text-red-600 dark:text-red-400" role="status">
+            Could not finish the check. Nothing was changed — try again in a moment.
+          </p>
+        )}
 
         {result && (
           <p className="mt-3 text-sm text-mono-600 dark:text-mono-300" role="status">
