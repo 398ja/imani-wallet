@@ -264,6 +264,35 @@ describe('metrics are exposition text, because that is what a dashboard reads', 
     expect(text).toContain('audit_api_coupon_checks_total{verdict="honoured"} 1')
   })
 
+  it('exposes the ledger gauges on a SCRAPE ALONE, with no API call first', async () => {
+    // The regression that made 6 of 15 dashboard panels read "No data".
+    //
+    // /metrics used to render whatever was cached, and the cache is only filled
+    // by an API request. Nothing calls this API on a schedule, so a real
+    // deployment scraped `up`, collected the request counters, and never
+    // produced a single `audit_ledger_*` sample. Found by pointing real
+    // Prometheus at the service with the deploy repo's own config.
+    //
+    // This test therefore touches NO endpoint before scraping. Adding a warm-up
+    // call above would restore the bug while keeping the test green.
+    relayEvents = [attest(LEDGER_A, N1), attest(LEDGER_B, N2)]
+    const text = await (await fetch(`${base}/metrics`)).text()
+
+    expect(text).toContain('audit_ledger_redemptions 2')
+    expect(text).toContain('audit_ledger_merchants 2')
+    expect(text).toContain('audit_api_relay_up 1')
+  })
+
+  it('still renders counters when the relay is down, rather than failing the scrape', async () => {
+    // A relay outage must surface as `audit_api_relay_up 0` beside the last
+    // known figures. A failed scrape would also lose the counters that tell an
+    // operator the service is alive, which is the opposite of useful mid-incident.
+    relayThrows = true
+    const res = await fetch(`${base}/metrics`)
+    expect(res.status).toBe(200)
+    expect(await res.text()).toContain('audit_api_relay_up 0')
+  })
+
   it('exposes the ledger gauges the dashboard queries by name', async () => {
     relayEvents = [attest(LEDGER_A, N1), attest(LEDGER_B, N2)]
     await get('/api/v1/audit/summary')
