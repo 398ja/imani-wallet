@@ -185,7 +185,7 @@ it is what each reader can *open*.
 | Verify an attestation is authentic | yes | yes |
 | Detect a token redeemed twice | yes | yes |
 | See the stream is live, count redemptions | yes | yes |
-| **Confirm a specific coupon was honoured** | yes | **yes** |
+| **Confirm a specific coupon was honoured** | yes | **blocked — see below** |
 | Read one merchant's totals | yes | only on that merchant's disclosure |
 | Identify the real stall behind a pseudonym | yes | no |
 | Cross-merchant analytics | yes | no |
@@ -215,11 +215,38 @@ us — here is the receipt, verify it yourself"*. The second is the selling
 point, and it is only credible because the merchant cannot quietly rewrite
 history: the commitment is published before any dispute.
 
-### Not safe to expose yet: absence is not evidence
+> #### ⚠️ The customer cannot do this today, and the blocker is in the gateway
+>
+> **"A customer held the token" is false on the atomic-send path**, which is
+> every coupon a customer sends. Established while building the reader:
+>
+> - `nullifierFor` hashes the token the merchant **received** (`dmPoll.ts`), and
+>   that token is the gateway's `send_token`, produced by the split and handed
+>   straight to the gift wrap (`AtomicSendService`).
+> - `AtomicSendResponse` states it outright: *"The send_token is NEVER returned
+>   during the saga — it stays server-side. Only returned via reclaim."* The
+>   customer receives `keep_token`, which is their **change**.
+>
+> So the customer's wallet never sees the bytes that were redeemed and cannot
+> compute the nullifier to look up. `couponCheckFilter` is unreachable in
+> principle, not merely uncalled — its own comment attributes this to sequencing,
+> which is now known to be the lesser reason.
+>
+> **The fix is small and belongs to the gateway:** return the send token's
+> *nullifier* (not the token) to the sender on COMPLETED. It is a hash of a
+> value the gateway already holds, discloses nothing bearer, and is the only
+> thing standing between here and the headline capability. Filed as its own
+> card.
+>
+> Everything else in this table — authenticity, replay detection, per-merchant
+> audit, the merchant's own view — is built and live.
 
-**The reconciliation sweep does not exist.** Until it does, a missing
-attestation has at least four innocent explanations, and the ledger cannot tell
-them apart from a merchant omitting deliberately:
+### Absence is not evidence, and the SLA that makes it mean something
+
+**The reconciliation sweep now exists** (`reconcileAttestations`, reachable at
+Settings → Redemption ledger). Before it did, a missing attestation had at least
+four innocent explanations, and the ledger could not tell them apart from a
+merchant omitting deliberately:
 
 1. the tab closed before the publish landed
 2. the relay rejected or dropped the event
@@ -235,6 +262,14 @@ is fine; the customer-facing interpretation shipping before the sweep is not.**
 
 Order of work: producer → reconciliation sweep → reader. Not producer → reader.
 
+**The reader now gates absence on a one-hour SLA** (`ABSENCE_SLA_MS` in
+`src/lib/audit.ts`), which is the operational form of the rule above. Inside the
+hour a gap reads `pending` and says when that may change; past it, `missing` —
+and `missing` travels with a written caveat that it is evidence of a gap and not
+proof of dishonesty. A caller that cannot say *when* the redemption happened
+cannot obtain a `missing` verdict at all: no timestamp, no accusation.
+
+
 ### Build it fresh
 
 The existing `cashu-ledger` repo is marked **Retire** on its own board: it
@@ -245,6 +280,41 @@ around that graph.
 
 The replacement reader is a `GROUP BY` over a flat attestation stream, not a
 graph walk. Build against the stream; do not revive the traversal.
+
+## What shipped (DEV-245)
+
+The reader is `src/lib/audit.ts`, and it is the whole service's logic: verify a
+signature, detect a replay, answer "was this coupon honoured", summarise one
+ledger key. It needs no key and no wallet, so **one implementation** serves an
+external auditor, the hosted API and a merchant auditing themselves — an
+external reader cannot be told something an internal one would not be.
+
+| Surface | Where |
+|---|---|
+| Reader | `src/lib/audit.ts` |
+| Hosted API | `services/audit-api/` → `audit.staging.398ja.xyz` |
+| Merchant's own view | Settings → Redemption ledger |
+| Dashboard | Grafana → *Redemption audit ledger* |
+| Live probe | `scripts/audit-probe.mjs` |
+
+Three findings worth carrying forward, each from running the thing rather than
+reasoning about it:
+
+- **`verifyEvent` can be fooled by object spread.** nostr-tools memoises its
+  verdict in a `Symbol(verified)` property, and symbols survive spread — so
+  `{...genuine, sig: 'ff…'}` verifies `true` without the signature being
+  checked. Relay traffic arrives as JSON and so was never at risk, which is why
+  it could sit unnoticed. `stripCachedVerdict` removes it before every check.
+- **A batched event is already on the relay.** Event `6a3688bf…` carries two `n`
+  tags and no `v`, from this design work. An absent version defaults to v1, so
+  batches are refused structurally as well as by version.
+- **A missing WebSocket transport returns zero events from a *successful*
+  query.** In a Node service that reads as "no redemptions" rather than as an
+  outage — the API would have accused every merchant of not publishing. Guarded
+  in `/health`.
+
+Measured against staging: 30 events, 28 audit cleanly, 2 refused correctly (the
+hand-made probe above and the batch), across 9 ledger keys in EUR and XAF.
 
 ## Open decisions
 
