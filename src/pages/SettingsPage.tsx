@@ -70,7 +70,7 @@ export function SettingsPage({
               to="/settings/ledger"
               icon={ShieldCheck}
               label="Redemption ledger"
-              hint="Your ledger ID, and check for gaps"
+              hint="What you have published, your ledger ID, and gaps"
             />
           </ListSection>
         </div>
