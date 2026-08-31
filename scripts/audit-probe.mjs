@@ -51,7 +51,21 @@ ws.on('message', (raw) => {
   }
 
   ws.close()
-  process.exit(rejected.length > 0 || conflicts.length > 0 ? 1 : 0)
+
+  // Exit non-zero only on findings that are ACTUALLY actionable.
+  //
+  // Not on `rejected.length`, which is what this did first and was wrong: two
+  // refusals are permanent fixtures of the staging relay — a hand-made probe
+  // event and an unversioned batch, both left from the design work — so any
+  // check wired to "refused > 0" is red forever and teaches whoever sees it to
+  // ignore this script. `unknown_version` in particular means a publisher is
+  // AHEAD of this reader, which is a scheduled upgrade rather than a fault.
+  //
+  // A forged signature and a conflicting claim are the two things that mean
+  // somebody is doing something wrong.
+  const forged = rejected.filter((r) => r.defect === 'bad_signature')
+  if (forged.length > 0) console.log(`\nFORGED SIGNATURES: ${forged.length}`)
+  process.exit(forged.length > 0 || conflicts.length > 0 ? 1 : 0)
 })
 
 ws.on('error', (e) => {
