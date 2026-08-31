@@ -3,6 +3,7 @@ import { schnorr } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@noble/hashes/utils'
 
+import { ATTESTATION_KIND, ATTESTATION_VERSION } from './attestationKind'
 import { getSigner } from './nap'
 import { allEvents, publish } from './relay'
 
@@ -73,22 +74,19 @@ import { allEvents, publish } from './relay'
  */
 
 /**
- * A regular kind, like 7376 — relays keep every copy rather than replacing by
- * `d`. Append-only is exactly right for a redemption ledger; a replaceable kind
- * would let a later publish quietly erase an earlier redemption.
+ * The wire constants live in `attestationKind.ts` and are re-exported here so
+ * every existing importer is unaffected.
  *
- * 7377 sits beside NIP-60's 7375 (token) and 7376 (history) rather than in the
- * application range, because it is the same family of record. It is not a
- * registered NIP-60 kind; if one is standardised for this, move to it.
+ * They had to move because this module cannot be loaded outside a browser: it
+ * reaches `./nap` and `./relay` to sign and publish, and those reach
+ * `@imani/nap-client-web` and `import.meta.env`. The hosted audit API is a Node
+ * process that needs the kind number and must never be able to sign — so it
+ * imports the constants without importing the signer.
+ *
+ * Re-exported rather than copied. One definition, so a reader and the producer
+ * cannot drift apart about what is on the wire.
  */
-export const ATTESTATION_KIND = 7377
-
-/**
- * Payload version. `1` is one attestation per event; a batched format would be
- * `2`, carrying a list. Present from the first event so the migration is
- * detectable rather than a guess.
- */
-export const ATTESTATION_VERSION = '1'
+export { ATTESTATION_KIND, ATTESTATION_VERSION } from './attestationKind'
 
 /** Domain separators. Versioned, so a future scheme change cannot collide. */
 const LEDGER_KEY_TAG = 'imani-ledger-key-v1'
