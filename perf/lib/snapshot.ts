@@ -25,6 +25,18 @@ export interface StoreContents {
   keyPath: string | string[] | null
   autoIncrement: boolean
   records: unknown[]
+  /**
+   * The keys the records were stored under, for out-of-line stores.
+   *
+   * A store created with no keyPath and no generator (the wallet's `resume`
+   * store is one, see src/lib/resume.ts) keeps its keys OUTSIDE the record.
+   * Capturing only the values loses them, and restoring then fails with
+   * "the object store uses out-of-line keys and has no key generator and the
+   * key parameter was not provided".
+   *
+   * Absent for in-line stores, where the key lives in the record already.
+   */
+  keys?: IDBValidKey[]
 }
 
 export interface DatabaseContents {
@@ -97,11 +109,24 @@ export async function capture(page: Page, coupons: number): Promise<Omit<Snapsho
           r.onsuccess = () => ok(r.result)
           r.onerror = () => no(r.error)
         })
+
+        // Keys are captured separately for out-of-line stores, where they are
+        // not part of the record and would otherwise be lost.
+        const outOfLine = store.keyPath === null && !store.autoIncrement
+        const keys = outOfLine
+          ? await new Promise<IDBValidKey[]>((ok, no) => {
+              const r = store.getAllKeys()
+              r.onsuccess = () => ok(r.result)
+              r.onerror = () => no(r.error)
+            })
+          : undefined
+
         stores.push({
           name: storeName,
           keyPath: store.keyPath as string | string[] | null,
           autoIncrement: store.autoIncrement,
           records,
+          ...(keys ? { keys } : {}),
         })
       }
 
@@ -176,7 +201,13 @@ export async function restore(page: Page, snapshot: Snapshot): Promise<void> {
         if (!db.objectStoreNames.contains(store.name)) continue
         const tx = db.transaction(store.name, 'readwrite')
         const os = tx.objectStore(store.name)
-        for (const record of store.records) os.put(record)
+        for (let i = 0; i < store.records.length; i++) {
+          // Out-of-line stores need the key passed alongside the value; an
+          // in-line store rejects a key argument outright, so this cannot be
+          // done unconditionally.
+          if (store.keys) os.put(store.records[i], store.keys[i])
+          else os.put(store.records[i])
+        }
         await new Promise<void>((ok, no) => {
           tx.oncomplete = () => ok()
           tx.onerror = () => no(tx.error)

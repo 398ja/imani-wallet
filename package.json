@@ -15,7 +15,8 @@
     "perf": "tsx perf/bin/run.ts",
     "perf:accept": "tsx perf/bin/run.ts --accept",
     "perf:record": "tsx perf/bin/record.ts",
-    "perf:verify-recorder": "tsx perf/bin/verify-recorder.ts"
+    "perf:verify-recorder": "tsx perf/bin/verify-recorder.ts",
+    "perf:verify-snapshot": "tsx perf/bin/verify-snapshot.ts"
   },
   "dependencies": {
     "@capacitor/android": "^7.6.8",
