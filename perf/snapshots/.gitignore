@@ -1,0 +1,4 @@
+# Recorded wallet state, not committed: it is large, regenerable from the real
+# issuing flow, and pinned to a source hash that says when it went stale.
+*
+!.gitignore

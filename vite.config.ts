@@ -242,8 +242,16 @@ export default defineConfig({
   // an auditor and a forged record auditing clean. It is listed explicitly
   // rather than by widening the glob, so a future vendored directory does not
   // get pulled in by accident.
+  // `perf/` is ours too, and its helpers decide whether a performance run
+  // fails. Untested, a bug there reports green while measuring nothing, which
+  // is the one failure mode a performance suite cannot afford. Listed
+  // explicitly for the same reason as `services/`.
   test: {
-    include: ['src/**/*.test.{ts,tsx}', 'services/**/*.test.{ts,tsx}'],
+    include: [
+      'src/**/*.test.{ts,tsx}',
+      'services/**/*.test.{ts,tsx}',
+      'perf/**/*.test.{ts,tsx}',
+    ],
   },
   resolve: {
     // ONE React, or the production build renders a blank page.
