@@ -171,3 +171,60 @@ excused as a rate limit.
 That probe retries for up to a minute, because a previous run can leave the
 window saturated. Without the retry, two runs back to back reported **12660
 failures** and **0** respectively for a deployment that was healthy both times.
+
+## Aborting a run whose data is already invalid
+
+    node loadtest/abort-watch.mjs &                     # watch, serve on :8766
+    node loadtest/abort-watch.mjs --check               # one pass, then exit
+
+    ABORT_WATCHER_URL=http://127.0.0.1:8766 k6 run loadtest/issuance.js
+
+A run that keeps going after a subsystem has failed generates data that is
+already invalid, and buries the moment things went wrong under minutes of
+consequences.
+
+### Observed signals, and unproven ones
+
+Every pattern is marked `observed` or `unproven`, and that distinction is the
+whole point.
+
+imani-apps' plan predicted a connection pool would fail with `Connection is not
+available, request timed out`. Under load it failed with `HikariDataSource has
+been closed` — a *closed* pool, not a timeout waiting for a slot. Its own run
+report records "Hikari `Connection is not available`: **0 observations**". The
+predicted signal never fired while the run produced hours of worthless data.
+
+| Signal | Confidence | Evidence |
+|---|---|---|
+| `HikariDataSource has been closed` | observed | 316 in imani-apps run 002 |
+| `relay_subscription_failed` | observed | 332, starting ~564ms before the pool closures |
+| `proof_repository persist_failed` | observed | 243, downstream of the closed pool |
+| `check_pending_voucher_failed` | observed | 117 |
+| `Connection is not available` | **unproven** | predicted, 0 observations |
+| `proofs_not_bound` | **unproven** | never seen |
+
+Adding a pattern is cheap. *Believing* an unproven one is what costs a run.
+
+### Two kinds of invalid
+
+A **subsystem failure** means the deployment is unwell: the run found something
+and should stop before recording the consequences.
+
+**Load generator saturation** means this machine ran out of capacity before the
+gateway did, so the numbers describe the laptop. That is not a gateway capacity
+finding, and the two are easy to confuse because the graphs look alike.
+
+**Rate limiting is deliberately not an abort signal.** It is the deployment
+defending itself, and aborting on it would end every issuance run at the moment
+it discovered what it went looking for.
+
+### Demonstrated, not merely implemented
+
+| Case | Result |
+|---|---|
+| A signal that is present | k6 exits **108**, `test aborted: SUBSYSTEM FAILED: … (observed)` |
+| Healthy stack, watcher live | 39 issued, 0 failed, exit 0, no spurious abort |
+| No watcher configured | run proceeds unchanged |
+| Watching staging (no local containers) | no breach, since there is nothing to read |
+
+Abort logic that has never been seen to fire is indistinguishable from none.

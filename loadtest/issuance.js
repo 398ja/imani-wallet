@@ -18,6 +18,7 @@
 import { check, sleep } from 'k6'
 import exec from 'k6/execution'
 import { requireSigner } from './lib/signed-request.js'
+import { abortIfInvalid } from './lib/abort.js'
 import { issueCoupon, resolve, GATEWAY, PORTAL } from './lib/gateway.js'
 import { Counter } from 'k6/metrics'
 import {
@@ -168,6 +169,10 @@ export function setup() {
 let backoffSeconds = 1
 
 export function issue(data) {
+  // Stop before doing more work if the run is already invalid: either a
+  // subsystem has failed, or this machine saturated before the gateway did.
+  abortIfInvalid()
+
   // One customer per VU, so concurrent issuance is spread across identities
   // rather than contending on one.
   const stall = CUSTOMERS[exec.vu.idInTest % CUSTOMERS.length]
