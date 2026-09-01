@@ -16,18 +16,39 @@ export const GATEWAY = (__ENV.GATEWAY_URL || 'https://customer.staging.398ja.xyz
 export const PORTAL = (__ENV.PORTAL_URL || GATEWAY).replace(/\/$/, '')
 
 /**
+ * The secret an edge proxy uses to vouch for a caller.
+ *
+ * Staging runs an edge that authenticates the session and injects who the
+ * caller is; locally there is no edge, so a run has to play that role itself.
+ * The portal trusts X-Auth-Pubkey and X-Auth-Permissions only when paired with
+ * this secret, which is why a page cannot simply claim a permission for itself.
+ *
+ * Without it, issuance returns 403 "Insufficient permissions" — a message that
+ * reads as a problem with the stall's account rather than a missing header.
+ */
+const EDGE_SECRET = __ENV.EDGE_SECRET || ''
+
+/**
  * One signed request.
  *
  * The body is serialised exactly once and that same string is both signed and
  * sent. Re-serialising would produce a different `payload` hash and fail
  * verification, which is why this does not take an object and stringify twice.
  */
-export function signed(base, path, method, payload, customer, name) {
+export function signed(base, path, method, payload, customer, name, permissions) {
   const body = payload === undefined ? undefined : JSON.stringify(payload)
   const url = `${base}${path}`
 
   const headers = { Authorization: nip98Header(url, method, body, customer) }
   if (body !== undefined) headers['Content-Type'] = 'application/json'
+
+  // Play the edge only when configured to. On staging a real edge does this
+  // and would discard anything sent from here anyway.
+  if (EDGE_SECRET) {
+    headers['X-Auth-Pubkey'] = customer.pubHex
+    headers['X-Edge-Auth'] = EDGE_SECRET
+    if (permissions) headers['X-Auth-Permissions'] = permissions
+  }
 
   return timed(gateway_ms, () =>
     http.request(method, url, body, { headers, tags: { name: name || path } }),
@@ -56,6 +77,8 @@ export function issueCoupon(stall, { faceValueMinor, currency, expiryDays, memo 
     },
     stall,
     'issue coupon',
+    // The permission the portal actually checks for issuance.
+    'coupon:issue',
   )
 }
 

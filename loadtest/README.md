@@ -128,3 +128,46 @@ since issuance is what funds sending, splitting and draining.
 
 Keys land in `.loadtest-pool.json`, which git ignores. They are throwaway
 identities on a test deployment and worth nothing, but they are still keys.
+
+## The issuance ramp
+
+    node loadtest/signer.mjs &
+    node loadtest/pool.mjs --size 50
+    GATEWAY_URL=http://localhost:28082 PORTAL_URL=http://localhost:28084 \
+      EDGE_SECRET=dev-edge-secret-local-only \
+      k6 run loadtest/issuance.js
+
+Issuance goes first because it produces the coupons that sending, splitting and
+draining all consume. It is both the first measurement and the tool that funds
+everything after it.
+
+**No latency threshold, on purpose.** This is capacity discovery: the output is
+a report saying where the deployment degraded. Inventing a pass mark before a
+baseline exists would produce a number nobody could defend. The only thresholds
+are correctness ones.
+
+### The first finding
+
+The gateway rate-limits issuance, keyed on **client IP**, so every customer in
+the pool shares one budget. On this stack a run issues 20-40 coupons before
+`PathRateLimitFilter` starts refusing, and the window clears after about a
+minute.
+
+That is the answer to "where does this break first", and it is reported as a
+finding rather than as failures.
+
+### Why the script has to infer throttling
+
+`gateway-customer` returns a proper `429` with a `RATE_001` body. `gateway-portal`
+catches it and re-emits a bare `500 {"error":"Internal server error"}`, so
+**nothing a caller receives says "rate limited"**. Filed as #37.
+
+Until that is fixed, the script issues one coupon before applying load, and
+then reads later opaque 500s as throttling. The inference is only sound because
+the pre-run probe established the endpoint works; if it did not, failures are
+reported as failures, which is the safe way round. A genuine outage must not be
+excused as a rate limit.
+
+That probe retries for up to a minute, because a previous run can leave the
+window saturated. Without the retry, two runs back to back reported **12660
+failures** and **0** respectively for a deployment that was healthy both times.
