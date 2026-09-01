@@ -240,11 +240,27 @@ history: the commitment is published before any dispute.
 > principle, not merely uncalled — its own comment attributes this to sequencing,
 > which is now known to be the lesser reason.
 >
-> **The fix is small and belongs to the gateway:** return the send token's
-> *nullifier* (not the token) to the sender on COMPLETED. It is a hash of a
-> value the gateway already holds, discloses nothing bearer, and is the only
-> thing standing between here and the headline capability. Filed as its own
-> card.
+> **The fix belongs to gateway-core, and it is not as small as it first looks.**
+> The obvious version — return the send token's nullifier on COMPLETED — cannot
+> work: `finalizeSend` clears the token in the same transition that completes
+> the send, and all 639 completed sends on staging have `send_token = NULL`.
+> Clearing it is correct, since it is bearer value the recipient now holds.
+>
+> So the hash must be computed *before* the clear and persisted: a
+> `send_nullifier` column on `voucher_send`, written inside the existing
+> transaction, returned on `AtomicSendResponse`. A nullifier discloses nothing
+> bearer — it is already published to a public relay by the merchant's own
+> attestation — but a schema migration plus a BOM bump and redeploy is a
+> different decision from a one-line DTO change, which is why the card asks
+> whether the customer-facing check is worth it before anyone starts.
+>
+> The domain separator must match `NULLIFIER_TAG` exactly; a mismatch yields a
+> nullifier matching nothing, whose symptom is every coupon reading `missing` —
+> precisely the false accusation this design is most careful to avoid.
+>
+> Filed as `jq4thd9pgtgo` (deferred). Note it was first filed against
+> `imani-gateway-atomic`, which is retired and serves no traffic; that repo is
+> now archived.
 >
 > Everything else in this table — authenticity, replay detection, per-merchant
 > audit, the merchant's own view — is built and live.
