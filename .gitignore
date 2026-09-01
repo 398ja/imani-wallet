@@ -34,3 +34,4 @@ dist-ssr
 *.sw?
 .gstack/
 __pycache__/
+till.png
