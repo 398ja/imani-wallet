@@ -14,6 +14,22 @@ set -euo pipefail
 DEPLOY="${DEPLOY:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../imani-deploy" && pwd)}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Say which directory is wrong, rather than which file is missing inside it.
+# Compose reports "couldn't find env file: /nonexistent/.env.test", which sends
+# you looking for an env file when the problem is the sibling checkout.
+if [ ! -f "$DEPLOY/docker-compose.test.yml" ]; then
+    cat >&2 <<EOF
+no imani-deploy at: $DEPLOY
+
+This repo's compose override layers on top of that repo's
+docker-compose.test.yml. Clone it beside this one, or point DEPLOY at it:
+
+  DEPLOY=/path/to/imani-deploy ./deploy/up.sh
+
+EOF
+    exit 1
+fi
+
 SERVICES=(
   imani-gateway-db bottin-db imani-vault-db imani-payment-db
   bottin-api nostr-relay phoenixd-mock blossom

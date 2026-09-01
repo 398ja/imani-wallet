@@ -319,3 +319,29 @@ which no scenario here drives yet.
 The summary says this explicitly whenever it happens, because an all-empty run
 looks identical to a healthy loaded one in every other number. A scenario that
 quietly measured nothing while reporting a clean p95 would be worse than none.
+
+## Checking the stack before a run
+
+    ./deploy/up.sh && ./deploy/check.sh
+
+`docker ps` will not tell you the stack is healthy: a container that exited is
+simply absent from the list, so counting running containers reports a complete
+stack while a service is dead. That is how `account-app` sat exited through a
+whole evening of load runs.
+
+`check.sh` names every expected service, so a missing one is a failure rather
+than a shorter list. It also reaches past `gateway-customer`'s healthcheck,
+which reports `OUT_OF_SERVICE` while serving perfectly (see the note in
+`up.sh`), to ask whether the service actually answers a request.
+
+Exercised against the failure modes that matter:
+
+| Situation | Result |
+|---|---|
+| Everything up | `Stack is ready`, exit 0 |
+| A service stopped | names it `NOT RUNNING`, exit 1 |
+| A service exits after starting | caught, exit 1 |
+| A database killed under a running service | caught via the database, exit 1 |
+| Run from another directory | works, exit 0 |
+| Required local image missing | `up.sh` names the image and the `mvn` command, exit 1 |
+| `DEPLOY` pointing nowhere | names the directory, not the env file inside it, exit 1 |

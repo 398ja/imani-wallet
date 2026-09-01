@@ -227,3 +227,42 @@ The recorder also now refuses to write a **partial** snapshot, not just an
 empty one. A partial snapshot is the more dangerous case: it looks plausible,
 every later scenario trusts it, and the ladder would measure one coupon while
 claiming a thousand.
+
+## Verifying the snapshot round trip
+
+    npm run perf:verify-snapshot
+
+Capture and hashing are checked elsewhere. This checks the boundary nothing
+else touched: whether state written back into a **fresh browser context**
+actually reconstitutes the wallet. That is where a snapshot stops being a file
+and starts being a measurement.
+
+    7/7 checks passed
+
+| Check | Why it exists |
+|---|---|
+| there is real state to round trip | Six of seven checks passed vacuously on the first run, comparing an empty wallet to an empty wallet |
+| every database and store comes back | A silently dropped store measures a wallet that never existed |
+| every localStorage key comes back | Wallet state is not only IndexedDB |
+| record counts match exactly | |
+| record **contents** survive | Restoring the right number of empty objects would pass every check above |
+| database versions survive | A store restored without its schema reads back identically and then behaves differently |
+| restore **replaces** rather than merges | Otherwise a 100-coupon run after a 1000-coupon one silently measures 1100 |
+
+### The bug this found
+
+`restore()` had never been executed. Its first contact with real data threw:
+
+    DataError: the object store uses out-of-line keys and has no key
+    generator and the key parameter was not provided
+
+`src/lib/resume.ts` creates its `wrap` store with **no keyPath and no
+generator**, so its keys live outside the records. `capture()` recorded only
+the values, so the keys were lost and restore could not put them back.
+
+Fixed by capturing `getAllKeys()` for out-of-line stores and passing the key
+alongside the value on the way back in. Unconditionally passing a key is not an
+option: an in-line store rejects it.
+
+This would have broken every fixture, and no unit test would have caught it,
+because the failure needs a real IndexedDB with a real out-of-line store.
