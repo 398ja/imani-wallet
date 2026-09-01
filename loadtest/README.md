@@ -94,13 +94,14 @@ exist" when it means "it is on the other tier":
 | Drain arrivals | account `:28081` | 401 there, 404 on `:28082` |
 | **Split a coupon** | **none** | refused by design, see below |
 
-**Splitting has no gateway path.** The customer gateway refuses it outright:
-*"Voucher split execution is not supported on JdbcWalletPort — the
-customer-wallet is self-custodial (Constitution Principle II)."* Same situation
-ADR 0003 records for redemption: the work happens on the device, so measuring
-it belongs in the browser suite. `splitCoupon()` is exported and throws with
-that explanation, so anyone looking for a split scenario finds the reason
-rather than an absence.
+**Splitting has no gateway path**, recorded in
+[ADR 0004](../docs/adr/0004-splitting-is-not-load-tested.md). The customer
+gateway refuses it outright: *"Voucher split execution is not supported on
+JdbcWalletPort — the customer-wallet is self-custodial (Constitution Principle
+II)."* Same case as redemption in ADR 0003: the work happens on the device, so
+measuring it belongs in the browser suite. `splitCoupon()` is exported and
+throws with that explanation, so anyone looking for a split scenario finds the
+reason rather than an absence.
 
 ### The smoke run
 
