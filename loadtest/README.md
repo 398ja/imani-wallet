@@ -258,3 +258,38 @@ it discovered what it went looking for.
 | Watching staging (no local containers) | no breach, since there is nothing to read |
 
 Abort logic that has never been seen to fire is indistinguishable from none.
+
+## The send ramp
+
+    ACCOUNT_URL=http://localhost:28081 k6 run loadtest/send.js
+
+Each iteration issues a coupon, waits for the mint to back it, then sends it to
+another customer. Sender and recipient are paired by position, so the pairing
+is the same on every run.
+
+That makes a send run **bounded by the issuance rate limit as well as by the
+send path**, which is honest rather than convenient: coupons are bearer
+instruments, so a pre-funded pool would mean holding real tokens in a file
+between runs, and a run that crashed mid-send would strand value in a JSON blob
+nobody reads.
+
+`not backed` is counted separately from failures. A coupon is not sendable the
+instant it is created; the token appears once the mint has backed it. Counting
+that as a send failure would blame the send path for the mint's latency.
+
+### The wire format is snake_case
+
+The wallet's `buildSendParams` uses camelCase and its client layer converts.
+Copying the wallet's field names verbatim sends `recipientPubkey`, and the
+gateway answers:
+
+    VALIDATION_001 field_errors:[{field:"recipientPubkey",
+                                  message:"Recipient pubkey is required"}]
+
+It names the field using the name it was *given*, so a misspelling reads as an
+absence. The mapping that matters is imani-apps' `shared/api.js`
+`initiateAtomicSend`, not the wallet's TypeScript.
+
+`face_value` is the **send amount**, not the coupon's face value. `pay.ts`
+records why: passing the coupon's value made a partial send complete as a full
+one, the recipient got the whole coupon, and the customer got no change.
