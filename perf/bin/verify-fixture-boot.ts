@@ -172,17 +172,44 @@ async function main() {
     )
     await target.close()
 
-    // ---- And a measurement can be taken against it ------------------------
-    // The point of the whole chain. `measureColdBoot` is the real scenario,
-    // unmodified, given a page seeded from the fixture.
-    const measured = await measureColdBoot(browser, {
+    // ---- And the real scenario measures against it ------------------------
+    //
+    // The point of the whole chain, and the check that was wrong first: it
+    // called measureColdBoot with no fixture at all, which opens a FRESH
+    // context and measures an empty wallet. It passed, labelled "runs against
+    // the fixture path", and measured nothing of the sort.
+    //
+    // Now the fixture is passed in and the result reports how many records the
+    // wallet actually held, so the claim cannot outrun the measurement.
+    const empty = await measureColdBoot(browser, { baseUrl: site.url, timeoutMs: 90_000 })
+    const withFixture = await measureColdBoot(browser, {
       baseUrl: site.url,
       timeoutMs: 90_000,
+      fixture: loaded,
+      passphrase: PASSPHRASE,
     })
+
     record(
-      'a measurement runs against the fixture path',
-      measured.ms > 0 && measured.observedStarting,
-      `cold boot ${measured.ms}ms, starting state observed, settled on: ${measured.settledOn.slice(0, 40)}`,
+      'the real scenario measures against the fixture',
+      // Deliberately NOT asserting observedStarting here: a restored wallet
+      // goes straight to its lock screen, so there is no starting state to
+      // see. What proves this measurement is real is that the wallet held the
+      // fixture's records and settled on the customer's own wallet rather than
+      // the lock screen.
+      withFixture.ms > 0 &&
+        withFixture.couponsHeld >= countRecords(loaded) &&
+        /Total balance|Scan/.test(withFixture.settledOn),
+      `${withFixture.ms}ms holding ${withFixture.couponsHeld} records, ` +
+        `settled on: ${withFixture.settledOn.slice(0, 40)}`,
+    )
+
+    // An empty wallet boots fast however badly storage scales, so a fixture
+    // that measured the same as no fixture would not be measuring the wallet.
+    record(
+      'measuring a restored wallet differs from measuring an empty one',
+      withFixture.couponsHeld > empty.couponsHeld,
+      `empty held ${empty.couponsHeld} records (${empty.ms}ms), ` +
+        `restored held ${withFixture.couponsHeld} (${withFixture.ms}ms)`,
     )
 
     // ---- The refusals, through the same public interface ------------------

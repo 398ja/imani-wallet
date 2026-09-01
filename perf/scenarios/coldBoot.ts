@@ -11,6 +11,9 @@
 
 import { chromium, type Browser, type Page } from '@playwright/test'
 
+import type { Snapshot } from '../lib/snapshot'
+import { restore } from '../lib/snapshot'
+
 /**
  * The customer-visible states the wallet passes through while starting.
  *
@@ -39,15 +42,50 @@ const STARTING = [
 /** How the wallet says it failed, which must never read as a fast boot. */
 const FATAL = 'Could not open the wallet'
 
+/**
+ * The passphrase a fixture is recorded under.
+ *
+ * Fixed and public on purpose: it protects nothing. The wallets it opens hold
+ * test coupons on a local stack, and a scenario has to be able to unlock them
+ * without a human present.
+ *
+ * Declared here rather than beside `unlock` below, so the default parameter on
+ * `measureColdBoot` is not reaching forward into a temporal dead zone.
+ */
+export const FIXTURE_PASSPHRASE = 'fixture-passphrase'
+
 export interface ColdBootOptions {
   /** Where the built bundle is being served. */
   baseUrl: string
   /** Give up rather than hang, so a broken build fails as a failure. */
   timeoutMs?: number
+  /**
+   * A recorded wallet to measure against.
+   *
+   * Without one this measures an EMPTY wallet, which boots fast no matter how
+   * badly the storage layer scales and is therefore useless as a regression
+   * signal for anything except the shell.
+   *
+   * With one, the wallet is restored before the app loads and unlocked the way
+   * a returning customer unlocks it. That is what makes the number describe a
+   * customer's second visit rather than a stranger's first.
+   */
+  fixture?: Snapshot
+  /** The passphrase the fixture was recorded under. */
+  passphrase?: string
 }
 
 export interface ColdBootResult {
   ms: number
+  /**
+   * How many records the wallet held while being measured.
+   *
+   * Reported so a run cannot claim to have measured a populated wallet while
+   * measuring an empty one — the exact mistake an earlier version of the
+   * fixture check made, labelling an empty-context measurement as running
+   * "against the fixture path".
+   */
+  couponsHeld: number
   /**
    * What the wallet showed once it was usable, so a run can prove it measured
    * a wallet that opened rather than one that died quietly.
@@ -70,7 +108,7 @@ export interface ColdBootResult {
  */
 export async function measureColdBoot(
   browser: Browser,
-  { baseUrl, timeoutMs = 30_000 }: ColdBootOptions,
+  { baseUrl, timeoutMs = 30_000, fixture, passphrase = FIXTURE_PASSPHRASE }: ColdBootOptions,
 ): Promise<ColdBootResult> {
   const context = await browser.newContext()
   const page: Page = await context.newPage()
@@ -78,6 +116,14 @@ export async function measureColdBoot(
   try {
     const failures: string[] = []
     page.on('pageerror', (e) => failures.push(String(e)))
+
+    // Seed the wallet BEFORE the measured navigation, so restoring is not
+    // counted as boot time. The page has to be on the origin first: storage is
+    // partitioned by it, so writing from about:blank populates nothing.
+    if (fixture) {
+      await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs })
+      await restore(page, fixture, context)
+    }
 
     const started = Date.now()
     await page.goto(baseUrl, { waitUntil: 'commit', timeout: timeoutMs })
@@ -116,7 +162,57 @@ export async function measureColdBoot(
       throw new Error(`the wallet errored while opening: ${failures.join('; ')}`)
     }
 
-    return { ms, settledOn: text.slice(0, 80), observedStarting: saw }
+    // A restored wallet boots LOCKED: its resume record is encrypted under a
+    // non-extractable wrapping key that no snapshot can carry. Unlocking is
+    // therefore part of what a returning customer's boot costs, and is
+    // measured rather than excluded.
+    let unlockedMs = ms
+    if (fixture) {
+      const opened = await unlock(page, passphrase)
+      unlockedMs = Date.now() - started
+      if (!opened) {
+        throw new Error(
+          'the wallet did not unlock with the fixture passphrase, so this ' +
+            'measured a locked wallet rather than a customer\'s wallet',
+        )
+      }
+    }
+
+    // Count what the wallet actually held, so the result cannot overstate what
+    // it measured.
+    const couponsHeld = await page.evaluate(async () => {
+      const dbs = await indexedDB.databases()
+      let total = 0
+      for (const { name } of dbs) {
+        if (!name) continue
+        const db = await new Promise<IDBDatabase>((ok, no) => {
+          const r = indexedDB.open(name)
+          r.onsuccess = () => ok(r.result)
+          r.onerror = () => no(r.error)
+        })
+        for (const store of Array.from(db.objectStoreNames)) {
+          total += await new Promise<number>((ok) => {
+            const r = db.transaction(store, 'readonly').objectStore(store).count()
+            r.onsuccess = () => ok(r.result)
+            r.onerror = () => ok(0)
+          })
+        }
+        db.close()
+      }
+      return total
+    })
+
+    // Report what the wallet settled on AFTER unlocking, when there was an
+    // unlock. Reporting the pre-unlock text made a correctly-measured run look
+    // as though it had stopped at the lock screen.
+    const settledOn = fixture ? ((await page.textContent('body')) ?? text).trim() : text
+
+    return {
+      ms: unlockedMs,
+      settledOn: settledOn.slice(0, 80),
+      observedStarting: saw,
+      couponsHeld,
+    }
   } finally {
     await context.close()
   }
@@ -131,6 +227,12 @@ export async function measureColdBoot(
  * regressions and one that reports green while blind.
  */
 export function assertBootWasObserved(results: ColdBootResult[]): void {
+  // A wallet restored from a fixture goes straight to its lock screen without
+  // passing through a starting state, so there is nothing to observe and its
+  // absence proves nothing. What proves the measurement is real there is that
+  // the wallet UNLOCKED, which measureColdBoot already fails on.
+  if (results.some((r) => r.couponsHeld > 0)) return
+
   if (!results.some((r) => r.observedStarting)) {
     throw new Error(
       'no starting state was ever observed, so this measured the absence of a string ' +
@@ -151,7 +253,7 @@ export async function measureColdBootMedian(
   browser: Browser,
   options: ColdBootOptions,
   samples = 5,
-): Promise<{ ms: number; all: number[]; settledOn: string }> {
+): Promise<{ ms: number; all: number[]; settledOn: string; couponsHeld: number }> {
   const results: ColdBootResult[] = []
   for (let i = 0; i < samples; i++) {
     results.push(await measureColdBoot(browser, options))
@@ -163,17 +265,9 @@ export async function measureColdBootMedian(
     ms: sorted[Math.floor(sorted.length / 2)],
     all,
     settledOn: results[0].settledOn,
+    couponsHeld: results[0].couponsHeld,
   }
 }
-
-/**
- * The passphrase a fixture is recorded under.
- *
- * Fixed and public on purpose: it protects nothing. The wallets it opens hold
- * test coupons on a local stack, and a scenario has to be able to unlock them
- * without a human present.
- */
-export const FIXTURE_PASSPHRASE = 'fixture-passphrase'
 
 /**
  * Unlock a wallet restored from a fixture.

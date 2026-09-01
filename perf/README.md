@@ -274,12 +274,37 @@ because the failure needs a real IndexedDB with a real out-of-line store.
 The other checks prove the parts. This proves they compose, along the path a
 scenario actually takes: **record, load, restore, boot, unlock, measure**.
 
-    9/9 checks passed
+    10/10 checks passed
 
 Until this ran, the fixture machinery was a well-tested set of pieces with no
 evidence they worked together. A snapshot that restored perfectly into storage
 the app then ignored would have passed every other check in this suite while
 measuring an empty wallet.
+
+### The check that measured nothing
+
+Its own "a measurement runs against the fixture path" check called
+`measureColdBoot` **with no fixture at all**. The scenario had no way to accept
+one: it opened a fresh context and measured an empty wallet, then reported
+success under a label claiming otherwise.
+
+`measureColdBoot` now takes a `fixture`, restores it before the measured
+navigation, unlocks it, and reports `couponsHeld` so a result cannot overstate
+what it measured. Two checks now hold it honest:
+
+| | empty | restored |
+|---|---|---|
+| records held | 0 | 1 |
+| cold boot | ~106ms | ~258ms |
+
+An empty wallet boots fast however badly storage scales, so a fixture that
+measured the same as no fixture would not be measuring the wallet.
+
+One assertion had to be relaxed, and the reason matters: a restored wallet goes
+**straight to its lock screen** without passing through `Restoring your
+session…`, so `observedStarting` is legitimately false there. What proves that
+measurement is real instead is that the wallet held the fixture's records and
+settled on the customer's own wallet.
 
 ### A restored wallet boots locked, and that is the design
 
