@@ -14,7 +14,7 @@
 
 import { check } from 'k6'
 import { requireSigner, derivePub } from './lib/signed-request.js'
-import { resolve, drainNotifications, GATEWAY } from './lib/gateway.js'
+import { resolve, drainNotifications, GATEWAY, ACCOUNT } from './lib/gateway.js'
 import { iteration_ms, succeeded, failed, outcome_verified, signingShare } from './lib/metrics.js'
 
 export const options = {
@@ -35,6 +35,7 @@ export function setup() {
   requireSigner()
   const pubHex = derivePub(PRIV)
   console.log(`gateway  ${GATEWAY}`)
+  console.log(`account  ${ACCOUNT}`)
   console.log(`customer ${pubHex.slice(0, 16)}…`)
   return { customer: { privHex: PRIV, pubHex } }
 }

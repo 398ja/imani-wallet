@@ -16,6 +16,16 @@ export const GATEWAY = (__ENV.GATEWAY_URL || 'https://customer.staging.398ja.xyz
 export const PORTAL = (__ENV.PORTAL_URL || GATEWAY).replace(/\/$/, '')
 
 /**
+ * The account tier, which is NOT the customer gateway.
+ *
+ * Sending and arrival notifications live here, and the customer gateway 404s
+ * both. `vite.config.ts` documents the same split for the browser: a 404 on
+ * one of these reads as "the endpoint does not exist" when it means "it is on
+ * the other tier".
+ */
+export const ACCOUNT = (__ENV.ACCOUNT_URL || GATEWAY).replace(/\/$/, '')
+
+/**
  * The secret an edge proxy uses to vouch for a caller.
  *
  * Staging runs an edge that authenticates the session and injects who the
@@ -87,20 +97,43 @@ export function readCoupon(customer, couponId) {
   return signed(GATEWAY, `/api/v1/wallet/vouchers/${couponId}`, 'GET', undefined, customer, 'read coupon')
 }
 
-/** Send a coupon to another customer as a gift-wrapped DM. */
-export function sendCoupon(customer, payload) {
-  return signed(GATEWAY, '/api/v1/dm/tokens/send', 'POST', payload, customer, 'send coupon')
+/**
+ * Send coupons to another customer, as one escrowed saga.
+ *
+ * On the ACCOUNT tier, not the customer gateway, which 404s it. Verified
+ * against this stack: :28081 answers 401 (wants a signature, so it is there),
+ * :28082 answers 404 "Endpoint not found".
+ */
+export function sendCoupons(customer, payload) {
+  return signed(ACCOUNT, '/api/v1/atomic-send', 'POST', payload, customer, 'send coupons')
 }
 
-/** Split a coupon into a spent part and a returned remainder. */
-export function splitCoupon(customer, payload) {
-  return signed(GATEWAY, '/api/v1/wallet/vouchers/split', 'POST', payload, customer, 'split coupon')
+/**
+ * Splitting is NOT available over the network, by design.
+ *
+ * The customer gateway refuses it outright:
+ *
+ *   "Voucher split execution is not supported on JdbcWalletPort — the
+ *    customer-wallet is self-custodial (Constitution Principle II)."
+ *
+ * It is kept here, exported and throwing, so that anyone who goes looking for
+ * a split scenario finds the reason rather than an absence. This is the same
+ * situation ADR 0003 records for redemption: the work happens on the device,
+ * so measuring it belongs in the browser suite.
+ */
+export function splitCoupon() {
+  throw new Error(
+    'Splitting is client-side by design and has no gateway path to measure. ' +
+      'The customer gateway refuses it: "not supported on JdbcWalletPort — the ' +
+      'customer-wallet is self-custodial". Measure it in the browser suite, ' +
+      'as ADR 0003 does for redemption.',
+  )
 }
 
-/** Drain pending arrival notifications. */
+/** Drain pending arrival notifications. On the ACCOUNT tier. */
 export function drainNotifications(customer, limit = 50) {
   return signed(
-    GATEWAY,
+    ACCOUNT,
     '/api/v1/incoming-notifications/drain',
     'POST',
     { limit },
@@ -112,7 +145,7 @@ export function drainNotifications(customer, limit = 50) {
 /** Acknowledge drained notifications, so they stop coming back. */
 export function ackNotifications(customer, ids) {
   return signed(
-    GATEWAY,
+    ACCOUNT,
     '/api/v1/incoming-notifications/ack',
     'POST',
     { ids },
