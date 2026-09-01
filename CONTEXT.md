@@ -60,6 +60,37 @@ A customer returning a stall's coupons to that same stall. The ordinary end of a
 coupon's life, and the case that must never need the network to authorise it.
 _Avoid_: Payment, spend
 
+### Measurement
+
+**Scenario**:
+An isolated measurement of one subsystem under load. Isolated so that a
+regression names its own cause, rather than one number moving for several
+possible reasons.
+_Avoid_: Test, case, benchmark
+
+**Run**:
+One execution of one scenario, against one deployment, at one moment. Two runs
+are comparable only if they say so; nothing about their order implies it.
+_Avoid_: Trial, execution
+
+**Baseline**:
+The committed reference a run is judged against. Changing it is a deliberate act
+that appears in the diff, which is what stops a slow drift from passing as
+always-green.
+_Avoid_: Target, threshold, SLO
+
+**Scaling ladder**:
+The same scenario measured at several coupon counts, to assert the shape of the
+cost rather than its value. Survives a change of hardware, where a single
+measurement does not.
+_Avoid_: Sweep, series
+
+**Fixture snapshot**:
+A recording of wallet state produced by the real issuing flow, restored to make
+a run reproducible. Distinct from synthetic state, which can reach any size but
+drifts from what the flow actually writes.
+_Avoid_: Seed, fixture, test data
+
 ### Identity and authorisation
 
 **NAP**:
