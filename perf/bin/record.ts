@@ -94,11 +94,18 @@ async function main() {
     await page.getByPlaceholder('Confirm passphrase').fill(PASSPHRASE)
     await page.getByRole('button', { name: 'Add key and unlock' }).click()
 
-    // Wait until the wallet has actually stored the coupons: polling storage
-    // rather than a fixed sleep, so a slow stack records correctly and a
-    // broken one fails rather than recording an empty wallet.
-    const stored = await page.waitForFunction(
-      async (expected: number) => {
+    // Wait until the wallet has actually stored the coupons.
+    //
+    // An explicit loop rather than `page.waitForFunction`, because that helper
+    // treats an ASYNC predicate's return value as the result: a Promise is
+    // always truthy, so it resolves on the first tick without ever polling.
+    // Counting IndexedDB records requires await, so the predicate has to be
+    // async, so the helper cannot be used here. An earlier version did use it
+    // and reported "stored null" instantly.
+    const deadline = Date.now() + 120_000
+    let stored = 0
+    while (Date.now() < deadline) {
+      stored = await page.evaluate(async () => {
         const dbs = await indexedDB.databases()
         let total = 0
         for (const { name } of dbs) {
@@ -109,27 +116,43 @@ async function main() {
             r.onerror = () => no(r.error)
           })
           for (const store of Array.from(db.objectStoreNames)) {
-            const n = await new Promise<number>((ok) => {
+            total += await new Promise<number>((ok) => {
               const r = db.transaction(store, 'readonly').objectStore(store).count()
               r.onsuccess = () => ok(r.result)
               r.onerror = () => ok(0)
             })
-            total += n
           }
           db.close()
         }
-        return total >= expected ? total : null
-      },
-      COUPONS,
-      { timeout: 120_000, polling: 1000 },
-    )
-    console.log(`  stored ${await stored.jsonValue()} records`)
+        return total
+      })
+      if (stored >= COUPONS) break
+      await new Promise((r) => setTimeout(r, 1000))
+    }
+
+    console.log(`  stored ${stored} records (wanted ${COUPONS})`)
 
     const recorded = await capture(page, COUPONS)
     const snapshot: Snapshot = { ...recorded, sourceHash: sourceHash(ROOT) }
 
-    if (countRecords(snapshot) === 0) {
-      throw new Error('recorded an empty wallet, which would measure nothing')
+    // Refuse to record a wallet holding fewer coupons than were issued.
+    //
+    // An empty wallet was already refused, but a PARTIAL one is the more
+    // dangerous case: it writes a plausible snapshot that every later scenario
+    // trusts, and the ladder then measures 1 coupon while claiming 1000. The
+    // count is the fixture's entire meaning.
+    const couponStore = snapshot.databases
+      .flatMap((db) => db.stores)
+      .find((store) => store.name === 'wallet_vouchers')
+    const held = couponStore ? couponStore.records.length : 0
+
+    if (held < COUPONS) {
+      throw new Error(
+        `the wallet holds ${held} of the ${COUPONS} coupons that were issued, so ` +
+          'this snapshot would misrepresent what it contains. Refusing to write it.\n\n' +
+          'If the gateway is serving only the newest gift wrap per recipient, that ' +
+          'is issue #36 and this is the expected symptom.',
+      )
     }
 
     mkdirSync(SNAPSHOTS, { recursive: true })

@@ -179,3 +179,51 @@ redemption, scenario, run, baseline, scaling ladder, fixture snapshot. The
 retired project's words (voucher, merchant, user) are renamed on the way in;
 since that project is retired and nothing will be merged back, preserving a
 comparable diff has no value, and a port is the one moment renaming is free.
+
+## Verifying the recorder
+
+    ./deploy/up.sh && ./deploy/check.sh
+    npm run build
+    npm run perf:verify-recorder
+
+Checks each of the recorder's acceptance criteria against the running stack and
+says which hold. Every check observes the real thing: the real seeder, the real
+onboarding form, real browser storage. No stubs, no fixtures.
+
+Current result, and it is expected to stay this way while #36 is open:
+
+    PASS  the real issuing flow runs end to end
+    PASS  login goes through the real onboarding form
+    PASS  capture reads IndexedDB and localStorage
+    PASS  the snapshot is stamped with a source hash
+    FAIL  the wallet holds the coupons that were issued
+          0/3 stored — BLOCKED by #36
+
+    4/5 criteria verified against the running stack
+
+The single failure is the blocker, named. That is more useful than "the
+recorder is blocked", which does not say how much of it works.
+
+### Why there is no way around #36
+
+Every route into a populated wallet goes through gift-wrapped delivery.
+`issueAndDeliver` always ends in `deliver()`, the scan screen only routes codes
+rather than ingesting tokens, and coupons are client-held so the backend has no
+store to read from. Checked before concluding it, rather than assumed.
+
+### Two mistakes this check caught in itself
+
+It first reported login as failing. The wallet renders `Unlocking…` **in place
+of** `Add key and unlock`, so waiting for that button text to disappear returns
+while login is still running. Same class of error as the 31ms cold boot: it
+waited for the wrong signal.
+
+The recorder's own wait was worse. `page.waitForFunction` with an **async**
+predicate resolves on the returned Promise, which is always truthy, so it
+returned instantly without polling. Counting IndexedDB records needs `await`,
+so the helper cannot be used at all; it is now an explicit loop.
+
+The recorder also now refuses to write a **partial** snapshot, not just an
+empty one. A partial snapshot is the more dangerous case: it looks plausible,
+every later scenario trusts it, and the ladder would measure one coupon while
+claiming a thousand.
