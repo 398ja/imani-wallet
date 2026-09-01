@@ -62,19 +62,117 @@ function issueTo(count: number): { nsec: string; npub: string } {
   return { nsec, npub }
 }
 
+/** Poll the gateway until it serves the gift wraps that were just delivered. */
+async function waitForGatewayToServe(npub: string, expected: number): Promise<void> {
+  const { nip19 } = await import('nostr-tools')
+  const decoded = nip19.decode(npub)
+  const pubHex = decoded.data as string
+  const gateway = process.env.GATEWAY_URL ?? 'http://localhost:28082'
+  const deadline = Date.now() + 120_000
+
+  process.stdout.write('Waiting for the gateway to serve them')
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${gateway}/api/v1/nostr/query`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kinds: [1059], pTags: [pubHex], limit: 100 }),
+        signal: AbortSignal.timeout(10_000),
+      })
+      const body = (await res.json()) as { events?: unknown[] }
+      const served = body.events?.length ?? 0
+      if (served >= expected) {
+        console.log(` ${served}/${expected}`)
+        return
+      }
+    } catch {
+      // Keep waiting: a transient failure here is not a verdict.
+    }
+    process.stdout.write('.')
+    await new Promise((r) => setTimeout(r, 2000))
+  }
+  console.log(' timed out')
+  console.warn(
+    'the gateway never served all the gift wraps. The wallet will fetch what ' +
+      'is there; if that is fewer than were issued, this is issue #36.',
+  )
+}
+
+/** How many coupons the wallet is holding right now. */
+async function countCoupons(page: import('@playwright/test').Page): Promise<number> {
+  return page.evaluate(async () => {
+    const dbs = await indexedDB.databases()
+    let coupons = 0
+    for (const { name } of dbs) {
+      if (!name) continue
+      const db = await new Promise<IDBDatabase>((ok, no) => {
+        const r = indexedDB.open(name)
+        r.onsuccess = () => ok(r.result)
+        r.onerror = () => no(r.error)
+      })
+      if (db.objectStoreNames.contains('wallet_vouchers')) {
+        coupons += await new Promise<number>((ok) => {
+          const r = db.transaction('wallet_vouchers', 'readonly')
+            .objectStore('wallet_vouchers')
+            .count()
+          r.onsuccess = () => ok(r.result)
+          r.onerror = () => ok(0)
+        })
+      }
+      db.close()
+    }
+    return coupons
+  })
+}
+
 async function main() {
   if (!existsSync(join(DIST, 'index.html'))) {
     console.error('No build to record against. Run `npm run build` first.')
     process.exit(2)
   }
 
-  const { nsec } = issueTo(COUPONS)
+  const { nsec, npub } = issueTo(COUPONS)
+
+  // Wait for the GATEWAY to serve the gift wraps before opening the wallet.
+  //
+  // The wallet fetches its DMs once at startup and then waits for a live
+  // subscription. The gateway ingests from the relay asynchronously, so a
+  // wallet opened seconds after delivery fetches zero, finds nothing, and
+  // never asks again — the recorder then sat through its whole 120s wait
+  // holding a wallet that had already given up. Observed:
+  //
+  //   [DmPollService] Fetched 0 gift wrap events
+  //   wallet holds 0 coupons (wanted 1)
+  //
+  // while the relay had the wrap and the gateway began serving it moments
+  // later. Waiting here, before the wallet opens, removes the race rather than
+  // papering over it with a longer wait afterwards.
+  await waitForGatewayToServe(npub, COUPONS)
   const site = await serve(DIST, { withGateway: true })
   const browser = await chromium.launch()
 
   try {
     const context = await browser.newContext()
     const page = await context.newPage()
+    if (process.env.DEBUG_RECORD) {
+      page.on('console', (m) => {
+        const t = m.text()
+        if (/DmPoll|gift|wrap|redeem|SSE|sse/i.test(t)) console.log('   [browser]', t.slice(0, 150))
+      })
+      // Correlate request with response: interleaved logs made an empty answer
+      // to a DIFFERENT query look like the answer to the 1059 one.
+      // Correlate the gift-wrap query with its answer. Interleaved logs once
+      // made an empty response to a DIFFERENT query look like the answer to
+      // this one, which sent an investigation down the wrong path.
+      page.on('response', async (r) => {
+        if (!r.url().includes('nostr/query')) return
+        const req = r.request().postData() ?? ''
+        if (!req.includes('1059')) return
+        const body = await r.text().catch(() => '')
+        console.log(`   [gift wraps] ${req.slice(0, 120)}`)
+        console.log(`               -> ${r.status()} ${body.slice(0, 100)}`)
+      })
+    }
 
     console.log('Opening the wallet and waiting for the coupons to arrive…')
 
@@ -99,43 +197,41 @@ async function main() {
     await page.getByPlaceholder('Confirm passphrase').fill(PASSPHRASE)
     await page.getByRole('button', { name: 'Add key and unlock' }).click()
 
-    // Wait until the wallet has actually stored the coupons.
+    // Wait until the wallet has actually stored the coupons, RELOADING when it
+    // has not.
     //
-    // An explicit loop rather than `page.waitForFunction`, because that helper
-    // treats an ASYNC predicate's return value as the result: a Promise is
-    // always truthy, so it resolves on the first tick without ever polling.
-    // Counting IndexedDB records requires await, so the predicate has to be
-    // async, so the helper cannot be used here. An earlier version did use it
-    // and reported "stored null" instantly.
-    const deadline = Date.now() + 120_000
+    // The wallet fetches its DMs once at startup and then relies on a live
+    // subscription. If that one fetch lands while the gateway is still
+    // ingesting, it gets zero and never asks again — waiting longer changes
+    // nothing, because nothing is going to ask a second time.
+    //
+    // Observed: the gateway confirmed 1/1 served, the wallet's very next query
+    // (same filter, same pubkey) returned 0, and a passive 120s wait then sat
+    // there holding a wallet that had already given up. That is issue #36's
+    // non-determinism reaching the wallet, so the recorder retries the only
+    // way a customer could: by reopening the app.
+    const deadline = Date.now() + 180_000
     let stored = 0
+    let reloads = 0
     while (Date.now() < deadline) {
-      stored = await page.evaluate(async () => {
-        const dbs = await indexedDB.databases()
-        let total = 0
-        for (const { name } of dbs) {
-          if (!name) continue
-          const db = await new Promise<IDBDatabase>((ok, no) => {
-            const r = indexedDB.open(name)
-            r.onsuccess = () => ok(r.result)
-            r.onerror = () => no(r.error)
-          })
-          for (const store of Array.from(db.objectStoreNames)) {
-            total += await new Promise<number>((ok) => {
-              const r = db.transaction(store, 'readonly').objectStore(store).count()
-              r.onsuccess = () => ok(r.result)
-              r.onerror = () => ok(0)
-            })
-          }
-          db.close()
-        }
-        return total
-      })
+      stored = await countCoupons(page)
       if (stored >= COUPONS) break
-      await new Promise((r) => setTimeout(r, 1000))
-    }
 
-    console.log(`  stored ${stored} records (wanted ${COUPONS})`)
+      await new Promise((r) => setTimeout(r, 5000))
+      stored = await countCoupons(page)
+      if (stored >= COUPONS) break
+
+      await page.reload({ waitUntil: 'domcontentloaded' })
+      reloads++
+      await page
+        .waitForFunction(() => /Total balance|Scan/.test(document.body?.innerText ?? ''), undefined, {
+          timeout: 60_000,
+        })
+        .catch(() => {})
+    }
+    if (reloads > 0) console.log(`  reopened the wallet ${reloads}x waiting for delivery`)
+
+    console.log(`  wallet holds ${stored} coupons (wanted ${COUPONS})`)
 
     const recorded = await capture(page, COUPONS, context)
     const snapshot: Snapshot = { ...recorded, sourceHash: sourceHash(ROOT) }

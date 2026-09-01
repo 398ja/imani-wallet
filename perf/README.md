@@ -341,3 +341,37 @@ So the fixture carries the customer's **encrypted** key, exactly what a
 returning customer's browser holds, and the scenario types the passphrase
 exactly as a returning customer does. That is the more faithful measurement
 anyway: it is the boot a customer really experiences on their second visit.
+
+## What the recorder learned about delivery
+
+Recording a fixture needs the wallet to actually receive what was issued, and
+that exposed how the wallet takes delivery.
+
+**The wallet fetches its DMs once at startup**, then relies on a live
+subscription. If that single fetch draws a losing answer from the gateway, the
+wallet shows nothing and never asks again. Waiting longer changes nothing,
+because nothing is going to ask a second time.
+
+So the recorder does two things a passive wait cannot:
+
+- **Waits for the gateway to serve the gift wraps before opening the wallet**,
+  removing the ingestion race rather than hoping to outlast it.
+- **Reopens the wallet** when coupons have not arrived, which is the only retry
+  a customer has.
+
+Neither is enough while #36 is open, and the recorder says so rather than
+writing a fixture that misrepresents itself. It counts **coupons**, not
+records: counting every store meant the resume wrapper written at login
+satisfied the wait, so the loop reported `stored 1` while the wallet held no
+coupons and the guard then refused. Two numbers disagreeing, from one question
+asked two different ways.
+
+## On the tolerance band
+
+The band is 35%, not the 25% it started at. At 25% a run reported cold boot
+regressing to 138ms purely because a browser verification was running on the
+same laptop, and it measured 108ms again when idle.
+
+A band that cries wolf on a busy machine is one people learn to ignore, and the
+**absolute ceiling** is what actually guards the number a customer experiences.
+The band catches shape; the ceiling catches truth.
