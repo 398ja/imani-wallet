@@ -150,7 +150,14 @@ const portalEdgeAuth = (): Plugin => ({
  * shared/api.js issues relative paths like `/api/v1/wallet/receive`, so the
  * split has to happen here rather than in a baseUrl.
  */
-const proxy = {
+/**
+ * Exported so the performance recorder serves the built bundle through the
+ * same routing table the dev server uses. A second copy would drift, and the
+ * `changeOrigin` choices below are exactly the kind of detail that gets
+ * silently wrong in a copy: a NIP-98 route proxied with `changeOrigin: true`
+ * fails signature verification for reasons nothing in the error explains.
+ */
+export const proxy = {
   '/api/v1/auth': { target: 'http://localhost:28081', changeOrigin: true },
   // The escrowed send saga lives on account-app, NOT customer-wallet, which
   // 404s it. This mirrors imani-apps' own nginx.conf.template, where

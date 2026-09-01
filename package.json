@@ -13,7 +13,8 @@
     "android": "npm run build && cap sync android",
     "android:run": "npm run android && cap run android",
     "perf": "tsx perf/bin/run.ts",
-    "perf:accept": "tsx perf/bin/run.ts --accept"
+    "perf:accept": "tsx perf/bin/run.ts --accept",
+    "perf:record": "tsx perf/bin/record.ts"
   },
   "dependencies": {
     "@capacitor/android": "^7.6.8",
