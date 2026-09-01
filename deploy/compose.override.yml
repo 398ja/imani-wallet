@@ -154,7 +154,34 @@ services:
     # env below was already written for a locally-built image; those two vars are
     # what it means.
     image: imani-gateway-core:acl-local
+    # account-app is defined ONLY here — the deploy repo's test compose has no
+    # such service — so nothing else supplies its database or its network. It
+    # exited(1) at startup on `Connection to localhost:5432 refused`, because
+    # with no datasource configured Flyway falls back to localhost and there is
+    # no postgres inside the container.
+    #
+    # The failure was invisible: `docker ps` does not list a container that has
+    # already exited, so a stack with account-app dead looked complete, and
+    # counting running containers reported fourteen healthy services when one
+    # of them had never started.
+    #
+    # It publishes no host port, so nothing addressed it directly and the load
+    # scenarios were unaffected: `:28081` belongs to gateway-core, which is
+    # what actually serves /api/v1/atomic-send here. Fixed regardless, because
+    # a service that exits at startup is a service nobody can rely on, and the
+    # next person to need it would debug it from scratch.
+    #
+    # Same database and credentials as gateway-core, since it IS gateway-core's
+    # image running a second role.
+    depends_on:
+      imani-gateway-db:
+        condition: service_healthy
+    networks:
+      - imani-internal
     environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://imani-gateway-db:5432/imani_core
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
       GATEWAY_ATOMIC_SEND_DELIVERY_NIP17_ENABLED: "true"
       GATEWAY_ATOMIC_SEND_DELIVERY_NIP17_SERVICE_TOKEN: "dev-atomic-ops-token-local-only"
       # Needed only once account-app is built from current gateway-core source
