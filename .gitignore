@@ -35,3 +35,8 @@ dist-ssr
 .gstack/
 __pycache__/
 till.png
+
+# Performance run artifacts. Generated on every run; commit one deliberately
+# when it is worth keeping, rather than accumulating every local run.
+perf/results/*.json
+perf/results/*.md
