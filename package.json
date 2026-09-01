@@ -11,7 +11,9 @@
     "test:watch": "vitest",
     "preview": "vite preview",
     "android": "npm run build && cap sync android",
-    "android:run": "npm run android && cap run android"
+    "android:run": "npm run android && cap run android",
+    "perf": "tsx perf/bin/run.ts",
+    "perf:accept": "tsx perf/bin/run.ts --accept"
   },
   "dependencies": {
     "@capacitor/android": "^7.6.8",
@@ -40,6 +42,7 @@
     "@capacitor/cli": "^7.6.8",
     "@cashu/crypto": "^0.3.4",
     "@eslint/js": "^9.39.1",
+    "@playwright/test": "^1.62.1",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^24.10.1",
@@ -56,6 +59,7 @@
     "jsdom": "^25.0.1",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.19",
+    "tsx": "^4.23.13",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.46.4",
     "vite": "^7.2.4",

@@ -1,0 +1,8 @@
+{
+  "cold-boot": {
+    "ms": 108,
+    "tolerancePercent": 25,
+    "ceilingMs": 1000,
+    "note": "Measured on a laptop against the built bundle, logged out. The 1000ms ceiling is absolute: it is roughly the point at which opening the wallet stops feeling immediate, and it exists so that a baseline creeping upward a few percent at a time cannot ratchet past what a customer will tolerate while every run still reports green. Raising it is a product decision, not a maintenance one."
+  }
+}
