@@ -53,3 +53,53 @@ So these numbers are a floor on the signer and a ceiling on the checker. Under
 a real run the load generator is the busy party and the signer has cores to
 itself. Quoting the checker's latency as the signer's cost would be the same
 error as quoting a laptop figure as production capacity.
+
+## The helper library
+
+    loadtest/lib/signed-request.js   NIP-98 signing, via the sidecar
+    loadtest/lib/gateway.js          the calls the wallet makes
+    loadtest/lib/metrics.js          what a run measures
+    loadtest/smoke.js                prove it all works, at one customer
+
+Ported from the retired imani-apps project and renamed on the way in: it spoke
+of vouchers, merchants and users, all of which this repository's `CONTEXT.md`
+lists under terms to avoid. Since that project is retired and nothing will be
+merged back, preserving a comparable diff has no value, and a port is the one
+moment renaming is free.
+
+Two things were checked against this wallet's own source rather than carried
+over. The signature has **no nonce tag**: imani-apps added one, `src/lib/nip98.ts`
+does not, and a load test that signs differently from the wallet measures a
+path no customer takes. And the request bodies match what the wallet sends,
+read from `src/lib/issue.ts` and `src/lib/incomingNotifications.ts`.
+
+### The smoke run
+
+    node loadtest/signer.mjs &
+    GATEWAY_URL=http://localhost:28082 PORTAL_URL=http://localhost:28084 \
+      k6 run loadtest/smoke.js
+
+Every full run starts with this. imani-apps' first two real runs each spent
+fifteen minutes discovering bugs in the *scripts* rather than anything about
+the system; one customer and three iterations catches that in seconds.
+
+Verified to fail when it should, which is what makes a pass mean anything:
+
+| Situation | Result |
+|---|---|
+| Everything working | 9 checks passed, exit 0 |
+| Signer not running | exit 107, names the command to start it |
+| Gateway unreachable | exit 99, 6 checks failed, thresholds crossed |
+| No checks ran at all | reported explicitly, since `rate==1.0` is vacuously true against nothing |
+
+### Reading the signing share
+
+Every run reports what fraction of an iteration was spent signing, because the
+sidecar is fast but not free and a run whose iterations are mostly signing has
+stopped measuring the gateway.
+
+The share is only judged once iterations are doing real work (500ms or more). A
+smoke run is ~78% signing by construction: it makes two trivial calls, so
+almost all of its time is signature overhead. Warning about that would be noise
+that teaches people to ignore the warning when it matters, so the number is
+printed and the conclusion withheld.
