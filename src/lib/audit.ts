@@ -24,8 +24,16 @@ import { ATTESTATION_KIND, ATTESTATION_VERSION } from './attestationKind'
  *
  * Every function here takes events and returns verdicts. That is what makes the
  * same code serve an auditor with no relationship to the stall, the hosted API
- * (`services/audit-api`), and a merchant auditing themselves. One implementation,
- * so an external reader cannot be told something an internal one would not be.
+ * (`services/audit-api`), and a merchant auditing themselves.
+ *
+ * There is deliberately no privileged reader. An internal tier — one that could
+ * resolve a `ledgerPubkey` to a real stall through a disclosure granted at
+ * onboarding — was designed, never built, and in 2026-09 decided against:
+ * everything stays pseudonymous. Such a mapping would be the single artefact
+ * whose breach de-anonymises every merchant at once, retroactively.
+ *
+ * So do not add a parameter here that widens what a caller may learn. The
+ * absence of one is the privacy guarantee, not an oversight.
  *
  * ## Why parsing is defensive to the point of rudeness
  *

@@ -174,33 +174,46 @@ Everything above was executed, not reasoned about:
 No new dependency: `@noble/curves` and `@noble/hashes` are already used
 directly by `voucherToken.ts` for signature verification.
 
-## The audit service — internal and external
+## The audit service — one reader, no privileged view
 
-The attestations are the data; the service is the product. Both readers are
-served by **one published stream** — the difference is not what is published,
-it is what each reader can *open*.
+The attestations are the data; the service is the product. There is **one
+published stream and one reader**, and no operator view that sees more than a
+stranger does.
 
-| Capability | Internal | External |
-|---|---|---|
-| Verify an attestation is authentic | yes | yes |
-| Detect a token redeemed twice | yes | yes |
-| See the stream is live, count redemptions | yes | yes |
-| **Confirm a specific coupon was honoured** | yes | **blocked — see below** |
-| Read one merchant's totals | yes | only on that merchant's disclosure |
-| Identify the real stall behind a pseudonym | **not built** | no |
-| Cross-merchant analytics | **not built** | no |
+| Capability | Any reader |
+|---|---|
+| Verify an attestation is authentic | yes |
+| Detect a token redeemed twice | yes |
+| See the stream is live, count redemptions | yes |
+| Read one pseudonymous ledger's totals | yes |
+| **Confirm a specific coupon was honoured** | **blocked — see below** |
+| Identify the real stall behind a pseudonym | **no, by decision** |
+| Cross-merchant analytics | **no, by decision** |
 
-Internal was to get more through a **disclosure granted at onboarding** — one
-signed statement linking `ledgerPub` to the stall — not through a second
-privileged feed. One stream, one format, nothing to keep in sync.
+### Why there is no internal tier
 
-> **That disclosure does not exist.** Nothing produces, stores or consumes it,
-> so the internal reader is today byte-for-byte identical to the external one.
-> Caught by the spec axis of the code review; filed as `i41dcl4gk6dd`, where the
-> first question is whether it should be built at all — a stored
-> `ledgerPub → stall` mapping is the single artefact whose breach
-> de-anonymises every merchant at once, which is the same shape of risk this
-> design rejected dual-encryption for.
+An earlier draft gave an internal reader more, through a **disclosure granted at
+onboarding**: one signed statement linking `ledgerPub` to the stall. It was
+never built — nothing produced, stored or consumed it — and in 2026-09 it was
+**decided against outright**. Everything stays pseudonymous.
+
+The reasoning is the one this design already applied to dual-encryption. A
+stored `ledgerPub → stall` mapping is the single artefact whose breach
+de-anonymises every merchant at once, retroactively and for every attestation
+ever published. It is the same chokepoint in a different costume, and the fact
+that it would sit in a table rather than a key does not change its blast radius.
+
+It also cost nothing to give up, because no operator workflow was waiting on it.
+The pseudonymous half is the hard half, and it is the half that shipped: the
+stream is verifiable, replay-detectable and per-ledger auditable without anyone
+learning which stall is which.
+
+**The consequence, stated plainly:** an operator holding this ledger cannot tell
+you which merchant a pseudonym belongs to, and cross-merchant analytics over
+real-world identities is not available from this data. That is the intended
+trade, not a gap to be closed later. Anyone who needs a stall's totals must be
+given that stall's own disclosure, by that stall, out of band — a per-merchant
+act, never a central index.
 
 ### The trust moment
 
@@ -310,8 +323,9 @@ graph walk. Build against the stream; do not revive the traversal.
 The reader is `src/lib/audit.ts`, and it is the whole service's logic: verify a
 signature, detect a replay, answer "was this coupon honoured", summarise one
 ledger key. It needs no key and no wallet, so **one implementation** serves an
-external auditor, the hosted API and a merchant auditing themselves — an
-external reader cannot be told something an internal one would not be.
+external auditor, the hosted API and a merchant auditing themselves. There is
+no privileged variant that could be told more, which is now the design's
+position rather than an implementation detail.
 
 | Surface | Where |
 |---|---|
