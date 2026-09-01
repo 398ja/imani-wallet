@@ -17,6 +17,9 @@ dist-ssr
 # sensitive as an nsec. It is real key material for whatever those identities
 # hold, and it must never be committed.
 .seed-keys.json
+# Throwaway customer keys for load runs. Worthless on a test deployment, but
+# still keys, and regenerable with `node loadtest/pool.mjs`.
+.loadtest-pool.json
 
 # Browser-automation output: console logs, screenshots and traces from headless
 # QA runs. Regenerated on every run and 300+ MB after a few sessions.

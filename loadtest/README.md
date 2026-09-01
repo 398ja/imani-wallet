@@ -103,3 +103,28 @@ smoke run is ~78% signing by construction: it makes two trivial calls, so
 almost all of its time is signature overhead. Warning about that would be noise
 that teaches people to ignore the warning when it matters, so the number is
 printed and the conclusion withheld.
+
+## The customer pool
+
+    node loadtest/pool.mjs --size 50            # create, or top up to 50
+    node loadtest/pool.mjs --size 50 --verify   # and check each is usable
+
+Customers are named by position (`loadtest-customer-0000`), so the same index
+is the same customer on every run. That is what makes topping up possible, and
+it lets a scenario pair customer N with customer M reproducibly.
+
+Running it again **tops up rather than rebuilds**, which matters beyond
+convenience: rebuilding would orphan the coupons previous runs issued, under
+keys nothing references any more. The pool accumulates value across runs,
+since issuance is what funds sending, splitting and draining.
+
+| Command | Result |
+|---|---|
+| `--size 10` on an empty pool | added 10, total 10 |
+| `--size 10` again | added 0, "already had 10" |
+| `--size 25` | added 15, total 25, **customer 0000 keeps its key** |
+| `--size 5 --verify` against a live gateway | 5/5 usable, exit 0 |
+| `--verify` against a dead gateway | 0/3 usable, exit 1 |
+
+Keys land in `.loadtest-pool.json`, which git ignores. They are throwaway
+identities on a test deployment and worth nothing, but they are still keys.
