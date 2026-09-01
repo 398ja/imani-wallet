@@ -166,6 +166,44 @@ export async function measureColdBootMedian(
   }
 }
 
+/**
+ * The passphrase a fixture is recorded under.
+ *
+ * Fixed and public on purpose: it protects nothing. The wallets it opens hold
+ * test coupons on a local stack, and a scenario has to be able to unlock them
+ * without a human present.
+ */
+export const FIXTURE_PASSPHRASE = 'fixture-passphrase'
+
+/**
+ * Unlock a wallet restored from a fixture.
+ *
+ * A restored wallet always boots LOCKED, and this is not a gap in the
+ * snapshot. The session key is encrypted under a wrapping key that
+ * `src/lib/resume.ts` generates non-extractable and keeps in IndexedDB, so it
+ * cannot be serialised into a snapshot at all — by design, and its comment
+ * says so plainly.
+ *
+ * So the fixture carries the customer's ENCRYPTED key, which is exactly what a
+ * returning customer's browser holds, and the scenario types the passphrase
+ * exactly as a returning customer does. That is a more faithful measurement
+ * than a smuggled session would be: it is the boot a customer actually
+ * experiences on their second visit.
+ */
+export async function unlock(page: Page, passphrase = FIXTURE_PASSPHRASE): Promise<boolean> {
+  const field = page.getByPlaceholder('Passphrase')
+  if ((await field.count()) === 0) return false
+
+  await field.fill(passphrase)
+  await page.getByRole('button', { name: /unlock/i }).first().click()
+  await page
+    .waitForFunction(() => /Total balance|Scan/.test(document.body?.innerText ?? ''), undefined, {
+      timeout: 60_000,
+    })
+    .catch(() => {})
+  return /Total balance|Scan/.test((await page.textContent('body')) ?? '')
+}
+
 export async function withBrowser<T>(fn: (browser: Browser) => Promise<T>): Promise<T> {
   const browser = await chromium.launch()
   try {

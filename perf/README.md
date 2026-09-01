@@ -266,3 +266,53 @@ option: an in-line store rejects it.
 
 This would have broken every fixture, and no unit test would have caught it,
 because the failure needs a real IndexedDB with a real out-of-line store.
+
+## Verifying that a fixture drives a measurement
+
+    npm run perf:verify-fixture-boot
+
+The other checks prove the parts. This proves they compose, along the path a
+scenario actually takes: **record, load, restore, boot, unlock, measure**.
+
+    9/9 checks passed
+
+Until this ran, the fixture machinery was a well-tested set of pieces with no
+evidence they worked together. A snapshot that restored perfectly into storage
+the app then ignored would have passed every other check in this suite while
+measuring an empty wallet.
+
+### A restored wallet boots locked, and that is the design
+
+The first run failed on exactly that: the wallet booted to *"Welcome back /
+Unlock"*, and a scenario would have measured the unlock screen.
+
+Chasing it found two real gaps and one hard boundary.
+
+**sessionStorage was not captured.** The wallet's session lives in
+`imani-wallet:resume:v1`, not localStorage. Now captured and restored.
+
+**httpOnly cookies were not captured.** `merchant_session` is httpOnly by
+design, so no page script can read or write it. It travels through the browser
+context instead, which is why `capture` and `restore` each take an optional
+one.
+
+**The session itself cannot be carried, ever.** The resume record is encrypted
+under a wrapping key that `src/lib/resume.ts` generates **non-extractable**:
+
+    const key = await crypto.subtle.generateKey(
+      { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'])
+
+`getAll()` cannot serialise a non-extractable `CryptoKey`, so a snapshot
+carries the ciphertext without the key, and the wallet correctly discards a
+record it cannot decrypt:
+
+    [resume] discarding an unusable resume record: no wrapping key
+
+That is the design working, and its comment says so: *"there is no code path —
+ours or an attacker's — that turns this back into bytes."* A fixture that could
+restore an unlocked session would be a hole in that.
+
+So the fixture carries the customer's **encrypted** key, exactly what a
+returning customer's browser holds, and the scenario types the passphrase
+exactly as a returning customer does. That is the more faithful measurement
+anyway: it is the boot a customer really experiences on their second visit.
