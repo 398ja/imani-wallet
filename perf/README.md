@@ -1,0 +1,181 @@
+# Wallet performance testing
+
+Two suites measure this wallet, and they are automated to different degrees
+because they can honestly support different degrees.
+
+The **browser suite** (`perf/`) measures what happens on the customer's device.
+It is reproducible on a laptop, needs no backend, and runs on every commit.
+
+The **gateway suite** (`loadtest/`) measures the service under load. It needs a
+real deployment, that deployment is shared, and so it cannot gate anything. An
+operator runs it deliberately.
+
+Spec: [#15](https://github.com/398ja/imani-wallet/issues/15).
+
+## Why two suites
+
+The wallet holds coupons on the customer's own device, so the work that decides
+whether the app feels fast happens in the browser: opening the app, writing
+coupons to storage, totalling a balance, draining arrivals. That cost is
+measurable on a laptop with nothing else running.
+
+Gateway capacity is a different question with a different shape. It needs a
+deployment that resembles production, and staging is single-host and shared, so
+two runs collide and neither is reproducible.
+
+Treating these as one problem produces a suite that is either too slow to run
+often or too weak to mean anything.
+
+## Settled decisions
+
+Each of these was decided against a real alternative. The reason is recorded so
+a later reader can tell a deliberate constraint from an accident.
+
+### Both suites
+
+**Runs are named by date and subject.** `2026-09-01-cold-boot`, never `run-007`.
+The retired `imani-apps` project used a global sequence, which fractured into
+`007b`, `009c`, `010b` as variants multiplied, because a shared sequence implies
+runs are comparable when they are not. A date says when and a subject says what,
+and neither claims more.
+
+**Every run emits two artifacts**: a machine summary (JSON) and a generated
+report (Markdown). The report is **delta-shaped**: a run that changes nothing is
+a few lines, a run that regresses is a full account of what moved. Length
+carries the signal, so a regression is visibly larger in the diff.
+
+**Generated reports are appendable.** The most valuable artifact the retired
+project produced was a human-written report identifying a defect that the
+numbers alone did not name. Prose appended below the generated section survives
+regeneration.
+
+**Measurements observe only what a customer or a caller could observe.** Time to
+a usable app, time for a balance to appear, gateway latency and success rate. A
+measurement that reaches into a module to time an internal function is measuring
+an implementation detail, and it will fail the day that detail is refactored
+while the customer's experience is unchanged.
+
+**No production module gains a hook, export or flag for the benefit of a
+measurement.** Both suites enter at boundaries that already exist: the gateway's
+HTTP surface, and the built bundle in a real browser.
+
+**A flow asserts it actually succeeded before its duration is recorded.** A fast
+failure otherwise reads as excellent performance. The retired project's early
+runs proved a load script can be confidently wrong: it mistook a terminal state
+for an intermediate one and reported failures that were its own fault.
+
+### Browser suite
+
+**It drives a real browser.** Three of the four subsystems being measured are
+invisible from Node: only a browser has the storage engine, the render pipeline
+and the contended event loop. The retired project attempted this once and its
+`bench-wallet-sync.mjs` explicitly did *not* drive a browser, importing modules
+into Node with a shim instead. That script cannot observe storage contention or
+render cost at all: a module benchmark wearing a browser benchmark's name.
+Repeating it would produce a suite that reports green while blind to what it
+claims to measure.
+
+**Scenarios are isolated, not a journey.** A combined journey yields one number
+that can move for four reasons, which cannot direct anyone to a cause.
+
+**Fixtures are recorded from the real issuing flow, never synthesised.** Coupons
+are client-held by design, so the only honest path into stored state is a browser
+performing a real issue and receive. That is slow, so it is recorded once and the
+recording is restored per commit. Invented state can reach any size but drifts
+from what the flow actually writes, and then the suite measures a shape
+production never produces.
+
+**Snapshots are invalidated by a source hash, not a schema version.** A version
+bump only catches a change in the *shape* of the store. A change to *what gets
+written* into an unchanged schema is exactly the drift that makes a measurement
+lie, and a version check sails straight past it.
+
+**Measurements are taken on a ladder, and the assertion is on shape.** A lone
+measurement reports a value that hardware noise moves, and hides quadratic
+behaviour behind a fast machine. Cost per coupon that is flat passes; cost per
+coupon that climbs fails, even when the absolute numbers look comfortable.
+
+**Thresholds are baseline-relative, with one absolute ceiling on cold boot.**
+Purely relative bands ratchet: a few percent per commit never trips a band, and a
+year later the wallet takes seconds to open with every run green. Cold boot is
+the number a customer directly experiences, so it also gets a fixed limit.
+
+**Baselines are committed to the repository.** Accepting a slowdown means editing
+a tracked file, which surfaces in review. An external time-series store puts the
+number where no reviewer will see it.
+
+### Gateway suite
+
+**Signing happens in a sidecar process, not in the load generator's JavaScript
+engine.** This is settled, not to be re-evaluated. The retired project spent an
+entire spike step on it: in-engine signing came out roughly 67× over budget at
+p99 (676ms), while a sidecar in cluster mode sustained 2400 req/s at 61ms p99.
+Both results are recorded in that project's `loadtest/spike-0/` and
+`spike-0b/`. Re-running the failed experiment to rediscover the same answer is
+the most predictable waste available here.
+
+**Signing cost is reported as a share of each iteration.** The sidecar is fast
+enough but not free. When its share grows large, the run is measuring the load
+generator rather than the gateway, and that should be visible rather than
+inferred.
+
+**The target deployment is chosen at run time**, read from the environment and
+defaulting to staging.
+
+**Abort signals come from what real runs observed, not what a plan predicted.**
+This distinction is load-bearing. The retired project's plan predicted a
+connection pool would fail with `Connection is not available`; under load it
+actually failed with `HikariDataSource has been closed`, so the predicted signal
+never fired while the run produced hours of worthless data. Ported signals are
+marked as observed or unproven.
+
+**The load generator's own saturation invalidates a run**, so a laptop's limit is
+never mistaken for the gateway's.
+
+**Issuance is implemented first.** It produces the coupons that sending,
+splitting and draining all consume, so it is both the first measurement and the
+tool that fills the pool for everything after it.
+
+**Manual until proven, then scheduled.** The retired project's first two real
+runs both surfaced defects in the *scripts* before revealing anything about the
+system. A schedule firing into unproven scripts generates noise that trains
+people to ignore it.
+
+## What is deliberately not measured
+
+**Redemption has no gateway scenario**, by
+[ADR 0003](../docs/adr/0003-redemption-is-not-load-tested.md). There is no
+gateway path to measure, and building one in order to measure it would install
+the very dependency the design exists without. Its device-side cost is measured
+in the browser suite instead, so the exclusion does not leave it unmeasured.
+
+Also out of scope, with reasons in the spec: committed objectives (no baselines
+exist yet to derive them from), soak runs, mixed workloads, native Android
+performance, third-party upload throughput, registration throughput, and
+optimising anything this suite happens to find.
+
+## A local run is not a capacity number
+
+A run against a shared single-host deployment measures **that host**, not the
+system in the abstract. A run on a laptop measures that laptop. Numbers from
+either inform planning; neither is production capacity, and quoting them as such
+is a misuse this document can warn against but not prevent.
+
+## Layout
+
+```
+perf/                      browser suite
+├── baselines/             committed reference numbers
+├── results/               run artifacts, date-plus-subject
+└── snapshots/             recorded wallet state (not committed)
+
+loadtest/                  gateway suite
+├── lib/                   ported helpers, renamed to this glossary
+└── results/               run artifacts, date-plus-subject
+```
+
+Vocabulary follows [`CONTEXT.md`](../CONTEXT.md): coupon, stall, customer,
+redemption, scenario, run, baseline, scaling ladder, fixture snapshot. The
+retired project's words (voucher, merchant, user) are renamed on the way in;
+since that project is retired and nothing will be merged back, preserving a
+comparable diff has no value, and a port is the one moment renaming is free.
