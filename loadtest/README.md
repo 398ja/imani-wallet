@@ -293,3 +293,29 @@ absence. The mapping that matters is imani-apps' `shared/api.js`
 `face_value` is the **send amount**, not the coupon's face value. `pay.ts`
 records why: passing the coupon's value made a partial send complete as a full
 one, the recipient got the whole coupon, and the customer got no change.
+
+## The drain ramp
+
+    ACCOUNT_URL=http://localhost:28081 k6 run loadtest/drain.js
+
+The gateway-side counterpart to the browser drain scenario: this measures the
+service, that one measures the device. Draining is a read, so it needs nothing
+issued first, which makes it the scenario that can push hardest.
+
+On this stack: **6609 drains, 0 failed, avg 22ms, p95 33ms**, no rate limiting
+reached.
+
+### What it does not measure here
+
+Every drain comes back **empty**, so what is measured is the cost of answering
+"nothing waiting" — the endpoint, the signature check and the queue poll, but
+not the work of returning and acknowledging envelopes.
+
+Envelopes are payment *receipts* delivered over Artemis. Coupon sends do not
+produce them, so running the send ramp first does not help: measured, **10
+sends produced 0 envelopes**. Populating that queue needs the payment flow,
+which no scenario here drives yet.
+
+The summary says this explicitly whenever it happens, because an all-empty run
+looks identical to a healthy loaded one in every other number. A scenario that
+quietly measured nothing while reporting a clean p95 would be worse than none.
