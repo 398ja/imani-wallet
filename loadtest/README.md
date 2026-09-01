@@ -67,11 +67,40 @@ lists under terms to avoid. Since that project is retired and nothing will be
 merged back, preserving a comparable diff has no value, and a port is the one
 moment renaming is free.
 
-Two things were checked against this wallet's own source rather than carried
-over. The signature has **no nonce tag**: imani-apps added one, `src/lib/nip98.ts`
-does not, and a load test that signs differently from the wallet measures a
-path no customer takes. And the request bodies match what the wallet sends,
-read from `src/lib/issue.ts` and `src/lib/incomingNotifications.ts`.
+Request bodies match what the wallet sends, read from `src/lib/issue.ts` and
+`src/lib/incomingNotifications.ts` rather than from the old scripts.
+
+**One deliberate divergence: the signature carries a nonce, and the wallet's
+does not.** This was removed first, on the principle of matching the wallet
+exactly, and that was wrong. The event id hashes the tags and a
+second-granularity timestamp, so two identical requests in the same second
+produce the same id and the gateway rejects the second:
+
+    nip98_eventid_replay_detected ... reason=Event ID already used
+
+The wallet never hits this because it never repeats a request within a second;
+it drains every ten. A load run does so constantly. imani-apps carried a nonce
+for exactly this reason.
+
+### Which tier serves what
+
+Verified against this stack, because a 404 here reads as "the endpoint does not
+exist" when it means "it is on the other tier":
+
+| Call | Tier | Evidence |
+|---|---|---|
+| Issue a coupon | portal `:28084` | 201 with `X-Auth-Permissions: coupon:issue` |
+| Send coupons | account `:28081` | `/api/v1/atomic-send`; `:28082` answers 404 |
+| Drain arrivals | account `:28081` | 401 there, 404 on `:28082` |
+| **Split a coupon** | **none** | refused by design, see below |
+
+**Splitting has no gateway path.** The customer gateway refuses it outright:
+*"Voucher split execution is not supported on JdbcWalletPort — the
+customer-wallet is self-custodial (Constitution Principle II)."* Same situation
+ADR 0003 records for redemption: the work happens on the device, so measuring
+it belongs in the browser suite. `splitCoupon()` is exported and throws with
+that explanation, so anyone looking for a split scenario finds the reason
+rather than an absence.
 
 ### The smoke run
 

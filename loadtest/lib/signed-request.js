@@ -4,12 +4,23 @@
 // with a signature binding the caller's key to that exact URL, method and body.
 // The gateway wants the second on its write endpoints.
 //
-// This mirrors `src/lib/nip98.ts`, deliberately and closely, because a load
-// test that signs differently from the wallet is measuring a path no customer
-// takes. Two details are load-bearing:
+// This mirrors `src/lib/nip98.ts` closely, because a load test that signs
+// differently from the wallet measures a path no customer takes. Two details
+// are load-bearing:
 //
-//   * No nonce tag. The retired imani-apps version added one; this wallet does
-//     not, and the signature must match what the wallet actually sends.
+//   * A nonce tag, which the wallet does NOT send. This is the one deliberate
+//     divergence, and it took a failing smoke run to justify. The event id is
+//     a hash over the tags and a second-granularity timestamp, so two
+//     identical requests in the same second produce the same id, and the
+//     gateway rejects the second as a replay:
+//
+//       nip98_eventid_replay_detected ... reason=Event ID already used
+//
+//     The wallet never hits this because it never repeats a request within a
+//     second (it drains every ten). A load run does so constantly. imani-apps
+//     carried a nonce for exactly this reason; removing it on the principle of
+//     "match the wallet exactly" was wrong, and the smoke run caught it.
+//
 //   * The `u` tag is the URL the gateway rebuilds from the Host header. If they
 //     disagree the call fails 401 AUTH_002 "URL mismatch", which reads as a
 //     credential problem and is not one.
@@ -45,6 +56,9 @@ export function nip98Header(url, method, body, customer) {
   const tags = [
     ['u', url],
     ['method', method.toUpperCase()],
+    // Unique per request, so concurrent iterations do not collide into one
+    // event id and get rejected as replays. See the note at the top.
+    ['nonce', `${Date.now()}-${crypto.sha256(String(Math.random()), 'hex').slice(0, 16)}`],
   ]
 
   // Hash the body exactly as serialised. Re-serialising with a different key
