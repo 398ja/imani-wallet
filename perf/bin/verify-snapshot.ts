@@ -67,8 +67,8 @@ async function readState(browser: Browser, url: string, seed?: Snapshot, nsec?: 
       await page.waitForTimeout(15_000)
     }
 
-    if (seed) await restore(page, seed)
-    return await capture(page, seed ? seed.coupons : 0)
+    if (seed) await restore(page, seed, context)
+    return await capture(page, seed ? seed.coupons : 0, context)
   } finally {
     await context.close()
   }
@@ -179,8 +179,8 @@ async function main() {
     await pollutedPage.evaluate(() => {
       localStorage.setItem('a-key-from-a-previous-run', 'stale')
     })
-    await restore(pollutedPage, original)
-    const afterPollution = await capture(pollutedPage, original.coupons)
+    await restore(pollutedPage, original, polluted)
+    const afterPollution = await capture(pollutedPage, original.coupons, polluted)
     await polluted.close()
 
     record(

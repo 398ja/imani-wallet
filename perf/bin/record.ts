@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url'
 import { chromium } from '@playwright/test'
 import { serve } from '../lib/serve'
 import { capture, countRecords, type Snapshot } from '../lib/snapshot'
+import { FIXTURE_PASSPHRASE } from '../scenarios/coldBoot'
 import { sourceHash } from '../lib/sources'
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..')
@@ -85,7 +86,11 @@ async function main() {
     // plaintext key would be starting the wallet from a state it is designed
     // never to be in, and whatever it then measured would not be the real
     // startup path.
-    const PASSPHRASE = 'performance-recording-passphrase'
+    // The shared fixture passphrase, so a scenario can unlock what this
+    // records. A restored wallet always boots locked: the resume record's
+    // wrapping key is non-extractable by design, so no snapshot can carry an
+    // unlocked session.
+    const PASSPHRASE = FIXTURE_PASSPHRASE
     await page.goto(`${site.url}/onboarding`, { waitUntil: 'domcontentloaded' })
 
     await page.getByRole('button', { name: 'Log in' }).click()
@@ -132,7 +137,7 @@ async function main() {
 
     console.log(`  stored ${stored} records (wanted ${COUPONS})`)
 
-    const recorded = await capture(page, COUPONS)
+    const recorded = await capture(page, COUPONS, context)
     const snapshot: Snapshot = { ...recorded, sourceHash: sourceHash(ROOT) }
 
     // Refuse to record a wallet holding fewer coupons than were issued.

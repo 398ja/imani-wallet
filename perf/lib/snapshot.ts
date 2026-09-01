@@ -17,7 +17,7 @@
  * they have moved.
  */
 
-import type { Page } from '@playwright/test'
+import type { BrowserContext, Cookie, Page } from '@playwright/test'
 
 /** One IndexedDB object store, and everything in it. */
 export interface StoreContents {
@@ -64,6 +64,38 @@ export interface Snapshot {
    * them boots into a different state than the one recorded.
    */
   localStorage: Record<string, string>
+  /**
+   * Captured for completeness, but it cannot restore an unlocked wallet.
+   *
+   * `imani-wallet:resume:v1` holds the session key encrypted under a wrapping
+   * key that `src/lib/resume.ts` generates NON-EXTRACTABLE and keeps in
+   * IndexedDB. `getAll()` cannot serialise a non-extractable CryptoKey, so a
+   * snapshot carries the ciphertext without the key, and the wallet correctly
+   * discards a record it cannot decrypt:
+   *
+   *   [resume] discarding an unusable resume record: no wrapping key
+   *
+   * That is the design working. Its comment is explicit: "there is no code
+   * path — ours or an attacker's — that turns this back into bytes." A fixture
+   * that could restore an unlocked session would be a hole in that.
+   *
+   * So a restored wallet boots LOCKED, and a scenario must unlock it with the
+   * passphrase it was recorded under. See `unlock()` in the cold-boot
+   * scenario.
+   */
+  sessionStorage: Record<string, string>
+  /**
+   * Session cookies, which no page script can reach.
+   *
+   * `merchant_session` is httpOnly by design, so `document.cookie` cannot see
+   * it and `page.evaluate` cannot restore it. It has to be carried through the
+   * browser context instead, which is why `capture` and `restore` each take an
+   * optional one.
+   *
+   * Optional so a snapshot recorded before this existed still loads; it simply
+   * carries no cookies.
+   */
+  cookies?: Cookie[]
 }
 
 /**
@@ -72,7 +104,11 @@ export interface Snapshot {
  * Runs in the page rather than through a storage API, because only the page
  * can see its own origin's databases.
  */
-export async function capture(page: Page, coupons: number): Promise<Omit<Snapshot, 'sourceHash'>> {
+export async function capture(
+  page: Page,
+  coupons: number,
+  context?: BrowserContext,
+): Promise<Omit<Snapshot, 'sourceHash'>> {
   const captured = await page.evaluate(async () => {
     const dbs = await indexedDB.databases()
     const out: Array<{
@@ -140,7 +176,13 @@ export async function capture(page: Page, coupons: number): Promise<Omit<Snapsho
       if (k) ls[k] = localStorage.getItem(k) ?? ''
     }
 
-    return { databases: out, localStorage: ls }
+    const ss: Record<string, string> = {}
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const k = sessionStorage.key(i)
+      if (k) ss[k] = sessionStorage.getItem(k) ?? ''
+    }
+
+    return { databases: out, localStorage: ls, sessionStorage: ss }
   })
 
   return {
@@ -149,6 +191,8 @@ export async function capture(page: Page, coupons: number): Promise<Omit<Snapsho
     coupons,
     databases: captured.databases,
     localStorage: captured.localStorage,
+    sessionStorage: captured.sessionStorage,
+    ...(context ? { cookies: await context.cookies() } : {}),
   }
 }
 
@@ -160,14 +204,29 @@ export async function capture(page: Page, coupons: number): Promise<Omit<Snapsho
  * it. Goes in through the real schema: no production module gains a seam for
  * this.
  */
-export async function restore(page: Page, snapshot: Snapshot): Promise<void> {
+export async function restore(
+  page: Page,
+  snapshot: Snapshot,
+  context?: BrowserContext,
+): Promise<void> {
   if (snapshot.format !== 1) {
     throw new Error(`unknown snapshot format ${snapshot.format}; re-record it`)
+  }
+
+  // Cookies go through the context, because httpOnly ones are invisible to
+  // page scripts by design.
+  if (context && snapshot.cookies?.length) {
+    await context.addCookies(snapshot.cookies)
   }
 
   await page.evaluate(async (snap: Snapshot) => {
     for (const key of Object.keys(snap.localStorage)) {
       localStorage.setItem(key, snap.localStorage[key])
+    }
+
+    // The unlocked session, without which the wallet boots locked.
+    for (const key of Object.keys(snap.sessionStorage ?? {})) {
+      sessionStorage.setItem(key, snap.sessionStorage[key])
     }
 
     for (const dbSpec of snap.databases) {
