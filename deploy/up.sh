@@ -16,9 +16,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SERVICES=(
   imani-gateway-db bottin-db imani-vault-db imani-payment-db
-  bottin-web nostr-relay phoenixd-mock blossom
+  bottin-api nostr-relay phoenixd-mock blossom
   imani-vault-jpa payment-adapter imani-mint-rest
-  account-app customer-wallet gateway-portal
+  account-app gateway-customer gateway-portal
 )
 
 export WALLET_DEPLOY_DIR="$HERE"
@@ -58,13 +58,13 @@ compose() {
 
 if [ $# -eq 0 ]; then
   # gateway-portal is started separately, with --no-deps, because it
-  # `depends_on: customer-wallet: service_healthy` and customer-wallet's
+  # `depends_on: gateway-customer: service_healthy` and gateway-customer's
   # healthcheck reports OUT_OF_SERVICE even when it is working perfectly (§15.5
   # of the design spec). Compose believes it, refuses to start the portal, and
   # exits 1 — so a plain `./deploy/up.sh` brought up eleven services, silently
   # skipped the merchant tier, and reported failure for a stack that was fine.
   #
-  # --no-deps only skips the dependency START, not the dependency: customer-wallet
+  # --no-deps only skips the dependency START, not the dependency: gateway-customer
   # is in SERVICES above and is already up by this line.
   everything_else=()
   for service in "${SERVICES[@]}"; do

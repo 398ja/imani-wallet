@@ -229,8 +229,51 @@ services:
       # the honest failure mode if someone points this at nothing.
       BLOSSOM_SERVER_URL: ${BLOSSOM_SERVER_URL:-http://localhost:28089}
 
-  customer-wallet:
+  # bottin-api 0.10.0 added a startup guard (RequiredCredentials) that refuses
+  # to boot under the `prod` profile unless BOTTIN_API_PASSWORD is set, and the
+  # deploy repo's test compose sets only BOTTIN_ADMIN_PASSWORD. The container
+  # exits(1) with "Production startup blocked", and because gateway-core and
+  # gateway-portal both `depends_on` it, the whole stack fails to come up.
+  #
+  # Same value as BOTTIN_ADMIN_PASSWORD deliberately: callers (gateway-core's
+  # BOTTIN_PASSWORD above, gateway-portal's) authenticate with the admin
+  # credential, so a different value here boots the service and then fails
+  # every lookup with a 401, which is a far more confusing failure than not
+  # starting at all.
+  # Same DevModeGuard refusal the account-app block above reasons through, and
+  # the same answer. gateway-core and gateway-customer were left inheriting
+  # GATEWAY_DEV_MODE=true from the deploy repo's test compose, so both exit(1)
+  # at startup with nothing in the compose output but "dependency failed to
+  # start" — the symptom the account-app comment warns about, in two services
+  # that block the whole stack.
+  #
+  # Dev-mode only bypasses the SHA-256 preimage check gating escrow fund
+  # movement, for a "Skip Payment" path this wallet does not use: phoenixd-mock
+  # settles invoices for real here. Turning a cryptographic check off to make a
+  # local stack boot is the wrong trade when nothing needs it off.
+  gateway-core:
     environment:
+      GATEWAY_DEV_MODE: "false"
+      # And the second thing the account-app block documents, for the same
+      # reason: NostrPreWarmer takes a HARD constructor dependency on
+      # CachingNostrGatewayDecorator, which is @ConditionalOnBean and off by
+      # default, so the context fails to start rather than falling back to
+      # local-only queries.
+      GATEWAY_CORE_NOSTR_ENABLED: "true"
+      # MUST be set alongside it: CoreNostrProperties otherwise defaults to
+      # wss://relay.imani.casa, a PUBLIC relay, and a local stack would open
+      # WebSockets to it and publish there.
+      GATEWAY_CORE_NOSTR_RELAYS: "ws://nostr-relay:7777"
+
+  bottin-api:
+    environment:
+      BOTTIN_API_USER: ${BOTTIN_ADMIN_USERNAME:-imani}
+      BOTTIN_API_PASSWORD: ${BOTTIN_ADMIN_PASSWORD:-test-bottin-admin-9ace19b7fb61b5007225f745}
+
+  gateway-customer:
+    environment:
+      # See the gateway-core note above.
+      GATEWAY_DEV_MODE: "false"
       GATEWAY_CUSTOMER_WALLET_NOSTR_ENABLED: "true"
       GATEWAY_CUSTOMER_WALLET_NOSTR_RELAYS: "ws://nostr-relay:7777"
       # Must match GATEWAY_ATOMIC_SEND_DELIVERY_NIP17_SERVICE_TOKEN above.
