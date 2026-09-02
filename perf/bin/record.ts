@@ -126,11 +126,14 @@ function issueTo(count: number): { nsec: string; npub: string } {
   // coupons: the wait counts what the customer holds, and a shared name would
   // count coupons from every previous recording.
   //
-  // That makes runs independent, but not unlimited. Issuance goes through the
-  // GATEWAY's single cashu wallet, and enough concurrent swaps make the mint
-  // reject proofs it has already spent (11001) — which surfaces here as
-  // "never produced a token" and leaves the gateway broken for later runs
-  // until its H2 file is cleared. Two at once is fine; four is not.
+  // That makes runs independent in what they READ, but not in what they spend.
+  // Issuance goes through the GATEWAY's single cashu wallet, so concurrent
+  // recordings make the mint reject proofs it has already spent (11001) —
+  // surfacing here as "never produced a token", and leaving the gateway broken
+  // for later runs until its H2 file is cleared. Run one at a time.
+  //
+  // Two at once sometimes both succeed, which is the awkward part: it looks
+  // supported right up until a longer run collides.
 
   // One coupon per call, repeated, rather than one call for the whole batch.
   //
