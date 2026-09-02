@@ -55,6 +55,10 @@ export function nostrdbAdapter(): NostrdbAdapter {
           pTags: filter.pTags,
           authors: filter.authors,
           since: filter.since,
+          // Forwarded so the fetcher can PAGE. Without it every query returns
+          // the same newest page and a wallet holding more coupons than one
+          // page can carry never sees the rest (#38).
+          until: filter.until,
           limit: filter.limit,
         }),
       })
