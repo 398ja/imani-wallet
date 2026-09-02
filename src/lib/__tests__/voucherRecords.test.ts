@@ -7,13 +7,21 @@ const stubs = vi.hoisted(() => ({
   events: [] as { tags: string[][]; content: string; created_at: number }[],
   restored: [] as VoucherRow[],
   state: 'SPENT',
+  /** How many records the restore actually opened. */
+  decrypts: 0,
 }))
 
 vi.mock('../nap', () => ({
   getSigner: () => ({
     pubkey: 'bb'.repeat(32),
     nip44Encrypt: (_to: string, plain: string) => plain,
-    nip44Decrypt: (_from: string, cipher: string) => cipher,
+    nip44Decrypt: (_from: string, cipher: string) => {
+      // Counted, because "did not decrypt this" is a claim a test should be
+      // able to make. getSigner returns a fresh object per call, so the count
+      // lives on the shared stub rather than on the signer.
+      stubs.decrypts++
+      return cipher
+    },
   }),
 }))
 vi.mock('../relay', () => ({ allEvents: async () => stubs.events, publish: async () => undefined }))
@@ -107,9 +115,95 @@ describe('restoreVouchers', () => {
     created_at: 100,
   })
 
+  /** A tombstone: the tag says spent, and the payload agrees. */
+  const tombstone = (row: VoucherRow) => ({
+    tags: [
+      ['d', row.token_id],
+      ['spent', 'true'],
+    ],
+    content: JSON.stringify({ spent: true } satisfies TokenRecord),
+    created_at: 200,
+  })
+
   beforeEach(() => {
     stubs.restored = []
     stubs.state = 'SPENT'
+    stubs.decrypts = 0
+  })
+
+  it('does not decrypt a tombstone it can recognise by its tag', async () => {
+    /*
+     * `buildRecord` writes `spent` as a TAG as well as into the payload, so a
+     * reader can skip tombstones without opening them. The reader decrypted
+     * everything anyway, and a wallet accumulates one tombstone per coupon it
+     * has ever spent — measured at 240 relay events on a 120-coupon fixture,
+     * every one decrypted and every one then discarded.
+     */
+    stubs.events = [tombstone(coupon('a')), tombstone(coupon('b'))]
+    await restoreVouchers('aa'.repeat(32))
+
+    expect(stubs.decrypts).toBe(0)
+  })
+
+  it('does decrypt a record that is not a tombstone', async () => {
+    // The other half: the skip must be specific to tombstones, or the first
+    // test would pass just as well against a reader that never decrypts.
+    stubs.state = 'UNSPENT'
+    stubs.events = [event(coupon('a'))]
+
+    await restoreVouchers('aa'.repeat(32))
+
+    expect(stubs.decrypts).toBe(1)
+  })
+
+  it('still lets a tombstone win, whichever way it was read', async () => {
+    // The rule the whole restore stands on: a coupon whose proofs are burnt
+    // must not come back. Skipping the decrypt must not weaken it.
+    stubs.state = 'UNSPENT'
+    stubs.events = [event(coupon('a')), tombstone(coupon('a'))]
+
+    await restoreVouchers('aa'.repeat(32))
+
+    expect(stubs.restored).toEqual([])
+  })
+
+  it('does not trust a tag that says spent when the payload disagrees', async () => {
+    // The tag is a hint and can only make the reader do LESS work. It is
+    // written by this wallet, but an event on a public relay is not something
+    // to take on trust — and treating a `false` tag as authoritative would let
+    // a forged tag resurrect a burnt coupon.
+    stubs.state = 'UNSPENT'
+    stubs.events = [
+      {
+        tags: [
+          ['d', 'a'],
+          ['spent', 'false'],
+        ],
+        // Tag says live, payload says spent. The payload is the record.
+        content: JSON.stringify({ spent: true } satisfies TokenRecord),
+        created_at: 100,
+      },
+    ]
+
+    await restoreVouchers('aa'.repeat(32))
+
+    expect(stubs.restored).toEqual([])
+  })
+
+  it('reads a record with no spent tag at all', async () => {
+    // Written before the tag existed. Must still restore.
+    stubs.state = 'UNSPENT'
+    stubs.events = [
+      {
+        tags: [['d', 'a']],
+        content: JSON.stringify({ voucher: coupon('a') } satisfies TokenRecord),
+        created_at: 100,
+      },
+    ]
+
+    await restoreVouchers('aa'.repeat(32))
+
+    expect(stubs.restored.map((r) => r.token_id)).toEqual(['a'])
   })
 
   it('keeps a redeemed coupon the mint calls SPENT, and drops a live one', async () => {
