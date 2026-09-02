@@ -591,6 +591,39 @@ The lesson is in the shape of the symptom: a count that is short by four is not
 evidence about where the coupons went. Each of these was found by tracing the
 loop itself rather than reasoning about the count.
 
+## Measure after the page goes quiet
+
+Every scenario that measures a populated wallet has to wait for the boot's
+background work to drain before starting its clock. This is not a detail of
+implementation; it is the difference between measuring a subsystem and
+measuring contention.
+
+Opening the wallet starts a reconciliation chain that walks everything held, so
+the work scales with the coupon count: about 350ms of settling at 5 coupons and
+1200ms at 120 (#42). A scenario that starts timing before that drains charges
+its own subsystem for whatever the boot had not finished — and because the
+effect grows with the fixture, **it is indistinguishable from superlinear
+cost.**
+
+That is not hypothetical. Balance aggregation was measured this way and
+reported cost per coupon climbing 8.4x. It reached a filed issue before anyone
+checked it. Measured properly the same ladder is flat at ~0.15ms per coupon,
+and the entire curve was the settling.
+
+Two things caught it, neither of which was reading the code:
+
+- **Measuring the same fixture two ways and getting different answers.** 120
+  coupons took ~97ms unsettled and ~22ms settled, while 20 coupons took 10ms
+  either way. A discrepancy that only appears at the large end is the tell.
+- **Profiling instead of theorising.** The main thread was ~90% idle during the
+  measurement, which ruled out the aggregation code long before any of it had
+  been read carefully.
+
+`settle()` in `perf/scenarios/balanceAggregation.ts` waits for three
+consecutive idle callbacks. Deliberately not a fixed sleep: one long enough for
+the biggest fixture wastes that time on every smaller one, and one tuned to the
+small rungs silently stops working as the ladder grows.
+
 ## On the tolerance band
 
 The band is 35%, not the 25% it started at. At 25% a run reported cold boot
