@@ -9,7 +9,15 @@
 
 import { describe, it, expect } from 'vitest'
 
-import { assessShape, formatLadder, MAX_SLOPE_GROWTH, type Rung } from '../ladder'
+import {
+  assessShape,
+  formatLadder,
+  runLadder,
+  MAX_SLOPE_GROWTH,
+  type LadderScenario,
+  type Rung,
+} from '../ladder'
+import type { Snapshot } from '../snapshot'
 import { isFailure, renderReport, type Comparison, type RunSummary } from '../run'
 
 /** Linear: a fixed cost to open, plus a constant cost per coupon. */
@@ -188,5 +196,84 @@ describe('a climbing shape reaching the run', () => {
     expect(report).toContain('No regression')
     expect(report).toContain('cold-boot cost shape')
     expect(report).toContain('| coupons | ms |')
+  })
+})
+
+describe('runLadder', () => {
+  /**
+   * The shared driver every scenario uses. #23-#26 all measure across the same
+   * rungs, so this is the part that keeps them comparable: one freshness
+   * check, one idea of how few rungs is too few, one table.
+   */
+  const fixture = { databases: [], localStorage: {}, sessionStorage: {}, cookies: [], sourceHash: 'x' } as unknown as Snapshot
+
+  function scenario(ms: (coupons: number) => number): LadderScenario {
+    return {
+      name: 'test',
+      measure: async (coupons) => ({ ms: ms(coupons), all: [ms(coupons)], held: coupons }),
+    }
+  }
+
+  it('measures every rung and assesses the shape', async () => {
+    const result = await runLadder(scenario((c) => 100 + 0.5 * c), {
+      counts: [5, 20, 50],
+      loadFixture: () => fixture,
+    })
+
+    expect(result.rungs.map((r) => r.coupons)).toEqual([5, 20, 50])
+    expect(result.shape?.flat).toBe(true)
+    expect(result.table).toContain('| coupons | ms |')
+  })
+
+  it('reports a climbing scenario as not flat', async () => {
+    const result = await runLadder(scenario((c) => 100 + 0.05 * c * c), {
+      counts: [5, 20, 50],
+      loadFixture: () => fixture,
+    })
+
+    expect(result.shape?.flat).toBe(false)
+  })
+
+  it('measures rungs in ascending order whatever order they are given', async () => {
+    const seen: number[] = []
+    await runLadder(
+      {
+        name: 'test',
+        measure: async (coupons) => {
+          seen.push(coupons)
+          return { ms: 100, all: [100], held: coupons }
+        },
+      },
+      { counts: [50, 5, 20], loadFixture: () => fixture },
+    )
+
+    // Marginal cost is computed between adjacent rungs, so the order the
+    // ladder reports has to be the order of the counts, not of the input.
+    expect(seen).toEqual([5, 20, 50])
+  })
+
+  it('returns rungs but no shape when the ladder is too short', async () => {
+    const result = await runLadder(scenario(() => 100), {
+      counts: [5, 20],
+      loadFixture: () => fixture,
+    })
+
+    // Deliberately not a throw: too few rungs is a caller's decision to make,
+    // and the run treats it differently on a laptop than under CI.
+    expect(result.rungs).toHaveLength(2)
+    expect(result.shape).toBeUndefined()
+  })
+
+  it('loads a fixture for every rung, so staleness is checked per rung', async () => {
+    const loaded: number[] = []
+    await runLadder(scenario(() => 100), {
+      counts: [5, 20, 50],
+      loadFixture: (coupons) => {
+        loaded.push(coupons)
+        return fixture
+      },
+    })
+
+    expect(loaded).toEqual([5, 20, 50])
   })
 })

@@ -21,7 +21,7 @@ import { load, available } from '../lib/fixture'
 import { serve } from '../lib/serve'
 import { compare, type Baselines } from '../lib/baseline'
 import { runName, regenerateReport, isFailure, type RunSummary, type Comparison } from '../lib/run'
-import { assessShape, formatLadder, MIN_RUNGS, type Rung } from '../lib/ladder'
+import { runLadder, MIN_RUNGS, type Rung, type LadderScenario } from '../lib/ladder'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const ROOT = resolve(HERE, '../..')
@@ -132,50 +132,61 @@ async function main() {
       console.log('\nNo fixtures recorded, so only the empty wallet was measured.')
       console.log('  npm run perf:record -- --coupons 5')
     }
-    for (const coupons of rungs) {
-      const fixture = load(SNAPSHOTS, coupons, ROOT)
-      const populated = await withBrowser((browser) =>
-        measureColdBootMedian(browser, {
-          baseUrl: site.url,
-          fixture,
-          passphrase: FIXTURE_PASSPHRASE,
-          timeoutMs: 90_000,
-        }),
-      )
-      const scenario = `cold-boot-${coupons}`
-      console.log(
-        `\n${scenario}: ${populated.ms}ms (samples ${populated.all.join(', ')})`,
-      )
-      console.log(`  holding ${populated.couponsHeld} records`)
-
-      summary.scenarios.push({
-        scenario,
-        measurements: [{ coupons, ms: populated.ms }],
-      })
-      comparisons.push(compare(scenario, populated.ms, baselines[scenario]))
-      ladder.push({ coupons, ms: populated.ms })
+    // Driven through the shared ladder runner rather than a loop of its own.
+    //
+    // Every remaining scenario (#23-#26) measures across the same rungs, and a
+    // scenario that rolled its own loop would drift from the others — a
+    // different freshness check, a different idea of how few rungs is too few.
+    // The whole point of a ladder is that its rungs are comparable.
+    const coldBoot: LadderScenario = {
+      name: 'cold-boot',
+      measure: async (_coupons, fixture) => {
+        const r = await withBrowser((browser) =>
+          measureColdBootMedian(browser, {
+            baseUrl: site.url,
+            fixture,
+            passphrase: FIXTURE_PASSPHRASE,
+            timeoutMs: 90_000,
+          }),
+        )
+        return { ms: r.ms, all: r.all, held: r.couponsHeld }
+      },
     }
 
-    // Assert the SHAPE, once there are enough rungs to have one.
-    //
-    // This is a different question from every comparison above. Those ask
+    const result = await runLadder(coldBoot, {
+      counts: rungs,
+      loadFixture: (coupons) => load(SNAPSHOTS, coupons, ROOT),
+      onRung: (rung, measurement) => {
+        const scenario = `${coldBoot.name}-${rung.coupons}`
+        console.log(`\n${scenario}: ${rung.ms}ms (samples ${measurement.all.join(', ')})`)
+        console.log(`  holding ${measurement.held} records`)
+
+        summary.scenarios.push({
+          scenario,
+          measurements: [{ coupons: rung.coupons, ms: rung.ms }],
+        })
+        comparisons.push(compare(scenario, rung.ms, baselines[scenario]))
+      },
+    })
+    ladder.push(...result.rungs)
+
+    // The SHAPE is a different question from every comparison above. Those ask
     // whether a number moved since last time; this asks whether the cost per
-    // coupon is flat or climbing, which is the question that survives moving
-    // to different hardware. A slower laptop shifts every rung up together and
-    // the shape is unchanged.
+    // coupon is flat or climbing, which is what survives moving to different
+    // hardware. A slower laptop shifts every rung up together.
     //
-    // Fewer than MIN_RUNGS is not a failure — it means the ladder has not been
-    // recorded yet, and saying which command records it is more useful than a
-    // red run.
-    if (ladder.length >= MIN_RUNGS) {
-      const shape = assessShape(ladder)
-      console.log(`\ncold-boot cost shape: ${shape.explanation}`)
-      console.log(formatLadder(ladder))
+    // Too few rungs is not a failure on a laptop — it means the ladder has not
+    // been recorded yet, and naming the command that records it is more useful
+    // than a red run. Under --require-fixtures it IS a failure; see below.
+    if (result.shape) {
+      const shape = result.shape
+      console.log(`\n${coldBoot.name} cost shape: ${shape.explanation}`)
+      console.log(result.table)
 
       summary.ladders = [
         {
-          scenario: 'cold-boot',
-          table: formatLadder(ladder),
+          scenario: coldBoot.name,
+          table: result.table ?? '',
           flat: shape.flat,
           explanation: shape.explanation,
         },
@@ -183,7 +194,7 @@ async function main() {
 
       if (!shape.flat) {
         comparisons.push({
-          scenario: 'cold-boot cost shape',
+          scenario: `${coldBoot.name} cost shape`,
           measuredMs: Math.round(shape.lateSlope * 1000) / 1000,
           verdict: 'regressed',
           note: shape.explanation,
