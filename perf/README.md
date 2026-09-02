@@ -291,6 +291,12 @@ so 20 coupons take about five minutes.
 `DEBUG_RECORD=1` traces the browser console, failed requests and every gift-wrap
 query with its response. That tracing is what found all five faults above.
 
+Every fourth coupon is issued in **USD**, so a recorded wallet holds more than
+one currency — adding EUR to USD would be a confident lie, so the wallet keeps
+one figure per currency and aggregation has to walk them separately. A
+single-currency fixture would measure the easy path. `--currencies EUR` records
+in one currency.
+
 Two things the recorder will not do:
 
 - **Write a partial snapshot.** Fewer coupons stored than issued and it refuses,
