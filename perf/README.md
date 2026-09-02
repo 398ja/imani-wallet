@@ -353,6 +353,16 @@ so 20 coupons take about five minutes.
 `DEBUG_RECORD=1` traces the browser console, failed requests and every gift-wrap
 query with its response. That tracing is what found all five faults above.
 
+**Do not edit a watched file while recording.** The snapshot is stamped with
+the source hash at the moment it is WRITTEN, so a change landed mid-run
+invalidates the rung the moment it finishes — and a 500-coupon rung is an
+hour's work. Recording the ladder and changing the wallet are two activities
+that cannot overlap, which is worth planning around rather than discovering.
+
+Cost of getting it wrong, from one afternoon: a 500-rung abandoned at 295/500,
+and a 5-rung re-recorded twice. The `WATCHED` list is in `perf/lib/sources.ts`
+if you need to know what counts.
+
 **Record one wallet at a time.** Issuance goes through the gateway's single
 cashu wallet, and concurrent swaps make the mint reject proofs it has already
 spent (`mint_error_code=11001`). The run fails as `never produced a token`,
