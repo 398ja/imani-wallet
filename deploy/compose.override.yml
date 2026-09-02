@@ -38,8 +38,17 @@ services:
   # that repository does not exist in the registry. The image this stack actually
   # ran with is staging/cashu-vault-jpa (confirmed from a previous container of
   # the same name on this host).
+  #
+  # DO NOT rebuild this one from source to chase the #36 upgrade. Tried, and it
+  # cannot work on this stack: current cashu-vault stores key material in an
+  # external secret store, and its t_key table has no private_key column at all,
+  # only a vault_path. The stack runs no such store, so every key reads back as
+  # privateKey=null and the mint dies on PrivateKey.fromString with "s is marked
+  # non-null but is null". Recreating the volume does not help; the schema is
+  # simply different. That upgrade needs a secret backend this compose file does
+  # not have, which is a deploy decision rather than a version bump.
   imani-vault-jpa:
-    image: docker.398ja.xyz/staging/cashu-vault-jpa:latest
+    image: ${VAULT_JPA_IMAGE:-docker.398ja.xyz/staging/cashu-vault-jpa:latest}
 
   # Same 404 story: docker.398ja.xyz/gateway-portal does not exist, staging/ does.
   #
@@ -313,6 +322,19 @@ services:
   #     GATEWAY_CUSTOMER_IMAGE=imani-gateway-customer:frameseq ./deploy/up.sh
   imani-mint-rest:
     image: ${MINT_REST_IMAGE:-docker.398ja.xyz/imani-mint-rest:latest}
+    environment:
+      # mint 0.35.0 rate-limits issuance at 10/minute and 60/day, keyed on the
+      # caller's IP. Every service on this stack shares one IP as far as the
+      # mint is concerned, so a seeding run or a performance fixture exhausts
+      # the day's budget in seconds and every later mint quote returns 429 —
+      # which surfaces as "voucher never produced a token", naming neither the
+      # limit nor the mint.
+      #
+      # Raised rather than disabled: the limiter should still be exercised, and
+      # a run that somehow needs 100k quotes a day is a runaway worth stopping.
+      # Harmless on the published 0.11.0 image, which does not read these.
+      CASHU_MINT_ISSUANCE_RATE_LIMIT_PER_MINUTE_BURST: "${MINT_RATE_PER_MINUTE:-10000}"
+      CASHU_MINT_ISSUANCE_RATE_LIMIT_PER_DAY: "${MINT_RATE_PER_DAY:-100000}"
 
   gateway-customer:
     # The published image ships nostr-java-client 2.0.7, which dispatches every
