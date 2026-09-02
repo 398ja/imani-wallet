@@ -11,12 +11,13 @@
 
 import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
-import { createServer } from 'node:http'
-import { join, extname, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { hostname } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
-import { withBrowser, measureColdBootMedian } from '../scenarios/coldBoot'
+import { withBrowser, measureColdBootMedian, FIXTURE_PASSPHRASE } from '../scenarios/coldBoot'
+import { load, available } from '../lib/fixture'
+import { serve } from '../lib/serve'
 import { compare, type Baselines } from '../lib/baseline'
 import { runName, regenerateReport, isFailure, type RunSummary, type Comparison } from '../lib/run'
 
@@ -24,46 +25,13 @@ const HERE = fileURLToPath(new URL('.', import.meta.url))
 const ROOT = resolve(HERE, '../..')
 const DIST = join(ROOT, 'dist')
 const BASELINE_FILE = join(ROOT, 'perf/baselines/browser.json')
+const SNAPSHOTS = join(ROOT, 'perf/snapshots')
 const RESULTS = join(ROOT, 'perf/results')
 
 const accept = process.argv.includes('--accept')
 
 /** Serve the built bundle. A real static server, because a file:// URL is not
  *  how the app is ever loaded and would measure a different thing. */
-function serve(dir: string): Promise<{ url: string; close: () => Promise<void> }> {
-  const types: Record<string, string> = {
-    '.html': 'text/html',
-    '.js': 'text/javascript',
-    '.css': 'text/css',
-    '.json': 'application/json',
-    '.svg': 'image/svg+xml',
-    '.png': 'image/png',
-    '.ico': 'image/x-icon',
-    '.woff2': 'font/woff2',
-  }
-  const server = createServer((req, res) => {
-    const path = (req.url ?? '/').split('?')[0]
-    let file = join(dir, path === '/' ? 'index.html' : path)
-    // A single-page app: unknown paths are routes, not missing files.
-    if (!existsSync(file) || extname(file) === '') file = join(dir, 'index.html')
-    try {
-      const body = readFileSync(file)
-      res.writeHead(200, { 'content-type': types[extname(file)] ?? 'application/octet-stream' })
-      res.end(body)
-    } catch {
-      res.writeHead(404).end('not found')
-    }
-  })
-  return new Promise((ok) => {
-    server.listen(0, '127.0.0.1', () => {
-      const port = (server.address() as { port: number }).port
-      ok({
-        url: `http://127.0.0.1:${port}`,
-        close: () => new Promise<void>((done) => server.close(() => done())),
-      })
-    })
-  })
-}
 
 function commit(): string {
   try {
@@ -86,7 +54,19 @@ async function main() {
     process.exit(2)
   }
 
-  const site = await serve(DIST)
+  // withGateway serves the app AND the proxy table from vite.config.ts.
+  //
+  // Not a backend: nothing here needs the stack running, and the populated
+  // rungs were measured with gateway-customer stopped to prove it. But the
+  // wallet's unlock posts to /api/v1/auth/*, and without a rule for that path
+  // the SPA fallback answers with index.html — the unlock then fails, and the
+  // measurement silently becomes a locked wallet rather than a customer's.
+  // The guard in measureColdBoot catches exactly that.
+  //
+  // Shared with the recorder rather than reimplemented. This file had its own
+  // copy, which carried the same fallback bug: a missing build asset served as
+  // HTML instead of 404.
+  const site = await serve(DIST, { withGateway: true })
   const comparisons: Comparison[] = []
   const baselines = loadBaselines()
 
@@ -107,6 +87,46 @@ async function main() {
 
     summary.scenarios.push({ scenario: 'cold-boot', measurements: [{ coupons: 0, ms: boot.ms }] })
     comparisons.push(compare('cold-boot', boot.ms, baselines['cold-boot']))
+
+    // Then the same boot against a wallet that is actually holding coupons.
+    //
+    // An empty wallet boots fast no matter how badly storage scales, so the
+    // empty measurement alone cannot see the cost that matters. Each recorded
+    // rung is measured as its own scenario, `cold-boot-5` and so on, because
+    // they are different questions and a single number would hide which count
+    // moved.
+    //
+    // Rungs are whatever has been recorded — no fixture, nothing to measure,
+    // and that is not a failure of this run. `load` throws on a snapshot taken
+    // from different source code, and that IS a failure: measuring it would
+    // produce a number that looks fine and means nothing.
+    const rungs = available(SNAPSHOTS)
+    if (rungs.length === 0) {
+      console.log('\nNo fixtures recorded, so only the empty wallet was measured.')
+      console.log('  npm run perf:record -- --coupons 5')
+    }
+    for (const coupons of rungs) {
+      const fixture = load(SNAPSHOTS, coupons, ROOT)
+      const populated = await withBrowser((browser) =>
+        measureColdBootMedian(browser, {
+          baseUrl: site.url,
+          fixture,
+          passphrase: FIXTURE_PASSPHRASE,
+          timeoutMs: 90_000,
+        }),
+      )
+      const scenario = `cold-boot-${coupons}`
+      console.log(
+        `\n${scenario}: ${populated.ms}ms (samples ${populated.all.join(', ')})`,
+      )
+      console.log(`  holding ${populated.couponsHeld} records`)
+
+      summary.scenarios.push({
+        scenario,
+        measurements: [{ coupons, ms: populated.ms }],
+      })
+      comparisons.push(compare(scenario, populated.ms, baselines[scenario]))
+    }
   } finally {
     await site.close()
   }
