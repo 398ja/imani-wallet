@@ -223,11 +223,43 @@ export async function restoreVouchers(pubkey: string): Promise<number> {
     const candidates = liveRecords(await allEvents(pubkey, NIP60_TOKEN_KIND))
     if (candidates.length === 0) return 0
 
+    // What this device already has, read once.
+    //
+    // A coupon already in the store is not being restored — it is being
+    // re-read — and asking the mint about it buys nothing: it is already the
+    // customer's, it will be checked at spend time like any other, and a
+    // wallet that dropped it on a bad answer would be losing money it holds
+    // over a network round trip it did not need to make.
+    //
+    // Measured before this: a returning customer with 120 coupons made 120
+    // sequential gateway calls on every login and took 12.8s to finish, having
+    // restored nothing it did not already have (#44).
+    const held = new Set(
+      (await getWallet().getAllVouchers())
+        .map((row) => row.token_id)
+        .filter((id): id is string => Boolean(id)),
+    )
+
     // Sequential on purpose: each check is a NIP-98-signed gateway request, and
     // a wallet with fifty coupons should not open fifty of them at once on a
     // phone. Logins are already past `setReady`, so nothing is waiting on this.
     let restored = 0
+    let written = 0
     for (const row of candidates) {
+      // Already here. Written through anyway, because the relay copy may be
+      // newer than this device's — `saveVoucher` keys on the content-derived
+      // token_id, so this is an overwrite — but with no mint call, which is
+      // the expensive half.
+      if (row.token_id && held.has(row.token_id)) {
+        await addRestoredVoucher(row)
+        // Counted as written, not as restored. `restored` drives the log line
+        // and the change notification, and a relay copy that is newer than
+        // this device's still changed the store — the screens reading it need
+        // to hear that, even though nothing was recovered.
+        written += 1
+        continue
+      }
+
       // A burnt coupon is SPENT at the mint BY DESIGN — that is what redeeming
       // one does (see burn.ts). Asking the mint about it would discard the
       // receipt the merchant is meant to keep, so the status answers first.
@@ -236,7 +268,9 @@ export async function restoreVouchers(pubkey: string): Promise<number> {
       restored += 1
     }
 
-    if (restored > 0) notifyWalletChanged()
+    // Any write at all, not only a recovery: a screen showing a stale copy of
+    // a coupon this device already had is still showing the wrong thing.
+    if (restored + written > 0) notifyWalletChanged()
     return restored
   } catch (error) {
     console.error('[voucherRecords] could not restore coupons from the relay', error)

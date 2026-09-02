@@ -9,6 +9,10 @@ const stubs = vi.hoisted(() => ({
   state: 'SPENT',
   /** How many records the restore actually opened. */
   decrypts: 0,
+  /** What the device already holds, for the skip-the-mint path. */
+  stored: [] as VoucherRow[],
+  /** How many times the mint was asked about a coupon. */
+  validations: 0,
 }))
 
 vi.mock('../nap', () => ({
@@ -26,13 +30,18 @@ vi.mock('../nap', () => ({
 }))
 vi.mock('../relay', () => ({ allEvents: async () => stubs.events, publish: async () => undefined }))
 vi.mock('../legacyBridge', () => ({
-  legacyApi: async () => ({ validateToken: async () => ({ state: stubs.state }) }),
+  legacyApi: async () => ({
+    validateToken: async () => {
+      stubs.validations++
+      return { state: stubs.state }
+    },
+  }),
 }))
 vi.mock('../wallet', () => ({
   addRestoredVoucher: async (row: VoucherRow) => {
     stubs.restored.push(row)
   },
-  getWallet: () => ({ getAllVouchers: async () => [] }),
+  getWallet: () => ({ getAllVouchers: async () => stubs.stored }),
   notifyWalletChanged: () => undefined,
 }))
 
@@ -129,6 +138,62 @@ describe('restoreVouchers', () => {
     stubs.restored = []
     stubs.state = 'SPENT'
     stubs.decrypts = 0
+    stubs.stored = []
+    stubs.validations = 0
+  })
+
+  it('does not ask the mint about a coupon the device already holds', async () => {
+    /*
+     * A returning customer's wallet already has its coupons. Asking the mint
+     * about each one buys nothing — it is already theirs, and it is checked at
+     * spend time like any other — while costing one sequential NIP-98 request
+     * per coupon. Measured at 120 coupons: 120 calls, 12.8s (#44).
+     */
+    stubs.state = 'UNSPENT'
+    stubs.stored = [coupon('a'), coupon('b')]
+    stubs.events = [event(coupon('a')), event(coupon('b'))]
+
+    await restoreVouchers('aa'.repeat(32))
+
+    expect(stubs.validations).toBe(0)
+    // Still written through: the relay copy may be newer than this device's.
+    expect(stubs.restored.map((r) => r.token_id)).toEqual(['a', 'b'])
+  })
+
+  it('does ask about a coupon the device does not have', async () => {
+    // The other half. Without this, the test above would pass against a
+    // restore that never validates anything.
+    stubs.state = 'UNSPENT'
+    stubs.stored = [coupon('a')]
+    stubs.events = [event(coupon('a')), event(coupon('b'))]
+
+    await restoreVouchers('aa'.repeat(32))
+
+    expect(stubs.validations).toBe(1)
+    expect(stubs.restored.map((r) => r.token_id)).toEqual(['a', 'b'])
+  })
+
+  it('still drops a coupon the mint calls SPENT when the device lacks it', async () => {
+    // The rule the restore stands on. Skipping the check for HELD coupons must
+    // not weaken it for the ones actually being recovered.
+    stubs.state = 'SPENT'
+    stubs.stored = []
+    stubs.events = [event(coupon('b'))]
+
+    await restoreVouchers('aa'.repeat(32))
+
+    expect(stubs.restored).toEqual([])
+  })
+
+  it('counts only what it recovered, not what it re-wrote', async () => {
+    // The return value drives a log line that says how many coupons came back
+    // from the relay. Counting re-writes would report a recovery that did not
+    // happen on every single login.
+    stubs.state = 'UNSPENT'
+    stubs.stored = [coupon('a')]
+    stubs.events = [event(coupon('a')), event(coupon('b'))]
+
+    expect(await restoreVouchers('aa'.repeat(32))).toBe(1)
   })
 
   it('does not decrypt a tombstone it can recognise by its tag', async () => {
