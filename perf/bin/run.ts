@@ -20,6 +20,7 @@ import { load, available } from '../lib/fixture'
 import { serve } from '../lib/serve'
 import { compare, type Baselines } from '../lib/baseline'
 import { runName, regenerateReport, isFailure, type RunSummary, type Comparison } from '../lib/run'
+import { assessShape, formatLadder, MIN_RUNGS, type Rung } from '../lib/ladder'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const ROOT = resolve(HERE, '../..')
@@ -100,6 +101,7 @@ async function main() {
     // and that is not a failure of this run. `load` throws on a snapshot taken
     // from different source code, and that IS a failure: measuring it would
     // produce a number that looks fine and means nothing.
+    const ladder: Rung[] = []
     const rungs = available(SNAPSHOTS)
     if (rungs.length === 0) {
       console.log('\nNo fixtures recorded, so only the empty wallet was measured.')
@@ -126,6 +128,47 @@ async function main() {
         measurements: [{ coupons, ms: populated.ms }],
       })
       comparisons.push(compare(scenario, populated.ms, baselines[scenario]))
+      ladder.push({ coupons, ms: populated.ms })
+    }
+
+    // Assert the SHAPE, once there are enough rungs to have one.
+    //
+    // This is a different question from every comparison above. Those ask
+    // whether a number moved since last time; this asks whether the cost per
+    // coupon is flat or climbing, which is the question that survives moving
+    // to different hardware. A slower laptop shifts every rung up together and
+    // the shape is unchanged.
+    //
+    // Fewer than MIN_RUNGS is not a failure — it means the ladder has not been
+    // recorded yet, and saying which command records it is more useful than a
+    // red run.
+    if (ladder.length >= MIN_RUNGS) {
+      const shape = assessShape(ladder)
+      console.log(`\ncold-boot cost shape: ${shape.explanation}`)
+      console.log(formatLadder(ladder))
+
+      summary.ladders = [
+        {
+          scenario: 'cold-boot',
+          table: formatLadder(ladder),
+          flat: shape.flat,
+          explanation: shape.explanation,
+        },
+      ]
+
+      if (!shape.flat) {
+        comparisons.push({
+          scenario: 'cold-boot cost shape',
+          measuredMs: Math.round(shape.lateSlope * 1000) / 1000,
+          verdict: 'regressed',
+          note: shape.explanation,
+        })
+      }
+    } else if (rungs.length > 0) {
+      console.log(
+        `\nCost shape needs ${MIN_RUNGS} rungs to be visible, have ${ladder.length}.` +
+          ` Record another: npm run perf:record -- --coupons 500`,
+      )
     }
   } finally {
     await site.close()
