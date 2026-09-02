@@ -72,7 +72,11 @@ async function waitForGatewayToServe(npub: string, expected: number): Promise<vo
       const res = await fetch(`${gateway}/api/v1/nostr/query`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ kinds: [1059], pTags: [pubHex], limit: 100 }),
+        // Ask for more than were issued, not a constant. A fixed 100 here
+        // meant a 120-coupon recording could never satisfy its own wait: the
+        // gateway served exactly 100, the check demanded 120, and it timed out
+        // blaming the frame-ordering bug. Same shape as #38, one layer up.
+        body: JSON.stringify({ kinds: [1059], pTags: [pubHex], limit: expected + 50 }),
         signal: AbortSignal.timeout(10_000),
       })
       const body = (await res.json()) as { events?: unknown[] }
@@ -346,8 +350,12 @@ async function main() {
       // Stalled, not slow. Report it rather than reloading: the guard below
       // refuses the snapshot anyway, and saying WHERE it stopped is worth more
       // than a retry that cannot succeed.
-      if (Date.now() - lastProgress > 90_000) {
-        console.log(`\n  no progress for 90s at ${stored}/${COUPONS}`)
+      // Longer than a rate-limit window plus its backoff. The gateway limits
+      // redemption to 10/minute per pubkey and answers Retry-After: 60, so a
+      // wallet waiting one out looks stalled for well over 90s while working
+      // perfectly — and this used to give up on it (#39).
+      if (Date.now() - lastProgress > 240_000) {
+        console.log(`\n  no progress for 4 minutes at ${stored}/${COUPONS}`)
         break
       }
 

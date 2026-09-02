@@ -16,7 +16,10 @@
 import { describe, it, expect, vi } from 'vitest'
 
 import { NostrdbQueryFetcher } from './NostrdbQueryFetcher'
-import type { EventFilter, GiftWrapEvent } from '../types/subscription'
+import { queryAllEvents } from './queryAllEvents'
+import { DmPollService } from '../core/DmPollService'
+import type { EventFilter } from '../types/subscription'
+import type { GiftWrapEvent } from '../types/dm'
 
 const PUBKEY = 'a'.repeat(64)
 
@@ -193,5 +196,52 @@ describe('NostrdbQueryFetcher pagination', () => {
         nostrdbAdapter: dead as never,
       }).fetch(),
     ).rejects.toThrow('gateway down')
+  })
+})
+
+describe('DmPollService uses the paged query', () => {
+  /**
+   * The fix has to land on the path the WALLET takes, which is
+   * DmPollService.fetchRecentDms — not NostrdbQueryFetcher, which is exported
+   * but called by nothing. Fixing the fetcher alone left the live path capped
+   * at 50, and the recording still stalled at exactly 50 with the paging code
+   * sitting in the bundle unused.
+   */
+  it('fetches past the first page of gift wraps', async () => {
+    const adapter = pagingAdapter(wraps(120), 50)
+    const service = new DmPollService({
+      recipientPubkey: PUBKEY,
+      recipientPrivkey: '',
+      nostrdbAdapter: adapter as never,
+      cryptoAdapter: {
+        // Unwrapping is not what is under test: return null so each event is
+        // counted as seen and then dropped.
+        unwrapNip17Dm: async () => null,
+        extractToken: () => null,
+        getTokenFingerprint: async () => 'x',
+        parseTokenTransferMessage: () => ({}),
+      } as never,
+      enableAutoRedemption: false,
+    })
+
+    await service.fetchRecentDms()
+
+    // Three requests: 50, 50, then a short page that ends the walk.
+    expect(adapter.queried.length).toBeGreaterThan(1)
+    expect(adapter.queried[1].until).toBeDefined()
+  })
+})
+
+describe('queryAllEvents', () => {
+  it('is what both callers share, so one fix covers every capped query', async () => {
+    const adapter = pagingAdapter(wraps(200), 50)
+
+    const events = await queryAllEvents(
+      adapter as never,
+      { kinds: [1059], pTags: [PUBKEY] },
+      { pageSize: 50 },
+    )
+
+    expect(events).toHaveLength(200)
   })
 })

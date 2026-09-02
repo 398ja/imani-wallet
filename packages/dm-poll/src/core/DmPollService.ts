@@ -6,6 +6,7 @@ import { RedemptionRefusedError } from '../errors';
 import { TypedEventEmitter } from './EventEmitter';
 import { ProcessedEventTracker } from './ProcessedEventTracker';
 import { FailedEventTracker } from './FailedEventTracker';
+import { queryAllEvents } from '../subscriptions/queryAllEvents';
 import type {
   DmPollConfig,
   ResolvedDmPollConfig,
@@ -154,12 +155,14 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
     try {
       console.log('[DmPollService] Fetching recent DMs since:', new Date(since * 1000));
 
-      const events = await this.config.nostrdbAdapter.queryEvents({
-        kinds: [1059],
-        pTags: [this.config.recipientPubkey],
-        since,
-        limit: 50,
-      });
+      // Paged, not capped. A flat `limit: 50` meant a wallet holding more
+      // than 50 pending coupons received exactly 50 and never asked for the
+      // rest — see queryAllEvents and #38.
+      const events = await queryAllEvents(
+        this.config.nostrdbAdapter,
+        { kinds: [1059], pTags: [this.config.recipientPubkey], since },
+        { log: (m) => console.warn(`[DmPollService] ${m}`) },
+      );
 
       console.log(`[DmPollService] Fetched ${events.length} gift wrap events`);
 
@@ -639,12 +642,14 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
     console.log('[DmPollService] Fetching unclaimed tokens since:', new Date(since * 1000));
 
     try {
-      const events = await this.config.nostrdbAdapter.queryEvents({
-        kinds: [1059],
-        pTags: [this.config.recipientPubkey],
-        since,
-        limit: 100,
-      });
+      // Paged for the same reason as fetchRecentDms: the unclaimed sweep is
+      // exactly the path a wallet takes after being offline, which is when it
+      // is most likely to hold more coupons than one page carries.
+      const events = await queryAllEvents(
+        this.config.nostrdbAdapter,
+        { kinds: [1059], pTags: [this.config.recipientPubkey], since },
+        { log: (m) => console.warn(`[DmPollService] ${m}`) },
+      );
 
       console.log(`[DmPollService] Found ${events.length} total gift wrap events`);
 

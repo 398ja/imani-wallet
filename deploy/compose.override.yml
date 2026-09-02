@@ -436,6 +436,16 @@ services:
       #
       # See extra_hosts above. The IP has to be passed because it changes when
       # the mint container is recreated.
+      # PathRateLimitFilter throttles per PUBKEY at 100 requests/minute, and a
+      # wallet receiving a large batch of coupons redeems fast enough to trip
+      # it: recording 120 coupons produced 347 "Rate limit exceeded" errors and
+      # stored 50. The wallet has no backoff, so a throttled redemption is
+      # simply lost.
+      #
+      # Raised rather than disabled: the limiter should still be exercised, and
+      # a real customer redeeming 100+ coupons a minute is worth knowing about.
+      # Recording a fixture is not a real customer.
+      GATEWAY_SECURITY_RATE_LIMIT_REQUESTS_PER_MINUTE: "${GATEWAY_RATE_PER_MINUTE:-10000}"
       GATEWAY_CUSTOMER_WALLET_STATE_MINT_URL: "${MINT_URL:-http://imani-mint-rest:7777}"
       GATEWAY_WALLET_MINT_URL: "${MINT_URL:-http://imani-mint-rest:7777}"
       GATEWAY_CUSTOMER_WALLET_NOSTR_ENABLED: "true"
