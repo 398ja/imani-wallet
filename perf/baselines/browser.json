@@ -1,20 +1,26 @@
 {
   "cold-boot": {
-    "ms": 108,
+    "ms": 106,
     "tolerancePercent": 35,
     "ceilingMs": 1000,
     "note": "Measured on a laptop against the built bundle, logged out. The 1000ms ceiling is absolute: it is roughly the point at which opening the wallet stops feeling immediate, and it exists so that a baseline creeping upward a few percent at a time cannot ratchet past what a customer will tolerate while every run still reports green. Raising it is a product decision, not a maintenance one. The 35% band is deliberately wider than it looks like it needs to be: at 25% this run reported a regression at 138ms purely because a browser verification was running on the same machine, and was back to 108ms when idle. A band that cries wolf on a busy laptop is a band people learn to ignore, and the absolute ceiling is what actually guards the number."
   },
   "cold-boot-5": {
     "tolerancePercent": 35,
-    "ms": 311,
+    "ms": 307,
     "ceilingMs": 1500,
     "note": "Cold boot holding a recorded 5-coupon fixture, measured with the backend stopped. Same 35% band as the empty case and for the same reason: a narrower band reports regressions caused by whatever else the laptop is doing. The ceiling is 1500ms rather than 1000ms because this measurement includes an unlock the empty case does not have \u2014 a restored wallet always boots locked, by design, since the wrapping key is non-extractable and cannot be serialised into a snapshot. It is still an absolute limit: past it, a returning customer's wallet has stopped feeling immediate."
   },
   "cold-boot-20": {
     "tolerancePercent": 35,
-    "ms": 297,
+    "ms": 279,
     "ceilingMs": 1500,
     "note": "Cold boot holding a recorded 20-coupon fixture. Compared against cold-boot-5, this is the pair that says whether stored coupons cost anything to open: today 20 coupons boot no slower than 5, which is the result worth watching for change. A rung that starts climbing away from its neighbour is the storage layer failing to scale, and that is invisible in any single number."
+  },
+  "cold-boot-50": {
+    "tolerancePercent": 35,
+    "ms": 293,
+    "ceilingMs": 1500,
+    "note": "Cold boot holding a recorded 50-coupon fixture. The top rung of the ladder, so this is the one that would move first if storage stopped scaling. It currently opens no slower than the 5-coupon wallet, which is why the shape check reports the per-coupon cost as unmeasurable above noise."
   }
 }
