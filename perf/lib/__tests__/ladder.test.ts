@@ -73,19 +73,56 @@ describe('assessShape', () => {
     expect(() => assessShape(linear([5, 50], 100, 0.5))).toThrow(/at least 3 rungs/)
   })
 
-  it('treats immeasurably small per-coupon cost as flat', () => {
-    // A larger wallet measuring no slower than a smaller one is the healthiest
-    // result there is. It must not divide into a misleading ratio.
-    const noise: Rung[] = [
+  it('treats a large end that costs nothing as flat', () => {
+    // The biggest wallet measuring no slower than the one before it is the
+    // healthiest result there is, and it must not divide into a misleading
+    // ratio.
+    const verdict = assessShape([
       { coupons: 5, ms: 320 },
-      { coupons: 50, ms: 310 },
+      { coupons: 50, ms: 330 },
       { coupons: 500, ms: 315 },
-    ]
+    ])
 
-    const verdict = assessShape(noise)
-
+    expect(verdict.lateSlope).toBeLessThanOrEqual(0)
     expect(verdict.flat).toBe(true)
     expect(verdict.explanation).toContain('not measurable above noise')
+  })
+
+  it('catches a cost that only appears at the large end', () => {
+    /*
+     * The real one, found measuring balance aggregation.
+     *
+     * The small rungs were indistinguishable — 11ms at 5 coupons, 10ms at 20,
+     * a NEGATIVE slope — and then the cost became real: 0.200ms per coupon
+     * from 20 to 50, and 1.686ms from 50 to 120. An 8.4x rise.
+     *
+     * Because the early slope was negative, the old guard called it "not
+     * measurable above noise" and reported FLAT. A check that reports health
+     * on the exact signature of superlinear cost is worse than no check.
+     */
+    const verdict = assessShape([
+      { coupons: 5, ms: 11 },
+      { coupons: 20, ms: 10 },
+      { coupons: 50, ms: 16 },
+      { coupons: 120, ms: 134 },
+    ])
+
+    expect(verdict.flat).toBe(false)
+    expect(verdict.explanation).toContain('CLIMBING')
+  })
+
+  it('does not cry wolf when the large end is still below the noise floor', () => {
+    // Same shape — unmeasurable early, measurable late — but the late figure
+    // is fractions of a millisecond per coupon. Reporting that as a regression
+    // would fire on jitter and train people to ignore the check.
+    const verdict = assessShape([
+      { coupons: 5, ms: 300 },
+      { coupons: 20, ms: 299 },
+      { coupons: 120, ms: 310 },
+    ])
+
+    expect(verdict.flat).toBe(true)
+    expect(verdict.explanation).toContain('below the')
   })
 
   it('does not depend on the order the rungs are given in', () => {

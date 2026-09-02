@@ -79,6 +79,18 @@ export const MAX_SLOPE_GROWTH = 2.5
  */
 export const MIN_RUNGS = 3
 
+/**
+ * Below this, a per-coupon cost is not worth calling a cost.
+ *
+ * Wall-clock browser measurements on a laptop carry a few milliseconds of
+ * jitter, and spread across the gap between two rungs that is fractions of a
+ * millisecond per coupon. A floor keeps the "no early baseline" branch from
+ * firing on noise, while staying far below anything a customer could feel:
+ * at 1ms per coupon a 500-coupon wallet spends half a second, which is
+ * already worth knowing about.
+ */
+export const NOISE_FLOOR_MS_PER_COUPON = 0.5
+
 export function assessShape(
   rungs: Rung[],
   maxGrowth = MAX_SLOPE_GROWTH,
@@ -98,20 +110,53 @@ export function assessShape(
   const earlySlope = marginal(sorted[0], sorted[1])
   const lateSlope = marginal(sorted[sorted.length - 2], sorted[sorted.length - 1])
 
-  // A slope at or below zero means the larger rung measured no slower than the
-  // smaller one: the per-coupon cost is lost in noise. That is the healthiest
-  // possible result and must not divide into a misleading ratio.
-  if (earlySlope <= 0 || lateSlope <= 0) {
+  // A LATE slope at or below zero means the biggest rung measured no slower
+  // than the one before it: the per-coupon cost is lost in noise at the scale
+  // that matters most. That is the healthiest possible result, and it must not
+  // divide into a misleading ratio.
+  if (lateSlope <= 0) {
     return {
       flat: true,
       earlySlope,
       lateSlope,
       ratio: 0,
       explanation:
-        `flat: cost per coupon is not measurable above noise ` +
+        `flat: cost per coupon is not measurable above noise at the large end ` +
         `(early ${earlySlope.toFixed(3)}ms, late ${lateSlope.toFixed(3)}ms per coupon). ` +
-        `A larger wallet opening no slower than a smaller one is the healthiest ` +
+        `A larger wallet costing no more than a smaller one is the healthiest ` +
         `result there is.`,
+    }
+  }
+
+  // An early slope at or below zero is a different matter entirely, and
+  // treating it as "flat" was a real bug here.
+  //
+  // It means the small rungs are indistinguishable from each other — the work
+  // is too cheap at that size to measure — while the late slope says the cost
+  // is now real. Dividing by it gives a negative or infinite ratio, so the
+  // guard above reported FLAT for balance aggregation climbing from 0.200 to
+  // 1.686 ms per coupon: an 8.4x rise, reported as healthy.
+  //
+  // With no measurable early cost there is no baseline to compare against, so
+  // the late slope is judged on its own: measurable per-coupon cost that
+  // appears only at the large end is exactly the signature of superlinear
+  // work, and is worth a human looking at rather than a silent pass.
+  if (earlySlope <= 0) {
+    const flat = lateSlope < NOISE_FLOOR_MS_PER_COUPON
+    return {
+      flat,
+      earlySlope,
+      lateSlope,
+      ratio: Number.POSITIVE_INFINITY,
+      explanation: flat
+        ? `flat: the small rungs are too cheap to measure and the large end ` +
+          `costs ${lateSlope.toFixed(3)}ms per coupon, below the ` +
+          `${NOISE_FLOOR_MS_PER_COUPON}ms floor where a difference means anything.`
+        : `CLIMBING: cost per coupon was unmeasurable across the small rungs ` +
+          `(${earlySlope.toFixed(3)}ms) and is ${lateSlope.toFixed(3)}ms at the ` +
+          `large end. Work that only becomes measurable as the wallet grows is ` +
+          `the signature of superlinear cost, and there is no early figure to ` +
+          `compare it against — so this is reported rather than divided away.`,
     }
   }
 
@@ -180,6 +225,12 @@ export interface LadderMeasurement {
    * count is what makes it visible.
    */
   held: number
+  /**
+   * Anything else the scenario proved about what it measured, printed beside
+   * the record count — balance aggregation reports how many currencies the
+   * balance actually rendered, since measuring one is the easy path.
+   */
+  note?: string
 }
 
 export interface LadderRun {
