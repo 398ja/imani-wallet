@@ -72,6 +72,12 @@ key it generated, and the stall owner returns a voucher locked to it. Distinct
 from login, which the terminal then does by itself, repeatedly.
 _Avoid_: Pairing, provisioning, onboarding
 
+**Takings**:
+Coupons redeemed back to a stall. They are gift-wrapped to the stall's own key,
+never to the terminal that asked for them, so a terminal handles no takings even
+though it is where the customer pays.
+_Avoid_: Revenue, receipts, float
+
 ### Measurement
 
 **Scenario**:

@@ -64,5 +64,26 @@ disposable key rather than a person's identity, and never a wallet of its own.
   is a real regression for a stall on a market's connectivity. Degraded mode
   issues a redeem-only session on the DLEQ alone, because redemption must never
   need the network to authorise, while issuance is value-bearing and waits.
+- **A terminal never holds value.** A payment request it displays names the
+  stall's own pubkey as recipient, so redeemed coupons are gift-wrapped to the
+  stall and never to `K`. A terminal that received to its own key would hold
+  takings its owner cannot decrypt, and burning its voucher would then destroy
+  money rather than only access.
+- **The issuer stamped on a coupon comes from the voucher, not the session.**
+  Issuance today takes the issuer pubkey from whoever the portal authenticated,
+  which under this decision would be a burner, stamping coupons with an identity
+  that ceases to exist at the next re-enrol. The portal reads `issuer_pubkey`
+  from the verified voucher instead, and refuses issuance outright when there is
+  no voucher, so the rule that the issuer is never a request field survives in
+  the form that matters.
+- **`K` is passphrase-protected at rest**, in the same keystore as a person's
+  key, and entered when the terminal opens for trade. Leaving it bare would be
+  defensible in theory, since a stolen `K` is inert once its voucher is burned,
+  but it makes a stolen tablet trade as the stall until somebody notices.
+- **Logging out of a terminal is decommissioning it.** The customer wording is
+  wrong in every clause here: there are no held coupons, no nsec to write down,
+  and no self-service way back. The terminal's own action burns its voucher and
+  then wipes, so a device leaving the stall is revoked rather than merely
+  cleared.
 - **It cannot ship before the mint does.** The composite `P2PK_VOUCHER` kind is
   required in `cashu-lib`, `cashu-voucher`, and `cashu-mint` first.
