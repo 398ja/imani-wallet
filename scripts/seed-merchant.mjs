@@ -336,8 +336,17 @@ async function deliver(voucher, merchant, customerPubkey) {
   // Each attempt re-signs. The NIP-98 header covers a timestamp the gateway
   // checks for freshness, so a reused header fails as an auth error and
   // disguises the thing being retried.
+  // Six attempts with a rising wait, not four.
+  //
+  // The 502 is the gateway's relay WebSocket dropping under sustained
+  // publishing, and it needs time to reconnect — not just a moment. Four
+  // attempts over ~12s exhausted themselves inside one reconnect and lost a
+  // 500-coupon run at coupon 175, having already recovered twelve earlier
+  // bursts. Recording is slow and deliberate; waiting is cheaper than
+  // restarting.
+  const ATTEMPTS = 6
   let lastText = ''
-  for (let attempt = 1; attempt <= 4; attempt++) {
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     const r = await fetch(url, {
       method: 'POST',
       headers: {
@@ -349,11 +358,12 @@ async function deliver(voucher, merchant, customerPubkey) {
     })
     lastText = await r.text()
     if (r.ok) return JSON.parse(lastText)
-    if (r.status < 500 || attempt === 4) {
+    if (r.status < 500 || attempt === ATTEMPTS) {
       throw new Error(`deliver failed ${r.status}: ${lastText}`)
     }
-    process.stderr.write(`  deliver ${r.status}, retrying (${attempt}/3)\n`)
-    await new Promise((resolve) => setTimeout(resolve, attempt * 2000))
+    process.stderr.write(`  deliver ${r.status}, retrying (${attempt}/${ATTEMPTS - 1})\n`)
+    // 2s, 6s, 12s, 20s, 30s — 70s in total, comfortably past a reconnect.
+    await new Promise((resolve) => setTimeout(resolve, attempt * (attempt + 1) * 1000))
   }
   throw new Error(`deliver failed: ${lastText}`)
 }
