@@ -323,18 +323,39 @@ async function deliver(voucher, merchant, customerPubkey) {
   })
 
   // Unlike voucher creation, this endpoint enforces NIP-98.
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: nip98(merchant.sk, url, 'POST', body),
-      ...(sessionCookie ? { cookie: sessionCookie } : {}),
-    },
-    body,
-  })
-  const text = await r.text()
-  if (!r.ok) throw new Error(`deliver failed ${r.status}: ${text}`)
-  return JSON.parse(text)
+  //
+  // Retried on 5xx, because delivery publishes to the relay over a WebSocket
+  // the gateway holds open, and sustained issuance closes it: a long seeding
+  // run fails partway with `deliver failed 502` and an empty body, then works
+  // again immediately. Losing a 500-coupon recording an hour in, to a fault
+  // that clears by itself, is not a useful way to learn that.
+  //
+  // Only 5xx. A 4xx is this script's own mistake — a bad signature, a missing
+  // cookie — and retrying it would just repeat it more slowly.
+  //
+  // Each attempt re-signs. The NIP-98 header covers a timestamp the gateway
+  // checks for freshness, so a reused header fails as an auth error and
+  // disguises the thing being retried.
+  let lastText = ''
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: nip98(merchant.sk, url, 'POST', body),
+        ...(sessionCookie ? { cookie: sessionCookie } : {}),
+      },
+      body,
+    })
+    lastText = await r.text()
+    if (r.ok) return JSON.parse(lastText)
+    if (r.status < 500 || attempt === 4) {
+      throw new Error(`deliver failed ${r.status}: ${lastText}`)
+    }
+    process.stderr.write(`  deliver ${r.status}, retrying (${attempt}/3)\n`)
+    await new Promise((resolve) => setTimeout(resolve, attempt * 2000))
+  }
+  throw new Error(`deliver failed: ${lastText}`)
 }
 
 /**
