@@ -88,6 +88,30 @@ if [ $# -eq 0 ]; then
   done
 
   compose up -d "${everything_else[@]}"
+
+  # Point gateway-customer at the mint by its CURRENT address.
+  #
+  # A rebuilt gateway carries cashu-wallet 0.7.0, which refuses a non-localhost
+  # http:// mint, so compose.override.yml gives it the loopback-named alias
+  # `127.0.0.1.mint`. That alias needs the mint's container IP, and the IP
+  # changes every time the mint is recreated — while `docker start` does not
+  # reapply extra_hosts at all.
+  #
+  # Get this wrong and the gateway exits 1 during startup with "Connection
+  # refused ... /v1/info", several seconds after the command that started it
+  # reported success. Resolving it here means the ordinary path is correct
+  # without anyone having to know.
+  if [ -z "${MINT_HOST_IP:-}" ]; then
+    mint_ip="$(docker inspect -f \
+      '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+      imani-mint-rest-test 2>/dev/null || true)"
+    if [ -n "$mint_ip" ]; then
+      echo "mint is at $mint_ip; pointing gateway-customer at it"
+      MINT_HOST_IP="$mint_ip" MINT_URL="${MINT_URL:-http://127.0.0.1.mint:7777}" \
+        compose up -d --force-recreate --no-deps gateway-customer
+    fi
+  fi
+
   compose up -d --no-deps gateway-portal
 else
   compose "$@"
