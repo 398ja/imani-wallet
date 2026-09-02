@@ -118,6 +118,19 @@ export async function measureAggregation(
       { timeout: timeoutMs },
     )
 
+    // Wait for the page to go QUIET before starting the clock.
+    //
+    // Opening the wallet kicks off background work — relay reconciliation,
+    // branding fetches, the arrival poller — and that work scales with the
+    // number of coupons held. Measuring while it is still running charges
+    // aggregation for whatever else the boot had not finished.
+    //
+    // It reported balance aggregation climbing 8.4x per coupon and made it as
+    // far as a filed issue (#41) before this was found: 120 coupons measured
+    // ~97ms unsettled and ~22ms once quiet, while 20 coupons measured 10ms
+    // either way. The whole apparent curve was contention, not aggregation.
+    await settle(page, timeoutMs)
+
     const started = Date.now()
     await page.evaluate(() => {
       window.history.pushState({}, '', '/')
@@ -215,4 +228,37 @@ async function countRecords(page: Page): Promise<number> {
     }
     return total
   })
+}
+
+/**
+ * Wait until the main thread has been idle for a moment.
+ *
+ * `requestIdleCallback` fires when the browser has nothing queued, so a run of
+ * consecutive idle callbacks means the boot's background work has drained.
+ * Deliberately not a fixed sleep: a sleep long enough for the biggest fixture
+ * wastes that time on every smaller one, and a sleep tuned to the smaller ones
+ * silently stops working as the ladder grows.
+ */
+async function settle(page: Page, timeoutMs: number): Promise<void> {
+  // Passed as SOURCE TEXT, not a function.
+  //
+  // Playwright serialises a function argument, and the TS loader has already
+  // rewritten every arrow inside it to call its own `__name` helper — which
+  // does not exist in the page, so the callback dies with `__name is not
+  // defined`. A string is handed to the page verbatim and cannot be
+  // instrumented on the way.
+  await page.evaluate(`
+    new Promise((resolve) => {
+      const deadline = Date.now() + ${Math.min(timeoutMs, 5_000)}
+      let quiet = 0
+      const step = () => {
+        if (quiet >= 3 || Date.now() > deadline) { resolve(); return }
+        requestIdleCallback(
+          (info) => { quiet = info.timeRemaining() > 8 ? quiet + 1 : 0; step() },
+          { timeout: 200 },
+        )
+      }
+      step()
+    })
+  `)
 }
