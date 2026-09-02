@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url'
 
 import { withBrowser, measureColdBootMedian, FIXTURE_PASSPHRASE } from '../scenarios/coldBoot'
 import { load, available } from '../lib/fixture'
+import { measureAggregationMedian } from '../scenarios/balanceAggregation'
 import { serve } from '../lib/serve'
 import { compare, type Baselines } from '../lib/baseline'
 import { runName, regenerateReport, isFailure, type RunSummary, type Comparison } from '../lib/run'
@@ -185,6 +186,44 @@ async function main() {
     })
     ladder.push(...result.rungs)
 
+    // ---- Balance aggregation -------------------------------------------
+    //
+    // Its own ladder, because it is a different question from cold boot and a
+    // regression should name one subsystem rather than "something got slower".
+    // Aggregation walks every coupon held by construction, so unlike cold boot
+    // it has a per-coupon cost big enough to see — which is what makes its
+    // shape assertion worth having.
+    const aggregation: LadderScenario = {
+      name: 'balance-aggregation',
+      measure: async (_coupons, fixture) => {
+        const r = await withBrowser((browser) =>
+          measureAggregationMedian(browser, {
+            baseUrl: site.url,
+            fixture,
+            passphrase: FIXTURE_PASSPHRASE,
+            timeoutMs: 90_000,
+          }),
+        )
+        return { ms: r.ms, all: r.all, held: r.held, note: `${r.currencies} currencies` }
+      },
+    }
+
+    const aggregationRun = await runLadder(aggregation, {
+      counts: rungs,
+      loadFixture: (coupons) => load(SNAPSHOTS, coupons, ROOT),
+      onRung: (rung, measurement) => {
+        const scenario = `${aggregation.name}-${rung.coupons}`
+        console.log(`\n${scenario}: ${rung.ms}ms (samples ${measurement.all.join(', ')})`)
+        console.log(`  ${measurement.note}, holding ${measurement.held} records`)
+
+        summary.scenarios.push({
+          scenario,
+          measurements: [{ coupons: rung.coupons, ms: rung.ms }],
+        })
+        comparisons.push(compare(scenario, rung.ms, baselines[scenario]))
+      },
+    })
+
     // The SHAPE is a different question from every comparison above. Those ask
     // whether a number moved since last time; this asks whether the cost per
     // coupon is flat or climbing, which is what survives moving to different
@@ -214,6 +253,28 @@ async function main() {
           verdict: 'regressed',
           note: shape.explanation,
         })
+      }
+
+      if (aggregationRun.shape) {
+        const aggShape = aggregationRun.shape
+        console.log(`\n${aggregation.name} cost shape: ${aggShape.explanation}`)
+        console.log(aggregationRun.table)
+
+        summary.ladders.push({
+          scenario: aggregation.name,
+          table: aggregationRun.table ?? '',
+          flat: aggShape.flat,
+          explanation: aggShape.explanation,
+        })
+
+        if (!aggShape.flat) {
+          comparisons.push({
+            scenario: `${aggregation.name} cost shape`,
+            measuredMs: Math.round(aggShape.lateSlope * 1000) / 1000,
+            verdict: 'regressed',
+            note: aggShape.explanation,
+          })
+        }
       }
     } else if (rungs.length > 0) {
       const message =
