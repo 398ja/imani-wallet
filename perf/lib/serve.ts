@@ -128,8 +128,24 @@ export async function serve(dist: string, { withGateway = false } = {}): Promise
 
     const path = url.split('?')[0]
     let file = join(dist, path === '/' ? 'index.html' : path)
-    // A single-page app: an unknown path is a route, not a missing file.
-    if (!existsSync(file) || extname(file) === '') file = join(dist, 'index.html')
+
+    // A single-page app: an unknown path is a route, not a missing file. But
+    // that fallback must NOT swallow a missing BUILD ASSET. Serving index.html
+    // for /assets/foo.js hands the browser HTML where it asked for a module,
+    // and it fails with "Failed to fetch dynamically imported module" — which
+    // reads as a network or bundler fault, not a missing file.
+    //
+    // Worse, it is silent until the exact moment the app lazy-loads that
+    // chunk. During recording, coupon 1 redeemed, the profile service chunk
+    // 404'd into HTML, and the app crashed mid-loop — so the wallet stored 1
+    // of 5 coupons and the fixture looked like a delivery bug in the gateway.
+    const isAsset = extname(file) !== ''
+    if (isAsset && !existsSync(file)) {
+      res.writeHead(404, { 'content-type': 'text/plain' })
+      res.end(`missing build asset ${path} — is dist/ stale? run \`npm run build\``)
+      return
+    }
+    if (!existsSync(file) || !isAsset) file = join(dist, 'index.html')
     try {
       res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream' })
       res.end(readFileSync(file))
