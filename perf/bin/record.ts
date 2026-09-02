@@ -15,10 +15,12 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from '@playwright/test'
+import { nip19 } from 'nostr-tools'
+import { hexToBytes } from '@noble/hashes/utils'
 import { serve } from '../lib/serve'
 import { capture, countRecords, type Snapshot } from '../lib/snapshot'
 import { FIXTURE_PASSPHRASE } from '../scenarios/coldBoot'
@@ -35,38 +37,24 @@ function flag(name: string, fallback: string): string {
 
 const COUPONS = Number(flag('coupons', '10'))
 
-/** Issue real coupons to a fresh customer, and return their key. */
-function issueTo(count: number): { nsec: string; npub: string } {
-  console.log(`Issuing ${count} coupons through the real flow…`)
-  // A fresh customer every recording. The seeder's default identity
-  // (`demo-customer`) is stable across runs by design, so it accumulates
-  // coupons from every previous recording and the wallet under measurement
-  // would hold an unknown number of them. A recording has to know exactly what
-  // it recorded.
-  const customer = `perf-${Date.now().toString(36)}`
-  const out = execFileSync(
-    'node',
-    ['scripts/seed-merchant.mjs', '--quantity', String(count), '--customer', customer],
-    { cwd: ROOT, encoding: 'utf8' },
-  )
-  const nsec = out.match(/nsec\s+(nsec1\w+)/)?.[1]
-  const npub = out.match(/customer\s+(npub1\w+)/)?.[1]
-  if (!nsec || !npub) {
-    throw new Error(`could not read the customer key from the seeder:\n${out}`)
-  }
-  const delivered = Number(out.match(/delivered (\d+)/)?.[1] ?? '0')
-  if (delivered < count) {
-    throw new Error(`only ${delivered} of ${count} coupons were delivered; the stack may be unwell`)
-  }
-  console.log(`  ${delivered} delivered to ${npub.slice(0, 16)}…`)
-  return { nsec, npub }
-}
+/**
+ * Record from a customer that already holds coupons, instead of issuing.
+ *
+ *   npm run perf:record -- --coupons 5 --customer ladder-src
+ *
+ * Issuing needs the whole settlement chain healthy. Recording needs only that
+ * the wallet can READ what it already holds, which is a much smaller ask and a
+ * different code path. Separating them means a fixture can still be captured
+ * when issuance is blocked — as it is whenever the gateway and mint images are
+ * out of step — and it lets one seeded customer serve several rungs of the
+ * ladder without re-issuing for each.
+ */
+const EXISTING_CUSTOMER = flag('customer', '')
 
-/** Poll the gateway until it serves the gift wraps that were just delivered. */
+/** Issue real coupons to a fresh customer, and return their key. */
+/** Poll the gateway until it serves the gift wraps this customer holds. */
 async function waitForGatewayToServe(npub: string, expected: number): Promise<void> {
-  const { nip19 } = await import('nostr-tools')
-  const decoded = nip19.decode(npub)
-  const pubHex = decoded.data as string
+  const pubHex = nip19.decode(npub).data as string
   const gateway = process.env.GATEWAY_URL ?? 'http://localhost:28082'
   const deadline = Date.now() + 120_000
 
@@ -93,9 +81,71 @@ async function waitForGatewayToServe(npub: string, expected: number): Promise<vo
   }
   console.log(' timed out')
   console.warn(
-    'the gateway never served all the gift wraps. The wallet will fetch what ' +
-      'is there; if that is fewer than were issued, this is issue #36.',
+    'the gateway never served all the gift wraps. If it serves fewer than were ' +
+      'issued, the gateway image predates the frame-ordering fix (issue #36).',
   )
+}
+
+/** Read a customer the seeder created earlier, rather than issuing new coupons. */
+function keysForSeededCustomer(name: string): { nsec: string; npub: string } {
+  const keys = JSON.parse(readFileSync(join(ROOT, '.seed-keys.json'), 'utf8')) as Record<
+    string,
+    { sk: string; pk: string }
+  >
+  const entry = keys[name]
+  if (!entry) {
+    throw new Error(
+      `no seeded customer named "${name}". Create one with:\n\n` +
+        `  node scripts/seed-merchant.mjs --quantity 1 --customer ${name}\n`,
+    )
+  }
+  console.log(`Recording from the existing customer "${name}" (no new issuance)`)
+  return {
+    nsec: nip19.nsecEncode(hexToBytes(entry.sk)),
+    npub: nip19.npubEncode(entry.pk),
+  }
+}
+
+function issueTo(count: number): { nsec: string; npub: string } {
+  // A fresh customer every recording. The seeder's default identity
+  // (`demo-customer`) is stable across runs by design, so it accumulates
+  // coupons from every previous recording and the wallet under measurement
+  // would hold an unknown number of them. A recording has to know exactly what
+  // it recorded.
+  const customer = `perf-${Date.now().toString(36)}`
+
+  // One coupon per call, repeated, rather than one call for the whole batch.
+  //
+  // `--quantity N` issues N vouchers inside a single run and the mint's
+  // settlement saga does not reliably keep up: the seeder gives up with
+  // "never produced a token" well before the last one lands. Issuing singly is
+  // slower and it works, which is the trade a fixture recording wants — this
+  // runs rarely by design.
+  console.log(`Issuing ${count} coupon${count === 1 ? '' : 's'} through the real flow…`)
+  let nsec: string | undefined
+  let npub: string | undefined
+  let delivered = 0
+
+  for (let i = 0; i < count; i++) {
+    const out = execFileSync(
+      'node',
+      ['scripts/seed-merchant.mjs', '--quantity', '1', '--customer', customer],
+      { cwd: ROOT, encoding: 'utf8' },
+    )
+    nsec = out.match(/nsec\s+(nsec1\w+)/)?.[1] ?? nsec
+    npub = out.match(/customer\s+(npub1\w+)/)?.[1] ?? npub
+    delivered += Number(out.match(/delivered (\d+)/)?.[1] ?? '0')
+    process.stdout.write(`  ${delivered}/${count}\r`)
+  }
+  console.log(`  ${delivered}/${count} delivered`)
+
+  if (!nsec || !npub) {
+    throw new Error('could not read the customer key from the seeder')
+  }
+  if (delivered < count) {
+    throw new Error(`only ${delivered} of ${count} coupons were delivered; the stack may be unwell`)
+  }
+  return { nsec, npub }
 }
 
 /** How many coupons the wallet is holding right now. */
@@ -131,7 +181,7 @@ async function main() {
     process.exit(2)
   }
 
-  const { nsec, npub } = issueTo(COUPONS)
+  const { nsec, npub } = EXISTING_CUSTOMER ? keysForSeededCustomer(EXISTING_CUSTOMER) : issueTo(COUPONS)
 
   // Wait for the GATEWAY to serve the gift wraps before opening the wallet.
   //
@@ -164,7 +214,11 @@ async function main() {
       // Correlate the gift-wrap query with its answer. Interleaved logs once
       // made an empty response to a DIFFERENT query look like the answer to
       // this one, which sent an investigation down the wrong path.
+      page.on('requestfailed', (r) => {
+        console.log(`   [failed] ${r.url().slice(0, 110)} :: ${r.failure()?.errorText}`)
+      })
       page.on('response', async (r) => {
+        if (/keyset|\/v1\//.test(r.url())) console.log(`   [mint] ${r.status()} ${r.url().slice(0, 100)}`)
         if (!r.url().includes('nostr/query')) return
         const req = r.request().postData() ?? ''
         if (!req.includes('1059')) return
