@@ -271,44 +271,50 @@ async function main() {
     // there holding a wallet that had already given up. That is issue #36's
     // non-determinism reaching the wallet, so the recorder retries the only
     // way a customer could: by reopening the app.
-    // Reload only when the wallet has STOPPED making progress.
+    // Wait, and do not touch the page.
     //
-    // Reloading unconditionally destroys the execution context mid-redemption.
-    // DmPollService redeems its gift wraps in one sequential loop, so a reload
-    // between coupon 1 and coupon 2 kills the loop where it stands — and the
-    // reload lands on /login, because the resume key lives in this tab and the
-    // gateway session does not survive. The wallet then holds exactly 1 of 5
-    // coupons and looks like a delivery fault.
+    // Reloading used to be the recovery here, a workaround for the gateway
+    // serving zero gift wraps (#36). That bug is fixed, and the reload is now
+    // purely destructive: DmPollService redeems its wraps in ONE sequential
+    // loop, so a reload part-way through kills the loop where it stands — and
+    // it lands on /login, because the resume key is scoped to the tab and the
+    // gateway session does not survive. From there the wallet can never finish,
+    // and it recorded 1 of 5, then 5 of 20, looking each time like a delivery
+    // fault rather than an interrupted loop.
     //
-    // Now the count itself decides: while it is climbing, leave the page alone.
-    const deadline = Date.now() + 180_000
+    // The budget scales with the count: redemption is per-coupon work, and
+    // each coupon is a full swap against the mint — measured at ~12s each on
+    // this stack, so 20 coupons take four minutes. A fixed timeout silently
+    // truncated the larger ladder rungs (20 recorded as 15, still climbing).
+    // The stall check below is what actually catches a hang, so this only has
+    // to be generous.
+    const budgetMs = Math.max(180_000, COUPONS * 20_000)
+    const deadline = Date.now() + budgetMs
     let stored = 0
-    let reloads = 0
     let lastProgress = Date.now()
+    let lastCount = 0
+
     while (Date.now() < deadline) {
-      const before = stored
       stored = await countCoupons(page)
       if (stored >= COUPONS) break
-      if (stored > before) lastProgress = Date.now()
 
-      await new Promise((r) => setTimeout(r, 5000))
-      stored = await countCoupons(page)
-      if (stored >= COUPONS) break
-      if (stored > before) lastProgress = Date.now()
+      if (stored > lastCount) {
+        lastCount = stored
+        lastProgress = Date.now()
+        process.stdout.write(`\r  redeemed ${stored}/${COUPONS}`)
+      }
 
-      // Still climbing: the poller is working, so do not interrupt it.
-      if (Date.now() - lastProgress < 45_000) continue
-      lastProgress = Date.now()
+      // Stalled, not slow. Report it rather than reloading: the guard below
+      // refuses the snapshot anyway, and saying WHERE it stopped is worth more
+      // than a retry that cannot succeed.
+      if (Date.now() - lastProgress > 90_000) {
+        console.log(`\n  no progress for 90s at ${stored}/${COUPONS}`)
+        break
+      }
 
-      await page.reload({ waitUntil: 'domcontentloaded' })
-      reloads++
-      await page
-        .waitForFunction(() => /Total balance|Scan/.test(document.body?.innerText ?? ''), undefined, {
-          timeout: 60_000,
-        })
-        .catch(() => {})
+      await new Promise((r) => setTimeout(r, 2000))
     }
-    if (reloads > 0) console.log(`  reopened the wallet ${reloads}x waiting for delivery`)
+    if (lastCount > 0) process.stdout.write('\n')
 
     console.log(`  wallet holds ${stored} coupons (wanted ${COUPONS})`)
 
