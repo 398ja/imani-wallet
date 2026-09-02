@@ -298,6 +298,27 @@ services:
       BOTTIN_API_PASSWORD: ${BOTTIN_ADMIN_PASSWORD:-test-bottin-admin-9ace19b7fb61b5007225f745}
 
   gateway-customer:
+    # Built from imani-gateway-customer source rather than pulled.
+    #
+    # The published image ships nostr-java-client 2.0.7, which dispatches every
+    # inbound relay frame onto its own virtual thread with nothing sequencing
+    # them: ordered arrival, unordered handling. An EOSE handled before an
+    # EVENT that reached the socket first means a query returning on EOSE
+    # returns without it — issue #36, where a wallet showed an empty balance
+    # while the coupons sat on the relay.
+    #
+    # The SOURCE already resolves 2.3.1, which added a per-listener
+    # FrameSequencer. Only the published image lags, so this needs no code
+    # change: rebuild it and the defect goes.
+    #
+    #   cd ../imani-gateway-customer
+    #   mvn -pl gateway-customer-rest -am package \
+    #       com.google.cloud.tools:jib-maven-plugin:3.4.0:dockerBuild \
+    #       -DskipTests -Djib.to.image=imani-gateway-customer:frameseq
+    #
+    # Remove this override once the registry image is rebuilt from current
+    # source; it exists to prove the fix, not to fork the deployment.
+    image: imani-gateway-customer:frameseq
     environment:
       # See the gateway-core note above.
       GATEWAY_DEV_MODE: "false"
