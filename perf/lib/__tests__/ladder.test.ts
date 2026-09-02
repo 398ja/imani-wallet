@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest'
 
 import { assessShape, formatLadder, MAX_SLOPE_GROWTH, type Rung } from '../ladder'
+import { isFailure, renderReport, type Comparison, type RunSummary } from '../run'
 
 /** Linear: a fixed cost to open, plus a constant cost per coupon. */
 function linear(counts: number[], fixed: number, perCoupon: number): Rung[] {
@@ -119,5 +120,73 @@ describe('formatLadder', () => {
       .map((r) => Number(r.split('|')[1].trim()))
 
     expect(counts).toEqual([5, 50, 500])
+  })
+})
+
+describe('a climbing shape reaching the run', () => {
+  /**
+   * The maths is covered above. This covers the WIRING: a verdict that
+   * assessShape calls unflat has to become a failure the run acts on, and
+   * appear in the report. A shape check that computes the right answer and
+   * then reports green is worse than none.
+   */
+  function verdictFor(rungs: Rung[]): { failed: boolean; report: string } {
+    const shape = assessShape(rungs)
+    const comparisons: Comparison[] = shape.flat
+      ? []
+      : [
+          {
+            scenario: 'cold-boot cost shape',
+            measuredMs: shape.lateSlope,
+            verdict: 'regressed',
+            note: shape.explanation,
+          },
+        ]
+    const summary: RunSummary = {
+      run: 'test',
+      commit: 'test',
+      host: 'test',
+      startedAt: 'test',
+      scenarios: [],
+      ladders: [
+        {
+          scenario: 'cold-boot',
+          table: formatLadder(rungs),
+          flat: shape.flat,
+          explanation: shape.explanation,
+        },
+      ],
+    }
+    return {
+      failed: comparisons.some(isFailure),
+      report: renderReport(summary, comparisons),
+    }
+  }
+
+  it('fails the run and says so in the report', () => {
+    const quadratic = [5, 20, 50].map((coupons) => ({
+      coupons,
+      ms: 100 + 0.05 * coupons * coupons,
+    }))
+
+    const { failed, report } = verdictFor(quadratic)
+
+    expect(failed).toBe(true)
+    expect(report).toContain('regressed')
+    expect(report).toContain('CLIMBING')
+  })
+
+  it('shows the ladder even when nothing regressed', () => {
+    // The rest of the report is delta-shaped, so an unchanged run is quiet.
+    // The ladder is deliberately not: a shape that only appears once it has
+    // already failed cannot be watched.
+    const flat = [5, 20, 50].map((coupons) => ({ coupons, ms: 300 + 0.1 * coupons }))
+
+    const { failed, report } = verdictFor(flat)
+
+    expect(failed).toBe(false)
+    expect(report).toContain('No regression')
+    expect(report).toContain('cold-boot cost shape')
+    expect(report).toContain('| coupons | ms |')
   })
 })
