@@ -291,6 +291,14 @@ so 20 coupons take about five minutes.
 `DEBUG_RECORD=1` traces the browser console, failed requests and every gift-wrap
 query with its response. That tracing is what found all five faults above.
 
+**Two recordings at once is fine; four is not.** Issuance goes through the
+gateway's single cashu wallet, and enough concurrent swaps make the mint reject
+proofs it has already spent (`mint_error_code=11001`). Every run then fails as
+`never produced a token`, naming neither the contention nor the wallet, and the
+gateway stays broken for later runs until its H2 file is cleared. `check.sh`
+detects that state and prints the two commands that fix it. Measured, not
+guessed: two parallel recordings both completed, four all failed.
+
 Every fourth coupon is issued in **USD**, so a recorded wallet holds more than
 one currency — adding EUR to USD would be a confident lie, so the wallet keeps
 one figure per currency and aggregation has to walk them separately. A
