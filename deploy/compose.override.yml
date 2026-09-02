@@ -297,6 +297,23 @@ services:
       BOTTIN_API_USER: ${BOTTIN_ADMIN_USERNAME:-imani}
       BOTTIN_API_PASSWORD: ${BOTTIN_ADMIN_PASSWORD:-test-bottin-admin-9ace19b7fb61b5007225f745}
 
+  # The mint is the other half of the matched pair. Its published image is
+  # 0.11.0 while its source is 0.35.0, and cashu-wallet 0.7.0 (which a rebuilt
+  # gateway-customer carries) only works against the newer mint: against 0.11.0
+  # every swap fails with verify_proof_failed_error.
+  #
+  # So the two are rebuilt and enabled together, or neither:
+  #
+  #   cd ../cashu-mint
+  #   mvn -pl cashu-mint-rest -am install -DskipTests
+  #   mvn -pl cashu-mint-rest com.google.cloud.tools:jib-maven-plugin:3.4.0:dockerBuild \
+  #       -Djib.to.image=imani-mint-rest:current
+  #
+  #   MINT_REST_IMAGE=imani-mint-rest:current \
+  #     GATEWAY_CUSTOMER_IMAGE=imani-gateway-customer:frameseq ./deploy/up.sh
+  imani-mint-rest:
+    image: ${MINT_REST_IMAGE:-docker.398ja.xyz/imani-mint-rest:latest}
+
   gateway-customer:
     # The published image ships nostr-java-client 2.0.7, which dispatches every
     # inbound relay frame onto its own virtual thread with nothing sequencing
@@ -328,9 +345,32 @@ services:
     # The real fix is to republish gateway-customer AND imani-mint-rest from
     # current source together, so the BOM's matched versions deploy as a pair.
     # Then this whole comment goes.
+    image: ${GATEWAY_CUSTOMER_IMAGE:-docker.398ja.xyz/gateway-customer:latest}
+    # cashu-wallet 0.7.0 (carried by a source rebuild) also refuses an http://
+    # mint that is not localhost. That control is correct and is NOT relaxed:
+    # a plaintext mint URL to a remote host is a real risk, and staging and
+    # production both use https. This stack's mint is a container address, so
+    # it gets a name the validator recognises as local, pointing at the address
+    # it actually has.
+    extra_hosts:
+      - "127.0.0.1.mint:${MINT_HOST_IP:-192.168.144.12}"
     environment:
       # See the gateway-core note above.
       GATEWAY_DEV_MODE: "false"
+      # Defaults to the service name, which the published image accepts. The
+      # rebuilt image carries cashu-wallet 0.7.0, whose MintUrlValidator refuses
+      # a non-localhost http:// mint — correct, and not relaxed here. For that
+      # image pass the loopback-named alias instead:
+      #
+      #   MINT_URL=http://127.0.0.1.mint:7777 \
+      #     MINT_HOST_IP=$(docker inspect -f \
+      #       '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+      #       imani-mint-rest-test) ...
+      #
+      # See extra_hosts above. The IP has to be passed because it changes when
+      # the mint container is recreated.
+      GATEWAY_CUSTOMER_WALLET_STATE_MINT_URL: "${MINT_URL:-http://imani-mint-rest:7777}"
+      GATEWAY_WALLET_MINT_URL: "${MINT_URL:-http://imani-mint-rest:7777}"
       GATEWAY_CUSTOMER_WALLET_NOSTR_ENABLED: "true"
       GATEWAY_CUSTOMER_WALLET_NOSTR_RELAYS: "ws://nostr-relay:7777"
       # Must match GATEWAY_ATOMIC_SEND_DELIVERY_NIP17_SERVICE_TOKEN above.
