@@ -1,4 +1,16 @@
-# Recorded wallet state, not committed: it is large, regenerable from the real
-# issuing flow, and pinned to a source hash that says when it went stale.
+# Recorded wallet state. Two rungs are committed; the rest are not.
+#
+# The small ones are here so CI can measure a POPULATED wallet. An empty wallet
+# boots fast however badly storage scales, so a runner without fixtures would
+# report green having checked the one case that cannot fail. Together they are
+# about 66KB in git, and the source hash means a schema change turns CI red
+# until someone with the local stack re-records them — which is the correct
+# behaviour, and the cost of having them.
+#
+# The larger rungs stay local. Their value is the cost SHAPE, which needs the
+# full ladder, and a 500-coupon fixture is several megabytes of state that is
+# re-recorded far more often than it would be reviewed.
 *
 !.gitignore
+!coupons-5.json
+!coupons-20.json

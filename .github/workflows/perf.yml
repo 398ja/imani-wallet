@@ -1,0 +1,72 @@
+# The browser performance check, on every commit.
+#
+# Scope is deliberately the performance check ALONE. The wallet's unit tests are
+# not run here: adding them would be a separate decision about what gates a
+# merge, and smuggling it into a performance workflow is how a repository ends
+# up with CI nobody chose.
+#
+# No backend. The check restores a recorded fixture into the browser and
+# measures against it, which is the whole reason the suite was split in two
+# (#15): the gateway suite needs a real deployment and cannot gate anything,
+# while this one runs on a laptop or a runner in seconds.
+name: Browser performance
+
+on:
+  push:
+  pull_request:
+
+# A regression on the tip of a branch is the interesting one. Cancelling
+# superseded runs keeps a burst of pushes from queueing behind each other.
+concurrency:
+  group: perf-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cold-boot:
+    runs-on: ubuntu-latest
+    # Generous against a cold npm cache and a browser download. The check
+    # itself takes about fifteen seconds; anything near this limit is a hang,
+    # not a slow run.
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Chromium only. The suite measures this wallet's own cost, not browser
+      # differences, and three engines would triple the runtime for a number
+      # that says the same thing three ways.
+      - run: npx playwright install --with-deps chromium
+
+      # The check measures dist/, not source, because that is what a customer
+      # actually loads.
+      - run: npm run build
+
+      # --require-fixtures, so the check cannot pass by measuring nothing.
+      #
+      # Snapshots are gitignored apart from the two small committed rungs. If
+      # those ever stop being committed, this run measures an empty wallet —
+      # which boots fast however badly storage scales — and reports green.
+      # The flag makes that state loud instead.
+      #
+      # NOT --require-shape: the cost-shape assertion needs the full ladder,
+      # and the large rungs are deliberately not in the repository. A developer
+      # with the local stack runs that.
+      - name: Measure cold boot against a populated wallet
+        run: npm run perf -- --require-fixtures
+
+      # Kept whatever the verdict: a green report is the record of what the
+      # numbers were, which is what makes the next regression legible.
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-report
+          path: perf/results/
+          if-no-files-found: warn

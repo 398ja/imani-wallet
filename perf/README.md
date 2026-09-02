@@ -209,6 +209,52 @@ rather than 1000ms for that reason.
 
 Recording is the slow half and is not part of this loop — see below.
 
+## On every commit
+
+`.github/workflows/perf.yml` runs the check on every push and pull request. It
+needs **no backend**: about 26 seconds including the build, most of that being
+the build.
+
+Scope is the performance check alone. The wallet's unit tests are deliberately
+not run there — what gates a merge is a separate decision, and smuggling it into
+a performance workflow is how a repository ends up with CI nobody chose.
+
+CI runs with `--require-fixtures` but **not** `--require-shape`, because the
+cost-shape assertion needs the full ladder and the large rungs are not in the
+repository.
+
+### Which fixtures are committed, and why
+
+`coupons-5` and `coupons-20` are committed, about 66KB in git. The rest are not.
+
+Without them a runner measures an empty wallet, which boots fast however badly
+storage scales, and reports green having checked the one case that cannot fail.
+The two small rungs are enough to measure a genuinely populated wallet; the
+large ones exist for the *shape*, which needs the whole ladder.
+
+The cost of committing them is real and worth stating: they are pinned to a
+source hash, so **changing what the wallet stores turns CI red until someone
+with the local stack re-records them.** That is the correct behaviour — the
+alternative is CI measuring a shape production no longer produces — but it means
+a schema change now drags a re-recording chore behind it. Measured before
+agreeing to it: over 90 days, 7 of 199 commits touched a watched path, so a
+fixture survives roughly 28 of every 29 commits.
+
+### Accepting a new number
+
+    npm run perf -- --accept
+
+Writes the measured figures into `perf/baselines/browser.json`, which is
+**committed**. That is the point: accepting a slowdown means editing a tracked
+file and having someone see it in review. A time-series service would put the
+number somewhere no reviewer will ever look, and the slowdown would be accepted
+by nobody in particular.
+
+`--accept` writes the number but not the reasoning. Add the `note` yourself —
+every baseline carries one saying why it is what it is, for whoever next
+proposes changing it. A rung whose note says only "measured on a laptop" is a
+number nobody can argue with later.
+
 ## The cost shape
 
 The ladder is the assertion that matters most, and the only one that survives
