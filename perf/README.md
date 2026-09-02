@@ -255,6 +255,20 @@ The ladder prints on **every** run, unlike the rest of the report, which is
 delta-shaped. A shape that only appears once it has already failed cannot be
 watched.
 
+### `--require-fixtures`
+
+    npm run perf -- --require-fixtures
+
+Fails when there are no fixtures, or too few to form a ladder, instead of
+measuring less and reporting green.
+
+Snapshots are gitignored, so a laptop may legitimately have none, and degrading
+to the empty wallet while saying so is right there. In CI it is wrong: an empty
+wallet boots fast however badly storage scales, so a runner without fixtures
+measures the one case that cannot fail while the populated rungs and the shape
+assertion silently stop running. That is this suite's own failure mode wearing
+its clothes, and it is what the flag exists to make loud.
+
 ## Recording a fixture
 
 Requires the local stack, and the **matched image set** — the published gateway,

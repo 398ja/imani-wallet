@@ -4,6 +4,7 @@
  *
  *   npm run perf              measure, compare to baseline, fail on regression
  *   npm run perf -- --accept  measure, and write the result as the new baseline
+ *   npm run perf -- --require-fixtures   fail if there are no fixtures to measure
  *
  * Accepting a slowdown is deliberately a separate flag that edits a tracked
  * file, so it lands in a diff and someone sees it in review.
@@ -30,6 +31,21 @@ const SNAPSHOTS = join(ROOT, 'perf/snapshots')
 const RESULTS = join(ROOT, 'perf/results')
 
 const accept = process.argv.includes('--accept')
+
+/**
+ * Refuse to run without fixtures, rather than quietly measuring less.
+ *
+ * On a laptop, missing fixtures are ordinary: they are gitignored, and a
+ * developer may not have recorded any yet. Degrading to the empty wallet and
+ * saying so is the right answer there.
+ *
+ * In CI it is the wrong answer entirely. An empty wallet boots fast no matter
+ * how badly storage scales, so a runner with no fixtures measures the one case
+ * that cannot fail, reports green, and the populated rungs and the whole cost
+ * shape assertion silently stop running. That is the failure this suite exists
+ * to prevent, wearing the suite's own clothes.
+ */
+const requireFixtures = process.argv.includes('--require-fixtures')
 
 /** Serve the built bundle. A real static server, because a file:// URL is not
  *  how the app is ever loaded and would measure a different thing. */
@@ -104,6 +120,15 @@ async function main() {
     const ladder: Rung[] = []
     const rungs = available(SNAPSHOTS)
     if (rungs.length === 0) {
+      if (requireFixtures) {
+        throw new Error(
+          'no fixtures recorded, and --require-fixtures was passed.\n\n' +
+            'Without them this run measures an empty wallet, which boots fast ' +
+            'however badly storage scales — so it would report green having ' +
+            'checked nothing that matters.\n\n' +
+            '  npm run perf:record -- --coupons 5',
+        )
+      }
       console.log('\nNo fixtures recorded, so only the empty wallet was measured.')
       console.log('  npm run perf:record -- --coupons 5')
     }
@@ -165,10 +190,13 @@ async function main() {
         })
       }
     } else if (rungs.length > 0) {
-      console.log(
-        `\nCost shape needs ${MIN_RUNGS} rungs to be visible, have ${ladder.length}.` +
-          ` Record another: npm run perf:record -- --coupons 500`,
-      )
+      const message =
+        `Cost shape needs ${MIN_RUNGS} rungs to be visible, have ${ladder.length}.` +
+        ` Record another: npm run perf:record -- --coupons 500`
+      // Same reasoning as above: a ladder too short to have a shape is a
+      // developer's ordinary state and CI's silent failure.
+      if (requireFixtures) throw new Error(message)
+      console.log(`\n${message}`)
     }
   } finally {
     await site.close()
