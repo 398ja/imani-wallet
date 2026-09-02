@@ -180,6 +180,35 @@ retired project's words (voucher, merchant, user) are renamed on the way in;
 since that project is retired and nothing will be merged back, preserving a
 comparable diff has no value, and a port is the one moment renaming is free.
 
+## Measuring a populated wallet
+
+    npm run perf
+
+Measures cold boot three ways: empty, then once per recorded fixture, as
+`cold-boot`, `cold-boot-5`, `cold-boot-20`. Takes about ten seconds.
+
+**No backend is needed**, and that is checked rather than assumed: the numbers
+above were measured with `gateway-customer` and `imani-mint-rest` stopped. What
+the run does need is the proxy TABLE from `vite.config.ts`, because the wallet's
+unlock posts to `/api/v1/auth/*` and the SPA fallback would otherwise answer
+with `index.html`. The wallet then stays locked and the run measures the lock
+screen instead of a customer's wallet — `measureColdBoot` refuses to report
+that, which is how the gap was found.
+
+The rungs matter as a **pair**. An empty wallet boots fast no matter how badly
+storage scales, so the empty number alone cannot see the cost that matters. And
+a single populated number cannot either: what says storage is scaling is
+`cold-boot-20` staying level with `cold-boot-5`. Today they are within noise of
+each other. A rung climbing away from its neighbour is the signal.
+
+A restored wallet always boots **locked**, and the measurement includes typing
+the passphrase. That is not a limitation of the snapshot: the wrapping key is
+generated non-extractable and cannot be serialised at all, so this is exactly
+the boot a returning customer experiences. The populated ceilings are 1500ms
+rather than 1000ms for that reason.
+
+Recording is the slow half and is not part of this loop — see below.
+
 ## Recording a fixture
 
 Requires the local stack, and the **matched image set** — the published gateway,
