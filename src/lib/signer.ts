@@ -61,6 +61,32 @@ export function createWalletSigner(privkeyHex: string): WalletSigner {
     return key
   }
 
+  /**
+   * Conversation keys, cached per peer.
+   *
+   * `getConversationKey` is an ECDH — a full elliptic-curve scalar
+   * multiplication — and it depends only on the two keys, so for a given peer
+   * it computes the same 32 bytes every time. Restoring a wallet decrypts one
+   * relay record per coupon, all addressed to the customer's own pubkey, so
+   * the same derivation was being repeated once per coupon. Measured at 120
+   * coupons: ~450ms of the ~1000ms it took the page to go quiet after unlock
+   * was spent inside this one function (#42).
+   *
+   * Holds DERIVED key material, so it is zeroed and dropped by `clearKey()`
+   * alongside the secret it came from. A cache that outlived the lock would
+   * keep the wallet decryptable while it claims to be locked, which is worse
+   * than the cost it saves.
+   */
+  let conversationKeys = new Map<string, Uint8Array>()
+
+  const conversationKey = (peerPubkey: string): Uint8Array => {
+    const cached = conversationKeys.get(peerPubkey)
+    if (cached) return cached
+    const derived = nip44.getConversationKey(require(), peerPubkey)
+    conversationKeys.set(peerPubkey, derived)
+    return derived
+  }
+
   return {
     pubkey,
 
@@ -77,6 +103,12 @@ export function createWalletSigner(privkeyHex: string): WalletSigner {
       }
       key = hexToBytes(next)
       hex = next
+      // Belt and braces. The guard above already refuses a key for a different
+      // identity, so a cached conversation key is still correct — but tying
+      // the cache's lifetime to the key it derives from means that stays true
+      // however the guard changes.
+      for (const derived of conversationKeys.values()) derived.fill(0)
+      conversationKeys = new Map()
     },
     clearKey() {
       // Zero before dropping the reference — the point of eviction is that the
@@ -84,13 +116,18 @@ export function createWalletSigner(privkeyHex: string): WalletSigner {
       key?.fill(0)
       key = null
       hex = null
+      // Derived from the secret, so it goes with it. Zeroed for the same
+      // reason the key is: a conversation key left in memory decrypts every
+      // record written for that peer.
+      for (const derived of conversationKeys.values()) derived.fill(0)
+      conversationKeys = new Map()
     },
 
     nip44Decrypt: (peerPubkey, ciphertext) =>
-      nip44.decrypt(ciphertext, nip44.getConversationKey(require(), peerPubkey)),
+      nip44.decrypt(ciphertext, conversationKey(peerPubkey)),
 
     nip44Encrypt: (peerPubkey, plaintext) =>
-      nip44.encrypt(plaintext, nip44.getConversationKey(require(), peerPubkey)),
+      nip44.encrypt(plaintext, conversationKey(peerPubkey)),
 
     privkeyHex() {
       if (!hex) throw new SessionLockedError()
