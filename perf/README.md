@@ -223,6 +223,13 @@ CI runs with `--require-fixtures` but **not** `--require-shape`, because the
 cost-shape assertion needs the full ladder and the large rungs are not in the
 repository.
 
+**So a climbing cost shape does not turn CI red.** That is a deliberate
+consequence and worth being honest about: the shape is the assertion this suite
+values most, and CI cannot make it. A runner holding two rungs finds an absolute
+regression against a baseline; only someone who has recorded the full ladder
+locally finds a bend in the curve. If that trade stops being acceptable, the
+answer is committing a third rung, not weakening the check.
+
 ### Which fixtures are committed, and why
 
 `coupons-5` and `coupons-20` are committed, about 66KB in git. The rest are not.
