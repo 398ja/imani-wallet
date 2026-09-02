@@ -93,7 +93,7 @@ services:
     #
     # Deliberately a different NAME rather than a rebuild of the registry tag, so
     # `latest` stays whatever was pulled and this cannot be mistaken for it.
-    image: imani-gateway-portal:acl-local
+    image: ${GATEWAY_PORTAL_IMAGE:-imani-gateway-portal:acl-local}
     environment:
       # The portal authenticates merchants either by NIP-98 or by trusting the
       # edge proxy, which forwards the NAP-verified pubkey as X-Auth-Pubkey
