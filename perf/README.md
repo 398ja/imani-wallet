@@ -209,6 +209,52 @@ rather than 1000ms for that reason.
 
 Recording is the slow half and is not part of this loop — see below.
 
+## The cost shape
+
+The ladder is the assertion that matters most, and the only one that survives
+moving to different hardware.
+
+A single measurement tells you a value. Hardware noise moves it, and it hides
+accidental quadratic behaviour behind a fast machine: 500 coupons opening in
+half a second looks perfectly healthy right up until 5000 coupons take a
+minute. Measured at several counts, the same scenario answers a better
+question — does each coupon cost the same when there are more of them?
+
+    cold-boot cost shape: flat: cost per coupon is not measurable above noise
+    (early 0.000ms, late -0.267ms per coupon).
+
+    | coupons | ms | ms per coupon | marginal ms per coupon |
+    | --- | --- | --- | --- |
+    | 5 | 305 | 61.000 | — |
+    | 20 | 305 | 15.250 | 0.000 |
+    | 50 | 297 | 5.940 | -0.267 |
+
+That is a real run, and it is the healthiest result available: opening a wallet
+holding 50 coupons costs no more than one holding 5, so the per-coupon cost is
+lost in the noise of the fixed cost. A negative marginal figure means the larger
+rung measured slightly *faster*, which is noise, not an improvement.
+
+**Read the last column, not the third.** `ms per coupon` falls from 61 to 6
+here, and that fall is meaningless: it is the fixed cost of opening the wallet
+being spread thinner. Marginal cost — the difference between two rungs over the
+difference in their counts — cancels that fixed term instead of estimating it,
+which is why the check compares two differences rather than two averages. A
+quadratic hides completely in the third column and is obvious in the fourth.
+
+The threshold is **2.5x** growth in marginal cost across the ladder. Generous
+on purpose: the ratio divides two differences, so it amplifies noise from four
+wall-clock numbers rather than two. What it exists to catch does not arrive as
+a 3x drift — quadratic growth over two orders of magnitude arrives as tens or
+hundreds.
+
+**Three rungs is the minimum, and fewer is refused rather than passed.** Two
+points define a line and can only ever look flat, so a two-rung ladder would
+report success without having checked anything.
+
+The ladder prints on **every** run, unlike the rest of the report, which is
+delta-shaped. A shape that only appears once it has already failed cannot be
+watched.
+
 ## Recording a fixture
 
 Requires the local stack, and the **matched image set** — the published gateway,
