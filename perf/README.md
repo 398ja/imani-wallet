@@ -180,6 +180,38 @@ retired project's words (voucher, merchant, user) are renamed on the way in;
 since that project is retired and nothing will be merged back, preserving a
 comparable diff has no value, and a port is the one moment renaming is free.
 
+## Recording a fixture
+
+Requires the local stack, and the **matched image set** — the published gateway,
+mint and vault images do not work together (see `deploy/compose.override.yml`,
+and #36 for how each mismatch presents).
+
+    ./deploy/migrate-keys-to-hashi.sh        # once, before the new vault starts
+    VAULT_HASHI_ENABLED=true \
+      VAULT_JPA_IMAGE=imani-vault-jpa:libfix \
+      MINT_REST_IMAGE=imani-mint-rest:libfix \
+      GATEWAY_CUSTOMER_IMAGE=imani-gateway-customer:frameseq ./deploy/up.sh
+    ./deploy/check.sh
+    npm run build                            # the recorder measures dist/
+    npm run perf:record -- --coupons 5
+
+Writes `perf/snapshots/coupons-5.json`. Any count works; `--coupons 20` gives
+the next rung. Recording is per-coupon work against the mint, roughly 12s each,
+so 20 coupons take about five minutes.
+
+`DEBUG_RECORD=1` traces the browser console, failed requests and every gift-wrap
+query with its response. That tracing is what found all five faults above.
+
+Two things the recorder will not do:
+
+- **Write a partial snapshot.** Fewer coupons stored than issued and it refuses,
+  naming both numbers. A plausible-looking fixture is the dangerous failure: the
+  ladder would measure 1 coupon while claiming 1000.
+- **Invent state.** `--customer <name>` records from a wallet the seeder already
+  filled, which is useful when issuance is broken, but the coupons are still
+  real ones from the real flow. Bearer tokens are spent once, so a customer
+  already recorded from will not yield its coupons twice.
+
 ## Verifying the recorder
 
     ./deploy/up.sh && ./deploy/check.sh
@@ -190,26 +222,28 @@ Checks each of the recorder's acceptance criteria against the running stack and
 says which hold. Every check observes the real thing: the real seeder, the real
 onboarding form, real browser storage. No stubs, no fixtures.
 
-Current result, and it is expected to stay this way while #36 is open:
+Current result:
 
     PASS  the real issuing flow runs end to end
     PASS  login goes through the real onboarding form
     PASS  capture reads IndexedDB and localStorage
     PASS  the snapshot is stamped with a source hash
-    FAIL  the wallet holds the coupons that were issued
-          0/3 stored — BLOCKED by #36
+    PASS  the wallet holds the coupons that were issued
 
-    4/5 criteria verified against the running stack
+    5/5 criteria verified against the running stack
 
-The single failure is the blocker, named. That is more useful than "the
-recorder is blocked", which does not say how much of it works.
+The last one failed at `0/3 stored` for as long as #36 was open. While it did,
+this file recorded the failure with the blocker named, which is more useful
+than "the recorder is blocked" — it says exactly how much of the recorder
+worked.
 
-### Why there is no way around #36
+### Why there was no way around #36
 
 Every route into a populated wallet goes through gift-wrapped delivery.
 `issueAndDeliver` always ends in `deliver()`, the scan screen only routes codes
 rather than ingesting tokens, and coupons are client-held so the backend has no
-store to read from. Checked before concluding it, rather than assumed.
+store to read from. Checked before concluding it, rather than assumed. So the
+only way forward was to fix the delivery bug itself.
 
 ### Two mistakes this check caught in itself
 
@@ -352,19 +386,42 @@ subscription. If that single fetch draws a losing answer from the gateway, the
 wallet shows nothing and never asks again. Waiting longer changes nothing,
 because nothing is going to ask a second time.
 
-So the recorder does two things a passive wait cannot:
+So the recorder **waits for the gateway to serve the gift wraps before opening
+the wallet**, removing the ingestion race rather than hoping to outlast it.
 
-- **Waits for the gateway to serve the gift wraps before opening the wallet**,
-  removing the ingestion race rather than hoping to outlast it.
-- **Reopens the wallet** when coupons have not arrived, which is the only retry
-  a customer has.
+It counts **coupons**, not records: counting every store meant the resume
+wrapper written at login satisfied the wait, so the loop reported `stored 1`
+while the wallet held no coupons and the guard then refused. Two numbers
+disagreeing, from one question asked two different ways.
 
-Neither is enough while #36 is open, and the recorder says so rather than
-writing a fixture that misrepresents itself. It counts **coupons**, not
-records: counting every store meant the resume wrapper written at login
-satisfied the wait, so the loop reported `stored 1` while the wallet held no
-coupons and the guard then refused. Two numbers disagreeing, from one question
-asked two different ways.
+It also used to **reopen the wallet** when coupons had not arrived, the only
+retry a customer has. That was recovery for #36, and once #36 was fixed the
+reload became the bug. `DmPollService` redeems its gift wraps in one sequential
+loop, so a reload part-way through kills the loop where it stands, and it lands
+on `/login` because the resume key is scoped to the tab. The wallet recorded 1
+of 5, then 5 of 20 — each time looking like a delivery fault rather than an
+interrupted loop. The recorder now waits, prints the count as it climbs, and
+reports a genuine stall instead of reacting to one.
+
+### Five faults that all looked like a delivery bug
+
+Between them these stored exactly one coupon out of five, and every one of them
+presented as the gateway losing coupons:
+
+- The recorder's static server fell back to `index.html` for a **missing build
+  asset**, handing the browser HTML where it asked for a JavaScript module.
+- `shared/api.js` reaches `shared/profileService.js` by **dynamic import**, a
+  literal path Vite never sees, because `legacyBridge` loads the bridge with
+  `?url` and nothing follows what those files import at runtime.
+- `profileService.js` injects `/lib/profile-service.min.js`, which exists in
+  **no build of this repo**.
+- `getProfile()` could **hang forever** inside the sequential redemption loop,
+  stalling every coupon behind it.
+- The reload described above.
+
+The lesson is in the shape of the symptom: a count that is short by four is not
+evidence about where the coupons went. Each of these was found by tracing the
+loop itself rather than reasoning about the count.
 
 ## On the tolerance band
 

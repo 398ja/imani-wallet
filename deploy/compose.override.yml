@@ -322,19 +322,36 @@ services:
       BOTTIN_API_USER: ${BOTTIN_ADMIN_USERNAME:-imani}
       BOTTIN_API_PASSWORD: ${BOTTIN_ADMIN_PASSWORD:-test-bottin-admin-9ace19b7fb61b5007225f745}
 
-  # The mint is the other half of the matched pair. Its published image is
-  # 0.11.0 while its source is 0.35.0, and cashu-wallet 0.7.0 (which a rebuilt
-  # gateway-customer carries) only works against the newer mint: against 0.11.0
-  # every swap fails with verify_proof_failed_error.
+  # The mint is the second member of the matched set. Its published image is
+  # 0.11.0 while its source is 0.35.0, and the difference is in the CRYPTO:
+  # cashu-lib 0.28+ hashes the UTF-8 bytes of a secret in hash_to_curve
+  # (cashu-lib 53c3e55), while the 0.14.0 the published image carries hex-decodes
+  # it. A rebuilt gateway-customer therefore fails every swap against the
+  # published mint with verify_proof_failed_error — proofs the mint itself just
+  # signed, which is what makes it read as data corruption rather than a
+  # version skew.
   #
-  # So the two are rebuilt and enabled together, or neither:
+  # Rebuild (the Dockerfile's build stage is not needed; the exec jar is
+  # self-contained):
   #
   #   cd ../cashu-mint
   #   mvn -pl cashu-mint-rest -am install -DskipTests
-  #   mvn -pl cashu-mint-rest com.google.cloud.tools:jib-maven-plugin:3.4.0:dockerBuild \
-  #       -Djib.to.image=imani-mint-rest:current
+  #   mkdir -p /tmp/mintbuild
+  #   cp cashu-mint-rest/target/cashu-mint-rest-*-exec.jar /tmp/mintbuild/app.jar
+  #   printf 'FROM eclipse-temurin:21-jre\nWORKDIR /app\nCOPY app.jar /app/app.jar\nEXPOSE 7777 9000\nENTRYPOINT ["java","-jar","/app/app.jar"]\n' \
+  #     > /tmp/mintbuild/Dockerfile
+  #   docker build -t imani-mint-rest:libfix /tmp/mintbuild
   #
-  #   MINT_REST_IMAGE=imani-mint-rest:current \
+  # (A .dockerignore excludes **/target, so building from the repo root cannot
+  # see the jar. Hence the staging directory.)
+  #
+  # Same recipe for the vault, from ../cashu-vault with -pl cashu-vault-jpa and
+  # EXPOSE 3333. Then, keys first — see deploy/migrate-keys-to-hashi.sh:
+  #
+  #   ./deploy/migrate-keys-to-hashi.sh
+  #   VAULT_HASHI_ENABLED=true \
+  #     VAULT_JPA_IMAGE=imani-vault-jpa:libfix \
+  #     MINT_REST_IMAGE=imani-mint-rest:libfix \
   #     GATEWAY_CUSTOMER_IMAGE=imani-gateway-customer:frameseq ./deploy/up.sh
   imani-mint-rest:
     image: ${MINT_REST_IMAGE:-docker.398ja.xyz/imani-mint-rest:latest}
