@@ -15,6 +15,7 @@ import {
 } from '@imani/dm-poll'
 
 import { announceArrival, type ArrivedVoucher } from './arrivalToast'
+import { announceQueued, settleQueued } from './queuedToast'
 import { attestRedemption, nullifierFor } from './attestation'
 import { createDmCryptoAdapter, toLegacyMetadata } from './dmCrypto'
 import { loadMerchant } from './merchant'
@@ -406,7 +407,9 @@ function redemptionAdapter(): RedemptionAdapter {
       // Waits out the window rather than guessing a safe rate. The wallet
       // cannot know what limit is enforced, and a rate it guesses will drift
       // from the server's — whereas Retry-After is the server saying it.
-      const voucher = (await retryOnTransientMintError(
+      let voucher: Voucher
+      try {
+        voucher = (await retryOnTransientMintError(
         () =>
           withCorrelation(
         {
@@ -447,10 +450,27 @@ function redemptionAdapter(): RedemptionAdapter {
           // default (1s/4s/15s) cannot: it would exhaust its budget inside the
           // window it is waiting for and drop the coupon anyway.
           backoffsMs: RATE_LIMIT_BACKOFFS_MS,
-          onRetry: ({ attempt, delayMs }) =>
-            console.info(`[dmPoll] rate limited, retrying in ${delayMs}ms (attempt ${attempt})`),
+          onRetry: ({ attempt, delayMs }) => {
+            console.info(`[dmPoll] rate limited, retrying in ${delayMs}ms (attempt ${attempt})`)
+            // Say so on screen. Until this, a coupon waiting out the limiter
+            // and a coupon that failed looked exactly alike — which is the one
+            // thing a person cannot be left guessing about when it is their
+            // money (#40).
+            announceQueued(meta?.voucherId as string | undefined, delayMs)
+          },
         },
-      )) as unknown as Voucher
+        )) as unknown as Voucher
+      } finally {
+        // The wait is over, whichever way it went — and `finally` because the
+        // way that matters most is the one that throws. A toast saying "still
+        // receiving" left open above a redemption that has given up is worse
+        // than never having shown it: it is the wallet asserting something
+        // untrue about the customer's money, indefinitely.
+        //
+        // Dismissed rather than left to expire so it cannot briefly overlap
+        // the arrival toast below, which would read as two separate payments.
+        settleQueued(meta?.voucherId as string | undefined)
+      }
 
       // tokenRedemption wrote straight into IndexedDB, and this tab does not
       // hear its own BroadcastChannel post — see notifyWalletChanged.

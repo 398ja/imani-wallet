@@ -15,6 +15,14 @@ vi.mock('../arrivalToast', () => ({
   announceArrival: (v: unknown) => void announced.push(v),
 }))
 
+// Mocked for the same reason as arrivalToast: this file runs without a DOM,
+// and sonner inserts a stylesheet at import time. Importing it for real fails
+// the whole suite before a single test runs.
+vi.mock('../queuedToast', () => ({
+  announceQueued: () => {},
+  settleQueued: () => {},
+}))
+
 // The attestation is mocked at the boundary so this file can assert WHAT the
 // redemption path hands it. attestation.test.ts covers the crypto; the bug
 // class this guards is the wiring — passing the wrong identifier here is

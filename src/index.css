@@ -227,3 +227,18 @@
 [data-sonner-toaster] [data-sonner-toast][data-expanded='false'][data-front='false'] > * {
   opacity: 0;
 }
+
+/*
+ * 3. The loading icon. Sonner wraps a custom `loading` icon in `.sonner-loader`
+ *    and positions it ABSOLUTELY, expecting its own layout to place it. Running
+ *    unstyled there is no such layout, so the spinner is laid out from the
+ *    toast's padding box and lands on top of the description — measured at
+ *    `left: 177px`, straight through the middle of the sentence.
+ *
+ *    Returned to the flow so it sits in the icon slot the flex row already
+ *    provides, like the success tick and the error cross beside it.
+ */
+[data-sonner-toaster] [data-sonner-toast] .sonner-loader {
+  position: static;
+  transform: none;
+}
