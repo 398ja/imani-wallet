@@ -38,6 +38,15 @@ export interface ScenarioResult {
 }
 
 /** The machine-readable half of a run's output. */
+export interface Ladder {
+  /** Which scenario the ladder measures, e.g. `cold-boot`. */
+  scenario: string
+  /** The rungs, and the verdict on their shape. */
+  table: string
+  flat: boolean
+  explanation: string
+}
+
 export interface RunSummary {
   run: string
   /** Which build this ran against, so the result stays interpretable later. */
@@ -46,6 +55,8 @@ export interface RunSummary {
   host: string
   startedAt: string
   scenarios: ScenarioResult[]
+  /** Cost-shape assessments, when enough rungs were recorded to have one. */
+  ladders?: Ladder[]
 }
 
 /** How a measurement compared to its baseline. */
@@ -115,6 +126,25 @@ export function renderReport(summary: RunSummary, comparisons: Comparison[]): st
       lines.push(`| ${c.scenario} | ${c.verdict} | ${c.measuredMs}ms |`)
     }
     lines.push('')
+  }
+
+  // The ladder prints on EVERY run, green or not.
+  //
+  // Everything else here is delta-shaped: unchanged scenarios stay quiet so
+  // that length carries the signal. The ladder is the exception because it is
+  // not a comparison against a baseline — it is the shape of the cost, and a
+  // reader has to be able to see the marginal column climbing before any
+  // threshold trips. A shape that only appears once it has already failed
+  // cannot be watched.
+  for (const ladder of summary.ladders ?? []) {
+    lines.push(
+      `## ${ladder.scenario} cost shape`,
+      '',
+      ladder.explanation,
+      '',
+      ladder.table,
+      '',
+    )
   }
 
   lines.push(APPEND_MARKER, '')
