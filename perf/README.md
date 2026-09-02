@@ -255,12 +255,21 @@ The ladder prints on **every** run, unlike the rest of the report, which is
 delta-shaped. A shape that only appears once it has already failed cannot be
 watched.
 
-### `--require-fixtures`
+### `--require-fixtures` and `--require-shape`
 
-    npm run perf -- --require-fixtures
+    npm run perf -- --require-fixtures   # CI: a populated wallet was measured
+    npm run perf -- --require-shape      # and the ladder was long enough
 
-Fails when there are no fixtures, or too few to form a ladder, instead of
-measuring less and reporting green.
+Two demands, deliberately separate. `--require-fixtures` fails when there are
+no fixtures at all; `--require-shape` also fails when there are too few to form
+a ladder.
+
+They are separate because CI and a developer hold different things. A runner
+has the small committed fixtures and cannot hold the large rungs a shape needs,
+so requiring both at once made the flag unusable for the case it was written
+for: CI failed for having exactly what it was given. Now CI asserts *a
+populated wallet was measured*, and a developer with the stack asserts *and the
+cost shape is flat*.
 
 Snapshots are gitignored, so a laptop may legitimately have none, and degrading
 to the empty wallet while saying so is right there. In CI it is wrong: an empty

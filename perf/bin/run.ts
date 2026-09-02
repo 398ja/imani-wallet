@@ -5,6 +5,7 @@
  *   npm run perf              measure, compare to baseline, fail on regression
  *   npm run perf -- --accept  measure, and write the result as the new baseline
  *   npm run perf -- --require-fixtures   fail if there are no fixtures to measure
+ *   npm run perf -- --require-shape      also fail if there are too few for a ladder
  *
  * Accepting a slowdown is deliberately a separate flag that edits a tracked
  * file, so it lands in a diff and someone sees it in review.
@@ -46,6 +47,20 @@ const accept = process.argv.includes('--accept')
  * to prevent, wearing the suite's own clothes.
  */
 const requireFixtures = process.argv.includes('--require-fixtures')
+
+/**
+ * Also require enough rungs to assert a cost SHAPE.
+ *
+ * Separate from --require-fixtures because they are different demands, and
+ * conflating them made the flag unusable for CI: a runner holding the two
+ * small committed fixtures has everything it needs to measure a populated
+ * wallet, and cannot hold the large rungs a ladder needs. Requiring both at
+ * once meant CI failed for having exactly what it was given.
+ *
+ * So CI asserts "a populated wallet was measured", and a developer with the
+ * stack asserts "and the cost shape is flat".
+ */
+const requireShape = process.argv.includes('--require-shape')
 
 /** Serve the built bundle. A real static server, because a file:// URL is not
  *  how the app is ever loaded and would measure a different thing. */
@@ -206,7 +221,7 @@ async function main() {
         ` Record another: npm run perf:record -- --coupons 500`
       // Same reasoning as above: a ladder too short to have a shape is a
       // developer's ordinary state and CI's silent failure.
-      if (requireFixtures) throw new Error(message)
+      if (requireShape) throw new Error(message)
       console.log(`\n${message}`)
     }
   } finally {
