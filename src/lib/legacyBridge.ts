@@ -301,6 +301,28 @@ export function loadLegacyRedemption(): Promise<void> {
     await loadScript(tokenSecurityLibUrl) // ImaniTokenSecurity
     await loadScript(tokenSecurityUrl) // TokenSecurity (needs ImaniTokenSecurity)
     await loadScript(nostrUrl) // NostrUtils  (needs NostrTools)
+    // Opt out of the profile service before api.js can consult the flag.
+    //
+    // api.js dynamically imports shared/profileService.js, which injects
+    // /lib/profile-service.min.js — a file that exists in NO build of this
+    // repo. The flag defaults to ON, so every profile lookup takes a path that
+    // cannot complete: the script 404s, the service rejects, and while api.js
+    // does fall back to the legacy endpoint, the rejection surfaced as an
+    // unhandled error that killed the in-flight coupon loop. The wallet then
+    // held 1 of 5 coupons, which reads as a delivery fault rather than a
+    // missing asset.
+    //
+    // Set here rather than patched into api.js: it is the switch that file
+    // already provides, and it goes back to a one-line change if the library
+    // is ever shipped.
+    try {
+      if (localStorage.getItem('imani_use_profile_service') === null) {
+        localStorage.setItem('imani_use_profile_service', 'false')
+      }
+    } catch {
+      // A storage-less context still loads the bridge; the flag then defaults
+      // on and falls back per lookup, which is the pre-existing behaviour.
+    }
     await loadScript(apiUrl) // api          (needs NostrUtils, GatewayConfig)
     await loadScript(walletStorageUrl) // walletStorageIntegration
     await loadScript(tokenRedemptionUrl) // TokenRedemption

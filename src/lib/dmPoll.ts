@@ -130,9 +130,21 @@ export function nostrdbAdapter(): NostrdbAdapter {
     async getProfile(pubkey: string): Promise<Profile | null> {
       // /api/v1/nostr/profiles/{pubkey} 404s on this build. Profile lookup is
       // cosmetic — never fail a coupon receipt over a display name.
+      //
+      // The TIMEOUT is what makes that promise true. DmPollService awaits this
+      // inside its sequential redemption loop, so a fetch that never settles
+      // does not just lose a display name: it stalls every remaining coupon
+      // behind it, silently and forever. Observed while recording a fixture —
+      // 5 gift wraps fetched, coupon 1 redeemed and stored, then nothing. No
+      // error, no timeout, no further iteration; the wallet simply held 1 of 5
+      // and looked like a delivery fault in the gateway.
+      //
+      // catch covers the abort too, so a slow profile is treated exactly like
+      // a missing one.
       try {
         const r = await fetch(`${GATEWAY}/api/v1/nostr/profiles/${pubkey}`, {
           credentials: 'include',
+          signal: AbortSignal.timeout(5000),
         })
         return r.ok ? ((await r.json()) as Profile) : null
       } catch {

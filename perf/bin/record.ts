@@ -207,17 +207,24 @@ async function main() {
     if (process.env.DEBUG_RECORD) {
       page.on('console', (m) => {
         const t = m.text()
-        if (/DmPoll|gift|wrap|redeem|SSE|sse/i.test(t)) console.log('   [browser]', t.slice(0, 150))
+        if (m.type() === 'error' || /DmPoll|gift|wrap|redeem|SSE|sse|coupon|voucher|store/i.test(t))
+          console.log(`   [browser:${m.type()}]`, t.slice(0, 190))
       })
       // Correlate request with response: interleaved logs made an empty answer
       // to a DIFFERENT query look like the answer to the 1059 one.
       // Correlate the gift-wrap query with its answer. Interleaved logs once
       // made an empty response to a DIFFERENT query look like the answer to
       // this one, which sent an investigation down the wrong path.
+      page.on('pageerror', (e) => console.log(`   [pageerror] ${String(e).slice(0, 200)}`))
+      page.on('framenavigated', (f) => {
+        if (f === page.mainFrame()) console.log(`   [navigated] ${f.url().slice(0, 120)}`)
+      })
       page.on('requestfailed', (r) => {
         console.log(`   [failed] ${r.url().slice(0, 110)} :: ${r.failure()?.errorText}`)
       })
       page.on('response', async (r) => {
+        if (r.status() === 401 || r.status() === 404)
+          console.log(`   [${r.status()}] ${r.request().method()} ${r.url().slice(0, 130)}`)
         if (/keyset|\/v1\//.test(r.url())) console.log(`   [mint] ${r.status()} ${r.url().slice(0, 100)}`)
         if (!r.url().includes('nostr/query')) return
         const req = r.request().postData() ?? ''
@@ -264,16 +271,34 @@ async function main() {
     // there holding a wallet that had already given up. That is issue #36's
     // non-determinism reaching the wallet, so the recorder retries the only
     // way a customer could: by reopening the app.
+    // Reload only when the wallet has STOPPED making progress.
+    //
+    // Reloading unconditionally destroys the execution context mid-redemption.
+    // DmPollService redeems its gift wraps in one sequential loop, so a reload
+    // between coupon 1 and coupon 2 kills the loop where it stands — and the
+    // reload lands on /login, because the resume key lives in this tab and the
+    // gateway session does not survive. The wallet then holds exactly 1 of 5
+    // coupons and looks like a delivery fault.
+    //
+    // Now the count itself decides: while it is climbing, leave the page alone.
     const deadline = Date.now() + 180_000
     let stored = 0
     let reloads = 0
+    let lastProgress = Date.now()
     while (Date.now() < deadline) {
+      const before = stored
       stored = await countCoupons(page)
       if (stored >= COUPONS) break
+      if (stored > before) lastProgress = Date.now()
 
       await new Promise((r) => setTimeout(r, 5000))
       stored = await countCoupons(page)
       if (stored >= COUPONS) break
+      if (stored > before) lastProgress = Date.now()
+
+      // Still climbing: the poller is working, so do not interrupt it.
+      if (Date.now() - lastProgress < 45_000) continue
+      lastProgress = Date.now()
 
       await page.reload({ waitUntil: 'domcontentloaded' })
       reloads++

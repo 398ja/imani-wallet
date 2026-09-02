@@ -4,6 +4,7 @@ import { defineConfig } from 'vitest/config'
 import type { Connect, Plugin, ViteDevServer, PreviewServer } from 'vite'
 import react from '@vitejs/plugin-react'
 import { fileURLToPath } from 'node:url'
+import { readFileSync } from 'node:fs'
 import type { ClientRequest } from 'node:http'
 
 const r = (p: string) => fileURLToPath(new URL(p, import.meta.url))
@@ -235,8 +236,38 @@ export const proxy = {
   '/api': { target: 'http://localhost:28082', changeOrigin: false },
 }
 
+/**
+ * Emit the shared modules that api.js reaches by DYNAMIC import.
+ *
+ * legacyBridge.ts loads the shared/*.js bridge with `?url`, which copies each
+ * file but does not follow what it imports at runtime. api.js does
+ * `await import('./profileService.js')` — a literal, sibling-relative path
+ * Vite never sees, so nothing emits it and the request 404s.
+ *
+ * The failure is silent until the app first asks for a profile, and it
+ * surfaces as a caught "Profile service failed, falling back to legacy" — with
+ * an unhandled rejection that killed the coupon loop mid-run. The fixture
+ * recorder stored 1 of 5 coupons because of it, which read as a delivery bug
+ * in the gateway rather than a missing asset.
+ *
+ * Emitted with its exact name, next to api.js, because the specifier is
+ * literal: a content-hashed name would not be found.
+ */
+function sharedDynamicImports(): Plugin {
+  return {
+    name: 'imani-shared-dynamic-imports',
+    generateBundle() {
+      this.emitFile({
+        type: 'asset',
+        fileName: 'assets/profileService.js',
+        source: readFileSync(r('./shared/profileService.js'), 'utf8'),
+      })
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), portalEdgeAuth()],
+  plugins: [react(), portalEdgeAuth(), sharedDynamicImports()],
   // Scoped to src/, because `packages/` now lives in this repo and ships its own
   // suites — dm-poll's and wallet-storage's among them, the latter wanting
   // `fake-indexeddb`, which is not a dependency here. Without this, `npm test`

@@ -49,6 +49,22 @@ services:
   # not have, which is a deploy decision rather than a version bump.
   imani-vault-jpa:
     image: ${VAULT_JPA_IMAGE:-docker.398ja.xyz/staging/cashu-vault-jpa:latest}
+    environment:
+      # A locally built vault (0.11.1) runs migration V3, which DROPS
+      # t_key.private_key and moves key material to HashiCorp Vault. That is
+      # the "external secret store" the comment above warns about — but the
+      # store is already here: the cashu-mint compose stack runs a dev-mode
+      # HashiCorp Vault, and connecting it to this network is enough.
+      #
+      # Keys must be copied in BEFORE V3 runs, at keys/{mintId}/{keySetId}/{amount}
+      # with a `private_key` field, or every key reads back null and the mint
+      # dies on PrivateKey.fromString. See deploy/migrate-keys-to-hashi.sh.
+      VAULT_HASHI_ENABLED: "${VAULT_HASHI_ENABLED:-false}"
+      VAULT_HASHI_URI: "${VAULT_HASHI_URI:-http://hashicorp-vault:8200}"
+      VAULT_HASHI_AUTH_METHOD: "token"
+      VAULT_HASHI_AUTH_TOKEN: "${VAULT_HASHI_TOKEN:-dev-root-token}"
+      # V3/V6/V7/V8 arrive after V999, which this database already applied.
+      SPRING_FLYWAY_OUT_OF_ORDER: "true"
 
   # Same 404 story: docker.398ja.xyz/gateway-portal does not exist, staging/ does.
   #
@@ -323,6 +339,18 @@ services:
   imani-mint-rest:
     image: ${MINT_REST_IMAGE:-docker.398ja.xyz/imani-mint-rest:latest}
     environment:
+      # The MINT bundles cashu-vault-hashi and resolves key material itself:
+      # imani-vault-jpa serves the row (privateKey null, vaultPath set) and the
+      # mint reads the secret at that path. So these belong here, not only on
+      # the vault. Without them the mint fails at PrivateKey.fromString with
+      # "s is marked non-null but is null", which names neither Vault nor the
+      # path it could not read.
+      VAULT_HASHI_ENABLED: "${VAULT_HASHI_ENABLED:-false}"
+      VAULT_HASHI_URI: "${VAULT_HASHI_URI:-http://hashicorp-vault:8200}"
+      VAULT_HASHI_AUTH_METHOD: "token"
+      VAULT_HASHI_AUTH_TOKEN: "${VAULT_HASHI_TOKEN:-dev-root-token}"
+      VAULT_HASHI_ENGINE_MOUNT: "${VAULT_HASHI_MOUNT:-cashu}"
+
       # mint 0.35.0 rate-limits issuance at 10/minute and 60/day, keyed on the
       # caller's IP. Every service on this stack shares one IP as far as the
       # mint is concerned, so a seeding run or a performance fixture exhausts
