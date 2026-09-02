@@ -33,6 +33,8 @@
  * between two differences rather than between two averages.
  */
 
+import type { Snapshot } from './snapshot'
+
 /** One measured point on the ladder. */
 export interface Rung {
   coupons: number
@@ -150,4 +152,70 @@ export function formatLadder(rungs: Rung[]): string {
   }
 
   return lines.join('\n')
+}
+
+/** What a scenario must provide to be measured across a ladder. */
+export interface LadderScenario {
+  /** Base name, e.g. `cold-boot`. Rungs become `cold-boot-5`, `cold-boot-50`. */
+  name: string
+  /**
+   * Measure this scenario against a wallet holding `coupons` coupons.
+   *
+   * The snapshot is loaded and its freshness checked before this is called,
+   * so an implementation never has to think about staleness.
+   */
+  measure(coupons: number, fixture: Snapshot): Promise<LadderMeasurement>
+}
+
+export interface LadderMeasurement {
+  /** The measurement itself, already reduced to one number (a median). */
+  ms: number
+  /** Individual samples, for a reader who wants to see the spread. */
+  all: number[]
+  /**
+   * How many records the wallet actually held.
+   *
+   * Reported rather than assumed: a scenario that measured an empty wallet by
+   * accident is the failure mode this whole suite keeps rediscovering, and a
+   * count is what makes it visible.
+   */
+  held: number
+}
+
+export interface LadderRun {
+  rungs: Rung[]
+  shape?: ShapeVerdict
+  table?: string
+}
+
+/**
+ * Measure one scenario at every recorded coupon count, and assess the shape.
+ *
+ * Shared so that every scenario gets the same treatment: the same freshness
+ * check, the same refusal to report a shape from too few rungs, the same
+ * table. A scenario that rolled its own would drift from the others, and the
+ * whole point of a ladder is that rungs are comparable.
+ */
+export async function runLadder(
+  scenario: LadderScenario,
+  options: {
+    counts: number[]
+    loadFixture: (coupons: number) => Snapshot
+    onRung?: (rung: Rung, measurement: LadderMeasurement) => void
+  },
+): Promise<LadderRun> {
+  const rungs: Rung[] = []
+
+  for (const coupons of [...options.counts].sort((a, b) => a - b)) {
+    const fixture = options.loadFixture(coupons)
+    const measurement = await scenario.measure(coupons, fixture)
+    const rung = { coupons, ms: measurement.ms }
+    rungs.push(rung)
+    options.onRung?.(rung, measurement)
+  }
+
+  if (rungs.length < MIN_RUNGS) return { rungs }
+
+  const shape = assessShape(rungs)
+  return { rungs, shape, table: formatLadder(rungs) }
 }
