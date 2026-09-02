@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { Toaster } from 'sonner'
-import { CheckCircle2, XCircle } from 'lucide-react'
+import { CheckCircle2, Loader2, XCircle } from 'lucide-react'
 import { NapProvider, useNapSession, useNapCallbacks } from '@imani/nap-react'
 import type { NapSession } from '@imani/nap-client-web'
 
@@ -545,6 +545,17 @@ function Shell({ children }: { children: React.ReactNode }) {
         icons={{
           success: <CheckCircle2 className="h-5 w-5 text-green-600" />,
           error: <XCircle className="h-5 w-5 text-red-500" />,
+          // Supplied because `unstyled: true` drops sonner's own loader with
+          // the rest of its CSS. Neutral rather than amber: a queued coupon is
+          // STATUS, not a warning, and colouring it as a caution would train
+          // people to read an ordinary pause as a fault.
+          //
+          // `motion-safe:` so the rotation stops under prefers-reduced-motion.
+          // A ring with no animation still reads as in-progress next to
+          // "Still receiving", so nothing is lost by holding it still.
+          loading: (
+            <Loader2 className="h-5 w-5 motion-safe:animate-spin text-mono-500 dark:text-mono-400" />
+          ),
         }}
         toastOptions={{
           unstyled: true,
