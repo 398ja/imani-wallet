@@ -298,27 +298,36 @@ services:
       BOTTIN_API_PASSWORD: ${BOTTIN_ADMIN_PASSWORD:-test-bottin-admin-9ace19b7fb61b5007225f745}
 
   gateway-customer:
-    # Built from imani-gateway-customer source rather than pulled.
-    #
     # The published image ships nostr-java-client 2.0.7, which dispatches every
     # inbound relay frame onto its own virtual thread with nothing sequencing
-    # them: ordered arrival, unordered handling. An EOSE handled before an
-    # EVENT that reached the socket first means a query returning on EOSE
-    # returns without it — issue #36, where a wallet showed an empty balance
-    # while the coupons sat on the relay.
+    # them: ordered arrival, unordered handling. An EOSE handled before an EVENT
+    # that reached the socket first means a query returning on EOSE returns
+    # without it — issue #36, where a wallet showed an empty balance while the
+    # coupons sat on the relay.
     #
-    # The SOURCE already resolves 2.3.1, which added a per-listener
-    # FrameSequencer. Only the published image lags, so this needs no code
-    # change: rebuild it and the defect goes.
+    # nostr-java 2.3.1 fixes it with a per-listener FrameSequencer, and this
+    # service's SOURCE already resolves 2.3.1. Only the published image lags, so
+    # the fix is a rebuild rather than a code change:
     #
     #   cd ../imani-gateway-customer
     #   mvn -pl gateway-customer-rest -am package \
     #       com.google.cloud.tools:jib-maven-plugin:3.4.0:dockerBuild \
     #       -DskipTests -Djib.to.image=imani-gateway-customer:frameseq
+    #   GATEWAY_CUSTOMER_IMAGE=imani-gateway-customer:frameseq ./deploy/up.sh
     #
-    # Remove this override once the registry image is rebuilt from current
-    # source; it exists to prove the fix, not to fork the deployment.
-    image: imani-gateway-customer:frameseq
+    # Measured that way, same customer, same 3 gift wraps on the relay:
+    #   2.0.7  ->  1 1 1 1 1 1 1 1 1 1 1 1 1 1 1   (loses 2 of 3, every time)
+    #   2.3.1  ->  3 3 3 3 3 3 3 3 3 3 3 3 3 3 3   (20/20 on re-check)
+    #
+    # NOT the default, deliberately. That rebuild also picks up cashu-wallet
+    # 0.7.0, which imani-bom 0.1.59 pairs with cashu-mint 0.34.2 — but the mint
+    # image this stack pulls is 0.11.0, and the pair does not work: swaps fail
+    # with verify_proof_failed_error and issuance never completes. Enabling it
+    # by default would trade a query defect for an issuance one.
+    #
+    # The real fix is to republish gateway-customer AND imani-mint-rest from
+    # current source together, so the BOM's matched versions deploy as a pair.
+    # Then this whole comment goes.
     environment:
       # See the gateway-core note above.
       GATEWAY_DEV_MODE: "false"
