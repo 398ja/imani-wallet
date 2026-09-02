@@ -60,6 +60,18 @@ A customer returning a stall's coupons to that same stall. The ordinary end of a
 coupon's life, and the case that must never need the network to authorise it.
 _Avoid_: Payment, spend
 
+**Terminal**:
+One device acting for a stall, with its own key and its own fixed role. A stall
+runs several, and they differ in what they may do, so "the stall" is not a single
+actor at a till.
+_Avoid_: Subaccount, employee, delegate, till
+
+**Enrolment**:
+Loading a terminal with the authority to act for a stall: the terminal shows the
+key it generated, and the stall owner returns a voucher locked to it. Distinct
+from login, which the terminal then does by itself, repeatedly.
+_Avoid_: Pairing, provisioning, onboarding
+
 ### Measurement
 
 **Scenario**:
