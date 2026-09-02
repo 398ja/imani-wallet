@@ -51,6 +51,14 @@ const COUPONS = Number(flag('coupons', '10'))
  */
 const EXISTING_CUSTOMER = flag('customer', '')
 
+/**
+ * Currencies to issue in, cycled over the coupons.
+ *
+ * Every fourth coupon is USD so that a recorded wallet holds more than one
+ * currency. `--currencies EUR` restores the single-currency behaviour.
+ */
+const CURRENCIES = flag('currencies', 'EUR,EUR,EUR,USD').split(',')
+
 /** Issue real coupons to a fresh customer, and return their key. */
 /** Poll the gateway until it serves the gift wraps this customer holds. */
 async function waitForGatewayToServe(npub: string, expected: number): Promise<void> {
@@ -114,6 +122,10 @@ function issueTo(count: number): { nsec: string; npub: string } {
   // it recorded.
   const customer = `perf-${Date.now().toString(36)}`
 
+  // A unique customer per run, so two recordings cannot read each other's
+  // coupons: the wait counts what the customer holds, and a shared name would
+  // count coupons from every previous recording.
+
   // One coupon per call, repeated, rather than one call for the whole batch.
   //
   // `--quantity N` issues N vouchers inside a single run and the mint's
@@ -127,9 +139,27 @@ function issueTo(count: number): { nsec: string; npub: string } {
   let delivered = 0
 
   for (let i = 0; i < count; i++) {
+    // A second currency, for the scenarios that total a balance.
+    //
+    // Adding EUR to USD would be a confident lie, so the wallet keeps one
+    // figure per currency and aggregation has to walk them separately. A
+    // single-currency fixture would measure the easy path and call it done.
+    //
+    // A minority rather than a half: the realistic shape is a customer whose
+    // coupons are mostly from one place, and it keeps the primary total
+    // stable enough to assert on.
+    const currency = CURRENCIES[i % CURRENCIES.length]
     const out = execFileSync(
       'node',
-      ['scripts/seed-merchant.mjs', '--quantity', '1', '--customer', customer],
+      [
+        'scripts/seed-merchant.mjs',
+        '--quantity',
+        '1',
+        '--customer',
+        customer,
+        '--currency',
+        currency,
+      ],
       { cwd: ROOT, encoding: 'utf8' },
     )
     nsec = out.match(/nsec\s+(nsec1\w+)/)?.[1] ?? nsec

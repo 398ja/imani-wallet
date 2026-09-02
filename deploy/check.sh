@@ -81,5 +81,40 @@ if [ "$fail" -ne 0 ]; then
   echo "Stack is NOT ready. Try ./deploy/up.sh, then check logs for whatever is missing."
   exit 1
 fi
+
+# Healthy containers are not the same as a stack that can issue.
+#
+# The gateway keeps its cashu wallet in an H2 file, and a run that dies
+# mid-swap leaves proofs in it that the mint has already spent. Every later
+# issuance then fails with "Proof already used" (11001) while every container
+# still reports healthy — so check.sh would say ready and the next recording
+# would waste an hour before failing.
+#
+# Looks only at recent logs, so an old failure that has already been cleared
+# does not keep raising the alarm.
+# grep -c, not grep -q, and the count compared afterwards.
+#
+# Under `set -o pipefail`, `grep -q` exits as soon as it matches, docker gets
+# SIGPIPE, and the PIPELINE reports 141 — so the `if` takes the false branch on
+# the very runs where the string WAS found. The check silently never fired.
+# Scoped to the CURRENT container lifetime, not a fixed window.
+#
+# Clearing the wallet means restarting the gateway, so errors from before that
+# restart are exactly the ones already fixed. A time window keeps reporting
+# them and check.sh cries wolf on a stack that is fine.
+gateway_started=$(docker inspect -f '{{.State.StartedAt}}' gateway-customer-test 2>/dev/null || true)
+spent_proofs=$(docker logs --since "${gateway_started:-10m}" gateway-customer-test 2>&1 |
+  grep -c "mint_error_code=11001" || true)
+if [ "${spent_proofs:-0}" -gt 0 ]; then
+  echo
+  echo "Stack is up but the gateway's wallet holds SPENT proofs ($spent_proofs recent 11001 errors)."
+  echo "A recording that died mid-swap leaves these behind; issuance will keep failing."
+  echo
+  echo "  docker exec gateway-customer-test sh -c 'rm -f /root/.imani-bridge/wallet.mv.db /root/.imani-bridge/wallet.trace.db'"
+  echo "  docker restart gateway-customer-test"
+  echo
+  exit 1
+fi
+
 echo
 echo "Stack is ready."
