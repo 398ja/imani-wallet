@@ -11,6 +11,7 @@ import {
   type SubscriptionHandle,
   type Voucher,
   RedemptionRefusedError,
+  retryOnTransientMintError,
 } from '@imani/dm-poll'
 
 import { announceArrival, type ArrivedVoucher } from './arrivalToast'
@@ -29,6 +30,28 @@ import { legacyApi, withCorrelation } from './legacyBridge'
  * the query string, and the SSE subscription below is all query string.
  */
 const GATEWAY = ''
+
+/**
+ * Backoffs for a rate-limited redemption.
+ *
+ * The gateway's limiter is a one-minute window and it answers `Retry-After:
+ * 60`, so the sequence has to be able to outlast a full window. dm-poll's
+ * default (1s, 4s, 15s) exhausts itself inside one and drops the coupon.
+ *
+ * Rises past 60s because several coupons arriving together are all waiting on
+ * the same window: the first through consumes the allowance the next is
+ * waiting for.
+ */
+export const RATE_LIMIT_BACKOFFS_MS: readonly number[] = [5_000, 20_000, 65_000, 65_000]
+
+/** A 429 from the gateway, however the layers below have reshaped it. */
+export function isRateLimited(error: unknown): boolean {
+  const status = (error as { status?: number } | undefined)?.status
+  if (status === 429) return true
+  // The legacy bridge rebuilds errors and does not always carry `status`, so
+  // the message is a fallback rather than the primary test.
+  return /rate limit/i.test(String((error as Error | undefined)?.message ?? ''))
+}
 
 /**
  * Reads go through the gateway's nostrdb, never straight to a relay — that is
@@ -371,7 +394,21 @@ function redemptionAdapter(): RedemptionAdapter {
       // a device that has been wiped.
       const attestationNullifier = nullifierFor(token)
 
-      const voucher = (await withCorrelation(
+      // Retry a rate-limited redemption instead of losing the coupon.
+      //
+      // The gateway limits /api/v1/wallet/receive to 10 requests a minute per
+      // pubkey, and dm-poll redeems in a tight sequential loop, so any wallet
+      // receiving more than ten coupons in a minute trips it. Without this the
+      // failure was silent and permanent: DmPollService logged, moved on, and
+      // the coupon was never redeemed. Measured at 120 coupons: 320 rate-limit
+      // errors and 50 coupons stored (#39).
+      //
+      // Waits out the window rather than guessing a safe rate. The wallet
+      // cannot know what limit is enforced, and a rate it guesses will drift
+      // from the server's — whereas Retry-After is the server saying it.
+      const voucher = (await retryOnTransientMintError(
+        () =>
+          withCorrelation(
         {
           bundleId: meta?.bundleId as string | undefined,
           requestId: meta?.requestId as string | undefined,
@@ -403,6 +440,16 @@ function redemptionAdapter(): RedemptionAdapter {
             // dm-poll already deduped by fingerprint before calling us.
             skipDuplicateCheck: true,
           }),
+          ),
+        {
+          isTransient: isRateLimited,
+          // Long enough to outlast a one-minute window, which the short
+          // default (1s/4s/15s) cannot: it would exhaust its budget inside the
+          // window it is waiting for and drop the coupon anyway.
+          backoffsMs: RATE_LIMIT_BACKOFFS_MS,
+          onRetry: ({ attempt, delayMs }) =>
+            console.info(`[dmPoll] rate limited, retrying in ${delayMs}ms (attempt ${attempt})`),
+        },
       )) as unknown as Voucher
 
       // tokenRedemption wrote straight into IndexedDB, and this tab does not
