@@ -184,8 +184,23 @@ comparable diff has no value, and a port is the one moment renaming is free.
 
     npm run perf
 
-Measures cold boot three ways: empty, then once per recorded fixture, as
-`cold-boot`, `cold-boot-5`, `cold-boot-20`. Takes about ten seconds.
+**Five scenarios**, each measured across every recorded fixture, plus cold boot
+against an empty wallet. About two and a half minutes for the full ladder.
+
+| scenario | what it answers |
+| --- | --- |
+| `cold-boot` | how long until the wallet is usable |
+| `balance-aggregation` | how long until a balance across currencies is on screen |
+| `batch-write` | what it costs to write a burst of coupons into a full wallet |
+| `notification-drain` | what a burst of arrivals costs, **and whether the app freezes** |
+| `redemption-plan` | what choosing coupons costs, with the network switched off |
+
+Every one is measured at 5, 20, 50, 120 and 500 coupons, and every one is
+currently **flat** — cost grows with the number of coupons and not faster.
+
+They are separate on purpose. A combined journey yields one number that can
+move for five reasons and cannot point at any of them; five numbers name the
+subsystem that changed.
 
 **No backend is needed**, and that is checked rather than assumed: the numbers
 above were measured with `gateway-customer` and `imani-mint-rest` stopped. What
