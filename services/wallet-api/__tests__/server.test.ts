@@ -15,11 +15,12 @@
  * test would pass while no real wallet could authenticate. Importing the
  * shipping signer means these tests fail if either side drifts.
  */
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure'
 
-import { server, metrics } from '../server.js'
-import { verifyNip98 } from '../nip98.js'
+import { server, metrics, guards } from '../server.js'
+import { verifyNip98, FRESHNESS_WINDOW_SECONDS } from '../nip98.js'
+import { REPLAY_TTL_MS, RATE_LIMIT } from '../guards.js'
 
 // The signer is a browser module and reads `window.location.origin` to make the
 // `u` tag absolute. Providing it is what lets the shipping signer run here.
@@ -659,5 +660,291 @@ describe('valuing a holding', () => {
     // And the same caller asking again gets nothing carried over either.
     const third = await value({ coupons: [] })
     expect(third.body.couponCount).toBe(0)
+  })
+})
+
+/**
+ * Replay refusal, idempotency and throttling, over HTTP.
+ *
+ * The store's own behaviour is tested in `expiringMap.test.ts`. What is tested
+ * here is what only a real request can show: that the guards run after
+ * authentication and before any work, and that a caller can tell the three
+ * refusals apart.
+ *
+ * `guards.clear()` between tests because the state is per process and these
+ * tests share one server. Without it, one test's requests count against
+ * another's rate limit and the failures look like flakes.
+ */
+describe('replay, idempotency and throttling', () => {
+  beforeEach(() => guards.clear())
+
+  /** A signed GET, reusable so a test can send the identical bytes twice. */
+  async function signedGet(signer: unknown, extra: Record<string, string> = {}) {
+    const authorization = await nip98Header('/v1/whoami', 'GET', undefined, signer as never)
+    return { authorization, ...extra }
+  }
+
+  describe('a replayed signature', () => {
+    it('is refused the second time, distinguishably from a bad signature', async () => {
+      const { signer } = makeSigner()
+      const headers = await signedGet(signer)
+
+      const first = await fetch(`${base}/v1/whoami`, { headers })
+      expect(first.status).toBe(200)
+
+      // The IDENTICAL bytes, which is exactly what a captured request is.
+      const second = await fetch(`${base}/v1/whoami`, { headers })
+      expect(second.status).toBe(409)
+
+      const body = await second.json()
+      expect(body.error).toBe('replay')
+      // NOT 401. The signature is perfectly valid, and saying otherwise sends a
+      // caller to rotate a key that was never the problem.
+      expect(second.status).not.toBe(401)
+      expect(body.detail).toContain('already been seen')
+    })
+
+    it('does not refuse a fresh signature for the same request', async () => {
+      const { signer } = makeSigner()
+      const first = await fetch(`${base}/v1/whoami`, { headers: await signedGet(signer) })
+      const second = await fetch(`${base}/v1/whoami`, { headers: await signedGet(signer) })
+
+      expect(first.status).toBe(200)
+      expect(second.status).toBe(200)
+    })
+
+    it('counts refusals so a retry loop is visible as a shape', async () => {
+      const { signer } = makeSigner()
+      const headers = await signedGet(signer)
+      await fetch(`${base}/v1/whoami`, { headers })
+      await fetch(`${base}/v1/whoami`, { headers })
+
+      expect(guards.stats.replaysRefused).toBe(1)
+    })
+
+    /**
+     * The guard has to run before the work. A replayed spend that is refused
+     * only after spending is not replay protection.
+     */
+    it('refuses a replayed POST without doing the work again', async () => {
+      const { signer } = makeSigner()
+      const payload = JSON.stringify({ coupons: [] })
+      const headers = {
+        authorization: await nip98Header('/v1/holding/value', 'POST', payload, signer as never),
+      }
+
+      expect((await fetch(`${base}/v1/holding/value`, { method: 'POST', body: payload, headers })).status).toBe(200)
+      const second = await fetch(`${base}/v1/holding/value`, { method: 'POST', body: payload, headers })
+      expect(second.status).toBe(409)
+      expect((await second.json()).error).toBe('replay')
+    })
+  })
+
+  describe('a stale signature', () => {
+    /**
+     * The store's TTL is derived from the freshness window rather than picked,
+     * so a signature is never forgotten while it could still verify. Pinned as
+     * a relationship: change the window and this still holds.
+     */
+    it('is remembered no longer than it could still verify', () => {
+      expect(REPLAY_TTL_MS).toBeGreaterThan(FRESHNESS_WINDOW_SECONDS * 2 * 1000)
+    })
+
+    it('is refused as stale rather than as a replay', async () => {
+      const { signer } = makeSigner()
+      const header = await nip98Header('/v1/whoami', 'GET', undefined, signer as never)
+      const result = verifyNip98({
+        header,
+        url: `${base}/v1/whoami`,
+        method: 'GET',
+        now: Math.floor(Date.now() / 1000) + 61,
+      })
+      expect(result).toMatchObject({ ok: false, reason: 'stale' })
+    })
+  })
+
+  describe('idempotency', () => {
+    it('returns the first response without acting again', async () => {
+      const { signer, pubkey } = makeSigner()
+      const key = 'retry-after-timeout'
+
+      const first = await fetch(`${base}/v1/whoami`, {
+        headers: await signedGet(signer, { 'idempotency-key': key }),
+      })
+      expect(first.status).toBe(200)
+      expect(first.headers.get('idempotency-replayed')).toBeNull()
+
+      // A CORRECT retry: fresh signature, same key. The old signature would be
+      // stale within a minute anyway, so this is what a real client does.
+      const retry = await fetch(`${base}/v1/whoami`, {
+        headers: await signedGet(signer, { 'idempotency-key': key }),
+      })
+
+      expect(retry.status).toBe(200)
+      expect(await retry.json()).toEqual({ pubkey })
+      // Marked, so a caller can tell "it ran twice" from "it ran once and I asked twice".
+      expect(retry.headers.get('idempotency-replayed')).toBe('true')
+      expect(guards.stats.idempotentReplays).toBe(1)
+    })
+
+    /**
+     * The scoping test that matters. An unscoped key would let one caller's
+     * choice of "retry-1" serve another caller's response: a cross-caller leak
+     * dressed up as a convenience feature.
+     */
+    it('is unrelated between two callers using the same key', async () => {
+      const a = makeSigner()
+      const b = makeSigner()
+      const key = 'retry-1'
+
+      const first = await fetch(`${base}/v1/whoami`, {
+        headers: await signedGet(a.signer, { 'idempotency-key': key }),
+      })
+      expect((await first.json()).pubkey).toBe(a.pubkey)
+
+      const other = await fetch(`${base}/v1/whoami`, {
+        headers: await signedGet(b.signer, { 'idempotency-key': key }),
+      })
+
+      // B gets B's answer, not A's.
+      expect((await other.json()).pubkey).toBe(b.pubkey)
+      expect(other.headers.get('idempotency-replayed')).toBeNull()
+    })
+
+    it('replays the body a caller actually got, not a recomputed one', async () => {
+      const { signer } = makeSigner()
+      const key = 'holding-retry'
+      const payload = JSON.stringify({
+        coupons: [
+          {
+            voucher_id: 'c1',
+            token: 't',
+            face_value: 500,
+            face_unit: 'EUR',
+            face_decimals: 2,
+            issuer_id: 'a'.repeat(64),
+            status: 'active',
+          },
+        ],
+      })
+
+      const send = async () =>
+        fetch(`${base}/v1/holding/value`, {
+          method: 'POST',
+          body: payload,
+          headers: {
+            authorization: await nip98Header('/v1/holding/value', 'POST', payload, signer as never),
+            'idempotency-key': key,
+          },
+        })
+
+      const first = await send()
+      const firstBody = await first.json()
+      const retry = await send()
+
+      expect(retry.headers.get('idempotency-replayed')).toBe('true')
+      expect(await retry.json()).toEqual(firstBody)
+    })
+
+    /**
+     * Replaying a 400 for 24 hours would keep telling a caller their request is
+     * malformed after they had fixed it — and an error is the answer most worth
+     * genuinely retrying.
+     */
+    it('does not memoise an error response', async () => {
+      const { signer } = makeSigner()
+      const key = 'bad-request'
+      const payload = JSON.stringify({ coupons: 'not-an-array' })
+
+      const send = async () =>
+        fetch(`${base}/v1/holding/value`, {
+          method: 'POST',
+          body: payload,
+          headers: {
+            authorization: await nip98Header('/v1/holding/value', 'POST', payload, signer as never),
+            'idempotency-key': key,
+          },
+        })
+
+      expect((await send()).status).toBe(400)
+      const retry = await send()
+      expect(retry.status).toBe(400)
+      expect(retry.headers.get('idempotency-replayed')).toBeNull()
+    })
+
+    it('leaves a request without a key entirely alone', async () => {
+      const { signer } = makeSigner()
+      const first = await fetch(`${base}/v1/whoami`, { headers: await signedGet(signer) })
+      const second = await fetch(`${base}/v1/whoami`, { headers: await signedGet(signer) })
+
+      expect(first.status).toBe(200)
+      expect(second.status).toBe(200)
+      expect(second.headers.get('idempotency-replayed')).toBeNull()
+    })
+  })
+
+  describe('throttling', () => {
+    it('tells a throttled caller that it was throttled, and for how long', async () => {
+      const { signer } = makeSigner()
+
+      let throttled: Response | undefined
+      for (let i = 0; i < RATE_LIMIT + 5; i++) {
+        const res = await fetch(`${base}/v1/whoami`, { headers: await signedGet(signer) })
+        if (res.status === 429) {
+          throttled = res
+          break
+        }
+      }
+
+      expect(throttled).toBeDefined()
+      const body = await throttled!.json()
+      expect(body.error).toBe('rate-limited')
+      expect(body.retryAfterSeconds).toBeGreaterThan(0)
+      // The header too, because that is what an HTTP client already understands.
+      expect(Number(throttled!.headers.get('retry-after'))).toBeGreaterThan(0)
+    })
+
+    /**
+     * The ticket's reason for per-key throttling, asserted directly: callers
+     * share NATs and cloud egress ranges, so per-address limiting makes one
+     * caller's retry loop another caller's outage.
+     */
+    it('does not let one caller throttle another', async () => {
+      const noisy = makeSigner()
+      const quiet = makeSigner()
+
+      for (let i = 0; i < RATE_LIMIT + 2; i++) {
+        await fetch(`${base}/v1/whoami`, { headers: await signedGet(noisy.signer) })
+      }
+      expect(guards.stats.throttled).toBeGreaterThan(0)
+
+      // Same address, different key. Unaffected.
+      const other = await fetch(`${base}/v1/whoami`, { headers: await signedGet(quiet.signer) })
+      expect(other.status).toBe(200)
+      expect((await other.json()).pubkey).toBe(quiet.pubkey)
+    })
+  })
+
+  describe('what the guards do not touch', () => {
+    /**
+     * An orchestrator polling liveness has no key, so it cannot be throttled by
+     * one — and a health check that goes red under load gets the container
+     * restarted mid-incident.
+     */
+    it('never throttles health', async () => {
+      for (let i = 0; i < RATE_LIMIT + 10; i++) {
+        const res = await fetch(`${base}/health`)
+        expect(res.status).toBe(200)
+      }
+    })
+
+    it('exposes store sizes so boundedness is observable', async () => {
+      const { signer } = makeSigner()
+      await fetch(`${base}/v1/whoami`, { headers: await signedGet(signer) })
+
+      const metricsBody = await (await fetch(`${base}/metrics`)).json()
+      expect(metricsBody.stores.replay).toBeGreaterThan(0)
+      expect(metricsBody.guards).toMatchObject({ replaysRefused: expect.any(Number) })
+    })
   })
 })
