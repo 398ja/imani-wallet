@@ -113,6 +113,41 @@ describe('assessShape', () => {
     expect(verdict.ratio).toBeLessThan(1.5)
   })
 
+  it('does not fail a fast scenario for rounding at its smallest rung', () => {
+    /*
+     * Real redemption-plan numbers, and the reason a residual is measured
+     * against a clock floor rather than the rung's own value.
+     *
+     * Four of these five rungs fit their line to within 0-6%. The smallest
+     * reports 68% — not because the curve bends, but because the fit predicts
+     * 0.3ms there and a millisecond clock can only say 1ms. A rung below the
+     * clock's resolution can never be inside any band, however straight the
+     * curve is, so this failed the check on two separate runs.
+     */
+    const verdict = assessShape([
+      { coupons: 5, ms: 1 },
+      { coupons: 20, ms: 2 },
+      { coupons: 50, ms: 5 },
+      { coupons: 120, ms: 12 },
+      { coupons: 500, ms: 54 },
+    ])
+
+    expect(verdict.flat).toBe(true)
+  })
+
+  it('still catches a quadratic whose small rungs round to nothing', () => {
+    // The counterpart: the floor must not blind the check to a real bend that
+    // happens to start small. Same tiny early rungs, genuinely quadratic.
+    const verdict = assessShape(
+      [5, 20, 50, 120, 500].map((coupons) => ({
+        coupons,
+        ms: Math.round(0.0006 * coupons * coupons),
+      })),
+    )
+
+    expect(verdict.flat).toBe(false)
+  })
+
   it('still catches a quadratic on a five-rung ladder', () => {
     // The counterpart: widening the slopes must not blunt the check it exists
     // for. Same rung positions, genuinely quadratic cost.

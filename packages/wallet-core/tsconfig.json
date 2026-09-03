@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    // No DOM on purpose. The package has to compile without it, which is what
+    // proves it can run in plain Node — an acceptance criterion, not a taste.
+    "lib": ["ES2022"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "baseUrl": ".",
+    "paths": {
+      // The TYPE file, not the package index. The index pulls in adapters and
+      // resolvers this package has no use for, and their type errors are not
+      // ours to answer.
+      "@imani/voucher-send": ["../voucher-send/src/types/voucher.ts"]
+    }
+  },
+  "include": ["src"]
+}

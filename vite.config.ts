@@ -329,6 +329,8 @@ export default defineConfig({
       '@imani/gateway-client': imani('gateway-client'),
       '@imani/dm-poll': imani('dm-poll'),
       '@imani/money': imani('money'),
+      // The money decisions the app and the future wallet API share (#4).
+      '@imani/wallet-core': imani('wallet-core'),
       'imani-qr': imani('imani-qr'),
     },
   },

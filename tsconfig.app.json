@@ -56,6 +56,7 @@
       "@imani/gateway-client": ["./packages/gateway-client/src/index.ts"],
       "@imani/dm-poll": ["./packages/dm-poll/src/index.ts"],
       "@imani/money": ["./packages/money/src/index.ts"],
+      "@imani/wallet-core": ["./packages/wallet-core/src/index.ts"],
       "imani-qr": ["./packages/imani-qr/src/index.ts"]
     }
   },
