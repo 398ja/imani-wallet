@@ -357,10 +357,155 @@ Replay state is held **per process**. Staging runs a single replica, which is
 what makes that adequate; scaling out needs a shared store and a decision
 record.
 
+### `POST /v1/spend/parts/prepare`
+
+Prepare one part of a plan: the coupons that replace the one being spent, and an
+**unsigned** event for you to sign and publish. This is where a script spends.
+
+**One part at a time.** Parts fail independently, so one failing strands nothing
+else, and you own the retry loop — which is correct, because you own the coupons.
+
+#### Two signatures, not one
+
+The split runs on the gateway, behind NIP-98, and **this service holds no
+credential of its own to present there**. If it did, that credential would be a
+way to split any coupon anyone sent it, which is the custody
+[ADR 0001](../docs/adr/0001-caller-holds-the-key.md) refuses. So you sign the
+gateway request too, and the service forwards your header verbatim. It is a
+courier for a signature it cannot forge.
+
+Ask what to sign rather than deriving it:
+
+```
+POST /v1/spend/parts/gateway-request
+{ "token": "cashuB…", "amount": 200 }
+```
+
+```json
+{
+  "url": "http://gateway-core:8081/api/v1/atomic/vouchers/split",
+  "method": "POST",
+  "body": "{\"token\":\"cashuB…\",\"send_face_value\":200}"
+}
+```
+
+Sign that `body` string **byte for byte**. Re-serialising it changes the payload
+hash and the gateway refuses the request as a mismatch — from a service you never
+addressed directly, which is a confusing afternoon.
+
+The memo is deliberately not part of the signed body. It belongs to the message,
+not to the division of a coupon, and it travels in the event instead.
+
+#### Preparing
+
+```
+POST /v1/spend/parts/prepare
+Idempotency-Key: pay-supplier-2026-01-14-part-0
+```
+
+```json
+{
+  "token": "cashuB…",
+  "amount": 200,
+  "recipientPubkey": "c1c1…",
+  "stallId": "aaaa…",
+  "currency": "EUR",
+  "decimals": 2,
+  "couponId": "c1",
+  "memo": "invoice 4471",
+  "gatewayAuthorization": "Nostr <base64 of the event you just signed>"
+}
+```
+
+```json
+{
+  "prepared": {
+    "replaces": "c1",
+    "sent": { "token": "cashuB…", "faceValue": 200, "faceUnit": "EUR", "faceDecimals": 2, "couponId": "sent-1", "stallId": "aaaa…" },
+    "change": { "token": "cashuB…", "faceValue": 800, "faceUnit": "EUR", "faceDecimals": 2, "stallId": "aaaa…" },
+    "unsignedEvent": {
+      "kind": 14,
+      "content": "{\"type\":\"cashu_token_transfer\",…}",
+      "tags": [["p", "c1c1…"]]
+    },
+    "recipientPubkey": "c1c1…"
+  },
+  "refusal": null,
+  "holdingUnchanged": false
+}
+```
+
+**`replaces`, `sent` and `change` are one write.** The coupon named by
+`replaces` no longer exists; those two are what exists instead. Commit them
+transactionally before doing anything else — including before signing.
+
+`change` is `null` for a full send, rather than a zero-valued coupon that could
+never be spent and would sit in your holding forever.
+
+#### Signing and publishing
+
+The event has no `id`, no `pubkey` and no `sig`. You supply all three by sealing
+and wrapping it with your own key, which is the step this service cannot perform:
+sealing derives a conversation key from the customer's private key, and this
+service has never had one. [ADR 0002](../docs/adr/0002-the-api-plans-the-caller-signs.md)
+records why, and the image build fails if anything able to sign or seal is
+reachable in the shipped tree.
+
+```js
+import { nip17 } from 'nostr-tools'
+
+const wrap = nip17.wrapEvent(mySecretKey, { publicKey: recipientPubkey }, prepared.unsignedEvent.content)
+await Promise.any(pool.publish([relayUrl], wrap))
+```
+
+The outer wrap is signed by a throwaway key, per NIP-59; the inner rumor carries
+your real identity, which is how the recipient knows who paid. The
+`sender_pubkey` in the payload is taken from **your signature on this request**,
+never from the request body, so you cannot address a send as somebody else.
+
+#### When the gateway fails
+
+Every failure answers with `holdingUnchanged: true`, and it means exactly what it
+says: nothing was split and your coupon is still whole and still yours.
+
+| status | `error` | what happened |
+|---|---|---|
+| 502 | `gateway-unreachable` | it could not be reached, or timed out |
+| 401 | `gateway-…` | **your** signature was refused; fix the payload hash or the clock |
+| 409-mapped 502 | `gateway-swap_rejected` | the mint refused the swap, usually because the proofs are already spent |
+| 502 | `gateway-incomplete` | it claimed success but returned no send token |
+
+`gateway-incomplete` is the one to treat carefully: re-read your holding before
+retrying, because the coupon may already have been split.
+
+**Failures are not stored against your idempotency key.** Only successful
+responses are, so a retry after an outage really does retry.
+
+#### Retrying safely
+
+Reuse the `Idempotency-Key` and sign a fresh request. The original answer comes
+back, marked `Idempotency-Replayed: true`, and **the gateway is not called
+again** — a second call would be a second split, which divides a coupon twice and
+strands half of it.
+
+#### Where a coupon may be sent
+
+The same check as `/v1/spend/plan`, and it runs **before** the split — the only
+ordering that leaves the coupon whole. A refusal is 200 with `prepared: null`:
+
+```json
+{ "prepared": null, "refusal": { "reason": "wrong-stall", "detail": "…" }, "holdingUnchanged": true }
+```
+
 ### `GET /metrics`
 
 Unauthenticated counters: requests, errors, refusals by reason, validation
-errors, guard statistics, and live store sizes so boundedness is observable.
+errors, guard statistics, parts prepared, prepare failures by reason, and live
+store sizes so boundedness is observable.
+
+`prepareFailures` is worth an alert. `gateway-unreachable` climbing is an outage;
+`gateway-swap_rejected` climbing is callers spending coupons that are already
+spent, which is a bug somewhere else entirely.
 
 ## Using it with curl
 
@@ -392,9 +537,20 @@ and therefore the payload hash, and the request is refused as
 `payload-mismatch` — verified, not assumed. Same file, same header, different
 flag, different answer.
 
-## What is not here yet
+## The whole spend, end to end
 
-Preparing a part. `/v1/holding/value` and `/v1/spend/plan` are both reads; the
-prepare endpoint comes next. When they arrive, the service will build an unsigned event and hand it
-back for you to sign — it cannot sign, by construction, and
-[ADR 0002](../docs/adr/0002-the-api-plans-the-caller-signs.md) records why.
+```
+POST /v1/spend/plan              which coupons, or why none
+  for each part:
+    POST /v1/spend/parts/gateway-request    what to sign for the gateway
+    sign it locally
+    POST /v1/spend/parts/prepare            replacements + an unsigned event
+    PERSIST the replacements                ← the dangerous moment
+    sign and wrap the event locally
+    publish it to the relay
+```
+
+The two signing steps are pure functions: no network, no round trip, a library
+call inside your script. They are also the two places this service is
+structurally unable to stand in for you, which is what makes a public spending
+endpoint defensible at all.

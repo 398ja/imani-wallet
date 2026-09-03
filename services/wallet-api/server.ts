@@ -33,6 +33,7 @@ import { valueHolding, planSpend, checkRecipient, needsRecipientLookup } from '@
 
 import { verifyNip98, type AuthFailure } from './nip98.js'
 import { parseHolding, parsePlanRequest } from './holding.js'
+import { parsePrepareRequest, requestSplit, buildRumor, splitUrl, splitBody } from './prepare.js'
 import { createGuards, type StoredResponse } from './guards.js'
 import { createStallLookup } from './stallLookup.js'
 
@@ -56,6 +57,17 @@ export const metrics = {
    * are the same 200-with-a-refusal on the wire.
    */
   recipientRefusals: {} as Record<string, number>,
+  /**
+   * Parts prepared, and failures by reason.
+   *
+   * Separate from `errors` because a prepare that fails is the one failure
+   * where a caller might have half-moved money, so an operator needs to see it
+   * without reading logs. `gateway-unreachable` climbing is an outage;
+   * `gateway-swap_rejected` climbing is callers spending coupons that are
+   * already spent, which is a wallet bug somewhere else entirely.
+   */
+  prepared: 0,
+  prepareFailures: {} as Record<string, number>,
 }
 
 /**
@@ -92,6 +104,29 @@ export function setStallLookup(lookup: ReturnType<typeof createStallLookup>): vo
 
 export function resetStallLookup(): void {
   stalls = createStallLookup()
+}
+
+/**
+ * How the gateway is called.
+ *
+ * A seam for the same reason the lookup has one, and a more important one: the
+ * behaviours that matter most on this path only happen when the gateway FAILS.
+ * "A gateway failure leaves the caller's holding unchanged and says so plainly"
+ * is the ticket's requirement, and a guarantee that cannot be exercised under
+ * failure is a claim rather than a property.
+ *
+ * Substituting the transport keeps every other layer real: the request still
+ * arrives over a socket, is still verified, still passes the guards, and the
+ * answer is still assembled by the handler that ships.
+ */
+let gatewayFetch: typeof fetch = fetch
+
+export function setGatewayFetch(impl: typeof fetch): void {
+  gatewayFetch = impl
+}
+
+export function resetGatewayFetch(): void {
+  gatewayFetch = fetch
 }
 
 /** One header, lower-cased and de-duplicated, or undefined. */
@@ -146,6 +181,65 @@ function refuse(res: ServerResponse, reason: AuthFailure, detail: string) {
   // than from documentation they have not read yet.
   res.setHeader('www-authenticate', 'Nostr')
   json(res, 401, { error: reason, detail })
+}
+
+/**
+ * May these coupons go to this recipient?
+ *
+ * Shared by the plan and by prepare, and shared deliberately rather than
+ * copied. The plan's refusal is advice — nothing has moved — while prepare's
+ * refusal is the last moment the money is still whole. Two implementations
+ * would eventually differ, and the one that would drift open is the one that
+ * actually spends.
+ *
+ * Returns the refusal, or `null` when the send may proceed.
+ */
+async function refuseRecipient(
+  senderPubkey: string,
+  recipientPubkey: string,
+  stallId: string | undefined,
+): Promise<{ reason: string; detail: string } | null> {
+  /**
+   * The lookup is skipped for a redemption or a self-send, which are decided
+   * from the keys alone.
+   *
+   * Not an optimisation. Redemption is the overwhelmingly common case and the
+   * one a market stall depends on, so it must keep working when the relay does
+   * not — and that is exactly what makes refusing on `unknown` affordable
+   * rather than an outage for the whole market.
+   */
+  let role: 'stall' | 'customer' | 'unknown' = 'unknown'
+  if (needsRecipientLookup(senderPubkey, recipientPubkey, stallId)) {
+    try {
+      role = await stalls.role(recipientPubkey)
+    } catch {
+      // `unknown`, NOT a 500.
+      //
+      // The lookup already catches its own failures, so this should be
+      // unreachable — but "should be" is doing load-bearing work in a sentence
+      // about the money path. A thrown error escaping to the generic handler
+      // answers 500 with "internal error", which tells a caller nothing about
+      // whether their send was refused or half-done.
+      //
+      // Degrading to `unknown` keeps the fail-closed guarantee a property of
+      // THIS function rather than of the lookup's internals: whatever goes
+      // wrong upstream, the send is refused and the caller is told the check
+      // could not be made and nothing has moved.
+      role = 'unknown'
+    }
+  }
+
+  const verdict = checkRecipient({
+    senderPubkey,
+    recipientPubkey,
+    issuerPubkey: stallId,
+    recipientRole: role,
+  })
+
+  if (verdict.allowed) return null
+
+  metrics.recipientRefusals[verdict.reason] = (metrics.recipientRefusals[verdict.reason] ?? 0) + 1
+  return { reason: verdict.reason, detail: verdict.detail }
 }
 
 async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -369,49 +463,13 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
      * question depend on a network round trip.
      */
     if (request.value.recipientPubkey !== undefined) {
-      const recipient = request.value.recipientPubkey
+      const refusal = await refuseRecipient(
+        auth.pubkey,
+        request.value.recipientPubkey,
+        request.value.stallId,
+      )
 
-      /**
-       * The lookup is skipped for a redemption or a self-send, which are
-       * decided from the keys alone.
-       *
-       * Not an optimisation. Redemption is the overwhelmingly common case and
-       * the one a market stall depends on, so it must keep working when the
-       * relay does not — and that is exactly what makes refusing on `unknown`
-       * affordable rather than an outage for the whole market.
-       */
-      let role: 'stall' | 'customer' | 'unknown' = 'unknown'
-      if (needsRecipientLookup(auth.pubkey, recipient, request.value.stallId)) {
-        try {
-          role = await stalls.role(recipient)
-        } catch {
-          // `unknown`, NOT a 500.
-          //
-          // The lookup already catches its own failures, so this should be
-          // unreachable — but "should be" is doing load-bearing work in a
-          // sentence about the money path. A thrown error escaping to the
-          // generic handler answers 500 with "internal error", which tells a
-          // caller nothing about whether their send was refused or half-done.
-          //
-          // Degrading to `unknown` keeps the fail-closed guarantee a property
-          // of THIS handler rather than of the lookup's internals: whatever
-          // goes wrong upstream, the send is refused and the caller is told
-          // the check could not be made and nothing has moved.
-          role = 'unknown'
-        }
-      }
-
-      const verdict = checkRecipient({
-        senderPubkey: auth.pubkey,
-        recipientPubkey: recipient,
-        issuerPubkey: request.value.stallId,
-        recipientRole: role,
-      })
-
-      if (!verdict.allowed) {
-        metrics.recipientRefusals[verdict.reason] =
-          (metrics.recipientRefusals[verdict.reason] ?? 0) + 1
-
+      if (refusal) {
         // 200 with a refusal, like an obstacle: the question was answered, and
         // the answer is that this send must not happen. The `refusal` field is
         // separate from `obstacle` because they are different problems — one is
@@ -419,7 +477,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
         return answer(200, {
           parts: [],
           obstacle: null,
-          refusal: { reason: verdict.reason, detail: verdict.detail },
+          refusal,
           available: 0,
           eligibleCount: 0,
         })
@@ -442,6 +500,210 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       refusal: null,
       available: plan.available,
       eligibleCount: plan.eligibleCount,
+    })
+  }
+
+  /**
+   * Prepare one part: replacement coupons, and an unsigned event to sign.
+   *
+   * The point of the whole API. Everything before this is a read; this is
+   * where a script can spend.
+   *
+   * ## What it does, and what it deliberately cannot
+   *
+   * The gateway is asked to split the coupon — forwarding the CALLER's own
+   * signature, never one this service produced, because this service holds no
+   * credential of its own to produce. Back come two coupons: the part being
+   * sent, and the change. The service wraps the sent part in an UNSIGNED NIP-17
+   * rumor addressed to the recipient and returns both.
+   *
+   * The caller signs that rumor locally and publishes it. This service cannot:
+   * sealing a rumor needs the customer's private key, which it has never had
+   * (ADR 0001, ADR 0002). A total compromise here denies callers a wallet; it
+   * does not take their money.
+   *
+   * ## One part at a time
+   *
+   * A plan's parts fail independently, so preparing one touches nothing else,
+   * and the caller owns the retry loop — which is correct, because the caller
+   * owns the coupons.
+   *
+   * ## The dangerous moment
+   *
+   * Between the gateway minting the replacements and the caller persisting
+   * them, a lost response is lost coupons. So the answer carries everything
+   * needed to recover in ONE write, and a retry with the same idempotency key
+   * returns that same answer rather than splitting again — `answer` above
+   * stores it, and the guard replays it before any work happens.
+   */
+  if (path === '/v1/spend/parts/prepare' && method === 'POST') {
+    let parsedBody: unknown
+    try {
+      parsedBody = JSON.parse(body ?? '')
+    } catch {
+      return answer(400, {
+        error: 'invalid-json',
+        field: 'body',
+        detail: 'the request body is not valid JSON',
+      })
+    }
+
+    const request = parsePrepareRequest(parsedBody)
+    if (!request.ok) {
+      metrics.validationErrors++
+      return answer(400, {
+        error: 'invalid-request',
+        field: request.error.field,
+        detail: request.error.detail,
+      })
+    }
+
+    /**
+     * The recipient check runs BEFORE the split, which is the whole reason it
+     * is worth running at all here. Once the gateway has split, the sent half
+     * exists and is addressed to somebody; refusing afterwards would leave the
+     * caller holding a coupon they cannot deliver and did not ask for.
+     */
+    const refusal = await refuseRecipient(
+      auth.pubkey,
+      request.value.recipientPubkey,
+      request.value.stallId,
+    )
+
+    if (refusal) {
+      // 200 with a refusal and no coupons, matching the plan's shape. Nothing
+      // was split, which is what `holdingUnchanged` says out loud: a caller
+      // reading only this field knows not to reconcile.
+      return answer(200, {
+        prepared: null,
+        refusal,
+        holdingUnchanged: true,
+      })
+    }
+
+    const outcome = await requestSplit(request.value, gatewayFetch)
+
+    if (!outcome.ok) {
+      metrics.prepareFailures[outcome.code] = (metrics.prepareFailures[outcome.code] ?? 0) + 1
+
+      // NOT stored against the idempotency key — `answer` only remembers 2xx —
+      // so a caller retrying a failed prepare with the same key really does
+      // retry, rather than being handed the failure forever.
+      return json(res, outcome.status, {
+        error: outcome.code,
+        detail: outcome.detail,
+        // The load-bearing field. Every failure path above reaches the gateway
+        // either not at all or without a split, so the caller's coupon is still
+        // theirs and still whole. A caller that cannot tell "refused" from
+        // "half-done" must reconcile after every error.
+        holdingUnchanged: true,
+      })
+    }
+
+    const split = outcome.split
+
+    metrics.prepared++
+
+    return answer(200, {
+      prepared: {
+        /**
+         * The coupons that REPLACE the one being spent. Both of them, in one
+         * answer, because this is the write a caller must commit atomically:
+         * the source coupon is gone at the mint the moment the gateway
+         * answered, and these two are what exists instead.
+         *
+         * `change` is null for a full send — the whole coupon went — rather
+         * than a zero-valued coupon, which would be a coupon that cannot be
+         * spent and would sit in a holding forever.
+         */
+        replaces: request.value.couponId ?? null,
+        sent: {
+          token: split.send_token,
+          faceValue: split.send_face_value,
+          faceUnit: split.face_unit ?? request.value.currency ?? null,
+          faceDecimals: split.face_decimals ?? request.value.decimals ?? null,
+          tokenAmount: split.send_token_amount ?? null,
+          couponId: split.sent_voucher_id ?? null,
+          stallId: split.issuer_id ?? request.value.stallId ?? null,
+        },
+        change:
+          split.keep_token === undefined || split.keep_token === null || split.keep_token === ''
+            ? null
+            : {
+                token: split.keep_token,
+                faceValue: split.keep_face_value,
+                faceUnit: split.face_unit ?? request.value.currency ?? null,
+                faceDecimals: split.face_decimals ?? request.value.decimals ?? null,
+                tokenAmount: split.keep_token_amount ?? null,
+                stallId: split.issuer_id ?? request.value.stallId ?? null,
+              },
+        /**
+         * The unsigned event. No `id`, no `pubkey`, no `sig` — the caller
+         * supplies all three by sealing and wrapping it with their own key.
+         *
+         * Named `unsignedEvent` rather than `event` because the distinction is
+         * the entire security property, and a field called `event` is one a
+         * caller publishes directly and then wonders why nothing arrives.
+         */
+        unsignedEvent: buildRumor(request.value, split, auth.pubkey),
+        recipientPubkey: request.value.recipientPubkey,
+      },
+      refusal: null,
+      /**
+       * FALSE, and this is the one place it is. The gateway has split; the
+       * source coupon no longer exists and the two above are what replaced it.
+       * Persist before doing anything else.
+       */
+      holdingUnchanged: false,
+    })
+  }
+
+  /**
+   * What to sign for the gateway, for a part you are about to prepare.
+   *
+   * Prepare needs a SECOND signature: one for this service, and one the service
+   * forwards to the gateway, because it holds no credential of its own. That is
+   * the single hardest thing about integrating, and the failure mode is a
+   * `payload-mismatch` from a service the caller never addressed directly.
+   *
+   * So the URL and the exact body bytes are answered here rather than
+   * documented and re-derived. A caller hashes the `body` string verbatim —
+   * re-serialising it changes the hash and the gateway refuses the request.
+   *
+   * POST because the answer depends on the token and amount, and a token in a
+   * URL is a bearer coupon in an access log.
+   */
+  if (path === '/v1/spend/parts/gateway-request' && method === 'POST') {
+    let parsedBody: unknown
+    try {
+      parsedBody = JSON.parse(body ?? '')
+    } catch {
+      return answer(400, {
+        error: 'invalid-json',
+        field: 'body',
+        detail: 'the request body is not valid JSON',
+      })
+    }
+
+    const fields = (parsedBody ?? {}) as Record<string, unknown>
+    if (typeof fields.token !== 'string' || fields.token.length === 0) {
+      metrics.validationErrors++
+      return answer(400, { error: 'invalid-request', field: 'token', detail: 'is required' })
+    }
+    if (typeof fields.amount !== 'number' || !Number.isInteger(fields.amount) || fields.amount <= 0) {
+      metrics.validationErrors++
+      return answer(400, {
+        error: 'invalid-request',
+        field: 'amount',
+        detail: 'expected a positive whole number of minor units',
+      })
+    }
+
+    return answer(200, {
+      url: splitUrl(),
+      method: 'POST',
+      // The exact bytes. Sign THIS string; do not rebuild it.
+      body: splitBody({ token: fields.token, amount: fields.amount }),
     })
   }
 

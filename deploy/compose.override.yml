@@ -179,6 +179,15 @@ services:
     # env below was already written for a locally-built image; those two vars are
     # what it means.
     image: imani-gateway-core:acl-local
+    # The same mint alias gateway-customer carries below, for the same reason —
+    # and its absence here was found by a real send, not by reading. atomic-send
+    # does its SPLIT on gateway-core, and the token's own mint URL is
+    # `http://127.0.0.1.mint:7777`, so a core without this alias fails every
+    # split with UnknownHostException and the saga parks in SPLIT_ERROR.
+    # gateway-customer had the alias; the tier that actually dereferences the
+    # mint URL did not.
+    extra_hosts:
+      - "127.0.0.1.mint:${MINT_HOST_IP:-192.168.144.12}"
     # account-app is defined ONLY here — the deploy repo's test compose has no
     # such service — so nothing else supplies its database or its network. It
     # exited(1) at startup on `Connection to localhost:5432 refused`, because
@@ -304,6 +313,19 @@ services:
   # settles invoices for real here. Turning a cryptographic check off to make a
   # local stack boot is the wrong trade when nothing needs it off.
   gateway-core:
+    # Built locally from imani-gateway-core, for the same reason account-app is
+    # above and with the same command. The registry image predates
+    # VoucherSplitController, which is the route `/v1/spend/parts/prepare` calls
+    # to split a coupon WITHOUT the gateway also delivering the DM — the whole
+    # point of the wallet API's prepare (issue #10, ADR 0002). Against the
+    # registry image every prepare answers 404 from a service the caller never
+    # addressed directly, which reads as a wallet-api bug and is not one.
+    image: imani-gateway-core:acl-local
+    # The mint alias, for the same reason account-app carries it: this tier is
+    # what dereferences the token's own mint URL during a split, and without the
+    # alias every split fails with UnknownHostException.
+    extra_hosts:
+      - "127.0.0.1.mint:${MINT_HOST_IP:-192.168.144.12}"
     environment:
       GATEWAY_DEV_MODE: "false"
       # And the second thing the account-app block documents, for the same
