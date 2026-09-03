@@ -1,0 +1,17 @@
+{
+  "name": "@imani/wallet-core",
+  "version": "0.1.0",
+  "description": "The wallet's money decisions: selection, splitting, and spend plans",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest",
+    "test:run": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "license": "MIT"
+}

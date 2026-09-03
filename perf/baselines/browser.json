@@ -101,9 +101,9 @@
     "note": "50 arrivals into a 50-coupon wallet. 50% band: three runs put the median at 19, 21 and 22ms with samples reaching 31ms, and at ~20ms a few milliseconds of jitter is a large fraction."
   },
   "notification-drain-120": {
-    "tolerancePercent": 50,
+    "tolerancePercent": 70,
     "ms": 21,
-    "note": "50 arrivals into a 120-coupon wallet. 50% band for the same reason as the rung below: medians of 24, 28 and 32ms across runs."
+    "note": "50 arrivals into a 120-coupon wallet. A 70% band, and the widest on this ladder: observed medians of 18, 24, 28 and 32ms across runs, with single samples reaching 38ms. At ~20ms a few milliseconds of scheduling jitter is a third of the value, and this rung tripped a 50% band on an unrelated commit. The 500-coupon rung is the one to watch \u2014 its work is large enough to be stable, and it carries a 35% band."
   },
   "notification-drain-500": {
     "tolerancePercent": 35,
