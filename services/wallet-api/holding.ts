@@ -190,3 +190,74 @@ function describe(value: unknown): string {
   if (typeof value === 'string') return `a string (${JSON.stringify(value)})`
   return `a ${typeof value}`
 }
+
+/**
+ * A spend-plan request: a holding, a stall, a currency, and an amount.
+ *
+ * The holding is validated by `parseHolding`; the three scalars are checked
+ * here. Each error names its own field for the same reason as the coupon
+ * checks: a caller assembling this for the first time gets one thing wrong, and
+ * "invalid request" turns that into an afternoon.
+ */
+export interface PlanBody {
+  coupons: Record<string, unknown>[]
+  stallId: string
+  currency: string
+  amount: number
+}
+
+export function parsePlanRequest(body: unknown): Parsed<PlanBody> {
+  const holding = parseHolding(body)
+  if (!holding.ok) return holding
+
+  const fields = body as Record<string, unknown>
+
+  for (const field of ['stallId', 'currency'] as const) {
+    const value = fields[field]
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      return {
+        ok: false,
+        error: {
+          field,
+          detail: value === undefined ? 'is required' : `expected a non-empty string, got ${describe(value)}`,
+        },
+      }
+    }
+  }
+
+  const amount = fields.amount
+  if (typeof amount !== 'number' || !Number.isFinite(amount)) {
+    return {
+      ok: false,
+      error: {
+        field: 'amount',
+        detail: amount === undefined ? 'is required' : `expected a finite number, got ${describe(amount)}`,
+      },
+    }
+  }
+  // Minor units are whole by definition. A fractional amount means the caller
+  // sent euros where cents were wanted, and silently flooring it would spend
+  // the wrong amount — the one mistake this endpoint must never round away.
+  if (!Number.isInteger(amount)) {
+    return {
+      ok: false,
+      error: {
+        field: 'amount',
+        detail: `expected a whole number of minor units, got ${amount}. Amounts are in cents, not euros.`,
+      },
+    }
+  }
+  if (amount <= 0) {
+    return { ok: false, error: { field: 'amount', detail: `expected a positive amount, got ${amount}` } }
+  }
+
+  return {
+    ok: true,
+    value: {
+      coupons: holding.value,
+      stallId: fields.stallId as string,
+      currency: fields.currency as string,
+      amount,
+    },
+  }
+}

@@ -30,3 +30,13 @@ export {
   type UnusableCoupon,
   type UnusableReason,
 } from './holding'
+
+export {
+  planSpend,
+  eligibleCoupons,
+  type SpendPlan,
+  type PlanRequest,
+  type PlanObstacle,
+  type PlannedPart,
+  type ObstacleKind,
+} from './plan'
