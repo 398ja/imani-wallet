@@ -17,8 +17,18 @@
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure'
+import { nip17 } from 'nostr-tools'
 
-import { server, metrics, guards, setStallLookup, resetStallLookup } from '../server.js'
+import {
+  server,
+  metrics,
+  guards,
+  setStallLookup,
+  resetStallLookup,
+  setGatewayFetch,
+  resetGatewayFetch,
+} from '../server.js'
+import { SPLIT_PATH } from '../prepare.js'
 import { verifyNip98, FRESHNESS_WINDOW_SECONDS } from '../nip98.js'
 import { REPLAY_TTL_MS, RATE_LIMIT } from '../guards.js'
 
@@ -1463,5 +1473,429 @@ describe('refusing a send the recipient could not honour', () => {
     // Separate from validation errors and from auth refusals, so an operator
     // can tell a caller's bug from a relay outage.
     expect(metrics.recipientRefusals).not.toHaveProperty('replay')
+  })
+})
+
+/**
+ * Preparing a part.
+ *
+ * The gateway is substituted, the rest is real: a signed request over a socket,
+ * through the guards, into the shipping handler. The substitution exists
+ * because the behaviours that matter here happen when the gateway FAILS, and a
+ * guarantee that cannot be exercised under failure is a claim.
+ *
+ * The signing is checked in the strongest available way — `nip17.wrapEvent`
+ * from nostr-tools consumes the returned rumor, and the recipient unwraps it —
+ * so "valid gift wrap once signed" is demonstrated rather than asserted about
+ * the shape of an object.
+ */
+describe('preparing a part', () => {
+  const STALL = 'a'.repeat(64)
+  const RECIPIENT = 'c'.repeat(63) + 'd'
+
+  const SPLIT = {
+    send_token: 'cashuB-sent',
+    keep_token: 'cashuB-change',
+    send_face_value: 200,
+    keep_face_value: 800,
+    send_token_amount: 20,
+    keep_token_amount: 80,
+    sent_voucher_id: 'sent-1',
+    issuer_id: STALL,
+    face_unit: 'EUR',
+    face_decimals: 2,
+    is_full_send: false,
+  }
+
+  /** A gateway with a fixed answer, and a record of every call it received. */
+  function gatewayReturning(
+    status: number,
+    payload: unknown,
+    ) {
+    const calls: { url: string; authorization: string | null; body: string }[] = []
+    setGatewayFetch((async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({
+        url: String(url),
+        authorization:
+          (init?.headers as Record<string, string> | undefined)?.authorization ?? null,
+        body: String(init?.body ?? ''),
+      })
+      return new Response(typeof payload === 'string' ? payload : JSON.stringify(payload), {
+        status,
+        headers: { 'content-type': 'application/json' },
+      })
+    }) as unknown as typeof fetch)
+    return calls
+  }
+
+  /** A gateway that cannot be reached at all. */
+  function gatewayDown() {
+    const calls: string[] = []
+    setGatewayFetch((async (url: string | URL | Request) => {
+      calls.push(String(url))
+      throw new TypeError('fetch failed')
+    }) as unknown as typeof fetch)
+    return calls
+  }
+
+  beforeEach(() => {
+    guards.clear()
+    resetGatewayFetch()
+    // The recipient is an ordinary customer unless a test says otherwise, so
+    // the recipient guard is not what these assertions are measuring.
+    setStallLookup({ async role() { return 'customer' }, clear() {} })
+  })
+  afterAll(() => {
+    resetGatewayFetch()
+    resetStallLookup()
+  })
+
+  const request = (over: Record<string, unknown> = {}) => ({
+    token: 'cashuB-source',
+    amount: 200,
+    recipientPubkey: RECIPIENT,
+    stallId: STALL,
+    currency: 'EUR',
+    decimals: 2,
+    couponId: 'coupon-1',
+    gatewayAuthorization: 'Nostr caller-signed-credential',
+    ...over,
+  })
+
+  async function prepare(over: Record<string, unknown> = {}, headers: Record<string, string> = {}, s?: ReturnType<typeof makeSigner>) {
+    const signer = s ?? makeSigner()
+    const payload = JSON.stringify(request(over))
+    const res = await fetch(`${base}/v1/spend/parts/prepare`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: await nip98Header('/v1/spend/parts/prepare', 'POST', payload, signer.signer),
+        ...headers,
+      },
+      body: payload,
+    })
+    return { status: res.status, headers: res.headers, body: await res.json(), signer }
+  }
+
+  it('returns the replacement coupons and an unsigned event', async () => {
+    gatewayReturning(200, SPLIT)
+
+    const res = await prepare()
+
+    expect(res.status).toBe(200)
+    expect(res.body.prepared.sent.token).toBe('cashuB-sent')
+    expect(res.body.prepared.sent.faceValue).toBe(200)
+    expect(res.body.prepared.change.token).toBe('cashuB-change')
+    expect(res.body.prepared.change.faceValue).toBe(800)
+    // Which coupon these two replace, so the caller's write is one statement:
+    // remove that, add these.
+    expect(res.body.prepared.replaces).toBe('coupon-1')
+    expect(res.body.prepared.unsignedEvent.kind).toBe(14)
+    // FALSE on the one path where the gateway actually split. A caller that
+    // reads this as true skips the write and loses both coupons, so the
+    // success case must assert it as loudly as every failure case does.
+    expect(res.body.holdingUnchanged).toBe(false)
+  })
+
+  it('returns an event that is genuinely unsigned', async () => {
+    gatewayReturning(200, SPLIT)
+
+    const { body } = await prepare()
+    const event = body.prepared.unsignedEvent
+
+    // All three, because any ONE of them present would make this a thing the
+    // service produced rather than a template the caller completes.
+    expect(event).not.toHaveProperty('id')
+    expect(event).not.toHaveProperty('pubkey')
+    expect(event).not.toHaveProperty('sig')
+    // And nothing anywhere in the response looks like a signature.
+    expect(JSON.stringify(body)).not.toMatch(/"sig"\s*:/)
+  })
+
+  it('returns an event that becomes a valid gift wrap once the caller signs it', async () => {
+    gatewayReturning(200, SPLIT)
+
+    // A real recipient, so the wrap can actually be unwrapped.
+    const recipientSecret = generateSecretKey()
+    const recipientPubkey = getPublicKey(recipientSecret)
+    const { body, signer } = await prepare({ recipientPubkey })
+
+    // The CALLER's own key does the sealing and wrapping, locally. This is the
+    // step the service cannot perform, performed by the only party who can.
+    const wrap = nip17.wrapEvent(
+      signer.secret,
+      { publicKey: recipientPubkey },
+      body.prepared.unsignedEvent.content,
+    )
+
+    expect(wrap.kind).toBe(1059)
+    // The outer wrap is signed by a THROWAWAY key, never the sender's — that is
+    // what NIP-59 is for, and asserting it here pins that the caller's identity
+    // is not on the outside of the envelope.
+    expect(wrap.pubkey).not.toBe(signer.pubkey)
+
+    const rumor = nip17.unwrapEvent(wrap, recipientSecret)
+    // The inner rumor carries the sender's real identity, which is how the
+    // recipient knows who paid.
+    expect(rumor.pubkey).toBe(signer.pubkey)
+
+    const payload = JSON.parse(rumor.content)
+    expect(payload.type).toBe('cashu_token_transfer')
+    expect(payload.token).toBe('cashuB-sent')
+    expect(payload.face_value).toBe(200)
+  })
+
+  it('addresses the event to the intended recipient and carries the intended part', async () => {
+    gatewayReturning(200, SPLIT)
+
+    const { body } = await prepare()
+    const event = body.prepared.unsignedEvent
+
+    // The `p` tag is what makes the wrap reach anyone at all: the recipient
+    // subscribes on it. A wrap without it reaches the relay and nobody.
+    expect(event.tags).toContainEqual(['p', RECIPIENT])
+
+    const payload = JSON.parse(event.content)
+    expect(payload.token).toBe(SPLIT.send_token)
+    expect(payload.face_value).toBe(200)
+    expect(payload.face_unit).toBe('EUR')
+    expect(payload.issuer_id).toBe(STALL)
+  })
+
+  it('names the caller as the sender from the SIGNATURE, not from the body', async () => {
+    gatewayReturning(200, SPLIT)
+
+    // A caller claiming to be somebody else. The field is not read.
+    const { body, signer } = await prepare({ sender_pubkey: 'f'.repeat(64), senderPubkey: 'f'.repeat(64) })
+
+    expect(JSON.parse(body.prepared.unsignedEvent.content).sender_pubkey).toBe(signer.pubkey)
+  })
+
+  it('calls the gateway with the caller’s own signature, never one it produced', async () => {
+    const calls = gatewayReturning(200, SPLIT)
+
+    await prepare({ gatewayAuthorization: 'Nostr the-callers-own-credential' })
+
+    expect(calls).toHaveLength(1)
+    // Verbatim. The service is a courier for a credential it cannot forge, and
+    // substituting one of its own would be exactly the custody this design
+    // refuses.
+    expect(calls[0].authorization).toBe('Nostr the-callers-own-credential')
+    expect(calls[0].url).toContain(SPLIT_PATH)
+  })
+
+  it('sends the gateway the exact bytes it told the caller to sign', async () => {
+    const calls = gatewayReturning(200, SPLIT)
+    const signer = makeSigner()
+
+    // What the service says to sign...
+    const askPayload = JSON.stringify({ token: 'cashuB-source', amount: 200 })
+    const ask = await fetch(`${base}/v1/spend/parts/gateway-request`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: await nip98Header('/v1/spend/parts/gateway-request', 'POST', askPayload, signer.signer),
+      },
+      body: askPayload,
+    })
+    const advice = await ask.json()
+
+    // ...must be byte for byte what it then posts, or the caller's payload hash
+    // will not match and the gateway refuses a request nobody altered.
+    await prepare({}, {}, signer)
+
+    expect(calls[0].body).toBe(advice.body)
+    expect(advice.url).toContain(SPLIT_PATH)
+    expect(advice.method).toBe('POST')
+  })
+
+  it('refuses a request with no gateway credential, and says what to sign', async () => {
+    const calls = gatewayReturning(200, SPLIT)
+
+    const res = await prepare({ gatewayAuthorization: undefined })
+
+    expect(res.status).toBe(400)
+    expect(res.body.field).toBe('gatewayAuthorization')
+    // The service holds no credential of its own to fall back on, and saying so
+    // is the difference between a caller adding a header and a caller filing a
+    // bug about a missing feature.
+    expect(res.body.detail).toContain(SPLIT_PATH)
+    expect(calls).toEqual([])
+  })
+
+  describe('when the gateway fails', () => {
+    it('leaves the holding unchanged and says so plainly when it cannot be reached', async () => {
+      const calls = gatewayDown()
+
+      const res = await prepare()
+
+      expect(res.status).toBe(502)
+      expect(res.body.error).toBe('gateway-unreachable')
+      // The load-bearing field: a caller that cannot tell "refused" from
+      // "half-done" must reconcile after every error.
+      expect(res.body.holdingUnchanged).toBe(true)
+      expect(res.body.detail).toContain('holding is unchanged')
+      expect(calls).toHaveLength(1)
+    })
+
+    it('passes a refused signature back as a 401 rather than a server error', async () => {
+      gatewayReturning(401, { error_code: 'AUTH_002', error_message: 'NIP-98 payload hash mismatch' })
+
+      const res = await prepare()
+
+      // The CALLER's signature was refused, and no amount of retrying by this
+      // service would fix it — so the caller is told, not the operator.
+      expect(res.status).toBe(401)
+      expect(res.body.holdingUnchanged).toBe(true)
+      expect(res.body.detail).toContain('payload hash mismatch')
+    })
+
+    it('refuses a success that carries no send token', async () => {
+      gatewayReturning(200, { ...SPLIT, send_token: undefined })
+
+      const res = await prepare()
+
+      // Building an event around `undefined` would publish a send containing no
+      // money, which the recipient's wallet would accept as an arrival.
+      expect(res.status).toBe(502)
+      expect(res.body.error).toBe('gateway-incomplete')
+    })
+
+    it('does not store a failure against the idempotency key', async () => {
+      gatewayDown()
+      const signer = makeSigner()
+      const first = await prepare({}, { 'Idempotency-Key': 'retry-me' }, signer)
+      expect(first.status).toBe(502)
+
+      // The same key now succeeds, because only 2xx is remembered. A caller
+      // whose gateway was briefly down must be able to retry, not be handed the
+      // outage forever.
+      gatewayReturning(200, SPLIT)
+      const second = await prepare({}, { 'Idempotency-Key': 'retry-me' }, signer)
+
+      expect(second.status).toBe(200)
+      expect(second.headers.get('idempotency-replayed')).toBeNull()
+    })
+
+    it('counts failures by reason, separately from other errors', async () => {
+      const before = { ...metrics.prepareFailures }
+      gatewayDown()
+
+      await prepare()
+
+      expect(metrics.prepareFailures['gateway-unreachable']).toBe(
+        (before['gateway-unreachable'] ?? 0) + 1,
+      )
+    })
+  })
+
+  describe('retrying', () => {
+    it('returns the first answer and does not mint again', async () => {
+      const calls = gatewayReturning(200, SPLIT)
+      const signer = makeSigner()
+
+      const first = await prepare({}, { 'Idempotency-Key': 'pay-supplier-1' }, signer)
+      const second = await prepare({}, { 'Idempotency-Key': 'pay-supplier-1' }, signer)
+
+      expect(second.status).toBe(200)
+      expect(second.headers.get('idempotency-replayed')).toBe('true')
+      expect(second.body).toEqual(first.body)
+      // THE assertion. A second call to the gateway is a second split, which is
+      // a coupon divided twice and half of it stranded server-side.
+      expect(calls).toHaveLength(1)
+    })
+
+    it('keeps one caller’s key clear of another’s', async () => {
+      const calls = gatewayReturning(200, SPLIT)
+
+      await prepare({}, { 'Idempotency-Key': 'shared-name' }, makeSigner())
+      const other = await prepare({}, { 'Idempotency-Key': 'shared-name' }, makeSigner())
+
+      expect(other.headers.get('idempotency-replayed')).toBeNull()
+      expect(calls).toHaveLength(2)
+    })
+  })
+
+  it('does not affect any other part of a plan', async () => {
+    const calls = gatewayReturning(200, SPLIT)
+    const signer = makeSigner()
+
+    // Two parts of one plan, prepared independently, each with its own key.
+    await prepare({ token: 'cashuB-part-one', couponId: 'coupon-1' }, { 'Idempotency-Key': 'plan-x-part-0' }, signer)
+    await prepare({ token: 'cashuB-part-two', couponId: 'coupon-2' }, { 'Idempotency-Key': 'plan-x-part-1' }, signer)
+
+    expect(calls).toHaveLength(2)
+    // Each carries its OWN coupon. One part's failure or retry cannot reach
+    // another, because nothing ties them together on this service at all.
+    expect(calls[0].body).toContain('cashuB-part-one')
+    expect(calls[1].body).toContain('cashuB-part-two')
+  })
+
+  it('refuses a send the recipient could not honour, before splitting anything', async () => {
+    const calls = gatewayReturning(200, SPLIT)
+    setStallLookup({ async role() { return 'stall' }, clear() {} })
+
+    // A different stall from the one that issued these coupons.
+    const res = await prepare({ recipientPubkey: 'b'.repeat(64) })
+
+    expect(res.status).toBe(200)
+    expect(res.body.prepared).toBeNull()
+    expect(res.body.refusal.reason).toBe('wrong-stall')
+    expect(res.body.holdingUnchanged).toBe(true)
+    // The check runs BEFORE the split, which is the only ordering that leaves
+    // the coupon whole. Afterwards the caller would hold a sent half addressed
+    // to a stall that cannot honour it.
+    expect(calls).toEqual([])
+  })
+
+  it('refuses when the recipient could not be checked at all', async () => {
+    const calls = gatewayReturning(200, SPLIT)
+    setStallLookup({ async role() { return 'unknown' }, clear() {} })
+
+    const res = await prepare({ recipientPubkey: 'e'.repeat(64) })
+
+    // Fail-closed, and for the asymmetry the plan documents: a send blocked by
+    // an outage is retried, a coupon landing on the wrong stall is gone.
+    expect(res.body.refusal.reason).toBe('recipient-unknown')
+    expect(calls).toEqual([])
+  })
+
+  it('reports a full send as no change rather than a worthless coupon', async () => {
+    gatewayReturning(200, { ...SPLIT, keep_token: null, keep_face_value: 0, is_full_send: true })
+
+    const { body } = await prepare({ amount: 1000 })
+
+    // A zero-valued coupon cannot be spent and would sit in a holding forever.
+    expect(body.prepared.change).toBeNull()
+    expect(body.prepared.sent.token).toBe('cashuB-sent')
+  })
+
+  describe('validation', () => {
+    const cases: [string, Record<string, unknown>, string][] = [
+      ['a missing token', { token: undefined }, 'token'],
+      ['a fractional amount', { amount: 2.5 }, 'amount'],
+      ['a negative amount', { amount: -1 }, 'amount'],
+      ['a missing recipient', { recipientPubkey: undefined }, 'recipientPubkey'],
+      ['a malformed recipient', { recipientPubkey: 'not-a-key' }, 'recipientPubkey'],
+    ]
+
+    for (const [name, over, field] of cases) {
+      it(`refuses ${name} and names the field`, async () => {
+        const calls = gatewayReturning(200, SPLIT)
+
+        const res = await prepare(over)
+
+        expect(res.status).toBe(400)
+        expect(res.body.field).toBe(field)
+        // Nothing reached the gateway, so nothing moved.
+        expect(calls).toEqual([])
+      })
+    }
+
+    it('explains that amounts are minor units when given euros', async () => {
+      gatewayReturning(200, SPLIT)
+      const res = await prepare({ amount: 2.5 })
+      expect(res.body.detail).toContain('cents, not euros')
+    })
   })
 })
