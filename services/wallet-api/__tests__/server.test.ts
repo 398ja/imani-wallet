@@ -380,3 +380,284 @@ describe('body binding', () => {
     expect((await res.json()).error).toBe('payload-mismatch')
   })
 })
+
+/**
+ * Valuing a holding, over HTTP.
+ *
+ * The grouping rules themselves are tested as pure functions in
+ * `@imani/wallet-core`, where they belong and where they need no server. What
+ * is tested here is what only HTTP can show: that a caller's coupons survive
+ * the wire intact, that a malformed body is refused by field, and that the
+ * request has to be signed like any other.
+ */
+describe('valuing a holding', () => {
+  const STALL_A = 'a'.repeat(64)
+  const STALL_B = 'b'.repeat(64)
+
+  const coupon = (over: Record<string, unknown> = {}) => ({
+    voucher_id: 'c1',
+    token: 'cashuBo...',
+    face_value: 1000,
+    face_unit: 'EUR',
+    face_decimals: 2,
+    token_amount: 500,
+    issuer_id: STALL_A,
+    status: 'active',
+    ...over,
+  })
+
+  /** A signed POST, since every request here needs one. */
+  async function value(payload: unknown, signer?: { signEvent: (t: never) => Promise<never> }) {
+    const s = signer ?? makeSigner().signer
+    const body = JSON.stringify(payload)
+    const res = await fetch(`${base}/v1/holding/value`, {
+      method: 'POST',
+      body,
+      headers: {
+        authorization: await nip98Header('/v1/holding/value', 'POST', body, s as never),
+        'content-type': 'application/json',
+      },
+    })
+    return { status: res.status, body: (await res.json()) as Record<string, never> }
+  }
+
+  it('answers with value grouped by stall and currency', async () => {
+    const res = await value({
+      coupons: [coupon({ voucher_id: '1' }), coupon({ voucher_id: '2', face_value: 250 })],
+    })
+
+    expect(res.status).toBe(200)
+    expect(res.body.groups).toHaveLength(1)
+    expect(res.body.groups[0]).toMatchObject({
+      stallId: STALL_A,
+      currency: 'EUR',
+      faceValue: 1250,
+      couponCount: 2,
+    })
+  })
+
+  it('never sums two stalls together', async () => {
+    const res = await value({
+      coupons: [coupon({ issuer_id: STALL_A }), coupon({ issuer_id: STALL_B })],
+    })
+    expect(res.body.groups).toHaveLength(2)
+  })
+
+  it('never sums two currencies from one stall together', async () => {
+    const res = await value({
+      coupons: [coupon({ face_unit: 'EUR' }), coupon({ face_unit: 'XAF', face_decimals: 0 })],
+    })
+    expect(res.body.groups).toHaveLength(2)
+  })
+
+  it('reports unspendable coupons rather than counting or dropping them', async () => {
+    const res = await value({
+      coupons: [
+        coupon({ voucher_id: 'live' }),
+        coupon({ voucher_id: 'gone', status: 'spent' }),
+        coupon({ voucher_id: 'lapsed', expires_at: '2020-01-01T00:00:00Z' }),
+      ],
+    })
+
+    expect(res.body.groups).toHaveLength(1)
+    expect(res.body.unusable).toEqual([
+      { couponId: 'gone', reason: 'spent' },
+      { couponId: 'lapsed', reason: 'expired' },
+    ])
+    // Every coupon supplied is accounted for, which is what a reconciler needs.
+    expect(res.body.couponCount).toBe(3)
+  })
+
+  it('treats an empty holding as a valid request with an empty answer', async () => {
+    const res = await value({ coupons: [] })
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ groups: [], unusable: [], couponCount: 0 })
+  })
+
+  describe('malformed holdings name the field at fault', () => {
+    it('names a coupon field of the wrong type, with its index', async () => {
+      const res = await value({ coupons: [coupon(), coupon({ face_value: '1000' })] })
+      expect(res.status).toBe(400)
+      expect(res.body.field).toBe('coupons[1].face_value')
+      expect(res.body.detail).toContain('number')
+    })
+
+    it('names a missing required field', async () => {
+      const holding = coupon() as Record<string, unknown>
+      delete holding.token
+      const res = await value({ coupons: [holding] })
+      expect(res.body.field).toBe('coupons[0].token')
+      expect(res.body.detail).toContain('required')
+    })
+
+    it('names a coupon that is not an object at all', async () => {
+      const res = await value({ coupons: [coupon(), null] })
+      expect(res.body.field).toBe('coupons[1]')
+      expect(res.body.detail).toContain('null')
+    })
+
+    /**
+     * Asserts the DETAIL, not just the field. Mutation testing found that
+     * removing the missing-field check entirely still produced
+     * `field: 'coupons'` — the array check caught it and said "expected an
+     * array, got undefined". Distinguishing "you left it out" from "you sent
+     * the wrong type" is the whole point of naming a field.
+     */
+    it('names a missing coupons array as missing, not as the wrong type', async () => {
+      const res = await value({})
+      expect(res.body.field).toBe('coupons')
+      expect(res.body.detail).toContain('required')
+    })
+
+    /**
+     * A string has a `length` and indexes like an array, so without the array
+     * check the loop iterates its CHARACTERS and blames `coupons[0]` for not
+     * being an object. The caller's actual mistake is one level up.
+     */
+    it('blames the coupons field itself when it is a string, not its characters', async () => {
+      const res = await value({ coupons: 'not-an-array' })
+      expect(res.body.field).toBe('coupons')
+      expect(res.body.detail).toContain('array')
+    })
+
+    it('names the body when it is not an object', async () => {
+      const res = await value([coupon()])
+      expect(res.body.field).toBe('body')
+    })
+
+    /**
+     * `typeof NaN === 'number'`, so a NaN face value passes a naive type check
+     * and then poisons every sum it touches — a group total of `null` once
+     * serialised, which reads as "no value" rather than "bad input".
+     */
+    /**
+     * Infinity is reachable over the wire, but only as raw text.
+     *
+     * `JSON.stringify(Infinity)` is `null`, so a JS caller cannot send one by
+     * accident — my first attempt at this test built the body with
+     * `stringify` and asserted a 400 that could never come. The literal
+     * `1e999` IS valid JSON and parses to Infinity, which is `typeof
+     * 'number'`, passes a naive type check, and serialises back out as `null`.
+     * A caller would read that group as worth nothing.
+     *
+     * So the body is written by hand, because that is the only way this
+     * reaches the parser at all.
+     */
+    it('refuses a non-finite face value rather than answering with a null total', async () => {
+      const raw = `{"coupons":[{"token":"t","face_value":1e999,"issuer_id":"${STALL_A}"}]}`
+      const res = await fetch(`${base}/v1/holding/value`, {
+        method: 'POST',
+        body: raw,
+        headers: {
+          authorization: await nip98Header(
+            '/v1/holding/value',
+            'POST',
+            raw,
+            makeSigner().signer as never,
+          ),
+        },
+      })
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.field).toBe('coupons[0].face_value')
+      expect(body.detail).toContain('finite')
+    })
+
+    it('refuses a non-finite token amount for the same reason', async () => {
+      const raw = `{"coupons":[{"token":"t","face_value":10,"token_amount":1e999,"issuer_id":"${STALL_A}"}]}`
+      const res = await fetch(`${base}/v1/holding/value`, {
+        method: 'POST',
+        body: raw,
+        headers: {
+          authorization: await nip98Header(
+            '/v1/holding/value',
+            'POST',
+            raw,
+            makeSigner().signer as never,
+          ),
+        },
+      })
+      expect(res.status).toBe(400)
+      expect((await res.json()).field).toBe('coupons[0].token_amount')
+    })
+
+    it('refuses a body that is not JSON, without a stack trace', async () => {
+      const body = '{not json'
+      const res = await fetch(`${base}/v1/holding/value`, {
+        method: 'POST',
+        body,
+        headers: {
+          authorization: await nip98Header(
+            '/v1/holding/value',
+            'POST',
+            body,
+            makeSigner().signer as never,
+          ),
+        },
+      })
+      expect(res.status).toBe(400)
+      expect((await res.json()).error).toBe('invalid-json')
+    })
+  })
+
+  /**
+   * `expires_at` is TYPED as a string and WRITTEN as a number by the redemption
+   * path. Refusing the numeric form would refuse coupons the wallet itself
+   * produced, so the endpoint has to accept what the wallet actually writes.
+   */
+  it('accepts the numeric expiry the wallet actually writes', async () => {
+    const res = await value({
+      coupons: [coupon({ expires_at: Math.floor(Date.parse('2020-01-01') / 1000) })],
+    })
+    expect(res.status).toBe(200)
+    expect(res.body.unusable[0]).toMatchObject({ reason: 'expired' })
+  })
+
+  it('requires a signature like every other route', async () => {
+    const res = await fetch(`${base}/v1/holding/value`, {
+      method: 'POST',
+      body: JSON.stringify({ coupons: [] }),
+    })
+    expect(res.status).toBe(401)
+    expect((await res.json()).error).toBe('unsigned')
+  })
+
+  /**
+   * The body hash is what makes this safe to accept: without it a signature
+   * over an empty holding could be replayed against any holding at all.
+   */
+  it('refuses a holding swapped after the signature was made', async () => {
+    const signed = JSON.stringify({ coupons: [] })
+    const res = await fetch(`${base}/v1/holding/value`, {
+      method: 'POST',
+      body: JSON.stringify({ coupons: [coupon()] }),
+      headers: {
+        authorization: await nip98Header(
+          '/v1/holding/value',
+          'POST',
+          signed,
+          makeSigner().signer as never,
+        ),
+      },
+    })
+    expect(res.status).toBe(401)
+    expect((await res.json()).error).toBe('payload-mismatch')
+  })
+
+  /**
+   * ADR 0001: the service holds neither the key nor the coupons. Asserted by
+   * sending a holding and then asking a DIFFERENT caller for an empty one — if
+   * anything were retained between requests, the second answer would carry it.
+   */
+  it('retains nothing about a holding after the response', async () => {
+    const first = await value({ coupons: [coupon({ voucher_id: 'secret-coupon' })] })
+    expect(first.body.groups).toHaveLength(1)
+
+    const second = await value({ coupons: [] }, makeSigner().signer as never)
+    expect(second.body).toEqual({ groups: [], unusable: [], couponCount: 0 })
+
+    // And the same caller asking again gets nothing carried over either.
+    const third = await value({ coupons: [] })
+    expect(third.body.couponCount).toBe(0)
+  })
+})

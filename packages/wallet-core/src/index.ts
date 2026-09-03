@@ -21,3 +21,12 @@ export {
   type SendPart,
   type SendPlan,
 } from './spend'
+
+export {
+  valueHolding,
+  stallKey,
+  type HoldingGroup,
+  type HoldingValue,
+  type UnusableCoupon,
+  type UnusableReason,
+} from './holding'
