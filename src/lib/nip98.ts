@@ -44,7 +44,31 @@ export interface RequestSigner {
     created_at: number
     tags: string[][]
     content: string
-  }): Promise<{ id: string; sig: string; pubkey: string }>
+  }): Promise<SignedEvent>
+}
+
+/**
+ * The COMPLETE signed event, because the whole thing goes on the wire.
+ *
+ * This used to be declared as `{ id; sig; pubkey }`, which was a quiet lie:
+ * `nip98Header` serialises whatever it gets back, and a verifier re-derives the
+ * id by hashing `kind`, `created_at`, `tags` and `content`. A signer that
+ * returned only the three declared fields would produce a header that NO
+ * correct verifier could accept, and the type said that was fine.
+ *
+ * Nothing was broken in production — every real signer here is nostr-tools'
+ * `finalizeEvent`, which returns the full event — so this was latent rather
+ * than live. It stopped being latent the moment a test wrote a signer to the
+ * declared type and produced headers the verifier rejected as malformed.
+ */
+export interface SignedEvent {
+  id: string
+  pubkey: string
+  sig: string
+  kind: number
+  created_at: number
+  tags: string[][]
+  content: string
 }
 
 /**
