@@ -32,6 +32,29 @@ RUN npm install --no-package-lock --omit=dev \
 
 COPY services/wallet-api ./services/wallet-api
 
+# The tests are not runtime, and more than that: this service's safety argument
+# is that it holds no code path which can sign. The suite necessarily imports
+# the wallet's SIGNER to produce test credentials, so shipping it would put
+# signing capability inside the one image whose claim is that it has none.
+#
+# Inert as it sits — the entrypoint never loads it, and src/lib is not even
+# present, so the import could not resolve. Removed anyway, because "inert" is
+# a property of today's entrypoint and "absent" is a property of the image.
+RUN rm -rf services/wallet-api/__tests__
+
+# Prove the claim rather than assert it: fail the BUILD if anything that can
+# sign is reachable in the shipped tree. A comment saying the service cannot
+# sign goes stale the first time someone adds an import; this does not.
+# The Dockerfile itself is copied in by the COPY above and NAMES these symbols
+# in this very check, so scanning the whole directory matched the guard against
+# its own pattern and failed an honest build. Caught by running it: an
+# unplanted build went red before a planted one ever did.
+#
+# Scoped to *.ts, which is the only thing the entrypoint can execute anyway.
+RUN ! find services/wallet-api -name '*.ts' -exec \
+      grep -lE "finalizeEvent|schnorr\.sign|generateSecretKey|getSigner" {} + \
+    || (echo "FAIL: signing capability reachable in wallet-api image" && exit 1)
+
 ENV PORT=8788
 EXPOSE 8788
 
