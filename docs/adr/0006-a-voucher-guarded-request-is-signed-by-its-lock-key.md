@@ -220,6 +220,67 @@ A genuinely public revocation list would need per-burn random tags carried by th
 holder rather than `y` — a different credential format, not a different relay
 setting.
 
+### The issuer's own ledger is the one relay source that fits
+
+Found after the above, and worth separating from it, because the objections to
+the mint's burn stream do not apply.
+
+`cashu-voucher` publishes a `VoucherLedgerEvent`: a kind-30078 addressed
+`d=voucher:<id>`, **signed by the issuer**, carrying a plaintext `status` tag
+whose terminal values include `REVOKED`. That is an issuer-signed revocation
+statement rather than a mint-signed spend, and revocation is exactly what a
+voucher-guarded request needs to know.
+
+It leaks nothing new. `issuer_id` and `issuer_pubkey` are already public on that
+event — the traceability spec exempts them from redaction in every privacy mode
+for precisely that reason — so unlike `y`, publishing status adds no correlation
+key that did not already exist.
+
+The same asymmetry makes it safe: a seen `REVOKED` denies, offline and
+immediately; an unseen one changes nothing and falls through to the mint. It can
+only ever subtract, which is the property that lets it sit in front of a
+credential check at all.
+
+**It does not replace the mint, for two reasons.** A relay still cannot prove
+absence, so "no `REVOKED` published" is not "not revoked". And revocation is not
+the only way a voucher dies: `REDEEMED` is a mint-side event that the issuer may
+never publish, so the ledger covers deliberate withdrawal and not liveness.
+
+**It is also still blocked.** `SignedVoucher` wraps a `VoucherSecret` while
+`P2PKVoucherSecret` extends `P2PKSecret`, so the ledger cannot represent a
+P2PK-locked voucher — which is the only kind this ADR uses. Building the watcher
+before that lands would produce a revocation channel structurally unable to see
+the credentials it exists to revoke.
+
+So the sequencing is: the seven checks and the degraded path first, which are
+implementable today; the issuer-ledger watcher second, as a staleness
+improvement over the cache TTL, once the ledger can carry the kind.
+
+## Not built yet, and deliberately
+
+No endpoint in this API is voucher-guarded today. `prepare` and the reads
+authenticate a caller as themselves, and that is sufficient for what they do.
+
+This ADR is therefore a decision recorded **before** its first use rather than
+after, which is worth stating so a reader does not go looking for the
+implementation. The reason to write it now is that the alternatives were being
+weighed anyway — a header instead of the body, a bearer voucher instead of the
+binding, relays instead of the mint — and the arguments against each are easier
+to reconstruct while the code that motivated them is in view than a year later
+from the shape of the answer.
+
+The first voucher-guarded resource will decide two things this document
+deliberately leaves open, because they are policy rather than mechanism:
+
+- **what `grant()` returns** — which roles and permissions a verified voucher
+  confers, parameterised by stall in the form ADR 0005 requires
+  (`voucher:redeem:<issuer_pubkey>`, never a bare `redeem`);
+- **what the degraded set contains** — which of those survive when the mint
+  cannot be reached, given that redemption must and issuance must not.
+
+Both need the resource in hand. Inventing them now would be guessing, and
+`nap-voucher`'s own wiring refuses to default either for the same reason.
+
 ## What is settled upstream, and what is not
 
 The composite `P2PK_VOUCHER` kind, which ADR 0005 and extension 0001 §5.3 both
