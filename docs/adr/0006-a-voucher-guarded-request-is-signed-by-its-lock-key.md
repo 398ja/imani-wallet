@@ -89,27 +89,62 @@ state-checking arbitrary proofs.
   back, and worse, makes its idempotency records and rate limit shared across
   everything else it does.
 
-- **The mint becomes an availability dependency of every guarded request**, not
-  of a login. This is where a stateless API is worse than NAP's session model
-  rather than better. NAP checks state once at `/auth/complete` and lives with a
-  bounded staleness window; here there is no session to carry a decision, so the
-  honest reading of "evaluate permissions on every request" is a NUT-07 check on
-  every request. Extension 0001 §7.1 calls per-request state checks a trap, and
-  it is right.
+- **Six of the seven checks are permanently offline; only liveness is not.**
+  Worth stating as a table, because "the mint is required" is true of one row and
+  gets read as true of all seven:
 
-  The mitigation is the asymmetry this repo already applies to redemption and to
-  the recipient check: **a short-TTL cache on `checkstate`, and a degraded answer
-  that is redeem-only rather than deny-everything.** Redemption must never need
-  the network to authorise; issuance is value-bearing and can wait. The cache TTL
-  is a security parameter, being the maximum staleness of an authorisation
-  decision, and belongs in the same conversation as the guard TTLs rather than
-  being tuned for latency.
+  | check | needs the mint? |
+  |---|---|
+  | `mint_url` allowlisted | no — local config |
+  | DLEQ verifies | keyset only, cached |
+  | `K === auth.pubkey` | no — a comparison |
+  | `issuer_sig` verifies | no — the wallet already does this offline |
+  | `(mint, issuer)` allowlisted | no — local config |
+  | `expires_at` in the future | no — local clock |
+  | **NUT-07 `checkstate`** | **yes, irreducibly** |
+
+  The issuer signature is the one most often assumed to need a network call. It
+  does not: `verifyVoucher` in `src/lib/voucherToken.ts` runs in the browser, and
+  `preparedPart.test.ts` exercises it against a coupon this API really split.
+
+  Liveness cannot join them, and not for want of engineering. `y =
+  hash_to_curve(secret)` is what NUT-07 is keyed on, and a proof's spent-ness is
+  a fact about the mint's spent-set that exists nowhere else by construction. No
+  signature can encode "not yet spent", because spending happens after signing.
+
+  **So the practical dependency is much narrower than "every request needs the
+  mint".** Every *denial* on a forged signature, an expired voucher, a wrong lock
+  key or an untrusted issuer is local, and happens before any outbound call — the
+  ordering above already requires that for SSRF reasons, and it pays twice. The
+  mint is contacted only when a request would otherwise be **allowed**.
+
+- **An unreachable mint degrades rather than denies, and the split is ADR 0003's.**
+  A short-TTL cache on `checkstate`, and a degraded answer that is **redeem-only**
+  rather than deny-everything. Redemption must never need the network to
+  authorise it, and ADR 0003 establishes that by measuring the flow with the
+  browser context set OFFLINE rather than asserting it; issuance is value-bearing
+  and waits.
+
+  The asymmetry is what makes the trade affordable. A revoked terminal that
+  redeems for a few more minutes sends coupons to the stall that issued them, and
+  a terminal never holds value (ADR 0005) — so the error is recoverable. A
+  revoked terminal that *issues* creates money that should not exist, and nothing
+  downstream catches it. Only the second must wait.
+
+  The cache TTL is a security parameter, being the maximum staleness of an
+  authorisation decision, and belongs beside the guard TTLs rather than being
+  tuned for latency. `nap-voucher`'s own `availability.ts` refuses to default the
+  degraded grant for the same reason: a default of the full grant is the
+  vulnerability, and a default of nothing is a session that silently does nothing
+  and reads as though it works. It also takes a `destructivePermissions` list and
+  throws at wiring time on overlap, which is the only mechanical check that
+  "reduced" is true rather than a promise in a comment.
 
 - **Statelessness removes two of the extension's hardest problems.** There is no
   session to outlive its credential (§7.1) and no re-resolution that has lost the
   credential (§7.2), because every request carries its own. What NAP bounds with
   `maxSessionLifetimeSeconds`, this API gets for free — the staleness window is
-  the cache TTL, and nothing else.
+  the cache TTL and nothing else.
 
 - **A voucher-guarded resource on the GATEWAY repeats the forwarding problem.**
   This service holds no credential of its own and cannot mint one (ADR 0002), so
@@ -127,6 +162,63 @@ state-checking arbitrary proofs.
   needs a new `voucherRefusals` counter beside `recipientRefusals` — an
   authorisation denial that reaches no metric is invisible on exactly the surface
   where it matters most.
+
+## Relays are not a substitute for the mint
+
+Asked and answered during review, and recorded because the idea is a good one
+that fails for a reason worth knowing: could a relay carry a list of burned
+vouchers, so liveness is answered offline and relays act as mint backups?
+
+**No, and the obstacle is Cashu itself rather than a missing feature.**
+
+The infrastructure exists and is further along than it looks. `cashu-ledger`'s
+trace publisher already signs with the **mint's own key**, over a canonical
+NIP-01 id, through a durable outbox — so a burn is already a mint-signed fact
+rather than an issuer's claim. `OperationKind.isMintStateChange()` names exactly
+the operations that consume proofs, and every privacy mode retains `y`, which is
+the same key NUT-07 is keyed on. It would join perfectly.
+
+Three things stop it, and the first is decisive:
+
+1. **A public burn list *is* the transaction graph.** The trace specification
+   §7.2 is explicit: capturing the chain of custody "operationally undoes"
+   Cashu's sender/receiver unlinkability, which is "acceptable inside an operator
+   boundary but unacceptable as a public service." `PrivateRelayGuard` therefore
+   refuses to start against any public relay **in every privacy mode**, including
+   `MINIMAL`. Publishing burns publicly would take a system engineered so nobody
+   can build that graph and hand the graph to everybody.
+
+   `y = hash_to_curve(secret)` is unsalted, so a public list is not a disclosure
+   but an **oracle**: anyone holding a candidate secret — every merchant who ever
+   received the coupon — could test membership and correlate. §7.2 names this
+   directly.
+
+2. **A private relay shares the mint's failure domain.** Even setting privacy
+   aside, the only permitted target runs beside the mint, so it is unavailable in
+   the same outage. It would be a latency win inside one operator's boundary, not
+   an availability one.
+
+3. **The stream is async and may be lossy.** The publisher enqueues and returns,
+   so a spend precedes its published burn; and three of four `OverflowPolicy`
+   values may drop events, tagging themselves so "consumers can interpret gaps."
+   A revocation list with sanctioned gaps cannot be relied on.
+
+There is also a direction argument that holds regardless of all three. A relay
+can only ever prove a voucher **is** burned; it cannot prove one is **not**,
+because absence on a best-effort relay is not evidence of absence. Substituting
+relays for NUT-07 would silently convert a fail-closed check into a fail-open
+one.
+
+**What would remain sound** is a burn watcher used strictly as a negative
+channel, inside an operator boundary: a seen burn denies immediately and offline,
+and an unseen burn changes nothing. That only ever refuses, so the unsafe
+direction is unreachable, and it would cut revocation latency from the cache TTL
+to seconds. It is an optimisation to this ADR, not an alternative to it, and it
+is not required for a first implementation.
+
+A genuinely public revocation list would need per-burn random tags carried by the
+holder rather than `y` — a different credential format, not a different relay
+setting.
 
 ## What is settled upstream, and what is not
 
