@@ -117,6 +117,48 @@ distinct sessions per voucher over a window, and rate-limit or flag. That works
 regardless of what the client does, which is the test any anti-sharing measure
 should have to pass.
 
+## Where the code goes: a package here, not a project of its own
+
+The check is a pure function — a signature, a clock, and a grant, with no
+network, no storage and no DOM. That shape invites extraction, and the question
+was asked directly: should it be an independent project the wallet consumes?
+
+**A package in this repo, under `packages/licence/`, alongside the twelve
+already there. Not a separate repository, and not `src/lib`.**
+
+Not `src/lib`, because a boundary is worth having even with one consumer. A
+package cannot quietly grow an import from the wallet's internals, and this is
+one of the few modules that has no business knowing about IndexedDB, the signer,
+or a React tree.
+
+Not a separate repository, because **extraction is justified by a second
+consumer and there is not one**. `@imani/wallet-core` is the example worth
+copying and the reason not to copy it yet: it was extracted because the wallet
+API had to give the same answers as the app, and two implementations of "what
+does this spend cost" is a class of bug no test catches. Licence checking has no
+such twin today, so extracting first would mean designing an API against zero
+real callers.
+
+The middle option costs nothing to reverse. `@imani/money` and
+`@imani/voucher-send` already ship `dist` builds with proper `exports`, so
+promoting a package out of here is a build-config change rather than a redesign.
+
+**Three things would make extraction right**, and one is enough:
+
+1. **A second consumer.** If the wallet API gates a paid endpoint too, that is
+   the `wallet-core` argument exactly — one implementation, or they drift.
+2. **A second runtime.** If the check must run in Java, in the gateway or the
+   mint, a TypeScript package does not help and it is the *specification* that
+   needs extracting.
+3. **Third-party verifiers.** If another app honours vouchers we sold, the
+   verifier becomes a product with its own release cycle.
+
+One argument specifically against a standalone project, worth recording because
+it is easy to miss: **our issuer key is the trust anchor**. A library invites the
+question "which key?", and the honest answer is a value the application supplies
+rather than one the library knows. That is a seam better left uncut until a real
+second caller shows what it should look like.
+
 ## Consequences
 
 - **A customer who loses their key loses their subscription**, with no recovery
