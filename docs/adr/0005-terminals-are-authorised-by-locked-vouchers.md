@@ -100,3 +100,14 @@ disposable key rather than a person's identity, and never a wallet of its own.
   so the ledger cannot represent a locked voucher and revocation stays bounded by
   the session ceiling rather than immediate. See ADR 0006, which carries the same
   binding into the wallet API's per-request path.
+
+- **Terminals are the first PAID feature**, decided after this ADR. A stall
+  unlocks multi-terminal support by holding a voucher we sold, verified offline
+  by its signature and expiry (ADR 0007).
+
+  Two vouchers, doing different jobs, and the distinction is worth keeping
+  straight: the one described in THIS decision authorises a terminal to act for
+  its stall, and is issued by the stall owner. The one in ADR 0007 entitles the
+  stall to run terminals at all, and is issued by us. A stall needs both, and
+  they are checked in opposite directions — a missing terminal credential must
+  refuse, while an unverifiable licence keeps working through its grace window.
