@@ -29,7 +29,10 @@
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 
+import { valueHolding } from '@imani/wallet-core'
+
 import { verifyNip98, type AuthFailure } from './nip98.js'
+import { parseHolding } from './holding.js'
 
 const PORT = Number(process.env.PORT ?? 8788)
 
@@ -40,6 +43,8 @@ export const metrics = {
   requestSeconds: 0,
   /** Refusals by reason, so a caller failing in a loop is visible as a shape. */
   refusals: {} as Record<AuthFailure, number>,
+  /** Malformed requests, which are a caller-integration signal, not an outage. */
+  validationErrors: 0,
 }
 
 const json = (res: ServerResponse, status: number, body: unknown) => {
@@ -131,6 +136,53 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
    */
   if (path === '/v1/whoami' && method === 'GET') {
     return json(res, 200, { pubkey: auth.pubkey })
+  }
+
+  /**
+   * What a holding is worth, grouped by stall and currency.
+   *
+   * POST rather than GET, and that is not REST pedantry: the holding is the
+   * request. A GET would have to carry hundreds of coupons in a URL, where they
+   * would land in access logs and proxy caches — coupons are BEARER
+   * instruments, so a logged one is a spendable one.
+   *
+   * State-in, state-out (ADR 0001). The coupons arrive here, are valued, and
+   * are gone when the response ends: no store, no cache, no log line carrying
+   * them. That is what makes a breach of this service a denial of service
+   * rather than a theft.
+   */
+  if (path === '/v1/holding/value' && method === 'POST') {
+    let parsedBody: unknown
+    try {
+      parsedBody = JSON.parse(body ?? '')
+    } catch {
+      return json(res, 400, {
+        error: 'invalid-json',
+        field: 'body',
+        detail: 'the request body is not valid JSON',
+      })
+    }
+
+    const holding = parseHolding(parsedBody)
+    if (!holding.ok) {
+      metrics.validationErrors++
+      return json(res, 400, {
+        error: 'invalid-request',
+        field: holding.error.field,
+        detail: holding.error.detail,
+      })
+    }
+
+    // The same function the app's money logic uses, from @imani/wallet-core.
+    // A second implementation here is the one thing that could make the API and
+    // the app disagree about what a customer holds.
+    const value = valueHolding(holding.value as never)
+
+    return json(res, 200, {
+      groups: value.groups,
+      unusable: value.unusable,
+      couponCount: value.couponCount,
+    })
   }
 
   // A 404 only AFTER authentication, so an unauthenticated caller cannot map
