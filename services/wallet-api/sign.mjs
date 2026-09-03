@@ -24,7 +24,7 @@ import { readFileSync } from 'node:fs'
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure'
 import { nip19 } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
-import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
+import { bytesToHex, hexToBytes, randomBytes } from '@noble/hashes/utils'
 
 const [, , key, method, url, bodyFile] = process.argv
 
@@ -69,6 +69,13 @@ if (bodyFile) {
   // hash that does not match what curl sends.
   tags.push(['payload', bytesToHex(sha256(readFileSync(bodyFile)))])
 }
+
+// A nonce, for the same reason `src/lib/nip98.ts` carries one: `created_at` is
+// in SECONDS and the other tags are a pure function of the request, so two
+// curl calls in the same second would produce a byte-identical event and the
+// second would be refused as a replay. Two invocations of this script are
+// exactly that case.
+tags.push(['nonce', bytesToHex(randomBytes(16))])
 
 const event = finalizeEvent(
   { kind: 27235, created_at: Math.floor(Date.now() / 1000), tags, content: '' },

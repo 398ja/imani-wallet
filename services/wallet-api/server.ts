@@ -33,6 +33,7 @@ import { valueHolding } from '@imani/wallet-core'
 
 import { verifyNip98, type AuthFailure } from './nip98.js'
 import { parseHolding } from './holding.js'
+import { createGuards, type StoredResponse } from './guards.js'
 
 const PORT = Number(process.env.PORT ?? 8788)
 
@@ -45,6 +46,30 @@ export const metrics = {
   refusals: {} as Record<AuthFailure, number>,
   /** Malformed requests, which are a caller-integration signal, not an outage. */
   validationErrors: 0,
+}
+
+/**
+ * Replay, idempotency and throttling state.
+ *
+ * Module-level, so it is per PROCESS. That is a real constraint and worth being
+ * honest about: run two replicas behind a load balancer and each holds its own
+ * view, so a replay could be accepted once per replica. The service is
+ * otherwise stateless by design (ADR 0001), and a shared store would be the
+ * database this architecture deliberately does not have.
+ *
+ * Staging is single-replica, which is what makes this adequate today. Scaling
+ * out needs a shared store and a decision record, not a bigger cap.
+ */
+export const guards = createGuards()
+
+/** One header, lower-cased and de-duplicated, or undefined. */
+function header(req: IncomingMessage, name: string): string | undefined {
+  const raw = req.headers[name]
+  // Node gives an ARRAY when a header appears twice. Taking the first would let
+  // a caller send two Idempotency-Keys and have the service silently pick one.
+  const value = Array.isArray(raw) ? raw[0] : raw
+  const trimmed = value?.trim()
+  return trimmed === undefined || trimmed.length === 0 ? undefined : trimmed
 }
 
 const json = (res: ServerResponse, status: number, body: unknown) => {
@@ -106,7 +131,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   }
 
   if (path === '/metrics') {
-    return json(res, 200, metrics)
+    return json(res, 200, { ...metrics, guards: guards.stats, stores: guards.sizes(Date.now()) })
   }
 
   const body = method === 'GET' || method === 'HEAD' ? undefined : await readBody(req)
@@ -123,6 +148,85 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (!auth.ok) return refuse(res, auth.reason, auth.detail)
 
   /**
+   * Replay, idempotency and throttling — after authentication, before any work.
+   *
+   * After, because every one of them is scoped to a caller and there is no
+   * caller until a signature has verified. Keying a rate limit on an unverified
+   * pubkey would let anyone throttle anyone by claiming their key.
+   *
+   * Before, because a guard that runs after the work has already let the work
+   * happen. For a spend that is a second payment.
+   *
+   * Health and metrics sit above this deliberately: an orchestrator polling
+   * liveness must never be throttled, and has no key to be throttled by.
+   */
+  const idempotencyKey = header(req, 'idempotency-key')
+
+  /**
+   * Answer, and remember the answer if the caller asked for idempotency.
+   *
+   * Central rather than a `remember` call beside every `json(...)`, because
+   * that pattern only has to be forgotten ONCE — on the spend endpoint, by
+   * whoever adds it — for a retry to become a second payment. Routing every
+   * answer through one function makes forgetting impossible rather than
+   * unlikely.
+   *
+   * Only 2xx is stored. A 400 tells a caller their request was malformed, and
+   * replaying that for 24 hours would keep answering "malformed" after they had
+   * fixed it. Errors are also the answers most worth retrying for real.
+   */
+  const answer = (status: number, payload: unknown): void => {
+    if (idempotencyKey !== undefined && status >= 200 && status < 300) {
+      guards.remember({
+        pubkey: auth.pubkey,
+        idempotencyKey,
+        response: { status, body: payload } satisfies StoredResponse,
+        now: Date.now(),
+      })
+    }
+    json(res, status, payload)
+  }
+
+  const verdict = guards.check({
+    eventId: auth.eventId,
+    pubkey: auth.pubkey,
+    idempotencyKey,
+    now: Date.now(),
+  })
+
+  if (!verdict.allowed) {
+    if (verdict.reason === 'idempotent-replay') {
+      // The ORIGINAL answer, not a fresh one, and marked so a caller can tell
+      // its retry from its first attempt — which is the difference between
+      // "this ran twice" and "this ran once and I asked twice".
+      res.setHeader('idempotency-replayed', 'true')
+      return json(res, verdict.stored.status, verdict.stored.body)
+    }
+
+    if (verdict.reason === 'rate-limited') {
+      // `Retry-After` in seconds, which is what every HTTP client already
+      // understands. Repeated in the body because a caller reading JSON should
+      // not have to reach for headers to back off correctly.
+      res.setHeader('retry-after', String(verdict.retryAfterSeconds))
+      return json(res, 429, {
+        error: 'rate-limited',
+        detail: verdict.detail,
+        retryAfterSeconds: verdict.retryAfterSeconds,
+      })
+    }
+
+    if (verdict.reason === 'at-capacity') {
+      res.setHeader('retry-after', '5')
+      return json(res, 503, { error: 'at-capacity', detail: verdict.detail })
+    }
+
+    // A replay is 409: the request is well-formed and correctly signed, and
+    // conflicts with one already handled. NOT 401 — the signature is valid, and
+    // telling a caller their signature failed would send them at their key.
+    return json(res, 409, { error: 'replay', detail: verdict.detail })
+  }
+
+  /**
    * The tracer bullet: tell a caller who they are.
    *
    * Trivial on purpose. It exercises the entire path — header parsing,
@@ -135,7 +239,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
    * request in one call.
    */
   if (path === '/v1/whoami' && method === 'GET') {
-    return json(res, 200, { pubkey: auth.pubkey })
+    return answer(200, { pubkey: auth.pubkey })
   }
 
   /**
@@ -178,7 +282,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     // the app disagree about what a customer holds.
     const value = valueHolding(holding.value as never)
 
-    return json(res, 200, {
+    return answer(200, {
       groups: value.groups,
       unusable: value.unusable,
       couponCount: value.couponCount,

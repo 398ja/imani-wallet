@@ -57,7 +57,10 @@ export type AuthFailure =
   | 'payload-mismatch'
 
 export type AuthResult =
-  | { ok: true; pubkey: string }
+  // The event id comes back so the caller can refuse a replay. It is unique
+  // per signature and already verified to match the event's contents, which is
+  // exactly what a replay store needs as a key.
+  | { ok: true; pubkey: string; eventId: string }
   | { ok: false; reason: AuthFailure; detail: string }
 
 /** The signed event NIP-98 carries, as it arrives on the wire. */
@@ -234,7 +237,7 @@ export function verifyNip98({
     }
   }
 
-  return { ok: true, pubkey: event.pubkey.toLowerCase() }
+  return { ok: true, pubkey: event.pubkey.toLowerCase(), eventId: event.id.toLowerCase() }
 }
 
 /**

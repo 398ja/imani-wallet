@@ -175,10 +175,80 @@ A 400 names the field at fault:
 Only the **first** error is reported. A systematic mistake across a 500-coupon
 holding would otherwise answer with the same sentence 500 times.
 
+## Retrying safely
+
+The service refuses a signature it has already seen. That is replay protection:
+a captured request resent verbatim must not be honoured twice, and shortly this
+service will be able to move money.
+
+A refused replay is **409**, not 401. Your signature was valid; it had simply
+been used.
+
+```json
+{ "error": "replay", "detail": "this exact signed request has already been seen…" }
+```
+
+**To retry safely, sign a fresh request and reuse your `Idempotency-Key`.**
+
+```
+Idempotency-Key: pay-supplier-2026-01-14
+```
+
+A repeat of the same key from the same caller returns the **original response**,
+without doing the work again, marked so you can tell:
+
+```
+Idempotency-Replayed: true
+```
+
+Keys are scoped to your public key, so your `retry-1` and another caller's
+`retry-1` are unrelated. Answers are kept for 24 hours. Only successful
+responses are stored — replaying a 400 would keep telling you a request is
+malformed after you had fixed it.
+
+Nothing forces you to send a key. Without one, an honest retry is simply a new
+request.
+
+### Why a fresh signature
+
+NIP-98's `created_at` is in seconds, so a naive signer produces byte-identical
+events for two requests in the same second, and the second is indistinguishable
+from a replay. Both signers in this repository add a `nonce` tag for that
+reason. If you are writing your own, add one.
+
+### Being throttled
+
+Requests are limited **per public key**, not per address, so sharing a NAT or a
+cloud egress range with another caller does not throttle you.
+
+Over the limit is **429**, with the delay in both the header and the body:
+
+```
+Retry-After: 34
+```
+
+```json
+{ "error": "rate-limited", "detail": "…Retry in 34s.", "retryAfterSeconds": 34 }
+```
+
+Back off by that long. It is never zero.
+
+### Under extreme load
+
+If the service cannot guarantee replay protection it refuses with **503** and
+`error: at-capacity` rather than proceeding unprotected. This is deliberate: a
+caller retrying in a minute is better than a spend that happens twice, and
+[ADR 0001](../docs/adr/0001-caller-holds-the-key.md) already accepts denial of
+service as this design's failure mode.
+
+Replay state is held **per process**. Staging runs a single replica, which is
+what makes that adequate; scaling out needs a shared store and a decision
+record.
+
 ### `GET /metrics`
 
 Unauthenticated counters: requests, errors, refusals by reason, validation
-errors.
+errors, guard statistics, and live store sizes so boundedness is observable.
 
 ## Using it with curl
 

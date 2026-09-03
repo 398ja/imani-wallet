@@ -1,4 +1,4 @@
-import { bytesToHex } from '@noble/hashes/utils'
+import { bytesToHex, randomBytes } from '@noble/hashes/utils'
 import { sha256 } from '@noble/hashes/sha256'
 
 import { getSigner } from './nap'
@@ -99,6 +99,25 @@ export async function nip98Header(
   if (body !== undefined) {
     tags.push(['payload', bytesToHex(sha256(new TextEncoder().encode(body)))])
   }
+
+  // A nonce, because NIP-98 has no other source of uniqueness.
+  //
+  // `created_at` is in SECONDS, and the tags are otherwise a pure function of
+  // the request. So two identical requests in the same second produce a
+  // byte-identical event with an identical id — measured, not theorised — and
+  // a server doing replay protection cannot tell them from a captured request
+  // resent. It must refuse one, and refusing an honest second request is worse
+  // than the alternative.
+  //
+  // The nonce makes each signature unique, so the server can refuse duplicates
+  // safely. The spec allows extra tags and requires servers to check only `u`,
+  // `method` and `created_at`, so this stays interoperable: a server that
+  // ignores the tag is unaffected.
+  //
+  // Random rather than a counter: a counter would need state across calls, and
+  // resets to zero on every page load, which is exactly when a signer is most
+  // likely to repeat itself.
+  tags.push(['nonce', bytesToHex(randomBytes(16))])
 
   const event = await signer.signEvent({
     kind: 27235,
