@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url'
 import { withBrowser, measureColdBootMedian, FIXTURE_PASSPHRASE } from '../scenarios/coldBoot'
 import { load, available } from '../lib/fixture'
 import { measureAggregationMedian } from '../scenarios/balanceAggregation'
+import { measureBatchWriteMedian } from '../scenarios/batchWrite'
 import { serve } from '../lib/serve'
 import { compare, type Baselines } from '../lib/baseline'
 import { runName, regenerateReport, isFailure, type RunSummary, type Comparison } from '../lib/run'
@@ -224,6 +225,43 @@ async function main() {
       },
     })
 
+    // ---- Storage write contention ---------------------------------------
+    //
+    // A fixed batch written into wallets of different sizes, so the rung is
+    // the size of the STORE and not the size of the batch. That is what
+    // isolates "does a fuller wallet cost more to write to" from "does a
+    // bigger batch cost more", and the first is the question worth asking.
+    const batchWrite: LadderScenario = {
+      name: 'batch-write',
+      measure: async (_coupons, fixture) => {
+        const r = await withBrowser((browser) =>
+          measureBatchWriteMedian(browser, {
+            baseUrl: site.url,
+            fixture,
+            passphrase: FIXTURE_PASSPHRASE,
+            timeoutMs: 90_000,
+          }),
+        )
+        return { ms: r.ms, all: r.all, held: r.after, note: `${r.before} held before` }
+      },
+    }
+
+    const batchWriteRun = await runLadder(batchWrite, {
+      counts: rungs,
+      loadFixture: (coupons) => load(SNAPSHOTS, coupons, ROOT),
+      onRung: (rung, measurement) => {
+        const scenario = `${batchWrite.name}-${rung.coupons}`
+        console.log(`\n${scenario}: ${rung.ms}ms (samples ${measurement.all.join(', ')})`)
+        console.log(`  ${measurement.note}, ${measurement.held} after`)
+
+        summary.scenarios.push({
+          scenario,
+          measurements: [{ coupons: rung.coupons, ms: rung.ms }],
+        })
+        comparisons.push(compare(scenario, rung.ms, baselines[scenario]))
+      },
+    })
+
     // The SHAPE is a different question from every comparison above. Those ask
     // whether a number moved since last time; this asks whether the cost per
     // coupon is flat or climbing, which is what survives moving to different
@@ -253,6 +291,28 @@ async function main() {
           verdict: 'regressed',
           note: shape.explanation,
         })
+      }
+
+      if (batchWriteRun.shape) {
+        const bwShape = batchWriteRun.shape
+        console.log(`\n${batchWrite.name} cost shape: ${bwShape.explanation}`)
+        console.log(batchWriteRun.table)
+
+        summary.ladders.push({
+          scenario: batchWrite.name,
+          table: batchWriteRun.table ?? '',
+          flat: bwShape.flat,
+          explanation: bwShape.explanation,
+        })
+
+        if (!bwShape.flat) {
+          comparisons.push({
+            scenario: `${batchWrite.name} cost shape`,
+            measuredMs: Math.round(bwShape.lateSlope * 1000) / 1000,
+            verdict: 'regressed',
+            note: bwShape.explanation,
+          })
+        }
       }
 
       if (aggregationRun.shape) {
