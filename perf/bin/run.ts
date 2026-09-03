@@ -21,6 +21,7 @@ import { withBrowser, measureColdBootMedian, FIXTURE_PASSPHRASE } from '../scena
 import { load, available } from '../lib/fixture'
 import { measureAggregationMedian } from '../scenarios/balanceAggregation'
 import { measureBatchWriteMedian } from '../scenarios/batchWrite'
+import { measureDrainMedian } from '../scenarios/notificationDrain'
 import { serve } from '../lib/serve'
 import { compare, type Baselines } from '../lib/baseline'
 import { runName, regenerateReport, isFailure, type RunSummary, type Comparison } from '../lib/run'
@@ -262,6 +263,49 @@ async function main() {
       },
     })
 
+    // ---- Notification drain ----------------------------------------------
+    //
+    // A burst of arrivals into wallets of different sizes. Reports how long
+    // the drain took AND the worst the main thread stalled while it ran,
+    // because those can move in opposite directions: a drain that takes twice
+    // as long but never blocks is the better outcome for a customer holding
+    // the phone.
+    const drain: LadderScenario = {
+      name: 'notification-drain',
+      measure: async (_coupons, fixture) => {
+        const r = await withBrowser((browser) =>
+          measureDrainMedian(browser, {
+            baseUrl: site.url,
+            fixture,
+            passphrase: FIXTURE_PASSPHRASE,
+            timeoutMs: 90_000,
+          }),
+        )
+        return {
+          ms: r.ms,
+          all: r.all,
+          held: r.before,
+          note: `${r.processed} arrivals, worst stall ${r.worstStallMs}ms`,
+        }
+      },
+    }
+
+    const drainRun = await runLadder(drain, {
+      counts: rungs,
+      loadFixture: (coupons) => load(SNAPSHOTS, coupons, ROOT),
+      onRung: (rung, measurement) => {
+        const scenario = `${drain.name}-${rung.coupons}`
+        console.log(`\n${scenario}: ${rung.ms}ms (samples ${measurement.all.join(', ')})`)
+        console.log(`  ${measurement.note}, into ${measurement.held} held`)
+
+        summary.scenarios.push({
+          scenario,
+          measurements: [{ coupons: rung.coupons, ms: rung.ms }],
+        })
+        comparisons.push(compare(scenario, rung.ms, baselines[scenario]))
+      },
+    })
+
     // The SHAPE is a different question from every comparison above. Those ask
     // whether a number moved since last time; this asks whether the cost per
     // coupon is flat or climbing, which is what survives moving to different
@@ -311,6 +355,28 @@ async function main() {
             measuredMs: Math.round(bwShape.lateSlope * 1000) / 1000,
             verdict: 'regressed',
             note: bwShape.explanation,
+          })
+        }
+      }
+
+      if (drainRun.shape) {
+        const drainShape = drainRun.shape
+        console.log(`\n${drain.name} cost shape: ${drainShape.explanation}`)
+        console.log(drainRun.table)
+
+        summary.ladders.push({
+          scenario: drain.name,
+          table: drainRun.table ?? '',
+          flat: drainShape.flat,
+          explanation: drainShape.explanation,
+        })
+
+        if (!drainShape.flat) {
+          comparisons.push({
+            scenario: `${drain.name} cost shape`,
+            measuredMs: Math.round(drainShape.lateSlope * 1000) / 1000,
+            verdict: 'regressed',
+            note: drainShape.explanation,
           })
         }
       }
