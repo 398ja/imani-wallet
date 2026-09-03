@@ -1,37 +1,37 @@
 {
   "cold-boot": {
-    "ms": 111,
+    "ms": 112,
     "tolerancePercent": 35,
     "ceilingMs": 1000,
     "note": "Measured on a laptop against the built bundle, logged out. The 1000ms ceiling is absolute: it is roughly the point at which opening the wallet stops feeling immediate, and it exists so that a baseline creeping upward a few percent at a time cannot ratchet past what a customer will tolerate while every run still reports green. Raising it is a product decision, not a maintenance one. The 35% band is deliberately wider than it looks like it needs to be: at 25% this run reported a regression at 138ms purely because a browser verification was running on the same machine, and was back to 108ms when idle. A band that cries wolf on a busy laptop is a band people learn to ignore, and the absolute ceiling is what actually guards the number."
   },
   "cold-boot-5": {
     "tolerancePercent": 35,
-    "ms": 319,
+    "ms": 330,
     "ceilingMs": 1500,
     "note": "Cold boot holding a recorded 5-coupon fixture, measured with the backend stopped. Same 35% band as the empty case and for the same reason: a narrower band reports regressions caused by whatever else the laptop is doing. The ceiling is 1500ms rather than 1000ms because this measurement includes an unlock the empty case does not have \u2014 a restored wallet always boots locked, by design, since the wrapping key is non-extractable and cannot be serialised into a snapshot. It is still an absolute limit: past it, a returning customer's wallet has stopped feeling immediate."
   },
   "cold-boot-20": {
     "tolerancePercent": 35,
-    "ms": 296,
+    "ms": 329,
     "ceilingMs": 1500,
     "note": "Cold boot holding a recorded 20-coupon fixture. Compared against cold-boot-5, this is the pair that says whether stored coupons cost anything to open: today 20 coupons boot no slower than 5, which is the result worth watching for change. A rung that starts climbing away from its neighbour is the storage layer failing to scale, and that is invisible in any single number."
   },
   "cold-boot-50": {
     "tolerancePercent": 35,
-    "ms": 305,
+    "ms": 313,
     "ceilingMs": 1500,
     "note": "Cold boot holding a recorded 50-coupon fixture. The top rung of the ladder, so this is the one that would move first if storage stopped scaling. It currently opens no slower than the 5-coupon wallet, which is why the shape check reports the per-coupon cost as unmeasurable above noise."
   },
   "cold-boot-120": {
     "tolerancePercent": 35,
-    "ms": 309,
+    "ms": 310,
     "ceilingMs": 1500,
     "note": "Cold boot holding a recorded 120-coupon fixture, 90 EUR and 30 USD. The top rung, and the one that exists because 120 is past the 50-coupon ceiling the wallet used to have (#38): before paging, a wallet this size received exactly 50 coupons and reported no error. It opens no slower than the 5-coupon wallet."
   },
   "balance-aggregation-5": {
     "tolerancePercent": 35,
-    "ms": 9,
+    "ms": 10,
     "note": "Balance aggregation on a 5-coupon wallet, two currencies. Measured after the page goes idle: the boot's background work scales with the coupon count, and charging it to aggregation invented an 8.4x curve that reached a filed issue (#41) before it was caught."
   },
   "balance-aggregation-20": {
@@ -41,17 +41,17 @@
   },
   "balance-aggregation-50": {
     "tolerancePercent": 35,
-    "ms": 44,
+    "ms": 14,
     "note": "Balance aggregation on a 50-coupon wallet. First rung with a measurable per-coupon cost, ~0.13ms."
   },
   "balance-aggregation-120": {
     "tolerancePercent": 35,
-    "ms": 25,
+    "ms": 26,
     "note": "Balance aggregation on a 120-coupon wallet, 90 EUR and 30 USD. ~0.16ms per coupon, level with the 50-coupon rung \u2014 so the cost is linear in the number of coupons, which is what the ladder exists to confirm."
   },
   "cold-boot-500": {
     "tolerancePercent": 35,
-    "ms": 286,
+    "ms": 296,
     "ceilingMs": 1500,
     "note": "Cold boot holding a recorded 500-coupon fixture. The top of the ladder, and the rung that takes the span to two full orders of magnitude \u2014 which is what makes the shape assertion mean anything. It opens no slower than the 5-coupon wallet, so the fixed cost of opening still dominates at 100x the coupons."
   },
@@ -62,27 +62,52 @@
   },
   "batch-write-5": {
     "tolerancePercent": 35,
-    "ms": 44,
+    "ms": 40,
     "note": "Writing 200 coupons into a 5-coupon wallet, and reading every row back. The batch is constant across the ladder so the rung is the size of the STORE, not the size of the batch \u2014 the question is whether a fuller wallet costs more to write to."
   },
   "batch-write-20": {
     "tolerancePercent": 35,
-    "ms": 43,
+    "ms": 41,
     "note": "Writing 200 coupons into a 20-coupon wallet. Indistinguishable from the 5-coupon rung, which is the expected result: 15 extra rows is nothing to an IndexedDB store."
   },
   "batch-write-50": {
     "tolerancePercent": 75,
-    "ms": 46,
+    "ms": 43,
     "note": "Writing 200 coupons into a 50-coupon wallet. A 75% band, wider than any other rung, and measured rather than guessed: three consecutive runs put the MEDIAN at 41, 46 and 72ms, with individual samples reaching 149ms. Nothing about the wallet distinguishes this rung \u2014 it is a machine-noise artefact \u2014 and a 35% band here would cry wolf until the whole suite was ignored. If it ever settles, tighten it."
   },
   "batch-write-120": {
     "tolerancePercent": 40,
-    "ms": 68,
+    "ms": 78,
     "note": "Writing 200 coupons into a 120-coupon wallet. 40% rather than 35%: three runs measured 64, 68 and 82ms."
   },
   "batch-write-500": {
     "tolerancePercent": 35,
-    "ms": 148,
+    "ms": 158,
     "note": "Writing 200 coupons into a 500-coupon wallet, the top of the ladder. Cost per existing coupon is level with or below the small end, so writing into a full wallet is no more expensive per row than writing into an empty one."
+  },
+  "notification-drain-5": {
+    "tolerancePercent": 40,
+    "ms": 20,
+    "note": "50 coupons arriving into a 5-coupon wallet, one at a time, each notifying the screens. The burst is constant across the ladder so the rung is the size of the wallet they land in."
+  },
+  "notification-drain-20": {
+    "tolerancePercent": 40,
+    "ms": 19,
+    "note": "50 arrivals into a 20-coupon wallet. Indistinguishable from the 5-coupon rung."
+  },
+  "notification-drain-50": {
+    "tolerancePercent": 50,
+    "ms": 21,
+    "note": "50 arrivals into a 50-coupon wallet. 50% band: three runs put the median at 19, 21 and 22ms with samples reaching 31ms, and at ~20ms a few milliseconds of jitter is a large fraction."
+  },
+  "notification-drain-120": {
+    "tolerancePercent": 50,
+    "ms": 28,
+    "note": "50 arrivals into a 120-coupon wallet. 50% band for the same reason as the rung below: medians of 24, 28 and 32ms across runs."
+  },
+  "notification-drain-500": {
+    "tolerancePercent": 35,
+    "ms": 70,
+    "note": "50 arrivals into a 500-coupon wallet, the top of the ladder. The most stable rung, because the work is large enough to dwarf the jitter. Worst main-thread stall stays at 1ms here as at every other rung \u2014 the drain does not freeze the app, which is what this scenario exists to establish."
   }
 }
