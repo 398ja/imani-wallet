@@ -281,6 +281,25 @@ deliberately leaves open, because they are policy rather than mechanism:
 Both need the resource in hand. Inventing them now would be guessing, and
 `nap-voucher`'s own wiring refuses to default either for the same reason.
 
+### A licence is the same mechanism with the opposite default
+
+[ADR 0007](0007-paid-features-are-unlocked-by-a-voucher-we-sold.md) applies this
+binding to a paid feature rather than to money, and inverts almost every choice
+here. Recorded so a reader meeting both does not take them for a contradiction:
+
+| | this ADR (money) | ADR 0007 (a licence) |
+|---|---|---|
+| issuer | any stall | only us |
+| on `unknown` | **fail closed** | **fail open**, inside a window |
+| the mint | required for liveness | not on the path at all |
+| what a wrong answer costs | a coupon that stops | some unpaid access |
+
+The mechanism is identical — the voucher travels in the body, the request is
+signed by `K`, and the equality is the credential. What differs is the direction
+of the asymmetry, and it differs because refusing a paying merchant mid-trade is
+worse than granting a lapsed one an extra hour, while the reverse is true when a
+coupon might land somewhere it cannot be honoured.
+
 ## What is settled upstream, and what is not
 
 The composite `P2PK_VOUCHER` kind, which ADR 0005 and extension 0001 §5.3 both
