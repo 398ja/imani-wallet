@@ -5,6 +5,8 @@ import { getWallet, listVouchers, notifyWalletChanged } from './wallet'
 import { legacyApi } from './legacyBridge'
 import { couponsFor, issuerKey, toVoucher, type Merchant } from './merchants'
 import { merchantStatus } from './merchant'
+import { getSigner } from './nap'
+import { spentTokenIds, withoutSpent } from './spentCoupons'
 import { buildPaymentTransaction, buildSentTransaction } from './transactions'
 import type { NUT18VRequest } from './nap'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
@@ -593,8 +595,35 @@ async function spendableFrom(merchantPubkey: string): Promise<{
   rowOf: Map<Voucher, VoucherRow>
 }> {
   const rows = couponsFor(await listVouchers(), merchantPubkey)
+
+  /**
+   * Drop anything this wallet has already spent, according to its own
+   * tombstones on the relay (#45).
+   *
+   * `couponsFor` filters on the LOCAL row's status, which is correct and is not
+   * enough: a coupon spent on another device is still `active` here until this
+   * device restores. Offering it produces `SOURCE_PROOFS_NOT_UNSPENT` at the
+   * gateway, and `initiateOnFirstFree` below records what that costs on this
+   * stack — a send failing after the split cannot be reclaimed, so the coupon
+   * is stuck rather than merely refused.
+   *
+   * Only ever subtracts, and never blocks: an unreachable relay answers
+   * `known: false`, `withoutSpent` returns the rows untouched, and the send
+   * proceeds exactly as it did before this existed.
+   */
+  let spendableRows = rows
+  try {
+    const signer = getSigner()
+    spendableRows = withoutSpent(rows, await spentTokenIds(signer.pubkey))
+  } catch (error) {
+    // A locked wallet has no pubkey to scope the read by. Not an error worth
+    // failing a send over — the caller is mid-payment and the local filters
+    // have already run.
+    console.warn('[pay] could not check tombstones; offering the holding unchanged', error)
+  }
+
   const rowOf = new Map<Voucher, VoucherRow>()
-  const mine = rows.map((row) => {
+  const mine = spendableRows.map((row) => {
     const voucher = toVoucher(row)
     rowOf.set(voucher, row)
     return voucher
