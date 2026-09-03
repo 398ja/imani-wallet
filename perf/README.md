@@ -274,18 +274,26 @@ minute. Measured at several counts, the same scenario answers a better
 question — does each coupon cost the same when there are more of them?
 
     cold-boot cost shape: flat: cost per coupon is not measurable above noise
-    (early 0.000ms, late -0.267ms per coupon).
+    at the large end (early -0.400ms, late -0.055ms per coupon).
 
     | coupons | ms | ms per coupon | marginal ms per coupon |
     | --- | --- | --- | --- |
-    | 5 | 305 | 61.000 | — |
-    | 20 | 305 | 15.250 | 0.000 |
-    | 50 | 297 | 5.940 | -0.267 |
+    | 5 | 289 | 57.800 | — |
+    | 20 | 283 | 14.150 | -0.400 |
+    | 50 | 299 | 5.980 | 0.533 |
+    | 120 | 301 | 2.508 | 0.029 |
+    | 500 | 280 | 0.560 | -0.055 |
 
-That is a real run, and it is the healthiest result available: opening a wallet
-holding 50 coupons costs no more than one holding 5, so the per-coupon cost is
-lost in the noise of the fixed cost. A negative marginal figure means the larger
-rung measured slightly *faster*, which is noise, not an improvement.
+That is a real run, and it is the healthiest result available: a wallet holding
+**500** coupons opens no slower than one holding 5, so the per-coupon cost is
+still lost in the noise of the fixed cost at a hundred times the size. A
+negative marginal figure means the larger rung measured slightly *faster*,
+which is noise, not an improvement.
+
+Balance aggregation, measured on the same rungs, does have a visible per-coupon
+cost — 0.100ms from 50 to 120, 0.108ms from 120 to 500 — and it is flat, which
+is the more interesting result: the work grows with the number of coupons, and
+not faster.
 
 **Read the last column, not the third.** `ms per coupon` falls from 61 to 6
 here, and that fall is meaningless: it is the fixed cost of opening the wallet
