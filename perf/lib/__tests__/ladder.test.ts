@@ -88,6 +88,42 @@ describe('assessShape', () => {
     expect(verdict.explanation).toContain('not measurable above noise')
   })
 
+  it('does not fail a flat curve because one small gap was noisy', () => {
+    /*
+     * Real batch-write numbers, and the reason the slopes span HALVES of the
+     * ladder rather than its two end gaps.
+     *
+     * The first two rungs measured 37ms and 38ms. That 1ms of jitter, divided
+     * across 15 coupons, became an "early slope" of 0.067 — and against a late
+     * slope of 0.195 that is a 2.9x climb, over the 2.5x band. Meanwhile the
+     * middle slopes were 0.333, 0.286, 0.195: declining.
+     *
+     * A check that fails a DECLINING curve because one narrow gap was quiet is
+     * worse than no check, because the failure looks exactly like a real one.
+     */
+    const verdict = assessShape([
+      { coupons: 5, ms: 37 },
+      { coupons: 20, ms: 38 },
+      { coupons: 50, ms: 48 },
+      { coupons: 120, ms: 68 },
+      { coupons: 500, ms: 142 },
+    ])
+
+    expect(verdict.flat).toBe(true)
+    expect(verdict.ratio).toBeLessThan(1.5)
+  })
+
+  it('still catches a quadratic on a five-rung ladder', () => {
+    // The counterpart: widening the slopes must not blunt the check it exists
+    // for. Same rung positions, genuinely quadratic cost.
+    const verdict = assessShape(
+      [5, 20, 50, 120, 500].map((coupons) => ({ coupons, ms: 30 + 0.002 * coupons * coupons })),
+    )
+
+    expect(verdict.flat).toBe(false)
+    expect(verdict.explanation).toContain('CLIMBING')
+  })
+
   it('catches a cost that only appears at the large end', () => {
     /*
      * The real one, found measuring balance aggregation.

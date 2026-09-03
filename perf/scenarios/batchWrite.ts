@@ -30,8 +30,19 @@ import { FIXTURE_PASSPHRASE, unlock } from './coldBoot'
  * one every time.
  */
 
-/** How many coupons each rung writes, so the write itself is a constant. */
-const BATCH = 25
+/**
+ * How many coupons each rung writes.
+ *
+ * Constant across the ladder on purpose: the rung is the size of the wallet
+ * being written INTO, so holding the batch fixed is what isolates "does a
+ * fuller store cost more to write to" from "does a bigger batch cost more".
+ *
+ * 200 rather than a couple of dozen. At 25 the write took 3-4ms on the small
+ * rungs, which is close enough to timer resolution that a real regression
+ * could hide inside the jitter — and 25 is not the "large batch" this scenario
+ * is named for. 200 is a wallet receiving a market day's takings at once.
+ */
+const BATCH = 200
 
 export interface BatchWriteOptions {
   baseUrl: string
