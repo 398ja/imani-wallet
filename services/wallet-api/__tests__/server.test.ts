@@ -948,3 +948,260 @@ describe('replay, idempotency and throttling', () => {
     })
   })
 })
+
+/**
+ * Planning a spend, over HTTP.
+ *
+ * The planning rules are tested as pure functions in `@imani/wallet-core`, and
+ * their agreement with the app is pinned by `src/lib/__tests__/planParity.test.ts`.
+ * What is tested here is what only a request can show: the wire shape, the
+ * validation, and that asking twice moves nothing.
+ */
+describe('planning a spend', () => {
+  beforeEach(() => guards.clear())
+
+  const STALL = 'a'.repeat(64)
+  const OTHER_STALL = 'b'.repeat(64)
+
+  const coupon = (over: Record<string, unknown> = {}) => ({
+    voucher_id: 'c1',
+    token: 'cashuBo...',
+    face_value: 1000,
+    face_unit: 'EUR',
+    face_decimals: 2,
+    token_amount: 1000,
+    issuance_ratio: 1,
+    issuer_id: STALL,
+    status: 'active',
+    ...over,
+  })
+
+  async function plan(payload: unknown) {
+    const body = JSON.stringify(payload)
+    const res = await fetch(`${base}/v1/spend/plan`, {
+      method: 'POST',
+      body,
+      headers: {
+        authorization: await nip98Header(
+          '/v1/spend/plan',
+          'POST',
+          body,
+          makeSigner().signer as never,
+        ),
+        'content-type': 'application/json',
+      },
+    })
+    return { status: res.status, body: (await res.json()) as Record<string, never> }
+  }
+
+  const request = (over: Record<string, unknown> = {}) => ({
+    coupons: [coupon()],
+    stallId: STALL,
+    currency: 'EUR',
+    amount: 400,
+    ...over,
+  })
+
+  it('returns the parts that satisfy an amount, and no obstacle', async () => {
+    const res = await plan(request())
+
+    expect(res.status).toBe(200)
+    expect(res.body.obstacle).toBeNull()
+    expect(res.body.parts).toEqual([
+      { couponId: 'c1', amount: 400, faceValue: 1000, whole: false },
+    ])
+  })
+
+  it('prefers an exact match over splitting a larger coupon', async () => {
+    const res = await plan(
+      request({
+        coupons: [
+          coupon({ voucher_id: 'big', face_value: 5000 }),
+          coupon({ voucher_id: 'exact', face_value: 400 }),
+        ],
+      }),
+    )
+
+    expect(res.body.parts).toHaveLength(1)
+    expect(res.body.parts[0]).toMatchObject({ couponId: 'exact', whole: true })
+  })
+
+  it('never draws another stall’s coupons into the plan', async () => {
+    const res = await plan(
+      request({
+        amount: 1000,
+        coupons: [
+          coupon({ voucher_id: 'mine', face_value: 300 }),
+          coupon({ voucher_id: 'theirs', face_value: 9000, issuer_id: OTHER_STALL }),
+        ],
+      }),
+    )
+
+    // The other stall's 9000 would have covered it, and must not be touched.
+    expect(res.body.obstacle).toMatchObject({ kind: 'insufficient-value', available: 300 })
+    expect(res.body.eligibleCount).toBe(1)
+  })
+
+  it('never draws another currency into the plan', async () => {
+    const res = await plan(
+      request({
+        amount: 1000,
+        coupons: [
+          coupon({ voucher_id: 'eur', face_value: 300 }),
+          coupon({ voucher_id: 'xaf', face_value: 9000, face_unit: 'XAF' }),
+        ],
+      }),
+    )
+
+    expect(res.body.obstacle).toMatchObject({ kind: 'insufficient-value', available: 300 })
+  })
+
+  describe('obstacles', () => {
+    /**
+     * A 200, not a 4xx. The question "can this be spent?" was answered
+     * successfully, and the answer being "no" is a normal result — a 4xx would
+     * fire a caller's error handling on it.
+     */
+    it('answers 200 with an obstacle rather than failing the request', async () => {
+      const res = await plan(request({ amount: 99999 }))
+      expect(res.status).toBe(200)
+      expect(res.body.obstacle).not.toBeNull()
+    })
+
+    it('says insufficient-value when the holding does not add up', async () => {
+      const res = await plan(request({ amount: 99999 }))
+
+      expect(res.body.obstacle).toMatchObject({
+        kind: 'insufficient-value',
+        available: 1000,
+        requested: 99999,
+      })
+      expect(res.body.parts).toEqual([])
+    })
+
+    /**
+     * The distinction the ticket exists for. A ratio of 200 means the coupon
+     * divides only in steps of 200, so 150 is unreachable from a nominally
+     * sufficient 1000 — and waiting for more coupons would never help.
+     */
+    it('says not-splittable when the holding is enough but the amount is unreachable', async () => {
+      const res = await plan(
+        request({
+          amount: 150,
+          coupons: [coupon({ face_value: 1000, token_amount: 5, issuance_ratio: 200 })],
+        }),
+      )
+
+      expect(res.body.obstacle).toMatchObject({
+        kind: 'not-splittable',
+        available: 1000,
+        requested: 150,
+        minimumStep: 200,
+      })
+    })
+
+    it('distinguishes the two, so a caller knows whether waiting would help', async () => {
+      const coarse = coupon({ face_value: 1000, token_amount: 5, issuance_ratio: 200 })
+
+      const short = await plan(request({ amount: 99999, coupons: [coarse] }))
+      const unreachable = await plan(request({ amount: 150, coupons: [coarse] }))
+
+      expect(short.body.obstacle.kind).toBe('insufficient-value')
+      expect(unreachable.body.obstacle.kind).toBe('not-splittable')
+    })
+  })
+
+  describe('validation', () => {
+    it('names a missing stallId', async () => {
+      const rest = request() as Record<string, unknown>
+      delete rest.stallId
+      const res = await plan(rest)
+      expect(res.status).toBe(400)
+      expect(res.body.field).toBe('stallId')
+    })
+
+    it('names a missing currency', async () => {
+      const rest = request() as Record<string, unknown>
+      delete rest.currency
+      expect((await plan(rest)).body.field).toBe('currency')
+    })
+
+    it('names a non-numeric amount', async () => {
+      const res = await plan(request({ amount: '400' }))
+      expect(res.body.field).toBe('amount')
+      expect(res.body.detail).toContain('number')
+    })
+
+    /**
+     * Amounts are minor units, which are whole by definition. A fractional
+     * amount means the caller sent euros where cents were wanted, and flooring
+     * it silently would spend the wrong amount.
+     */
+    it('refuses a fractional amount rather than rounding it', async () => {
+      const res = await plan(request({ amount: 4.5 }))
+      expect(res.status).toBe(400)
+      expect(res.body.field).toBe('amount')
+      expect(res.body.detail).toContain('cents')
+    })
+
+    it('refuses a zero or negative amount', async () => {
+      expect((await plan(request({ amount: 0 }))).status).toBe(400)
+      expect((await plan(request({ amount: -100 }))).status).toBe(400)
+    })
+
+    it('still names a bad coupon field, with its index', async () => {
+      const res = await plan(request({ coupons: [coupon(), coupon({ face_value: 'x' })] }))
+      expect(res.body.field).toBe('coupons[1].face_value')
+    })
+
+    it('accepts an empty holding and answers with an obstacle', async () => {
+      const res = await plan(request({ coupons: [] }))
+      expect(res.status).toBe(200)
+      expect(res.body.obstacle).toMatchObject({ kind: 'insufficient-value', available: 0 })
+    })
+  })
+
+  /**
+   * The property that makes it safe to ask before committing.
+   */
+  it('moves nothing and changes nothing when asked twice', async () => {
+    const payload = request({
+      coupons: [coupon({ voucher_id: 'a', face_value: 500 }), coupon({ voucher_id: 'b', face_value: 700 })],
+      amount: 900,
+    })
+
+    const first = await plan(payload)
+    const second = await plan(payload)
+
+    expect(second.body).toEqual(first.body)
+    // And the holding a caller sent is still worth what it was: planning does
+    // not spend, mark or consume anything.
+    const value = await (async () => {
+      const body = JSON.stringify({ coupons: payload.coupons })
+      const res = await fetch(`${base}/v1/holding/value`, {
+        method: 'POST',
+        body,
+        headers: {
+          authorization: await nip98Header(
+            '/v1/holding/value',
+            'POST',
+            body,
+            makeSigner().signer as never,
+          ),
+        },
+      })
+      return res.json()
+    })()
+
+    expect(value.groups[0].faceValue).toBe(1200)
+    expect(value.unusable).toEqual([])
+  })
+
+  it('requires a signature like every other route', async () => {
+    const res = await fetch(`${base}/v1/spend/plan`, {
+      method: 'POST',
+      body: JSON.stringify(request()),
+    })
+    expect(res.status).toBe(401)
+  })
+})

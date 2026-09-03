@@ -160,6 +160,75 @@ Groups are ordered largest first, with ties broken by stall and currency, so the
 same holding always serialises identically and a diff between two reads shows
 only real changes.
 
+### `POST /v1/spend/plan`
+
+Which of your coupons would be spent for an amount, or why none can be. **Nothing
+moves.** This is the question asked before the money is touched, so an impossible
+spend fails while the holding is still whole.
+
+```json
+{
+  "coupons": [ … ],
+  "stallId": "aaaa…",
+  "currency": "EUR",
+  "amount": 400
+}
+```
+
+`amount` is in **minor units** and must be a whole number. A fractional amount is
+refused rather than rounded: it means cents were wanted and euros were sent, and
+silently flooring it would plan the wrong spend.
+
+```json
+{
+  "parts": [{ "couponId": "c1", "amount": 400, "faceValue": 1000, "whole": false }],
+  "obstacle": null,
+  "available": 1000,
+  "eligibleCount": 1
+}
+```
+
+Only coupons from that stall, in that currency, unspent and unexpired take part.
+A coupon from another stall is never drawn in, however conveniently sized: a
+stall cannot honour what it did not issue, and a coupon sent to one that cannot
+honour it is money that simply stops.
+
+### When a spend cannot be planned
+
+The answer is still **200** with an `obstacle`. The question was answered
+successfully; the answer being "no" is a normal result, not a failed request.
+
+```json
+{
+  "parts": [],
+  "obstacle": {
+    "kind": "not-splittable",
+    "detail": "The smallest amount this voucher can be split into is 200.",
+    "available": 1000,
+    "requested": 150,
+    "minimumStep": 200
+  },
+  "available": 1000,
+  "eligibleCount": 1
+}
+```
+
+Two kinds, and the difference is what you should do about it:
+
+| `kind` | meaning | what helps |
+|---|---|---|
+| `insufficient-value` | the eligible coupons do not add up | more coupons from that stall in that currency |
+| `not-splittable` | they add up, but no combination divides to exactly this amount | a different amount — more coupons of the same shape will not help |
+
+`not-splittable` is the one worth handling properly. A coupon divides only in
+steps of `minimumStep`, so some amounts are unreachable from a holding that is
+nominally more than sufficient. A caller that treats every failure as "try again
+later" will retry forever.
+
+This plan is the same plan the wallet app would make from the same holding — the
+decisions come from one shared package, and a parity test runs both over the same
+holdings to prove it.
+
 ### Malformed requests
 
 A 400 names the field at fault:
@@ -282,7 +351,7 @@ flag, different answer.
 
 ## What is not here yet
 
-Spending. `/v1/holding/value` is a read; the plan and prepare endpoints come
-next. When they arrive, the service will build an unsigned event and hand it
+Preparing a part. `/v1/holding/value` and `/v1/spend/plan` are both reads; the
+prepare endpoint comes next. When they arrive, the service will build an unsigned event and hand it
 back for you to sign — it cannot sign, by construction, and
 [ADR 0002](../docs/adr/0002-the-api-plans-the-caller-signs.md) records why.

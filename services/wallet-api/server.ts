@@ -29,10 +29,10 @@
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 
-import { valueHolding } from '@imani/wallet-core'
+import { valueHolding, planSpend } from '@imani/wallet-core'
 
 import { verifyNip98, type AuthFailure } from './nip98.js'
-import { parseHolding } from './holding.js'
+import { parseHolding, parsePlanRequest } from './holding.js'
 import { createGuards, type StoredResponse } from './guards.js'
 
 const PORT = Number(process.env.PORT ?? 8788)
@@ -286,6 +286,61 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       groups: value.groups,
       unusable: value.unusable,
       couponCount: value.couponCount,
+    })
+  }
+
+  /**
+   * Which coupons would be spent for an amount, or why none can be.
+   *
+   * Nothing moves. This is the question asked before the money is touched,
+   * which is what lets an impossible spend fail while the holding is still
+   * whole — and it is why the answer to a spend that cannot be made is an
+   * OBSTACLE rather than an error.
+   *
+   * The obstacle distinguishes "you do not hold enough" from "you hold enough
+   * but it cannot be split to this amount". Only the first is solved by waiting
+   * for more coupons; a caller told merely "failed" retries forever.
+   *
+   * Every decision comes from @imani/wallet-core, so this is the same plan the
+   * wallet app would make from the same holding. `planParity.test.ts` pins it.
+   */
+  if (path === '/v1/spend/plan' && method === 'POST') {
+    let parsedBody: unknown
+    try {
+      parsedBody = JSON.parse(body ?? '')
+    } catch {
+      return answer(400, {
+        error: 'invalid-json',
+        field: 'body',
+        detail: 'the request body is not valid JSON',
+      })
+    }
+
+    const request = parsePlanRequest(parsedBody)
+    if (!request.ok) {
+      metrics.validationErrors++
+      return answer(400, {
+        error: 'invalid-request',
+        field: request.error.field,
+        detail: request.error.detail,
+      })
+    }
+
+    const plan = planSpend({
+      coupons: request.value.coupons as never,
+      stallId: request.value.stallId,
+      currency: request.value.currency,
+      amount: request.value.amount,
+    })
+
+    // 200 even when there is an obstacle. The question "can this be spent?" was
+    // answered successfully; the answer being "no" is not a failed request, and
+    // a 4xx here would make a caller's error handling fire on a normal result.
+    return answer(200, {
+      parts: plan.parts,
+      obstacle: plan.obstacle,
+      available: plan.available,
+      eligibleCount: plan.eligibleCount,
     })
   }
 
