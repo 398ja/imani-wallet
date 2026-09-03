@@ -18,7 +18,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure'
 
-import { server, metrics, guards } from '../server.js'
+import { server, metrics, guards, setStallLookup, resetStallLookup } from '../server.js'
 import { verifyNip98, FRESHNESS_WINDOW_SECONDS } from '../nip98.js'
 import { REPLAY_TTL_MS, RATE_LIMIT } from '../guards.js'
 
@@ -1203,5 +1203,265 @@ describe('planning a spend', () => {
       body: JSON.stringify(request()),
     })
     expect(res.status).toBe(401)
+  })
+})
+
+/**
+ * Refusing a send the receiving stall could never honour.
+ *
+ * The rule itself is tested pure in `@imani/wallet-core`, and its agreement
+ * with the app is pinned by `src/lib/__tests__/recipientParity.test.ts`. What
+ * is tested here is the thing only a request can show: that the refusal happens
+ * during planning before anything moves, and — most importantly — that an
+ * unreachable relay refuses rather than allows.
+ *
+ * The lookup is substituted rather than mocked at the module level, because the
+ * outage branch is the one that matters and a guarantee that cannot be
+ * exercised under failure is not a guarantee.
+ */
+describe('refusing a send the recipient could not honour', () => {
+  const STALL = 'a'.repeat(64)
+  const OTHER_STALL = 'b'.repeat(64)
+  const CUSTOMER = 'c'.repeat(64)
+
+  /** A lookup with a fixed answer, and a record of whether it was consulted. */
+  function lookupReturning(role: 'stall' | 'customer' | 'unknown') {
+    const calls: string[] = []
+    setStallLookup({
+      async role(pubkey: string) {
+        calls.push(pubkey)
+        return role
+      },
+      clear() {},
+    })
+    return calls
+  }
+
+  beforeEach(() => {
+    guards.clear()
+    resetStallLookup()
+  })
+  afterAll(() => resetStallLookup())
+
+  const coupon = (over: Record<string, unknown> = {}) => ({
+    voucher_id: 'c1',
+    token: 'cashuBo...',
+    face_value: 1000,
+    face_unit: 'EUR',
+    face_decimals: 2,
+    token_amount: 1000,
+    issuance_ratio: 1,
+    issuer_id: STALL,
+    status: 'active',
+    ...over,
+  })
+
+  async function plan(over: Record<string, unknown> = {}, signer?: unknown) {
+    const payload = {
+      coupons: [coupon()],
+      stallId: STALL,
+      currency: 'EUR',
+      amount: 400,
+      ...over,
+    }
+    const body = JSON.stringify(payload)
+    const res = await fetch(`${base}/v1/spend/plan`, {
+      method: 'POST',
+      body,
+      headers: {
+        authorization: await nip98Header(
+          '/v1/spend/plan',
+          'POST',
+          body,
+          (signer ?? makeSigner().signer) as never,
+        ),
+      },
+    })
+    return { status: res.status, body: (await res.json()) as Record<string, never> }
+  }
+
+  describe('a redemption', () => {
+    /**
+     * The overwhelmingly common case, and the one a market stall depends on.
+     * Decided from the keys alone, so it keeps working during an outage — which
+     * is precisely what makes refusing on `unknown` affordable elsewhere.
+     */
+    it('is allowed with NO network lookup performed', async () => {
+      const calls = lookupReturning('unknown')
+
+      const res = await plan({ recipientPubkey: STALL })
+
+      expect(res.status).toBe(200)
+      expect(res.body.refusal).toBeNull()
+      expect(res.body.parts).toHaveLength(1)
+      // The assertion that matters: the relay was never asked.
+      expect(calls).toEqual([])
+    })
+
+    it('is allowed even when every lookup would fail', async () => {
+      setStallLookup({
+        async role() {
+          throw new Error('the relay is down')
+        },
+        clear() {},
+      })
+
+      const res = await plan({ recipientPubkey: STALL })
+      expect(res.body.refusal).toBeNull()
+      expect(res.body.parts).toHaveLength(1)
+    })
+  })
+
+  it('allows a send to someone who is not a stall', async () => {
+    lookupReturning('customer')
+
+    const res = await plan({ recipientPubkey: CUSTOMER })
+    expect(res.body.refusal).toBeNull()
+    expect(res.body.parts).toHaveLength(1)
+  })
+
+  it('refuses another stall’s coupons, naming the mismatch', async () => {
+    lookupReturning('stall')
+
+    const res = await plan({ recipientPubkey: OTHER_STALL })
+
+    expect(res.status).toBe(200)
+    expect(res.body.refusal).toMatchObject({ reason: 'wrong-stall' })
+    expect(res.body.refusal.detail).toContain(STALL)
+    expect(res.body.refusal.detail).toContain(OTHER_STALL)
+    // Nothing was planned: the refusal happened before the money question.
+    expect(res.body.parts).toEqual([])
+  })
+
+  describe('an unreachable network', () => {
+    /**
+     * The requirement that must not be softened into a warning.
+     *
+     * A send blocked by an outage is retried a minute later; a coupon that
+     * lands on a stall which cannot honour it is money the customer no longer
+     * holds and the merchant cannot give back. Only the second is
+     * unrecoverable.
+     */
+    it('refuses the send rather than allowing it', async () => {
+      lookupReturning('unknown')
+
+      const res = await plan({ recipientPubkey: OTHER_STALL })
+
+      expect(res.body.refusal).toMatchObject({ reason: 'recipient-unknown' })
+      expect(res.body.parts).toEqual([])
+    })
+
+    it('says the check could not be made, and that nothing has moved', async () => {
+      lookupReturning('unknown')
+
+      const res = await plan({ recipientPubkey: OTHER_STALL })
+
+      expect(res.body.refusal.detail).toContain('Could not check')
+      expect(res.body.refusal.detail).toContain('Nothing has moved')
+      // And tells the caller what to do about it.
+      expect(res.body.refusal.detail).toContain('Retry')
+    })
+
+    it('refuses distinguishably from a wrong stall', async () => {
+      lookupReturning('unknown')
+      const outage = await plan({ recipientPubkey: OTHER_STALL })
+
+      lookupReturning('stall')
+      const wrong = await plan({ recipientPubkey: OTHER_STALL })
+
+      expect(outage.body.refusal.reason).toBe('recipient-unknown')
+      expect(wrong.body.refusal.reason).toBe('wrong-stall')
+    })
+
+    /**
+     * A lookup that THROWS, rather than one that reports `unknown`. The store
+     * must not turn a thrown error into an allowed send at any layer.
+     */
+    it('refuses when the lookup throws outright', async () => {
+      setStallLookup({
+        async role() {
+          throw new Error('relay unreachable')
+        },
+        clear() {},
+      })
+
+      const res = await plan({ recipientPubkey: OTHER_STALL })
+
+      // A 500 would be wrong even though it does not ALLOW the send: "internal
+      // error" leaves a caller unable to tell a refusal from a half-completed
+      // send. This was a real 500 until the handler caught it.
+      expect(res.status).toBe(200)
+      expect(res.body.refusal).toMatchObject({ reason: 'recipient-unknown' })
+      expect(res.body.refusal.detail).toContain('Nothing has moved')
+      expect(res.body.parts).toEqual([])
+    })
+  })
+
+  describe('a send to the caller’s own key', () => {
+    it('is refused', async () => {
+      const { pubkey, signer } = makeSigner()
+      lookupReturning('customer')
+
+      const res = await plan({ recipientPubkey: pubkey }, signer)
+
+      expect(res.body.refusal).toMatchObject({ reason: 'self-send' })
+      expect(res.body.parts).toEqual([])
+    })
+
+    /**
+     * Even when it would otherwise be a redemption. A stall sending to itself
+     * still burns a coupon and mints an equal one for a fee, and that is the
+     * identity where a loop bug is most likely.
+     */
+    it('is refused even when the caller is the issuing stall', async () => {
+      const { pubkey, signer } = makeSigner()
+      const calls = lookupReturning('stall')
+
+      const res = await plan({ recipientPubkey: pubkey, stallId: pubkey }, signer)
+
+      expect(res.body.refusal).toMatchObject({ reason: 'self-send' })
+      expect(calls).toEqual([])
+    })
+  })
+
+  describe('validation', () => {
+    it('refuses a malformed recipient key rather than looking it up', async () => {
+      const calls = lookupReturning('customer')
+
+      const res = await plan({ recipientPubkey: 'not-a-key' })
+
+      expect(res.status).toBe(400)
+      expect(res.body.field).toBe('recipientPubkey')
+      // A typo must not become a lookup that finds nothing and reads as
+      // "customer", which would allow the send.
+      expect(calls).toEqual([])
+    })
+
+    it('plans without a recipient at all, for a caller only asking what it can afford', async () => {
+      const calls = lookupReturning('unknown')
+
+      const res = await plan()
+
+      expect(res.body.refusal).toBeNull()
+      expect(res.body.parts).toHaveLength(1)
+      expect(calls).toEqual([])
+    })
+  })
+
+  it('counts refusals separately, and by reason', async () => {
+    const before = { ...metrics.recipientRefusals }
+
+    lookupReturning('stall')
+    await plan({ recipientPubkey: OTHER_STALL })
+    lookupReturning('unknown')
+    await plan({ recipientPubkey: OTHER_STALL })
+
+    expect(metrics.recipientRefusals['wrong-stall']).toBe((before['wrong-stall'] ?? 0) + 1)
+    expect(metrics.recipientRefusals['recipient-unknown']).toBe(
+      (before['recipient-unknown'] ?? 0) + 1,
+    )
+    // Separate from validation errors and from auth refusals, so an operator
+    // can tell a caller's bug from a relay outage.
+    expect(metrics.recipientRefusals).not.toHaveProperty('replay')
   })
 })

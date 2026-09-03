@@ -29,11 +29,12 @@
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 
-import { valueHolding, planSpend } from '@imani/wallet-core'
+import { valueHolding, planSpend, checkRecipient, needsRecipientLookup } from '@imani/wallet-core'
 
 import { verifyNip98, type AuthFailure } from './nip98.js'
 import { parseHolding, parsePlanRequest } from './holding.js'
 import { createGuards, type StoredResponse } from './guards.js'
+import { createStallLookup } from './stallLookup.js'
 
 const PORT = Number(process.env.PORT ?? 8788)
 
@@ -46,6 +47,15 @@ export const metrics = {
   refusals: {} as Record<AuthFailure, number>,
   /** Malformed requests, which are a caller-integration signal, not an outage. */
   validationErrors: 0,
+  /**
+   * Sends refused because the recipient could not receive these coupons,
+   * counted by reason and SEPARATELY from other failures.
+   *
+   * An operator watching this can tell a caller repeatedly aiming at the wrong
+   * stall (a bug in their script) from a relay outage (a bug in ours), which
+   * are the same 200-with-a-refusal on the wire.
+   */
+  recipientRefusals: {} as Record<string, number>,
 }
 
 /**
@@ -61,6 +71,28 @@ export const metrics = {
  * out needs a shared store and a decision record, not a bigger cap.
  */
 export const guards = createGuards()
+
+/**
+ * Recipient lookups. Module-level for the same reason as the guards: this
+ * service holds no database, and the cache is per process.
+ */
+let stalls = createStallLookup()
+
+/**
+ * Substitute the lookup, for tests only.
+ *
+ * The fail-closed branch is the most important behaviour in this file and it
+ * only happens when the network is down. A guarantee that cannot be exercised
+ * under failure is a claim, so this seam exists to make the outage testable —
+ * over real HTTP, against the real handler, rather than by reasoning about it.
+ */
+export function setStallLookup(lookup: ReturnType<typeof createStallLookup>): void {
+  stalls = lookup
+}
+
+export function resetStallLookup(): void {
+  stalls = createStallLookup()
+}
 
 /** One header, lower-cased and de-duplicated, or undefined. */
 function header(req: IncomingMessage, name: string): string | undefined {
@@ -326,6 +358,74 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       })
     }
 
+    /**
+     * The recipient check runs BEFORE planning, and planning moves nothing
+     * either — so a refusal here happens while the holding is still whole and
+     * before anything could have moved. That ordering is the ticket's
+     * requirement and it is cheap to honour, because both steps are reads.
+     *
+     * Only performed when a recipient was named. A caller asking "can I afford
+     * this?" has no recipient yet, and requiring one would make the cheap
+     * question depend on a network round trip.
+     */
+    if (request.value.recipientPubkey !== undefined) {
+      const recipient = request.value.recipientPubkey
+
+      /**
+       * The lookup is skipped for a redemption or a self-send, which are
+       * decided from the keys alone.
+       *
+       * Not an optimisation. Redemption is the overwhelmingly common case and
+       * the one a market stall depends on, so it must keep working when the
+       * relay does not — and that is exactly what makes refusing on `unknown`
+       * affordable rather than an outage for the whole market.
+       */
+      let role: 'stall' | 'customer' | 'unknown' = 'unknown'
+      if (needsRecipientLookup(auth.pubkey, recipient, request.value.stallId)) {
+        try {
+          role = await stalls.role(recipient)
+        } catch {
+          // `unknown`, NOT a 500.
+          //
+          // The lookup already catches its own failures, so this should be
+          // unreachable — but "should be" is doing load-bearing work in a
+          // sentence about the money path. A thrown error escaping to the
+          // generic handler answers 500 with "internal error", which tells a
+          // caller nothing about whether their send was refused or half-done.
+          //
+          // Degrading to `unknown` keeps the fail-closed guarantee a property
+          // of THIS handler rather than of the lookup's internals: whatever
+          // goes wrong upstream, the send is refused and the caller is told
+          // the check could not be made and nothing has moved.
+          role = 'unknown'
+        }
+      }
+
+      const verdict = checkRecipient({
+        senderPubkey: auth.pubkey,
+        recipientPubkey: recipient,
+        issuerPubkey: request.value.stallId,
+        recipientRole: role,
+      })
+
+      if (!verdict.allowed) {
+        metrics.recipientRefusals[verdict.reason] =
+          (metrics.recipientRefusals[verdict.reason] ?? 0) + 1
+
+        // 200 with a refusal, like an obstacle: the question was answered, and
+        // the answer is that this send must not happen. The `refusal` field is
+        // separate from `obstacle` because they are different problems — one is
+        // about the coupons, the other about where they were going.
+        return answer(200, {
+          parts: [],
+          obstacle: null,
+          refusal: { reason: verdict.reason, detail: verdict.detail },
+          available: 0,
+          eligibleCount: 0,
+        })
+      }
+    }
+
     const plan = planSpend({
       coupons: request.value.coupons as never,
       stallId: request.value.stallId,
@@ -339,6 +439,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     return answer(200, {
       parts: plan.parts,
       obstacle: plan.obstacle,
+      refusal: null,
       available: plan.available,
       eligibleCount: plan.eligibleCount,
     })

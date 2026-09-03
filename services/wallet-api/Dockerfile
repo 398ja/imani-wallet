@@ -22,12 +22,22 @@ WORKDIR /app
 # floated @noble/hashes a full major ahead of the tested code. Bump these with
 # the wallet's lockfile, never independently.
 #
-# Note this list is SHORTER than the audit API's: no `ws`, no `nostr-tools` at
-# runtime. This service holds no relay connection — it answers from the request
-# alone — and the smaller surface is a property worth keeping.
+# `nostr-tools` and `ws` are here as of the recipient check: the service now
+# asks the relay whether a recipient is a stall. It was previously shorter than
+# the audit API's list, and the container went from booting to dying the moment
+# that import landed — caught by running the image, not by the suite, which
+# resolves everything through vite.
+#
+# `ws` because Node 20 has no global WebSocket. Without it nostr-tools connects
+# to nothing and every query resolves `[]` with NO error — which here would read
+# as "not a stall" and ALLOW exactly the send this check exists to refuse. The
+# audit API carries the same warning; there it produced false accusations,
+# here it would produce lost coupons.
 RUN npm install --no-package-lock --omit=dev \
       @noble/curves@2.0.1 \
       @noble/hashes@1.8.0 \
+      nostr-tools@2.24.1 \
+      ws@8.21.3 \
       tsx@4.19.2
 
 COPY services/wallet-api ./services/wallet-api
@@ -89,6 +99,7 @@ RUN ! find services/wallet-api node_modules/@imani \
     || (echo "FAIL: signing capability reachable in wallet-api image" && exit 1)
 
 ENV PORT=8788
+ENV WALLET_API_RELAY_URL=ws://nostr-relay:7777
 EXPOSE 8788
 
 # No shell form, so the process is PID 1 and receives SIGTERM directly —

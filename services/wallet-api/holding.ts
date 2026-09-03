@@ -204,6 +204,12 @@ export interface PlanBody {
   stallId: string
   currency: string
   amount: number
+  /**
+   * Who the coupons would go to. Optional: a caller asking only "can I afford
+   * this?" has no recipient yet, and demanding one would make the cheap
+   * question require the expensive answer.
+   */
+  recipientPubkey?: string
 }
 
 export function parsePlanRequest(body: unknown): Parsed<PlanBody> {
@@ -251,6 +257,28 @@ export function parsePlanRequest(body: unknown): Parsed<PlanBody> {
     return { ok: false, error: { field: 'amount', detail: `expected a positive amount, got ${amount}` } }
   }
 
+  const recipient = fields.recipientPubkey
+  if (recipient !== undefined && recipient !== null) {
+    if (typeof recipient !== 'string') {
+      return {
+        ok: false,
+        error: { field: 'recipientPubkey', detail: `expected a string, got ${describe(recipient)}` },
+      }
+    }
+    // 64 hex characters. Checked here rather than left to the relay, because a
+    // malformed key would produce a lookup that finds nothing, which reads as
+    // `customer` and ALLOWS the send. A typo must not be a way past the guard.
+    if (!/^[0-9a-f]{64}$/i.test(recipient)) {
+      return {
+        ok: false,
+        error: {
+          field: 'recipientPubkey',
+          detail: 'expected a 64-character hex public key',
+        },
+      }
+    }
+  }
+
   return {
     ok: true,
     value: {
@@ -258,6 +286,7 @@ export function parsePlanRequest(body: unknown): Parsed<PlanBody> {
       stallId: fields.stallId as string,
       currency: fields.currency as string,
       amount,
+      recipientPubkey: typeof recipient === 'string' ? recipient : undefined,
     },
   }
 }

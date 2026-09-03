@@ -193,6 +193,49 @@ A coupon from another stall is never drawn in, however conveniently sized: a
 stall cannot honour what it did not issue, and a coupon sent to one that cannot
 honour it is money that simply stops.
 
+### Where a coupon may be sent
+
+Pass `recipientPubkey` and the plan also checks whether that recipient could
+honour these coupons. Optional: a caller asking only "can I afford this?" has no
+recipient yet, and requiring one would make the cheap question need a network
+round trip.
+
+A refused send comes back as a `refusal`, again with **200** and with no parts:
+
+```json
+{
+  "parts": [],
+  "obstacle": null,
+  "refusal": {
+    "reason": "wrong-stall",
+    "detail": "These coupons were issued by aaaa…, and the recipient is a different stall…"
+  }
+}
+```
+
+| `reason` | meaning |
+|---|---|
+| `wrong-stall` | the recipient is a stall, but not the one that issued these coupons |
+| `recipient-unknown` | the recipient's role could not be checked |
+| `self-send` | you are sending to your own key |
+
+**A coupon is a claim on exactly one stall.** Sent to a different stall it is
+something they cannot honour, cannot redeem and cannot return, and the money
+simply stops — nothing downstream catches it.
+
+Sending a stall **its own** coupons is a redemption and is always allowed, with
+**no network lookup at all**. It is the common case and the one a market stall
+depends on, so it keeps working when the relay does not.
+
+`recipient-unknown` **refuses**, and this is deliberate rather than
+conservative. A send blocked by an outage is retried a minute later; a coupon
+that lands on a stall which cannot honour it is money the customer no longer
+holds and the merchant cannot give back. Only the second is unrecoverable. The
+detail says the check could not be made and that nothing has moved.
+
+Because redemption needs no lookup, failing closed costs only cross-stall sends,
+which are rare. That is what makes the strictness affordable.
+
 ### When a spend cannot be planned
 
 The answer is still **200** with an `obstacle`. The question was answered
