@@ -1014,7 +1014,7 @@ export async function sendVouchers({
  * asking anything of the network at all. It is only a send to a THIRD party,
  * whose role we genuinely do not know, that waits for the relay.
  */
-async function refuseIfWrongMerchant(recipient: string, issuer: string): Promise<void> {
+export async function refuseIfWrongMerchant(recipient: string, issuer: string): Promise<void> {
   if (issuerKey(recipient) === issuerKey(issuer)) return // A redemption. Always fine.
 
   const status = await merchantStatus(recipient)

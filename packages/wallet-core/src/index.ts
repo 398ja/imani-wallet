@@ -40,3 +40,12 @@ export {
   type PlannedPart,
   type ObstacleKind,
 } from './plan'
+
+export {
+  checkRecipient,
+  needsRecipientLookup,
+  type RecipientRole,
+  type RecipientCheck,
+  type SendVerdict,
+  type SendRefusal,
+} from './recipient'
