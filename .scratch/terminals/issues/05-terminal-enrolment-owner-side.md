@@ -13,7 +13,7 @@ offered, as those would be credentials to the stall sitting in a drawer.
 
 **Blocked by:** 01, 04
 
-**Status:** done — screen landed. Only the mint call remains, which is ticket 10.
+**Status:** done — ticket 10 landed the real minted credential this screen issues.
 
 - [x] The owner names a terminal and picks a role from the fixed catalog; a
       terminal cannot go live without a role.
@@ -118,3 +118,12 @@ Bottin password fallback `MERCHANT_IDENTITY_BOTTIN_PASS` instead of
 disables itself when either is blank. Fixed, image rebuilt, and the gateway
 now logs `bottin_record_client_created ... auth=basic` from a clean container
 with no hand-patching.
+
+
+## The mint call (ticket 10)
+
+The note above said the mint call remained. It landed with ticket 10:
+`scripts/mint-terminal-credential.mjs` mints a real locked credential through
+the live gateway, and `terminalCredential.ts` defines the shape both sides
+read. Enrolment now issues authority a mint actually signed rather than a
+record the device wrote for itself.
