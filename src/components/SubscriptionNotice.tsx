@@ -74,13 +74,22 @@ export function SubscriptionNotice({ pubkey }: { pubkey: string }) {
       // A link, not a button with a handler: the whole strip goes to the screen
       // that can explain it, and a plain navigation cannot swallow a gesture the
       // way an interactive overlay can.
-      className={`mb-4 flex items-center gap-3 rounded-xl p-3 text-sm press-row ${
+      //
+      // `pressable`, NOT `press-row`. The house press-row carries a press with a
+      // grey tint, which is right for a divided list and wrong here: laid over
+      // amber it reads as the banner going muddy rather than as a press. This
+      // strip has its own colour and its own rounded edges with nothing to clip
+      // against, so it takes the scale-and-dim feedback instead — which is also
+      // the one that already answers `prefers-reduced-motion`.
+      className={`pressable mb-4 flex items-center gap-3 rounded-xl p-3 text-sm ${
         lastDay
           ? 'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200'
           : 'bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300'
       }`}
     >
-      <Clock className="h-4 w-4 shrink-0" />
+      {/* Decorative: the sentence beside it already says everything, and a
+          screen reader announcing "clock" first would only delay it. */}
+      <Clock className="h-4 w-4 shrink-0" aria-hidden />
       <span className="min-w-0">{noticeText(notice, formatDate(notice.expiresAt))}</span>
     </Link>
   )
