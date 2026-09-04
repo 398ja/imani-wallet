@@ -1,11 +1,29 @@
 /**
  * @vitest-environment jsdom
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
-import { TerminalsPage } from '../TerminalsPage'
+/**
+ * Only the licence CHECK is stubbed. `lapseService` — which decides which
+ * tills a lapse stops — runs for real, because it is the thing being wired.
+ */
+let subscribed = true
+vi.mock('../../lib/licenceStatus', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/licenceStatus')>()
+  return {
+    ...actual,
+    licenceStatus: async () => ({
+      checkedAt: Date.now(),
+      decision: subscribed
+        ? { granted: true as const, source: 'verified' as const, grant: { features: ['terminals'] } }
+        : { granted: false as const, reason: 'expired' as const },
+    }),
+  }
+})
+
+const { TerminalsPage } = await import('../TerminalsPage')
 import { recordTerminal, revokeTerminal, isRevoked, REVOCATION_DELAY_HOURS } from '../../lib/terminalRoster'
 import { TERMINAL_ROLES } from '../../lib/terminalRole'
 
@@ -178,5 +196,79 @@ describe('there is no pause', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Revoke' }))
 
     expect(screen.getByText(/add it again from the device/i)).toBeTruthy()
+  })
+})
+
+describe('what a lapse shows the owner', () => {
+  const two = () => {
+    enrol()
+    recordTerminal(STALL, {
+      terminalPubkey: 'e'.repeat(64),
+      name: 'Second',
+      role: TERMINAL_ROLES.REDEEM_ONLY,
+      enrolledAt: 2_000_000,
+    })
+  }
+
+  it('says nothing about lapses while the subscription is live', async () => {
+    // The common case. An owner in good standing must never see a word about
+    // tills stopping.
+    two()
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('Second')).toBeTruthy())
+    expect(screen.queryByText(/subscription is inactive/)).toBeNull()
+  })
+
+  it('marks only the tills a lapse actually stopped', async () => {
+    /**
+     * The free one keeps serving, so exactly one of these two is marked. A
+     * screen that marked both would tell an owner their stall had stopped
+     * trading over a billing problem, which is the thing the whole design
+     * refuses.
+     */
+    subscribed = false
+    two()
+    renderPage()
+
+    await waitFor(() =>
+      expect(screen.getAllByText(/subscription is inactive/)).toHaveLength(1),
+    )
+  })
+
+  it('keeps the marked till on the list, not in "no longer in service"', async () => {
+    // Stopped by a bill is not retired by the owner. Moving it would imply the
+    // owner did something, and would put it beside terminals that need
+    // re-enrolling — which this one does not.
+    subscribed = false
+    two()
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText(/subscription is inactive/)).toBeTruthy())
+    expect(screen.getByText('In service')).toBeTruthy()
+    expect(screen.queryByText('No longer in service')).toBeNull()
+  })
+
+  it('promises renewal restores it with nothing to set up', async () => {
+    // The kind half of the design, said out loud. An owner who thinks renewal
+    // means re-enrolling every device may not bother renewing.
+    subscribed = false
+    two()
+    renderPage()
+
+    await waitFor(() =>
+      expect(screen.getByText(/nothing needs setting up on the device/)).toBeTruthy(),
+    )
+  })
+
+  it('never calls it paused', async () => {
+    // There is no pause in this system, and unlike a revocation this needs no
+    // action on the device to undo.
+    subscribed = false
+    two()
+    const { container } = renderPage()
+
+    await waitFor(() => expect(screen.getByText(/subscription is inactive/)).toBeTruthy())
+    expect(container.textContent).not.toMatch(/paused|suspended/i)
   })
 })

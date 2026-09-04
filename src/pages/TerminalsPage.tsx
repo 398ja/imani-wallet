@@ -1,8 +1,10 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Tablet, TriangleAlert } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, Panel, ListSection, Button, EmptyRow } from '../components/ui'
 import { Link } from 'react-router-dom'
+import { licenceStatus, type LicenceStatus } from '../lib/licenceStatus'
+import { mayServe } from '../lib/lapseService'
 import { formatDate } from '../lib/format'
 import { TERMINAL_ROLE_LABELS } from '../lib/terminalRole'
 import {
@@ -54,6 +56,29 @@ export function TerminalsPage({ stallPubkey }: { stallPubkey: string }) {
   // way back is a whole enrolment — so it does not happen on a single tap.
   const [confirming, setConfirming] = useState<string | null>(null)
 
+  /**
+   * What the licence check believes, for the lapse markers below.
+   *
+   * Read here rather than per-row so every row is judged against ONE answer:
+   * rows resolving separately could render a list where the same subscription
+   * appears live on one line and lapsed on the next.
+   *
+   * Null while it loads, and rows show no marker until it arrives — briefly
+   * flashing "stopped" at an owner whose subscription is fine would be worse
+   * than showing nothing for a moment.
+   */
+  const [licence, setLicence] = useState<LicenceStatus | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    void licenceStatus({ pubkey: stallPubkey }).then((status) => {
+      if (!cancelled) setLicence(status)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [stallPubkey])
+
   const refresh = useCallback(() => setTerminals(allTerminals(stallPubkey)), [stallPubkey])
 
   const live = terminals.filter((t) => t.revokedAt === undefined)
@@ -77,6 +102,9 @@ export function TerminalsPage({ stallPubkey }: { stallPubkey: string }) {
             <TerminalRow
               key={terminal.terminalPubkey}
               terminal={terminal}
+              // Undefined until the check answers, so the row shows no marker
+              // rather than briefly accusing a healthy subscription.
+              stopped={licence ? !mayServe(licence, terminals, terminal.terminalPubkey).serving : undefined}
               confirming={confirming === terminal.terminalPubkey}
               onAskRevoke={() => setConfirming(terminal.terminalPubkey)}
               onCancel={() => setConfirming(null)}
@@ -118,12 +146,15 @@ export function TerminalsPage({ stallPubkey }: { stallPubkey: string }) {
 
 function TerminalRow({
   terminal,
+  stopped,
   confirming = false,
   onAskRevoke,
   onCancel,
   onRevoke,
 }: {
   terminal: TerminalRecord
+  /** Enrolled and unrevoked, but a lapse has stopped it. Undefined = unknown. */
+  stopped?: boolean
   confirming?: boolean
   onAskRevoke?: () => void
   onCancel?: () => void
@@ -168,6 +199,17 @@ function TerminalRow({
       {revoked && bitesAt !== null ? (
         <p className="mt-2 text-sm text-mono-500">
           Revoked {formatDate(terminal.revokedAt!)} · stops trading by {formatDate(bitesAt)}
+        </p>
+      ) : null}
+
+      {/* Stopped by a lapse, not revoked — and the wording has to keep those
+          apart, because one is the owner's own decision and the other is a
+          bill. "Paused" would be wrong twice over: there is no pause in this
+          system, and this needs no action on the terminal to undo. */}
+      {!revoked && stopped ? (
+        <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">
+          Not trading while your subscription is inactive. Renewing starts it again
+          straight away — nothing needs setting up on the device.
         </p>
       ) : null}
 
