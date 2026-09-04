@@ -90,13 +90,22 @@ LOGIN is ticket 10. When it lands, App passes them through and the gating is
 already tested. Nothing here is a stand-in: the rules and both enforcement
 halves are real.
 
-## Verified in the real app
+## What is NOT verified, and why
 
-Everything above was originally evidenced by jsdom component tests. That
-proves the component, not the product, so the terminal screens were afterwards
-driven in a real browser against the running `imani-test` stack: a merchant
-registers for real, then the list, revocation and enrolment screens are
-clicked through. 27 checks, all passing (`npm run e2e`).
+Correcting an overstatement. The E2E suite added later covers the terminal
+list, revocation and enrolment screens, but it covers NOTHING in this ticket,
+and it cannot: `App.tsx` renders `MerchantHomePage` with no `actor` and no
+`session`, so the role gating and the lapse notice are unreachable by any
+user. Terminal LOGIN is ticket 10.
+
+So the honest state is: the rules (`terminalSession.ts`) and both enforcement
+halves (`issueAndDeliver`, the screen's own gating) are real, unit-tested and
+mutation-checked, and the screen behaves correctly when handed an actor and a
+session. Whether a real terminal ever gets one is ticket 10's job, and until
+then no user reaches this code.
+
+The E2E checks below belong to the terminals work generally, not to this
+ticket's criteria.
 
 Doing that immediately found a defect no unit test could reach: registration
 died with HTTP 500 because imani-gateway-core's `application.yml` spelled the

@@ -92,13 +92,27 @@ reader into thinking there is a hazard here.
 
 1811 tests pass, lint clean, tsc at the pre-existing 81 in 6 files.
 
-## Verified in the real app
+## Verified in the real app, and the part that is not
 
-Everything above was originally evidenced by jsdom component tests. That
-proves the component, not the product, so the terminal screens were afterwards
-driven in a real browser against the running `imani-test` stack: a merchant
-registers for real, then the list, revocation and enrolment screens are
-clicked through. 27 checks, all passing (`npm run e2e`).
+The owner-facing half is now driven in a real browser (`npm run e2e`), against
+the running `imani-test` stack with a merchant registered for real. Six checks:
+exactly one of two tills is marked, it is the NEWEST, the oldest keeps
+serving, the stopped one stays under "In service", the copy promises renewal
+needs nothing done on the device, and nothing says paused. Both were
+mutation-tested THROUGH the browser — sorting newest-first, and suppressing
+the marker — so they catch regressions rather than passing vacuously.
+
+One honest limitation. The browser run exercises a stall with NO licence, not
+one whose licence expired. Both take the identical code path (`grants()` is
+false either way), and a real EXPIRY is covered in `lapseService.test.ts`
+against the gateway-minted licence fixture, with the clock moved past the
+grace window. But minting a licence into a live browser wallet is not
+something the E2E does, so the browser evidence is for the allowance path
+rather than for expiry specifically.
+
+The staff-facing side ("staff on a stopped till are told plainly") is a
+TERMINAL screen, which no user can reach until terminal login lands in
+terminals ticket 10.
 
 Doing that immediately found a defect no unit test could reach: registration
 died with HTTP 500 because imani-gateway-core's `application.yml` spelled the
