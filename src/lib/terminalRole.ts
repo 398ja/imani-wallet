@@ -59,15 +59,25 @@ export const ALL_TERMINAL_ROLES: readonly TerminalRole[] = Object.values(TERMINA
 /**
  * What an owner sees when choosing. Kept beside the catalog so a new role
  * cannot be added without someone writing the words for it.
+ *
+ * House voice, matching every `SettingRow` in the app: a sentence-case name and
+ * a hint that is a NOUN PHRASE with no terminal punctuation ("Categories,
+ * location, voucher currency"). Full sentences here would read as instructions
+ * in a list that is really a set of labels.
+ *
+ * Named for what the device DOES rather than for what it is denied. "Redemption
+ * only" is the job at the door; describing it as "cannot sell" would put the
+ * limitation first, and an owner is choosing a purpose rather than declining a
+ * feature.
  */
 export const TERMINAL_ROLE_LABELS: Record<TerminalRole, { name: string; hint: string }> = {
   [TERMINAL_ROLES.REDEEM_ONLY]: {
     name: 'Redemption only',
-    hint: 'Honours your coupons. Cannot sell.',
+    hint: 'Honours your coupons, cannot sell',
   },
   [TERMINAL_ROLES.ISSUE_AND_REDEEM]: {
     name: 'Sell and redeem',
-    hint: 'A full till: sells coupons and honours them.',
+    hint: 'A full till: sells and honours',
   },
 }
 

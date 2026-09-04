@@ -49,6 +49,26 @@ describe('the role catalog', () => {
       expect(TERMINAL_ROLE_LABELS[role]?.hint).toBeTruthy()
     }
   })
+
+  it('writes those words in the app’s own voice', () => {
+    /**
+     * These render in a `SettingRow`-shaped list, where every hint in the app
+     * is a noun phrase with no terminal punctuation — "Categories, location,
+     * voucher currency". Full sentences would read as instructions in a list
+     * that is really a set of labels.
+     *
+     * Pinned because copy is the thing most likely to be "improved" by someone
+     * who has not seen the surrounding screens.
+     */
+    for (const role of ALL_TERMINAL_ROLES) {
+      const { name, hint } = TERMINAL_ROLE_LABELS[role]
+
+      // Sentence case, like every other label: one leading capital.
+      expect(name[0]).toBe(name[0].toUpperCase())
+      expect(name).not.toMatch(/[.!]$/)
+      expect(hint).not.toMatch(/[.!]$/)
+    }
+  })
 })
 
 describe('a permission always names its stall', () => {
