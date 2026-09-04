@@ -39,6 +39,14 @@ vi.mock('../nap', () => ({
   getSigner: () => ({ privkeyHex: () => bytesToHex(customerSk) }),
 }))
 
+/**
+ * The adapter takes a recipient key and deliberately IGNORES it — dmCrypto
+ * reads from the signer instead, so that locking the wallet actually evicts
+ * the key. `GiftWrapProcessor` still passes one, so the tests do too, and its
+ * being wrong here is the point: unwrapping must succeed regardless.
+ */
+const IGNORED_PRIVKEY = 'f'.repeat(64)
+
 const { createDmCryptoAdapter } = await import('../dmCrypto')
 const { licenceFromToken } = await import('../licences')
 const { forgetLicenceParses } = await import('../licences')
@@ -68,7 +76,7 @@ describe('a licence delivered by DM', () => {
     const wraps = nip17.wrapEvent(senderSk, { publicKey: customerPk }, envelope(TOKEN))
     const wrap = Array.isArray(wraps) ? wraps[0] : wraps
 
-    const unwrapped = await adapter.unwrapNip17Dm(wrap as never)
+    const unwrapped = await adapter.unwrapNip17Dm(wrap as never, IGNORED_PRIVKEY)
 
     expect(unwrapped).not.toBeNull()
     expect(unwrapped!.content).toContain('cashuB')
@@ -79,7 +87,7 @@ describe('a licence delivered by DM', () => {
     const wraps = nip17.wrapEvent(senderSk, { publicKey: customerPk }, envelope(TOKEN))
     const wrap = Array.isArray(wraps) ? wraps[0] : wraps
 
-    const unwrapped = await adapter.unwrapNip17Dm(wrap as never)
+    const unwrapped = await adapter.unwrapNip17Dm(wrap as never, IGNORED_PRIVKEY)
     const payload = JSON.parse(unwrapped!.content) as { token: string }
 
     // The bytes that came out of the wrap, read as a licence. If delivery
@@ -122,6 +130,6 @@ describe('a licence delivered by DM', () => {
     const wrap = Array.isArray(wraps) ? wraps[0] : wraps
 
     // Null rather than a throw: one undecryptable wrap must not stall the poll.
-    expect(await adapter.unwrapNip17Dm(wrap as never)).toBeNull()
+    expect(await adapter.unwrapNip17Dm(wrap as never, IGNORED_PRIVKEY)).toBeNull()
   })
 })
