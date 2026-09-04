@@ -251,7 +251,20 @@ const executed =
   process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]
 
 if (executed) {
-  await main()
+  // Operator errors — no seller identity, a gateway that refuses, a delivery
+  // that fails — are reported as a sentence, not a stack trace. Every one of
+  // them is something the person running this can act on, and a stack frame
+  // from inside node's ESM loader tells them nothing about which.
+  //
+  // The message matters most on the delivery failure, where it names the
+  // voucher that WAS minted: re-delivering it is right and minting a second is
+  // not, because the customer would then hold two licences for one subscription.
+  try {
+    await main()
+  } catch (error) {
+    console.error(`\n${error instanceof Error ? error.message : String(error)}`)
+    process.exitCode = 1
+  }
 }
 
 /**

@@ -74,6 +74,22 @@ close that:
   key DROPPED. Worth knowing: the seller would see a successful sale and the
   customer would get an ordinary coupon.
 
+### A second gateway path, found on re-check
+
+The first fix put metadata into the signed secret in `finalizePendingVoucher`
+and stopped one step short. `createVoucher` PREFERS
+`voucherService.issueAndBackup`, which spends proofs the wallet already holds,
+and that path cannot carry metadata at all — `IssueVoucherRequest` has no such
+component and `VoucherServiceImpl` hardcodes `emptyMap()`. So a licence sold
+from a FUNDED wallet would have been signed without its subscription id, grant
+or lock key while the identical sale from an empty wallet worked: intermittent,
+silent, attributable to nothing the seller did.
+
+The first test missed it by stubbing `issueAndBackup` to THROW, so it only ever
+exercised the fallback. Requests carrying metadata now route to the direct path
+regardless of balance (imani-gateway-customer b282e87), with coupons still
+spending proofs, asserted separately.
+
 **Not verified: a live end-to-end sale.** The local stack is down and the gateway
 images are not present, so no licence has been minted by a running gateway,
 delivered by DM, and unlocked on a device. Ticket 04 is where that happens, and
