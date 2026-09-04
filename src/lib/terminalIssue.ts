@@ -150,6 +150,23 @@ export function checkEnrolment(
 }
 
 /**
+ * A credential this side has just built, with its fields known precisely.
+ *
+ * `TerminalCredential` types its fields `unknown` on purpose: it describes what
+ * arrives from OUTSIDE, where the role and keys are claims to be validated
+ * rather than facts. Here we are the ones constructing it, so the caller should
+ * not have to re-validate what we just wrote — a narrower type at the point of
+ * creation, and the loose one at the point of receipt.
+ */
+export type PreparedCredential = TerminalCredential & {
+  name: string
+  stallPubkey: string
+  role: TerminalRole
+  lockedTo: string
+  permissions: readonly string[]
+}
+
+/**
  * Everything the credential must contain, ready for the mint.
  *
  * Throws rather than returning a partial. `checkEnrolment` is the place that
@@ -164,7 +181,7 @@ export function checkEnrolment(
 export function prepareEnrolment(
   request: EnrolmentRequest,
   context: EnrolmentContext,
-): TerminalCredential & { name: string } {
+): PreparedCredential {
   const check = checkEnrolment(request, context)
   if (!check.ready) throw new Error(check.message)
   // `checkEnrolment` has established the role; this narrows it for TypeScript.

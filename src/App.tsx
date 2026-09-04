@@ -55,6 +55,7 @@ import { SettingsPage } from './pages/SettingsPage'
 import { LedgerPage } from './pages/LedgerPage'
 import { SubscriptionPage } from './pages/SubscriptionPage'
 import { TerminalsPage } from './pages/TerminalsPage'
+import { TerminalEnrolPage } from './pages/TerminalEnrolPage'
 import { ProfileEditPage } from './pages/ProfileEditPage'
 import { SecurityPage } from './pages/SecurityPage'
 import { BackupPage, RestorePage } from './pages/BackupPages'
@@ -351,6 +352,20 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             // problem into a security one.
             merchant !== null ? (
               <TerminalsPage stallPubkey={pubkey} />
+            ) : (
+              <Navigate to="/settings" replace />
+            )
+          }
+        />
+        <Route
+          path="/settings/terminals/add"
+          element={
+            // Licence-gated only through `checkEnrolment`, which the screen
+            // renders as a sentence. A route guard here would hide the reason,
+            // and "refused at enrolment rather than by hiding a button" is
+            // subscriptions ticket 07's first criterion.
+            merchant !== null ? (
+              <TerminalEnrolPage stallPubkey={pubkey} />
             ) : (
               <Navigate to="/settings" replace />
             )
