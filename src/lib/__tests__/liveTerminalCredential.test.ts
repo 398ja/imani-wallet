@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { parseVoucherToken } from '../voucherToken'
+import { parseVoucherToken, verifyVoucher } from '../voucherToken'
 import { credentialActor, parseTerminalMetadata } from '../terminalCredential'
 import { TERMINAL_ROLES, grantFor, permissionFor, TERMINAL_ACTIONS } from '../terminalRole'
 
@@ -36,8 +36,23 @@ const TOKEN = readFileSync(
 ).trim()
 
 const parsed = parseVoucherToken(TOKEN)
-const STALL = 'b1787b2b98a5244a70d934b393e0179e7ebba0c72579b4a0b238eda3911caa02'
-const DEVICE = 'cacc220c14764bfa06f154c662aec0bb339f29a10f2f6e1edd2c83cd10dee752'
+
+/**
+ * What the minting script SENT, recorded beside the token when it ran.
+ *
+ * These were once hardcoded hex. Re-minting the fixture — which the spend probe
+ * requires, since a swap consumes the proof — then failed three tests purely
+ * because the keys had changed, on a credential that was entirely valid.
+ *
+ * Read from the sidecar, never from `parsed`: comparing the token against
+ * itself would still pass if the gateway dropped the lock, which is the exact
+ * bug this file exists to catch.
+ */
+const MINTED = JSON.parse(
+  readFileSync(join(__dirname, 'fixtures', 'live-terminal-credential.json'), 'utf8'),
+) as { stall: string; device: string; role: string; name: string }
+const STALL = MINTED.stall
+const DEVICE = MINTED.device
 
 describe('the metadata survives the round trip to a real mint', () => {
   it('is still there in the signed secret', () => {
@@ -55,7 +70,7 @@ describe('the metadata survives the round trip to a real mint', () => {
     expect(m.role).toBe(TERMINAL_ROLES.REDEEM_ONLY)
     expect(m.stall_pubkey).toBe(STALL)
     expect(m.lock_key).toBe(DEVICE)
-    expect(m.name).toBe('Front counter')
+    expect(m.name).toBe(MINTED.name)
   })
 
   it('names the stall as its issuer, in the signed bytes', () => {
@@ -91,5 +106,57 @@ describe('logging in with the real thing', () => {
     const actor = credentialActor(metadata(), DEVICE, { issuerId: parsed.voucher.issuerId })!
     expect(actor.permissions).toEqual(grantFor(TERMINAL_ROLES.REDEEM_ONLY, STALL))
     expect(actor.permissions).not.toContain(permissionFor(TERMINAL_ACTIONS.ISSUE, STALL))
+  })
+})
+
+/**
+ * The lock the MINT enforces, on a credential a real gateway issued.
+ *
+ * These are `P2PK_VOUCHER` now (ADR 0008), and that change is invisible to
+ * every test that only reads metadata — which is how it went unnoticed that
+ * `parseVoucherToken` threw on all of them. The wallet could not read a
+ * credential the gateway had just minted, and no unit test failed, because
+ * every test fed itself a `VOUCHER` it had built.
+ */
+describe('the lock the mint will actually enforce', () => {
+  it('is the locked kind, not a plain voucher that merely names a holder', () => {
+    // The distinction is the entire point. Under the plain kind the mint never
+    // looks for a witness, so a thief holding the proof can spend it.
+    expect(parsed.voucher.lockKey).toBeTruthy()
+  })
+
+  it('locks to the device key, as a compressed point', () => {
+    // `02` + x-only: the mint checks a witness against THIS, so if it were some
+    // other key the credential would be unusable by the terminal it names.
+    expect(parsed.voucher.lockKey).toBe('02' + MINTED.device)
+  })
+
+  it('enforces the same key it advertises in its metadata', () => {
+    // A mismatch would be silent and severe: the roster would show a terminal
+    // enrolled against one key while the mint enforced another, so revoking the
+    // advertised key would leave the real one spendable.
+    const m = parseTerminalMetadata(parsed.voucher.merchantMetadata)!
+    expect(parsed.voucher.lockKey).toBe('02' + m.lock_key)
+  })
+
+  it("carries the issuer's signature over the bytes that arrived", () => {
+    // Locked vouchers keep their tags ON THE WIRE, where the plain kind hides
+    // them in a CBOR blob. Verifying means hashing the arriving tag order
+    // rather than a reconstruction of it, and tag order is hashed.
+    expect(verifyVoucher(parsed.voucher).signatureValid).toBe(true)
+  })
+
+  it('fails verification if a single signed tag is altered', () => {
+    // The control. Without it the assertion above would pass just as happily
+    // against a verifier that returned true unconditionally.
+    const wire = new TextDecoder().decode(parsed.voucher.canonicalWire!)
+    const tampered = wire.replace('"face_value",1', '"face_value",2')
+    expect(tampered).not.toBe(wire)
+    expect(
+      verifyVoucher({
+        ...parsed.voucher,
+        canonicalWire: new TextEncoder().encode(tampered),
+      }).signatureValid,
+    ).toBe(false)
   })
 })

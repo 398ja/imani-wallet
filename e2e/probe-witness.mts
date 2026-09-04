@@ -8,6 +8,7 @@
  * thief holding the token would send. A 4xx is the pass.
  */
 import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { tokenProofs, proofSecrets } from '../src/lib/voucherToken'
 import { secp256k1 } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha2.js'
@@ -64,23 +65,77 @@ async function attempt(file: string, label: string) {
   return { status: r.status, text, kind }
 }
 
-const locked = await attempt('src/lib/__tests__/fixtures/witness-test.token', 'LOCKED, no witness:')
+/**
+ * Mints BOTH arms fresh on every run.
+ *
+ * A swap SPENDS what it is given, so a committed token is single-use: a second
+ * run of this probe reported "the same request SUCCEEDS unlocked — was 400"
+ * purely because its own previous run had spent the control. Re-minting is what
+ * lets this probe be run twice and mean the same thing both times.
+ *
+ * The unlocked arm needs an OFF-CURVE key, which trips the gateway's documented
+ * fallback. That is the only way to get a genuinely unlocked credential from the
+ * REAL gateway rather than fabricating one here — and a fabricated control would
+ * not be evidence about the gateway at all.
+ */
+function mintArm(out: string, extra: string[] = []): void {
+  execFileSync(
+    'node',
+    ['scripts/mint-terminal-credential.mjs', '--stall-name', 'imani-terminals',
+     '--device', deviceKey(extra.includes('--allow-unlocked')), '--out', out, ...extra],
+    { stdio: 'pipe' },
+  )
+}
+
+/** A real x-only pubkey, or deliberately off-curve bytes for the unlocked arm. */
+function deviceKey(offCurve: boolean): string {
+  for (;;) {
+    const k = bytesToHex(randomBytes(32))
+    let onCurve = true
+    try { secp256k1.Point.fromHex('02' + k) } catch { onCurve = false }
+    if (onCurve !== offCurve) return k
+  }
+}
+
+
+const LOCKED = 'src/lib/__tests__/fixtures/witness-test.token'
+const CONTROL = 'src/lib/__tests__/fixtures/control-unlocked.token'
+mintArm('witness-test.token')
+mintArm('control-unlocked.token', ['--allow-unlocked'])
+
+const locked = await attempt(LOCKED, 'LOCKED, no witness:')
 
 /**
- * The control. An UNLOCKED voucher sent the same way must fail for a DIFFERENT
- * reason — empty outputs — not for a missing witness. Without this, "the mint
- * refused" proves nothing: it refuses this malformed request either way.
+ * The control. The SAME request over an unlocked voucher must be ACCEPTED,
+ * which is what shows the refusal above came from the lock rather than from
+ * anything about the request's shape.
  */
-const open = await attempt('src/lib/__tests__/fixtures/live-terminal-credential.token', 'UNLOCKED, same request:')
+const open = await attempt(CONTROL, 'UNLOCKED, same request:')
 
 console.log()
-const lockedMentionsWitness = /witness|signature|p2pk/i.test(locked.text)
-const openMentionsWitness = /witness|signature|p2pk/i.test(open.text)
 
-console.log(locked.kind === 'P2PK_VOUCHER' ? 'PASS  the locked token really is P2PK_VOUCHER' : `FAIL  kind was ${locked.kind}`)
-console.log(locked.status >= 400 ? 'PASS  the mint refused the witness-less spend' : 'FAIL  the mint accepted it')
-console.log(
-  lockedMentionsWitness && !openMentionsWitness
-    ? 'PASS  and refused it FOR the missing witness, not for the malformed request'
-    : `INFO  locked=${locked.status} open=${open.status} — reasons: see bodies above`,
-)
+/**
+ * The claim is DIFFERENTIAL: the same request, sent the same way, must be
+ * refused when the voucher is locked and accepted when it is not. Only the
+ * pair proves the mint enforces the lock — a lone 400 could be a malformed
+ * request, which is how an earlier version of this probe "passed" while the
+ * mint was silently ignoring the lock entirely (SecretUtil could not parse
+ * P2PK_VOUCHER, and every locked proof came back HTTP 200).
+ */
+const checks: Array<[boolean, string]> = [
+  [locked.kind === 'P2PK_VOUCHER', `the locked token is P2PK_VOUCHER (was ${locked.kind})`],
+  [open.kind === 'VOUCHER', `the control is genuinely UNLOCKED (was ${open.kind})`],
+  [locked.status >= 400, `the mint REFUSED the witness-less locked spend (was ${locked.status})`],
+  [open.status === 200, `the same request SUCCEEDS unlocked (was ${open.status})`],
+  [
+    /witness|signature|p2pk/i.test(locked.text),
+    'and refused it FOR the missing witness, not for a malformed request',
+  ],
+]
+
+let failed = 0
+for (const [ok, what] of checks) {
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${what}`)
+  if (!ok) failed++
+}
+process.exit(failed === 0 ? 0 : 1)
