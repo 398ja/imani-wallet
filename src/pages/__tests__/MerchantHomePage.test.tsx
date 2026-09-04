@@ -213,3 +213,51 @@ describe('the lapse mark matches the reason', () => {
     expect(iconName()).toMatch(/shield/i)
   })
 })
+
+describe('a refused terminal is not mistaken for the owner', () => {
+  /**
+   * The hole this closes, found by re-reading the wiring rather than by any
+   * test: "no actor" was doing two opposite jobs. A device with no credential
+   * is the stall's own and gets the full till. A device whose credential was
+   * REJECTED — revoked, or locked to another device — also produced no actor,
+   * and so was handed that same full till.
+   *
+   * A revoked terminal could sell. Nothing in 1873 unit tests, 33 browser
+   * checks or a live-mint probe covered it, because none of them asked what a
+   * refused terminal RENDERS.
+   */
+  const REFUSAL = 'This terminal is no longer in service. Ask the stall owner.'
+
+  it('offers nothing at all when the credential was refused', () => {
+    show({ refusal: REFUSAL })
+
+    expect(sell()).toBeNull()
+    expect(redeem()).toBeNull()
+  })
+
+  it('says why, in the words the refusal chose', () => {
+    show({ refusal: REFUSAL })
+    expect(screen.getByText(REFUSAL)).toBeTruthy()
+  })
+
+  it('refuses even when an actor and a healthy session are also present', () => {
+    // The refusal wins over everything. A device holding a rejected credential
+    // must not be able to trade because some other field looked fine.
+    const actor = terminal()
+    show({
+      refusal: REFUSAL,
+      actor,
+      session: openSession(actor, SESSION_KIND.FULL, Date.now()),
+    })
+
+    expect(sell()).toBeNull()
+    expect(redeem()).toBeNull()
+  })
+
+  it('leaves the owner’s own device untouched', () => {
+    // The owner holds no credential, so nothing can refuse them.
+    show({ refusal: null })
+    expect(sell()).toBeTruthy()
+    expect(redeem()).toBeTruthy()
+  })
+})
