@@ -15,15 +15,15 @@ correct and unusable.
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A licence verified once keeps its features through the window with every
+- [x] A licence verified once keeps its features through the window with every
       check made impossible.
-- [ ] The features stop when the window passes, tested by moving the clock rather
+- [x] The features stop when the window passes, tested by moving the clock rather
       than by waiting.
-- [ ] The window is measured from the last successful verification, so an app
+- [x] The window is measured from the last successful verification, so an app
       that has never verified gets no window.
-- [ ] An EXPIRED voucher locks at once and gets no window, because an expiry is a
+- [x] An EXPIRED voucher locks at once and gets no window, because an expiry is a
       signed answer rather than an outage.
-- [ ] A test fails against an implementation with no window at all — a happy-path
+- [x] A test fails against an implementation with no window at all — a happy-path
       test would not.

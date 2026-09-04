@@ -11,13 +11,13 @@ subscription they bought is being told something false about their business.
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A licence arriving by DM is recognised and kept, without the customer
+- [x] A licence arriving by DM is recognised and kept, without the customer
       activating anything or typing a code.
-- [ ] A licence is never offered for spending and never counted in a balance or a
+- [x] A licence is never offered for spending and never counted in a balance or a
       takings total.
-- [ ] A licence carrying a later expiry replaces the one held, so a renewal needs
+- [x] A licence carrying a later expiry replaces the one held, so a renewal needs
       no action from the customer.
-- [ ] A second licence for the same subscription id does not produce two.
-- [ ] The customer can see what they paid and until when, from the voucher itself.
+- [x] A second licence for the same subscription id does not produce two.
+- [x] The customer can see what they paid and until when, from the voucher itself.

@@ -15,15 +15,15 @@ test adversarially on its own than through a feature that happens to use it.
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A voucher signed by anyone but us grants nothing, however well-formed it is
+- [x] A voucher signed by anyone but us grants nothing, however well-formed it is
       and however generous the grant inside it claims to be.
-- [ ] A voucher presented by a key other than the one it is locked to grants
+- [x] A voucher presented by a key other than the one it is locked to grants
       nothing. Tested adversarially: a valid voucher plus a wrong key must fail.
-- [ ] An expired voucher grants nothing, decided from the signed expiry and a
+- [x] An expired voucher grants nothing, decided from the signed expiry and a
       local clock alone.
-- [ ] The module reads a clock it is given rather than the wall clock, so expiry
+- [x] The module reads a clock it is given rather than the wall clock, so expiry
       boundaries are testable without waiting.
-- [ ] Nothing in the package imports from `src/lib`, and the package builds and
+- [x] Nothing in the package imports from `src/lib`, and the package builds and
       tests on its own.
