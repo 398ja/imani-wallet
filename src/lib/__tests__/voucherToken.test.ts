@@ -59,6 +59,57 @@ describe('voucherCanonicalBytes', () => {
     )
     expect(bytes).not.toContain('issuance_ratio')
   })
+
+  /**
+   * A licence's `merchant_metadata`, rendered exactly as the Java signer renders it.
+   *
+   * Every other cross-language proof in this file uses a voucher with NO
+   * metadata, so the `merchant_metadata` tag — its position among the tags, and
+   * the escaping of the JSON string inside it — was never checked against the
+   * real canonicalizer. A subscription licence is nothing BUT that tag, so an
+   * unchecked tag is an unchecked licence.
+   *
+   * The expected string below was produced by running the actual
+   * `VoucherCanonicalBytes.of()` from cashu-voucher-domain 0.12.1 (the version
+   * gateway-customer resolves) over a `VoucherSecret` carrying these fields, and
+   * diffing it against this module's output. They were byte-identical.
+   *
+   * Two things it pins that nothing else does:
+   *
+   *  - **Tag ORDER.** `merchant_metadata` comes last, after `backing_strategy`,
+   *    because Java emits tags in `VoucherSecret.Builder` insertion order. These
+   *    bytes are hashed, so moving it one place fails every licence signature.
+   *  - **Escaping.** The value is a JSON document nested inside a JSON string,
+   *    so every quote in it is backslash-escaped. A canonicalizer that escaped
+   *    differently would verify vouchers with plain metadata and fail only on
+   *    licences.
+   */
+  it('renders a licence\'s merchant_metadata exactly as the Java signer does', () => {
+    const licence: SignedVoucherFields = {
+      ...STAGING,
+      faceValue: 4000,
+      expiresAt: 1900000000,
+      memo: 'Imani subscription (annual)',
+      issuanceRatio: 1,
+      merchantMetadata:
+        '{"subscription_id":"sub_9f2c11","features":["terminals"],"lock_key":"bbbb"}',
+    }
+
+    expect(new TextDecoder().decode(voucherCanonicalBytes(licence))).toBe(
+      '["VOUCHER",' +
+        '"31643434313061662d373066352d346331342d383630362d353139343034363834656137",' +
+        '"9637578ddcad0aafe73d5afc6d74bb32900023e2445827bc1d3fe4e9b0c98945",' +
+        '[["issuer","32571441619edd632f41b5d263ea508d30f43c0bef1b37c57a129f0242a4c30f"],' +
+        '["unit","GBP"],' +
+        '["face_value",4000],' +
+        '["expires_at",1900000000],' +
+        '["memo","Imani subscription (annual)"],' +
+        '["face_decimals",2],' +
+        '["backing_strategy","PROPORTIONAL"],' +
+        '["merchant_metadata","{\\"subscription_id\\":\\"sub_9f2c11\\",' +
+        '\\"features\\":[\\"terminals\\"],\\"lock_key\\":\\"bbbb\\"}"]]]',
+    )
+  })
 })
 
 describe('verifyVoucher', () => {

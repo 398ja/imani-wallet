@@ -25,19 +25,24 @@
  * ## Why not the portal endpoint the Sell flow uses
  *
  * `POST /api/v1/portal/vouchers` builds `merchant_metadata` itself and puts
- * exactly one key in it — `campaign_id` — so a licence minted through it arrives
- * carrying no subscription id, no grant and no lock key, and grants nothing.
+ * exactly one key in it — `campaign_id`. Its request record has no metadata
+ * field at all and is annotated `@JsonIgnoreProperties(ignoreUnknown = true)`,
+ * so sending licence fields there does not fail: it returns 201 and DROPS them.
+ * Verified by deserialising this exact body with the real DTO. That silence is
+ * the danger — the seller sees a successful sale and the customer receives an
+ * ordinary coupon.
+ *
  * This calls the wallet tier's `POST /api/v1/wallet/vouchers`, which takes
  * `CreateVoucherRequest` and passes `merchant_metadata` through to the signed
- * secret. Selling is out-of-band precisely so it can use the tier that fits
- * rather than wait for a portal field.
+ * secret. The body below was checked against that DTO and its bean validation:
+ * every field binds, zero violations. Selling is out-of-band precisely so it
+ * can use the tier that fits rather than wait for a portal field.
  *
- * IF THIS 4xxs on `merchant_metadata`: see the note at the bottom of the
- * subscriptions spec. The gateway's `VoucherAdapter` must pass
+ * IF THIS 4xxs on `merchant_metadata`: the gateway's `VoucherAdapter` must pass
  * `pending.merchantMetadata()` into `VoucherSecret.builder()` for the field to
- * reach the SIGNED bytes; it carries the value through its response either way,
- * so a token that verifies but is not recognised as a licence is that gap and
- * not this script.
+ * reach the SIGNED bytes (imani-gateway-customer b0fdca5). It carries the value
+ * through its response either way, so a token that verifies but is not
+ * recognised as a licence means that fix is not in the deployed build.
  */
 import { finalizeEvent, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
