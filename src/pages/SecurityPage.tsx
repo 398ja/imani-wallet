@@ -5,6 +5,9 @@ import { Copy, Check, Download } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, ListSection, Button, Input, Alert, Panel } from '../components/ui'
 import { keyStore } from '../lib/nap'
+import { legacyApi } from '../lib/legacyBridge'
+import { decommissionTerminal, DECOMMISSION_COPY } from '../lib/terminalDecommission'
+import type { CredentialMintApi } from '../lib/credentialRevocation'
 import { downloadText } from '../lib/download'
 import {
   passphraseStrength,
@@ -21,26 +24,128 @@ import {
  * "forgot passphrase" link anywhere in this app. Nothing on the other end could
  * answer it.
  */
-export function SecurityPage({ onLogout }: { onLogout: () => void }) {
+export function SecurityPage({
+  onLogout,
+  terminal,
+  pubkey,
+}: {
+  onLogout: () => void
+  /** This device's own key, for the wallet wipe when decommissioning. */
+  pubkey: string
+  /**
+   * True when this device is a terminal.
+   *
+   * A terminal gets a different danger zone entirely — not different wording
+   * on the same button. Its holder has no backup key, no account and no sales
+   * of their own, so the passphrase and key-reveal panels are meaningless to
+   * them and the logout copy would be actively misleading.
+   */
+  terminal?: boolean
+}) {
   return (
     <Screen>
       <BackLink to="/settings" label="Settings" />
       <PageHeader title="Security" />
 
-      <ChangePassphrase />
-      <RevealKey />
+      {/* Both are about a personal key: changing the passphrase that encrypts
+          it, and reading it back. A terminal's key is a disposable the owner
+          issued authority against — never something its holder should write
+          down — so neither panel belongs on one. */}
+      {!terminal && (
+        <>
+          <ChangePassphrase />
+          <RevealKey />
+        </>
+      )}
 
       <ListSection title="Danger zone">
-        <div className="p-4">
-          <p className="mb-3 text-sm text-mono-500">
-            Logging out erases your key from this browser. Make sure you have your backup key first.
-          </p>
-          <Button variant="outline" className="w-full !text-red-600 dark:!text-red-400" onClick={onLogout}>
-            Log out
-          </Button>
-        </div>
+        {terminal ? <DecommissionPanel pubkey={pubkey} /> : (
+          <div className="p-4">
+            <p className="mb-3 text-sm text-mono-500">
+              Logging out erases your key from this browser. Make sure you have your backup key first.
+            </p>
+            <Button variant="outline" className="w-full !text-red-600 dark:!text-red-400" onClick={onLogout}>
+              Log out
+            </Button>
+          </div>
+        )}
       </ListSection>
     </Screen>
+  )
+}
+
+/**
+ * Taking a terminal out of service, from the device.
+ *
+ * Terminals ticket 08. Deliberately NOT the logout button with new words: the
+ * operation is different (it hands authority back before erasing) and so is
+ * everything it can honestly promise.
+ *
+ * The confirmation is the terminal's own copy. `decommissionTerminal` never
+ * asks — `logout`'s prompt promises a backup key its holder does not have, so
+ * this screen is the only thing that may do the asking.
+ */
+function DecommissionPanel({ pubkey }: { pubkey: string }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [asking, setAsking] = useState(false)
+
+  return (
+    <div className="p-4">
+      <p className="mb-3 text-sm text-mono-500">{DECOMMISSION_COPY.body}</p>
+
+      {error ? (
+        // Says what did NOT happen. A holder who believes the device is clean
+        // and is wrong has a live key in their pocket.
+        <Alert>{error}</Alert>
+      ) : null}
+
+      {asking ? (
+        <div className="expand-row mt-3 rounded-xl bg-amber-50 p-3 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
+          <p className="text-sm">{DECOMMISSION_COPY.confirmBody}</p>
+          <div className="mt-3 flex gap-2">
+            {/* Keeping it first and plain, as everywhere else in this app: the
+                destructive option should never be where a thumb lands. */}
+            <Button variant="outline" size="sm" onClick={() => setAsking(false)} disabled={busy}>
+              Keep it in service
+            </Button>
+            <Button
+              size="sm"
+              className="!bg-red-600 !text-white hover:!bg-red-700"
+              disabled={busy}
+              onClick={() => {
+                setBusy(true)
+                setError(null)
+                void (async () => {
+                  // The same client `burn.ts` spends through, because this IS
+                  // a spend — reusing it means one place decides how a proof
+                  // reaches the mint.
+                  const api = (await legacyApi()) as unknown as CredentialMintApi
+                  const out = await decommissionTerminal(api, pubkey)
+                  if (!out.done) {
+                    setError(out.message)
+                    setBusy(false)
+                    setAsking(false)
+                  }
+                  // On success `decommissionTerminal` navigates away, so there
+                  // is nothing to reset — the component is gone.
+                })()
+              }}
+            >
+              {busy ? 'Handing back…' : DECOMMISSION_COPY.confirm}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <Button
+          variant="outline"
+          className="w-full !text-red-600 dark:!text-red-400"
+          onClick={() => setAsking(true)}
+        >
+          {DECOMMISSION_COPY.title}
+        </Button>
+      )}
+    </div>
   )
 }
 
