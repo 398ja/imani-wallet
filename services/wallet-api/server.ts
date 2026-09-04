@@ -44,6 +44,15 @@ import {
   receiveUrl,
   receiveBody,
 } from './redeem.js'
+import {
+  parseIssueRequest,
+  issueBody,
+  issueUrl,
+  parseDeliverRequest,
+  deliverBody,
+  deliverUrl,
+  relayUrls,
+} from './issue.js'
 import { parsePrepareRequest, requestSplit, buildRumor, splitUrl, splitBody } from './prepare.js'
 import { createGuards, type StoredResponse } from './guards.js'
 import { createStallLookup } from './stallLookup.js'
@@ -472,6 +481,76 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       }
     }
     return { ok: true as const, value: report.value }
+  }
+
+  /**
+   * What to sign to mint a coupon.
+   *
+   * A courier: the service holds no credential to present to the gateway, and
+   * if it did, that credential would be a way to mint coupons in anyone's name.
+   *
+   * **Through `/api/v1/wallet/vouchers`, not the portal path the app uses.**
+   * Measured, not assumed: an unregistered keypair signing for itself gets 201
+   * here and 500 on `/api/v1/portal/vouchers`, which is authorised by a session
+   * cookie no headless caller can hold. An implementer following
+   * `src/lib/issue.ts` would lose a day to that.
+   *
+   * The issuer is the signing key and cannot be overridden. A coupon names the
+   * stall that honours it, and one claiming a stall that never agreed would be
+   * discovered by the customer, at the counter.
+   */
+  if (path === '/v1/issue/gateway-request' && method === 'POST') {
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const plan = parseIssueRequest(parsed.value, auth.pubkey)
+    if (!plan.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: plan.error.field, detail: plan.error.detail })
+    }
+
+    return answer(200, {
+      url: issueUrl(),
+      method: 'POST',
+      body: issueBody(plan.value),
+      // Said here rather than left to be discovered: minting answers PENDING
+      // behind a bolt11 top-up and carries a token seconds later. The caller
+      // polls, because a held connection is a timeout waiting to happen — and
+      // the caller has to persist the id anyway to be crash-safe.
+      then: {
+        poll: `${issueUrl()}/{voucher_id}`,
+        until: 'the response carries a non-empty `token`',
+      },
+    })
+  }
+
+  /**
+   * What to sign to hand a coupon to a customer.
+   *
+   * Separate from issuance because the seam is real: a coupon can be issued and
+   * undelivered, and that is recoverable ONLY if the caller knows the voucher
+   * id. Hiding delivery inside issuance would turn a recoverable state into a
+   * silent loss of value.
+   *
+   * The gateway does the NIP-17 wrapping, as it does for the app — hand-rolling
+   * a gift wrap here would risk drifting from the format the receive pipeline
+   * parses.
+   */
+  if (path === '/v1/issue/deliver-request' && method === 'POST') {
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const input = parseDeliverRequest(parsed.value, auth.pubkey)
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+
+    return answer(200, {
+      url: deliverUrl(),
+      method: 'POST',
+      body: deliverBody(input.value, relayUrls()),
+    })
   }
 
   /**
