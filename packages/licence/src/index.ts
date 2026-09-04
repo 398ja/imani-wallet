@@ -31,3 +31,12 @@
 export type { LicenceVoucher, LicenceGrant, LicenceVerdict, VerifyOptions } from './types.js'
 export { DENIAL_REASONS } from './types.js'
 export { verifyLicence } from './verify.js'
+
+export type {
+  LicenceCheck,
+  LastVerification,
+  LicenceDecision,
+  GraceOptions,
+  GraceReason,
+} from './grace.js'
+export { decideWithGrace, GRACE_REASONS, GRACE_WINDOW_SECONDS } from './grace.js'
