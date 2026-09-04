@@ -102,3 +102,19 @@ Three pre-existing, app-wide defects fell out of writing the tests:
 14 screen tests. Five mutation controls, all caught: defaulting the role (2
 failures), enrolling on scan (4), ignoring the check (5), storing a fixed role
 (1), skipping the roster write (2).
+
+## Verified in the real app
+
+Everything above was originally evidenced by jsdom component tests. That
+proves the component, not the product, so the terminal screens were afterwards
+driven in a real browser against the running `imani-test` stack: a merchant
+registers for real, then the list, revocation and enrolment screens are
+clicked through. 27 checks, all passing (`npm run e2e`).
+
+Doing that immediately found a defect no unit test could reach: registration
+died with HTTP 500 because imani-gateway-core's `application.yml` spelled the
+Bottin password fallback `MERCHANT_IDENTITY_BOTTIN_PASS` instead of
+`..._PASSWORD`. The username resolved, the password did not, and the client
+disables itself when either is blank. Fixed, image rebuilt, and the gateway
+now logs `bottin_record_client_created ... auth=basic` from a clean container
+with no hand-patching.

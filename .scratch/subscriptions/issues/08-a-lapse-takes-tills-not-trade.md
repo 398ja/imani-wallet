@@ -91,3 +91,19 @@ than left in — a defensive copy that defends against nothing misleads the next
 reader into thinking there is a hazard here.
 
 1811 tests pass, lint clean, tsc at the pre-existing 81 in 6 files.
+
+## Verified in the real app
+
+Everything above was originally evidenced by jsdom component tests. That
+proves the component, not the product, so the terminal screens were afterwards
+driven in a real browser against the running `imani-test` stack: a merchant
+registers for real, then the list, revocation and enrolment screens are
+clicked through. 27 checks, all passing (`npm run e2e`).
+
+Doing that immediately found a defect no unit test could reach: registration
+died with HTTP 500 because imani-gateway-core's `application.yml` spelled the
+Bottin password fallback `MERCHANT_IDENTITY_BOTTIN_PASS` instead of
+`..._PASSWORD`. The username resolved, the password did not, and the client
+disables itself when either is blank. Fixed, image rebuilt, and the gateway
+now logs `bottin_record_client_created ... auth=basic` from a clean container
+with no hand-patching.

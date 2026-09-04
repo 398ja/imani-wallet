@@ -89,3 +89,19 @@ files. `npm run build` fails identically on a stashed tree (pre-existing, in
 Recording a terminal into the roster at the moment it is enrolled. Ticket 05's
 enrolment screen and mint call are still unbuilt; `recordTerminal` takes the
 credential shape directly, so that is one call when the screen lands.
+
+## Verified in the real app
+
+Everything above was originally evidenced by jsdom component tests. That
+proves the component, not the product, so the terminal screens were afterwards
+driven in a real browser against the running `imani-test` stack: a merchant
+registers for real, then the list, revocation and enrolment screens are
+clicked through. 27 checks, all passing (`npm run e2e`).
+
+Doing that immediately found a defect no unit test could reach: registration
+died with HTTP 500 because imani-gateway-core's `application.yml` spelled the
+Bottin password fallback `MERCHANT_IDENTITY_BOTTIN_PASS` instead of
+`..._PASSWORD`. The username resolved, the password did not, and the client
+disables itself when either is blank. Fixed, image rebuilt, and the gateway
+now logs `bottin_record_client_created ... auth=basic` from a clean container
+with no hand-patching.
