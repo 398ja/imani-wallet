@@ -179,5 +179,22 @@ check('a missing idempotency key', noKey.status === 400 && noKey.body.field === 
 const zero = await ask('/v1/cashback/generate', { amountMinor: 0, unit: 'EUR', idempotencyKey: randomUUID() })
 check('an amount of zero', zero.status === 400 && zero.body.field === 'amountMinor')
 
+/**
+ * The read path's own answers, straight from the portal.
+ *
+ * Worth checking directly rather than only through the courier: these are the
+ * distinctions a caller acts on, and the courier cannot invent them.
+ */
+console.log('\nWhat the portal says about a code')
+const unknown = await fetch(String(lookup.body.url).replace(/by-code\/.*$/, 'by-code/CB-ZZZZ-99'))
+const unknownBody = (await unknown.json().catch(() => ({}))) as { code?: string }
+check('an unknown code is 404 not_found', unknown.status === 404 && unknownBody.code === 'not_found', `HTTP ${unknown.status} ${JSON.stringify(unknownBody)}`)
+
+// 410 carries `claimed` | `expired` | `revoked`, which is how a caller tells a
+// spent code from a lapsed one. Not reachable here without generating and
+// consuming a code, which needs the write path.
+console.log('  INFO  claimed / expired / revoked arrive as 410 with a `code`;')
+console.log('        reaching them needs the write path (see the SKIP above).')
+
 console.log(failures === 0 ? '\nAll checks passed.' : `\n${failures} check(s) failed.`)
 process.exit(failures === 0 ? 0 : 1)
