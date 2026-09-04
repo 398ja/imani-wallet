@@ -35,6 +35,7 @@ import { merchantStats, outstandingLiability, expiringSoon } from '@imani/report
 import { verifyNip98, type AuthFailure } from './nip98.js'
 import { parseHolding, parsePlanRequest } from './holding.js'
 import { parseReportRequest } from './reports.js'
+import { parseCreateRequest, buildRequest, parseReconcileRequest, reconcile } from './requests.js'
 import { parsePrepareRequest, requestSplit, buildRumor, splitUrl, splitBody } from './prepare.js'
 import { createGuards, type StoredResponse } from './guards.js'
 import { createStallLookup } from './stallLookup.js'
@@ -444,6 +445,68 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       }
     }
     return { ok: true as const, value: report.value }
+  }
+
+  /**
+   * Ask a customer to pay.
+   *
+   * The `vreqA` string is built by `shared/nut18v.js` — the SAME encoder the
+   * app loads — because the wire format has to match
+   * `VoucherPaymentRequest.java` byte for byte. A request this service encoded
+   * slightly differently would scan, look right, and be refused by the gateway.
+   *
+   * The recipient is always the signing key and cannot be overridden. Takings
+   * are gift-wrapped to whoever the request names, so a request naming anything
+   * else would send a customer's payment to a key its owner cannot decrypt:
+   * money stranded rather than merely misrouted.
+   */
+  if (path === '/v1/requests/create' && method === 'POST') {
+    let parsedBody: unknown
+    try {
+      parsedBody = JSON.parse(body ?? '')
+    } catch {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-json', field: 'body', detail: 'the request body is not valid JSON' })
+    }
+
+    const request = parseCreateRequest(parsedBody, auth.pubkey)
+    if (!request.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: request.error.field, detail: request.error.detail })
+    }
+
+    return answer(200, { request: buildRequest(request.value, Math.floor(Date.now() / 1000)) })
+  }
+
+  /**
+   * What arrived, against what was asked for.
+   *
+   * One endpoint rather than separate match and reconcile calls: matching a
+   * single arrival is the same computation as reconciling a day of them, and
+   * two endpoints would be two chances to disagree about which request a
+   * payment settled.
+   *
+   * Answers with the requests as they now stand, the settlements found, and
+   * what is still outstanding — including how much of an outstanding request
+   * has partially arrived, because "unpaid" and "half paid" are different
+   * problems for a merchant.
+   */
+  if ((path === '/v1/requests/reconcile' || path === '/v1/requests/match') && method === 'POST') {
+    let parsedBody: unknown
+    try {
+      parsedBody = JSON.parse(body ?? '')
+    } catch {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-json', field: 'body', detail: 'the request body is not valid JSON' })
+    }
+
+    const parsed = parseReconcileRequest(parsedBody, Date.now())
+    if (!parsed.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: parsed.error.field, detail: parsed.error.detail })
+    }
+
+    return answer(200, reconcile(parsed.value))
   }
 
   /**

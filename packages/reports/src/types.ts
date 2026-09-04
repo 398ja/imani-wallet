@@ -30,4 +30,17 @@ export interface ReportTransaction {
   voucherId?: string
   counterparty?: string
   expiresAt?: number
+  /**
+   * The parts of one logical send, when a payment arrived split across several
+   * coupons. `groupArrivals` sums them, because a customer paying £10 as three
+   * coupons has paid once and a merchant must see one arrival.
+   */
+  bundleId?: string
+  /**
+   * The NUT-18V payment request this settles, when it settles one.
+   *
+   * With it, a request settles BY ID rather than by guessing from the amount —
+   * which is what stops two similar requests being confused.
+   */
+  paymentId?: string
 }
