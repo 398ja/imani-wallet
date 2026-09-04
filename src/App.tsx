@@ -285,12 +285,31 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         />
         {trading && (
           <>
-            <Route path="/sell" element={<SellPage pubkey={pubkey} merchant={merchant} />} />
+            <Route
+              path="/sell"
+              element={
+                <SellPage
+                  pubkey={pubkey}
+                  merchant={merchant}
+                  actor={terminal.actor ?? undefined}
+                  session={terminal.session}
+                />
+              }
+            />
             {/* Under /sell because it is the other half of the same job —
                 and guarded by the same `trading` check, since issuing
                 cashback needs `merchant.issuanceCurrency` exactly as Sell does. */}
             <Route path="/sell/cashback" element={<CashbackIssuePage merchant={merchant} />} />
-            <Route path="/redeem" element={<RedeemPage pubkey={pubkey} merchant={merchant} />} />
+            <Route
+              path="/redeem"
+              element={
+                <RedeemPage
+                  pubkey={pubkey}
+                  merchant={merchant}
+                  actor={terminal.actor ?? undefined}
+                />
+              }
+            />
             <Route path="/merchant/transactions" element={<MerchantTransactionsPage />} />
             <Route path="/merchant/coupons" element={<IssuedCouponsPage />} />
             <Route path="/merchant/coupon/:voucherId" element={<IssuedCouponPage />} />
