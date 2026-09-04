@@ -39,6 +39,19 @@ export interface WalletTransaction {
   voucherId?: string
   tokenId?: string
   /**
+   * Which terminal handled this movement — terminals ticket 09.
+   *
+   * On the STALL's own copy only. This row is decrypted from the merchant's
+   * own encrypted history; the coupon the customer holds carries no such
+   * field, because a customer should learn who honours their voucher and
+   * nothing about how the stall is staffed.
+   *
+   * Absent means the stall's own device handled it. Not "unknown" — a blank
+   * would make an owner learn that most rows being empty is normal, so
+   * `describeHandler` reads the absence as "your device".
+   */
+  terminalPubkey?: string
+  /**
    * What was actually checked about this coupon when it arrived.
    *
    * Absent on every row written before verification existed, and that absence
@@ -260,6 +273,15 @@ export function buildIssueTransaction(input: {
   /** Epoch SECONDS, as the gateway reports it. Undefined when it never settled. */
   expiresAt?: number
   at: number
+  /**
+   * Which terminal handled this, if it was not the stall's own device.
+   *
+   * Terminals ticket 09. On the STALL's row only — this record is encrypted to
+   * the merchant's own key, while the coupon travels to the customer, and a
+   * customer should learn who honours their voucher and nothing about how the
+   * stall is staffed.
+   */
+  terminalPubkey?: string
 }): TransactionRow {
   return {
     id: `issued:${input.voucherId}`,
@@ -274,6 +296,9 @@ export function buildIssueTransaction(input: {
     voucherId: input.voucherId,
     memo: input.memo || 'Voucher issued',
     expiresAt: input.expiresAt,
+    // Written only when there IS one, so an owner's row carries no empty field
+    // and `describeHandler` reads its absence as "the stall".
+    ...(input.terminalPubkey ? { terminalPubkey: input.terminalPubkey } : {}),
   } as unknown as TransactionRow
 }
 

@@ -3,6 +3,8 @@ import { useParams } from 'react-router-dom'
 import { Info } from 'lucide-react'
 import type { VoucherRow } from '@imani/wallet-storage'
 
+import { handlerFor } from '../lib/terminalAttribution'
+
 import {
   Screen,
   BackLink,
@@ -449,6 +451,30 @@ export function TransactionPage({
           ['Type', transactionLabel(tx)],
           ['Date', formatDate(tx.at)],
           ['Memo', tx.memo],
+          /**
+           * Which terminal took this — terminals ticket 09.
+           *
+           * The stall's OWN records only, which is what this screen is: the
+           * row is decrypted from the merchant's own history. A customer
+           * reading their copy of the same sale sees no such field, because a
+           * coupon should say who honours it and nothing about how the stall
+           * is staffed.
+           *
+           * Shown only on the stall's own rows. On a customer's screen the
+           * field is absent anyway, but gating it on `ownStall` means a future
+           * row that carried one by mistake still would not display it.
+           */
+          [
+            'Handled by',
+            // `terminalPubkey` is only ever set on a terminal's row, so this
+            // reads "your device" for every sale the owner took themselves.
+            ownStall && tx.type === 'issued'
+              ? handlerFor(
+                  tx.terminalPubkey ? { terminalPubkey: tx.terminalPubkey } : undefined,
+                  pubkey,
+                ).label
+              : '',
+          ],
           // Visible for the same reason as the coupon id: it names the record.
           ['Transaction id', tx.id],
         ]).map(([label, value]) => (
