@@ -3,6 +3,7 @@ import type { Voucher, MerchantGroup } from '@imani/voucher-send'
 import type { VoucherRow } from '@imani/wallet-storage'
 
 import { toEpochMs } from './format'
+import { isLicence } from './licences'
 import type { WalletTransaction } from './transactions'
 
 /**
@@ -258,9 +259,18 @@ export function isSpent(row: Pick<VoucherRow, 'status'>): boolean {
  * `couponsFor` drop them, which is what keeps a shop card's count and its
  * coupon list agreeing; the receipts come back separately through
  * `redeemedFor`.
+ *
+ * A LICENCE is dropped for a different reason and by the same filter. It is a
+ * voucher with a real face value (ADR 0007 makes the price paid the face value
+ * so the credential is its own receipt), so nothing about it fails `isSpent` —
+ * it would be offered for spending and summed into a takings figure, telling a
+ * merchant something false about their business. This is the only place worth
+ * putting that: `toMerchants` and `couponsFor` are the two roots every balance,
+ * count and send-side selection grows from, so excluding it here excludes it
+ * everywhere at once rather than in each screen that remembered.
  */
 export function spendable(rows: VoucherRow[]): VoucherRow[] {
-  return rows.filter((row) => !isSpent(row))
+  return rows.filter((row) => !isSpent(row) && !isLicence(row))
 }
 
 /**
