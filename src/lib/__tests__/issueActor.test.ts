@@ -258,3 +258,57 @@ describe('a request made around the UI is refused, not merely hidden', () => {
     expect(calls.length).toBeGreaterThan(0)
   })
 })
+
+describe('the customer’s copy carries no terminal information', () => {
+  /**
+   * Terminals ticket 09's third criterion, asserted on the artefact a customer
+   * ACTUALLY receives rather than on the function that builds it.
+   *
+   * The stall's record and the customer's coupon are built a few lines apart
+   * in the same function. Adding attribution to the wrong one is a one-word
+   * mistake, and nothing about the resulting coupon would look wrong — the
+   * customer would simply be told how the stall is staffed. So this reads the
+   * delivered payload and asserts the terminal's key appears nowhere in it.
+   */
+  it('does not leak the terminal key into the delivered coupon', async () => {
+    const till = terminalActor(
+      {
+        stallPubkey: STALL,
+        role: TERMINAL_ROLES.ISSUE_AND_REDEEM,
+        lockedTo: DEVICE,
+        permissions: grantFor(TERMINAL_ROLES.ISSUE_AND_REDEEM, STALL),
+      },
+      DEVICE,
+    )!
+
+    await issueAndDeliver({ ...params, actor: till, session: live(till) })
+
+    // Every body that left the device, not just the DM: a terminal key in the
+    // issuance request would reach the gateway too.
+    const everything = JSON.stringify(bodies)
+    expect(everything).not.toContain(DEVICE)
+    expect(everything).not.toMatch(/terminal/i)
+  })
+
+  it('still carries the stall, so the customer knows who honours it', async () => {
+    // The privacy rule is "nothing about how the stall is staffed", not
+    // "nothing about the stall" — a coupon with no issuer is unredeemable.
+    // Issued here rather than relying on the test above, which `beforeEach`
+    // clears: a test that only passes after its neighbour is a test that will
+    // fail the day someone reorders the file.
+    const till = terminalActor(
+      {
+        stallPubkey: STALL,
+        role: TERMINAL_ROLES.ISSUE_AND_REDEEM,
+        lockedTo: DEVICE,
+        permissions: grantFor(TERMINAL_ROLES.ISSUE_AND_REDEEM, STALL),
+      },
+      DEVICE,
+    )!
+
+    await issueAndDeliver({ ...params, actor: till, session: live(till) })
+
+    const dm = bodies.find((b) => 'issuer_id' in b)
+    expect(dm?.issuer_id).toBe(STALL)
+  })
+})

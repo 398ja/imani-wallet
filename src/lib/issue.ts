@@ -8,6 +8,7 @@ import { getWallet, notifyWalletChanged } from './wallet'
 import { buildIssueTransaction } from './transactions'
 import { issuingStall, mayIssue, type Actor } from './actor'
 import { canIssueNow, sessionState, type TerminalSession } from './terminalSession'
+import { attributionFor } from './terminalAttribution'
 import { currencyDecimals } from './format'
 
 /**
@@ -485,6 +486,10 @@ export async function issueAndDeliver(
       memo: params.memo,
       expiresAt: toEpochSeconds(ready.expires_at),
       at: Date.now(),
+      // Terminals ticket 09. The STALL's row only: this is written to the
+      // merchant's own encrypted history, while `deliver` above builds what
+      // the customer receives. Attribution deliberately does not appear there.
+      terminalPubkey: attributionFor(params.actor)?.terminalPubkey,
     })
 
     // The relay copy rides along with the write: `openWallet` wraps
