@@ -30,9 +30,11 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 
 import { valueHolding, planSpend, checkRecipient, needsRecipientLookup } from '@imani/wallet-core'
+import { merchantStats, outstandingLiability, expiringSoon } from '@imani/reports'
 
 import { verifyNip98, type AuthFailure } from './nip98.js'
 import { parseHolding, parsePlanRequest } from './holding.js'
+import { parseReportRequest } from './reports.js'
 import { parsePrepareRequest, requestSplit, buildRumor, splitUrl, splitBody } from './prepare.js'
 import { createGuards, type StoredResponse } from './guards.js'
 import { createStallLookup } from './stallLookup.js'
@@ -412,6 +414,84 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       groups: value.groups,
       unusable: value.unusable,
       couponCount: value.couponCount,
+    })
+  }
+
+  /**
+   * Both report endpoints take the same body, so they parse it the same way.
+   *
+   * Counts a bad body as a validation error, like every other endpoint, so the
+   * metric keeps meaning "callers are getting the shape wrong" rather than
+   * silently excluding whichever endpoints were added last.
+   */
+  const readReport = (raw: string | undefined) => {
+    let parsedBody: unknown
+    try {
+      parsedBody = JSON.parse(raw ?? '')
+    } catch {
+      metrics.validationErrors++
+      return {
+        ok: false as const,
+        problem: { error: 'invalid-json', field: 'body', detail: 'the request body is not valid JSON' },
+      }
+    }
+    const report = parseReportRequest(parsedBody, Date.now())
+    if (!report.ok) {
+      metrics.validationErrors++
+      return {
+        ok: false as const,
+        problem: { error: 'invalid-request', field: report.error.field, detail: report.error.detail },
+      }
+    }
+    return { ok: true as const, value: report.value }
+  }
+
+  /**
+   * A stall's own numbers, over rows the caller supplies.
+   *
+   * POST for the same reason `/v1/holding/value` is: the history IS the
+   * request, and it carries voucher ids and amounts that have no business in an
+   * access log or a proxy cache.
+   *
+   * Computed by `@imani/reports`, which is the same code the app's dashboard
+   * calls. A second implementation here would be worse than useless — two
+   * dashboards disagreeing about takings is indistinguishable from money going
+   * missing.
+   *
+   * NOT proxied to the gateway's own dashboard endpoint. That one answers 200
+   * with zeros: it is fed by sources which deliberately do not consult
+   * customer-wallet, so a merchant who has issued three coupons is told they
+   * have issued none.
+   */
+  if (path === '/v1/reports/dashboard' && method === 'POST') {
+    const parsed = readReport(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const { transactions, pubkey, unit, decimals, from, now } = parsed.value
+    return answer(200, {
+      stats: merchantStats(transactions, { pubkey, unit, decimals, from, now }),
+    })
+  }
+
+  /**
+   * What is still owed, and what is about to expire.
+   *
+   * Separate from the dashboard because they answer different questions and a
+   * caller usually wants one of them: outstanding liability is an accounting
+   * figure, and expiring-soon is an operational one that drives a reminder.
+   */
+  if (path === '/v1/reports/records' && method === 'POST') {
+    const parsed = readReport(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const { transactions, pubkey, unit, now } = parsed.value
+    return answer(200, {
+      // Minor units, like every other amount this service reports. Rendering
+      // is the caller's decision, so `unit` and `decimals` travel with it.
+      outstanding: outstandingLiability(transactions, { pubkey, unit, now }),
+      unit,
+      decimals: parsed.value.decimals,
+      expiringSoon: expiringSoon(transactions, { now }),
     })
   }
 

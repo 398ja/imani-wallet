@@ -344,6 +344,7 @@ export default defineConfig({
       '@imani/wallet-core': imani('wallet-core'),
       '@imani/licence': imani('licence'),
       '@imani/redemption': imani('redemption'),
+      '@imani/reports': imani('reports'),
       'imani-qr': imani('imani-qr'),
     },
   },
