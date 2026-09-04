@@ -141,7 +141,12 @@ function IssueForm({
           expiryDays: validity,
           memo: memo.trim() || undefined,
           recipientPubkey: customer,
-          issuerPubkey,
+          // The ACTOR, not a key. On this device the owner is signed in as the
+          // stall, so the stall is the session pubkey — a positive claim rather
+          // than the fallback terminals ticket 02 removes. A terminal reaches
+          // the same call with a credential-derived actor and never with its
+          // own disposable key.
+          actor: { kind: 'owner', stallPubkey: issuerPubkey },
         },
         setStage,
       )

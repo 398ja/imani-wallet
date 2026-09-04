@@ -6,6 +6,7 @@ import { signedFetch } from './nip98'
 import { INTERNAL_RELAY_URL } from './relay'
 import { getWallet, notifyWalletChanged } from './wallet'
 import { buildIssueTransaction } from './transactions'
+import { issuingStall, mayIssue, type Actor } from './actor'
 import { currencyDecimals } from './format'
 
 /**
@@ -25,9 +26,15 @@ import { currencyDecimals } from './format'
  *    hitting this guard, the request is routing to the wrong tier."
  *
  * Issuing is a merchant action, so it goes to gateway-portal's
- * PortalVoucherController. The issuer pubkey is NEVER a request field — it comes
- * from whoever the portal authenticated, which is the point: the coupon is
- * stamped with the merchant's identity key.
+ * PortalVoucherController, which takes the issuer from whoever it authenticated
+ * and never from a request field.
+ *
+ * That is the PORTAL's rule and it still holds. What changed (terminals ticket
+ * 02) is the issuer this app stamps on the DM payload: it used to be the
+ * session pubkey, which is correct only while a stall is one durable key. A
+ * terminal signs in with a disposable one, replaced at every re-enrolment, so
+ * the stall now comes from the verified credential via `issuingStall` — and
+ * issuance with no actor cannot be expressed at all.
  *
  * AUTH: the seed script sends `X-Auth-Pubkey` + `X-Edge-Auth` because it stands
  * in for the edge proxy that a real deployment runs. A browser is not that proxy
@@ -162,8 +169,21 @@ export interface IssueParams {
   memo?: string
   /** Hex pubkey of the customer receiving the coupon. */
   recipientPubkey: string
-  /** The issuing merchant's own hex pubkey. */
-  issuerPubkey: string
+  /**
+   * WHO this coupon is issued for, not what to stamp on it.
+   *
+   * Terminals ticket 02. This was `issuerPubkey: string` — a key the caller
+   * handed over — and a caller supplying the issuer is exactly what the ticket
+   * removes: "A caller cannot supply the issuer directly; it is read from the
+   * verified credential only."
+   *
+   * The difference is not cosmetic. A terminal signs in with a disposable key
+   * that is replaced at every re-enrolment, so a screen passing its own session
+   * pubkey would stamp coupons with an issuer that stops existing. The actor
+   * names the STALL — from the credential for a terminal, from the session for
+   * an owner's own device — and `issuingStall` is the only way to read it.
+   */
+  actor: Actor
 }
 
 /** Where the caller has got to, for the progress screen. */
@@ -329,8 +349,11 @@ async function deliver(
     face_decimals: voucher.face_decimals,
     token_amount: voucher.token_amount,
     backing_strategy: voucher.backing_strategy,
-    issuer_id: params.issuerPubkey,
-    sender_pubkey: params.issuerPubkey,
+    // The STALL, whichever kind of device is running this. A terminal's own
+    // key never appears on a coupon: customers must hold coupons from a stall
+    // they can look up, not from a till that may not exist next week.
+    issuer_id: issuingStall(params.actor),
+    sender_pubkey: issuingStall(params.actor),
     // SendTokenDmRequest declares `@JsonProperty("expires_at") Long` — epoch
     // SECONDS. The gateway only forwards what the sender supplies
     // (TokenDmController is a straight `request.expiresAt()` passthrough), which
@@ -361,6 +384,26 @@ export async function issueAndDeliver(
   params: IssueParams,
   onStage?: (stage: IssueStage) => void,
 ): Promise<{ voucher: IssuedVoucher; eventId?: string }> {
+  /**
+   * Refused BEFORE anything is minted, not after.
+   *
+   * Terminals ticket 02: "Issuance with no credential is refused, and does not
+   * fall back to the session." A caller with no actor cannot reach this line at
+   * all — the type demands one — and a terminal whose role does not carry
+   * issuance is stopped here rather than at delivery, so no voucher is minted
+   * and abandoned.
+   *
+   * This is affordance, not the boundary. The gateway's `coupon:issue` is what
+   * actually counts, and a page that lied to itself here would still get a 403
+   * from the check that matters. It is here so the failure is a sentence rather
+   * than a 403 the merchant cannot read.
+   */
+  if (!mayIssue(params.actor)) {
+    throw new Error(
+      'This terminal is not set up to sell. Ask the stall owner to enrol it as a full till.',
+    )
+  }
+
   onStage?.('issuing')
   const created = await createVoucher(params)
 
