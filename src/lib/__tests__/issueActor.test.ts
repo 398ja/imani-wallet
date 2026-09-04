@@ -48,6 +48,18 @@ vi.mock('../relay', () => ({ INTERNAL_RELAY_URL: 'ws://relay.test' }))
 const { issueAndDeliver } = await import('../issue')
 const { ownerActor, terminalActor } = await import('../actor')
 const { TERMINAL_ROLES, grantFor } = await import('../terminalRole')
+const { openSession, SESSION_KIND } = await import('../terminalSession')
+
+/**
+ * A live, full-authority session.
+ *
+ * Passed explicitly so these tests keep testing what they were written for —
+ * the ROLE rule and the issuer stamp. Without it every terminal here would be
+ * refused for having no session (terminals ticket 07), and the refusals below
+ * would pass for a reason nobody intended.
+ */
+const live = (actor: Parameters<typeof openSession>[0]) =>
+  openSession(actor, SESSION_KIND.FULL, Date.now())
 
 const STALL = 'a'.repeat(64)
 const DEVICE = 'c'.repeat(64)
@@ -76,7 +88,7 @@ describe('a terminal that may not sell', () => {
       DEVICE,
     )!
 
-    await expect(issueAndDeliver({ ...params, actor: redeemOnly })).rejects.toThrow(
+    await expect(issueAndDeliver({ ...params, actor: redeemOnly, session: live(redeemOnly) })).rejects.toThrow(
       /not set up to sell/,
     )
 
@@ -97,7 +109,7 @@ describe('a terminal that may not sell', () => {
       DEVICE,
     )!
 
-    await expect(issueAndDeliver({ ...params, actor: redeemOnly })).rejects.toThrow(
+    await expect(issueAndDeliver({ ...params, actor: redeemOnly, session: live(redeemOnly) })).rejects.toThrow(
       /Ask the stall owner/,
     )
   })
@@ -126,7 +138,7 @@ describe('what the coupon is stamped with', () => {
       DEVICE,
     )!
 
-    await issueAndDeliver({ ...params, actor: till })
+    await issueAndDeliver({ ...params, actor: till, session: live(till) })
 
     const dm = bodies.find((b) => 'issuer_id' in b)
     expect(dm).toBeDefined()
@@ -161,5 +173,88 @@ describe('an owner issuing on their own device', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(calls[0]).toBe('/api/v1/portal/vouchers')
+  })
+})
+
+/**
+ * The enforcement point, attacked directly.
+ *
+ * "The hiding is the courtesy, not the control" (terminals ticket 07). These
+ * bypass the UI entirely and call `issueAndDeliver` the way a modified client
+ * or a stale open tab would — which is the only way to show the refusal is real
+ * rather than a hidden button.
+ *
+ * Every one asserts `calls` is EMPTY, because a refusal that happens after a
+ * mint has left a voucher nobody can deliver.
+ */
+describe('a request made around the UI is refused, not merely hidden', () => {
+  const till = () =>
+    terminalActor(
+      {
+        stallPubkey: STALL,
+        role: TERMINAL_ROLES.ISSUE_AND_REDEEM,
+        lockedTo: DEVICE,
+        permissions: grantFor(TERMINAL_ROLES.ISSUE_AND_REDEEM, STALL),
+      },
+      DEVICE,
+    )!
+
+  it('refuses a terminal whose trading day has rolled over', async () => {
+    const actor = till()
+    const expired = openSession(actor, SESSION_KIND.FULL, Date.now() - 13 * 3600 * 1000)
+
+    await expect(issueAndDeliver({ ...params, actor, session: expired })).rejects.toThrow(
+      /signing in again/,
+    )
+    expect(calls).toEqual([])
+  })
+
+  it('refuses a terminal on reduced authority, whatever its role allows', async () => {
+    // The mint was unreachable at login. Issuance is value-bearing: a coupon
+    // minted on an authority nobody could check is money created on a guess.
+    const actor = till()
+    const reduced = openSession(actor, SESSION_KIND.REDUCED, Date.now())
+
+    await expect(issueAndDeliver({ ...params, actor, session: reduced })).rejects.toThrow(
+      /reaches the network/,
+    )
+    expect(calls).toEqual([])
+  })
+
+  it('refuses a terminal that simply omits the session', async () => {
+    /**
+     * The likeliest bypass, and the one a default would open. If a missing
+     * session read as "fine", every check here could be skipped by forgetting
+     * a field — so it must be refused, not defaulted.
+     */
+    await expect(issueAndDeliver({ ...params, actor: till() })).rejects.toThrow()
+    expect(calls).toEqual([])
+  })
+
+  it('tells staff the recoverable thing first', async () => {
+    // A redeem-only terminal whose session ALSO expired hears "sign in again",
+    // not "this till cannot sell". One of those is actionable; sending staff
+    // to the owner with the other is a wasted trip.
+    const redeemOnly = terminalActor(
+      {
+        stallPubkey: STALL,
+        role: TERMINAL_ROLES.REDEEM_ONLY,
+        lockedTo: DEVICE,
+        permissions: grantFor(TERMINAL_ROLES.REDEEM_ONLY, STALL),
+      },
+      DEVICE,
+    )!
+    const expired = openSession(redeemOnly, SESSION_KIND.FULL, Date.now() - 13 * 3600 * 1000)
+
+    await expect(
+      issueAndDeliver({ ...params, actor: redeemOnly, session: expired }),
+    ).rejects.toThrow(/signing in again/)
+  })
+
+  it('leaves the stall on its own device completely alone', async () => {
+    // The fifth criterion. An owner has no session and never will, so none of
+    // the above can reach them.
+    await issueAndDeliver({ ...params, actor: ownerActor(STALL)! })
+    expect(calls.length).toBeGreaterThan(0)
   })
 })
