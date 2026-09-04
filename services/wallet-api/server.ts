@@ -46,6 +46,14 @@ import {
 } from './redeem.js'
 import { parseLicenceRequest, checkLicence, licenceIssuerPubkey } from './licence.js'
 import {
+  parseGenerateRequest,
+  generateBody,
+  generateUrl,
+  parseLookupRequest,
+  byCodeUrl,
+  publicUrl,
+} from './cashback.js'
+import {
   parseDrainRequest,
   drainBody,
   drainUrl,
@@ -493,6 +501,70 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       }
     }
     return { ok: true as const, value: report.value }
+  }
+
+  /**
+   * What to sign to generate a cashback code.
+   *
+   * On the PORTAL — a third host, neither gateway-core nor customer-wallet.
+   * The 404 that made this look blocked came from asking customer-wallet; the
+   * portal has protected `/api/v1/portal/` with NIP-98 all along.
+   *
+   * The idempotency key is required and not generated here. One this service
+   * invented would differ on every retry, which is the opposite of what the key
+   * is for: the caller must be able to repeat a request that may already have
+   * succeeded, without generating a second cashback.
+   */
+  if (path === '/v1/cashback/generate' && method === 'POST') {
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const input = parseGenerateRequest(parsed.value)
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+
+    return answer(200, {
+      url: generateUrl(),
+      method: 'POST',
+      body: generateBody(input.value),
+    })
+  }
+
+  /**
+   * Where to look a cashback code up.
+   *
+   * NO signature: the portal exempts `/by-code/` and `/public/` from NIP-98
+   * deliberately, because a customer redeeming a code off a printed receipt
+   * holds no key of ours. The code itself is the credential.
+   *
+   * There is no claim endpoint, and that is not an omission. The lookup returns
+   * a `claimUrl` carrying its decryption key in the URL FRAGMENT — which a
+   * browser never transmits. The caller fetches and decrypts with that key. An
+   * endpoint here would have to be given the key, which would make this service
+   * able to claim anyone's cashback.
+   */
+  if (path === '/v1/cashback/lookup' && method === 'POST') {
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const input = parseLookupRequest(parsed.value)
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+
+    return answer(200, {
+      url: byCodeUrl(input.value.code),
+      method: 'GET',
+      authenticated: false,
+      then: {
+        claimUrl: 'the response carries a claimUrl; its #k= fragment is the decryption key',
+        metadata: `${publicUrl('{claimRef}')} — what a code is worth, before spending it`,
+        warning: 'never send the fragment anywhere: it is the only thing protecting the coupon',
+      },
+    })
   }
 
   /**
