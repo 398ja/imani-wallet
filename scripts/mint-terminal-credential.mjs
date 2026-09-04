@@ -26,8 +26,9 @@
  * credential whose issuer is not the stall it names. That is what stops a
  * terminal minting its own authority.
  */
-import { finalizeEvent } from 'nostr-tools'
+import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
+import { secp256k1 } from '@noble/curves/secp256k1.js'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -143,6 +144,43 @@ async function main() {
 
   if (!device) throw new Error('--device <hex> is required (the key the terminal generated)')
 
+  /**
+   * A device key must be a real x-only PUBLIC key, not 32 random bytes.
+   *
+   * Only about half of all 32-byte values are valid secp256k1 x-coordinates, so
+   * `--device $(openssl rand -hex 32)` produced a credential the gateway could
+   * not lock roughly half the time. It fell back to issuing UNLOCKED — which is
+   * the correct, documented behaviour (a bad lock must not fail the sale) and
+   * is logged as `lock_key_not_on_curve`.
+   *
+   * The effect was a fixture whose kind flickered between P2PK_VOUCHER and
+   * VOUCHER run to run, which looked exactly like an intermittent gateway bug
+   * and was entirely this script's doing. Refuse the key here instead, where
+   * the cause is obvious.
+   */
+  //
+  // `--allow-unlocked` is the ONE legitimate reason to pass a key that is not on
+  // the curve: the witness probe needs an UNLOCKED control, and the only way to
+  // get one from the real gateway is to trip its documented fallback. It must be
+  // asked for explicitly, because silently issuing an unlocked credential is the
+  // exact failure this check exists to make visible.
+  const allowUnlocked = process.argv.includes('--allow-unlocked')
+  try {
+    if (!secp256k1.Point.fromHex('02' + device.toLowerCase())) throw new Error('bad')
+  } catch {
+    if (allowUnlocked) {
+      console.log('WARNING --allow-unlocked: this key is off-curve, so the gateway')
+      console.log('        will fall back to issuing an UNLOCKED voucher.')
+    } else {
+      throw new Error(
+        `--device ${device.slice(0, 16)}… is not on the curve, so it is nobody's public key.\n` +
+          'Pass a real x-only pubkey. To generate one:\n' +
+          "  node -e \"import('nostr-tools').then(n=>console.log(n.getPublicKey(n.generateSecretKey())))\"\n" +
+          'Or pass --allow-unlocked if you deliberately want the UNLOCKED fallback.',
+      )
+    }
+  }
+
   const metadata = terminalMetadata({
     stallPubkey: stall.pk,
     role,
@@ -157,6 +195,23 @@ async function main() {
   const out = join(HERE, '..', 'src', 'lib', '__tests__', 'fixtures', arg('--out', 'live-terminal-credential.token'))
   writeFileSync(out, ready.token.trim() + '\n')
   console.log(`wrote ${out}`)
+
+  /**
+   * The keys this run chose, written BESIDE the token.
+   *
+   * The tests must know which device the credential was locked to, and the
+   * first version of this pinned that hex in the test file. Re-minting the
+   * fixture then broke three tests for no reason other than the key having
+   * changed — the credential was perfectly good.
+   *
+   * This is deliberately NOT read back out of the token. Deriving the expected
+   * device from the bytes under test would make the assertion circular and it
+   * would pass even if the gateway dropped the lock entirely. It records what
+   * this script SENT, so the test still compares two independent things.
+   */
+  const sidecar = out.replace(/\.token$/, '.json')
+  writeFileSync(sidecar, JSON.stringify({ stall: stall.pk, device, role, name }, null, 2) + '\n')
+  console.log(`wrote ${sidecar}`)
   console.log(`issuer ${stall.pk}`)
   console.log(`locked to ${device}`)
 }
