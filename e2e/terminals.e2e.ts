@@ -53,6 +53,53 @@ async function seedAndOpen(path: string, terminals: unknown[]) {
   await page.waitForTimeout(1200)
 }
 
+
+/**
+ * Make the running app believe this device is an enrolled terminal.
+ *
+ * Writes the record `completeEnrolment` writes, using the REAL
+ * gateway-minted credential. The key and shape are the app's own, so a change
+ * to either fails here — which is the point of doing it in the browser rather
+ * than against a mock.
+ */
+async function beATerminal(role: 'redeem-only' | 'issue-and-redeem') {
+  const fs = await import('node:fs')
+  const file =
+    role === 'redeem-only'
+      ? 'src/lib/__tests__/fixtures/live-terminal-credential.token'
+      : 'src/lib/__tests__/fixtures/live-terminal-till.token'
+  const token = fs.readFileSync(file, 'utf8').trim()
+
+  // Parsed with the app's own reader rather than restated here.
+  const { parseVoucherToken } = await import('../src/lib/voucherToken')
+  const parsed = parseVoucherToken(token)
+  const metadata = JSON.parse(String(parsed.voucher.merchantMetadata))
+
+  await page.goto(BASE, { waitUntil: 'domcontentloaded' })
+  await page.evaluate(
+    ([record]) => localStorage.setItem('imani-wallet:terminal', JSON.stringify(record)),
+    [
+      {
+        stallPubkey: metadata.stall_pubkey,
+        role: metadata.role,
+        terminalPubkey: metadata.lock_key,
+        permissions: [],
+        name: metadata.name,
+        enrolledAt: 1_000_000,
+        token,
+        merchantMetadata: parsed.voucher.merchantMetadata,
+        issuerId: parsed.voucher.issuerId,
+      },
+    ] as const,
+  )
+}
+
+/** Back to the stall's own device. */
+async function beTheOwner() {
+  await page.goto(BASE, { waitUntil: 'domcontentloaded' })
+  await page.evaluate(() => localStorage.removeItem('imani-wallet:terminal'))
+}
+
 async function main() {
   browser = await chromium.launch()
   page = await browser.newPage()
@@ -209,6 +256,66 @@ async function main() {
   check('the newest till is the one stopped', lastNamed === 'Second till', `marked ${lastNamed}`)
   check('and the oldest keeps serving', lapse.includes('Oldest till'))
   check('no uncaught errors', pageErrors.length === 0, pageErrors.join('; '))
+
+  console.log('\nTicket 07: what a terminal is allowed to see')
+  /**
+   * Role gating, in the shipped app rather than in a mounted component.
+   *
+   * These were unreachable until ticket 10 wired the login, and the wiring is
+   * exactly the part a component test cannot check.
+   */
+  await beATerminal('redeem-only')
+  await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
+  await page.waitForTimeout(2500)
+
+  const tillText = await page.locator('body').innerText()
+  check('a redemption-only terminal is offered Redeem', /Redeem/.test(tillText))
+  check('and is NOT offered Sell', !/\bSell\b/.test(tillText), tillText.slice(0, 120))
+
+  check(
+    'the stall’s books are hidden from the menu',
+    !/Dashboard/.test(tillText) && !/Transactions/.test(tillText),
+  )
+
+  // The control, not the courtesy: typing the URL must not work either.
+  await page.goto(`${BASE}/merchant/dashboard`, { waitUntil: 'domcontentloaded' })
+  await page.waitForTimeout(2000)
+  const dash = await page.locator('body').innerText()
+  check('typing the dashboard URL does not reach it', !/Turnover|Takings|Dashboard/i.test(dash))
+  check('no uncaught errors as a terminal', pageErrors.length === 0, pageErrors.join('; '))
+
+  console.log('\nTicket 08: decommissioning is offered, logout is not')
+  await page.goto(`${BASE}/settings/security`, { waitUntil: 'domcontentloaded' })
+  await page.waitForTimeout(1500)
+  const security = await page.locator('body').innerText()
+
+  check('a terminal is offered decommissioning', /Take this terminal out of service/.test(security))
+  check('a terminal is not offered log out', !/Log out/.test(security))
+  check('and is never told about a backup key', !/backup key/i.test(security), security.slice(0, 200))
+
+  console.log('\nThe owner is unaffected by all of it')
+  await beTheOwner()
+  await page.goto(`${BASE}/settings/security`, { waitUntil: 'domcontentloaded' })
+  await page.waitForTimeout(1500)
+  const ownerSecurity = await page.locator('body').innerText()
+
+  check('the owner still gets the existing logout copy', /backup key/i.test(ownerSecurity))
+  check('and is not offered decommissioning', !/out of service/i.test(ownerSecurity))
+
+  await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
+  await page.waitForTimeout(2000)
+  const ownerTill = await page.locator('body').innerText()
+  check('the owner’s till still offers both actions', /Sell/.test(ownerTill) && /Redeem/.test(ownerTill))
+
+  console.log('\nSubscriptions: the diagnostics screen a support call reads')
+  await page.goto(`${BASE}/settings/subscription`, { waitUntil: 'domcontentloaded' })
+  await page.waitForTimeout(2500)
+  const sub = await page.locator('body').innerText()
+
+  check('renders rather than 404ing', sub.includes('Subscription'))
+  check('states a verdict', /Not active|Active|Working/.test(sub), sub.slice(0, 160))
+  check('says what to do about it', /get in touch|Get in touch/i.test(sub))
+  check('no uncaught errors anywhere', pageErrors.length === 0, pageErrors.join('; '))
 
   console.log('\nReduced motion is honoured, in a real browser')
   /**

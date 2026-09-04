@@ -20,15 +20,29 @@ gets you a redirect to `/onboarding` and nothing else.
 
 ## What it covers
 
-A merchant registers for real against the gateway, then the terminals screens
-are driven by clicking. Notably it checks things unit tests structurally
-cannot:
+A merchant registers for real against the gateway, then the terminal screens
+are driven by clicking. 51 checks, spanning terminals 05-10 and subscriptions
+07-08.
+
+The suite was written partway through the work, so it was afterwards extended
+BACKWARDS over the tickets that predated it — role gating, the dashboard
+guard, decommissioning, and the subscription diagnostics screen. Ticket 07's
+gating in particular had never run in a browser before that: it was
+unreachable until ticket 10 wired the login, and the wiring is exactly what a
+component test cannot check.
+
+Notably it checks things unit tests structurally cannot:
 
 - clicking a `<label>` focuses its input (the `htmlFor` fix)
 - `prefers-reduced-motion` actually suppresses the confirmation animation,
   **and** that it animates without the preference — so the check cannot pass
   by the class never being applied
 - no uncaught page errors at any point
+- that a terminal cannot reach `/merchant/dashboard` by TYPING the URL, which
+  is the control rather than the courtesy — verified separately from the menu
+  being hidden, because those are two different guards and either could rot
+- that the owner's own device is unaffected by every terminal rule, checked
+  after each one
 
 ## What this found
 
