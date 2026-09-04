@@ -130,6 +130,13 @@ to the portal (28084, not running) and account-app (28081). Their tickets are
 sequenced last and start by locating the service, because a ticket that assumes
 an endpoint exists is a ticket that stalls on its first day.
 
+**"Cannot spend" is a property of operations, not of imports.** Learned by
+building ticket 12 first: the service imports `schnorr` to VERIFY NIP-98, and
+that same object can sign, so an import-level rule is unsatisfiable. The image
+build already enforced the operation-level rule and more thoroughly than
+expected — every executable extension, plus a separate guard for the NIP-17
+sealing path, since a send can be wrapped without ever calling `finalizeEvent`.
+
 **Every endpoint is exercised by a probe against live services.** The two
 riskiest shapes were validated this way before being written down, and one of
 them was corrected by it. A ticket that ships only unit tests has not
