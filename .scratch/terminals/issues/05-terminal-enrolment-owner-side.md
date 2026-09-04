@@ -13,7 +13,7 @@ offered, as those would be credentials to the stall sitting in a drawer.
 
 **Blocked by:** 01, 04
 
-**Status:** part-landed — the rules and the credential are built and tested; the SCREEN and the mint call remain
+**Status:** done — screen landed. Only the mint call remains, which is ticket 10.
 
 - [x] The owner names a terminal and picks a role from the fixed catalog; a
       terminal cannot go live without a role.
@@ -46,7 +46,7 @@ not the form.
   than by hiding a button. The refusal message is passed through from `mayEnrol`
   verbatim rather than reworded, so there is one sentence per situation.
 
-NOT landed: the screen itself, and the mint call. `prepareEnrolment` returns
+NOT landed: the mint call alone. `prepareEnrolment` returns
 exactly what the credential must contain, so ticket 10 adds a network round trip
 and no rules.
 
@@ -67,3 +67,38 @@ Mutation controls:
 - Taking the stall from the request instead of the session — SURVIVED at first,
   because nothing supplied one. The smuggling test above was written for it, and
   the mutant now fails.
+
+
+## The screen (landed later)
+
+`src/pages/TerminalEnrolPage.tsx` at `/settings/terminals/add`, reached from
+the terminal list. Name, then role, then scan — scanning last because it is the
+only step needing the other device present, and asking for it first would make
+the owner hold two devices while typing.
+
+Deliberately thin. Every rule stays in `terminalIssue.ts`; anything the form
+decided for itself would be a second place the rules live.
+
+Two properties the rules could not assert alone:
+
+- **A scan does not enrol.** The QR is safe to observe only if seeing one
+  cannot create authority.
+- **The roster row is written here, on the OWNER's device**, which is what
+  makes ticket 06's revocation-without-the-device possible at all.
+
+The design pass found a real gap: no way to correct a wrong scan. Two devices
+on a counter showing similar codes is ordinary, and the only remedies were to
+abandon the form or enrol the wrong device. Added Rescan.
+
+Three pre-existing, app-wide defects fell out of writing the tests:
+
+- `Input` had a `<label>` with no `htmlFor` — tapping it did not focus the
+  field, and a screen reader announced an unlabelled box. Every form uses it.
+- `Alert` had no `role`, so refusals were announced to nobody.
+- `prepareEnrolment` returned the loose `TerminalCredential` (fields `unknown`,
+  correct for data arriving from outside) for a credential we construct
+  ourselves. Now returns `PreparedCredential`.
+
+14 screen tests. Five mutation controls, all caught: defaulting the role (2
+failures), enrolling on scan (4), ignoring the check (5), storing a fixed role
+(1), skipping the roster write (2).
