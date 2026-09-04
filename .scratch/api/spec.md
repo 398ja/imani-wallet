@@ -52,10 +52,34 @@ which the service already runs:
 10. As an integrator, I want to generate and claim cashback, so that a loyalty flow is not browser-only.
 11. As an integrator, I want to enrol and revoke terminals, so that a fleet of tills can be managed from a management system.
 12. As an integrator, I want to check my subscription, so that my automation can tell whether a feature is available before it tries.
-13. As an integrator, I want every endpoint to work with a key and nothing else, so that no browser session, cookie, or shared secret is required.
-14. As an integrator, I want to be told which coupons a plan would spend before anything moves, so that I can refuse and keep the holding whole.
-15. As a stall owner, I want an API caller to be bounded by the same rules as my own device, so that automating my till does not weaken it.
-16. As a security reviewer, I want the API to remain incapable of spending, so that a breach of it is a denial of service and not a theft.
+13. As an integrator, I want to register a stall, so that provisioning a new site does not need a person at a browser.
+14. As an integrator, I want every endpoint to work with a key and nothing else, so that no browser session, cookie, or shared secret is required.
+15. As an integrator, I want to be told which coupons a plan would spend before anything moves, so that I can refuse and keep the holding whole.
+16. As a stall owner, I want an API caller to be bounded by the same rules as my own device, so that automating my till does not weaken it.
+17. As a security reviewer, I want the API to remain incapable of spending, so that a breach of it is a denial of service and not a theft.
+
+## Which ticket serves which story
+
+Written out because a story with no ticket is a promise nobody owns, and this
+table is what caught story 13 having none.
+
+| story | ticket |
+|---|---|
+| 1, 2 | 02 |
+| 3 | 01 and 02 |
+| 4 | 03 |
+| 5 | 04 |
+| 6, 7 | 05 |
+| 8 | 06 |
+| 9 | 07 |
+| 10 | 08 |
+| 11 | 11 |
+| 12 | 09 |
+| 13 | 10 |
+| 14 | every ticket; 03 is where it is measured |
+| 15 | already served by `/v1/spend/plan` |
+| 16 | 01's parity test, and 05's recipient rule |
+| 17 | 12 |
 
 ## Implementation Decisions
 
