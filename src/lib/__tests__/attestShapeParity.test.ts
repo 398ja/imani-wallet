@@ -28,27 +28,22 @@ import { checkRedemption } from '../redemptionLedger'
  */
 
 /**
- * The proposed endpoint, written out: a pure function of its arguments.
+ * The shared ceiling — the SAME function the wallet API calls.
  *
- * No storage, no network, no clock. That IS the proposal — if this needed
- * anything the caller did not send, the endpoint could not be stateless.
+ * This used to be a reimplementation sitting beside the app's, and these tests
+ * asserted the two agreed. That was the best available check while the
+ * arithmetic still lived inside `redemptionLedger`, and it was never
+ * satisfying: agreement today is not identity tomorrow, and the failure it
+ * guards against is silent by construction.
+ *
+ * Ticket 01 extracted the arithmetic, so `checkRedemption` now CALLS this.
+ * These tests therefore no longer compare two implementations — they pin that
+ * the app has not grown a second one, which is a stronger property and a
+ * cheaper one to keep true.
  */
-function redeemCheck(input: {
-  signedFaceValue: number
-  requested: number
-  priorRedemptions: Array<{ amount: number; direction: 'in' | 'out' }>
-}) {
-  const alreadyRedeemed = input.priorRedemptions
-    .filter((r) => r.direction === 'in')
-    .reduce((sum, r) => sum + (Number.isFinite(r.amount) ? r.amount : 0), 0)
+import { checkCeiling } from '@imani/redemption'
 
-  return {
-    allowed:
-      input.signedFaceValue <= 0 || alreadyRedeemed + input.requested <= input.signedFaceValue,
-    alreadyRedeemed,
-    remaining: Math.max(0, input.signedFaceValue - alreadyRedeemed),
-  }
-}
+const redeemCheck = checkCeiling
 
 const VOUCHER = '1d4410af-70f5-4c14-8606-519404684ea7'
 
