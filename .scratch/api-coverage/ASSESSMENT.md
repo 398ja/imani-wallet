@@ -385,6 +385,39 @@ updates have a use. Listed here as out of scope; say if you want it in.
    Currently every API caller is the stall.
 5. **Profile writes**: in or out?
 
+## Every claim, and the check that backs it
+
+Run end to end over the final tree, not accumulated from when each was written.
+The probes here were built late in the work, so they are re-run over the
+earlier P2PK commits too rather than only over what came after them.
+
+| # | claim | check | observed |
+|---|---|---|---|
+| 1 | the wallet reads a P2PK-locked voucher | `liveTerminalCredential.test.ts` | 13 pass |
+| 2 | the mint refuses a witness-less locked spend | `e2e/probe-witness.mts` | 5/5, locked 400 vs unlocked 200 |
+| 3 | only the device's own key can spend it | `e2e/probe-witness-positive.mts` | 3/3, wrong key 400, right key 200 |
+| 4 | checking a credential never spends it | `e2e/probe-spend.mts` | PASS, 3 identical reads |
+| 5 | the owner's revoke never reaches the mint | `e2e/revocation-reaches-mint.e2e.ts` | 8/8, still `UNSPENT` after revoking |
+| 6 | issuance can be couriered | `e2e/probe-courier-issue.mts` | 7/7, unregistered signer mints a verified token |
+| 7 | the ceiling works over supplied rows | `e2e/probe-attest-redeem.mts` | 10/10 |
+| 8 | the extracted ceiling matches the app's | `attestShapeParity.test.ts` | 9 pass, mutation-controlled |
+| 9 | the five documented endpoints exist and the ten proposed do not | signed requests to the running service | 5 answer, 10 return 404 |
+| 10 | the service is shippable, not just runnable | `docker build` + signed calls to the container | image builds; `whoami` and `holding/value` answer correctly on :8799 |
+
+Integration boundary, built from the PR branches rather than local state:
+
+| repo | result |
+|---|---|
+| cashu-lib | installs; 1121 tests across the reactor |
+| cashu-voucher | installs against it; 414 across five modules |
+| imani-gateway-customer | **384 pass** compiled against both, from a detached worktree so the colleague's in-flight files are excluded |
+| imani-gateway-core | 709 pass |
+| imani-wallet | 1936 unit, 49 browser, lint clean, tsc at the pre-existing 81 |
+
+The gateway-customer number is the one that matters: it is the only check that
+compiles this chain end to end, and it is why the four PRs can be merged in
+order without a broken intermediate state.
+
 ## What this document is not
 
 An implementation plan. No endpoint here is designed to the level of request
