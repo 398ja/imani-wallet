@@ -121,3 +121,23 @@ Bottin password fallback `MERCHANT_IDENTITY_BOTTIN_PASS` instead of
 disables itself when either is blank. Fixed, image rebuilt, and the gateway
 now logs `bottin_record_client_created ... auth=basic` from a clean container
 with no hand-patching.
+
+
+## The dashboard half, landed later
+
+Re-reading the spec after ticket 10 wired the login found that only half of
+"a redemption-only terminal has no Sell button and no dashboard" had been
+built. The Sell half was done here. The dashboard half did not exist at all:
+the menu offered Dashboard and Transactions to any merchant device, and the
+routes were guarded only on `trading`.
+
+So a terminal could read the stall's turnover, issued coupons and
+reconciliation gaps — on a device that is, by design, in someone else's hands.
+
+Now both halves, as the spec words them: the menu hides the entries (the
+courtesy) and the routes are guarded (the control). Gated on being a terminal
+at all rather than on the role, because a full till may sell and still has no
+business reading the books.
+
+Settings and sign-out stay reachable, so staff can hand the device back and an
+owner can reach the terminal list from the device itself.
