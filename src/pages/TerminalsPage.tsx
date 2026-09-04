@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react'
 import { Tablet, TriangleAlert } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, Panel, ListSection, Button, EmptyRow } from '../components/ui'
+import { Link } from 'react-router-dom'
 import { formatDate } from '../lib/format'
 import { TERMINAL_ROLE_LABELS } from '../lib/terminalRole'
 import {
@@ -100,8 +101,15 @@ export function TerminalsPage({ stallPubkey }: { stallPubkey: string }) {
         </ListSection>
       ) : null}
 
+      {/* The way in, present whether or not the list is empty: an owner adding
+          a second till should not have to find a different route than the one
+          they used for the first. */}
+      <Link to="/settings/terminals/add" className="mt-2 block">
+        <Button className="w-full">Add a terminal</Button>
+      </Link>
+
       {/* Says what to do, rather than implying a resume exists somewhere. */}
-      <p className="mt-2 text-sm text-mono-500">
+      <p className="mt-4 text-sm text-mono-500">
         To bring a terminal back, add it again from the device.
       </p>
     </Screen>

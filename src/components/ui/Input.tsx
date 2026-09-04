@@ -1,4 +1,4 @@
-import { forwardRef, type InputHTMLAttributes } from 'react';
+import { forwardRef, useId, type InputHTMLAttributes } from 'react';
 import { cn } from '../../lib/utils';
 
 interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
@@ -7,16 +7,34 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(
-  ({ className, label, error, type = 'text', ...props }, ref) => {
+  ({ className, label, error, type = 'text', id, ...props }, ref) => {
+    /**
+     * The label must actually point at the field.
+     *
+     * It was a bare `<label>` with no `htmlFor`, so tapping it did not focus
+     * the input and a screen reader announced an unlabelled box. Every form in
+     * the app uses this component, so the fix lands everywhere at once.
+     *
+     * `useId` rather than a counter: React owns uniqueness across concurrent
+     * renders, and a caller-supplied `id` still wins so an existing
+     * `htmlFor`/`aria-describedby` outside this component keeps working.
+     */
+    const generatedId = useId();
+    const inputId = id ?? generatedId;
+
     return (
       <div className="w-full">
         {label && (
-          <label className="block text-sm font-medium text-mono-600 dark:text-mono-400 mb-2">
+          <label
+            htmlFor={inputId}
+            className="block text-sm font-medium text-mono-600 dark:text-mono-400 mb-2"
+          >
             {label}
           </label>
         )}
         <input
           type={type}
+          id={inputId}
           ref={ref}
           className={cn(
             'w-full rounded-xl border border-mono-200 bg-white px-4 py-3',
