@@ -106,12 +106,15 @@ that the input is theirs.
 signed face **from the token** rather than from the caller, then runs the
 ceiling over supplied rows: partial redemption allowed, the sum refused once it
 would exceed what was issued, an outgoing (issued) row correctly not consuming
-the ceiling, and a zero-face legacy voucher left unbounded. 11/11.
+the ceiling, and a zero-face legacy voucher left unbounded. 10/10 checks.
 
 `src/lib/__tests__/attestShapeParity.test.ts` then pins the extracted
 arithmetic against the app's own `checkRedemption` across seven boundary cases
-including exactly-at-face and one-unit-over. Mutation control: dropping the
-`direction === 'in'` filter from the app fails the parity test.
+(fresh, partially redeemed, exactly at the face, one minor unit over, already
+at the face, past it, and no signed face), plus two controls — that an
+overspend is actually refused, so the agreement is not agreement on
+always-true, and that outgoing rows are ignored. Nine tests. Mutation control:
+dropping the `direction === 'in'` filter from the app fails the parity test.
 
 That parity test is the load-bearing one. An extracted copy that drifts would
 leave a till and an API enforcing two different ceilings on the same voucher,
