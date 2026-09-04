@@ -27,6 +27,7 @@
       "@imani/reports": ["./packages/reports/src/index.ts"],
       "@imani/payment-requests": ["./packages/payment-requests/src/index.ts"],
       "@imani/redemption": ["./packages/redemption/src/index.ts"],
+      "@imani/licence": ["./packages/licence/src/index.ts"],
       "@imani/voucher-send": ["./packages/voucher-send/src/index.ts"],
       "@imani/wallet-storage": ["./packages/wallet-storage/src/index.ts"]
     }

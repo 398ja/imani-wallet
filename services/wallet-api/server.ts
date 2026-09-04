@@ -44,6 +44,7 @@ import {
   receiveUrl,
   receiveBody,
 } from './redeem.js'
+import { parseLicenceRequest, checkLicence, licenceIssuerPubkey } from './licence.js'
 import {
   parseIssueRequest,
   issueBody,
@@ -481,6 +482,44 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       }
     }
     return { ok: true as const, value: report.value }
+  }
+
+  /**
+   * What does this licence entitle its holder to?
+   *
+   * An attest, and entirely local: the caller sends the voucher it holds and we
+   * read it, check our signature over it, and say what it grants. There is no
+   * lookup of who they are and there must not be — ADR 0007 decides a licence
+   * is a voucher we sold, verified offline, with no licence server and no
+   * honeypot of who-runs-what.
+   *
+   * Worth an endpoint because an automation can then ask "is this available to
+   * me?" BEFORE it tries, rather than discovering a lapse through a failure in
+   * the middle of a workflow.
+   */
+  if (path === '/v1/licence/status' && method === 'POST') {
+    const issuer = licenceIssuerPubkey()
+    if (!issuer) {
+      // 503, not a default. A licence check nobody configured would pass for a
+      // voucher anyone minted — worse than no check, because it looks like it
+      // is working.
+      return json(res, 503, {
+        error: 'not-configured',
+        detail: 'WALLET_API_LICENCE_ISSUER_PUBKEY is unset, so no licence can be checked',
+      })
+    }
+
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const input = parseLicenceRequest(parsed.value, auth.pubkey, Math.floor(Date.now() / 1000))
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+
+    // 200 whether or not it grants anything: the question was answered.
+    return answer(200, checkLicence(input.value, issuer))
   }
 
   /**
