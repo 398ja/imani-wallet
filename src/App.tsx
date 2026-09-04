@@ -257,7 +257,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
 
   return (
     <>
-      <Header profile={profile} merchant={trading} onLogout={onLogout} />
+      <Header profile={profile} merchant={trading} terminal={terminal.actor !== null} onLogout={onLogout} />
       <Routes>
         {/*
           The role split. A merchant gets a different home and the two money
@@ -310,13 +310,31 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
                 />
               }
             />
-            <Route path="/merchant/transactions" element={<MerchantTransactionsPage />} />
-            <Route path="/merchant/coupons" element={<IssuedCouponsPage />} />
-            <Route path="/merchant/coupon/:voucherId" element={<IssuedCouponPage />} />
-            <Route
-              path="/merchant/dashboard"
-              element={<MerchantDashboardPage pubkey={pubkey} merchant={merchant} />}
-            />
+            {/*
+              The stall's own business, owner-only.
+
+              "A redemption-only terminal has no Sell button and no dashboard,
+              and not as a matter of hiding." Hiding the menu entries is the
+              courtesy; this is the control — a terminal that types the URL
+              lands on the till instead, because a device in staff hands must
+              not show the stall's turnover, its issued coupons or its
+              reconciliation gaps.
+
+              Guarded on `actor === null`, which is the owner's own device, and
+              NOT on the role: a full till may sell, and still has no business
+              reading the stall's books.
+            */}
+            {terminal.actor === null && (
+              <>
+                <Route path="/merchant/transactions" element={<MerchantTransactionsPage />} />
+                <Route path="/merchant/coupons" element={<IssuedCouponsPage />} />
+                <Route path="/merchant/coupon/:voucherId" element={<IssuedCouponPage />} />
+                <Route
+                  path="/merchant/dashboard"
+                  element={<MerchantDashboardPage pubkey={pubkey} merchant={merchant} />}
+                />
+              </>
+            )}
           </>
         )}
         <Route path="/scan" element={<ScanPage />} />
