@@ -32,7 +32,7 @@ const minted = (over = {}) => parseTerminalMetadata(terminalMetadataJson(terms(o
 
 /** Verified the way login will: our device, our stall, our issuer. */
 const asOurs = (m = minted(), device = DEVICE, issuer = STALL) =>
-  credentialActor(m, device, { issuerPubkey: issuer })
+  credentialActor(m, device, { issuerId: issuer })
 
 describe('minting refuses what would not work', () => {
   it('refuses an unlocked credential', () => {
@@ -155,7 +155,7 @@ describe('only from an issuer we recognise, only for its own stall', () => {
     // Signed by a real stall, but not the one in the credential — a stall
     // issuing authority over someone else's business.
     const m = minted({ stallPubkey: OTHER_STALL })
-    expect(credentialActor(m, DEVICE, { issuerPubkey: STALL })).toBeNull()
+    expect(credentialActor(m, DEVICE, { issuerId: STALL })).toBeNull()
   })
 })
 
@@ -198,7 +198,7 @@ describe('permissions come from the credential, not from a stored record', () =>
       ...minted(),
       permissions: [permissionFor(TERMINAL_ACTIONS.ISSUE, STALL)],
     }
-    const actor = credentialActor(withList, DEVICE, { issuerPubkey: STALL })!
+    const actor = credentialActor(withList, DEVICE, { issuerId: STALL })!
 
     expect(actor.permissions).not.toContain(permissionFor(TERMINAL_ACTIONS.ISSUE, STALL))
     expect(actor.permissions).toEqual(grantFor(TERMINAL_ROLES.REDEEM_ONLY, STALL))
