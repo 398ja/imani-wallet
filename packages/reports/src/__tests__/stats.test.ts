@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 
-import { merchantStats, expiringSoon, outstandingLiability } from '../stats'
-import type { WalletTransaction } from '../transactions'
+import { merchantStats, expiringSoon, outstandingLiability } from '../stats.js'
+import type { ReportTransaction as WalletTransaction } from '../types.js'
 
 const ME = 'a'.repeat(64)
 const OTHER = 'b'.repeat(64)

@@ -7,7 +7,28 @@
        tsx, so extensionless TS imports resolve the same way Vite resolves them
        for the app. */
     "allowImportingTsExtensions": true,
-    "noEmit": true
+    "noEmit": true,
+    /* The shared packages the service imports, resolved to source.
+
+       Absent until API ticket 07, which is why `@imani/wallet-core` had been
+       reporting TS2307 here for as long as the service has existed: the service
+       is RUN by tsx, which resolves these through vite.config's aliases, and
+       typechecked by a project that could not.
+
+       Adding them fixes five TS2307s and reveals what those were masking —
+       once the modules resolve, their types apply, and the service's tests
+       stop being `unknown`. That is a real backlog rather than a regression,
+       and it is now visible instead of hidden behind an unresolved import.
+       Two non-test errors in `server.ts` predate this and are unrelated to
+       any package. */
+    "baseUrl": ".",
+    "paths": {
+      "@imani/wallet-core": ["./packages/wallet-core/src/index.ts"],
+      "@imani/reports": ["./packages/reports/src/index.ts"],
+      "@imani/redemption": ["./packages/redemption/src/index.ts"],
+      "@imani/voucher-send": ["./packages/voucher-send/src/index.ts"],
+      "@imani/wallet-storage": ["./packages/wallet-storage/src/index.ts"]
+    }
   },
   /* `src/lib/audit.ts` is included, not just referenced: the audit API's whole
      point is that it runs the SAME reader the wallet does, so a change there
