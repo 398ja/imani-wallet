@@ -60,6 +60,7 @@
       "@imani/licence": ["./packages/licence/src/index.ts"],
       "@imani/redemption": ["./packages/redemption/src/index.ts"],
       "@imani/reports": ["./packages/reports/src/index.ts"],
+      "@imani/payment-requests": ["./packages/payment-requests/src/index.ts"],
       "imani-qr": ["./packages/imani-qr/src/index.ts"]
     }
   },
