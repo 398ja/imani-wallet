@@ -19,7 +19,7 @@ because it is value-bearing.
 
 **Blocked by:** 04
 
-**Status:** done — pending the terminal LOGIN that supplies the session, which is ticket 10.
+**Status:** done — ticket 10 has now wired the login that supplies the session.
 
 - [x] A terminal shows only what its role permits.
 - [x] The same action attempted around the UI is refused, not merely hidden.
@@ -90,7 +90,14 @@ LOGIN is ticket 10. When it lands, App passes them through and the gating is
 already tested. Nothing here is a stand-in: the rules and both enforcement
 halves are real.
 
-## What is NOT verified, and why
+## Now reachable
+
+Ticket 10 landed `useTerminalIdentity`, and `App` passes the actor and session
+to `MerchantHomePage`. The gating below is no longer unreachable code. The
+note that follows described the state before that, and is kept because it is
+the honest history of what the evidence supported at the time.
+
+## What was NOT verified, and why (superseded)
 
 Correcting an overstatement. The E2E suite added later covers the terminal
 list, revocation and enrolment screens, but it covers NOTHING in this ticket,
