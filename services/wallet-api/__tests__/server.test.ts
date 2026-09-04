@@ -369,10 +369,15 @@ describe('freshness', () => {
   it('refuses one from the future, not just the past', async () => {
     const { header, url } = await signed()
     const result = verifyNip98({
+      // -61 sat exactly on the 60s boundary, so a single second passing
+      // between signing and checking put the event back INSIDE the window and
+      // failed this test at random. Flaky since it was written; observed
+      // failing in a full run and passing alone. -120 is unambiguously
+      // outside, and the boundary itself is covered by the test above.
       header,
       url,
       method: 'GET',
-      now: Math.floor(Date.now() / 1000) - 61,
+      now: Math.floor(Date.now() / 1000) - 120,
     })
     expect(result).toMatchObject({ ok: false, reason: 'stale' })
     expect((result as { detail: string }).detail).toContain('future')
