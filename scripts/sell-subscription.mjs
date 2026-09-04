@@ -47,12 +47,14 @@
 import { finalizeEvent, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const KEYS = join(HERE, '..', '.seed-keys.json')
+/** The seller's record of what was sold, read by notify-expiring.mjs. */
+const SOLD = join(HERE, '..', '.sold-subscriptions.json')
 const WALLET = process.env.WALLET_URL ?? 'http://localhost:28082'
 const EDGE_SECRET = process.env.EDGE_SECRET ?? 'dev-edge-secret-local-only'
 const INTERNAL_RELAY = process.env.INTERNAL_RELAY_URL ?? 'ws://nostr-relay:7777'
@@ -237,6 +239,54 @@ async function deliver(seller, voucher, customerPubkey) {
   return JSON.parse(text)
 }
 
+/**
+ * Record the sale, so the expiry notices have something to run from.
+ *
+ * `notify-expiring.mjs` cannot warn anyone about a subscription nobody wrote
+ * down, and asking a seller to hand-maintain a JSON file is asking for the one
+ * customer who is missed to be the one who lapses silently. Written here
+ * because this is the moment the facts exist and are certainly correct.
+ *
+ * NOT an account database. It is the seller's own note of what they sold —
+ * the same kind of record as `.seed-keys.json` beside it — and the customer's
+ * entitlement still lives entirely in their voucher. Delete this file and
+ * nobody loses access; only the reminders stop.
+ *
+ * Keyed by subscription id, so a RENEWAL updates the existing row rather than
+ * adding a second. The expiry moving is what re-arms the notices for the new
+ * term (see `alreadySent`, which keys on the expiry as well as the id).
+ */
+function recordSale({ subscriptionId, customerPubkey, expiresAt, term, paidAmountMinor, paidCurrency, pilot }) {
+  let rows = []
+  try {
+    if (existsSync(SOLD)) {
+      const parsed = JSON.parse(readFileSync(SOLD, 'utf8'))
+      if (Array.isArray(parsed)) rows = parsed
+    }
+  } catch {
+    // An unreadable ledger must not fail a sale that already completed. The
+    // customer HAS their licence; the worst case is a missed reminder.
+    rows = []
+  }
+
+  const existing = rows.find((r) => r.subscription_id === subscriptionId)
+  const row = existing ?? { subscription_id: subscriptionId, notices: [] }
+  row.customer_pubkey = customerPubkey
+  row.expires_at = expiresAt
+  row.term = term
+  row.paid_amount_minor = paidAmountMinor
+  row.paid_currency = paidCurrency
+  row.pilot = pilot
+  if (!existing) rows.push(row)
+
+  try {
+    writeFileSync(SOLD, JSON.stringify(rows, null, 2))
+    return true
+  } catch {
+    return false
+  }
+}
+
 // ---------------------------------------------------------------- entrypoint
 
 /**
@@ -370,6 +420,22 @@ async function main() {
     `delivered ${String(result.event_id ?? result.eventId ?? '(printed)').slice(0, 12)}…  ` +
       `expires ${expiry ? new Date(expiry * 1000).toISOString().slice(0, 10) : 'NEVER — a licence with no expiry grants NOTHING'}`,
   )
+  const recorded = recordSale({
+    subscriptionId,
+    customerPubkey,
+    expiresAt: expiry,
+    term,
+    paidAmountMinor,
+    paidCurrency,
+    pilot,
+  })
+  if (!recorded) {
+    console.warn(
+      '\nWARNING: the sale could not be written to .sold-subscriptions.json, so ' +
+        'no expiry reminder will go out for it. The licence IS delivered.',
+    )
+  }
+
   console.log(`\nkeep this for renewal:  --subscription-id ${subscriptionId}`)
 }
 
