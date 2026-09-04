@@ -32,6 +32,9 @@ export type { LicenceVoucher, LicenceGrant, LicenceVerdict, VerifyOptions } from
 export { DENIAL_REASONS } from './types.js'
 export { verifyLicence } from './verify.js'
 
+export type { SignedVoucherFields } from './voucherFields.js'
+export { licenceOf } from './read.js'
+
 export type {
   LicenceCheck,
   LastVerification,
