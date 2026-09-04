@@ -7,9 +7,11 @@ integrator cannot automate, and whatever it adds is a promise we keep.
 
 ## The answer in one line
 
-**The API covers one journey out of roughly seven.** Five endpoints serve a
-customer spending coupons. The entire merchant side — issuing, redeeming,
-payment requests, cashback, terminals, subscriptions — has no API at all.
+**The API covers one journey out of eight.** Five endpoints serve a customer
+spending coupons. The entire merchant side — issuing, redeeming, payment
+requests, cashback, terminals, subscriptions — has no API at all, and neither
+does **receiving**, which means a headless caller can spend but cannot notice
+income.
 
 ## What exists today
 
@@ -278,7 +280,50 @@ only ever having run on the device.
 `licenceStatus` is already an offline verification over a voucher the caller
 holds, so it maps to **attest** almost unchanged.
 
-### 7. Reads
+### 7. Receiving a coupon, and registering a stall
+
+*Added on a completeness re-check. The first draft was assembled from the
+screens I had been working in, and these three modules make network calls that
+no section covered — which means the inventory was not the exhaustive thing it
+claimed to be.*
+
+`lib/registration.ts`, `lib/dmPoll.ts`, `lib/incomingNotifications.ts`
+
+| operation | proposed | pattern |
+|---|---|---|
+| is this handle free? | `GET /v1/stalls/available/{handle}` | plan |
+| register a stall | `POST /v1/register/prepare` | courier |
+| collect arriving coupons | `POST /v1/inbox/drain` | courier |
+
+**Receiving is the gap that most affects an integrator.** `startDmPoll` and
+`startIncomingNotifications` are how a wallet learns it has been paid, and both
+are long-running loops in the browser. A headless caller has no equivalent, so
+today it can spend but cannot notice income — which makes the "bookkeeping
+tool" use case in the README's own opening only half possible.
+
+A drain endpoint fits the courier pattern in principle, since the caller can
+sign for itself. But **the two the app calls are not deployed on this stack**:
+a signed POST to `/api/v1/incoming-notifications/drain` and `/ack` both answer
+`404 Endpoint not found` on gateway-customer. So the receive path's server side
+needs locating before an endpoint is proposed over it — it may live in another
+service, or not be running here.
+
+*(Checked rather than assumed, after a first version of this paragraph asserted
+the endpoints "already exist behind NIP-98". They may well exist somewhere;
+they do not answer here.)*
+
+Unwrapping the NIP-17 gift wrap needs the caller's private key regardless, so
+decryption stays client-side, exactly as delivery does for a send.
+
+`refuseIfOverRedeemed` living in `dmPoll` is worth noting for §1: the
+double-redemption ceiling is enforced on the RECEIVE path too, so an API that
+covers redemption without covering receipt would enforce it in one place only.
+
+Not operations, and deliberately unlisted: `config`, `branding`, `nip98` and
+`gatewayNostr` are infrastructure — runtime config, pass artwork, header
+signing and a relay read path — with no user-facing verb behind them.
+
+### 8. Reads
 
 `lib/stats.ts`, `lib/merchants.ts` · dashboard, records, merchant lookup
 
@@ -301,6 +346,7 @@ Not "not yet". Each would break something specific.
 |---|---|
 | **Backup / recovery** (`lib/backup.ts`) | handles key material. An endpoint that emits or ingests it undoes ADR 0001 outright. |
 | **Security / PIN** (`SecurityPage`) | device-local by definition; remote administration is an attack surface with no user. |
+| **Restore** (`/restore`, `BackupPages.RestorePage`) | ingests a passphrase-protected backup **containing the private key**. The mirror of Backup and out for the same reason. Missed in the first draft, which listed Backup and not this. |
 | **Settings, profile, onboarding, welcome, scan** | presentation and device state. `scan` is a camera. |
 | **Login / logout** | there is no session to create. Identity *is* the signing key. |
 
@@ -309,11 +355,11 @@ updates have a use. Listed here as out of scope; say if you want it in.
 
 ## Recommended sequence
 
-1. **Reads** (§7) and **payment requests** (§3) — near-pure over supplied
+1. **Reads** (§8) and **payment requests** (§3) — near-pure over supplied
    state, no new custody question, immediately useful.
 2. **Redeem** (§1) — highest value, but needs the ceiling ruling first.
 3. **Issue** (§2) — needs the poll/partial-failure shape settled.
-4. **Cashback** (§4), **licences** (§6).
+4. **Cashback** (§4), **licences** (§6), **receipt** (§7).
 5. **Terminals** (§5) — blocked on the revocation finding.
 
 ## Open questions
