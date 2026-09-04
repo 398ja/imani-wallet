@@ -54,6 +54,9 @@ import { ProfilePage } from './pages/ProfilePage'
 import { SettingsPage } from './pages/SettingsPage'
 import { LedgerPage } from './pages/LedgerPage'
 import { SubscriptionPage } from './pages/SubscriptionPage'
+import { TerminalsPage } from './pages/TerminalsPage'
+import { TerminalEnrolPage } from './pages/TerminalEnrolPage'
+import { useTerminalIdentity } from './lib/useTerminalIdentity'
 import { ProfileEditPage } from './pages/ProfileEditPage'
 import { SecurityPage } from './pages/SecurityPage'
 import { BackupPage, RestorePage } from './pages/BackupPages'
@@ -181,6 +184,17 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
     }
   }, [pubkey])
 
+
+  /**
+   * Whether this device is a terminal, and what it may do today.
+   *
+   * Null actor on the stall's own device, which is the common case and behaves
+   * exactly as it always has. On a terminal this carries the role gating and
+   * the lapse notice that terminals ticket 07 built — until this line existed
+   * those were correct code no user could reach.
+   */
+  const terminal = useTerminalIdentity()
+
   // Every arriving coupon is a candidate payment for an open request, and the
   // merchant is rarely on the screen that shows it — the till, the home screen
   // and a closed app all have to settle a sale just the same.
@@ -243,7 +257,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
 
   return (
     <>
-      <Header profile={profile} merchant={trading} onLogout={onLogout} />
+      <Header profile={profile} merchant={trading} terminal={terminal.actor !== null} onLogout={onLogout} />
       <Routes>
         {/*
           The role split. A merchant gets a different home and the two money
@@ -258,24 +272,69 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route
           path="/"
           element={
-            trading ? <MerchantHomePage /> : <MerchantsPage />
+            trading ? (
+              <MerchantHomePage
+                actor={terminal.actor ?? undefined}
+                session={terminal.session}
+                refusal={terminal.refusal}
+              />
+            ) : (
+              <MerchantsPage />
+            )
           }
         />
         {trading && (
           <>
-            <Route path="/sell" element={<SellPage pubkey={pubkey} merchant={merchant} />} />
+            <Route
+              path="/sell"
+              element={
+                <SellPage
+                  pubkey={pubkey}
+                  merchant={merchant}
+                  actor={terminal.actor ?? undefined}
+                  session={terminal.session}
+                />
+              }
+            />
             {/* Under /sell because it is the other half of the same job —
                 and guarded by the same `trading` check, since issuing
                 cashback needs `merchant.issuanceCurrency` exactly as Sell does. */}
             <Route path="/sell/cashback" element={<CashbackIssuePage merchant={merchant} />} />
-            <Route path="/redeem" element={<RedeemPage pubkey={pubkey} merchant={merchant} />} />
-            <Route path="/merchant/transactions" element={<MerchantTransactionsPage />} />
-            <Route path="/merchant/coupons" element={<IssuedCouponsPage />} />
-            <Route path="/merchant/coupon/:voucherId" element={<IssuedCouponPage />} />
             <Route
-              path="/merchant/dashboard"
-              element={<MerchantDashboardPage pubkey={pubkey} merchant={merchant} />}
+              path="/redeem"
+              element={
+                <RedeemPage
+                  pubkey={pubkey}
+                  merchant={merchant}
+                  actor={terminal.actor ?? undefined}
+                />
+              }
             />
+            {/*
+              The stall's own business, owner-only.
+
+              "A redemption-only terminal has no Sell button and no dashboard,
+              and not as a matter of hiding." Hiding the menu entries is the
+              courtesy; this is the control — a terminal that types the URL
+              lands on the till instead, because a device in staff hands must
+              not show the stall's turnover, its issued coupons or its
+              reconciliation gaps.
+
+              Guarded on `actor === null`, which is the owner's own device, and
+              NOT on the role: a full till may sell, and still has no business
+              reading the stall's books.
+            */}
+            {terminal.actor === null && (
+              <>
+                <Route path="/merchant/transactions" element={<MerchantTransactionsPage />} />
+                <Route path="/merchant/coupons" element={<IssuedCouponsPage />} />
+                <Route path="/merchant/coupon/:voucherId" element={<IssuedCouponPage />} />
+                <Route
+                  path="/merchant/dashboard"
+                  element={<MerchantDashboardPage pubkey={pubkey} merchant={merchant} />}
+                />
+              </>
+            )}
           </>
         )}
         <Route path="/scan" element={<ScanPage />} />
@@ -340,7 +399,45 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             )
           }
         />
-        <Route path="/settings/security" element={<SecurityPage onLogout={onLogout} />} />
+        <Route
+          path="/settings/terminals"
+          element={
+            // Merchant-only for reachability: a customer has no stall for a
+            // terminal to trade on behalf of. NOT licence-gated — an owner
+            // whose subscription lapsed must still be able to revoke a stolen
+            // device, and a paywall in front of revocation would turn a billing
+            // problem into a security one.
+            merchant !== null ? (
+              <TerminalsPage stallPubkey={pubkey} />
+            ) : (
+              <Navigate to="/settings" replace />
+            )
+          }
+        />
+        <Route
+          path="/settings/terminals/add"
+          element={
+            // Licence-gated only through `checkEnrolment`, which the screen
+            // renders as a sentence. A route guard here would hide the reason,
+            // and "refused at enrolment rather than by hiding a button" is
+            // subscriptions ticket 07's first criterion.
+            merchant !== null ? (
+              <TerminalEnrolPage stallPubkey={pubkey} />
+            ) : (
+              <Navigate to="/settings" replace />
+            )
+          }
+        />
+        <Route
+          path="/settings/security"
+          element={
+            <SecurityPage
+              onLogout={onLogout}
+              pubkey={pubkey}
+              terminal={terminal.actor !== null}
+            />
+          }
+        />
         <Route path="/settings/backup" element={<BackupPage profile={profile} />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

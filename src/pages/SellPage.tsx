@@ -13,6 +13,8 @@ import {
   IdentityInline,
 } from '../components/ui'
 import { ScanRecipient } from '../components/ScanRecipient'
+import type { Actor } from '../lib/actor'
+import type { TerminalSession } from '../lib/terminalSession'
 import { issueAndDeliver, type IssueStage } from '../lib/issue'
 import { identityLabel, useIdentity } from '../lib/identity'
 import { currencyDecimals, formatDate, formatFace, parseAmountToMinor } from '../lib/format'
@@ -45,7 +47,27 @@ const STAGE_LABEL: Record<IssueStage, string> = {
   delivering: 'Delivering to the customer…',
 }
 
-export function SellPage({ pubkey, merchant }: { pubkey: string; merchant: MerchantProfile }) {
+export function SellPage({
+  pubkey,
+  merchant,
+  actor,
+  session,
+}: {
+  pubkey: string
+  merchant: MerchantProfile
+  /**
+   * The terminal selling, if this device is one.
+   *
+   * Absent on the stall's own device. Passed through rather than assumed,
+   * because this screen used to BUILD an owner actor unconditionally — so a
+   * terminal that reached /sell issued with the stall's full authority, and a
+   * revoked one could still mint. The comment beside that line already
+   * promised "a terminal reaches the same call with a credential-derived
+   * actor"; nothing supplied one.
+   */
+  actor?: Actor
+  session?: TerminalSession | null
+}) {
   const navigate = useNavigate()
   const [customer, setCustomer] = useState<string | null>(null)
 
@@ -64,6 +86,8 @@ export function SellPage({ pubkey, merchant }: { pubkey: string; merchant: Merch
           customer={customer}
           merchant={merchant}
           issuerPubkey={pubkey}
+          actor={actor}
+          session={session}
           onRescan={() => setCustomer(null)}
           onDone={() => navigate('/')}
         />
@@ -100,12 +124,16 @@ function IssueForm({
   customer,
   merchant,
   issuerPubkey,
+  actor,
+  session,
   onRescan,
   onDone,
 }: {
   customer: string
   merchant: MerchantProfile
   issuerPubkey: string
+  actor?: Actor
+  session?: TerminalSession | null
   onRescan: () => void
   onDone: () => void
 }) {
@@ -141,7 +169,16 @@ function IssueForm({
           expiryDays: validity,
           memo: memo.trim() || undefined,
           recipientPubkey: customer,
-          issuerPubkey,
+          // The ACTOR, not a key. On the owner's own device the stall IS the
+          // session pubkey — a positive claim rather than the fallback
+          // terminals ticket 02 removes. A terminal passes its
+          // credential-derived actor and never its own disposable key, which
+          // is what makes the role gating real: `issueAndDeliver` asks
+          // `canIssueNow` of whatever arrives here.
+          actor: actor ?? { kind: 'owner', stallPubkey: issuerPubkey },
+          // Carried so the enforcement point can see a lapsed or reduced
+          // session. Undefined for an owner, who never has one.
+          session,
         },
         setStage,
       )
