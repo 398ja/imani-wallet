@@ -146,28 +146,37 @@ Straightforward: already a gateway call behind a signature.
 
 **Two findings, neither of which is an API problem.**
 
-**(i) Owner-side revocation never reaches the mint.** Traced through the code:
+**(i) Owner-side revocation never reaches the mint.**
 
-- `TerminalsPage` line 112 — the owner's only revoke button — calls
+*Corrected from my first reading, which treated the delay itself as the bug. It
+is not: ADR 0005 decides revocation is "bounded, not immediate", so a till
+re-authenticates once a trading day rather than mid-shift. A revoked terminal
+trading on for a while is designed.*
+
+The gap is that the bound has nothing enforcing it. Traced through the code and
+pinned by `src/lib/__tests__/ownerRevocationGap.test.ts`:
+
+- `TerminalsPage:112` — the owner's only revoke button — calls
   `revokeTerminal(stallPubkey, terminalPubkey)`.
 - `terminalRoster.revokeTerminal` sets `revokedAt` on a **local roster row**
   and returns. No mint call, no network.
-- The real revocation is `revokeCredential`, which *spends* the credential. Its
-  only non-test caller is `terminalDecommission.ts`, which runs **on the
-  device**.
-- `terminalLogin` decides on `unspent`, described as "the mint says the
-  credential has been spent — the owner revoked it". Nothing in login reads the
-  roster.
+- The revocation that bites is `revokeCredential`, which *spends* the
+  credential. Its only non-test caller is `terminalDecommission.ts`, which runs
+  **on the device being decommissioned**.
+- `terminalLogin` refuses on `unspent === false`, a definite SPENT from the
+  mint. It never reads the roster.
 
-So the owner's revoke button updates a list on their own phone, and the
-credential stays spendable. A lost or stolen till that still holds its
-credential keeps working, and the screen says it is retired. The comment in
-`terminalLogin` states the assumption the button does not honour.
+So the twelve-hour bound assumes the credential is dead and only the *session*
+lingers. With the credential still live, each expiry is followed by a fresh
+login that succeeds: the delay is not twelve hours but indefinite.
 
-Worth confirming as a live security gap before any endpoint is designed,
-because an API would otherwise faithfully reproduce it — and reproduce it at
-machine speed, for integrators who would reasonably assume revoke means
-revoked.
+`isRevoked` exists, is exported, and has **no caller outside its own module**,
+consistent with the mark being a display concern only. And
+`terminalDecommission` carries the comment "the owner has revoked it remotely
+and the device is finishing the job" — which no code path makes true.
+
+Five tests pin this, with a mutation control: removing the `unspent === false`
+refusal fails the control arm, so they are not passing vacuously.
 
 **(ii) P2PK makes owner-side revocation harder, not easier.** Now that
 credentials are locked (ADR 0008, PR #48), spending one requires a **witness
@@ -235,8 +244,12 @@ updates have a use. Listed here as out of scope; say if you want it in.
 1. **Redemption ceiling**: caller-supplied history, or documented as the
    caller's responsibility? Affects whether the API can be trusted to prevent
    double-redemption at all.
-2. **Owner-side revocation**: is finding (i) a live gap? If so it wants a fix
-   before an endpoint, and P2PK (ii) means the fix is not simply "spend it".
+2. **Owner-side revocation**: finding (i) is now pinned by tests, so the
+   question is not whether but what to do. The bound in ADR 0005 is sound; it
+   just needs something to enforce it. P2PK (ii) rules out the obvious fix, so
+   the options are a gateway-side revocation list, an issuer-spendable path
+   designed on purpose, or accepting that only the device can revoke itself and
+   saying so on the owner's screen. This wants a ruling before an endpoint.
 3. **Issuance polling**: hold the connection, or return an id and let the
    caller poll? Recommend the latter.
 4. **Terminal-scoped API keys**: should a terminal's own credential authorise
