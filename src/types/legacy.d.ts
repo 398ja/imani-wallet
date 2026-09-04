@@ -49,3 +49,17 @@ declare module '*/scripts/sell-subscription.mjs' {
     paidCurrency: string
   }): string
 }
+
+/**
+ * The seller's expiry-notice sender.
+ *
+ * Declared for the same reason as `sell-subscription.mjs` above: it restates a
+ * schedule defined in `src/lib/expiryNotice.ts` that a plain-node script cannot
+ * import, and one test compares the two answers day by day so the pair cannot
+ * drift into a customer being warned by one channel and not the other.
+ */
+declare module '*/scripts/notify-expiring.mjs' {
+  /** The notice due today in whole days before expiry, or null for silence. */
+  export function noticeDueOn(expiresAt: number, now: number): number | null
+  export function noticeMessage(daysLeft: number, expiresAt: number): string
+}
