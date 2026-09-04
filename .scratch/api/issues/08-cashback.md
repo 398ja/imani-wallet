@@ -66,14 +66,40 @@ gate every other merchant surface sits behind.
 | look up by code | `GET /v1/cashback/{code}` | plan (public read) |
 | claim | `POST /v1/cashback/claim` | courier |
 
-**Status:** built; the write path needs one thing upstream
+**Status:** built, with claiming decided against and one thing left upstream
 
-- [x] A code can be generated and looked up by a caller holding only a key. **Claiming is not an endpoint** — see below.
+- [x] A code can be generated and looked up by a caller holding only a key.
+- [x] **Claiming is out of scope — decided, not deferred.** See below.
 - [x] The public read paths stay public — a customer redeeming a code holds no key of ours.
+- [x] An unknown code is refused distinguishably: `404 {"code":"not_found"}`, checked against the live portal.
 - [x] A probe runs against the live portal: the courier is exercised and the auth model confirmed.
 - [ ] **Blocked upstream:** the write path stops at AUTHORISATION. `Nip98AuthFilter` grants only `ROLE_NOSTR_USER` and never `coupon:issue`, which comes solely from `NapProxyAuthFilter` (the NAP session path). So a NIP-98 caller authenticates perfectly and can never satisfy `@PreAuthorize(MERCHANT_ONLY)`, whatever key it holds.
-- [ ] A claimed code cannot be claimed twice — not verifiable until the write path lands.
-- [ ] An unknown or expired code is refused distinguishably — same.
+- [ ] A claimed code cannot be claimed twice — needs the write path to generate one first.
+
+## Claiming: decided against
+
+**Agreed with the maintainer, and it matches what the code forces.**
+
+Looking a code up returns a `claimUrl` of the form
+`https://<host>/c/<ref>#k=<43-char base64url>`. The key is in the URL
+**fragment**, which a browser never transmits. The customer's wallet fetches the
+ciphertext and decrypts it locally.
+
+So a claim endpoint has exactly two possible shapes and both are wrong:
+
+1. **Take the key.** Then this service can claim anyone's cashback, and ADR
+   0001's argument — that a breach here is a denial of service rather than a
+   theft — stops being true.
+2. **Do the fetch without the key.** Then it returns ciphertext the caller must
+   decrypt anyway, and the endpoint has added a hop and nothing else.
+
+The lookup endpoint returns the URL and warns never to send the fragment
+anywhere. That is the whole of what a courier can honestly do here, and the
+claim stays where the key is.
+
+*Note the shape of this: the client-side-only claim is not an inconvenience
+routed around, it is the design working. Anything that made claiming
+couriereable would have made the cashback claimable by us.*
 
 ## What it took
 

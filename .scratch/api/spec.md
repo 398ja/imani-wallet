@@ -166,6 +166,12 @@ removed, or it is only asserting that two functions agree about nothing.
 
 ## Out of Scope
 
+- **Claiming a cashback code.** Decided during ticket 08, not deferred. The
+  claim URL carries its decryption key in the URL *fragment*, so an endpoint
+  would have to either be given that key — making this service able to claim
+  anyone's cashback, which is the custody ADR 0001 refuses — or return
+  ciphertext the caller must decrypt anyway. The claim stays with the key.
+
 - **Backup, restore, and security.** They handle key material. An endpoint that
   emits or ingests it undoes ADR 0001 outright.
 - **Settings, profile editing, onboarding, welcome, scan.** Presentation and
