@@ -1,3 +1,5 @@
+import { checkCeiling, type PriorRedemption, type RedemptionCheck } from '@imani/redemption'
+
 import { listTransactions } from './wallet'
 import { toTransaction } from './transactions'
 
@@ -24,17 +26,13 @@ import { toTransaction } from './transactions'
  * trip at the slowest possible moment.
  */
 
-export interface RedemptionCheck {
-  /** False when crediting `requested` would take the voucher past what was issued. */
-  allowed: boolean
-  /** Sum of prior redemptions against this voucher on this device. */
-  alreadyRedeemed: number
-  requested: number
-  /** The issuer-signed ceiling. */
-  signedFaceValue: number
-  /** What remains creditable. Never negative. */
-  remaining: number
-}
+/**
+ * Re-exported rather than redeclared.
+ *
+ * The shape now lives in `@imani/redemption`, so the till and the wallet API
+ * cannot drift into two different answers about the same voucher.
+ */
+export type { RedemptionCheck } from '@imani/redemption'
 
 /**
  * Sums prior redemptions of one voucher, in face minor units.
@@ -81,17 +79,33 @@ export async function checkRedemption(input: {
 }): Promise<RedemptionCheck> {
   const { voucherId, requested, signedFaceValue, excludeTransactionId } = input
 
-  const alreadyRedeemed = await redeemedTotal(voucherId, { excludeTransactionId })
-  const remaining = Math.max(0, signedFaceValue - alreadyRedeemed)
-
-  return {
-    // A voucher with no signed face value (faceValue 0 — legacy derive-only
-    // tokens store nothing) has no ceiling to enforce, so this cannot refuse it.
-    // Saying so plainly beats inventing a bound and refusing honest coupons.
-    allowed: signedFaceValue <= 0 || alreadyRedeemed + requested <= signedFaceValue,
-    alreadyRedeemed,
-    requested,
+  // Reads the rows, then hands the ARITHMETIC to the shared package. This
+  // module keeps the part that is genuinely local — which rows count, and how
+  // direction is derived — and owns no bound of its own, so a till and the
+  // wallet API cannot enforce different ceilings on the same voucher.
+  return checkCeiling({
     signedFaceValue,
-    remaining,
-  }
+    requested,
+    priorRedemptions: await priorRedemptionsOf(voucherId, { excludeTransactionId }),
+  })
+}
+
+/**
+ * The rows for one voucher, in the shape the ceiling takes.
+ *
+ * Direction comes through `toTransaction` rather than off the row, because the
+ * stored rows disagree with themselves about it — a merchant's own `issued`
+ * row would otherwise read as incoming and consume the whole ceiling.
+ */
+async function priorRedemptionsOf(
+  voucherId: string,
+  { excludeTransactionId }: { excludeTransactionId?: string } = {},
+): Promise<PriorRedemption[]> {
+  if (!voucherId) return []
+
+  const rows = await listTransactions()
+  return rows
+    .map(toTransaction)
+    .filter((tx) => tx.voucherId === voucherId && tx.id !== excludeTransactionId)
+    .map((tx) => ({ amount: tx.amount, direction: tx.direction === 'in' ? 'in' : 'out' }))
 }
