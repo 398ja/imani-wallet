@@ -146,13 +146,20 @@ const HEX64 = /^[0-9a-f]{64}$/i
  *    anyone else grants nothing however well-formed it is, which is the check
  *    that stops a terminal minting its own authority.
  *
+ * The issuer here is the voucher's `issuerId`, NOT its `issuerPublicKey`.
+ * Minting one against the live gateway is what showed the difference:
+ * `issuerPublicKey` is the GATEWAY's signing key, the same for every voucher it
+ * mints, so comparing the stall against it refuses every real credential ever
+ * issued. `issuerId` is the stall, and it is inside the bytes the gateway
+ * signs, so it is just as trustworthy and is actually the claim we mean.
+ *
  * Permissions are derived here from the role and stall, never read from the
  * wire, so a credential cannot claim more than its role allows.
  */
 export function credentialActor(
   metadata: TerminalMetadata,
   devicePubkey: string,
-  { issuerPubkey }: { issuerPubkey: string },
+  { issuerId }: { issuerId: string },
 ): {
   kind: 'terminal'
   stallPubkey: string
@@ -171,7 +178,7 @@ export function credentialActor(
   // the stall the credential already names, so the extra check could be deleted
   // with no test noticing. A parameter that cannot disagree with the data is
   // not defence in depth, it is a second thing to keep in sync.
-  if (issuerPubkey.toLowerCase() !== metadata.stall_pubkey) return null
+  if (issuerId.toLowerCase() !== metadata.stall_pubkey) return null
 
   return {
     kind: 'terminal',
