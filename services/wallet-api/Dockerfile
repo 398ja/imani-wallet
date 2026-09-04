@@ -58,6 +58,53 @@ COPY services/wallet-api ./services/wallet-api
 # implementations of what a spend costs is a bug no test can catch.
 COPY packages/wallet-core ./node_modules/@imani/wallet-core
 
+# The other packages the service imports, for the same reason: one
+# implementation, shared with the app.
+#
+# These were MISSING while the service imported them. The image built green —
+# the guards below scan whatever is present, and absent packages are trivially
+# clean — then died at boot on `Cannot find module '@imani/reports'`. A build
+# that passes and an image that cannot start is the worst pair, so the list is
+# checked against the service's actual imports immediately after.
+COPY packages/redemption ./node_modules/@imani/redemption
+COPY packages/reports ./node_modules/@imani/reports
+COPY packages/payment-requests ./node_modules/@imani/payment-requests
+COPY packages/licence ./node_modules/@imani/licence
+COPY packages/wallet-storage ./node_modules/@imani/wallet-storage
+
+# Derive the requirement from the source instead of trusting the list above to
+# stay current. Every `@imani/*` the service imports must now exist in the
+# image, so adding an import without a COPY fails the BUILD rather than the
+# container's first request. Verified by deleting a COPY line: red.
+#
+# `{ ...; exit 1; }` and NOT `( ...; exit 1 )`. The parenthesised form is a
+# SUBSHELL, so inside this loop `exit 1` only left the subshell: the build
+# printed "FAIL: @imani/reports ..." and then exited 0 anyway, shipping the
+# broken image the guard exists to stop. The mutation is what exposed it —
+# grepping for the FAIL line alone would have called the fake guard green.
+RUN for p in $(grep -rhoE "@imani/[a-z-]+" services/wallet-api/*.ts | sort -u); do \
+      test -d "node_modules/$p" \
+        || { echo "FAIL: $p imported by wallet-api but not copied into the image"; exit 1; }; \
+    done
+
+# `licence.ts` and `redeem.ts` read vouchers through `src/lib/voucherToken.ts`,
+# reaching outside the service tree. Copied at its ORIGINAL path so the
+# relative import resolves unchanged.
+#
+# This single file only, not `src/lib`, which is full of wallet code that can
+# sign. It imports `schnorr` to VERIFY, never to sign, so it survives the
+# signing guard below on its merits — that guard matches `schnorr.sign`, and
+# the distinction is the whole reason it was written that way.
+COPY src/lib/voucherToken.ts ./src/lib/voucherToken.ts
+
+# Same reasoning as the `@imani/*` check: derive it from the source. Any new
+# reach into `src/lib` must be copied, or the build stops rather than the
+# container dying on its first redeem.
+RUN for f in $(grep -rhoE "\.\./\.\./src/lib/[a-zA-Z]+\.js" services/wallet-api/*.ts | sort -u); do \
+      t="src/lib/$(basename "$f" .js).ts"; \
+      test -f "$t" || { echo "FAIL: $t imported by wallet-api but not copied into the image"; exit 1; }; \
+    done
+
 # `@imani/voucher-send` is imported by wallet-core for its `Voucher` TYPE only,
 # and types are erased, so the package is not needed at runtime. Asserted here
 # rather than assumed: if a value import ever appears, the container fails to
