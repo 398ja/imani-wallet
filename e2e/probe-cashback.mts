@@ -112,27 +112,31 @@ check(
 )
 if (generated.status === 403) {
   /**
-   * Expected today, and the reason is upstream rather than here.
+   * This used to be the expected outcome, and it is now a real failure.
    *
-   * `Nip98AuthFilter` grants exactly one authority — `ROLE_NOSTR_USER` — and
-   * never `coupon:issue`. That permission is granted only by
-   * `NapProxyAuthFilter`, from a NAP session forwarded by the edge proxy. So a
-   * NIP-98 caller can authenticate perfectly and can never satisfy
-   * `@PreAuthorize(MERCHANT_ONLY)`, whatever key it holds.
+   * `Nip98AuthFilter` granted exactly one authority, `ROLE_NOSTR_USER`, and
+   * never `coupon:issue` — that came only from `NapProxyAuthFilter` and a NAP
+   * session — so a NIP-98 caller could authenticate perfectly and never
+   * satisfy `@PreAuthorize(MERCHANT_ONLY)`. imani-security #7 added a
+   * permission resolver, gateway-core exposes
+   * `/internal/v1/merchants/{pubkey}/permissions`, and gateway-portal now asks
+   * it. A signed merchant gets `coupon:issue`.
    *
-   * The endpoints here are complete and correct. What is missing is one line
-   * upstream: NIP-98 authentication has to carry the caller's merchant
-   * permissions, the way the NAP path already does.
+   * So a 403 here means something is BROKEN rather than unbuilt. In order of
+   * likelihood:
    *
-   * Reported as a SKIP with the reason rather than a failure, because nothing
-   * in this repo can fix it and a red probe would read as our defect.
+   *   - the merchant has no open stall. Merchant status comes from a kind-30078
+   *     `d=imani:merchant` record with `{"active":true}`; publishing one is what
+   *     makes someone a merchant. Run `node scripts/open-stall.mjs`.
+   *   - the portal cannot reach gateway-core, or its service token is missing.
+   *     It fails CLOSED, so that looks exactly like "not a merchant". Check the
+   *     portal log for `merchant_permissions_lookup_failed`.
+   *   - the resolver's 60s cache still holds a pre-stall answer. Wait, or
+   *     restart the portal.
    */
-  console.log('\n  SKIP  the write path stops at authorisation, not authentication.')
-  console.log('        Nip98AuthFilter grants only ROLE_NOSTR_USER; coupon:issue')
-  console.log('        comes from NapProxyAuthFilter (the NAP session path).')
-  console.log('        So NIP-98 can never satisfy @PreAuthorize(MERCHANT_ONLY)')
-  console.log('        until that filter carries merchant permissions too.')
-  console.log('        The read paths below still exercise the courier.')
+  check('and generates the cashback', false,
+    `HTTP 403 — a signed merchant should now hold coupon:issue. ` +
+    `Check: stall published? gateway-core reachable? service token set?`)
 } else {
   check('and generates the cashback', generated.status < 400, `HTTP ${generated.status} ${generated.text.slice(0, 140)}`)
 }
@@ -194,7 +198,7 @@ check('an unknown code is 404 not_found', unknown.status === 404 && unknownBody.
 // spent code from a lapsed one. Not reachable here without generating and
 // consuming a code, which needs the write path.
 console.log('  INFO  claimed / expired / revoked arrive as 410 with a `code`;')
-console.log('        reaching them needs the write path (see the SKIP above).')
+console.log("        reaching them needs a code generated first.")
 
 console.log(failures === 0 ? '\nAll checks passed.' : `\n${failures} check(s) failed.`)
 process.exit(failures === 0 ? 0 : 1)
