@@ -66,13 +66,64 @@ gate every other merchant surface sits behind.
 | look up by code | `GET /v1/cashback/{code}` | plan (public read) |
 | claim | `POST /v1/cashback/claim` | courier |
 
-**Blocked by:** 03 (shares the courier plumbing), and a portal image that
-includes `PortalCashbackController`
+**Status:** built; the write path needs one thing upstream
 
-**Status:** ready once deployed
+- [x] A code can be generated and looked up by a caller holding only a key. **Claiming is not an endpoint** — see below.
+- [x] The public read paths stay public — a customer redeeming a code holds no key of ours.
+- [x] A probe runs against the live portal: the courier is exercised and the auth model confirmed.
+- [ ] **Blocked upstream:** the write path stops at AUTHORISATION. `Nip98AuthFilter` grants only `ROLE_NOSTR_USER` and never `coupon:issue`, which comes solely from `NapProxyAuthFilter` (the NAP session path). So a NIP-98 caller authenticates perfectly and can never satisfy `@PreAuthorize(MERCHANT_ONLY)`, whatever key it holds.
+- [ ] A claimed code cannot be claimed twice — not verifiable until the write path lands.
+- [ ] An unknown or expired code is refused distinguishably — same.
 
-- [ ] A code can be generated, looked up, and claimed by a caller holding only a key.
-- [ ] A claimed code cannot be claimed twice.
-- [ ] An unknown or expired code is refused with a reason that distinguishes the two.
-- [ ] The public read paths stay public — a customer redeeming a code holds no key of ours.
-- [ ] A probe runs generate → look up → claim against the live service.
+## What it took
+
+Two endpoints. `/v1/cashback/generate` is a courier to the portal;
+`/v1/cashback/lookup` returns a URL with **no signature to make**, because the
+portal exempts `/by-code/` and `/public/` from NIP-98 on purpose: a customer
+redeeming a code off a printed receipt holds no key of ours.
+
+**There is no claim endpoint, and that is a finding rather than a gap.** The
+ticket asked for one. Looking a code up returns a `claimUrl` of the form
+`https://<host>/c/<ref>#k=<43-char base64url>`, and the key is in the URL
+**fragment** — which a browser never transmits. The customer's wallet fetches
+the ciphertext and decrypts it locally. A claim endpoint would have to be given
+that key, which would make this service able to claim anyone's cashback: exactly
+the custody ADR 0001 refuses. The lookup response says so, including a warning
+never to send the fragment anywhere.
+
+Most of the parsing exists to refuse what the portal answers badly. Its
+`idempotencyKey` is a `java.util.UUID`, and anything else returns a 500 with a
+stack trace about string length from a host the caller never addressed. The key
+is required rather than generated: one this service invented would differ on
+every retry, which is the opposite of what it is for.
+
+## The upstream gap, stated precisely
+
+`Nip98AuthFilter` sets exactly one authority:
+
+```java
+List<SimpleGrantedAuthority> authorities = List.of(
+        new SimpleGrantedAuthority("ROLE_NOSTR_USER")
+);
+```
+
+`coupon:issue` is granted only by `NapProxyAuthFilter`, which reads permissions
+from a NAP session forwarded by the edge proxy. So this is not about which key
+probes it — **no** NIP-98 caller can pass `MERCHANT_ONLY` today.
+
+That is one change in `imani-security`: NIP-98 authentication should carry the
+caller's merchant permissions the way the NAP path already does. The endpoints
+here are complete and will work unchanged once it does.
+
+## Evidence
+
+18 tests and a 10-check probe against the live portal (built from source, since
+the deployed image predates the controller).
+
+The probe's decisive arm: a signed request with **no API key** reaches the portal
+and is answered — `403 Insufficient permissions`, not `401 API key required`.
+That is authentication succeeding and authorisation refusing, which are
+different problems with different owners.
+
+The 403 is reported as a labelled SKIP rather than a failure, because nothing in
+this repo can fix it and a red probe would read as our defect.
