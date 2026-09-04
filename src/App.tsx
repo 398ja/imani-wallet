@@ -273,7 +273,11 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           path="/"
           element={
             trading ? (
-              <MerchantHomePage actor={terminal.actor ?? undefined} session={terminal.session} />
+              <MerchantHomePage
+                actor={terminal.actor ?? undefined}
+                session={terminal.session}
+                refusal={terminal.refusal}
+              />
             ) : (
               <MerchantsPage />
             )
