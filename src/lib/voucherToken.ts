@@ -262,6 +262,27 @@ function voucherBlobHex(secret: string): string | null {
   return null
 }
 
+/**
+ * The NUT-10 secret of every proof in a TokenV4.
+ *
+ * Exported for the live-mint probe that checks NUT-07 does not SPEND a
+ * credential when it merely reads its state. That probe needs each proof's
+ * secret to compute its `Y`, and re-implementing the CBOR reader to get them
+ * would mean the probe checked a different decode from the one the app uses —
+ * which is precisely the substitution these probes exist to avoid.
+ */
+export function proofSecrets(token: string): string[] {
+  if (!token?.startsWith('cashuB')) throw new Error('not a TokenV4 (cashuB) token')
+  const root = decodeCbor(base64UrlDecode(token.slice(6))) as Record<string, unknown>
+  const entries = (root.t ?? []) as Array<Record<string, unknown>>
+  return entries
+    .flatMap((e) => (e.p ?? []) as Array<Record<string, unknown>>)
+    .map((p) => {
+      if (typeof p.s !== 'string') throw new Error('proof has no NUT-10 secret')
+      return p.s
+    })
+}
+
 export function parseVoucherToken(token: string): ParsedVoucherToken {
   if (!token?.startsWith('cashuB')) {
     throw new Error('not a TokenV4 (cashuB) token')
