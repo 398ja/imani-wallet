@@ -272,15 +272,51 @@ function voucherBlobHex(secret: string): string | null {
  * which is precisely the substitution these probes exist to avoid.
  */
 export function proofSecrets(token: string): string[] {
+  return tokenProofs(token).map((p) => p.secret)
+}
+
+/** One proof, in the shape the mint's /v1/swap expects. */
+export interface TokenProof {
+  amount: number
+  /** Keyset id, hex. */
+  id: string
+  /** The NUT-10 secret, verbatim. */
+  secret: string
+  /** The unblinded signature, hex. */
+  C: string
+}
+
+/**
+ * Every proof in a TokenV4, decoded with the app's own reader.
+ *
+ * Exported for the live-mint probes. They need whole proofs rather than just
+ * secrets — presenting one for a spend is the only way to observe the mint
+ * ENFORCING a lock rather than merely accepting it — and re-implementing the
+ * CBOR reader would mean the probe checked a different decode from the one the
+ * app uses, which is exactly the substitution these probes exist to avoid.
+ */
+export function tokenProofs(token: string): TokenProof[] {
   if (!token?.startsWith('cashuB')) throw new Error('not a TokenV4 (cashuB) token')
   const root = decodeCbor(base64UrlDecode(token.slice(6))) as Record<string, unknown>
   const entries = (root.t ?? []) as Array<Record<string, unknown>>
-  return entries
-    .flatMap((e) => (e.p ?? []) as Array<Record<string, unknown>>)
-    .map((p) => {
+
+  return entries.flatMap((entry) => {
+    // The keyset id lives on the ENTRY, not the proof: TokenV4 groups proofs by
+    // keyset precisely so it is stored once.
+    const keysetId = entry.i
+    const id = keysetId instanceof Uint8Array ? bytesToHex(keysetId) : String(keysetId ?? '')
+
+    return ((entry.p ?? []) as Array<Record<string, unknown>>).map((p) => {
       if (typeof p.s !== 'string') throw new Error('proof has no NUT-10 secret')
-      return p.s
+      const c = p.c
+      return {
+        amount: Number(p.a ?? 0),
+        id,
+        secret: p.s,
+        C: c instanceof Uint8Array ? bytesToHex(c) : String(c ?? ''),
+      }
     })
+  })
 }
 
 export function parseVoucherToken(token: string): ParsedVoucherToken {
