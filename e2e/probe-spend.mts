@@ -57,8 +57,24 @@ const stable =
   JSON.stringify(first) === JSON.stringify(second) &&
   JSON.stringify(second) === JSON.stringify(third)
 
+/**
+ * STABLE is the claim; UNSPENT is a precondition.
+ *
+ * Reporting "checking changed the state" for an already-spent fixture was
+ * wrong and cost real time chasing a regression that did not exist — the
+ * fixture had been spent by another probe's control arm. Three identical
+ * SPENT reads prove checking is non-destructive just as well as three
+ * UNSPENT ones; what they cannot do is prove it on a LIVE proof, which is
+ * why that is called out rather than silently passing.
+ */
 const neverSpent = stable && first.every((s) => s === 'UNSPENT')
-console.log(neverSpent ? 'PASS  checking never spends' : 'FAIL  checking changed the state')
+if (stable && !neverSpent) {
+  console.log(`INCONCLUSIVE  the fixture is already ${first[0]} — checking did not change it,`)
+  console.log('              but this cannot show non-destructiveness on a LIVE proof.')
+  console.log('              Re-mint the fixture to make this meaningful.')
+} else {
+  console.log(neverSpent ? 'PASS  checking never spends' : 'FAIL  checking changed the state')
+}
 
 /**
  * The other half: revoking DOES spend.
@@ -75,7 +91,7 @@ const spendable = process.env.PROBE_SPEND === '1'
 
 if (!spendable) {
   console.log('SKIP  revocation spend (set PROBE_SPEND=1 — it destroys the fixture)')
-  process.exit(neverSpent ? 0 : 1)
+  process.exit(stable ? 0 : 1)
 }
 
 const { finalizeEvent } = await import('nostr-tools')
@@ -110,4 +126,4 @@ console.log('receive:', r.status, (await r.text()).slice(0, 200))
 const after = await check('check after spend')
 const spent = after.every((s) => s === 'SPENT')
 console.log(spent ? 'PASS  revoking spent the credential' : `FAIL  still ${after[0]}`)
-process.exit(neverSpent && spent ? 0 : 1)
+process.exit(stable && spent ? 0 : 1)

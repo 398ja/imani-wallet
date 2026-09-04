@@ -199,6 +199,27 @@ export interface SignedVoucherFields {
   nonce: string
   issuerSignature: string
   issuerPublicKey: string
+  /**
+   * The key a spender must produce a witness signature for, hex, on a
+   * `P2PK_VOUCHER`. Absent on the plain `VOUCHER` kind, which is unlocked.
+   *
+   * Presence of this is the ONLY honest way to tell the two apart. A plain
+   * voucher that merely names a holder in its metadata is not locked: the mint
+   * dispatches it to the voucher condition, never looks for a witness, and a
+   * thief holding the proof can spend it (ADR 0008).
+   */
+  lockKey?: string
+  /**
+   * The canonical bytes exactly as they arrived, when the secret carried its
+   * own tags.
+   *
+   * A `P2PK_VOUCHER` puts its voucher fields in NUT-10 TAGS on the wire, where
+   * the plain kind puts them in a CBOR blob with an empty tag array. For the
+   * blob form the tags must be REBUILT to check the signature; for this form
+   * rebuilding them would be a guess at the issuer's tag order, and tag order is
+   * hashed. Verify over what was actually signed instead.
+   */
+  canonicalWire?: Uint8Array
 }
 
 export interface ParsedVoucherToken {
@@ -244,6 +265,15 @@ export interface ParsedVoucherToken {
  * Returns null when the secret is not a VOUCHER secret at all, which is a real
  * and expected case (plain ecash) rather than an error.
  */
+/**
+ * The NUT-10 kinds that carry voucher metadata.
+ *
+ * Mirrors `VoucherCanonicalBytes.requireVoucherCarryingKind`. `P2PK_VOUCHER` is
+ * a voucher that is ALSO P2PK-locked; it is a sibling of `VOUCHER` rather than a
+ * subclass, on both sides, so every reader has to name both explicitly.
+ */
+const VOUCHER_KINDS = ['VOUCHER', 'P2PK_VOUCHER']
+
 function voucherBlobHex(secret: string): string | null {
   let parsed: unknown
   try {
@@ -251,7 +281,7 @@ function voucherBlobHex(secret: string): string | null {
   } catch {
     return null
   }
-  if (!Array.isArray(parsed) || parsed[0] !== 'VOUCHER') return null
+  if (!Array.isArray(parsed) || !VOUCHER_KINDS.includes(parsed[0])) return null
 
   const second = parsed[1]
   if (typeof second === 'string') return second
@@ -272,15 +302,51 @@ function voucherBlobHex(secret: string): string | null {
  * which is precisely the substitution these probes exist to avoid.
  */
 export function proofSecrets(token: string): string[] {
+  return tokenProofs(token).map((p) => p.secret)
+}
+
+/** One proof, in the shape the mint's /v1/swap expects. */
+export interface TokenProof {
+  amount: number
+  /** Keyset id, hex. */
+  id: string
+  /** The NUT-10 secret, verbatim. */
+  secret: string
+  /** The unblinded signature, hex. */
+  C: string
+}
+
+/**
+ * Every proof in a TokenV4, decoded with the app's own reader.
+ *
+ * Exported for the live-mint probes. They need whole proofs rather than just
+ * secrets — presenting one for a spend is the only way to observe the mint
+ * ENFORCING a lock rather than merely accepting it — and re-implementing the
+ * CBOR reader would mean the probe checked a different decode from the one the
+ * app uses, which is exactly the substitution these probes exist to avoid.
+ */
+export function tokenProofs(token: string): TokenProof[] {
   if (!token?.startsWith('cashuB')) throw new Error('not a TokenV4 (cashuB) token')
   const root = decodeCbor(base64UrlDecode(token.slice(6))) as Record<string, unknown>
   const entries = (root.t ?? []) as Array<Record<string, unknown>>
-  return entries
-    .flatMap((e) => (e.p ?? []) as Array<Record<string, unknown>>)
-    .map((p) => {
+
+  return entries.flatMap((entry) => {
+    // The keyset id lives on the ENTRY, not the proof: TokenV4 groups proofs by
+    // keyset precisely so it is stored once.
+    const keysetId = entry.i
+    const id = keysetId instanceof Uint8Array ? bytesToHex(keysetId) : String(keysetId ?? '')
+
+    return ((entry.p ?? []) as Array<Record<string, unknown>>).map((p) => {
       if (typeof p.s !== 'string') throw new Error('proof has no NUT-10 secret')
-      return p.s
+      const c = p.c
+      return {
+        amount: Number(p.a ?? 0),
+        id,
+        secret: p.s,
+        C: c instanceof Uint8Array ? bytesToHex(c) : String(c ?? ''),
+      }
     })
+  })
 }
 
 export function parseVoucherToken(token: string): ParsedVoucherToken {
@@ -296,13 +362,24 @@ export function parseVoucherToken(token: string): ParsedVoucherToken {
   const secret = proofs[0].s
   if (typeof secret !== 'string') throw new Error('proof has no NUT-10 secret')
 
-  const dataHex = voucherBlobHex(secret)
-  if (dataHex === null) {
-    throw new Error('token is not a voucher (NUT-10 kind is not VOUCHER)')
+  /**
+   * The locked kind is read from its TAGS; the plain kind from its CBOR blob.
+   *
+   * Terminal credentials are now issued as `P2PK_VOUCHER` (ADR 0008), and this
+   * function threw "token is not a voucher" on every one of them — the wallet
+   * could not read a credential the gateway had just minted. The two shapes are
+   * genuinely different on the wire, not merely tagged differently: the locked
+   * kind's `data` field is the LOCK KEY, so there is no blob to decode.
+   */
+  const locked = lockedVoucherFrom(secret)
+  const dataHex = locked ? null : voucherBlobHex(secret)
+  if (locked === null && dataHex === null) {
+    throw new Error('token is not a voucher (NUT-10 kind is not VOUCHER or P2PK_VOUCHER)')
   }
 
-  const blob = decodeCbor(hexToBytes(dataHex)) as Record<string, unknown>
-  const voucher = readVoucherFields(blob)
+  const voucher = locked
+    ? locked
+    : readVoucherFields(decodeCbor(hexToBytes(dataHex!)) as Record<string, unknown>)
 
   // Every proof must carry the same voucher. A bundle mixing provenance would
   // otherwise be summed under one voucher's ratio, which is the shape of an
@@ -315,6 +392,23 @@ export function parseVoucherToken(token: string): ParsedVoucherToken {
   // the blob — the signed voucher — is shared.
   for (const p of proofs) {
     if (typeof p.s !== 'string') throw new Error('proof has no NUT-10 secret')
+    if (locked) {
+      // Locked proofs share no blob — each carries its own tags and its own
+      // wrapper nonce. `voucher_id` is what identifies the voucher they came
+      // from, and mixing two vouchers in one token is the inflation shape this
+      // check exists to refuse, so it still has to be refused here.
+      const other = lockedVoucherFrom(p.s)
+      if (other === null) throw new Error('proof secret is not a NUT-10 secret')
+      if (other.voucherId !== locked.voucherId) {
+        throw new Error('token mixes proofs from more than one voucher')
+      }
+      if (other.lockKey !== locked.lockKey) {
+        // Two locks in one token would mean part of it is spendable by a
+        // different holder than the rest.
+        throw new Error('token mixes proofs locked to more than one key')
+      }
+      continue
+    }
     // Through the same reader as above, so a bundle whose proofs use the object
     // form is compared on its blobs rather than rejected outright.
     const otherHex = voucherBlobHex(p.s)
@@ -330,6 +424,99 @@ export function parseVoucherToken(token: string): ParsedVoucherToken {
     proofCount: proofs.length,
     voucher,
   }
+}
+
+/**
+ * A `P2PK_VOUCHER` secret → the voucher inside it, or null for any other kind.
+ *
+ * The locked kind's NUT-10 second element is `{nonce, data, tags}` where `data`
+ * is the 33-byte compressed LOCK KEY and every voucher field is a tag. That is
+ * the mint's own layout: the P2PK condition needs `data` to be the spending key
+ * it checks a witness against, so the voucher metadata had nowhere to go but
+ * the tags.
+ *
+ * Captures `canonicalWire` while it is here. The tags are rendered back to the
+ * exact string the issuer signed, in the order they ARRIVED — reconstructing a
+ * plausible order would be a guess, and these bytes are hashed, so a guess that
+ * is one tag out of order fails every signature on a perfectly good voucher.
+ */
+function lockedVoucherFrom(secret: string): SignedVoucherFields | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(secret)
+  } catch {
+    return null
+  }
+  if (!Array.isArray(parsed) || parsed[0] !== 'P2PK_VOUCHER') return null
+
+  const body = parsed[1]
+  if (!body || typeof body !== 'object') return null
+  const { nonce, data, tags } = body as { nonce?: unknown; data?: unknown; tags?: unknown }
+  if (typeof data !== 'string' || !Array.isArray(tags)) return null
+
+  const rows = tags.filter((t): t is unknown[] => Array.isArray(t) && typeof t[0] === 'string')
+  const tag = (k: string): string | undefined => {
+    const row = rows.find((r) => r[0] === k)
+    return row && row[1] != null ? String(row[1]) : undefined
+  }
+  const required = (k: string): string => {
+    const v = tag(k)
+    if (!v) throw new Error(`locked voucher is missing ${k}`)
+    return v
+  }
+  const num = (k: string, fallback: number): number => {
+    const v = tag(k)
+    return v == null ? fallback : Number(v)
+  }
+
+  return {
+    voucherId: required('voucher_id'),
+    issuerId: required('issuer'),
+    unit: required('unit'),
+    faceValue: num('face_value', 0),
+    expiresAt: tag('expires_at') == null ? undefined : Number(tag('expires_at')),
+    memo: tag('memo'),
+    backingStrategy: tag('backing_strategy'),
+    issuanceRatio: num('issuance_ratio', 1),
+    faceDecimals: num('face_decimals', 0),
+    merchantMetadata: tag('merchant_metadata') ?? null,
+    nonce: typeof nonce === 'string' ? nonce : '',
+    issuerSignature: required('issuer_sig'),
+    issuerPublicKey: required('issuer_pubkey'),
+    lockKey: data,
+    canonicalWire: lockedCanonicalBytes(data, typeof nonce === 'string' ? nonce : '', rows),
+  }
+}
+
+/**
+ * The signed bytes of a locked voucher, rebuilt from the tags AS THEY ARRIVED.
+ *
+ * Mirrors `VoucherCanonicalBytes.of`: `[kind,"data","nonce",[tags…]]`, dropping
+ * `issuer_sig` and `issuer_pubkey` (set after signing, so they cannot be under
+ * the signature), rendering the four numeric tags bare and everything else
+ * quoted.
+ */
+function lockedCanonicalBytes(dataHex: string, nonce: string, rows: unknown[][]): Uint8Array {
+  const NUMERIC = ['face_value', 'expires_at', 'face_decimals', 'issuance_ratio']
+  const AFTER_SIGNING = ['issuer_sig', 'issuer_pubkey']
+
+  const rendered = rows
+    .filter((r) => !AFTER_SIGNING.includes(String(r[0])))
+    .map((r) => {
+      const key = String(r[0])
+      const values = r.slice(1).map((v) => {
+        const raw = String(v)
+        // Integral values render as longs, exactly as the Java does, so 1.0 and
+        // 1 produce identical bytes rather than two valid forms.
+        if (NUMERIC.includes(key)) return appendNumber(Number(raw), false)
+        return `"${escapeJson(raw)}"`
+      })
+      return `["${escapeJson(key)}"${values.map((v) => ',' + v).join('')}]`
+    })
+
+  return new TextEncoder().encode(
+    `["P2PK_VOUCHER","${dataHex}","${nonce}",[${rendered.join(',')}]]`,
+  )
 }
 
 function readVoucherFields(blob: Record<string, unknown>): SignedVoucherFields {
@@ -508,6 +695,14 @@ export function verifyVoucher(v: SignedVoucherFields): VoucherVerification {
     const pub = hexToBytes(v.issuerPublicKey)
     if (sig.length !== 64 || pub.length !== 32) {
       return { signatureValid: false, legacyCanonical: false }
+    }
+    // A locked voucher is verified over the bytes that ARRIVED, because its
+    // tags are on the wire and their order is part of what was hashed.
+    if (v.canonicalWire) {
+      return {
+        signatureValid: schnorr.verify(sig, sha256(v.canonicalWire), pub),
+        legacyCanonical: false,
+      }
     }
     if (schnorr.verify(sig, sha256(voucherCanonicalBytes(v, false)), pub)) {
       return { signatureValid: true, legacyCanonical: false }
