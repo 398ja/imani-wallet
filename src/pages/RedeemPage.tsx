@@ -6,6 +6,7 @@ import QRCode from 'qrcode'
 import { Button, Screen, BackLink, PageHeader, Alert, Panel, Input } from '../components/ui'
 import { currencyDecimals, formatFace, parseAmountToMinor, formatDate } from '../lib/format'
 import type { MerchantProfile } from '../lib/merchant'
+import type { Actor } from '../lib/actor'
 import {
   createRequest,
   expireRequests,
@@ -31,7 +32,23 @@ import { onWalletChanged } from '../lib/wallet'
  * `/merchant/payment-requests/check` every 30s, but that endpoint does not exist
  * on this stack; see lib/vreq.ts.
  */
-export function RedeemPage({ pubkey, merchant }: { pubkey: string; merchant: MerchantProfile }) {
+export function RedeemPage({
+  pubkey,
+  merchant,
+  actor,
+}: {
+  pubkey: string
+  merchant: MerchantProfile
+  /**
+   * The terminal taking payment, if this device is one.
+   *
+   * Absent on the stall's own device. This screen used to BUILD an owner actor
+   * unconditionally, which on a terminal names the wrong recipient — and the
+   * comment below already says what that costs: money arriving somewhere
+   * nobody can decrypt it.
+   */
+  actor?: Actor
+}) {
   const navigate = useNavigate()
   const [request, setRequest] = useState<VoucherPaymentRequest | null>(null)
 
@@ -41,7 +58,12 @@ export function RedeemPage({ pubkey, merchant }: { pubkey: string; merchant: Mer
       <PageHeader title="Redeem" subtitle={request ? undefined : 'What does the customer owe?'} />
 
       {request === null ? (
-        <RequestForm merchant={merchant} issuerPubkey={pubkey} onCreated={setRequest} />
+        <RequestForm
+          merchant={merchant}
+          issuerPubkey={pubkey}
+          actor={actor}
+          onCreated={setRequest}
+        />
       ) : (
         <RequestDisplay
           pubkey={pubkey}
@@ -58,10 +80,12 @@ export function RedeemPage({ pubkey, merchant }: { pubkey: string; merchant: Mer
 function RequestForm({
   merchant,
   issuerPubkey,
+  actor,
   onCreated,
 }: {
   merchant: MerchantProfile
   issuerPubkey: string
+  actor?: Actor
   onCreated: (request: VoucherPaymentRequest) => void
 }) {
   const [amount, setAmount] = useState('')
@@ -85,7 +109,7 @@ function RequestForm({
         // signed in. On this device they are the same key; on a terminal they
         // are not, and the difference is money arriving somewhere nobody can
         // decrypt it.
-        actor: { kind: 'owner', stallPubkey: issuerPubkey },
+        actor: actor ?? { kind: 'owner', stallPubkey: issuerPubkey },
         description: memo,
       })
       // Persisted before it is shown: a request the merchant is looking at but
