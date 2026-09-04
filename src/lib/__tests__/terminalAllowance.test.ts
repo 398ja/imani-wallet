@@ -245,3 +245,35 @@ describe('how many are left', () => {
     expect(remainingTerminals(status, 9)).toBe(0)
   })
 })
+
+describe('a count that makes no sense', () => {
+  /**
+   * `remainingTerminals` is shown to a merchant, and a number above the tier
+   * invites them to enrol a terminal that `mayEnrol` will then refuse.
+   *
+   * Found by probing rather than reading: a negative count reported MORE free
+   * terminals than exist, because `Math.max(0, ...)` clamped only the output.
+   */
+  it('never reports more free terminals than the tier has', async () => {
+    const status = await noLicence()
+    expect(remainingTerminals(status, -1)).toBeLessThanOrEqual(FREE_TERMINALS)
+    expect(remainingTerminals(status, -999)).toBeLessThanOrEqual(FREE_TERMINALS)
+  })
+
+  /**
+   * NaN propagated straight through, so a screen rendered the literal text
+   * "NaN". `mayEnrol` refuses NaN correctly, so this was never a way to enrol
+   * a second terminal — it was a way to be told something meaningless.
+   */
+  it('reports a real number when the count is unknown', async () => {
+    const status = await noLicence()
+    expect(Number.isFinite(remainingTerminals(status, NaN))).toBe(true)
+    expect(remainingTerminals(status, NaN)).toBe(0)
+  })
+
+  /** The gate itself still refuses, which is the property that matters. */
+  it('still refuses enrolment on a nonsense count', async () => {
+    const status = await noLicence()
+    expect(mayEnrol(status, NaN).allowed).toBe(false)
+  })
+})
