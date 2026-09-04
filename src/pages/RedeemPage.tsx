@@ -81,7 +81,11 @@ function RequestForm({
       const created = createRequest({
         amount: minor,
         unit: merchant.issuanceCurrency,
-        issuerPubkey,
+        // The ACTOR, so the recipient is the stall rather than whoever is
+        // signed in. On this device they are the same key; on a terminal they
+        // are not, and the difference is money arriving somewhere nobody can
+        // decrypt it.
+        actor: { kind: 'owner', stallPubkey: issuerPubkey },
         description: memo,
       })
       // Persisted before it is shown: a request the merchant is looking at but
