@@ -56,9 +56,25 @@ call `mayEnrol` at the point of enrolment, not use `remainingTerminals` to hide
 a button; the module's own doc comment says so, because hiding the button is
 exactly what this ticket refuses.
 
+## A bug found on re-check
+
+The first version told the two refusals apart with `status.licence != null`.
+That is wrong in the case that matters most: past the grace window with an
+unreadable store, the decision refuses with `grace-elapsed` and the licence is
+NULL because the voucher could not be read — so a PAYING customer whose storage
+failed was told to go and buy a subscription they already held.
+
+The refusal REASON distinguishes them, not the licence in hand: only `absent`
+and `never-verified` mean nobody ever subscribed. Fixed, with a test that fails
+against the old logic.
+
+The same re-check found that grace was never exercised here at all. It behaves
+correctly — a carried licence still allows enrolment, which is ADR 0007's
+fail-open — but it is now tested rather than assumed.
+
 ## Evidence
 
-10 tests, run against the REAL gateway-minted licence
+13 tests, run against the REAL gateway-minted licence
 (`fixtures/live-licence.token`) rather than a fixture this app signed for
 itself. Mutation controls bite: opening the gate unconditionally fails 4, and
 collapsing the two refusals into one fails 2.

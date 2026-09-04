@@ -157,6 +157,80 @@ describe('a stall whose subscription lapsed', () => {
   })
 })
 
+describe('when the device cannot read its own wallet', () => {
+  /** A store that will not open: an outage, not an answer. */
+  const unreadable = () => Promise.reject(new Error('storage unavailable'))
+
+  it('still allows enrolment while the grace window carries the licence', async () => {
+    // ADR 0007 fails OPEN here. Refusing a paying merchant a till because our
+    // storage hiccuped is the failure the window exists to prevent, and
+    // enrolment needs connectivity anyway — so if they got this far, let them.
+    forgetLicenceParses()
+    await withLicence(EXPIRES_AT - 300 * DAY)
+
+    const carried = await licenceStatus({
+      pubkey: CUSTOMER,
+      now: EXPIRES_AT - 300 * DAY + 3600,
+      issuerPublicKey: ISSUER,
+      loadRows: unreadable,
+    })
+
+    expect(carried.decision.granted).toBe(true)
+    expect(mayEnrol(carried, 3)).toEqual({ allowed: true })
+  })
+
+  it('does not tell a SUBSCRIBER to buy what they already own', async () => {
+    /**
+     * The bug this test was written for. Past the grace window with an
+     * unreadable store, the decision refuses with `grace-elapsed` and
+     * `status.licence` is NULL — the voucher could not be read. An earlier
+     * version keyed the two refusals on `status.licence != null`, so a paying
+     * customer whose storage failed was told to go and buy a subscription they
+     * already held, at the worst possible moment.
+     *
+     * The reason is what distinguishes them, not the licence in hand.
+     */
+    forgetLicenceParses()
+    forgetVerification(CUSTOMER)
+    await withLicence(EXPIRES_AT - 300 * DAY)
+
+    const lapsedOffline = await licenceStatus({
+      pubkey: CUSTOMER,
+      now: EXPIRES_AT - 300 * DAY + 5 * DAY,
+      issuerPublicKey: ISSUER,
+      loadRows: unreadable,
+    })
+
+    expect(lapsedOffline.decision.granted).toBe(false)
+    expect(lapsedOffline.licence).toBeNull()
+
+    const decision = mayEnrol(lapsedOffline, FREE_TERMINALS)
+    expect(decision.allowed).toBe(false)
+    if (!decision.allowed) {
+      expect(decision.reason).toBe(ENROL_REFUSAL.LAPSED)
+      expect(decision.message).toContain('Renewing')
+    }
+  })
+
+  it('still says "buy" to a device that has never held a licence', async () => {
+    // The other side of the same coin: nothing readable AND no history is a
+    // stall that never subscribed, and telling them to "renew" would be
+    // nonsense.
+    forgetVerification(CUSTOMER)
+
+    const neverAnything = await licenceStatus({
+      pubkey: CUSTOMER,
+      now: EXPIRES_AT - 300 * DAY,
+      issuerPublicKey: ISSUER,
+      loadRows: unreadable,
+    })
+
+    const decision = mayEnrol(neverAnything, FREE_TERMINALS)
+    expect(decision.allowed).toBe(false)
+    if (!decision.allowed) expect(decision.reason).toBe(ENROL_REFUSAL.AT_FREE_LIMIT)
+  })
+})
+
 describe('how many are left', () => {
   it('counts down to the free limit without a subscription', async () => {
     const status = await noLicence()

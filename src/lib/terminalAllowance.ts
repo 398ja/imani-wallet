@@ -1,3 +1,5 @@
+import { DENIAL_REASONS, GRACE_REASONS } from '@imani/licence'
+
 import { LICENCE_FEATURES } from './licenceIssue'
 import { grants, type LicenceStatus } from './licenceStatus'
 
@@ -91,24 +93,48 @@ export function mayEnrol(status: LicenceStatus, enrolledCount: number): EnrolDec
   // No subscription now. WAS there one? A stall that has held a licence and let
   // it lapse gets a different sentence from one that never subscribed, because
   // renewing and buying are different acts.
-  const lapsed = status.licence != null
+  //
+  // `status.licence` alone is NOT enough to tell them apart. It is null whenever
+  // the voucher could not be READ, and the case that matters is a subscriber
+  // whose device is offline past its grace window: `grace-elapsed`, with no
+  // licence in hand. Keying on the licence would tell a paying customer to buy
+  // something they already own, at the worst possible moment.
+  //
+  // So the REASON decides, and only two of them mean "never subscribed":
+  //
+  //   absent          the store was readable and held no licence
+  //   never-verified  nothing could be read, and this device has never verified
+  //
+  // Every other refusal — expired, grace-elapsed, and the tamper reasons — is a
+  // device that has, at some point, held something we issued.
+  //
+  // Narrowed explicitly rather than reading `status.decision.reason` directly:
+  // `LicenceDecision` is a union, and `reason` only exists on the refusing arm.
+  // TypeScript is right to insist — the granted case is handled above and can
+  // never reach here, but saying so is what keeps that true if the order above
+  // ever changes.
+  const decision = status.decision
+  const neverSubscribed =
+    !decision.granted &&
+    (decision.reason === DENIAL_REASONS.ABSENT ||
+      decision.reason === GRACE_REASONS.NEVER_VERIFIED)
 
-  return lapsed
+  return neverSubscribed
     ? {
-        allowed: false,
-        reason: ENROL_REFUSAL.LAPSED,
-        message:
-          'Your subscription has ended, so you cannot add another till. ' +
-          'Renewing restores your tills straight away — get in touch and we will sort it out. ' +
-          'Your stall keeps trading either way.',
-      }
-    : {
         allowed: false,
         reason: ENROL_REFUSAL.AT_FREE_LIMIT,
         message:
           `You are using your free till. Running more than ${FREE_TERMINALS} at once ` +
           'needs a subscription — get in touch and we will set one up. ' +
           'This device is not affected and keeps working as it does now.',
+      }
+    : {
+        allowed: false,
+        reason: ENROL_REFUSAL.LAPSED,
+        message:
+          'Your subscription has ended, so you cannot add another till. ' +
+          'Renewing restores your tills straight away — get in touch and we will sort it out. ' +
+          'Your stall keeps trading either way.',
       }
 }
 
