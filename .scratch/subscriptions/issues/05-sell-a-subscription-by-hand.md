@@ -96,6 +96,9 @@ rebuilt from source. On that stack this script authenticated, the gateway
 accepted `merchant_metadata`, and the request took the `create_voucher_direct`
 path — b282e87 confirmed outside a unit test.
 
-The voucher still did not settle, and a control with NO metadata stalled the
-same way, so that is a gateway/mint image mismatch rather than anything about
-licences. Nothing has yet reached a wallet.
+The voucher still did not settle. Two environmental causes, both proved to be
+unrelated to licences by running the STOCK gateway image and a no-metadata
+control coupon, which fail identically: the mint client refuses a plain-http
+docker-DNS host in its constructor (`MintUrlValidator`), and the mint's vault DB
+holds key PATHS with no key material and no HashiCorp Vault to resolve them.
+Nothing has yet reached a wallet. See ticket 04 for the detail.

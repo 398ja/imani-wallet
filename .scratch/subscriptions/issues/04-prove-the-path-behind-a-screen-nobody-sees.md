@@ -94,16 +94,36 @@ gateway. That is the routing fix confirmed outside a unit test: a request
 carrying metadata went to the path that can sign it rather than to
 `issueAndBackup`, which would have dropped it.
 
-**What still did not complete, and why it is not ours.** The voucher stays
-PENDING: the gateway's mint client throws `RestClientException: Mint client
-execution failed` with no root cause, while the same quote read directly from
-inside the container returns `"state":"PAID"`. A CONTROL was run to place the
-blame properly — the identical endpoint, same seller, **no metadata at all** —
-and it stalled at PENDING in exactly the same way. So this is a
-locally-built-gateway against pinned-mint-image incompatibility in the client
-library, present with or without any licence work.
+**What still did not complete, and why it is not ours.** Two obstacles were
+found, both environmental, and the first attribution was WRONG until it was
+tested properly.
+
+1. **The mint URL was rejected before any request was made.** The gateway's
+   `RestClientException: Mint client execution failed` carried no root cause,
+   but the stack frames end at `AbstractRequestBase.<init>` — a CONSTRUCTOR, not
+   a call. That is `MintUrlValidator.validate`, which allows plain `http` only
+   for `localhost`, `127.*` or `::1`. The stack configures
+   `http://imani-mint-rest:7777`, a docker-DNS name, so every mint call failed
+   before it was sent. Worked around by pointing the gateway at a
+   `127.mint.local` name via `extra_hosts` — the validator tests the host
+   STRING, so this passes validation and still resolves. The gateway then booted
+   and reached `finalizeVoucher`.
+
+2. **The mint has no signing keys.** It then returns 500 with
+   `NullPointerException: s is marked non-null but is null` from
+   `PrivateKey.fromString`, because `t_key` in the vault DB holds only a
+   `vault_path` column (`cashu/keys/<mint>/<keyset>/<amount>`) and no key
+   material, while `imani-vault-jpa` runs with `VAULT_HASHI_ENABLED=false` and
+   the stack has no `hashicorp-vault` service. The rows were seeded on
+   2026-09-02 under a different configuration; the volume outlived it.
+
+Neither is caused by, or related to, any licence work: I had first blamed
+"gateway/mint image skew", and that was disproved by running the STOCK
+`gateway-customer:latest` image, which fails identically. A no-metadata control
+coupon also stalls in the same place.
 
 The consequence for this ticket: nothing reached a wallet, so the screen has not
 yet been driven by a licence that a real gateway minted and a real DM delivered.
-Everything up to the mint's settlement step now has live evidence; that last hop
-needs a stack whose gateway and mint images are built from the same BOM.
+The path is now proven live as far as `create_voucher_direct` and
+`finalizeVoucher`; the last hop needs a stack whose vault actually holds mint
+keys.
