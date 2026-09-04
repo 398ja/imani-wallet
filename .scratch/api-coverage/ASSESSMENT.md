@@ -100,6 +100,25 @@ A stateless service has no such rows. Two honest options:
 Recommend **(a)**, documented as (b) — compute it for them, and be explicit
 that the input is theirs.
 
+**Validated.** `e2e/probe-attest-redeem.mts` mints a real £10 coupon, reads the
+signed face **from the token** rather than from the caller, then runs the
+ceiling over supplied rows: partial redemption allowed, the sum refused once it
+would exceed what was issued, an outgoing (issued) row correctly not consuming
+the ceiling, and a zero-face legacy voucher left unbounded. 11/11.
+
+`src/lib/__tests__/attestShapeParity.test.ts` then pins the extracted
+arithmetic against the app's own `checkRedemption` across seven boundary cases
+including exactly-at-face and one-unit-over. Mutation control: dropping the
+`direction === 'in'` filter from the app fails the parity test.
+
+That parity test is the load-bearing one. An extracted copy that drifts would
+leave a till and an API enforcing two different ceilings on the same voucher,
+each internally consistent and neither failing a test.
+
+One thing the probe could not do, which is itself a finding: `checkRedemption`
+imports `wallet.ts`, which needs a browser, so it cannot be called from a
+stateless service at all. Extracting the arithmetic is not optional.
+
 ### 2. Issue a coupon
 
 `lib/issue.ts` · `SellPage`
@@ -109,6 +128,25 @@ that the input is theirs.
 | what minting would cost/produce | `POST /v1/issue/plan` | plan |
 | the gateway request to sign | `POST /v1/issue/gateway-request` | courier |
 | the delivery DM to sign | `POST /v1/issue/deliver-request` | prepare |
+
+**Validated, with one correction — and it changes which path an API must use.**
+`e2e/probe-courier-issue.mts` runs the courier shape end to end: a keypair that
+has never registered signs NIP-98 itself, mints through the live gateway, polls
+until the coupon carries a real Cashu token, and verifies the issuer signature.
+7/7, twice, token arriving in ~2s.
+
+But that works via **`/api/v1/wallet/vouchers`**, not via the
+`/api/v1/portal/vouchers` the UI uses. The portal path is authorised by a
+**session cookie** validated against account-app, with Vite's `portal-edge-auth`
+attaching a shared secret the browser never sees — and `issue.ts` says the
+portal's own NIP-98 filter "does not authenticate on this image". Observed: an
+unregistered NIP-98 caller gets **500** on the portal path and **201** on the
+wallet path.
+
+So issuance can be couriered, but an API cannot simply reuse the UI's route.
+Recommend `/api/v1/wallet/vouchers` as the courier target and say so, or the
+first implementer will follow `issue.ts` into an auth model no headless caller
+can satisfy.
 
 `issueAndDeliver` is three phases — mint, poll until the token exists, deliver
 — with a **partial-failure window the UI already handles**: a coupon can be
@@ -310,6 +348,16 @@ returns 404 — and finding (i) is verified on the acceptance path: a real
 gateway-minted credential, revoked through the real UI, is still UNSPENT at
 the live mint.
 
-What remains unverified is the SHAPE of each proposal. Whether
-`/v1/redeem/prepare` can really be a courier, and whether issuing splits
-cleanly into three calls, will only be known by building one.
+The two riskiest SHAPES are now validated by running them, not by arguing
+them:
+
+- **courier, for issuance** — `e2e/probe-courier-issue.mts`. Holds, but only
+  via `/api/v1/wallet/vouchers`; the portal route the UI uses needs a session
+  cookie no headless caller has.
+- **attest, for the redemption ceiling** — `e2e/probe-attest-redeem.mts` plus
+  `src/lib/__tests__/attestShapeParity.test.ts`. Holds, and the extracted
+  arithmetic is pinned to the app's own.
+
+Still unvalidated: the **prepare** shape for delivering an issued coupon (the
+DM half), and whether issuance really wants three calls or two. Those need a
+real endpoint, not a probe.
