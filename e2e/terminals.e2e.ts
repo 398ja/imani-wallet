@@ -164,6 +164,52 @@ async function main() {
   const focused = await page.evaluate(() => document.activeElement?.tagName)
   check('clicking the label focuses the input', focused === 'INPUT', `focused ${focused}`)
 
+  console.log('\nWhat an unsubscribed stall sees when it runs two tills')
+  /**
+   * Subscriptions ticket 08, on the real screen.
+   *
+   * A freshly registered stall holds no licence, so `grants()` is false and the
+   * free allowance applies — the same code path a LAPSE takes, and the only one
+   * reachable without minting a licence into this wallet. What it demonstrates
+   * is the property the ticket turns on: the allowance lands on exactly one
+   * till, the oldest, and the extra one is marked rather than removed.
+   *
+   * The narrower claim, that a genuine EXPIRY behaves this way, is covered by
+   * lapseService.test.ts against a real gateway-minted licence.
+   */
+  await seedAndOpen('/settings/terminals', [
+    { terminalPubkey: 'c'.repeat(64), name: 'Oldest till', role: 'issue-and-redeem', enrolledAt: 1_000 },
+    { terminalPubkey: 'e'.repeat(64), name: 'Second till', role: 'redeem-only', enrolledAt: 2_000 },
+  ])
+  await page.waitForTimeout(1500)
+
+  const lapse = await page.locator('body').innerText()
+  const marks = (lapse.match(/subscription is inactive/g) ?? []).length
+  check('marks exactly one of the two tills', marks === 1, `found ${marks}`)
+  check('promises renewal needs nothing done on the device',
+    /nothing needs setting up on the device/.test(lapse))
+  check('keeps the stopped till in service, not retired',
+    lapse.includes('In service') && !lapse.includes('No longer in service'))
+  check('never calls it paused', !/paused|suspended/i.test(lapse))
+
+  /**
+   * The free allowance must land on the OLDEST till, not just on "one of them".
+   *
+   * Asserted on the rendered text order rather than by walking ancestors: the
+   * marker paragraph belongs to the row above it, so the marked name is
+   * whichever name most recently preceded the sentence. My first attempt
+   * climbed the DOM and matched a wrapper containing BOTH rows, which reported
+   * the oldest as marked when the screen plainly showed otherwise — a wrong
+   * assertion, not a wrong app.
+   */
+  const marked = lapse.slice(0, lapse.indexOf('subscription is inactive'))
+  const lastNamed = marked.lastIndexOf('Second till') > marked.lastIndexOf('Oldest till')
+    ? 'Second till'
+    : 'Oldest till'
+  check('the newest till is the one stopped', lastNamed === 'Second till', `marked ${lastNamed}`)
+  check('and the oldest keeps serving', lapse.includes('Oldest till'))
+  check('no uncaught errors', pageErrors.length === 0, pageErrors.join('; '))
+
   console.log('\nReduced motion is honoured, in a real browser')
   /**
    * Re-uses the SAME page with an emulated preference rather than a fresh
