@@ -46,6 +46,17 @@ import {
 } from './redeem.js'
 import { parseLicenceRequest, checkLicence, licenceIssuerPubkey } from './licence.js'
 import {
+  parseDrainRequest,
+  drainBody,
+  drainUrl,
+  parseAckRequest,
+  ackBody,
+  ackUrl,
+  parseClaimHandleRequest,
+  claimHandleBody,
+  claimHandleUrl,
+} from './inbox.js'
+import {
   parseIssueRequest,
   issueBody,
   issueUrl,
@@ -482,6 +493,90 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       }
     }
     return { ok: true as const, value: report.value }
+  }
+
+  /**
+   * What to sign to collect coupons that have arrived.
+   *
+   * The gap that changes what this API is FOR. Until this, a program could
+   * spend a holding and never notice being paid — which makes the "bookkeeping
+   * tool" in this service's own opening line only half possible.
+   *
+   * On gateway-core, not customer-wallet: a signed POST to the same path
+   * returns 404 there and 200 here, which is what made the coverage assessment
+   * record it as unlocated.
+   *
+   * Unwrapping the NIP-17 gift wrap needs the caller's private key, so
+   * decryption stays theirs. This service never sees a plaintext coupon.
+   */
+  if (path === '/v1/inbox/drain' && method === 'POST') {
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const input = parseDrainRequest(parsed.value)
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+
+    return answer(200, {
+      url: drainUrl(),
+      method: 'POST',
+      body: drainBody(input.value.limit),
+      then: {
+        decrypt: 'each envelope is a NIP-17 gift wrap; unwrap it with your own key',
+        ack: `${ackUrl()} — acknowledge what you have stored, or it comes back`,
+      },
+    })
+  }
+
+  /**
+   * What to sign to acknowledge envelopes already stored.
+   *
+   * Separate from draining on purpose. Acknowledging before persisting would
+   * lose a coupon on a crash, and the caller is the only one that knows when
+   * its own write has landed.
+   */
+  if (path === '/v1/inbox/ack' && method === 'POST') {
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const input = parseAckRequest(parsed.value)
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+
+    return answer(200, { url: ackUrl(), method: 'POST', body: ackBody(input.value.ids) })
+  }
+
+  /**
+   * What to sign to claim a handle.
+   *
+   * `POST /api/v1/nip05`, NOT `/api/v1/register` — that one is bottin's, wants
+   * HTTP Basic, and is not something a service holding no credentials could
+   * call. Claiming is the only step that needs a signature; everything else a
+   * stall does afterwards it does for itself.
+   *
+   * The handle is claimed FOR the signing key, and a caller naming another
+   * pubkey is refused. Claiming a name on somebody else's behalf is the one
+   * thing this endpoint must not be usable for.
+   */
+  if (path === '/v1/stalls/claim-handle' && method === 'POST') {
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const input = parseClaimHandleRequest(parsed.value, auth.pubkey, relayUrls())
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+
+    return answer(200, {
+      url: claimHandleUrl(),
+      method: 'POST',
+      body: claimHandleBody(input.value),
+    })
   }
 
   /**
