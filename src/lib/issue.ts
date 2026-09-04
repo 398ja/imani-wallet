@@ -7,6 +7,7 @@ import { INTERNAL_RELAY_URL } from './relay'
 import { getWallet, notifyWalletChanged } from './wallet'
 import { buildIssueTransaction } from './transactions'
 import { issuingStall, mayIssue, type Actor } from './actor'
+import { canIssueNow, sessionState, type TerminalSession } from './terminalSession'
 import { currencyDecimals } from './format'
 
 /**
@@ -184,6 +185,20 @@ export interface IssueParams {
    * an owner's own device — and `issuingStall` is the only way to read it.
    */
   actor: Actor
+  /**
+   * The terminal's current session, if it is a terminal.
+   *
+   * Optional because an owner has none and never will: "a stall on its own
+   * device sees no change" (terminals ticket 07) holds because the owner path
+   * never acquires a session to lapse.
+   *
+   * For a TERMINAL, omitting it is refused. The role saying "may issue" is not
+   * enough — a terminal whose day has rolled over, or which opened on reduced
+   * authority because the mint was unreachable, still passes `mayIssue` and
+   * must still be stopped. Defaulting a missing session to "fine" would make
+   * this a check any caller could skip by forgetting it.
+   */
+  session?: TerminalSession | null
 }
 
 /** Where the caller has got to, for the progress screen. */
@@ -393,12 +408,38 @@ export async function issueAndDeliver(
    * issuance is stopped here rather than at delivery, so no voucher is minted
    * and abandoned.
    *
+   * Ticket 07 adds the SESSION to this. "The same request made around the UI is
+   * refused too" is the criterion, and it is only true if the enforcement point
+   * asks the same question the screen asked. `canIssueNow` is that question:
+   * role AND a live session AND not reduced authority. Calling `mayIssue` here
+   * while the screen called `canIssueNow` would make hiding the control the
+   * only thing standing between a lapsed terminal and minting money.
+   *
    * This is affordance, not the boundary. The gateway's `coupon:issue` is what
    * actually counts, and a page that lied to itself here would still get a 403
    * from the check that matters. It is here so the failure is a sentence rather
    * than a 403 the merchant cannot read.
    */
-  if (!mayIssue(params.actor)) {
+  if (!canIssueNow(params.actor, params.session ?? null)) {
+    // The lapse is reported ahead of the role, because it is the recoverable
+    // one: "sign in again" is something staff can act on, while "this till was
+    // never allowed to sell" is not. Reporting the role first would send them
+    // to the owner with the wrong question.
+    if (params.actor.kind === 'terminal') {
+      const state = sessionState(params.session ?? null)
+      if (!state.live) throw new Error(state.message)
+      if (!mayIssue(params.actor)) {
+        throw new Error(
+          'This terminal is not set up to sell. Ask the stall owner to enrol it as a full till.',
+        )
+      }
+      // Live, permitted by role, and still refused: reduced authority. Named
+      // as a network problem, because that is what it is and it will pass.
+      throw new Error(
+        'This terminal cannot sell until it reaches the network again. Redeeming still works.',
+      )
+    }
+
     throw new Error(
       'This terminal is not set up to sell. Ask the stall owner to enrol it as a full till.',
     )
