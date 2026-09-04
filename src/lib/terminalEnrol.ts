@@ -109,6 +109,30 @@ export interface StoredTerminal {
   /** What the owner named it, for the device to show its operator. */
   name?: string
   enrolledAt: number
+  /**
+   * The credential voucher itself, ticket 10.
+   *
+   * Kept because the credential IS the authority: login re-derives permissions
+   * from its signed metadata rather than trusting the fields above, and
+   * revocation is the act of spending this token. Without it the device would
+   * hold a description of its authority and not the authority.
+   *
+   * Optional so a device enrolled before ticket 10 still reads back as
+   * enrolled rather than as corrupt — it simply cannot do the credential-based
+   * login until it is enrolled again.
+   */
+  token?: string
+  /** The voucher's `merchant_metadata`, which login re-verifies. */
+  merchantMetadata?: string
+  /**
+   * The voucher's `issuerId` — the STALL.
+   *
+   * Not `issuerPublicKey`, which is the gateway's signing key and identical on
+   * every voucher it mints. Minting one for real is what surfaced the
+   * difference; checking the stall against the wrong one refuses every genuine
+   * credential.
+   */
+  issuerId?: string
 }
 
 /**
@@ -132,6 +156,14 @@ export async function completeEnrolment(
   credential: TerminalCredential,
   passphrase: string,
   name?: string,
+  /**
+   * The credential voucher, ticket 10.
+   *
+   * Optional so ticket 04's stand-in enrolment still works, but a terminal
+   * enrolled without it cannot do credential-based login — the authority it
+   * holds would be a description rather than the thing itself.
+   */
+  voucher?: { token: string; merchantMetadata: string; issuerId: string },
 ): Promise<TerminalActor> {
   if (!pending) {
     throw new Error('Start enrolment on this device before scanning a code.')
@@ -160,6 +192,13 @@ export async function completeEnrolment(
     permissions: [...actor.permissions],
     name: name?.trim() || undefined,
     enrolledAt: Date.now(),
+    ...(voucher
+      ? {
+          token: voucher.token,
+          merchantMetadata: voucher.merchantMetadata,
+          issuerId: voucher.issuerId,
+        }
+      : {}),
   }
   localStorage.setItem(ENROLMENT_KEY, JSON.stringify(stored))
 
@@ -197,6 +236,13 @@ export function storedTerminal(): StoredTerminal | null {
       permissions: parsed.permissions.filter((p): p is string => typeof p === 'string'),
       name: typeof parsed.name === 'string' ? parsed.name : undefined,
       enrolledAt: typeof parsed.enrolledAt === 'number' ? parsed.enrolledAt : 0,
+      // Validated like everything else here rather than cast: a record edited
+      // to carry a number where the token belongs must read as "no credential"
+      // and send the device back to enrolment, not into a login that throws.
+      token: typeof parsed.token === 'string' ? parsed.token : undefined,
+      merchantMetadata:
+        typeof parsed.merchantMetadata === 'string' ? parsed.merchantMetadata : undefined,
+      issuerId: typeof parsed.issuerId === 'string' ? parsed.issuerId : undefined,
     }
   } catch {
     return null

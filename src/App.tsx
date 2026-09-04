@@ -56,6 +56,7 @@ import { LedgerPage } from './pages/LedgerPage'
 import { SubscriptionPage } from './pages/SubscriptionPage'
 import { TerminalsPage } from './pages/TerminalsPage'
 import { TerminalEnrolPage } from './pages/TerminalEnrolPage'
+import { useTerminalIdentity } from './lib/useTerminalIdentity'
 import { ProfileEditPage } from './pages/ProfileEditPage'
 import { SecurityPage } from './pages/SecurityPage'
 import { BackupPage, RestorePage } from './pages/BackupPages'
@@ -183,6 +184,17 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
     }
   }, [pubkey])
 
+
+  /**
+   * Whether this device is a terminal, and what it may do today.
+   *
+   * Null actor on the stall's own device, which is the common case and behaves
+   * exactly as it always has. On a terminal this carries the role gating and
+   * the lapse notice that terminals ticket 07 built — until this line existed
+   * those were correct code no user could reach.
+   */
+  const terminal = useTerminalIdentity()
+
   // Every arriving coupon is a candidate payment for an open request, and the
   // merchant is rarely on the screen that shows it — the till, the home screen
   // and a closed app all have to settle a sale just the same.
@@ -260,7 +272,11 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route
           path="/"
           element={
-            trading ? <MerchantHomePage /> : <MerchantsPage />
+            trading ? (
+              <MerchantHomePage actor={terminal.actor ?? undefined} session={terminal.session} />
+            ) : (
+              <MerchantsPage />
+            )
           }
         />
         {trading && (
