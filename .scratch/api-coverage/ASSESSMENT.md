@@ -21,6 +21,19 @@ payment requests, cashback, terminals, subscriptions — has no API at all.
 | `POST /v1/spend/parts/prepare` | prepare one part, return an unsigned event |
 | `POST /v1/spend/parts/gateway-request` | what to sign for the gateway |
 
+Verified by **calling the running service**, not by reading the source: all
+five answer a signed request (`/v1/whoami` returns the caller's pubkey; the
+rest reach validation and answer 400 on an empty body), while every endpoint
+proposed below returns **404**. Unsigned requests are rejected before routing,
+so 401 alone cannot distinguish a real route from an imaginary one — the probe
+signs with `services/wallet-api/sign.mjs`.
+
+Running it locally needed one step the README omits: `@imani/wallet-core` is
+not installed, since there are no npm workspaces and the package is linked into
+`node_modules/@imani/` by the Dockerfile. `npx tsx services/wallet-api/server.ts`
+therefore fails on a clean checkout with `ERR_MODULE_NOT_FOUND`. Worth a line in
+the README, since it is the documented way to start the service.
+
 That is the README's story: "a script that pays a supplier every Friday". It
 is complete for that, and nothing below argues otherwise.
 
@@ -175,8 +188,34 @@ consistent with the mark being a display concern only. And
 `terminalDecommission` carries the comment "the owner has revoked it remotely
 and the device is finishing the job" — which no code path makes true.
 
-Five tests pin this, with a mutation control: removing the `unspent === false`
-refusal fails the control arm, so they are not passing vacuously.
+**The design already anticipated this, and the field is unwired.**
+`TerminalRecord.revocationSecret` exists, is parsed, and is documented as
+"what the owner needs to spend this terminal's proof … retained at enrolment so
+revocation never needs the device — the third acceptance criterion, and the
+reason revocation is safe at all". `revokeTerminal`'s own comment says the
+owner holds it "so a device that is lost, stolen, flat or destroyed is revoked
+exactly like one on the counter".
+
+Nothing writes it. `TerminalEnrolPage:93` calls `recordTerminal` with
+`terminalPubkey`, `name`, `role` and `enrolledAt` — no secret — and no code
+outside `terminalRoster.ts` reads the field. So the intended mechanism is
+designed, named, and absent, which is a much smaller fix than a new subsystem.
+
+### Evidence
+
+Two levels, because the first is not enough on its own:
+
+- `src/lib/__tests__/ownerRevocationGap.test.ts` — five tests, mutation
+  controlled (removing the `unspent === false` refusal fails the control arm).
+  But these decide the question with an `unspent: true` the test supplies,
+  which assumes what it sets out to show.
+- `e2e/revocation-reaches-mint.e2e.ts` — the acceptance path, and the one that
+  settles it. Mints a credential through the **real gateway**, registers a
+  **real stall**, clicks Revoke in a **real browser**, then asks the **live
+  mint** via NUT-07 whether the proof is still spendable.
+
+  Observed, 8/8 across three runs: **`UNSPENT` after revocation.** NUT-07 is a
+  read and does not spend, proven separately by `probe-spend.mts`.
 
 **(ii) P2PK makes owner-side revocation harder, not easier.** Now that
 credentials are locked (ADR 0008, PR #48), spending one requires a **witness
@@ -244,12 +283,14 @@ updates have a use. Listed here as out of scope; say if you want it in.
 1. **Redemption ceiling**: caller-supplied history, or documented as the
    caller's responsibility? Affects whether the API can be trusted to prevent
    double-redemption at all.
-2. **Owner-side revocation**: finding (i) is now pinned by tests, so the
-   question is not whether but what to do. The bound in ADR 0005 is sound; it
-   just needs something to enforce it. P2PK (ii) rules out the obvious fix, so
-   the options are a gateway-side revocation list, an issuer-spendable path
-   designed on purpose, or accepting that only the device can revoke itself and
-   saying so on the owner's screen. This wants a ruling before an endpoint.
+2. **Owner-side revocation**: settled as a fact — a real credential is still
+   `UNSPENT` at the live mint after a real revoke. The bound in ADR 0005 is
+   sound and just needs something to enforce it, and the intended mechanism
+   already has a name: populate `revocationSecret` at enrolment and spend it on
+   revoke. What needs deciding is whether that survives P2PK (ii): the secret
+   would have to carry whatever the mint requires as a witness for a locked
+   proof. If it cannot, the alternatives are a gateway-side revocation list or
+   telling the owner plainly that only the device can revoke itself.
 3. **Issuance polling**: hold the connection, or return an id and let the
    caller poll? Recommend the latter.
 4. **Terminal-scoped API keys**: should a terminal's own credential authorise
@@ -263,6 +304,12 @@ An implementation plan. No endpoint here is designed to the level of request
 and response shapes, error cases, or idempotency — that is per-ticket work
 once the five questions above are answered.
 
-Nothing here has been built or tested. It is an inventory read off the code,
-and the two terminal findings in §5 are the parts most worth checking before
-anything is written.
+No endpoint here has been built. The inventory itself IS verified — every
+existing route was called on the running service and every proposed one
+returns 404 — and finding (i) is verified on the acceptance path: a real
+gateway-minted credential, revoked through the real UI, is still UNSPENT at
+the live mint.
+
+What remains unverified is the SHAPE of each proposal. Whether
+`/v1/redeem/prepare` can really be a courier, and whether issuing splits
+cleanly into three calls, will only be known by building one.
