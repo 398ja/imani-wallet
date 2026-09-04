@@ -17,6 +17,14 @@ dist-ssr
 # sensitive as an nsec. It is real key material for whatever those identities
 # hold, and it must never be committed.
 .seed-keys.json
+# The seller's record of who bought a subscription, when it expires, and what
+# they have already been told about it. No key material, but it is a list of
+# paying customers by pubkey — a customer list, which is precisely the thing
+# ADR 0007's design avoids holding server-side. It stays on the seller's own
+# machine. Regenerable in the sense that matters: deleting it stops the expiry
+# reminders and takes nobody's subscription away, because the entitlement lives
+# in the customer's voucher.
+.sold-subscriptions.json
 # Throwaway customer keys for load runs. Worthless on a test deployment, but
 # still keys, and regenerable with `node loadtest/pool.mjs`.
 .loadtest-pool.json

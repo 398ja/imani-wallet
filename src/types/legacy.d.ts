@@ -26,3 +26,40 @@ declare module '*/shared/currency.js' {
   export function normalizeFaceUnit(input: unknown): string | null
   export function resolveFaceUnit(inputs: unknown): { faceUnit: string; source: string }
 }
+
+/**
+ * The seller's out-of-band subscription tool.
+ *
+ * A `.mjs` script rather than app source, because it runs under plain node with
+ * no build step. It is imported by ONE test — the drift guard that asserts the
+ * licence metadata it writes is byte-identical to `licenceIssue.ts`'s — and that
+ * import is the point: the script restates a shape defined in TypeScript it
+ * cannot import, and a restatement drifts silently.
+ *
+ * Only `licenceMetadata` is declared. The rest of the script mints and delivers
+ * over the network and has no business being reachable from a test.
+ */
+declare module '*/scripts/sell-subscription.mjs' {
+  export function licenceMetadata(terms: {
+    lockKey: string
+    subscriptionId: string
+    features: string[]
+    pilot?: boolean
+    paidAmountMinor: number
+    paidCurrency: string
+  }): string
+}
+
+/**
+ * The seller's expiry-notice sender.
+ *
+ * Declared for the same reason as `sell-subscription.mjs` above: it restates a
+ * schedule defined in `src/lib/expiryNotice.ts` that a plain-node script cannot
+ * import, and one test compares the two answers day by day so the pair cannot
+ * drift into a customer being warned by one channel and not the other.
+ */
+declare module '*/scripts/notify-expiring.mjs' {
+  /** The notice due today in whole days before expiry, or null for silence. */
+  export function noticeDueOn(expiresAt: number, now: number): number | null
+  export function noticeMessage(daysLeft: number, expiresAt: number): string
+}

@@ -3,6 +3,7 @@ import type { Voucher, MerchantGroup } from '@imani/voucher-send'
 import type { VoucherRow } from '@imani/wallet-storage'
 
 import { toEpochMs } from './format'
+import { isLicence } from './licences'
 import type { WalletTransaction } from './transactions'
 
 /**
@@ -225,6 +226,31 @@ export function isRedeemed(row: Pick<VoucherRow, 'status'>): boolean {
 }
 
 /**
+ * Has this coupon been spent, under either word for it?
+ *
+ * `'redeemed'` is what a merchant's burn writes; `'spent'` is
+ * `@imani/voucher-send`'s own vocabulary for the same fact, and
+ * `wallet-core`'s `isSpendable` has treated the two as equivalent since the
+ * money logic was extracted. This file did not: `spendable` checked
+ * `isRedeemed` alone, so a row marked `'spent'` was money here and not money
+ * to the shared planner.
+ *
+ * That mattered on the send path rather than in a count. `couponsFor` feeds
+ * `spendableFrom`, so a spent row was offered to the gateway, which refuses it
+ * with SOURCE_PROOFS_NOT_UNSPENT — and on this stack a send that fails after
+ * the split cannot be reclaimed, so the coupon is stuck rather than merely
+ * rejected. A row acquires that status when another device spends it and the
+ * relay's own record is read back, which is exactly the two-device case.
+ *
+ * `planParity.test.ts` exists to catch this class of drift and did not, because
+ * every fixture in it used `'redeemed'`. Both words are now exercised there.
+ */
+export function isSpent(row: Pick<VoucherRow, 'status'>): boolean {
+  const status = (row.status ?? '').toLowerCase()
+  return status === 'redeemed' || status === 'spent'
+}
+
+/**
  * The rows that are still MONEY.
  *
  * A redeemed coupon's proofs are burnt (burn.ts), so counting one would put
@@ -233,9 +259,18 @@ export function isRedeemed(row: Pick<VoucherRow, 'status'>): boolean {
  * `couponsFor` drop them, which is what keeps a shop card's count and its
  * coupon list agreeing; the receipts come back separately through
  * `redeemedFor`.
+ *
+ * A LICENCE is dropped for a different reason and by the same filter. It is a
+ * voucher with a real face value (ADR 0007 makes the price paid the face value
+ * so the credential is its own receipt), so nothing about it fails `isSpent` —
+ * it would be offered for spending and summed into a takings figure, telling a
+ * merchant something false about their business. This is the only place worth
+ * putting that: `toMerchants` and `couponsFor` are the two roots every balance,
+ * count and send-side selection grows from, so excluding it here excludes it
+ * everywhere at once rather than in each screen that remembered.
  */
 export function spendable(rows: VoucherRow[]): VoucherRow[] {
-  return rows.filter((row) => !isRedeemed(row))
+  return rows.filter((row) => !isSpent(row) && !isLicence(row))
 }
 
 /**

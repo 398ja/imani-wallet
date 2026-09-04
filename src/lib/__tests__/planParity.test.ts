@@ -127,6 +127,45 @@ const HOLDINGS: Array<{ name: string; rows: VoucherRow[] }> = [
     ],
   },
   {
+    /**
+     * The other word for the same fact, and the one this suite used to miss.
+     *
+     * Every status fixture here said `'redeemed'`, so the app's `spendable`
+     * could check that word alone and still agree with `eligibleCoupons`, which
+     * rejects `'spent'` too. It did, and the parity this file exists to prove
+     * was false for the vocabulary `@imani/voucher-send` actually writes — the
+     * app offered a spent coupon to the gateway, which refuses it, and on this
+     * stack a send that fails after the split cannot be reclaimed.
+     *
+     * A row acquires `'spent'` when another device spends it and the relay's
+     * own record is read back, so the case is the ordinary two-device one
+     * rather than a contrived state.
+     */
+    name: 'a coupon marked spent rather than redeemed',
+    rows: [
+      row({ voucher_id: 'live', face_value: 400 }),
+      row({ voucher_id: 'gone', face_value: 9000, status: 'spent' }),
+    ],
+  },
+  {
+    name: 'both words for spent at once',
+    rows: [
+      row({ voucher_id: 'live', face_value: 400 }),
+      row({ voucher_id: 'gone', face_value: 9000, status: 'spent' }),
+      row({ voucher_id: 'burnt', face_value: 9000, status: 'redeemed' }),
+    ],
+  },
+  {
+    // Case is not the app's to normalise away differently from the package:
+    // both lower-case the status before comparing, and a fixture that only
+    // ever used lower-case would not notice if one of them stopped.
+    name: 'a spent status in mixed case',
+    rows: [
+      row({ voucher_id: 'live', face_value: 400 }),
+      row({ voucher_id: 'gone', face_value: 9000, status: 'Spent' }),
+    ],
+  },
+  {
     name: 'an expired coupon present',
     rows: [
       row({ voucher_id: 'live', face_value: 400 }),

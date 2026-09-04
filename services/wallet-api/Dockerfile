@@ -98,6 +98,24 @@ RUN ! find services/wallet-api node_modules/@imani \
       grep -lE "finalizeEvent|schnorr\.sign|generateSecretKey|getSigner" {} + \
     || (echo "FAIL: signing capability reachable in wallet-api image" && exit 1)
 
+# The same guard for SEALING, which arrived with the prepare endpoint.
+#
+# Signing was never the only way to spend. A NIP-17 send is a rumor sealed to a
+# conversation key derived from the customer's private key, so a module that
+# imports `nip17` or `nip44` could wrap and deliver a send without ever calling
+# `finalizeEvent` — the guard above would stay green while the image gained the
+# exact capability it exists to exclude.
+#
+# Matched on the IMPORT, not on the name: `prepare.ts` explains in a comment
+# that the caller passes the returned rumor to `nip17.wrapEvent`, and a guard
+# that failed on the word would make the file undocumentable. Verified by
+# building with that comment present and with a planted import; only the second
+# goes red.
+RUN ! find services/wallet-api node_modules/@imani \
+      \( -name '*.ts' -o -name '*.mjs' -o -name '*.js' -o -name '*.cjs' \) -exec \
+      grep -lE "(import|require).*(nostr-tools/(nip17|nip44)|[{,] *nip(17|44) *[,}])" {} + \
+    || (echo "FAIL: gift-wrap sealing reachable in wallet-api image" && exit 1)
+
 ENV PORT=8788
 ENV WALLET_API_RELAY_URL=ws://nostr-relay:7777
 EXPOSE 8788

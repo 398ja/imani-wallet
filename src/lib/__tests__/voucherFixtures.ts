@@ -68,6 +68,13 @@ function voucherBlob(v: SignedVoucherFields): Uint8Array {
   if (v.backingStrategy != null) {
     pairs.push(bytes(tstr('backingStrategy'), tstr(v.backingStrategy)))
   }
+  // Signed — `voucherCanonicalBytes` emits a `merchant_metadata` tag for it — but
+  // absent from this encoder until a licence needed it. A fixture that dropped it
+  // produced a token whose own signature did not verify, so any test relying on
+  // the field would have been testing the rejection path by accident.
+  if (v.merchantMetadata != null) {
+    pairs.push(bytes(tstr('merchantMetadata'), tstr(v.merchantMetadata)))
+  }
   return bytes(head(5, pairs.length), ...pairs)
 }
 
