@@ -28,7 +28,15 @@ const BREAK = Symbol('cbor-break')
 
 class CborReader {
   private i = 0
-  constructor(private readonly b: Uint8Array) {}
+  // Written out rather than a `constructor(private readonly b)` parameter
+  // property: that syntax is not erasable, and the wallet API typechecks under
+  // `erasableSyntaxOnly` because Node strips types rather than compiling them.
+  // The service imports this file for API ticket 02, so it has to be readable
+  // by both.
+  private readonly b: Uint8Array
+  constructor(b: Uint8Array) {
+    this.b = b
+  }
 
   private u8(): number {
     if (this.i >= this.b.length) throw new Error('cbor: truncated')

@@ -154,5 +154,16 @@ export function mayEnrol(status: LicenceStatus, enrolledCount: number): EnrolDec
  */
 export function remainingTerminals(status: LicenceStatus, enrolledCount: number): number {
   if (grants(status, LICENCE_FEATURES.TERMINALS)) return Infinity
-  return Math.max(0, FREE_TERMINALS - enrolledCount)
+  // Clamp the INPUT, not just the output. `Math.max(0, ...)` alone let a
+  // nonsense count through in both directions: a negative count reported MORE
+  // free terminals than exist (-1 gave 2 of a 1-terminal tier), and NaN
+  // propagated so a screen rendered the literal text "NaN terminals left".
+  //
+  // Neither is a security hole — `mayEnrol` is the gate and refuses NaN
+  // correctly — but this number is shown to a merchant, and a count that
+  // exceeds the tier invites them to enrol a terminal that will then be
+  // refused. Failing to a conservative 0 is the honest reading of "I cannot
+  // tell you how many you have left".
+  const enrolled = Number.isFinite(enrolledCount) ? Math.max(0, enrolledCount) : FREE_TERMINALS
+  return Math.max(0, FREE_TERMINALS - enrolled)
 }

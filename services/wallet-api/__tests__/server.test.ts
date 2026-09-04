@@ -32,6 +32,30 @@ import { SPLIT_PATH } from '../prepare.js'
 import { verifyNip98, FRESHNESS_WINDOW_SECONDS } from '../nip98.js'
 import { REPLAY_TTL_MS, RATE_LIMIT } from '../guards.js'
 
+/**
+ * A JSON body, typed loosely enough to assert on.
+ *
+ * `Response.json()` returns `unknown`, so every `(await jsonOf(res)).error` in
+ * this file was a type error the moment `tsconfig.services.json` gained the
+ * `paths` that let its imports resolve (API ticket 07). Sixty-nine of them,
+ * none new: they were invisible because an unresolved `@imani/wallet-core`
+ * meant the file never typechecked far enough to notice.
+ *
+ * A named helper rather than a cast at each site, so the looseness is declared
+ * once and a reader can see exactly how much is being assumed.
+ *
+ * `any`, deliberately, and only here. These assertions reach into nested
+ * response shapes — `body.stores.replay`, `body.event.kind` — and a stricter
+ * type would be re-declaring the whole API surface in the test file, which is a
+ * second source of truth for shapes the endpoints already own. The looseness is
+ * confined to one function that does nothing else.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function jsonOf(res: Response): Promise<any> {
+  return await res.json()
+}
+
+
 // The signer is a browser module and reads `window.location.origin` to make the
 // `u` tag absolute. Providing it is what lets the shipping signer run here.
 const ORIGIN = 'http://127.0.0.1'
@@ -84,7 +108,7 @@ describe('an authenticated request', () => {
     })
 
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ pubkey })
+    expect(await jsonOf(res)).toEqual({ pubkey })
   })
 
   it('does not set a CORS wildcard, unlike the public audit API', async () => {
@@ -115,14 +139,14 @@ describe('refusals', () => {
     const res = await fetch(`${base}/v1/whoami`)
     expect(res.status).toBe(401)
     expect(res.headers.get('www-authenticate')).toBe('Nostr')
-    expect((await res.json()).error).toBe('unsigned')
+    expect((await jsonOf(res)).error).toBe('unsigned')
   })
 
   it('refuses a header that is not a signed event', async () => {
     const res = await fetch(`${base}/v1/whoami`, {
       headers: { authorization: 'Nostr not-base64-at-all!!' },
     })
-    expect((await res.json()).error).toBe('malformed')
+    expect((await jsonOf(res)).error).toBe('malformed')
   })
 
   it('refuses a signature for a different path', async () => {
@@ -133,7 +157,7 @@ describe('refusals', () => {
       headers: { authorization: await nip98Header('/v1/something-else', 'GET', undefined, signer) },
     })
     expect(res.status).toBe(401)
-    expect((await res.json()).error).toBe('url-mismatch')
+    expect((await jsonOf(res)).error).toBe('url-mismatch')
   })
 
   /**
@@ -152,7 +176,7 @@ describe('refusals', () => {
       },
     })
     expect(res.status).toBe(401)
-    expect((await res.json()).error).toBe('url-mismatch')
+    expect((await jsonOf(res)).error).toBe('url-mismatch')
   })
 
   it('accepts a signature whose query matches exactly', async () => {
@@ -163,7 +187,7 @@ describe('refusals', () => {
       },
     })
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ pubkey })
+    expect(await jsonOf(res)).toEqual({ pubkey })
   })
 
   it('refuses a GET signature replayed as a POST', async () => {
@@ -173,7 +197,7 @@ describe('refusals', () => {
       body: '{}',
       headers: { authorization: await nip98Header('/v1/whoami', 'GET', undefined, signer) },
     })
-    expect((await res.json()).error).toBe('method-mismatch')
+    expect((await jsonOf(res)).error).toBe('method-mismatch')
   })
 
   it('refuses a signature whose pubkey is not the one that signed', async () => {
@@ -191,7 +215,7 @@ describe('refusals', () => {
       },
     })
     expect(res.status).toBe(401)
-    expect((await res.json()).error).toBe('bad-signature')
+    expect((await jsonOf(res)).error).toBe('bad-signature')
   })
 
   /**
@@ -220,7 +244,7 @@ describe('refusals', () => {
       },
     })
     expect(res.status).toBe(401)
-    expect((await res.json()).error).toBe('bad-signature')
+    expect((await jsonOf(res)).error).toBe('bad-signature')
   })
 
   /**
@@ -247,7 +271,7 @@ describe('refusals', () => {
       },
     })
     expect(res.status).toBe(401)
-    expect((await res.json()).error).toBe('bad-signature')
+    expect((await jsonOf(res)).error).toBe('bad-signature')
   })
 
   /**
@@ -280,7 +304,7 @@ describe('refusals', () => {
       },
     })
     expect(res.status).toBe(401)
-    expect((await res.json()).error).toBe('malformed')
+    expect((await jsonOf(res)).error).toBe('malformed')
   })
 
   it('refuses a 404 to an unauthenticated caller as 401, not 404', async () => {
@@ -308,7 +332,7 @@ describe('the health endpoint', () => {
   it('answers without a signature, because an orchestrator has no key', async () => {
     const res = await fetch(`${base}/health`)
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ status: 'ok' })
+    expect(await jsonOf(res)).toEqual({ status: 'ok' })
   })
 })
 
@@ -345,10 +369,15 @@ describe('freshness', () => {
   it('refuses one from the future, not just the past', async () => {
     const { header, url } = await signed()
     const result = verifyNip98({
+      // -61 sat exactly on the 60s boundary, so a single second passing
+      // between signing and checking put the event back INSIDE the window and
+      // failed this test at random. Flaky since it was written; observed
+      // failing in a full run and passing alone. -120 is unambiguously
+      // outside, and the boundary itself is covered by the test above.
       header,
       url,
       method: 'GET',
-      now: Math.floor(Date.now() / 1000) - 61,
+      now: Math.floor(Date.now() / 1000) - 120,
     })
     expect(result).toMatchObject({ ok: false, reason: 'stale' })
     expect((result as { detail: string }).detail).toContain('future')
@@ -378,7 +407,7 @@ describe('body binding', () => {
       headers: { authorization: await nip98Header('/v1/whoami', 'POST', signedPayload, signer) },
     })
     expect(res.status).toBe(401)
-    expect((await res.json()).error).toBe('payload-mismatch')
+    expect((await jsonOf(res)).error).toBe('payload-mismatch')
   })
 
   it('refuses a body sent under a signature that covered no body', async () => {
@@ -388,7 +417,7 @@ describe('body binding', () => {
       body: JSON.stringify({ amount: 1000000 }),
       headers: { authorization: await nip98Header('/v1/whoami', 'POST', undefined, signer) },
     })
-    expect((await res.json()).error).toBe('payload-mismatch')
+    expect((await jsonOf(res)).error).toBe('payload-mismatch')
   })
 })
 
@@ -429,7 +458,7 @@ describe('valuing a holding', () => {
         'content-type': 'application/json',
       },
     })
-    return { status: res.status, body: (await res.json()) as Record<string, never> }
+    return { status: res.status, body: await jsonOf(res) }
   }
 
   it('answers with value grouped by stall and currency', async () => {
@@ -569,7 +598,7 @@ describe('valuing a holding', () => {
         },
       })
       expect(res.status).toBe(400)
-      const body = await res.json()
+      const body = await jsonOf(res)
       expect(body.field).toBe('coupons[0].face_value')
       expect(body.detail).toContain('finite')
     })
@@ -589,7 +618,7 @@ describe('valuing a holding', () => {
         },
       })
       expect(res.status).toBe(400)
-      expect((await res.json()).field).toBe('coupons[0].token_amount')
+      expect((await jsonOf(res)).field).toBe('coupons[0].token_amount')
     })
 
     it('refuses a body that is not JSON, without a stack trace', async () => {
@@ -607,7 +636,7 @@ describe('valuing a holding', () => {
         },
       })
       expect(res.status).toBe(400)
-      expect((await res.json()).error).toBe('invalid-json')
+      expect((await jsonOf(res)).error).toBe('invalid-json')
     })
   })
 
@@ -630,7 +659,7 @@ describe('valuing a holding', () => {
       body: JSON.stringify({ coupons: [] }),
     })
     expect(res.status).toBe(401)
-    expect((await res.json()).error).toBe('unsigned')
+    expect((await jsonOf(res)).error).toBe('unsigned')
   })
 
   /**
@@ -652,7 +681,7 @@ describe('valuing a holding', () => {
       },
     })
     expect(res.status).toBe(401)
-    expect((await res.json()).error).toBe('payload-mismatch')
+    expect((await jsonOf(res)).error).toBe('payload-mismatch')
   })
 
   /**
@@ -706,7 +735,7 @@ describe('replay, idempotency and throttling', () => {
       const second = await fetch(`${base}/v1/whoami`, { headers })
       expect(second.status).toBe(409)
 
-      const body = await second.json()
+      const body = await jsonOf(second)
       expect(body.error).toBe('replay')
       // NOT 401. The signature is perfectly valid, and saying otherwise sends a
       // caller to rotate a key that was never the problem.
@@ -746,7 +775,7 @@ describe('replay, idempotency and throttling', () => {
       expect((await fetch(`${base}/v1/holding/value`, { method: 'POST', body: payload, headers })).status).toBe(200)
       const second = await fetch(`${base}/v1/holding/value`, { method: 'POST', body: payload, headers })
       expect(second.status).toBe(409)
-      expect((await second.json()).error).toBe('replay')
+      expect((await jsonOf(second)).error).toBe('replay')
     })
   })
 
@@ -791,7 +820,7 @@ describe('replay, idempotency and throttling', () => {
       })
 
       expect(retry.status).toBe(200)
-      expect(await retry.json()).toEqual({ pubkey })
+      expect(await jsonOf(retry)).toEqual({ pubkey })
       // Marked, so a caller can tell "it ran twice" from "it ran once and I asked twice".
       expect(retry.headers.get('idempotency-replayed')).toBe('true')
       expect(guards.stats.idempotentReplays).toBe(1)
@@ -810,14 +839,14 @@ describe('replay, idempotency and throttling', () => {
       const first = await fetch(`${base}/v1/whoami`, {
         headers: await signedGet(a.signer, { 'idempotency-key': key }),
       })
-      expect((await first.json()).pubkey).toBe(a.pubkey)
+      expect((await jsonOf(first)).pubkey).toBe(a.pubkey)
 
       const other = await fetch(`${base}/v1/whoami`, {
         headers: await signedGet(b.signer, { 'idempotency-key': key }),
       })
 
       // B gets B's answer, not A's.
-      expect((await other.json()).pubkey).toBe(b.pubkey)
+      expect((await jsonOf(other)).pubkey).toBe(b.pubkey)
       expect(other.headers.get('idempotency-replayed')).toBeNull()
     })
 
@@ -849,11 +878,11 @@ describe('replay, idempotency and throttling', () => {
         })
 
       const first = await send()
-      const firstBody = await first.json()
+      const firstBody = await jsonOf(first)
       const retry = await send()
 
       expect(retry.headers.get('idempotency-replayed')).toBe('true')
-      expect(await retry.json()).toEqual(firstBody)
+      expect(await jsonOf(retry)).toEqual(firstBody)
     })
 
     /**
@@ -907,7 +936,7 @@ describe('replay, idempotency and throttling', () => {
       }
 
       expect(throttled).toBeDefined()
-      const body = await throttled!.json()
+      const body = await jsonOf(throttled!)
       expect(body.error).toBe('rate-limited')
       expect(body.retryAfterSeconds).toBeGreaterThan(0)
       // The header too, because that is what an HTTP client already understands.
@@ -931,7 +960,7 @@ describe('replay, idempotency and throttling', () => {
       // Same address, different key. Unaffected.
       const other = await fetch(`${base}/v1/whoami`, { headers: await signedGet(quiet.signer) })
       expect(other.status).toBe(200)
-      expect((await other.json()).pubkey).toBe(quiet.pubkey)
+      expect((await jsonOf(other)).pubkey).toBe(quiet.pubkey)
     })
   })
 
@@ -952,7 +981,7 @@ describe('replay, idempotency and throttling', () => {
       const { signer } = makeSigner()
       await fetch(`${base}/v1/whoami`, { headers: await signedGet(signer) })
 
-      const metricsBody = await (await fetch(`${base}/metrics`)).json()
+      const metricsBody = await jsonOf(await fetch(`${base}/metrics`))
       expect(metricsBody.stores.replay).toBeGreaterThan(0)
       expect(metricsBody.guards).toMatchObject({ replaysRefused: expect.any(Number) })
     })
@@ -1001,7 +1030,7 @@ describe('planning a spend', () => {
         'content-type': 'application/json',
       },
     })
-    return { status: res.status, body: (await res.json()) as Record<string, never> }
+    return { status: res.status, body: await jsonOf(res) }
   }
 
   const request = (over: Record<string, unknown> = {}) => ({
@@ -1200,7 +1229,7 @@ describe('planning a spend', () => {
           ),
         },
       })
-      return res.json()
+      return jsonOf(res)
     })()
 
     expect(value.groups[0].faceValue).toBe(1200)
@@ -1287,7 +1316,7 @@ describe('refusing a send the recipient could not honour', () => {
         ),
       },
     })
-    return { status: res.status, body: (await res.json()) as Record<string, never> }
+    return { status: res.status, body: await jsonOf(res) }
   }
 
   describe('a redemption', () => {
@@ -1574,7 +1603,7 @@ describe('preparing a part', () => {
       },
       body: payload,
     })
-    return { status: res.status, headers: res.headers, body: await res.json(), signer }
+    return { status: res.status, headers: res.headers, body: await jsonOf(res), signer }
   }
 
   it('returns the replacement coupons and an unsigned event', async () => {
@@ -1698,7 +1727,7 @@ describe('preparing a part', () => {
       },
       body: askPayload,
     })
-    const advice = await ask.json()
+    const advice = await jsonOf(ask)
 
     // ...must be byte for byte what it then posts, or the caller's payload hash
     // will not match and the gateway refuses a request nobody altered.

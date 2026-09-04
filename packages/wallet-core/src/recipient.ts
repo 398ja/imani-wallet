@@ -53,7 +53,7 @@ export interface RecipientCheck {
   /** Who is receiving. */
   recipientPubkey: string
   /** The stall that issued the coupons being sent. */
-  issuerPubkey: string
+  issuerPubkey: string | undefined
   /**
    * What the recipient is. Only consulted when the send is not a redemption,
    * so a caller may pass `unknown` freely for the redemption case — and should,
@@ -138,7 +138,10 @@ export function checkRecipient({
 export function needsRecipientLookup(
   senderPubkey: string,
   recipientPubkey: string,
-  issuerPubkey: string,
+  // Optional, because a plan may name no stall: `stallKey` already maps
+  // undefined to 'unknown', so this signature was narrower than the behaviour
+  // and forced its one caller to lie about the type.
+  issuerPubkey: string | undefined,
 ): boolean {
   const sender = stallKey(senderPubkey)
   const recipient = stallKey(recipientPubkey)
