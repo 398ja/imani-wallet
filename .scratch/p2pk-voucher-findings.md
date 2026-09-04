@@ -73,3 +73,49 @@ not this device's key, and the issuer's signature means the value cannot be
 forged or altered. A modified client could ignore it; the mint would not stop
 them. Terminals ADR 0005 and the licence types comment both already say so —
 this is a known limitation, not a regression.
+
+---
+
+# Update 2026-09-04: implemented, not yet proven end to end
+
+## Landed
+
+| Step | Repo | State |
+| --- | --- | --- |
+| BOM 0.1.59 -> 0.1.62 | imani-gateway-customer | done, 366 tests |
+| Four missing accessors on `P2PKVoucherSecret` | cashu-lib | done, 974 tests |
+| `SignedLockedVoucher` | cashu-voucher | done, 148 tests |
+| Legacy wire format pinned | imani-gateway-customer | done, 4 tests |
+| `VoucherAdapter` issues locked when `lock_key` is usable | imani-gateway-customer | done, 381 tests |
+
+Unlocked issuance is byte-for-byte unchanged, which the legacy characterisation
+test proves against a token a real gateway issued.
+
+## What is NOT yet proven
+
+**That the mint refuses a witness-less spend of a locked voucher.** This is the
+only claim that ultimately matters, and it needs a locked voucher minted end to
+end.
+
+I could not get one on the test stack. Rebuilding gateway-customer against the
+0.1.62 BOM produced a container whose `wallet-core` client fails on
+`mintQuotePaid` with "Mint client execution failed", while the SAME endpoint
+returns `"state":"PAID"` over plain HTTP from inside that container.
+
+So the version set is not as aligned as `imani-bom` implies: cashu-lib 0.29.0
+and cashu-mint 0.35.0 agree, but the wallet-core the BOM pairs with them does
+not parse this mint's quote response. That is worth chasing before anyone
+deploys 0.1.62, and it is upstream of the P2PK work rather than caused by it.
+
+Until then the adapter change is unexercised against a live mint. It is covered
+by unit tests and mutation controls, and it cannot affect unlocked issuance —
+but "the mint enforces the lock" remains a claim, not an observation.
+
+## Note for whoever picks this up
+
+While investigating I ran `git stash` in imani-gateway-customer and collided
+with a colleague's in-flight `015-stale-source-token-defenses` work. Their
+files are restored byte-identical to their stash, which is intact at
+`stash@{0}`. Their tree does not compile on its own — it references classes
+their own stash adds — and that is unrelated to this work: a clean tree at HEAD
+compiles with zero errors.
