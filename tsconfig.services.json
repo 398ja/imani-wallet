@@ -40,6 +40,12 @@
      import `attestation.ts`: the producer reaches `./nap` and `./relay`, hence
      `@imani/nap-client-web` and `import.meta.env` — a browser dependency graph
      and a Vite-only global that no Node service has. That split is also why the
-     API physically cannot sign an attestation. */
-  "include": ["services", "src/lib/audit.ts"]
+     API physically cannot sign an attestation.
+
+     `src/lib/voucherToken.ts` joins it for the same reason, with API ticket 02:
+     redemption has to decide whether a customer's coupon is genuine, and a
+     second voucher parser would be a second opinion about somebody's money. It
+     is pure — schnorr, sha256, hex, no DOM — so it costs the service nothing to
+     run the wallet's own reader. */
+  "include": ["services", "src/lib/audit.ts", "src/lib/voucherToken.ts"]
 }

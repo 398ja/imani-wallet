@@ -36,6 +36,14 @@ import { verifyNip98, type AuthFailure } from './nip98.js'
 import { parseHolding, parsePlanRequest } from './holding.js'
 import { parseReportRequest } from './reports.js'
 import { parseCreateRequest, buildRequest, parseReconcileRequest, reconcile } from './requests.js'
+import {
+  parseVerifyInput,
+  verifyCoupon,
+  parseCheckInput,
+  checkRedemption,
+  receiveUrl,
+  receiveBody,
+} from './redeem.js'
 import { parsePrepareRequest, requestSplit, buildRumor, splitUrl, splitBody } from './prepare.js'
 import { createGuards, type StoredResponse } from './guards.js'
 import { createStallLookup } from './stallLookup.js'
@@ -419,6 +427,25 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   }
 
   /**
+   * Read a JSON body, or the 400 to answer with.
+   *
+   * Shared by every endpoint added after the first three, which each repeated
+   * this block. Counts a malformed body as a validation error so the metric
+   * keeps meaning "callers are getting the shape wrong".
+   */
+  const readJson = (raw: string | undefined) => {
+    try {
+      return { ok: true as const, value: JSON.parse(raw ?? '') as unknown }
+    } catch {
+      metrics.validationErrors++
+      return {
+        ok: false as const,
+        problem: { error: 'invalid-json', field: 'body', detail: 'the request body is not valid JSON' },
+      }
+    }
+  }
+
+  /**
    * Both report endpoints take the same body, so they parse it the same way.
    *
    * Counts a bad body as a validation error, like every other endpoint, so the
@@ -445,6 +472,92 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       }
     }
     return { ok: true as const, value: report.value }
+  }
+
+  /**
+   * Is this coupon real, unexpired, and mine to honour?
+   *
+   * Nothing moves. A till asks this while the customer is still standing there,
+   * so it must answer from the bytes alone — no mint, no network.
+   *
+   * Says nothing about whether the coupon has been SPENT: that is the mint's
+   * answer, and asking here would turn a local check into a round trip at the
+   * slowest possible moment. What this settles is that the coupon is genuine,
+   * which is the part a caller cannot do for itself.
+   */
+  if (path === '/v1/redeem/verify' && method === 'POST') {
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const input = parseVerifyInput(parsed.value, auth.pubkey, Math.floor(Date.now() / 1000))
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+
+    // 200 even when the coupon is refused: the question was answered, and the
+    // answer is that this coupon must not be taken. A 4xx would mean the
+    // REQUEST was wrong, which is a different thing a caller fixes differently.
+    return answer(200, verifyCoupon(input.value))
+  }
+
+  /**
+   * Would taking this amount breach what the issuer signed?
+   *
+   * The only check that sees ACROSS redemptions — the one that notices the same
+   * coupon presented until it exceeds its face. The service holds no history,
+   * so the caller sends what it has and gets a verdict.
+   *
+   * The BOUND is never caller-supplied: it is read from the verified voucher,
+   * because a ceiling the presenter chose is not a ceiling. That is why this
+   * verifies the token again rather than trusting a face value in the body.
+   */
+  if (path === '/v1/redeem/check' && method === 'POST') {
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const input = parseCheckInput(parsed.value, auth.pubkey, Math.floor(Date.now() / 1000))
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+
+    return answer(200, checkRedemption(input.value))
+  }
+
+  /**
+   * What to sign to accept a coupon.
+   *
+   * A courier, for the reason ADR 0001 gives: accepting means swapping at the
+   * mint, and this service holds no credential to present there. If it did,
+   * that credential would be a way to redeem any coupon anyone sent it.
+   *
+   * The body is serialised ONCE and returned as a string to be signed byte for
+   * byte. Re-serialising it changes the payload hash, and the gateway then
+   * refuses the request from a service the caller never addressed directly.
+   */
+  if (path === '/v1/redeem/prepare' && method === 'POST') {
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const input = parseVerifyInput(parsed.value, auth.pubkey, Math.floor(Date.now() / 1000))
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+
+    // Verified first, so a caller is never handed instructions for accepting a
+    // coupon that was never going to be honoured.
+    const verdict = verifyCoupon(input.value)
+    if (!verdict.ok) return answer(200, verdict)
+
+    return answer(200, {
+      ok: true,
+      voucher: verdict.voucher,
+      url: receiveUrl(),
+      method: 'POST',
+      body: receiveBody(input.value.token),
+    })
   }
 
   /**
