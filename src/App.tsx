@@ -54,6 +54,7 @@ import { ProfilePage } from './pages/ProfilePage'
 import { SettingsPage } from './pages/SettingsPage'
 import { LedgerPage } from './pages/LedgerPage'
 import { SubscriptionPage } from './pages/SubscriptionPage'
+import { TerminalsPage } from './pages/TerminalsPage'
 import { ProfileEditPage } from './pages/ProfileEditPage'
 import { SecurityPage } from './pages/SecurityPage'
 import { BackupPage, RestorePage } from './pages/BackupPages'
@@ -335,6 +336,21 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             // predicate as the row that leads here.
             merchant !== null ? (
               <SubscriptionPage pubkey={pubkey} />
+            ) : (
+              <Navigate to="/settings" replace />
+            )
+          }
+        />
+        <Route
+          path="/settings/terminals"
+          element={
+            // Merchant-only for reachability: a customer has no stall for a
+            // terminal to trade on behalf of. NOT licence-gated — an owner
+            // whose subscription lapsed must still be able to revoke a stolen
+            // device, and a paywall in front of revocation would turn a billing
+            // problem into a security one.
+            merchant !== null ? (
+              <TerminalsPage stallPubkey={pubkey} />
             ) : (
               <Navigate to="/settings" replace />
             )
