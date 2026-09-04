@@ -122,8 +122,34 @@ Neither is caused by, or related to, any licence work: I had first blamed
 `gateway-customer:latest` image, which fails identically. A no-metadata control
 coupon also stalls in the same place.
 
-The consequence for this ticket: nothing reached a wallet, so the screen has not
-yet been driven by a licence that a real gateway minted and a real DM delivered.
-The path is now proven live as far as `create_voucher_direct` and
-`finalizeVoucher`; the last hop needs a stack whose vault actually holds mint
-keys.
+The consequence for this ticket: **the loop is now closed.** Both obstacles were
+fixed rather than accepted, and a licence was minted end to end.
+
+## The real licence
+
+`scripts/sell-subscription.mjs` ran against gateway-customer (rebuilt from
+source with b0fdca5 + b282e87) and a mint with real signing keys, and produced
+an actual customer-facing token. It is committed at
+`src/lib/__tests__/fixtures/live-licence.token` and asserted by
+`liveLicence.test.ts`:
+
+- the issuer's signature verifies in the wallet — the Java signer and this
+  app's canonicalizer agreeing on real bytes, not on a fixture;
+- `merchant_metadata` survived into the signed secret, carrying the
+  subscription id, the grant and the lock key;
+- `verifyLicence` GRANTS to the customer it was locked to, and refuses anyone
+  else;
+- it is not money: `spendable` excludes it and `walletTotals` is empty, on a
+  voucher with a real 4000 GBP face value;
+- the lifecycle reads correctly through `licenceStatus` and `expiryNotice` —
+  active, then a five-day warning, then "This subscription has ended", then
+  silence.
+
+The second obstacle was fixed in imani-deploy (bfeade2): the test stack sets
+`VAULT_HASHI_URI` but defines no Vault, so the mint could serve `/v1/keys` from
+preload and could not sign anything. Adding the service and loading the
+preload keys at the paths `t_key` already points at makes issuance work.
+
+What is still unproven is the DELIVERY hop — the licence reached the wallet's
+verifier as a token, not as a DM through a relay into IndexedDB. The screen
+itself is covered by its own tests against the same real token.

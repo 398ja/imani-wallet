@@ -90,15 +90,17 @@ exercised the fallback. Requests carrying metadata now route to the direct path
 regardless of balance (imani-gateway-customer b282e87), with coupons still
 spending proofs, asserted separately.
 
-**Partly verified live, later.** The claim that the images were "not present" was
-wrong; see ticket 04, where the stack was brought up with gateway-customer
-rebuilt from source. On that stack this script authenticated, the gateway
-accepted `merchant_metadata`, and the request took the `create_voucher_direct`
-path — b282e87 confirmed outside a unit test.
+**Verified live.** The stack was fixed rather than worked around (see ticket 04
+and imani-deploy bfeade2: the test stack sets `VAULT_HASHI_URI` but defines no
+Vault, so the mint had no signing keys and could not sign a blinded message).
 
-The voucher still did not settle. Two environmental causes, both proved to be
-unrelated to licences by running the STOCK gateway image and a no-metadata
-control coupon, which fail identically: the mint client refuses a plain-http
-docker-DNS host in its constructor (`MintUrlValidator`), and the mint's vault DB
-holds key PATHS with no key material and no HashiCorp Vault to resolve them.
-Nothing has yet reached a wallet. See ticket 04 for the detail.
+With that fixed, this script minted a real licence through gateway-customer
+against a real mint. The resulting token is committed at
+`src/lib/__tests__/fixtures/live-licence.token` and asserted by
+`liveLicence.test.ts`: the issuer signature verifies, `merchant_metadata`
+carries the subscription id, grant and lock key into the SIGNED secret,
+`verifyLicence` grants to the locked customer and refuses everyone else, and
+the wallet keeps it out of every balance.
+
+That is the round trip these tickets were written to produce, on the real
+artefact rather than a fixture.
