@@ -295,7 +295,13 @@ export function LedgerPage() {
           mid-send.
         </p>
         <Button className="mt-3" onClick={sweep} disabled={busy}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${busy ? 'animate-spin' : ''}`} aria-hidden />
+          {/* motion-reduce: a continuous rotation is the vestibular motion that
+              setting asks us to drop, and the button's own label already says
+              the sweep is running. */}
+          <RefreshCw
+            className={`mr-2 h-4 w-4 ${busy ? 'animate-spin motion-reduce:animate-none' : ''}`}
+            aria-hidden
+          />
           {busy ? 'Checking…' : 'Check now'}
         </Button>
 

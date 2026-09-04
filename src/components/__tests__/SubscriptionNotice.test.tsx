@@ -164,6 +164,29 @@ describe('the expiry banner', () => {
     }
   })
 
+  it('carries press feedback that suits a coloured strip', async () => {
+    /**
+     * `pressable`, not `press-row`. Both are house styles for a press, and the
+     * wrong one is a visual bug rather than a broken one: `press-row` carries
+     * the press with a GREY tint, which is right for a divided list and reads
+     * as the amber banner going muddy here.
+     *
+     * Pinned because it is exactly the kind of thing that gets "tidied" back to
+     * the list style by someone matching the surrounding code.
+     */
+    const expiresAt = SOLD_AT + YEAR
+    const { row, issuerPublicKey } = mint(terms(), expiresAt)
+    rows = [row]
+    vi.stubEnv('VITE_LICENCE_ISSUER_PUBKEY', issuerPublicKey)
+    vi.setSystemTime((expiresAt - 4 * DAY) * 1000)
+
+    renderNotice()
+    const strip = (await screen.findByText(/ends in 4 days/)).closest('a')!
+
+    expect(strip.className).toContain('pressable')
+    expect(strip.className).not.toContain('press-row')
+  })
+
   it('offers no way to dismiss it', async () => {
     // Dismissing would hide the one warning before a lapse, and the person who
     // dismisses on day seven is the one who needs it on day one.

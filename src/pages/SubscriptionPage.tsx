@@ -141,7 +141,13 @@ export function SubscriptionPage({ pubkey }: { pubkey: string }) {
       </Panel>
 
       <Button onClick={() => void check()} disabled={checking} variant="secondary">
-        <RefreshCw className={`mr-2 h-4 w-4 ${checking ? 'animate-spin' : ''}`} />
+        {/* `motion-reduce:animate-none` because a continuous rotation is exactly
+            the vestibular motion that setting asks us to drop. The word beside
+            it already says "Checking…", so nothing is lost by stopping it. */}
+        <RefreshCw
+          className={`mr-2 h-4 w-4 ${checking ? 'animate-spin motion-reduce:animate-none' : ''}`}
+          aria-hidden
+        />
         {checking ? 'Checking…' : 'Check again'}
       </Button>
 
@@ -158,13 +164,23 @@ export function SubscriptionPage({ pubkey }: { pubkey: string }) {
   )
 }
 
+/**
+ * The verdict mark.
+ *
+ * Three states, three marks, three colours — because "working" and "working,
+ * but we cannot confirm it" are genuinely different situations, and a screen
+ * that showed the same tick for both could never warn anyone before the grace
+ * window drained.
+ *
+ * `aria-hidden` on all three: the heading and the sentence beside them already
+ * say what they mean, and colour is never the only carrier.
+ */
 function Verdict({ granted, source }: { granted: boolean; source?: 'verified' | 'grace' }) {
-  if (!granted) return <ShieldAlert className="h-6 w-6 shrink-0 text-red-600" />
-  // Deliberately a different mark for grace: "working" and "working, but we
-  // cannot confirm it" are different states, and a screen that showed the same
-  // tick for both could not warn anyone before the window drained.
-  if (source === 'grace') return <ShieldQuestion className="h-6 w-6 shrink-0 text-amber-600" />
-  return <ShieldCheck className="h-6 w-6 shrink-0 text-green-600" />
+  if (!granted) return <ShieldAlert className="h-6 w-6 shrink-0 text-red-600" aria-hidden />
+  if (source === 'grace') {
+    return <ShieldQuestion className="h-6 w-6 shrink-0 text-amber-600" aria-hidden />
+  }
+  return <ShieldCheck className="h-6 w-6 shrink-0 text-green-600" aria-hidden />
 }
 
 /**
