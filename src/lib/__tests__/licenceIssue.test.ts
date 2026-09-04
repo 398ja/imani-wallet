@@ -343,16 +343,7 @@ describe('the seller script writes what the wallet reads', () => {
    * Comparing the two outputs byte for byte is the only thing that catches it.
    */
   it('produces byte-identical metadata to the definition it restates', async () => {
-    const script = (await import('../../../scripts/sell-subscription.mjs')) as {
-      licenceMetadata: (t: {
-        lockKey: string
-        subscriptionId: string
-        features: string[]
-        pilot?: boolean
-        paidAmountMinor: number
-        paidCurrency: string
-      }) => string
-    }
+    const script = await import('../../../scripts/sell-subscription.mjs')
 
     for (const pilot of [false, true]) {
       const t = terms({ pilot })
@@ -372,9 +363,7 @@ describe('the seller script writes what the wallet reads', () => {
   it('mints something the wallet recognises, using the SCRIPT\'s metadata', async () => {
     // The round trip that matters: the script's own bytes, through a real signed
     // voucher, into the wallet's recogniser and check.
-    const { licenceMetadata } = (await import('../../../scripts/sell-subscription.mjs')) as {
-      licenceMetadata: (t: Record<string, unknown>) => string
-    }
+    const { licenceMetadata } = await import('../../../scripts/sell-subscription.mjs')
 
     const { token, voucher } = buildVoucherToken({
       merchantMetadata: licenceMetadata({
