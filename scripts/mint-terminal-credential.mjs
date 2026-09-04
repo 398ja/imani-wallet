@@ -154,7 +154,7 @@ async function main() {
   const created = await mint(stall, metadata)
   const ready = await waitForToken(stall, created.voucher_id)
 
-  const out = join(HERE, '..', 'src', 'lib', '__tests__', 'fixtures', 'live-terminal-credential.token')
+  const out = join(HERE, '..', 'src', 'lib', '__tests__', 'fixtures', arg('--out', 'live-terminal-credential.token'))
   writeFileSync(out, ready.token.trim() + '\n')
   console.log(`wrote ${out}`)
   console.log(`issuer ${stall.pk}`)
