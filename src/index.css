@@ -122,6 +122,29 @@
     animation: materialize 200ms cubic-bezier(0.32, 0.72, 0, 1);
   }
 
+  /*
+   * An inline panel opening out of the row that owns it — a confirmation, an
+   * expanded detail. Distinct from `materialize`: that one SCALES, which is
+   * right for a popover floating above the page and wrong here, because this
+   * panel is part of the list and scaling it would shrink its text away from
+   * the row it belongs to.
+   *
+   * So it slides and fades instead, and the slide is short (4px) because the
+   * height change is already doing the explaining. `ease-out` on the same curve
+   * as everything else: the panel is entering, and the user is watching hardest
+   * at the first frame.
+   */
+  .expand-row {
+    animation: expand-row 180ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  @keyframes expand-row {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+  }
+
   @keyframes materialize {
     from {
       opacity: 0;
@@ -153,7 +176,8 @@
     scroll-behavior: auto;
   }
 
-  .materialize {
+  .materialize,
+  .expand-row {
     animation: none;
   }
 }
