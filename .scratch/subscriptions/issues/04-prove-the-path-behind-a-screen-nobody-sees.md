@@ -150,6 +150,15 @@ The second obstacle was fixed in imani-deploy (bfeade2): the test stack sets
 preload and could not sign anything. Adding the service and loading the
 preload keys at the paths `t_key` already points at makes issuance work.
 
-What is still unproven is the DELIVERY hop — the licence reached the wallet's
-verifier as a token, not as a DM through a relay into IndexedDB. The screen
-itself is covered by its own tests against the same real token.
+The DELIVERY hop is covered too, by `licenceDelivery.test.ts`: the same real
+licence is wrapped in a genuine NIP-17 gift wrap and opened with the app's own
+`createDmCryptoAdapter` — the code path the poller uses. It survives the round
+trip byte for byte, is still recognised as a licence with its grant and lock
+key intact, is read from the SIGNED voucher rather than the envelope (so a
+sender cannot re-label it in transit), and a wrap addressed to somebody else
+returns null rather than throwing.
+
+What remains untested is only the transport underneath that: a relay actually
+carrying the event, and IndexedDB actually persisting the row. Both are
+infrastructure the wallet already uses for every coupon, and neither is
+specific to licences.
