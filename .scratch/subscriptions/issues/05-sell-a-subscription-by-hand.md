@@ -90,7 +90,12 @@ exercised the fallback. Requests carrying metadata now route to the direct path
 regardless of balance (imani-gateway-customer b282e87), with coupons still
 spending proofs, asserted separately.
 
-**Not verified: a live end-to-end sale.** The local stack is down and the gateway
-images are not present, so no licence has been minted by a running gateway,
-delivered by DM, and unlocked on a device. Ticket 04 is where that happens, and
-it needs gateway-customer rebuilt with b0fdca5 deployed.
+**Partly verified live, later.** The claim that the images were "not present" was
+wrong; see ticket 04, where the stack was brought up with gateway-customer
+rebuilt from source. On that stack this script authenticated, the gateway
+accepted `merchant_metadata`, and the request took the `create_voucher_direct`
+path — b282e87 confirmed outside a unit test.
+
+The voucher still did not settle, and a control with NO metadata stalled the
+same way, so that is a gateway/mint image mismatch rather than anything about
+licences. Nothing has yet reached a wallet.

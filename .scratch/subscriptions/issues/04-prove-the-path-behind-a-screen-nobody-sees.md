@@ -73,8 +73,37 @@ Also fixed: the ticket-05 drift-guard test imported an untyped `.mjs` and added
 2 `tsc` errors. Declared in `src/types/legacy.d.ts` alongside the existing
 patterns, so the casts came out of the test too. Back to the pre-existing 81.
 
-**Still not verified: a live sale.** The stack is down and the gateway images are
-absent locally, so no licence has been minted by a running gateway, delivered by
-DM and unlocked on a device. This screen is the tool for that when a stack with
-b0fdca5 and b282e87 is available; everything above it is now proven against real
-signed vouchers.
+## The live attempt, and what it actually showed
+
+The earlier claim that this was "blocked, images absent" was WRONG, and worth
+correcting rather than repeating: the images were present, and the stack is
+project `imani-test` (not `imani-deploy`) with the wallet's own
+`deploy/compose.override.yml`. It was stopped, not missing.
+
+So it was brought up, with gateway-customer rebuilt from source via
+`jib:dockerBuild` so the image actually contained b0fdca5 and b282e87. One
+pre-existing obstacle on the way: `imani-vault-jpa:latest` fails Flyway
+validation against the existing volume ("applied migration not resolved
+locally: 3..8"). Fixed by using the newer local `imani-vault-jpa:libfix` image
+rather than deleting the volume, which would have destroyed mint keysets.
+
+**What was proven live.** The seller script authenticated, the gateway accepted
+the request with `merchant_metadata`, and the log line reads
+`wallet_adapter create_voucher_direct` — which is b282e87 working on a real
+gateway. That is the routing fix confirmed outside a unit test: a request
+carrying metadata went to the path that can sign it rather than to
+`issueAndBackup`, which would have dropped it.
+
+**What still did not complete, and why it is not ours.** The voucher stays
+PENDING: the gateway's mint client throws `RestClientException: Mint client
+execution failed` with no root cause, while the same quote read directly from
+inside the container returns `"state":"PAID"`. A CONTROL was run to place the
+blame properly — the identical endpoint, same seller, **no metadata at all** —
+and it stalled at PENDING in exactly the same way. So this is a
+locally-built-gateway against pinned-mint-image incompatibility in the client
+library, present with or without any licence work.
+
+The consequence for this ticket: nothing reached a wallet, so the screen has not
+yet been driven by a licence that a real gateway minted and a real DM delivered.
+Everything up to the mint's settlement step now has live evidence; that last hop
+needs a stack whose gateway and mint images are built from the same BOM.
