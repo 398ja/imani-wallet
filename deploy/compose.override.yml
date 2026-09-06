@@ -346,6 +346,19 @@ services:
       # wss://relay.imani.casa, a PUBLIC relay, and a local stack would open
       # WebSockets to it and publish there.
       GATEWAY_CORE_NOSTR_RELAYS: "ws://nostr-relay:7777"
+      # Where the browser uploads avatars and banners.
+      #
+      # This is set on account-app too, but GET /api/v1/config is served by
+      # gateway-core (ConfigController, reading gateway.bottin.blossom-server-url
+      # <- BLOSSOM_SERVER_URL), so setting it only on account-app left
+      # blossom_server_url null in the config the wallet actually reads. The
+      # wallet then disables its file inputs, which presents as "the Browse
+      # button does nothing" on the profile page with no error anywhere.
+      #
+      # Consumed by a BROWSER: the gateway only names the server, the client PUTs
+      # straight to it. So it must be an address a browser can resolve —
+      # http://blossom:3000 would look right here and fail in the page.
+      BLOSSOM_SERVER_URL: ${BLOSSOM_SERVER_URL:-http://localhost:28089}
 
   bottin-api:
     environment:
