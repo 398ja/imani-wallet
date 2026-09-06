@@ -175,6 +175,16 @@ export const proxy = {
   // claim is NIP-98 authenticated, and the signed `u` tag is the browser origin.
   '/api/v1/nip05': { target: 'http://localhost:28081', changeOrigin: false },
   '/api/v1/config': { target: 'http://localhost:28081', changeOrigin: true },
+  // Receipt notifications live on account-app as well: IncomingNotificationController
+  // is in gateway-core-rest, not customer-wallet. Without this rule the drain and
+  // ack calls fall into the '/api' catch-all, hit customer-wallet, and 404 every
+  // few seconds forever — the polling loop retries, so the console fills with
+  // "drain: request failed status=404" while nothing is actually wrong with the
+  // endpoint. account-app answers 401 for the same request, which is the endpoint
+  // existing and wanting a session.
+  //
+  // changeOrigin: false for the NIP-98 reason above.
+  '/api/v1/incoming-notifications': { target: 'http://localhost:28081', changeOrigin: false },
   // Voucher ISSUANCE is a merchant action and lives on gateway-portal, a third
   // tier this file did not know about. customer-wallet refuses it outright
   // ("Voucher creation not supported on JdbcWalletPort — customer-wallet is
