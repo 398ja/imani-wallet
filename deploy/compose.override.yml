@@ -459,6 +459,18 @@ services:
     environment:
       # See the gateway-core note above.
       GATEWAY_DEV_MODE: "false"
+      # Where to reach gateway-core for the calls this tier delegates rather
+      # than serves: NIP-05 resolution is the visible one.
+      #
+      # GatewayCoreClientProperties defaults gateway.core.base-url to
+      # http://localhost:8081, which inside THIS container is itself, and
+      # nothing listens on 8081 here (the app is on 8082). So every delegated
+      # call failed to connect and CoreNip05ResolutionClient returned empty,
+      # which ResolutionController turns into a 404 "NIP-05 not found" — the
+      # same response as a handle that genuinely does not exist. A registered
+      # handle and an unreachable gateway-core are indistinguishable from the
+      # wallet, which is what made this look like missing bottin data.
+      GATEWAY_CORE_BASE_URL: "http://gateway-core:8081"
       # Defaults to the service name, which the published image accepts. The
       # rebuilt image carries cashu-wallet 0.7.0, whose MintUrlValidator refuses
       # a non-localhost http:// mint — correct, and not relaxed here. For that
