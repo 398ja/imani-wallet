@@ -1,0 +1,127 @@
+/**
+ * Does a locked coupon survive the WHOLE gateway round trip?
+ *
+ * `probe-witness-positive.mts` talks to the mint directly, which proves the
+ * mint enforces a lock but says nothing about whether the gateway can issue one
+ * or spend one. Issue #58 broke in four separate places between those two ends,
+ * and every one of them returned a cheerful 2xx while doing the wrong thing:
+ *
+ *   - the controller rebuilt the request and dropped recipient_pubkey
+ *   - the adapter routed a locked request down a path that discards metadata
+ *   - the app's CBOR reader could not decode a cashuB token at all
+ *   - no client ever sent the X-Cashu-Witnesses header
+ *
+ * None of those was visible from either end alone. So this drives the real
+ * gateway over HTTP with NIP-98 auth and checks the property that actually
+ * matters: the coupon is locked to the customer, the mint REFUSES it unsigned,
+ * and the customer's own signature is what makes it spendable.
+ *
+ *   npx tsx e2e/probe-gateway-locked-redeem.mts
+ *
+ * Needs the imani-test stack up, and a funded gateway wallet.
+ */
+import { readFileSync } from 'node:fs'
+import { finalizeEvent, getPublicKey } from 'nostr-tools/pure'
+import { hexToBytes, bytesToHex } from '@noble/hashes/utils'
+import { sha256 } from '@noble/hashes/sha2.js'
+import { schnorr } from '@noble/curves/secp256k1.js'
+
+import { proofSecrets } from '../src/lib/voucherToken'
+
+const GATEWAY = process.env.GATEWAY_URL ?? 'http://localhost:28082'
+const MINT = process.env.MINT_URL ?? 'http://127.0.0.1.mint:7777'
+const KEY_FILE = process.env.LOCK_KEY_FILE ?? '/tmp/lockkey.json'
+
+const secretKey = hexToBytes(JSON.parse(readFileSync(KEY_FILE, 'utf8')).sk)
+const pubkey = getPublicKey(secretKey)
+
+/** NIP-98: the gateway signs every customer request, so the probe must too. */
+function authHeader(url: string, method: string, body?: string): string {
+  const tags = [['u', url], ['method', method]]
+  if (body) tags.push(['payload', bytesToHex(sha256(new TextEncoder().encode(body)))])
+  const event = finalizeEvent(
+    { kind: 27235, created_at: Math.floor(Date.now() / 1000), tags, content: '' }, secretKey)
+  return 'Nostr ' + Buffer.from(JSON.stringify(event)).toString('base64')
+}
+
+async function call(path: string, method: string, payload?: unknown,
+                    extra: Record<string, string> = {}) {
+  const url = GATEWAY + path
+  const body = payload ? JSON.stringify(payload) : undefined
+  const res = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json', Authorization: authHeader(url, method, body), ...extra },
+    body,
+  })
+  return { status: res.status, text: await res.text() }
+}
+
+function fail(message: string): never {
+  console.error(`FAIL: ${message}`)
+  process.exit(1)
+}
+
+// 1. Issue a coupon locked to the customer's key.
+const created = await call('/api/v1/wallet/vouchers', 'POST', {
+  face_value: 30, face_unit: 'sat', face_decimals: 0,
+  mint_url: MINT, backing_strategy: 'FIXED',
+  recipient_pubkey: '02' + pubkey,
+})
+if (created.status !== 201) fail(`issuance returned ${created.status}: ${created.text.slice(0, 200)}`)
+
+// Quote-funded issuance finalises asynchronously, so poll for the token.
+const voucherId = JSON.parse(created.text).voucher_id
+let token: string | undefined = JSON.parse(created.text).token
+for (let i = 0; !token && i < 8; i++) {
+  await new Promise((r) => setTimeout(r, 3_000))
+  const polled = await call(`/api/v1/wallet/vouchers/${voucherId}`, 'GET')
+  try { token = JSON.parse(polled.text).token } catch { /* still pending */ }
+}
+if (!token) fail(`voucher ${voucherId} never produced a token`)
+console.log('1. issued a locked coupon')
+
+// 2. Read its secrets with the app's OWN reader, not a second decoder.
+const secrets = proofSecrets(token)
+const kinds = secrets.map((s) => JSON.parse(s)[0])
+if (!kinds.includes('P2PK_VOUCHER')) {
+  // The failure this catches: recipient_pubkey silently dropped somewhere
+  // between the controller and the signed secret, yielding a bearer coupon
+  // that anyone can spend. It returns 201 either way.
+  fail(`coupon is not locked — kinds were ${JSON.stringify(kinds)}`)
+}
+console.log(`2. decoded ${secrets.length} secret(s), locked as P2PK_VOUCHER`)
+
+// 3. Sign, exactly as the browser does.
+const xOnly = (hex: string) => (hex.length === 66 ? hex.slice(2) : hex)
+const witnesses: Record<string, string[]> = {}
+for (const secret of secrets) {
+  const parsed = JSON.parse(secret)
+  if (parsed[0] !== 'P2PK_VOUCHER') continue
+  if (xOnly(parsed[1].data) !== pubkey) continue
+  // A BARE hex signature over sha256(secret): the gateway parses
+  // Map<String, List<String>> and builds the NUT-11 witness itself.
+  witnesses[secret] = [bytesToHex(schnorr.sign(sha256(new TextEncoder().encode(secret)), secretKey))]
+}
+if (Object.keys(witnesses).length === 0) fail('nothing was signed — is the coupon locked to us?')
+const header = JSON.stringify(witnesses)
+console.log('3. signed every locked secret')
+
+// 4a. Unsigned must be REFUSED. Without this arm a permissive mint would let
+//     the whole probe pass while enforcing nothing.
+const bare = await call('/api/v1/wallet/receive', 'POST', { token },
+  { 'Idempotency-Key': `probe-bare-${Date.now()}` })
+if (bare.status === 200) fail('an unsigned locked coupon was ACCEPTED — the lock is not enforced')
+console.log(`4a. unsigned redemption refused (${bare.status})`)
+
+// The auth filter rejects a repeated event id, and created_at has 1s
+// resolution, so the next request needs a distinct second.
+await new Promise((r) => setTimeout(r, 1_500))
+
+// 4b. Signed must SUCCEED.
+const signed = await call('/api/v1/wallet/receive', 'POST', { token },
+  { 'Idempotency-Key': `probe-signed-${Date.now()}`, 'X-Cashu-Witnesses': header })
+if (signed.status !== 200) {
+  fail(`a correctly signed coupon was refused (${signed.status}): ${signed.text.slice(0, 300)}`)
+}
+console.log(`4b. signed redemption succeeded (${signed.status})`)
+console.log('\nPASS: the coupon is the customer\'s, and only their signature spends it.')

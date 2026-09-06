@@ -3,6 +3,7 @@ import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@noble/hashes/utils'
 
 import { getSigner } from './nap'
+import { proofSecrets } from './voucherToken'
 
 /**
  * Signing the NUT-11 witness that unlocks a coupon locked to this wallet.
@@ -131,35 +132,23 @@ export function witnessHeader(secrets: readonly string[]): string | null {
 /**
  * The proof secrets carried by an encoded token.
  *
- * A cashuB token is CBOR, not JSON, so this goes through the decoder in
- * `shared/nut18v.js` — the only one in the app. Returns an empty list rather
- * than throwing for anything it cannot read: an unreadable token is the
- * gateway's problem to report, and failing here would break an ordinary bearer
- * receive that never needed a witness at all.
+ * Delegates to `voucherToken.proofSecrets`, which is the app's own TokenV4
+ * reader, rather than decoding again here. A second decoder is the substitution
+ * these paths exist to avoid: it would drift from the one the app actually uses
+ * and the difference would show up as a coupon that cannot be spent.
+ *
+ * Returns an empty list rather than throwing for anything it cannot read. An
+ * unreadable token is the gateway's problem to report, and failing here would
+ * break an ordinary bearer receive that never needed a witness at all.
  */
 export function secretsFromToken(token: string): string[] {
   try {
     const trimmed = token.trim()
     const body = trimmed.startsWith('cashu:') ? trimmed.slice(6) : trimmed
     // Locked proofs are only ever issued as V4. A cashuA token is legacy and
-    // bearer, so there is nothing in one to sign and no reason to decode it.
+    // bearer, so there is nothing in one to sign; proofSecrets throws on it.
     if (!body.startsWith('cashuB')) return []
-
-    const cbor = (globalThis as unknown as { NUT18V?: { _CBOR?: { decode(b: Uint8Array): unknown } } })
-      .NUT18V?._CBOR
-    if (!cbor) return []
-
-    let base64 = body.slice(6).replace(/-/g, '+').replace(/_/g, '/')
-    while (base64.length % 4) base64 += '='
-    const binary = atob(base64)
-    const bytes = new Uint8Array(binary.length)
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-
-    const decoded = cbor.decode(bytes) as { t?: { p?: { s?: string }[] }[] }
-    return (decoded?.t ?? [])
-      .flatMap((entry) => entry?.p ?? [])
-      .map((proof) => proof?.s)
-      .filter((secret): secret is string => typeof secret === 'string')
+    return proofSecrets(body)
   } catch {
     return []
   }
