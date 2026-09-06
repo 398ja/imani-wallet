@@ -211,7 +211,13 @@ services:
     # gateway-customer had the alias; the tier that actually dereferences the
     # mint URL did not.
     extra_hosts:
-      - "127.0.0.1.mint:${MINT_HOST_IP:-192.168.144.12}"
+      # No default: an out-of-date literal here is worse than a missing value.
+      # It used to default to 192.168.144.12, and when the mint moved to .16 the
+      # alias resolved to whatever container now held .12 — so a split failed
+      # with "Connection refused" against an address that looked plausible,
+      # rather than failing loudly as an unset variable. .env.test carries the
+      # current ip and deploy/up.sh resolves it dynamically.
+      - "127.0.0.1.mint:${MINT_HOST_IP:?set MINT_HOST_IP to the mint container ip}"
     # account-app is defined ONLY here — the deploy repo's test compose has no
     # such service — so nothing else supplies its database or its network. It
     # exited(1) at startup on `Connection to localhost:5432 refused`, because
@@ -349,7 +355,13 @@ services:
     # what dereferences the token's own mint URL during a split, and without the
     # alias every split fails with UnknownHostException.
     extra_hosts:
-      - "127.0.0.1.mint:${MINT_HOST_IP:-192.168.144.12}"
+      # No default: an out-of-date literal here is worse than a missing value.
+      # It used to default to 192.168.144.12, and when the mint moved to .16 the
+      # alias resolved to whatever container now held .12 — so a split failed
+      # with "Connection refused" against an address that looked plausible,
+      # rather than failing loudly as an unset variable. .env.test carries the
+      # current ip and deploy/up.sh resolves it dynamically.
+      - "127.0.0.1.mint:${MINT_HOST_IP:?set MINT_HOST_IP to the mint container ip}"
     environment:
       GATEWAY_DEV_MODE: "false"
       # And the second thing the account-app block documents, for the same
@@ -492,7 +504,13 @@ services:
     # it gets a name the validator recognises as local, pointing at the address
     # it actually has.
     extra_hosts:
-      - "127.0.0.1.mint:${MINT_HOST_IP:-192.168.144.12}"
+      # No default: an out-of-date literal here is worse than a missing value.
+      # It used to default to 192.168.144.12, and when the mint moved to .16 the
+      # alias resolved to whatever container now held .12 — so a split failed
+      # with "Connection refused" against an address that looked plausible,
+      # rather than failing loudly as an unset variable. .env.test carries the
+      # current ip and deploy/up.sh resolves it dynamically.
+      - "127.0.0.1.mint:${MINT_HOST_IP:?set MINT_HOST_IP to the mint container ip}"
     environment:
       # See the gateway-core note above.
       GATEWAY_DEV_MODE: "false"
