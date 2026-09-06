@@ -142,6 +142,31 @@ if (fresh) {
       + `with a proof this swap just spent, so they are already spent at the mint`)
   }
   console.log(`5. the ${freshSecrets.length} minted proof(s) all carry fresh secrets`)
+
+  // 6. And they must actually be SPENDABLE.
+  //
+  // Fresh secrets are necessary but not sufficient. The nonce that makes them
+  // distinct lives inside the bytes the issuer signed, so unless the issuer
+  // re-signs, the mint refuses them with voucher_signature_invalid (90019) —
+  // received fine, dead on the next spend. Only a real second spend shows it.
+  await new Promise((r) => setTimeout(r, 1_600))
+  const freshWitnesses: Record<string, string[]> = {}
+  for (const secret of freshSecrets) {
+    let parsed
+    try { parsed = JSON.parse(secret) } catch { continue }
+    if (parsed[0] !== 'P2PK_VOUCHER') continue
+    if (xOnly(parsed[1].data) !== pubkey) continue
+    freshWitnesses[secret] =
+      [bytesToHex(schnorr.sign(sha256(new TextEncoder().encode(secret)), secretKey))]
+  }
+  const respend = await call('/api/v1/wallet/receive', 'POST', { token: fresh },
+    { 'Idempotency-Key': `probe-respend-${Date.now()}`,
+      'X-Cashu-Witnesses': JSON.stringify(freshWitnesses) })
+  if (respend.status !== 200) {
+    fail(`the proofs receive minted could not be spent (${respend.status}): `
+      + `${respend.text.slice(0, 300)}`)
+  }
+  console.log(`6. those minted proof(s) spend again cleanly (${respend.status})`)
 }
 
 console.log('\nPASS: the coupon is the customer\'s, and only their signature spends it.')
