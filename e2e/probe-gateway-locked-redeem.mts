@@ -124,4 +124,24 @@ if (signed.status !== 200) {
   fail(`a correctly signed coupon was refused (${signed.status}): ${signed.text.slice(0, 300)}`)
 }
 console.log(`4b. signed redemption succeeded (${signed.status})`)
+
+// 5. The proofs receive MINTED must not be born spent.
+//
+// A 200 on the receive is not enough. If the swap gives an output the same
+// secret as its input, the two share a Y — and the input is spent by that very
+// swap, so the "fresh" proof is already marked spent at the mint. The receive
+// looks perfect and the coupon is destroyed. That shipped once: an attempt to
+// preserve the issuer signature by keeping the nonce did exactly this, and
+// only a respend revealed it.
+const fresh = JSON.parse(signed.text).token
+if (fresh) {
+  const freshSecrets = proofSecrets(fresh)
+  const reused = freshSecrets.filter((s) => secrets.includes(s))
+  if (reused.length > 0) {
+    fail(`${reused.length} minted proof(s) reuse an input secret — they share a Y `
+      + `with a proof this swap just spent, so they are already spent at the mint`)
+  }
+  console.log(`5. the ${freshSecrets.length} minted proof(s) all carry fresh secrets`)
+}
+
 console.log('\nPASS: the coupon is the customer\'s, and only their signature spends it.')
