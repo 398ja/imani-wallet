@@ -1225,6 +1225,34 @@ class GatewayAPI {
       extraHeaders['Idempotency-Key'] = options.idempotencyKey;
     }
 
+    // Sign the proofs this wallet is allowed to spend.
+    //
+    // Receiving a locked coupon SPENDS it: the swap that mints fresh proofs
+    // consumes the locked ones, so the mint demands a NUT-11 witness for each.
+    // The gateway cannot produce them — it holds no customer spending keys,
+    // which is the entire point of issue #58 — so the signature is made in the
+    // page and only the signature crosses the wire.
+    //
+    // Attached here rather than at the three call sites so burn, redemption
+    // and revocation all get it, and a fourth caller cannot forget. The hook
+    // is installed by legacyBridge because this file is a classic script and
+    // cannot import the TypeScript module.
+    //
+    // Absent hook, locked-to-someone-else, bearer token, wallet not unlocked:
+    // all produce null and send no header at all, leaving an ordinary receive
+    // byte-identical to what it was before locked coupons existed.
+    try {
+      const witnesses = globalThis.__imaniWitnessHeaderForToken?.(token);
+      if (witnesses) {
+        extraHeaders['X-Cashu-Witnesses'] = witnesses;
+      }
+    } catch {
+      // Never fail a receive because signing failed. An unsigned locked proof
+      // is refused by the MINT, with a reason naming the real problem; an
+      // exception here would also break every bearer receive that never
+      // needed a witness.
+    }
+
     return this.requestWithHeaders('POST', '/api/v1/wallet/receive', { token }, extraHeaders);
   }
 

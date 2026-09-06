@@ -127,3 +127,60 @@ export function witnessHeader(secrets: readonly string[]): string | null {
   const witnesses = buildWitnesses(secrets)
   return Object.keys(witnesses).length === 0 ? null : JSON.stringify(witnesses)
 }
+
+/**
+ * The proof secrets carried by an encoded token.
+ *
+ * A cashuB token is CBOR, not JSON, so this goes through the decoder in
+ * `shared/nut18v.js` — the only one in the app. Returns an empty list rather
+ * than throwing for anything it cannot read: an unreadable token is the
+ * gateway's problem to report, and failing here would break an ordinary bearer
+ * receive that never needed a witness at all.
+ */
+export function secretsFromToken(token: string): string[] {
+  try {
+    const trimmed = token.trim()
+    const body = trimmed.startsWith('cashu:') ? trimmed.slice(6) : trimmed
+    // Locked proofs are only ever issued as V4. A cashuA token is legacy and
+    // bearer, so there is nothing in one to sign and no reason to decode it.
+    if (!body.startsWith('cashuB')) return []
+
+    const cbor = (globalThis as unknown as { NUT18V?: { _CBOR?: { decode(b: Uint8Array): unknown } } })
+      .NUT18V?._CBOR
+    if (!cbor) return []
+
+    let base64 = body.slice(6).replace(/-/g, '+').replace(/_/g, '/')
+    while (base64.length % 4) base64 += '='
+    const binary = atob(base64)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+
+    const decoded = cbor.decode(bytes) as { t?: { p?: { s?: string }[] }[] }
+    return (decoded?.t ?? [])
+      .flatMap((entry) => entry?.p ?? [])
+      .map((proof) => proof?.s)
+      .filter((secret): secret is string => typeof secret === 'string')
+  } catch {
+    return []
+  }
+}
+
+/**
+ * The witness header for a token about to be redeemed, or null.
+ *
+ * The single entry point for the receive path: hand it the token the customer
+ * is redeeming and it returns either a header value or null. Null covers every
+ * ordinary case — a bearer token, a coupon locked to somebody else, a wallet
+ * that is not unlocked — and the caller then sends no header, leaving the wire
+ * exactly as it was before locked coupons existed.
+ *
+ * Never throws. A receive that fails because signing failed would be worse
+ * than one the mint refuses with a reason.
+ */
+export function witnessHeaderForToken(token: string): string | null {
+  try {
+    return witnessHeader(secretsFromToken(token))
+  } catch {
+    return null
+  }
+}

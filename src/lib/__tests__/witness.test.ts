@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha2.js'
@@ -18,8 +20,16 @@ vi.mock('../nap', () => ({
   getSigner: () => mockSigner,
 }))
 
-const { buildWitnesses, isLockedSecret, lockedToPubkey, signWitness, witnessHeader, xOnly } =
-  await import('../witness')
+const {
+  buildWitnesses,
+  isLockedSecret,
+  lockedToPubkey,
+  secretsFromToken,
+  signWitness,
+  witnessHeader,
+  witnessHeaderForToken,
+  xOnly,
+} = await import('../witness')
 
 const lockedSecret = (pubkeyCompressed: string, nonce = 'aa') =>
   JSON.stringify([
@@ -159,6 +169,90 @@ describe('witness', () => {
       expect(xOnly(HOLDER_PUBKEY_COMPRESSED)).toBe(HOLDER_PUBKEY_XONLY)
       expect(xOnly(HOLDER_PUBKEY_XONLY)).toBe(HOLDER_PUBKEY_XONLY)
       expect(xOnly(`0x${HOLDER_PUBKEY_COMPRESSED}`)).toBe(HOLDER_PUBKEY_XONLY)
+    })
+  })
+
+
+  /**
+   * Reading the secrets out of an encoded token, and signing them.
+   *
+   * This is the step that was missing: the witness signer existed and was
+   * tested, but nothing could get the secrets out of a cashuB token, so no
+   * locked coupon could actually be redeemed through the UI.
+   *
+   * The tokens here are built with the app's OWN CBOR encoder rather than
+   * hand-rolled fixtures, so the test exercises the same codec the wire uses.
+   */
+  describe('reading secrets off a token', () => {
+    // shared/nut18v.js is a classic script that assigns to window; the app
+    // loads it the same way in main.tsx.
+    const loadCbor = () => {
+      const scope = globalThis as unknown as {
+        window?: unknown
+        NUT18V?: { _CBOR: { encode(v: unknown): Uint8Array } }
+      }
+      scope.window = scope
+      new Function(
+        readFileSync(new URL('../../../shared/nut18v.js', import.meta.url), 'utf8'),
+      )()
+      return scope.NUT18V!._CBOR
+    }
+
+    const encodeToken = (secrets: string[]) => {
+      const bytes = loadCbor().encode({
+        t: [{ p: secrets.map((s) => ({ s })) }],
+        m: 'https://mint.example',
+        u: 'sat',
+      })
+      let base64 = btoa(String.fromCharCode(...bytes))
+      base64 = base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+      return `cashuB${base64}`
+    }
+
+    it('extracts every proof secret', () => {
+      const first = lockedSecret(HOLDER_PUBKEY_COMPRESSED, 'a1')
+      const second = lockedSecret(HOLDER_PUBKEY_COMPRESSED, 'a2')
+
+      expect(secretsFromToken(encodeToken([first, second]))).toEqual([first, second])
+    })
+
+    it('tolerates the cashu: URI prefix', () => {
+      const secret = lockedSecret(HOLDER_PUBKEY_COMPRESSED)
+
+      expect(secretsFromToken(`cashu:${encodeToken([secret])}`)).toEqual([secret])
+    })
+
+    it('returns nothing for a token it cannot read', () => {
+      // Garbage must not throw. An unreadable token is the gateway's problem
+      // to report, and throwing here would break an ordinary bearer receive.
+      expect(secretsFromToken('cashuBnot-valid-base64!!')).toEqual([])
+      expect(secretsFromToken('cashuAlegacy')).toEqual([])
+      expect(secretsFromToken('')).toEqual([])
+    })
+
+    it('signs a token locked to this wallet', () => {
+      const secret = lockedSecret(HOLDER_PUBKEY_COMPRESSED)
+
+      const header = witnessHeaderForToken(encodeToken([secret]))
+
+      expect(header).not.toBeNull()
+      const parsed = JSON.parse(header!) as Record<string, string[]>
+      expect(Object.keys(parsed)).toEqual([secret])
+      // A real BIP-340 signature over sha256(secret), verifiable against the
+      // x-only key exactly as the mint checks it.
+      expect(
+        schnorr.verify(hexToBytes(parsed[secret][0]), sha256(utf8ToBytes(secret)), hexToBytes(HOLDER_PUBKEY_XONLY)),
+      ).toBe(true)
+    })
+
+    it('sends no header for a bearer token', () => {
+      // The whole point of null: an ordinary receive stays byte-identical to
+      // what it was before locked coupons existed.
+      expect(witnessHeaderForToken(encodeToken([bearerSecret]))).toBeNull()
+    })
+
+    it('sends no header for a coupon locked to somebody else', () => {
+      expect(witnessHeaderForToken(encodeToken([lockedSecret(OTHER_PUBKEY_COMPRESSED)]))).toBeNull()
     })
   })
 
