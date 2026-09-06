@@ -346,6 +346,27 @@ services:
       # wss://relay.imani.casa, a PUBLIC relay, and a local stack would open
       # WebSockets to it and publish there.
       GATEWAY_CORE_NOSTR_RELAYS: "ws://nostr-relay:7777"
+      # The same edge shared secret gateway-portal carries.
+      #
+      # gateway-core runs NapProxyAuthFilter too (GatewaySecurityConfiguration),
+      # and that filter fails CLOSED: with no secret it logs
+      # nap_proxy_auth_disabled and ignores X-Auth-Pubkey for every request. The
+      # secret was set only on gateway-portal, so gateway-core discarded the
+      # identity Vite's edge-auth shim had just established, and portal calls
+      # came back "NIP-98 authentication required" even with a valid NAP session.
+      #
+      # The comment on gateway-portal's copy names this exact symptom; it just
+      # needs to be on both tiers, because both instantiate the filter.
+      #
+      # Note the variable is GATEWAY_CORE_..., not GATEWAY_PORTAL_...: each tier
+      # reads its own name (gateway.core.edge-shared-secret here,
+      # gateway.portal.edge-shared-secret there) while application.yml requires
+      # they hold the SAME value, "one nap_auth.lua, one secret". The warning
+      # this filter logs names GATEWAY_PORTAL_EDGE_SHARED_SECRET regardless of
+      # which tier logged it, so setting the variable it names on gateway-core
+      # changes nothing and the warning persists — which is exactly the wrong
+      # turn this comment exists to save the next person.
+      GATEWAY_CORE_EDGE_SHARED_SECRET: "dev-edge-secret-local-only"
       # Where the browser uploads avatars and banners.
       #
       # This is set on account-app too, but GET /api/v1/config is served by
@@ -471,6 +492,12 @@ services:
       # handle and an unreachable gateway-core are indistinguishable from the
       # wallet, which is what made this look like missing bottin data.
       GATEWAY_CORE_BASE_URL: "http://gateway-core:8081"
+      # Third copy of the one edge secret. CustomerSecurityConfiguration runs
+      # NapProxyAuthFilter as well, reading gateway.customer.edge-shared-secret,
+      # and fails closed the same way: without it the identity the edge
+      # established is discarded on this tier too. All three names must hold the
+      # same value — application.yml puts it as "one nap_auth.lua, one secret".
+      GATEWAY_CUSTOMER_EDGE_SHARED_SECRET: "dev-edge-secret-local-only"
       # Defaults to the service name, which the published image accepts. The
       # rebuilt image carries cashu-wallet 0.7.0, whose MintUrlValidator refuses
       # a non-localhost http:// mint — correct, and not relaxed here. For that
