@@ -395,6 +395,28 @@ services:
       # changes nothing and the warning persists — which is exactly the wrong
       # turn this comment exists to save the next person.
       GATEWAY_CORE_EDGE_SHARED_SECRET: "dev-edge-secret-local-only"
+      # The real NIP-17 DM publisher, without which the atomic-send saga has no
+      # way to deliver.
+      #
+      # Nip17DmSendConfiguration is @ConditionalOnProperty on this flag, and with
+      # it unset DefaultDmPublisher wins on @ConditionalOnMissingBean and answers
+      # every delivery with DM_PUBLISHER_UNAVAILABLE. The saga then parks in
+      # DM_ERROR, and reclaim from that state needs an HTTP receive endpoint the
+      # decomposed stack does not expose, so the send is neither delivered nor
+      # returnable: "held by the gateway ... preserved server-side for manual
+      # recovery".
+      #
+      # These two were set on account-app only. Both containers run the same
+      # image and share the database, but the wallet's /api/v1/atomic-send goes
+      # to gateway-core on :28081, which did not have them — the same shape as
+      # BLOSSOM_SERVER_URL being set on the wrong one of the pair.
+      #
+      # The token must match CUSTOMER_WALLET_SVC_CRED_ATOMIC_OPS on
+      # gateway-customer, which is what authenticates the call to its internal
+      # POST /internal/v1/wallet/dm/tokens/send.
+      GATEWAY_ATOMIC_SEND_DELIVERY_NIP17_ENABLED: "true"
+      GATEWAY_ATOMIC_SEND_DELIVERY_NIP17_SERVICE_TOKEN: "dev-atomic-ops-token-local-only"
+      GATEWAY_ATOMIC_SEND_DELIVERY_NIP17_CUSTOMER_WALLET_BASE_URL: "http://gateway-customer:8082"
       # Where the browser uploads avatars and banners.
       #
       # This is set on account-app too, but GET /api/v1/config is served by
