@@ -86,7 +86,23 @@ services:
   # so issuance calls http://phoenixd-mock:9740/createinvoice. Without it,
   # /v1/mint/quote/voucher/bolt11 returns 500 and nothing can be issued.
   phoenixd-mock:
-    image: docker.398ja.xyz/staging/phoenixd-mock:latest
+    # The LOCAL build, not the staging tag.
+    #
+    # The staging image only PATCHes the quote to PAID. That writes the row and
+    # stops: the mint learns a quote was funded from the phoenixd webhook that
+    # payment-adapter's PhoenixWebhookHandler forwards on, so with only the PATCH
+    # the quote reads PAID everywhere while the mint has no funding record, and
+    # voucher issuance sits at "Waiting for the voucher to be backed" until it
+    # times out.
+    #
+    # phoenixd-java df292ab adds the real callback alongside the PATCH for exactly
+    # this reason, citing the same failure on staging 2026-08-29. Both images are
+    # named "latest" in different registries, which is why the stale one was not
+    # obvious. Rebuild with:
+    #
+    #   cd ../phoenixd-java && mvn -q -pl phoenixd-mock jib:dockerBuild \
+    #       -DskipTests -Djib.to.image=phoenixd-mock:webhook-local
+    image: ${PHOENIXD_MOCK_IMAGE:-phoenixd-mock:webhook-local}
 
   gateway-portal:
     # Built locally from imani-gateway-portal, NOT pulled: the registry image has
