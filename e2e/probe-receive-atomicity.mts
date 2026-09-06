@@ -68,12 +68,13 @@ const key = `probe-conc-${Date.now()}`
 const url = GW + '/api/v1/wallet/receive'
 const body = JSON.stringify({ token })
 const requests = Array.from({ length: 6 }, (_, i) => ({
-  // A distinct created_at per caller, since the filter keys on event id and
-  // an identical event body one second apart still collides.
+  // A distinct created_at per caller. The filter keys on event id, and two
+  // callers sharing a second produce byte-identical events and therefore the
+  // same id — so the offset must be per-caller, not per-run.
   headers: {
     'Content-Type': 'application/json',
     Authorization: 'Nostr ' + Buffer.from(JSON.stringify(finalizeEvent({
-      kind: 27235, created_at: Math.floor(Date.now() / 1000) - i,
+      kind: 27235, created_at: Math.floor(Date.now() / 1000) - (i * 3),
       tags: [['u', url], ['method', 'POST'],
              ['payload', bytesToHex(sha256(new TextEncoder().encode(body)))]],
       content: '',
