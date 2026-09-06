@@ -62,10 +62,17 @@ function fail(message: string): never {
 }
 
 // 1. Issue a coupon locked to the customer's key.
+// FACE_VALUE=120 makes the mint split the token into 64+32+16+8, which is
+// the case that matters: four outputs cannot share a nonce, so each needs its
+// own AND each needs a valid issuer signature. A single-proof voucher passes
+// even when the multi-output path is broken, so the default is the split.
+const faceValue = Number(process.env.FACE_VALUE ?? 120)
 const created = await call('/api/v1/wallet/vouchers', 'POST', {
-  face_value: 30, face_unit: 'sat', face_decimals: 0,
+  face_value: faceValue, face_unit: 'sat', face_decimals: 0,
   mint_url: MINT, backing_strategy: 'FIXED',
   recipient_pubkey: '02' + pubkey,
+  // Drives token_amount, and therefore how many proofs the token carries.
+  backing_sats: faceValue,
 })
 if (created.status !== 201) fail(`issuance returned ${created.status}: ${created.text.slice(0, 200)}`)
 
@@ -89,7 +96,12 @@ if (!kinds.includes('P2PK_VOUCHER')) {
   // that anyone can spend. It returns 201 either way.
   fail(`coupon is not locked — kinds were ${JSON.stringify(kinds)}`)
 }
-console.log(`2. decoded ${secrets.length} secret(s), locked as P2PK_VOUCHER`)
+if (new Set(secrets).size !== secrets.length) {
+  // Identical secrets share a Y, so the mint treats them as one proof: a
+  // 120 sat voucher would be worth 64.
+  fail(`the ${secrets.length} issued proof(s) are not all distinct`)
+}
+console.log(`2. decoded ${secrets.length} distinct secret(s), locked as P2PK_VOUCHER`)
 
 // 3. Sign, exactly as the browser does.
 const xOnly = (hex: string) => (hex.length === 66 ? hex.slice(2) : hex)
