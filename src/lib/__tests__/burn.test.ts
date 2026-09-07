@@ -70,6 +70,64 @@ beforeEach(() => {
 })
 
 describe('burnIfSelfIssued', () => {
+  /**
+   * A 409 can mean "already running", not "failed".
+   *
+   * The gateway claims the idempotency key BEFORE the irreversible swap, so a
+   * duplicate arriving while the winner is mid-swap is refused: the row is
+   * CLAIMED and there is no outcome to replay yet. Observed live — the escrow
+   * was created at 08:44:22.95 and the duplicate arrived 90ms later, settling
+   * at 08:44:24, so it was seconds from succeeding.
+   *
+   * Reporting that as "redeemed coupon not burnt" is wrong twice over: the
+   * coupon usually IS burnt a moment later, and the operator is told to act on
+   * something that resolves itself.
+   */
+  it('retries once when the gateway says the burn is already in flight', async () => {
+    let attempts = 0
+    stubs.api.receive = async (token: string) => {
+      attempts += 1
+      received.push(token)
+      if (attempts === 1) {
+        const conflict = Object.assign(new Error('API request failed'), {
+          status: 409,
+          code: 'UNKNOWN_ERROR',
+        })
+        throw conflict
+      }
+      return { receive_id: 'escrow-1', token: 'cashuBfresh' }
+    }
+
+    expect(await burnIfSelfIssued(row(), MERCHANT)).toBe(true)
+    expect(attempts).toBe(2)
+    expect(stubs.saved.at(-1)?.status).toBe('redeemed')
+  })
+
+  it('still fails honestly when the contention does not clear', async () => {
+    // One retry, not a loop. If the other caller is still holding the claim,
+    // it will finish the burn and the next sweep sees it as already spent —
+    // so hammering here would only delay the sweep.
+    stubs.api.receive = async () => {
+      throw Object.assign(new Error('API request failed'), { status: 409 })
+    }
+
+    expect(await burnIfSelfIssued(row(), MERCHANT)).toBe(false)
+    expect(stubs.saved).toHaveLength(0)
+  })
+
+  it('does not retry a failure that is not a conflict', async () => {
+    // A 500 is not contention. Retrying it just doubles the load on a gateway
+    // that is already struggling.
+    let attempts = 0
+    stubs.api.receive = async () => {
+      attempts += 1
+      throw Object.assign(new Error('boom'), { status: 500 })
+    }
+
+    expect(await burnIfSelfIssued(row(), MERCHANT)).toBe(false)
+    expect(attempts).toBe(1)
+  })
+
   it('spends the proofs at the mint and marks the row redeemed', async () => {
     expect(await burnIfSelfIssued(row(), MERCHANT)).toBe(true)
 
