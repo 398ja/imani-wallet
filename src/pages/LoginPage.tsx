@@ -4,7 +4,7 @@ import { getPublicKey } from 'nostr-tools'
 import { hexToBytes } from '@noble/hashes/utils'
 
 import { Avatar, Button, Input, Alert, Centered } from '../components/ui'
-import { keyStore, hasStoredKey } from '../lib/nap'
+import { keyStore, hasStoredKey, loadUnprotectedKey } from '../lib/nap'
 import { handleLabel } from '../lib/format'
 import { loadProfile, profileName, refreshProfile, type Profile } from '../lib/profile'
 
@@ -15,6 +15,11 @@ import { loadProfile, profileName, refreshProfile, type Profile } from '../lib/p
  * an account lives too — this screen exists for the returning user, and asking
  * them nothing but a passphrase is the point.
  *
+ * Or nothing at all. A device set up without a passphrase gets a button and no
+ * field. The check runs against the stored ciphertext rather than a flag (see
+ * `loadUnprotectedKey`), so the screen cannot offer a passphrase-free unlock to
+ * someone whose key is in fact protected, or the reverse.
+ *
  * The wallet holds the customer's key because receiving coupons needs NIP-44
  * decryption to unwrap NIP-17 gift wraps, and NAP is an authentication protocol
  * whose signer only signs. At rest the key is PBKDF2 + AES-GCM encrypted by
@@ -22,6 +27,8 @@ import { loadProfile, profileName, refreshProfile, type Profile } from '../lib/p
  */
 export function LoginPage({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<void> }) {
   const [enrolled, setEnrolled] = useState<boolean | null>(null)
+  // undefined while the check is in flight, null once it has come back empty.
+  const [openKey, setOpenKey] = useState<string | null | undefined>(undefined)
   const [profile, setProfile] = useState<Profile | null>(null)
   const [passphrase, setPassphrase] = useState('')
   const [busy, setBusy] = useState(false)
@@ -31,6 +38,14 @@ export function LoginPage({ onUnlock }: { onUnlock: (privkeyHex: string) => Prom
   useEffect(() => {
     hasStoredKey().then(setEnrolled, () => setEnrolled(false))
   }, [])
+
+  // Held rather than unlocked on arrival. Landing straight in the wallet would
+  // make the back button walk out of an open session, and a stall phone left on
+  // this screen should still take a deliberate tap to open.
+  useEffect(() => {
+    if (enrolled !== true) return
+    void loadUnprotectedKey().then(setOpenKey, () => setOpenKey(null))
+  }, [enrolled])
 
   // Nothing to unlock — send them to sign-up rather than showing a passphrase
   // box for a key that does not exist.
@@ -51,7 +66,9 @@ export function LoginPage({ onUnlock }: { onUnlock: (privkeyHex: string) => Prom
     setBusy(true)
     setError(null)
     try {
-      const hex = await keyStore.loadKey(passphrase)
+      // The already-decrypted key when there is no passphrase, so opening the
+      // wallet does not pay for a second PBKDF2 over the same empty string.
+      const hex = openKey ?? (await keyStore.loadKey(passphrase))
       await onUnlock(hex)
       // Reconcile with the relay on the way in, as bottin does: a profile edited
       // on another device should be current here before the header renders.
@@ -63,7 +80,7 @@ export function LoginPage({ onUnlock }: { onUnlock: (privkeyHex: string) => Prom
     }
   }
 
-  if (enrolled === null) return <Centered>Checking…</Centered>
+  if (enrolled === null || openKey === undefined) return <Centered>Checking…</Centered>
 
   return (
     <div className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-6 p-6">
@@ -87,27 +104,31 @@ export function LoginPage({ onUnlock }: { onUnlock: (privkeyHex: string) => Prom
       </div>
 
       <div className="space-y-3">
-        <Input
-          type="password"
-          placeholder="Passphrase"
-          value={passphrase}
-          onChange={(e) => setPassphrase(e.target.value)}
-          autoComplete="current-password"
-          autoFocus
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && passphrase && !busy) void unlock()
-          }}
-        />
+        {openKey === null && (
+          <Input
+            type="password"
+            placeholder="Passphrase"
+            value={passphrase}
+            onChange={(e) => setPassphrase(e.target.value)}
+            autoComplete="current-password"
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && passphrase && !busy) void unlock()
+            }}
+          />
+        )}
         <Button
           size="lg"
           className="w-full"
-          disabled={busy || !passphrase}
+          disabled={busy || (openKey === null && !passphrase)}
           onClick={() => void unlock()}
         >
-          {busy ? 'Unlocking…' : 'Unlock'}
+          {busy ? 'Opening…' : openKey ? 'Open wallet' : 'Unlock'}
         </Button>
         <p className="text-center text-xs text-mono-400">
-          Your key stays encrypted until you unlock it.
+          {openKey
+            ? 'This device has no passphrase. Anyone holding it can open your wallet.'
+            : 'Your key stays encrypted until you unlock it.'}
         </p>
       </div>
 

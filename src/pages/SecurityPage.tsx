@@ -3,8 +3,9 @@ import { nip19 } from 'nostr-tools'
 import { hexToBytes } from '@noble/hashes/utils'
 import { Copy, Check, Download } from 'lucide-react'
 
-import { Screen, BackLink, PageHeader, ListSection, Button, Input, Alert, Panel } from '../components/ui'
-import { keyStore } from '../lib/nap'
+import { Screen, BackLink, PageHeader, ListSection, Button, Input, Alert, Panel, Switch } from '../components/ui'
+import { keyStore, NO_PASSPHRASE } from '../lib/nap'
+import { useDevicePassphrase } from '../lib/useDevicePassphrase'
 import { legacyApi } from '../lib/legacyBridge'
 import { decommissionTerminal, DECOMMISSION_COPY } from '../lib/terminalDecommission'
 import type { CredentialMintApi } from '../lib/credentialRevocation'
@@ -149,8 +150,21 @@ function DecommissionPanel({ pubkey }: { pubkey: string }) {
   )
 }
 
+/**
+ * Change the passphrase — including to no passphrase, and back.
+ *
+ * Both directions, not just the middle one. A customer who set this device up
+ * open and has since started taking real money should be able to close it
+ * without re-importing their key, and one who has now escrowed to Drive should
+ * be able to drop a passphrase they no longer need to remember.
+ *
+ * `protectedKey` is asked of the stored record rather than remembered, so this
+ * screen shows a "current passphrase" field exactly when there is one to type.
+ */
 function ChangePassphrase() {
+  const protectedKey = useDevicePassphrase()
   const [current, setCurrent] = useState('')
+  const [wanted, setWanted] = useState(true)
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
   const [busy, setBusy] = useState(false)
@@ -159,7 +173,11 @@ function ChangePassphrase() {
 
   const nextError = next === '' ? undefined : validatePassphrase(next)
   const confirmError = confirm === '' ? undefined : validateConfirmation(next, confirm)
-  const complete = current !== '' && next !== '' && confirm !== '' && !nextError && !confirmError
+  const complete =
+    protectedKey !== undefined &&
+    (!protectedKey || current !== '') &&
+    // Turning protection off on a device that is already off is not a change.
+    (wanted ? next !== '' && confirm !== '' && !nextError && !confirmError : protectedKey)
 
   const change = async () => {
     setBusy(true)
@@ -170,8 +188,8 @@ function ChangePassphrase() {
       // this is not a second key-handling implementation, it is two calls to the
       // one that already exists. A wrong current passphrase throws here, before
       // anything is overwritten.
-      const hex = await keyStore.loadKey(current)
-      await keyStore.save(hex, next)
+      const hex = await keyStore.loadKey(protectedKey ? current : NO_PASSPHRASE)
+      await keyStore.save(hex, wanted ? next : NO_PASSPHRASE)
       setDone(true)
       setCurrent('')
       setNext('')
@@ -186,38 +204,62 @@ function ChangePassphrase() {
   return (
     <ListSection title="Passphrase">
       <div className="space-y-3 p-4">
-        <Input
-          type="password"
-          placeholder="Current passphrase"
-          value={current}
-          onChange={(e) => setCurrent(e.target.value)}
-          autoComplete="current-password"
+        {protectedKey && (
+          <Input
+            type="password"
+            placeholder="Current passphrase"
+            value={current}
+            onChange={(e) => setCurrent(e.target.value)}
+            autoComplete="current-password"
+          />
+        )}
+
+        <Switch
+          label="Protect this device with a passphrase"
+          hint={
+            wanted
+              ? 'Asked for every time you open the wallet on this device.'
+              : 'Anyone holding this phone can open your wallet.'
+          }
+          checked={wanted}
+          disabled={busy}
+          onChange={setWanted}
         />
-        <div>
-          <Input
-            type="password"
-            placeholder="New passphrase"
-            value={next}
-            onChange={(e) => setNext(e.target.value)}
-            autoComplete="new-password"
-          />
-          {next !== '' && <StrengthBar strength={passphraseStrength(next)} />}
-          {nextError && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{nextError}</p>}
-        </div>
-        <div>
-          <Input
-            type="password"
-            placeholder="Confirm new passphrase"
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-            autoComplete="new-password"
-          />
-          {confirmError && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{confirmError}</p>}
-        </div>
+
+        {wanted && (
+          <>
+            <div>
+              <Input
+                type="password"
+                placeholder="New passphrase"
+                value={next}
+                onChange={(e) => setNext(e.target.value)}
+                autoComplete="new-password"
+              />
+              {next !== '' && <StrengthBar strength={passphraseStrength(next)} />}
+              {nextError && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{nextError}</p>}
+            </div>
+            <div>
+              <Input
+                type="password"
+                placeholder="Confirm new passphrase"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                autoComplete="new-password"
+              />
+              {confirmError && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{confirmError}</p>}
+            </div>
+          </>
+        )}
+
         <Button className="w-full" disabled={busy || !complete} onClick={() => void change()}>
-          {busy ? 'Changing…' : 'Change passphrase'}
+          {busy ? 'Saving…' : wanted ? 'Change passphrase' : 'Remove passphrase'}
         </Button>
-        {done && <p className="text-sm text-green-700 dark:text-green-500">Passphrase changed.</p>}
+        {done && (
+          <p className="text-sm text-green-700 dark:text-green-500">
+            {wanted ? 'Passphrase changed.' : 'Passphrase removed.'}
+          </p>
+        )}
         {error && <Alert>{error}</Alert>}
       </div>
     </ListSection>
@@ -253,6 +295,7 @@ function StrengthBar({ strength }: { strength: Strength }) {
  * a market stall would otherwise hand its key to anyone who opens this screen.
  */
 function RevealKey() {
+  const protectedKey = useDevicePassphrase()
   const [passphrase, setPassphrase] = useState('')
   const [nsec, setNsec] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -263,7 +306,7 @@ function RevealKey() {
     setBusy(true)
     setError(null)
     try {
-      const hex = await keyStore.loadKey(passphrase)
+      const hex = await keyStore.loadKey(protectedKey ? passphrase : NO_PASSPHRASE)
       setNsec(nip19.nsecEncode(hexToBytes(hex)))
       setPassphrase('')
     } catch (e) {
@@ -320,17 +363,19 @@ function RevealKey() {
               Anyone with this key controls your account and your vouchers. Only show it somewhere
               private.
             </p>
-            <Input
-              type="password"
-              placeholder="Passphrase"
-              value={passphrase}
-              onChange={(e) => setPassphrase(e.target.value)}
-              autoComplete="current-password"
-            />
+            {protectedKey && (
+              <Input
+                type="password"
+                placeholder="Passphrase"
+                value={passphrase}
+                onChange={(e) => setPassphrase(e.target.value)}
+                autoComplete="current-password"
+              />
+            )}
             <Button
               variant="secondary"
               className="w-full"
-              disabled={busy || !passphrase}
+              disabled={busy || protectedKey === undefined || (protectedKey && !passphrase)}
               onClick={() => void reveal()}
             >
               {busy ? 'Checking…' : 'Show my backup key'}

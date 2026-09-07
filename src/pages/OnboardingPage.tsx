@@ -5,7 +5,7 @@ import { hexToBytes } from '@noble/hashes/utils'
 
 import { Button, Input, Alert, Switch } from '../components/ui'
 import { gatewayConfig } from '../lib/config'
-import { toPrivkeyHex, keyStore } from '../lib/nap'
+import { toPrivkeyHex, keyStore, NO_PASSPHRASE } from '../lib/nap'
 import { HandleTakenError, isHandleAvailable, register } from '../lib/registration'
 import { refreshProfile } from '../lib/profile'
 import {
@@ -128,8 +128,7 @@ function CreateForm({
   onBack: () => void
 }) {
   const [handle, setHandle] = useState('')
-  const [passphrase, setPassphrase] = useState('')
-  const [confirm, setConfirm] = useState('')
+  const pass = usePassphrase()
   const [domain, setDomain] = useState<string | null>(null)
   const [availability, setAvailability] = useState<Availability>('idle')
   const [busy, setBusy] = useState(false)
@@ -183,10 +182,7 @@ function CreateForm({
     }
   }, [handle, handleError])
 
-  const passphraseError = passphrase === '' ? undefined : validatePassphrase(passphrase)
-  const confirmError = confirm === '' ? undefined : validateConfirmation(passphrase, confirm)
-  const complete =
-    handle !== '' && passphrase !== '' && confirm !== '' && !handleError && !passphraseError && !confirmError
+  const complete = handle !== '' && !handleError && pass.complete
 
   // Reloading restores the step from history but not the draft above it, which
   // would leave a merchant screen ready to submit an empty account. Only the
@@ -202,7 +198,7 @@ function CreateForm({
       // the remount renders.
       await register(
         handle,
-        passphrase,
+        pass.value,
         onUnlock,
         isMerchant ? merchant : undefined,
         isMerchant
@@ -353,32 +349,7 @@ function CreateForm({
         </p>
       </div>
 
-      <div>
-        <Input
-          type="password"
-          placeholder="Passphrase"
-          value={passphrase}
-          onChange={(e) => setPassphrase(e.target.value)}
-          autoComplete="new-password"
-        />
-        {passphrase !== '' && <StrengthBar strength={passphraseStrength(passphrase)} />}
-        {passphraseError && (
-          <p className="mt-1 text-xs text-red-600 dark:text-red-400">{passphraseError}</p>
-        )}
-      </div>
-
-      <div>
-        <Input
-          type="password"
-          placeholder="Confirm passphrase"
-          value={confirm}
-          onChange={(e) => setConfirm(e.target.value)}
-          autoComplete="new-password"
-        />
-        {confirmError && (
-          <p className="mt-1 text-xs text-red-600 dark:text-red-400">{confirmError}</p>
-        )}
-      </div>
+      <PassphraseFields state={pass} disabled={busy} />
 
       {/* Last, under the fields it does not change: everything above is asked of
           both roles, and this only decides whether there is a second screen. */}
@@ -417,10 +388,103 @@ function CreateForm({
       {error && <Alert>{error}</Alert>}
 
       <p className="text-center text-xs text-mono-400">
-        Your passphrase encrypts your key on this device. It is never sent anywhere, and it cannot
-        be reset.
+        {pass.wanted
+          ? 'Your passphrase encrypts your key on this device. It is never sent anywhere, and it cannot be reset.'
+          : 'Your key is stored on this device unprotected. Back it up under Settings → Backup.'}
       </p>
     </div>
+  )
+}
+
+/**
+ * The passphrase half of both sign-up forms, and the switch that removes it.
+ *
+ * Extracted because it was already written twice, and this change would have
+ * made it three times — the mistake lib/validate.ts opens by describing.
+ *
+ * A passphrase is still the default and still what the copy recommends. What
+ * changed is that it is no longer the only thing standing between a customer
+ * and their money: with the key escrowed to their own Drive, a device
+ * passphrase protects the DEVICE, and losing it costs a restore rather than the
+ * account. Making it compulsory to guard against a cliff that no longer exists
+ * just moves people to a wallet that does not ask.
+ */
+function usePassphrase() {
+  const [wanted, setWanted] = useState(true)
+  const [passphrase, setPassphrase] = useState('')
+  const [confirm, setConfirm] = useState('')
+
+  const passphraseError = passphrase === '' ? undefined : validatePassphrase(passphrase)
+  const confirmError = confirm === '' ? undefined : validateConfirmation(passphrase, confirm)
+
+  return {
+    wanted,
+    setWanted,
+    passphrase,
+    setPassphrase,
+    confirm,
+    setConfirm,
+    passphraseError,
+    confirmError,
+    /** Ready to submit. Trivially true when no passphrase was asked for. */
+    complete: !wanted || (passphrase !== '' && confirm !== '' && !passphraseError && !confirmError),
+    /** What to hand the keystore. `NO_PASSPHRASE` when the switch is off. */
+    value: wanted ? passphrase : NO_PASSPHRASE,
+  }
+}
+
+function PassphraseFields({
+  state,
+  disabled,
+}: {
+  state: ReturnType<typeof usePassphrase>
+  disabled?: boolean
+}) {
+  return (
+    <>
+      <Switch
+        label="Protect this device with a passphrase"
+        hint={
+          state.wanted
+            ? 'Asked for every time you open the wallet on this device.'
+            : 'Anyone holding this phone can open your wallet. Back up to Google Drive so you can still get back in.'
+        }
+        checked={state.wanted}
+        disabled={disabled}
+        onChange={state.setWanted}
+      />
+
+      {state.wanted && (
+        <>
+          <div>
+            <Input
+              type="password"
+              placeholder="Passphrase"
+              value={state.passphrase}
+              onChange={(e) => state.setPassphrase(e.target.value)}
+              autoComplete="new-password"
+            />
+            {state.passphrase !== '' && <StrengthBar strength={passphraseStrength(state.passphrase)} />}
+            {state.passphraseError && (
+              <p className="mt-1 text-xs text-red-600 dark:text-red-400">{state.passphraseError}</p>
+            )}
+          </div>
+
+          <div>
+            <Input
+              type="password"
+              placeholder="Confirm passphrase"
+              value={state.confirm}
+              onChange={(e) => state.setConfirm(e.target.value)}
+              autoComplete="new-password"
+            />
+            {state.confirmError && (
+              <p className="mt-1 text-xs text-red-600 dark:text-red-400">{state.confirmError}</p>
+            )}
+          </div>
+        </>
+      )}
+    </>
   )
 }
 
@@ -461,15 +525,12 @@ function ImportForm({
   onBack: () => void
 }) {
   const [nsec, setNsec] = useState('')
-  const [passphrase, setPassphrase] = useState('')
-  const [confirm, setConfirm] = useState('')
+  const pass = usePassphrase()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const navigate = useNavigate()
 
-  const passphraseError = passphrase === '' ? undefined : validatePassphrase(passphrase)
-  const confirmError = confirm === '' ? undefined : validateConfirmation(passphrase, confirm)
-  const complete = nsec !== '' && passphrase !== '' && confirm !== '' && !passphraseError && !confirmError
+  const complete = nsec !== '' && pass.complete
 
   const submit = async () => {
     setBusy(true)
@@ -477,7 +538,7 @@ function ImportForm({
     try {
       // Throws a readable message on a mistyped key, before anything is stored.
       const hex = toPrivkeyHex(nsec)
-      await keyStore.save(hex, passphrase)
+      await keyStore.save(hex, pass.value)
       await onUnlock(hex)
 
       // No `saveProfile(emptyProfile(...))` here. Writing a blank record first
@@ -513,31 +574,7 @@ function ImportForm({
         onChange={(e) => setNsec(e.target.value)}
         autoComplete="off"
       />
-      <div>
-        <Input
-          type="password"
-          placeholder="Choose a passphrase"
-          value={passphrase}
-          onChange={(e) => setPassphrase(e.target.value)}
-          autoComplete="new-password"
-        />
-        {passphrase !== '' && <StrengthBar strength={passphraseStrength(passphrase)} />}
-        {passphraseError && (
-          <p className="mt-1 text-xs text-red-600 dark:text-red-400">{passphraseError}</p>
-        )}
-      </div>
-      <div>
-        <Input
-          type="password"
-          placeholder="Confirm passphrase"
-          value={confirm}
-          onChange={(e) => setConfirm(e.target.value)}
-          autoComplete="new-password"
-        />
-        {confirmError && (
-          <p className="mt-1 text-xs text-red-600 dark:text-red-400">{confirmError}</p>
-        )}
-      </div>
+      <PassphraseFields state={pass} disabled={busy} />
 
       <Button size="lg" className="w-full" disabled={busy || !complete} onClick={submit}>
         {busy ? 'Unlocking…' : 'Add key and unlock'}
@@ -548,7 +585,9 @@ function ImportForm({
       {error && <Alert>{error}</Alert>}
 
       <p className="text-center text-xs text-mono-400">
-        Your key is encrypted with this passphrase and never leaves this device.
+        {pass.wanted
+          ? 'Your key is encrypted with this passphrase and never leaves this device.'
+          : 'Your key is stored on this device unprotected, and never leaves it.'}
       </p>
     </div>
   )
