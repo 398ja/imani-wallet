@@ -35,8 +35,9 @@ export const LOGOUT_WARNING =
   'Your account, your business and your sales come back when you log in with your ' +
   'backup key (nsec) — they are stored under your key, not on this device. ' +
   'Vouchers you are holding are restored from the relay as they are received ' +
-  'again.\n\nThe only way back in is your backup key or a backup file from ' +
-  'Settings → Backup. There is no password reset.\n\nLog out anyway?'
+  'again.\n\nThe only way back in is your backup key, a backup file, or a Google ' +
+  'Drive backup — all under Settings → Backup. There is no password reset.\n\n' +
+  'Log out anyway?'
 
 /**
  * @param confirm injected so tests can exercise both answers without a DOM.

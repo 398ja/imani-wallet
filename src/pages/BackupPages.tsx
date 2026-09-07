@@ -8,8 +8,9 @@ import { downloadText } from '../lib/download'
 import { driveConfigured, getEscrow, putEscrow } from '../lib/drive'
 import { createEscrow, installEscrow, nsecProtected, parseEscrow, type ParsedEscrow } from '../lib/escrow'
 import { handleLabel } from '../lib/format'
-import { keyStore } from '../lib/nap'
+import { keyStore, NO_PASSPHRASE } from '../lib/nap'
 import { profileName, refreshProfile, type Profile } from '../lib/profile'
+import { useDevicePassphrase } from '../lib/useDevicePassphrase'
 
 /**
  * Save a copy of the account.
@@ -84,6 +85,7 @@ export function BackupPage({ profile }: { profile: Profile }) {
  * keystore requires it — the same gate as revealing the backup key.
  */
 function DriveEscrowPanel({ profile }: { profile: Profile }) {
+  const protectedKey = useDevicePassphrase()
   const [passphrase, setPassphrase] = useState('')
   const [protect, setProtect] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -100,8 +102,12 @@ function DriveEscrowPanel({ profile }: { profile: Profile }) {
       // Verified before anything is uploaded, in both branches. A wrong
       // passphrase would otherwise escrow an envelope the customer cannot open,
       // and they would find out on the far side with nothing else left.
-      const privkeyHex = await keyStore.loadKey(passphrase)
-      await putEscrow(createEscrow(profile.pubkey, protect ? undefined : privkeyHex))
+      const privkeyHex = await keyStore.loadKey(protectedKey ? passphrase : NO_PASSPHRASE)
+      // An open device has no passphrase to protect the escrow with, so the
+      // envelope it would copy is one an empty string opens. Hex is the honest
+      // shape for that, and restore then says so on the confirmation screen.
+      const escrowProtected = protectedKey === true && protect
+      await putEscrow(createEscrow(profile.pubkey, escrowProtected ? undefined : privkeyHex))
       setDone(true)
       setPassphrase('')
     } catch (e) {
@@ -118,30 +124,41 @@ function DriveEscrowPanel({ profile }: { profile: Profile }) {
         touches an Imani server, and you can delete it from Drive at any time.
       </p>
 
-      <div className="mt-4">
-        <Switch
-          label="Ask for my passphrase to restore"
-          hint={
-            protect
-              ? 'Safest. You will need this passphrase on the new device.'
-              : 'Signing in to Google is then enough to get your account back.'
-          }
-          checked={protect}
-          onChange={setProtect}
-          disabled={busy}
+      {/* Only offered when there is a passphrase to ask for. On an open device
+          the escrowed copy can only be unprotected, and a switch promising
+          otherwise would write a file that opens with an empty string. */}
+      {protectedKey && (
+        <div className="mt-4">
+          <Switch
+            label="Ask for my passphrase to restore"
+            hint={
+              protect
+                ? 'Safest. You will need this passphrase on the new device.'
+                : 'Signing in to Google is then enough to get your account back.'
+            }
+            checked={protect}
+            onChange={setProtect}
+            disabled={busy}
+          />
+        </div>
+      )}
+
+      {protectedKey && (
+        <Input
+          className="mt-3"
+          type="password"
+          placeholder="Your passphrase"
+          value={passphrase}
+          onChange={(e) => setPassphrase(e.target.value)}
+          autoComplete="current-password"
         />
-      </div>
+      )}
 
-      <Input
-        className="mt-3"
-        type="password"
-        placeholder="Your passphrase"
-        value={passphrase}
-        onChange={(e) => setPassphrase(e.target.value)}
-        autoComplete="current-password"
-      />
-
-      <Button className="mt-3 w-full" disabled={busy || passphrase === ''} onClick={() => void escrow()}>
+      <Button
+        className="mt-3 w-full"
+        disabled={busy || protectedKey === undefined || (protectedKey && passphrase === '')}
+        onClick={() => void escrow()}
+      >
         <Cloud className="h-4 w-4" />
         <span className="ml-2">{busy ? 'Backing up…' : 'Back up to Google Drive'}</span>
       </Button>
@@ -173,6 +190,7 @@ function DriveEscrowPanel({ profile }: { profile: Profile }) {
 function DriveRestorePanel({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<void> }) {
   const [escrow, setEscrow] = useState<ParsedEscrow | null>(null)
   const [name, setName] = useState<string | null>(null)
+  const [wanted, setWanted] = useState(true)
   const [passphrase, setPassphrase] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -219,7 +237,7 @@ function DriveRestorePanel({ onUnlock }: { onUnlock: (privkeyHex: string) => Pro
     setBusy(true)
     setError(null)
     try {
-      await onUnlock(await installEscrow(escrow, passphrase))
+      await onUnlock(await installEscrow(escrow, protectedKey || wanted ? passphrase : NO_PASSPHRASE))
       navigate('/', { replace: true })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -253,23 +271,45 @@ function DriveRestorePanel({ onUnlock }: { onUnlock: (privkeyHex: string) => Pro
           <p className="mt-3 text-sm text-mono-600 dark:text-mono-300">
             {protectedKey
               ? 'Enter the passphrase this backup was made with.'
-              : 'Choose a passphrase for this device. It protects the key here only — your Drive backup will still get you back in if you forget it.'}
+              : 'Set a passphrase for this device if you want one. Your Drive backup gets you back in either way, so this one is safe to forget.'}
           </p>
 
-          <Input
-            className="mt-2"
-            type="password"
-            placeholder={protectedKey ? 'Passphrase' : 'Choose a passphrase'}
-            value={passphrase}
-            onChange={(e) => setPassphrase(e.target.value)}
-            autoComplete={protectedKey ? 'current-password' : 'new-password'}
-            autoFocus
-          />
+          {/* An unprotected escrow carries no passphrase to verify, so what this
+              asks for is a NEW one, for this device only — and it is optional
+              for the same reason it is optional at signup. A protected escrow
+              has exactly one right answer and no switch. */}
+          {!protectedKey && (
+            <div className="mt-3">
+              <Switch
+                label="Protect this device with a passphrase"
+                hint={
+                  wanted
+                    ? 'Asked for every time you open the wallet here.'
+                    : 'Anyone holding this phone can open your wallet.'
+                }
+                checked={wanted}
+                disabled={busy}
+                onChange={setWanted}
+              />
+            </div>
+          )}
+
+          {(protectedKey || wanted) && (
+            <Input
+              className="mt-2"
+              type="password"
+              placeholder={protectedKey ? 'Passphrase' : 'Choose a passphrase'}
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+              autoComplete={protectedKey ? 'current-password' : 'new-password'}
+              autoFocus
+            />
+          )}
 
           <Button
             size="lg"
             className="mt-3 w-full"
-            disabled={busy || passphrase === ''}
+            disabled={busy || ((protectedKey || wanted) && passphrase === '')}
             onClick={() => void restore()}
           >
             {busy ? 'Restoring…' : 'Restore this account'}

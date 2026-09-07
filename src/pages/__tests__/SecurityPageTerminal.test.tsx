@@ -5,7 +5,14 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
-vi.mock('../../lib/nap', () => ({ keyStore: { has: async () => true } }))
+// `loadUnprotectedKey` is what decides whether these panels render a passphrase
+// field at all, so the stub has to answer it. `null` is "this device has a
+// passphrase", which is the shape every assertion below was written against.
+vi.mock('../../lib/nap', () => ({
+  keyStore: { has: async () => true },
+  loadUnprotectedKey: async () => null,
+  NO_PASSPHRASE: '',
+}))
 vi.mock('../../lib/legacyBridge', () => ({ legacyApi: async () => ({}) }))
 
 const { SecurityPage } = await import('../SecurityPage')
