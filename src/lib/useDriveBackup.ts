@@ -30,8 +30,14 @@ export function useDriveBackup(pubkey: string) {
   const [error, setError] = useState<string | null>(null)
 
   return {
-    /** False when this deployment has no client id — callers render nothing. */
-    available: driveConfigured(),
+    /**
+     * Whether the deployment can actually complete a Drive backup.
+     *
+     * Callers show the button either way — a backup option that appears only on
+     * some deployments teaches nobody it exists. This is for wording: it says
+     * whether a click will reach Google or explain why it cannot.
+     */
+    configured: driveConfigured(),
     busy,
     done,
     error,

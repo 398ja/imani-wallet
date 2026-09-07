@@ -7,7 +7,7 @@ import { Check, Cloud, CloudDownload, Copy, Download } from 'lucide-react'
 import { Screen, BackLink, PageHeader, Panel, Button, Input, Alert } from '../components/ui'
 import { applyBackup, backupFilename, createBackup, parseBackup, type ParsedBackup } from '../lib/backup'
 import { downloadText } from '../lib/download'
-import { driveConfigured, getBackup } from '../lib/drive'
+import { getBackup } from '../lib/drive'
 import { useDriveBackup } from '../lib/useDriveBackup'
 import { handleLabel } from '../lib/format'
 import { keyStore } from '../lib/nap'
@@ -75,7 +75,7 @@ export function BackupPage({ profile, terminal }: { profile: Profile; terminal?:
   // than left behind on the screen it came from.
   const canReveal = !terminal
 
-  const buttons = (canReveal && nsec ? 1 : 0) + 1 + (drive.available ? 1 : 0)
+  const buttons = (canReveal && nsec ? 1 : 0) + 2
 
   return (
     <Screen>
@@ -98,7 +98,7 @@ export function BackupPage({ profile, terminal }: { profile: Profile; terminal?:
         {/* Same shape as the screen after onboarding: one row, one decision.
             Copy is the only one that needs the passphrase, so it joins the row
             once the key is out rather than sitting there disabled. */}
-        <div className={`mt-3 grid gap-2 ${buttons === 3 ? 'grid-cols-3' : buttons === 2 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+        <div className={`mt-3 grid gap-2 ${buttons === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
           {canReveal && nsec && (
             <Button variant="secondary" className="flex-col px-2 py-2 text-xs" onClick={() => void copy()}>
               {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
@@ -111,17 +111,15 @@ export function BackupPage({ profile, terminal }: { profile: Profile; terminal?:
             <span className="mt-1">{downloaded ? 'Saved' : 'Download file'}</span>
           </Button>
 
-          {drive.available && (
-            <Button
-              variant="secondary"
-              className="flex-col px-2 py-2 text-xs"
-              disabled={drive.busy}
-              onClick={() => void drive.save()}
-            >
-              <Cloud className="h-4 w-4" />
-              <span className="mt-1">{drive.busy ? 'Saving…' : 'Google Drive'}</span>
-            </Button>
-          )}
+          <Button
+            variant="secondary"
+            className="flex-col px-2 py-2 text-xs"
+            disabled={drive.busy}
+            onClick={() => void drive.save()}
+          >
+            <Cloud className="h-4 w-4" />
+            <span className="mt-1">{drive.busy ? 'Saving…' : 'Google Drive'}</span>
+          </Button>
         </div>
 
         {drive.done && (
@@ -163,7 +161,11 @@ export function BackupPage({ profile, terminal }: { profile: Profile; terminal?:
           </div>
         )}
 
-        {error && <Alert>{error}</Alert>}
+        {/* Both, because they fail independently: a Drive refusal must not be
+            swallowed just because the local download went fine. `drive.save`
+            reports through its own state rather than throwing, so this is the
+            only place its message can surface. */}
+        {(error ?? drive.error) && <Alert>{error ?? drive.error}</Alert>}
       </Panel>
     </Screen>
   )
@@ -205,8 +207,6 @@ function DriveRestorePanel({ onUnlock }: { onUnlock: (privkeyHex: string) => Pro
       live = false
     }
   }, [parsed])
-
-  if (!driveConfigured()) return null
 
   const fetchBackup = async () => {
     setBusy(true)

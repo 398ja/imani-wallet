@@ -101,7 +101,7 @@ export function WelcomePage({
         {/* Icon over label, not beside it. Three of these across a phone leaves
             about 100px each, which "Google Drive" does not fit on one line
             next to an icon. */}
-        <div className={`mt-2 grid gap-2 ${drive.available ? 'grid-cols-3' : 'grid-cols-2'}`}>
+        <div className="mt-2 grid grid-cols-3 gap-2">
           <Button variant="secondary" className="flex-col px-2 py-2 text-xs" onClick={copy}>
             {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
             <span className="mt-1">{copied ? 'Copied' : 'Copy key'}</span>
@@ -115,17 +115,15 @@ export function WelcomePage({
             <span className="mt-1">{downloaded ? 'Saved' : 'Download file'}</span>
           </Button>
 
-          {drive.available && (
-            <Button
-              variant="secondary"
-              className="flex-col px-2 py-2 text-xs"
-              disabled={drive.busy}
-              onClick={() => void drive.save()}
-            >
-              <Cloud className="h-4 w-4" />
-              <span className="mt-1">{drive.busy ? 'Saving…' : 'Google Drive'}</span>
-            </Button>
-          )}
+          <Button
+            variant="secondary"
+            className="flex-col px-2 py-2 text-xs"
+            disabled={drive.busy}
+            onClick={() => void drive.save()}
+          >
+            <Cloud className="h-4 w-4" />
+            <span className="mt-1">{drive.busy ? 'Saving…' : 'Google Drive'}</span>
+          </Button>
         </div>
 
         {drive.done && (

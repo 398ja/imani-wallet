@@ -10,10 +10,10 @@ const save = vi.fn(async () => {})
 vi.mock('../../lib/nap', () => ({ keyStore: { loadKey, save } }))
 vi.mock('../../lib/legacyBridge', () => ({ legacyApi: async () => ({}) }))
 
-const putBackup = vi.fn(async () => {})
+const putBackup = vi.fn<(json: string) => Promise<void>>(async () => {})
 vi.mock('../../lib/drive', () => ({
   driveConfigured: () => true,
-  putBackup: (json: string) => putBackup(json) as Promise<void>,
+  putBackup,
   getBackup: async () => null,
 }))
 

@@ -203,7 +203,7 @@ function ChangePassphrase({ pubkey }: { pubkey: string }) {
       // rather than throwing, and a catch here would be dead code that reads
       // like a safety net. The rotation has already succeeded either way, so a
       // Drive failure must not reach the outer catch and be reported as one.
-      if (drive.available) await drive.save()
+      if (drive.configured) await drive.save()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -249,9 +249,9 @@ function ChangePassphrase({ pubkey }: { pubkey: string }) {
           <>
             <p className="text-sm text-green-700 dark:text-green-500">
               Passphrase changed.
-              {drive.available && drive.done && ' Your Google Drive backup was updated too.'}
+              {drive.configured && drive.done && ' Your Google Drive backup was updated too.'}
             </p>
-            {drive.available && drive.error && (
+            {drive.configured && drive.error && (
               <Alert>
                 Your passphrase changed, but the copy in Google Drive still opens with the old one.
                 Back up again under Settings → Backup.
