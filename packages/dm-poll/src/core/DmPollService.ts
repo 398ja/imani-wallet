@@ -304,9 +304,21 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
         await this.config.storageAdapter.saveVoucher(voucher);
       }
 
-      // Get sender profile for notification
+      // Get sender profile for notification.
+      //
+      // Gated on there BEING a notification to decorate. The profile is only
+      // ever read by showReceivedNotification below and by listeners of the
+      // event we emit, so with no uiAdapter configured this fetch was pure
+      // cost: one request per redeemed coupon whose result was discarded.
+      //
+      // It was not silent cost either. Coupon DMs are gift-wrapped by the
+      // gateway's own identity, and the gateway publishes no kind-0, so the
+      // lookup normally 404s — and a 404 is drawn in the browser console by
+      // the network layer itself, which no catch in our code can suppress.
+      // That put a red line under every successful receipt and made a healthy
+      // wallet look broken.
       let senderProfile;
-      if (this.config.enableUiNotifications) {
+      if (this.config.enableUiNotifications && this.config.uiAdapter) {
         senderProfile = await this.config.nostrdbAdapter.getProfile(tokenDm.senderPubkey);
       }
 
