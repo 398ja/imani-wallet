@@ -115,3 +115,46 @@ describe('applyBackup', () => {
     expect(store.has(KEYSTORE_KEY)).toBe(false)
   })
 })
+
+/**
+ * The identity a restore screen shows before it asks for anything.
+ *
+ * Load-bearing: someone who has just lost a phone is handed a file out of
+ * Drive and has to be told whose account it holds. Naming the wrong one is
+ * worse than refusing, so the npub is derived and checked rather than believed.
+ */
+describe('the account named in a backup', () => {
+  // The real bech32 encoding of PUBKEY. It has to be, or the disagreement test
+  // below passes through the unreadable-npub branch instead of the one it names.
+  const NPUB = 'npub1gu50mzkk5t6u3yc0gpjng7g8ugscd7axcuaaqns5th7hszucu3gs2q2gk6'
+
+  it('round-trips the npub for a file this build wrote', async () => {
+    const { createBackup } = await import('../backup')
+    store.set(KEYSTORE_KEY, JSON.stringify(envelope()))
+
+    const written = JSON.parse(createBackup(PUBKEY)) as { npub: string; pubkey: string }
+
+    expect(written.pubkey).toBe(PUBKEY)
+    expect(parseBackup(createBackup(PUBKEY)).npub).toBe(written.npub)
+  })
+
+  it('reports no account for a file written before the field existed', () => {
+    // Older backups are still good backups. Restore falls back to saying
+    // nothing rather than guessing, and must not reject the file.
+    expect(parseBackup(file()).npub).toBeNull()
+  })
+
+  it('rejects a file whose npub and pubkey disagree', () => {
+    // NPUB is readable and decodes cleanly; only the pubkey beside it is wrong.
+    expect(parseBackup(file({ npub: NPUB })).npub).toBe(NPUB)
+    expect(() => parseBackup(file({ npub: NPUB, pubkey: 'f'.repeat(64) }))).toThrow(
+      /npub and public key disagree/,
+    )
+  })
+
+  it('rejects an unreadable npub rather than showing it', () => {
+    expect(() => parseBackup(file({ npub: 'npub1notreallybech32' }))).toThrow(
+      /cannot be read/,
+    )
+  })
+})
