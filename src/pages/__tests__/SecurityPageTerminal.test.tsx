@@ -39,8 +39,12 @@ describe('a person logging out of their own wallet', () => {
     expect(screen.getByRole('button', { name: 'Log out' })).toBeTruthy()
   })
 
-  it('keeps the passphrase and backup-key panels', () => {
+  it('keeps the passphrase panel, and is not offered decommissioning', () => {
     show()
+
+    // The backup key is no longer asserted here: it moved to Settings → Backup,
+    // and BackupPageTerminal.test.tsx is where the terminal rule now lives.
+    expect(screen.getByText('Passphrase')).toBeTruthy()
     expect(screen.queryByText(DECOMMISSION_COPY.title)).toBeNull()
   })
 })
@@ -65,13 +69,13 @@ describe('a terminal', () => {
     expect(container.textContent).not.toMatch(/nsec/i)
   })
 
-  it('is not offered a passphrase change or a key reveal', () => {
-    // Both are about a personal key. A terminal's is a disposable the owner
-    // issued authority against, so neither panel means anything on one.
+  it('is not offered a passphrase change', () => {
+    // A terminal's key is a disposable the owner issued authority against, so
+    // the panel means nothing on one. The key reveal that used to sit beside
+    // this assertion is on Settings → Backup now, guarded there.
     const { container } = show({ terminal: true })
 
     expect(container.textContent).not.toMatch(/Change passphrase/i)
-    expect(container.textContent).not.toMatch(/Show my backup key/i)
   })
 
   it('says what does come back, and who does it', () => {
