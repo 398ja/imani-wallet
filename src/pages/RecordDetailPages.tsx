@@ -31,6 +31,7 @@ import {
   type ValidationStatus,
 } from '../lib/validationStatus'
 import { otherParty, toTransaction, transactionLabel, type WalletTransaction } from '../lib/transactions'
+import { useCashbackStatus } from '../lib/cashback'
 
 /**
  * One record, in full.
@@ -366,6 +367,97 @@ const EXPLAINER: Record<ValidationStatus, string> = {
 
 
 /**
+ * Whether the customer ever redeemed a cashback code, in the merchant's words.
+ *
+ * The question this whole screen exists to answer for a cashback row: a code
+ * was read out across a counter, and nothing about what happened to it
+ * afterwards reaches this device. Only the gateway knows, so only the gateway
+ * is asked.
+ *
+ * "Not checked yet" is a real answer and is shown as one. A row whose status
+ * could not be fetched must not read as unredeemed — a merchant deciding
+ * whether to honour a code twice is exactly who a confident guess would hurt.
+ */
+function CashbackSection({ tx }: { tx: WalletTransaction }) {
+  const { reading, checking } = useCashbackStatus({
+    rowId: tx.id,
+    cashbackId: tx.cashbackId,
+    cachedStatus: tx.cashbackStatus,
+    cachedClaimedAt: tx.claimedAt,
+  })
+
+  if (!tx.cashbackId) return null
+
+  const status = reading?.status
+  const redeemed = status === 'Claimed'
+
+  return (
+    <ListSection title="Cashback">
+      <DetailRow
+        label="Redeemed"
+        value={
+          <span
+            className={
+              redeemed
+                ? 'text-green-600'
+                : status === undefined
+                  ? 'text-mono-500'
+                  : 'text-mono-900 dark:text-mono-50'
+            }
+          >
+            {/* `?? REDEMPTION.unknown` because the status is whatever string the
+                gateway sent — `fetchCashbackStatus` casts it rather than
+                validating it. A state this build has never heard of must read
+                as "could not check", not as an empty line the merchant reads
+                as "not redeemed". */}
+            {REDEMPTION[status ?? (checking ? 'checking' : 'unknown')] ?? REDEMPTION.unknown}
+          </span>
+        }
+      />
+      {/*
+        The date only where there IS one. On an unclaimed code the field would
+        be an em-dash saying the same thing the line above already said.
+      */}
+      {redeemed && reading?.claimedAt ? (
+        <DetailRow label="Redeemed on" value={formatDate(reading.claimedAt)} />
+      ) : null}
+      {/* What the customer was told to type. The one string that identifies
+          this cashback to the person holding the receipt. */}
+      {tx.claimCode ? (
+        <DetailRow
+          label="Code"
+          value={<span className="font-mono tracking-wider">{tx.claimCode}</span>}
+        />
+      ) : null}
+      {/* Kept even when absent, but NOT as "never expires": the gateway applies
+          its own term to every cashback whether or not it echoed one back, so
+          an unrecorded expiry is an unknown, not an absent one. Telling a
+          merchant at a counter that a code lasts forever is the one wrong
+          answer here. */}
+      <DetailRow label="Expires" value={formatDate(tx.expiresAt) || 'Not recorded'} />
+    </ListSection>
+  )
+}
+
+/**
+ * One line per state, each saying what happened rather than naming the enum.
+ *
+ * `ManualAttention` is the gateway's word for a cashback whose token could not
+ * be parked or reclaimed cleanly. The merchant cannot fix that from here, so
+ * the line says what it means for them — the money is neither spent nor safely
+ * back — and nothing about the internals.
+ */
+const REDEMPTION: Record<string, string> = {
+  Claimed: 'Yes, redeemed by the customer',
+  Unclaimed: 'Not yet — the code is still good',
+  Expired: 'No, and the code has expired',
+  Revoked: 'No, the code was cancelled',
+  ManualAttention: 'Unresolved — ask support about this one',
+  checking: 'Checking…',
+  unknown: 'Could not check just now',
+}
+
+/**
  * `trading` is the same gate App puts on the merchant routes, so it is also the
  * answer to "does /merchant/transactions exist for this user" — routing a
  * customer there would bounce them to the catch-all redirect.
@@ -482,6 +574,8 @@ export function TransactionPage({
         ))}
       </ListSection>
 
+      <CashbackSection tx={tx} />
+
       <ValidationSection tx={tx} />
 
       <RawDetails
@@ -501,6 +595,7 @@ export function TransactionPage({
           ],
           ['Voucher id', tx.tokenId],
           ['Issuance id', tx.voucherId],
+          ['Cashback id', tx.cashbackId],
           ['Bundle id', tx.bundleId],
           // Where the machine strings live, beside the other ids. These are
           // what an auditor looks the record up BY: the nullifier is the `#n`

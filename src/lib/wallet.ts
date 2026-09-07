@@ -317,6 +317,32 @@ export async function recordAttestationReceipt(
 }
 
 /**
+ * Stamp a cashback row with the redemption status the gateway just reported.
+ *
+ * Terminal statuses only — see `useCashbackStatus`. Through `updateTransaction`
+ * rather than `addTransaction` so a row that has since been deleted is not
+ * resurrected by a status read, matching `recordAttestationReceipt`.
+ *
+ * Never throws. This is a cache of something the gateway will answer again on
+ * the next visit; failing to save it must not surface anywhere.
+ */
+export async function recordCashbackStatus(
+  id: string,
+  reading: { status: string; claimedAt?: number },
+): Promise<void> {
+  try {
+    await getWallet().updateTransaction(id, {
+      cashbackStatus: reading.status,
+      ...(reading.claimedAt === undefined ? {} : { claimedAt: reading.claimedAt }),
+    } as unknown as Partial<TransactionRow>)
+    // The detail screen is open on this very row — see recordAttestationReceipt.
+    notifyWalletChanged()
+  } catch (error) {
+    console.error('[wallet] cashback status not recorded', error)
+  }
+}
+
+/**
  * The same write-back, for a caller that knows the nullifier but not the row id.
  *
  * dmPoll is that caller. Its row id is `received:<tokenId>` where `tokenId` is

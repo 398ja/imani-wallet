@@ -100,6 +100,28 @@ export interface WalletTransaction {
    * itself, not on the transaction that delivered it.
    */
   expiresAt?: number
+  /**
+   * The gateway's id for a cashback code this merchant issued.
+   *
+   * Its presence is what makes a row a cashback rather than a sale, and it is
+   * the handle `GET /portal/cashback/{id}/status` is asked with — the one way
+   * a merchant can find out whether the customer ever typed the code in.
+   */
+  cashbackId?: string
+  /** The six-character code that was read out at the counter. */
+  claimCode?: string
+  /**
+   * Last redemption status read back from the gateway: `Unclaimed`, `Claimed`,
+   * `Expired`, `Revoked`, `ManualAttention`.
+   *
+   * A CACHE, never the authority — the gateway is. Stored so an offline detail
+   * screen can still say what was true last time, and absent on rows written
+   * before the status was ever fetched, which reads as "not checked" rather
+   * than as "unclaimed".
+   */
+  cashbackStatus?: string
+  /** When the customer redeemed it, epoch milliseconds. */
+  claimedAt?: number
 }
 
 /**
@@ -146,7 +168,10 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     // customer a coupon is value leaving this wallet, exactly as paying a
     // merchant is. 'sent' is the customer's own version of the same thing —
     // a voucher passed to someone else. Anything else is incoming.
-    direction: type === 'payment' || type === 'issued' || type === 'sent' ? 'out' : 'in',
+    direction:
+      type === 'payment' || type === 'issued' || type === 'sent' || type === 'cashback'
+        ? 'out'
+        : 'in',
     at: toEpochMs(r.timestamp ?? r.created_at),
     amount: Number(r.amount ?? 0),
     unit: String(r.unit ?? r.face_unit ?? 'UNKNOWN'),
@@ -185,6 +210,13 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     // Through the same normaliser as `timestamp`: it is written in seconds (the
     // gateway's unit) and read back for display in milliseconds.
     expiresAt: r.expiresAt === undefined ? undefined : toEpochMs(r.expiresAt),
+    cashbackId: str(r.cashbackId),
+    claimCode: str(r.claimCode),
+    cashbackStatus: str(r.cashbackStatus),
+    // Same magnitude-discriminating normaliser as `timestamp`: the gateway
+    // reports an ISO instant, this row stores milliseconds, and a relay
+    // round-trip could turn either into seconds.
+    claimedAt: r.claimedAt === undefined || r.claimedAt === null ? undefined : toEpochMs(r.claimedAt),
   }
 }
 
@@ -365,6 +397,55 @@ export function buildSentTransaction(input: {
 }
 
 /**
+ * The row for a cashback code the merchant read out at the counter.
+ *
+ * A sale with no customer in it. `buildIssueTransaction` cannot serve: it keys
+ * on a voucher id and files a `counterparty`, and a cashback has neither — the
+ * whole point of the flow is reaching someone who has no wallet yet and so no
+ * key to name. Its own type rather than `'issued'` for the same reason: the
+ * Issued vouchers list is about coupons a named customer holds, and a code on a
+ * paper receipt is not one of those.
+ *
+ * Written for the same reason every other merchant row is — nothing else holds
+ * it. `GET /portal/cashback` would list these, but a merchant offline at a
+ * stall cannot reach it, and their own history should not go blank when the
+ * network does.
+ *
+ * Keyed on the cashback id, so a retry overwrites rather than duplicating, and
+ * so the status write-back can find the row again by id alone.
+ */
+export function buildCashbackTransaction(input: {
+  cashbackId: string
+  claimCode: string
+  amount: number
+  unit: string
+  decimals: number
+  memo?: string
+  /** Epoch SECONDS, as the gateway reports it. */
+  expiresAt?: number
+  at: number
+}): TransactionRow {
+  return {
+    id: `cashback:${input.cashbackId}`,
+    txId: `cashback:${input.cashbackId}`,
+    type: 'cashback',
+    direction: 'out',
+    timestamp: input.at,
+    amount: input.amount,
+    unit: input.unit,
+    decimals: input.decimals,
+    cashbackId: input.cashbackId,
+    claimCode: input.claimCode,
+    memo: input.memo || 'Cashback issued',
+    expiresAt: input.expiresAt,
+    // Deliberately no status. The gateway has just minted it, so `Unclaimed` is
+    // what it would say — but writing that here would make an unfetched row
+    // indistinguishable from a checked one, and the detail screen must be able
+    // to tell "not checked" from "not claimed".
+  } as unknown as TransactionRow
+}
+
+/**
  * Who is on the other side of this movement, and what to call them.
  *
  * `counterparty` is that person by construction — the sender of an arriving
@@ -395,5 +476,6 @@ export function otherParty(
 export function transactionLabel(tx: WalletTransaction): string {
   if (tx.type === 'payment') return 'Paid'
   if (tx.type === 'sent') return 'Sent'
+  if (tx.type === 'cashback') return 'Cashback'
   return tx.type === 'issued' ? 'Issued' : 'Received'
 }
