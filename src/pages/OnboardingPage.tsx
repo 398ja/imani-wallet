@@ -5,6 +5,7 @@ import { hexToBytes } from '@noble/hashes/utils'
 
 import { Button, Input, Alert, Switch } from '../components/ui'
 import { gatewayConfig } from '../lib/config'
+import { driveConfigured } from '../lib/drive'
 import { toPrivkeyHex, keyStore, NO_PASSPHRASE } from '../lib/nap'
 import { HandleTakenError, isHandleAvailable, register } from '../lib/registration'
 import { refreshProfile } from '../lib/profile'
@@ -316,7 +317,9 @@ function CreateForm({
         <h2 className="text-lg font-semibold text-mono-900 dark:text-mono-50">
           Your account
         </h2>
-        <p className="mt-0.5 text-sm text-mono-500">Pick a handle and a passphrase.</p>
+        <p className="mt-0.5 text-sm text-mono-500">
+          {pass.wanted ? 'Pick a handle and a passphrase.' : 'Pick a handle.'}
+        </p>
       </div>
 
       <div>
@@ -444,10 +447,15 @@ function PassphraseFields({
     <>
       <Switch
         label="Protect this device with a passphrase"
+        // Naming Drive only when Drive is there. On a deployment without a
+        // client id the backup panel does not render, so the advice would send
+        // someone looking for a button that is not on any screen.
         hint={
           state.wanted
             ? 'Asked for every time you open the wallet on this device.'
-            : 'Anyone holding this phone can open your wallet. Back up to Google Drive so you can still get back in.'
+            : driveConfigured()
+              ? 'Anyone holding this phone can open your wallet. Back up to Google Drive so you can still get back in.'
+              : 'Anyone holding this phone can open your wallet. Save your backup key so you can still get back in.'
         }
         checked={state.wanted}
         disabled={disabled}

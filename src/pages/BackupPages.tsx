@@ -20,6 +20,7 @@ import { useDevicePassphrase } from '../lib/useDevicePassphrase'
  * rather than a second thing to keep secret.
  */
 export function BackupPage({ profile }: { profile: Profile }) {
+  const protectedKey = useDevicePassphrase()
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState(false)
 
@@ -40,8 +41,9 @@ export function BackupPage({ profile }: { profile: Profile }) {
 
       <Panel className="mb-4 p-4">
         <p className="text-sm text-mono-600 dark:text-mono-300">
-          This file contains your key, encrypted with your passphrase, and your profile. You will
-          need both the file and your passphrase to restore.
+          {protectedKey === false
+            ? 'This file contains your key and your profile. It has no passphrase on it, so treat the file itself as the secret.'
+            : 'This file contains your key, encrypted with your passphrase, and your profile. You will need both the file and your passphrase to restore.'}
         </p>
         <Button className="mt-4 w-full" onClick={save}>
           <Download className="h-4 w-4" />
@@ -54,8 +56,9 @@ export function BackupPage({ profile }: { profile: Profile }) {
       <DriveEscrowPanel profile={profile} />
 
       <p className="text-sm text-mono-500">
-        A backup file will not help if you forget your passphrase. For that you need your backup key,
-        under{' '}
+        {protectedKey === false
+          ? 'Your backup key is under '
+          : 'A backup file will not help if you forget your passphrase. For that you need your backup key, under '}
         <Link to="/settings/security" className="pressable underline hover:text-mono-900 dark:hover:text-mono-50">
           Security
         </Link>
