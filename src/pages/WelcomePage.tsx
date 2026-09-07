@@ -5,6 +5,7 @@ import { Button, Panel } from '../components/ui'
 import type { Profile } from '../lib/profile'
 import { downloadText } from '../lib/download'
 import { handleLabel } from '../lib/format'
+import { useDevicePassphrase } from '../lib/useDevicePassphrase'
 
 /**
  * Save your key. The only screen in the app that cannot be undone by trying
@@ -15,6 +16,11 @@ import { handleLabel } from '../lib/format'
  * forgets the passphrase, the account and its coupons are gone. So the screen is
  * modal by construction (App renders it INSTEAD of the router, not as a route)
  * and Continue stays disabled until the checkbox is ticked.
+ *
+ * The reason it names differs by device. "If you forget your passphrase" is the
+ * wrong sentence to put in front of someone who has just chosen not to have
+ * one — it describes a risk they do not carry and stays silent about the one
+ * they do, which is losing the phone.
  *
  * Hidden behind a reveal by default because "shown on screen" and "written down"
  * are different things, and the first invites a shoulder-surfer for no benefit.
@@ -28,6 +34,7 @@ export function WelcomePage({
   profile: Profile
   onDone: () => void
 }) {
+  const protectedKey = useDevicePassphrase()
   const [revealed, setRevealed] = useState(false)
   const [copied, setCopied] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -58,8 +65,9 @@ export function WelcomePage({
       <Panel className="p-4">
         <h2 className="text-sm font-medium text-mono-900 dark:text-mono-50">Your backup key</h2>
         <p className="mt-1 text-xs text-mono-500">
-          This is the only way back into your account if you forget your passphrase or use another
-          device. Save it somewhere safe. It will not be shown again.
+          {protectedKey === false
+            ? 'This is the only way back into your account if you lose this device. It has no passphrase, so nothing else stands between the key and your coupons. Save it somewhere safe — it will not be shown again.'
+            : 'This is the only way back into your account if you forget your passphrase or use another device. Save it somewhere safe. It will not be shown again.'}
         </p>
 
         <div className="mt-3 flex items-center gap-2">
