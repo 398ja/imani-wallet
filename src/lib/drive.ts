@@ -143,12 +143,28 @@ async function call(token: string, url: string, init?: RequestInit): Promise<Res
   return response
 }
 
-/** The escrow file's Drive id, or null when this account has never escrowed. */
+/**
+ * The escrow file's Drive id, or null when this account has never escrowed.
+ *
+ * One fixed address, resolved rather than chosen: the `drive.appdata` scope
+ * addresses a single hidden per-app folder, and the name is a constant. Nobody
+ * picks a location on either side — there is no location to pick, and a
+ * customer restoring on a borrowed phone must not have to remember one.
+ *
+ * `modifiedTime desc` rather than whatever comes first. Two devices escrowing
+ * before either has written the file both see nothing and both POST, and Drive
+ * is content to hold two files of the same name in the same folder. After that
+ * "the fixed location" holds two answers, and an unordered query would hand
+ * restore an arbitrary one — in practice the older, since it was created first.
+ * Newest-wins makes the duplicate harmless: reads take it, and the write below
+ * updates that same one, so the pair converges instead of alternating.
+ */
 async function findEscrow(token: string): Promise<string | null> {
   const query = new URLSearchParams({
     spaces: 'appDataFolder',
     q: `name = '${ESCROW_FILENAME}' and trashed = false`,
     fields: 'files(id)',
+    orderBy: 'modifiedTime desc',
     pageSize: '1',
   })
 
