@@ -1,14 +1,11 @@
 import { useState } from 'react'
-import { nip19 } from 'nostr-tools'
-import { hexToBytes } from '@noble/hashes/utils'
-import { Copy, Check, Download } from 'lucide-react'
 
-import { Screen, BackLink, PageHeader, ListSection, Button, Input, Alert, Panel } from '../components/ui'
+import { Screen, BackLink, PageHeader, ListSection, Button, Input, Alert } from '../components/ui'
 import { keyStore } from '../lib/nap'
+import { useDriveBackup } from '../lib/useDriveBackup'
 import { legacyApi } from '../lib/legacyBridge'
 import { decommissionTerminal, DECOMMISSION_COPY } from '../lib/terminalDecommission'
 import type { CredentialMintApi } from '../lib/credentialRevocation'
-import { downloadText } from '../lib/download'
 import {
   passphraseStrength,
   validateConfirmation,
@@ -53,9 +50,8 @@ export function SecurityPage({
           down — so neither panel belongs on one. */}
       {!terminal && (
         <>
-          <ChangePassphrase />
-          <RevealKey />
-        </>
+          <ChangePassphrase pubkey={pubkey} />
+          </>
       )}
 
       <ListSection title="Danger zone">
@@ -149,7 +145,29 @@ function DecommissionPanel({ pubkey }: { pubkey: string }) {
   )
 }
 
-function ChangePassphrase() {
+/**
+ * Rotate the passphrase — and the copies encrypted with the old one.
+ *
+ * The rotation itself is two calls to nap: decrypt with the old, re-encrypt
+ * with the new. What is easy to miss is that it only re-encrypts the record in
+ * THIS browser. Every copy made earlier still carries the previous envelope, so
+ * a Drive backup taken before the change goes on opening with the passphrase
+ * the customer believes they have just replaced — and they find that out on a
+ * new phone, holding a passphrase that does not work, with no way to tell
+ * whether they misremembered it or the wallet lied.
+ *
+ * So the Drive copy is rewritten as part of the change, not left to the
+ * customer to remember. Google will show its account chooser, which cannot be
+ * suppressed, so this is not silent; what it must not be is skipped. If it
+ * fails or is cancelled the passphrase change still stands — it already
+ * succeeded locally — and the message says exactly which copy is now stale
+ * rather than reporting a failure that did not happen.
+ *
+ * A file downloaded earlier is stale in the same way and cannot be reached, so
+ * it is named in the copy instead.
+ */
+function ChangePassphrase({ pubkey }: { pubkey: string }) {
+  const drive = useDriveBackup(pubkey)
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -176,6 +194,16 @@ function ChangePassphrase() {
       setCurrent('')
       setNext('')
       setConfirm('')
+
+      // After the local record, never before it: a Drive write that succeeded
+      // against a rotation that then failed would leave Drive holding a
+      // passphrase this device does not have.
+      //
+      // Not wrapped in its own try/catch — `save` reports through `drive.error`
+      // rather than throwing, and a catch here would be dead code that reads
+      // like a safety net. The rotation has already succeeded either way, so a
+      // Drive failure must not reach the outer catch and be reported as one.
+      if (drive.available) await drive.save()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -217,7 +245,24 @@ function ChangePassphrase() {
         <Button className="w-full" disabled={busy || !complete} onClick={() => void change()}>
           {busy ? 'Changing…' : 'Change passphrase'}
         </Button>
-        {done && <p className="text-sm text-green-700 dark:text-green-500">Passphrase changed.</p>}
+        {done && (
+          <>
+            <p className="text-sm text-green-700 dark:text-green-500">
+              Passphrase changed.
+              {drive.available && drive.done && ' Your Google Drive backup was updated too.'}
+            </p>
+            {drive.available && drive.error && (
+              <Alert>
+                Your passphrase changed, but the copy in Google Drive still opens with the old one.
+                Back up again under Settings → Backup.
+              </Alert>
+            )}
+            <p className="text-xs text-mono-500">
+              Any backup file you downloaded earlier still needs your old passphrase. Save a fresh
+              one under Settings → Backup.
+            </p>
+          </>
+        )}
         {error && <Alert>{error}</Alert>}
       </div>
     </ListSection>
@@ -243,102 +288,5 @@ function StrengthBar({ strength }: { strength: Strength }) {
       </div>
       <span className="text-xs capitalize text-mono-500">{strength}</span>
     </div>
-  )
-}
-
-/**
- * Show the nsec, behind the passphrase.
- *
- * Re-asking for the passphrase is not ceremony: an unlocked wallet left open on
- * a market stall would otherwise hand its key to anyone who opens this screen.
- */
-function RevealKey() {
-  const [passphrase, setPassphrase] = useState('')
-  const [nsec, setNsec] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [copied, setCopied] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const reveal = async () => {
-    setBusy(true)
-    setError(null)
-    try {
-      const hex = await keyStore.loadKey(passphrase)
-      setNsec(nip19.nsecEncode(hexToBytes(hex)))
-      setPassphrase('')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const copy = async () => {
-    if (!nsec) return
-    try {
-      await navigator.clipboard.writeText(nsec)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // Clipboard access can be refused — insecure context, denied permission.
-      // Silently doing nothing would leave the user believing their only backup
-      // key is on the clipboard when it is not. The key is already on screen
-      // here, so say so and let them select it.
-      setError('Could not copy. Select the key above and copy it manually.')
-    }
-  }
-
-  return (
-    <ListSection title="Backup key">
-      <div className="space-y-3 p-4">
-        {nsec ? (
-          <>
-            <Panel className="break-all bg-mono-100 p-3 font-mono text-xs text-mono-900 dark:bg-mono-800 dark:text-mono-50">
-              {nsec}
-            </Panel>
-            <div className="grid grid-cols-2 gap-2">
-              <Button variant="secondary" onClick={() => void copy()}>
-                {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                <span className="ml-2">{copied ? 'Copied' : 'Copy'}</span>
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => downloadText('imani-wallet-backup-key.txt', nsec)}
-              >
-                <Download className="h-4 w-4" />
-                <span className="ml-2">Download</span>
-              </Button>
-            </div>
-            <Button variant="ghost" className="w-full" onClick={() => setNsec(null)}>
-              Hide
-            </Button>
-            {error && <Alert>{error}</Alert>}
-          </>
-        ) : (
-          <>
-            <p className="text-sm text-mono-500">
-              Anyone with this key controls your account and your vouchers. Only show it somewhere
-              private.
-            </p>
-            <Input
-              type="password"
-              placeholder="Passphrase"
-              value={passphrase}
-              onChange={(e) => setPassphrase(e.target.value)}
-              autoComplete="current-password"
-            />
-            <Button
-              variant="secondary"
-              className="w-full"
-              disabled={busy || !passphrase}
-              onClick={() => void reveal()}
-            >
-              {busy ? 'Checking…' : 'Show my backup key'}
-            </Button>
-            {error && <Alert>{error}</Alert>}
-          </>
-        )}
-      </div>
-    </ListSection>
   )
 }

@@ -36,13 +36,13 @@ export function SettingsPage({
           to="/settings/security"
           icon={Shield}
           label="Security"
-          hint="Passphrase and backup key"
+          hint="Change your passphrase"
         />
         <SettingRow
           to="/settings/backup"
           icon={Download}
           label="Backup"
-          hint="Save a copy of your account"
+          hint="Backup key, file and Google Drive"
         />
       </ListSection>
 
