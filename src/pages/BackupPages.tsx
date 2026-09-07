@@ -5,7 +5,8 @@ import { Cloud, CloudDownload, Download } from 'lucide-react'
 import { Screen, BackLink, PageHeader, Panel, Button, Input, Alert } from '../components/ui'
 import { applyBackup, backupFilename, createBackup, parseBackup, type ParsedBackup } from '../lib/backup'
 import { downloadText } from '../lib/download'
-import { driveConfigured, getBackup, putBackup } from '../lib/drive'
+import { driveConfigured, getBackup } from '../lib/drive'
+import { useDriveBackup } from '../lib/useDriveBackup'
 import { handleLabel } from '../lib/format'
 import { keyStore } from '../lib/nap'
 import { profileName, refreshProfile, type Profile } from '../lib/profile'
@@ -18,6 +19,7 @@ import { profileName, refreshProfile, type Profile } from '../lib/profile'
  * rather than a second thing to keep secret.
  */
 export function BackupPage({ profile }: { profile: Profile }) {
+  const drive = useDriveBackup(profile.pubkey)
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState(false)
 
@@ -52,9 +54,25 @@ export function BackupPage({ profile }: { profile: Profile }) {
         {/* Same file, sent somewhere else. Inside the same panel rather than
             below it, because "download or Drive" is one decision about one
             thing, not two features that happen to share a screen. */}
-        <div className="mt-3">
-          <DriveBackupPanel pubkey={profile.pubkey} />
-        </div>
+        {drive.available && (
+          <>
+            <Button
+              variant="secondary"
+              className="mt-3 w-full"
+              disabled={drive.busy}
+              onClick={() => void drive.save()}
+            >
+              <Cloud className="h-4 w-4" />
+              <span className="ml-2">{drive.busy ? 'Backing up…' : 'Back up to Google Drive'}</span>
+            </Button>
+            {drive.done && (
+              <p className="mt-2 text-sm text-green-700 dark:text-green-500">
+                Saved to your Google Drive.
+              </p>
+            )}
+            {drive.error && <Alert>{drive.error}</Alert>}
+          </>
+        )}
       </Panel>
 
       <p className="text-sm text-mono-500">
@@ -66,63 +84,6 @@ export function BackupPage({ profile }: { profile: Profile }) {
         .
       </p>
     </Screen>
-  )
-}
-
-/**
- * The same account file, sent to the customer's own Google Drive.
- *
- * The remote half of the choice offered after onboarding: local is a download,
- * remote is this. Identical bytes either way — `createBackup` is the one
- * format, so a file written here restores from disk and vice versa.
- *
- * It costs no self-custody. The file goes to a hidden folder in storage the
- * customer owns, browser-to-Google, and no Imani server sees a key. "There is
- * no honeypot" stays literally true.
- *
- * No passphrase is asked for and none is optional: the file carries nap's
- * envelope verbatim, already encrypted by the passphrase this account was
- * created with, and restoring it demands that passphrase. Uploading is
- * therefore a copy, not a decryption — there is nothing here to unlock.
- */
-export function DriveBackupPanel({ pubkey }: { pubkey: string }) {
-  const [busy, setBusy] = useState(false)
-  const [done, setDone] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  if (!driveConfigured()) return null
-
-  const save = async () => {
-    setBusy(true)
-    setError(null)
-    setDone(false)
-    try {
-      await putBackup(createBackup(pubkey))
-      setDone(true)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <>
-      <Button
-        variant="secondary"
-        className="w-full"
-        disabled={busy}
-        onClick={() => void save()}
-      >
-        <Cloud className="h-4 w-4" />
-        <span className="ml-2">{busy ? 'Backing up…' : 'Back up to Google Drive'}</span>
-      </Button>
-
-      {done && (
-        <p className="mt-2 text-sm text-green-700 dark:text-green-500">Saved to your Google Drive.</p>
-      )}
-      {error && <Alert>{error}</Alert>}
-    </>
   )
 }
 
