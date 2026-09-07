@@ -2440,6 +2440,32 @@ class GatewayAPI {
       amount: params.amount,
       recipient_pubkey: params.recipientPubkey,
     };
+
+    // Sign the proofs this wallet is allowed to spend.
+    //
+    // Sending a locked coupon SPENDS it, so the mint demands a NUT-11 witness
+    // for every locked input. The gateway holds no customer spending keys —
+    // the point of issue #58 — so the signature is made here and travels with
+    // the request.
+    //
+    // In the BODY, not a header, unlike receive. This saga finishes on an
+    // async worker long after the request is gone, so the server persists the
+    // witnesses with the send and re-reads them there; a header would be read
+    // from a request context that no longer exists.
+    //
+    // Absent for a bearer token, a coupon locked to someone else, or a locked
+    // wallet: all produce null and the field is omitted, leaving an ordinary
+    // send byte-identical to what it was before locked coupons existed.
+    try {
+      const witnesses = globalThis.__imaniWitnessHeaderForToken?.(params.token);
+      if (witnesses) {
+        body.witnesses = witnesses;
+      }
+    } catch {
+      // Never fail a send because signing failed. An unsigned locked proof is
+      // refused by the MINT, with a reason naming the real problem; throwing
+      // here would also break every bearer send that never needed a witness.
+    }
     if (params.memo) body.memo = params.memo;
     if (params.faceValue != null) body.face_value = params.faceValue;
     if (params.faceUnit) body.face_unit = params.faceUnit;
