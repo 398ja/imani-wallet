@@ -1,5 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
+import { imaniAliases } from '../../vitest.aliases';
+
 export default defineConfig({
   test: {
     globals: true,
@@ -12,4 +14,8 @@ export default defineConfig({
       exclude: ['src/**/index.ts'],
     },
   },
+  // Sibling packages are consumed from source, so this suite has to resolve
+  // them the same way the app does. Without it every file here failed to load
+  // on "Cannot find package '@imani/money'".
+  resolve: { alias: { ...imaniAliases } },
 });
