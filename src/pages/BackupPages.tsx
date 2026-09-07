@@ -2,15 +2,13 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Cloud, CloudDownload, Download } from 'lucide-react'
 
-import { Screen, BackLink, PageHeader, Panel, Button, Input, Alert, Switch } from '../components/ui'
+import { Screen, BackLink, PageHeader, Panel, Button, Input, Alert } from '../components/ui'
 import { applyBackup, backupFilename, createBackup, parseBackup, type ParsedBackup } from '../lib/backup'
 import { downloadText } from '../lib/download'
-import { driveConfigured, getEscrow, putEscrow } from '../lib/drive'
-import { createEscrow, installEscrow, nsecProtected, parseEscrow, type ParsedEscrow } from '../lib/escrow'
+import { driveConfigured, getBackup, putBackup } from '../lib/drive'
 import { handleLabel } from '../lib/format'
-import { keyStore, NO_PASSPHRASE } from '../lib/nap'
+import { keyStore } from '../lib/nap'
 import { profileName, refreshProfile, type Profile } from '../lib/profile'
-import { useDevicePassphrase } from '../lib/useDevicePassphrase'
 
 /**
  * Save a copy of the account.
@@ -20,7 +18,6 @@ import { useDevicePassphrase } from '../lib/useDevicePassphrase'
  * rather than a second thing to keep secret.
  */
 export function BackupPage({ profile }: { profile: Profile }) {
-  const protectedKey = useDevicePassphrase()
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState(false)
 
@@ -41,24 +38,28 @@ export function BackupPage({ profile }: { profile: Profile }) {
 
       <Panel className="mb-4 p-4">
         <p className="text-sm text-mono-600 dark:text-mono-300">
-          {protectedKey === false
-            ? 'This file contains your key and your profile. It has no passphrase on it, so treat the file itself as the secret.'
-            : 'This file contains your key, encrypted with your passphrase, and your profile. You will need both the file and your passphrase to restore.'}
+          This file contains your key, encrypted with your passphrase, and your profile. You will
+          need both the file and your passphrase to restore.
         </p>
+
         <Button className="mt-4 w-full" onClick={save}>
           <Download className="h-4 w-4" />
           <span className="ml-2">Download backup file</span>
         </Button>
         {done && <p className="mt-2 text-sm text-green-700 dark:text-green-500">Backup downloaded.</p>}
         {error && <Alert>{error}</Alert>}
+
+        {/* Same file, sent somewhere else. Inside the same panel rather than
+            below it, because "download or Drive" is one decision about one
+            thing, not two features that happen to share a screen. */}
+        <div className="mt-3">
+          <DriveBackupPanel pubkey={profile.pubkey} />
+        </div>
       </Panel>
 
-      <DriveEscrowPanel profile={profile} />
-
       <p className="text-sm text-mono-500">
-        {protectedKey === false
-          ? 'Your backup key is under '
-          : 'A backup file will not help if you forget your passphrase. For that you need your backup key, under '}
+        A backup file will not help if you forget your passphrase. For that you need your backup key,
+        under{' '}
         <Link to="/settings/security" className="pressable underline hover:text-mono-900 dark:hover:text-mono-50">
           Security
         </Link>
@@ -69,50 +70,35 @@ export function BackupPage({ profile }: { profile: Profile }) {
 }
 
 /**
- * Escrow the account to the customer's own Google Drive.
+ * The same account file, sent to the customer's own Google Drive.
  *
- * The recovery path every competitor has and this wallet did not. It costs no
- * self-custody: the file goes to a hidden folder in storage the customer owns,
- * it is fetched browser-to-Google, and no Imani server ever sees a key. "There
- * is no honeypot" stays literally true.
+ * The remote half of the choice offered after onboarding: local is a download,
+ * remote is this. Identical bytes either way — `createBackup` is the one
+ * format, so a file written here restores from disk and vice versa.
  *
- * The switch is the fork the product had to settle. Left on, the escrowed key
- * carries nap's passphrase envelope untouched and the passphrase is still
- * needed to restore — safest, but a forgotten passphrase is still a lost
- * account. Turned off, the key travels as hex and the customer's Google account
- * is the only gate: no unrecoverable secret anywhere, at the price of trusting
- * Google as the recovery factor. Both are defensible, so the customer picks,
- * and the default is the safe one.
+ * It costs no self-custody. The file goes to a hidden folder in storage the
+ * customer owns, browser-to-Google, and no Imani server sees a key. "There is
+ * no honeypot" stays literally true.
  *
- * Either way the passphrase is typed here, because reading the key out of the
- * keystore requires it — the same gate as revealing the backup key.
+ * No passphrase is asked for and none is optional: the file carries nap's
+ * envelope verbatim, already encrypted by the passphrase this account was
+ * created with, and restoring it demands that passphrase. Uploading is
+ * therefore a copy, not a decryption — there is nothing here to unlock.
  */
-function DriveEscrowPanel({ profile }: { profile: Profile }) {
-  const protectedKey = useDevicePassphrase()
-  const [passphrase, setPassphrase] = useState('')
-  const [protect, setProtect] = useState(true)
+export function DriveBackupPanel({ pubkey }: { pubkey: string }) {
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   if (!driveConfigured()) return null
 
-  const escrow = async () => {
+  const save = async () => {
     setBusy(true)
     setError(null)
     setDone(false)
     try {
-      // Verified before anything is uploaded, in both branches. A wrong
-      // passphrase would otherwise escrow an envelope the customer cannot open,
-      // and they would find out on the far side with nothing else left.
-      const privkeyHex = await keyStore.loadKey(protectedKey ? passphrase : NO_PASSPHRASE)
-      // An open device has no passphrase to protect the escrow with, so the
-      // envelope it would copy is one an empty string opens. Hex is the honest
-      // shape for that, and restore then says so on the confirmation screen.
-      const escrowProtected = protectedKey === true && protect
-      await putEscrow(createEscrow(profile.pubkey, escrowProtected ? undefined : privkeyHex))
+      await putBackup(createBackup(pubkey))
       setDone(true)
-      setPassphrase('')
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -121,58 +107,22 @@ function DriveEscrowPanel({ profile }: { profile: Profile }) {
   }
 
   return (
-    <Panel className="mb-4 p-4">
-      <p className="text-sm text-mono-600 dark:text-mono-300">
-        Put a copy in your own Google Drive, in a hidden folder only this app can see. It never
-        touches an Imani server, and you can delete it from Drive at any time.
-      </p>
-
-      {/* Only offered when there is a passphrase to ask for. On an open device
-          the escrowed copy can only be unprotected, and a switch promising
-          otherwise would write a file that opens with an empty string. */}
-      {protectedKey && (
-        <div className="mt-4">
-          <Switch
-            label="Ask for my passphrase to restore"
-            hint={
-              protect
-                ? 'Safest. You will need this passphrase on the new device.'
-                : 'Signing in to Google is then enough to get your account back.'
-            }
-            checked={protect}
-            onChange={setProtect}
-            disabled={busy}
-          />
-        </div>
-      )}
-
-      {protectedKey && (
-        <Input
-          className="mt-3"
-          type="password"
-          placeholder="Your passphrase"
-          value={passphrase}
-          onChange={(e) => setPassphrase(e.target.value)}
-          autoComplete="current-password"
-        />
-      )}
-
+    <>
       <Button
-        className="mt-3 w-full"
-        disabled={busy || protectedKey === undefined || (protectedKey && passphrase === '')}
-        onClick={() => void escrow()}
+        variant="secondary"
+        className="w-full"
+        disabled={busy}
+        onClick={() => void save()}
       >
         <Cloud className="h-4 w-4" />
         <span className="ml-2">{busy ? 'Backing up…' : 'Back up to Google Drive'}</span>
       </Button>
 
       {done && (
-        <p className="mt-2 text-sm text-green-700 dark:text-green-500">
-          Saved to your Google Drive.
-        </p>
+        <p className="mt-2 text-sm text-green-700 dark:text-green-500">Saved to your Google Drive.</p>
       )}
       {error && <Alert>{error}</Alert>}
-    </Panel>
+    </>
   )
 }
 
@@ -180,54 +130,53 @@ function DriveEscrowPanel({ profile }: { profile: Profile }) {
  * Restore from the customer's own Google Drive.
  *
  * The order of the screen is the order the customer needs: sign in, then be
- * TOLD whose account this is before being asked for anything. The npub and the
- * profile ride in the clear precisely so this step can happen — someone who has
- * lost a phone should not have to recognise a passphrase prompt to find out
- * whether they are even looking at the right account.
+ * TOLD whose account this is before being asked for anything. The npub rides in
+ * the clear precisely so this step can happen — someone who has lost a phone
+ * should not have to recognise an account by whether a passphrase prompt
+ * accepts their typing.
  *
- * The passphrase field appears only when the escrowed key is protected. When it
- * is not, the field asks for a NEW passphrase for this device instead: the copy
- * in Drive is the recovery path, so a device passphrase is no longer a secret
- * that can be lost.
+ * The passphrase is then required, exactly as it is for a file off disk. Drive
+ * is where the file lives, never what protects it: an attacker with the
+ * customer's Google account gets an encrypted envelope and nothing else.
  */
 function DriveRestorePanel({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<void> }) {
-  const [escrow, setEscrow] = useState<ParsedEscrow | null>(null)
+  const [parsed, setParsed] = useState<ParsedBackup | null>(null)
   const [name, setName] = useState<string | null>(null)
-  const [wanted, setWanted] = useState(true)
   const [passphrase, setPassphrase] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const navigate = useNavigate()
 
-  // The escrowed profile is a snapshot from whenever the backup was written, so
+  // The stored profile is a snapshot from whenever the backup was written, so
   // the relay is asked for a fresher one. Best-effort: a customer standing in a
-  // shop with no signal must still be able to restore, and the npub below is
-  // identification enough on its own.
+  // shop with no signal must still be able to restore, and the npub below
+  // identifies the account on its own.
   useEffect(() => {
-    if (!escrow) return
+    const pubkey = parsed?.profile?.pubkey
+    if (!pubkey) return
     let live = true
-    void refreshProfile(escrow.pubkey)
+    void refreshProfile(pubkey)
       .then((p) => live && setName(profileName(p)))
       .catch(() => {})
     return () => {
       live = false
     }
-  }, [escrow])
+  }, [parsed])
 
   if (!driveConfigured()) return null
 
-  const fetchEscrow = async () => {
+  const fetchBackup = async () => {
     setBusy(true)
     setError(null)
     try {
-      const text = await getEscrow()
+      const text = await getBackup()
       if (text === null) {
         setError('That Google account has no wallet backup in it.')
         return
       }
-      const parsed = parseEscrow(text)
-      setEscrow(parsed)
-      setName(parsed.profile ? profileName(parsed.profile) : null)
+      const backup = parseBackup(text)
+      setParsed(backup)
+      setName(backup.profile ? profileName(backup.profile) : null)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -236,11 +185,12 @@ function DriveRestorePanel({ onUnlock }: { onUnlock: (privkeyHex: string) => Pro
   }
 
   const restore = async () => {
-    if (!escrow) return
+    if (!parsed) return
     setBusy(true)
     setError(null)
     try {
-      await onUnlock(await installEscrow(escrow, protectedKey || wanted ? passphrase : NO_PASSPHRASE))
+      const { privkeyHex } = await applyBackup(parsed, () => keyStore.loadKey(passphrase))
+      await onUnlock(privkeyHex)
       navigate('/', { replace: true })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -249,70 +199,45 @@ function DriveRestorePanel({ onUnlock }: { onUnlock: (privkeyHex: string) => Pro
     }
   }
 
-  const protectedKey = escrow !== null && nsecProtected(escrow.nsec)
-
   return (
     <>
-      {!escrow && (
-        <Button size="lg" className="w-full" disabled={busy} onClick={() => void fetchEscrow()}>
+      {!parsed && (
+        <Button size="lg" className="w-full" disabled={busy} onClick={() => void fetchBackup()}>
           <CloudDownload className="h-4 w-4" />
           <span className="ml-2">{busy ? 'Checking Google Drive…' : 'Restore from Google Drive'}</span>
         </Button>
       )}
 
-      {escrow && (
+      {parsed && (
         <Panel className="p-4">
           <p className="text-sm text-mono-500">This backup holds the account</p>
           <p className="mt-1 font-medium text-mono-900 dark:text-mono-50">
             {name ?? 'Unnamed account'}
           </p>
-          {/* Shown in full, not truncated. It is the only thing on this screen
-              that cannot be faked by whoever wrote the file, and it is what a
-              customer with two accounts checks before overwriting one. */}
-          <p className="mt-1 break-all font-mono text-xs text-mono-500">{escrow.npub}</p>
+          {/* Shown in full, not truncated. It is what a customer with two
+              accounts checks before overwriting one. */}
+          {parsed.npub && (
+            <p className="mt-1 break-all font-mono text-xs text-mono-500">{parsed.npub}</p>
+          )}
 
           <p className="mt-3 text-sm text-mono-600 dark:text-mono-300">
-            {protectedKey
-              ? 'Enter the passphrase this backup was made with.'
-              : 'Set a passphrase for this device if you want one. Your Drive backup gets you back in either way, so this one is safe to forget.'}
+            Enter the passphrase for this account.
           </p>
 
-          {/* An unprotected escrow carries no passphrase to verify, so what this
-              asks for is a NEW one, for this device only — and it is optional
-              for the same reason it is optional at signup. A protected escrow
-              has exactly one right answer and no switch. */}
-          {!protectedKey && (
-            <div className="mt-3">
-              <Switch
-                label="Protect this device with a passphrase"
-                hint={
-                  wanted
-                    ? 'Asked for every time you open the wallet here.'
-                    : 'Anyone holding this phone can open your wallet.'
-                }
-                checked={wanted}
-                disabled={busy}
-                onChange={setWanted}
-              />
-            </div>
-          )}
-
-          {(protectedKey || wanted) && (
-            <Input
-              className="mt-2"
-              type="password"
-              placeholder={protectedKey ? 'Passphrase' : 'Choose a passphrase'}
-              value={passphrase}
-              onChange={(e) => setPassphrase(e.target.value)}
-              autoComplete={protectedKey ? 'current-password' : 'new-password'}
-              autoFocus
-            />
-          )}
+          <Input
+            className="mt-2"
+            type="password"
+            placeholder="Passphrase"
+            value={passphrase}
+            onChange={(e) => setPassphrase(e.target.value)}
+            autoComplete="current-password"
+            autoFocus
+          />
 
           <Button
             size="lg"
             className="mt-3 w-full"
-            disabled={busy || ((protectedKey || wanted) && passphrase === '')}
+            disabled={busy || !passphrase}
             onClick={() => void restore()}
           >
             {busy ? 'Restoring…' : 'Restore this account'}
@@ -322,7 +247,7 @@ function DriveRestorePanel({ onUnlock }: { onUnlock: (privkeyHex: string) => Pro
         </Panel>
       )}
 
-      {!escrow && error && <Alert>{error}</Alert>}
+      {!parsed && error && <Alert>{error}</Alert>}
     </>
   )
 }

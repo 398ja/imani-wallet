@@ -1,6 +1,15 @@
+import { nip19 } from 'nostr-tools'
+
 import { loadProfile, sanitiseProfile, saveProfile, type Profile } from './profile'
 
 /**
+ * The account identity file — one format, two destinations.
+ *
+ * The same JSON either goes to the customer's disk (Backup → download) or to
+ * their own Google Drive (lib/drive.ts). Deliberately not two formats: a file
+ * written on one device and restored from the other place must be the same
+ * thing, or the two paths drift and only one of them gets tested.
+ *
  * Account backup and restore.
  *
  * The file carries nap's OWN encrypted envelope verbatim — the
@@ -28,10 +37,22 @@ const KEYSTORE_STORAGE_KEY = 'imani-wallet-key'
 const FORMAT = 'imani-wallet-backup'
 const VERSION = 1
 
+/** The name the file takes in Drive's appDataFolder. One per Google account. */
+export const DRIVE_FILENAME = 'imani-wallet-account.json'
+
 export interface BackupFile {
   format: typeof FORMAT
   version: number
   createdAt: string
+  /**
+   * The identity, in the clear. Public by construction — an npub is not a
+   * credential — and load-bearing on restore: someone who has just lost a phone
+   * must be TOLD whose account came back out of Drive before being asked for a
+   * passphrase, rather than identifying it by whether a prompt accepts their
+   * typing. Absent from files written before this field existed.
+   */
+  npub?: string
+  pubkey?: string
   /** nap's encrypted envelope, opaque here and passed through untouched. */
   key: unknown
   profile: Profile | null
@@ -50,6 +71,8 @@ export function createBackup(pubkey: string): string {
     format: FORMAT,
     version: VERSION,
     createdAt: new Date().toISOString(),
+    npub: nip19.npubEncode(pubkey),
+    pubkey,
     key: JSON.parse(key) as unknown,
     profile: loadProfile(pubkey),
   }
@@ -67,6 +90,12 @@ export function backupFilename(profile: Profile | null): string {
 export interface ParsedBackup {
   key: unknown
   profile: Profile | null
+  /**
+   * Whose account this is, when the file says. `null` for a file written before
+   * the field existed — restore then falls back to the profile record, and to
+   * saying nothing rather than guessing.
+   */
+  npub: string | null
 }
 
 /**
@@ -102,13 +131,32 @@ export function parseBackup(text: string): ParsedBackup {
   // a record without one writes `imani-wallet:profile:undefined` — which then
   // breaks the login screen's recognition card, because that counts stored
   // profiles and expects exactly one.
+  // Derived from the npub rather than believed. A restore screen that names the
+  // wrong account is worse than one that refuses, so the two fields have to
+  // agree — and an older file, which carries neither, is simply anonymous.
+  let npub: string | null = null
+  if (typeof parsed.npub === 'string') {
+    let decoded: string
+    try {
+      const result = nip19.decode(parsed.npub)
+      if (result.type !== 'npub') throw new Error()
+      decoded = result.data
+    } catch {
+      throw new BackupError('That backup names an account that cannot be read.')
+    }
+    if (parsed.pubkey !== undefined && parsed.pubkey !== decoded) {
+      throw new BackupError('That backup is damaged: its npub and public key disagree.')
+    }
+    npub = parsed.npub
+  }
+
   const profile = parsed.profile
   const usableProfile =
     profile && typeof profile.pubkey === 'string' && profile.pubkey !== ''
       ? sanitiseProfile(profile)
       : null
 
-  return { key: parsed.key, profile: usableProfile }
+  return { key: parsed.key, profile: usableProfile, npub }
 }
 
 /**

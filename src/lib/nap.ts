@@ -51,39 +51,6 @@ export function hasStoredKey(): Promise<boolean> {
   return keyStore.hasKey()
 }
 
-/**
- * "No passphrase", spelled the one way the whole app agrees on.
- *
- * An empty passphrase, not a flag beside the record. The keystore still does
- * its PBKDF2 and AES-GCM over it, so nothing on disk changes shape and no code
- * path outside this module learns a second way to store a key — but a device
- * set up this way is readable by anyone holding the device, which is exactly
- * what the customer chose when they turned the switch off.
- *
- * A flag would be the obvious alternative and is the worse one: it can
- * disagree with the ciphertext it claims to describe. Restoring a backup
- * written on another device, or a half-finished passphrase change, would leave
- * a marker saying "open" beside a record that is not — and the failure lands on
- * the login screen of someone who cannot get in.
- */
-export const NO_PASSPHRASE = ''
-
-/**
- * The key, if this device holds one that needs no passphrase. Otherwise null.
- *
- * Asked of the ciphertext rather than of a stored flag, for the reason above.
- * It costs one PBKDF2 on the login screen for protected users too — a few
- * hundred milliseconds, spent while the screen is still painting, to buy an
- * answer that cannot be wrong.
- */
-export async function loadUnprotectedKey(): Promise<string | null> {
-  try {
-    return await keyStore.loadKey(NO_PASSPHRASE)
-  } catch {
-    return null
-  }
-}
-
 /** Accepts an nsec or raw hex, and normalises to hex. */
 export function toPrivkeyHex(input: string): string {
   const trimmed = input.trim()

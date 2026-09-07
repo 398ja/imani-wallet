@@ -1,7 +1,7 @@
-import { ESCROW_FILENAME } from './escrow'
+import { DRIVE_FILENAME } from './backup'
 
 /**
- * The customer's own Google Drive, as an escrow target.
+ * The customer's own Google Drive, as a backup target.
  *
  * Two things make this defensible against the promise the wallet makes
  * elsewhere ("there is no honeypot"):
@@ -20,7 +20,7 @@ import { ESCROW_FILENAME } from './escrow'
  *
  * ponytail: implicit token flow, so the token is not refreshable and each
  * backup or restore costs one account chooser. Fine for an action taken twice
- * in an account's life; if escrow ever becomes automatic and periodic this
+ * in an account's life; if Drive backup ever becomes automatic and periodic this
  * wants the auth-code flow and a refresh token instead.
  */
 
@@ -59,7 +59,7 @@ declare global {
 export class DriveError extends Error {}
 
 /**
- * Whether Drive escrow is offered at all.
+ * Whether Drive backup is offered at all.
  *
  * The client id is per-deployment and there is no sane default, so an
  * unconfigured build hides the buttons rather than showing one that fails at
@@ -76,7 +76,7 @@ function clientId(): string {
 
 let scriptLoad: Promise<void> | undefined
 
-/** Loaded on demand, not in index.html: most sessions never touch escrow. */
+/** Loaded on demand, not in index.html: most sessions never touch Drive. */
 function loadGis(): Promise<void> {
   if (scriptLoad) return scriptLoad
 
@@ -103,7 +103,7 @@ function loadGis(): Promise<void> {
  * One access token, one user gesture.
  *
  * Not cached. A token lives an hour and caching it across a page that also
- * holds an unlocked key buys nothing — both escrow actions are single calls
+ * holds an unlocked key buys nothing — both Drive actions are single calls
  * initiated by a tap, and a stale token would fail inside the operation rather
  * than at the door.
  */
@@ -144,14 +144,14 @@ async function call(token: string, url: string, init?: RequestInit): Promise<Res
 }
 
 /**
- * The escrow file's Drive id, or null when this account has never escrowed.
+ * The account file's Drive id, or null when this account has never backed up.
  *
  * One fixed address, resolved rather than chosen: the `drive.appdata` scope
  * addresses a single hidden per-app folder, and the name is a constant. Nobody
  * picks a location on either side — there is no location to pick, and a
  * customer restoring on a borrowed phone must not have to remember one.
  *
- * `modifiedTime desc` rather than whatever comes first. Two devices escrowing
+ * `modifiedTime desc` rather than whatever comes first. Two devices backing up
  * before either has written the file both see nothing and both POST, and Drive
  * is content to hold two files of the same name in the same folder. After that
  * "the fixed location" holds two answers, and an unordered query would hand
@@ -159,10 +159,10 @@ async function call(token: string, url: string, init?: RequestInit): Promise<Res
  * Newest-wins makes the duplicate harmless: reads take it, and the write below
  * updates that same one, so the pair converges instead of alternating.
  */
-async function findEscrow(token: string): Promise<string | null> {
+async function findBackup(token: string): Promise<string | null> {
   const query = new URLSearchParams({
     spaces: 'appDataFolder',
-    q: `name = '${ESCROW_FILENAME}' and trashed = false`,
+    q: `name = '${DRIVE_FILENAME}' and trashed = false`,
     fields: 'files(id)',
     orderBy: 'modifiedTime desc',
     pageSize: '1',
@@ -173,20 +173,20 @@ async function findEscrow(token: string): Promise<string | null> {
 }
 
 /**
- * Write the escrow, replacing any earlier one.
+ * Write the account file, replacing any earlier one.
  *
  * Update-in-place rather than a second file, so a customer who backs up twice
  * cannot end up restoring the older of two indistinguishable copies. Drive
  * keeps its own revision history of the file, which is the right place for the
  * old one to live.
  */
-export async function putEscrow(json: string): Promise<void> {
+export async function putBackup(json: string): Promise<void> {
   const token = await accessToken()
-  const existing = await findEscrow(token)
+  const existing = await findBackup(token)
 
   const metadata = existing
-    ? { name: ESCROW_FILENAME }
-    : { name: ESCROW_FILENAME, parents: ['appDataFolder'] }
+    ? { name: DRIVE_FILENAME }
+    : { name: DRIVE_FILENAME, parents: ['appDataFolder'] }
 
   // Multipart rather than two calls: metadata and content have to land together
   // or a crash between them leaves a named, empty file that restore would find.
@@ -203,10 +203,10 @@ export async function putEscrow(json: string): Promise<void> {
   })
 }
 
-/** The escrow file's text, or null when this Google account holds none. */
-export async function getEscrow(): Promise<string | null> {
+/** The account file's text, or null when this Google account holds none. */
+export async function getBackup(): Promise<string | null> {
   const token = await accessToken()
-  const id = await findEscrow(token)
+  const id = await findBackup(token)
   if (!id) return null
 
   return (await call(token, `${FILES}/${id}?alt=media`)).text()
