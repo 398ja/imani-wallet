@@ -59,12 +59,19 @@ declare global {
 export class DriveError extends Error {}
 
 /**
- * Whether Drive backup is offered at all.
+ * Whether this build carries the OAuth client id Google needs.
  *
- * The client id is per-deployment and there is no sane default, so an
- * unconfigured build hides the buttons rather than showing one that fails at
- * the moment the customer is most anxious. Same fail-closed shape as
- * `cashbackOrigins` in lib/config.ts.
+ * NOT a gate on showing the buttons — they are offered everywhere, so that
+ * "back this up to Drive" is a thing the product visibly does rather than a
+ * feature that appears only on correctly configured deployments. This exists so
+ * the failure can name itself: an unconfigured build says so in one sentence
+ * instead of handing over whatever Google returns for a client that does not
+ * exist (`invalid_client`, in a popup, with no route back).
+ *
+ * The client id identifies the APP, not the customer. It is public — it ships
+ * in this bundle and Google sees it on every sign-in — but it has to exist, and
+ * it has to list this origin. There is no Google API reachable without one, so
+ * a deployment without it cannot complete a backup however the button behaves.
  */
 export function driveConfigured(): boolean {
   return clientId() !== ''
@@ -109,7 +116,12 @@ function loadGis(): Promise<void> {
  */
 async function accessToken(): Promise<string> {
   const id = clientId()
-  if (!id) throw new DriveError('Google Drive backup is not configured for this deployment.')
+  if (!id) {
+    throw new DriveError(
+      'This app is not set up for Google Drive yet, so it cannot open a Google sign-in. ' +
+        'Save the backup file instead, or ask whoever runs this deployment to add a Google client id.',
+    )
+  }
 
   await loadGis()
   const oauth2 = window.google?.accounts.oauth2
