@@ -57,6 +57,16 @@ for(const s of secrets){const p=JSON.parse(s)
 console.log('2. signed', Object.keys(w).length, 'secret(s)')
 
 // 3. Atomic send, WITH witnesses in the body.
+//
+// The body is built here rather than through shared/api.js, because that file
+// is a browser classic script needing window, localStorage and NostrUtils. So
+// this probe covers the SERVER half — that a correctly shaped request spends a
+// locked coupon, and that omitting the signatures does not.
+//
+// The client half, that api.js actually produces this shape, is covered by
+// src/lib/__tests__/atomicSendWitnesses.test.ts, which drives the real file.
+// Neither check subsumes the other: this one would pass against a client that
+// sends nothing, and that one would pass against a server that ignores it.
 const recipient='0'.repeat(63)+'1'
 const send=await call(CORE,'/api/v1/atomic-send','POST',{
   token, amount:60, recipient_pubkey:recipient, face_value:60, face_unit:'sat',
