@@ -109,7 +109,7 @@ function owed(over: Partial<OwedPurchase> = {}): OwedPurchase {
   return {
     eventId: 'evt_1',
     paymentRequestId: '0123456789abcdef0123456789abcdef',
-    connectedAccountId: 'b'.repeat(64),
+    stallPubkey: 'b'.repeat(64),
     recipientPubkey: 'c'.repeat(64),
     amountMinor: 2500,
     currency: 'gbp',
@@ -201,6 +201,51 @@ describe('worker pass', () => {
 
     expect(result.blocked).toBe(1)
     expect((d.api.reportFailure as ReturnType<typeof vi.fn>).mock.calls[0][2]).toBe(true)
+  })
+
+  it('skips a debt whose stall could not be identified', async () => {
+    // A row with no stall pubkey has no credential to look up. Minting for a
+    // guessed stall is worse than not minting, so this waits for a person.
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const d = deps()
+    ;(d.api.owed as ReturnType<typeof vi.fn>).mockResolvedValue([owed({ stallPubkey: null })])
+
+    const result = await runPass(d)
+
+    expect(result.skipped).toBe(1)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('mints a zero-decimal currency at its own scale', async () => {
+    // XAF is zero-decimal and a primary market. Stripe sends 5000 for 5000 XAF,
+    // and minting that with 2 decimals would issue 50.00 - a customer paying
+    // 5000 and receiving a hundredth of it.
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't', issuer_id: 'i1' }))
+      .mockResolvedValueOnce(reply(200, {}))
+    vi.stubGlobal('fetch', fetchMock)
+    const d = deps()
+    ;(d.api.owed as ReturnType<typeof vi.fn>).mockResolvedValue([
+      owed({ currency: 'xaf', amountMinor: 5000 }),
+    ])
+
+    await runPass(d)
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body.face_decimals).toBe(0)
+    expect(body.face_value).toBe(5000)
+  })
+
+  it('mints a two-decimal currency at its own scale', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't', issuer_id: 'i1' }))
+      .mockResolvedValueOnce(reply(200, {}))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await runPass(deps())
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).face_decimals).toBe(2)
   })
 
   it('says nothing about a stall that holds no credential', async () => {

@@ -175,6 +175,17 @@ export const proxy = {
   // claim is NIP-98 authenticated, and the signed `u` tag is the browser origin.
   '/api/v1/nip05': { target: 'http://localhost:28081', changeOrigin: false },
   '/api/v1/config': { target: 'http://localhost:28081', changeOrigin: true },
+  /*
+   * Starting a card purchase, which lives on payment-adapter — a THIRD service,
+   * neither gateway. Without this rule it falls into the '/api' catch-all, hits
+   * customer-wallet, and 404s, which reads as "purchases are not implemented"
+   * rather than "the proxy does not know where they live".
+   *
+   * Port 8087 is what imani-deploy publishes payment-adapter on. changeOrigin
+   * true: the endpoint is unauthenticated, so no signature depends on the
+   * origin surviving.
+   */
+  '/api/v1/checkout': { target: 'http://localhost:8087', changeOrigin: true },
   // Receipt notifications live on account-app as well: IncomingNotificationController
   // is in gateway-core-rest, not customer-wallet. Without this rule the drain and
   // ack calls fall into the '/api' catch-all, hit customer-wallet, and 404 every

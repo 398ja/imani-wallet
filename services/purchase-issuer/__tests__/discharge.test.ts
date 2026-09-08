@@ -85,9 +85,13 @@ describe('discharging a purchase', () => {
     await discharge('http://gw', OBLIGATION, ports())
 
     const [, init] = fetchMock.mock.calls[1]
-    expect(JSON.parse(init.body).paymentRequestId).toBe(
+    // snake_case, matching SendTokenDmRequest's @JsonProperty. The DTO ignores
+    // unknown fields, so a camelCase key is dropped in silence and the debt
+    // can never be discharged.
+    expect(JSON.parse(init.body).payment_request_id).toBe(
       '0123456789abcdef0123456789abcdef',
     )
+    expect(JSON.parse(init.body).paymentRequestId).toBeUndefined()
   })
 
   it('issues as the stall, naming no issuer of its own', async () => {

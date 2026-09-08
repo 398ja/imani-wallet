@@ -367,9 +367,6 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             QR is the reason the hosted page exists. */}
         <Route path="/buy/:pubkey" element={<BuyPage buyerPubkey={pubkey} />} />
         <Route path="/merchants/:pubkey" element={<MerchantPage />} />
-      {/* Reachable with no wallet by design: the buyer takes delivery by claim
-          link, so nothing here needs a key. */}
-      <Route path="/buy/:pubkey" element={<BuyPage />} />
         <Route path="/merchants/:pubkey/coupons" element={<CouponsPage />} />
         <Route path="/merchants/:pubkey/transactions" element={<TransactionsPage />} />
         <Route path="/coupon/:tokenId" element={<CouponPage />} />
@@ -527,6 +524,14 @@ function PublicRoutes({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<
           closed — no record means no Buy button — but it is a deployment
           prerequisite rather than a detail. */}
       <Route path="/merchants/:pubkey" element={<MerchantPage />} />
+      {/* Buying with no wallet, which is the hosted purchase case: delivery
+          falls back to a claim link, so nothing here needs a key.
+
+          This route was briefly declared inside the AUTHED tree by mistake,
+          where React Router never reached it and a stranger tapping Buy landed
+          on /onboarding. A duplicate path in the wrong <Routes> is dead code
+          that looks live. */}
+      <Route path="/buy/:pubkey" element={<BuyPage />} />
       {/* Anything else, including deep links into the authed app, lands on the
           entry screen; the deep link is not preserved because every authed route
           needs a wallet that does not exist yet. */}

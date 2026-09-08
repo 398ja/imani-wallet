@@ -87,7 +87,13 @@ export async function deliver(
   const body = JSON.stringify({
     recipient_pubkey: recipient.pubkey,
     token,
-    paymentRequestId,
+    // SNAKE case. `SendTokenDmRequest` binds this with
+    // @JsonProperty("payment_request_id") and the DTO ignores unknown fields,
+    // so a camelCase key is silently DROPPED — the send is recorded with a null
+    // request id, no completed send ever answers the purchase, and every
+    // discharge is refused forever. Sending the wrong case here is invisible at
+    // every layer until a debt never closes.
+    payment_request_id: paymentRequestId,
   })
 
   let response: Response

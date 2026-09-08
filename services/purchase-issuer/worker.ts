@@ -7,6 +7,8 @@
  * and only one of those is recoverable.
  */
 
+import { getDecimals } from '@imani/money'
+
 import { discharge, type Obligation, type Ports } from './discharge'
 import type { PurchasesApi, OwedPurchase } from './purchasesApi'
 
@@ -47,6 +49,13 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
   const owed = await deps.api.owed()
 
   for (const purchase of owed) {
+    if (purchase.stallPubkey === null) {
+      // We know a debt is owed and cannot tell which stall owes it, so there is
+      // no credential to look up. Left for a human rather than guessed at.
+      result.skipped += 1
+      continue
+    }
+
     if (purchase.livemode !== deps.livemode) {
       // Not ours. Left owed rather than failed: the other worker will take it,
       // and marking it would hide a misconfiguration behind a stream of
@@ -76,6 +85,10 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
             purchase.eventId,
             `issued voucher ${outcome.voucherId} but the discharge was ${accepted}`,
             false,
+            // NAMED, so the debt stops being mintable. Without this the row
+            // stays in the owed queue and the next pass mints a second coupon
+            // for the same payment.
+            outcome.voucherId,
           )
         }
         break
@@ -89,6 +102,7 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
           purchase.eventId,
           `issued voucher ${outcome.voucherId} but delivery failed: ${outcome.reason}`,
           false,
+          outcome.voucherId,
         )
         break
 
@@ -115,16 +129,25 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
 }
 
 function toObligation(purchase: OwedPurchase): Obligation {
+  const currency = purchase.currency.toUpperCase()
   return {
     id: purchase.eventId,
     paymentRequestId: purchase.paymentRequestId,
-    stallPubkey: purchase.connectedAccountId,
+    // The stall's pubkey, never its Stripe account id: a credential is keyed
+    // by the first and the second addresses money.
+    stallPubkey: purchase.stallPubkey as string,
     faceValue: purchase.amountMinor,
-    faceUnit: purchase.currency.toUpperCase(),
-    // Stripe's minor units and the coupon's must agree, and they do: both are
-    // the currency's own minor unit. Zero-decimal currencies are the case to
-    // watch if this ever supports one.
-    faceDecimals: 2,
+    faceUnit: currency,
+    /*
+     * Looked up, NOT assumed to be 2.
+     *
+     * This said `faceDecimals: 2` with a comment calling zero-decimal
+     * currencies "the case to watch". They are not hypothetical: XAF, XOF,
+     * UGX and TZS are all zero-decimal and XAF is a primary market. Stripe
+     * sends 5000 for 5000 XAF, and a coupon minted with 2 decimals would read
+     * that as 50.00 — a customer paying 5000 and receiving a hundredth of it.
+     */
+    faceDecimals: getDecimals(currency),
     memo: '',
     recipient:
       purchase.recipientPubkey === null
