@@ -23,6 +23,14 @@ it with them later, all or part at a time. This guide walks you through it.
    Write it down and keep it somewhere safe. This is covered in detail
    [below](#keeping-your-account-safe), and it matters more than anything else here.
 
+   <img src="screenshots/welcome-three-buttons.png" alt="The end of onboarding: one
+   'Back up your account' panel holding the hidden key and three buttons — Copy key,
+   Download file, Google Drive — above a checkbox confirming you have saved it, and a
+   Continue button that stays disabled until you do." width="320">
+
+   Three ways to keep the same key: copy it, download the encrypted file, or put
+   that file in your Google Drive. One is enough.
+
 Already have a key from before? Choose **enrol an existing key** instead and
 paste it in.
 
