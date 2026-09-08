@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
@@ -41,6 +41,9 @@ const show = (props: Record<string, unknown> = {}) =>
 afterEach(() => {
   cleanup()
   localStorage.clear()
+  // Env stubs are global, so a block that removes the Drive client id would
+  // otherwise leave every later test running without one.
+  vi.unstubAllEnvs()
 })
 
 describe('a terminal on the backup screen', () => {
@@ -95,6 +98,15 @@ describe('a person on the backup screen', () => {
  * fail silently. lib/drive.ts owns that sentence.
  */
 describe('the Google Drive button without a client id', () => {
+  // Make the premise true rather than inheriting it. `clientId()` reads
+  // VITE_GOOGLE_CLIENT_ID, so on a machine whose .env sets one — any machine
+  // that can actually use Drive — this block was testing the opposite of what
+  // it says, and the third case failed. A test named "without a client id"
+  // has to be the thing that removes it.
+  beforeEach(() => {
+    vi.stubEnv('VITE_GOOGLE_CLIENT_ID', '')
+  })
+
   it('is still offered', () => {
     show()
     expect(screen.getByRole('button', { name: /Google Drive/i })).toBeTruthy()
