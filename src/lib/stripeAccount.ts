@@ -77,6 +77,16 @@ export interface StripeAccountStatus {
   requirementsDue: string[]
   /** Where to send the merchant to finish onboarding, when there is more to do. */
   onboardingUrl?: string
+  /**
+   * Why {@link onboardingUrl} is absent, when the service DID send one and it
+   * was refused.
+   *
+   * Undefined when there was nothing to refuse. Carried here because the raw
+   * value is gone by the time a caller notices the absence, and "no link" and
+   * "a link I would not follow" need different words on screen — the first is
+   * Stripe having nothing more to ask, the second is a bug or an attack.
+   */
+  onboardingUrlRejected?: string
 }
 
 export type StripeResult =
@@ -248,6 +258,12 @@ function parse(body: unknown): StripeAccountStatus {
       ? raw.requirements_due.filter((r): r is string => typeof r === 'string')
       : [],
     onboardingUrl: stripeUrl(raw.onboarding_url),
+    // Only when something was actually sent: an absent field is not a refusal,
+    // and reporting one would turn "Stripe is finished with you" into an error.
+    onboardingUrlRejected:
+      raw.onboarding_url === undefined || raw.onboarding_url === null
+        ? undefined
+        : (stripeUrlRejection(raw.onboarding_url) ?? undefined),
   }
 }
 
@@ -262,19 +278,57 @@ function parse(body: unknown): StripeAccountStatus {
  * Stripe's own hosts, over https, and nothing else. An allowlist rather than a
  * pattern because "looks like Stripe" is exactly what a phisher registers —
  * `stripe.com.example.net` matches a naive contains-check and is not Stripe.
+ *
+ * ## Rejecting it silently was its own bug
+ *
+ * A refused URL used to be indistinguishable from no URL at all: both left
+ * `onboardingUrl` undefined, and the screen's response to undefined is to do
+ * NOTHING. Pressing "Finish setting up" produced no navigation, no error and no
+ * console output — the single worst failure a button can have, because there is
+ * nothing to search for.
+ *
+ * It surfaced against stripe-mock, which returns a `*.stripe.me` fixture URL.
+ * The rejection was CORRECT; the silence was not. `stripeUrlRejection` now
+ * reports the refusal so callers can say what happened, and the tap has a
+ * consequence either way.
  */
 function stripeUrl(value: unknown): string | undefined {
-  if (typeof value !== 'string' || value.trim() === '') return undefined
+  return typeof value === 'string' && stripeUrlRejection(value) === null
+    ? new URL(value).toString()
+    : undefined
+}
+
+/**
+ * Why an onboarding URL was refused, or null when it is fine.
+ *
+ * Split out from {@link stripeUrl} so the two can never disagree about what is
+ * acceptable — one predicate, two questions. Returning a REASON rather than a
+ * boolean is the point: the reader of this message is a developer looking at a
+ * button that did nothing, and "not a Stripe address" plus the host they got is
+ * the entire diagnosis.
+ */
+export function stripeUrlRejection(value: unknown): string | null {
+  if (typeof value !== 'string' || value.trim() === '') {
+    return 'Stripe did not send a setup link.'
+  }
 
   let url: URL
   try {
     url = new URL(value)
   } catch {
-    return undefined
+    return 'Stripe sent a setup link that is not a valid address.'
   }
 
-  if (url.protocol !== 'https:') return undefined
+  if (url.protocol !== 'https:') {
+    return `Refused a setup link that was not https (${url.protocol}//).`
+  }
 
   const host = url.hostname.toLowerCase()
-  return host === 'stripe.com' || host.endsWith('.stripe.com') ? url.toString() : undefined
+  if (host !== 'stripe.com' && !host.endsWith('.stripe.com')) {
+    // Names the host, because that is the fact that identifies the problem —
+    // a mock, a typo, or a genuine phishing attempt all look the same without it.
+    return `Refused a setup link that was not a Stripe address (${url.hostname}).`
+  }
+
+  return null
 }

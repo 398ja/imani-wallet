@@ -162,10 +162,29 @@ export function PaymentsSettingsPage({
       const result = await fn()
       await apply(result)
 
-      if (redirect && result.kind === 'ok' && result.status.onboardingUrl) {
-        // A full navigation: Stripe hosts this, and identity documents and bank
-        // details never touch this app.
-        window.location.href = result.status.onboardingUrl
+      if (redirect && result.kind === 'ok') {
+        if (result.status.onboardingUrl) {
+          // A full navigation: Stripe hosts this, and identity documents and bank
+          // details never touch this app.
+          window.location.href = result.status.onboardingUrl
+          return
+        }
+
+        // NOTHING HAPPENING IS NOT AN OPTION. Without this branch a refused or
+        // absent setup link left the tap with no navigation, no message and no
+        // console line — the worst failure a button can have, because there is
+        // nothing to search for. Observed against stripe-mock, whose fixture URL
+        // is on `*.stripe.me`: the allowlist correctly refused it and said so to
+        // nobody.
+        //
+        // The reason travels on the status, set by the same predicate that did
+        // the refusing, so this can never describe a different rule than the one
+        // applied. When Stripe simply had no more to ask, say that instead of
+        // inventing a failure.
+        setError(
+          result.status.onboardingUrlRejected ??
+            'Stripe did not send a setup link. Try Check again in a moment.',
+        )
       }
     } finally {
       // `finally`, because a throw here used to leave every button disabled
