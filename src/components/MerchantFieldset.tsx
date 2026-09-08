@@ -138,8 +138,8 @@ export function MerchantFieldset({
       </div>
 
       {/* The default leads its own row, so it is whatever this stall last saved
-          rather than the app's 30 — except at signup, where there is no stall
-          yet and 30 is the only sensible thing to lead with. */}
+          rather than the app's — except at signup, where there is no stall yet
+          and the app's default (never expiring) is what leads. */}
       <ValidityPicker
         label="Vouchers stay valid for"
         value={value.voucherValidityDays}

@@ -106,7 +106,26 @@ export const CURRENCIES = [
 export const VALIDITY_DAYS = [30, 60, 90] as const
 
 export const DEFAULT_CURRENCY = 'EUR'
-export const DEFAULT_VALIDITY_DAYS = 30
+
+/**
+ * A coupon that never expires, as a validity.
+ *
+ * `null` was not available: it already means "not a validity" — the state a
+ * half-typed custom term sits in — and SellPage disables its submit button on
+ * exactly that. Zero is outside `MIN_VALIDITY_DAYS`, so nothing that reads a
+ * day count can mistake it for one, and `issue.ts` drops `expiry_days` from the
+ * request rather than sending it.
+ */
+export const NEVER_EXPIRES = 0
+
+/**
+ * What a stall issues when it has never said otherwise.
+ *
+ * Never expiring, because an expiry is a promise to a customer that the stall
+ * has to keep track of, and a market stall that has not chosen a term has not
+ * chosen to make that promise. A stall that wants one picks it.
+ */
+export const DEFAULT_VALIDITY_DAYS: number = NEVER_EXPIRES
 
 /**
  * What a coupon's life may be set to, in whole days.
@@ -128,10 +147,22 @@ export const MAX_VALIDITY_DAYS = 730
  */
 export function validValidityDays(value: unknown): number | null {
   if (value === '' || value === null || value === undefined) return null
+  // Shape before value, and this order is load-bearing. `Number()` maps `false`,
+  // `[]`, `' '`, `'\n'`, `'0.0'` and `'0x0'` ALL onto 0. That was harmless while
+  // 0 meant nothing — every one of them failed the `>= MIN_VALIDITY_DAYS` bound
+  // along with it. Now that 0 is a deliberate term, anything reaching the
+  // `=== NEVER_EXPIRES` test has to be a number or a plain run of digits
+  // first, or a relay event carrying `false` reads as a stall that chose
+  // never-expiring.
+  if (typeof value === 'string') {
+    if (!/^\s*\d+\s*$/.test(value)) return null
+  } else if (typeof value !== 'number') {
+    return null
+  }
   const days = Number(value)
-  return Number.isInteger(days) && days >= MIN_VALIDITY_DAYS && days <= MAX_VALIDITY_DAYS
-    ? days
-    : null
+  if (!Number.isInteger(days)) return null
+  if (days === NEVER_EXPIRES) return NEVER_EXPIRES
+  return days >= MIN_VALIDITY_DAYS && days <= MAX_VALIDITY_DAYS ? days : null
 }
 
 /**
@@ -143,7 +174,10 @@ export function validValidityDays(value: unknown): number | null {
  * not offered 60 twice.
  */
 export function validityChoices(defaultDays: number): number[] {
-  return [defaultDays, ...VALIDITY_DAYS.filter((days) => days !== defaultDays)]
+  return [
+    defaultDays,
+    ...[NEVER_EXPIRES, ...VALIDITY_DAYS].filter((days) => days !== defaultDays),
+  ]
 }
 
 /**
