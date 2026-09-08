@@ -44,6 +44,7 @@ import { MerchantDashboardPage } from './pages/MerchantDashboardPage'
 import { RedeemPage } from './pages/RedeemPage'
 import { MerchantPage } from './pages/MerchantPage'
 import { ClaimLandingPage } from './pages/ClaimLandingPage'
+import { BuyPage } from './pages/BuyPage'
 import { peekPendingClaim } from './lib/pendingClaim'
 import { CouponsPage, TransactionsPage } from './pages/RecordListPages'
 import { CouponPage, TransactionPage } from './pages/RecordDetailPages'
@@ -361,7 +362,14 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             so the last step of "install the app to get your voucher" is not
             left to the customer to work out. */}
         <Route path="/c" element={<ClaimLandingPage authed />} />
+        {/* Buying a stall's coupon by card. In BOTH trees: a shopper who
+            already holds coupons is topping up, and a stranger who scanned a
+            QR is the reason the hosted page exists. */}
+        <Route path="/buy/:pubkey" element={<BuyPage buyerPubkey={pubkey} />} />
         <Route path="/merchants/:pubkey" element={<MerchantPage />} />
+      {/* Reachable with no wallet by design: the buyer takes delivery by claim
+          link, so nothing here needs a key. */}
+      <Route path="/buy/:pubkey" element={<BuyPage />} />
         <Route path="/merchants/:pubkey/coupons" element={<CouponsPage />} />
         <Route path="/merchants/:pubkey/transactions" element={<TransactionsPage />} />
         <Route path="/coupon/:tokenId" element={<CouponPage />} />
