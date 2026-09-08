@@ -54,27 +54,39 @@ protects every merchant. A bad trade.
 - **`walletIsOpen()` is new.** `listVouchers` throws without a store, and a
   visitor with no wallet is now an expected caller. Asked rather than caught,
   because catching would swallow a genuine storage failure too.
-- **There is still no directory, and the reason is curation rather than
-  infrastructure.** The wallet's queries all pass `authors:[pubkey]`, so nothing
-  enumerates stalls today. That is a client choice, not a protocol limit: a relay
-  will answer `{kinds:[30078], '#d':['imani:merchant']}` with no `authors`
-  filter, and since the stall record is plaintext that single query IS a
-  directory, carrying categories, location and `acceptsCards` with it.
+- **There is no directory, and that is a decision rather than a gap.** Stalls
+  are reached by a link somebody handed out: a QR on a stall sign, a link in a
+  bio, an email footer. Nothing in this design needs to enumerate stalls, and
+  **we are deliberately not building a way to.**
+
+  Recorded because the mechanism is cheap enough to look like an oversight. The
+  wallet's queries all pass `authors:[pubkey]`, but that is a client choice, not
+  a protocol limit: a relay will answer `{kinds:[30078], '#d':['imani:merchant']}`
+  with no `authors` filter, and since the stall record is plaintext that single
+  query IS a directory, carrying categories, location and `acceptsCards` with
+  it. Somebody will notice this and reach for it.
 
   **This paragraph originally said a browse tab "would need a new author-less
   index, which is a much larger decision than a page". That was wrong**, and
   wrong in the expensive direction: it named infrastructure as the blocker when
-  the index already exists. Corrected here rather than left to mislead someone
-  into building what they already have.
+  the index already exists. Corrected rather than left to mislead.
 
-  What actually stops a browse tab is that such a query returns **every** stall
-  record ever published — abandoned, test, and inactive alike — with no ranking
-  and no moderation, and `active` is self-asserted with nothing verifying a stall
-  is real. A directory of junk is worse than none. So the decision to make is
-  about curation, and it is a product decision rather than a technical one.
+  The reasons to leave it alone are about product, not plumbing:
 
-- **Bottin is the addressing layer, not the directory.** It maps name to pubkey
-  and holds no room for anything else: `Nip05RecordEntity` carries domain,
+  - The query returns **every** stall record ever published — abandoned, test
+    and inactive alike — with no ranking and no moderation, and `active` is
+    self-asserted with nothing verifying a stall is real. A directory of junk is
+    worse than none.
+  - Listing stalls makes Imani a marketplace, with the cold-start problem and
+    the curation duty that come with it. Link-led distribution has neither.
+  - It is reversible. Nothing here forecloses a directory later, and the data to
+    build one accumulates whether or not it is ever read.
+
+  Revisit when a stall asks to be found by someone who does not already know
+  them. Until then the absence is the feature.
+
+- **Bottin is the addressing layer, and not a registry either.** It maps name to
+  pubkey and holds no room for anything else: `Nip05RecordEntity` carries domain,
   username, pubkey, relays, enabled and timestamps, with no metadata column. A
   flag saying "this pubkey is a live Imani stall" would mean a schema migration
   putting one product's domain concepts into a general-purpose Nostr service,
