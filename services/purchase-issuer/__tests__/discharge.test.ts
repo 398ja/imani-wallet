@@ -26,6 +26,7 @@ const CREDENTIAL = {
 
 const OBLIGATION: Obligation = {
   id: 'evt_1',
+  paymentRequestId: '0123456789abcdef0123456789abcdef',
   stallPubkey: 'b'.repeat(64),
   faceValue: 2500,
   faceUnit: 'GBP',
@@ -63,7 +64,30 @@ describe('discharging a purchase', () => {
 
     const outcome = await discharge('http://gw', OBLIGATION, ports())
 
-    expect(outcome).toEqual({ kind: 'discharged', voucherId: 'v1', eventId: 'ev1' })
+    expect(outcome).toEqual({
+      kind: 'discharged',
+      voucherId: 'v1',
+      issuerId: '',
+      eventId: 'ev1',
+    })
+  })
+
+  it('stamps the payment request id onto the delivery', async () => {
+    // Without it the send answers no request, so the purchases API can never
+    // confirm the discharge: the coupon would be issued and the debt would
+    // stay open forever.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't' }))
+      .mockResolvedValueOnce(reply(200, { event_id: 'ev1' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await discharge('http://gw', OBLIGATION, ports())
+
+    const [, init] = fetchMock.mock.calls[1]
+    expect(JSON.parse(init.body).paymentRequestId).toBe(
+      '0123456789abcdef0123456789abcdef',
+    )
   })
 
   it('issues as the stall, naming no issuer of its own', async () => {
