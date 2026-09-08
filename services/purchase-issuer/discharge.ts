@@ -27,6 +27,14 @@ import { deliver, type Recipient } from './delivery'
 export interface Obligation {
   /** Stable across retries; Stripe's event id upstream. */
   id: string
+  /**
+   * Stamped onto the send so the discharge can be verified.
+   *
+   * Comes from the service that recorded the debt, never invented here: an id
+   * this service chose at delivery time would verify only that this service
+   * did something, which is what it already claims.
+   */
+  paymentRequestId: string
   stallPubkey: string
   faceValue: number
   faceUnit: string
@@ -38,7 +46,7 @@ export interface Obligation {
 }
 
 export type Outcome =
-  | { kind: 'discharged'; voucherId: string; eventId?: string }
+  | { kind: 'discharged'; voucherId: string; issuerId: string; eventId?: string }
   /** Issued but not delivered: value exists and has not reached anyone. */
   | { kind: 'undelivered'; voucherId: string; reason: string }
   /** Nothing minted. The debt stands and can be tried again. */
@@ -128,8 +136,19 @@ export async function discharge(
   }
 
   try {
-    const delivered = await deliver(baseUrl, credential, obligation.recipient, token)
-    return { kind: 'discharged', voucherId: coupon.voucherId, eventId: delivered.eventId }
+    const delivered = await deliver(
+      baseUrl,
+      credential,
+      obligation.recipient,
+      token,
+      obligation.paymentRequestId,
+    )
+    return {
+      kind: 'discharged',
+      voucherId: coupon.voucherId,
+      issuerId: coupon.issuerId,
+      eventId: delivered.eventId,
+    }
   } catch (error) {
     return {
       kind: 'undelivered',

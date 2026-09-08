@@ -58,6 +58,7 @@ export async function deliver(
   credential: StallCredential,
   recipient: Recipient,
   token: string,
+  paymentRequestId: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<Delivered> {
   if (token === '') {
@@ -77,7 +78,17 @@ export async function deliver(
   // No `sender_pubkey`. The gateway overwrites it with the authenticated key,
   // so sending one would be stating something we are not the authority on —
   // the same reason issuance sends no `issuer_id`.
-  const body = JSON.stringify({ recipient_pubkey: recipient.pubkey, token })
+  //
+  // `paymentRequestId` IS ours to state, and it is what makes the discharge
+  // checkable: gateway-core records it against the send, and the purchases API
+  // later asks whether a COMPLETED send answered this exact id. Omitting it
+  // would leave every discharge unverifiable, which the endpoint answers with
+  // 503 forever — the coupon would be issued and the debt never closed.
+  const body = JSON.stringify({
+    recipient_pubkey: recipient.pubkey,
+    token,
+    paymentRequestId,
+  })
 
   let response: Response
   try {
