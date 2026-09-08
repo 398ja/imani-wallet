@@ -37,6 +37,14 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
   const [error, setError] = useState<string | null>(null)
 
   const minor = toMinorUnits(amount)
+  /**
+   * Only complain about what they have finished typing.
+   *
+   * "2" on the way to "25.00" is not an error, and a field that turns red under
+   * the cursor teaches people to distrust the validation rather than the input.
+   * So the message waits for something that cannot become valid by typing more.
+   */
+  const malformed = amount.trim() !== '' && minor === null && !/^\d*\.?\d{0,2}$/.test(amount.trim())
 
   const buy = async () => {
     if (minor === null) return
@@ -66,43 +74,71 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
     <Screen>
       <BackLink to={`/merchants/${pubkey}`} label="Back" />
 
-      <h1 className="mb-2 text-xl font-semibold">Buy a voucher</h1>
-      <p className="mb-6 text-sm text-mono-500">
+      {/* Tracking tightened at this size: a heading reads loose with the body
+          tracking the system font ships by default. */}
+      <h1 className="mb-2 text-[22px] font-semibold tracking-[-0.02em]">Buy a voucher</h1>
+      <p className="mb-6 text-[15px] leading-relaxed text-mono-500">
         You pay this stall directly by card. The voucher arrives in your wallet.
       </p>
 
       <label className="mb-2 block text-sm font-medium" htmlFor="amount">
         Amount
       </label>
+      {/*
+        `inputMode="decimal"` puts a number pad under a thumb without the
+        spinners and scroll-to-change that `type="number"` brings.
+
+        The focus ring is the app's own rather than the browser default, which
+        differs per platform and would be the one control here that looks
+        borrowed.
+      */}
       <input
         id="amount"
         inputMode="decimal"
-        className="mb-4 w-full rounded-lg border border-mono-300 px-3 py-2 dark:border-mono-700"
+        autoComplete="off"
+        className="mb-2 w-full rounded-xl border border-mono-200 bg-transparent px-4 py-3 text-[17px] tabular-nums outline-none transition-colors duration-100 ease-out placeholder:text-mono-400 focus:border-mono-400 dark:border-mono-800 dark:focus:border-mono-600"
         value={amount}
         onChange={(e) => setAmount(e.target.value)}
         placeholder="25.00"
+        aria-describedby={malformed ? 'amount-hint' : undefined}
+        aria-invalid={malformed || undefined}
       />
 
+      {malformed && (
+        <p id="amount-hint" className="mb-2 text-sm text-mono-500">
+          Enter an amount like 25.00.
+        </p>
+      )}
+
       {error && (
-        <p className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+        <p className="expand-row mb-4 mt-2 rounded-xl bg-red-50 px-4 py-3 text-sm leading-relaxed text-red-700 dark:bg-red-950/50 dark:text-red-300">
+          {error}
+        </p>
       )}
 
       {/* Disabled rather than hidden: an amount box with no button beside it
           reads as broken, and the reason it cannot be pressed is visible in the
           empty field. */}
-      <Button size="lg" className="w-full" disabled={minor === null} onClick={buy}>
-        <CreditCard className="mr-2 h-5 w-5" /> Pay by card
+      <Button
+        size="lg"
+        className="mt-4 w-full"
+        disabled={minor === null}
+        onClick={buy}
+      >
+        <CreditCard className="mr-2 h-5 w-5" aria-hidden /> Pay by card
       </Button>
 
       {buyerPubkey === null && (
-        <p className="mt-4 text-sm text-mono-500">
+        <p className="mt-4 text-[15px] leading-relaxed text-mono-500">
           You will get a link to claim your voucher, so you can install the app
           afterwards.
         </p>
       )}
 
+      {/* A text button, not a second heavy one. Cancelling is the quiet path
+          and should not compete with the thing they came here to do. */}
       <button
-        className="mt-6 text-sm text-mono-500 underline"
+        className="pressable mt-6 text-sm text-mono-500 underline"
         onClick={() => navigate(`/merchants/${pubkey}`)}
       >
         Cancel

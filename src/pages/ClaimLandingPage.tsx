@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 
 import { redeemClaimRef, type RedeemResult } from '../lib/cashback'
 import { peekPendingClaim, stashPendingClaim, takePendingClaim } from '../lib/pendingClaim'
+import { Button } from '../components/ui'
 import { Centered } from '../components/ui/layout'
 
 /**
@@ -112,36 +113,64 @@ export function ClaimLandingPage({ authed }: { authed: boolean }) {
 
   if (arrival.kind === 'incomplete') {
     return (
-      <Centered>
-        <div>
-          <h1>Voucher unavailable</h1>
-          <p>This link is missing part of itself. Make sure the whole QR was scanned.</p>
-          <button onClick={() => navigate('/', { replace: true })}>Open my wallet</button>
-        </div>
-      </Centered>
+      <Outcome
+        title="Voucher unavailable"
+        body="This link is missing part of itself. Make sure the whole QR was scanned."
+        onDone={() => navigate('/', { replace: true })}
+      />
     )
   }
 
   if (!result) return <Centered>Adding your voucher…</Centered>
 
-  if (result.kind === 'ok') {
-    return (
-      <Centered>
-        <div>
-          <h1>Voucher added</h1>
-          <p>It is in your wallet now.</p>
-          <button onClick={() => navigate('/', { replace: true })}>Open my wallet</button>
-        </div>
-      </Centered>
-    )
-  }
+  return result.kind === 'ok' ? (
+    <Outcome
+      title="Voucher added"
+      body="It is in your wallet now."
+      onDone={() => navigate('/', { replace: true })}
+    />
+  ) : (
+    <Outcome
+      title="Voucher unavailable"
+      body={describe(result)}
+      onDone={() => navigate('/', { replace: true })}
+    />
+  )
+}
 
+/**
+ * The end of the journey, whichever end it is.
+ *
+ * One component for both outcomes rather than three near-identical blocks: a
+ * customer who succeeds and one who does not are looking at the same screen
+ * with different words, and building them separately is how the failure case
+ * ends up with the unstyled heading nobody noticed.
+ *
+ * Centred and short. There is exactly one thing to do here, and a page with one
+ * action should not make somebody find it.
+ */
+function Outcome({
+  title,
+  body,
+  onDone,
+}: {
+  title: string
+  body: string
+  onDone: () => void
+}) {
   return (
     <Centered>
-      <div>
-        <h1>Voucher unavailable</h1>
-        <p>{describe(result)}</p>
-        <button onClick={() => navigate('/', { replace: true })}>Open my wallet</button>
+      {/* `materialize` because this arrives over a blank screen after a wait,
+          and a plain cut reads as a page that failed to load and then did not.
+          Reduced motion drops it through the shared rule in index.css. */}
+      <div className="materialize max-w-sm px-6 text-center">
+        {/* Tracking tightened, leading pulled in: both are size-specific, and a
+            heading set with body defaults reads loose and airy. */}
+        <h1 className="text-[22px] font-semibold leading-tight tracking-[-0.02em]">{title}</h1>
+        <p className="mt-2 text-[15px] leading-relaxed text-mono-500">{body}</p>
+        <Button size="lg" className="mt-6 w-full" onClick={onDone}>
+          Open my wallet
+        </Button>
       </div>
     </Centered>
   )
