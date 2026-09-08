@@ -53,6 +53,18 @@ alone" is how two copies come to disagree.
 | Store and coupon currency must match | `imani-woo` ADR 0005 | Stripe setup checks |
 | The caller holds the key, and the coupons | `imani-wallet` ADR 0001 | Every service that would hold either |
 | Coupon purchases are direct charges | `payment-adapter` ADR 0001 | The whole no-float position |
+| A purchase reaches the stall as a message | `imani-wallet` ADR 0011 | Anything writing to a stall's ledger |
+
+## A ledger row is sealed by the key that owns it
+
+Worth hoisting out of ADR 0011, because it constrains every context that might
+want to tell a stall something. A NIP-60 history event is
+`nip44Encrypt(signer.pubkey, ...)` — sealed to the writer's own key, by the
+writer's own key.
+
+So **no service can write into a party's ledger**, however well authorised. A
+service that has something to record sends a message and lets the owning device
+write its own row. Anything else needs a key no service should hold.
 
 ## Vocabulary across the boundary
 
