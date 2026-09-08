@@ -68,3 +68,60 @@ const bypass = await fetch(`${VITE}/api/v1/portalfoo`, {
   body,
 })
 console.log(`prefix-bypass /api/v1/portalfoo   → ${bypass.status}`)
+
+// --- merchant-service, the same question asked of a different service --------
+//
+// Added after `Connect to Stripe` answered 401 with a valid session. Two bugs
+// met there, and only one of them was the visible one:
+//
+//   1. The proxy rule sent the request STRAIGHT to merchant-service, skipping
+//      the middleware that turns a session cookie into X-Auth-Pubkey. A good
+//      session arrived anonymous. That was the 401.
+//   2. merchant-service ran its own NapProxyAuthFilter that believed
+//      X-Auth-Pubkey with NO proof of origin. Fixing (1) alone would have made
+//      the screen work while leaving anyone who could reach the pod able to act
+//      as any merchant.
+//
+// So the honest line must now be non-401, and every forged line must be 401.
+// Before the fix the fourth line — pubkey with no secret at all — reached the
+// Stripe adapter and came back 502.
+const stripeBody = JSON.stringify({
+  return_url: 'http://localhost:5173/settings/payments?stripe=return',
+  refresh_url: 'http://localhost:5173/settings/payments?stripe=refresh',
+})
+const merchantShot = async (label, headers) => {
+  const r = await fetch(`${VITE}/api/v1/merchant/stripe/connect`, {
+    method: 'POST', headers: { 'content-type': 'application/json', cookie, ...headers },
+    body: stripeBody,
+  })
+  console.log(`${label} → ${r.status} ${(await r.text()).slice(0, 70)}`)
+}
+
+// READ THE SERVICE LOG, NOT JUST THESE STATUS CODES. The forged lines below
+// answer the SAME code as the honest one, because the edge overwrites the
+// forged header rather than rejecting the request — so the call succeeds, as
+// the real session. `docker logs merchant-service-test | grep
+// merchant_stripe_connect` prints the pubkey that actually acted, and every
+// line must show the SESSION's pubkey, never the aaaa… one sent here. Verified:
+// three forged attempts, three log lines reading ba5acafe (the session).
+//
+// On this dev stack the honest line is 502 with STRIPE_CONNECT_ENABLED unset —
+// payment-adapter answers 503 CONNECT_DISABLED, which needs real Stripe keys.
+// That is downstream of authentication and is exactly why the log matters more
+// than the code here.
+console.log('\n--- merchant-service (401 = refused; honest line must NOT be 401) ---')
+await merchantShot('honest, through the dev edge      ', {})
+await merchantShot('forging a victim pubkey           ', { 'X-Auth-Pubkey': 'a'.repeat(64) })
+await merchantShot('forging pubkey + edge secret      ', {
+  'X-Auth-Pubkey': 'a'.repeat(64), 'X-Edge-Auth': 'dev-edge-secret-local-only',
+})
+
+// Straight at the service, no proxy in the way — the SSRF / misrouted-ingress
+// case, and the one that was wide open. 401 is the only acceptable answer.
+const MERCHANT = process.env.MERCHANT ?? 'http://localhost:28088'
+const direct = await fetch(`${MERCHANT}/api/v1/merchant/stripe/connect`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', 'X-Auth-Pubkey': 'a'.repeat(64) },
+  body: stripeBody,
+})
+console.log(`direct to the pod, forged pubkey  → ${direct.status}`)

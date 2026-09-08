@@ -122,13 +122,13 @@ async function call(path: string, init: RequestInit): Promise<StripeResult> {
     }
 
     if (!response.ok) {
-      return {
-        kind: 'refused',
-        reason:
-          response.status === 401
-            ? 'Your session has expired. Sign in again to manage card payments.'
-            : 'Stripe could not be reached through your account. Please try again.',
+      if (response.status === 401) {
+        return {
+          kind: 'refused',
+          reason: 'Your session has expired. Sign in again to manage card payments.',
+        }
       }
+      return { kind: 'refused', reason: await refusalReason(response) }
     }
 
     return { kind: 'ok', status: parse(await response.json()) }
@@ -145,6 +145,42 @@ async function call(path: string, init: RequestInit): Promise<StripeResult> {
   } finally {
     clearTimeout(timer)
   }
+}
+
+/**
+ * What went wrong, in the merchant's words where the service gave us any.
+ *
+ * Every non-401 used to collapse into "Stripe could not be reached through your
+ * account", which was actively misleading the first time this screen was run
+ * against a real stack. Stripe Connect was simply switched off — payment-adapter
+ * answered 503 CONNECT_DISABLED, merchant-service passed the message through as
+ * a 502, and the wallet replaced it with a sentence about reachability. That
+ * sent the investigation to the network and the proxy table, when the whole
+ * problem was one unset flag in a compose file.
+ *
+ * So the service's own message wins when it sends one. Two guards on it:
+ *
+ * - A body that is not JSON, or carries no message, falls back to the generic
+ *   sentence rather than showing a fragment of HTML or an empty string.
+ * - It is length-capped. This text is rendered in the UI, and an upstream that
+ *   returns a stack trace should not become the screen.
+ *
+ * Deliberately NOT shown for 401: "session expired" is advice the merchant can
+ * act on, and no upstream phrasing improves on it.
+ */
+async function refusalReason(response: Response): Promise<string> {
+  const generic = 'Stripe could not be reached through your account. Please try again.'
+  try {
+    const body: unknown = await response.json()
+    const message = (body as { message?: unknown })?.message
+    if (typeof message === 'string' && message.trim()) {
+      return message.length > 200 ? generic : message
+    }
+  } catch {
+    // Not JSON. The generic sentence is still true, and a parse failure here
+    // must never lose the refusal itself.
+  }
+  return generic
 }
 
 /** Where a stall stands with Stripe today. */

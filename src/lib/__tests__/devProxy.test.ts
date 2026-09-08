@@ -30,7 +30,7 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { proxy } from '../../../vite.config'
+import { EDGE_AUTH_PREFIXES, proxy } from '../../../vite.config'
 
 /**
  * What the local test stack actually publishes, from
@@ -113,5 +113,77 @@ describe('the dev proxy table', () => {
       (t) => t.rule !== '/api' && t.rule.startsWith('/api') && t.target === catchAll.target,
     )
     expect(redundant.map((r) => r.rule)).toEqual([])
+  })
+})
+
+/**
+ * The edge hop, which is a separate property from the target.
+ *
+ * `Connect to Stripe` answered 401 with a valid session AFTER the port was
+ * fixed. The rule pointed at the right service and skipped the middleware that
+ * turns a session cookie into `X-Auth-Pubkey`, so the request arrived
+ * anonymous. Nothing looked wrong: a proxy rule with a correct target looks
+ * finished, and the missing piece lives in a different part of the file.
+ *
+ * These tests pair the two halves so they cannot drift. Adding an
+ * edge-authenticated route now means adding it to both, and forgetting either
+ * is a failure here rather than a 401 nobody can explain.
+ */
+describe('edge-authenticated routes', () => {
+  /*
+   * The regression, stated directly. A prefix the middleware authenticates must
+   * be a prefix the proxy routes, or the headers are attached to a request that
+   * then goes somewhere else entirely.
+   */
+  it.each(EDGE_AUTH_PREFIXES)('has a proxy rule for the edge-auth prefix %s', (prefix) => {
+    expect(Object.keys(proxy)).toContain(prefix)
+  })
+
+  /*
+   * And the converse, which is the half that actually broke. Both services
+   * behind these rules identify a caller ONLY from the edge-injected pubkey:
+   * gateway-portal and merchant-service each reject an unproven header outright
+   * (merchant-service does now — it used to trust it from anyone, which is why
+   * this went unnoticed). A rule here that the middleware does not cover is a
+   * screen that cannot work.
+   */
+  it.each(['/api/v1/portal', '/api/v1/merchant/stripe'])(
+    'runs the edge-auth middleware for the session-authenticated rule %s',
+    (rule) => {
+      expect(EDGE_AUTH_PREFIXES).toContain(rule)
+    },
+  )
+
+  /*
+   * The secret is what makes the two headers believable, so a rule that sets
+   * neither is one where the service falls back to "no identity". Asserted by
+   * driving the `configure` hook rather than by reading the source, because the
+   * property is what the proxy DOES to an outgoing request.
+   */
+  it.each(EDGE_AUTH_PREFIXES)('attaches the edge secret on %s, but only to a validated pubkey', (prefix) => {
+    const entry = (proxy as Record<string, { configure?: (p: unknown) => void }>)[prefix]
+    expect(entry?.configure, `${prefix} has no proxyReq hook`).toBeTypeOf('function')
+
+    const run = (headers: Record<string, string>) => {
+      const sent: Record<string, string> = { ...headers }
+      let handler: ((req: unknown) => void) | undefined
+      entry!.configure!({ on: (_e: string, cb: (req: unknown) => void) => (handler = cb) })
+      handler!({
+        getHeader: (name: string) => sent[name],
+        setHeader: (name: string, value: string) => (sent[name] = value),
+        removeHeader: (name: string) => delete sent[name],
+      })
+      return sent
+    }
+
+    // Validated: vouch for it.
+    expect(run({ 'x-auth-pubkey': 'abc' })['X-Edge-Auth']).toBeTruthy()
+
+    // Not validated: no secret, and the page's own permissions header is
+    // dropped rather than forwarded to be refused later. Fail closed here, not
+    // one layer down.
+    const unauthenticated = run({ 'x-auth-permissions': 'coupon:issue' })
+    expect(unauthenticated['X-Edge-Auth']).toBeUndefined()
+    expect(unauthenticated['x-auth-permissions']).toBeUndefined()
   })
 })

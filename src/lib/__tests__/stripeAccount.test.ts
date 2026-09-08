@@ -182,3 +182,70 @@ describe('stripe account status', () => {
     }
   })
 })
+
+/**
+ * The refusal a merchant is shown must be the one the service gave.
+ *
+ * Every non-401 used to become "Stripe could not be reached through your
+ * account", and the first time this screen met a real stack that sentence was
+ * false: Stripe Connect was switched off, payment-adapter said so plainly
+ * ("Stripe Connect is disabled"), and the wallet replaced it with a claim about
+ * reachability. The investigation went to the network and the proxy table; the
+ * answer was one unset flag in a compose file.
+ */
+describe('what a refusal actually says', () => {
+  const connect = async (status: number, body: unknown, isJson = true) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status,
+        json: async () => {
+          if (!isJson) throw new SyntaxError('Unexpected token <')
+          return body
+        },
+      })),
+    )
+    return connectStripe()
+  }
+
+  it('shows the service’s own message instead of a guess about the network', async () => {
+    const result = await connect(502, { message: 'Stripe Connect is disabled' })
+    expect(result).toEqual({ kind: 'refused', reason: 'Stripe Connect is disabled' })
+  })
+
+  /*
+   * 401 keeps its own words: "session expired" is advice the merchant can act
+   * on, and no upstream phrasing improves on it.
+   */
+  it('keeps the actionable wording for an expired session', async () => {
+    const result = await connect(401, { message: 'NIP-98 authentication required' })
+    expect(result).toEqual({
+      kind: 'refused',
+      reason: 'Your session has expired. Sign in again to manage card payments.',
+    })
+  })
+
+  /*
+   * A non-JSON body (an nginx error page, say) must not lose the refusal or
+   * render markup. Falling back is right; throwing would turn a refusal into
+   * "unreachable", which is the exact confusion this change removes.
+   */
+  it('falls back to the generic sentence when the body is not JSON', async () => {
+    const result = await connect(500, null, false)
+    expect(result.kind).toBe('refused')
+    expect((result as { reason: string }).reason).toContain('Please try again')
+  })
+
+  /* An upstream that returns a stack trace must not become the screen. */
+  it('refuses to render an unreasonably long upstream message', async () => {
+    const result = await connect(502, { message: 'x'.repeat(500) })
+    expect((result as { reason: string }).reason).toContain('Please try again')
+  })
+
+  /* A JSON body with no message at all is the same fallback. */
+  it('falls back when the body carries no message', async () => {
+    const result = await connect(502, { status: 502 })
+    expect((result as { reason: string }).reason).toContain('Please try again')
+  })
+})
