@@ -43,6 +43,8 @@ import { CashbackIssuePage } from './pages/CashbackIssuePage'
 import { MerchantDashboardPage } from './pages/MerchantDashboardPage'
 import { RedeemPage } from './pages/RedeemPage'
 import { MerchantPage } from './pages/MerchantPage'
+import { ClaimLandingPage } from './pages/ClaimLandingPage'
+import { peekPendingClaim } from './lib/pendingClaim'
 import { CouponsPage, TransactionsPage } from './pages/RecordListPages'
 import { CouponPage, TransactionPage } from './pages/RecordDetailPages'
 import { ScanPage } from './pages/ScanPage'
@@ -272,7 +274,15 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route
           path="/"
           element={
-            trading ? (
+            /*
+              Someone who arrived holding a claim link came for a voucher, not
+              for an empty wallet. If one is still parked after onboarding,
+              finish that first — peeked rather than taken, so the claim is
+              still there for the screen that spends it.
+            */
+            peekPendingClaim() ? (
+              <Navigate to="/c" replace />
+            ) : trading ? (
               <MerchantHomePage
                 actor={terminal.actor ?? undefined}
                 session={terminal.session}
@@ -342,6 +352,15 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route path="/send" element={<SendPage pubkey={pubkey} />} />
         <Route path="/receive" element={<ReceivePage profile={profile} />} />
         <Route path="/receive/cashback" element={<CashbackRedeemPage />} />
+        {/* A claim link handed over by the hosted page. Present in BOTH trees:
+            here it redeems, and in `PublicRoutes` it parks the claim and sends
+            the customer to onboarding first. */}
+        <Route path="/c/:ref" element={<ClaimLandingPage authed />} />
+        {/* Where a parked claim is picked up after onboarding. `Entry` sends a
+            new wallet here rather than to the home screen when one is waiting,
+            so the last step of "install the app to get your voucher" is not
+            left to the customer to work out. */}
+        <Route path="/c" element={<ClaimLandingPage authed />} />
         <Route path="/merchants/:pubkey" element={<MerchantPage />} />
         <Route path="/merchants/:pubkey/coupons" element={<CouponsPage />} />
         <Route path="/merchants/:pubkey/transactions" element={<TransactionsPage />} />
@@ -481,6 +500,12 @@ function PublicRoutes({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<
       <Route path="/login" element={<LoginPage onUnlock={onUnlock} />} />
       <Route path="/onboarding" element={<OnboardingPage onUnlock={onUnlock} />} />
       <Route path="/restore" element={<RestorePage onUnlock={onUnlock} />} />
+      {/* A bearer claim link, which is opened by people who have no wallet yet
+          BY DESIGN. It cannot fall through to `Entry` with everything else:
+          losing the ref and the key here used to mean losing the voucher. The
+          page parks the claim and resumes it after onboarding, and nothing is
+          spent until a wallet exists to hold it. */}
+      <Route path="/c/:ref" element={<ClaimLandingPage authed={false} />} />
       {/* Anything else, including deep links into the authed app, lands on the
           entry screen; the deep link is not preserved because every authed route
           needs a wallet that does not exist yet. */}
