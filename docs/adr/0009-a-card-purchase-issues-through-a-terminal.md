@@ -97,3 +97,43 @@ the gateway decides an issuer.
 **Not in `payment-adapter`**, which is a payments service and should not acquire
 custody of Nostr issuing keys. It signals that a purchase was paid; what follows
 from that is somebody else's business.
+
+## How it runs, added when the design was made deployable
+
+Everything above is about which key signs. What the design did not say is where
+the signing PROCESS lives, and the answer was accidentally "nowhere": the issuer
+had `runPass`, a vault, a discharge policy and tests for all three, and no
+entrypoint, no config, no Dockerfile and no compose entry. Every unit was
+correct and nothing constructed them.
+
+It is a **poll loop**, not a push from the webhook. `payment-adapter` records a
+debt transactionally with Stripe's event and stops there, and ADR 0010's whole
+point is that issuance is not on the payment path. A push would put it back, and
+would need its own retry, queue and idempotency — all of which the debt table
+already is. Polling makes the recovery path and the normal path the same code: a
+missed push is a bug, a missed poll is the next poll.
+
+**One replica.** `runPass` is sequential because two workers racing one debt is
+how one payment becomes two coupons, and nothing holds a lock on a row. Scaling
+this means claiming the row in `payment-adapter`, not adding a replica.
+
+**It refuses to boot when unconfigured, rather than degrading.** This is the
+one design decision the runtime added, and it exists because of an asymmetry
+already in the code: `PurchasesApi.owed()` returns `[]` on any failure, so a
+worker idles through an outage instead of crash-looping. That is right for an
+outage and indistinguishable from "nothing is owed" when the cause is a missing
+token — the queue would read as empty and healthy while paid customers waited.
+`livemode` has no default at all, because defaulting it false leaves production
+debts unworked and defaulting it true lets a test payment mint real value.
+
+Two bugs found by running the image rather than the suite, both invisible to
+every test:
+
+- `@imani/money` is the one package in this repo whose `exports` points at
+  `dist` rather than source, and `dist` is gitignored. The container died on
+  `Cannot find module`. The build guard had checked the directory EXISTED,
+  which it did; it now resolves each package the way the service does.
+- The credential store was written with `writeFile`, which truncates before it
+  writes. A crash in that window leaves a zero-byte file, every stall silently
+  falls back to manual issuance, and the vault's skip-unreadable-records
+  handling keeps the logs quiet. Now written to a sibling and renamed.
