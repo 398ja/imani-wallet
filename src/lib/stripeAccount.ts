@@ -302,10 +302,27 @@ function stripeUrl(value: unknown): string | undefined {
  * Why an onboarding URL was refused, or null when it is fine.
  *
  * Split out from {@link stripeUrl} so the two can never disagree about what is
- * acceptable — one predicate, two questions. Returning a REASON rather than a
- * boolean is the point: the reader of this message is a developer looking at a
- * button that did nothing, and "not a Stripe address" plus the host they got is
- * the entire diagnosis.
+ * acceptable — one predicate, two questions.
+ *
+ * ## These messages are read by two different people
+ *
+ * A merchant, who needs to know whether they are stuck and whose fault it is;
+ * and a developer, who needs the fact that identifies the cause. The first
+ * version of this served only the second, and said:
+ *
+ *     Refused a setup link that was not a Stripe address
+ *     (sangeekp-15t6ai--manage-mydev.dev.stripe.me).
+ *
+ * Every word true, and useless to anyone. It reads like a security incident,
+ * names a host nobody recognises, and gives no next step. What was actually
+ * happening: the local stack runs `stripe-mock`, which cannot host a real
+ * onboarding page, so there was nothing to go to and nothing wrong.
+ *
+ * So the KNOWN case is named. `*.stripe.me` is Stripe's own internal domain and
+ * appears in stripe-mock's fixtures; if a link arrives from there, this is a
+ * development stack pointed at the mock, and the honest answer is "this cannot
+ * be finished here" plus how to change that. The generic refusal stays for
+ * everything else, where "an address that is not Stripe's" IS the story.
  */
 export function stripeUrlRejection(value: unknown): string | null {
   if (typeof value !== 'string' || value.trim() === '') {
@@ -325,8 +342,19 @@ export function stripeUrlRejection(value: unknown): string | null {
 
   const host = url.hostname.toLowerCase()
   if (host !== 'stripe.com' && !host.endsWith('.stripe.com')) {
-    // Names the host, because that is the fact that identifies the problem —
-    // a mock, a typo, or a genuine phishing attempt all look the same without it.
+    // The one refusal that is expected rather than alarming. stripe-mock's
+    // fixtures point at Stripe's internal `*.stripe.me` domain, which hosts no
+    // onboarding page a browser can reach, so this is a local stack running the
+    // fake — not an attack, not a bug, and not something to keep pressing.
+    if (host === 'stripe.me' || host.endsWith('.stripe.me')) {
+      return (
+        'This stack is running the Stripe mock, which cannot host the setup ' +
+        'page. Account creation worked; finishing setup needs a real Stripe ' +
+        'test key (unset STRIPE_API_BASE and set STRIPE_SECRET_KEY).'
+      )
+    }
+    // Everything else: the host IS the story, so it is named. A typo and a
+    // phishing attempt are indistinguishable without it.
     return `Refused a setup link that was not a Stripe address (${url.hostname}).`
   }
 

@@ -277,17 +277,31 @@ describe('a refused onboarding URL says so', () => {
     return (result as { status: StripeAccountStatus }).status
   }
 
-  /* The exact URL stripe-mock returns, which is how this was found. */
-  it('names the host when the link is not a Stripe address', async () => {
+  /*
+   * The exact URL stripe-mock returns, which is how this was found.
+   *
+   * The first message here was technically perfect and practically useless:
+   * "Refused a setup link that was not a Stripe address
+   * (sangeekp-15t6ai--manage-mydev.dev.stripe.me)". It reads as a security
+   * incident, names a host nobody recognises, and offers no next step — for a
+   * situation where nothing is wrong and nothing can be done on this stack.
+   *
+   * So the mock is named, and the assertion is about what a reader LEARNS
+   * rather than which branch ran.
+   */
+  it('explains the mock rather than reporting a scary refusal', async () => {
     const status = await statusWith(
       'https://sangeekp-15t6ai--manage-mydev.dev.stripe.me/setup/s/acct_1PgafTB7WZ01zgkW/x',
     )
 
     expect(status.onboardingUrl, 'must still refuse to navigate there').toBeUndefined()
-    expect(status.onboardingUrlRejected).toContain('not a Stripe address')
-    // The host is the whole diagnosis: a mock, a typo and a phishing attempt
-    // are indistinguishable without it.
-    expect(status.onboardingUrlRejected).toContain('dev.stripe.me')
+    expect(status.onboardingUrlRejected).toContain('Stripe mock')
+    // Says what still worked, so the reader does not go hunting a broken flow.
+    expect(status.onboardingUrlRejected).toContain('Account creation worked')
+    // And how to change it, which is the only actionable part.
+    expect(status.onboardingUrlRejected).toContain('STRIPE_API_BASE')
+    // The alarming phrasing is reserved for hosts that deserve it.
+    expect(status.onboardingUrlRejected).not.toContain('Refused')
   })
 
   /* The phishing case the allowlist exists for. */
@@ -324,4 +338,51 @@ describe('a refused onboarding URL says so', () => {
     expect(status.onboardingUrl).toBe('https://connect.stripe.com/setup/s/acct_123')
     expect(status.onboardingUrlRejected).toBeUndefined()
   })
+})
+
+/**
+ * The friendly mock message must not become a hiding place.
+ *
+ * Naming `*.stripe.me` as "the mock, nothing is wrong" is safe only because it
+ * is a SUFFIX check on the parsed hostname. A substring check would let
+ * `stripe.me.attacker.com` describe itself as a local development mock —
+ * turning a reassurance into cover for the exact attack the allowlist exists to
+ * stop. Neither host is ever navigated to; the danger is only in the words.
+ */
+describe('the mock explanation cannot be borrowed', () => {
+  const rejectionFor = async (onboardingUrl: string) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ status: 'restricted', onboarding_url: onboardingUrl }),
+      })),
+    )
+    const result = await connectStripe()
+    return (result as { status: StripeAccountStatus }).status
+  }
+
+  it.each([
+    'https://stripe.me.attacker.com/setup',
+    'https://evil-stripe.me.attacker.com/setup',
+    'https://notstripe.me.example.net/setup',
+  ])('calls %s a refusal, not a mock', async (url) => {
+    const status = await rejectionFor(url)
+
+    expect(status.onboardingUrl).toBeUndefined()
+    expect(status.onboardingUrlRejected).toContain('not a Stripe address')
+    expect(status.onboardingUrlRejected).not.toContain('mock')
+  })
+
+  /* A genuine mock host, including the bare domain, still gets the kind words. */
+  it.each(['https://stripe.me/setup', 'https://x.dev.stripe.me/setup'])(
+    'recognises %s as the mock',
+    async (url) => {
+      const status = await rejectionFor(url)
+
+      expect(status.onboardingUrl).toBeUndefined()
+      expect(status.onboardingUrlRejected).toContain('Stripe mock')
+    },
+  )
 })
