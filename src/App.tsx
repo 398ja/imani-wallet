@@ -506,6 +506,19 @@ function PublicRoutes({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<
           page parks the claim and resumes it after onboarding, and nothing is
           spent until a wallet exists to hold it. */}
       <Route path="/c/:ref" element={<ClaimLandingPage authed={false} />} />
+      {/* A stall's profile, which is a PUBLIC thing: the kind-30078 record and
+          the kind-0 profile are both plaintext and readable over an
+          unauthenticated relay query, and the whole point of a QR on a stall
+          sign is that a stranger can scan it.
+
+          Caveat worth knowing before trusting this: `newestAddressable` reads
+          the relay AND the gateway, and its own comment records that a
+          deployment which does not publish strfry's port loses the merchant
+          record entirely. An unauthenticated visitor has only the relay leg, so
+          on such a deployment this page degrades to a bare address. It fails
+          closed — no record means no Buy button — but it is a deployment
+          prerequisite rather than a detail. */}
+      <Route path="/merchants/:pubkey" element={<MerchantPage />} />
       {/* Anything else, including deep links into the authed app, lands on the
           entry screen; the deep link is not preserved because every authed route
           needs a wallet that does not exist yet. */}
