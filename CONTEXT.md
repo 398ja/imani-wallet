@@ -137,7 +137,8 @@ _Avoid_: Storage, hosting
 **Purchase**:
 A customer buying a coupon with a card, paid to the stall's own Stripe account.
 Neither a redemption nor an issuance by hand, so it is counted separately from
-both.
+both. Recorded as two rows, one in each party's own ledger, never as one shared
+record.
 _Avoid_: Sale, order, checkout
 
 **Obligation**:
@@ -157,6 +158,12 @@ The stall's own Stripe account, which is merchant of record for every purchase.
 Funds land there and never in an Imani balance, so disputes and reserves are the
 stall's.
 _Avoid_: Merchant account, Stripe account
+
+**Purchase notice**:
+The message telling a stall that a purchase was issued in its name. Carries no
+coupon, because the coupon went to the customer; the stall's device turns it
+into a ledger row of its own.
+_Avoid_: Notification, receipt, webhook
 
 ### A note on Stall and Merchant
 
