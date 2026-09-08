@@ -32,8 +32,14 @@ export interface OwedPurchase {
    * which is what stops a discharge from being self-certifying.
    */
   paymentRequestId: string
-  /** The stall that owes it. */
-  connectedAccountId: string
+  /**
+   * The stall's NOSTR pubkey, which is what a credential is keyed by.
+   *
+   * Null when the recording service could not identify the stall. Treated as
+   * "issue by hand" rather than guessed at: minting for the wrong stall is
+   * worse than not minting.
+   */
+  stallPubkey: string | null
   /** Who to deliver to, or null when the buyer takes a claim link. */
   recipientPubkey: string | null
   amountMinor: number
@@ -125,14 +131,26 @@ export class PurchasesApi {
    * Best-effort by design: this is a note for whoever reads the row later, and
    * failing to write it must not stop the worker moving to the next debt.
    */
-  async reportFailure(eventId: string, reason: string, permanent: boolean): Promise<void> {
+  async reportFailure(
+    eventId: string,
+    reason: string,
+    permanent: boolean,
+    /**
+     * The coupon that WAS minted, when one was.
+     *
+     * Its presence takes the debt out of the mintable queue. Omitting it after
+     * a successful mint leaves the row looking unminted, and the next pass
+     * mints again — one payment, a coupon per wake.
+     */
+    voucherId?: string,
+  ): Promise<void> {
     try {
       await this.fetchImpl(
         `${this.baseUrl}/api/v1/purchases/${encodeURIComponent(eventId)}/failure`,
         {
           method: 'POST',
           headers: this.headers(),
-          body: JSON.stringify({ reason, permanent }),
+          body: JSON.stringify({ reason, permanent, voucherId: voucherId ?? null }),
         },
       )
     } catch {

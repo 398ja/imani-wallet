@@ -82,11 +82,32 @@ export function ClaimLandingPage({ authed }: { authed: boolean }) {
       return
     }
 
-    // Consume the parked copy now that this render is committed to spending it,
-    // and drop the key from the address bar.
-    takePendingClaim()
-    window.history.replaceState(null, '', window.location.pathname)
-    void redeemClaimRef(arrival.ref, arrival.key).then(setResult)
+    /*
+     * Redeem FIRST, then forget.
+     *
+     * The previous order consumed the parked claim and stripped the fragment
+     * before the redeem was attempted, so a network failure destroyed both
+     * copies of the key while the screen told the customer their voucher was
+     * still waiting. It was not: nothing could reach it again.
+     *
+     * The claim itself is unharmed by a failed redeem — the server only spends
+     * it on a successful ciphertext fetch — so the key is the only thing worth
+     * protecting, and it is dropped only once it is no longer needed.
+     */
+    void redeemClaimRef(arrival.ref, arrival.key).then((outcome) => {
+      if (outcome.kind === 'ok' || outcome.kind === 'not_found') {
+        // Spent, or gone for good. Either way there is nothing left to resume,
+        // and keeping it would offer a dead claim to the next visit.
+        takePendingClaim()
+        window.history.replaceState(null, '', window.location.pathname)
+      } else if (arrival.kind === 'link') {
+        // Failed, and the key came from the URL rather than the store. Park it
+        // so a retry has something to work from: the customer may close this
+        // tab and come back to a link whose fragment they no longer have.
+        stashPendingClaim(arrival.ref, arrival.key)
+      }
+      setResult(outcome)
+    })
   }, [arrival, authed, navigate])
 
   if (arrival.kind === 'incomplete') {

@@ -108,7 +108,26 @@ export function MerchantPage() {
     // records in this device's localStorage, which `clearMerchant` at logout
     // never removes. Their record is not ours to keep.
     let cancelled = false
-    fetchMerchantRecord(pubkey)
+
+    /*
+     * A DEADLINE, because the page now waits for this before rendering
+     * anything.
+     *
+     * `fetchMerchantRecord` never rejects, but it can hang: the relay query
+     * underneath has no timeout of its own, and a customer holding twenty
+     * coupons would sit on "Loading…" forever over a stall record they do not
+     * need. That is a regression this screen introduced by gating render on a
+     * second fetch, so the timeout belongs here rather than in the fetch.
+     *
+     * Resolving to null means no map and no Buy button, which is the same
+     * degradation as an unreachable stall, and it fails CLOSED.
+     */
+    const withDeadline = Promise.race([
+      fetchMerchantRecord(pubkey),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
+    ])
+
+    withDeadline
       .then((m) => {
         if (!cancelled) setRecord(m)
       })
