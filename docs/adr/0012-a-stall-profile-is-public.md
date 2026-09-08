@@ -54,11 +54,44 @@ protects every merchant. A bad trade.
 - **`walletIsOpen()` is new.** `listVouchers` throws without a store, and a
   visitor with no wallet is now an expected caller. Asked rather than caught,
   because catching would swallow a genuine storage failure too.
-- **There is still no directory.** Every relay query requires `authors:[pubkey]`,
-  so stalls cannot be enumerated and this page is only reachable by a link
-  somebody handed out. That is a data-model fact, not an oversight: a browse tab
-  would need a new author-less index, which is a much larger decision than a
-  page.
+- **There is still no directory, and the reason is curation rather than
+  infrastructure.** The wallet's queries all pass `authors:[pubkey]`, so nothing
+  enumerates stalls today. That is a client choice, not a protocol limit: a relay
+  will answer `{kinds:[30078], '#d':['imani:merchant']}` with no `authors`
+  filter, and since the stall record is plaintext that single query IS a
+  directory, carrying categories, location and `acceptsCards` with it.
+
+  **This paragraph originally said a browse tab "would need a new author-less
+  index, which is a much larger decision than a page". That was wrong**, and
+  wrong in the expensive direction: it named infrastructure as the blocker when
+  the index already exists. Corrected here rather than left to mislead someone
+  into building what they already have.
+
+  What actually stops a browse tab is that such a query returns **every** stall
+  record ever published — abandoned, test, and inactive alike — with no ranking
+  and no moderation, and `active` is self-asserted with nothing verifying a stall
+  is real. A directory of junk is worse than none. So the decision to make is
+  about curation, and it is a product decision rather than a technical one.
+
+- **Bottin is the addressing layer, not the directory.** It maps name to pubkey
+  and holds no room for anything else: `Nip05RecordEntity` carries domain,
+  username, pubkey, relays, enabled and timestamps, with no metadata column. A
+  flag saying "this pubkey is a live Imani stall" would mean a schema migration
+  putting one product's domain concepts into a general-purpose Nostr service,
+  to answer a question the relay answers better and with richer data.
+
+  What bottin is genuinely good for here is the human-readable address a stall
+  prints on a sign, since `imani.casa/@marlowbooks` beats 64 hex characters.
+  Note that Imani handles now come from the gateway's `POST /api/v1/nip05`
+  rather than bottin, and the two have already drifted — bottin's form allows a
+  hyphen the gateway rejects (`src/lib/validate.ts`).
+
+- **Handle lists are public, by NIP-05 design.** `GET /.well-known/nostr.json`
+  with no `?name=` returns every enabled record for a domain, unauthenticated.
+  That is the spec behaving correctly rather than a leak, and it applies to
+  customers as much as to stalls. Recorded because it is easy to assume
+  otherwise: a handle is enumerable, and it maps to a pubkey whose stall record
+  and relay activity are public too.
 - **A deployment prerequisite, not a detail.** `newestAddressable` reads the
   relay and the gateway, and its own comment records that a deployment which
   does not publish strfry's port loses the merchant record. An unauthenticated
