@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 # Bring up the minimum imani backend the customer coupon wallet needs.
 #
-# Skipped on purpose: merchant-service (a merchant surface we
-# do not use) and edge-proxy (Vite proxies straight
-# to the host ports instead). gateway-portal IS needed — it is the merchant tier
-# that issues coupons; phoenixd-mock IS needed — the mint backs vouchers with
-# Lightning invoices. Both had to be image-corrected; see compose.override.yml.
+# Skipped on purpose: edge-proxy (Vite proxies straight to the host ports
+# instead, and plays the edge's auth_request itself — see vite.config.ts).
+# gateway-portal IS needed — it is the merchant tier that issues coupons;
+# phoenixd-mock IS needed — the mint backs vouchers with Lightning invoices.
+# Both had to be image-corrected; see compose.override.yml.
+#
+# merchant-service USED to be on the skip list, described as "a merchant surface
+# we do not use". That stopped being true when Settings → Payments arrived: it
+# owns a stall's Stripe account, and every call that screen makes goes there. It
+# was left out long enough that its absence was mistaken for the endpoint not
+# existing, and the wrong conclusion reached two source files. It is a dependency
+# now, so it starts with everything else.
 #
 #   ./deploy/up.sh              # start the wallet subset
 #   ./deploy/up.sh ps           # any other compose subcommand
@@ -34,7 +41,7 @@ SERVICES=(
   imani-gateway-db bottin-db imani-vault-db imani-payment-db
   bottin-api nostr-relay phoenixd-mock blossom
   imani-vault-jpa payment-adapter imani-mint-rest
-  account-app gateway-customer gateway-portal
+  account-app gateway-customer gateway-portal merchant-service
 )
 
 export WALLET_DEPLOY_DIR="$HERE"
