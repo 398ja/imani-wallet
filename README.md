@@ -86,7 +86,7 @@ why it can't be forged, and why your key matters so much.
 
 This is a single-page web app (React 19 + TypeScript + Vite), packaged for
 Android with Capacitor. It talks to the Imani gateway backend for identity,
-Nostr message relay, and the Cashu mint that backs coupons with value.
+Nostr message relay, and the Cashu mint that issues and signs coupons.
 
 ### Run it
 
