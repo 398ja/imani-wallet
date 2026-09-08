@@ -63,7 +63,8 @@ _Avoid_: Payment, spend
 **Terminal**:
 One device acting for a stall, with its own key and its own fixed role. A stall
 runs several, and they differ in what they may do, so "the stall" is not a single
-actor at a till.
+actor at a till. Not always a device on a counter: the Purchase Issuer is one
+too.
 _Avoid_: Subaccount, employee, delegate, till
 
 **Enrolment**:
@@ -130,3 +131,39 @@ _Avoid_: Client, integrator
 Holding either a customer's key or their coupons. Holding the coupons alone is
 still custody, because coupons are bearer instruments.
 _Avoid_: Storage, hosting
+
+### Buying a coupon with a card
+
+**Purchase**:
+A customer buying a coupon with a card, paid to the stall's own Stripe account.
+Neither a redemption nor an issuance by hand, so it is counted separately from
+both.
+_Avoid_: Sale, order, checkout
+
+**Obligation**:
+A coupon a stall owes because a purchase was paid. Recorded when payment is
+confirmed and discharged only when issuance is confirmed, never when it is
+asserted.
+_Avoid_: Pending order, debt, IOU
+
+**Purchase Issuer**:
+The terminal that mints a coupon when a purchase is paid, holding one credential
+per stall. A terminal like any other, so a stall enrols it and burns it the same
+way.
+_Avoid_: Minting service, bot, robot till
+
+**Connected account**:
+The stall's own Stripe account, which is merchant of record for every purchase.
+Funds land there and never in an Imani balance, so disputes and reserves are the
+stall's.
+_Avoid_: Merchant account, Stripe account
+
+### A note on Stall and Merchant
+
+**Stall** is the word, and everything a customer ever reads says it.
+
+**Merchant** survives on the service side — `imani-merchant`, `merchantPubkey`,
+`MerchantStripeAccount` — because Stripe's own vocabulary is merchant-shaped and
+renaming across service boundaries would cost more than it returns. Treat it as
+the same concept under a foreign name, and do not let it cross back into
+customer-facing text.
