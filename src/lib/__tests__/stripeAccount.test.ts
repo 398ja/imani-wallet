@@ -3,6 +3,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { StripeAccountStatus } from '../stripeAccount'
 import {
   connectStripe,
   disconnectStripe,
@@ -247,5 +248,80 @@ describe('what a refusal actually says', () => {
   it('falls back when the body carries no message', async () => {
     const result = await connect(502, { status: 502 })
     expect((result as { reason: string }).reason).toContain('Please try again')
+  })
+})
+
+/**
+ * A refused setup link must be distinguishable from no setup link.
+ *
+ * The allowlist that keeps `window.location.href` safe rejected stripe-mock's
+ * `*.stripe.me` fixture URL — correctly — and reported it to nobody. Both cases
+ * left `onboardingUrl` undefined, so pressing "Finish setting up" produced no
+ * navigation, no message and no console line. A button that does nothing is the
+ * worst failure it can have: there is nothing to search for.
+ *
+ * The rejection is CORRECT and stays. Only the silence is fixed.
+ */
+describe('a refused onboarding URL says so', () => {
+  const statusWith = async (onboardingUrl: unknown) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ status: 'restricted', onboarding_url: onboardingUrl }),
+      })),
+    )
+    const result = await connectStripe()
+    expect(result.kind).toBe('ok')
+    return (result as { status: StripeAccountStatus }).status
+  }
+
+  /* The exact URL stripe-mock returns, which is how this was found. */
+  it('names the host when the link is not a Stripe address', async () => {
+    const status = await statusWith(
+      'https://sangeekp-15t6ai--manage-mydev.dev.stripe.me/setup/s/acct_1PgafTB7WZ01zgkW/x',
+    )
+
+    expect(status.onboardingUrl, 'must still refuse to navigate there').toBeUndefined()
+    expect(status.onboardingUrlRejected).toContain('not a Stripe address')
+    // The host is the whole diagnosis: a mock, a typo and a phishing attempt
+    // are indistinguishable without it.
+    expect(status.onboardingUrlRejected).toContain('dev.stripe.me')
+  })
+
+  /* The phishing case the allowlist exists for. */
+  it('refuses a lookalike host and says which one', async () => {
+    const status = await statusWith('https://stripe.com.example.net/setup')
+
+    expect(status.onboardingUrl).toBeUndefined()
+    expect(status.onboardingUrlRejected).toContain('stripe.com.example.net')
+  })
+
+  it('refuses a non-https link', async () => {
+    const status = await statusWith('http://stripe.com/setup')
+
+    expect(status.onboardingUrl).toBeUndefined()
+    expect(status.onboardingUrlRejected).toContain('https')
+  })
+
+  /*
+   * The distinction that matters. Stripe sending nothing is not a refusal — it
+   * is an account with nothing left to ask — and reporting it as an error would
+   * put a scary message in front of a merchant who is finished.
+   */
+  it('reports no rejection when there was no link to refuse', async () => {
+    const status = await statusWith(undefined)
+
+    expect(status.onboardingUrl).toBeUndefined()
+    expect(status.onboardingUrlRejected).toBeUndefined()
+  })
+
+  /* A good link still passes, unchanged. */
+  it('accepts a real Stripe link and reports no rejection', async () => {
+    const status = await statusWith('https://connect.stripe.com/setup/s/acct_123')
+
+    expect(status.onboardingUrl).toBe('https://connect.stripe.com/setup/s/acct_123')
+    expect(status.onboardingUrlRejected).toBeUndefined()
   })
 })
