@@ -1,0 +1,259 @@
+/**
+ * Issuing a coupon for a purchase, as the stall, with nobody in the loop.
+ *
+ * A customer pays a stall by card. Stripe confirms it, an Obligation is
+ * recorded, and this mints the coupon and hands it over. The stall is asleep.
+ *
+ * ## Why this is a separate service from `wallet-api`
+ *
+ * `wallet-api` holds no key and signs nothing: ADR 0001 and 0002 are the reason
+ * a public spending endpoint is defensible at all. This service is the opposite
+ * shape — it holds one issuing credential per stall and signs with them — so it
+ * must be visibly a different thing rather than an endpoint on that one. Two
+ * services, two postures, no ambiguity about which property applies where.
+ *
+ * It is a **caller** in the precise sense the glossary gives that word: a
+ * program holding the key and doing its own signing, using the plan-then-sign
+ * seam ADR 0002 describes as where a caller inserts its own policy.
+ *
+ * ## What it does NOT do
+ *
+ * **It does not gift-wrap.** That was my assumption and it was wrong. Only
+ * `gateway-customer` builds NIP-17 wraps; this POSTs to `/api/v1/dm/tokens/send`
+ * and the gateway wraps. So there is no NIP-44 or NIP-17 code here at all, and
+ * the service is much smaller than "an autonomous Nostr issuer" suggests.
+ *
+ * **It does not decide what is owed.** `payment-adapter` records that a purchase
+ * was paid; this reads those records and discharges them. Recording and
+ * discharging are deliberately different jobs in different services, because the
+ * first must be transactional with a webhook and the second must be able to take
+ * its time and retry.
+ *
+ * ## The behaviour worth copying from `imani-woo`
+ *
+ * `AutonomousIssuance` has run this against a real shop, and three things it
+ * learned are carried here rather than rediscovered:
+ *
+ * - **Minting is asynchronous.** A voucher id comes back in ~250ms and the token
+ *   about 1.5s later. Waiting briefly is worth it; waiting forever is not.
+ * - **No credential is silence, not an error.** A stall that never enrolled is
+ *   the ordinary case, and warning on every sale trains people to ignore logs.
+ * - **A failure leaves the debt standing, with a reason.** Never a silent drop,
+ *   and never a discharge on anything short of confirmation.
+ */
+
+import { finalizeEvent, getPublicKey } from 'nostr-tools/pure'
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
+import { sha256 } from '@noble/hashes/sha256'
+
+/** The header the gateway reads a terminal credential from. */
+export const CREDENTIAL_HEADER = 'X-Imani-Terminal-Credential'
+
+/**
+ * Where issuance happens: customer-wallet, NOT the portal.
+ *
+ * `wallet-api`'s `issue.ts` names this trap and it is worth repeating where
+ * somebody might follow the app instead: an unregistered keypair signing NIP-98
+ * for itself gets 201 on `/api/v1/wallet/vouchers` and 500 on
+ * `/api/v1/portal/vouchers`, because the portal wants a session cookie no
+ * headless caller can produce.
+ */
+export const ISSUE_PATH = '/api/v1/wallet/vouchers'
+export const DELIVER_PATH = '/api/v1/dm/tokens/send'
+
+/**
+ * How long a coupon bought by card stays spendable.
+ *
+ * A year, matching the gateway's default for merchant issuance and `imani-woo`.
+ * Long enough that a gift bought at Christmas is still good the next one.
+ */
+export const DEFAULT_EXPIRES_IN_DAYS = 365
+
+/** One stall's authority to be issued for, held on its behalf. */
+export interface StallCredential {
+  /** The stall this issues as. */
+  stallPubkey: string
+  /** The credential's voucher id. Travels in a header; not a secret. */
+  credentialId: string
+  /**
+   * The private key the credential is LOCKED to, hex.
+   *
+   * This is the secret. The credential id proves nothing on its own: the
+   * gateway checks a NIP-98 signature from the key the credential names.
+   */
+  lockKeyHex: string
+}
+
+export interface IssuePlan {
+  faceValue: number
+  faceUnit: string
+  faceDecimals: number
+  memo: string
+  expiresInDays: number
+}
+
+export interface IssuedCoupon {
+  voucherId: string
+  issuerId: string
+  /** Empty while the mint is still working. See `waitForToken`. */
+  token: string
+}
+
+/** Why an issuance did not happen, in terms an operator can act on. */
+export class IssuanceFailed extends Error {
+  /** True when retrying could plausibly succeed. */
+  readonly retryable: boolean
+
+  constructor(message: string, retryable: boolean) {
+    super(message)
+    this.name = 'IssuanceFailed'
+    this.retryable = retryable
+  }
+}
+
+/**
+ * A NIP-98 Authorization header for one request.
+ *
+ * Signed with the credential's lock key, which is what the gateway checks
+ * before deriving the issuer from the credential id.
+ */
+export function authorization(
+  method: string,
+  url: string,
+  body: string,
+  lockKeyHex: string,
+): string {
+  const event = finalizeEvent(
+    {
+      kind: 27235,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [
+        ['u', url],
+        ['method', method.toUpperCase()],
+        ['payload', bytesToHex(sha256(new TextEncoder().encode(body)))],
+      ],
+      content: '',
+    },
+    hexToBytes(lockKeyHex),
+  )
+  return `Nostr ${btoa(JSON.stringify(event))}`
+}
+
+/**
+ * The issuance request body.
+ *
+ * **No `issuer_id`.** The gateway derives it from the credential, so a value
+ * here could only agree or be refused — stating something we are not the
+ * authority on.
+ */
+export function issueBody(plan: IssuePlan): string {
+  return JSON.stringify({
+    face_value: plan.faceValue,
+    face_unit: plan.faceUnit,
+    face_decimals: plan.faceDecimals,
+    /**
+     * PROPORTIONAL, not MINIMAL, and the difference is whether the coupon can
+     * be spent at all.
+     *
+     * Backing decides granularity. Measured on a live gateway for one £25
+     * coupon: MINIMAL gives token_amount=10, ratio=250, so £2.50 steps;
+     * PROPORTIONAL gives 2500, ratio=1, so £0.01 steps. A split floors to the
+     * ratio, so a MINIMAL £25 coupon paying a £10.75 basket splits to £10.00,
+     * the gateway refuses the mismatch, and the send lands in SPLIT_ERROR — a
+     * state the wallet cannot reclaim from.
+     *
+     * `imani-woo` shipped MINIMAL, a customer paying £10.75 found it, and this
+     * comment exists so the next implementation does not find it again.
+     */
+    backing_strategy: 'PROPORTIONAL',
+    memo: plan.memo,
+    expires_in_days: plan.expiresInDays,
+  })
+}
+
+/** Mint one coupon as the stall. */
+export async function issueAsStall(
+  baseUrl: string,
+  credential: StallCredential,
+  plan: IssuePlan,
+  fetchImpl: typeof fetch = fetch,
+): Promise<IssuedCoupon> {
+  const url = `${baseUrl.replace(/\/$/, '')}${ISSUE_PATH}`
+  const body = issueBody(plan)
+
+  let response: Response
+  try {
+    response = await fetchImpl(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: authorization('POST', url, body, credential.lockKeyHex),
+        [CREDENTIAL_HEADER]: credential.credentialId,
+      },
+      body,
+    })
+  } catch (error) {
+    // Unreachable is retryable: the money is already taken, so the debt stands
+    // and a later attempt is the right answer.
+    throw new IssuanceFailed(
+      error instanceof Error ? error.message : 'could not reach the gateway',
+      true,
+    )
+  }
+
+  const raw = await response.text()
+
+  if (response.status !== 200 && response.status !== 201) {
+    throw new IssuanceFailed(explain(response.status, raw), isRetryableStatus(response.status))
+  }
+
+  let decoded: unknown
+  try {
+    decoded = JSON.parse(raw)
+  } catch {
+    throw new IssuanceFailed('the gateway returned something that was not JSON', true)
+  }
+
+  if (decoded === null || typeof decoded !== 'object') {
+    throw new IssuanceFailed('the gateway returned no voucher', true)
+  }
+
+  const record = decoded as Record<string, unknown>
+  const voucherId = typeof record.voucher_id === 'string' ? record.voucher_id : ''
+  if (voucherId === '') {
+    throw new IssuanceFailed('the gateway accepted the request but returned no voucher', true)
+  }
+
+  return {
+    voucherId,
+    issuerId: typeof record.issuer_id === 'string' ? record.issuer_id : '',
+    token: typeof record.token === 'string' ? record.token : '',
+  }
+}
+
+/**
+ * Turn a refusal into something an operator can act on.
+ *
+ * A 403 here almost always means the credential was burnt or re-issued, which
+ * is a stall's deliberate act rather than a fault, and it must not be retried
+ * forever against a door that is now closed.
+ */
+function explain(status: number, raw: string): string {
+  if (status === 401) {
+    return 'the gateway did not accept this credential’s signature'
+  }
+  if (status === 403) {
+    return 'the stall no longer authorises this issuer (credential burnt or replaced)'
+  }
+  const detail = raw.trim().slice(0, 200)
+  return detail === ''
+    ? `the gateway refused with status ${status}`
+    : `the gateway refused with status ${status}: ${detail}`
+}
+
+/** A burnt credential will never succeed; a 500 might. */
+function isRetryableStatus(status: number): boolean {
+  return status !== 401 && status !== 403 && status !== 400
+}
+
+export { getPublicKey }
