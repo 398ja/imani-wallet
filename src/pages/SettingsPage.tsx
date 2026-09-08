@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { ChevronRight, User, Shield, Download, Store, ShieldCheck, BadgeCheck, Tablet } from 'lucide-react'
+import { ChevronRight, User, Shield, Download, Store, ShieldCheck, BadgeCheck, Tablet, CreditCard } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, ListSection } from '../components/ui'
@@ -71,6 +71,15 @@ export function SettingsPage({
               icon={ShieldCheck}
               label="Redemption ledger"
               hint="What you have published, your ledger ID, and gaps"
+            />
+            {/* Listed whether or not a stall has connected. The screen behind
+                it is where a merchant learns card payments exist at all, and
+                hiding it until they are connected is a chicken and egg. */}
+            <SettingRow
+              to="/settings/payments"
+              icon={CreditCard}
+              label="Card payments"
+              hint="Take card payments for your vouchers"
             />
             <SettingRow
               to="/settings/terminals"

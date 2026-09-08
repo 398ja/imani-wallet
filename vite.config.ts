@@ -186,6 +186,18 @@ export const proxy = {
    * origin surviving.
    */
   '/api/v1/checkout': { target: 'http://localhost:8087', changeOrigin: true },
+  /*
+   * A stall's own Stripe account, on merchant-service (port 8086 -> 8085).
+   *
+   * Without a rule this falls into the '/api' catch-all and reaches
+   * gateway-portal, which answers 403 with an empty body for
+   * `/api/v1/merchant/*` — a refusal that reads like a permissions problem
+   * rather than a misrouted request. See the note in `src/lib/merchant.ts`.
+   *
+   * changeOrigin false: these are session-authenticated, and the cookie is
+   * scoped to the browser origin.
+   */
+  '/api/v1/merchant/stripe': { target: 'http://localhost:8086', changeOrigin: false },
   // Receipt notifications live on account-app as well: IncomingNotificationController
   // is in gateway-core-rest, not customer-wallet. Without this rule the drain and
   // ack calls fall into the '/api' catch-all, hit customer-wallet, and 404 every

@@ -38,6 +38,7 @@ import {
   IssuedCouponPage,
 } from './pages/MerchantRecordPages'
 import { MerchantEditPage } from './pages/MerchantEditPage'
+import { PaymentsSettingsPage } from './pages/PaymentsSettingsPage'
 import { SellPage } from './pages/SellPage'
 import { CashbackIssuePage } from './pages/CashbackIssuePage'
 import { MerchantDashboardPage } from './pages/MerchantDashboardPage'
@@ -389,6 +390,19 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             // stall editor for a stall that does not exist.
             merchant !== null ? (
               <MerchantEditPage pubkey={pubkey} merchant={merchant} onSaved={setMerchant} />
+            ) : (
+              <Navigate to="/settings" replace />
+            )
+          }
+        />
+        <Route
+          path="/settings/payments"
+          element={
+            // Same predicate as the stall editor. A customer typing this URL
+            // has no stall to take payments for, so they land where the link
+            // would have taken them.
+            merchant !== null ? (
+              <PaymentsSettingsPage merchant={merchant} onSaved={setMerchant} />
             ) : (
               <Navigate to="/settings" replace />
             )
