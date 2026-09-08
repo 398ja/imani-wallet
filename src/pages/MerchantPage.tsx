@@ -257,19 +257,42 @@ function StallHeader({
         <img
           src={branding.bannerUrl}
           alt=""
+          /* `rounded-2xl` matches the Pass a customer with coupons sees in this
+             same slot, so the two states of this page are the same shape rather
+             than two designs. */
           className="mb-4 h-28 w-full rounded-2xl object-cover"
+          loading="lazy"
         />
       )}
       {branding.logoUrl && (
         <img
           src={branding.logoUrl}
           alt=""
-          className="mx-auto mb-3 h-16 w-16 rounded-full object-cover"
+          /* A ring rather than a border: it sits outside the image, so a logo
+             with a light edge still reads as a distinct object against the
+             page. Pulled up over the banner when there is one, which is the
+             arrangement every profile in the world uses and therefore the one
+             nobody has to learn. */
+          className={`mx-auto h-16 w-16 rounded-full object-cover ring-1 ring-mono-200 dark:ring-mono-800 ${
+            branding.bannerUrl ? '-mt-12 mb-3 bg-mono-50 dark:bg-mono-950' : 'mb-3'
+          }`}
+          loading="lazy"
         />
       )}
-      <h1 className="text-xl font-semibold">{name ?? 'This stall'}</h1>
-      {branding.nip05 && <p className="mt-1 text-sm text-mono-500">{branding.nip05}</p>}
-      {description && <p className="mt-3 text-sm text-mono-500">{description}</p>}
+      {/* Tightened tracking and leading, both size-specific. The fallback is
+          deliberately plain: "This stall" is what an unbranded stall is, and
+          inventing something friendlier would be putting words in their mouth. */}
+      <h1 className="text-[22px] font-semibold leading-tight tracking-[-0.02em]">
+        {name ?? 'This stall'}
+      </h1>
+      {branding.nip05 && (
+        <p className="mt-1 text-[15px] text-mono-500">{branding.nip05}</p>
+      )}
+      {description && (
+        <p className="mx-auto mt-3 max-w-prose text-[15px] leading-relaxed text-mono-500">
+          {description}
+        </p>
+      )}
     </div>
   )
 }

@@ -191,6 +191,34 @@ function parse(body: unknown): StripeAccountStatus {
     requirementsDue: Array.isArray(raw.requirements_due)
       ? raw.requirements_due.filter((r): r is string => typeof r === 'string')
       : [],
-    onboardingUrl: str(raw.onboarding_url),
+    onboardingUrl: stripeUrl(raw.onboarding_url),
   }
+}
+
+/**
+ * An onboarding URL, only if it is one.
+ *
+ * This value goes into `window.location.href`, so an unchecked string from a
+ * response is an open redirect: anything that could shape that response could
+ * send a merchant to a page asking for their bank details, arriving from a tap
+ * they trusted.
+ *
+ * Stripe's own hosts, over https, and nothing else. An allowlist rather than a
+ * pattern because "looks like Stripe" is exactly what a phisher registers —
+ * `stripe.com.example.net` matches a naive contains-check and is not Stripe.
+ */
+function stripeUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.trim() === '') return undefined
+
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    return undefined
+  }
+
+  if (url.protocol !== 'https:') return undefined
+
+  const host = url.hostname.toLowerCase()
+  return host === 'stripe.com' || host.endsWith('.stripe.com') ? url.toString() : undefined
 }

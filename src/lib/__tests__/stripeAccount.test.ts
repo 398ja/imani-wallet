@@ -134,6 +134,40 @@ describe('stripe account status', () => {
     expect(fetchMock.mock.calls[0][1].credentials).toBe('include')
   })
 
+  it('only ever hands back a Stripe url to redirect to', async () => {
+    // This value goes into window.location.href. An unchecked string from a
+    // response is an open redirect: a merchant taps something they trust and
+    // lands on a page asking for their bank details.
+    const rejected = [
+      'https://stripe.com.evil.example/onboard',   // looks like Stripe, is not
+      'http://connect.stripe.com/setup',           // not https
+      'javascript:alert(1)',
+      '//connect.stripe.com/setup',
+      'https://evil.example/stripe.com',
+      'not a url',
+    ]
+
+    for (const onboarding_url of rejected) {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply(200, {
+        status: 'pending',
+        onboarding_url,
+      })))
+      const result = await fetchStripeStatus()
+      if (result.kind === 'ok') {
+        expect(result.status.onboardingUrl, onboarding_url).toBeUndefined()
+      }
+    }
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply(200, {
+      status: 'pending',
+      onboarding_url: 'https://connect.stripe.com/setup/abc',
+    })))
+    const accepted = await fetchStripeStatus()
+    if (accepted.kind === 'ok') {
+      expect(accepted.status.onboardingUrl).toBe('https://connect.stripe.com/setup/abc')
+    }
+  })
+
   it('reads a disconnect as a stall that takes no cards', async () => {
     // 204, no body. Not an error, and not a status either, so it has to be
     // turned into the one thing the caller can act on.
