@@ -18,11 +18,23 @@ import { str } from './branding'
  * records rather than forking the identity.
  *
  * NOT stored on the gateway. possa-merchant posts this to
- * `POST /api/v1/merchant/onboarding/complete`, but that endpoint does not exist
- * on this stack — gateway-portal answers 403 with an empty body for
- * `/api/v1/merchant/*`, exactly as it does for a path it has never heard of.
- * The relay is the only store, which is also why `refreshMerchant` reads from
- * the relay directly rather than through the gateway's nostrdb cache.
+ * `POST /api/v1/merchant/onboarding/complete`, and this file used to say that
+ * endpoint "does not exist on this stack" because gateway-portal answered 403
+ * with an empty body for `/api/v1/merchant/*`.
+ *
+ * That inference was WRONG, and the correction is worth keeping. `merchant-
+ * service` is deployed on both stacks and nginx routes `/api/v1/merchant*` to
+ * it; the 403 came from the DEV PROXY, which had no rule for the prefix and let
+ * it fall into the `/api` catch-all onto gateway-portal — a service that
+ * refuses an unknown path exactly the way it refuses an unpermitted one. See
+ * `src/lib/stripeAccount.ts` for the full account and
+ * `src/lib/__tests__/devProxy.test.ts` for the guard.
+ *
+ * The relay is STILL the only store for this record, which is the part that
+ * actually mattered and is why `refreshMerchant` reads from the relay directly
+ * rather than through the gateway's nostrdb cache. Whether that onboarding
+ * endpoint exists was never the reason; a public, self-asserted profile
+ * belongs on the relay either way.
  *
  * NOTHING SECRET GOES IN HERE, for the same reason as `Profile`: this is public
  * metadata, published to a relay, readable by anyone.
