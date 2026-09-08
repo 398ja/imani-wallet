@@ -13,20 +13,40 @@
  * every one of these endpoints is self-scoped behind the session, so a stall
  * can only ever see and change its own. There is no pubkey parameter to abuse.
  *
- * ## `merchant-service` IS NOT DEPLOYED ON THIS STACK YET
+ * ## The "merchant-service is not deployed" note was WRONG
  *
- * `src/lib/merchant.ts` records the state of play: gateway-portal answers 403
- * with an empty body for `/api/v1/merchant/*`, exactly as it does for a path it
- * has never heard of. `imani-deploy` lists `merchant-service` as a dependency
- * and defines no such service.
+ * This comment used to say the screen would show "could not reach your account
+ * service" until `merchant-service` was deployed and routed. That was a wrong
+ * diagnosis of a real symptom, and it is left recorded rather than quietly
+ * deleted because the reasoning error is the useful part.
  *
- * So this screen will show "could not reach your account service" until that
- * service is deployed and routed. That is the correct behaviour rather than a
- * bug to work around here — every failure path leaves the stall's published
- * offer untouched, so an absent service means card payments stay off rather
- * than being wrongly advertised.
+ * The evidence was a 403 with an empty body from `/api/v1/merchant/*`, which
+ * `src/lib/merchant.ts` had already attributed to the endpoint not existing.
+ * All three of those checks now say otherwise:
  *
- * Stated so the first person to open the screen knows what they are looking at.
+ * - `imani-deploy` defines `merchant-service` on BOTH stacks (staging, and the
+ *   test stack on 28088).
+ * - Its nginx routes `^/api/v1/merchants?(/|$)` straight at it, which matches
+ *   every path this file calls.
+ * - `MerchantStripeController` maps `/api/v1/merchant/stripe` and serves
+ *   connect, status, return, refresh and disconnect.
+ *
+ * The 403 came from the DEV PROXY. There was no rule for this prefix, so it
+ * fell into the `/api` catch-all and reached gateway-portal, which refuses an
+ * unknown path exactly the way it refuses an unpermitted one. A rule was then
+ * added pointing at 8086 — a STAGING publish port, dead on a developer's
+ * machine — so the symptom changed from 403 to ECONNREFUSED and the "not
+ * deployed" story survived. `src/lib/__tests__/devProxy.test.ts` now pins every
+ * rule to a port the local stack actually publishes.
+ *
+ * The lesson worth keeping: a refusal from a service you did not mean to call
+ * is indistinguishable from a refusal by the service you did.
+ *
+ * ## What happens when it genuinely cannot be reached
+ *
+ * Unchanged, and still correct: every failure path leaves the stall's published
+ * offer untouched, so an unreachable account service means card payments stay
+ * off rather than being wrongly advertised.
  *
  * ## Everything here is a session call, not NIP-98
  *

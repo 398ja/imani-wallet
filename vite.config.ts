@@ -181,23 +181,35 @@ export const proxy = {
    * customer-wallet, and 404s, which reads as "purchases are not implemented"
    * rather than "the proxy does not know where they live".
    *
-   * Port 8087 is what imani-deploy publishes payment-adapter on. changeOrigin
-   * true: the endpoint is unauthenticated, so no signature depends on the
-   * origin surviving.
+   * Port 28087 is the LOCAL TEST stack, matching every other rule in this
+   * table. It said 8087, which is what imani-deploy publishes payment-adapter
+   * on in STAGING — a port with nothing behind it on a developer's machine, so
+   * every checkout would fail with ECONNREFUSED against a service that was
+   * running the whole time, two digits away.
+   *
+   * changeOrigin true: the endpoint is unauthenticated, so no signature depends
+   * on the origin surviving.
    */
-  '/api/v1/checkout': { target: 'http://localhost:8087', changeOrigin: true },
+  '/api/v1/checkout': { target: 'http://localhost:28087', changeOrigin: true },
   /*
-   * A stall's own Stripe account, on merchant-service (port 8086 -> 8085).
+   * A stall's own Stripe account, on merchant-service.
    *
    * Without a rule this falls into the '/api' catch-all and reaches
    * gateway-portal, which answers 403 with an empty body for
    * `/api/v1/merchant/*` — a refusal that reads like a permissions problem
    * rather than a misrouted request. See the note in `src/lib/merchant.ts`.
    *
+   * 28088, and getting here took two wrong answers. It said 8086, the staging
+   * publish port, which is nothing locally. The obvious correction — 28086, the
+   * same number in the local range — is WORSE than the original: on the test
+   * stack that port is BOTTIN-API, so the wallet would have reached a live,
+   * healthy, completely unrelated service. A connection refused is a bad
+   * afternoon; a 404 from the wrong service is a bug hunt in the wrong repo.
+   *
    * changeOrigin false: these are session-authenticated, and the cookie is
    * scoped to the browser origin.
    */
-  '/api/v1/merchant/stripe': { target: 'http://localhost:8086', changeOrigin: false },
+  '/api/v1/merchant/stripe': { target: 'http://localhost:28088', changeOrigin: false },
   // Receipt notifications live on account-app as well: IncomingNotificationController
   // is in gateway-core-rest, not customer-wallet. Without this rule the drain and
   // ack calls fall into the '/api' catch-all, hit customer-wallet, and 404 every
