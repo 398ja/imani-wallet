@@ -165,6 +165,12 @@ coupon, because the coupon went to the customer; the stall's device turns it
 into a ledger row of its own.
 _Avoid_: Notification, receipt, webhook
 
+**Stall record**:
+The stall's own public description of itself: where it trades, what it sells in,
+and whether it takes cards. Plaintext and readable by anyone, so it is what a
+stranger knows before they hold anything.
+_Avoid_: Profile, merchant record, settings
+
 ### A note on Stall and Merchant
 
 **Stall** is the word, and everything a customer ever reads says it.

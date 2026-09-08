@@ -46,6 +46,26 @@ export interface MerchantProfile {
   issuanceCurrency: string
   /** How long an issued coupon stays valid. Sent to the portal as `expiry_days`. */
   voucherValidityDays: number
+  /**
+   * Whether this stall can be paid by card.
+   *
+   * Published on the stall's own public record because it is the ONLY channel a
+   * stranger has. Every `imani-merchant` endpoint is self-scoped behind
+   * `MerchantAuth.requirePubkey()` — `charges_enabled` exists there, but a
+   * merchant can read only their own, and there is no pubkey parameter to ask
+   * about anyone else's. A shopper who scanned a QR has no session and no
+   * relationship, so a gateway answer is not available to them at any price
+   * short of punching a hole in that self-scoping.
+   *
+   * SELF-ASSERTED, and safe to be, because it is checked where it counts:
+   * creating a Checkout Session goes through `payment-adapter`, which knows the
+   * real `chargesEnabled` and refuses. A stale or wrong flag costs a stranger
+   * one failed tap; it can never take a payment that should not have happened.
+   *
+   * Set by connecting Stripe and cleared by disconnecting, so it is not a
+   * separate thing for a stall to remember.
+   */
+  acceptsCards?: boolean
   /** When this record was last written locally, ms. For display only. */
   updatedAt: number
   /**
@@ -329,6 +349,11 @@ export function buildMerchantEvent(merchant: MerchantProfile): EventTemplate {
   put('location', merchant.location)
   put('storeDescription', merchant.storeDescription)
 
+  // Only when TRUE. Absent means "this stall does not take cards", which is
+  // also what an older client that never knew the field publishes, so the two
+  // agree rather than needing to be told apart.
+  if (merchant.acceptsCards === true) content.acceptsCards = true
+
   return {
     kind: MERCHANT_KIND,
     created_at: Math.floor(Date.now() / 1000),
@@ -381,6 +406,11 @@ export function mergeMerchantEvent(
     issuanceCurrency: str(parsed.issuanceCurrency) ?? merchant.issuanceCurrency,
     voucherValidityDays:
       validValidityDays(parsed.voucherValidityDays) ?? merchant.voucherValidityDays,
+    // Absent means false, NOT "keep what we had". Unlike `active`, this field
+    // tracks a live external fact — whether Stripe will accept a charge — and a
+    // record that stops asserting it has stopped being evidence for it. Holding
+    // the old value would keep a Buy button alive on a stall that disconnected.
+    acceptsCards: parsed.acceptsCards === true,
     updatedAt: Date.now(),
     eventAt: createdAt > 0 ? createdAt : merchant.eventAt,
   }
