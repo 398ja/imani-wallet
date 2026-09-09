@@ -52,11 +52,19 @@ import { profileHandle, profileName, type Profile } from '../../lib/profile'
 export function Header({
   profile,
   merchant,
+  terminal,
   onLogout,
 }: {
   profile: Profile
   /** Trading as a merchant — adds the merchant entries; the rest is the same. */
   merchant?: boolean
+  /**
+   * Running as a terminal rather than on the stall's own device.
+   *
+   * Hides the stall's business entries. A terminal is a device in someone
+   * else's hands, and its turnover is the owner's business.
+   */
+  terminal?: boolean
   onLogout: () => void
 }) {
   const menu = useRef<HTMLDetailsElement>(null)
@@ -136,8 +144,14 @@ export function Header({
             {/* Merchants only: there is nothing to count for a customer, whose
                 own history already lives on the merchant screens. Both entries
                 are here rather than on the till, which shows a customer
-                standing at the counter nothing but the two buttons. */}
-            {merchant && (
+                standing at the counter nothing but the two buttons.
+
+                And the OWNER only, not a terminal. "A redemption-only terminal
+                has no Sell button and no dashboard" — a terminal is a device
+                in someone else's hands, quite possibly staff, and the stall's
+                turnover is the owner's business rather than the till's. The
+                route is guarded too; this is the courtesy, not the control. */}
+            {merchant && !terminal && (
               <>
                 <MenuLink to="/merchant/dashboard" icon={LayoutDashboard} onClick={close}>
                   Dashboard

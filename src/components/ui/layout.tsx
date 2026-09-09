@@ -145,7 +145,16 @@ export function DetailRow({ label, value }: { label: string; value: React.ReactN
 /** Inline problem message. */
 export function Alert({ children }: { children: React.ReactNode }) {
   return (
-    <p className="rounded-xl bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
+    // `role="alert"` because these appear in RESPONSE to something the user
+    // did — a refused enrolment, a rejected form. Without it the message is
+    // painted silently, and a screen-reader user gets no feedback at all from
+    // an action that visibly failed for everyone else. The role also makes it
+    // an assertive live region, which is right here: the user is waiting on
+    // the outcome of the thing they just pressed.
+    <p
+      role="alert"
+      className="rounded-xl bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950 dark:text-red-300"
+    >
       {children}
     </p>
   )

@@ -1,3 +1,4 @@
+import { issuingStall, type Actor } from './actor'
 import { toTransaction, type WalletTransaction } from './transactions'
 import { listTransactions } from './wallet'
 
@@ -69,28 +70,46 @@ function shim(): Nut18vShim {
 }
 
 /**
- * Build a payment request for this merchant.
+ * Build a payment request for this stall.
  *
- * `issuerId` MUST be the authenticated merchant's own pubkey. The shim rejects
- * an empty one, but not a wrong one — and a request carrying someone else's
- * issuer id sends the customer's payment to that someone else. possa-merchant
- * validates this explicitly (`paymentRequest.ts:116`) and so do we.
+ * `issuerId` MUST be the STALL's own pubkey, and terminals ticket 03 is about
+ * the word "stall" there rather than "whoever is signed in".
+ *
+ * Takings are gift-wrapped to the recipient's key: `lib/pay.ts` sets
+ * `recipientPubkey` to the request's `issuerId`, and the atomic-send saga DMs
+ * the token there. So a device that named ITSELF would collect coupons its
+ * owner cannot decrypt — money stranded on a till, and revoking that till would
+ * destroy funds rather than only access. A terminal is an instrument for asking
+ * for payment and never a place money rests.
+ *
+ * Hence an `Actor` rather than a pubkey, exactly as issuance takes one: the
+ * recipient is read from `issuingStall` and a caller has no field in which to
+ * put a different key. The old signature took `issuerPubkey: string`, and every
+ * caller passed its session pubkey — which is correct on the owner's device and
+ * silently wrong on a terminal.
+ *
+ * The shim rejects an empty issuer but not a wrong one, and a request carrying
+ * someone else's issuer id sends the customer's payment to that someone else.
+ * possa-merchant validates this explicitly (`paymentRequest.ts:116`) and so do
+ * we — now structurally.
  */
 export function createRequest({
   amount,
   unit,
-  issuerPubkey,
+  actor,
   description,
   expirySeconds = DEFAULT_EXPIRY_SECONDS,
 }: {
   amount: number
   unit: string
-  issuerPubkey: string
+  /** WHO is being paid. The stall, whichever device is displaying the QR. */
+  actor: Actor
   description?: string
   expirySeconds?: number
 }): VoucherPaymentRequest {
+  const issuerPubkey = issuingStall(actor)
   if (!issuerPubkey || issuerPubkey.length !== 64) {
-    throw new Error('Invalid merchant pubkey: a payment request must name its issuer.')
+    throw new Error('Invalid stall pubkey: a payment request must name its issuer.')
   }
   if (!Number.isFinite(amount) || amount <= 0) {
     throw new Error('The amount must be more than zero.')
