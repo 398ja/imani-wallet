@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { ChevronRight, User, Shield, Download, Store, ShieldCheck } from 'lucide-react'
+import { ChevronRight, User, Shield, Download, Store, ShieldCheck, BadgeCheck } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, ListSection } from '../components/ui'
@@ -71,6 +71,17 @@ export function SettingsPage({
               icon={ShieldCheck}
               label="Redemption ledger"
               hint="What you have published, your ledger ID, and gaps"
+            />
+            {/* Listed rather than hidden. The screen behind it is gated by the
+                real licence check and shows its own refusal, so a merchant
+                without a subscription is told why — which is the answer to
+                "why did my terminals stop?" and is useless if it is only
+                reachable by someone who already knows the URL. */}
+            <SettingRow
+              to="/settings/subscription"
+              icon={BadgeCheck}
+              label="Subscription"
+              hint="What it unlocks, until when, and why"
             />
           </ListSection>
         </div>

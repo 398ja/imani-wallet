@@ -87,3 +87,27 @@ disposable key rather than a person's identity, and never a wallet of its own.
   cleared.
 - **It cannot ship before the mint does.** The composite `P2PK_VOUCHER` kind is
   required in `cashu-lib`, `cashu-voucher`, and `cashu-mint` first.
+
+  **Satisfied.** All three released and pinned together in `imani-bom`:
+  cashu-lib 0.29.0 defines the kind, cashu-voucher 0.13.0 signs it, and
+  cashu-mint 0.35.0 enforces the voucher conditions and the P2PK witness
+  together. The versions travel as a set on purpose — a 0.29.0 cashu-lib against
+  a mint older than 0.35.0 dispatches the kind to a condition that never checks a
+  witness, which is the advisory lock this decision cannot tolerate.
+
+  What remains blocked is the ledger watcher, not enrolment: `SignedVoucher`
+  still wraps a `VoucherSecret` while `P2PKVoucherSecret` extends `P2PKSecret`,
+  so the ledger cannot represent a locked voucher and revocation stays bounded by
+  the session ceiling rather than immediate. See ADR 0006, which carries the same
+  binding into the wallet API's per-request path.
+
+- **Terminals are the first PAID feature**, decided after this ADR. A stall
+  unlocks multi-terminal support by holding a voucher we sold, verified offline
+  by its signature and expiry (ADR 0007).
+
+  Two vouchers, doing different jobs, and the distinction is worth keeping
+  straight: the one described in THIS decision authorises a terminal to act for
+  its stall, and is issued by the stall owner. The one in ADR 0007 entitles the
+  stall to run terminals at all, and is issued by us. A stall needs both, and
+  they are checked in opposite directions — a missing terminal credential must
+  refuse, while an unverifiable licence keeps working through its grace window.

@@ -174,6 +174,30 @@ without the issuance role must be refused at the API and not merely in the UI.
 
 ## Further Notes
 
+**This feature is sold, not free** — decided after this spec was written, in
+[the subscriptions spec](../subscriptions/spec.md) and
+[ADR 0007](../../docs/adr/0007-paid-features-are-unlocked-by-a-voucher-we-sold.md).
+Three things here read differently as a result, and none of them changes a
+ticket:
+
+- **A stall now holds two vouchers**, doing different jobs. The one this spec
+  describes authorises a terminal to act for its stall and is issued by the
+  owner. The other entitles the stall to run terminals at all and is issued by
+  us. The separation is what lets a lapsed subscription suspend terminals
+  without burning their credentials.
+- **The twelve-hour ceiling and the licence's twenty-four-hour grace window never
+  interact.** They answer different questions and fail in opposite directions:
+  the ceiling asks whether a terminal is still authorised by its stall and fails
+  closed; the licence asks whether the stall is still a customer and fails open.
+  A terminal re-authenticates every twelve hours regardless.
+- **The owner's device is terminal 1 and is free.** It is counted, not converted:
+  it keeps authenticating as the stall, holds the stall's key, and is never
+  enrolled. Everything below about a terminal's disposable identity applies to
+  terminals 2 onwards.
+
+The gate lands at enrolment on the owner's device, so nothing in this spec's
+tickets needs to know about licences.
+
 The sequencing is that everything except the credential itself can be built now.
 The owner's terminal list, the enrolment screens, the role-gated UI, and the
 corrected issuer and recipient handling all stand on their own, and the mint work

@@ -15,11 +15,17 @@ terminal still works. And when the network is unreliable a terminal may still be
 admitted on reduced authority, redemption only, because a queue cannot wait but
 issuance is value-bearing.
 
-**Blocked by:** 02, 04, 05, and the upstream composite voucher kind landing in
-`cashu-lib`, `cashu-voucher`, and `cashu-mint`. This ticket cannot start until
-that upstream work is released; every other ticket in this set can.
+**Blocked by:** 02, 04, 05. The upstream composite voucher kind **has now
+landed**: cashu-lib 0.29.0, cashu-voucher 0.13.0 and cashu-mint 0.35.0 are
+released and pinned together in `imani-bom`, with the mint enforcing the voucher
+conditions and the P2PK witness together. This ticket is no longer blocked
+upstream and can start once 02, 04 and 05 are done.
 
-**Status:** blocked
+Note the pin is a set: a 0.29.0 cashu-lib against a mint older than 0.35.0
+dispatches the kind to a condition that never checks a witness, which makes the
+lock advisory and defeats the whole point.
+
+**Status:** ready once 02, 04 and 05 land
 
 - [ ] Enrolment issues authority locked to the key the terminal generated.
 - [ ] Login verifies that lock, and authority held without the key is inert.

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { Clock } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, Panel, ListSection, DetailRow } from '../components/ui'
+import { SubscriptionNotice } from '../components/SubscriptionNotice'
 import { listTransactions, listVouchers, onWalletChanged } from '../lib/wallet'
 import { toTransaction, type WalletTransaction } from '../lib/transactions'
 import { toMerchants, walletTotals } from '../lib/merchants'
@@ -94,6 +95,22 @@ export function MerchantDashboardPage({
     <Screen>
       <BackLink to="/" label="Till" />
       <PageHeader title="Dashboard" />
+
+      {/* The subscription notice lives HERE, not on the till, and the reason is
+          the same one that emptied the till of everything else: a till is held
+          facing outward, and "your subscription ends in 5 days" is the stall's
+          private business, not something to show the person being served.
+
+          The Dashboard is where the owner already comes to read what they owe
+          and what is expiring, on purpose and away from the counter — which is
+          exactly the moment a renewal reminder can be acted on. The DM covers
+          the owner who is not looking at the app at all; between them the
+          ticket's "reaches them at the till" is honoured without putting billing
+          in front of a customer.
+
+          It renders nothing at all outside the seven-day window, so this costs
+          an absent element on every other day of the year. */}
+      <SubscriptionNotice pubkey={pubkey} />
 
       {/* The balance, off the till and onto the screen you choose to open. */}
       <Panel className="mb-6 p-5">

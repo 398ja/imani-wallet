@@ -53,6 +53,7 @@ import { CashbackRedeemPage } from './pages/CashbackRedeemPage'
 import { ProfilePage } from './pages/ProfilePage'
 import { SettingsPage } from './pages/SettingsPage'
 import { LedgerPage } from './pages/LedgerPage'
+import { SubscriptionPage } from './pages/SubscriptionPage'
 import { ProfileEditPage } from './pages/ProfileEditPage'
 import { SecurityPage } from './pages/SecurityPage'
 import { BackupPage, RestorePage } from './pages/BackupPages'
@@ -322,6 +323,22 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route
           path="/settings/profile"
           element={<ProfileEditPage profile={profile} onSaved={setProfile} />}
+        />
+        <Route
+          path="/settings/subscription"
+          element={
+            // NOT gated by a route guard, deliberately. The screen renders its
+            // own refusal from the real licence check, which is the thing being
+            // proven — a `Navigate` here would gate on merchant-ness and leave
+            // the licence gate itself never exercised. Merchant-only for
+            // REACHABILITY (a customer has no stall to run terminals for), same
+            // predicate as the row that leads here.
+            merchant !== null ? (
+              <SubscriptionPage pubkey={pubkey} />
+            ) : (
+              <Navigate to="/settings" replace />
+            )
+          }
         />
         <Route path="/settings/security" element={<SecurityPage onLogout={onLogout} />} />
         <Route path="/settings/backup" element={<BackupPage profile={profile} />} />
