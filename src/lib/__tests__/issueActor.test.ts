@@ -47,6 +47,7 @@ vi.mock('../relay', () => ({ INTERNAL_RELAY_URL: 'ws://relay.test' }))
 
 const { issueAndDeliver } = await import('../issue')
 const { ownerActor, terminalActor } = await import('../actor')
+const { NEVER_EXPIRES } = await import('../merchant')
 const { TERMINAL_ROLES, grantFor } = await import('../terminalRole')
 const { openSession, SESSION_KIND } = await import('../terminalSession')
 
@@ -153,6 +154,32 @@ describe('what the coupon is stamped with', () => {
 
     const dm = bodies.find((b) => 'issuer_id' in b)
     expect(dm!.issuer_id).toBe(STALL)
+  })
+
+  /**
+   * A never-expiring coupon sends NO `expiry_days`, rather than sending zero.
+   *
+   * The portal reads an absent expiry as "never" and still bounds the field at
+   * `@Min(1)`, so a literal 0 would be a 400 on every sale — the one way this
+   * branch can be wrong that a type checker cannot see.
+   */
+  it('omits the expiry entirely when the stall issues coupons that never expire', async () => {
+    await issueAndDeliver({
+      ...params,
+      expiryDays: NEVER_EXPIRES,
+      actor: ownerActor(STALL)!,
+    })
+
+    const mint = bodies.find((b) => 'face_value_minor' in b)
+    expect(mint).toBeDefined()
+    expect(mint).not.toHaveProperty('expiry_days')
+  })
+
+  it('still stamps a term the stall did choose', async () => {
+    await issueAndDeliver({ ...params, expiryDays: 90, actor: ownerActor(STALL)! })
+
+    const mint = bodies.find((b) => 'face_value_minor' in b)
+    expect(mint!.expiry_days).toBe(90)
   })
 })
 

@@ -10,6 +10,7 @@ import {
   validityChoices,
   validValidityDays,
   MAX_VALIDITY_DAYS,
+  NEVER_EXPIRES,
   MERCHANT_D_TAG,
   MERCHANT_KIND,
   type MerchantFields,
@@ -41,7 +42,7 @@ describe('buildMerchantEvent', () => {
   it('always carries the fields Sell and Redeem cannot work without', () => {
     const content = JSON.parse(buildMerchantEvent(base()).content)
     expect(content.issuanceCurrency).toBe('EUR')
-    expect(content.voucherValidityDays).toBe(30)
+    expect(content.voucherValidityDays).toBe(NEVER_EXPIRES)
     expect(content.categories).toEqual(['food'])
   })
 })
@@ -95,22 +96,65 @@ describe('mergeMerchantEvent', () => {
     expect(mergeMerchantEvent(base(), JSON.stringify({ active: false }), 300).active).toBe(false)
   })
 
-  it('rejects a nonsense validity rather than issuing vouchers that never expire', () => {
+  it('rejects a nonsense validity rather than rewriting the term a stall chose', () => {
+    // Never-expiring is a legitimate term now, so the danger this guards has
+    // inverted: it is no longer "a garbled event mints an eternal coupon" but
+    // "a garbled event silently moves a stall off the term it published".
+    // Either way the answer is to keep what the stall already had.
     const merged = mergeMerchantEvent(
-      base(),
+      base({ voucherValidityDays: 45 }),
       JSON.stringify({ voucherValidityDays: 'soon' }),
       300,
     )
-    expect(merged.voucherValidityDays).toBe(30)
+    expect(merged.voucherValidityDays).toBe(45)
   })
 
   it('rejects an out-of-range validity — the content is attacker-controllable', () => {
     // Now that this number is a default rather than a fixture, it reaches
     // `expiry_days` on every sale without anyone re-reading it.
-    for (const voucherValidityDays of [0, -1, 5000, 45.5]) {
-      const merged = mergeMerchantEvent(base(), JSON.stringify({ voucherValidityDays }), 300)
-      expect(merged.voucherValidityDays).toBe(30)
+    for (const voucherValidityDays of [-1, 5000, 45.5]) {
+      const merged = mergeMerchantEvent(
+        base({ voucherValidityDays: 45 }),
+        JSON.stringify({ voucherValidityDays }),
+        300,
+      )
+      expect(merged.voucherValidityDays).toBe(45)
     }
+  })
+
+  /**
+   * The values that reach zero by coercion rather than by being it.
+   *
+   * `Number()` maps every one of these onto 0, and 0 is now a legitimate term,
+   * so an event carrying `false` or `" "` could claim never-expiring on a
+   * stall's behalf. Out-of-range numbers do not cover this: those fail on the
+   * bound, while these arrive already looking like the answer.
+   */
+  it('rejects a validity that only reaches never-expiring through coercion', () => {
+    for (const voucherValidityDays of [false, [], ' ', '\n', '0.0', '0x0', {}]) {
+      const merged = mergeMerchantEvent(
+        base({ voucherValidityDays: 45 }),
+        JSON.stringify({ voucherValidityDays }),
+        300,
+      )
+      expect(merged.voucherValidityDays).toBe(45)
+    }
+  })
+
+  it('still takes a term a merchant typed as digits', () => {
+    // The string path is narrowed above, so the form's own input must survive it.
+    expect(validValidityDays('45')).toBe(45)
+    expect(validValidityDays(' 45 ')).toBe(45)
+    expect(validValidityDays('0')).toBe(NEVER_EXPIRES)
+  })
+
+  it('accepts a published never-expires term', () => {
+    const merged = mergeMerchantEvent(
+      base({ voucherValidityDays: 45 }),
+      JSON.stringify({ voucherValidityDays: NEVER_EXPIRES }),
+      300,
+    )
+    expect(merged.voucherValidityDays).toBe(NEVER_EXPIRES)
   })
 
   it('accepts a custom validity a merchant actually chose', () => {
@@ -136,7 +180,9 @@ describe('validValidityDays', () => {
     expect(validValidityDays(MAX_VALIDITY_DAYS)).toBe(MAX_VALIDITY_DAYS)
     expect(validValidityDays('45')).toBe(45)
 
-    expect(validValidityDays(0)).toBeNull()
+    // Zero is the never-expires term, not a rejected day count.
+    expect(validValidityDays(0)).toBe(NEVER_EXPIRES)
+
     expect(validValidityDays(-30)).toBeNull()
     expect(validValidityDays(MAX_VALIDITY_DAYS + 1)).toBeNull()
     // A typo that would date the coupon to the next decade.
@@ -152,11 +198,11 @@ describe('validValidityDays', () => {
 
 describe('validityChoices', () => {
   it('offers the stall its own term first, then the presets', () => {
-    expect(validityChoices(45)).toEqual([45, 30, 60, 90])
+    expect(validityChoices(45)).toEqual([45, NEVER_EXPIRES, 30, 60, 90])
   })
 
   it('does not offer the same term twice', () => {
-    expect(validityChoices(60)).toEqual([60, 30, 90])
+    expect(validityChoices(60)).toEqual([60, NEVER_EXPIRES, 30, 90])
   })
 })
 

@@ -40,8 +40,10 @@ Two things make a coupon trustworthy:
    worthless the instant it's used. This is why the same coupon can't be spent
    twice, by you or anyone who somehow got a copy.
 
-The merchant who issued a coupon backs it with real value when they create it, so
-a €5 coupon is genuinely worth €5, not a promise that might bounce.
+A coupon is the issuing merchant's own promise, in the same way a paper voucher
+is. What the cryptography adds is that the promise can't be forged, copied, or
+spent twice: a €5 coupon is unmistakably a €5 coupon from that merchant, and
+redeemable only with them.
 
 ## Your key, and self-custody
 
@@ -126,12 +128,15 @@ history back, while a coupon you'd already spent stays spent.
 For the curious, the open technologies this is built on:
 
 - **Cashu** — the digital-cash system that makes coupons unforgeable bearer
-  tokens, backed by a "mint." This is what makes a coupon behave like cash.
+  tokens, issued and signed by a "mint." This is what makes a coupon behave like
+  cash.
 - **Nostr** — the messaging network that delivers coupons (as private,
   encrypted messages) and carries profiles and history. Your handle and key are
   Nostr identities.
-- **Lightning / Bitcoin** — the value layer the mint uses to back coupons behind
-  the scenes. You never touch it directly.
+- **Lightning / Bitcoin** — the plumbing the mint protocol is built on. Coupons
+  are denominated in its base unit so they can be split precisely. There is no
+  pot of bitcoin behind them, and a coupon can only ever be redeemed with the
+  merchant who issued it.
 - **NAP** — the login system that unlocks your key and keeps your session,
   without ever copying the key out of its secure store.
 

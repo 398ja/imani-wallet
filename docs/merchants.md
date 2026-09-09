@@ -70,8 +70,8 @@ flowchart LR
 1. Tap **Sell**.
 2. Ask the customer to open **Receive** on their phone, then scan their QR code.
 3. Type the **amount** in your currency.
-4. Tap send. Hold on a moment while it completes: the coupon is created, backed
-   with value, and delivered to the customer.
+4. Tap send. Hold on a moment while it completes: the coupon is created, signed,
+   and delivered to the customer.
 5. The customer's phone shows *"on its way"* immediately, and the coupon lands in
    their wallet a few seconds later.
 
@@ -135,8 +135,10 @@ applies to you too, and your history matters as much as your coupons:
 ## Common questions
 
 **Where does the value come from?**
-Each coupon is backed with real value when you issue it, so it's worth what it
-says. To you and your customer it just behaves like a coupon.
+From you. A coupon is your own promise to honour it for goods, exactly like a
+paper voucher. What the app adds is that the promise can't be forged, copied, or
+spent twice. There's no separate pot of money behind a coupon, which is also why
+it's only ever worth something at your stall.
 
 **Can a customer spend my coupon somewhere else?**
 No. Coupons are tied to you. They can only be redeemed back with your stall.

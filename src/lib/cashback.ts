@@ -30,7 +30,7 @@ import { useEffect, useState } from 'react'
 import { gatewayConfig, cashbackEnabled } from './config'
 import { legacyApi } from './legacyBridge'
 import { signedFetch } from './nip98'
-import { notifyWalletChanged } from './wallet'
+import { notifyWalletChanged, recordCashbackStatus } from './wallet'
 
 /**
  * Whether to offer cashback at all on this deployment.
@@ -180,6 +180,145 @@ export async function generateCashback(params: {
     amountMinor: Number(body.amountMinor ?? params.amountMinor),
     unit: typeof body.unit === 'string' ? body.unit : params.unit,
     expiresAt: typeof body.expiresAt === 'string' ? body.expiresAt : '',
+  }
+}
+
+/**
+ * Where a cashback got to, as the gateway sees it.
+ *
+ * `Unclaimed` is the only non-terminal one: the code is out there and nobody
+ * has typed it in yet. The other four are final and never change again, which
+ * is what makes a cached copy of one safe to trust forever.
+ */
+export type CashbackStatus =
+  | 'Unclaimed'
+  | 'Claimed'
+  | 'Expired'
+  | 'Revoked'
+  | 'ManualAttention'
+
+const TERMINAL_STATUSES: readonly string[] = ['Claimed', 'Expired', 'Revoked', 'ManualAttention']
+
+/** Whether this status can still change, and so whether it is worth re-asking. */
+export function isTerminalCashbackStatus(status: string | undefined): boolean {
+  return status !== undefined && TERMINAL_STATUSES.includes(status)
+}
+
+export interface CashbackStatusReading {
+  status: CashbackStatus
+  /** Epoch milliseconds, or undefined while it is still unclaimed. */
+  claimedAt?: number
+}
+
+/**
+ * Ask the gateway whether the customer ever redeemed this code.
+ *
+ * The merchant-side counterpart to `redeemCashbackCode`, and the only source of
+ * truth for it: the code lives on a paper receipt, the customer may redeem it
+ * on a phone that did not exist when it was issued, and nothing about that ever
+ * reaches this device. `GET /{id}/status` is scoped to the authenticated
+ * merchant by `PortalCashbackController`, so a merchant can only ever read
+ * their own.
+ *
+ * Returns null rather than throwing on anything that went wrong — offline, 404,
+ * a gateway having a bad day. A status screen that cannot reach the gateway
+ * must say "could not check", never invent an answer, and a merchant at a stall
+ * can act on neither the HTTP code nor the stack trace.
+ */
+export async function fetchCashbackStatus(
+  cashbackId: string,
+): Promise<CashbackStatusReading | null> {
+  const path = `/api/v1/portal/cashback/${encodeURIComponent(cashbackId)}/status`
+  let response: Response
+  try {
+    response = await signedFetch(path, 'GET')
+  } catch {
+    return null
+  }
+  if (!response.ok) return null
+
+  const body = (await response.json().catch(() => null)) as {
+    status?: unknown
+    claimedAt?: unknown
+  } | null
+  const status = typeof body?.status === 'string' ? body.status : null
+  if (!status) return null
+
+  const claimedAt = typeof body?.claimedAt === 'string' ? Date.parse(body.claimedAt) : NaN
+  return {
+    status: status as CashbackStatus,
+    claimedAt: Number.isNaN(claimedAt) ? undefined : claimedAt,
+  }
+}
+
+/**
+ * The status of one issued cashback, for a screen that has just been opened.
+ *
+ * Reads once per mount rather than on a timer. possa-merchant polls every 30 s
+ * because its voucher list is a live dashboard; this is a receipt someone
+ * navigated to on purpose, and the answer they want is "as of when I opened
+ * this". A merchant who wants a fresher one navigates back in.
+ *
+ * A terminal cached status short-circuits the fetch entirely — `Claimed` never
+ * becomes anything else, so re-asking would spend a round trip to be told what
+ * the row already says.
+ *
+ * `checking` is distinct from a null reading: one means the answer is on its
+ * way, the other that it could not be had. Collapsing them would leave an
+ * offline screen spinning forever.
+ */
+export function useCashbackStatus(input: {
+  /**
+   * The row to stamp the answer onto, passed in rather than rebuilt from the
+   * cashback id. `buildCashbackTransaction` owns the `cashback:<id>` key, and a
+   * second copy of that convention here would fail the only way this write can:
+   * `updateTransaction` returns null for an id that matches nothing and
+   * `recordCashbackStatus` swallows it, so the cache would just quietly stop
+   * working with nothing on screen or in the console to say so.
+   */
+  rowId?: string
+  cashbackId?: string
+  cachedStatus?: string
+  cachedClaimedAt?: number
+}): { reading: CashbackStatusReading | null; checking: boolean } {
+  const { rowId, cashbackId, cachedStatus, cachedClaimedAt } = input
+  const settled = isTerminalCashbackStatus(cachedStatus)
+  const cached: CashbackStatusReading | null = cachedStatus
+    ? { status: cachedStatus as CashbackStatus, claimedAt: cachedClaimedAt }
+    : null
+
+  // The id is carried alongside the answer so a screen navigated from one
+  // cashback to another does not show the first one's status while the second
+  // is still in flight.
+  const [fetched, setFetched] = useState<{
+    id: string
+    reading: CashbackStatusReading | null
+  } | null>(null)
+
+  useEffect(() => {
+    if (!cashbackId || settled) return
+    let live = true
+    void fetchCashbackStatus(cashbackId).then((fresh) => {
+      if (!live) return
+      setFetched({ id: cashbackId, reading: fresh })
+      // Only terminal states are written back. An `Unclaimed` reading is stale
+      // the moment it lands, and persisting it would let a row claim it had
+      // been checked when the check tells you nothing durable.
+      if (rowId && fresh && isTerminalCashbackStatus(fresh.status)) {
+        void recordCashbackStatus(rowId, fresh)
+      }
+    })
+    return () => {
+      live = false
+    }
+  }, [rowId, cashbackId, settled])
+
+  const answer = fetched && fetched.id === cashbackId ? fetched : null
+  return {
+    // A failed check falls back to the cache rather than blanking the screen:
+    // what was true last time is more use than nothing at all.
+    reading: answer?.reading ?? cached,
+    checking: !!cashbackId && !settled && answer === null,
   }
 }
 

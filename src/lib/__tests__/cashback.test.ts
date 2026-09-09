@@ -22,6 +22,7 @@ vi.mock('../legacyBridge', () => ({
 }))
 vi.mock('../wallet', () => ({
   notifyWalletChanged: () => {},
+  recordCashbackStatus: async () => {},
 }))
 vi.mock('../nip98', () => ({
   signedFetch: async () => new Response('{}', { status: 200 }),
