@@ -1,0 +1,10 @@
+
+# Throwaway probe arms, re-minted on every run of e2e/probe-witness.mts.
+# Committing them would commit a SPENT proof: a swap consumes what it is given,
+# so these are single-use and a checked-in copy is worse than none.
+witness-test.token
+witness-test.json
+control-unlocked.token
+control-unlocked.json
+witness-positive.token
+witness-positive.json

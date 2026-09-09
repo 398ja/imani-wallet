@@ -26,8 +26,16 @@ const TOKEN = readFileSync(
   'utf8',
 ).trim()
 const parsed = parseVoucherToken(TOKEN)
-const DEVICE = 'cacc220c14764bfa06f154c662aec0bb339f29a10f2f6e1edd2c83cd10dee752'
-const STALL = 'b1787b2b98a5244a70d934b393e0179e7ebba0c72579b4a0b238eda3911caa02'
+/**
+ * What the minting script SENT, recorded beside the token. Hardcoded hex here
+ * meant re-minting the fixture — which the live spend probe requires, since a
+ * swap consumes the proof — failed four tests over a credential that was valid.
+ */
+const MINTED = JSON.parse(
+  readFileSync(join(__dirname, 'fixtures', 'live-terminal-credential.json'), 'utf8'),
+) as { stall: string; device: string }
+const DEVICE = MINTED.device
+const STALL = MINTED.stall
 
 const ENROLMENT_KEY = 'imani-wallet:terminal'
 
