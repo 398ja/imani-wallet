@@ -289,6 +289,17 @@ export default defineConfig({
       'src/**/*.test.{ts,tsx}',
       'services/**/*.test.{ts,tsx}',
       'perf/**/*.test.{ts,tsx}',
+      // `packages/` was ABSENT, and five test files across wallet-core,
+      // dm-poll and money had never run in this suite — 171 tests, green when
+      // invoked directly and invisible to `npm test`. Found while adding
+      // @imani/licence, whose whole design argument is that a package boundary
+      // makes it testable; a boundary whose tests nobody runs is worse than no
+      // boundary, because it reads as covered.
+      //
+      // wallet-core is the sharpest case: it exists so the app and the wallet
+      // API cannot disagree about money, and its own tests were outside the
+      // run that would have caught them disagreeing.
+      'packages/**/src/**/*.test.{ts,tsx}',
     ],
   },
   resolve: {
@@ -331,6 +342,7 @@ export default defineConfig({
       '@imani/money': imani('money'),
       // The money decisions the app and the future wallet API share (#4).
       '@imani/wallet-core': imani('wallet-core'),
+      '@imani/licence': imani('licence'),
       'imani-qr': imani('imani-qr'),
     },
   },
