@@ -156,8 +156,18 @@ export function nostrdbAdapter(): NostrdbAdapter {
     },
 
     async getProfile(pubkey: string): Promise<Profile | null> {
-      // /api/v1/nostr/profiles/{pubkey} 404s on this build. Profile lookup is
-      // cosmetic — never fail a coupon receipt over a display name.
+      // Profile lookup is cosmetic — never fail a coupon receipt over a
+      // display name.
+      //
+      // A 404 here is NORMAL and not a broken endpoint, which is what this
+      // comment used to claim. /api/v1/nostr/profiles/{pubkey} serves 200 with
+      // the kind-0 when one exists; it answers 404 when that pubkey has simply
+      // never published one. The pubkey we pass is the DM's rumor author, and
+      // coupon DMs are gift-wrapped by the GATEWAY's own identity rather than
+      // the merchant's (attribution rides on issuer_id inside the payload, see
+      // issue.ts). The gateway is infrastructure and publishes no kind-0, so
+      // the common case is a 404 by design. Every consumer treats the profile
+      // as optional and falls back to a short pubkey, so nothing is lost.
       //
       // The TIMEOUT is what makes that promise true. DmPollService awaits this
       // inside its sequential redemption loop, so a fetch that never settles

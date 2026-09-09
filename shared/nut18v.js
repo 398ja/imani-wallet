@@ -212,13 +212,25 @@ const NUT18V = (function() {
         },
 
         _decodeByteString(state, additionalInfo) {
-            const length = this._decodeInteger({ bytes: state.bytes, offset: state.offset - 1 }, additionalInfo);
-            if (additionalInfo >= 24) {
-                // Re-decode to advance offset properly
-                const tempState = { bytes: state.bytes, offset: state.offset };
-                this._decodeInteger(tempState, additionalInfo);
-                state.offset = tempState.offset;
-            }
+            // The length is read AT the offset, not one byte before it.
+            //
+            // This used to decode from `state.offset - 1`, which is the header
+            // byte itself, then re-decode from the right place only to advance
+            // the cursor. For a short string (additionalInfo < 24) the length
+            // is packed into the header and both readings agree, which is why
+            // vreq payloads decoded fine. For anything longer the first
+            // reading returned the wrong number, the string was sliced to the
+            // wrong width, and every value after it was read from a shifted
+            // offset — surfacing far away as "Unsupported CBOR major type"
+            // while pointing at an innocent byte.
+            //
+            // A TokenV4 proof carries a 32-byte C value, so this hit every
+            // cashuB token in existence: a map {"s":..., "c":...} came back
+            // with the secret 3 bytes too long and no "c" key at all. Mirrors
+            // _decodeTextString, which always did this correctly.
+            const length = additionalInfo < 24
+                ? additionalInfo
+                : this._getLengthAndAdvance(state, additionalInfo);
             const bytes = state.bytes.slice(state.offset, state.offset + length);
             state.offset += length;
             return bytes;

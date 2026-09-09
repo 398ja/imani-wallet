@@ -81,3 +81,27 @@ Observed: `receive` returned 200, and the following checkstate returned
 `SPENT`. So revocation really is irreversible and global — the pair matters,
 because "checking never spends" would also pass against a mint that ignored us
 entirely.
+
+## Locked (P2PK) coupons — issue #58
+
+`probe-gateway-locked-redeem.mts` and `probe-receive-atomicity.mts` cover
+self-custody end to end against the live stack: a coupon locked to the
+customer's key, refused unsigned by the mint, spendable with their signature,
+and the proofs it mints spendable again afterwards.
+
+**What is wired, and what is not.** Locking works on issuance
+(`recipient_pubkey` → `merchant_metadata.lock_key`) and the client signs on
+`api.receive`, which covers redemption, burn and credential revocation. The
+voucher *split* endpoint accepts witnesses too.
+
+The gap is gateway-core's atomic-send saga, the client's ordinary pay path. It
+forwards to the split endpoint from an `@Async` worker, so the originating
+request's headers are gone; it persists the source token but has no witness
+column and no customer key. Carrying signatures across that hop needs a schema
+change and a decision about holding customer signatures server-side.
+
+That gap is currently latent rather than live: nothing in production sets
+`recipient_pubkey` on voucher creation, and `terminalMetadataJson` — the other
+producer of a `lock_key` — is called only from tests. So no locked coupon
+reaches the saga today. It becomes a real defect the moment either is switched
+on, which is why the probes exist now rather than later.

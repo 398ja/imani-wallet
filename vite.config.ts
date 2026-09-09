@@ -175,6 +175,16 @@ export const proxy = {
   // claim is NIP-98 authenticated, and the signed `u` tag is the browser origin.
   '/api/v1/nip05': { target: 'http://localhost:28081', changeOrigin: false },
   '/api/v1/config': { target: 'http://localhost:28081', changeOrigin: true },
+  // Receipt notifications live on account-app as well: IncomingNotificationController
+  // is in gateway-core-rest, not customer-wallet. Without this rule the drain and
+  // ack calls fall into the '/api' catch-all, hit customer-wallet, and 404 every
+  // few seconds forever — the polling loop retries, so the console fills with
+  // "drain: request failed status=404" while nothing is actually wrong with the
+  // endpoint. account-app answers 401 for the same request, which is the endpoint
+  // existing and wanting a session.
+  //
+  // changeOrigin: false for the NIP-98 reason above.
+  '/api/v1/incoming-notifications': { target: 'http://localhost:28081', changeOrigin: false },
   // Voucher ISSUANCE is a merchant action and lives on gateway-portal, a third
   // tier this file did not know about. customer-wallet refuses it outright
   // ("Voucher creation not supported on JdbcWalletPort — customer-wallet is
@@ -285,6 +295,32 @@ export default defineConfig({
   // is the one failure mode a performance suite cannot afford. Listed
   // explicitly for the same reason as `services/`.
   test: {
+    // Each package under packages/ ships its OWN vitest.config.ts, and eleven
+    // of them were never run by `npm test`. The include globs below only reach
+    // `packages/**/src/`, while most of those suites live in `tests/` or
+    // `test/` — 106 files and ~1900 tests, invisible here. dm-poll is the
+    // sharpest case: DmPollService.test.ts sits beside the service it covers
+    // and never executed, so a test added there would have read as passing
+    // while running nothing at all. That is how this was found.
+    //
+    // They are wired in as PROJECTS rather than by widening the globs because
+    // the globs alone are not enough: these suites declare their own
+    // environment and setupFiles (fake-indexeddb for the IDB-backed ones), and
+    // pulling the files into this config without them fails 70 tests on
+    // "indexedDB is not defined" — a config problem wearing the costume of a
+    // broken test. As projects, each package keeps the config it was written
+    // against, and this file keeps owning the app's own suite.
+    projects: [
+      // The app itself: this config's own include list, below.
+      './vite.config.ts',
+      // `.mts` as well as `.ts`: blossom-upload and wallet-storage ship dual
+      // CJS/ESM builds and so cannot carry `"type": "module"` without breaking
+      // their `require` consumers, which made node load their config as
+      // CommonJS and abort the whole run with ERR_REQUIRE_ESM. Renaming just
+      // those two configs to `.mts` forces ESM for the config alone and leaves
+      // each package's published shape untouched.
+      './packages/*/vitest.config.{ts,mts}',
+    ],
     include: [
       'src/**/*.test.{ts,tsx}',
       'services/**/*.test.{ts,tsx}',

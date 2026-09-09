@@ -304,9 +304,21 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
         await this.config.storageAdapter.saveVoucher(voucher);
       }
 
-      // Get sender profile for notification
+      // Get sender profile for notification.
+      //
+      // Gated on there BEING a notification to decorate. The profile is only
+      // ever read by showReceivedNotification below and by listeners of the
+      // event we emit, so with no uiAdapter configured this fetch was pure
+      // cost: one request per redeemed coupon whose result was discarded.
+      //
+      // It was not silent cost either. Coupon DMs are gift-wrapped by the
+      // gateway's own identity, and the gateway publishes no kind-0, so the
+      // lookup normally 404s — and a 404 is drawn in the browser console by
+      // the network layer itself, which no catch in our code can suppress.
+      // That put a red line under every successful receipt and made a healthy
+      // wallet look broken.
       let senderProfile;
-      if (this.config.enableUiNotifications) {
+      if (this.config.enableUiNotifications && this.config.uiAdapter) {
         senderProfile = await this.config.nostrdbAdapter.getProfile(tokenDm.senderPubkey);
       }
 
@@ -421,6 +433,33 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
         return null;
       }
 
+      // A token the mint will never accept must not be retried forever.
+      //
+      // The rethrow below is deliberate for TRANSIENT failures: it keeps the
+      // event out of eventTracker so a later poll can try again. For a
+      // permanently malformed token that same path is a loop — observed at
+      // ~30 failures a minute against eight stuck DMs, each one a mint round
+      // trip, and no amount of retrying can change the bytes.
+      //
+      // Swallowed rather than rethrown, so the event is marked processed and
+      // the customer stops seeing an error they cannot act on. The token is
+      // NOT marked received: nothing was redeemed, and claiming otherwise
+      // would hide a real loss. processUnclaimedTokens can still surface it.
+      if (this.isPermanentlyUnredeemableError(error)) {
+        console.warn(
+          '[DmPollService] Token cannot be redeemed and will not be retried:',
+          tokenDm.eventId.substring(0, 8),
+          error instanceof Error ? error.message : String(error)
+        );
+        this.emit('redemption:error', {
+          message: error instanceof Error ? error.message : 'Unknown error',
+          error: error instanceof Error ? error : new Error(String(error)),
+          token: tokenDm.token,
+          eventId: tokenDm.eventId,
+        });
+        return null;
+      }
+
       console.error('[DmPollService] Redemption failed:', error);
 
       this.emit('redemption:error', {
@@ -429,7 +468,6 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
         token: tokenDm.token,
         eventId: tokenDm.eventId,
       });
-
       if (this.config.uiAdapter) {
         this.config.uiAdapter.showErrorNotification(
           `Failed to redeem token: ${error instanceof Error ? error.message : 'Unknown error'}`
@@ -443,6 +481,28 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
       // because processGiftWrap short-circuits on eventTracker.has().
       throw error;
     }
+  }
+
+  /**
+   * Whether the mint will refuse this token however many times it is offered.
+   *
+   * Distinct from {@link isAlreadyRedeemedError}, which means the value DID
+   * reach its owner. These mean the token itself is malformed, so retrying is
+   * pure cost: every attempt is a mint round trip that must fail identically.
+   *
+   * `11007 duplicate_inputs` is the one seen in the field. It was produced by
+   * cashu-lib 0.30.0, whose redacted `PrivateKey.toString()` gave every proof
+   * of a voucher the same nonce — so a split voucher's proofs collided on Y
+   * and the mint saw one input repeated. The library is fixed (0.30.1), but
+   * tokens minted before that fix still exist in customers' DMs and will
+   * never become spendable.
+   */
+  private isPermanentlyUnredeemableError(error: unknown): boolean {
+    const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+    return (
+      message.includes('11007') ||
+      message.includes('duplicate inputs')
+    );
   }
 
   /**

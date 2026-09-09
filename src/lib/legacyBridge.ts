@@ -34,6 +34,8 @@
  */
 import * as NostrTools from 'nostr-tools'
 
+import { witnessHeaderForToken } from './witness'
+
 // `?url` rather than a hardcoded /@fs path: Vite rewrites these to the served
 // URL in dev and emits them as assets on build, so the same code works in both.
 import formatUrl from '../../shared/format.js?url'
@@ -369,6 +371,21 @@ export async function legacyApi(): Promise<NonNullable<Window['api']>> {
   await loadLegacyRedemption()
   setLegacyCredentials(getSigner().privkeyHex(), getSigner().pubkey)
   if (!window.api) throw new Error('api.js loaded but window.api is unset')
+
+  // Let api.js sign locked proofs on a receive.
+  //
+  // Receiving a locked coupon spends it, so the mint demands a NUT-11 witness
+  // for every locked input. The gateway cannot make one — it holds no customer
+  // spending keys, which is the point of issue #58 — so the signing happens in
+  // the page. api.js is a classic script and cannot import the TS module, so
+  // the function is handed over as a global, exactly as NostrTools is.
+  //
+  // Installed here rather than at module scope because signing needs an
+  // unlocked wallet, and this is the function every caller already goes
+  // through to get an authenticated api.
+  ;(globalThis as unknown as Record<string, unknown>).__imaniWitnessHeaderForToken =
+    witnessHeaderForToken
+
   return window.api
 }
 

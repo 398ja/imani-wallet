@@ -74,6 +74,16 @@ async function alreadySpent(api: BurnApi, token: string): Promise<boolean> {
 }
 
 /**
+ * How long to wait before retrying a burn the gateway refused as in-flight.
+ *
+ * Long enough for a swap to finish — the observed one settled ~1.2s after its
+ * claim — and short enough that a sweep does not stall. A single retry, not a
+ * loop: if it is still contended, the other caller will finish the burn and
+ * the next sweep sees it as already spent.
+ */
+const RETRY_AFTER_CONFLICT_MS = 1_500
+
+/**
  * Spend this coupon's proofs at the mint and mark the row redeemed. Never throws.
  *
  * Order is the whole safety property: the status is written only AFTER the mint
@@ -114,6 +124,36 @@ export async function burnIfSelfIssued(row: VoucherRow, ownPubkey: string): Prom
     notifyWalletChanged()
     return true
   } catch (error) {
+    // A 409 can mean the burn is ALREADY RUNNING, not that it failed.
+    //
+    // The gateway claims the idempotency key before the irreversible swap, so
+    // a duplicate arriving while the winner is mid-swap is refused — the row
+    // is CLAIMED, and there is no outcome to replay yet. Observed live: the
+    // escrow was created at 08:44:22.95 and the duplicate arrived 90ms later,
+    // settling at 08:44:24. It was seconds from succeeding.
+    //
+    // Reporting that as "redeemed coupon not burnt" is wrong twice: the coupon
+    // usually IS burnt a moment later, and the operator is told to act on
+    // something that resolves itself. One retry after a short pause turns the
+    // common case into a success; anything still contended falls through to
+    // the honest failure below.
+    if ((error as { status?: number })?.status === 409) {
+      await new Promise((r) => setTimeout(r, RETRY_AFTER_CONFLICT_MS))
+      try {
+        const api = (await legacyApi()) as unknown as BurnApi
+        const replay = await api.receive(row.token, {
+          idempotencyKey: `burn_${row.token_id}`,
+        })
+        const receiveId = replay?.receive_id ?? replay?.receiveId
+        if (receiveId) await api.acknowledgeReceive(receiveId).catch(() => undefined)
+        await getWallet().saveVoucher({ ...row, status: 'redeemed' })
+        notifyWalletChanged()
+        return true
+      } catch {
+        // Still contended, or a different failure. Fall through.
+      }
+    }
+
     // Already burnt? Then the row is a receipt, not money, and the burn has
     // in effect succeeded — mark it so, or it is retried forever and keeps
     // counting towards a balance the mint no longer backs.
