@@ -176,13 +176,19 @@ export function MerchantPage() {
             who already holds coupons and wants more — that is the top-up case,
             and it needs no separate screen.
 
-            `/buy/:pubkey` is NOT BUILT YET. It waits on the funds-flow
-            correction in `payment-adapter` (its ADR 0001): until a Checkout
-            Session is created on the stall's connected account, a purchase
-            would charge the platform and put Imani in the money path, which is
-            the one thing the design rules out. The button is gated on
-            `acceptsCards`, which no stall publishes yet, so nothing renders a
-            route to nowhere in the meantime. */}
+            This note used to say `/buy/:pubkey` was NOT BUILT and that no stall
+            published `acceptsCards`. Both are now false: BuyPage exists and is
+            routed, payment-adapter creates the Checkout Session on the stall's
+            connected account (so the stall is merchant of record, never Imani),
+            and Settings → Payments publishes the flag through
+            `reconcileCardOffer` on every connect, refresh and disconnect.
+
+            The gate stays, and it is the right one. `acceptsCards` is the only
+            channel a stranger has — imani-merchant is self-scoped, so nobody
+            can ask whether SOMEBODY ELSE takes cards — so a stall that has not
+            connected Stripe shows no Buy button rather than a button that can
+            only fail. Fails closed: an unreachable stall record means no offer,
+            never an offer we cannot honour. */}
         {acceptsCards && (
           <Button size="lg" onClick={() => navigate(`/buy/${pubkey}`)}>
             <CreditCard className="mr-2 h-5 w-5" /> Buy a voucher

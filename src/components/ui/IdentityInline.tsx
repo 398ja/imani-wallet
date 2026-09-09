@@ -50,16 +50,21 @@ export function IdentityInline({
   const handle = identitySubLabel(identity)
 
   /*
-    A stall's avatar and name go to its profile. Reported from the app: the
+    A stall's avatar and name go to THEIR PROFILE. Reported from the app: the
     picture is the obvious thing to tap and nothing happened — on a voucher, on
-    a receipt, anywhere a stall is named. The route existed the whole time;
-    nothing pointed at it unless you had arrived from there and could go back.
+    a receipt, anywhere a stall is named.
 
-    ONLY for a merchant. `/merchants/{pubkey}` renders for any key, so linking a
-    customer would open an empty stall page for someone who has none — a worse
-    outcome than no link, because it looks like a broken merchant rather than a
-    person who is not one. Pay and Send show customers through this component,
-    so this is not hypothetical.
+    `/profile/{pubkey}`, NOT `/merchants/{pubkey}`. The second one exists and is
+    a different question: it is my relationship with a stall — the coupons I
+    hold from them, the transactions we have had, a Send button for spending
+    what I have. Tapping someone's face and landing on my own holdings answers a
+    question nobody asked. This goes to who they are and how to buy from them.
+
+    ONLY for a merchant. A customer publishes no stall record, so their page
+    would be blank — and more to the point, an ordinary person's kind-0 is not
+    an invitation to a profile page inside someone else's wallet. Pay and Send
+    name customers through this component, so this is not hypothetical. The page
+    refuses a customer too; this just avoids offering the tap.
 
     Same hook the badge uses, so a row that shows the merchant badge is exactly
     a row that links, and the two cannot drift apart.
@@ -67,7 +72,7 @@ export function IdentityInline({
   const merchant = useIsMerchant(pubkey) && linkToProfile
   const Row = merchant ? Link : 'span'
   const rowProps = merchant
-    ? { to: `/merchants/${pubkey}`, className: 'pressable -m-1 flex min-w-0 items-center gap-3 rounded-xl p-1 hover:opacity-90' }
+    ? { to: `/profile/${pubkey}`, className: 'pressable -m-1 flex min-w-0 items-center gap-3 rounded-xl p-1 hover:opacity-90' }
     : { className: 'flex min-w-0 items-center gap-3' }
 
   return (
