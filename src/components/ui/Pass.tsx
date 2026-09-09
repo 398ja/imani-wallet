@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import QRCode from 'qrcode'
@@ -24,6 +25,21 @@ interface PassProps {
   pass: PassJson
   /** When set, the whole card becomes a link here. */
   to?: string
+  /**
+   * When set, the avatar-and-name block links here. For the stall behind a
+   * coupon.
+   *
+   * Separate from `to` rather than reusing it, because on a coupon's own page
+   * the card is NOT a link: it carries the redemption QR, and wrapping that in
+   * a navigation is how a cashier's tap on the code becomes a page change
+   * mid-scan. The identity block is the only part that should move.
+   *
+   * The two are mutually exclusive in practice — a card that is entirely a link
+   * must not contain a second one, which is invalid HTML and gives the inner
+   * link unpredictable behaviour. Asserted below rather than left to whoever
+   * passes both.
+   */
+  issuerTo?: string
 }
 
 /** A raw 64-char hex pubkey standing in for a name would overflow the card. */
@@ -68,7 +84,30 @@ function PassBarcode({ format, message, altText }: { format: string; message: st
   )
 }
 
-export function Pass({ pass, to }: PassProps) {
+/**
+ * The stall's name and picture, optionally as a link to them.
+ *
+ * One component for both cases so the LAYOUT cannot drift: the flex row lives
+ * here once, rather than being written twice and slowly diverging between the
+ * linked and unlinked cards. The padding trick keeps them pixel-identical —
+ * `-m-1 p-1` grows the tap target by 4px on every side without moving anything
+ * on screen, because a 40px avatar is a small thing to hit on a phone and the
+ * name beside it is part of the same idea.
+ */
+function IssuerBlock({ to, children }: { to?: string; children: ReactNode }) {
+  if (!to) return <div className="flex items-center gap-3">{children}</div>
+
+  return (
+    <Link
+      to={to}
+      className="pressable -m-1 flex items-center gap-3 rounded-xl p-1 hover:opacity-90"
+    >
+      {children}
+    </Link>
+  )
+}
+
+export function Pass({ pass, to, issuerTo }: PassProps) {
   const balance = pass.storeCard.primaryFields?.[0]
   const expiry = pass.storeCard.auxiliaryFields?.[0]
   const code = pass.barcodes?.[0]
@@ -76,6 +115,11 @@ export function Pass({ pass, to }: PassProps) {
   const stripUrl = pass.userInfo.stripUrl
   const issuer = pass.userInfo.issuer
   const nip05 = pass.userInfo.issuerNip05
+
+  // A link inside a link is invalid HTML, and browsers resolve it by guessing.
+  // `to` wins because it is the older contract and the whole card moving is the
+  // stronger promise; the inner one is dropped rather than nested.
+  const linkIssuer = issuerTo !== undefined && to === undefined
 
   const card = (
     <div
@@ -96,7 +140,17 @@ export function Pass({ pass, to }: PassProps) {
       )}
 
       <div className="p-5">
-        <div className="flex items-center gap-3">
+        {/*
+          The stall's name and picture are the way back to the stall. Holding a
+          coupon and being unable to reach who issued it is the gap this closes:
+          the back arrow went there, but only from a screen the customer had
+          arrived from — reaching a coupon any other way left the stall
+          unreachable, with its avatar sitting right there looking tappable.
+
+          The whole block, not just the avatar. A 40px circle is a small target
+          on a phone, and the name beside it is part of the same idea.
+        */}
+        <IssuerBlock to={linkIssuer ? issuerTo : undefined}>
           <Avatar
             src={logoUrl}
             name={displayName(pass.organizationName)}
@@ -131,7 +185,7 @@ export function Pass({ pass, to }: PassProps) {
               </p>
             )}
           </div>
-        </div>
+        </IssuerBlock>
 
         {balance && (
           <div className="mt-5">
