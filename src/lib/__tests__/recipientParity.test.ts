@@ -16,7 +16,11 @@
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 
-const relayEvents = vi.fn<[], Promise<unknown[]>>(async () => [])
+// Vitest 3 takes ONE type argument, the whole function signature; the
+// two-argument `<Args, Return>` form was removed in v2. Under the old
+// spelling `[]` was read as the return type, so every `mockResolvedValue`
+// below was checked against `never` and reported as the error.
+const relayEvents = vi.fn<() => Promise<unknown[]>>(async () => [])
 
 // The relay, stubbed at the seam `merchant.ts` actually reads through. Both
 // stores are stubbed so a test decides the answer rather than the environment.

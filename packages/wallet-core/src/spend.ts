@@ -272,7 +272,4 @@ export function splitObstacle(vouchers: Voucher[], amount: number): string | nul
   return check.ok ? null : check.reason
 }
 
-/** States where the backend holds the token and expects the sender to take it back. */
-const RECLAIMABLE = ['DM_ERROR', 'RECLAIM_READY', 'EXPIRED', 'FAILED', 'SPLIT_ERROR']
-
 /** Poll budget for the send saga: 40 × 500ms = 20s before we stop waiting. */
