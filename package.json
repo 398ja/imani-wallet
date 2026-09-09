@@ -18,7 +18,8 @@
     "perf:verify-recorder": "tsx perf/bin/verify-recorder.ts",
     "perf:verify-snapshot": "tsx perf/bin/verify-snapshot.ts",
     "perf:verify-fixture-boot": "tsx perf/bin/verify-fixture-boot.ts",
-    "e2e": "tsx e2e/terminals.e2e.ts"
+    "e2e": "tsx e2e/terminals.e2e.ts",
+    "e2e:purchase": "tsx e2e/purchase.e2e.ts"
   },
   "dependencies": {
     "@capacitor/android": "^7.6.8",

@@ -1,0 +1,135 @@
+/**
+ * What this worker needs before it may mint anything.
+ *
+ * Split out from the entrypoint so it can be TESTED, which matters more here
+ * than the file count suggests. Every value below is read from the environment
+ * of a container nobody watches, and the failure mode of getting one wrong is
+ * not a crash — it is a worker that starts, polls a queue it cannot read, and
+ * reports success while a customer who paid waits forever.
+ *
+ * ## Why this refuses to boot rather than degrading
+ *
+ * The tempting shape is a default for everything: an empty token, a localhost
+ * gateway, `livemode` off. Each default turns a deployment mistake into a
+ * SILENT one. An empty token gets 401 from the purchases API, whose `owed()`
+ * deliberately returns `[]` on failure so a worker idles through an outage
+ * instead of crash-looping — correct for an outage, and indistinguishable from
+ * "nothing is owed" when the cause is a missing secret. The queue would look
+ * empty and healthy while debts piled up behind it.
+ *
+ * So a missing value is fatal AT BOOT, where a deploy shows it, rather than
+ * invisible at run time.
+ *
+ * ## `livemode` has no default at all
+ *
+ * `worker.ts` skips rows whose livemode does not match, so this flag decides
+ * whether real coupons get minted for real payments. Defaulting it either way
+ * picks a wrong answer for somebody: defaulting false leaves production debts
+ * silently unworked, and defaulting true lets a test payment mint real value.
+ * The deployment is the only thing that knows, so it must say.
+ */
+
+export interface IssuerConfig {
+  /** Where the purchases API lives, e.g. http://payment-adapter:8080. */
+  purchasesUrl: string
+  /** The bearer token for it. */
+  purchasesToken: string
+  /** Where the gateway lives, for minting and delivering. */
+  gatewayUrl: string
+  /** 32 bytes of hex. Unseals the credential store; never stored beside it. */
+  vaultKeyHex: string
+  /** Where sealed credentials live on disk. */
+  credentialsPath: string
+  /** Whether this deployment may mint real coupons. */
+  livemode: boolean
+  /** How long to sleep between passes. */
+  intervalMs: number
+  /** Liveness port. */
+  port: number
+}
+
+/** Refused at boot, naming everything that is wrong rather than the first thing. */
+export class ConfigError extends Error {
+  readonly missing: readonly string[]
+
+  constructor(missing: readonly string[]) {
+    super(`purchase-issuer cannot start; fix these and redeploy:\n  - ${missing.join('\n  - ')}`)
+    this.name = 'ConfigError'
+    this.missing = missing
+  }
+}
+
+/**
+ * Read the config, or explain everything that is wrong with it.
+ *
+ * Collects ALL the problems before throwing. Failing on the first one turns a
+ * misconfigured deploy into a guessing game played one restart at a time, and
+ * these values are usually wrong together — a stack that never set any of them
+ * should be told that once.
+ */
+export function readConfig(env: NodeJS.ProcessEnv): IssuerConfig {
+  const missing: string[] = []
+
+  const purchasesUrl = (env.PURCHASE_API_URL ?? '').trim()
+  if (purchasesUrl === '') {
+    missing.push('PURCHASE_API_URL: where payment-adapter serves /api/v1/purchases')
+  }
+
+  const purchasesToken = (env.PURCHASE_API_TOKEN ?? '').trim()
+  if (purchasesToken === '') {
+    // Must match `purchase.api.token` on payment-adapter. A mismatch reads as
+    // an empty queue, which is why this is fatal rather than defaulted.
+    missing.push('PURCHASE_API_TOKEN: must equal payment-adapter’s purchase.api.token')
+  }
+
+  const gatewayUrl = (env.PURCHASE_GATEWAY_URL ?? '').trim()
+  if (gatewayUrl === '') {
+    missing.push('PURCHASE_GATEWAY_URL: the gateway that mints and delivers')
+  }
+
+  const vaultKeyHex = (env.PURCHASE_VAULT_KEY ?? '').trim()
+  if (vaultKeyHex === '') {
+    missing.push('PURCHASE_VAULT_KEY: 32 bytes of hex sealing the credential store')
+  } else if (!/^[0-9a-f]{64}$/i.test(vaultKeyHex)) {
+    // Checked HERE as well as in the vault, because the vault throws on first
+    // use and this throws on boot. A key of the wrong length that only fails
+    // when a sale arrives is a deployment that looks healthy until it matters.
+    missing.push('PURCHASE_VAULT_KEY: must be exactly 64 hex characters')
+  }
+
+  const livemodeRaw = (env.PURCHASE_LIVEMODE ?? '').trim().toLowerCase()
+  if (livemodeRaw !== 'true' && livemodeRaw !== 'false') {
+    missing.push(
+      'PURCHASE_LIVEMODE: must be exactly "true" or "false"; ' +
+        'it decides whether real value is minted, so there is no safe default',
+    )
+  }
+
+  if (missing.length > 0) throw new ConfigError(missing)
+
+  return {
+    purchasesUrl,
+    purchasesToken,
+    gatewayUrl,
+    vaultKeyHex: vaultKeyHex.toLowerCase(),
+    // A path CAN be defaulted: it names a location, not a secret or a mode, and
+    // a wrong one fails loudly on the first read rather than silently.
+    credentialsPath: (env.PURCHASE_CREDENTIALS_PATH ?? '/var/lib/imani/purchase-credentials.json').trim(),
+    livemode: livemodeRaw === 'true',
+    intervalMs: positive(env.PURCHASE_INTERVAL_MS, 15_000),
+    port: positive(env.PURCHASE_ISSUER_PORT, 8791),
+  }
+}
+
+/**
+ * A positive number, or the default.
+ *
+ * `Number('')` is 0 and `Number('nonsense')` is NaN, and both would sail
+ * through a bare `??`. A zero interval spins the loop as fast as the event
+ * loop allows, hammering the gateway; a NaN port makes `listen` throw at boot
+ * for a reason nobody would connect to the typo that caused it.
+ */
+function positive(raw: string | undefined, fallback: number): number {
+  const value = Number(raw)
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}

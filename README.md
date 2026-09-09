@@ -99,6 +99,11 @@ The dev server also stands in for the production edge proxy (auth validation and
 header injection), so a local gateway stack must be running for login and coupon
 flows to work. See `deploy/` for the compose override and nginx config.
 
+Card payments run against `stripe-mock` by default, so Settings → Payments works
+with no Stripe account and no key. See
+[running the card flows locally](docs/card-payments-locally.md) for where the
+mock stops and how to switch to a real test key.
+
 ### Common tasks
 
 ```bash

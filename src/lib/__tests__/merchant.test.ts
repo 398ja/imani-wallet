@@ -252,3 +252,69 @@ describe('canTrade', () => {
     expect(canTrade([], null)).toBe(false)
   })
 })
+
+/**
+ * Whether a stall takes cards, as a stranger discovers it.
+ *
+ * This field is the only channel a visitor with no session has: every
+ * `imani-merchant` endpoint is self-scoped, so `charges_enabled` is unreachable
+ * for anyone but the merchant themselves. It therefore has to behave
+ * conservatively in every direction a record can be wrong.
+ */
+describe('acceptsCards', () => {
+  it('is published only when true', () => {
+    const on = JSON.parse(buildMerchantEvent(base({ acceptsCards: true })).content)
+    expect(on.acceptsCards).toBe(true)
+
+    // Absent rather than `false`, so a stall that never connected Stripe and a
+    // client too old to know the field publish the same thing.
+    const off = JSON.parse(buildMerchantEvent(base({ acceptsCards: false })).content)
+    expect('acceptsCards' in off).toBe(false)
+
+    const unset = JSON.parse(buildMerchantEvent(base()).content)
+    expect('acceptsCards' in unset).toBe(false)
+  })
+
+  it('reads back as true only from an explicit true', () => {
+    const merged = mergeMerchantEvent(
+      base(),
+      JSON.stringify({ acceptsCards: true }),
+      Math.floor(Date.now() / 1000),
+    )
+    expect(merged.acceptsCards).toBe(true)
+  })
+
+  it('goes false when a record stops asserting it', () => {
+    // The disconnect case, and the reason this field does NOT follow `active`'s
+    // "absent means keep what we had" rule. It tracks a live external fact:
+    // a stall that disconnected Stripe republishes without the flag, and
+    // holding the old value would keep a Buy button alive on a stall that can
+    // no longer be paid.
+    const connected = base({ acceptsCards: true })
+    const merged = mergeMerchantEvent(
+      connected,
+      JSON.stringify({ categories: ['food'] }),
+      Math.floor(Date.now() / 1000),
+    )
+    expect(merged.acceptsCards).toBe(false)
+  })
+
+  it('refuses a truthy non-boolean', () => {
+    // A record is plaintext JSON on a public relay, so anything can appear in
+    // it. Only a real `true` counts.
+    for (const value of ['true', 1, {}, [], 'yes']) {
+      const merged = mergeMerchantEvent(
+        base(),
+        JSON.stringify({ acceptsCards: value }),
+        Math.floor(Date.now() / 1000),
+      )
+      expect(merged.acceptsCards).toBe(false)
+    }
+  })
+
+  it('survives a round trip through the event', () => {
+    const event = buildMerchantEvent(base({ acceptsCards: true }))
+    const merged = mergeMerchantEvent(emptyMerchant('a'.repeat(64)), event.content, event.created_at)
+    expect(merged.acceptsCards).toBe(true)
+  })
+})

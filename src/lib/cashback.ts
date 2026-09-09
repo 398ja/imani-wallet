@@ -74,6 +74,14 @@ const CANONICAL_RE = /^CB-[A-Z0-9]{4}-[A-Z0-9]{2}$/
 const KEY_RE = /^k=([A-Za-z0-9_-]{43})$/
 const CLAIM_PATH_RE = /^\/c\/([A-Za-z0-9_-]{8,64})$/
 
+/**
+ * The same two shapes, unwrapped, for a claim that arrives as parts rather than
+ * as a URL. Declared beside their wrapped forms so the two paths cannot drift
+ * into accepting different things.
+ */
+const CLAIM_REF_RE = /^[A-Za-z0-9_-]{8,64}$/
+const CLAIM_KEY_RE = /^[A-Za-z0-9_-]{43}$/
+
 const BY_CODE_PATH = '/api/v1/portal/cashback/by-code/'
 const PUBLIC_META_PATH = '/api/v1/portal/cashback/public/'
 
@@ -687,6 +695,50 @@ export async function redeemCashbackCode(canonical: string): Promise<RedeemResul
   // key in it. Both mean the same thing here: do not fetch it.
   if (!parsed) return { kind: 'invalid', reason: 'untrusted_claim_url' }
 
+  return redeemParsedClaim(parsed)
+}
+
+/**
+ * Redeem a claim that arrived as a LINK rather than as a typed code.
+ *
+ * The hosted claim page hands over `ref` and the key from its fragment, and the
+ * wallet performs the redeem itself. That split is deliberate and it is the fix
+ * for a real bug: the page used to fetch the ciphertext on load, which spent the
+ * claim into a browser tab that could not keep it, so anyone without a wallet
+ * installed lost the voucher by looking at it.
+ *
+ * The URL is rebuilt here from the trusted-origin list rather than taken from
+ * the caller, so a link cannot name its own host. `ref` and `key` are still
+ * checked against the same patterns `parseClaimUrl` enforces.
+ */
+export async function redeemClaimRef(ref: string, key: string): Promise<RedeemResult> {
+  if (!CLAIM_REF_RE.test(ref)) return { kind: 'not_found' }
+  if (!CLAIM_KEY_RE.test(key)) return { kind: 'invalid', reason: 'untrusted_claim_url' }
+
+  const config = await gatewayConfig().catch(() => null)
+  if (!config) return { kind: 'unreachable', reason: 'network' }
+  if (!cashbackEnabled(config)) return { kind: 'disabled' }
+
+  // The origin comes from config, never from the link. A claim link can only
+  // ever point at a host this deployment already trusts.
+  const origin = config.cashbackOrigins[0]
+  if (!origin) return { kind: 'invalid', reason: 'untrusted_claim_url' }
+
+  return redeemParsedClaim({
+    claimRef: ref,
+    claimKey: key,
+    ciphertextUrl: `https://${origin}/c/${ref}/ciphertext`,
+  })
+}
+
+/**
+ * The half of redemption that is the same however the claim arrived.
+ *
+ * Ordered so everything fallible and reversible happens before the one step
+ * that is neither: the metadata read precedes the destructive claim, so a
+ * success screen can name a real amount even if the commit must be replayed.
+ */
+async function redeemParsedClaim(parsed: ParsedClaimUrl): Promise<RedeemResult> {
   const metadata = await fetchPublicMetadata(parsed.claimRef)
 
   const claimed = await claimCiphertext(parsed)

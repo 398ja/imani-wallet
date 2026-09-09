@@ -18,11 +18,23 @@ import { str } from './branding'
  * records rather than forking the identity.
  *
  * NOT stored on the gateway. possa-merchant posts this to
- * `POST /api/v1/merchant/onboarding/complete`, but that endpoint does not exist
- * on this stack — gateway-portal answers 403 with an empty body for
- * `/api/v1/merchant/*`, exactly as it does for a path it has never heard of.
- * The relay is the only store, which is also why `refreshMerchant` reads from
- * the relay directly rather than through the gateway's nostrdb cache.
+ * `POST /api/v1/merchant/onboarding/complete`, and this file used to say that
+ * endpoint "does not exist on this stack" because gateway-portal answered 403
+ * with an empty body for `/api/v1/merchant/*`.
+ *
+ * That inference was WRONG, and the correction is worth keeping. `merchant-
+ * service` is deployed on both stacks and nginx routes `/api/v1/merchant*` to
+ * it; the 403 came from the DEV PROXY, which had no rule for the prefix and let
+ * it fall into the `/api` catch-all onto gateway-portal — a service that
+ * refuses an unknown path exactly the way it refuses an unpermitted one. See
+ * `src/lib/stripeAccount.ts` for the full account and
+ * `src/lib/__tests__/devProxy.test.ts` for the guard.
+ *
+ * The relay is STILL the only store for this record, which is the part that
+ * actually mattered and is why `refreshMerchant` reads from the relay directly
+ * rather than through the gateway's nostrdb cache. Whether that onboarding
+ * endpoint exists was never the reason; a public, self-asserted profile
+ * belongs on the relay either way.
  *
  * NOTHING SECRET GOES IN HERE, for the same reason as `Profile`: this is public
  * metadata, published to a relay, readable by anyone.
@@ -46,6 +58,26 @@ export interface MerchantProfile {
   issuanceCurrency: string
   /** How long an issued coupon stays valid. Sent to the portal as `expiry_days`. */
   voucherValidityDays: number
+  /**
+   * Whether this stall can be paid by card.
+   *
+   * Published on the stall's own public record because it is the ONLY channel a
+   * stranger has. Every `imani-merchant` endpoint is self-scoped behind
+   * `MerchantAuth.requirePubkey()` — `charges_enabled` exists there, but a
+   * merchant can read only their own, and there is no pubkey parameter to ask
+   * about anyone else's. A shopper who scanned a QR has no session and no
+   * relationship, so a gateway answer is not available to them at any price
+   * short of punching a hole in that self-scoping.
+   *
+   * SELF-ASSERTED, and safe to be, because it is checked where it counts:
+   * creating a Checkout Session goes through `payment-adapter`, which knows the
+   * real `chargesEnabled` and refuses. A stale or wrong flag costs a stranger
+   * one failed tap; it can never take a payment that should not have happened.
+   *
+   * Set by connecting Stripe and cleared by disconnecting, so it is not a
+   * separate thing for a stall to remember.
+   */
+  acceptsCards?: boolean
   /** When this record was last written locally, ms. For display only. */
   updatedAt: number
   /**
@@ -329,6 +361,11 @@ export function buildMerchantEvent(merchant: MerchantProfile): EventTemplate {
   put('location', merchant.location)
   put('storeDescription', merchant.storeDescription)
 
+  // Only when TRUE. Absent means "this stall does not take cards", which is
+  // also what an older client that never knew the field publishes, so the two
+  // agree rather than needing to be told apart.
+  if (merchant.acceptsCards === true) content.acceptsCards = true
+
   return {
     kind: MERCHANT_KIND,
     created_at: Math.floor(Date.now() / 1000),
@@ -381,6 +418,11 @@ export function mergeMerchantEvent(
     issuanceCurrency: str(parsed.issuanceCurrency) ?? merchant.issuanceCurrency,
     voucherValidityDays:
       validValidityDays(parsed.voucherValidityDays) ?? merchant.voucherValidityDays,
+    // Absent means false, NOT "keep what we had". Unlike `active`, this field
+    // tracks a live external fact — whether Stripe will accept a charge — and a
+    // record that stops asserting it has stopped being evidence for it. Holding
+    // the old value would keep a Buy button alive on a stall that disconnected.
+    acceptsCards: parsed.acceptsCards === true,
     updatedAt: Date.now(),
     eventAt: createdAt > 0 ? createdAt : merchant.eventAt,
   }

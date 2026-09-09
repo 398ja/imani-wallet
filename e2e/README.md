@@ -11,7 +11,8 @@ not apply.
 ```sh
 docker compose -f ../imani-deploy/docker-compose.test.yml up -d   # the stack
 npm run dev -- --port 5177                                        # NOT preview
-npm run e2e
+npm run e2e                                                       # terminals
+npm run e2e:purchase                                              # card purchase
 ```
 
 The **dev server, not `vite preview`**: the API proxy that registration needs
@@ -105,3 +106,26 @@ That gap is currently latent rather than live: nothing in production sets
 producer of a `lock_key` — is called only from tests. So no locked coupon
 reaches the saga today. It becomes a real defect the moment either is switched
 on, which is why the probes exist now rather than later.
+
+## `purchase.e2e.ts` — the card purchase
+
+Written after a shopper's card was refused inside Stripe's hosted checkout
+(400 on `/v1/payment_pages/.../confirm`) because the stall's connected account
+had never been asked for the `card_payments` capability. `transfers` alone set
+`charges_enabled`, so every flag we stored said the stall could sell.
+
+`BuyPage` and `purchase.ts` both promise, in prose, that everything refusable
+is decided BEFORE the customer sees a card form. That promise was false and
+nothing held it, because holding it needs the real screen, the real proxy, the
+real controller and the real account state at once.
+
+So it asserts the REFUSAL LANDS ON OUR SCREEN — a stall that cannot take a card
+fails on the Buy page, in our words, with no navigation to `checkout.stripe.com`
+— rather than asserting a payment completes. That needs no fully-onboarded
+Stripe account, so it still runs in CI; and completing Stripe's own form would
+require a bank account and TOS acceptance no script can supply, besides testing
+Stripe's DOM rather than ours.
+
+Verified by mutation: flipping `charges_enabled` back to true in the test
+database reproduced the incident exactly, landing the browser on a real
+`checkout.stripe.com` session that would 400 at confirm. 4 of 11 checks red.

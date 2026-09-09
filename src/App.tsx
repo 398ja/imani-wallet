@@ -38,11 +38,16 @@ import {
   IssuedCouponPage,
 } from './pages/MerchantRecordPages'
 import { MerchantEditPage } from './pages/MerchantEditPage'
+import { PaymentsSettingsPage } from './pages/PaymentsSettingsPage'
 import { SellPage } from './pages/SellPage'
 import { CashbackIssuePage } from './pages/CashbackIssuePage'
 import { MerchantDashboardPage } from './pages/MerchantDashboardPage'
 import { RedeemPage } from './pages/RedeemPage'
 import { MerchantPage } from './pages/MerchantPage'
+import { ClaimLandingPage } from './pages/ClaimLandingPage'
+import { BuyPage } from './pages/BuyPage'
+import { PublicProfilePage } from './pages/PublicProfilePage'
+import { peekPendingClaim } from './lib/pendingClaim'
 import { CouponsPage, TransactionsPage } from './pages/RecordListPages'
 import { CouponPage, TransactionPage } from './pages/RecordDetailPages'
 import { ScanPage } from './pages/ScanPage'
@@ -272,7 +277,15 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route
           path="/"
           element={
-            trading ? (
+            /*
+              Someone who arrived holding a claim link came for a voucher, not
+              for an empty wallet. If one is still parked after onboarding,
+              finish that first — peeked rather than taken, so the claim is
+              still there for the screen that spends it.
+            */
+            peekPendingClaim() ? (
+              <Navigate to="/c" replace />
+            ) : trading ? (
               <MerchantHomePage
                 actor={terminal.actor ?? undefined}
                 session={terminal.session}
@@ -342,6 +355,19 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route path="/send" element={<SendPage pubkey={pubkey} />} />
         <Route path="/receive" element={<ReceivePage profile={profile} />} />
         <Route path="/receive/cashback" element={<CashbackRedeemPage />} />
+        {/* A claim link handed over by the hosted page. Present in BOTH trees:
+            here it redeems, and in `PublicRoutes` it parks the claim and sends
+            the customer to onboarding first. */}
+        <Route path="/c/:ref" element={<ClaimLandingPage authed />} />
+        {/* Where a parked claim is picked up after onboarding. `Entry` sends a
+            new wallet here rather than to the home screen when one is waiting,
+            so the last step of "install the app to get your voucher" is not
+            left to the customer to work out. */}
+        <Route path="/c" element={<ClaimLandingPage authed />} />
+        {/* Buying a stall's coupon by card. In BOTH trees: a shopper who
+            already holds coupons is topping up, and a stranger who scanned a
+            QR is the reason the hosted page exists. */}
+        <Route path="/buy/:pubkey" element={<BuyPage buyerPubkey={pubkey} />} />
         <Route path="/merchants/:pubkey" element={<MerchantPage />} />
         <Route path="/merchants/:pubkey/coupons" element={<CouponsPage />} />
         <Route path="/merchants/:pubkey/transactions" element={<TransactionsPage />} />
@@ -351,6 +377,15 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           element={<TransactionPage pubkey={pubkey} trading={trading} />}
         />
         <Route path="/profile" element={<ProfilePage profile={profile} merchant={merchant} />} />
+        {/* Somebody ELSE's profile. `/profile` with no key is still your own —
+            the two are one route family on purpose, because "whose profile am I
+            looking at" is the only difference between them.
+
+            NOT the same page as `/merchants/:pubkey`, which is my relationship
+            with a stall: the coupons I hold, the transactions we have had. This
+            is who they are and how to buy from them, and it renders the same
+            for a stranger as for their best customer. */}
+        <Route path="/profile/:pubkey" element={<PublicProfilePage />} />
         {/* `merchant !== null`, NOT `trading`: a CLOSED stall must stay reachable
             or the Open-for-business switch could never be turned back on. It is
             also what hides the Merchant section from customers entirely — they
@@ -365,6 +400,19 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             // stall editor for a stall that does not exist.
             merchant !== null ? (
               <MerchantEditPage pubkey={pubkey} merchant={merchant} onSaved={setMerchant} />
+            ) : (
+              <Navigate to="/settings" replace />
+            )
+          }
+        />
+        <Route
+          path="/settings/payments"
+          element={
+            // Same predicate as the stall editor. A customer typing this URL
+            // has no stall to take payments for, so they land where the link
+            // would have taken them.
+            merchant !== null ? (
+              <PaymentsSettingsPage merchant={merchant} onSaved={setMerchant} />
             ) : (
               <Navigate to="/settings" replace />
             )
@@ -481,6 +529,37 @@ function PublicRoutes({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<
       <Route path="/login" element={<LoginPage onUnlock={onUnlock} />} />
       <Route path="/onboarding" element={<OnboardingPage onUnlock={onUnlock} />} />
       <Route path="/restore" element={<RestorePage onUnlock={onUnlock} />} />
+      {/* A bearer claim link, which is opened by people who have no wallet yet
+          BY DESIGN. It cannot fall through to `Entry` with everything else:
+          losing the ref and the key here used to mean losing the voucher. The
+          page parks the claim and resumes it after onboarding, and nothing is
+          spent until a wallet exists to hold it. */}
+      <Route path="/c/:ref" element={<ClaimLandingPage authed={false} />} />
+      {/* A stall's profile, which is a PUBLIC thing: the kind-30078 record and
+          the kind-0 profile are both plaintext and readable over an
+          unauthenticated relay query, and the whole point of a QR on a stall
+          sign is that a stranger can scan it.
+
+          Caveat worth knowing before trusting this: `newestAddressable` reads
+          the relay AND the gateway, and its own comment records that a
+          deployment which does not publish strfry's port loses the merchant
+          record entirely. An unauthenticated visitor has only the relay leg, so
+          on such a deployment this page degrades to a bare address. It fails
+          closed — no record means no Buy button — but it is a deployment
+          prerequisite rather than a detail. */}
+      <Route path="/merchants/:pubkey" element={<MerchantPage />} />
+      {/* Public, so it belongs on the signed-out side too: a stall's profile is
+          a shop sign, and someone who scanned a QR at a market has no wallet
+          yet. Every field comes from the relay, so this needs no session. */}
+      <Route path="/profile/:pubkey" element={<PublicProfilePage />} />
+      {/* Buying with no wallet, which is the hosted purchase case: delivery
+          falls back to a claim link, so nothing here needs a key.
+
+          This route was briefly declared inside the AUTHED tree by mistake,
+          where React Router never reached it and a stranger tapping Buy landed
+          on /onboarding. A duplicate path in the wrong <Routes> is dead code
+          that looks live. */}
+      <Route path="/buy/:pubkey" element={<BuyPage />} />
       {/* Anything else, including deep links into the authed app, lands on the
           entry screen; the deep link is not preserved because every authed route
           needs a wallet that does not exist yet. */}

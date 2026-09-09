@@ -107,7 +107,25 @@ export function CouponPage() {
         would hand over the token's bearer value.
       */}
       <div className="mb-6">
-        <Pass pass={toCouponPass(row, branding)} />
+        {/*
+          `issuerTo`, not `to`: the card carries the redemption QR a cashier
+          scans, and making the whole thing a link turns a tap on that code into
+          a navigation mid-redemption. Only the stall's name and picture move.
+
+          Reaching the stall used to depend on the back arrow, which only points
+          there when the customer ARRIVED from it — open a coupon from a
+          notification, a search or a deep link and the issuer was unreachable,
+          with their avatar sitting on the card looking tappable. Guarded on
+          issuer_id because a coupon can exist without one.
+
+          `/profile`, not `/merchants`: the second is my relationship with this
+          stall — which is the page I am already on the detail of — while this
+          asks who they are and offers to buy from them.
+        */}
+        <Pass
+          pass={toCouponPass(row, branding)}
+          issuerTo={row.issuer_id ? `/profile/${row.issuer_id}` : undefined}
+        />
       </div>
 
       <ListSection title="Voucher">
