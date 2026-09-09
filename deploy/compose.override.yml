@@ -489,6 +489,23 @@ services:
       CASHU_MINT_ISSUANCE_RATE_LIMIT_PER_MINUTE_BURST: "${MINT_RATE_PER_MINUTE:-10000}"
       CASHU_MINT_ISSUANCE_RATE_LIMIT_PER_DAY: "${MINT_RATE_PER_DAY:-100000}"
 
+      # mint 0.36.1 refuses to start unless JPA persistence is on OR the profile
+      # is local/test:
+      #
+      #   cashu.mint.jpa.enabled must be true outside the local and test
+      #   profiles. With it disabled the melt saga and swap holds are absent,
+      #   so melt pays the invoice before checking whether its inputs were
+      #   already spent.
+      #
+      # That guard is right, and this stack genuinely is local: there is no mint
+      # database service here, and adding one is a deployment decision (it
+      # changes where issuance state lives), not a line in a dev override.
+      #
+      # So the profile is declared rather than the guard disabled. The stack
+      # asserts what it is, and the mint applies its own rule to that. A stack
+      # that later gains a real mint DB turns persistence on and drops this.
+      SPRING_PROFILES_ACTIVE: "${MINT_PROFILE:-local}"
+
   gateway-customer:
     # nostr-java-client 2.0.7 dispatched every inbound relay frame onto its own
     # virtual thread with nothing sequencing them: ordered arrival, unordered
