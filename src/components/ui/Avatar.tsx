@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import { cn, getInitials } from '../../lib/utils';
-import { isMerchantPubkey } from '../../lib/merchant';
+import { useIsMerchant } from '../../hooks/useIsMerchant';
 
 interface AvatarProps {
   src?: string;
@@ -14,30 +14,6 @@ interface AvatarProps {
   pubkey?: string;
   size?: 'sm' | 'md' | 'lg' | 'xl';
   className?: string;
-}
-
-/**
- * Does this pubkey have a stall? False until the answer arrives.
- *
- * The pubkey is stored WITH the answer and compared on the way out, for the same
- * reason `useIdentity` does it: this component is reused across rows, and a badge
- * left over from the previous person is a claim about the wrong person.
- */
-function useIsMerchant(pubkey: string | undefined): boolean {
-  const [resolved, setResolved] = useState<{ pubkey: string; merchant: boolean }>();
-
-  useEffect(() => {
-    if (!pubkey) return;
-    let cancelled = false;
-    void isMerchantPubkey(pubkey).then((merchant) => {
-      if (!cancelled) setResolved({ pubkey, merchant });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [pubkey]);
-
-  return resolved !== undefined && resolved.pubkey === pubkey && resolved.merchant;
 }
 
 export function Avatar({ src, name, pubkey, size = 'md', className }: AvatarProps) {
