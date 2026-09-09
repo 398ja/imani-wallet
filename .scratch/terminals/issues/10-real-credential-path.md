@@ -25,17 +25,70 @@ Note the pin is a set: a 0.29.0 cashu-lib against a mint older than 0.35.0
 dispatches the kind to a condition that never checks a witness, which makes the
 lock advisory and defeats the whole point.
 
-**Status:** ready once 02, 04 and 05 land
+**Status:** done
 
-- [ ] Enrolment issues authority locked to the key the terminal generated.
-- [ ] Login verifies that lock, and authority held without the key is inert.
-- [ ] A terminal's permissions come from its credential rather than any stored
+- [x] Enrolment issues authority locked to the key the terminal generated.
+- [x] Login verifies that lock, and authority held without the key is inert.
+- [x] A terminal's permissions come from its credential rather than any stored
       record.
-- [ ] Authority is honoured only from issuers the mint recognises, and only for
+- [x] Authority is honoured only from issuers the mint recognises, and only for
       the stall that issued it.
-- [ ] Revocation spends the credential, and a revoked terminal cannot log in
+- [x] Revocation spends the credential, and a revoked terminal cannot log in
       again anywhere.
-- [ ] A terminal's session lives at most one trading day.
-- [ ] With the mint unreachable, a terminal may be admitted for redemption only,
+- [x] A terminal's session lives at most one trading day.
+- [x] With the mint unreachable, a terminal may be admitted for redemption only,
       never issuance.
-- [ ] Verification never spends: logging in leaves the credential live.
+- [x] Verification never spends: logging in leaves the credential live.
+
+## What it took
+
+`terminalCredential.ts` (the wire shape), `terminalLogin.ts` (login),
+`credentialRevocation.ts` (spend-to-revoke), `useTerminalIdentity.ts` (the
+wiring), and `scripts/mint-terminal-credential.mjs`.
+
+Minting real credentials — rather than writing fixtures — is what made this
+ticket worth doing, and it found two defects a full green unit suite had
+passed over:
+
+- `credentialActor` compared the stall against the voucher's
+  `issuerPublicKey`, which is the GATEWAY's signing key and identical on every
+  voucher it mints. It would have refused every real credential ever issued
+  while passing every hand-written fixture. `issuerId` is the stall.
+- The reduced-authority test was written against the redeem-only fixture,
+  whose ROLE blocks issuance anyway, so a mutation forcing every session to
+  FULL left it green. A second credential was minted with the issue-and-redeem
+  role so the reduced session is the only thing standing between that till and
+  minting money.
+
+## Evidence
+
+Proven against the real mint (cashu-mint 0.35.0), not mocks:
+
+    three consecutive checkstate calls -> UNSPENT, UNSPENT, UNSPENT
+    receive (the revocation)           -> 200
+    checkstate after                   -> SPENT
+
+Both halves matter: "checking never spends" would also pass against a mint
+that ignored us entirely, so the spend is what gives it meaning. The
+destructive half is env-gated and was run against a throwaway credential, so
+the committed fixture is still live. See `e2e/probe-spend.mts`.
+
+53 tests across the four modules. Mutation controls, all caught, including:
+the state check spending (4 failures), unreachable read as revoked, revoking a
+non-credential, and trusting the stored record over the credential.
+
+One mutation surfaced a fragility rather than a missing test: making `deps`
+unused left it in an effect dependency array and the run died with a V8
+out-of-memory instead of a failed assertion — an inline client object would
+loop forever, which in a browser is a tab that grinds to a halt with no
+readable error. Fixed with a ref; the mutation now fails cleanly in seconds.
+
+1873 unit tests pass, lint clean, tsc at the pre-existing 81. The 33-check
+browser E2E still passes, which is what confirms the owner's own till is
+untouched by any of this.
+
+## What this unblocks
+
+Terminals 07's role gating and lapse notice are now REACHABLE. They were built
+and tested but no user could reach them, because App rendered the till with no
+actor and no session. That is now wired.

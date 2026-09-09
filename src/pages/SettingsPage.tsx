@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { ChevronRight, User, Shield, Download, Store, ShieldCheck, BadgeCheck } from 'lucide-react'
+import { ChevronRight, User, Shield, Download, Store, ShieldCheck, BadgeCheck, Tablet } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, ListSection } from '../components/ui'
@@ -71,6 +71,12 @@ export function SettingsPage({
               icon={ShieldCheck}
               label="Redemption ledger"
               hint="What you have published, your ledger ID, and gaps"
+            />
+            <SettingRow
+              to="/settings/terminals"
+              icon={Tablet}
+              label="Terminals"
+              hint="Devices trading for your stall, and revoking one"
             />
             {/* Listed rather than hidden. The screen behind it is gated by the
                 real licence check and shows its own refusal, so a merchant

@@ -15,16 +15,16 @@ of every existing merchant's device for no benefit they can perceive.
 
 **Blocked by:** 02, and terminals 05 (the owner-side enrolment screen)
 
-**Status:** part-landed — the rule is built and tested; the GATE waits on terminals 05
+**Status:** done — terminals 05 landed the enrolment screen the gate needed.
 
-- [ ] Enrolling a second terminal without a licence is refused, at enrolment
+- [x] Enrolling a second terminal without a licence is refused, at enrolment
       rather than by hiding a button.
-- [ ] The refusal names the limit and how to lift it, with the contact route
+- [x] The refusal names the limit and how to lift it, with the contact route
       present while selling is by hand.
-- [ ] With a licence, enrolment proceeds with no further check.
-- [ ] The owner's own device continues to work exactly as before and is never
+- [x] With a licence, enrolment proceeds with no further check.
+- [x] The owner's own device continues to work exactly as before and is never
       asked to enrol.
-- [ ] No inert terminal is ever created: enrolment either completes or does not
+- [x] No inert terminal is ever created: enrolment either completes or does not
       begin.
 
 ## What has landed, and what has not
@@ -78,3 +78,25 @@ fail-open — but it is now tested rather than assumed.
 (`fixtures/live-licence.token`) rather than a fixture this app signed for
 itself. Mutation controls bite: opening the gate unconditionally fails 4, and
 collapsing the two refusals into one fails 2.
+
+
+## The gate (landed with terminals 05)
+
+The note above said the gate waited on an enrolment screen. That screen is
+`src/pages/TerminalEnrolPage.tsx`, and the gate is wired exactly as this ticket
+asked:
+
+- `checkEnrolment` consults `mayEnrol` at the point of enrolment, and the
+  screen renders the refusal as a sentence with the form still visible. Not a
+  hidden button — a hidden button leaves an owner with nothing to act on.
+- The refusal message is passed through from `mayEnrol` verbatim rather than
+  reworded, so there is one sentence per situation and the contact route
+  cannot drift out of it.
+- The owner's own device is never counted or converted; `FREE_TERMINALS` is an
+  allowance against ENROLLED terminals only.
+- Nothing is created before the check passes, so no inert terminal exists.
+
+Covered by the screen tests under "the subscription gate is on the screen, not
+behind it", including that the first terminal is allowed WITHOUT a
+subscription — a stall trying the product must reach a working terminal, or
+nobody ever sees what they would be paying for.
