@@ -14,18 +14,17 @@
  * without the field, and `mergeMerchantEvent` reads an absent field as false
  * precisely so that this works.
  *
- * ## NOT YET CALLED, and the feature is dark until it is
+ * ## Wired, as of Settings → Payments
  *
- * Nothing in the app invokes this, so `acceptsCards` is never published, so
- * `MerchantPage` never renders a Buy button and no purchase can begin. Stated
- * here rather than left to be discovered, because every other piece of the
- * card-purchase path is built and a reader could reasonably assume this one is
- * wired too.
+ * This block used to say the opposite: that nothing called this, so the flag
+ * was never published, so no Buy button ever rendered and the whole
+ * card-purchase path was dark. The screen it said was missing now exists —
+ * `PaymentsSettingsPage` — and every path through it ends here: connect,
+ * refresh, disconnect, and the plain status read on mount.
  *
- * What it needs is a stall-facing Stripe screen in Settings: connect, read the
- * status back, and call this with the answer. That screen does not exist — the
- * wallet has no Stripe UI at all — and building it is the remaining step
- * between a working backend and a working feature.
+ * That last one is the quiet one worth knowing about. A stall whose Stripe was
+ * disabled while they were away has its offer withdrawn the next time they open
+ * the screen, without doing anything, because the mount path reconciles too.
  *
  * ## Why this refuses to publish a claim it cannot support
  *

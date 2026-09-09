@@ -49,7 +49,7 @@ describe('a stall’s row on any screen', () => {
     draw(<IdentityInline pubkey={STALL} />)
 
     await waitFor(() =>
-      expect(screen.getByRole('link').getAttribute('href')).toBe(`/merchants/${STALL}`),
+      expect(screen.getByRole('link').getAttribute('href')).toBe(`/profile/${STALL}`),
     )
   })
 

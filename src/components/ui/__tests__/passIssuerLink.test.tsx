@@ -46,13 +46,13 @@ afterEach(cleanup)
 
 describe('reaching the stall from its coupon', () => {
   it('makes the stall’s name a link when given somewhere to go', () => {
-    draw(<Pass pass={coupon()} issuerTo={`/merchants/${ISSUER}`} />)
+    draw(<Pass pass={coupon()} issuerTo={`/profile/${ISSUER}`} />)
 
     // getAttribute rather than a jest-dom matcher: this repo does not install
     // @testing-library/jest-dom, and one assertion is not worth a dependency.
     expect(
       screen.getByRole('link', { name: /Rosa Green Farm/ }).getAttribute('href'),
-    ).toBe(`/merchants/${ISSUER}`)
+    ).toBe(`/profile/${ISSUER}`)
   })
 
   /*
@@ -64,7 +64,7 @@ describe('reaching the stall from its coupon', () => {
   it('puts the avatar inside that link, not beside it', () => {
     const pass = coupon()
     pass.userInfo.logoUrl = 'https://example.test/logo.png'
-    draw(<Pass pass={pass} issuerTo={`/merchants/${ISSUER}`} />)
+    draw(<Pass pass={pass} issuerTo={`/profile/${ISSUER}`} />)
 
     const link = screen.getByRole('link', { name: /Rosa Green Farm/ })
     expect(link.querySelector('img')?.getAttribute('src')).toBe('https://example.test/logo.png')
@@ -89,7 +89,7 @@ describe('reaching the stall from its coupon', () => {
    * The outer one wins, so the card keeps the stronger promise it already made.
    */
   it('never nests the issuer link inside a whole-card link', () => {
-    draw(<Pass pass={coupon()} to="/merchants/x/coupons" issuerTo={`/merchants/${ISSUER}`} />)
+    draw(<Pass pass={coupon()} to="/merchants/x/coupons" issuerTo={`/profile/${ISSUER}`} />)
 
     const links = screen.getAllByRole('link')
     expect(links).toHaveLength(1)

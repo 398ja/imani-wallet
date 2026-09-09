@@ -46,6 +46,7 @@ import { RedeemPage } from './pages/RedeemPage'
 import { MerchantPage } from './pages/MerchantPage'
 import { ClaimLandingPage } from './pages/ClaimLandingPage'
 import { BuyPage } from './pages/BuyPage'
+import { PublicProfilePage } from './pages/PublicProfilePage'
 import { peekPendingClaim } from './lib/pendingClaim'
 import { CouponsPage, TransactionsPage } from './pages/RecordListPages'
 import { CouponPage, TransactionPage } from './pages/RecordDetailPages'
@@ -376,6 +377,15 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           element={<TransactionPage pubkey={pubkey} trading={trading} />}
         />
         <Route path="/profile" element={<ProfilePage profile={profile} merchant={merchant} />} />
+        {/* Somebody ELSE's profile. `/profile` with no key is still your own —
+            the two are one route family on purpose, because "whose profile am I
+            looking at" is the only difference between them.
+
+            NOT the same page as `/merchants/:pubkey`, which is my relationship
+            with a stall: the coupons I hold, the transactions we have had. This
+            is who they are and how to buy from them, and it renders the same
+            for a stranger as for their best customer. */}
+        <Route path="/profile/:pubkey" element={<PublicProfilePage />} />
         {/* `merchant !== null`, NOT `trading`: a CLOSED stall must stay reachable
             or the Open-for-business switch could never be turned back on. It is
             also what hides the Merchant section from customers entirely — they
@@ -538,6 +548,10 @@ function PublicRoutes({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<
           closed — no record means no Buy button — but it is a deployment
           prerequisite rather than a detail. */}
       <Route path="/merchants/:pubkey" element={<MerchantPage />} />
+      {/* Public, so it belongs on the signed-out side too: a stall's profile is
+          a shop sign, and someone who scanned a QR at a market has no wallet
+          yet. Every field comes from the relay, so this needs no session. */}
+      <Route path="/profile/:pubkey" element={<PublicProfilePage />} />
       {/* Buying with no wallet, which is the hosted purchase case: delivery
           falls back to a claim link, so nothing here needs a key.
 
