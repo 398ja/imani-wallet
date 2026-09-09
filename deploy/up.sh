@@ -71,11 +71,27 @@ EOF
 require_local_image imani-gateway-core:acl-local   imani-gateway-core   gateway-core-rest
 require_local_image imani-gateway-portal:acl-local imani-gateway-portal gateway-portal-rest
 
+# A gitignored file for things that must not be committed — a real Stripe test
+# key, most obviously. `.env.test` is TRACKED, so a secret put there is a secret
+# published; this is the escape hatch that keeps one out of git.
+#
+# It has to be listed EXPLICITLY. Passing --env-file at all replaces compose's
+# default of reading ./.env, so the usual "just make a .env.local" advice
+# silently does nothing here — the file is read by nobody and the mock keeps
+# being used, which looks like the override not working.
+#
+# Later --env-file wins on conflict, so this overrides .env.test rather than
+# being overridden by it.
+DEPLOY_LOCAL_ENV="$DEPLOY/.env.local"
+
 compose() {
+  local env_files=(--env-file "$DEPLOY/.env.test")
+  [ -f "$DEPLOY_LOCAL_ENV" ] && env_files+=(--env-file "$DEPLOY_LOCAL_ENV")
+
   docker compose \
     -f "$DEPLOY/docker-compose.test.yml" \
     -f "$HERE/compose.override.yml" \
-    --env-file "$DEPLOY/.env.test" \
+    "${env_files[@]}" \
     -p imani-test "$@"
 }
 

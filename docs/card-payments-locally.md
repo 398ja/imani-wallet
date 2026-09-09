@@ -51,24 +51,36 @@ onboarding pages, so the flow completes for real.
 3. Go to <https://dashboard.stripe.com/test/apikeys>.
 4. Copy the **Secret key**, starting `sk_test_`.
 
-Then run with the mock switched off:
+Then put both lines in `imani-deploy/.env.local`, which is gitignored:
+
+```bash
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_API_BASE=
+```
+
+and run `./deploy/up.sh` as usual. See `.env.local.example` in that repo.
+
+**Not `.env.test`** — that file is tracked, so a key there is a key committed.
+
+**Both lines are needed.** `STRIPE_API_BASE=` (empty) is what disables the
+override; blank means "no override", so the SDK talks to Stripe. Deleting the
+line does the opposite of what it looks like, because an unset variable falls
+back to the compose default, which is the mock.
+
+For a one-off without touching any file:
 
 ```bash
 STRIPE_API_BASE= STRIPE_SECRET_KEY=sk_test_... ./deploy/up.sh
 ```
 
-`STRIPE_API_BASE=` (empty) is what disables the override — blank means "no
-override", so the SDK talks to Stripe. Leaving the variable unset entirely gets
-you the mock, because that is the compose default.
+### If Connect is not enabled yet
 
-### One extra step for Connect
-
-Creating *connected accounts* needs Connect enabled on your sandbox, which asks
-a few questions about your platform once:
-<https://dashboard.stripe.com/test/connect/accounts/overview>. Until that is
-done, account creation fails with a Stripe error naming the reason — and since
-`StripeSdkConnectClient` logs Stripe's own message, the adapter log will say
-exactly what it wants.
+Creating *connected accounts* may need Connect enabled on your sandbox, a
+one-time form about your platform at
+<https://dashboard.stripe.com/test/connect/accounts/overview>. Newer sandboxes
+have it on already — try first, and only go looking if account creation fails.
+It fails with a Stripe error naming the reason, and `StripeSdkConnectClient`
+logs Stripe's own message, so the adapter log will say exactly what it wants.
 
 Nothing else changes. The same code path serves both, which is the point of
 having an api-base at all.
