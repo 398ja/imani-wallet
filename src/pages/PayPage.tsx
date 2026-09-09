@@ -160,11 +160,15 @@ export function PayPage({ pubkey }: { pubkey: string }) {
           avatar's alt text and initials, so an issuer with no picture still
           reads as themselves rather than as a stray letter. */}
       <div className="mb-6">
+        {/* Not a link, deliberately. Everywhere else a stall's name reaches its
+            profile, but this screen holds a payment in progress: a tap meaning
+            "who is this?" that navigates away loses the request being paid. */}
         <IdentityInline
           pubkey={request.issuerId}
           label="To"
           size="md"
           fallbackName={merchant?.name}
+          linkToProfile={false}
         />
       </div>
 
