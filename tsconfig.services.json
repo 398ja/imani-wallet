@@ -22,8 +22,37 @@
        Two non-test errors in `server.ts` predate this and are unrelated to
        any package. */
     "baseUrl": ".",
+    /* `lib` gains DOM on top of tsconfig.node's ES2023.
+
+       Not because a service touches the DOM — none does — but because this
+       project deliberately includes one browser module. `wallet-api`'s tests
+       sign with the SHIPPING `src/lib/nip98.ts` rather than an event built in
+       the test file (the reasoning is at the top of that file), and the
+       shipping signer reads `window.location.origin` to make the `u` tag
+       absolute. Without DOM, `window` is TS2304 and the whole nip98 import
+       chain fails to typecheck.
+
+       The alternative was dropping the browser module from this project, which
+       would mean the wallet-api tests verify signatures against events they
+       constructed themselves — exactly the self-agreeing test the comment there
+       rejects. Widening `lib` is the smaller cost: `types` still omits `dom`
+       ambient packages, and a service that reached for `document` would be
+       caught in review rather than by the compiler. */
+    "lib": ["ES2023", "DOM"],
     "paths": {
       "@imani/wallet-core": ["./packages/wallet-core/src/index.ts"],
+      /* The nap packages resolve to the sibling checkout, exactly as
+         tsconfig.app.json resolves them. `nip98.ts` imports `./nap`, which
+         imports `./signer`, which is where `WalletSigner` comes from — with
+         these unresolved the type degraded to an implicit any and produced
+         four errors that looked like real signature mismatches
+         (`Property 'signEvent' is missing in type 'WalletSigner'`) but were
+         only the unresolved import wearing a disguise. */
+      "@imani/nap-core": ["../nap/packages/nap-core/src/index.ts"],
+      "@imani/nap-client-http": ["../nap/packages/nap-client-http/src/index.ts"],
+      "@imani/nap-client-web": ["../nap/packages/nap-client-web/src/index.ts"],
+      "@imani/nap-client-nip46": ["../nap/packages/nap-client-nip46/src/index.ts"],
+      "@imani/nap-react": ["../nap/packages/nap-react/src/index.ts"],
       "@imani/reports": ["./packages/reports/src/index.ts"],
       "@imani/payment-requests": ["./packages/payment-requests/src/index.ts"],
       "@imani/redemption": ["./packages/redemption/src/index.ts"],
