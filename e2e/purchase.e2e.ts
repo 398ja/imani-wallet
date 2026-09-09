@@ -48,15 +48,73 @@ import { chromium, type Browser, type Page } from 'playwright'
 
 const BASE = process.env.E2E_BASE ?? 'http://localhost:5177'
 
-/** A stall that exists and cannot take cards — the incident's exact shape. */
+/**
+ * A stall that exists and cannot take cards — the incident's exact shape.
+ *
+ * Overridable because it is a row in the local test database, not a constant of
+ * the product. The default is a seeded account with `charges_enabled = false`.
+ * If a real stall completes Stripe onboarding it stops being usable here, which
+ * is what `preflight` detects and says out loud.
+ */
 const RESTRICTED_STALL =
-  process.env.E2E_STALL ?? '35f7a28b6adc9a923686a4506a02cae0fcf634cb32f42675872a5bd07d67af47'
+  process.env.E2E_STALL ?? '7203f8173204c7dbc2862a28115a51dd259d9fe19839fe0963ee1c360c8d1bdb'
 
 /** Shaped like a pubkey, belonging to no stall. */
 const UNKNOWN_STALL = 'a'.repeat(64)
 
+/**
+ * Fail early and by name if the fixture stall is not the shape this suite
+ * needs.
+ *
+ * The default stall is a row in the local test database, and a reset stack, a
+ * different machine, or a merchant who finishes onboarding will all change it.
+ * Without this the refusal check fails with "does not take card payments"
+ * instead of the expected "cannot accept card payments yet" — a message one
+ * word away from the one being asserted, which reads like a product regression
+ * rather than missing test data.
+ *
+ * ## The side effect, stated plainly
+ *
+ * There is no side-effect-free probe. `PurchaseCheckoutController` validates
+ * the amount and the pubkey shape BEFORE it looks the account up, so any
+ * request that reaches the chargeable check is a request that creates a real
+ * Checkout Session when the stall turns out to be chargeable. That only happens
+ * when the fixture is already wrong — the run then stops — and the session is
+ * unpaid and expires on its own. Worth knowing, not worth a stray session on
+ * every green run.
+ */
+async function preflight(page: Page): Promise<boolean> {
+  const response = await page.request.post(`${BASE}/api/v1/checkout/purchase`, {
+    data: { stallPubkey: RESTRICTED_STALL, amountMinor: 100, buyerPubkey: null },
+    failOnStatusCode: false,
+  })
+  if (response.status() === 409) return true
+
+  const why =
+    response.status() === 200
+      ? 'it CAN take cards now (onboarding completed?), so it cannot demonstrate a refusal'
+      : response.status() === 404
+        ? 'no connected account exists for it'
+        : 'unexpected status'
+
+  console.log(
+    `  SKIP fixture stall ${RESTRICTED_STALL.slice(0, 12)}… answered ${response.status()}: ${why}.\n` +
+      '       Expected 409. Set E2E_STALL to a stall with charges_enabled = false.',
+  )
+  return false
+}
+
 const failures: string[] = []
 const pageErrors: string[] = []
+
+/**
+ * The button's real label. Matched exactly rather than by an alternation of
+ * guesses: a regex like /Buy|Pay/ silently matches the wrong control if the
+ * label changes, and `.first()` then clicks whatever it found. An exact name
+ * that stops matching fails loudly, which is the behaviour worth having when
+ * the point of the suite is to notice changes.
+ */
+const PAY_BUTTON = 'Pay by card'
 
 function check(label: string, condition: boolean, detail = ''): void {
   if (condition) {
@@ -81,18 +139,29 @@ async function goto(p: Page, url: string): Promise<void> {
 }
 
 /**
- * Type an amount and press Buy, then wait for the outcome.
+ * Type an amount and press Pay, then wait for the outcome.
  *
  * Returns where the browser ended up, because "did we leave for Stripe" is the
  * question every check here is really asking.
+ *
+ * Waits for a real signal rather than sleeping: either an error paragraph
+ * appears, or the URL leaves the Buy page. A fixed timeout would pass a slow
+ * refusal as a success, and this suite exists to catch exactly the case where
+ * the customer ends up somewhere they should not.
  */
 async function attemptPurchase(p: Page, stall: string, amount: string): Promise<string> {
   await goto(p, `${BASE}/buy/${stall}`)
   await p.locator('input:visible').first().fill(amount)
-  await p.getByRole('button', { name: /Continue to payment|Buy|Pay/i }).first().click()
-  // Long enough for the POST to answer and the screen to settle. Not
-  // networkidle: a refusal leaves the page put, so there is nothing to wait on.
-  await p.waitForTimeout(3000)
+  await p.getByRole('button', { name: PAY_BUTTON }).click()
+
+  await Promise.race([
+    p.waitForURL((url) => !url.pathname.includes('/buy/'), { timeout: 15_000 }).catch(() => {}),
+    p.locator('p.text-red-600, [role="alert"]').first().waitFor({ timeout: 15_000 }).catch(() => {}),
+    // The screen can also settle by re-enabling the button after `busy`.
+    p.getByRole('button', { name: PAY_BUTTON }).waitFor({ timeout: 15_000 }).catch(() => {}),
+  ])
+  // A short settle for the redirect to commit, once something has happened.
+  await p.waitForTimeout(500)
   return p.url()
 }
 
@@ -104,6 +173,15 @@ async function main(): Promise<void> {
   page.on('pageerror', (error) => pageErrors.push(String(error)))
 
   try {
+    console.log('\nPreflight')
+    const ready = await preflight(page)
+    check('the fixture stall exists and cannot take cards', ready)
+    if (!ready) {
+      // Everything below asserts on that stall's refusal, so continuing would
+      // print a screen of failures that all mean "wrong test data".
+      throw new Error('fixture stall unusable; see SKIP above')
+    }
+
     console.log('\nBuy screen renders')
     await goto(page, `${BASE}/buy/${RESTRICTED_STALL}`)
     const body = (await page.textContent('body')) ?? ''
@@ -140,11 +218,11 @@ async function main(): Promise<void> {
 
     console.log('\nAmount validation happens before any network call')
     await goto(page, `${BASE}/buy/${RESTRICTED_STALL}`)
-    const buy = page.getByRole('button', { name: /Continue to payment|Buy|Pay/i }).first()
-    check('Buy is disabled with an empty amount', await buy.isDisabled())
+    const buy = page.getByRole('button', { name: PAY_BUTTON })
+    check('Pay is disabled with an empty amount', await buy.isDisabled())
     await page.locator('input:visible').first().fill('0')
     await page.waitForTimeout(200)
-    check('Buy is disabled for a zero amount', await buy.isDisabled())
+    check('Pay is disabled for a zero amount', await buy.isDisabled())
 
     console.log('\nNo uncaught page errors')
     check('the page threw nothing', pageErrors.length === 0, pageErrors.join(' | '))
