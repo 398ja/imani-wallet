@@ -1,5 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
+import { imaniAliases } from '../../vitest.aliases';
+
 export default defineConfig({
   test: {
     globals: true,
@@ -21,6 +23,10 @@ export default defineConfig({
   },
   resolve: {
     alias: {
+      // Sibling packages are consumed from source, so this suite has to
+      // resolve them the same way the app does. The local `@` mapping below
+      // was here already and is kept.
+      ...imaniAliases,
       '@': './src',
     },
   },

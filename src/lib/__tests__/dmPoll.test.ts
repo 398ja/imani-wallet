@@ -179,3 +179,47 @@ describe('startDmPoll — catch-up after a gap', () => {
     expect(fake.fetchRecentDms).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * A 404 from the profile endpoint is the ORDINARY case, not a broken build.
+ *
+ * Coupon DMs are gift-wrapped by the gateway's own identity, and the gateway
+ * publishes no kind-0, so the pubkey handed to getProfile usually has no
+ * profile to find. What matters is that a receipt never depends on it: the
+ * lookup must resolve null rather than throw or hang, because DmPollService
+ * awaits it inside its sequential redemption loop and one rejection there
+ * strands every remaining coupon behind it.
+ */
+describe('profile lookup never blocks a coupon receipt', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('resolves null when the pubkey has published no profile', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('', { status: 404 })),
+    )
+    await expect(nostrdbAdapter().getProfile('e'.repeat(64))).resolves.toBeNull()
+  })
+
+  it('returns the profile when one exists', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ pubkey: 'f'.repeat(64), name: 'candles' })),
+    )
+    await expect(nostrdbAdapter().getProfile('f'.repeat(64))).resolves.toMatchObject({
+      name: 'candles',
+    })
+  })
+
+  it('resolves null instead of rejecting when the lookup fails outright', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('network down')
+      }),
+    )
+    await expect(nostrdbAdapter().getProfile('a'.repeat(64))).resolves.toBeNull()
+  })
+})

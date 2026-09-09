@@ -879,12 +879,27 @@ async function sendPart(
     // bundle form is upstream's (`bundle:<id>:<part>:<attempt>`), which is what
     // the gateway's own retry handling expects to see, and it is per-part, so
     // it serves a bundled redemption as well as a bundled send.
-    (candidate) =>
-      bundle
+    //
+    // The window is what makes a RETRY distinguishable from a double-tap.
+    // Without it the key was a pure function of (recipient, amount, voucher),
+    // so re-sending the same coupon to the same person for the same amount —
+    // which is exactly what a user does after a send fails — hit the gateway's
+    // idempotency check and got back the OLD send. On a send that ended in
+    // FAILED that is unrecoverable by construction: the reclaim endpoint
+    // refuses a terminal state, so the wallet reported "could not be returned
+    // automatically" and the coupon looked permanently stuck. It was not; the
+    // request simply never reached a new saga.
+    //
+    // Ten seconds is comfortably longer than a double-tap and far shorter than
+    // the time it takes to read an error and press the button again.
+    (candidate) => {
+      const window = Math.floor(Date.now() / 10_000)
+      return bundle
         ? `bundle:${bundle.bundleId}:${bundle.index}:0`
         : ctx.paymentRequestId
           ? `pay_${ctx.paymentRequestId}_${candidate.voucher_id}`
-          : `c2c_${ctx.recipient.pubkey}_${amount}_${candidate.voucher_id}`,
+          : `c2c_${ctx.recipient.pubkey}_${amount}_${candidate.voucher_id}_${window}`
+    },
   )
 
   await awaitAndSettle(

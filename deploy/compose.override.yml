@@ -86,7 +86,23 @@ services:
   # so issuance calls http://phoenixd-mock:9740/createinvoice. Without it,
   # /v1/mint/quote/voucher/bolt11 returns 500 and nothing can be issued.
   phoenixd-mock:
-    image: docker.398ja.xyz/staging/phoenixd-mock:latest
+    # The LOCAL build, not the staging tag.
+    #
+    # The staging image only PATCHes the quote to PAID. That writes the row and
+    # stops: the mint learns a quote was funded from the phoenixd webhook that
+    # payment-adapter's PhoenixWebhookHandler forwards on, so with only the PATCH
+    # the quote reads PAID everywhere while the mint has no funding record, and
+    # voucher issuance sits at "Waiting for the voucher to be backed" until it
+    # times out.
+    #
+    # phoenixd-java df292ab adds the real callback alongside the PATCH for exactly
+    # this reason, citing the same failure on staging 2026-08-29. Both images are
+    # named "latest" in different registries, which is why the stale one was not
+    # obvious. Rebuild with:
+    #
+    #   cd ../phoenixd-java && mvn -q -pl phoenixd-mock jib:dockerBuild \
+    #       -DskipTests -Djib.to.image=phoenixd-mock:webhook-local
+    image: ${PHOENIXD_MOCK_IMAGE:-phoenixd-mock:webhook-local}
 
   gateway-portal:
     # Built locally from imani-gateway-portal, NOT pulled: the registry image has
@@ -195,7 +211,13 @@ services:
     # gateway-customer had the alias; the tier that actually dereferences the
     # mint URL did not.
     extra_hosts:
-      - "127.0.0.1.mint:${MINT_HOST_IP:-192.168.144.12}"
+      # No default: an out-of-date literal here is worse than a missing value.
+      # It used to default to 192.168.144.12, and when the mint moved to .16 the
+      # alias resolved to whatever container now held .12 — so a split failed
+      # with "Connection refused" against an address that looked plausible,
+      # rather than failing loudly as an unset variable. .env.test carries the
+      # current ip and deploy/up.sh resolves it dynamically.
+      - "127.0.0.1.mint:${MINT_HOST_IP:?set MINT_HOST_IP to the mint container ip}"
     # account-app is defined ONLY here — the deploy repo's test compose has no
     # such service — so nothing else supplies its database or its network. It
     # exited(1) at startup on `Connection to localhost:5432 refused`, because
@@ -333,7 +355,13 @@ services:
     # what dereferences the token's own mint URL during a split, and without the
     # alias every split fails with UnknownHostException.
     extra_hosts:
-      - "127.0.0.1.mint:${MINT_HOST_IP:-192.168.144.12}"
+      # No default: an out-of-date literal here is worse than a missing value.
+      # It used to default to 192.168.144.12, and when the mint moved to .16 the
+      # alias resolved to whatever container now held .12 — so a split failed
+      # with "Connection refused" against an address that looked plausible,
+      # rather than failing loudly as an unset variable. .env.test carries the
+      # current ip and deploy/up.sh resolves it dynamically.
+      - "127.0.0.1.mint:${MINT_HOST_IP:?set MINT_HOST_IP to the mint container ip}"
     environment:
       GATEWAY_DEV_MODE: "false"
       # And the second thing the account-app block documents, for the same
@@ -346,6 +374,62 @@ services:
       # wss://relay.imani.casa, a PUBLIC relay, and a local stack would open
       # WebSockets to it and publish there.
       GATEWAY_CORE_NOSTR_RELAYS: "ws://nostr-relay:7777"
+      # The same edge shared secret gateway-portal carries.
+      #
+      # gateway-core runs NapProxyAuthFilter too (GatewaySecurityConfiguration),
+      # and that filter fails CLOSED: with no secret it logs
+      # nap_proxy_auth_disabled and ignores X-Auth-Pubkey for every request. The
+      # secret was set only on gateway-portal, so gateway-core discarded the
+      # identity Vite's edge-auth shim had just established, and portal calls
+      # came back "NIP-98 authentication required" even with a valid NAP session.
+      #
+      # The comment on gateway-portal's copy names this exact symptom; it just
+      # needs to be on both tiers, because both instantiate the filter.
+      #
+      # Note the variable is GATEWAY_CORE_..., not GATEWAY_PORTAL_...: each tier
+      # reads its own name (gateway.core.edge-shared-secret here,
+      # gateway.portal.edge-shared-secret there) while application.yml requires
+      # they hold the SAME value, "one nap_auth.lua, one secret". The warning
+      # this filter logs names GATEWAY_PORTAL_EDGE_SHARED_SECRET regardless of
+      # which tier logged it, so setting the variable it names on gateway-core
+      # changes nothing and the warning persists — which is exactly the wrong
+      # turn this comment exists to save the next person.
+      GATEWAY_CORE_EDGE_SHARED_SECRET: "dev-edge-secret-local-only"
+      # The real NIP-17 DM publisher, without which the atomic-send saga has no
+      # way to deliver.
+      #
+      # Nip17DmSendConfiguration is @ConditionalOnProperty on this flag, and with
+      # it unset DefaultDmPublisher wins on @ConditionalOnMissingBean and answers
+      # every delivery with DM_PUBLISHER_UNAVAILABLE. The saga then parks in
+      # DM_ERROR, and reclaim from that state needs an HTTP receive endpoint the
+      # decomposed stack does not expose, so the send is neither delivered nor
+      # returnable: "held by the gateway ... preserved server-side for manual
+      # recovery".
+      #
+      # These two were set on account-app only. Both containers run the same
+      # image and share the database, but the wallet's /api/v1/atomic-send goes
+      # to gateway-core on :28081, which did not have them — the same shape as
+      # BLOSSOM_SERVER_URL being set on the wrong one of the pair.
+      #
+      # The token must match CUSTOMER_WALLET_SVC_CRED_ATOMIC_OPS on
+      # gateway-customer, which is what authenticates the call to its internal
+      # POST /internal/v1/wallet/dm/tokens/send.
+      GATEWAY_ATOMIC_SEND_DELIVERY_NIP17_ENABLED: "true"
+      GATEWAY_ATOMIC_SEND_DELIVERY_NIP17_SERVICE_TOKEN: "dev-atomic-ops-token-local-only"
+      GATEWAY_ATOMIC_SEND_DELIVERY_NIP17_CUSTOMER_WALLET_BASE_URL: "http://gateway-customer:8082"
+      # Where the browser uploads avatars and banners.
+      #
+      # This is set on account-app too, but GET /api/v1/config is served by
+      # gateway-core (ConfigController, reading gateway.bottin.blossom-server-url
+      # <- BLOSSOM_SERVER_URL), so setting it only on account-app left
+      # blossom_server_url null in the config the wallet actually reads. The
+      # wallet then disables its file inputs, which presents as "the Browse
+      # button does nothing" on the profile page with no error anywhere.
+      #
+      # Consumed by a BROWSER: the gateway only names the server, the client PUTs
+      # straight to it. So it must be an address a browser can resolve —
+      # http://blossom:3000 would look right here and fail in the page.
+      BLOSSOM_SERVER_URL: ${BLOSSOM_SERVER_URL:-http://localhost:28089}
 
   bottin-api:
     environment:
@@ -442,10 +526,34 @@ services:
     # it gets a name the validator recognises as local, pointing at the address
     # it actually has.
     extra_hosts:
-      - "127.0.0.1.mint:${MINT_HOST_IP:-192.168.144.12}"
+      # No default: an out-of-date literal here is worse than a missing value.
+      # It used to default to 192.168.144.12, and when the mint moved to .16 the
+      # alias resolved to whatever container now held .12 — so a split failed
+      # with "Connection refused" against an address that looked plausible,
+      # rather than failing loudly as an unset variable. .env.test carries the
+      # current ip and deploy/up.sh resolves it dynamically.
+      - "127.0.0.1.mint:${MINT_HOST_IP:?set MINT_HOST_IP to the mint container ip}"
     environment:
       # See the gateway-core note above.
       GATEWAY_DEV_MODE: "false"
+      # Where to reach gateway-core for the calls this tier delegates rather
+      # than serves: NIP-05 resolution is the visible one.
+      #
+      # GatewayCoreClientProperties defaults gateway.core.base-url to
+      # http://localhost:8081, which inside THIS container is itself, and
+      # nothing listens on 8081 here (the app is on 8082). So every delegated
+      # call failed to connect and CoreNip05ResolutionClient returned empty,
+      # which ResolutionController turns into a 404 "NIP-05 not found" — the
+      # same response as a handle that genuinely does not exist. A registered
+      # handle and an unreachable gateway-core are indistinguishable from the
+      # wallet, which is what made this look like missing bottin data.
+      GATEWAY_CORE_BASE_URL: "http://gateway-core:8081"
+      # Third copy of the one edge secret. CustomerSecurityConfiguration runs
+      # NapProxyAuthFilter as well, reading gateway.customer.edge-shared-secret,
+      # and fails closed the same way: without it the identity the edge
+      # established is discarded on this tier too. All three names must hold the
+      # same value — application.yml puts it as "one nap_auth.lua, one secret".
+      GATEWAY_CUSTOMER_EDGE_SHARED_SECRET: "dev-edge-secret-local-only"
       # Defaults to the service name, which the published image accepts. The
       # rebuilt image carries cashu-wallet 0.7.0, whose MintUrlValidator refuses
       # a non-localhost http:// mint — correct, and not relaxed here. For that
