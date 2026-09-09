@@ -8,3 +8,5 @@ control-unlocked.token
 control-unlocked.json
 witness-positive.token
 witness-positive.json
+revocation-probe.token
+revocation-probe.json

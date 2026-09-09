@@ -91,6 +91,31 @@ describe('the list of what is out', () => {
     expect(liveTerminals(STALL)).toEqual([])
   })
 
+  /**
+   * A revoked terminal must stay revoked however storage spells it.
+   *
+   * Every consumer tests `revokedAt === undefined` — lapseService's
+   * servingTerminals and terminalsStoppedByLapse, terminalAttribution — so a
+   * `null` reaching them unnormalised would read as "not revoked" and a
+   * decommissioned till would keep taking payments.
+   *
+   * Safe because this reader normalises anything non-numeric to `undefined`.
+   * Pinned here because the invariant is defined in this file and RELIED ON in
+   * three others, and `null` is exactly what JSON round-trips produce for a
+   * field some other writer chose to null out rather than omit.
+   */
+  it('treats a null revokedAt as revoked-unknown, not as still-serving', () => {
+    localStorage.setItem(
+      `imani-wallet:terminals:${STALL}`,
+      JSON.stringify([
+        { terminalPubkey: COUNTER, name: 'Till', role: 'redeem-only', enrolledAt: 1, revokedAt: null },
+      ]),
+    )
+    const rows = allTerminals(STALL)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].revokedAt).toBeUndefined()
+  })
+
   it('reads unusable storage as an empty roster rather than throwing', () => {
     for (const bad of ['not json', '{}', 'null']) {
       localStorage.setItem(`imani-wallet:terminals:${STALL}`, bad)

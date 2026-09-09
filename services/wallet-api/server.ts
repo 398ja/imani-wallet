@@ -30,9 +30,49 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 
 import { valueHolding, planSpend, checkRecipient, needsRecipientLookup } from '@imani/wallet-core'
+import { merchantStats, outstandingLiability, expiringSoon } from '@imani/reports'
 
 import { verifyNip98, type AuthFailure } from './nip98.js'
 import { parseHolding, parsePlanRequest } from './holding.js'
+import { parseReportRequest } from './reports.js'
+import { parseCreateRequest, buildRequest, parseReconcileRequest, reconcile } from './requests.js'
+import {
+  parseVerifyInput,
+  verifyCoupon,
+  parseCheckInput,
+  checkRedemption,
+  receiveUrl,
+  receiveBody,
+} from './redeem.js'
+import { parseLicenceRequest, checkLicence, licenceIssuerPubkey } from './licence.js'
+import {
+  parseGenerateRequest,
+  generateBody,
+  generateUrl,
+  parseLookupRequest,
+  byCodeUrl,
+  publicUrl,
+} from './cashback.js'
+import {
+  parseDrainRequest,
+  drainBody,
+  drainUrl,
+  parseAckRequest,
+  ackBody,
+  ackUrl,
+  parseClaimHandleRequest,
+  claimHandleBody,
+  claimHandleUrl,
+} from './inbox.js'
+import {
+  parseIssueRequest,
+  issueBody,
+  issueUrl,
+  parseDeliverRequest,
+  deliverBody,
+  deliverUrl,
+  relayUrls,
+} from './issue.js'
 import { parsePrepareRequest, requestSplit, buildRumor, splitUrl, splitBody } from './prepare.js'
 import { createGuards, type StoredResponse } from './guards.js'
 import { createStallLookup } from './stallLookup.js'
@@ -412,6 +452,507 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       groups: value.groups,
       unusable: value.unusable,
       couponCount: value.couponCount,
+    })
+  }
+
+  /**
+   * Read a JSON body, or the 400 to answer with.
+   *
+   * Shared by every endpoint added after the first three, which each repeated
+   * this block. Counts a malformed body as a validation error so the metric
+   * keeps meaning "callers are getting the shape wrong".
+   */
+  const readJson = (raw: string | undefined) => {
+    try {
+      return { ok: true as const, value: JSON.parse(raw ?? '') as unknown }
+    } catch {
+      metrics.validationErrors++
+      return {
+        ok: false as const,
+        problem: { error: 'invalid-json', field: 'body', detail: 'the request body is not valid JSON' },
+      }
+    }
+  }
+
+  /**
+   * Both report endpoints take the same body, so they parse it the same way.
+   *
+   * Counts a bad body as a validation error, like every other endpoint, so the
+   * metric keeps meaning "callers are getting the shape wrong" rather than
+   * silently excluding whichever endpoints were added last.
+   */
+  const readReport = (raw: string | undefined) => {
+    let parsedBody: unknown
+    try {
+      parsedBody = JSON.parse(raw ?? '')
+    } catch {
+      metrics.validationErrors++
+      return {
+        ok: false as const,
+        problem: { error: 'invalid-json', field: 'body', detail: 'the request body is not valid JSON' },
+      }
+    }
+    const report = parseReportRequest(parsedBody, Date.now())
+    if (!report.ok) {
+      metrics.validationErrors++
+      return {
+        ok: false as const,
+        problem: { error: 'invalid-request', field: report.error.field, detail: report.error.detail },
+      }
+    }
+    return { ok: true as const, value: report.value }
+  }
+
+  /**
+   * What to sign to generate a cashback code.
+   *
+   * On the PORTAL — a third host, neither gateway-core nor customer-wallet.
+   * The 404 that made this look blocked came from asking customer-wallet; the
+   * portal has protected `/api/v1/portal/` with NIP-98 all along.
+   *
+   * The idempotency key is required and not generated here. One this service
+   * invented would differ on every retry, which is the opposite of what the key
+   * is for: the caller must be able to repeat a request that may already have
+   * succeeded, without generating a second cashback.
+   */
+  if (path === '/v1/cashback/generate' && method === 'POST') {
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const input = parseGenerateRequest(parsed.value)
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+
+    return answer(200, {
+      url: generateUrl(),
+      method: 'POST',
+      body: generateBody(input.value),
+    })
+  }
+
+  /**
+   * Where to look a cashback code up.
+   *
+   * NO signature: the portal exempts `/by-code/` and `/public/` from NIP-98
+   * deliberately, because a customer redeeming a code off a printed receipt
+   * holds no key of ours. The code itself is the credential.
+   *
+   * There is no claim endpoint, and that is not an omission. The lookup returns
+   * a `claimUrl` carrying its decryption key in the URL FRAGMENT — which a
+   * browser never transmits. The caller fetches and decrypts with that key. An
+   * endpoint here would have to be given the key, which would make this service
+   * able to claim anyone's cashback.
+   */
+  if (path === '/v1/cashback/lookup' && method === 'POST') {
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const input = parseLookupRequest(parsed.value)
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+
+    return answer(200, {
+      url: byCodeUrl(input.value.code),
+      method: 'GET',
+      authenticated: false,
+      then: {
+        claimUrl: 'the response carries a claimUrl; its #k= fragment is the decryption key',
+        metadata: `${publicUrl('{claimRef}')} — what a code is worth, before spending it`,
+        warning: 'never send the fragment anywhere: it is the only thing protecting the coupon',
+      },
+    })
+  }
+
+  /**
+   * What to sign to collect coupons that have arrived.
+   *
+   * The gap that changes what this API is FOR. Until this, a program could
+   * spend a holding and never notice being paid — which makes the "bookkeeping
+   * tool" in this service's own opening line only half possible.
+   *
+   * On gateway-core, not customer-wallet: a signed POST to the same path
+   * returns 404 there and 200 here, which is what made the coverage assessment
+   * record it as unlocated.
+   *
+   * Unwrapping the NIP-17 gift wrap needs the caller's private key, so
+   * decryption stays theirs. This service never sees a plaintext coupon.
+   */
+  if (path === '/v1/inbox/drain' && method === 'POST') {
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const input = parseDrainRequest(parsed.value)
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+
+    return answer(200, {
+      url: drainUrl(),
+      method: 'POST',
+      body: drainBody(input.value.limit),
+      then: {
+        decrypt: 'each envelope is a NIP-17 gift wrap; unwrap it with your own key',
+        ack: `${ackUrl()} — acknowledge what you have stored, or it comes back`,
+      },
+    })
+  }
+
+  /**
+   * What to sign to acknowledge envelopes already stored.
+   *
+   * Separate from draining on purpose. Acknowledging before persisting would
+   * lose a coupon on a crash, and the caller is the only one that knows when
+   * its own write has landed.
+   */
+  if (path === '/v1/inbox/ack' && method === 'POST') {
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const input = parseAckRequest(parsed.value)
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+
+    return answer(200, { url: ackUrl(), method: 'POST', body: ackBody(input.value.ids) })
+  }
+
+  /**
+   * What to sign to claim a handle.
+   *
+   * `POST /api/v1/nip05`, NOT `/api/v1/register` — that one is bottin's, wants
+   * HTTP Basic, and is not something a service holding no credentials could
+   * call. Claiming is the only step that needs a signature; everything else a
+   * stall does afterwards it does for itself.
+   *
+   * The handle is claimed FOR the signing key, and a caller naming another
+   * pubkey is refused. Claiming a name on somebody else's behalf is the one
+   * thing this endpoint must not be usable for.
+   */
+  if (path === '/v1/stalls/claim-handle' && method === 'POST') {
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const input = parseClaimHandleRequest(parsed.value, auth.pubkey, relayUrls())
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+
+    return answer(200, {
+      url: claimHandleUrl(),
+      method: 'POST',
+      body: claimHandleBody(input.value),
+    })
+  }
+
+  /**
+   * What does this licence entitle its holder to?
+   *
+   * An attest, and entirely local: the caller sends the voucher it holds and we
+   * read it, check our signature over it, and say what it grants. There is no
+   * lookup of who they are and there must not be — ADR 0007 decides a licence
+   * is a voucher we sold, verified offline, with no licence server and no
+   * honeypot of who-runs-what.
+   *
+   * Worth an endpoint because an automation can then ask "is this available to
+   * me?" BEFORE it tries, rather than discovering a lapse through a failure in
+   * the middle of a workflow.
+   */
+  if (path === '/v1/licence/status' && method === 'POST') {
+    const issuer = licenceIssuerPubkey()
+    if (!issuer) {
+      // 503, not a default. A licence check nobody configured would pass for a
+      // voucher anyone minted — worse than no check, because it looks like it
+      // is working.
+      return json(res, 503, {
+        error: 'not-configured',
+        detail: 'WALLET_API_LICENCE_ISSUER_PUBKEY is unset, so no licence can be checked',
+      })
+    }
+
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const input = parseLicenceRequest(parsed.value, auth.pubkey, Math.floor(Date.now() / 1000))
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+
+    // 200 whether or not it grants anything: the question was answered.
+    return answer(200, checkLicence(input.value, issuer))
+  }
+
+  /**
+   * What to sign to mint a coupon.
+   *
+   * A courier: the service holds no credential to present to the gateway, and
+   * if it did, that credential would be a way to mint coupons in anyone's name.
+   *
+   * **Through `/api/v1/wallet/vouchers`, not the portal path the app uses.**
+   * Measured, not assumed: an unregistered keypair signing for itself gets 201
+   * here and 500 on `/api/v1/portal/vouchers`, which is authorised by a session
+   * cookie no headless caller can hold. An implementer following
+   * `src/lib/issue.ts` would lose a day to that.
+   *
+   * The issuer is the signing key and cannot be overridden. A coupon names the
+   * stall that honours it, and one claiming a stall that never agreed would be
+   * discovered by the customer, at the counter.
+   */
+  if (path === '/v1/issue/gateway-request' && method === 'POST') {
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const plan = parseIssueRequest(parsed.value, auth.pubkey)
+    if (!plan.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: plan.error.field, detail: plan.error.detail })
+    }
+
+    return answer(200, {
+      url: issueUrl(),
+      method: 'POST',
+      body: issueBody(plan.value),
+      // Said here rather than left to be discovered: minting answers PENDING
+      // behind a bolt11 top-up and carries a token seconds later. The caller
+      // polls, because a held connection is a timeout waiting to happen — and
+      // the caller has to persist the id anyway to be crash-safe.
+      then: {
+        poll: `${issueUrl()}/{voucher_id}`,
+        until: 'the response carries a non-empty `token`',
+      },
+    })
+  }
+
+  /**
+   * What to sign to hand a coupon to a customer.
+   *
+   * Separate from issuance because the seam is real: a coupon can be issued and
+   * undelivered, and that is recoverable ONLY if the caller knows the voucher
+   * id. Hiding delivery inside issuance would turn a recoverable state into a
+   * silent loss of value.
+   *
+   * The gateway does the NIP-17 wrapping, as it does for the app — hand-rolling
+   * a gift wrap here would risk drifting from the format the receive pipeline
+   * parses.
+   */
+  if (path === '/v1/issue/deliver-request' && method === 'POST') {
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const input = parseDeliverRequest(parsed.value, auth.pubkey)
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+
+    return answer(200, {
+      url: deliverUrl(),
+      method: 'POST',
+      body: deliverBody(input.value, relayUrls()),
+    })
+  }
+
+  /**
+   * Is this coupon real, unexpired, and mine to honour?
+   *
+   * Nothing moves. A till asks this while the customer is still standing there,
+   * so it must answer from the bytes alone — no mint, no network.
+   *
+   * Says nothing about whether the coupon has been SPENT: that is the mint's
+   * answer, and asking here would turn a local check into a round trip at the
+   * slowest possible moment. What this settles is that the coupon is genuine,
+   * which is the part a caller cannot do for itself.
+   */
+  if (path === '/v1/redeem/verify' && method === 'POST') {
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const input = parseVerifyInput(parsed.value, auth.pubkey, Math.floor(Date.now() / 1000))
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+
+    // 200 even when the coupon is refused: the question was answered, and the
+    // answer is that this coupon must not be taken. A 4xx would mean the
+    // REQUEST was wrong, which is a different thing a caller fixes differently.
+    return answer(200, verifyCoupon(input.value))
+  }
+
+  /**
+   * Would taking this amount breach what the issuer signed?
+   *
+   * The only check that sees ACROSS redemptions — the one that notices the same
+   * coupon presented until it exceeds its face. The service holds no history,
+   * so the caller sends what it has and gets a verdict.
+   *
+   * The BOUND is never caller-supplied: it is read from the verified voucher,
+   * because a ceiling the presenter chose is not a ceiling. That is why this
+   * verifies the token again rather than trusting a face value in the body.
+   */
+  if (path === '/v1/redeem/check' && method === 'POST') {
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const input = parseCheckInput(parsed.value, auth.pubkey, Math.floor(Date.now() / 1000))
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+
+    return answer(200, checkRedemption(input.value))
+  }
+
+  /**
+   * What to sign to accept a coupon.
+   *
+   * A courier, for the reason ADR 0001 gives: accepting means swapping at the
+   * mint, and this service holds no credential to present there. If it did,
+   * that credential would be a way to redeem any coupon anyone sent it.
+   *
+   * The body is serialised ONCE and returned as a string to be signed byte for
+   * byte. Re-serialising it changes the payload hash, and the gateway then
+   * refuses the request from a service the caller never addressed directly.
+   */
+  if (path === '/v1/redeem/prepare' && method === 'POST') {
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const input = parseVerifyInput(parsed.value, auth.pubkey, Math.floor(Date.now() / 1000))
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+
+    // Verified first, so a caller is never handed instructions for accepting a
+    // coupon that was never going to be honoured.
+    const verdict = verifyCoupon(input.value)
+    if (!verdict.ok) return answer(200, verdict)
+
+    return answer(200, {
+      ok: true,
+      voucher: verdict.voucher,
+      url: receiveUrl(),
+      method: 'POST',
+      body: receiveBody(input.value.token),
+    })
+  }
+
+  /**
+   * Ask a customer to pay.
+   *
+   * The `vreqA` string is built by `shared/nut18v.js` — the SAME encoder the
+   * app loads — because the wire format has to match
+   * `VoucherPaymentRequest.java` byte for byte. A request this service encoded
+   * slightly differently would scan, look right, and be refused by the gateway.
+   *
+   * The recipient is always the signing key and cannot be overridden. Takings
+   * are gift-wrapped to whoever the request names, so a request naming anything
+   * else would send a customer's payment to a key its owner cannot decrypt:
+   * money stranded rather than merely misrouted.
+   */
+  if (path === '/v1/requests/create' && method === 'POST') {
+    let parsedBody: unknown
+    try {
+      parsedBody = JSON.parse(body ?? '')
+    } catch {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-json', field: 'body', detail: 'the request body is not valid JSON' })
+    }
+
+    const request = parseCreateRequest(parsedBody, auth.pubkey)
+    if (!request.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: request.error.field, detail: request.error.detail })
+    }
+
+    return answer(200, { request: buildRequest(request.value, Math.floor(Date.now() / 1000)) })
+  }
+
+  /**
+   * What arrived, against what was asked for.
+   *
+   * One endpoint rather than separate match and reconcile calls: matching a
+   * single arrival is the same computation as reconciling a day of them, and
+   * two endpoints would be two chances to disagree about which request a
+   * payment settled.
+   *
+   * Answers with the requests as they now stand, the settlements found, and
+   * what is still outstanding — including how much of an outstanding request
+   * has partially arrived, because "unpaid" and "half paid" are different
+   * problems for a merchant.
+   */
+  if ((path === '/v1/requests/reconcile' || path === '/v1/requests/match') && method === 'POST') {
+    let parsedBody: unknown
+    try {
+      parsedBody = JSON.parse(body ?? '')
+    } catch {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-json', field: 'body', detail: 'the request body is not valid JSON' })
+    }
+
+    const parsed = parseReconcileRequest(parsedBody, Date.now())
+    if (!parsed.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: parsed.error.field, detail: parsed.error.detail })
+    }
+
+    return answer(200, reconcile(parsed.value))
+  }
+
+  /**
+   * A stall's own numbers, over rows the caller supplies.
+   *
+   * POST for the same reason `/v1/holding/value` is: the history IS the
+   * request, and it carries voucher ids and amounts that have no business in an
+   * access log or a proxy cache.
+   *
+   * Computed by `@imani/reports`, which is the same code the app's dashboard
+   * calls. A second implementation here would be worse than useless — two
+   * dashboards disagreeing about takings is indistinguishable from money going
+   * missing.
+   *
+   * NOT proxied to the gateway's own dashboard endpoint. That one answers 200
+   * with zeros: it is fed by sources which deliberately do not consult
+   * customer-wallet, so a merchant who has issued three coupons is told they
+   * have issued none.
+   */
+  if (path === '/v1/reports/dashboard' && method === 'POST') {
+    const parsed = readReport(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const { transactions, pubkey, unit, decimals, from, now } = parsed.value
+    return answer(200, {
+      stats: merchantStats(transactions, { pubkey, unit, decimals, from, now }),
+    })
+  }
+
+  /**
+   * What is still owed, and what is about to expire.
+   *
+   * Separate from the dashboard because they answer different questions and a
+   * caller usually wants one of them: outstanding liability is an accounting
+   * figure, and expiring-soon is an operational one that drives a reminder.
+   */
+  if (path === '/v1/reports/records' && method === 'POST') {
+    const parsed = readReport(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const { transactions, pubkey, unit, now } = parsed.value
+    return answer(200, {
+      // Minor units, like every other amount this service reports. Rendering
+      // is the caller's decision, so `unit` and `decimals` travel with it.
+      outstanding: outstandingLiability(transactions, { pubkey, unit, now }),
+      unit,
+      decimals: parsed.value.decimals,
+      expiringSoon: expiringSoon(transactions, { now }),
     })
   }
 

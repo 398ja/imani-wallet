@@ -25,6 +25,27 @@ is said here rather than left to be discovered.
 Reads like `/v1/holding/value` do not change anything, so a lost response there
 costs you a retry and nothing else.
 
+### The service cannot spend, and that is enforced
+
+Not a promise in prose: **there is no code path here capable of signing or
+spending**, which is what makes a public spending endpoint defensible at all
+([ADR 0002](../docs/adr/0002-the-api-plans-the-caller-signs.md)). Where a
+signature is needed, you sign and the service forwards yours verbatim — it is a
+courier for a signature it cannot forge.
+
+Two checks hold that true rather than trusting it:
+
+- `__tests__/cannotSpend.test.ts` fails if any source file invokes an operation
+  that signs or spends, and names the file and the call.
+- The image build fails if signing capability is reachable in the shipped tree
+  at all, across every executable extension. That guard has caught two real
+  escapes: `sign.mjs` walking into the image past a `*.ts`-only scan, and the
+  sealing path that arrived with `/v1/spend/parts/prepare`.
+
+The service does verify signatures, and must: `schnorr.verify` is how it
+authenticates you. The boundary is the operation, not the import — `.verify` is
+its job, `.sign` would be the end of the argument above.
+
 ## Authenticating
 
 Every request except `/health` and `/metrics` carries a

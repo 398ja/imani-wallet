@@ -25,6 +25,29 @@ let browser: Browser
 let page: Page
 const failures: string[] = []
 
+/**
+ * `page.goto` with a retry, because the dev server intermittently answers
+ * `net::ERR_NETWORK_CHANGED` on this host.
+ *
+ * Observed failing one run in roughly three, always on navigation and never on
+ * an assertion — the run before this was added died after 19 of 49 checks and
+ * the run after passed 49/49 with no code change. A harness that reports the
+ * host's networking as a product failure trains everyone to re-run it, which
+ * is how a real regression gets waved through.
+ */
+async function goto(p: Page, url: string): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await p.goto(url, { waitUntil: 'domcontentloaded' })
+      return
+    } catch (e) {
+      if (attempt === 3) throw e
+      console.log(`  (navigation retry ${attempt}: ${(e as Error).message.split('\n')[0]})`)
+      await p.waitForTimeout(500)
+    }
+  }
+}
+
 function check(name: string, ok: boolean, detail = '') {
   if (ok) {
     console.log(`  PASS  ${name}`)
@@ -42,14 +65,14 @@ function check(name: string, ok: boolean, detail = '') {
  * shipped, not a copy of its logic.
  */
 async function seedAndOpen(path: string, terminals: unknown[]) {
-  await page.goto(BASE, { waitUntil: 'domcontentloaded' })
+  await goto(page, BASE)
   await page.evaluate(
     ([stall, rows]) => {
       localStorage.setItem(`imani-wallet:terminals:${stall}`, JSON.stringify(rows))
     },
     [STALL, terminals] as const,
   )
-  await page.goto(`${BASE}${path}`, { waitUntil: 'domcontentloaded' })
+  await goto(page, `${BASE}${path}`)
   await page.waitForTimeout(1200)
 }
 
@@ -75,7 +98,7 @@ async function beATerminal(role: 'redeem-only' | 'issue-and-redeem') {
   const parsed = parseVoucherToken(token)
   const metadata = JSON.parse(String(parsed.voucher.merchantMetadata))
 
-  await page.goto(BASE, { waitUntil: 'domcontentloaded' })
+  await goto(page, BASE)
   await page.evaluate(
     ([record]) => localStorage.setItem('imani-wallet:terminal', JSON.stringify(record)),
     [
@@ -96,7 +119,7 @@ async function beATerminal(role: 'redeem-only' | 'issue-and-redeem') {
 
 /** Back to the stall's own device. */
 async function beTheOwner() {
-  await page.goto(BASE, { waitUntil: 'domcontentloaded' })
+  await goto(page, BASE)
   await page.evaluate(() => localStorage.removeItem('imani-wallet:terminal'))
 }
 
@@ -194,7 +217,13 @@ async function main() {
 
   console.log('\nThe enrolment screen')
   await seedAndOpen('/settings/terminals/add', [])
-  await page.waitForTimeout(500)
+  // Wait for the form itself rather than a flat timeout. One run in three
+  // reached this with the screen still blank and failed four checks plus the
+  // harness — the app was fine and the sleep was simply too short. Waiting on
+  // the thing being asserted makes the check about the app again.
+  await page
+    .getByRole('button', { name: 'Add terminal' })
+    .waitFor({ state: 'visible', timeout: 15_000 })
   const enrol = await page.locator('body').innerText()
   check('renders', enrol.includes('Add a terminal') || enrol.includes('terminal'))
   check('asks for a name', enrol.includes('Name'))
@@ -265,7 +294,7 @@ async function main() {
    * exactly the part a component test cannot check.
    */
   await beATerminal('redeem-only')
-  await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
+  await goto(page, `${BASE}/`)
   await page.waitForTimeout(2500)
 
   const tillText = await page.locator('body').innerText()
@@ -278,14 +307,14 @@ async function main() {
   )
 
   // The control, not the courtesy: typing the URL must not work either.
-  await page.goto(`${BASE}/merchant/dashboard`, { waitUntil: 'domcontentloaded' })
+  await goto(page, `${BASE}/merchant/dashboard`)
   await page.waitForTimeout(2000)
   const dash = await page.locator('body').innerText()
   check('typing the dashboard URL does not reach it', !/Turnover|Takings|Dashboard/i.test(dash))
   check('no uncaught errors as a terminal', pageErrors.length === 0, pageErrors.join('; '))
 
   console.log('\nTicket 08: decommissioning is offered, logout is not')
-  await page.goto(`${BASE}/settings/security`, { waitUntil: 'domcontentloaded' })
+  await goto(page, `${BASE}/settings/security`)
   await page.waitForTimeout(1500)
   const security = await page.locator('body').innerText()
 
@@ -295,20 +324,20 @@ async function main() {
 
   console.log('\nThe owner is unaffected by all of it')
   await beTheOwner()
-  await page.goto(`${BASE}/settings/security`, { waitUntil: 'domcontentloaded' })
+  await goto(page, `${BASE}/settings/security`)
   await page.waitForTimeout(1500)
   const ownerSecurity = await page.locator('body').innerText()
 
   check('the owner still gets the existing logout copy', /backup key/i.test(ownerSecurity))
   check('and is not offered decommissioning', !/out of service/i.test(ownerSecurity))
 
-  await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
+  await goto(page, `${BASE}/`)
   await page.waitForTimeout(2000)
   const ownerTill = await page.locator('body').innerText()
   check('the owner’s till still offers both actions', /Sell/.test(ownerTill) && /Redeem/.test(ownerTill))
 
   console.log('\nSubscriptions: the diagnostics screen a support call reads')
-  await page.goto(`${BASE}/settings/subscription`, { waitUntil: 'domcontentloaded' })
+  await goto(page, `${BASE}/settings/subscription`)
   await page.waitForTimeout(2500)
   const sub = await page.locator('body').innerText()
 
