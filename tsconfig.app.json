@@ -58,6 +58,9 @@
       "@imani/money": ["./packages/money/src/index.ts"],
       "@imani/wallet-core": ["./packages/wallet-core/src/index.ts"],
       "@imani/licence": ["./packages/licence/src/index.ts"],
+      "@imani/redemption": ["./packages/redemption/src/index.ts"],
+      "@imani/reports": ["./packages/reports/src/index.ts"],
+      "@imani/payment-requests": ["./packages/payment-requests/src/index.ts"],
       "imani-qr": ["./packages/imani-qr/src/index.ts"]
     }
   },
