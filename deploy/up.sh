@@ -71,6 +71,24 @@ EOF
 require_local_image imani-gateway-core:acl-local   imani-gateway-core   gateway-core-rest
 require_local_image imani-gateway-portal:acl-local imani-gateway-portal gateway-portal-rest
 
+# The vault image is the ONE case where the registry copy is older than the
+# database, so the default in compose.override.yml cannot boot a stack that has
+# been running a while. imani_vault here is already at Flyway V8; the published
+# staging/cashu-vault-jpa:latest only resolves V1-V2 and aborts on startup with
+#
+#   applied migration not resolved locally: 3, 4, 5, 6, 7, 8
+#
+# which reads as database corruption and is really a too-old image. The build
+# that has those migrations is the local-only `imani-vault-jpa:libfix` (a jar
+# copied in, never pushed), so it cannot be the compose default — a fresh clone
+# would fail to pull it. Prefer it when it exists and leave the default alone.
+#
+# A machine WITHOUT libfix and WITHOUT an existing volume is fine on the
+# default: Flyway creates the schema at whatever version that image knows.
+if [ -z "${VAULT_JPA_IMAGE:-}" ] && docker image inspect imani-vault-jpa:libfix >/dev/null 2>&1; then
+  export VAULT_JPA_IMAGE=imani-vault-jpa:libfix
+fi
+
 # A gitignored file for things that must not be committed — a real Stripe test
 # key, most obviously. `.env.test` is TRACKED, so a secret put there is a secret
 # published; this is the escape hatch that keeps one out of git.
