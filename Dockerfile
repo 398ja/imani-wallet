@@ -7,6 +7,7 @@
 #   docker build --build-context nap=../nap \
 #     --build-arg VITE_RELAY_URL=wss://relay.staging.398ja.xyz \
 #     --build-arg VITE_INTERNAL_RELAY_URL=ws://nostr-relay:7777 \
+#     --build-arg VITE_GOOGLE_CLIENT_ID=<oauth-client-id>.apps.googleusercontent.com \
 #     -t imani-wallet .
 #
 # The /build/{imani-wallet,nap} layout below reproduces the on-disk sibling shape
@@ -50,6 +51,15 @@ ARG VITE_RELAY_URL
 ARG VITE_INTERNAL_RELAY_URL
 ENV VITE_RELAY_URL=$VITE_RELAY_URL
 ENV VITE_INTERNAL_RELAY_URL=$VITE_INTERNAL_RELAY_URL
+
+# Google Drive escrow (src/lib/drive.ts). A public OAuth *client id*, not a
+# secret — the browser sends it to Google on every sign-in — but it is per-origin
+# and per-deployment: the origin serving this bundle must be listed as an
+# authorised JavaScript origin on that client, or Google refuses the token with
+# no visible reason. Left unset, `driveConfigured()` is false and the Drive
+# backup and restore buttons do not render at all.
+ARG VITE_GOOGLE_CLIENT_ID
+ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
 
 COPY . .
 # `tsc -b && vite build`. The tsc half typechecks ./packages AND ../nap through

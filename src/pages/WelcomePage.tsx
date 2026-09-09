@@ -1,10 +1,12 @@
 import { useState } from 'react'
-import { Copy, Check, Download, Eye, EyeOff } from 'lucide-react'
+import { Copy, Check, Cloud, Download, Eye, EyeOff } from 'lucide-react'
 
-import { Button, Panel } from '../components/ui'
+import { Button, Panel, Alert } from '../components/ui'
 import type { Profile } from '../lib/profile'
+import { backupFilename, createBackup } from '../lib/backup'
 import { downloadText } from '../lib/download'
 import { handleLabel } from '../lib/format'
+import { useDriveBackup } from '../lib/useDriveBackup'
 
 /**
  * Save your key. The only screen in the app that cannot be undone by trying
@@ -28,9 +30,22 @@ export function WelcomePage({
   profile: Profile
   onDone: () => void
 }) {
+  const drive = useDriveBackup(profile.pubkey)
   const [revealed, setRevealed] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [downloaded, setDownloaded] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
+
+  const download = () => {
+    setError(null)
+    try {
+      downloadText(backupFilename(profile), createBackup(profile.pubkey))
+      setDownloaded(true)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
 
   const copy = async () => {
     try {
@@ -56,10 +71,11 @@ export function WelcomePage({
       </div>
 
       <Panel className="p-4">
-        <h2 className="text-sm font-medium text-mono-900 dark:text-mono-50">Your backup key</h2>
+        <h2 className="text-sm font-medium text-mono-900 dark:text-mono-50">Back up your account</h2>
         <p className="mt-1 text-xs text-mono-500">
-          This is the only way back into your account if you forget your passphrase or use another
-          device. Save it somewhere safe. It will not be shown again.
+          This is the only way back in if you forget your passphrase or use another device. The key
+          below is not shown again — copy it, or keep the backup file, which holds the same key
+          encrypted with your passphrase.
         </p>
 
         <div className="mt-3 flex items-center gap-2">
@@ -82,19 +98,40 @@ export function WelcomePage({
           </button>
         </div>
 
-        <div className="mt-2 grid grid-cols-2 gap-2">
-          <Button variant="secondary" onClick={copy}>
+        {/* Icon over label, not beside it. Three of these across a phone leaves
+            about 100px each, which "Google Drive" does not fit on one line
+            next to an icon. */}
+        <div className="mt-2 grid grid-cols-3 gap-2">
+          <Button variant="secondary" className="flex-col px-2 py-2 text-xs" onClick={copy}>
             {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-            <span className="ml-2">{copied ? 'Copied' : 'Copy'}</span>
+            <span className="mt-1">{copied ? 'Copied' : 'Copy key'}</span>
           </Button>
+
+          {/* The account FILE, not the nsec as text. One artifact for both
+              backup buttons — the two of them are the same thing going to two
+              places, and only the clipboard button deals in the raw key. */}
+          <Button variant="secondary" className="flex-col px-2 py-2 text-xs" onClick={download}>
+            <Download className="h-4 w-4" />
+            <span className="mt-1">{downloaded ? 'Saved' : 'Download file'}</span>
+          </Button>
+
           <Button
             variant="secondary"
-            onClick={() => downloadText('imani-wallet-backup-key.txt', nsec)}
+            className="flex-col px-2 py-2 text-xs"
+            disabled={drive.busy}
+            onClick={() => void drive.save()}
           >
-            <Download className="h-4 w-4" />
-            <span className="ml-2">Download</span>
+            <Cloud className="h-4 w-4" />
+            <span className="mt-1">{drive.busy ? 'Saving…' : 'Google Drive'}</span>
           </Button>
         </div>
+
+        {drive.done && (
+          <p className="mt-2 text-xs text-green-700 dark:text-green-500">
+            Saved to your Google Drive.
+          </p>
+        )}
+        {(error ?? drive.error) && <Alert>{error ?? drive.error}</Alert>}
       </Panel>
 
       <label className="flex items-start gap-3 text-sm text-mono-600 dark:text-mono-300">

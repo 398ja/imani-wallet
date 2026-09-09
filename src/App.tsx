@@ -438,7 +438,10 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             />
           }
         />
-        <Route path="/settings/backup" element={<BackupPage profile={profile} />} />
+        <Route
+          path="/settings/backup"
+          element={<BackupPage profile={profile} terminal={terminal.actor !== null} />}
+        />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </>
