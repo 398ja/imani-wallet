@@ -27,15 +27,22 @@ const imani = (name: string) => r(`./packages/${name}/src/index.ts`)
 const nap = (name: string) => r(`../nap/packages/${name}/src/index.ts`)
 
 /**
- * The shared secret gateway-portal trusts its edge proxy with.
+ * The shared secret every edge-gated service trusts its edge proxy with.
+ *
+ * ONE value for all of them, which is not a shortcut: `nap_auth.lua` injects a
+ * single `X-Edge-Auth` for every upstream it gates, so gateway-portal,
+ * customer-wallet and merchant-service are all configured with the same secret
+ * in every environment. A second constant here would be a way to drift out of
+ * step with a deployment that cannot drift.
  *
  * Read here, in the Vite config, NOT through `import.meta.env` — anything with a
  * `VITE_` prefix is inlined into the client bundle, and this must never be. See
  * the `/api/v1/portal` proxy rule below for why the browser cannot hold it.
  *
- * Matches GATEWAY_PORTAL_EDGE_SHARED_SECRET in deploy/compose.override.yml.
+ * Matches GATEWAY_PORTAL_EDGE_SHARED_SECRET in deploy/compose.override.yml and
+ * MERCHANT_EDGE_SHARED_SECRET in imani-deploy's test stack.
  */
-const PORTAL_EDGE_SECRET = process.env.PORTAL_EDGE_SECRET ?? 'dev-edge-secret-local-only'
+const EDGE_SHARED_SECRET = process.env.PORTAL_EDGE_SECRET ?? 'dev-edge-secret-local-only'
 
 /** account-app — the only service that can read the NAP session store. */
 const ACCOUNT_APP = 'http://localhost:28081'
@@ -63,14 +70,42 @@ const ACCOUNT_APP = 'http://localhost:28081'
  * The pubkey now comes from the session cookie, checked server-side, which is what
  * a deployment's nginx does.
  */
-const PORTAL_PREFIX = '/api/v1/portal'
+/**
+ * Every prefix this dev server must authenticate the way a real edge does.
+ *
+ * Exported so `devProxy.test.ts` can hold this list against the proxy table.
+ * That pairing IS the invariant that broke: a rule with the right target and no
+ * edge hop looks complete and answers 401 with a valid session.
+ *
+ * TWO of them, and the second was added after `Connect to Stripe` answered 401
+ * with a perfectly good session. The 401 was correct and the proxy was wrong:
+ * `/api/v1/merchant/stripe` went STRAIGHT to merchant-service, skipping the
+ * step that turns a session cookie into an identity. Every service behind this
+ * proxy learns who you are from `X-Auth-Pubkey`, injected by the edge after it
+ * validates the cookie; bypass the edge and you arrive anonymous, however valid
+ * your session.
+ *
+ * That is why this is a list rather than a second copy of the middleware. The
+ * portal rule had the whole mechanism and the merchant rule had none of it, and
+ * nothing about the shape of the file said one was missing — the merchant rule
+ * looked complete because it had a correct target. Adding a prefix here is now
+ * the only thing an author has to remember.
+ *
+ * `/api/v1/merchant` covers both `/merchant/` and `/merchants/`? NO — and that
+ * is deliberate. nginx routes `^/api/v1/merchants?(/|$)`, but the wallet only
+ * ever calls the singular, and matching the plural here without a proxy rule
+ * for it would authenticate a request that then falls into the `/api`
+ * catch-all and reaches customer-wallet WITH edge headers attached. The list
+ * stays exactly as wide as the routes it protects.
+ */
+export const EDGE_AUTH_PREFIXES = ['/api/v1/portal', '/api/v1/merchant/stripe'] as const
 
 /**
- * The exact test Vite's proxy uses to pick the `/api/v1/portal` rule: a bare
- * `startsWith` on the RAW url.
+ * The exact test Vite's proxy uses to pick a rule: a bare `startsWith` on the
+ * RAW url.
  *
  * This is not a stylistic choice. Mounting the middleware with
- * `server.middlewares.use(PORTAL_PREFIX, …)` looks equivalent and is not:
+ * `server.middlewares.use(prefix, …)` looks equivalent and is not:
  * Connect matches on the PARSED, case-insensitive pathname and demands a `/` or
  * `.` boundary, while the proxy matches the raw url with no boundary at all. Every
  * path where those two disagree is a request that reaches the proxy WITHOUT being
@@ -80,11 +115,11 @@ const PORTAL_PREFIX = '/api/v1/portal'
  * this was latent rather than live; it stops being latent the day someone adds one.
  * Sharing one predicate makes the two impossible to drift apart.
  */
-const isPortalRequest = (url: string | undefined): boolean =>
-  (url ?? '').startsWith(PORTAL_PREFIX)
+const needsEdgeAuth = (url: string | undefined): boolean =>
+  EDGE_AUTH_PREFIXES.some((prefix) => (url ?? '').startsWith(prefix))
 
 const edgeAuth: Connect.NextHandleFunction = (req, _res, next) => {
-  if (!isPortalRequest(req.url)) {
+  if (!needsEdgeAuth(req.url)) {
     next()
     return
   }
@@ -175,6 +210,72 @@ export const proxy = {
   // claim is NIP-98 authenticated, and the signed `u` tag is the browser origin.
   '/api/v1/nip05': { target: 'http://localhost:28081', changeOrigin: false },
   '/api/v1/config': { target: 'http://localhost:28081', changeOrigin: true },
+  /*
+   * Starting a card purchase, which lives on payment-adapter — a THIRD service,
+   * neither gateway. Without this rule it falls into the '/api' catch-all, hits
+   * customer-wallet, and 404s, which reads as "purchases are not implemented"
+   * rather than "the proxy does not know where they live".
+   *
+   * Port 28087 is the LOCAL TEST stack, matching every other rule in this
+   * table. It said 8087, which is what imani-deploy publishes payment-adapter
+   * on in STAGING — a port with nothing behind it on a developer's machine, so
+   * every checkout would fail with ECONNREFUSED against a service that was
+   * running the whole time, two digits away.
+   *
+   * changeOrigin true: the endpoint is unauthenticated, so no signature depends
+   * on the origin surviving.
+   */
+  '/api/v1/checkout': { target: 'http://localhost:28087', changeOrigin: true },
+  /*
+   * A stall's own Stripe account, on merchant-service.
+   *
+   * Without a rule this falls into the '/api' catch-all and reaches
+   * gateway-portal, which answers 403 with an empty body for
+   * `/api/v1/merchant/*` — a refusal that reads like a permissions problem
+   * rather than a misrouted request. See the note in `src/lib/merchant.ts`.
+   *
+   * 28088, and getting here took two wrong answers. It said 8086, the staging
+   * publish port, which is nothing locally. The obvious correction — 28086, the
+   * same number in the local range — is WORSE than the original: on the test
+   * stack that port is BOTTIN-API, so the wallet would have reached a live,
+   * healthy, completely unrelated service. A connection refused is a bad
+   * afternoon; a 404 from the wrong service is a bug hunt in the wrong repo.
+   *
+   * A THIRD wrong answer followed, and it is the reason for the `configure`
+   * block below: with the port finally right, `Connect to Stripe` answered 401.
+   * Correct, and nothing to do with Stripe. merchant-service identifies a
+   * merchant from `X-Auth-Pubkey`, which only the edge sets, and this rule went
+   * straight to the service — so a valid session arrived anonymous. Pointing at
+   * the right service is not the same as arriving there authenticated, and the
+   * shape of the rule made it look finished.
+   *
+   * The `edgeAuth` middleware above has already validated the session cookie
+   * against account-app and set the headers; this attaches the secret that
+   * vouches for them, exactly as the portal rule does. merchant-service now
+   * demands it — it used to trust `X-Auth-Pubkey` from anyone, which is how a
+   * missing edge hop stayed invisible for so long.
+   *
+   * changeOrigin false: these are session-authenticated, and the cookie is
+   * scoped to the browser origin.
+   */
+  '/api/v1/merchant/stripe': {
+    target: 'http://localhost:28088',
+    changeOrigin: false,
+    configure: (proxy: {
+      on(event: 'proxyReq', cb: (req: ClientRequest) => void): void
+    }) => {
+      proxy.on('proxyReq', (proxyReq) => {
+        // Same fail-closed shape as the portal rule: vouch only for a pubkey
+        // the middleware actually validated, and strip a permissions header
+        // that could only have come from the page otherwise.
+        if (proxyReq.getHeader('x-auth-pubkey')) {
+          proxyReq.setHeader('X-Edge-Auth', EDGE_SHARED_SECRET)
+        } else {
+          proxyReq.removeHeader('x-auth-permissions')
+        }
+      })
+    },
+  },
   // Receipt notifications live on account-app as well: IncomingNotificationController
   // is in gateway-core-rest, not customer-wallet. Without this rule the drain and
   // ack calls fall into the '/api' catch-all, hit customer-wallet, and 404 every
@@ -226,7 +327,7 @@ export const proxy = {
         // Only for a request the middleware authenticated. One that failed
         // validation must stay unauthenticated rather than be silently upgraded.
         if (proxyReq.getHeader('x-auth-pubkey')) {
-          proxyReq.setHeader('X-Edge-Auth', PORTAL_EDGE_SECRET)
+          proxyReq.setHeader('X-Edge-Auth', EDGE_SHARED_SECRET)
         } else {
           // No validated pubkey means the middleware refused or never ran, so a
           // permissions header here could only have come from the page. It cannot

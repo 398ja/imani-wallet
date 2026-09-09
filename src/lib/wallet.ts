@@ -206,6 +206,20 @@ export function getWallet(): WalletStorage {
 }
 
 /**
+ * Whether there is a store to read at all.
+ *
+ * For screens a visitor can reach WITHOUT a wallet — the public stall profile
+ * and the claim landing page. They have a relationship half and a public half,
+ * and only the first needs a store; asking first is how the second still
+ * renders. Catching the throw from `getWallet` would work and would also
+ * swallow a genuine storage failure, which is a different thing that must stay
+ * loud.
+ */
+export function walletIsOpen(): boolean {
+  return storage !== null && storage !== undefined
+}
+
+/**
  * Close and DELETE one user's store. Used by logout.
  *
  * The database has to be closed first or `deleteDatabase` blocks indefinitely on
