@@ -52,7 +52,8 @@ put a Buy button in front of every shopper of a stall that could not sell. The
 failure surfaced only in Stripe's UI, in a request our code never makes, with
 nothing logged on our side because our side was never called.
 
-**Fixed in `payment-adapter` `4a6c4f1`**, two changes because they fail in
+**Fixed in `payment-adapter` `4a6c4f1`**, then **completed in `3bfcc41`** — see
+[Review findings](#review-findings). Two changes, because they fail in
 different directions:
 
 - request `card_payments` (and `transfers`, explicitly) at account creation
@@ -63,11 +64,44 @@ Verified live: old params returned `capabilities: {}`, new ones return
 `card_payments: inactive` — asked for, pending onboarding. 11 new tests, both
 mutations verified red.
 
-**Fixed in `imani-wallet` `61018d5`**: `e2e/purchase.e2e.ts`, which holds the
-promise both `BuyPage` and `purchase.ts` make in prose — that everything
-refusable is decided before a customer sees a card form. Run with
-`npm run e2e:purchase`. Verified by mutation: flipping `charges_enabled` back
-to true in the test DB reproduced the incident exactly, 4 of 11 checks red.
+**Fixed in `imani-wallet` `61018d5`**, hardened in `ef7eec8`:
+`e2e/purchase.e2e.ts`, which holds the promise both `BuyPage` and `purchase.ts`
+make in prose — that everything refusable is decided before a customer sees a
+card form. Run with `npm run e2e:purchase`. Verified by mutation: flipping
+`charges_enabled` back to true reproduced the incident exactly.
+
+---
+
+## Review findings
+
+A review of the above found **the first fix was half a fix**, plus three ways
+the test could mislead. All corrected.
+
+### The important one: a second snapshot builder
+
+`4a6c4f1` narrowed `chargesEnabled` in `StripeSdkConnectClient#toSnapshot` and
+missed that `StripeConnectService#toSnapshot` also exists — it maps the
+`account.updated` **webhook** and writes straight to the database.
+
+It still read the raw flag. `account.updated` is the event most likely to
+arrive right after a merchant touches onboarding, so the webhook would have
+overwritten a correct `false` with the original lie at roughly the moment
+someone checked whether the fix worked, by a path with no user action to blame.
+The fix would have appeared to work, then silently undone itself.
+
+Fixed in `3bfcc41`: the rule now exists once, in `CardChargeCapability`, and
+both callers use it. `StripeAccountSnapshotConsistencyTest` asserts **no**
+production file outside that class reads `account.getChargesEnabled()`, so a
+third builder added later fails the build.
+
+### The test fixture had already drifted
+
+`61018d5` hardcoded a stall that has since **completed onboarding** — it now
+reports `card_payments: active` and genuinely can take cards. The suite would
+have failed with a message one word away from the expected one, reading like a
+regression rather than stale data. `ef7eec8` adds a preflight that names the
+cause, plus an exact button label and an event-based wait in place of a 3s
+sleep.
 
 ---
 
@@ -133,9 +167,10 @@ Worth knowing before you conclude a retest has failed.
   "takes money, issues nothing" bug in staging would have been urgent. It is
   not there. Cards are local-only today.
 - The old broken account `acct_1UDZ7BQ0Rz45vDTA` was repaired in place by
-  requesting the capability. It now honestly reports `restricted` with
-  `business_profile.mcc`, `individual.email`, `individual.phone` due, and the
-  wallet correctly shows no Buy button.
+  requesting the capability, and **has since completed onboarding**. It now
+  reports `card_payments: active`, `charges_enabled: true` with no requirements
+  due — so that flag is now TRUE and CORRECT, which is what let your payment
+  succeed. The fix agrees with it; nothing to undo.
 
 ## Suggested next, in order
 
@@ -146,8 +181,10 @@ Worth knowing before you conclude a retest has failed.
    is unsatisfiable — money moves and nothing arrives, silently. This is
    exactly the shape of the Connect/gateway flag mismatch you fixed in
    `4ab7bf7`, and deserves the same treatment.
-4. **Finish onboarding** for a stall so an end-to-end success can be tested at
-   all.
+4. ~~**Finish onboarding** for a stall~~ — **done**. `acct_1UDZ7BQ0Rz45vDTA`
+   reports `card_payments: active` and takes real test cards, which is how the
+   paid session above was created. An end-to-end success is now testable the
+   moment the webhook is wired.
 
 ## Loose ends I left alone
 
