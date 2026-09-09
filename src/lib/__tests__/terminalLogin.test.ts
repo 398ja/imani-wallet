@@ -49,8 +49,16 @@ const loginTill = (over = {}) =>
 const parsed = parseVoucherToken(TOKEN)
 const METADATA = parsed.voucher.merchantMetadata
 const ISSUER = parsed.voucher.issuerId
-const STALL = 'b1787b2b98a5244a70d934b393e0179e7ebba0c72579b4a0b238eda3911caa02'
-const DEVICE = 'cacc220c14764bfa06f154c662aec0bb339f29a10f2f6e1edd2c83cd10dee752'
+/**
+ * The stall and device the fixture was minted for, as RECORDED BY THE MINTING
+ * SCRIPT rather than read back out of the token. Hardcoding the hex meant
+ * re-minting the fixture broke this file for no reason but a changed key.
+ */
+const MINTED = JSON.parse(
+  readFileSync(join(__dirname, 'fixtures', 'live-terminal-credential.json'), 'utf8'),
+) as { stall: string; device: string }
+const STALL = MINTED.stall
+const DEVICE = MINTED.device
 
 const login = (over = {}) =>
   loginTerminal({
