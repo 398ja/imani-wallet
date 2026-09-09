@@ -36,7 +36,11 @@ vi.mock('../../lib/branding', () => ({
   merchantBranding: (pubkey: string) =>
     Promise.resolve(
       pubkey === STALL
-        ? { organizationName: 'Rosa Green Farm', storeDescription: 'Coffee and cake' }
+        ? {
+            organizationName: 'Rosa Green Farm',
+            storeDescription: 'Coffee and cake',
+            nip05: 'rosa@example.test',
+          }
         : {},
     ),
 }))
@@ -94,14 +98,46 @@ describe('a stall’s public profile', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /Buy a voucher/ })).toBeTruthy())
   })
 
-  /*
-   * The pubkey in full. A name and a picture can be copied by anyone, coupons
-   * are per-issuer, and half a key cannot be compared against anything.
+  /**
+   * NO RAW PUBKEY. An earlier draft printed all 64 characters as "the only
+   * unforgeable thing here" — true, and not a reason. Nobody compares two
+   * 64-character strings by eye, so it bought no safety and spent the bottom of
+   * a shopper's screen on noise.
    */
-  it('shows the full pubkey, which is the only unforgeable thing here', async () => {
+  it('does not print the raw pubkey at a shopper', async () => {
     draw(STALL)
 
-    await waitFor(() => expect(screen.getByText(STALL)).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Rosa Green Farm')).toBeTruthy())
+    expect(screen.queryByText(STALL)).toBeNull()
+  })
+
+  /**
+   * Copying the handle takes the stall away with you — into a message, a note,
+   * or the wallet's own search.
+   *
+   * The assertion is on WHAT LANDS ON THE CLIPBOARD, not that a button exists.
+   * `handleLabel` strips the domain for display ("@rosa"), and copying that
+   * would produce a string that resolves to nobody — a copy button that
+   * silently yields half an address is worse than none, because the failure
+   * shows up in someone else's app.
+   */
+  it('copies the full nip05, domain included', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+
+    draw(STALL)
+    await waitFor(() => expect(screen.getByLabelText(/Copy rosa@example.test/)).toBeTruthy())
+    screen.getByLabelText(/Copy rosa@example.test/).click()
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('rosa@example.test'))
+  })
+
+  /* A stall with no handle gets no button: one that copies nothing is worse. */
+  it('offers no copy button when there is no handle', async () => {
+    draw(UNREACHABLE)
+
+    await waitFor(() => expect(screen.queryByText(/Loading/)).toBeNull())
+    expect(screen.queryByLabelText(/^Copy /)).toBeNull()
   })
 
   /**

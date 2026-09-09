@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { CreditCard, Info, KeyRound, Store, Tag } from 'lucide-react'
+import { Banknote, Check, Copy, CreditCard, Info, Tag } from 'lucide-react'
 import { nip19 } from 'nostr-tools'
 
 import { Avatar, BackLink, Button, Centered, Screen } from '../components/ui'
@@ -57,6 +57,7 @@ import type { MerchantBranding } from '../lib/pass'
 export function PublicProfilePage() {
   const { pubkey = '' } = useParams()
   const navigate = useNavigate()
+  const [copied, setCopied] = useState(false)
   const [branding, setBranding] = useState<MerchantBranding>()
   const [record, setRecord] = useState<MerchantProfile | null>()
   const [status, setStatus] = useState<MerchantStatus>()
@@ -121,6 +122,21 @@ export function PublicProfilePage() {
     }
   }, [pubkey])
 
+  const copyHandle = async (nip05: string) => {
+    try {
+      await navigator.clipboard.writeText(nip05)
+      setCopied(true)
+      // Long enough to register as confirmation, short enough to be back to
+      // normal before anyone reaches for it again. Matches BackupPages and
+      // CashbackIssuePage, so a copy button behaves the same everywhere.
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Clipboard permission is not something a shopper can act on, and the
+      // handle is on screen to be read. Failing silently beats an error about
+      // a browser setting.
+    }
+  }
+
   if (branding === undefined || record === undefined || status === undefined) {
     return <Centered>Loading…</Centered>
   }
@@ -157,7 +173,7 @@ export function PublicProfilePage() {
         )}
         <div className="flex items-center gap-4 p-5">
           <Avatar src={branding.logoUrl} name={name} pubkey={pubkey} size="xl" />
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p className="truncate text-lg font-semibold text-mono-900 dark:text-mono-50">{name}</p>
             {handle && (
               <p className="truncate text-sm text-mono-500" title={pubkey}>
@@ -165,6 +181,29 @@ export function PublicProfilePage() {
               </p>
             )}
           </div>
+          {/* Copying the handle is how a shopper takes a stall away with them —
+              into a message, a note, or the wallet's own search. Only rendered
+              for a stall that HAS one: a button that copies nothing is worse
+              than no button.
+
+              Copies the FULL nip05, not the label beside it. `handleLabel`
+              strips the domain for display ("@rosa"), and pasting that
+              elsewhere resolves to nobody — the domain is the half that makes
+              it an address. */}
+          {branding.nip05 && (
+            <button
+              type="button"
+              onClick={() => void copyHandle(branding.nip05 as string)}
+              aria-label={copied ? 'Handle copied' : `Copy ${branding.nip05}`}
+              className="pressable shrink-0 rounded-xl p-2 text-mono-400 hover:text-mono-900 dark:hover:text-mono-50"
+            >
+              {copied ? (
+                <Check className="h-5 w-5 text-green-600" aria-hidden />
+              ) : (
+                <Copy className="h-5 w-5" aria-hidden />
+              )}
+            </button>
+          )}
         </div>
       </div>
 
@@ -198,26 +237,30 @@ export function PublicProfilePage() {
       {/* What their vouchers are denominated in. Worth showing to somebody about
           to buy one: a stall issuing in a currency the shopper does not hold is
           a fact better learned here than at the card form. */}
+      {/* `Banknote`, not `Store`: this line is about MONEY, and a shopfront
+          glyph beside "GBP" reads as another fact about the premises. `Store`
+          is used elsewhere in the app for actual stalls, which is exactly what
+          made it wrong here — the same icon meaning two things is worse than a
+          plain one. */}
       {record?.issuanceCurrency && (
-        <Field icon={Store} label="Vouchers issued in">
+        <Field icon={Banknote} label="Vouchers issued in">
           <p className="text-mono-900 dark:text-mono-50">
             {record.issuanceCurrency.toUpperCase()}
           </p>
         </Field>
       )}
 
-      {/* Renders nothing when the stall has no fixed pitch, which is the common
-          case for a trader who moves around. */}
-      <LocationMap location={record?.location} label={name} className="mt-5" />
+      {/* Where to find them, when they trade somewhere fixed. Renders nothing at
+          all for a trader who moves around, which is the common case — no empty
+          frame and no heading over a blank.
 
-      {/* Last, and quiet. The pubkey is the only unforgeable thing on this page
-          — a name and a picture can be copied by anyone, and coupons are
-          per-issuer, so a shopper paying the wrong "Rosa Green Farm" is a real
-          outcome. Shown in full rather than truncated: half a key cannot be
-          compared against anything. */}
-      <Field icon={KeyRound} label="Public key">
-        <p className="break-all font-mono text-xs text-mono-500">{pubkey}</p>
-      </Field>
+          NO RAW PUBKEY on this page, deliberately. An earlier draft printed the
+          full 64 characters as "the only unforgeable thing here", which is true
+          and is not a reason: nobody compares two 64-character strings by eye,
+          so it bought no real safety and spent the bottom of a shopper's screen
+          on noise. The handle above already names them, and the pubkey is in the
+          URL for anyone who genuinely needs it. */}
+      <LocationMap location={record?.location} label={name} className="mt-5" />
     </Screen>
   )
 }
