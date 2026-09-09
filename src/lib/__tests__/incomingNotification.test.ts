@@ -93,6 +93,19 @@ describe('pickCorrelationId', () => {
     expect(pickCorrelationId({})).toBeNull()
     expect(pickCorrelationId(null)).toBeNull()
   })
+
+  /**
+   * paymentRequestId is shared across every part of a multi-part send, exactly
+   * like bundleId. If it were ever used as the correlation id, the parts would
+   * collide onto one notificationId and the broker's _AMQ_DUPL_ID dedup would
+   * drop all but the first. It is a hint for the recipient, not an identity.
+   */
+  it('never treats paymentRequestId as a correlation id', () => {
+    expect(pickCorrelationId({ paymentRequestId: 'ord-1042' })).toBeNull()
+    expect(
+      pickCorrelationId({ deliveryEventId: 'd', paymentRequestId: 'ord-1042' }),
+    ).toBe('d')
+  })
 })
 
 describe('validateEnvelope', () => {

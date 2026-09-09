@@ -70,6 +70,18 @@ export interface EnvelopeCorrelation {
   bundleId?: string | null
   deliveryEventId?: string | null
   fallbackWindowId?: string | null
+  /**
+   * The NUT-18V payment request this payment answers, when it answers one.
+   *
+   * For recipients that ISSUED a request and must credit the right thing — a
+   * WooCommerce shop learns from the envelope that it was paid, and without
+   * this cannot tell which of its open orders that settles.
+   *
+   * A hint, never an identity: it is shared across every part of a multi-part
+   * send, so `pickCorrelationId` must not consider it, for the same reason it
+   * prefers deliveryEventId over bundleId.
+   */
+  paymentRequestId?: string | null
 }
 
 export interface NotificationPart {

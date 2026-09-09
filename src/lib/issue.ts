@@ -10,6 +10,7 @@ import { issuingStall, mayIssue, type Actor } from './actor'
 import { canIssueNow, sessionState, type TerminalSession } from './terminalSession'
 import { attributionFor } from './terminalAttribution'
 import { currencyDecimals } from './format'
+import { NEVER_EXPIRES } from './merchant'
 
 /**
  * Issuing a coupon and delivering it to a customer.
@@ -253,7 +254,9 @@ async function createVoucher(params: IssueParams): Promise<IssuedVoucher> {
       face_value_minor: params.faceValueMinor,
       currency: params.currency,
       quantity: 1,
-      expiry_days: params.expiryDays,
+      // Omitted, not sent as 0: no expiry field at all is what the portal reads
+      // as a coupon that never expires, and `expiry_days` still has a @Min(1).
+      ...(params.expiryDays === NEVER_EXPIRES ? {} : { expiry_days: params.expiryDays }),
       memo: params.memo,
     },
     // No X-Auth-Pubkey from here, deliberately. The portal's NIP-98 filter does
@@ -451,7 +454,10 @@ export async function issueAndDeliver(
 
   onStage?.('minting')
   const minted = await waitForToken(created.voucher_id)
-  const ready = await waitForExpiry(minted)
+  // Nothing to wait for when none was asked for: polling a coupon that never
+  // expires spends the whole 15s grace period to confirm a field that is
+  // correctly absent, on every sale.
+  const ready = params.expiryDays === NEVER_EXPIRES ? minted : await waitForExpiry(minted)
 
   onStage?.('delivering')
   const result = await deliver(ready, params)

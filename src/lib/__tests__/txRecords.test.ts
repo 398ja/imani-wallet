@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest'
 
 import { toContent, toRow } from '../txRecords'
-import { buildIssueTransaction, buildPaymentTransaction, toTransaction } from '../transactions'
+import {
+  buildCashbackTransaction,
+  buildIssueTransaction,
+  buildPaymentTransaction,
+  toTransaction,
+} from '../transactions'
 import type { TransactionRow } from '@imani/wallet-storage'
 
 /**
@@ -107,6 +112,24 @@ describe('toContent / toRow', () => {
     expect(toTransaction(toRow(received.id, toContent(toTransaction(received)))).direction).toBe(
       'in',
     )
+  })
+
+  it('keeps the cashback id and claim code, which nothing else can give back', () => {
+    // The code went onto a paper receipt and the id is the only handle the
+    // status endpoint answers to. A restored row missing either is a cashback
+    // the merchant can neither read back nor ever check again.
+    const cashback = buildCashbackTransaction({
+      cashbackId: 'cb-77',
+      claimCode: 'A1B2C3',
+      amount: 500,
+      unit: 'XAF',
+      decimals: 0,
+      at: 1786891362412,
+    })
+    const after = toTransaction(toRow(String(cashback.id), toContent(toTransaction(cashback))))
+
+    expect(after.cashbackId).toBe('cb-77')
+    expect(after.claimCode).toBe('A1B2C3')
   })
 
   it('restores under the id the writer used, so a re-restore overwrites', () => {

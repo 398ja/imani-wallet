@@ -37,7 +37,7 @@ import { toTransaction, type WalletTransaction } from './transactions'
  */
 
 /**
- * The event content: NIP-60's shape, plus three fields it has no slot for.
+ * The event content: NIP-60's shape, plus a few fields it has no slot for.
  *
  * The extras are ours and live inside the encrypted payload, so no other reader
  * is affected by them. Dropping them instead would restore coupons with no
@@ -51,6 +51,20 @@ type HistoryContent = Nip60HistoryContent & {
   token_id?: string
   /** Spec 012 bundle correlation. */
   bundle_id?: string
+  /**
+   * The two facts a cashback row cannot be rebuilt without.
+   *
+   * Neither is recoverable from anywhere else once the device is wiped: the
+   * claim code was read out loud onto a paper receipt, and the id is the only
+   * handle `GET /portal/cashback/{id}/status` answers to. Without them a
+   * restored row says "Cashback −500 XAF" and nothing else, which is exactly
+   * the blank history this file exists to prevent.
+   *
+   * The redemption status is deliberately NOT carried: it is a cache of
+   * something the gateway will answer again as soon as the id is back.
+   */
+  cashback_id?: string
+  claim_code?: string
 }
 
 /** Exported for tests: the unit and amount conversions are the easy things to get wrong. */
@@ -78,6 +92,8 @@ export function toContent(tx: WalletTransaction): HistoryContent {
     expires_at: tx.expiresAt === undefined ? undefined : Math.floor(tx.expiresAt / 1000),
     token_id: tx.tokenId,
     bundle_id: tx.bundleId,
+    cashback_id: tx.cashbackId,
+    claim_code: tx.claimCode,
   }
 }
 
@@ -112,6 +128,8 @@ export function toRow(id: string, content: HistoryContent): TransactionRow {
     memo: content.memo,
     expiresAt: content.expires_at,
     bundleId: content.bundle_id,
+    cashbackId: content.cashback_id,
+    claimCode: content.claim_code,
   } as unknown as TransactionRow
 }
 

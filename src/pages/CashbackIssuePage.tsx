@@ -7,6 +7,8 @@ import { generateCashback, type IssuedCashback } from '../lib/cashback'
 import { gatewayConfig, DEFAULT_CASHBACK_EXPIRY_DAYS } from '../lib/config'
 import { currencyDecimals, formatDate, formatFace, parseAmountToMinor } from '../lib/format'
 import type { MerchantProfile } from '../lib/merchant'
+import { buildCashbackTransaction } from '../lib/transactions'
+import { getWallet, notifyWalletChanged } from '../lib/wallet'
 
 /**
  * Issue cashback: a coupon for someone who has not installed the app.
@@ -56,14 +58,14 @@ export function CashbackIssuePage({ merchant }: { merchant: MerchantProfile }) {
     setBusy(true)
     setError(null)
     try {
-      setIssued(
-        await generateCashback({
-          amountMinor: minor,
-          unit: merchant.issuanceCurrency,
-          memo: memo.trim() || undefined,
-          expiryDays,
-        }),
-      )
+      const cashback = await generateCashback({
+        amountMinor: minor,
+        unit: merchant.issuanceCurrency,
+        memo: memo.trim() || undefined,
+        expiryDays,
+      })
+      await record(cashback, decimals, memo.trim())
+      setIssued(cashback)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -131,6 +133,46 @@ export function CashbackIssuePage({ merchant }: { merchant: MerchantProfile }) {
       </Button>
     </Screen>
   )
+}
+
+/**
+ * The merchant's own record of the code, written for the same reason every
+ * other merchant row is: nothing else on this device holds it.
+ *
+ * Without it a cashback leaves no trace at all — the code goes onto a paper
+ * receipt and the merchant has no way to find it again, let alone ask whether
+ * it was ever redeemed. The row is what the transaction detail screen looks the
+ * status up BY.
+ *
+ * Non-fatal but never silent, matching `issueAndDeliver`: the code has already
+ * been minted and is about to go on screen, so throwing here would report a
+ * live cashback as a failed one. A missing history entry beats a phantom
+ * failure.
+ */
+async function record(issued: IssuedCashback, decimals: number, memo: string): Promise<void> {
+  try {
+    const expiresAt = Date.parse(issued.expiresAt)
+    await getWallet().addTransaction(
+      buildCashbackTransaction({
+        cashbackId: issued.cashbackId,
+        claimCode: issued.claimCode,
+        amount: issued.amountMinor,
+        unit: issued.unit,
+        decimals,
+        memo: memo || undefined,
+        // Epoch SECONDS, as the builder documents and as every other expiry on
+        // the wire is carried.
+        expiresAt: Number.isNaN(expiresAt) ? undefined : Math.floor(expiresAt / 1000),
+        at: Date.now(),
+      }),
+    )
+    // The relay copy rides along with the write — `openWallet` wraps
+    // `addTransaction` — but a write made by this tab is not echoed back to it,
+    // so the history screen behind this one needs telling. Same as issue.ts.
+    notifyWalletChanged()
+  } catch (error) {
+    console.error('[cashback] issuance not recorded in history', error)
+  }
 }
 
 /**

@@ -1,7 +1,13 @@
 import { useState } from 'react'
 
 import { Input } from './ui'
-import { MAX_VALIDITY_DAYS, MIN_VALIDITY_DAYS, validValidityDays, validityChoices } from '../lib/merchant'
+import {
+  MAX_VALIDITY_DAYS,
+  MIN_VALIDITY_DAYS,
+  NEVER_EXPIRES,
+  validValidityDays,
+  validityChoices,
+} from '../lib/merchant'
 
 /**
  * How long a coupon stays valid: the stall's own term, a preset, or a typed one.
@@ -40,6 +46,17 @@ export function ValidityPicker({
 
   const choices = validityChoices(defaultDays)
 
+  /**
+   * The custom field means a DAY COUNT, and 0 is not one — "never" is the chip
+   * beside it. Without this, typing 0 quietly selects never-expiring while the
+   * Custom chip stays pressed, the Never chip stays unlit and the field's own
+   * `min={MIN_VALIDITY_DAYS}` says 1.
+   */
+  const typedDays = (raw: string) => {
+    const days = validValidityDays(raw)
+    return days === NEVER_EXPIRES ? null : days
+  }
+
   return (
     <div>
       <span className="mb-2 block text-sm font-medium text-mono-700 dark:text-mono-300">
@@ -67,7 +84,7 @@ export function ValidityPicker({
               aria-pressed={active}
               className={chip(active)}
             >
-              {days} days
+              {days === NEVER_EXPIRES ? 'Never expires' : `${days} days`}
               {days === defaultDays && choices.length > 1 && (
                 <span className="ml-1 opacity-60">· default</span>
               )}
@@ -105,12 +122,12 @@ export function ValidityPicker({
             autoFocus
             onChange={(e) => {
               setCustom(e.target.value)
-              onChange(validValidityDays(e.target.value))
+              onChange(typedDays(e.target.value))
             }}
             // Silent while the field is still empty — a blank field is not yet
             // a mistake, it is a field nobody has typed in.
             error={
-              custom !== '' && validValidityDays(custom) === null
+              custom !== '' && typedDays(custom) === null
                 ? `Enter a whole number of days between ${MIN_VALIDITY_DAYS} and ${MAX_VALIDITY_DAYS}.`
                 : undefined
             }
