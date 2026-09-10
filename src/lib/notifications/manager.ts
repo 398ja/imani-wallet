@@ -155,7 +155,14 @@ export async function enableNotifications(pubkey: string): Promise<EnableResult>
   if (!subscription) {
     return {
       ok: false,
-      reason: 'Could not register this device for notifications.',
+      // The transport knows things this layer cannot infer. A private window is
+      // the case that matters: everything above says yes — usable, permission
+      // granted, VAPID key in hand — and the browser still refuses, with the
+      // thrown error as the only clue. Falling back to the generic sentence
+      // when it has nothing better to add.
+      reason:
+        active.describeLastFailure?.() ??
+        'Could not register this device for notifications.',
       status: await readStatus(pubkey),
     }
   }

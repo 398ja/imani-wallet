@@ -78,4 +78,15 @@ export interface PushTransport {
 
   /** The active registration, if any, without creating one. */
   current(): Promise<TransportSubscription | null>
+
+  /**
+   * Why the last `subscribe` returned null, in words worth showing a user.
+   *
+   * Optional, because a transport may have nothing better to say than the
+   * caller's generic message. It exists because some refusals are only
+   * distinguishable from the thrown error: Chrome refuses Push in a private
+   * window with a bare "permission denied" even when permission is granted,
+   * and documents that there is deliberately no way to feature-detect it.
+   */
+  describeLastFailure?(): string | null
 }
