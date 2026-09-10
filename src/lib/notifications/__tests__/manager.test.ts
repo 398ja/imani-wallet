@@ -166,6 +166,13 @@ describe('notification manager', () => {
 
     const deleteCall = vi.mocked(signedFetch).mock.calls.find((call) => call[1] === 'DELETE')
     expect(deleteCall).toBeTruthy()
+    // The DELETE MUST carry a body, even an empty one. Nip98AuthFilter counts
+    // DELETE as a write and requires a `payload` tag; signedFetch only adds
+    // that tag when there is a body to hash. Without it the gateway answers
+    // 401 AUTH_002 and unsubscribe silently never works — the settings screen
+    // would say notifications are off while the server kept pushing. Verified
+    // against the live gateway: bodyless 401, with {} 204.
+    expect(deleteCall?.[2]).toBeDefined()
     expect(loadPreferences(PUBKEY).enabled).toBe(false)
   })
 

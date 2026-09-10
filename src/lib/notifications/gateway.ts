@@ -108,7 +108,19 @@ export async function updatePreferences(
 export async function deleteSubscription(pubkey: string, endpoint: string): Promise<boolean> {
   try {
     const hash = await hashEndpoint(endpoint)
-    const response = await signedFetch(`${BASE}/subscriptions/${pubkey}/${hash}`, 'DELETE')
+    /*
+     * The empty object is load-bearing, not decoration.
+     *
+     * `Nip98AuthFilter` requires a `payload` tag on every WRITE method, and it
+     * counts DELETE as a write. `signedFetch` only adds that tag when there is
+     * a body to hash, so a bodyless DELETE is signed without one and the
+     * gateway answers 401 AUTH_002 "NIP-98 payload tag required for DELETE" —
+     * meaning unsubscribe could never succeed, and the settings screen would
+     * report notifications off while the server kept pushing to a row it still
+     * held. Found by running this against the live gateway; every unit test
+     * mocked signedFetch and so agreed with the bug.
+     */
+    const response = await signedFetch(`${BASE}/subscriptions/${pubkey}/${hash}`, 'DELETE', {})
     return response.ok
   } catch (e) {
     console.warn('[push] could not remove the subscription:', e)
