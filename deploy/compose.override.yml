@@ -364,6 +364,21 @@ services:
       - "127.0.0.1.mint:${MINT_HOST_IP:?set MINT_HOST_IP to the mint container ip}"
     environment:
       GATEWAY_DEV_MODE: "false"
+      # Web Push, so /api/v1/push/vapid-key answers with a key instead of 503.
+      #
+      # The controller returns SERVICE_UNAVAILABLE when the public key is blank,
+      # which is correct and is what this stack did until now: the endpoint, the
+      # table and WebPushService all existed and no deployment had ever been
+      # given keys, so no client could subscribe.
+      #
+      # A P-256 keypair per RFC 8292: public is the uncompressed EC point
+      # (0x04 || X || Y) base64url-encoded, private is the raw 32-byte scalar.
+      # These are LOCAL-ONLY throwaways and belong in a dev override precisely
+      # because they are worthless — a real deployment sets them from its own
+      # secret store, and rotating them invalidates every existing subscription.
+      PUSH_VAPID_PUBLIC_KEY: "${PUSH_VAPID_PUBLIC_KEY:-BJIZJlUZ2Snzfu7LhOtqdq-p_IB7gTpphY8UMB2UBo5LO8yh9mpP_nqAL09eWE6CDIL1nD8EcTnqqC_VTgNiNqg}"
+      PUSH_VAPID_PRIVATE_KEY: "${PUSH_VAPID_PRIVATE_KEY:-751x9HPRVS_EsxL7VMz2PqPbz3rKRST8M1adz0xKEeI}"
+      PUSH_VAPID_SUBJECT: "${PUSH_VAPID_SUBJECT:-mailto:dev@localhost}"
       # And the second thing the account-app block documents, for the same
       # reason: NostrPreWarmer takes a HARD constructor dependency on
       # CachingNostrGatewayDecorator, which is @ConditionalOnBean and off by
