@@ -28,6 +28,23 @@
  *
  * If you are unsure whether your change altered the shape, re-record. This is
  * for the case where you have looked and it plainly did not.
+ *
+ * ## What re-stamping cannot rescue
+ *
+ * Worth knowing, because the current fixtures hit it. Re-stamping fixes the
+ * STAMP; it cannot fix data that is genuinely out of date. The committed
+ * snapshots were recorded when every wallet had a device passphrase, and
+ * `013d00a` (make the device passphrase optional, on main since 2026-09-07)
+ * changed how a stored wallet unlocks. So the perf run now gets past every
+ * fixture load, measures cold-boot, and then fails with
+ *
+ *   the wallet did not unlock with the fixture passphrase
+ *
+ * That one really does need `perf:record`, which needs a mint that can sign —
+ * see the vault block in deploy/compose.override.yml for why this machine's
+ * cannot. Re-stamping was still worth doing: it moved the failure from the
+ * first fixture load to the first scenario that depends on stale data, which
+ * is the difference between "measures nothing" and "measures cold boot".
  */
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
