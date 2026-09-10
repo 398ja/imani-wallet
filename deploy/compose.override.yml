@@ -57,6 +57,39 @@ services:
   #
   # The store itself is already here: the cashu-mint compose stack runs a
   # dev-mode HashiCorp Vault, and connecting it to this network is enough.
+  #
+  # ---------------------------------------------------------------------------
+  # THIS MACHINE IS ALREADY PAST THAT POINT, and the mint cannot sign.
+  #
+  # Observed 2026-09-10: any flow that MINTS dies with
+  #
+  #   PrivateKey.fromString: s is marked non-null but is null
+  #
+  # which is precisely the failure described above. Confirmed cause, in order:
+  #
+  #   - t_key has no `private_key` column, so V3 has already run here.
+  #   - every row carries a `vault_path` and reads back `privateKey: null`.
+  #   - VAULT_HASHI_ENABLED is false, so nothing resolves those paths.
+  #   - the running HashiCorp Vault has NO `cashu` mount at all, so the
+  #     migration below was never run against it.
+  #
+  # `migrate-keys-to-hashi.sh` cannot repair this. It refuses on purpose once
+  # `private_key` is gone, because the plaintext it would copy no longer exists
+  # anywhere — the recipe above only ever worked BEFORE V3.
+  #
+  # Two ways out, both deployment decisions rather than code:
+  #
+  #   1. Restore imani-vault-db from a backup taken before V3, run the
+  #      migration, then bring the stack up with VAULT_HASHI_ENABLED=true.
+  #   2. Accept a NEW keyset. All 27,647 proofs in this database are SPENT and
+  #      the single keyset holds no live value, so on THIS machine that costs
+  #      nothing — but it is still a data decision, and it is not one a change
+  #      to some other feature should make on its way past.
+  #
+  # Until one of those happens, reads work (the mint serves /v1/keys and
+  # /v1/keysets from cached public material) and every write fails. That is why
+  # the perf fixtures cannot be re-recorded: recording seeds a wallet by minting.
+  # ---------------------------------------------------------------------------
   imani-vault-jpa:
     image: ${VAULT_JPA_IMAGE:-docker.398ja.xyz/staging/cashu-vault-jpa:latest}
     environment:
