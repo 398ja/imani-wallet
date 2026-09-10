@@ -145,8 +145,24 @@ export class WebPushTransport implements PushTransport {
   private async registration(): Promise<ServiceWorkerRegistration | null> {
     try {
       const existing = await navigator.serviceWorker.getRegistration()
-      if (existing) return existing
-      return await navigator.serviceWorker.register(SERVICE_WORKER_PATH, { scope: '/' })
+      const registration = existing ?? (await navigator.serviceWorker.register(SERVICE_WORKER_PATH, { scope: '/' }))
+
+      // `register()` resolves as soon as the REGISTRATION exists, which is not
+      // the same as having a worker running. `pushManager.subscribe` needs an
+      // ACTIVE one and fails with
+      //
+      //   Subscription failed - no active Service Worker
+      //
+      // otherwise. On a first enable in a fresh profile that is the normal
+      // case, not an edge one: the user taps, the worker is still installing,
+      // and the tap fails for no reason they could act on. Observed exactly
+      // that in a real browser before this wait existed.
+      //
+      // `navigator.serviceWorker.ready` resolves once a worker is active for
+      // this scope, which is the condition subscribe actually needs.
+      if (!registration.active) await navigator.serviceWorker.ready
+
+      return registration
     } catch (e) {
       console.warn('[push] service worker registration failed:', e)
       return null
@@ -180,9 +196,45 @@ export class WebPushTransport implements PushTransport {
       return this.toTransportSubscription(subscription)
     } catch (e) {
       console.warn('[push] subscribe failed:', e)
+      // Kept so the caller can say something useful. A private window is the
+      // case that matters: Chrome refuses Push there with a plain
+      // "Registration failed - permission denied" even when permission IS
+      // granted, and states outright that there is deliberately no way to
+      // feature-detect it (crbug.com/41124656). The thrown error is the only
+      // signal available, so it has to survive this catch.
+      this.lastError = e instanceof Error ? e : new Error(String(e))
       return null
     }
   }
+
+  /**
+   * Why the last `subscribe` failed, in words worth showing.
+   *
+   * Null when the failure has no better explanation than the generic one.
+   */
+  describeLastFailure(): string | null {
+    const message = this.lastError?.message ?? ''
+    // Permission is checked and granted before subscribe() is ever called, so
+    // a permission error HERE means the browser refuses Push for this context
+    // rather than for this site — which in practice is a private window.
+    if (/permission denied/i.test(message)) {
+      return 'Private windows cannot receive notifications. Open Imani in a normal window and try again.'
+    }
+    // The worker registered but has not finished activating. Observed on a
+    // FIRST enable in a fresh profile: `register()` resolves as soon as the
+    // registration object exists, while `pushManager.subscribe` needs an
+    // ACTIVE worker, so the two race and the tap fails with nothing wrong.
+    // Retrying genuinely works, which is what makes this worth saying.
+    if (/no active service worker/i.test(message)) {
+      return 'Notifications are still starting up on this device. Try again in a moment.'
+    }
+    if (/push service (not available|error)/i.test(message)) {
+      return 'This browser could not reach its notification service. Check your connection and try again.'
+    }
+    return null
+  }
+
+  private lastError: Error | null = null
 
   async unsubscribe(): Promise<void> {
     const registration = await navigator.serviceWorker?.getRegistration()
