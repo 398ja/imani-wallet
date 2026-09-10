@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 
 import { Avatar } from './Avatar'
+import { NotificationBell } from './NotificationBell'
 import { profileHandle, profileName, type Profile } from '../../lib/profile'
 
 /**
@@ -114,6 +115,13 @@ export function Header({
           </svg>
           imani
         </Link>
+
+        {/* The bell sits between the lockup and the menu: notifications are
+            checked far more often than Settings or Log out, and the trailing
+            edge is where the thumb already is. Terminals are excluded — a till
+            in someone else's hands has no inbox of its own, and the stall's
+            arrivals are the owner's business. */}
+        {!terminal && <NotificationBell pubkey={profile.pubkey} />}
 
         <details
           ref={menu}
