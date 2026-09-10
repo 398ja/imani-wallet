@@ -105,12 +105,19 @@ export function NotificationSettingsPage({ pubkey }: { pubkey: string }) {
         </p>
       ) : (
         <>
+          {/* When permission is blocked the switch is disabled, because
+              tapping it cannot do anything: a browser will not re-prompt once
+              denied. The hint has to change with it — "Your device will ask
+              for permission" over a dead control is a lie, and it is the exact
+              state a headless browser and a real blocked user both land in. */}
           <Switch
             label={on ? 'Notifications are on' : 'Turn on notifications'}
             hint={
-              on
-                ? 'This device will be told about the events below.'
-                : 'Your device will ask for permission.'
+              blocked
+                ? 'Blocked in your browser or system settings. Allow them for Imani there, then come back.'
+                : on
+                  ? 'This device will be told about the events below.'
+                  : 'Your device will ask for permission.'
             }
             checked={on}
             disabled={busy || blocked}
