@@ -1123,5 +1123,12 @@
       "sameSite": "Lax"
     }
   ],
-  "sourceHash": "7cfbfce2773d3440"
+  "sourceHash": "0b92a81726710e72",
+  "restamped": [
+    {
+      "at": "2026-09-10T23:18:25.651Z",
+      "from": "7cfbfce2773d3440",
+      "because": "2f3ddee added recordCashbackStatus to wallet.ts and optional cashback fields to txRecords.ts; no database name, version or store definition changed, so the recorded data is still exactly what this build produces"
+    }
+  ]
 }
