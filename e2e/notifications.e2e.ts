@@ -73,6 +73,24 @@ function notification(id: string, title: string, readAt: number | null = null) {
   }
 }
 
+
+/**
+ * Wait for the wallet to finish booting, then open the bell.
+ *
+ * A fixed `waitForTimeout` after navigation was the source of a real flake:
+ * three consecutive runs scored 22, 8 and 18 checks. Boot does relay work
+ * whose duration is not fixed, so any constant is either too short sometimes
+ * or wasted always. Waiting for the bell ITSELF is the honest condition —
+ * it only renders once the authed app has mounted.
+ */
+async function openBell(): Promise<void> {
+  const bell = page.locator('summary[aria-label^="Notifications"]')
+  await bell.waitFor({ state: 'visible', timeout: 30_000 })
+  await bell.click()
+  // The panel is a <details>; give it the frame it needs to paint.
+  await page.locator('nav').first().waitFor({ state: 'visible', timeout: 10_000 })
+}
+
 async function main() {
   browser = await chromium.launch()
   const context = await browser.newContext()
@@ -88,9 +106,18 @@ async function main() {
   // ── REQUIREMENT: a notification icon in the header ──────────────────
   console.log('The bell')
   await goto(page, BASE)
-  await page.waitForTimeout(800)
 
   const bell = page.locator('summary[aria-label^="Notifications"]')
+  // The first check is also the boot wait: if the bell never appears, this
+  // fails as "bell is in the shipped header", which is the truth.
+  await bell.waitFor({ state: 'visible', timeout: 30_000 }).catch(() => {})
+  // Report what the page DID show when the bell is missing. A bare 30s
+  // timeout says only that something was slow; the failing runs here turned
+  // out to be the wallet not finishing its boot at all, which this names.
+  if ((await bell.count()) === 0) {
+    const shown = (await page.locator('body').innerText()).slice(0, 200)
+    console.log(`  (no bell at ${page.url()} — page shows: ${JSON.stringify(shown)})`)
+  }
   check('bell is in the shipped header', (await bell.count()) === 1)
 
   // ── REQUIREMENT: it shows there is something new ────────────────────
@@ -101,7 +128,7 @@ async function main() {
 
   await seedInbox(pubkey, [notification('e2e-1', 'First coupon'), notification('e2e-2', 'Second coupon')])
   await goto(page, BASE)
-  await page.waitForTimeout(800)
+  await page.locator('summary[aria-label^="Notifications"]').waitFor({ state: 'visible', timeout: 30_000 })
   check(
     'unread count reaches a screen reader',
     (await page.locator('summary[aria-label="Notifications, 2 unread"]').count()) === 1,
@@ -132,15 +159,14 @@ async function main() {
 
   // The read state has to survive a reload, or "read" means nothing.
   await goto(page, BASE)
-  await page.waitForTimeout(800)
+  await page.locator('summary[aria-label^="Notifications"]').waitFor({ state: 'visible', timeout: 30_000 })
   check(
     'read state survives a reload',
     (await page.locator('summary[aria-label="Notifications, 1 unread"]').count()) === 1,
   )
 
   // ── REQUIREMENT: mark them as read collectively ─────────────────────
-  await page.locator('summary[aria-label^="Notifications"]').click()
-  await page.waitForTimeout(300)
+  await openBell()
   await page.getByRole('button', { name: /mark all read/i }).click()
   await page.waitForTimeout(500)
 
@@ -154,7 +180,7 @@ async function main() {
   )
 
   await goto(page, BASE)
-  await page.waitForTimeout(800)
+  await page.locator('summary[aria-label^="Notifications"]').waitFor({ state: 'visible', timeout: 30_000 })
   check(
     'mark-all survives a reload too',
     (await page.locator('summary[aria-label="Notifications"]').count()) === 1,
@@ -163,9 +189,7 @@ async function main() {
   // ── REQUIREMENT: an empty inbox says what will appear ───────────────
   await seedInbox(pubkey, [])
   await goto(page, BASE)
-  await page.waitForTimeout(800)
-  await page.locator('summary[aria-label^="Notifications"]').click()
-  await page.waitForTimeout(300)
+  await openBell()
   check(
     'empty state says what WILL appear here',
     await page.getByText(/coupons you receive/i).isVisible(),
