@@ -5,6 +5,7 @@ import { Bell, CheckCheck } from 'lucide-react'
 import {
   listNotifications,
   markAllRead,
+  isUnread,
   markRead,
   subscribeToNotifications,
   type InboxItem,
@@ -50,7 +51,10 @@ export function NotificationBell({ pubkey }: { pubkey: string }) {
     () => listNotifications(pubkey),
   )
 
-  const unread = items.filter((item) => item.readAt === null).length
+  // Counted from the array being rendered, not re-read from storage, so the
+  // badge can never disagree with the list below it. `isUnread` is inbox.ts's
+  // definition, shared so the two cannot drift apart.
+  const unread = items.filter(isUnread).length
 
   const open = (item: InboxItem) => {
     markRead(pubkey, item.id)
@@ -126,7 +130,7 @@ export function NotificationBell({ pubkey }: { pubkey: string }) {
                       drawn, so titles align down the list rather than shifting
                       left as rows are read. */}
                   <span className="flex w-2 shrink-0 justify-center pt-1.5">
-                    {item.readAt === null && (
+                    {isUnread(item) && (
                       <span
                         aria-hidden="true"
                         className="h-2 w-2 rounded-full bg-blue-500"
@@ -136,7 +140,7 @@ export function NotificationBell({ pubkey }: { pubkey: string }) {
                   <span className="min-w-0 flex-1">
                     <span
                       className={`block text-[15px] ${
-                        item.readAt === null
+                        isUnread(item)
                           ? 'font-semibold text-mono-900 dark:text-mono-50'
                           : 'font-medium text-mono-500'
                       }`}
