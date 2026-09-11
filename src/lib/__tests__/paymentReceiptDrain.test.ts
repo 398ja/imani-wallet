@@ -15,17 +15,24 @@ const SENDER = '35f7a28b6adc9a923686a4506a02cae0fcf634cb32f42675872a5bd07d67af47
 const REDEEMER = '315042c05c30c54877e48a3fdfa64ece0a44b860e8afba2831163b6dd336ac73'
 
 const nip44Decrypt = vi.fn(() => JSON.stringify({ v: 1, faceValue: 150, faceUnit: 'GBP', redeemedAt: 1789152856 }))
-const signedFetch = vi.fn()
-const recordNotification = vi.fn(() => true)
+// Both typed with the REAL parameter lists of the functions they stand in for,
+// so `mock.calls[0]` is a tuple instead of `[]`. A bare `vi.fn()` makes every
+// destructuring below need an `as` cast, which tsc rejects — and a cast that
+// compiled would assert the call's shape rather than check it.
+const signedFetch = vi.fn(
+  async (_path: string, _method: string, _payload?: unknown, _signer?: unknown) =>
+    new Response(null, { status: 200 }),
+)
+const recordNotification = vi.fn((_pubkey: string, _item: Record<string, unknown>) => true)
 
 vi.mock('../nap', () => ({
   getSigner: () => ({ pubkey: SENDER, nip44Decrypt }),
 }))
 vi.mock('../nip98', () => ({
-  signedFetch: (...args: unknown[]) => signedFetch(...(args as [])),
+  signedFetch: (...args: Parameters<typeof signedFetch>) => signedFetch(...args),
 }))
 vi.mock('../notifications/inbox', () => ({
-  recordNotification: (...args: unknown[]) => recordNotification(...(args as [])),
+  recordNotification: (...args: Parameters<typeof recordNotification>) => recordNotification(...args),
 }))
 
 function drainResponse(body: unknown, status = 200): Response {
