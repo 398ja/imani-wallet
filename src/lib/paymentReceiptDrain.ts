@@ -1,3 +1,4 @@
+import { displayDecimals, formatFace } from './format'
 import { getSigner } from './nap'
 import { signedFetch } from './nip98'
 import { recordNotification } from './notifications/inbox'
@@ -76,9 +77,20 @@ function fileReceipt(pubkey: string, delivery: ReceiptDelivery): boolean {
     return false
   }
 
+  // Face values are MINOR units. Interpolating one raw renders a 72p claim as
+  // "72 GBP" — off by two decimal places, in the direction that reads as a far
+  // larger payment than it was.
+  //
+  // formatFace is the wallet's own answer and is used by the arrival toast, so
+  // the two notifications for one coupon agree. It takes the decimals rather
+  // than assuming 2, because zero-decimal currencies exist and a 5000 XAF
+  // coupon must not render as "50.00".
   const amount =
     payload.faceValue != null && payload.faceUnit
-      ? `${payload.faceValue} ${payload.faceUnit}`
+      ? formatFace(payload.faceValue, {
+          unit: payload.faceUnit,
+          decimals: displayDecimals(payload.faceUnit, payload.faceDecimals),
+        })
       : 'Your voucher'
 
   return recordNotification(pubkey, {

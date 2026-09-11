@@ -82,7 +82,10 @@ describe('payment receipt drain', () => {
     expect(pubkey).toBe(SENDER)
     expect(item.type).toBe('voucher_claimed')
     expect(item.title).toBe('Voucher Claimed')
-    expect(item.body).toContain('150 GBP')
+    // Formatted, not interpolated raw. 150 minor units is £1.50, and the
+    // reported bug was a 0.72 claim rendering as "72".
+    expect(item.body).toContain('1.50')
+    expect(item.body).not.toContain('150 GBP')
     // The gateway's own id, so a claim arriving by push AND by drain collapses.
     expect(item.id).toBe('r1')
 
