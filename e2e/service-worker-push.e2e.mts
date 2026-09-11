@@ -148,6 +148,84 @@ const escaped = after.filter((u) => {
 })
 check('a backslash url cannot escape the origin, in a real browser', escaped.length === 0, JSON.stringify(after))
 
+// ── Does TAPPING it actually navigate, and only within the origin? ──
+//
+// The unit test asserts openWindow was CALLED with '/receive' on a mock. That
+// proves intent, not that a browser goes anywhere. Playwright exposes the real
+// worker, so dispatch a genuine notificationclick INSIDE it and watch where
+// the page lands.
+const [worker] = ctx.serviceWorkers()
+check('playwright sees the real service worker', !!worker, worker?.url() ?? 'none')
+
+// Park the page somewhere else first, so a navigation is observable.
+await page.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })
+
+// A hostile payload: this is the open redirect, dispatched through the click
+// path rather than the push path, because the click handler sanitises
+// separately (event.notification.data.url is attacker-influenced too).
+// Passed as a STRING, not a function. tsx compiles arrow functions through
+// esbuild, which injects a `__name` helper that does not exist inside a
+// service worker, so the function form dies with "__name is not defined".
+await worker.evaluate(
+  "(async () => {" +
+    "const ev = new Event('notificationclick');" +
+    "ev.notification = { data: { url: '/\\\\evil.example/steal', type: 'voucher_received' }, close: function () {} };" +
+    "ev.waitUntil = function (p) { void p; };" +
+    "self.dispatchEvent(ev);" +
+    "await new Promise(function (r) { setTimeout(r, 400); });" +
+  "})()",
+)
+
+await page.waitForTimeout(1200)
+const url = page.url()
+check(
+  'a tapped notification never leaves the origin',
+  new URL(url).origin === BASE,
+  url,
+)
+// The worker navigates to the sanitised '/receive'; a logged-out wallet then
+// redirects that to '/onboarding' (verified: /receive -> /onboarding when no
+// session). Either is correct here. What would NOT be correct is evil.example,
+// and the origin check above is what rules that out.
+//
+// Be honest about what this pair does and does not prove. Measured by putting
+// the OLD vulnerable walletRoute back: these two still passed. The reason is
+// that this path reaches `client.navigate()`, which the browser itself refuses
+// cross-origin, and sw.js swallows that rejection — so the page stays put
+// whether or not the sanitiser works. Real defence in depth, and a blunt test.
+//
+// The sanitiser is what guards the OTHER branch, `clients.openWindow()`, taken
+// when no wallet window is open; that one the browser will happily follow
+// anywhere. The check below covers it, and it DOES fail against the old code.
+check(
+  'and a hostile url lands on a wallet route, not the attacker one',
+  ['/receive', '/onboarding'].includes(new URL(url).pathname),
+  new URL(url).pathname,
+)
+
+// The unprotected branch: no window open, so the worker calls openWindow(),
+// which is NOT origin-restricted. What it receives is the url the push handler
+// stored on the notification, so that value is the thing worth checking.
+// Read what the worker ACTUALLY stored on the notifications it built for those
+// payloads — that value is what openWindow would receive.
+const storedUrls = await page.evaluate(async () => {
+  const reg = await navigator.serviceWorker.getRegistration()
+  const list = (await reg?.getNotifications()) ?? []
+  return list.map((n) => (n.data as { url?: string } | undefined)?.url)
+})
+const leaks = storedUrls.filter((u) => {
+  try {
+    return new URL(String(u), 'https://wallet.example').origin !== 'https://wallet.example'
+  } catch {
+    return true
+  }
+})
+check(
+  'nothing openWindow could receive points off-origin',
+  leaks.length === 0,
+  JSON.stringify(storedUrls),
+)
+
 console.log(failures.length ? `\n${failures.length} FAILED` : '\nAll checks passed.')
 await ctx.close()
 process.exit(failures.length ? 1 : 0)
