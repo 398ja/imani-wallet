@@ -222,9 +222,23 @@ first time.
 So the honest statement is: the empty rung needs nothing, and every populated
 rung needs a reachable auth endpoint. On a laptop the local stack provides it.
 In CI it does not, which is why `.github/workflows/perf.yml` currently stops
-after `cold-boot`. Closing that gap means either standing a gateway up in the
-workflow, or giving the fixtures a way to boot unlocked — and the second is a
-security decision about the resume record, not a CI tweak.
+after `cold-boot`. Closing that gap has one fewer option than it looks.
+
+The tempting fix is to stub `/auth/init` and `/auth/complete` in `serve()`.
+It is a two-step nostr challenge handshake and the harness could answer it in
+about thirty lines. **Do not.** Unlock is INSIDE the measured window on every
+populated rung — `coldBoot.ts` sets `unlockedMs = Date.now() - started` after
+it, because a returning customer really does pay for the unlock. A stub
+answering in ~0ms where a gateway takes a round trip would not make CI measure
+the same thing faster; it would make CI measure a DIFFERENT quantity and
+report it against baselines recorded through a real gateway. A green run that
+compares two different quantities is worse than a red one.
+
+So the honest options are: stand a real gateway up in the workflow, or move
+unlock out of the measured window and accept that the populated rungs then
+under-report a returning customer's boot. The first costs CI minutes, the
+second costs fidelity. Both are real decisions, and neither is a tweak, which
+is why the workflow stops after `cold-boot` rather than guessing.
 
 The rungs matter as a **pair**. An empty wallet boots fast no matter how badly
 storage scales, so the empty number alone cannot see the cost that matters. And
