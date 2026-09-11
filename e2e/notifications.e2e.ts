@@ -224,6 +224,31 @@ async function main() {
     bodyText.includes('while the app is open'),
   )
 
+  // ── REQUIREMENT: apple-design on the new components ─────────────────
+  // Claimed in review; checked here rather than by reading class names,
+  // because a token can be present and still not apply.
+  console.log('\nCraft')
+  await goto(page, BASE)
+  const target = page.locator('summary[aria-label^="Notifications"]')
+  await target.waitFor({ state: 'visible', timeout: 30_000 })
+  const box = await target.boundingBox()
+  check(
+    'the bell is a 44px touch target',
+    (box?.width ?? 0) >= 44 && (box?.height ?? 0) >= 44,
+    `${Math.round(box?.width ?? 0)}x${Math.round(box?.height ?? 0)}`,
+  )
+
+  await openBell()
+  const material = await page
+    .locator('nav')
+    .first()
+    .evaluate((el) => getComputedStyle(el).backdropFilter)
+  check(
+    'the panel is a translucent material, not an opaque slab',
+    material !== 'none' && material.includes('blur'),
+    material,
+  )
+
   // ── REQUIREMENT: the PWA pieces push depends on ─────────────────────
   console.log('\nDelivery')
   const manifest = await page.evaluate(async () => {
