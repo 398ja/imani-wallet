@@ -46,11 +46,41 @@ cp ~/Downloads/google-services.json android/app/google-services.json
 npm run build && npx cap sync android
 ```
 
+`cap sync` is not optional here and is safe to run: it regenerates only
+`android/app/capacitor.build.gradle` and `android/capacitor.settings.gradle`,
+leaving the hand-edited `android/app/build.gradle` (and its conditional
+google-services block) untouched. Verified 2026-09-11.
+
+It matters because it is what registers the plugin with the Android project.
+Adding `@capacitor/push-notifications` to `package.json` is NOT enough: until
+sync runs, the generated gradle files never reference
+`:capacitor-push-notifications`, so the plugin is absent from the built app and
+the native transport would ask for a token from something that is not there.
+This repository was in exactly that state until the sync was run, which is why
+the registration is committed alongside this note.
+
+Registering it pulls in `com.google.firebase:firebase-messaging`, so the first
+build after sync needs network access; `--offline` fails with an unresolved
+dependency rather than anything more informative.
+
 `android/app/build.gradle` already applies the `com.google.gms.google-services`
-plugin **conditionally**, only when that file exists, and logs a warning when it
-does not. So the presence of the file is the entire client-side switch. It is
-gitignored deliberately: it identifies your Firebase project and does not belong
-in the repository.
+plugin **conditionally**, only when that file exists. So the presence of the
+file is the entire client-side switch. It is gitignored deliberately: it
+identifies your Firebase project and does not belong in the repository.
+
+Verified 2026-09-11 rather than assumed, since "just drop the file in" is the
+kind of claim that is wrong in an expensive way:
+
+- **Without the file**, `./gradlew :app:processDebugManifest` succeeds. The
+  missing credentials do not break the Android build, they only mean push is
+  never registered. Note the plugin's own message goes to `logger.info`, which
+  you will not see at default log level — absence is silent by design.
+- **With a malformed file**, the build FAILS loudly:
+  `Missing project_info object`, exit 1. So a wrong or truncated download
+  cannot slip through and leave you debugging a device that simply never gets
+  a token.
+
+That asymmetry is the useful part: no file is quiet, a bad file is loud.
 
 Verify on a real device, because an emulator without Play Services will not
 register:
