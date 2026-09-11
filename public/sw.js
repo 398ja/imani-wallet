@@ -166,6 +166,26 @@ async function notifyClients(payload) {
   }
 }
 
+/**
+ * No action BUTTONS, deliberately, and this is a divergence from imani-apps.
+ *
+ * Its `handlers.ts` attaches per-type actions — `voucher_received` gets "View"
+ * and "Use Now", `voucher_expiring` gets "Remind Later" — and branches on
+ * `event.action` to pick a URL. Not copied, for two reasons:
+ *
+ *  1. The URLs do not exist here. "Use Now" opens `/voucher/<id>/use`; this
+ *     SPA has `/coupon/:tokenId` and no `/use` route at all, so the button
+ *     would land on a 404 from the lock screen.
+ *  2. "Use Now" is a money action one tap from a locked phone, with no
+ *     authentication between the tap and a coupon being spent. A wallet should
+ *     not offer that; opening the wallet and letting the user choose is the
+ *     whole point.
+ *
+ * ("Remind Later" is a no-op in imani-apps too: its handler logs and closes.)
+ *
+ * So the tap has exactly one meaning — open the wallet at the right screen —
+ * and `event.action` is ignored because nothing ever sets it.
+ */
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
   const target = walletRoute(event.notification.data && event.notification.data.url) || '/'

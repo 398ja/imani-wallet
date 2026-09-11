@@ -89,12 +89,18 @@ export async function updatePreferences(
       `${BASE}/subscriptions/${pubkey}/${hash}/preferences`,
       'PUT',
       {
-        notifyVoucherReceived: preferences.voucherReceived,
-        notifyVoucherClaimed: preferences.voucherClaimed,
-        // The server calls the third flag `expired`; the event it gates is
-        // `voucher_expiring`. Mapped here rather than renaming ours, because
-        // the wallet's word is the one the user reads.
-        notifyVoucherExpired: preferences.voucherExpiring,
+        // THE VOCABULARY BOUNDARY. CONTEXT.md's noun is Coupon and lists
+        // Voucher under _Avoid_, so everything the wallet owns says coupon.
+        // Everything gateway-core owns keeps its own name, because renaming a
+        // field here would not rename the column there.
+        //
+        // Note the third line is a rename twice over: the server calls the
+        // flag `expired` while the event it gates is `voucher_expiring`. That
+        // mapping already had to exist, which is why moving the rest of the
+        // wallet to `coupon*` cost nothing.
+        notifyVoucherReceived: preferences.couponReceived,
+        notifyVoucherClaimed: preferences.couponClaimed,
+        notifyVoucherExpired: preferences.couponExpiring,
       },
     )
     return response.ok

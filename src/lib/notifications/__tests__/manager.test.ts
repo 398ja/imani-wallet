@@ -184,12 +184,12 @@ describe('notification manager', () => {
     const { signedFetch } = await import('../../nip98')
     vi.mocked(signedFetch).mockClear()
 
-    await setPreferences(PUBKEY, { ...loadPreferences(PUBKEY), voucherClaimed: false })
+    await setPreferences(PUBKEY, { ...loadPreferences(PUBKEY), couponClaimed: false })
 
     const put = vi.mocked(signedFetch).mock.calls.find((call) => call[1] === 'PUT')
     expect(put).toBeTruthy()
     expect(put?.[2]).toMatchObject({ notifyVoucherClaimed: false })
-    expect(loadPreferences(PUBKEY).voucherClaimed).toBe(false)
+    expect(loadPreferences(PUBKEY).couponClaimed).toBe(false)
   })
 
   it('maps our "expiring" onto the server\'s "expired" flag', async () => {
@@ -197,7 +197,7 @@ describe('notification manager', () => {
     const { signedFetch } = await import('../../nip98')
     vi.mocked(signedFetch).mockClear()
 
-    await setPreferences(PUBKEY, { ...loadPreferences(PUBKEY), voucherExpiring: false })
+    await setPreferences(PUBKEY, { ...loadPreferences(PUBKEY), couponExpiring: false })
 
     const put = vi.mocked(signedFetch).mock.calls.find((call) => call[1] === 'PUT')
     expect(put?.[2]).toMatchObject({ notifyVoucherExpired: false })
@@ -220,7 +220,7 @@ describe('notification manager', () => {
 
     const prefs = loadPreferences(PUBKEY)
     expect(prefs.enabled).toBe(true)
-    expect(prefs.voucherReceived).toBe(true)
+    expect(prefs.couponReceived).toBe(true)
   })
 
   it('falls back to defaults on a corrupt record', () => {
