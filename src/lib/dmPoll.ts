@@ -526,7 +526,24 @@ function redemptionAdapter(): RedemptionAdapter {
       // throwing, exactly as intended for a best-effort call, so a wrong field
       // name looked identical to a healthy wallet with nothing to report.
       void postPaymentReceipt({
-        senderPubkeyHex: String(opts?.senderPubkey ?? meta?.senderPubkey ?? ''),
+        // The ISSUER, not the envelope's signer.
+        //
+        // issue.ts says it plainly: "The DM is signed with the gateway's own
+        // identity rather than the merchant's, but merchant attribution rides
+        // on issuer_id inside the payload". So `senderPubkey` here is the
+        // GATEWAY — telling it a coupon was claimed is telling the wrong
+        // party, and the merchant who is owed the news never hears.
+        //
+        // Observed: a receipt enqueued with AMQ_GROUP_ID=27aa1ecd (the
+        // gateway's key) while the merchant waiting on it was 35f7a28b. The
+        // POST succeeded, the queue accepted it, and the settlement push had
+        // nobody to go to.
+        //
+        // Falls back to the envelope signer for a wallet-to-wallet send, where
+        // the two are the same party and there is no issuer.
+        senderPubkeyHex: String(
+          meta?.issuerId ?? meta?.issuer_id ?? opts?.senderPubkey ?? meta?.senderPubkey ?? '',
+        ),
         deliveryEventId: String(opts?.deliveryEventId ?? meta?.eventId ?? ''),
         voucherId: meta?.voucherId as string | undefined,
         faceValue: meta?.faceValue == null ? undefined : Number(meta.faceValue),
