@@ -236,8 +236,32 @@ compares two different quantities is worse than a red one.
 
 So the honest options are: stand a real gateway up in the workflow, or move
 unlock out of the measured window and accept that the populated rungs then
-under-report a returning customer's boot. The first costs CI minutes, the
-second costs fidelity. Both are real decisions, and neither is a tweak.
+under-report a returning customer's boot.
+
+Both costs have since been measured, which makes the choice less open than it
+reads.
+
+**Moving unlock out costs about three quarters of the measurement.** On this
+machine the empty wallet boots in 129ms and the 5-coupon wallet in 518ms, so
+restore-and-unlock is roughly 390ms — the *majority* of what a returning
+customer waits for. A populated rung without it would report ~130ms, barely
+distinguishable from the empty rung, and the cold-boot-5/cold-boot-20 pair
+that exists to show whether stored coupons cost anything to open would be
+comparing two numbers that no longer contain the part that varies. That is
+not a reduced measurement, it is a different one wearing the same name.
+
+**Standing a gateway up costs a stack, not a container.** `gateway-core`
+serves `/api/v1/auth/*` and wants Postgres, `bottin-api`, blossom and
+`gateway-customer`; the local stack it belongs to runs 42 containers. Bringing
+that up per CI run is minutes of setup and a new class of flake (a perf job
+that fails because a database was slow to accept connections tells you nothing
+about the wallet).
+
+So: keep unlock inside the window, keep the populated rungs on developer
+machines where the stack already runs, and let CI check what it can check
+honestly. If the populated rungs are ever wanted in CI, the gateway is the
+option to take — the fidelity loss of the alternative is too large to accept
+for a green tick.
 
 Until one is taken, the workflow runs `--empty-only --ceiling-only`, which
 measures the one rung that needs no auth endpoint and judges it by the
