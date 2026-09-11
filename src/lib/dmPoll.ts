@@ -503,11 +503,6 @@ function redemptionAdapter(): RedemptionAdapter {
       // money left their balance when they sent the gift wrap, and whether it
       // was ever claimed is invisible from their side.
       //
-      // The gateway already had every piece of this — the endpoint, the queue,
-      // the "Voucher Claimed" Web Push, four registered subscriptions — and
-      // `push_notification_log` still held zero rows, because nothing in this
-      // wallet ever posted a receipt.
-      //
       // NOT gated on being a merchant, unlike attestRedemption below: that
       // attests "I honoured this", which only a merchant does, while this says
       // "your coupon arrived", which every recipient owes the sender.
@@ -515,42 +510,37 @@ function redemptionAdapter(): RedemptionAdapter {
       // Fire-and-forget and never throws: the proofs are already burnt, so a
       // gateway that refuses the receipt must not turn a completed redemption
       // into a reported failure.
-      // Both read off `opts`, which is where dm-poll actually puts them:
-      // `TokenRedeemer` passes `senderPubkey` and `deliveryEventId` as
-      // top-level options, NOT inside `metadata` — `toLegacyMetadata` rewrites
-      // metadata into snake_case and takes the sender as a separate argument,
-      // so `meta.senderPubkey` was always undefined.
-      //
-      // That is how this shipped silently broken: the guard in
-      // postPaymentReceipt returns quietly on a missing id rather than
-      // throwing, exactly as intended for a best-effort call, so a wrong field
-      // name looked identical to a healthy wallet with nothing to report.
       void postPaymentReceipt({
-        // The ISSUER, not the envelope's signer.
-        //
-        // issue.ts says it plainly: "The DM is signed with the gateway's own
-        // identity rather than the merchant's, but merchant attribution rides
-        // on issuer_id inside the payload". So `senderPubkey` here is the
-        // GATEWAY — telling it a coupon was claimed is telling the wrong
-        // party, and the merchant who is owed the news never hears.
-        //
-        // Observed: a receipt enqueued with AMQ_GROUP_ID=27aa1ecd (the
-        // gateway's key) while the merchant waiting on it was 35f7a28b. The
-        // POST succeeded, the queue accepted it, and the settlement push had
-        // nobody to go to.
+        // The ISSUER, not the envelope's signer. The gateway signs the gift
+        // wrap on a merchant's behalf, so `senderPubkey` is the GATEWAY —
+        // telling it a coupon was claimed tells the wrong party. Attribution
+        // rides on issuer_id inside the payload (see issue.ts), and `issuerId`
+        // here is the SIGNED value when a voucher verified: dmCrypto prefers
+        // the voucher's own fields over the envelope's for exactly this
+        // reason.
         //
         // Falls back to the envelope signer for a wallet-to-wallet send, where
         // the two are the same party and there is no issuer.
-        senderPubkeyHex: String(
-          meta?.issuerId ?? meta?.issuer_id ?? opts?.senderPubkey ?? meta?.senderPubkey ?? '',
-        ),
-        deliveryEventId: String(opts?.deliveryEventId ?? meta?.eventId ?? ''),
+        senderPubkeyHex: String(meta?.issuerId ?? opts?.senderPubkey ?? ''),
+        deliveryEventId: String(opts?.deliveryEventId ?? ''),
         voucherId: meta?.voucherId as string | undefined,
-        faceValue: meta?.faceValue == null ? undefined : Number(meta.faceValue),
-        faceUnit: meta?.faceUnit == null ? undefined : String(meta.faceUnit),
-        // Where the decimal point goes. Without it the reader has to guess,
-        // and guessing 2 renders a zero-decimal currency a hundredfold wrong.
-        faceDecimals: meta?.faceDecimals == null ? undefined : Number(meta.faceDecimals),
+        // Amounts ONLY from a verified voucher.
+        //
+        // dmCrypto is explicit that envelope fields are sender-written and
+        // unchecked: "a genuine low-value token could be announced at any face
+        // value at all". attestRedemption below refuses to sign over an
+        // unverified face value for that reason, and a notification asserting
+        // one to the sender is the same claim in a friendlier place.
+        //
+        // Omitted rather than guessed: postPaymentReceipt renders "Your
+        // voucher was claimed" without an amount, which is true either way.
+        ...(meta?.validation as { signatureValid?: boolean } | undefined)?.signatureValid === true
+          ? {
+              faceValue: meta?.faceValue == null ? undefined : Number(meta.faceValue),
+              faceUnit: meta?.faceUnit == null ? undefined : String(meta.faceUnit),
+              faceDecimals: meta?.faceDecimals == null ? undefined : Number(meta.faceDecimals),
+            }
+          : {},
       })
 
       // The public half of the record. `txRecords` writes the merchant's own

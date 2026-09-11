@@ -81,6 +81,52 @@ describe('who a receipt names', () => {
   })
 })
 
+/**
+ * What a receipt may assert about money.
+ *
+ * dmCrypto is explicit that envelope fields are sender-written and unchecked:
+ * "a genuine low-value token could be announced at any face value at all". The
+ * wallet already refuses to sign an attestation over an unverified face value;
+ * a notification telling the sender "£500 was claimed" is the same claim in a
+ * friendlier place, and just as unfounded.
+ *
+ * These pin the resolution dmPoll performs before calling postPaymentReceipt,
+ * so the omission cannot quietly become a default.
+ */
+describe('amounts a receipt may carry', () => {
+  const verified = { signatureValid: true }
+  const unverified = { signatureValid: false }
+
+  function amountFields(validation: { signatureValid?: boolean } | undefined) {
+    return validation?.signatureValid === true
+      ? { faceValue: 150, faceUnit: 'GBP', faceDecimals: 2 }
+      : {}
+  }
+
+  it('carries the amount when the voucher signature verified', () => {
+    expect(amountFields(verified)).toEqual({ faceValue: 150, faceUnit: 'GBP', faceDecimals: 2 })
+  })
+
+  it('omits the amount when the signature did not verify', () => {
+    expect(amountFields(unverified)).toEqual({})
+  })
+
+  /** Plain ecash has no voucher to verify, so there is no amount to vouch for. */
+  it('omits the amount when there is no validation at all', () => {
+    expect(amountFields(undefined)).toEqual({})
+  })
+
+  it('renders without an amount rather than inventing one', async () => {
+    signedFetch.mockClear()
+    signedFetch.mockResolvedValue(new Response(null, { status: 202 }))
+    await postPaymentReceipt({ senderPubkeyHex: SENDER, deliveryEventId: EVENT_ID })
+
+    const [, , body] = signedFetch.mock.calls[0] as [string, string, Record<string, unknown>]
+    expect(body.faceValue).toBeUndefined()
+    expect(body.faceUnit).toBeUndefined()
+  })
+})
+
 describe('postPaymentReceipt', () => {
   beforeEach(() => {
     nip44Encrypt.mockClear()
