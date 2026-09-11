@@ -283,7 +283,22 @@ async function refuseRecipient(
 }
 
 async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
+  // The scheme comes from the EDGE, not from this socket.
+  //
+  // NIP-98 binds a signature to an absolute URL and `sameUrl` compares the
+  // protocol, so a caller signs the `https://` URL it requested while a
+  // TLS-terminating proxy hands us cleartext. Reconstructing `http://`
+  // unconditionally 401s `url-mismatch` on every authenticated request behind
+  // the proxy — the error the README singles out as most misdiagnosed, because
+  // it points at the caller's signing code, which is correct.
+  //
+  // Trusting a client-settable header is safe only for what it is used for
+  // here: matching a signature the caller already made over its own URL. It
+  // grants nothing. A client setting `x-forwarded-proto: https` while speaking
+  // http can only make its own signature verify against the URL it really used.
+  const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim()
+  const scheme = proto === 'https' ? 'https' : 'http'
+  const url = new URL(req.url ?? '/', `${scheme}://${req.headers.host ?? 'localhost'}`)
   const path = url.pathname.replace(/\/$/, '') || '/'
   const method = (req.method ?? 'GET').toUpperCase()
 

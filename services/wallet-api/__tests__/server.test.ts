@@ -190,6 +190,74 @@ describe('refusals', () => {
     expect(await jsonOf(res)).toEqual({ pubkey })
   })
 
+  /**
+   * BEHIND A TLS-TERMINATING PROXY, which is how this service is deployed.
+   *
+   * The caller signs the URL it actually requested — `https://host/v1/whoami`,
+   * the only URL it ever sees. The edge terminates TLS and forwards cleartext,
+   * so the service reconstructs `http://host/...` from `req.headers.host` and
+   * compares protocols field by field. Every authenticated request 401s
+   * `url-mismatch`, and the README calls that the most-misdiagnosed error there
+   * is: it reads as a signing bug in the caller, which is where people look.
+   *
+   * `x-forwarded-proto` is the edge stating what the caller used. It is
+   * trustworthy only because the edge always sets it — a header a client could
+   * set for itself would let anyone claim https, but nothing here turns on that
+   * claim beyond matching a signature the caller already made over its own URL.
+   *
+   * The host is spoofed here rather than the protocol, because `fetch` will not
+   * send a `Host` differing from the connection. Signing over that same name is
+   * what isolates the protocol as the single thing under test.
+   */
+  it('accepts a request signed as https when the proxy forwards x-forwarded-proto', async () => {
+    const { signer, pubkey } = makeSigner()
+    const host = `127.0.0.1:${port}`
+    const event = await signer.signEvent({
+      kind: 27235,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [
+        ['u', `https://${host}/v1/whoami`],
+        ['method', 'GET'],
+      ],
+      content: '',
+    })
+    const res = await fetch(`${base}/v1/whoami`, {
+      headers: {
+        authorization: `Nostr ${Buffer.from(JSON.stringify(event)).toString('base64')}`,
+        'x-forwarded-proto': 'https',
+      },
+    })
+    expect(res.status).toBe(200)
+    expect(await jsonOf(res)).toEqual({ pubkey })
+  })
+
+  /**
+   * The other half, so the fix cannot be "ignore the protocol entirely".
+   *
+   * With no proxy header the service is being addressed directly over http, and
+   * a signature claiming https was made for a different endpoint.
+   */
+  it('still refuses an https signature when no proxy header is present', async () => {
+    const { signer } = makeSigner()
+    const host = `127.0.0.1:${port}`
+    const event = await signer.signEvent({
+      kind: 27235,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [
+        ['u', `https://${host}/v1/whoami`],
+        ['method', 'GET'],
+      ],
+      content: '',
+    })
+    const res = await fetch(`${base}/v1/whoami`, {
+      headers: {
+        authorization: `Nostr ${Buffer.from(JSON.stringify(event)).toString('base64')}`,
+      },
+    })
+    expect(res.status).toBe(401)
+    expect((await jsonOf(res)).error).toBe('url-mismatch')
+  })
+
   it('refuses a GET signature replayed as a POST', async () => {
     const { signer } = makeSigner()
     const res = await fetch(`${base}/v1/whoami`, {
