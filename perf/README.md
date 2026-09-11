@@ -328,6 +328,18 @@ absolute numbers being comfortable today says nothing about a wallet twice the
 size, and it needs the FULL ladder — the 120 and 500 rungs, which are not
 committed — to say anything true. On three close rungs, read the rungs.
 
+Confirmed the same day by recording the 120 rung and re-running. With four
+rungs spanning 5 to 120 coupons the verdict inverts:
+
+    cold-boot cost shape: flat: cost per coupon is not measurable above noise
+    (fitted -0.273ms per coupon). A larger wallet costing no more than a
+    smaller one is the healthiest result there is.
+
+Same code, same machine, one more rung. `notification-drain` reports flat too,
+at 0.139ms per coupon. So the CLIMBING verdict was an artifact of the short
+ladder, and the honest reading of a three-rung shape warning is "record
+another rung", not "investigate a regression".
+
 **Do not accept a new baseline to make this green.** The numbers were recorded
 on different hardware in a different state, and rebaselining here would bake a
 cold gateway into the reference. Re-measure with a warm stack, or accept on the
