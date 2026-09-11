@@ -31,8 +31,15 @@ import {
  *
  * `voucher_received` goes to the coupon list rather than the home screen: the
  * point of the notification is the thing that arrived, and home makes you look
- * for it. `voucher_claimed` goes to the merchant's transaction list, where the
- * settlement is visible.
+ * for it.
+ *
+ * `voucher_claimed` goes to `/merchant/transactions`, where the settlement is
+ * visible. Note who receives it: gateway-core fires this at
+ * `req.senderPubkeyHex()` (PaymentReceiptController.fireSettlementPush), so it
+ * reaches the person who SENT a coupon, when the recipient claims it. The path
+ * says "merchant" because that is the route's literal name in App.tsx, not
+ * because a stall is involved — CONTEXT.md keeps Merchant off customer-facing
+ * text, and no string the customer reads here says it.
  */
 const ROUTE_FOR_TYPE: Record<NotificationTypeOrGeneric, string> = {
   voucher_received: '/receive',
