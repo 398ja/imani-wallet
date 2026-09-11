@@ -110,13 +110,19 @@ jobs:
         run: npm run perf -- --require-fixtures
         working-directory: imani-wallet
 
+      # --ceiling-only because the relative band is machine-specific: this
+      # same empty boot is ~121ms on a laptop and ~179ms on a runner, which
+      # trips the 35% band every run with nothing wrong. The 1000ms ceiling is
+      # portable — it is where opening stops feeling immediate on any hardware
+      # — so that is what CI enforces. Band outliers are still printed.
+      #
       # What CI CAN honestly check: the harness builds, drives a real browser,
       # and the wallet boots. No --require-fixtures, because the populated
       # rung above is what that flag guards and it cannot run here. This
       # measures an empty wallet, which boots fast however badly storage
       # scales, so it is a smoke check and NOT a regression gate.
       - name: Smoke-check that the wallet boots under measurement
-        run: npm run perf -- --empty-only
+        run: npm run perf -- --empty-only --ceiling-only
         working-directory: imani-wallet
 
       # Kept whatever the verdict: a green report is the record of what the

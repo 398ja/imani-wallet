@@ -239,8 +239,18 @@ unlock out of the measured window and accept that the populated rungs then
 under-report a returning customer's boot. The first costs CI minutes, the
 second costs fidelity. Both are real decisions, and neither is a tweak.
 
-Until one is taken, the workflow runs `--empty-only`, which measures the one
-rung that needs no auth endpoint. Treat that run as a smoke check that the
+Until one is taken, the workflow runs `--empty-only --ceiling-only`, which
+measures the one rung that needs no auth endpoint and judges it by the
+absolute ceiling rather than the relative band.
+
+The second flag matters as much as the first. A baseline is recorded on one
+machine, so the band means "slower than that laptop", not "slower than it
+was". This same empty boot measures ~121ms locally and ~179ms on a GitHub
+runner — a 64% "regression" that is entirely hardware. The band's own note
+already warns that a band which cries wolf is one people learn to ignore.
+The 1000ms ceiling is portable, because it is the point where opening stops
+feeling immediate on any hardware, so that is what CI enforces. Scenarios
+outside the band but under the ceiling are still printed, just not failed. Treat that run as a smoke check that the
 harness drives a real browser and the wallet boots — **not** as a regression
 gate, because an empty wallet boots fast however badly storage scales. The
 populated rungs are a developer-machine check, and `--empty-only` refuses to
