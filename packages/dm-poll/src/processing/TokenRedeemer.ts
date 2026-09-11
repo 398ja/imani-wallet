@@ -69,7 +69,7 @@ export class TokenRedeemer {
    * @returns Redemption result
    */
   async redeem(tokenDm: TokenDm): Promise<RedemptionResult> {
-    const { token, metadata, senderPubkey } = tokenDm;
+    const { token, metadata, senderPubkey, eventId } = tokenDm;
 
     // Check for duplicates
     if (this.options.storageAdapter) {
@@ -100,6 +100,11 @@ export class TokenRedeemer {
       const redemptionOptions: RedemptionOptions = {
         metadata,
         senderPubkey,
+        // Carried through so the redeeming wallet can tell the sender WHICH
+        // delivery was claimed. It was destructured off the TokenDm above and
+        // then dropped here, which is why the settlement receipt had no id to
+        // key on and the sender's notification never fired.
+        deliveryEventId: eventId,
         nip60Wallet: this.options.nip60Wallet,
       };
 
