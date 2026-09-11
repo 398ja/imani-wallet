@@ -98,8 +98,14 @@ export class NativePushTransport implements PushTransport {
    * arrives — the token comes back on the `registration` event. So this waits
    * for that event, with a timeout: a device with no Play Services never fires
    * it, and hanging forever would leave the settings screen spinning.
+   *
+   * The VAPID key is accepted and ignored. It is part of `PushTransport`
+   * because the web transport cannot work without one; FCM authenticates the
+   * SENDER through a service account instead, so there is nothing for a
+   * client-side key to do here. Declaring the parameter rather than omitting
+   * it keeps every caller able to treat the two transports identically.
    */
-  async subscribe(): Promise<TransportSubscription | null> {
+  async subscribe(_vapidPublicKey?: string | null): Promise<TransportSubscription | null> {
     try {
       const token = await this.awaitToken()
       if (!token) return null
