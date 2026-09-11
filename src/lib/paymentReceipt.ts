@@ -29,8 +29,15 @@ import { signedFetch } from './nip98'
 export interface ReceiptPayload {
   v: 1
   voucherId?: string
+  /** MINOR units, as everywhere else in this wallet: 72 is £0.72, not £72. */
   faceValue?: number
   faceUnit?: string
+  /**
+   * Where the decimal point goes. Carried rather than assumed, because it
+   * varies per merchant group and zero-decimal currencies exist — a reader
+   * that defaults to 2 renders a 5000 XAF coupon as "50.00".
+   */
+  faceDecimals?: number
   redeemedAt: number
 }
 
@@ -40,8 +47,10 @@ export interface PostReceiptParams {
   /** The gift wrap this settles, used to derive a stable receipt id. */
   deliveryEventId: string
   voucherId?: string
+  /** MINOR units. */
   faceValue?: number
   faceUnit?: string
+  faceDecimals?: number
   /** Rendered in the sender's push body. Coarse by design. */
   recipientName?: string
   merchantName?: string
@@ -88,6 +97,7 @@ export async function postPaymentReceipt(params: PostReceiptParams): Promise<voi
       voucherId: params.voucherId,
       faceValue: params.faceValue,
       faceUnit: params.faceUnit,
+      faceDecimals: params.faceDecimals,
       redeemedAt: Math.floor(Date.now() / 1000),
     }
 
