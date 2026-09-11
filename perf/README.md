@@ -202,13 +202,29 @@ They are separate on purpose. A combined journey yields one number that can
 move for five reasons and cannot point at any of them; five numbers name the
 subsystem that changed.
 
-**No backend is needed**, and that is checked rather than assumed: the numbers
-above were measured with `gateway-customer` and `imani-mint-rest` stopped. What
-the run does need is the proxy TABLE from `vite.config.ts`, because the wallet's
-unlock posts to `/api/v1/auth/*` and the SPA fallback would otherwise answer
-with `index.html`. The wallet then stays locked and the run measures the lock
-screen instead of a customer's wallet — `measureColdBoot` refuses to report
-that, which is how the gap was found.
+**No backend is needed** for the EMPTY rung, and that is checked rather than
+assumed: `cold-boot` with no fixture measures fine with everything stopped.
+
+The POPULATED rungs are a different matter, and the claim above was too broad.
+Restoring a fixture leaves the wallet LOCKED — the resume record's wrapping key
+is non-extractable by design, so no snapshot can carry an unlocked session —
+and unlocking calls `nap.login()`, which posts to `/api/v1/auth/*` and needs
+something to answer. The proxy table from `vite.config.ts` routes it, which is
+why `serve()` takes `withGateway`, but a route to nothing still fails: with no
+gateway the fetch rejects and the page renders
+
+    Unexpected token 'A', "AggregateError" is not valid JSON
+
+which is what a GitHub runner sees, every time. Observed 2026-09-11 on
+imani-wallet#69 after the workflow was fixed enough to reach that far for the
+first time.
+
+So the honest statement is: the empty rung needs nothing, and every populated
+rung needs a reachable auth endpoint. On a laptop the local stack provides it.
+In CI it does not, which is why `.github/workflows/perf.yml` currently stops
+after `cold-boot`. Closing that gap means either standing a gateway up in the
+workflow, or giving the fixtures a way to boot unlocked — and the second is a
+security decision about the resume record, not a CI tweak.
 
 The rungs matter as a **pair**. An empty wallet boots fast no matter how badly
 storage scales, so the empty number alone cannot see the cost that matters. And
