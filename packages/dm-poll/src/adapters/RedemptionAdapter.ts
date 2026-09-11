@@ -23,6 +23,18 @@ export interface RedemptionOptions {
 
   /** Sender's public key for recording */
   senderPubkey?: string;
+
+  /**
+   * The kind-1059 gift wrap this token arrived in.
+   *
+   * `GiftWrapProcessor` has always set it on the TokenDm and `TokenRedeemer`
+   * destructured it and dropped it here, so it reached no redemption path. It
+   * is the only stable id both parties share for one delivery, which is what a
+   * settlement receipt has to be keyed on: without it the recipient cannot tell
+   * the sender WHICH coupon was claimed, and the sender's "Voucher Claimed"
+   * notification never fires.
+   */
+  deliveryEventId?: string;
 }
 
 /**

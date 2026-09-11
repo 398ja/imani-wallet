@@ -515,14 +515,19 @@ function redemptionAdapter(): RedemptionAdapter {
       // Fire-and-forget and never throws: the proofs are already burnt, so a
       // gateway that refuses the receipt must not turn a completed redemption
       // into a reported failure.
-      // Both sources, because the sender's key reaches this frame by two
-      // routes: on the decoded DM metadata, and as the top-level
-      // `opts.senderPubkey` that line 449 below already relies on. Reading only
-      // one of them silently posts nothing whenever the other is the populated
-      // one, which is exactly the kind of quiet no-op this whole feature was.
+      // Both read off `opts`, which is where dm-poll actually puts them:
+      // `TokenRedeemer` passes `senderPubkey` and `deliveryEventId` as
+      // top-level options, NOT inside `metadata` — `toLegacyMetadata` rewrites
+      // metadata into snake_case and takes the sender as a separate argument,
+      // so `meta.senderPubkey` was always undefined.
+      //
+      // That is how this shipped silently broken: the guard in
+      // postPaymentReceipt returns quietly on a missing id rather than
+      // throwing, exactly as intended for a best-effort call, so a wrong field
+      // name looked identical to a healthy wallet with nothing to report.
       void postPaymentReceipt({
-        senderPubkeyHex: String(meta?.senderPubkey ?? opts?.senderPubkey ?? ''),
-        deliveryEventId: String(meta?.eventId ?? opts?.eventId ?? ''),
+        senderPubkeyHex: String(opts?.senderPubkey ?? meta?.senderPubkey ?? ''),
+        deliveryEventId: String(opts?.deliveryEventId ?? meta?.eventId ?? ''),
         voucherId: meta?.voucherId as string | undefined,
         faceValue: meta?.faceValue == null ? undefined : Number(meta.faceValue),
         faceUnit: meta?.faceUnit == null ? undefined : String(meta.faceUnit),
