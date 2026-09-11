@@ -22,13 +22,21 @@ const GATEWAY = '27aa1ecd8aa7ee6c0104fdb3dd0c0e700e55754212746d7a5774ac3c8e585a3
 const EVENT_ID = 'dca74270326812668b9d0fe06aafef530dd92ca0acc2394d91a2daa55e798900'
 
 const nip44Encrypt = vi.fn(() => 'ciphertext==')
-const signedFetch = vi.fn(async () => new Response(null, { status: 202 }))
+// Typed with signedFetch's REAL parameter list (path, method, payload, signer),
+// so `mock.calls[0]` is a tuple rather than `[]`. Untyped, every destructuring
+// of a call below needed an `as` cast that tsc rejects outright — and a cast
+// that did compile would assert the shape instead of checking it, which is the
+// opposite of what these assertions are for.
+const signedFetch = vi.fn(
+  async (_path: string, _method: string, _payload?: unknown, _signer?: unknown) =>
+    new Response(null, { status: 202 }),
+)
 
 vi.mock('../nap', () => ({
   getSigner: () => ({ pubkey: RECIPIENT, nip44Encrypt }),
 }))
 vi.mock('../nip98', () => ({
-  signedFetch: (...args: unknown[]) => signedFetch(...(args as [])),
+  signedFetch: (...args: Parameters<typeof signedFetch>) => signedFetch(...args),
 }))
 
 describe('computeReceiptId', () => {
