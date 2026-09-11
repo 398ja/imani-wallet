@@ -25,16 +25,21 @@
  * Every user-visible string below obeys that: the wallet says "Coupon
  * received", never "Voucher received".
  *
- * The identifiers do not, and deliberately. `voucher_received` is a value on
- * the WIRE, chosen by gateway-core, and `notifyVoucherClaimed` is a column in
- * its push_subscription table. Renaming them here would not rename them there;
- * it would only add a translation layer whose sole job is to disagree with the
- * server about what the same string is called, and every debugging session
- * would start by mapping one set of names onto the other.
+ * The WIRE VALUES do not, and cannot. `voucher_received` is a string chosen by
+ * gateway-core and `notifyVoucherClaimed` is a column in its
+ * push_subscription table; renaming either here would not rename it there.
  *
- * So the rule is: the glossary governs what we SAY, the server governs what we
- * SEND. The boundary is this file plus gateway.ts, and it should not spread
- * past them.
+ * Everything the WALLET owns does obey the glossary — the preference fields
+ * are `couponReceived`, `couponClaimed`, `couponExpiring`. An earlier version
+ * of this comment defended calling them `voucher*` on the grounds that a
+ * translation layer would be pure cost. That was wrong: gateway.ts already had
+ * to map `couponExpiring` onto the server's `notifyVoucherExpired`, because
+ * the server calls the flag `expired` while the event it gates is `expiring`.
+ * The layer existed, so the rename cost nothing.
+ *
+ * The rule: the glossary governs what we SAY and what we OWN, the server
+ * governs what we SEND. The boundary is the request body in gateway.ts and the
+ * `NotificationType` values below, and it should not spread past them.
  *
  * ## The event set is the SERVER's, not ours
  *
@@ -136,11 +141,11 @@ export interface NotificationPreferences {
   /** Master switch. False means we hold no subscription at all. */
   enabled: boolean
   /** A coupon arrived for you. */
-  voucherReceived: boolean
+  couponReceived: boolean
   /** A coupon you sent was claimed. */
-  voucherClaimed: boolean
+  couponClaimed: boolean
   /** A coupon you hold is about to expire. */
-  voucherExpiring: boolean
+  couponExpiring: boolean
 }
 
 /**
@@ -155,16 +160,16 @@ export interface NotificationPreferences {
  */
 export const DEFAULT_PREFERENCES: NotificationPreferences = {
   enabled: false,
-  voucherReceived: true,
-  voucherClaimed: true,
-  voucherExpiring: true,
+  couponReceived: true,
+  couponClaimed: true,
+  couponExpiring: true,
 }
 
 /** Maps a preference flag to the event it governs. */
 export const PREFERENCE_FOR_TYPE: Record<NotificationType, keyof NotificationPreferences> = {
-  voucher_received: 'voucherReceived',
-  voucher_claimed: 'voucherClaimed',
-  voucher_expiring: 'voucherExpiring',
+  voucher_received: 'couponReceived',
+  voucher_claimed: 'couponClaimed',
+  voucher_expiring: 'couponExpiring',
 }
 
 /**

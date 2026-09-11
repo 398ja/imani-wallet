@@ -141,23 +141,23 @@ export function NotificationSettingsPage({ pubkey }: { pubkey: string }) {
                 <Switch
                   label="Coupons I receive"
                   hint="Someone sends you a coupon."
-                  checked={preferences.voucherReceived}
+                  checked={preferences.couponReceived}
                   disabled={busy}
-                  onChange={(next) => void toggleEvent('voucherReceived', next)}
+                  onChange={(next) => void toggleEvent('couponReceived', next)}
                 />
                 <Switch
                   label="Coupons I sent being claimed"
                   hint="The person you sent one to redeems it."
-                  checked={preferences.voucherClaimed}
+                  checked={preferences.couponClaimed}
                   disabled={busy}
-                  onChange={(next) => void toggleEvent('voucherClaimed', next)}
+                  onChange={(next) => void toggleEvent('couponClaimed', next)}
                 />
                 <Switch
                   label="Coupons about to expire"
                   hint="A coupon you hold runs out soon."
-                  checked={preferences.voucherExpiring}
+                  checked={preferences.couponExpiring}
                   disabled={busy}
-                  onChange={(next) => void toggleEvent('voucherExpiring', next)}
+                  onChange={(next) => void toggleEvent('couponExpiring', next)}
                 />
               </div>
             </section>
