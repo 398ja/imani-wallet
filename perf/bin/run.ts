@@ -52,6 +52,7 @@ const accept = process.argv.includes('--accept')
  */
 const requireFixtures = process.argv.includes('--require-fixtures')
 const emptyOnly = process.argv.includes('--empty-only')
+const ceilingOnly = process.argv.includes('--ceiling-only')
 
 if (emptyOnly && requireFixtures) {
   throw new Error(
@@ -525,13 +526,44 @@ async function main() {
   const existing = existsSync(reportFile) ? readFileSync(reportFile, 'utf8') : undefined
   writeFileSync(reportFile, regenerateReport(existing, summary, comparisons))
 
-  const failures = comparisons.filter(isFailure)
+  // --ceiling-only judges by the absolute ceiling and ignores the relative
+  // band.
+  //
+  // The band compares against a number recorded on one machine, so it says
+  // "slower than that laptop" rather than "slower than it was". On a shared CI
+  // runner that is not a regression signal: this empty cold-boot sits at
+  // ~121ms locally and ~179ms on a runner, tripping the 35% band every single
+  // run while the wallet is entirely healthy. The baseline's own note already
+  // says a band that cries wolf is one people learn to ignore, and that "the
+  // absolute ceiling is what actually guards the number".
+  //
+  // The ceiling is portable in a way the band is not: 1000ms is the point at
+  // which opening stops feeling immediate, on whatever hardware. So CI
+  // enforces that, and the band stays a developer-machine signal where a
+  // stable baseline makes it meaningful.
+  const failures = comparisons.filter((c) =>
+    ceilingOnly ? c.verdict === 'ceiling-breach' : isFailure(c),
+  )
   for (const c of comparisons) {
     console.log(`${c.scenario}: ${c.verdict}${c.note ? ` (${c.note})` : ''}`)
   }
   if (failures.length > 0) {
-    console.error(`\n${failures.length} scenario(s) regressed. See ${reportFile}`)
+    console.error(
+      `\n${failures.length} scenario(s) ${ceilingOnly ? 'breached the ceiling' : 'regressed'}. See ${reportFile}`,
+    )
     process.exit(1)
+  }
+  if (ceilingOnly) {
+    const banded = comparisons.filter(isFailure)
+    if (banded.length > 0) {
+      console.log(
+        `\n--ceiling-only: ${banded.length} scenario(s) are outside the relative band but ` +
+          'under the ceiling. Reported, not failed, because the band compares against ' +
+          'another machine. Check them on a developer machine.',
+      )
+    }
+    console.log(`\nUnder the ceiling. ${reportFile}`)
+    return
   }
   console.log(`\nNo regression. ${reportFile}`)
 }
