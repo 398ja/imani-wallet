@@ -9,6 +9,7 @@ import { createSession, resetSession } from './lib/nap'
 import { openWallet, onWalletChanged } from './lib/wallet'
 import { startDmPoll } from './lib/dmPoll'
 import { startIncomingNotifications } from './lib/incomingNotifications'
+import { startPaymentReceipts, stopPaymentReceipts } from './lib/paymentReceiptDrain'
 import { startPushListener, stopPushListener } from './lib/notifications/listener'
 import { reconcilePendingSends } from './lib/pay'
 import { reconcileRequests } from './lib/vreq'
@@ -121,6 +122,17 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         // event delivered by both is still one line.
         startPushListener(pubkey)
 
+        // And the SENDER's side of a settlement: receipts saying a coupon we
+        // sent has been claimed. Distinct from the two loops above, which are
+        // about money arriving — this is about money we already parted with
+        // being picked up, which the sender otherwise never learns.
+        //
+        // The gateway pushes this too, the moment the receipt is posted. This
+        // loop is what reaches a user whose browser refuses notifications, and
+        // it dedupes on receiptId against that push, so a claim delivered both
+        // ways is still one line in the bell.
+        startPaymentReceipts(pubkey)
+
         // Finish any send this wallet stopped waiting for. The 20s poll in
         // pay.ts is not a verdict — a saga can complete minutes later — and
         // until this ran, one that did left the customer holding a coupon whose
@@ -201,6 +213,10 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
       // Leaving it attached across a logout would record the next account's
       // pushes into the previous account's inbox.
       stopPushListener()
+      // Same reasoning: a receipt drain left running across a logout would
+      // sign with the previous account's session and file the next account's
+      // claims into the wrong inbox.
+      stopPaymentReceipts()
     }
   }, [pubkey])
 
