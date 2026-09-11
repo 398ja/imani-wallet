@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-11
+
+### Fixed
+
+- **The SPA builds again.** `tsc -b` failed on the receipt tests, so
+  `npm run build` failed, so no image could be built from this checkout — the
+  SPA, audit-api, purchase-issuer and wallet-api all ship from it. The mocks
+  were bare `vi.fn()`, making `mock.calls[0]` a zero-length tuple that no `as`
+  cast can widen. Each mock now carries the real parameter list of the function
+  it replaces, so the assertions check the call rather than assert its shape
+  (#81).
+
 ## [0.1.1] - 2026-09-11
 
 ### Fixed
