@@ -548,6 +548,9 @@ function redemptionAdapter(): RedemptionAdapter {
         voucherId: meta?.voucherId as string | undefined,
         faceValue: meta?.faceValue == null ? undefined : Number(meta.faceValue),
         faceUnit: meta?.faceUnit == null ? undefined : String(meta.faceUnit),
+        // Where the decimal point goes. Without it the reader has to guess,
+        // and guessing 2 renders a zero-decimal currency a hundredfold wrong.
+        faceDecimals: meta?.faceDecimals == null ? undefined : Number(meta.faceDecimals),
       })
 
       // The public half of the record. `txRecords` writes the merchant's own
