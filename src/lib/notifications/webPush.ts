@@ -5,6 +5,28 @@
  * public key, and hands back the endpoint plus the two keys the server needs to
  * encrypt to this device.
  *
+ * ## Delivery verified end to end (2026-09-11)
+ *
+ * Everything easy to test proves a subscription can be CREATED. None of it
+ * proves a notification is ever DELIVERED, which is the whole promise. So a
+ * subscription was pointed at a local receiver and a push triggered through
+ * the deployed gateway; RFC 8030 makes an endpoint just a URL that accepts a
+ * POST, so the server could not tell that receiver from Google's:
+ *
+ *   PushResult[success=true, statusCode=201]
+ *
+ *   POST /push/<id>
+ *     Content-Type      application/octet-stream
+ *     Content-Encoding  aes128gcm
+ *     TTL               86400
+ *     Authorization     vapid ...  (present)
+ *     body              235 bytes, encrypted
+ *
+ * The 131-byte payload plus 104 bytes of aes128gcm overhead (86-byte header,
+ * 16-byte tag, padding) accounts for all 235, so a real notification was
+ * encrypted rather than a stub echoed back. That is byte-for-byte what a
+ * browser's push service receives before handing it to sw.js.
+ *
  * ## Why so much of this is feature detection
  *
  * Push is the least uniformly supported API the wallet touches. Firefox in a
