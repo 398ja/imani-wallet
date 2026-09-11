@@ -51,9 +51,28 @@ describe('toRenderable', () => {
     ['absolute', 'https://evil.example/steal'],
     ['protocol-relative', '//evil.example/steal'],
     ['javascript', 'javascript:alert(1)'],
+    // The four below all START with a single slash, so a check that only
+    // looks at the first characters lets them through — and every one of them
+    // resolves to a FOREIGN ORIGIN in a real browser. The URL spec treats a
+    // backslash as a path separator, and strips tab, newline and carriage
+    // return from a URL entirely, so `/\evil.example` and `/<tab>/evil.example`
+    // both become `https://evil.example/`. Verified with node's URL parser.
+    ['backslash', '/\\evil.example/steal'],
+    ['backslash-slash', '/\\/evil.example/steal'],
+    ['embedded tab', '/\t/evil.example/steal'],
+    ['embedded newline', '/\n/evil.example/steal'],
+    ['embedded carriage return', '/\r/evil.example/steal'],
   ])('refuses a %s URL rather than turning a tap into an open redirect', (_label, url) => {
     const result = toRenderable({ type: 'voucher_received', data: { url } })
     expect(result.url).toBe('/receive')
+  })
+
+  it('keeps honouring ordinary wallet routes, including query and fragment', () => {
+    // The redirect fix must not become so strict that real routes break.
+    for (const url of ['/receive', '/coupon/abc?x=1', '/merchant/transactions#top']) {
+      const result = toRenderable({ type: 'voucher_received', data: { url } })
+      expect(result.url).toBe(url)
+    }
   })
 
   it('still renders when the server sends a type this build does not know', () => {

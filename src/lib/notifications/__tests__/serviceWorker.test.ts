@@ -121,6 +121,30 @@ describe('service worker', () => {
     expect(options.data.url).toBe('/receive')
   })
 
+  // This worker is the copy that actually calls openWindow/navigate, so a URL
+  // that slips through here is a live open redirect, not a theoretical one.
+  // Each of these begins with exactly ONE slash and still leaves the origin,
+  // because the URL spec treats a backslash as a path separator and strips
+  // tab, newline and carriage return.
+  it.each([
+    ['backslash', '/\\evil.example/steal'],
+    ['backslash-slash', '/\\/evil.example/steal'],
+    ['embedded tab', '/\t/evil.example/steal'],
+    ['embedded newline', '/\n/evil.example/steal'],
+    ['embedded carriage return', '/\r/evil.example/steal'],
+  ])('refuses a %s URL, which resolves to a foreign origin', async (_label, url) => {
+    const payload = { type: 'voucher_received', data: { url } }
+    const { event, settled } = pushEvent(payload)
+    worker.listeners.push(event)
+    await settled()
+
+    const [, options] = worker.registration.showNotification.mock.calls[0]
+    expect(options.data.url).toBe('/receive')
+    // Belt and braces: whatever was stored must stay on this origin when the
+    // browser resolves it at click time.
+    expect(new URL(options.data.url, 'https://wallet.example').origin).toBe('https://wallet.example')
+  })
+
   it('still shows something when the push carries no data at all', async () => {
     const { event, settled } = pushEvent(undefined)
     worker.listeners.push(event)

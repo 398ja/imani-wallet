@@ -61,15 +61,45 @@ function readString(source: Record<string, unknown> | undefined, key: string): s
  * `/voucher/home.html` mismatch described above. The other is that a payload is
  * attacker-influenceable in principle — it is JSON from the network — and an
  * absolute URL taken on trust turns a notification tap into an open redirect.
- * Requiring a single leading slash rejects `https://…`, protocol-relative
- * `//evil.example` and `javascript:` alike, without needing to parse.
+ *
+ * This RESOLVES the URL rather than pattern-matching its first characters,
+ * because the obvious check is not safe. An earlier version required a single
+ * leading slash and rejected `//`, reasoning that this covered `https://…`,
+ * protocol-relative and `javascript:` alike "without needing to parse". It
+ * did not: the URL spec treats a backslash as a path separator and strips tab,
+ * newline and carriage return from a URL entirely, so
+ *
+ *     /\evil.example        →  https://evil.example/
+ *     /<tab>/evil.example   →  https://evil.example/
+ *
+ * both begin with exactly one slash and both leave the origin. The only
+ * reliable judge of where a URL points is the thing that will navigate to it,
+ * so ask the parser and compare origins.
  */
 function walletRoute(url: string | undefined): string | undefined {
   if (!url) return undefined
-  if (!url.startsWith('/') || url.startsWith('//')) return undefined
+  if (!url.startsWith('/')) return undefined
+
+  // A fixed, arbitrary base: only the ORIGIN COMPARISON matters, and using a
+  // constant keeps this identical under test and in a browser.
+  const base = 'https://wallet.invalid'
+  let resolved: URL
+  try {
+    resolved = new URL(url, base)
+  } catch {
+    return undefined
+  }
+
+  // The parser has now normalised backslashes and stripped whitespace, so a
+  // URL that escapes the wallet shows up here as a different origin.
+  if (resolved.origin !== base) return undefined
+
   // A path ending in .html is an imani-apps page, not a wallet route.
-  if (url.endsWith('.html')) return undefined
-  return url
+  if (resolved.pathname.endsWith('.html')) return undefined
+
+  // Return the RESOLVED path, not the input: what the caller navigates to must
+  // be what was checked, or the check protects nothing.
+  return resolved.pathname + resolved.search + resolved.hash
 }
 
 /**
