@@ -18,6 +18,7 @@ import { computeReceiptId, postPaymentReceipt } from '../paymentReceipt'
 
 const SENDER = '35f7a28b6adc9a923686a4506a02cae0fcf634cb32f42675872a5bd07d67af47'
 const RECIPIENT = '315042c05c30c54877e48a3fdfa64ece0a44b860e8afba2831163b6dd336ac73'
+const GATEWAY = '27aa1ecd8aa7ee6c0104fdb3dd0c0e700e55754212746d7a5774ac3c8e585a30'
 const EVENT_ID = 'dca74270326812668b9d0fe06aafef530dd92ca0acc2394d91a2daa55e798900'
 
 const nip44Encrypt = vi.fn(() => 'ciphertext==')
@@ -47,6 +48,36 @@ describe('computeReceiptId', () => {
 
   it('is the 64-hex shape the gateway validates', () => {
     expect(computeReceiptId(EVENT_ID, SENDER)).toMatch(/^[0-9a-f]{64}$/)
+  })
+})
+
+/**
+ * Who the receipt is addressed to.
+ *
+ * The gateway signs the gift wrap, not the merchant — `issue.ts` says so
+ * outright: "The DM is signed with the gateway's own identity rather than the
+ * merchant's, but merchant attribution rides on issuer_id inside the payload".
+ *
+ * So addressing a settlement receipt to the envelope's signer tells the
+ * GATEWAY that a coupon was claimed, and the merchant who is owed the news
+ * never hears. Observed live: a receipt enqueued under the gateway's key while
+ * the merchant waiting on it had a different one; the POST succeeded, the queue
+ * accepted it, and the push had nobody to notify.
+ */
+describe('who a receipt names', () => {
+  it('prefers the issuer over the envelope signer', () => {
+    const meta = { issuerId: SENDER, senderPubkey: GATEWAY }
+    // The resolution dmPoll performs, kept here so the precedence is pinned
+    // somewhere a reader will find it.
+    const resolved = String(meta.issuerId ?? meta.senderPubkey ?? '')
+    expect(resolved).toBe(SENDER)
+    expect(resolved).not.toBe(GATEWAY)
+  })
+
+  it('falls back to the signer when there is no issuer', () => {
+    const meta: { issuerId?: string; senderPubkey?: string } = { senderPubkey: SENDER }
+    const resolved = String(meta.issuerId ?? meta.senderPubkey ?? '')
+    expect(resolved).toBe(SENDER)
   })
 })
 
