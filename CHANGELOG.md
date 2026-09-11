@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-11
+
+### Fixed
+
+- **wallet-api: the scheme now comes from the edge, not the socket.** Behind a
+  TLS-terminating proxy every authenticated request answered 401 `url-mismatch`.
+  NIP-98 binds a signature to an absolute URL and the comparison includes the
+  protocol, so a caller signed `https://` while the service reconstructed
+  `http://` from `req.headers.host`. `X-Forwarded-Proto` is now read, which
+  grants nothing: it only lets a caller match a signature it already made over
+  the URL it really used. This is the release that lets wallet-api be deployed
+  at all (#79).
+
 ## [0.1.0] - 2026-09-11
 
 The first numbered release. 431 commits, previously shipped as `:latest` with
