@@ -72,11 +72,24 @@ function walletRoute(url) {
   return resolved.pathname + resolved.search + resolved.hash
 }
 
+/**
+ * An explicit allow-list, NOT `ROUTE_FOR_TYPE[candidate]`.
+ *
+ * A truthiness lookup finds inherited Object.prototype members, so a payload
+ * carrying `type: "constructor"` counted as a known type and
+ * `FALLBACK_TEXT["constructor"]` resolved to a FUNCTION — whose `.title` is
+ * undefined, producing a notification with no title. That is the silent drop
+ * this worker exists to prevent, reached from a string on the network.
+ *
+ * Mirrors `isNotificationType` in render.ts, which was always an allow-list.
+ */
+const KNOWN_TYPES = ['voucher_received', 'voucher_claimed', 'voucher_expiring']
+
 function toRenderable(payload) {
   const raw = payload || {}
   const data = raw.data || {}
   const candidate = raw.type || data.type
-  const type = ROUTE_FOR_TYPE[candidate] ? candidate : 'generic'
+  const type = KNOWN_TYPES.indexOf(candidate) !== -1 ? candidate : 'generic'
   const fallback = FALLBACK_TEXT[type]
 
   return {
