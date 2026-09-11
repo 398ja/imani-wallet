@@ -1,8 +1,12 @@
 // `vitest/config`, not `vite`: this file now carries a `test` block, and vite's
 // own defineConfig does not type it.
+import { createRequire } from 'node:module'
+
 import { defineConfig } from 'vitest/config'
 import type { Connect, Plugin, ViteDevServer, PreviewServer } from 'vite'
 import react from '@vitejs/plugin-react'
+
+const pkg = createRequire(import.meta.url)('./package.json') as { version: string }
 import { fileURLToPath } from 'node:url'
 import { readFileSync } from 'node:fs'
 import type { ClientRequest } from 'node:http'
@@ -407,6 +411,16 @@ function sharedDynamicImports(): Plugin {
 
 export default defineConfig({
   plugins: [react(), portalEdgeAuth(), sharedDynamicImports()],
+  // The version, reachable at runtime.
+  //
+  // Without this the number in package.json is a number in a file: the wallet
+  // deploys as `:latest`, so a container in staging could not be traced back to
+  // the code inside it. Baked in at build time so a support conversation can
+  // start from what is actually running rather than what someone believes was
+  // deployed.
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   // Scoped to src/, because `packages/` now lives in this repo and ships its own
   // suites — dm-poll's and wallet-storage's among them, the latter wanting
   // `fake-indexeddb`, which is not a dependency here. Without this, `npm test`
