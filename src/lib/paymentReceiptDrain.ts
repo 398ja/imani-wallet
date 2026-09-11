@@ -156,7 +156,14 @@ export async function runReceiptDrainTick(): Promise<void> {
       }
     }
 
-    if (body.moreAvailable) void runReceiptDrainTick()
+    // NOT recursed here. `drainInFlight` is still true until the finally
+    // below, so calling runReceiptDrainTick now would hit the re-entry guard
+    // and return immediately — a continuation that looks like one and does
+    // nothing. The 10s tick picks up the remainder, which is what
+    // incomingNotifications.ts already relies on for the same case.
+    if (body.moreAvailable) {
+      console.log(LOG_PREFIX, 'more receipts queued, continuing on the next tick')
+    }
   } catch (error) {
     console.warn(LOG_PREFIX, 'drain tick failed', error)
   } finally {
