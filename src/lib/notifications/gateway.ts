@@ -98,6 +98,15 @@ export async function updatePreferences(
         // flag `expired` while the event it gates is `voucher_expiring`. That
         // mapping already had to exist, which is why moving the rest of the
         // wallet to `coupon*` cost nothing.
+        //
+        // Verified against the LIVE gateway on 2026-09-11, because a rename at
+        // a serialization boundary is exactly where a typo ships silently: unit
+        // tests assert this literal against a mock, which would happily agree
+        // with a misspelling. Signing a real NIP-98 request with this body gave
+        // subscribe 201, preferences 200, the row persisting `t|t|f` in
+        // push_subscription, and the opted-out row correctly ABSENT from
+        // `WHERE active AND notify_voucher_expired` — the query that picks who
+        // gets an expiring push. Client asks, server persists, server filters.
         notifyVoucherReceived: preferences.couponReceived,
         notifyVoucherClaimed: preferences.couponClaimed,
         notifyVoucherExpired: preferences.couponExpiring,
