@@ -286,6 +286,19 @@ export const proxy = {
   //
   // changeOrigin: false for the NIP-98 reason above.
   '/api/v1/incoming-notifications': { target: 'http://localhost:28081', changeOrigin: false },
+  // Payment receipts are on account-app too, for the third time in this file:
+  // PaymentReceiptController is gateway-core-rest, not customer-wallet.
+  //
+  // The failure is the same one the comment above describes and is worth
+  // restating because it has now cost three separate debugging sessions: the
+  // drain loop polls every ten seconds, so a missing rule does not fail once,
+  // it 404s forever while the endpoint itself is perfectly healthy. The
+  // observed symptom was a settlement notification that never arrived, three
+  // tiers away from the line that was missing.
+  //
+  // changeOrigin: false for the NIP-98 reason above — the signed `u` tag is
+  // the browser origin, and rewriting the Host invalidates every signature.
+  '/api/v1/payment-receipts': { target: 'http://localhost:28081', changeOrigin: false },
   /*
    * Web Push subscription management, on gateway-core.
    *
