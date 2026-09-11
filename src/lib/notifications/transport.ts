@@ -27,7 +27,7 @@ import type { PermissionState } from './types'
  *
  * Modelled on the Web Push shape because that is what
  * `PushSubscriptionRequest` on gateway-core already accepts: endpoint, p256dh,
- * auth. Native fills the same envelope differently (see native.ts) so the
+ * auth. Native fills the same envelope differently (see nativePush.ts) so the
  * server needs no new endpoint on day one.
  */
 export interface TransportSubscription {

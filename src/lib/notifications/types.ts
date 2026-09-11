@@ -19,6 +19,23 @@
  * The seam is `PushTransport` (see transport.ts). This file holds only the
  * nouns, so neither transport imports the other's types.
  *
+ * ## Why this file says "voucher" when the glossary says "coupon"
+ *
+ * CONTEXT.md defines the domain noun as **Coupon** and lists _Avoid: Voucher_.
+ * Every user-visible string below obeys that: the wallet says "Coupon
+ * received", never "Voucher received".
+ *
+ * The identifiers do not, and deliberately. `voucher_received` is a value on
+ * the WIRE, chosen by gateway-core, and `notifyVoucherClaimed` is a column in
+ * its push_subscription table. Renaming them here would not rename them there;
+ * it would only add a translation layer whose sole job is to disagree with the
+ * server about what the same string is called, and every debugging session
+ * would start by mapping one set of names onto the other.
+ *
+ * So the rule is: the glossary governs what we SAY, the server governs what we
+ * SEND. The boundary is this file plus gateway.ts, and it should not spread
+ * past them.
+ *
  * ## The event set is the SERVER's, not ours
  *
  * `NotificationType` mirrors what `PushNotificationService` on gateway-core

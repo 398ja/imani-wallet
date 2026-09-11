@@ -145,6 +145,26 @@ describe('service worker', () => {
     expect(new URL(options.data.url, 'https://wallet.example').origin).toBe('https://wallet.example')
   })
 
+  // A payload's `type` is an arbitrary string from the network, and the worker
+  // looked it up with `ROUTE_FOR_TYPE[candidate]`, which finds inherited
+  // Object.prototype members. `type: "constructor"` is truthy, so it was
+  // treated as a KNOWN type, and FALLBACK_TEXT["constructor"] is a function
+  // whose .title is undefined — a notification with no title, which is exactly
+  // the silent-drop this worker is built to avoid.
+  it.each(['constructor', 'toString', 'valueOf', '__proto__', 'hasOwnProperty'])(
+    'treats the inherited key %s as unknown rather than rendering a blank notification',
+    async (type) => {
+      const { event, settled } = pushEvent({ type })
+      worker.listeners.push(event)
+      await settled()
+
+      const [title, options] = worker.registration.showNotification.mock.calls[0]
+      expect(title).toBe('Imani')
+      expect(options.body).toBe('You have a new notification.')
+      expect(options.data.url).toBe('/')
+    },
+  )
+
   it('still shows something when the push carries no data at all', async () => {
     const { event, settled } = pushEvent(undefined)
     worker.listeners.push(event)
