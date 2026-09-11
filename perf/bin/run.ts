@@ -51,6 +51,14 @@ const accept = process.argv.includes('--accept')
  * to prevent, wearing the suite's own clothes.
  */
 const requireFixtures = process.argv.includes('--require-fixtures')
+const emptyOnly = process.argv.includes('--empty-only')
+
+if (emptyOnly && requireFixtures) {
+  throw new Error(
+    '--empty-only and --require-fixtures contradict each other: one skips ' +
+      'every populated rung, the other insists on measuring them.',
+  )
+}
 
 /**
  * Also require enough rungs to assert a cost SHAPE.
@@ -137,7 +145,15 @@ async function main() {
     // from different source code, and that IS a failure: measuring it would
     // produce a number that looks fine and means nothing.
     const ladder: Rung[] = []
-    const rungs = available(SNAPSHOTS)
+    // --empty-only measures the rung that needs no auth endpoint.
+    //
+    // Every populated rung unlocks, and unlocking posts to /api/v1/auth/*,
+    // which a GitHub runner has nothing to answer. This is NOT a way to make
+    // a red run green: the empty wallet boots fast however badly storage
+    // scales, so a run under this flag is a smoke check that the harness
+    // drives a real browser and the wallet boots. It deliberately refuses to
+    // combine with --require-fixtures, which demands the opposite.
+    const rungs = emptyOnly ? [] : available(SNAPSHOTS)
     if (rungs.length === 0) {
       if (requireFixtures) {
         throw new Error(
@@ -148,8 +164,15 @@ async function main() {
             '  npm run perf:record -- --coupons 5',
         )
       }
-      console.log('\nNo fixtures recorded, so only the empty wallet was measured.')
-      console.log('  npm run perf:record -- --coupons 5')
+      if (emptyOnly) {
+        console.log(
+          '\n--empty-only: measured the empty wallet, which needs no auth ' +
+            'endpoint. A smoke check, NOT a regression gate.',
+        )
+      } else {
+        console.log('\nNo fixtures recorded, so only the empty wallet was measured.')
+        console.log('  npm run perf:record -- --coupons 5')
+      }
     }
     // Driven through the shared ladder runner rather than a loop of its own.
     //
