@@ -90,8 +90,33 @@ jobs:
       # NOT --require-shape: the cost-shape assertion needs the full ladder,
       # and the large rungs are deliberately not in the repository. A developer
       # with the local stack runs that.
+      # DISABLED, not deleted, and not quietly downgraded to a green run.
+      #
+      # Unlocking a restored fixture calls nap.login(), which posts to
+      # /api/v1/auth/*. A runner has no gateway to answer, so the page renders
+      # `Unexpected token 'A', "AggregateError" is not valid JSON` and the
+      # wallet stays locked. This step has never once passed.
+      #
+      # Do NOT "fix" it by stubbing /auth/init and /auth/complete: unlock is
+      # INSIDE the measured window (coldBoot.ts sets unlockedMs after it,
+      # because a returning customer really pays that cost), so a stub
+      # answering instantly would report a different quantity against
+      # baselines recorded through a real gateway. See perf/README.md.
+      #
+      # Re-enable by standing a gateway up in this job. Until then the
+      # populated rung is a developer-machine check.
       - name: Measure cold boot against a populated wallet
+        if: false
         run: npm run perf -- --require-fixtures
+        working-directory: imani-wallet
+
+      # What CI CAN honestly check: the harness builds, drives a real browser,
+      # and the wallet boots. No --require-fixtures, because the populated
+      # rung above is what that flag guards and it cannot run here. This
+      # measures an empty wallet, which boots fast however badly storage
+      # scales, so it is a smoke check and NOT a regression gate.
+      - name: Smoke-check that the wallet boots under measurement
+        run: npm run perf -- --empty-only
         working-directory: imani-wallet
 
       # Kept whatever the verdict: a green report is the record of what the

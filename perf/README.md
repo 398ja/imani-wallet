@@ -237,8 +237,14 @@ compares two different quantities is worse than a red one.
 So the honest options are: stand a real gateway up in the workflow, or move
 unlock out of the measured window and accept that the populated rungs then
 under-report a returning customer's boot. The first costs CI minutes, the
-second costs fidelity. Both are real decisions, and neither is a tweak, which
-is why the workflow stops after `cold-boot` rather than guessing.
+second costs fidelity. Both are real decisions, and neither is a tweak.
+
+Until one is taken, the workflow runs `--empty-only`, which measures the one
+rung that needs no auth endpoint. Treat that run as a smoke check that the
+harness drives a real browser and the wallet boots — **not** as a regression
+gate, because an empty wallet boots fast however badly storage scales. The
+populated rungs are a developer-machine check, and `--empty-only` refuses to
+combine with `--require-fixtures` so the two can never be confused.
 
 The rungs matter as a **pair**. An empty wallet boots fast no matter how badly
 storage scales, so the empty number alone cannot see the cost that matters. And
