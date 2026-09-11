@@ -17,6 +17,7 @@ import {
 import { announceArrival, type ArrivedVoucher } from './arrivalToast'
 import { announceQueued, settleQueued } from './queuedToast'
 import { attestRedemption, nullifierFor } from './attestation'
+import { postPaymentReceipt } from './paymentReceipt'
 import { createDmCryptoAdapter, toLegacyMetadata } from './dmCrypto'
 import { loadMerchant } from './merchant'
 import { checkRedemption } from './redemptionLedger'
@@ -497,6 +498,35 @@ function redemptionAdapter(): RedemptionAdapter {
       // the new one when the user looks. Never throws (see announceArrival), so
       // it cannot turn a completed redemption into a reported failure.
       announceArrival(toArrivedVoucher(voucher))
+
+      // And tell the SENDER it landed. They have no other way to know: the
+      // money left their balance when they sent the gift wrap, and whether it
+      // was ever claimed is invisible from their side.
+      //
+      // The gateway already had every piece of this — the endpoint, the queue,
+      // the "Voucher Claimed" Web Push, four registered subscriptions — and
+      // `push_notification_log` still held zero rows, because nothing in this
+      // wallet ever posted a receipt.
+      //
+      // NOT gated on being a merchant, unlike attestRedemption below: that
+      // attests "I honoured this", which only a merchant does, while this says
+      // "your coupon arrived", which every recipient owes the sender.
+      //
+      // Fire-and-forget and never throws: the proofs are already burnt, so a
+      // gateway that refuses the receipt must not turn a completed redemption
+      // into a reported failure.
+      // Both sources, because the sender's key reaches this frame by two
+      // routes: on the decoded DM metadata, and as the top-level
+      // `opts.senderPubkey` that line 449 below already relies on. Reading only
+      // one of them silently posts nothing whenever the other is the populated
+      // one, which is exactly the kind of quiet no-op this whole feature was.
+      void postPaymentReceipt({
+        senderPubkeyHex: String(meta?.senderPubkey ?? opts?.senderPubkey ?? ''),
+        deliveryEventId: String(meta?.eventId ?? opts?.eventId ?? ''),
+        voucherId: meta?.voucherId as string | undefined,
+        faceValue: meta?.faceValue == null ? undefined : Number(meta.faceValue),
+        faceUnit: meta?.faceUnit == null ? undefined : String(meta.faceUnit),
+      })
 
       // The public half of the record. `txRecords` writes the merchant's own
       // history sealed to their own key, which nobody else can read — so a
