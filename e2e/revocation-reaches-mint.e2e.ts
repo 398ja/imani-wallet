@@ -163,9 +163,26 @@ for (let attempt = 1; ; attempt++) {
     await page.waitForTimeout(500)
   }
 }
-await page.waitForTimeout(1500)
-
+// Wait for the ROSTER, not for a fixed interval and not merely for React to
+// mount.
+//
+// Mounting is the wrong signal here, and I had to measure that: #root gains a
+// child as soon as ANY route paints, which is sooner than the 1500ms sleep
+// this replaced, so waiting on it made the probe read an empty terminals
+// screen and bail with "rendered no roster". The roster arrives after its own
+// load, so that is what to wait for.
+//
+// Still better than the sleep: 1500ms is a guess that fails on a slow machine
+// and wastes time on a fast one, whereas this returns as soon as the screen is
+// genuinely ready and says so if it never is.
 const revoke = page.getByRole('button', { name: 'Revoke' })
+await revoke
+  .first()
+  .waitFor({ state: 'visible', timeout: 15_000 })
+  .catch(() => {
+    // Swallowed: the count check below is the assertion, and it reports the
+    // empty-roster case as probe setup rather than as a finding.
+  })
 check('the owner is offered Revoke', (await revoke.count()) === 1)
 if ((await revoke.count()) === 0) {
   // Bail rather than time out for 30s on a button that will never appear.
@@ -175,7 +192,21 @@ if ((await revoke.count()) === 0) {
 }
 await revoke.first().click()
 await page.getByRole('button', { name: /Revoke Front counter/ }).click()
-await page.waitForTimeout(400)
+
+// Wait for the WRITE this probe is about to read, not for 400ms and hope.
+// The click revokes asynchronously; sleeping a fixed interval means a slow
+// machine reads the row before revokedAt is set and reports a real revocation
+// as a failure.
+await page.waitForFunction(
+  (stall) => {
+    const raw = localStorage.getItem(`imani-wallet:terminals:${stall}`)
+    if (!raw) return false
+    const rows = JSON.parse(raw) as Array<{ revokedAt?: number }>
+    return typeof rows[0]?.revokedAt === 'number'
+  },
+  STALL,
+  { timeout: 15_000 },
+)
 
 const row = await page.evaluate(
   (stall) =>
