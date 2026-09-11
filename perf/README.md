@@ -202,13 +202,83 @@ They are separate on purpose. A combined journey yields one number that can
 move for five reasons and cannot point at any of them; five numbers name the
 subsystem that changed.
 
-**No backend is needed**, and that is checked rather than assumed: the numbers
-above were measured with `gateway-customer` and `imani-mint-rest` stopped. What
-the run does need is the proxy TABLE from `vite.config.ts`, because the wallet's
-unlock posts to `/api/v1/auth/*` and the SPA fallback would otherwise answer
-with `index.html`. The wallet then stays locked and the run measures the lock
-screen instead of a customer's wallet — `measureColdBoot` refuses to report
-that, which is how the gap was found.
+**No backend is needed** for the EMPTY rung, and that is checked rather than
+assumed: `cold-boot` with no fixture measures fine with everything stopped.
+
+The POPULATED rungs are a different matter, and the claim above was too broad.
+Restoring a fixture leaves the wallet LOCKED — the resume record's wrapping key
+is non-extractable by design, so no snapshot can carry an unlocked session —
+and unlocking calls `nap.login()`, which posts to `/api/v1/auth/*` and needs
+something to answer. The proxy table from `vite.config.ts` routes it, which is
+why `serve()` takes `withGateway`, but a route to nothing still fails: with no
+gateway the fetch rejects and the page renders
+
+    Unexpected token 'A', "AggregateError" is not valid JSON
+
+which is what a GitHub runner sees, every time. Observed 2026-09-11 on
+imani-wallet#69 after the workflow was fixed enough to reach that far for the
+first time.
+
+So the honest statement is: the empty rung needs nothing, and every populated
+rung needs a reachable auth endpoint. On a laptop the local stack provides it.
+In CI it does not, which is why `.github/workflows/perf.yml` currently stops
+after `cold-boot`. Closing that gap has one fewer option than it looks.
+
+The tempting fix is to stub `/auth/init` and `/auth/complete` in `serve()`.
+It is a two-step nostr challenge handshake and the harness could answer it in
+about thirty lines. **Do not.** Unlock is INSIDE the measured window on every
+populated rung — `coldBoot.ts` sets `unlockedMs = Date.now() - started` after
+it, because a returning customer really does pay for the unlock. A stub
+answering in ~0ms where a gateway takes a round trip would not make CI measure
+the same thing faster; it would make CI measure a DIFFERENT quantity and
+report it against baselines recorded through a real gateway. A green run that
+compares two different quantities is worse than a red one.
+
+So the honest options are: stand a real gateway up in the workflow, or move
+unlock out of the measured window and accept that the populated rungs then
+under-report a returning customer's boot.
+
+Both costs have since been measured, which makes the choice less open than it
+reads.
+
+**Moving unlock out costs about three quarters of the measurement.** On this
+machine the empty wallet boots in 129ms and the 5-coupon wallet in 518ms, so
+restore-and-unlock is roughly 390ms — the *majority* of what a returning
+customer waits for. A populated rung without it would report ~130ms, barely
+distinguishable from the empty rung, and the cold-boot-5/cold-boot-20 pair
+that exists to show whether stored coupons cost anything to open would be
+comparing two numbers that no longer contain the part that varies. That is
+not a reduced measurement, it is a different one wearing the same name.
+
+**Standing a gateway up costs a stack, not a container.** `gateway-core`
+serves `/api/v1/auth/*` and wants Postgres, `bottin-api`, blossom and
+`gateway-customer`; the local stack it belongs to runs 42 containers. Bringing
+that up per CI run is minutes of setup and a new class of flake (a perf job
+that fails because a database was slow to accept connections tells you nothing
+about the wallet).
+
+So: keep unlock inside the window, keep the populated rungs on developer
+machines where the stack already runs, and let CI check what it can check
+honestly. If the populated rungs are ever wanted in CI, the gateway is the
+option to take — the fidelity loss of the alternative is too large to accept
+for a green tick.
+
+Until one is taken, the workflow runs `--empty-only --ceiling-only`, which
+measures the one rung that needs no auth endpoint and judges it by the
+absolute ceiling rather than the relative band.
+
+The second flag matters as much as the first. A baseline is recorded on one
+machine, so the band means "slower than that laptop", not "slower than it
+was". This same empty boot measures ~121ms locally and ~179ms on a GitHub
+runner — a 64% "regression" that is entirely hardware. The band's own note
+already warns that a band which cries wolf is one people learn to ignore.
+The 1000ms ceiling is portable, because it is the point where opening stops
+feeling immediate on any hardware, so that is what CI enforces. Scenarios
+outside the band but under the ceiling are still printed, just not failed. Treat that run as a smoke check that the
+harness drives a real browser and the wallet boots — **not** as a regression
+gate, because an empty wallet boots fast however badly storage scales. The
+populated rungs are a developer-machine check, and `--empty-only` refuses to
+combine with `--require-fixtures` so the two can never be confused.
 
 The rungs matter as a **pair**. An empty wallet boots fast no matter how badly
 storage scales, so the empty number alone cannot see the cost that matters. And

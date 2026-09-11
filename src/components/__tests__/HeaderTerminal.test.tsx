@@ -61,4 +61,26 @@ describe('the menu on a terminal', () => {
     show({})
     expect(screen.queryByText('Dashboard')).toBeNull()
   })
+
+  /**
+   * The bell follows the same rule as the books.
+   *
+   * A terminal is a device in someone else's hands, quite possibly staff. The
+   * stall's arrivals are the owner's business, and an inbox on a shared till
+   * would show every coupon the stall received to whoever is standing at it.
+   */
+  it('gives a terminal no notification bell', () => {
+    show({ merchant: true, terminal: true })
+    expect(screen.queryByLabelText(/^Notifications/)).toBeNull()
+  })
+
+  it('but keeps it on the stall’s own device', () => {
+    show({ merchant: true })
+    expect(screen.getByLabelText(/^Notifications/)).toBeTruthy()
+  })
+
+  it('and for a plain customer, who is exactly who receives coupons', () => {
+    show({})
+    expect(screen.getByLabelText(/^Notifications/)).toBeTruthy()
+  })
 })

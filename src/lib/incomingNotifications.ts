@@ -39,6 +39,7 @@ import { createBoundedSet, createPersistentBoundedSet } from './boundedSet'
 import { displayDecimals, formatFace } from './format'
 import { signedFetch } from './nip98'
 import { validateEnvelope, type IncomingPaymentNotificationEnvelope } from './incomingNotification'
+import { recordNotification } from './notifications/inbox'
 
 /** Server-side Artemis producer drain endpoint. Same-origin; see dmPoll.ts. */
 const DRAIN_ENDPOINT = '/api/v1/incoming-notifications/drain'
@@ -258,6 +259,19 @@ function handleInboundEnvelope(raw: unknown, recipientPubkeyHex: string): string
   }
 
   raiseToast(env, recipientPubkeyHex)
+  // The toast lasts five seconds; the bell keeps it. Recorded even when the
+  // toast was suppressed as already-seen, because a user who missed the toast
+  // is precisely who opens the bell — and `recordNotification` dedupes on id,
+  // so a redelivery never becomes a second line.
+  recordNotification(recipientPubkeyHex, {
+    id: env.notificationId,
+    type: 'voucher_received',
+    title: 'Payment on its way',
+    body: `${formatEnvelopeTotal(env)} from ${env.sender.displayName ?? 'someone'}`,
+    // Not `/receive`: this is advance notice of money arriving, and the wallet
+    // home is where the balance it will land in is shown.
+    url: '/',
+  })
   // Acked whether or not this call was the one that announced it: if it was
   // already seen, the server is redelivering something the user has read.
   return env.notificationId

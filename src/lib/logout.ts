@@ -1,6 +1,7 @@
 import { getSession, keyStore, resetSession } from './nap'
 import { stopDmPoll } from './dmPoll'
 import { stopIncomingNotifications } from './incomingNotifications'
+import { disableNotifications } from './notifications/manager'
 import { forgetResume } from './resume'
 import { wipeWallet } from './wallet'
 
@@ -58,6 +59,27 @@ export async function logout(
   // Same reason: the drain loop signs NIP-98 with the session key and would keep
   // polling for payments addressed to the account being torn down.
   stopIncomingNotifications()
+
+  // And cancel the push subscription, which is the one piece of this account's
+  // state that localStorage cannot reach: it lives in the browser's push
+  // service and in the gateway's push_subscription table. Left behind, the
+  // server keeps pushing this account's coupon events to a device that has
+  // just erased the key, so a shared phone shows the previous user's activity
+  // on its lock screen — the same failure the wholesale localStorage wipe
+  // below exists to prevent, by a different door.
+  //
+  // Before session.logout(), deliberately: deregistering at the gateway is a
+  // NIP-98 signed DELETE, so it needs the session key that logout is about to
+  // zero.
+  try {
+    await disableNotifications(pubkey)
+  } catch {
+    // Best effort, for the same reason the session teardown below is: an
+    // unreachable gateway must not strand someone in a session they asked to
+    // leave. The local unsubscribe is the half that stops THIS device
+    // rendering anything, and a row the server cannot reach stops mattering
+    // the moment the browser subscription is gone.
+  }
 
   try {
     // Zeroes the decrypted key, POSTs /auth/logout, and broadcasts to other tabs

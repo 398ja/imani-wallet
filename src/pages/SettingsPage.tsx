@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { ChevronRight, User, Shield, Download, Store, ShieldCheck, BadgeCheck, Tablet, CreditCard } from 'lucide-react'
+import { ChevronRight, User, Shield, Download, Store, ShieldCheck, BadgeCheck, Tablet, CreditCard, Bell } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, ListSection } from '../components/ui'
@@ -43,6 +43,14 @@ export function SettingsPage({
           icon={Download}
           label="Backup"
           hint="Backup key, file and Google Drive"
+        />
+        {/* In Account rather than a section of its own: there is one row, and a
+            heading over a single item is a heading that earns nothing. */}
+        <SettingRow
+          to="/settings/notifications"
+          icon={Bell}
+          label="Notifications"
+          hint="What Imani tells you about"
         />
       </ListSection>
 

@@ -286,6 +286,21 @@ export const proxy = {
   //
   // changeOrigin: false for the NIP-98 reason above.
   '/api/v1/incoming-notifications': { target: 'http://localhost:28081', changeOrigin: false },
+  /*
+   * Web Push subscription management, on gateway-core.
+   *
+   * Same trap as the line above, found the same way: without a rule this falls
+   * into the '/api' catch-all, reaches customer-wallet, and 404s. That 404 is
+   * indistinguishable from "this deployment has no push support", so the wallet
+   * reads it as "no VAPID key" and the settings screen reports that
+   * notifications are not switched on for this server — with the server sitting
+   * right there, correctly configured, answering 200 on 28081.
+   *
+   * changeOrigin: false for the NIP-98 reason above: the subscribe, preferences
+   * and delete calls are signed over the URL, and rewriting the Host makes the
+   * signature cover an origin the server never saw.
+   */
+  '/api/v1/push': { target: 'http://localhost:28081', changeOrigin: false },
   // Voucher ISSUANCE is a merchant action and lives on gateway-portal, a third
   // tier this file did not know about. customer-wallet refuses it outright
   // ("Voucher creation not supported on JdbcWalletPort — customer-wallet is

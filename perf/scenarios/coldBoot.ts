@@ -285,16 +285,43 @@ export async function measureColdBootMedian(
  * experiences on their second visit.
  */
 export async function unlock(page: Page, passphrase = FIXTURE_PASSPHRASE): Promise<boolean> {
-  const field = page.getByPlaceholder('Passphrase')
-  if ((await field.count()) === 0) return false
+  const opened = () => /Total balance|Scan/.test(document.body?.innerText ?? '')
 
-  await field.fill(passphrase)
-  await page.getByRole('button', { name: /unlock/i }).first().click()
-  await page
-    .waitForFunction(() => /Total balance|Scan/.test(document.body?.innerText ?? ''), undefined, {
-      timeout: 60_000,
-    })
-    .catch(() => {})
+  // Already open. A wallet recorded WITHOUT a device passphrase (optional
+  // since 013d00a) boots straight in, so there is no field and nothing to do —
+  // and reporting that as a failed unlock would fail the run for a wallet that
+  // is working perfectly.
+  const field = page.getByPlaceholder('Passphrase')
+  if ((await field.count()) === 0) {
+    return /Total balance|Scan/.test((await page.textContent('body')) ?? '')
+  }
+
+  // Two attempts, because the failure this guards against is a LOST RACE, not
+  // a wrong passphrase. Restoring a fixture and unlocking competes with the
+  // boot's own background work, and five scenarios share one machine; the
+  // observed failures were the same unlock that succeeds in seconds when run
+  // alone. A wrong passphrase fails both attempts just as fast, so the retry
+  // costs nothing when the problem is real.
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    await field.fill(passphrase)
+    await page.getByRole('button', { name: /unlock/i }).first().click()
+    await page.waitForFunction(opened, undefined, { timeout: 120_000 }).catch(() => {})
+
+    if (/Total balance|Scan/.test((await page.textContent('body')) ?? '')) return true
+
+    // Say what the page DID show. A bare "did not unlock" tells the next
+    // reader only that something was slow — which is exactly the state that
+    // cost three instrumented CI runs to get past once already. The wallet
+    // reports a wrong passphrase, a corrupt key and a stalled boot
+    // differently, and all three are actionable once visible.
+    const shown = ((await page.textContent('body')) ?? '').replace(/\s+/g, ' ').trim().slice(0, 160)
+    console.log(`  unlock attempt ${attempt} did not open the wallet; page shows: ${shown}`)
+
+    // Only worth retrying if the form is still there to retry with.
+    if ((await field.count()) === 0) break
+    await page.waitForTimeout(1_000)
+  }
+
   return /Total balance|Scan/.test((await page.textContent('body')) ?? '')
 }
 
