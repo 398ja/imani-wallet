@@ -39,6 +39,25 @@ async function goto(p: Page, url: string): Promise<void> {
   for (let attempt = 1; ; attempt++) {
     try {
       await p.goto(url, { waitUntil: 'domcontentloaded' })
+      // `domcontentloaded` fires when the HTML is parsed, which for a SPA is
+      // before React has rendered anything: the document is an empty #root.
+      // Returning there made every later locator race the first render, and
+      // it failed roughly one run in five with a bare 30s locator timeout
+      // that pointed at the element rather than at the navigation.
+      //
+      // Waiting for React to MOUNT, not for networkidle (this app holds
+      // long-lived connections, so networkidle may never settle) and not for
+      // any particular element: the routes here render different chrome, and
+      // a logged-out wallet has no <header> at all — checked, it is 0 on both
+      // / and /settings, so waiting for one would hang every run.
+      //
+      // `#root` gaining a child is the one signal that means the same thing on
+      // every route: React has rendered something.
+      await p.waitForFunction(
+        () => (document.getElementById('root')?.children.length ?? 0) > 0,
+        undefined,
+        { timeout: 15_000 },
+      )
       return
     } catch (e) {
       if (attempt === 3) throw e
@@ -251,11 +270,30 @@ async function main() {
 
   // ── REQUIREMENT: the PWA pieces push depends on ─────────────────────
   console.log('\nDelivery')
-  const manifest = await page.evaluate(async () => {
-    const link = document.querySelector('link[rel="manifest"]')
-    if (!link) return null
-    return fetch(link.getAttribute('href')!).then((r) => (r.ok ? r.json() : null))
-  })
+
+  // Let the SPA settle first. The checks above click the bell, which routes,
+  // and everything below talks to the page (service worker registration in
+  // particular). Starting that work mid-navigation is what made this section
+  // flaky.
+  await page.waitForLoadState('networkidle').catch(() => {})
+  // Read the href in the page (that is the thing under test: the document
+  // really does declare a manifest) but fetch it OUT of the page.
+  //
+  // An in-page fetch() here was flaky, and the reason is this step's position:
+  // the checks above click the bell, which routes the SPA, and a fetch issued
+  // while a navigation is in flight is aborted — surfacing as a bare
+  // "TypeError: Failed to fetch" that says nothing about manifests. Playwright's
+  // request context does not share the page's lifetime, so it cannot lose that
+  // race.
+  const manifestHref = await page.evaluate(
+    () => document.querySelector('link[rel="manifest"]')?.getAttribute('href') ?? null,
+  )
+  const manifest = manifestHref
+    ? await page.request
+        .get(new URL(manifestHref, BASE).href)
+        .then((r) => (r.ok() ? r.json() : null))
+        .catch(() => null)
+    : null
   check('the app is installable (iOS grants Push only to an installed PWA)', manifest !== null)
   check('the manifest is standalone', manifest?.display === 'standalone')
 
