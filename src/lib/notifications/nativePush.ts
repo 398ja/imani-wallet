@@ -50,6 +50,23 @@ import type { PermissionState } from './types'
  * `@Size(max = 500)` validation, it is unambiguous (no Web Push endpoint is
  * ever `fcm:`), and a server-side `startsWith` is all the routing needs.
  */
+/*
+ * Kept in step with gateway-core's `WebPushService.FCM_ENDPOINT_SCHEME`, which
+ * declares the same literal independently across a repo boundary. Drift there
+ * would be invisible until an Android user's push vanished into a row the
+ * server tried to deliver as Web Push.
+ *
+ * Checked against the running gateway on 2026-09-11 by POSTing exactly what
+ * `toSubscription()` builds — `fcm:<token>` with the two placeholder keys:
+ * accepted 201, and push_subscription stores the endpoint verbatim.
+ *
+ * One surprise worth recording so nobody else chases it: the JSON RESPONSE
+ * shows `fcm://null/...`. That is not corruption. gateway-api's
+ * `PushSubscriptionResponse.truncateEndpoint` masks endpoints to their domain
+ * for privacy, via `URI.getScheme() + "://" + URI.getHost()`, and an `fcm:`
+ * URI has no host, so getHost() is null. Storage is correct and the wallet
+ * never reads the endpoint back, so it is cosmetic.
+ */
 const FCM_SCHEME = 'fcm:'
 
 /**
