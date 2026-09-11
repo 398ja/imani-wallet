@@ -280,6 +280,59 @@ gate, because an empty wallet boots fast however badly storage scales. The
 populated rungs are a developer-machine check, and `--empty-only` refuses to
 combine with `--require-fixtures` so the two can never be confused.
 
+## Reading a populated-rung "regression" (measured 2026-09-11)
+
+If the populated rungs report a regression while the empty rung does not,
+suspect the unlock before suspecting the wallet.
+
+Measured on this machine the day notifications landed:
+
+    empty boot        116ms   vs 109ms baseline   +6%
+    5-coupon boot     501ms   vs 327ms baseline  +53%
+    20-coupon boot    488ms   vs 311ms baseline  +57%
+    50-coupon boot    501ms   vs 336ms baseline  +49%
+
+Every populated rung is ~+50% and the empty one is flat. That shape is the
+answer: the only thing the populated rungs do that the empty one does not is
+restore a fixture and unlock it, and unlock is inside the measured window on
+purpose (see the note above). Subtracting gives the unlock cost directly:
+
+    baseline era   327 - 109 = ~218ms
+    today          501 - 116 = ~385ms
+
+So the wallet's own boot moved 7ms and the unlock moved ~167ms. Unlock is
+`nap.login()`, two signed round trips to a gateway — on this machine a gateway
+that had just been rebuilt and restarted, with cold JIT and an empty connection
+pool. It is not wallet rendering.
+
+Every rung is comfortably under its absolute ceiling (1500ms), which is the
+check that actually guards a customer's experience.
+
+### The cost-shape warning on a three-rung ladder
+
+The same run reported `cold-boot cost shape: regressed (CLIMBING: each coupon
+costs 1.233ms at the large end versus -1.267ms at the small end)`. Check the
+rungs before believing it:
+
+    5 coupons   501ms
+    20 coupons  488ms
+    50 coupons  501ms
+
+Flat across a 10x span. The two "slopes" are -0.867 and +0.433 ms/coupon,
+which is noise either side of zero divided by noise either side of zero. On a
+short ladder whose rungs differ by a few milliseconds, the shape check is
+measuring jitter.
+
+That is not an argument for loosening it. The shape check exists because
+absolute numbers being comfortable today says nothing about a wallet twice the
+size, and it needs the FULL ladder — the 120 and 500 rungs, which are not
+committed — to say anything true. On three close rungs, read the rungs.
+
+**Do not accept a new baseline to make this green.** The numbers were recorded
+on different hardware in a different state, and rebaselining here would bake a
+cold gateway into the reference. Re-measure with a warm stack, or accept on the
+machine the baseline came from.
+
 The rungs matter as a **pair**. An empty wallet boots fast no matter how badly
 storage scales, so the empty number alone cannot see the cost that matters. And
 a single populated number cannot either: what says storage is scaling is
