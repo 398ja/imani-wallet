@@ -21,6 +21,8 @@ vi.mock('../nap', () => ({
 }))
 vi.mock('../dmPoll', () => ({ stopDmPoll: vi.fn() }))
 vi.mock('../incomingNotifications', () => ({ stopIncomingNotifications: vi.fn() }))
+vi.mock('../notifications/manager', () => ({ disableNotifications: vi.fn(async () => undefined) }))
+import { disableNotifications } from '../notifications/manager'
 const forgetResume = vi.fn(() => {
   order.push('forget-resume')
 })
@@ -45,6 +47,7 @@ beforeEach(() => {
   reload.mockClear()
   forgetResume.mockClear()
   vi.mocked(wipeWallet).mockClear()
+  vi.mocked(disableNotifications).mockClear()
   // The module clears every `imani-wallet:*` key; the test env has no DOM.
   globalThis.localStorage = { 'imani-wallet:x': '1' } as unknown as Storage
   globalThis.localStorage.removeItem = () => {}
@@ -71,6 +74,41 @@ describe('logout', () => {
 
     expect(forgetResume).toHaveBeenCalledOnce()
     expect(order.indexOf('forget-resume')).toBeLessThan(order.indexOf('reload'))
+  })
+
+  /**
+   * Logout promises "This erases your key AND all your data from this browser",
+   * and it stops the DM poller and the drain loop for exactly that reason. A
+   * push subscription is the one piece of this account's state that lives
+   * somewhere localStorage cannot reach: in the browser's push service and in
+   * the gateway's push_subscription table.
+   *
+   * Left behind, the server keeps pushing this account's coupon events to a
+   * device that has just erased the key, so a shared or borrowed phone shows
+   * the previous user's activity on the lock screen. That is the same failure
+   * the wholesale localStorage wipe above exists to prevent, by a different
+   * door.
+   */
+  it('cancels the push subscription, so the device stops receiving this account', async () => {
+    await logout('ab'.repeat(32), yes, reload)
+
+    expect(disableNotifications).toHaveBeenCalledWith('ab'.repeat(32))
+  })
+
+  it('logs out even when cancelling the push subscription fails', async () => {
+    // An unreachable gateway must not strand the user in a session they asked
+    // to leave, exactly as with session.logout() above.
+    vi.mocked(disableNotifications).mockRejectedValueOnce(new Error('offline'))
+
+    await expect(logout('ab'.repeat(32), yes, reload)).resolves.toBe(true)
+    expect(wipeWallet).toHaveBeenCalled()
+    expect(reload).toHaveBeenCalled()
+  })
+
+  it('leaves the push subscription alone when the user cancels', async () => {
+    await logout('ab'.repeat(32), no, reload)
+
+    expect(disableNotifications).not.toHaveBeenCalled()
   })
 
   it('leaves the page alone when the user cancels', async () => {
