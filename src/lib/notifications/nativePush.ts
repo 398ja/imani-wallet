@@ -1,6 +1,14 @@
 /**
  * Native push: the Capacitor/Android transport.
  *
+ * NOT YET DELIVERABLE END TO END. This transport registers a token and the
+ * gateway stores it, but no notification has ever reached a real Android
+ * device, because the project has no Firebase credentials: `google-services.json`
+ * is absent and the server has no service account. Native rows are refused
+ * with 501 rather than attempted, so nothing is corrupted by the gap. The full
+ * activation procedure, and the one server-side branch that has to change, is
+ * in docs/native-push-activation.md.
+ *
  * The Android app cannot use Web Push. A Capacitor WebView often exposes
  * `PushManager` and it does not work — the API is present, `subscribe()` may
  * even resolve, and the notifications never arrive. Android delivers through
