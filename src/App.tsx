@@ -9,6 +9,7 @@ import { createSession, resetSession } from './lib/nap'
 import { openWallet, onWalletChanged } from './lib/wallet'
 import { startDmPoll } from './lib/dmPoll'
 import { startIncomingNotifications } from './lib/incomingNotifications'
+import { startPushListener, stopPushListener } from './lib/notifications/listener'
 import { reconcilePendingSends } from './lib/pay'
 import { reconcileRequests } from './lib/vreq'
 import { sweepBurnable } from './lib/burn'
@@ -39,6 +40,7 @@ import {
 } from './pages/MerchantRecordPages'
 import { MerchantEditPage } from './pages/MerchantEditPage'
 import { PaymentsSettingsPage } from './pages/PaymentsSettingsPage'
+import { NotificationSettingsPage } from './pages/NotificationSettingsPage'
 import { SellPage } from './pages/SellPage'
 import { CashbackIssuePage } from './pages/CashbackIssuePage'
 import { MerchantDashboardPage } from './pages/MerchantDashboardPage'
@@ -110,6 +112,14 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         // dm-poll's job on the real redemption. Stopped on logout, like the
         // poller above, for the same StrictMode reason.
         startIncomingNotifications(pubkey)
+
+        // The other half of the same idea, for when the app is NOT open: a
+        // push the service worker (or the native plugin) received is posted
+        // back here so it reaches the bell. Without it, a user who dismisses
+        // the OS notification has no record of it, and one who taps it lands
+        // on an empty inbox. Deduped on id against the drain loop above, so an
+        // event delivered by both is still one line.
+        startPushListener(pubkey)
 
         // Finish any send this wallet stopped waiting for. The 20s poll in
         // pay.ts is not a verdict — a saga can complete minutes later — and
@@ -186,6 +196,11 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
     // the coupon dropped mid-processing. Stopped on logout instead.
     return () => {
       live = false
+      // Unlike the pollers above, this one IS safe to stop here: it holds no
+      // in-flight work, only an event listener bound to this account's pubkey.
+      // Leaving it attached across a logout would record the next account's
+      // pushes into the previous account's inbox.
+      stopPushListener()
     }
   }, [pubkey])
 
@@ -404,6 +419,12 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
               <Navigate to="/settings" replace />
             )
           }
+        />
+        {/* Every account, customer or merchant: a customer receives coupons
+            and is exactly who wants telling when one arrives. No predicate. */}
+        <Route
+          path="/settings/notifications"
+          element={<NotificationSettingsPage pubkey={pubkey} />}
         />
         <Route
           path="/settings/payments"

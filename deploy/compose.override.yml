@@ -56,7 +56,53 @@ services:
   #     ./deploy/up.sh
   #
   # The store itself is already here: the cashu-mint compose stack runs a
-  # dev-mode HashiCorp Vault, and connecting it to this network is enough.
+  # dev-mode HashiCorp Vault. "Connecting it to this network is enough" was
+  # optimistic, though — see the measured state below, where FIVE separate
+  # things are missing and the network is only one of them.
+  #
+  # ---------------------------------------------------------------------------
+  # THIS MACHINE IS ALREADY PAST THAT POINT, and the mint cannot sign.
+  #
+  # Observed 2026-09-10: any flow that MINTS dies with
+  #
+  #   PrivateKey.fromString: s is marked non-null but is null
+  #
+  # which is precisely the failure described above. Five things are missing,
+  # each measured rather than inferred, and any ONE of them alone would break
+  # signing:
+  #
+  #   1. `t_key` has no `private_key` column — V3 has already run here.
+  #   2. Every row carries a `vault_path` and reads back `privateKey: null`.
+  #   3. VAULT_HASHI_ENABLED is false on BOTH imani-vault-jpa and the mint,
+  #      so nothing even tries to resolve those paths.
+  #   4. `hashicorp-vault` does not resolve from this stack. The vault that
+  #      exists is on the `cashu` network; imani-vault-jpa is on
+  #      `imani-test_imani-internal`, and no service by that name is defined
+  #      in this file at all.
+  #   5. That vault has no `cashu` secrets mount, so even once reachable there
+  #      is nothing at the paths the rows point to.
+  #
+  # Turning on the flag alone therefore moves the failure rather than fixing
+  # it: the mint would start failing to REACH a vault instead of failing to
+  # read a null key.
+  #
+  # `migrate-keys-to-hashi.sh` cannot repair this. It refuses on purpose once
+  # `private_key` is gone, because the plaintext it would copy no longer exists
+  # anywhere — the recipe above only ever worked BEFORE V3.
+  #
+  # Two ways out, both deployment decisions rather than code:
+  #
+  #   1. Restore imani-vault-db from a backup taken before V3, run the
+  #      migration, then bring the stack up with VAULT_HASHI_ENABLED=true.
+  #   2. Accept a NEW keyset. All 27,647 proofs in this database are SPENT and
+  #      the single keyset holds no live value, so on THIS machine that costs
+  #      nothing — but it is still a data decision, and it is not one a change
+  #      to some other feature should make on its way past.
+  #
+  # Until one of those happens, reads work (the mint serves /v1/keys and
+  # /v1/keysets from cached public material) and every write fails. That is why
+  # the perf fixtures cannot be re-recorded: recording seeds a wallet by minting.
+  # ---------------------------------------------------------------------------
   imani-vault-jpa:
     image: ${VAULT_JPA_IMAGE:-docker.398ja.xyz/staging/cashu-vault-jpa:latest}
     environment:
@@ -364,6 +410,21 @@ services:
       - "127.0.0.1.mint:${MINT_HOST_IP:?set MINT_HOST_IP to the mint container ip}"
     environment:
       GATEWAY_DEV_MODE: "false"
+      # Web Push, so /api/v1/push/vapid-key answers with a key instead of 503.
+      #
+      # The controller returns SERVICE_UNAVAILABLE when the public key is blank,
+      # which is correct and is what this stack did until now: the endpoint, the
+      # table and WebPushService all existed and no deployment had ever been
+      # given keys, so no client could subscribe.
+      #
+      # A P-256 keypair per RFC 8292: public is the uncompressed EC point
+      # (0x04 || X || Y) base64url-encoded, private is the raw 32-byte scalar.
+      # These are LOCAL-ONLY throwaways and belong in a dev override precisely
+      # because they are worthless — a real deployment sets them from its own
+      # secret store, and rotating them invalidates every existing subscription.
+      PUSH_VAPID_PUBLIC_KEY: "${PUSH_VAPID_PUBLIC_KEY:-BJIZJlUZ2Snzfu7LhOtqdq-p_IB7gTpphY8UMB2UBo5LO8yh9mpP_nqAL09eWE6CDIL1nD8EcTnqqC_VTgNiNqg}"
+      PUSH_VAPID_PRIVATE_KEY: "${PUSH_VAPID_PRIVATE_KEY:-751x9HPRVS_EsxL7VMz2PqPbz3rKRST8M1adz0xKEeI}"
+      PUSH_VAPID_SUBJECT: "${PUSH_VAPID_SUBJECT:-mailto:dev@localhost}"
       # And the second thing the account-app block documents, for the same
       # reason: NostrPreWarmer takes a HARD constructor dependency on
       # CachingNostrGatewayDecorator, which is @ConditionalOnBean and off by

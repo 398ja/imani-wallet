@@ -97,9 +97,14 @@ async function settle() {
   await new Promise((r) => setTimeout(r, 0))
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   stopIncomingNotifications()
   store.clear()
+  // The inbox mirrors storage in memory, so clearing the fake localStorage is
+  // not enough on its own — without this a row written by one test is still
+  // readable in the next.
+  const { _resetInboxCacheForTests } = await import('../notifications/inbox')
+  _resetInboxCacheForTests()
   toasts.length = 0
   signedFetch.mockReset()
 })
@@ -404,5 +409,71 @@ describe('a hidden tab', () => {
     // signing for an account that is no longer the user's.
     stopIncomingNotifications()
     expect((listeners['visibilitychange'] ?? []).length).toBe(0)
+  })
+})
+
+/**
+ * The drain loop is the ONLY notification source that works today: push needs
+ * a subscription, and this fires the moment a payer commits. If it does not
+ * reach the bell, the bell is empty for the case users meet most often.
+ */
+describe('what the drain loop files under the bell', () => {
+  it('keeps a payment the toast has already forgotten', async () => {
+    respondWith([envelope()])
+    startIncomingNotifications(RECIPIENT)
+    await settle()
+
+    const { listNotifications } = await import('../notifications/inbox')
+    const items = listNotifications(RECIPIENT)
+
+    expect(items).toHaveLength(1)
+    expect(items[0].title).toBe('Payment on its way')
+    // Rendered from the honest minor-unit integer, NOT the gateway's
+    // pre-formatted `display` string — the same correction raiseToast makes,
+    // which is why this reads FCFA 4 rather than the envelope's "4 XAF".
+    //
+    // The space is U+00A0: Intl.NumberFormat separates a currency symbol from
+    // its amount with a non-breaking space, and asserting on a plain one fails
+    // for a string that looks identical in the diff.
+    expect(items[0].body).toContain('FCFA\u00a04')
+    expect(items[0].readAt).toBeNull()
+  })
+
+  it('files it under the recipient, not whoever drained', async () => {
+    respondWith([envelope()])
+    startIncomingNotifications(RECIPIENT)
+    await settle()
+
+    const { listNotifications } = await import('../notifications/inbox')
+    expect(listNotifications(RECIPIENT)).toHaveLength(1)
+    expect(listNotifications(SENDER)).toHaveLength(0)
+  })
+
+  it('does not add a second line when the server redelivers', async () => {
+    // Drain is a non-destructive BROWSE: the same envelope comes back every
+    // tick until acked. One event must stay one line.
+    const env = envelope()
+    respondWith([env])
+    startIncomingNotifications(RECIPIENT)
+    await settle()
+    stopIncomingNotifications()
+
+    respondWith([env])
+    startIncomingNotifications(RECIPIENT)
+    await settle()
+
+    const { listNotifications } = await import('../notifications/inbox')
+    expect(listNotifications(RECIPIENT)).toHaveLength(1)
+  })
+
+  it('files nothing for a payment that is already settled', async () => {
+    // A terminal envelope has nothing to announce; putting it under the bell
+    // would resurrect the staging bug where a days-old payment reappeared.
+    respondWith([envelope({ state: 'redeemed' })])
+    startIncomingNotifications(RECIPIENT)
+    await settle()
+
+    const { listNotifications } = await import('../notifications/inbox')
+    expect(listNotifications(RECIPIENT)).toHaveLength(0)
   })
 })
