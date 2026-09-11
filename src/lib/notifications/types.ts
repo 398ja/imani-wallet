@@ -39,11 +39,30 @@
  * ## The event set is the SERVER's, not ours
  *
  * `NotificationType` mirrors what `PushNotificationService` on gateway-core
- * actually sends today: voucher_received, voucher_claimed, voucher_expiring.
- * imani-apps' preference model carries nine flags, six of which no server code
- * ever emits — bitcoin_received and friends are aspirational there. Copying
- * them would put switches in the settings screen that cannot change anything,
- * which is worse than not offering them.
+ * can send: voucher_received, voucher_claimed, voucher_expiring. imani-apps'
+ * preference model carries nine flags, six of which have no send method at all
+ * — bitcoin_received and friends are aspirational there. Copying them would
+ * put switches in the settings screen that cannot change anything, which is
+ * worse than not offering them.
+ *
+ * Be precise about "can send", because the three are not equal today. Checked
+ * against gateway-core on 2026-09-11, counting only non-test callers:
+ *
+ *   voucher_claimed    EMITTED  — PaymentReceiptController:174
+ *   voucher_received   wired, no production caller yet
+ *   voucher_expiring   wired, no production caller yet
+ *
+ * All three have an implemented, public `notifyVoucher*` method, so the
+ * preference flags reach real code and the switches are not decorative. But
+ * only a claim actually fires a push right now, and a reader who takes the
+ * three as equally live will go looking for a bug that is not there when
+ * testing the other two.
+ *
+ * This is deliberately NOT surfaced in the settings screen. A wallet that
+ * labelled two of its three switches "not yet" would be describing the
+ * server's roadmap to a customer who cannot act on it, and the labels would
+ * then need changing the day a caller lands. The asymmetry belongs here, next
+ * to the type, where the person it affects is looking.
  *
  * `generic` is the fallback for a payload whose type we do not recognise. A
  * server that starts sending a new type must still produce a readable
@@ -156,11 +175,3 @@ export const PREFERENCE_FOR_TYPE: Record<NotificationType, keyof NotificationPre
  * only one of them is worth offering a retry.
  */
 export type PermissionState = 'granted' | 'denied' | 'prompt' | 'unsupported'
-
-/** A live subscription, as the gateway knows it. */
-export interface PushSubscriptionRecord {
-  endpoint: string
-  p256dh: string
-  auth: string
-  deviceName?: string
-}

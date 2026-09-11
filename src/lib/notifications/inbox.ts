@@ -139,7 +139,20 @@ export function listNotifications(pubkey: string): InboxItem[] {
 }
 
 export function unreadCount(pubkey: string): number {
-  return read(pubkey).filter((item) => item.readAt === null).length
+  return read(pubkey).filter(isUnread).length
+}
+
+/**
+ * One definition of "unread", shared by everything that asks.
+ *
+ * Exported because the bell counts from the SAME array it renders rather than
+ * calling `unreadCount`, and that is deliberate: a second read of localStorage
+ * could disagree with the list on screen, showing a badge for an item the user
+ * is looking at. Sharing the predicate keeps the two honest without coupling
+ * the count to a re-read.
+ */
+export function isUnread(item: InboxItem): boolean {
+  return item.readAt === null
 }
 
 /**
@@ -187,6 +200,15 @@ export function markAllRead(pubkey: string): void {
   )
 }
 
+/**
+ * Empty one account's inbox.
+ *
+ * No production caller today, and kept anyway: logout erases the inbox by
+ * sweeping every `imani-wallet:*` key, which happens to cover
+ * `imani-wallet:notifications:<pubkey>` without naming it. If that sweep is
+ * ever narrowed, this is the call that replaces it, and rediscovering the key
+ * format at that point is how a stale inbox survives a logout.
+ */
 export function clearNotifications(pubkey: string): void {
   if (read(pubkey).length === 0) return
   write(pubkey, [])
