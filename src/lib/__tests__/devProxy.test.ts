@@ -105,6 +105,47 @@ describe('the dev proxy table', () => {
    * customer-wallet and merchant calls to gateway-portal's 403. A rule that
    * duplicates the catch-all's target is doing nothing.
    */
+  /*
+   * The failure this file did NOT catch, three times.
+   *
+   * Every test above validates rules that EXIST. None notices one that is
+   * absent — and absence is the failure mode that keeps happening, because
+   * `/api` has a catch-all: a path with no rule does not error, it quietly
+   * reaches customer-wallet and 404s. Comments in vite.config.ts record the
+   * same discovery for incoming-notifications and for push subscriptions; the
+   * third was payment-receipts, where the symptom was a settlement
+   * notification that never arrived and the cause was one missing line.
+   *
+   * So this pins the direction the catch-all hides: every gateway-core API the
+   * wallet calls must have its own rule.
+   */
+  it('routes every gateway-core path the wallet calls, since the catch-all hides a missing rule', () => {
+    // Paths served by gateway-core-rest, NOT customer-wallet. Add to this list
+    // when the wallet starts calling a new one.
+    const GATEWAY_CORE_PATHS = [
+      '/api/v1/atomic-send',
+      '/api/v1/incoming-notifications',
+      '/api/v1/payment-receipts',
+      '/api/v1/nip05',
+    ]
+
+    // Must resolve to a rule whose TARGET is gateway-core. Checking only that
+    // "some rule matches" is worthless here: the `/api` catch-all matches
+    // every one of these, which is precisely how a missing rule stays
+    // invisible. The first draft of this test did exactly that and passed
+    // against the bug it was written for.
+    const entries = Object.entries(proxy as Record<string, { target?: string }>)
+    const unrouted = GATEWAY_CORE_PATHS.filter((path) => {
+      // Longest matching prefix wins, which is how the dev server resolves it.
+      const match = entries
+        .filter(([rule]) => path === rule || path.startsWith(rule + '/'))
+        .sort((a, b) => b[0].length - a[0].length)[0]
+      return !match || new URL(match[1].target as string).port !== '28081'
+    })
+
+    expect(unrouted).toEqual([])
+  })
+
   it('gives every specific rule a target the catch-all would not have given it', () => {
     const all = targets()
     const catchAll = all.find((t) => t.rule === '/api')
