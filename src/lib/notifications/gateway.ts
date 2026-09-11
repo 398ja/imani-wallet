@@ -134,6 +134,17 @@ export async function deleteSubscription(pubkey: string, endpoint: string): Prom
      * report notifications off while the server kept pushing to a row it still
      * held. Found by running this against the live gateway; every unit test
      * mocked signedFetch and so agreed with the bug.
+     *
+     * Re-checked 2026-09-11 against the redeployed gateway, because logout now
+     * DEPENDS on this call (see lib/logout.ts) — a regression here leaves a
+     * logged-out device receiving the previous user's coupon events. Both
+     * halves confirmed on the running server:
+     *
+     *   DELETE with `{}`    204, and the row really disappears
+     *   DELETE with no body 401, still
+     *
+     * The second line is the point: the server-side requirement is live, not
+     * historical, so the empty object must not be "tidied away".
      */
     const response = await signedFetch(`${BASE}/subscriptions/${pubkey}/${hash}`, 'DELETE', {})
     return response.ok
