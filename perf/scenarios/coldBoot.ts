@@ -309,6 +309,14 @@ export async function unlock(page: Page, passphrase = FIXTURE_PASSPHRASE): Promi
 
     if (/Total balance|Scan/.test((await page.textContent('body')) ?? '')) return true
 
+    // Say what the page DID show. A bare "did not unlock" tells the next
+    // reader only that something was slow — which is exactly the state that
+    // cost three instrumented CI runs to get past once already. The wallet
+    // reports a wrong passphrase, a corrupt key and a stalled boot
+    // differently, and all three are actionable once visible.
+    const shown = ((await page.textContent('body')) ?? '').replace(/\s+/g, ' ').trim().slice(0, 160)
+    console.log(`  unlock attempt ${attempt} did not open the wallet; page shows: ${shown}`)
+
     // Only worth retrying if the form is still there to retry with.
     if ((await field.count()) === 0) break
     await page.waitForTimeout(1_000)
