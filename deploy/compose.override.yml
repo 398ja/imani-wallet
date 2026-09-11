@@ -56,7 +56,9 @@ services:
   #     ./deploy/up.sh
   #
   # The store itself is already here: the cashu-mint compose stack runs a
-  # dev-mode HashiCorp Vault, and connecting it to this network is enough.
+  # dev-mode HashiCorp Vault. "Connecting it to this network is enough" was
+  # optimistic, though — see the measured state below, where FIVE separate
+  # things are missing and the network is only one of them.
   #
   # ---------------------------------------------------------------------------
   # THIS MACHINE IS ALREADY PAST THAT POINT, and the mint cannot sign.
@@ -65,13 +67,24 @@ services:
   #
   #   PrivateKey.fromString: s is marked non-null but is null
   #
-  # which is precisely the failure described above. Confirmed cause, in order:
+  # which is precisely the failure described above. Five things are missing,
+  # each measured rather than inferred, and any ONE of them alone would break
+  # signing:
   #
-  #   - t_key has no `private_key` column, so V3 has already run here.
-  #   - every row carries a `vault_path` and reads back `privateKey: null`.
-  #   - VAULT_HASHI_ENABLED is false, so nothing resolves those paths.
-  #   - the running HashiCorp Vault has NO `cashu` mount at all, so the
-  #     migration below was never run against it.
+  #   1. `t_key` has no `private_key` column — V3 has already run here.
+  #   2. Every row carries a `vault_path` and reads back `privateKey: null`.
+  #   3. VAULT_HASHI_ENABLED is false on BOTH imani-vault-jpa and the mint,
+  #      so nothing even tries to resolve those paths.
+  #   4. `hashicorp-vault` does not resolve from this stack. The vault that
+  #      exists is on the `cashu` network; imani-vault-jpa is on
+  #      `imani-test_imani-internal`, and no service by that name is defined
+  #      in this file at all.
+  #   5. That vault has no `cashu` secrets mount, so even once reachable there
+  #      is nothing at the paths the rows point to.
+  #
+  # Turning on the flag alone therefore moves the failure rather than fixing
+  # it: the mint would start failing to REACH a vault instead of failing to
+  # read a null key.
   #
   # `migrate-keys-to-hashi.sh` cannot repair this. It refuses on purpose once
   # `private_key` is gone, because the plaintext it would copy no longer exists
