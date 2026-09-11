@@ -295,6 +295,15 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
         metadata: tokenDm.metadata,
         nip60Wallet: this.config.nip60Wallet ?? undefined,
         senderPubkey: tokenDm.senderPubkey,
+        // The gift wrap this arrived in, so the redeeming wallet can tell the
+        // sender WHICH delivery was claimed.
+        //
+        // There are two redemption call sites in this package — TokenRedeemer
+        // and this one — and THIS is the one the service actually drives.
+        // Fixing only the other left the id missing on the live path while
+        // every test passed, because the consumer returns quietly on a blank
+        // id rather than throwing.
+        deliveryEventId: tokenDm.eventId,
       });
 
       // Mark token as received
