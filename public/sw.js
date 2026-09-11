@@ -49,10 +49,27 @@ function text(value) {
  * Only a same-origin, wallet-shaped path is honoured. See render.ts: the
  * gateway sends `/voucher/home.html`, which does not exist here, and an
  * absolute URL taken on trust turns a tap into an open redirect.
+ *
+ * RESOLVE rather than pattern-match. Requiring one leading slash and rejecting
+ * `//` looks sufficient and is not: the URL spec treats a backslash as a path
+ * separator and strips tab/newline/CR, so `/\evil.example` and
+ * `/<tab>/evil.example` each begin with a single slash and each resolve to
+ * `https://evil.example/`. This worker is the copy that actually calls
+ * `openWindow`, so the hole was directly exploitable here.
  */
 function walletRoute(url) {
-  if (!url || !url.startsWith('/') || url.startsWith('//') || url.endsWith('.html')) return undefined
-  return url
+  if (!url || !url.startsWith('/')) return undefined
+  const base = 'https://wallet.invalid'
+  let resolved
+  try {
+    resolved = new URL(url, base)
+  } catch {
+    return undefined
+  }
+  if (resolved.origin !== base) return undefined
+  if (resolved.pathname.endsWith('.html')) return undefined
+  // The resolved path, not the input: navigate to what was actually checked.
+  return resolved.pathname + resolved.search + resolved.hash
 }
 
 function toRenderable(payload) {
