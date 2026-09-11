@@ -136,7 +136,14 @@ async function main() {
   const handle = await registerMerchant(page, BASE)
   check('registration completes and lands in the wallet', !page.url().includes('onboarding'), page.url())
   const home = await page.locator('body').innerText()
-  check('the till shows Sell and Redeem', home.includes('Sell') && home.includes('Redeem'))
+  check(
+    'the till shows Sell and Redeem',
+    home.includes('Sell') && home.includes('Redeem'),
+    // Say what the till DID show. Without this the failure is the word
+    // "false", and the next person cannot tell a missing button from a
+    // screen that never rendered.
+    home.replace(/\s+/g, ' ').slice(0, 160),
+  )
   check('no uncaught errors during registration', pageErrors.length === 0, pageErrors.join('; '))
 
   // The stall's own pubkey, which is what the roster is keyed on in real use.
@@ -298,7 +305,11 @@ async function main() {
   await page.waitForTimeout(2500)
 
   const tillText = await page.locator('body').innerText()
-  check('a redemption-only terminal is offered Redeem', /Redeem/.test(tillText))
+  check(
+    'a redemption-only terminal is offered Redeem',
+    /Redeem/.test(tillText),
+    tillText.replace(/\s+/g, ' ').slice(0, 160),
+  )
   check('and is NOT offered Sell', !/\bSell\b/.test(tillText), tillText.slice(0, 120))
 
   check(
@@ -334,7 +345,11 @@ async function main() {
   await goto(page, `${BASE}/`)
   await page.waitForTimeout(2000)
   const ownerTill = await page.locator('body').innerText()
-  check('the owner’s till still offers both actions', /Sell/.test(ownerTill) && /Redeem/.test(ownerTill))
+  check(
+    'the owner’s till still offers both actions',
+    /Sell/.test(ownerTill) && /Redeem/.test(ownerTill),
+    ownerTill.replace(/\s+/g, ' ').slice(0, 160),
+  )
 
   console.log('\nSubscriptions: the diagnostics screen a support call reads')
   await goto(page, `${BASE}/settings/subscription`)
