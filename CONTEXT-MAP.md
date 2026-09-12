@@ -25,6 +25,10 @@ alone" is how two copies come to disagree.
   single-use claim handle and serves it to a wallet.
 - **Gateway (customer)** — `imani-gateway-customer`. Mints coupons and verifies
   terminal credentials.
+- **Gateway (core)** — `imani-gateway-core`. The estate's authentication
+  authority: accounts, NIP-05, sessions, API keys. `register()` in
+  `src/lib/registration.ts` talks to it, so its registration-path decisions bind
+  the wallet's signup flow.
 
 ## Relationships
 
@@ -54,6 +58,7 @@ alone" is how two copies come to disagree.
 | The caller holds the key, and the coupons | `imani-wallet` ADR 0001 | Every service that would hold either |
 | Coupon purchases are direct charges | `payment-adapter` ADR 0001 | The whole no-float position |
 | A purchase reaches the stall as a message | `imani-wallet` ADR 0011 | Anything writing to a stall's ledger |
+| Registration bot protection is a PoW gate on `POST /api/v1/nip05` | `imani-gateway-core` spec 001 | The wallet's signup flow, which must solve before it claims |
 
 ## A ledger row is sealed by the key that owns it
 
