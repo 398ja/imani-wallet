@@ -57,15 +57,114 @@ export type DischargeOutcome =
   | 'unverifiable'
   | 'unknown-purchase'
 
+
+/** A 32-byte NOSTR public key, lowercase or uppercase hex. */
+const HEX64 = /^[0-9a-fA-F]{64}$/
+
+/** An ISO-4217 alphabetic currency code. */
+const ISO4217 = /^[A-Za-z]{3}$/
+
+/**
+ * A hard ceiling on a single coupon's face value, in minor units.
+ *
+ * No legitimate card purchase in this product reaches it, and an unbounded face value is an
+ * unbounded liability for a stall that is not awake to notice. A row above the ceiling is far
+ * more likely to be an attack or a unit-confusion bug than a real sale, and either way the safe
+ * answer is to refuse and let a human look.
+ */
+export const MAX_FACE_VALUE_MINOR = 100_000_00
+
+/**
+ * One debt, or null when the row cannot be trusted.
+ *
+ * Hand-written rather than a schema library to match the parsers in `wallet-api`
+ * (`redeem.ts`, `requests.ts`) and to avoid adding a dependency to the one service that holds
+ * issuing keys. Every field is checked, because every field reaches either the face value, the
+ * recipient, or the signature.
+ */
+export function parseOwedPurchase(row: unknown): OwedPurchase | null {
+  if (row === null || typeof row !== 'object' || Array.isArray(row)) return null
+  const r = row as Record<string, unknown>
+
+  const eventId = typeof r.eventId === 'string' ? r.eventId.trim() : ''
+  if (!eventId || eventId.length > 200) return null
+
+  const paymentRequestId = typeof r.paymentRequestId === 'string' ? r.paymentRequestId.trim() : ''
+  if (!paymentRequestId || paymentRequestId.length > 200) return null
+
+  // Null is meaningful on both keys: "issue by hand" and "buyer takes a claim link". A missing
+  // key and a malformed one are different things, and only the second is a refusal.
+  const stallPubkey = r.stallPubkey === null || r.stallPubkey === undefined ? null : r.stallPubkey
+  if (stallPubkey !== null && (typeof stallPubkey !== 'string' || !HEX64.test(stallPubkey))) return null
+
+  const recipientPubkey =
+    r.recipientPubkey === null || r.recipientPubkey === undefined ? null : r.recipientPubkey
+  if (recipientPubkey !== null && (typeof recipientPubkey !== 'string' || !HEX64.test(recipientPubkey))) {
+    return null
+  }
+
+  // The face value. Integer, positive, bounded — a float here would mint a coupon whose value
+  // cannot be represented in minor units, and a negative one is nonsense that nothing downstream
+  // checks for.
+  const amountMinor = r.amountMinor
+  if (
+    typeof amountMinor !== 'number' ||
+    !Number.isInteger(amountMinor) ||
+    amountMinor <= 0 ||
+    amountMinor > MAX_FACE_VALUE_MINOR
+  ) {
+    return null
+  }
+
+  // Checked before getDecimals() sees it: that lookup drives faceDecimals, and a
+  // faceValue/faceDecimals disagreement is the 5000-XAF-becomes-50 class of bug.
+  const currency = typeof r.currency === 'string' ? r.currency.trim() : ''
+  if (!ISO4217.test(currency)) return null
+
+  // Strictly boolean. `livemode: "false"` is truthy, and real value must never be minted from a
+  // test payment because a string looked like one.
+  if (typeof r.livemode !== 'boolean') return null
+
+  const attempts = r.attempts
+  if (typeof attempts !== 'number' || !Number.isInteger(attempts) || attempts < 0 || attempts > 1000) {
+    return null
+  }
+
+  return {
+    eventId,
+    paymentRequestId,
+    stallPubkey: stallPubkey as string | null,
+    recipientPubkey: recipientPubkey as string | null,
+    amountMinor,
+    currency,
+    livemode: r.livemode,
+    attempts,
+  }
+}
+
 export class PurchasesApi {
   private readonly baseUrl: string
   private readonly token: string
   private readonly fetchImpl: typeof fetch
+  /**
+   * Called for each debt row that fails validation (IW-07).
+   *
+   * A dropped row must be loud. Silently skipping one turns "we refused to mint from a
+   * malformed row" into "that purchase never arrived", which looks like a queue problem and
+   * hides an attack.
+   */
+  private readonly onInvalidRow?: (row: unknown) => void
 
-  constructor(baseUrl: string, token: string, fetchImpl: typeof fetch = fetch) {
+  constructor(
+    baseUrl: string,
+    token: string,
+    fetchImpl: typeof fetch = fetch,
+    onInvalidRow?: (row: unknown) => void,
+  ) {
     this.baseUrl = baseUrl.replace(/\/$/, '')
     this.token = token
     this.fetchImpl = fetchImpl
+    this.onInvalidRow = onInvalidRow
   }
 
   private headers(): Record<string, string> {
@@ -89,7 +188,31 @@ export class PurchasesApi {
       })
       if (!response.ok) return []
       const body = (await response.json()) as unknown
-      return Array.isArray(body) ? (body as OwedPurchase[]) : []
+      if (!Array.isArray(body)) return []
+
+      // IW-07: validate every row before it can decide how much value is minted.
+      //
+      // This used to be `body as OwedPurchase[]` — a cast, which is a promise to the type
+      // checker and no check at all at runtime. Every field was then used as authoritative:
+      // amountMinor became the coupon's face value with no range, type, integrality or sign
+      // check, and recipientPubkey decided who received it. This worker mints real value
+      // unsupervised with livemode: true, and its only input is an HTTP response, so anyone
+      // able to influence that response controlled the mint — and PURCHASE_API_URL is a
+      // plaintext intra-cluster hop reachable by any pod on the network.
+      //
+      // A malformed row is DROPPED and reported, never guessed at. Dropping one debt is
+      // recoverable: the queue still holds it and a human can look. Minting an attacker-chosen
+      // face value signed by a stall's own credential is not.
+      const valid: OwedPurchase[] = []
+      for (const row of body) {
+        const parsed = parseOwedPurchase(row)
+        if (parsed === null) {
+          this.onInvalidRow?.(row)
+          continue
+        }
+        valid.push(parsed)
+      }
+      return valid
     } catch {
       return []
     }
