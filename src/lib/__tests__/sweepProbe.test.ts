@@ -11,6 +11,7 @@ import { SimplePool } from 'nostr-tools'
 import WebSocket from 'ws'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils'
+import { hexToBytes } from '@noble/hashes/utils'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ;(globalThis as any).WebSocket ??= WebSocket
@@ -19,7 +20,11 @@ const RELAY = 'wss://relay.staging.398ja.xyz'
 const MERCHANT = bytesToHex(sha256(utf8ToBytes('probe-' + Date.now())))
 
 vi.mock('../nap', () => ({
-  getSigner: () => ({ privkeyHex: () => MERCHANT }),
+  getSigner: () => ({
+    privkeyHex: () => MERCHANT,
+    // IW-14: the scoped borrow the production signer now offers.
+    withPrivkey: <T,>(use: (key: Uint8Array) => T) => use(hexToBytes(MERCHANT)),
+  }),
 }))
 
 const { attestRedemption, reconcileAttestations, ledgerPubkey, nullifierFor, ATTESTATION_KIND } =

@@ -51,6 +51,7 @@ import {
   type AuditedAttestation,
   type RejectedAttestation,
 } from '../../src/lib/audit'
+import { createExpiringMap } from '../wallet-api/expiringMap.js'
 import { metrics, renderMetrics } from './metrics'
 
 /**
@@ -74,7 +75,49 @@ import { metrics, renderMetrics } from './metrics'
 useWebSocketImplementation(WebSocketImpl)
 
 const PORT = Number(process.env.AUDIT_API_PORT ?? 8090)
-const RELAY_URL = process.env.AUDIT_RELAY_URL ?? 'ws://nostr-relay:7777'
+/**
+ * The relay, which must be reachable over TLS (IW-11).
+ *
+ * The default was cleartext ws://, with no scheme validation and no pinning. This service's own
+ * header argues that a total compromise is harmless because "every answer it gives is
+ * re-derivable", and that is true of CONFIDENTIALITY and false of the integrity of the verdicts,
+ * which is the actual product.
+ *
+ * Attestations are individually signed, so a party on the wire cannot forge an `honoured`. It
+ * does not need to: it can WITHHOLD. Dropping the attestation events for a chosen merchant makes
+ * /api/v1/audit/coupon/{nullifier} answer `missing` - the verdict this code itself calls "the one
+ * most likely to be quoted at a merchant". So a position on the cleartext hop manufactures, on
+ * demand, a public accusation against any merchant the attacker picks, which is precisely the
+ * harm the whole service is engineered to avoid. The truncation guard does not help: it
+ * downgrades `missing` to `pending` only when MORE events arrive than the limit, and this
+ * attacker sends fewer.
+ */
+export function resolveRelayUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.AUDIT_RELAY_URL ?? ''
+  if (configured === '') {
+    throw new Error('AUDIT_RELAY_URL must be set: there is no safe default relay.')
+  }
+  let url: URL
+  try {
+    url = new URL(configured)
+  } catch {
+    throw new Error(`AUDIT_RELAY_URL is not a URL: ${configured}`)
+  }
+  if (url.protocol !== 'wss:' && env.AUDIT_ALLOW_PLAINTEXT_RELAY !== 'true') {
+    throw new Error(
+      `AUDIT_RELAY_URL must be wss:// (got ${url.protocol}). Set AUDIT_ALLOW_PLAINTEXT_RELAY=true ` +
+        'only for a local test stack: on a cleartext hop an attacker can drop one merchant of ' +
+        'their choosing from the stream, and this service then accuses that merchant of not ' +
+        'having published.',
+    )
+  }
+  return url.toString()
+}
+
+const RELAY_URL =
+  process.env.NODE_ENV === 'test'
+    ? (process.env.AUDIT_RELAY_URL ?? 'ws://nostr-relay:7777')
+    : resolveRelayUrl()
 /**
  * How long a fetched stream is reused.
  *
@@ -195,10 +238,45 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   let size = 0
   for await (const chunk of req) {
     size += (chunk as Buffer).length
+    // IW-12: the bound is checked as the body arrives and before the parse, so an oversize body
+    // is abandoned mid-stream rather than buffered whole and then parsed. Node is
+    // single-threaded, and JSON.parse of a megabyte blocks the event loop for every caller.
     if (size > 1_000_000) throw new Error('body too large')
     chunks.push(chunk as Buffer)
   }
   return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+}
+
+/**
+ * Per-address throttling (IW-12).
+ *
+ * This service has no caller identity - it is unauthenticated by design - so the address is the
+ * only key available. Weaker than wallet-api's per-key limit, and far better than none on an
+ * endpoint that does elliptic-curve work for anyone who asks: /verify-total accepts up to 500
+ * nullifiers and performs point addition per entry, roughly 40ms of BLOCKED event loop, so about
+ * 25 concurrent requests saturate the process indefinitely.
+ *
+ * Every response carries `access-control-allow-origin: *` by design, so the flood needs no
+ * attacker infrastructure: a malicious ad on any page turns its viewers into the source. And
+ * /health deliberately does not touch the relay, so it keeps answering 200 while the service is
+ * unusable - the orchestrator never restarts it and the outage is invisible to the probe.
+ */
+const RATE_WINDOW_MS = 60_000
+const RATE_LIMIT = 60
+const rateBuckets = createExpiringMap<{ count: number }>(RATE_WINDOW_MS, 50_000)
+
+export function throttled(req: IncomingMessage, now: number): boolean {
+  // The socket address, not a forwarded header: the worst a spoofer achieves by setting
+  // X-Forwarded-For is throttling an address that is not theirs, and the edge should be limiting
+  // ahead of us anyway.
+  const address = req.socket.remoteAddress ?? 'unknown'
+  const bucket = rateBuckets.get(address, now)
+  if (!bucket) {
+    rateBuckets.set(address, { count: 1 }, now)
+    return false
+  }
+  bucket.count++
+  return bucket.count > RATE_LIMIT
 }
 
 const json = (res: ServerResponse, status: number, body: unknown) => {
@@ -246,6 +324,16 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       // cannot support. Once it HAS read the relay, these are the numbers an
       // operator needs when the dashboard looks quiet.
       ...(cached ? { redemptions: cached.accepted.length, truncated: cached.truncated } : {}),
+    })
+  }
+
+  // IW-12: after /health, so a liveness probe is never shed, and ahead of every endpoint that
+  // does work.
+  if (path !== '/health' && throttled(req, Date.now())) {
+    res.setHeader('retry-after', String(RATE_WINDOW_MS / 1000))
+    return json(res, 429, {
+      error: 'rate-limited',
+      detail: `at most ${RATE_LIMIT} requests a minute from one address`,
     })
   }
 

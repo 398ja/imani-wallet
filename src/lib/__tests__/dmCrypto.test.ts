@@ -4,6 +4,7 @@ import { bytesToHex } from '@noble/hashes/utils'
 
 import { createDmCryptoAdapter, toLegacyMetadata } from '../dmCrypto'
 import { buildVoucherToken, dmEnvelope } from './voucherFixtures'
+import { hexToBytes } from '@noble/hashes/utils'
 
 /**
  * A stand-in for the app's signer, lockable like the real one.
@@ -18,6 +19,12 @@ vi.mock('../nap', () => ({
     privkeyHex() {
       if (!signerState.privkey) throw new Error('The wallet is locked.')
       return signerState.privkey
+    },
+    // IW-14: the scoped borrow, which throws while locked exactly as privkeyHex did — the
+    // locked-wallet case must stay distinguishable from a malformed wrap.
+    withPrivkey<T>(use: (key: Uint8Array) => T): T {
+      if (!signerState.privkey) throw new Error('The wallet is locked.')
+      return use(hexToBytes(signerState.privkey))
     },
   }),
 }))

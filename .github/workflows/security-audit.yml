@@ -1,0 +1,32 @@
+# IW-17: fail the build on a high-severity advisory in the PRODUCTION tree.
+#
+# The estate runs no SCA anywhere (P8 in the AppSec review), so an advisory with a fix available
+# sat in the shipped bundle until somebody happened to run `npm audit` by hand. This is the
+# narrow version of that control: production dependencies only, high and above only.
+#
+# Dev dependencies are deliberately out of scope here. They are numerous, they churn, and a
+# vulnerability in a test runner is not a vulnerability in the wallet a customer loads — gating
+# on them means the gate gets disabled, and a disabled gate protects nothing.
+name: security-audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Advisories are published against code that has not changed, so a push-only trigger never
+    # learns about them.
+    - cron: '0 6 * * 1'
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: npm audit (production dependencies)
+        run: npm run audit:prod

@@ -36,7 +36,10 @@ const senderSk = generateSecretKey()
 // argument (deliberately — see dmCrypto's note on `clearKey`), so the signer
 // is what has to be stubbed, not the crypto. It comes from `./nap`.
 vi.mock('../nap', () => ({
-  getSigner: () => ({ privkeyHex: () => bytesToHex(customerSk) }),
+  getSigner: () => ({
+    privkeyHex: () => bytesToHex(customerSk),
+    withPrivkey: <T,>(use: (key: Uint8Array) => T) => use(customerSk),
+  }),
 }))
 
 /**
