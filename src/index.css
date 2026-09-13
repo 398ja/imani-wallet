@@ -151,6 +151,44 @@
       transform: scale(0.92);
     }
   }
+
+  /*
+   * A modal surface arriving over the whole app, and the scrim behind it.
+   *
+   * Separate from `.materialize` because the two are anchored differently, and
+   * the anchor is the whole reason that class exists: a popover grows from the
+   * control that opened it, so it scales UP from small. This has no trigger —
+   * the session lapsing is not something the user pressed — so it is anchored to
+   * the screen rather than to any element, and it settles DOWN from 1.02 onto
+   * its resting size. That direction is what separates "this arrived to tell you
+   * something" from "this grew out of what you just tapped".
+   *
+   * Blur and scale animate together, so the panel reads as a real material
+   * condensing into place rather than an opacity fade of a picture of one.
+   * 260ms on the iOS curve: longer than the 200ms popover, because this covers
+   * the entire screen and a full-screen change that snaps feels like a fault.
+   */
+  .modal-surface {
+    animation: modal-surface 260ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  .modal-scrim {
+    animation: modal-scrim 260ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  @keyframes modal-surface {
+    from {
+      opacity: 0;
+      transform: scale(1.02);
+      backdrop-filter: blur(0px) saturate(100%);
+    }
+  }
+
+  @keyframes modal-scrim {
+    from {
+      opacity: 0;
+    }
+  }
 }
 
 /* Hide scrollbar but keep functionality */
@@ -179,6 +217,20 @@
   .materialize,
   .expand-row {
     animation: none;
+  }
+
+  /*
+   * The scrim keeps its fade and the surface loses its scale.
+   *
+   * Not `animation: none` on both, which is what the two above get: this dialog
+   * appears unannounced over a full screen of content, so cutting it in with no
+   * transition at all is a jump-cut of the entire viewport — the vestibular
+   * complaint reduced motion exists to answer, arriving by the other door. A
+   * cross-fade is the gentler equivalent the setting asks for, so the scrim runs
+   * unchanged and the surface is re-declared without the scale.
+   */
+  .modal-surface {
+    animation: modal-scrim 200ms ease;
   }
 }
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 import { Toaster } from 'sonner'
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react'
 import { NapProvider, useNapSession, useNapCallbacks } from '@imani/nap-react'
@@ -18,7 +18,10 @@ import { restoreIssued } from './lib/issuedRecords'
 import { restoreTx, backfillTx } from './lib/txRecords'
 import { restoreVouchers, backfillVouchers } from './lib/voucherRecords'
 import { logout as runLogout } from './lib/logout'
-import { emptyProfile, loadProfile, refreshProfile, type Profile } from './lib/profile'
+import { emptyProfile, loadProfile, profileName, refreshProfile, type Profile } from './lib/profile'
+import { reauthenticate } from './lib/reauth'
+import { useSessionReauth } from './lib/useSessionReauth'
+import { ReauthDialog } from './components/ui/ReauthDialog'
 import {
   canTrade,
   loadMerchant,
@@ -416,7 +419,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             with a stall: the coupons I hold, the transactions we have had. This
             is who they are and how to buy from them, and it renders the same
             for a stranger as for their best customer. */}
-        <Route path="/profile/:pubkey" element={<PublicProfilePage />} />
+        <Route path="/profile/:pubkey" element={<PublicProfilePage viewerPubkey={pubkey} />} />
         {/* `merchant !== null`, NOT `trading`: a CLOSED stall must stay reachable
             or the Open-for-business switch could never be turned back on. It is
             also what hides the Merchant section from customers entirely — they
@@ -533,24 +536,97 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
   )
 }
 
+/**
+ * The authenticated tree, plus the dialog that keeps it reachable.
+ *
+ * Two different things can make the session unusable, and the difference is
+ * invisible from here once it has happened:
+ *
+ *   - the cookie's lifetime ran out, which `watchSessionExpiry` sees coming
+ *     because the server told us the deadline at login, and
+ *   - the cookie was rejected or dropped, which surfaces as `isAuthenticated`
+ *     going false when something makes a request.
+ *
+ * Both end in the same place: a session object that is still held but no longer
+ * authenticates anything. This used to render `Signing in…` indefinitely — a
+ * dead screen with no affordance on it, escapable only by a page refresh the
+ * user had to think of themselves. Now either one opens the passphrase dialog
+ * over whatever was on screen, and unlocking puts them back where they were with
+ * no navigation and no reload.
+ */
 function Gate({ session, onLoggedOut }: { session: NapSession; onLoggedOut: () => void }) {
   const { isAuthenticated } = useNapSession()
+  const navigate = useNavigate()
+  // When to ask, and when to stop asking. See lib/useSessionReauth.ts — the
+  // three cases it separates are the ones that are invisible in a screenshot.
+  const { expired, dismiss } = useSessionReauth(session, isAuthenticated)
 
-  if (!isAuthenticated) return <Centered>Signing in…</Centered>
-
-  // Read during render, not in an effect. The pubkey is part of the established
-  // session rather than a signer round-trip, so it is available synchronously —
-  // mirroring it into state would only add a render and a cascading-update lint
-  // error. Reading it from the session rather than the signer also means a
-  // locked key does not stop the app knowing who is logged in.
+  // The pubkey, captured while the session still has one.
+  //
+  // It has to be carried at all because `getSession()` returns null the moment
+  // the session lapses, and that is exactly when the dialog needs it: to greet
+  // the user by name, and to tell logout whose data to erase.
+  //
+  // A render-phase state update rather than an effect, which is React's own
+  // pattern for deriving state from changing input. It re-runs this component
+  // before anything commits, so the dialog never renders against a stale pubkey,
+  // and there is no second pass — which is what both `set-state-in-effect` and
+  // `refs` are pointing at when they refuse the two obvious alternatives.
   const pubkey = session.getSession()?.pubkey
+  const [known, setKnown] = useState(pubkey)
+  if (pubkey && pubkey !== known) setKnown(pubkey)
+
+  const dialog = expired ? (
+    <ReauthDialog
+      name={known ? profileName(loadProfile(known) ?? emptyProfile(known)) : undefined}
+      onSubmit={async (passphrase) => {
+        await reauthenticate(passphrase)
+        dismiss()
+      }}
+      onRestore={() => {
+        // The restore screen lives on the PUBLIC side of the router, so it is
+        // unreachable while this tree is mounted. Ending the session is what
+        // hands the app back to `PublicRoutes`, and it is also the honest thing
+        // to do: someone restoring a backup is not the person this session
+        // belongs to any more. The key on disk is untouched, unlike logout.
+        dismiss()
+        onLoggedOut()
+        navigate('/restore')
+      }}
+      onLogout={() => {
+        // `runLogout` confirms first — it erases the key and every trace of the
+        // account from this browser, and it reloads the document on success, so
+        // nothing after this needs to tidy up.
+        if (known) void runLogout(known).then((done) => done && onLoggedOut())
+      }}
+    />
+  ) : null
+
+  // The dialog renders OVER the app rather than instead of it. That is the whole
+  // point of doing this in place: the screen behind it is still the one the user
+  // was on, so unlocking returns them to it mid-task instead of to a home screen
+  // that has forgotten what they were doing.
+  if (!isAuthenticated) {
+    return (
+      <>
+        <Centered>{expired ? 'Session expired' : 'Signing in…'}</Centered>
+        {dialog}
+      </>
+    )
+  }
+
   if (!pubkey) return <Centered>Reading identity…</Centered>
   // `key` so an identity change REMOUNTS everything below rather than
   // re-rendering it. Screens subscribe to the wallet in effects, and several
   // (MerchantsPage) do so with `[]` deps — on a re-render those keep the previous
   // user's subscription and never reload. Remounting tears them down, and it is
   // one attribute against auditing every screen's dependency array.
-  return <AuthedApp key={pubkey} pubkey={pubkey} onLoggedOut={onLoggedOut} />
+  return (
+    <>
+      <AuthedApp key={pubkey} pubkey={pubkey} onLoggedOut={onLoggedOut} />
+      {dialog}
+    </>
+  )
 }
 
 /**
