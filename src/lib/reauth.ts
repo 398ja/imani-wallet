@@ -1,4 +1,5 @@
 import { getSession, keyStore } from './nap'
+import { remember } from './resume'
 
 /**
  * Re-establishing a lapsed session in place.
@@ -71,9 +72,11 @@ export async function reauthenticate(passphrase: string): Promise<void> {
   // Refresh the tab's reload cache so a reload after this does not bounce back
   // to the passphrase screen. The key is unchanged, but the cache may have been
   // dropped by whatever ended the session.
+  //
+  // Best effort, like `remember` itself: it already swallows a browser that
+  // refuses IndexedDB, and a cache that could not be written costs one
+  // passphrase prompt on the next reload. Failing the whole re-authentication
+  // over it would cost the session that has just been successfully restored.
   const pubkey = session.getSession()?.pubkey
-  if (pubkey) {
-    const { remember } = await import('./resume')
-    await remember(pubkey, privkeyHex)
-  }
+  if (pubkey) await remember(pubkey, privkeyHex)
 }

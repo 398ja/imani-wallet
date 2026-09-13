@@ -39,6 +39,17 @@ describe('ReauthDialog', () => {
     expect(screen.getByText(/Welcome back, Ada/)).toBeTruthy()
   })
 
+  it('omits the greeting entirely when there is no name', () => {
+    render(<ReauthDialog onSubmit={async () => {}} onLogout={noop} onRestore={noop} />)
+
+    // `Gate` unwinds `profileName`'s npub fallback rather than passing it here.
+    // "Welcome back, npub1abc…" reads as a machine that does not know who you
+    // are, on the one dialog where trust is the whole point — so the prompt
+    // simply asks for the passphrase instead.
+    expect(screen.queryByText(/Welcome back/)).toBeNull()
+    expect(screen.getByText(/Enter your passphrase/)).toBeTruthy()
+  })
+
   it('focuses the passphrase field, so the first keystroke lands', () => {
     render(<ReauthDialog onSubmit={async () => {}} onLogout={noop} onRestore={noop} />)
 
@@ -104,6 +115,56 @@ describe('ReauthDialog', () => {
 
     await screen.findByText('nope')
     expect(field.value).toBe('almost-right')
+  })
+
+  it('puts the caret back in the field after a failure', async () => {
+    const onSubmit = vi.fn().mockRejectedValue(new Error('nope'))
+    render(<ReauthDialog onSubmit={onSubmit} onLogout={noop} onRestore={noop} />)
+
+    const field = screen.getByPlaceholderText('Passphrase')
+    const unlock = screen.getByRole('button', { name: 'Unlock' })
+    fireEvent.change(field, { target: { value: 'wrong' } })
+
+    // Focus really has to LEAVE the field, which is what tapping Unlock does on
+    // a device. `fireEvent.blur` only dispatches the event and leaves
+    // `document.activeElement` untouched, so a test written that way passes
+    // whatever the component does — the mount effect's focus never moved.
+    ;(unlock as HTMLElement).focus()
+    expect(document.activeElement).toBe(unlock)
+
+    fireEvent.click(unlock)
+    await screen.findByText('nope')
+
+    // The field is `disabled` while the attempt is in flight, and `.focus()` on
+    // a disabled input silently does nothing in jsdom as in a browser — so this
+    // has to happen after the re-render that re-enables it, not in the `catch`.
+    // Without that ordering the user has to hunt for the field again after
+    // every failed attempt.
+    await waitFor(() => expect(document.activeElement).toBe(field))
+  })
+
+  it('puts the caret back after EVERY failure, not just the first', async () => {
+    const onSubmit = vi.fn().mockRejectedValue(new Error('nope'))
+    render(<ReauthDialog onSubmit={onSubmit} onLogout={noop} onRestore={noop} />)
+
+    const field = screen.getByPlaceholderText('Passphrase')
+    const unlock = screen.getByRole('button', { name: 'Unlock' })
+
+    fireEvent.change(field, { target: { value: 'wrong' } })
+    ;(unlock as HTMLElement).focus()
+    fireEvent.click(unlock)
+    await screen.findByText('nope')
+    await waitFor(() => expect(document.activeElement).toBe(field))
+
+    // Away again, and a second attempt.
+    ;(unlock as HTMLElement).focus()
+    fireEvent.click(unlock)
+
+    // A boolean "has failed" flag would not re-fire the effect here, because it
+    // is already true. Counting the failures is what makes the second attempt
+    // behave like the first.
+    await waitFor(() => expect(document.activeElement).toBe(field))
+    expect(onSubmit).toHaveBeenCalledTimes(2)
   })
 
   /**

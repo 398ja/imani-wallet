@@ -9,7 +9,7 @@
  * — the original bug — no dialog at all.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 import { useSessionReauth } from '../useSessionReauth'
 
@@ -34,11 +34,21 @@ function Probe({
   session: { getSession: () => { expiresAt: number } | null }
   isAuthenticated: boolean
 }) {
-  const { expired } = useSessionReauth(session as never, isAuthenticated)
-  return <span data-testid="state">{expired ? 'prompting' : 'quiet'}</span>
+  const { expired, dismiss } = useSessionReauth(session as never, isAuthenticated)
+  // Exposed as a button rather than assigned to a module global during render,
+  // which `react-hooks/globals` rightly refuses. `dismiss` is not a user gesture
+  // in the app — `Gate` calls it when `reauthenticate()` resolves — so the button
+  // is a test handle, not a claim about the UI.
+  return (
+    <>
+      <span data-testid="state">{expired ? 'prompting' : 'quiet'}</span>
+      <button data-testid="dismiss" onClick={dismiss} />
+    </>
+  )
 }
 
 const state = () => screen.getByTestId('state').textContent
+const dismissLatest = () => fireEvent.click(screen.getByTestId('dismiss'))
 
 describe('useSessionReauth', () => {
   beforeEach(() => {
@@ -143,5 +153,55 @@ describe('useSessionReauth', () => {
     // A watcher that latched permanently would leave the second lapse silent —
     // the original bug, returning after one successful unlock.
     expect(state()).toBe('prompting')
+  })
+
+  /**
+   * The dismissal must not outlive the lapse it was made in.
+   *
+   * `dismiss()` exists to close the dialog the instant a correct passphrase
+   * lands, rather than waiting on NapProvider's 500ms poll — so it is called
+   * while `isAuthenticated` is still briefly false. The risk is that the same
+   * suppression then swallows a LATER, genuine loss, which would put the user
+   * back on the dead screen this whole change exists to remove.
+   */
+  describe('a dismissal', () => {
+    it('covers the gap between a correct passphrase and the session catching up', () => {
+      const session = fakeSession(NOW_S + 3600)
+      const { rerender } = render(<Probe session={session} isAuthenticated />)
+      rerender(<Probe session={session} isAuthenticated={false} />)
+      expect(state()).toBe('prompting')
+
+      // The dialog's submit resolved and called dismiss(), but the provider has
+      // not yet polled the session, so `isAuthenticated` is still false. The
+      // dialog must already be gone.
+      act(() => {
+        dismissLatest()
+      })
+
+      expect(state()).toBe('quiet')
+    })
+
+    it('does NOT silence a later, genuine session loss', () => {
+      const session = fakeSession(NOW_S + 3600)
+      const { rerender } = render(<Probe session={session} isAuthenticated />)
+
+      // Lapse, unlock, dismiss.
+      rerender(<Probe session={session} isAuthenticated={false} />)
+      act(() => {
+        dismissLatest()
+      })
+      expect(state()).toBe('quiet')
+
+      // The session really did come back.
+      rerender(<Probe session={session} isAuthenticated />)
+      expect(state()).toBe('quiet')
+
+      // And now it is lost again — a revoked cookie, whose deadline has not
+      // arrived, so the timer will not catch it. A dismissal that outlived its
+      // own lapse would leave this silent and the app back on the dead screen.
+      rerender(<Probe session={session} isAuthenticated={false} />)
+
+      expect(state()).toBe('prompting')
+    })
   })
 })

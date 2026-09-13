@@ -55,13 +55,24 @@ export function ReauthDialog({
    * whose key is not.
    */
   onRestore: () => void
-  /** Who is being asked, when the app knows. Reassurance, not identification. */
+  /**
+   * Who is being asked, when the app knows.
+   *
+   * Reassurance, not identification: it answers "is this my wallet asking".
+   * Pass a real name or nothing — a truncated npub is not reassurance, and
+   * `Welcome back, npub1abc\u2026` reads like a machine that does not know who you
+   * are, on the one dialog where trust is the whole point. `Gate` resolves this
+   * and passes undefined rather than a fallback.
+   */
   name?: string
 }) {
   const [passphrase, setPassphrase] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showOptions, setShowOptions] = useState(false)
+  // Counted rather than a boolean: the caret has to return after EVERY failed
+  // attempt, and a flag that is already true does not re-fire the effect below.
+  const [failures, setFailures] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
 
   // The dialog arrives unannounced, over whatever the user was doing, so the
@@ -82,14 +93,24 @@ export function ReauthDialog({
       setPassphrase('')
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
-      // Put the caret back where the fix happens. Without this the user has to
-      // find the field again after every failed attempt.
-      inputRef.current?.focus()
-      inputRef.current?.select()
+      setFailures((n) => n + 1)
     } finally {
       setBusy(false)
     }
   }
+
+  // Put the caret back where the fix happens, after a failed attempt.
+  //
+  // This has to be an effect keyed on the failure count, not a line in the
+  // `catch`. The field is `disabled` while `busy`, and `busy` is only cleared in
+  // the `finally` that runs AFTER the catch — so focusing there would call
+  // `.focus()` on a disabled input, which silently does nothing. By the time
+  // this effect runs the re-render has enabled the field again.
+  useEffect(() => {
+    if (failures === 0) return
+    inputRef.current?.focus()
+    inputRef.current?.select()
+  }, [failures])
 
   return (
     <div

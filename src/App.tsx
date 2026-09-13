@@ -7,8 +7,8 @@ import type { NapSession } from '@imani/nap-client-web'
 
 import { createSession, resetSession } from './lib/nap'
 import { openWallet, onWalletChanged } from './lib/wallet'
-import { startDmPoll } from './lib/dmPoll'
-import { startIncomingNotifications } from './lib/incomingNotifications'
+import { startDmPoll, stopDmPoll } from './lib/dmPoll'
+import { startIncomingNotifications, stopIncomingNotifications } from './lib/incomingNotifications'
 import { startPaymentReceipts, stopPaymentReceipts } from './lib/paymentReceiptDrain'
 import { startPushListener, stopPushListener } from './lib/notifications/listener'
 import { reconcilePendingSends } from './lib/pay'
@@ -18,7 +18,8 @@ import { restoreIssued } from './lib/issuedRecords'
 import { restoreTx, backfillTx } from './lib/txRecords'
 import { restoreVouchers, backfillVouchers } from './lib/voucherRecords'
 import { logout as runLogout } from './lib/logout'
-import { emptyProfile, loadProfile, profileName, refreshProfile, type Profile } from './lib/profile'
+import { emptyProfile, loadProfile, refreshProfile, type Profile } from './lib/profile'
+import { handleLabel } from './lib/format'
 import { reauthenticate } from './lib/reauth'
 import { useSessionReauth } from './lib/useSessionReauth'
 import { ReauthDialog } from './components/ui/ReauthDialog'
@@ -419,7 +420,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             with a stall: the coupons I hold, the transactions we have had. This
             is who they are and how to buy from them, and it renders the same
             for a stranger as for their best customer. */}
-        <Route path="/profile/:pubkey" element={<PublicProfilePage viewerPubkey={pubkey} />} />
+        <Route path="/profile/:pubkey" element={<PublicProfilePage />} />
         {/* `merchant !== null`, NOT `trading`: a CLOSED stall must stay reachable
             or the Open-for-business switch could never be turned back on. It is
             also what hides the Merchant section from customers entirely — they
@@ -576,9 +577,19 @@ function Gate({ session, onLoggedOut }: { session: NapSession; onLoggedOut: () =
   const [known, setKnown] = useState(pubkey)
   if (pubkey && pubkey !== known) setKnown(pubkey)
 
+  // A real name or nothing. `profileName` falls back through the handle to a
+  // truncated npub so the header always has something to render, but "Welcome
+  // back, npub1abc…" is not reassurance — it reads like a machine that does not
+  // know who you are, on the one dialog where trust is the point. So the
+  // fallback is unwound here: only a name a person chose is worth greeting with.
+  const knownProfile = known ? loadProfile(known) : null
+  const greeting =
+    knownProfile?.displayName ??
+    (knownProfile?.nip05 ? handleLabel(knownProfile.nip05) : undefined)
+
   const dialog = expired ? (
     <ReauthDialog
-      name={known ? profileName(loadProfile(known) ?? emptyProfile(known)) : undefined}
+      name={greeting}
       onSubmit={async (passphrase) => {
         await reauthenticate(passphrase)
         dismiss()
@@ -587,9 +598,34 @@ function Gate({ session, onLoggedOut }: { session: NapSession; onLoggedOut: () =
         // The restore screen lives on the PUBLIC side of the router, so it is
         // unreachable while this tree is mounted. Ending the session is what
         // hands the app back to `PublicRoutes`, and it is also the honest thing
-        // to do: someone restoring a backup is not the person this session
-        // belongs to any more. The key on disk is untouched, unlike logout.
+        // to do: someone restoring a backup is not necessarily the person this
+        // session belongs to any more.
+        //
+        // `resetSession()` is the load-bearing call, not `onLoggedOut()`.
+        // `onLoggedOut` only does `setSession(null)` — a React state change —
+        // while the nap singletons in lib/nap.ts live outside React entirely.
+        // `createSession` returns the EXISTING session if there is one and
+        // IGNORES the key it is passed, so without this the restore screen
+        // would unlock a different account's key, be handed back the previous
+        // account's session, and run every screen as the previous identity
+        // while the keystore held the new one. `onUnlock` guards the same
+        // hazard for a failed login and names the same consequence.
+        //
+        // No `forgetResume()`: the tab's reload cache belongs to the key on
+        // disk, which is untouched here, and `applyBackup` rolls the keystore
+        // back if the restore is abandoned. A restore that COMPLETES calls
+        // `onUnlock`, which rewrites the cache for the new identity.
+        //
+        // The two pollers are stopped by hand for the reason AuthedApp's own
+        // cleanup explains: their lifetime is the SESSION, not the component,
+        // so unmounting does not stop them. Both hold the unlocked key and
+        // write to the user-scoped IndexedDB, and one left running across a
+        // restore would decrypt the old account's gift wraps into the new
+        // account's wallet. `logout` stops them for the same reason.
         dismiss()
+        stopDmPoll()
+        stopIncomingNotifications()
+        resetSession()
         onLoggedOut()
         navigate('/restore')
       }}
