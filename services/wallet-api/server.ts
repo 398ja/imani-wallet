@@ -170,6 +170,27 @@ export function resetGatewayFetch(): void {
 }
 
 /** One header, lower-cased and de-duplicated, or undefined. */
+/**
+ * Warns once that the NIP-98 audience is being derived from a caller-controlled header (IW-01).
+ *
+ * Once, not per request: a per-request warning on a hot path is a log-flooding primitive, and
+ * the operator only needs to be told the thing is misconfigured a single time.
+ */
+let publicOriginWarned = false
+function warnMissingPublicOrigin(): void {
+  if (publicOriginWarned) return
+  publicOriginWarned = true
+  console.warn(
+    JSON.stringify({
+      event: 'nip98_audience_from_request_headers',
+      reason: 'WALLET_API_PUBLIC_ORIGIN unset',
+      detail:
+        'NIP-98 URL binding derives from the Host header, so an event signed for another ' +
+        'origin can be replayed here. Set WALLET_API_PUBLIC_ORIGIN to this service origin.',
+    }),
+  )
+}
+
 function header(req: IncomingMessage, name: string): string | undefined {
   const raw = req.headers[name]
   // Node gives an ARRAY when a header appears twice. Taking the first would let
@@ -292,13 +313,25 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   // the proxy — the error the README singles out as most misdiagnosed, because
   // it points at the caller's signing code, which is correct.
   //
-  // Trusting a client-settable header is safe only for what it is used for
-  // here: matching a signature the caller already made over its own URL. It
-  // grants nothing. A client setting `x-forwarded-proto: https` while speaking
-  // http can only make its own signature verify against the URL it really used.
+  // IW-01: the NIP-98 audience comes from server configuration when one is given.
+  //
+  // The reasoning that used to stand here — that a client-settable header "grants nothing"
+  // because the caller is only matching its own signature — holds for ONE service in isolation
+  // and breaks as soon as a second one shares the estate. A NIP-98 event is bound to a URL, and
+  // if the URL is reconstructed from Host, a caller can present an event signed for
+  // wallet.example against any other service by setting Host to wallet.example. The signature
+  // is genuine, the audience is forged. This is the same defect as SEC-02 in the Java gateways,
+  // and it was fixed there by requiring a configured origin.
+  //
+  // WALLET_API_PUBLIC_ORIGIN is that origin. When unset the old header-derived behaviour is
+  // kept rather than breaking existing deployments, but it is logged once so the gap is visible
+  // instead of silent.
+  const configuredOrigin = process.env.WALLET_API_PUBLIC_ORIGIN?.trim()
+  if (!configuredOrigin) warnMissingPublicOrigin()
   const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim()
   const scheme = proto === 'https' ? 'https' : 'http'
-  const url = new URL(req.url ?? '/', `${scheme}://${req.headers.host ?? 'localhost'}`)
+  const base = configuredOrigin ?? `${scheme}://${req.headers.host ?? 'localhost'}`
+  const url = new URL(req.url ?? '/', base)
   const path = url.pathname.replace(/\/$/, '') || '/'
   const method = (req.method ?? 'GET').toUpperCase()
 

@@ -190,7 +190,27 @@ export function createGuards(
         }
         window.count++
       } else {
-        rate.set(pubkey, { count: 1, windowEnds: now + RATE_WINDOW_MS }, now)
+        // IW-02: do not ignore the capacity signal.
+        //
+        // This discarded the return value, so once 10,000 live rate windows existed, set()
+        // stored nothing and returned 'at-capacity'. The next request from that key then found
+        // no window, created none, and was never counted — throttling degraded to OFF under
+        // exactly the load it exists to shed, silently.
+        //
+        // Refusing is the correct direction: a caller we cannot count is a caller we cannot
+        // promise a limit for, and an uncountable caller is precisely the flood the limit is
+        // there for. This is a 503 rather than a 429 because the fault is ours, not theirs.
+        const outcome = rate.set(pubkey, { count: 1, windowEnds: now + RATE_WINDOW_MS }, now)
+        if (outcome === 'at-capacity') {
+          return {
+            allowed: false,
+            reason: 'at-capacity',
+            detail:
+              'the rate-limit table is full, so this request cannot be counted. ' +
+              'Refusing rather than admitting an unthrottled request.',
+            retryAfterSeconds: Math.ceil(RATE_WINDOW_MS / 1000),
+          }
+        }
       }
 
       // Idempotency BEFORE replay. A correct retry carries a fresh signature,
