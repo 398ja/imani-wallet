@@ -80,21 +80,44 @@ export function useSessionReauth(
   const [everAuthenticated, setEverAuthenticated] = useState(isAuthenticated)
   if (isAuthenticated && !everAuthenticated) setEverAuthenticated(true)
 
+  /**
+   * A dismissal only silences the state of the world it was made in.
+   *
+   * `dismiss()` is called the instant a correct passphrase lands, to close the
+   * dialog without waiting for NapProvider's 500ms poll. In that window
+   * `isAuthenticated` is briefly still false while being about to become true,
+   * which is the ONLY thing the dismissal is meant to cover.
+   *
+   * So it is recorded against the authentication state at the time. Once
+   * `isAuthenticated` has gone true and come back down, this is a NEW loss —
+   * a second expiry, a revoked cookie — and the old dismissal must not silence
+   * it. Without this pairing the second failure renders the dead screen the
+   * whole change exists to remove, and only a timer-driven lapse could ever
+   * recover it.
+   */
+  const [dismissedWhileAuthed, setDismissedWhileAuthed] = useState(false)
+  if (isAuthenticated && prompt === 'dismissed' && !dismissedWhileAuthed) {
+    setDismissedWhileAuthed(true)
+  }
+
   // A session lost while the app was open needs the prompt whatever the timer
   // last thought — this is the half that catches a rejected or dropped cookie,
   // whose deadline has not arrived.
   const lost = !isAuthenticated && everAuthenticated
 
+  // Live and never lapsed: nothing to ask about.
+  const stale = prompt === 'lapsed' || lost
+
   return {
-    // A live session cannot need a passphrase prompt, however it got that way,
-    // and a dismissal silences the lapse it belongs to — including the moment
-    // after a correct passphrase where the session is genuinely back but
-    // `isAuthenticated` has not caught up yet. A later lapse re-opens it,
-    // because the watcher sets `'lapsed'` over the dismissal.
-    expired: prompt === 'dismissed' ? false : prompt === 'lapsed' || lost,
-    // Dismissed by hand — the dialog's own submit path, the moment a correct
-    // passphrase lands. NapProvider polls at 500ms and the watcher re-checks at
-    // 1s, and either delay reads as the unlock not having worked.
-    dismiss: () => setPrompt('dismissed'),
+    // A dismissal silences only the lapse it was made in. Once the session has
+    // come back (`dismissedWhileAuthed`), a later loss is a fresh one and
+    // reopens the dialog.
+    expired: prompt === 'dismissed' && !dismissedWhileAuthed ? false : stale,
+    dismiss: () => {
+      setPrompt('dismissed')
+      // Reset the pairing: this dismissal belongs to the CURRENT state, not to
+      // whatever an earlier one was recorded against.
+      setDismissedWhileAuthed(false)
+    },
   }
 }
