@@ -6,6 +6,7 @@ import {
   creditableFaceValue,
   type ParsedVoucherToken,
 } from '../../src/lib/voucherToken.js'
+import { effectiveNow } from './testSeams'
 
 /**
  * Taking a coupon a customer presents.
@@ -76,7 +77,11 @@ export function parseVerifyInput(body: unknown, callerPubkey: string, defaultNow
   const token = typeof b.token === 'string' ? b.token.trim() : ''
   if (!token) return fail('token', 'required')
 
-  const now = Number(b.now ?? defaultNow)
+  // IW-05: the server clock decides expiry, not the caller. `now` in the body was a test seam
+  // wired into the production parser, and it drives the expired-coupon branch below — so any
+  // caller could redeem a coupon that expired last year, and /v1/redeem/prepare gates on this
+  // verdict before handing a till the receive URL and body.
+  const now = effectiveNow(b.now, defaultNow)
   if (!Number.isFinite(now)) return fail('now', 'expected epoch seconds')
 
   return { ok: true, value: { token, now, stallPubkey: callerPubkey } }
