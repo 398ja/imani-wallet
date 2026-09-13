@@ -9,6 +9,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-13
+
+### Added
+
+- **An expired session now asks for your passphrase instead of stranding you.**
+  When the NAP session ran out, the app rendered `Signing in…` forever:
+  `isAuthenticated` had gone false while the session object was still held, so
+  the screen had no affordance on it and the only way back in was a page refresh
+  the user had to think of for themselves. A passphrase dialog now opens over
+  whatever was on screen, and unlocking returns them to it with no navigation
+  and no reload. This is the flow imani-apps already had in `<reauth-modal>`,
+  brought to the React wallet.
+
+  Three pieces:
+
+  - `lib/sessionExpiry.ts` — the local clock nap does not have. nap records
+    `expiresAt` and then leaves it alone, so a wallet sitting idle on the
+    coupons screen makes no requests and notices nothing until the user's next
+    tap fails. This fires at the deadline the server already gave us, slightly
+    early so a request in flight cannot lose the race, and re-checks on
+    `visibilitychange` because a backgrounded tab throttles timers.
+  - `lib/reauth.ts` — decrypt the stored key with the passphrase (the keystore
+    is the verifier; there is deliberately no cheaper one), restore it if a lock
+    evicted it, then `login()` for a fresh cookie. Deliberately not a silent
+    renewal: the key is usually still in the signer and `login()` would go
+    straight through, but a session that any open tab renews by itself is not a
+    session lifetime — it is an unbounded one.
+  - `components/ui/ReauthDialog.tsx` — modal, but never a dead end. A passphrase
+    prompt is useless to the one person most likely to be reading it, so the
+    other ways out are on the dialog: restore from a backup (nsec, file, Drive)
+    and log out, one level deeper so the destructive one is not beside the
+    button people mean to press.
+
+  The dialog wears the app's own `.material` — the same translucent layer as the
+  header and the menus — over a scrim that dims and pushes the content back, and
+  settles down onto its resting size rather than growing from a trigger it does
+  not have. Reduced motion keeps the cross-fade and drops the scale, rather than
+  jump-cutting the whole viewport.
+
+### Fixed
+
+- **Restoring another account from the dialog ran as the previous identity.**
+  The restore exit called `onLoggedOut()`, which is only `setSession(null)` — a
+  React state change. The nap session lives in a module singleton outside React,
+  and `createSession` returns the existing session while ignoring the key it is
+  passed, so unlocking a backup handed back the *previous* account's session:
+  authenticated as one identity while the keystore held another, with that
+  identity's roles and its pubkey on every signature, and no error anywhere. It
+  now calls `resetSession()`, the same guard `onUnlock` already applies to a
+  failed login. The same fix stops the DM poller and the notifications loop,
+  whose lifetime is the session rather than the component, so neither runs on
+  past the account it belongs to.
+- **A dismissed prompt silenced the next session loss.** The dialog closes the
+  instant a correct passphrase lands, ahead of `NapProvider`'s 500ms poll, but
+  the suppression was unconditional — so a later loss whose deadline had not
+  arrived (a revoked cookie, which the timer never sees) stayed silent and put
+  the user back on the dead screen. The dismissal is now paired with the
+  authentication state it was made in.
+- **The caret did not return to the passphrase field after a wrong attempt.**
+  The focus call sat in the `catch`, where the field is still `disabled` —
+  `busy` is cleared in the `finally`, after — and `.focus()` on a disabled input
+  silently does nothing.
+
 ## [0.1.2] - 2026-09-11
 
 ### Fixed
