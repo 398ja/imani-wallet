@@ -184,7 +184,16 @@ export function parseCheckInput(body: unknown, callerPubkey: string, defaultNow:
     return fail('requested', 'expected a whole number of minor units')
   }
 
-  const rows = b.priorRedemptions ?? []
+  // IW-06: required, not defaulted. An integrator who omits the field got a silently empty
+  // history and a ceiling that always fits — the failure looks exactly like success, which is
+  // the worst shape for a check documented as "the only one that sees ACROSS redemptions".
+  if (b.priorRedemptions === undefined) {
+    return fail(
+      'priorRedemptions',
+      'required - send every redemption you have recorded for this coupon, or [] if none',
+    )
+  }
+  const rows = b.priorRedemptions
   if (!Array.isArray(rows)) {
     return fail('priorRedemptions', `expected an array, got ${describe(rows)}`)
   }
@@ -198,8 +207,20 @@ export function parseCheckInput(body: unknown, callerPubkey: string, defaultNow:
     const r = row as Record<string, unknown>
 
     const amount = Number(r.amount)
-    if (!Number.isFinite(amount)) {
-      return fail(`priorRedemptions[${i}].amount`, 'expected a finite number of minor units')
+    // IW-06: whole and non-negative. This checked only Number.isFinite, while `requested` right
+    // above is checked as a positive integer — so a negative amount was accepted here and
+    // nowhere else. A negative `in` SUBTRACTS consumed value, so one request could manufacture
+    // headroom far above the signed face value:
+    //   {"requested":10000,"priorRedemptions":[{"amount":-999999,"direction":"in"}]}
+    // and the endpoint would answer that taking it breaches nothing.
+    if (!Number.isInteger(amount) || amount < 0) {
+      return fail(
+        `priorRedemptions[${i}].amount`,
+        'expected a whole number of minor units, zero or greater',
+      )
+    }
+    if (amount > Number.MAX_SAFE_INTEGER) {
+      return fail(`priorRedemptions[${i}].amount`, 'implausibly large')
     }
 
     const direction = r.direction
@@ -233,6 +254,15 @@ export function checkRedemption(input: CheckInput) {
       requested: input.requested,
       priorRedemptions: input.priorRedemptions,
     }),
+    /**
+     * IW-06: says out loud whose history this is.
+     *
+     * The ceiling is computed over the redemptions the CALLER supplied. This service holds none
+     * (ADR 0001), so `fits: true` is not a promise that the coupon is unspent — only the mint's
+     * swap settles that. Callers treat a 200 as authority unless the response says otherwise,
+     * and a courier that is mistaken for a ledger is how a double-spend gets approved politely.
+     */
+    historySource: 'caller-supplied' as const,
   }
 }
 

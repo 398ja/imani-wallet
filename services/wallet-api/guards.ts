@@ -37,6 +37,8 @@
 
 import { createExpiringMap } from './expiringMap.js'
 import { FRESHNESS_WINDOW_SECONDS } from './nip98.js'
+import { sha256 } from '@noble/hashes/sha256'
+import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils'
 
 /**
  * How long a signature is remembered.
@@ -82,6 +84,16 @@ export const RATE_WINDOW_MS = 60_000
 export interface StoredResponse {
   status: number
   body: unknown
+  /**
+   * The request this answer belongs to (IW-03).
+   *
+   * A key that names a caller but not a request is a key that replays the wrong answer. Without
+   * this, a till using a per-transaction id as its Idempotency-Key — the obvious choice — calls
+   * /v1/redeem/verify and then /v1/spend/parts/prepare under the same id, and the second call
+   * never executes: it receives the first's body with HTTP 200 and the caller believes a spend
+   * was prepared that never happened.
+   */
+  fingerprint: string
 }
 
 export type GuardVerdict =
@@ -90,6 +102,7 @@ export type GuardVerdict =
   | { allowed: false; reason: 'at-capacity'; detail: string }
   | { allowed: false; reason: 'rate-limited'; detail: string; retryAfterSeconds: number }
   | { allowed: false; reason: 'idempotent-replay'; stored: StoredResponse }
+  | { allowed: false; reason: 'idempotency-conflict'; detail: string }
 
 export interface Guards {
   /**
@@ -105,6 +118,8 @@ export interface Guards {
     pubkey: string
     /** The caller's `Idempotency-Key` header, if any. */
     idempotencyKey: string | undefined
+    /** Identifies the request itself, so a key cannot replay a different one (IW-03). */
+    fingerprint: string
     now: number
   }): GuardVerdict
 
@@ -120,6 +135,7 @@ export interface Guards {
   readonly stats: {
     replaysRefused: number
     idempotentReplays: number
+    idempotencyConflicts: number
     throttled: number
     atCapacity: number
   }
@@ -162,12 +178,18 @@ export function createGuards(
     IDEMPOTENCY_CAPACITY,
   )
 
-  const stats = { replaysRefused: 0, idempotentReplays: 0, throttled: 0, atCapacity: 0 }
+  const stats = {
+    replaysRefused: 0,
+    idempotentReplays: 0,
+    idempotencyConflicts: 0,
+    throttled: 0,
+    atCapacity: 0,
+  }
 
   return {
     stats,
 
-    check({ eventId, pubkey, idempotencyKey, now }) {
+    check({ eventId, pubkey, idempotencyKey, fingerprint, now }) {
       // Throttling FIRST, because it is the cheapest check and the one that
       // protects the others. A caller in a hot loop should be shed before it
       // can fill the replay store — otherwise a flood that is refused is still
@@ -224,6 +246,20 @@ export function createGuards(
         // leak dressed as a convenience feature.
         const stored = idempotent.get(idempotencyScope(pubkey, idempotencyKey), now)
         if (stored) {
+          // IW-03: a key reused for a DIFFERENT request is a caller error, not a cache hit.
+          // Replaying the stored body would answer a question that was never asked — and for
+          // /v1/spend/parts/prepare the stored body carries live bearer coupons, so a stale
+          // replay re-emits tokens that may already be spent, which a caller then persists as
+          // phantom balance. 422 rather than a silently wrong 200, matching RFC 9110 and Stripe.
+          if (stored.fingerprint !== fingerprint) {
+            stats.idempotencyConflicts++
+            return {
+              allowed: false,
+              reason: 'idempotency-conflict',
+              detail:
+                'this Idempotency-Key was already used for a different request. Use a new key.',
+            }
+          }
           stats.idempotentReplays++
           return { allowed: false, reason: 'idempotent-replay', stored }
         }
@@ -269,10 +305,21 @@ export function createGuards(
       rate.clear()
       stats.replaysRefused = 0
       stats.idempotentReplays = 0
+      stats.idempotencyConflicts = 0
       stats.throttled = 0
       stats.atCapacity = 0
     },
   }
+}
+
+/**
+ * What makes two requests "the same request" for idempotency purposes (IW-03).
+ *
+ * Method, path and body. Anything less and a key identifies a caller rather than a request,
+ * which is how one endpoint's answer ends up served for another's question.
+ */
+export function requestFingerprint(method: string, path: string, body: string | undefined): string {
+  return bytesToHex(sha256(utf8ToBytes(`${method.toUpperCase()}\u0000${path}\u0000${body ?? ''}`)))
 }
 
 /**
