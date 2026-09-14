@@ -64,7 +64,14 @@ jobs:
         with:
           # Full history: a credential deleted in a later commit is still in every clone.
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_CONFIG: .gitleaks.toml
+      # The gitleaks BINARY, not gitleaks-action. The action refuses to run for an
+      # organization without a paid licence key and fails the job with
+      # "missing gitleaks license" — so the scan never ran here at all. The binary
+      # is the same scanner with the same config and no such gate.
+      - name: Secret scanning (gitleaks)
+        run: |
+          set -euo pipefail
+          VERSION=8.28.0
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks detect --source . --config .gitleaks.toml --redact --verbose --exit-code 1
