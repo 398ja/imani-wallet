@@ -49,6 +49,10 @@ jobs:
       - name: Validate the ruleset
         # A malformed rule silently scans nothing, which looks exactly like a clean scan.
         run: semgrep --config .semgrep/ --validate
+      - name: Prove the rules still FIRE
+        # --validate proves the rules parse, not that they still match. A rule broken by an
+        # upgrade or a typo reports clean forever and is indistinguishable from a healthy one.
+        run: ./.semgrep/fixtures/check-rules-fire.sh
       - name: Scan
         run: semgrep --config .semgrep/ --error --severity=ERROR --severity=WARNING .
 
