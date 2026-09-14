@@ -46,7 +46,36 @@ import WebSocketImpl from 'ws'
  */
 useWebSocketImplementation(WebSocketImpl)
 
-const RELAY_URL = process.env.WALLET_API_RELAY_URL ?? 'ws://nostr-relay:7777'
+/**
+ * The relay this lookup reads stall records from.
+ *
+ * IW-11, sibling instance found by the Phase 3 Semgrep rule imani-cleartext-relay-default. The
+ * comment directly above already states the consequence of an empty result: it "would read as
+ * 'not a stall' and allow exactly the send this module exists to refuse". A party on a cleartext
+ * hop does not need to forge a stall record to cause that — withholding one is enough, and
+ * withholding is the cheaper attack.
+ *
+ * Plaintext stays available for the local stack, as an explicit opt-in rather than a default.
+ */
+function resolveRelayUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.WALLET_API_RELAY_URL ?? ''
+  if (configured === '') {
+    if (env.NODE_ENV === 'test') return 'ws://nostr-relay:7777'
+    throw new Error('WALLET_API_RELAY_URL must be set: there is no safe default relay.')
+  }
+  const url = new URL(configured)
+  if (url.protocol !== 'wss:' && env.WALLET_API_ALLOW_PLAINTEXT_RELAY !== 'true') {
+    throw new Error(
+      `WALLET_API_RELAY_URL must be wss:// (got ${url.protocol}). Set ` +
+        'WALLET_API_ALLOW_PLAINTEXT_RELAY=true only for a local test stack: on a cleartext hop ' +
+        'an attacker can withhold a stall record, and an absent record permits the send this ' +
+        'module exists to refuse.',
+    )
+  }
+  return url.toString()
+}
+
+const RELAY_URL = resolveRelayUrl()
 
 /** The kind and `d` tag that make an event a stall record, from the app. */
 export const STALL_KIND = 30078

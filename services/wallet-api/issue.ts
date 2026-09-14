@@ -60,6 +60,11 @@ export function deliverUrl(): string {
  * compose network, where `localhost` is its own container.
  */
 export function relayUrls(): string[] {
+  // nosemgrep: imani-cleartext-relay-default
+  // The INTERNAL publish hop on the compose network, not a read whose absence is a verdict:
+  // this writes an event the gateway then reads, and a dropped write fails loudly at the caller
+  // rather than silently producing a wrong answer. TLS for this hop belongs to the deployment.
+  // nosemgrep: imani-cleartext-relay-default
   return [process.env.WALLET_API_INTERNAL_RELAY_URL ?? 'ws://nostr-relay:7777']
 }
 

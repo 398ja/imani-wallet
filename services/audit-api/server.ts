@@ -114,8 +114,10 @@ export function resolveRelayUrl(env: NodeJS.ProcessEnv = process.env): string {
   return url.toString()
 }
 
+// The plaintext value is the TEST-only branch; resolveRelayUrl above requires wss:// otherwise.
 const RELAY_URL =
   process.env.NODE_ENV === 'test'
+    // nosemgrep: imani-cleartext-relay-default
     ? (process.env.AUDIT_RELAY_URL ?? 'ws://nostr-relay:7777')
     : resolveRelayUrl()
 /**

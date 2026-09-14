@@ -288,6 +288,11 @@ export function enrolledActor(devicePubkey: string): TerminalActor | null {
   if (!stored) return null
   if (!devicePubkey) return null
 
+  // Known and documented (IW-15): the role still comes from the unauthenticated record, and the
+  // credential-derived path is the real fix. What changed in Phase 2 is that the device key is
+  // now an independent argument, so the lock check can fail. The rule stays on so a NEW call
+  // site cannot be added without this conversation.
+  // nosemgrep: imani-role-from-local-storage
   return terminalActor(
     {
       stallPubkey: stored.stallPubkey,
