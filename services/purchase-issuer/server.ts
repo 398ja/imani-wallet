@@ -54,7 +54,20 @@ export function portsFor(config: IssuerConfig): Ports {
 
 export function depsFor(config: IssuerConfig): WorkerDeps {
   return {
-    api: new PurchasesApi(config.purchasesUrl, config.purchasesToken),
+    api: new PurchasesApi(config.purchasesUrl, config.purchasesToken, fetch, (row) => {
+      // IW-07: a refused debt row must be loud. It means either the upstream is emitting
+      // malformed data or somebody is trying to mint from a response they control, and both
+      // need a human. The row's own fields are not logged: an attacker-supplied row is
+      // attacker-supplied log content.
+      console.warn(
+        JSON.stringify({
+          event: 'purchase_row_rejected',
+          reason: 'failed_validation',
+          detail: 'row dropped rather than minted from; see IW-07',
+          row_type: row === null ? 'null' : Array.isArray(row) ? 'array' : typeof row,
+        }),
+      )
+    }),
     ports: portsFor(config),
     gatewayUrl: config.gatewayUrl,
     livemode: config.livemode,

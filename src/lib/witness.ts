@@ -80,7 +80,9 @@ export function xOnly(pubkeyHex: string): string {
  */
 export function signWitness(nut10Secret: string): string {
   const digest = sha256(utf8ToBytes(nut10Secret))
-  const signature = schnorr.sign(digest, hexToBytes(getSigner().privkeyHex()))
+  // IW-14: borrow the key for the signature and let the signer wipe the copy afterwards, rather
+  // than taking a hex string this code can never wipe.
+  const signature = getSigner().withPrivkey((key) => schnorr.sign(digest, key))
   return bytesToHex(signature)
 }
 

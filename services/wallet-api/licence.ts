@@ -8,6 +8,7 @@ import {
 
 
 import { parseVoucherToken, verifyVoucher } from '../../src/lib/voucherToken.js'
+import { acceptsCallerHistory, effectiveNow } from './testSeams'
 
 /**
  * What a licence entitles its holder to.
@@ -79,7 +80,11 @@ export function parseLicenceRequest(
   const token = typeof b.token === 'string' ? b.token.trim() : ''
   if (!token) return fail('token', 'required — the licence voucher to check')
 
-  const now = Number(b.now ?? defaultNow)
+  // IW-05: the server clock decides expiry. This path is worse than redeem's because
+  // checkLicence is deliberately offline and local (ADR 0007, no licence server), so there is no
+  // downstream authority to catch a lie: an expired licence plus any past timestamp returned
+  // granted: true with the full feature list, permanently.
+  const now = effectiveNow(b.now, defaultNow)
   if (!Number.isFinite(now)) return fail('now', 'expected unix SECONDS')
 
   /**
@@ -96,7 +101,10 @@ export function parseLicenceRequest(
     )
   }
 
-  const lastRaw = b.lastVerification
+  // IW-05: the grace window is computed from lastVerification, so accepting one from the request
+  // lets the caller manufacture the evidence that grants them grace — "no history, no window" is
+  // unenforceable when the caller supplies the history.
+  const lastRaw = acceptsCallerHistory() ? b.lastVerification : undefined
   let lastVerification: LastVerification | undefined
   if (lastRaw !== undefined) {
     if (lastRaw === null || typeof lastRaw !== 'object' || Array.isArray(lastRaw)) {

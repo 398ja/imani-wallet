@@ -1,0 +1,170 @@
+# Semgrep rules for the wallet PWA and its Node services, derived from findings this code had.
+#
+# Same principle as the Java ruleset: every rule names the finding it comes from, so a hit is
+# "we shipped this before" rather than a scanner's opinion.
+rules:
+  # ---------------------------------------------------------------------------
+  # IW-14 — the secret key must not be handed out as an unwipeable string.
+  # ---------------------------------------------------------------------------
+  - id: imani-privkey-hex-escape
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      privkeyHex() returns the secret key as a string, which JavaScript cannot wipe: strings are
+      immutable and GC-managed, so clearKey()'s promise that "between lock and reunlock there is
+      no key in memory" holds for the Uint8Array and not for this. Any caller in the origin — an
+      XSS, a malicious dependency, a devtools-adjacent extension — gets the whole key in one call
+      with no crypto work. That was IW-14. Use signer.withPrivkey(), which wipes the borrowed
+      copy when the borrow ends.
+    metadata:
+      cwe: "CWE-316: Cleartext Storage of Sensitive Information in Memory"
+      owasp: "A02:2021 Cryptographic Failures"
+      finding: IW-14
+      confidence: HIGH
+    patterns:
+      - pattern: $SIGNER.privkeyHex()
+
+  # ---------------------------------------------------------------------------
+  # IW-16 — a lock check must compare two independent values.
+  # ---------------------------------------------------------------------------
+  - id: imani-self-comparison-authorization
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      A value from a stored record is being compared against itself, or passed as both sides of a
+      check. That was IW-16: enrolledActor() passed stored.terminalPubkey as both the credential's
+      lockedTo and the supposed device key, so `lockedTo !== device` was `x !== x` and the
+      device-lock check could not fail — under a comment asserting the guarantee it did not
+      provide. Pass the live device key from the unlocked signer.
+    metadata:
+      cwe: "CWE-1025: Comparison Using Wrong Factors"
+      owasp: "A01:2021 Broken Access Control"
+      finding: IW-16
+      confidence: MEDIUM
+    # Not in tests: `expect(f(undefined, undefined))` is a legitimate assertion that two equal
+    # inputs behave, and flagging it teaches people the rule is noise.
+    paths:
+      exclude:
+        - "*__tests__*"
+        - "*.test.ts"
+        - "*.test.tsx"
+        - "*.spec.ts"
+        - "**/examples/**"
+    patterns:
+      - pattern-either:
+          - pattern: $X.$F === $X.$F
+          - pattern: $X.$F !== $X.$F
+          - pattern: $F($ARG, $ARG)
+
+  # ---------------------------------------------------------------------------
+  # IW-05 / IW-06 — security decisions must not read caller-supplied values.
+  # ---------------------------------------------------------------------------
+  - id: imani-caller-supplied-clock
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      An expiry or freshness check is reading `now` from the request body. The caller then chooses
+      whether their own credential has expired, which is not a check. That was IW-05. Use the
+      server clock; keep a caller-supplied value as a test seam only, gated on an explicit flag.
+    metadata:
+      cwe: "CWE-807: Reliance on Untrusted Inputs in a Security Decision"
+      owasp: "A04:2021 Insecure Design"
+      finding: IW-05
+      confidence: HIGH
+    paths:
+      exclude:
+        - "*__tests__*"
+        - "*.test.ts"
+        - "**/examples/**"
+        # A `deps` object assembled by the caller in-process is dependency injection, not a
+        # request body. The rule is about a value that crossed the network.
+        - "packages/**"
+    patterns:
+      - pattern-either:
+          - pattern: const $NOW = Number($B.now ?? ...)
+          - pattern: const $NOW = $B.now ?? ...
+          - pattern: const $NOW = $BODY.now
+      - metavariable-regex:
+          metavariable: $NOW
+          regex: "^(now|currentTime|timestamp|asOf)$"
+
+  # ---------------------------------------------------------------------------
+  # IW-11 — a relay or upstream URL must be TLS, and must not have a working default.
+  # ---------------------------------------------------------------------------
+  - id: imani-cleartext-relay-default
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      A websocket or HTTP URL defaults to a cleartext scheme. Attestations are individually
+      signed, so a party on the wire cannot forge a verdict — it can WITHHOLD one, and a withheld
+      attestation reads as `missing`, which is a public accusation against a named merchant. That
+      was IW-11. Require wss:// / https:// and make plaintext an explicit opt-in.
+    metadata:
+      cwe: "CWE-319: Cleartext Transmission of Sensitive Information"
+      owasp: "A02:2021 Cryptographic Failures"
+      finding: IW-11
+      confidence: HIGH
+    paths:
+      exclude:
+        - "*__tests__*"
+        - "*.test.ts"
+        - "*.spec.ts"
+        - "*e2e*"
+        # Local developer scripts that drive the compose stack by hand. They point at
+        # ws://localhost by definition, and the withholding risk this rule describes is about a
+        # SERVICE whose answers others rely on, not a script an engineer runs themselves.
+        - "scripts/**"
+        - "**/examples/**"
+    # Websocket schemes only. Intra-network http:// to a container name on a compose network is
+    # a different question with a different answer: that hop does not carry attestations whose
+    # ABSENCE is a verdict, and the deployment is where TLS termination for it belongs. Flagging
+    # every service URL here would bury the relay case, which is the one that manufactures a
+    # public accusation against a named merchant.
+    patterns:
+      - pattern-regex: '(?:\?\?|\|\|)\s*[''"]ws://[^''"]+[''"]'
+
+  # ---------------------------------------------------------------------------
+  # IW-03 — an idempotency key must name a request, not just a caller.
+  # ---------------------------------------------------------------------------
+  - id: imani-idempotency-scope-without-request
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      An idempotency scope is built from the caller and the key alone. A key that names a caller
+      but not a request replays the wrong answer: a till reusing one transaction id across two
+      endpoints receives the first endpoint's body with HTTP 200, and on the spend path that body
+      carries live bearer coupons. That was IW-03. Include a request fingerprint.
+    metadata:
+      cwe: "CWE-706: Use of Incorrectly-Resolved Name or Reference"
+      owasp: "A04:2021 Insecure Design"
+      finding: IW-03
+      confidence: MEDIUM
+    patterns:
+      - pattern: |
+          function $F($PUBKEY, $KEY) { ... }
+      - metavariable-regex:
+          metavariable: $F
+          regex: "(?i).*idempotencyscope.*"
+      - pattern-not: |
+          function $F($PUBKEY, $KEY, $FINGERPRINT) { ... }
+
+  # ---------------------------------------------------------------------------
+  # IW-15 — localStorage is attacker-writable; a role read from it is a role they chose.
+  # ---------------------------------------------------------------------------
+  - id: imani-role-from-local-storage
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      A role or permission set is being read from localStorage and used to build an actor. The
+      record is unauthenticated and editable by anyone holding the device or any XSS in the
+      origin, and permissions re-derived from an attacker-chosen role validate cleanly. That was
+      IW-15: a redeem-only till becomes an issuing one. Derive the actor from the signed
+      credential voucher instead.
+    metadata:
+      cwe: "CWE-922: Insecure Storage of Sensitive Information"
+      owasp: "A01:2021 Broken Access Control"
+      finding: IW-15
+      confidence: LOW
+    patterns:
+      - pattern: |
+          $F({ ..., role: $STORED.role, ... }, ...)

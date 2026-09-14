@@ -267,7 +267,7 @@ describe('the whole handshake', () => {
 
     await completeEnrolment(credential, 'a passphrase', credential.name)
 
-    const actor = enrolledActor()
+    const actor = enrolledActor(code.terminalPubkey)
     expect(actor).not.toBeNull()
     expect(actor!.stallPubkey).toBe(STALL)
     expect(actor!.terminalPubkey).toBe(code.terminalPubkey)

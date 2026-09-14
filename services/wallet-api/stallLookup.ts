@@ -46,7 +46,70 @@ import WebSocketImpl from 'ws'
  */
 useWebSocketImplementation(WebSocketImpl)
 
-const RELAY_URL = process.env.WALLET_API_RELAY_URL ?? 'ws://nostr-relay:7777'
+/**
+ * The relay this lookup reads stall records from.
+ *
+ * IW-11, sibling instance found by the Phase 3 Semgrep rule imani-cleartext-relay-default. The
+ * comment directly above already states the consequence of an empty result: it "would read as
+ * 'not a stall' and allow exactly the send this module exists to refuse". A party on a cleartext
+ * hop does not need to forge a stall record to cause that — withholding one is enough, and
+ * withholding is the cheaper attack.
+ *
+ * Plaintext stays available for the local stack, as an explicit opt-in rather than a default.
+ */
+export function resolveRelayUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.WALLET_API_RELAY_URL ?? ''
+  if (configured === '') {
+    // Unit tests import this module without an environment; they stub the pool and never dial.
+    if (env.NODE_ENV === 'test' || env.VITEST !== undefined) {
+      return 'ws://nostr-relay:7777'
+    }
+    throw new Error('WALLET_API_RELAY_URL must be set: there is no safe default relay.')
+  }
+  const url = new URL(configured)
+  if (url.protocol === 'wss:') {
+    return url.toString()
+  }
+
+  // Plaintext is REFUSED only when the operator has said this is production.
+  //
+  // The first version of this threw on any non-wss URL, which was correct about the risk and
+  // wrong about the rollout: services/wallet-api/Dockerfile ships
+  // `ENV WALLET_API_RELAY_URL=ws://nostr-relay:7777`, so the guard refused to start the very
+  // image it was added to protect. Verified by importing this module with exactly that
+  // environment — the process died at module load. A security control that stops the service
+  // booting gets reverted wholesale, and the finding comes back with it.
+  //
+  // So: loud on every start, fatal only where the operator has declared production. That keeps
+  // the compose stack working, keeps the warning in front of whoever reads the logs, and still
+  // makes the unsafe production case impossible.
+  if (env.WALLET_API_ALLOW_PLAINTEXT_RELAY === 'true' || env.NODE_ENV === 'test') {
+    return url.toString()
+  }
+  const production =
+    env.NODE_ENV === 'production' || env.WALLET_API_ENV === 'production'
+  if (production) {
+    throw new Error(
+      `WALLET_API_RELAY_URL must be wss:// in production (got ${url.protocol}). On a cleartext ` +
+        'hop an attacker can withhold a stall record, and an absent record permits the send ' +
+        'this module exists to refuse. Set WALLET_API_ALLOW_PLAINTEXT_RELAY=true only for a ' +
+        'local stack.',
+    )
+  }
+  console.warn(
+    JSON.stringify({
+      event: 'stall_lookup_plaintext_relay',
+      relay_protocol: url.protocol,
+      detail:
+        'Stall records are read over cleartext. A party on this hop can WITHHOLD a stall ' +
+        'record, and an absent record reads as "not a stall", which permits the send this ' +
+        'module exists to refuse. Use wss:// before production.',
+    }),
+  )
+  return url.toString()
+}
+
+const RELAY_URL = resolveRelayUrl()
 
 /** The kind and `d` tag that make an event a stall record, from the app. */
 export const STALL_KIND = 30078

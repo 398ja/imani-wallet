@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.0] - 2026-09-14
+
+The application-security review of 2026-09-13 (`imani-docs/security/appsec-2026-09-13/`) raised
+17 findings against this repository, 1 Critical. All are closed.
+
+**Minor, not patch: the services now refuse to start on an insecure relay URL in production.**
+See "Upgrading" below.
+
+### Security
+
+- **IW-07 (Critical) — the debt-queue response was trusted verbatim**, so unvalidated input
+  decided **how much value is minted**. Schema-validated before any minting now.
+- **IW-01 — the NIP-98 audience was derived from the attacker-controlled `Host` header.**
+- **IW-02 — free identities defeated per-key throttling**, and rate-map exhaustion silently
+  disabled it.
+- **IW-03 — idempotency keys were not bound to the request**, so one key replayed another
+  endpoint's body.
+- **IW-04 — replay protection was per-process**, so any scale-out silently re-admitted captured
+  requests.
+- **IW-05 — a caller-supplied `now` overrode the server clock on every expiry check.** The
+  Semgrep rule written for this then found it in `reports.ts` and `requests.ts`, two files the
+  review had not reached, one of which drives expiry.
+- **IW-06 — the `/v1/redeem/check` ceiling was self-attested**, and negative prior redemptions
+  were accepted.
+- **IW-08 — the credential vault authenticated the key but not the identity it is bound to.**
+- **IW-09 — decrypted issuing keys were cached for the process lifetime with no zeroisation.**
+- **IW-10 — unauthenticated `/health` echoed internal failure detail.**
+- **IW-11 — `audit-api` read the relay over cleartext `ws://` by default.**
+- **IW-12 — no rate limiting on an unauthenticated CORS-wildcard endpoint doing curve work.**
+- **IW-13 — no Content-Security-Policy anywhere in this repository.**
+- **IW-14 — `privkeyHex()` handed out an unwipeable string**, defeating the eviction guarantee.
+- **IW-15 — terminal enrolment records were stored unauthenticated in `localStorage`.**
+- **IW-16 — `enrolledActor()` compared a field with itself**, so the device-lock check could
+  never fail — under a comment asserting the comparison it could not make.
+- **IW-17 — two high-severity production advisories with fixes available.** `npm audit` now gates
+  the production tree in CI, and that gate *does* fail the build.
+
+### Fixed
+
+- **The IW-11 relay guards refused to start the shipped containers.** They threw at module load
+  on a cleartext relay URL, and both Dockerfiles set `ENV ..._RELAY_URL=ws://nostr-relay:7777` —
+  so the guard refused to start the very images it was protecting. A security control that stops
+  the service working gets reverted wholesale, and the finding comes back with it. Now loud
+  everywhere, fatal only in production.
+- **`stallLookup.ts` read over cleartext `ws://`.** The comment above it already said an empty
+  result "would read as 'not a stall' and allow exactly the send this module exists to refuse".
+  Found by the new rules.
+
+### Added
+
+- `.semgrep/` with 6 TypeScript rules derived from real findings here, fixtures proving each
+  still fires, and a CI check that fails when a rule matches nothing.
+- gitleaks over full history with custom rules for nostr private keys, cashu tokens and LNbits
+  admin keys.
+
+## Upgrading to 0.3.0
+
+**`AUDIT_RELAY_URL` is now mandatory — there is no default relay.** It previously fell back to a
+hardcoded `ws://nostr-relay:7777`, so a misconfigured deployment silently dialled cleartext.
+
+**In production a cleartext `ws://` relay refuses to start.** The guard fires when `NODE_ENV` or
+`AUDIT_ENV` is `production`; elsewhere it warns loudly and continues. Point `*_RELAY_URL` at
+`wss://` for any real deployment. For a local test stack only, `AUDIT_ALLOW_PLAINTEXT_RELAY=true`
+is the written-down escape hatch.
+
+Why it is fatal only in production: on a cleartext hop an attacker can drop one merchant of their
+choosing from the stream, and this service then accuses that merchant of not having published.
+
+**`npm audit` gates the production dependency tree in CI and fails the build.** Dev dependencies
+are deliberately out of scope: they are numerous, they churn, and a vulnerability in a test runner
+is not a vulnerability in the wallet a customer loads — gating on them means the gate gets
+disabled, and a disabled gate protects nothing.
+
+
 ## [Unreleased]
 
 ## [0.2.0] - 2026-09-13

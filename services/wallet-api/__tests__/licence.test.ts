@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach } from 'vitest'
 
 import { parseLicenceRequest, checkLicence, licenceIssuerPubkey } from '../licence.js'
 
@@ -43,6 +43,21 @@ describe('the issuer key', () => {
 })
 
 describe('reading the request', () => {
+  /**
+   * IW-05: the caller-supplied clock and verification history are TEST SEAMS, and they are off
+   * unless explicitly enabled. They were previously honoured in production, where they let any
+   * caller pass an expired licence by naming a past timestamp — and, because checkLicence is
+   * deliberately offline with no licence server behind it, nothing downstream could catch it.
+   *
+   * These tests enable the seam, which is exactly the case it exists for.
+   */
+  beforeEach(() => {
+    process.env.WALLET_API_ALLOW_TEST_SEAMS = 'true'
+  })
+  afterEach(() => {
+    delete process.env.WALLET_API_ALLOW_TEST_SEAMS
+  })
+
   const parse = (over: Record<string, unknown> = {}) =>
     parseLicenceRequest({ token: 'cashuBabc', ...over }, CALLER, NOW)
 

@@ -196,11 +196,13 @@ export function createDmCryptoAdapter(): CryptoAdapter {
       // mistaken for a malformed wrap. Throwing lets dm-poll record the real
       // reason and retry after its cooldown; the event is not consumed, because
       // `eventTracker.add` only runs on the success paths.
-      const privkey = getSigner().privkeyHex()
+      // IW-14: assert the wallet is unlocked without materialising the key here. The unwrap
+      // below borrows it for exactly as long as it needs.
+      getSigner().withPrivkey(() => undefined)
 
       try {
         console.log('[dmCrypto] unwrapping', event.id.slice(0, 8))
-        const rumor = nip17.unwrapEvent(event as never, hexToBytes(privkey))
+        const rumor = getSigner().withPrivkey((key) => nip17.unwrapEvent(event as never, key))
         console.log('[dmCrypto] unwrapped ok, content bytes:', rumor.content.length)
         return {
           eventId: event.id,

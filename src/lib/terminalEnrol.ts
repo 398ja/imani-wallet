@@ -252,26 +252,57 @@ export function storedTerminal(): StoredTerminal | null {
 /**
  * The actor this device logs in as, re-verified from what was stored.
  *
- * NOT simply the stored record cast to an actor. The record is on disk, where
- * anything could have edited it, so it goes back through `terminalActor` —
- * which re-checks that the permissions match the role for that stall. A device
- * whose storage was tampered with to add issuance is refused here, at launch,
- * rather than discovering it at the API.
+ * NOT simply the stored record cast to an actor. The record is on disk, where anything could
+ * have edited it, so it goes back through `terminalActor` - which re-checks that the permissions
+ * match the role for that stall. A device whose storage was tampered with to add issuance is
+ * refused here, at launch, rather than discovering it at the API.
+ *
+ * ## IW-16: the device key is an argument now
+ *
+ * This took no parameters and passed `stored.terminalPubkey` as BOTH the credential's `lockedTo`
+ * and the supposed device key. `terminalActor` then evaluates `lockedTo !== device`, which was
+ * `x !== x` - unreachable for any non-empty value. The comment beside it asserted "if that is
+ * not this device's key, the check fails", a guarantee the function could not provide, because
+ * it had no access to a device key at all. An always-true check that reads as load-bearing is
+ * worse than no check: it stops anyone looking.
+ *
+ * ## IW-15: and the record is still not authenticated
+ *
+ * `storedTerminal()` validates types and that the role is in the catalog; nothing authenticates
+ * the record as a whole. `terminalActor` re-derives permissions from the role via `grantFor`,
+ * so a record that inflates `permissions` alone is caught - and one that changes `role` is not,
+ * because the permissions are then re-derived consistently from the attacker's chosen role.
+ * Anyone with a moment on an unlocked terminal edits `localStorage` and a redeem-only till
+ * becomes an issuing one.
+ *
+ * The real fix is to derive the actor from the signed credential voucher (`credentialActor`,
+ * which checks the lock against the device key and the issuer against the named stall) and
+ * delete this path. Requiring the caller to supply a device key from the unlocked keystore is
+ * the step that makes the check able to fail at all.
+ *
+ * @param devicePubkey this device's key, from the unlocked signer - never read back out of the
+ *   record being checked
  */
-export function enrolledActor(): TerminalActor | null {
+export function enrolledActor(devicePubkey: string): TerminalActor | null {
   const stored = storedTerminal()
   if (!stored) return null
+  if (!devicePubkey) return null
 
+  // Known and documented (IW-15): the role still comes from the unauthenticated record, and the
+  // credential-derived path is the real fix. What changed in Phase 2 is that the device key is
+  // now an independent argument, so the lock check can fail. The rule stays on so a NEW call
+  // site cannot be added without this conversation.
+  // nosemgrep: imani-role-from-local-storage
   return terminalActor(
     {
       stallPubkey: stored.stallPubkey,
       role: stored.role,
-      // The record names the device it was written for; if that is not this
-      // device's key, the check fails, which is what we want.
+      // The record names the device it was written for. It is compared against a key the caller
+      // supplied, so the two sides are now independent and the comparison can fail.
       lockedTo: stored.terminalPubkey,
       permissions: stored.permissions,
     },
-    stored.terminalPubkey,
+    devicePubkey,
   )
 }
 

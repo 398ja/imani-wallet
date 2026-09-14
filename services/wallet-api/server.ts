@@ -74,7 +74,7 @@ import {
   relayUrls,
 } from './issue.js'
 import { parsePrepareRequest, requestSplit, buildRumor, splitUrl, splitBody } from './prepare.js'
-import { createGuards, type StoredResponse } from './guards.js'
+import { createGuards, requestFingerprint, type StoredResponse } from './guards.js'
 import { createStallLookup } from './stallLookup.js'
 
 const PORT = Number(process.env.PORT ?? 8788)
@@ -121,8 +121,43 @@ export const metrics = {
  *
  * Staging is single-replica, which is what makes this adequate today. Scaling
  * out needs a shared store and a decision record, not a bigger cap.
+ *
+ * IW-04: that constraint is now executable rather than documentary. See
+ * {@link assertSingleReplica} — a comment does not survive contact with a
+ * `replicas: 2` edit made by someone who never read it.
  */
 export const guards = createGuards()
+
+/**
+ * Refuses to start when the deployment is scaled out without a shared store (IW-04).
+ *
+ * <p>The guards above are per process, so N replicas mean a captured request is accepted once
+ * per replica — and, just as bad in the other direction, an honest retry that lands on a cold
+ * replica RE-EXECUTES rather than replaying, splitting a coupon a second time. The comment above
+ * has always said so, and a comment is not a control: scaling out is a one-line change in a
+ * manifest, made by someone who will not read this file.
+ *
+ * <p>Declaring WALLET_API_REPLICAS=1 is an affirmative statement that the operator knows. A
+ * shared store satisfies it instead, once one exists.
+ */
+export function assertSingleReplica(
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const replicas = Number(env.WALLET_API_REPLICAS ?? '1')
+  if (!Number.isFinite(replicas) || replicas < 1) {
+    throw new Error(
+      `WALLET_API_REPLICAS must be a positive integer (got ${String(env.WALLET_API_REPLICAS)}).`,
+    )
+  }
+  if (replicas > 1 && (env.WALLET_API_SHARED_STORE_URL ?? '') === '') {
+    throw new Error(
+      'WALLET_API_REPLICAS > 1 requires WALLET_API_SHARED_STORE_URL: replay protection and ' +
+        'idempotency are in-process, so each replica admits one replay of a captured request, ' +
+        'and a retry landing on another replica re-executes instead of replaying — which on ' +
+        '/v1/spend/parts/prepare splits the coupon twice. Refusing to start.',
+    )
+  }
+}
 
 /**
  * Recipient lookups. Module-level for the same reason as the guards: this
@@ -170,6 +205,27 @@ export function resetGatewayFetch(): void {
 }
 
 /** One header, lower-cased and de-duplicated, or undefined. */
+/**
+ * Warns once that the NIP-98 audience is being derived from a caller-controlled header (IW-01).
+ *
+ * Once, not per request: a per-request warning on a hot path is a log-flooding primitive, and
+ * the operator only needs to be told the thing is misconfigured a single time.
+ */
+let publicOriginWarned = false
+function warnMissingPublicOrigin(): void {
+  if (publicOriginWarned) return
+  publicOriginWarned = true
+  console.warn(
+    JSON.stringify({
+      event: 'nip98_audience_from_request_headers',
+      reason: 'WALLET_API_PUBLIC_ORIGIN unset',
+      detail:
+        'NIP-98 URL binding derives from the Host header, so an event signed for another ' +
+        'origin can be replayed here. Set WALLET_API_PUBLIC_ORIGIN to this service origin.',
+    }),
+  )
+}
+
 function header(req: IncomingMessage, name: string): string | undefined {
   const raw = req.headers[name]
   // Node gives an ARRAY when a header appears twice. Taking the first would let
@@ -292,13 +348,25 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   // the proxy — the error the README singles out as most misdiagnosed, because
   // it points at the caller's signing code, which is correct.
   //
-  // Trusting a client-settable header is safe only for what it is used for
-  // here: matching a signature the caller already made over its own URL. It
-  // grants nothing. A client setting `x-forwarded-proto: https` while speaking
-  // http can only make its own signature verify against the URL it really used.
+  // IW-01: the NIP-98 audience comes from server configuration when one is given.
+  //
+  // The reasoning that used to stand here — that a client-settable header "grants nothing"
+  // because the caller is only matching its own signature — holds for ONE service in isolation
+  // and breaks as soon as a second one shares the estate. A NIP-98 event is bound to a URL, and
+  // if the URL is reconstructed from Host, a caller can present an event signed for
+  // wallet.example against any other service by setting Host to wallet.example. The signature
+  // is genuine, the audience is forged. This is the same defect as SEC-02 in the Java gateways,
+  // and it was fixed there by requiring a configured origin.
+  //
+  // WALLET_API_PUBLIC_ORIGIN is that origin. When unset the old header-derived behaviour is
+  // kept rather than breaking existing deployments, but it is logged once so the gap is visible
+  // instead of silent.
+  const configuredOrigin = process.env.WALLET_API_PUBLIC_ORIGIN?.trim()
+  if (!configuredOrigin) warnMissingPublicOrigin()
   const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim()
   const scheme = proto === 'https' ? 'https' : 'http'
-  const url = new URL(req.url ?? '/', `${scheme}://${req.headers.host ?? 'localhost'}`)
+  const base = configuredOrigin ?? `${scheme}://${req.headers.host ?? 'localhost'}`
+  const url = new URL(req.url ?? '/', base)
   const path = url.pathname.replace(/\/$/, '') || '/'
   const method = (req.method ?? 'GET').toUpperCase()
 
@@ -356,12 +424,16 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
    * replaying that for 24 hours would keep answering "malformed" after they had
    * fixed it. Errors are also the answers most worth retrying for real.
    */
+  // IW-03: the request this idempotency key belongs to. Stored with the answer and compared on
+  // every later use of the key, so a key can replay only the request it was first used for.
+  const fingerprint = requestFingerprint(method, path, body)
+
   const answer = (status: number, payload: unknown): void => {
     if (idempotencyKey !== undefined && status >= 200 && status < 300) {
       guards.remember({
         pubkey: auth.pubkey,
         idempotencyKey,
-        response: { status, body: payload } satisfies StoredResponse,
+        response: { status, body: payload, fingerprint } satisfies StoredResponse,
         now: Date.now(),
       })
     }
@@ -372,6 +444,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     eventId: auth.eventId,
     pubkey: auth.pubkey,
     idempotencyKey,
+    fingerprint,
     now: Date.now(),
   })
 
@@ -382,6 +455,12 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       // "this ran twice" and "this ran once and I asked twice".
       res.setHeader('idempotency-replayed', 'true')
       return json(res, verdict.stored.status, verdict.stored.body)
+    }
+
+    if (verdict.reason === 'idempotency-conflict') {
+      // 422, not a replayed 200. The caller asked a question this key has no answer for, and
+      // handing back the other request's body is the failure mode this exists to prevent.
+      return json(res, 422, { error: 'idempotency-conflict', detail: verdict.detail })
     }
 
     if (verdict.reason === 'rate-limited') {
@@ -1285,6 +1364,9 @@ export const server = createServer((req, res) => {
 })
 
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop() ?? '')) {
+  // IW-04: before listening, not after. A process that cannot keep its replay promise should
+  // never accept the first request.
+  assertSingleReplica()
   server.listen(PORT, () => {
     console.log(`[wallet-api] listening on ${PORT}`)
   })

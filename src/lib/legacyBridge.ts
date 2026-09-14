@@ -369,6 +369,11 @@ export function loadLegacyRedemption(): Promise<void> {
  */
 export async function legacyApi(): Promise<NonNullable<Window['api']>> {
   await loadLegacyRedemption()
+  // The one remaining caller that genuinely needs a string: api.js is a classic script loaded at
+  // runtime and its setLegacyCredentials takes hex. withPrivkey cannot help across that boundary
+  // — the legacy module keeps its own copy for the life of the page — so the fix is to retire
+  // the legacy bridge, not to wrap this call. Recorded rather than silently exempted (IW-14).
+  // nosemgrep: imani-privkey-hex-escape
   setLegacyCredentials(getSigner().privkeyHex(), getSigner().pubkey)
   if (!window.api) throw new Error('api.js loaded but window.api is unset')
 

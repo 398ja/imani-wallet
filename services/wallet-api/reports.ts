@@ -1,4 +1,5 @@
 import type { ReportTransaction } from '@imani/reports'
+import { effectiveNow } from './testSeams.js'
 
 /**
  * Parsing the rows a caller sends for a report.
@@ -126,7 +127,11 @@ export function parseReportRequest(body: unknown, defaultNow: number): Parsed<Re
     return fail('decimals', 'expected a whole number between 0 and 8')
   }
 
-  const now = Number(b.now ?? defaultNow)
+  // IW-05, sibling instance found by the Phase 3 Semgrep rule imani-caller-supplied-clock.
+  // `now` bounds the report window and is compared against `from`, so a caller who sets it
+  // chooses which transactions their own report includes. Gated behind the same test seam the
+  // redeem path uses.
+  const now = effectiveNow(b.now, defaultNow)
   if (!Number.isFinite(now)) return fail('now', 'expected epoch milliseconds')
 
   const from = Number(b.from ?? now - DEFAULT_WINDOW_MS)

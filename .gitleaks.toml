@@ -1,0 +1,120 @@
+# Secret-scanning configuration.
+#
+# The review found no hardcoded credentials in tracked config, which is the good news and
+# exactly why this exists: the estate is clean today, so the cheap time to start scanning is
+# before it is not.
+title = "imani secret scanning"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "imani-nostr-private-key"
+description = "A Nostr private key (nsec or 64-hex secret) in tracked content"
+# nsec1... is bech32 with a fixed prefix; the hex form is caught by the assignment context so a
+# bare 64-hex string (an event id, a pubkey, a payment hash — all public) does not fire.
+regex = '''(?i)(nsec1[02-9ac-hj-np-z]{58})|((privkey|private_key|privatekey|secret_key|secretkey|nsec)\s*[:=]\s*["']?[0-9a-f]{64}["']?)'''
+tags = ["nostr", "key"]
+
+[[rules]]
+id = "imani-cashu-token"
+description = "A Cashu token, which is a bearer instrument"
+# cashuA/cashuB tokens are spendable money. One in a commit is money published.
+regex = '''cashu[AB][A-Za-z0-9+/=_-]{40,}'''
+tags = ["cashu", "bearer"]
+
+[[rules]]
+id = "imani-lnbits-admin-key"
+description = "An LNbits admin key, which grants full wallet control"
+regex = '''(?i)(lnbits[_-]?admin[_-]?key|admin[_-]?key)\s*[:=]\s*["']?[a-f0-9]{32}["']?'''
+tags = ["lnbits", "key"]
+
+# The default generic-api-key rule fires on `export const conversationKey = nip44.getConversationKey`
+# — an alias binding, not a value. Rather than allowlist the file (which would hide a real secret
+# added to it later), stop the rule matching a bare identifier on the right-hand side.
+[[rules]]
+id = "generic-api-key"
+description = "Generic API key, excluding identifier-to-identifier aliases"
+regex = '''(?i)(?:key|api[_.-]?key|token|secret|passwd|password)(?:[0-9a-z\-_\t .]{0,20})(?:[\s|']|[\s|"]){0,3}(?:=|>|:{1,3}=|\|\|:|<=|=>|:|\?=)(?:'|\"|\s|=|\x60){0,5}([0-9a-z\-_.=]{10,150})(?:['|\"|\n|\r|\s|\x60|;]|$)'''
+keywords = ["key", "api", "token", "secret", "passwd", "password"]
+[rules.allowlist]
+description = "Identifier aliases and public key material are not secrets"
+regexes = [
+  # A nostr PUBKEY is public by construction: it is the account identifier, printed in javadoc
+  # examples throughout this estate. The default rule's keyword list contains "key" and cannot
+  # tell the two apart; the dedicated imani-nostr-private-key rule above catches the half that
+  # matters. Matching the 64-hex value directly, since that is what gitleaks hands the allowlist.
+  '''^[0-9a-f]{64}$''',
+  # `export const conversationKey = nip44.getConversationKey` — an alias binding.
+  '''^[A-Za-z_$][A-Za-z0-9_$]*\.[A-Za-z_$][A-Za-z0-9_$]*$''',
+]
+
+# A nostr PUBKEY is public by construction and appears in javadoc examples throughout. The
+# generic rule cannot tell "pubkey" from "key"; this can.
+
+
+[allowlist]
+description = "Paths and values that are deliberately non-secret"
+paths = [
+  # Test sources and fixtures hold deliberately-published values used to make signature and
+  # authorization tests deterministic. They are worthless: they sign fixtures and hold nothing,
+  # and a scanner that shouts about them teaches people to ignore it.
+  #
+  # This is the allowlist entry most likely to be wrong later, so it is the narrowest useful
+  # form: test TREES only. A credential that matters does not live in src/test.
+  '''(^|.*/)src/test/.*''',
+  '''(^|.*/)__tests__/.*''',
+  '''(^|.*/)e2e/.*''',
+  '''(^|.*/)test/.*''',
+  '''.*\.test\.(ts|tsx|js|ja)$''',
+  '''.*Test\.java$''',
+  # Build output. Scanning target/ and node_modules/ reports the same finding twice and reports
+  # third-party fixtures as ours.
+  '''(^|.*/)target/.*''',
+  '''(^|.*/)node_modules/.*''',
+  '''(^|.*/)dist/.*''',
+  '''(^|.*/)build/.*''',
+  # Recorded wallet state for the performance harness. These hold cashu tokens that ARE real
+  # tokens — minted against the local dev stack that perf/README.md describes, with no mint URL
+  # in the file and no reachable issuer outside that stack, so they are worthless to anyone who
+  # clones this. Committed deliberately (see perf/snapshots/.gitignore) because CI measuring an
+  # EMPTY wallet reports green having checked the one case that cannot be slow.
+  #
+  # This is the allowlist entry to revisit if the perf harness is ever pointed at a real mint.
+  '''(^|.*/)perf/snapshots/.*''',
+  # The deleted Kotlin modules (removed 2025-11). Their matches are a javadoc example token and
+  # bech32 round-trip test vectors, both published in the NUT-00 and NIP-19 specs they cite.
+  # Allowlisted by PATH rather than by value, because gitleaks matches allowlist regexes against
+  # the extracted secret and not the surrounding line — a distinction worth writing down, since
+  # a value-based entry here looks like it works and silently does not.
+  '''(^|.*/)imani-(android|voucher|identity)/.*''',
+  # Documentation examples: a README showing the shape of a token is not a token anyone holds.
+  '''.*README\.md$''',
+  '''(^|.*/)docs/.*''',
+  # Design documents: the matches are angle-bracket placeholders like <issuer_pubkey_hex> and
+  # IndexedDB keyPath declarations, neither of which is a value.
+  '''(^|.*/)project/.*\.md$''',
+  '''.*\.md$''',
+  # The scanner's own patterns.
+  '''\.gitleaks\.toml''',
+  # Documented config EXAMPLES in javadoc, which show the shape of a property rather than a
+  # value anyone can use.
+  '''.*Properties\.java''',
+]
+regexes = [
+  # Documented dev placeholders. These are in the repository ON PURPOSE and guarded at boot by
+  # MasterKeyGuard (GC-10), DevModeGuard (CW-11) and ReceiptsSecretGuard, which refuse to start
+  # a production profile still carrying them. Allowlisting them here keeps the scanner's output
+  # about real secrets; the boot guards are what keep them out of production.
+  '''dev-master-key-change-me''',
+  '''receipts-dev-secret''',
+  '''receipts-cluster-dev-secret''',
+  '''receipts-dev-consume-secret-do-not-use-in-prod''',
+  # Domain-separator constants. These are versioned TAGS mixed into a KDF so two schemes cannot
+  # collide; they are public by design and printed in the spec.
+  '''imani-(ledger-key|redeem|blind)-v[0-9]+''',
+  # Deleted Kotlin modules (imani-android, imani-voucher, imani-identity) removed in 2025-11.
+  # The matches are a javadoc example token and bech32 round-trip test vectors, both published
+  # in the NUT-00 and NIP-19 specs they cite. Nothing here was ever spendable.
+  '''cashuAeyJwcm9vZnMiOlt7ImFtb3VudCI6MSwiaWQiOiIwMGFkMjY4''',
+]

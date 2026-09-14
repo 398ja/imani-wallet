@@ -33,6 +33,15 @@ const { TERMINAL_ROLES, grantFor } = await import('../terminalRole')
 type TerminalRole = (typeof TERMINAL_ROLES)[keyof typeof TERMINAL_ROLES]
 
 const STALL = 'a'.repeat(64)
+
+/**
+ * A device key that is NOT the enrolled terminal's (IW-16).
+ *
+ * enrolledActor now takes the device key as an argument instead of reading it back out of the
+ * record it is checking, so "this record belongs to another device" is finally a case that can
+ * fail. Used for the not-enrolled assertions, where no record exists either way.
+ */
+const DEVICE_KEY = 'd'.repeat(64)
 const OTHER_STALL = 'b'.repeat(64)
 const PASSPHRASE = 'correct horse battery staple'
 
@@ -122,7 +131,7 @@ describe('nothing is stored until enrolment completes', () => {
 
     expect(saved).toEqual([])
     expect(storedTerminal()).toBeNull()
-    expect(enrolledActor()).toBeNull()
+    expect(enrolledActor(DEVICE_KEY)).toBeNull()
   })
 
   it('persists nothing when the credential does not check out', async () => {
@@ -136,7 +145,7 @@ describe('nothing is stored until enrolment completes', () => {
     // No key saved, no record written, no session possible.
     expect(saved).toEqual([])
     expect(storedTerminal()).toBeNull()
-    expect(enrolledActor()).toBeNull()
+    expect(enrolledActor(DEVICE_KEY)).toBeNull()
   })
 
   it('persists nothing when the credential is for another stall’s permissions', async () => {
@@ -165,7 +174,7 @@ describe('logging itself in afterwards', () => {
     await completeEnrolment(credentialFor(code.terminalPubkey), PASSPHRASE, 'Door')
 
     // A fresh read, as at next launch.
-    const actor = enrolledActor()
+    const actor = enrolledActor(code.terminalPubkey)
     expect(actor).not.toBeNull()
     expect(actor!.stallPubkey).toBe(STALL)
     expect(actor!.terminalPubkey).toBe(code.terminalPubkey)
@@ -176,7 +185,7 @@ describe('logging itself in afterwards', () => {
     const code = beginEnrolment()
     await completeEnrolment(credentialFor(code.terminalPubkey), PASSPHRASE)
 
-    expect(enrolledActor()!.stallPubkey).not.toBe(code.terminalPubkey)
+    expect(enrolledActor(code.terminalPubkey)!.stallPubkey).not.toBe(code.terminalPubkey)
   })
 
   it('keeps the role it was enrolled with', async () => {
@@ -186,7 +195,7 @@ describe('logging itself in afterwards', () => {
       PASSPHRASE,
     )
 
-    expect(enrolledActor()!.role).toBe(TERMINAL_ROLES.REDEEM_ONLY)
+    expect(enrolledActor(code.terminalPubkey)!.role).toBe(TERMINAL_ROLES.REDEEM_ONLY)
   })
 
   it('refuses a record whose permissions were tampered with on disk', async () => {
@@ -207,7 +216,9 @@ describe('logging itself in afterwards', () => {
     }
     localStorage.setItem('imani-wallet:terminal', JSON.stringify(tampered))
 
-    expect(enrolledActor()).toBeNull()
+    // This device's own key, so the refusal is about the tampered permissions and not about the
+    // lock. Passing a foreign key here would make the test pass for the wrong reason.
+    expect(enrolledActor(code.terminalPubkey)).toBeNull()
   })
 
   it('reads an unusable record as not enrolled, rather than throwing', () => {
@@ -216,7 +227,7 @@ describe('logging itself in afterwards', () => {
     for (const bad of ['not json', '{}', '{"role":"owner"}', 'null']) {
       localStorage.setItem('imani-wallet:terminal', bad)
       expect(storedTerminal()).toBeNull()
-      expect(enrolledActor()).toBeNull()
+      expect(enrolledActor(DEVICE_KEY)).toBeNull()
     }
   })
 })
@@ -236,5 +247,23 @@ describe('retrying', () => {
     // A second enrolment is a new terminal identity, not the old one reused.
     const second = beginEnrolment()
     expect(second.terminalPubkey).not.toBe(first.terminalPubkey)
+  })
+})
+
+describe('IW-16: the device lock is a real comparison', () => {
+  it('refuses a record locked to another device', async () => {
+    // enrolledActor used to pass stored.terminalPubkey as BOTH the credential's lockedTo and the
+    // device key, so terminalActor evaluated `lockedTo !== device` as `x !== x` and the check
+    // could not fail. The record's claim about which device it belonged to was being checked
+    // against the record's own claim.
+    const code = beginEnrolment()
+    await completeEnrolment(credentialFor(code.terminalPubkey), PASSPHRASE)
+
+    expect(enrolledActor(code.terminalPubkey)).not.toBeNull()
+    expect(enrolledActor('f'.repeat(64))).toBeNull()
+  })
+
+  it('refuses when no device key is supplied', () => {
+    expect(enrolledActor('')).toBeNull()
   })
 })

@@ -67,6 +67,18 @@ export interface CredentialStore {
  * data it protects. A deployment that keeps both in the same place has
  * encryption in name only.
  */
+
+/**
+ * The fields bound into the GCM tag alongside the key material (IW-08).
+ *
+ * Separator is a NUL byte so the two fields cannot be run together ambiguously — without it,
+ * ("ab", "c") and ("a", "bc") would produce identical associated data and a record could be
+ * re-pointed between them.
+ */
+function associatedData(stallPubkey: string, credentialId: string): Buffer {
+  return Buffer.from(`${stallPubkey.toLowerCase()}\u0000${credentialId}`, 'utf8')
+}
+
 export class CredentialVault {
   private readonly key: Buffer
   private readonly store: CredentialStore
@@ -88,6 +100,15 @@ export class CredentialVault {
   async put(credential: StallCredential): Promise<void> {
     const iv = randomBytes(IV_BYTES)
     const cipher = createCipheriv('aes-256-gcm', this.key, iv)
+    // IW-08: bind the identity fields into the authentication tag.
+    //
+    // Only lockKeyHex was encrypted; stallPubkey and credentialId sat beside it in plaintext and
+    // outside the GCM tag, and decryption reassembled the credential from those plaintext
+    // fields. So the key material was authenticated and the identity it belongs to was not:
+    // anyone who could write the vault file could move a live key onto a different stall's
+    // record, and every signature it then produced would be attributed to that stall. The tag
+    // would still verify, because it never covered the fields that were changed.
+    cipher.setAAD(associatedData(credential.stallPubkey, credential.credentialId))
     const ciphertext = Buffer.concat([
       cipher.update(credential.lockKeyHex, 'utf8'),
       cipher.final(),
@@ -143,6 +164,10 @@ export class CredentialVault {
           Buffer.from(record.iv, 'base64'),
         )
         decipher.setAuthTag(tag)
+        // The same binding, checked. If either field was edited on disk, final() throws and the
+        // record is skipped below — which is the correct outcome: a credential whose owner we
+        // cannot confirm must not be used to sign as that owner.
+        decipher.setAAD(associatedData(record.stallPubkey, record.credentialId))
         const lockKeyHex = Buffer.concat([
           decipher.update(ciphertext),
           decipher.final(),
