@@ -1,0 +1,39 @@
+/*
+ * NOT PRODUCTION CODE. Deliberately vulnerable shapes, one per Semgrep rule in .semgrep/.
+ *
+ * A SAST ruleset that matches nothing looks exactly like a codebase with no findings.
+ * `semgrep --validate` proves the rules PARSE; only running them against known-bad code proves
+ * they still FIRE. CI asserts every rule id produces at least one finding here.
+ *
+ * Stored as .txt so tsc, vite and vitest never see it.
+ *
+ * Adding a rule? Add its vulnerable shape here in the same commit.
+ */
+const RELAY_URL = process.env.AUDIT_RELAY_URL ?? 'ws://nostr-relay:7777'
+
+function idempotencyScope(pubkey: string, key: string): string {
+  return `${pubkey.toLowerCase()}\u0000${key}`
+}
+
+function check(b: any, defaultNow: number) {
+  const now = Number(b.now ?? defaultNow)
+  return now
+}
+
+function enrolledActor(stored: any) {
+  return terminalActor(
+    { stallPubkey: stored.stallPubkey, role: stored.role, lockedTo: stored.terminalPubkey },
+    stored.terminalPubkey,
+  )
+}
+
+function leak(signer: any) {
+  return signer.privkeyHex()
+}
+
+declare function terminalActor(a: any, b: any): any
+
+function selfCompare(stored: any) {
+  if (stored.terminalPubkey !== stored.terminalPubkey) return null
+  return stored
+}

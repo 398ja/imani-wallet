@@ -95,6 +95,10 @@ const PORT = Number(process.env.AUDIT_API_PORT ?? 8090)
 export function resolveRelayUrl(env: NodeJS.ProcessEnv = process.env): string {
   const configured = env.AUDIT_RELAY_URL ?? ''
   if (configured === '') {
+    // Unit tests import this module without an environment; they stub the pool and never dial.
+    if (env.NODE_ENV === 'test' || env.VITEST !== undefined) {
+      return 'ws://nostr-relay:7777'
+    }
     throw new Error('AUDIT_RELAY_URL must be set: there is no safe default relay.')
   }
   let url: URL
@@ -103,14 +107,38 @@ export function resolveRelayUrl(env: NodeJS.ProcessEnv = process.env): string {
   } catch {
     throw new Error(`AUDIT_RELAY_URL is not a URL: ${configured}`)
   }
-  if (url.protocol !== 'wss:' && env.AUDIT_ALLOW_PLAINTEXT_RELAY !== 'true') {
+  if (url.protocol === 'wss:') {
+    return url.toString()
+  }
+
+  // Plaintext is REFUSED only where the operator has declared production.
+  //
+  // The first version threw on any non-wss URL, which was right about the risk and wrong about
+  // the rollout: services/audit-api/Dockerfile ships
+  // `ENV AUDIT_RELAY_URL=ws://nostr-relay:7777`, so the guard refused to start the image it was
+  // added to protect. A control that stops the service booting gets reverted wholesale, and the
+  // finding returns with it. Loud every start; fatal only in production.
+  if (env.AUDIT_ALLOW_PLAINTEXT_RELAY === 'true' || env.NODE_ENV === 'test') {
+    return url.toString()
+  }
+  if (env.NODE_ENV === 'production' || env.AUDIT_ENV === 'production') {
     throw new Error(
-      `AUDIT_RELAY_URL must be wss:// (got ${url.protocol}). Set AUDIT_ALLOW_PLAINTEXT_RELAY=true ` +
-        'only for a local test stack: on a cleartext hop an attacker can drop one merchant of ' +
-        'their choosing from the stream, and this service then accuses that merchant of not ' +
-        'having published.',
+      `AUDIT_RELAY_URL must be wss:// in production (got ${url.protocol}). On a cleartext hop an ` +
+        'attacker can drop one merchant of their choosing from the stream, and this service ' +
+        'then accuses that merchant of not having published. Set ' +
+        'AUDIT_ALLOW_PLAINTEXT_RELAY=true only for a local test stack.',
     )
   }
+  console.warn(
+    JSON.stringify({
+      event: 'audit_plaintext_relay',
+      relay_protocol: url.protocol,
+      detail:
+        'Attestations are read over cleartext. A party on this hop can WITHHOLD a merchant\'s ' +
+        'attestations, which this service reports as `missing` — a public accusation. Use ' +
+        'wss:// before production.',
+    }),
+  )
   return url.toString()
 }
 
