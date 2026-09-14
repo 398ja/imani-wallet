@@ -181,6 +181,10 @@ export interface LicenceStatusOptions {
  * as "no licence" would do exactly that.
  */
 export async function licenceStatus(options: LicenceStatusOptions): Promise<LicenceStatus> {
+  // nosemgrep: imani-caller-supplied-clock
+  // CLIENT-side, and the options object is built by this app, not parsed from a request: there
+  // is no remote caller to supply it. The licence verdict that matters is re-checked server-side.
+  // nosemgrep: imani-caller-supplied-clock
   const now = options.now ?? nowSeconds()
   const issuerPublicKey = options.issuerPublicKey ?? licenceIssuerPubkey()
   const load = options.loadRows ?? listVouchers

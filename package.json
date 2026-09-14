@@ -1,12 +1,13 @@
 {
   "name": "imani-wallet",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "audit:prod": "npm audit --omit=dev --audit-level=high",
     "test": "vitest run",
     "test:watch": "vitest",
     "preview": "vite preview",

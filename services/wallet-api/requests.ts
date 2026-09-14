@@ -8,6 +8,7 @@ import {
 import type { ReportTransaction } from '@imani/reports'
 
 import { nut18v } from './nut18v.js'
+import { effectiveNow } from './testSeams.js'
 
 /**
  * Asking to be paid, over HTTP.
@@ -250,7 +251,11 @@ export function parseReconcileRequest(body: unknown, defaultNow: number): Parsed
     })
   }
 
-  const now = Number(b.now ?? defaultNow)
+  // IW-05, sibling instance found by the Phase 3 Semgrep rule imani-caller-supplied-clock.
+  // This `now` drives expireRequests below, so a caller supplying it decides whether their own
+  // request has expired — which is the same shape as the redeem path, in a file the review did
+  // not reach.
+  const now = effectiveNow(b.now, defaultNow)
   if (!Number.isFinite(now)) return fail('now', 'expected epoch milliseconds')
 
   return { ok: true, value: { requests, transactions, now } }

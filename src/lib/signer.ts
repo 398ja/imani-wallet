@@ -36,6 +36,17 @@ export interface WalletSigner extends EvictableSigner {
   nip44Encrypt(peerPubkey: string, plaintext: string): string
   /** The raw key, for handing to DmPollService. Throws while locked. */
   privkeyHex(): string
+  /**
+   * Runs `use` with a borrowed copy of the raw key, then wipes that copy (IW-14).
+   *
+   * Prefer this to `privkeyHex()`. A returned string is a copy this signer can never account for
+   * and that JavaScript cannot wipe - strings are immutable and GC-managed, so `hex = null` in
+   * `clearKey()` drops a reference to bytes that stay resident, may be copied by the collector,
+   * and appear in any heap snapshot. The module header promises that "between lock and reunlock
+   * there is no key in memory to steal"; that is true of the Uint8Array half and false of the
+   * hex beside it. Scoping the borrow is what makes the promise checkable.
+   */
+  withPrivkey<T>(use: (key: Uint8Array) => T): T
 }
 
 export class SessionLockedError extends Error {
@@ -129,9 +140,25 @@ export function createWalletSigner(privkeyHex: string): WalletSigner {
     nip44Encrypt: (peerPubkey, plaintext) =>
       nip44.encrypt(plaintext, conversationKey(peerPubkey)),
 
+    /**
+     * @deprecated IW-14. Hands out an unwipeable copy of the secret key; any caller in the
+     *   origin - an XSS, a malicious dependency in the bundle, a devtools-adjacent extension -
+     *   gets the whole key in one call with no crypto work. Use `withPrivkey`.
+     */
     privkeyHex() {
       if (!hex) throw new SessionLockedError()
       return hex
+    },
+
+    withPrivkey(use) {
+      const borrowed = Uint8Array.from(require())
+      try {
+        return use(borrowed)
+      } finally {
+        // The borrow ends here whatever `use` did, which is the whole difference from handing
+        // out a reference and hoping.
+        borrowed.fill(0)
+      }
     },
   } satisfies WalletSigner
 }

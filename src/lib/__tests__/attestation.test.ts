@@ -19,7 +19,11 @@ vi.mock('../nap', () => ({
   getSigner: () => {
     // What a locked wallet — or an auditor with no wallet at all — looks like.
     if (signerThrows) throw new Error('No signer — the wallet has not been unlocked.')
-    return { privkeyHex: () => currentKey, pubkey: 'ff'.repeat(32) }
+    return {
+      privkeyHex: () => currentKey,
+      withPrivkey: <T,>(use: (key: Uint8Array) => T) => use(hexToBytes(currentKey)),
+      pubkey: 'ff'.repeat(32),
+    }
   },
 }))
 

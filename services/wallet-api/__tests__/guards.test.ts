@@ -15,14 +15,28 @@ import { FRESHNESS_WINDOW_SECONDS } from '../nip98.js'
 const T = 1_000_000
 const KEY = 'a'.repeat(64)
 
+// IW-03 bound a request fingerprint into the idempotency check, so both `check` and the
+// stored response now carry one. These helpers default it, because most tests here are about
+// replay and scoping rather than about the fingerprint itself; the tests that DO exercise
+// IW-03 pass an explicit value and are the ones that would break if the default leaked into
+// the comparison.
+const FINGERPRINT = 'fp-default'
+
 const check = (
   g: ReturnType<typeof createGuards>,
-  over: Partial<{ eventId: string; pubkey: string; idempotencyKey: string; now: number }> = {},
+  over: Partial<{
+    eventId: string
+    pubkey: string
+    idempotencyKey: string
+    fingerprint: string
+    now: number
+  }> = {},
 ) =>
   g.check({
     eventId: 'event-1',
     pubkey: KEY,
     idempotencyKey: undefined,
+    fingerprint: FINGERPRINT,
     now: T,
     ...over,
   })
@@ -138,7 +152,7 @@ describe('idempotency', () => {
     guards.remember({
       pubkey: KEY,
       idempotencyKey: 'shared',
-      response: { status: 200, body: { secret: 'mine' } },
+      response: { status: 200, body: { secret: 'mine' }, fingerprint: FINGERPRINT },
       now: T,
     })
 
@@ -161,7 +175,7 @@ describe('idempotency', () => {
     guards.remember({
       pubkey: KEY,
       idempotencyKey: 'k',
-      response: { status: 200, body: { secret: 'mine' } },
+      response: { status: 200, body: { secret: 'mine' }, fingerprint: FINGERPRINT },
       now: T,
     })
 
@@ -238,7 +252,7 @@ describe('guard ordering', () => {
     guards.remember({
       pubkey: KEY,
       idempotencyKey: 'k',
-      response: { status: 200, body: { ok: true } },
+      response: { status: 200, body: { ok: true }, fingerprint: FINGERPRINT },
       now: T,
     })
 

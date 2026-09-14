@@ -126,7 +126,12 @@ const BLIND_TAG = 'imani-blind-v1'
  * ever been published from a released build.
  */
 function ledgerKey(): { sk: Uint8Array; pubkey: string } {
-  const priv = hexToBytes(getSigner().privkeyHex())
+  // IW-14: a borrowed copy, wiped when the borrow ends. The derivation below reads `priv` only
+  // to build `input`, so the borrow can be this narrow.
+  return getSigner().withPrivkey((priv) => ledgerKeyFrom(priv))
+}
+
+function ledgerKeyFrom(priv: Uint8Array): { sk: Uint8Array; pubkey: string } {
   const tag = utf8ToBytes(`${LEDGER_KEY_TAG}:`)
   const input = new Uint8Array(tag.length + priv.length)
   input.set(tag)
