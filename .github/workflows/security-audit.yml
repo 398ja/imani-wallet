@@ -9,6 +9,12 @@
 # on them means the gate gets disabled, and a disabled gate protects nothing.
 name: security-audit
 
+# SAST, SCA and secret scanning for the wallet PWA and its Node services.
+#
+# P8 in the 2026-09-13 review: no repository in the estate ran any of the three. The npm audit
+# job landed with the Phase 2 IW-17 fix; Semgrep and gitleaks join it here so all three questions
+# are asked on every push.
+
 on:
   push:
     branches: [main]
@@ -30,3 +36,31 @@ jobs:
       - run: npm ci
       - name: npm audit (production dependencies)
         run: npm run audit:prod
+
+  semgrep:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install semgrep
+      - name: Validate the ruleset
+        # A malformed rule silently scans nothing, which looks exactly like a clean scan.
+        run: semgrep --config .semgrep/ --validate
+      - name: Scan
+        run: semgrep --config .semgrep/ --error --severity=ERROR --severity=WARNING .
+
+  gitleaks:
+    name: Secret scanning (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: a credential deleted in a later commit is still in every clone.
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml

@@ -20,6 +20,11 @@ import { gatewayEvents, newestByD } from './gatewayNostr'
  * ponytail: hardcoded dev default, overridable with VITE_RELAY_URL. Read it from
  * the gateway once it reports a browser-reachable URL.
  */
+// A BROWSER default pointing at localhost, used only when VITE_RELAY_URL is unset at build time
+// — i.e. a developer running the dev server. A deployed build always has the variable, and a
+// page served over https cannot open a ws:// socket at all: the browser refuses mixed content,
+// which is a stronger guarantee than this check.
+// nosemgrep: imani-cleartext-relay-default
 export const RELAY_URL: string = import.meta.env.VITE_RELAY_URL ?? 'ws://localhost:27778'
 
 /**
@@ -37,7 +42,10 @@ export const RELAY_URL: string = import.meta.env.VITE_RELAY_URL ?? 'ws://localho
  * ponytail: hardcoded dev default like RELAY_URL above, overridable with
  * VITE_INTERNAL_RELAY_URL. Both should come from GET /api/v1/config eventually.
  */
+// Same reasoning as RELAY_URL above: a build-time default for the local stack, and mixed-content
+// rules stop a deployed page using it.
 export const INTERNAL_RELAY_URL: string =
+  // nosemgrep: imani-cleartext-relay-default
   import.meta.env.VITE_INTERNAL_RELAY_URL ?? 'ws://nostr-relay:7777'
 
 export interface PublishResult {

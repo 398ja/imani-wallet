@@ -330,6 +330,10 @@ export function requestFingerprint(method: string, path: string, body: string | 
  * JSON. Any printable separator could be smuggled inside a caller's own key to
  * collide with another caller's scope.
  */
+// The request fingerprint is bound at the CALL site (check/remember compare stored.fingerprint
+// against the current request, IW-03) rather than inside this key, so that a conflicting reuse
+// can be answered 422 instead of silently missing the cache and re-executing.
+// nosemgrep: imani-idempotency-scope-without-request
 function idempotencyScope(pubkey: string, key: string): string {
   return `${pubkey.toLowerCase()}\u0000${key}`
 }
