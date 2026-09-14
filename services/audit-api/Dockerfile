@@ -37,6 +37,13 @@ RUN npm install --no-package-lock --omit=dev \
       ws@8.21.3
 
 COPY services/audit-api ./services/audit-api
+# server.ts imports ../wallet-api/expiringMap.js (the IW-04 bounded replay/rate
+# store). The image previously copied only this service's own directory, so the
+# import resolved at typecheck and in the repo but MODULE_NOT_FOUND at container
+# start — the audit-api came up unhealthy on staging while every check was green.
+# expiringMap.ts has no imports of its own, so this one file is the whole
+# dependency.
+COPY services/wallet-api/expiringMap.ts ./services/wallet-api/
 COPY src/lib/audit.ts src/lib/attestationKind.ts ./src/lib/
 
 ENV AUDIT_API_PORT=8090
