@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.1] - 2026-09-14
+
+### Fixed
+
+- **`audit-api` could not start: the image imported a file it never copied.** The IW-04 fix gave
+  this service the bounded replay/rate store by importing `expiringMap` from
+  `services/wallet-api`, but `services/audit-api/Dockerfile` copies only this service's own
+  directory — so the container died in a MODULE_NOT_FOUND loop and came up unhealthy on staging.
+
+  Nothing in the pipeline covers that gap. It is not a compile error, not a test failure and not
+  a scan finding: 4,607 tests, three scanners and a cold-boot job were all green on the commit
+  that introduced it. It only appears when the image runs, which is an argument for deploying to
+  staging as part of a release rather than after one.
+
 ## [0.3.0] - 2026-09-14
 
 The application-security review of 2026-09-13 (`imani-docs/security/appsec-2026-09-13/`) raised
