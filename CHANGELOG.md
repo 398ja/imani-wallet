@@ -29,6 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code into the real deployed app as a fake webcam and asserts the app actually moves;
   `deploy/__tests__/csp.test.ts` is the cheap guard on the header itself.
 
+- **A blocked QR decoder now says so.** The header above is repaired, but it is not the only
+  header in play: this app is served behind an edge proxy, can be served behind someone else's,
+  and runs in a WebView with its own policy. Two CSP headers intersect, so any of them can break
+  scanning on a deployment where our own file is correct.
+
+  Both scanning screens therefore ask, before opening the camera, whether the page may run the
+  decoder, and name the cause and the fix when it may not. The Scan screen reveals its typing
+  field at the same time, because a blocked decoder is exactly when the fallback matters.
+
 ## [0.3.1] - 2026-09-14
 
 ### Fixed
