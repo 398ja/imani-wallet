@@ -468,6 +468,11 @@ export default defineConfig({
       'src/**/*.test.{ts,tsx}',
       'services/**/*.test.{ts,tsx}',
       'perf/**/*.test.{ts,tsx}',
+      // `deploy/` ships the container's nginx.conf, and its CSP is application
+      // behaviour, not decoration: `worker-src 'self'` there silently disabled
+      // every QR scan in the app. Tested here so a header change is a failing
+      // test rather than a camera that runs and decodes nothing.
+      'deploy/**/*.test.{ts,tsx}',
       // `packages/` was ABSENT, and five test files across wallet-core,
       // dm-poll and money had never run in this suite — 171 tests, green when
       // invoked directly and invisible to `npm test`. Found while adding
