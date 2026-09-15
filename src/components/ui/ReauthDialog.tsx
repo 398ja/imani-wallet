@@ -16,10 +16,18 @@ import { Button, Input, Alert } from './index'
  * because behind it is an authenticated screen showing balances and coupons and
  * a dismissed dialog would leave the user looking at a wallet that cannot act.
  * But "cannot dismiss" is not "cannot leave": every way out of this state is on
- * the dialog — unlock, use a different account, restore from a backup, log out —
- * which is the wayfinding rule that a screen must always answer "how do I get
- * out?". The first draft failed that, offering only a passphrase nobody who had
- * forgotten it could produce.
+ * the dialog — unlock, or log out — which is the wayfinding rule that a screen
+ * must always answer "how do I get out?". The first draft failed that, offering
+ * only a passphrase nobody who had forgotten it could produce.
+ *
+ * **There is no restore button here.** There was one, and it was a dead end:
+ * `/restore` is declared in `PublicRoutes`, so it is only reachable once the
+ * session has been dropped and the app has handed itself back to the public
+ * tree — which is precisely what logging out does. A second button that had to
+ * tear the session down before it could navigate was a slower, less honest
+ * spelling of the logout already on this dialog, and it landed people on
+ * `/login` when the teardown and the navigation raced. Logout reaches the same
+ * screens: the login page links to both `/restore` and `/onboarding`.
  *
  * **The passphrase is never stored.** It lives in this component's state while
  * the user types, goes straight to `onSubmit`, and is cleared on success. It is
@@ -34,7 +42,6 @@ import { Button, Input, Alert } from './index'
 export function ReauthDialog({
   onSubmit,
   onLogout,
-  onRestore,
   name,
 }: {
   /**
@@ -49,12 +56,6 @@ export function ReauthDialog({
    * component only reports the intent.
    */
   onLogout: () => void
-  /**
-   * Leave towards the restore screen: a different account, a backup file, a
-   * Drive backup, an nsec. The way out for someone whose passphrase is gone but
-   * whose key is not.
-   */
-  onRestore: () => void
   /**
    * Who is being asked, when the app knows.
    *
@@ -223,15 +224,14 @@ export function ReauthDialog({
               <p className="text-[12px] leading-relaxed text-mono-600 dark:text-mono-300">
                 There is no passphrase reset — your key is encrypted with it, and
                 nothing on our side can read it. You can get back in with a
-                backup key (nsec), a backup file, or a Google Drive backup.
+                backup key (nsec), a backup file, or a Google Drive backup. Log
+                out below to reach the restore screen.
               </p>
-              <Button variant="secondary" size="sm" className="w-full" onClick={onRestore}>
-                Restore from a backup
-              </Button>
               {/*
                 Last, separated, and in the warning ink. It is the only
-                irreversible option on this dialog, so it reads as the last
-                resort it is rather than as a peer of the two above it.
+                irreversible option on this dialog, and now the only exit other
+                than unlocking, so it is labelled with what it actually does
+                rather than with the softer "restore" that used to sit above it.
               */}
               <button
                 type="button"
