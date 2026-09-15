@@ -6,6 +6,7 @@ import { PaymentRequestHandler, VoucherRedeemHandler } from 'imani-qr'
 import { Button, Screen, BackLink, PageHeader, Alert, Input } from '../components/ui'
 import { toRecipientPubkey } from '../lib/issue'
 import { readClipboard } from '../lib/native'
+import { scannerBlocked } from '../lib/scannerSupport'
 
 /**
  * Scan: the one camera for both things a customer points it at.
@@ -84,6 +85,18 @@ export function ScanPage() {
     let cancelled = false
 
     void (async () => {
+      // Asked BEFORE the camera opens, because a camera that opens and decodes
+      // nothing is the failure this whole screen shipped with: a blocked
+      // decoder worker looks exactly like a code nobody is holding up. Failing
+      // here says so, and reveals the typing fallback in the same breath.
+      const blocked = await scannerBlocked()
+      if (cancelled) return
+      if (blocked) {
+        setError(blocked)
+        setTyped('')
+        return
+      }
+
       const { default: QrScanner } = await import('qr-scanner')
       if (cancelled || !videoRef.current) return
 

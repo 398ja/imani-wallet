@@ -35,7 +35,7 @@
  * Needs ffmpeg for the fake camera feed.
  */
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -69,7 +69,7 @@ async function frame(text: string, name: string): Promise<string> {
  * Registration is per-run for the same reason it is in the other probes: a
  * shared account is state a probe cannot assume.
  */
-async function scan(video: string): Promise<string> {
+async function scan(video: string): Promise<{ url: string; violations: string[] }> {
   const browser = await chromium.launch({
     args: [
       '--use-fake-ui-for-media-stream',
@@ -96,7 +96,7 @@ async function scan(video: string): Promise<string> {
       await page.waitForTimeout(1000)
     }
     if (violations.length > 0) console.error('  CSP violations:', violations.join(' | '))
-    return page.url()
+    return { url: page.url(), violations }
   } finally {
     await browser.close()
   }
@@ -105,11 +105,22 @@ async function scan(video: string): Promise<string> {
 let failed = false
 
 async function check(label: string, code: string, expected: RegExp) {
-  const url = await scan(await frame(code, label.replace(/\W+/g, '-')))
+  const { url, violations } = await scan(await frame(code, label.replace(/\W+/g, '-')))
   const ok = expected.test(url)
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${label} -> ${url}`)
   if (!ok) {
     console.error(`  expected ${expected}`)
+    // Naming the cause, not just the symptom. "The app did not navigate" sends
+    // the next reader to the scan router, which was never the broken part.
+    if (violations.some((v) => v.includes('worker-src')))
+      console.error('  CAUSE: the CSP refused the decoder worker — see deploy/nginx.conf')
+    failed = true
+  }
+  // A policy that allows the worker but trips something else is still a
+  // deployment defect, and still one nobody would see from a phone.
+  if (ok && violations.length > 0) {
+    console.error(`  FAIL  ${label} navigated, but the page reported CSP violations:`)
+    for (const v of violations) console.error(`    ${v}`)
     failed = true
   }
 }
@@ -118,5 +129,7 @@ async function check(label: string, code: string, expected: RegExp) {
 await check('nip05 handle', HANDLE, /\/send\?to=[0-9a-f]{64}/)
 // A merchant's voucher payment request. Must open Pay, carrying the request.
 await check('vreq payment request', 'vreqAprobe000000000000', /\/pay\?paymentRequest=vreqA/i)
+
+rmSync(work, { recursive: true, force: true })
 
 process.exit(failed ? 1 : 0)
