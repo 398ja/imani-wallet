@@ -4,6 +4,7 @@ import { ClipboardPaste } from 'lucide-react'
 import { Button, Alert, Input } from './ui'
 import { toRecipientPubkey } from '../lib/issue'
 import { readClipboard } from '../lib/native'
+import { scannerBlocked } from '../lib/scannerSupport'
 
 /**
  * Read someone's address off their screen: camera, typed handle, or paste.
@@ -70,6 +71,17 @@ export function ScanRecipient({
     }
 
     ;(async () => {
+      // Before the camera, for the reason in lib/scannerSupport: a refused
+      // decoder worker leaves a live preview that never reads anything, which
+      // is indistinguishable from nobody holding up a code. This screen always
+      // carries its handle field, so saying so costs nothing but the words.
+      const blocked = await scannerBlocked()
+      if (cancelled) return
+      if (blocked) {
+        setError(blocked)
+        return
+      }
+
       const { default: QrScanner } = await import('qr-scanner')
       if (cancelled || !videoRef.current) return
 
