@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.2] - 2026-09-15
+
+### Fixed
+
+- **Scanning a QR code did nothing.** A customer's NIP-05 code from `/receive` and a merchant's
+  `vreqA…` payment request behaved identically: the camera opened, the preview ran, the scan
+  region drew its outline over the code, and the app never moved.
+
+  The broken part was one word in a response header this repository ships. `qr-scanner` decodes
+  in a Web Worker it builds from a Blob URL, and `deploy/nginx.conf` sent `worker-src 'self'`,
+  so the browser refused the worker and the library never produced a result. The only trace was
+  a console line, on a phone, where nobody is looking.
+
+  Two CSP headers **intersect** rather than override, so the edge already allowing `blob:` could
+  not rescue this: the strictest of the two wins, and the strictest was ours. `script-src 'self'`
+  is unchanged, so injected script still cannot run or be packaged into the worker.
+
+  Nothing in the unit suite could have caught it — the scan router, the QR handlers and
+  `/api/v1/resolve` were all correct. `npm run e2e:scan` (`e2e/probe-scan.mts`) now plays a QR
+  code into the real deployed app as a fake webcam and asserts the app actually moves;
+  `deploy/__tests__/csp.test.ts` is the cheap guard on the header itself.
+
 ## [0.3.1] - 2026-09-14
 
 ### Fixed
