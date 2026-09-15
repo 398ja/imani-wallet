@@ -64,46 +64,22 @@ function handlerBody(source: string, prop: string, nextProp: string): string {
   return body.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')
 }
 
-describe('leaving the dialog to restore another account', () => {
-  it('drops the nap session singleton, not just the React state', async () => {
-    const handler = handlerBody(await appSource(), 'onRestore', 'onLogout')
+describe('leaving the dialog to restore a backup', () => {
+  it('offers no restore exit at all — logout is the one that works', async () => {
+    const dialog = gateDialog(await appSource())
 
-    // THE assertion of this file. Without it the restore screen is handed the
-    // previous account's session: the app authenticates as one identity while
-    // the keystore holds another.
-    expect(handler).toContain('resetSession()')
-  })
-
-  it('stops the pollers, whose lifetime is the session rather than the component', async () => {
-    const handler = handlerBody(await appSource(), 'onRestore', 'onLogout')
-
-    // Unmounting does NOT stop these — AuthedApp's own cleanup comment explains
-    // why it deliberately does not. Both hold the unlocked key and write to the
-    // user-scoped IndexedDB, so one left running across a restore decrypts the
-    // old account's gift wraps into the new account's wallet.
-    expect(handler).toContain('stopDmPoll()')
-    expect(handler).toContain('stopIncomingNotifications()')
-  })
-
-  it('tears down before navigating', async () => {
-    const handler = handlerBody(await appSource(), 'onRestore', 'onLogout')
-
-    // The restore screen calls `createSession` as soon as a passphrase is
-    // entered, so anything that could hand it a stale session must be gone
-    // before the route changes.
-    expect(handler.indexOf('resetSession()')).toBeLessThan(handler.indexOf("navigate('/restore')"))
-    expect(handler.indexOf('stopDmPoll()')).toBeLessThan(handler.indexOf("navigate('/restore')"))
-  })
-
-  it('does NOT erase the key — that is logout, and this is not logout', async () => {
-    const code = handlerBody(await appSource(), 'onRestore', 'onLogout')
-
-    // Restore is reached by someone who has forgotten their passphrase, and
-    // `applyBackup` rolls the keystore back if they abandon the attempt. Wiping
-    // here would destroy the key a cancelled restore has to fall back on.
-    expect(code).not.toContain('keyStore.clear')
-    expect(code).not.toContain('wipeWallet')
-    expect(code).not.toContain('forgetResume()')
+    // There WAS an `onRestore` here, and it was a dead end. `/restore` is
+    // declared in `PublicRoutes`, which is not mounted while `Gate` is, so the
+    // navigation fell through the authed catch-all (`path="*"` -> `/`) and the
+    // user arrived at `/login` instead of the restore screen. Making it work
+    // meant tearing the session down first — resetting the nap singleton,
+    // stopping both pollers — which is logout with a gentler label and without
+    // logout's confirmation.
+    //
+    // So the exit is gone and `/restore` is reached through logout, which ends
+    // the session properly and lands on the login screen that links to it.
+    expect(dialog).not.toContain('onRestore')
+    expect(dialog).not.toContain("navigate('/restore')")
   })
 })
 

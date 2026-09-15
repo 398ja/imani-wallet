@@ -22,7 +22,7 @@ describe('ReauthDialog', () => {
   const noop = () => {}
 
   it('announces itself as a modal dialog, named by its own heading', () => {
-    render(<ReauthDialog onSubmit={async () => {}} onLogout={noop} onRestore={noop} />)
+    render(<ReauthDialog onSubmit={async () => {}} onLogout={noop} />)
 
     const dialog = screen.getByRole('dialog')
     // `aria-modal` is what makes a screen reader treat the app behind it as
@@ -33,14 +33,14 @@ describe('ReauthDialog', () => {
 
   it('greets the user by name when the app knows it', () => {
     render(
-      <ReauthDialog onSubmit={async () => {}} onLogout={noop} onRestore={noop} name="Ada" />,
+      <ReauthDialog onSubmit={async () => {}} onLogout={noop} name="Ada" />,
     )
 
     expect(screen.getByText(/Welcome back, Ada/)).toBeTruthy()
   })
 
   it('omits the greeting entirely when there is no name', () => {
-    render(<ReauthDialog onSubmit={async () => {}} onLogout={noop} onRestore={noop} />)
+    render(<ReauthDialog onSubmit={async () => {}} onLogout={noop} />)
 
     // `Gate` unwinds `profileName`'s npub fallback rather than passing it here.
     // "Welcome back, npub1abc…" reads as a machine that does not know who you
@@ -51,7 +51,7 @@ describe('ReauthDialog', () => {
   })
 
   it('focuses the passphrase field, so the first keystroke lands', () => {
-    render(<ReauthDialog onSubmit={async () => {}} onLogout={noop} onRestore={noop} />)
+    render(<ReauthDialog onSubmit={async () => {}} onLogout={noop} />)
 
     // The dialog arrives unannounced over whatever the user was doing. Without
     // this they type into nothing.
@@ -60,7 +60,7 @@ describe('ReauthDialog', () => {
 
   it('submits the typed passphrase', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined)
-    render(<ReauthDialog onSubmit={onSubmit} onLogout={noop} onRestore={noop} />)
+    render(<ReauthDialog onSubmit={onSubmit} onLogout={noop} />)
 
     fireEvent.change(screen.getByPlaceholderText('Passphrase'), {
       target: { value: 'correct horse' },
@@ -72,7 +72,7 @@ describe('ReauthDialog', () => {
 
   it('submits on Enter — a one-field form should not need the mouse', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined)
-    render(<ReauthDialog onSubmit={onSubmit} onLogout={noop} onRestore={noop} />)
+    render(<ReauthDialog onSubmit={onSubmit} onLogout={noop} />)
 
     const field = screen.getByPlaceholderText('Passphrase')
     fireEvent.change(field, { target: { value: 'correct horse' } })
@@ -83,7 +83,7 @@ describe('ReauthDialog', () => {
 
   it('refuses to submit an empty passphrase', () => {
     const onSubmit = vi.fn()
-    render(<ReauthDialog onSubmit={onSubmit} onLogout={noop} onRestore={noop} />)
+    render(<ReauthDialog onSubmit={onSubmit} onLogout={noop} />)
 
     const unlock = screen.getByRole('button', { name: 'Unlock' })
     expect(unlock).toHaveProperty('disabled', true)
@@ -93,7 +93,7 @@ describe('ReauthDialog', () => {
 
   it('shows the reason a failed attempt failed, and stays open for another', async () => {
     const onSubmit = vi.fn().mockRejectedValue(new Error('That passphrase is not right. Try again.'))
-    render(<ReauthDialog onSubmit={onSubmit} onLogout={noop} onRestore={noop} />)
+    render(<ReauthDialog onSubmit={onSubmit} onLogout={noop} />)
 
     fireEvent.change(screen.getByPlaceholderText('Passphrase'), { target: { value: 'wrong' } })
     fireEvent.click(screen.getByRole('button', { name: 'Unlock' }))
@@ -107,7 +107,7 @@ describe('ReauthDialog', () => {
 
   it('keeps what was typed after a failure, so a typo is one backspace away', async () => {
     const onSubmit = vi.fn().mockRejectedValue(new Error('nope'))
-    render(<ReauthDialog onSubmit={onSubmit} onLogout={noop} onRestore={noop} />)
+    render(<ReauthDialog onSubmit={onSubmit} onLogout={noop} />)
 
     const field = screen.getByPlaceholderText('Passphrase') as HTMLInputElement
     fireEvent.change(field, { target: { value: 'almost-right' } })
@@ -119,7 +119,7 @@ describe('ReauthDialog', () => {
 
   it('puts the caret back in the field after a failure', async () => {
     const onSubmit = vi.fn().mockRejectedValue(new Error('nope'))
-    render(<ReauthDialog onSubmit={onSubmit} onLogout={noop} onRestore={noop} />)
+    render(<ReauthDialog onSubmit={onSubmit} onLogout={noop} />)
 
     const field = screen.getByPlaceholderText('Passphrase')
     const unlock = screen.getByRole('button', { name: 'Unlock' })
@@ -145,7 +145,7 @@ describe('ReauthDialog', () => {
 
   it('puts the caret back after EVERY failure, not just the first', async () => {
     const onSubmit = vi.fn().mockRejectedValue(new Error('nope'))
-    render(<ReauthDialog onSubmit={onSubmit} onLogout={noop} onRestore={noop} />)
+    render(<ReauthDialog onSubmit={onSubmit} onLogout={noop} />)
 
     const field = screen.getByPlaceholderText('Passphrase')
     const unlock = screen.getByRole('button', { name: 'Unlock' })
@@ -174,7 +174,7 @@ describe('ReauthDialog', () => {
    */
   describe('the ways out', () => {
     it('hides the destructive options behind a disclosure, showing the common path first', () => {
-      render(<ReauthDialog onSubmit={async () => {}} onLogout={noop} onRestore={noop} />)
+      render(<ReauthDialog onSubmit={async () => {}} onLogout={noop} />)
 
       // Not rendered at all until asked for: logging out erases the key and
       // every trace of the account from this browser, and a dialog that arrives
@@ -184,7 +184,7 @@ describe('ReauthDialog', () => {
     })
 
     it('names the user\u2019s actual problem on the disclosure', () => {
-      render(<ReauthDialog onSubmit={async () => {}} onLogout={noop} onRestore={noop} />)
+      render(<ReauthDialog onSubmit={async () => {}} onLogout={noop} />)
 
       // Someone who has forgotten their passphrase has to RECOGNISE their own
       // situation here, which a label naming the mechanism ("More options")
@@ -195,18 +195,23 @@ describe('ReauthDialog', () => {
       expect(toggle.getAttribute('aria-expanded')).toBe('false')
     })
 
-    it('offers a restore route for a forgotten passphrase', () => {
-      const onRestore = vi.fn()
-      render(<ReauthDialog onSubmit={async () => {}} onLogout={noop} onRestore={onRestore} />)
+    it('offers no restore button, because restoring requires logging out first', () => {
+      render(<ReauthDialog onSubmit={async () => {}} onLogout={noop} />)
 
       fireEvent.click(screen.getByRole('button', { name: /Forgotten your passphrase/ }))
-      fireEvent.click(screen.getByRole('button', { name: 'Restore from a backup' }))
 
-      expect(onRestore).toHaveBeenCalled()
+      // `/restore` is declared in `PublicRoutes`, so it does not exist while
+      // this authed tree is mounted: a button navigating there fell through to
+      // the authed catch-all and dumped the user on `/login`. Logout is the
+      // step that hands the app back to the public routes, and the login screen
+      // it lands on links to `/restore`, so the route is still reachable — it is
+      // just reached honestly, through the exit that actually ends the session.
+      expect(screen.queryByRole('button', { name: /Restore/ })).toBeNull()
+      expect(screen.getByText(/Log out below to reach the restore screen/)).toBeTruthy()
     })
 
     it('is honest that there is no passphrase reset', () => {
-      render(<ReauthDialog onSubmit={async () => {}} onLogout={noop} onRestore={noop} />)
+      render(<ReauthDialog onSubmit={async () => {}} onLogout={noop} />)
 
       fireEvent.click(screen.getByRole('button', { name: /Forgotten your passphrase/ }))
 
@@ -217,7 +222,7 @@ describe('ReauthDialog', () => {
 
     it('offers logout, labelled with what it actually does', () => {
       const onLogout = vi.fn()
-      render(<ReauthDialog onSubmit={async () => {}} onLogout={onLogout} onRestore={noop} />)
+      render(<ReauthDialog onSubmit={async () => {}} onLogout={onLogout} />)
 
       fireEvent.click(screen.getByRole('button', { name: /Forgotten your passphrase/ }))
       // "Log out" alone would understate it: this erases the key, and without a

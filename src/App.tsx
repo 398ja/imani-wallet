@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import { Toaster } from 'sonner'
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react'
 import { NapProvider, useNapSession, useNapCallbacks } from '@imani/nap-react'
@@ -7,8 +7,8 @@ import type { NapSession } from '@imani/nap-client-web'
 
 import { createSession, resetSession } from './lib/nap'
 import { openWallet, onWalletChanged } from './lib/wallet'
-import { startDmPoll, stopDmPoll } from './lib/dmPoll'
-import { startIncomingNotifications, stopIncomingNotifications } from './lib/incomingNotifications'
+import { startDmPoll } from './lib/dmPoll'
+import { startIncomingNotifications } from './lib/incomingNotifications'
 import { startPaymentReceipts, stopPaymentReceipts } from './lib/paymentReceiptDrain'
 import { startPushListener, stopPushListener } from './lib/notifications/listener'
 import { reconcilePendingSends } from './lib/pay'
@@ -557,7 +557,6 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
  */
 function Gate({ session, onLoggedOut }: { session: NapSession; onLoggedOut: () => void }) {
   const { isAuthenticated } = useNapSession()
-  const navigate = useNavigate()
   // When to ask, and when to stop asking. See lib/useSessionReauth.ts — the
   // three cases it separates are the ones that are invisible in a screenshot.
   const { expired, dismiss } = useSessionReauth(session, isAuthenticated)
@@ -593,41 +592,6 @@ function Gate({ session, onLoggedOut }: { session: NapSession; onLoggedOut: () =
       onSubmit={async (passphrase) => {
         await reauthenticate(passphrase)
         dismiss()
-      }}
-      onRestore={() => {
-        // The restore screen lives on the PUBLIC side of the router, so it is
-        // unreachable while this tree is mounted. Ending the session is what
-        // hands the app back to `PublicRoutes`, and it is also the honest thing
-        // to do: someone restoring a backup is not necessarily the person this
-        // session belongs to any more.
-        //
-        // `resetSession()` is the load-bearing call, not `onLoggedOut()`.
-        // `onLoggedOut` only does `setSession(null)` — a React state change —
-        // while the nap singletons in lib/nap.ts live outside React entirely.
-        // `createSession` returns the EXISTING session if there is one and
-        // IGNORES the key it is passed, so without this the restore screen
-        // would unlock a different account's key, be handed back the previous
-        // account's session, and run every screen as the previous identity
-        // while the keystore held the new one. `onUnlock` guards the same
-        // hazard for a failed login and names the same consequence.
-        //
-        // No `forgetResume()`: the tab's reload cache belongs to the key on
-        // disk, which is untouched here, and `applyBackup` rolls the keystore
-        // back if the restore is abandoned. A restore that COMPLETES calls
-        // `onUnlock`, which rewrites the cache for the new identity.
-        //
-        // The two pollers are stopped by hand for the reason AuthedApp's own
-        // cleanup explains: their lifetime is the SESSION, not the component,
-        // so unmounting does not stop them. Both hold the unlocked key and
-        // write to the user-scoped IndexedDB, and one left running across a
-        // restore would decrypt the old account's gift wraps into the new
-        // account's wallet. `logout` stops them for the same reason.
-        dismiss()
-        stopDmPoll()
-        stopIncomingNotifications()
-        resetSession()
-        onLoggedOut()
-        navigate('/restore')
       }}
       onLogout={() => {
         // `runLogout` confirms first — it erases the key and every trace of the
