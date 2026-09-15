@@ -37,7 +37,8 @@ export const LOGOUT_WARNING =
   'backup key (nsec) — they are stored under your key, not on this device. ' +
   'Vouchers you are holding are restored from the relay as they are received ' +
   'again.\n\nThe only way back in is your backup key, a backup file, or a Google ' +
-  'Drive backup — all under Settings → Backup. There is no password reset.\n\n' +
+  'Drive backup — you MAKE those under Settings → Backup, and you USE them from ' +
+  'the screen this lands on. There is no password reset.\n\n' +
   'Log out anyway?'
 
 /**

@@ -93,6 +93,27 @@ export function OnboardingPage({ onUnlock }: { onUnlock: (privkeyHex: string) =>
               Unlock
             </Link>
           </p>
+
+          {/* The restore link has to be HERE, not only on /login.
+
+              This is where someone who has just logged out arrives: logout
+              erases the key and reloads the document, so `Entry` finds no
+              stored key and sends them to /onboarding rather than /login. That
+              is also the exact path the re-auth dialog now points at — its
+              disclosure tells a user who has forgotten their passphrase to log
+              out and restore — and without this link that journey ended on a
+              screen offering only "Register" and "Log in", with the backup file
+              they were told to use unreachable.
+
+              "Log in" (the import step) takes an nsec, so one of the three
+              backup kinds was reachable from here. A backup FILE and a Drive
+              backup were not. */}
+          <p className="text-center text-sm text-mono-500">
+            Have a backup file or a Google Drive backup?{' '}
+            <Link to="/restore" className="pressable underline hover:text-mono-900 dark:hover:text-mono-50">
+              Restore
+            </Link>
+          </p>
         </div>
       )}
 

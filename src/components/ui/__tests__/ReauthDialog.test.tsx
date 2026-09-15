@@ -207,7 +207,12 @@ describe('ReauthDialog', () => {
       // it lands on links to `/restore`, so the route is still reachable — it is
       // just reached honestly, through the exit that actually ends the session.
       expect(screen.queryByRole('button', { name: /Restore/ })).toBeNull()
-      expect(screen.getByText(/Log out below to reach the restore screen/)).toBeTruthy()
+      // And it says so in the order the app actually works, naming the erase.
+      // "Log out to restore" on its own reads as a soft continue, and the one
+      // person who must not misread it is someone with no backup.
+      expect(screen.getByText(/log out first/)).toBeTruthy()
+      expect(screen.getByText(/clears this device/)).toBeTruthy()
+      expect(screen.getByText(/Make sure you have your backup/)).toBeTruthy()
     })
 
     it('is honest that there is no passphrase reset', () => {

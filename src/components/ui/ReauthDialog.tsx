@@ -26,8 +26,14 @@ import { Button, Input, Alert } from './index'
  * tree — which is precisely what logging out does. A second button that had to
  * tear the session down before it could navigate was a slower, less honest
  * spelling of the logout already on this dialog, and it landed people on
- * `/login` when the teardown and the navigation raced. Logout reaches the same
- * screens: the login page links to both `/restore` and `/onboarding`.
+ * `/login` when the teardown and the navigation raced.
+ *
+ * Logout reaches the same screens, but note WHICH one: it erases the key and
+ * reloads the document, so `Entry` finds no stored key and routes to
+ * `/onboarding`, not `/login`. The restore link this dialog promises therefore
+ * has to be on the onboarding screen, and it is (OnboardingPage) — it was added
+ * with this change, because pointing at logout without it would have sent
+ * someone with a backup file to a screen that could not open one.
  *
  * **The passphrase is never stored.** It lives in this component's state while
  * the user types, goes straight to `onSubmit`, and is cleared on success. It is
@@ -224,8 +230,20 @@ export function ReauthDialog({
               <p className="text-[12px] leading-relaxed text-mono-600 dark:text-mono-300">
                 There is no passphrase reset — your key is encrypted with it, and
                 nothing on our side can read it. You can get back in with a
-                backup key (nsec), a backup file, or a Google Drive backup. Log
-                out below to reach the restore screen.
+                backup key (nsec), a backup file, or a Google Drive backup.
+              </p>
+              {/*
+                Says the order out loud, because the button below does not look
+                like a route to a restore screen and the two steps cannot be
+                swapped: restoring runs on the PUBLIC side of the router, which
+                this session is holding the app off. Naming the erase in the
+                same breath is what stops this reading as a soft "continue" —
+                someone with no backup must not learn the cost after tapping.
+              */}
+              <p className="text-[12px] leading-relaxed text-mono-600 dark:text-mono-300">
+                To use one, log out first: that clears this device, then offers
+                Restore on the next screen. Make sure you have your backup
+                before you do.
               </p>
               {/*
                 Last, separated, and in the warning ink. It is the only
