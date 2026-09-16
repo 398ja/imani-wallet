@@ -182,8 +182,26 @@ separate management port, and 8080 answers nothing.
 It also needs a service credential (`X-Service-Id` + `X-Service-Token`),
 bcrypt-checked against `service_credentials` and row-scoped to this one path,
 so a leaked token buys the ability to enqueue notifications and nothing else.
-**Staging has no row provisioned**, so the ramp has not run there yet; it aborts
-in `setup()` naming the cause rather than reporting an empty queue as a result.
+Staging provisions it as `GATEWAY_CORE_SVC_CRED_CUSTOMER_WALLET`, bcrypted into
+`service_credentials` at boot. Until 2026-09-16 staging provisioned **no**
+credentials at all and customer-wallet had no allowlist entry for this path, so
+the two failures hid each other.
+
+**First run, 2026-09-16:** 157 published, 157 matched, 0 unmatched, 471/471
+checks. Arrival to drain **avg 269ms, p95 353ms** — the gateway's share of the
+8s inbound-to-redeemed budget.
+
+### Keep MAX_VUS low over a tunnel
+
+The ceiling defaults to 5, lower than the other ramps, because an SSH tunnel
+multiplexes every VU onto one connection and saturates long before the service
+does. Measured at 20 VUs: 4192 of 4432 publishes never left the laptop while
+gateway-core logged 241 arrivals and no errors at all. That is the load
+generator being the bottleneck, and the summary now says so rather than leaving
+it to be inferred from a latency number that describes the tunnel.
+
+Raise it only when running where the service is, with `INTERNAL_URL` pointed at
+the container directly.
 
 Every failure mode was exercised rather than assumed:
 
