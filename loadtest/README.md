@@ -134,6 +134,66 @@ almost all of its time is signature overhead. Warning about that would be noise
 that teaches people to ignore the warning when it matters, so the number is
 printed and the conclusion withheld.
 
+## The receive ramp
+
+    INTERNAL_URL=http://gateway-core:8081 \
+    SERVICE_ID=loadtest SERVICE_TOKEN=... \
+    ACCOUNT_URL=http://localhost:28081 k6 run loadtest/receive.js
+
+The drain ramp measures the endpoint against an **empty** queue — on staging,
+9118 drains and 9118 empty. That is a real measurement of the poll the wallet
+makes every ten seconds, and it is not a measurement of receiving anything. The
+work that scales with load — matching a selector against a populated queue,
+serialising envelopes, acknowledging them — was unmeasured.
+
+This ramp publishes a real envelope for a real recipient, drains it, and
+asserts **that** envelope came back. A queue quietly returning stale entries
+under load would otherwise read as healthy.
+
+`arrival_to_drain_ms` is the number to watch: enqueue to the recipient holding
+it. imani-apps' plan set a receive SLO of 99% inbound-to-redeemed within 8s;
+this measures the gateway's share of that budget, so it is a floor under the
+SLO rather than the SLO itself.
+
+### It substitutes for the send, and says so
+
+A real arrival originates in the atomic-send saga, which needs a coupon, which
+needs issuance, which needs the portal — and the portal is gated behind a
+session cookie a NIP-98 client cannot obtain. So this publishes the same
+envelope the saga publishes, through the same service method, onto the same
+queue, via `POST /internal/v1/incoming-notifications/publish`.
+
+That makes it an honest measurement of **receiving** and a stand-in for
+**sending**. A green run says the recipient side holds up under arrival load.
+It says nothing about whether sends keep up.
+
+### Why it cannot run from your laptop
+
+`/internal/v1` is not reachable from outside the deployment: nginx declares
+`/internal` as an internal location, so the public edge answers 405 to a POST.
+That is the intended posture — the endpoint takes its recipient from the
+**body**, so a user credential reaching it would let any user enqueue for any
+other, and the controller says as much.
+
+So `INTERNAL_URL` has to point inside: `http://gateway-core:8081` on the
+deployment host, or a local stack. Note 8081, not 8080 — the actuator is on a
+separate management port, and 8080 answers nothing.
+
+It also needs a service credential (`X-Service-Id` + `X-Service-Token`),
+bcrypt-checked against `service_credentials` and row-scoped to this one path,
+so a leaked token buys the ability to enqueue notifications and nothing else.
+**Staging has no row provisioned**, so the ramp has not run there yet; it aborts
+in `setup()` naming the cause rather than reporting an empty queue as a result.
+
+Every failure mode was exercised rather than assumed:
+
+| Situation | Result |
+|---|---|
+| No `INTERNAL_URL`, run from a laptop | names the internal-location design and both correct URLs |
+| Pointed at the public edge | explains the 405 is the edge, not the service |
+| No credential | names the headers and the table, and does not retry |
+| Signer not running | exit 107, names the command |
+
 ## The customer pool
 
     node loadtest/pool.mjs --size 50            # create, or top up to 50
