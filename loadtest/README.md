@@ -187,9 +187,17 @@ Staging provisions it as `GATEWAY_CORE_SVC_CRED_CUSTOMER_WALLET`, bcrypted into
 credentials at all and customer-wallet had no allowlist entry for this path, so
 the two failures hid each other.
 
-**First run, 2026-09-16:** 157 published, 157 matched, 0 unmatched, 471/471
-checks. Arrival to drain **avg 269ms, p95 353ms** — the gateway's share of the
-8s inbound-to-redeemed budget.
+**2026-09-16:** 897 published, 897 matched, 0 unmatched, 2691/2691 checks.
+Arrival to drain **avg 246ms, p95 258ms** — the gateway's share of the 8s
+inbound-to-redeemed budget.
+
+The first attempt at this run measured something else entirely. Publishes were
+answering 429 because `/internal/v1` service-to-service calls were rate-limited
+as ANONYMOUS at 60/min per address, and every internal caller shared that one
+bucket — 179 of 263 refused, while gateway-core logged no refusal of its own
+because the limiter rejected them before the controller ran. Fixed in
+imani-security 5c7e331; the same ramp then published 4.8x as much with nothing
+refused.
 
 ### Keep MAX_VUS low over a tunnel
 
