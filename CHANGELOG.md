@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.0] - 2026-09-16
+
+### Added
+
+- **A stall can be reached by handle.** `/profile/cocoa`, `/profile/cocoa@imani.casa`, an npub or
+  a hex key all open the same page, resolved the way the scanner and the paste box already resolve
+  a recipient. A handle that resolves to nobody says so, rather than rendering an empty profile for
+  a name that does not exist.
+- **Show code.** Beside Copy on a stall's card, a button that holds up the stall's full handle
+  (or its npub, when it publishes none) as a QR code, white-backed in every theme because a
+  scanner reads dark-on-light. Both are 44px round targets, the same as on your own profile card.
+
+### Fixed
+
+- **A stall owner was offered a card purchase of their own voucher.** Opening your own profile,
+  from your own coupon, receipt or a link that came back round, showed the Buy button. The page
+  now knows who is looking: the purchase control is withheld on your own stall, and a line says
+  that this is how the stall looks to a shopper.
+
+### Changed
+
+- Load-test notes record the second staging run, what it cannot measure, and why the first
+  rate-limit fix was wrong (`loadtest/`).
+
 ## [0.3.2] - 2026-09-15
 
 ### Fixed
