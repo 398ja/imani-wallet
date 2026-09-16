@@ -419,8 +419,12 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             NOT the same page as `/merchants/:pubkey`, which is my relationship
             with a stall: the coupons I hold, the transactions we have had. This
             is who they are and how to buy from them, and it renders the same
-            for a stranger as for their best customer. */}
-        <Route path="/profile/:pubkey" element={<PublicProfilePage />} />
+            for a stranger as for their best customer.
+
+            `viewerPubkey` is what lets the page notice it is showing YOU: a
+            stall owner must not be offered a card purchase of their own voucher.
+            The signed-out route below passes nothing, because there is nobody. */}
+        <Route path="/profile/:pubkey" element={<PublicProfilePage viewerPubkey={pubkey} />} />
         {/* `merchant !== null`, NOT `trading`: a CLOSED stall must stay reachable
             or the Open-for-business switch could never be turned back on. It is
             also what hides the Merchant section from customers entirely — they

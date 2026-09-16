@@ -45,6 +45,14 @@ vi.mock('../../lib/branding', () => ({
     ),
 }))
 
+// The URL may carry a handle instead of a key. Resolution goes through the same
+// helper the scanner and paste box use; stubbed here so these tests stay about
+// the PAGE rather than about the gateway's resolver.
+vi.mock('../../lib/issue', () => ({
+  toRecipientPubkey: (input: string) =>
+    Promise.resolve(input === 'cocoa' || input === 'cocoa@imani.local' ? STALL : null),
+}))
+
 vi.mock('../../lib/merchant', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/merchant')>()),
   merchantStatus: (pubkey: string) =>
@@ -77,6 +85,51 @@ const draw = (pubkey: string) =>
   )
 
 afterEach(cleanup)
+
+/**
+ * A profile is reachable by handle, not only by key.
+ *
+ * `/profile/cocoa` is the form a person can say out loud, write on a card, or
+ * put in a message — a 64-character hex string is none of those. Resolution
+ * reuses `toRecipientPubkey`, so a handle typed into the URL behaves exactly as
+ * one typed into the scanner: a bare local part is completed against the
+ * gateway's own domain, and a leading `@` is stripped.
+ *
+ * Verified against the live gateway before being stubbed here: hex, npub,
+ * `cocoa@imani.local`, `cocoa` and `@cocoa` all resolved to the same key, and
+ * an unknown name resolved to null.
+ */
+describe('reaching a profile by handle', () => {
+  it.each(['cocoa', 'cocoa@imani.local'])('resolves %s to the stall', async (form) => {
+    render(
+      <MemoryRouter initialEntries={[`/profile/${encodeURIComponent(form)}`]}>
+        <Routes>
+          <Route path="/profile/:pubkey" element={<PublicProfilePage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('Rosa Green Farm')).toBeTruthy())
+  })
+
+  /*
+   * A name that resolves to nobody must SAY so. Rendering an empty profile
+   * instead would look like a stall that has published nothing, which sends the
+   * reader looking for a problem at the stall's end rather than at their typing.
+   */
+  it('says so when a handle resolves to nobody', async () => {
+    render(
+      <MemoryRouter initialEntries={['/profile/nobody']}>
+        <Routes>
+          <Route path="/profile/:pubkey" element={<PublicProfilePage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText(/No profile found/)).toBeTruthy())
+    expect(screen.getByText(/nobody/)).toBeTruthy()
+  })
+})
 
 describe('a stall’s public profile', () => {
   it('shows who they are', async () => {
@@ -132,12 +185,51 @@ describe('a stall’s public profile', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('rosa@example.test'))
   })
 
-  /* A stall with no handle gets no button: one that copies nothing is worse. */
-  it('offers no copy button when there is no handle', async () => {
-    draw(UNREACHABLE)
+  /**
+   * A stall with no NIP-05 still has something to hand over: the npub.
+   *
+   * This test previously asserted NO button, which was right when the only
+   * shareable value was a handle. Falling back to the npub is better — a shopper
+   * can still take the stall away with them, and every key has one — so the
+   * assertion moved to what gets copied rather than whether the control exists.
+   */
+  it('falls back to the npub when a stall publishes no handle', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
 
+    draw(UNREACHABLE)
     await waitFor(() => expect(screen.queryByText(/Loading/)).toBeNull())
-    expect(screen.queryByLabelText(/^Copy /)).toBeNull()
+    screen.getByLabelText(/^Copy npub1/).click()
+
+    // The FULL npub, not the shortened display form: an ellipsis in the middle
+    // pastes as a string that resolves to nobody.
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/^npub1[a-z0-9]{58}$/)),
+    )
+  })
+
+  /**
+   * A stall owner is not offered a purchase of their own voucher.
+   *
+   * It would charge their own Stripe account and mint them a coupon they
+   * already back, and the gateway would probably allow it. Everything else on
+   * the page stays: checking how you look to a shopper is a reasonable errand,
+   * which is why the whole page is not hidden.
+   */
+  it('offers the owner no way to buy from themselves', async () => {
+    render(
+      <MemoryRouter initialEntries={[`/profile/${STALL}`]}>
+        <Routes>
+          <Route path="/profile/:pubkey" element={<PublicProfilePage viewerPubkey={STALL} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('Rosa Green Farm')).toBeTruthy())
+    expect(screen.queryByRole('button', { name: /Buy a voucher/ })).toBeNull()
+    // Said, rather than silently absent: this is the page they check to see
+    // what shoppers see, so an unexplained gap is a question.
+    expect(screen.getByText(/how your stall looks/)).toBeTruthy()
   })
 
   /**

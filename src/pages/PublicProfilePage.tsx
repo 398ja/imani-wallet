@@ -1,12 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Banknote, Check, Copy, CreditCard, Info, Tag } from 'lucide-react'
+import { Banknote, Check, Copy, CreditCard, Info, QrCode, Tag } from 'lucide-react'
+import QRCode from 'qrcode'
 import { nip19 } from 'nostr-tools'
 
 import { Avatar, BackLink, Button, Centered, Screen } from '../components/ui'
 import { LocationMap } from '../components/LocationMap'
 import { merchantBranding } from '../lib/branding'
 import { handleLabel, shortPubkey } from '../lib/format'
+import { toRecipientPubkey } from '../lib/issue'
 import { fetchMerchantRecord, merchantStatus, type MerchantProfile, type MerchantStatus } from '../lib/merchant'
 import type { MerchantBranding } from '../lib/pass'
 
@@ -54,15 +56,54 @@ import type { MerchantBranding } from '../lib/pass'
  * be typed, shared or deep-linked. `IdentityInline` already declines to link a
  * customer; this makes that a property of the page rather than of one caller.
  */
-export function PublicProfilePage() {
-  const { pubkey = '' } = useParams()
+export function PublicProfilePage({ viewerPubkey }: { viewerPubkey?: string }) {
+  /*
+    The URL may carry a hex key, an npub, a full `name@domain`, or just the
+    local part — `/profile/cocoa` is the form a person can say out loud, and the
+    one that ends up in a message or on a card.
+
+    Resolved through `toRecipientPubkey`, which the scanner and the paste box
+    already use, so a handle typed here behaves exactly as one typed there:
+    same completion of a bare local part against the gateway's own domain, same
+    tolerance of a leading `@`, same null rather than a throw.
+
+    `resolved` is undefined while the lookup runs and null when it fails, which
+    the render below tells apart — a handle that resolves to nobody must say so
+    rather than render an empty profile for a name that does not exist.
+  */
+  const { pubkey: param = '' } = useParams()
+  const [resolved, setResolved] = useState<string | null>()
   const navigate = useNavigate()
   const [copied, setCopied] = useState(false)
+  const [showCode, setShowCode] = useState(false)
+
+  /*
+    Hex is by far the common case — every link this app generates uses it — so
+    it is DERIVED rather than fetched. Setting it from an effect would be a
+    cascading render for a value the URL already contains, which is the pattern
+    react-hooks/set-state-in-effect exists to stop.
+  */
+  const direct = /^[0-9a-f]{64}$/i.test(param) ? param.toLowerCase() : null
+
+  useEffect(() => {
+    if (direct) return
+    let cancelled = false
+    void toRecipientPubkey(param).then((hex) => {
+      if (!cancelled) setResolved(hex)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [param, direct])
+
+  const lookedUp = direct ?? resolved
+  const pubkey = lookedUp ?? ''
   const [branding, setBranding] = useState<MerchantBranding>()
   const [record, setRecord] = useState<MerchantProfile | null>()
   const [status, setStatus] = useState<MerchantStatus>()
 
   useEffect(() => {
+    if (!pubkey) return
     let cancelled = false
     // Never rejects: an unbranded or unreachable profile resolves to empty
     // fields rather than throwing, so the page always renders something.
@@ -75,6 +116,7 @@ export function PublicProfilePage() {
   }, [pubkey])
 
   useEffect(() => {
+    if (!pubkey) return
     let cancelled = false
     /*
       Is this a stall at all? The THREE-WAY answer matters: `merchantStatus`
@@ -96,6 +138,7 @@ export function PublicProfilePage() {
   }, [pubkey])
 
   useEffect(() => {
+    if (!pubkey) return
     let cancelled = false
     /*
       The stall record, with a deadline. Same shape as MerchantPage: a relay
@@ -137,7 +180,18 @@ export function PublicProfilePage() {
     }
   }
 
-  if (branding === undefined || record === undefined || status === undefined) {
+  // A handle that resolves to nobody. Said plainly rather than rendered as an
+  // empty profile, which would look like a stall with nothing published.
+  if (lookedUp === null) {
+    return <Centered>No profile found for “{param}”.</Centered>
+  }
+
+  if (
+    lookedUp === undefined ||
+    branding === undefined ||
+    record === undefined ||
+    status === undefined
+  ) {
     return <Centered>Loading…</Centered>
   }
 
@@ -153,8 +207,32 @@ export function PublicProfilePage() {
   // way — see MerchantBranding.nip05 — and the pubkey is what money is
   // addressed to, so the handle is a label rather than a credential.
   const handle = branding.nip05 ? handleLabel(branding.nip05) : npubOf(pubkey)
+  /*
+    What a shopper actually takes away — the full nip05, or the npub when a
+    stall publishes no handle. NOT `handle` above, which is the DISPLAY form:
+    `handleLabel` strips the domain ("@rosa") and `npubOf` shortens with an
+    ellipsis, and either would paste as a string that resolves to nobody.
+
+    Null only when the key itself is malformed, in which case there is nothing
+    to hand over and both buttons stay away.
+  */
+  const shareHandle = branding.nip05 ?? npubFull(pubkey)
   const about = branding.storeDescription ?? record?.storeDescription
-  const acceptsCards = record?.acceptsCards === true
+
+  /*
+    Buying from YOURSELF is not a thing. A stall owner reaching their own
+    profile — from their own coupon, their own receipt, or a shared link that
+    came back round — would otherwise be offered a card purchase of their own
+    voucher, which charges their own Stripe account and mints them a coupon they
+    already back. The gateway would probably let them.
+
+    `viewerPubkey` is passed by App, which already holds it. Comparing here
+    rather than hiding the whole page: everything else on it is still true and
+    still worth reading, and a stall checking how they look to a shopper is a
+    reasonable errand.
+  */
+  const isSelf = viewerPubkey !== undefined && viewerPubkey === pubkey
+  const acceptsCards = record?.acceptsCards === true && !isSelf
 
   return (
     <Screen>
@@ -171,38 +249,60 @@ export function PublicProfilePage() {
             className="h-24 w-full bg-mono-100 object-cover dark:bg-mono-800"
           />
         )}
-        <div className="flex items-center gap-4 p-5">
-          <Avatar src={branding.logoUrl} name={name} pubkey={pubkey} size="xl" />
+        <div className="flex items-center gap-3 p-5">
+          <Avatar src={branding.logoUrl} name={name} pubkey={pubkey} size="lg" />
           <div className="min-w-0 flex-1">
-            <p className="truncate text-lg font-semibold text-mono-900 dark:text-mono-50">{name}</p>
+            {/* Tracking tightens as size goes up: at 18px the default spacing
+                reads loose against the tighter handle beneath it. */}
+            <p className="truncate text-lg font-semibold tracking-[-0.01em] text-mono-900 dark:text-mono-50">
+              {name}
+            </p>
             {handle && (
               <p className="truncate text-sm text-mono-500" title={pubkey}>
                 {handle}
               </p>
             )}
           </div>
-          {/* Copying the handle is how a shopper takes a stall away with them —
-              into a message, a note, or the wallet's own search. Only rendered
-              for a stall that HAS one: a button that copies nothing is worse
-              than no button.
 
-              Copies the FULL nip05, not the label beside it. `handleLabel`
-              strips the domain for display ("@rosa"), and pasting that
-              elsewhere resolves to nobody — the domain is the half that makes
-              it an address. */}
-          {branding.nip05 && (
-            <button
-              type="button"
-              onClick={() => void copyHandle(branding.nip05 as string)}
-              aria-label={copied ? 'Handle copied' : `Copy ${branding.nip05}`}
-              className="pressable shrink-0 rounded-xl p-2 text-mono-400 hover:text-mono-900 dark:hover:text-mono-50"
-            >
-              {copied ? (
-                <Check className="h-5 w-5 text-green-600" aria-hidden />
-              ) : (
-                <Copy className="h-5 w-5" aria-hidden />
-              )}
-            </button>
+          {/* Both controls sit ON the card, beside what they act on, rather than
+              as full-width buttons below the fold — the same arrangement, sizes
+              and order as your own profile, because a stall's card and yours
+              are the same object seen from two sides.
+
+              Show, then Copy. Holding up a code is what you do with somebody in
+              front of you, and it is the errand that cannot be done any other
+              way; copying is the quieter one. */}
+          {shareHandle && (
+            <>
+              <button
+                type="button"
+                onClick={() => setShowCode(true)}
+                aria-label={`Show code for ${shareHandle}`}
+                className={ICON_BUTTON}
+              >
+                <QrCode className="h-4 w-4" aria-hidden />
+              </button>
+              {/* Copies the FULL nip05 where there is one, not the label beside
+                  it: `handleLabel` strips the domain for display ("@rosa"), and
+                  pasting that resolves to nobody. Falls back to the npub, so the
+                  button is never present with nothing to give. */}
+              <button
+                type="button"
+                onClick={() => void copyHandle(shareHandle)}
+                aria-label={copied ? 'Handle copied' : `Copy ${shareHandle}`}
+                className={`${ICON_BUTTON} -mr-2`}
+              >
+                {copied ? (
+                  <Check className="h-4 w-4 text-green-600" aria-hidden />
+                ) : (
+                  <Copy className="h-4 w-4" aria-hidden />
+                )}
+                {/* Announced without moving focus or stealing the label. */}
+                <span className="sr-only" aria-live="polite">
+                  {copied ? 'Copied' : ''}
+                </span>
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -222,9 +322,30 @@ export function PublicProfilePage() {
         </Button>
       )}
 
+      {/* Your own profile says so, quietly, where the Buy button would be. A
+          stall owner who opens their own page and finds no purchase control has
+          been told nothing; this is the one case where the absence needs a word,
+          because it is the page they will check to see what shoppers see.
+
+          For every OTHER stall that takes no cards, nothing is said. "This stall
+          does not accept cards" is a sentence about a feature the shopper never
+          saw, and it would be the loudest thing on a page whose job is to
+          introduce somebody. */}
+      {isSelf && (
+        <p className="mt-6 text-center text-sm text-mono-500">
+          This is how your stall looks to a shopper.
+        </p>
+      )}
+
+      {/* Leading is looser here than on the single-value rows below, because
+          this is the only multi-line text on the page and 1.5 is what makes a
+          paragraph readable rather than dense. The values below are one line
+          each, where the same leading would just add gaps. */}
       {about && (
         <Field icon={Info} label="About">
-          <p className="whitespace-pre-wrap text-mono-900 dark:text-mono-50">{about}</p>
+          <p className="whitespace-pre-wrap leading-relaxed text-mono-900 dark:text-mono-50">
+            {about}
+          </p>
         </Field>
       )}
 
@@ -261,17 +382,120 @@ export function PublicProfilePage() {
           on noise. The handle above already names them, and the pubkey is in the
           URL for anyone who genuinely needs it. */}
       <LocationMap location={record?.location} label={name} className="mt-5" />
+
+      {showCode && shareHandle && (
+        <CodeDialog handle={shareHandle} name={name} onClose={() => setShowCode(false)} />
+      )}
     </Screen>
   )
 }
 
-/** Their npub, or null if the key is malformed. Encoding is fallible. */
+/** Their npub, shortened for DISPLAY. Null if the key is malformed. */
 function npubOf(pubkey: string): string | null {
+  const full = npubFull(pubkey)
+  return full === null ? null : shortPubkey(full)
+}
+
+/**
+ * Their npub in full, for copying and for the code.
+ *
+ * Separate from {@link npubOf} because the two must never be confused: that one
+ * shortens with an ellipsis for a line of text, and a shortened key scans and
+ * pastes as nothing.
+ */
+function npubFull(pubkey: string): string | null {
   try {
-    return shortPubkey(nip19.npubEncode(pubkey))
+    return nip19.npubEncode(pubkey)
   } catch {
     return null
   }
+}
+
+/**
+ * A 44px round target, matching your own profile card exactly.
+ *
+ * Copied deliberately rather than imported: `ProfilePage` keeps it private, and
+ * hoisting it into the shared UI layer is a wider change than a design pass
+ * should make. The value is the point — 44px is the minimum comfortable touch
+ * target, and the focus ring keeps the control reachable without a pointer.
+ */
+const ICON_BUTTON =
+  'pressable flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-mono-500 outline-none ring-mono-400 hover:text-mono-900 focus-visible:ring-2 dark:hover:text-mono-50'
+
+/**
+ * The stall's handle as a code, held up across a counter.
+ *
+ * A modal task, so it dims and pushes everything else back — `materialize`
+ * scales and blurs it in as a real surface arriving rather than a flat fade.
+ * `<dialog>` rather than a hand-rolled overlay: it brings focus trapping, Escape
+ * to close, and inertness of the page behind it, none of which is worth
+ * reimplementing.
+ *
+ * The code is WHITE-backed regardless of theme. A scanner reads dark-on-light,
+ * and a code inverted for dark mode is a code that will not scan.
+ */
+function CodeDialog({
+  handle,
+  name,
+  onClose,
+}: {
+  handle: string
+  name: string
+  onClose: () => void
+}) {
+  const ref = useRef<HTMLDialogElement>(null)
+  const [dataUrl, setDataUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    ref.current?.showModal()
+  }, [])
+
+  useEffect(() => {
+    let live = true
+    QRCode.toDataURL(handle, { width: 512, margin: 1 }).then(
+      (url) => live && setDataUrl(url),
+      () => live && setDataUrl(null),
+    )
+    return () => {
+      live = false
+    }
+  }, [handle])
+
+  return (
+    <dialog
+      ref={ref}
+      onClose={onClose}
+      className="materialize m-auto w-[calc(100%-2.5rem)] max-w-sm rounded-[20px] bg-transparent p-0 backdrop:bg-mono-950/50 backdrop:backdrop-blur-sm"
+      // A click on the element itself rather than the card is a click on the
+      // backdrop, which is a click outside.
+      onClick={(e) => e.target === e.currentTarget && ref.current?.close()}
+    >
+      <div className="material flex flex-col items-center gap-4 rounded-[20px] p-5 shadow-xl shadow-mono-950/20 ring-1 ring-mono-900/5 dark:ring-mono-50/10">
+        {dataUrl ? (
+          <img
+            src={dataUrl}
+            alt={`Code for ${handle}`}
+            className="w-full rounded-2xl bg-white p-4"
+          />
+        ) : (
+          <p className="p-8 text-sm text-mono-500">The code could not be drawn.</p>
+        )}
+        <div className="w-full text-center">
+          <p className="truncate font-semibold tracking-[-0.01em] text-mono-900 dark:text-mono-50">
+            {name}
+          </p>
+          <p className="truncate text-sm text-mono-500">{handle}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => ref.current?.close()}
+          className="pressable min-h-11 w-full rounded-2xl bg-mono-900 text-sm font-medium text-mono-50 outline-none ring-mono-400 focus-visible:ring-2 dark:bg-mono-50 dark:text-mono-900"
+        >
+          Done
+        </button>
+      </div>
+    </dialog>
+  )
 }
 
 function Field({
