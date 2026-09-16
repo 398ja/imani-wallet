@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.1] - 2026-09-16
+
+### Fixed
+
+- **The 0.4.0 image would not build.** `undici` was added to `devDependencies` by the load-test
+  work without a lock-file update, so `npm ci` in the Dockerfile refused the checkout as out of
+  sync. The lock file now carries it. No runtime change.
+
 ## [0.4.0] - 2026-09-16
 
 ### Added
