@@ -147,8 +147,15 @@ export function drain() {
 
   // Acknowledge whatever came back, so the same envelopes are not redelivered
   // to every iteration and measured repeatedly.
+  //
+  // The field is `notificationId`. It used to read `e.id || e.envelope_id`,
+  // neither of which exists on IncomingNotificationEnvelope, so `ids` was always
+  // empty and this block acknowledged nothing — the second half of the same bug
+  // as the `{ids}` body in ackNotifications. Both were invisible here because
+  // this scenario has only ever run against an empty queue, so there was never
+  // anything to acknowledge and never a redelivery to notice.
   if (answered && envelopes.length > 0) {
-    const ids = envelopes.map((e) => e.id || e.envelope_id).filter(Boolean)
+    const ids = envelopes.map((e) => e.notificationId).filter(Boolean)
     if (ids.length > 0) ackNotifications(customer, ids)
   }
 

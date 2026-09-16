@@ -60,7 +60,17 @@ import {
 } from './lib/metrics.js'
 
 const published = new Counter('published')
+/**
+ * Publishes the gateway REFUSED — it answered, and the answer was not 202.
+ *
+ * Kept apart from publishes that never arrived at all. A 400 or a 401 is the
+ * service telling you something; a status of 0 is the load generator running
+ * out of sockets, and counting the two together is how a saturated tunnel came
+ * to look like 4192 rejections from a gateway that had logged no errors.
+ */
 const publish_refused = new Counter('publish_refused')
+/** Publishes that never reached the gateway: connection refused, reset, timeout. */
+const publish_unreachable = new Counter('publish_unreachable')
 const matched = new Counter('matched')
 const unmatched = new Counter('unmatched')
 const rate_limited = new Counter('rate_limited')
@@ -212,7 +222,14 @@ export default function () {
   })
 
   if (pub.status !== 202) {
-    publish_refused.add(1)
+    // status 0 means nothing answered — the generator ran out, not the service.
+    if (pub.status === 0) publish_unreachable.add(1)
+    else {
+      publish_refused.add(1)
+      if (__ENV.DEBUG_PUBLISH) {
+        console.error(`publish ${pub.status}: ${String(pub.body).slice(0, 200)}`)
+      }
+    }
     outcome_verified.add(false)
     failed.add(1)
     iteration_ms.add(Date.now() - started)
@@ -305,6 +322,7 @@ export function handleSummary(data) {
     `    matched       ${matchedN}`,
     `    unmatched     ${unmatchedN}`,
     `    refused       ${count('publish_refused')}`,
+    `    unreachable   ${count('publish_unreachable')}`,
     `    rate limited  ${count('rate_limited')}`,
     `    checks        ${m.checks?.values?.passes ?? 0} passed, ${m.checks?.values?.fails ?? 0} failed`,
     '',
@@ -323,10 +341,10 @@ export function handleSummary(data) {
   // Publishes that never reached the gateway mean the GENERATOR ran out, not
   // the service. Said plainly, because every other number here would otherwise
   // describe the tunnel rather than the deployment.
-  const refusedN = count('publish_refused')
-  if (refusedN > count('published')) {
+  const unreachableN = count('publish_unreachable')
+  if (unreachableN > count('published')) {
     lines.push(
-      `    ${refusedN} publishes never reached the gateway, against ${count('published')} that did.`,
+      `    ${unreachableN} publishes never reached the gateway, against ${count('published')} that did.`,
       '    That is the LOAD GENERATOR saturating, not the service: an SSH tunnel',
       '    multiplexes every VU onto one connection. Lower MAX_VUS, or run where',
       '    the service is and point INTERNAL_URL at it directly.',
