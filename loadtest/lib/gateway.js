@@ -44,6 +44,31 @@ export const ACCOUNT = (__ENV.ACCOUNT_URL || GATEWAY).replace(/\/$/, '')
 const EDGE_SECRET = __ENV.EDGE_SECRET || ''
 
 /**
+ * gateway-core's `/internal/v1` tier, which is NOT reachable from outside.
+ *
+ * nginx declares `/internal` as an nginx-internal location, so the edge answers
+ * 405 to a POST from the public side. Reaching it means running k6 where the
+ * service is: on the deployment host against `http://gateway-core:8081`, or a
+ * local stack. Defaulting to the local port keeps the failure mode "connection
+ * refused" rather than a confusing 405 from the public edge.
+ *
+ * Note 8081, not 8080: gateway-core serves its API there and its actuator on a
+ * separate management port. A probe against 8080 answers nothing at all.
+ */
+export const INTERNAL = (__ENV.INTERNAL_URL || 'http://localhost:8081').replace(/\/$/, '')
+
+/**
+ * Service credential for the `/internal/v1` tier.
+ *
+ * Row-scoped in `service_credentials.allowed_paths`, bcrypt-hashed, so this is
+ * not a shared secret that unlocks the tier — it unlocks one path. A run
+ * without it gets 401 and the scenario says so rather than reporting an empty
+ * queue as a result.
+ */
+const SERVICE_ID = __ENV.SERVICE_ID || 'loadtest'
+const SERVICE_TOKEN = __ENV.SERVICE_TOKEN || ''
+
+/**
  * One signed request.
  *
  * The body is serialised exactly once and that same string is both signed and
@@ -135,6 +160,58 @@ export function splitCoupon() {
   )
 }
 
+/**
+ * Enqueue an arrival notification, as a delivering service would.
+ *
+ * NOT a user-facing call, and deliberately not reachable as one: it is
+ * `/internal/v1`, authenticated by X-Service-Id + X-Service-Token rather than
+ * NIP-98, and the controller's own comment says it must NEVER be exposed on
+ * `/api/v1` — the recipient comes from the BODY, so a user credential reaching
+ * it would let any user enqueue for any other.
+ *
+ * Used here to populate the queue the drain scenario reads. The alternative was
+ * to drive a real atomic-send saga, which needs issuance, which needs the
+ * portal — and the portal is gated behind a session cookie a NIP-98 client
+ * cannot obtain (see results/staging-2026-09-16.md). This publishes the same
+ * envelope the saga publishes, through the same service, onto the same queue.
+ *
+ * What that buys and what it does not: the drain side is measured for real,
+ * against real envelopes. The SEND side is not exercised, so this measures
+ * arrival, not delivery end-to-end.
+ *
+ * `/internal` is not routed by the edge — nginx serves it as a static location
+ * and answers 405 — so INTERNAL_URL must point INSIDE the deployment. There is
+ * no path to this from outside, which is the intended posture.
+ */
+export function publishArrival(params) {
+  // camelCase here, NOT snake_case — the opposite of `/api/v1/atomic-send`.
+  // The public API takes snake_case (see sendCoupons, where copying the
+  // wallet's camelCase made the gateway report `recipientPubkey` as a MISSING
+  // field), but `PublishRequest` is a plain record and gateway-core sets no
+  // property-naming strategy, so Jackson binds it by its Java names. Get this
+  // wrong and every field arrives null: the controller answers 400 on the
+  // recipient check, which reads as a bad pubkey rather than a bad convention.
+  const body = JSON.stringify({
+    recipientPubkey: params.recipientPubkey,
+    senderPubkey: params.senderPubkey,
+    deliveryEventId: params.deliveryEventId,
+    currencyUnit: params.currencyUnit || 'EUR',
+    currencyDecimals: params.currencyDecimals == null ? 2 : params.currencyDecimals,
+    minorUnits: params.minorUnits == null ? 500 : params.minorUnits,
+    bundleId: params.bundleId,
+  })
+  return timed(gateway_ms, () =>
+    http.post(`${INTERNAL}/internal/v1/incoming-notifications/publish`, body, {
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Service-Id': SERVICE_ID,
+        'X-Service-Token': SERVICE_TOKEN,
+      },
+      tags: { name: 'publish arrival' },
+    }),
+  )
+}
+
 /** Drain pending arrival notifications. On the ACCOUNT tier. */
 export function drainNotifications(customer, limit = 50) {
   return signed(
@@ -147,13 +224,23 @@ export function drainNotifications(customer, limit = 50) {
   )
 }
 
-/** Acknowledge drained notifications, so they stop coming back. */
-export function ackNotifications(customer, ids) {
+/**
+ * Acknowledge drained notifications, so they stop coming back.
+ *
+ * The field is `notificationIds`, matching `AckRequest` and what the wallet
+ * itself sends from `incomingNotifications.ts`. It used to send `{ ids }`,
+ * which binds to a null list: the controller answers 200 with
+ * `acknowledged: 0`, so the call LOOKED like it worked and acknowledged
+ * nothing. Never noticed because drain.js only ever ran against an empty queue,
+ * so there was never anything to ack — found while writing receive.js, which is
+ * the first scenario to put envelopes on the queue.
+ */
+export function ackNotifications(customer, notificationIds) {
   return signed(
     ACCOUNT,
     '/api/v1/incoming-notifications/ack',
     'POST',
-    { ids },
+    { notificationIds },
     customer,
     'ack notifications',
   )
