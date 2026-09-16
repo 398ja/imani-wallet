@@ -70,7 +70,21 @@ const arrival_to_drain_ms = new Trend('arrival_to_drain_ms', true)
 const CUSTOMERS = JSON.parse(open('../.loadtest-pool.json') || '{}')
 const POOL = Object.values(CUSTOMERS)
 
-const MAX_VUS = Number(__ENV.MAX_VUS || 20)
+/**
+ * Ceiling deliberately lower than the other ramps.
+ *
+ * This scenario is usually driven through an SSH tunnel, because `/internal/v1`
+ * has no public route. A tunnel is a single TCP connection multiplexing every
+ * VU, and it saturates long before the service does: measured at 20 VUs, 4192
+ * of 4432 publishes never left the laptop while gateway-core logged only 241
+ * arrivals and no errors at all.
+ *
+ * That is the load generator being the bottleneck — the failure mode the README
+ * warns about for every other scenario — and it produces numbers that describe
+ * the tunnel. Keep this low, and raise it only when running WHERE the service
+ * is, with INTERNAL_URL pointed at the container directly.
+ */
+const MAX_VUS = Number(__ENV.MAX_VUS || 5)
 const CURRENCY = __ENV.CURRENCY || 'EUR'
 const MINOR_UNITS = Number(__ENV.MINOR_UNITS || 500)
 
@@ -228,8 +242,13 @@ export default function () {
   // The assertion that makes this scenario worth running: OUR envelope came
   // back, not merely SOME envelope. A queue that returns stale entries under
   // load would otherwise read as healthy.
+  //
+  // deliveryEventId lives under `correlation`, NOT at the top level — see
+  // IncomingNotificationEnvelope.Correlation. Looking for it at the top matches
+  // nothing, and the failure is quiet: every drain succeeds, every envelope is
+  // ignored, and the run reports `matched 0` as though the queue were broken.
   const ours = answered
-    ? envelopes.find((e) => e.deliveryEventId === deliveryEventId)
+    ? envelopes.find((e) => e.correlation?.deliveryEventId === deliveryEventId)
     : undefined
 
   if (ours) {
@@ -268,10 +287,10 @@ export default function () {
 
 export function handleSummary(data) {
   const m = data.metrics
-  // signingShare takes the WHOLE data object, not data.metrics, and returns
-  // null when a run made no iterations — as this one does when setup() aborts.
-  // Passing m crashed handleSummary, which then buried the real setup error
-  // under a TypeError.
+  // signingShare takes the WHOLE data object, not data.metrics, and returns an
+  // OBJECT (or null when a run made no iterations, as when setup() aborts).
+  // Passing m crashed handleSummary and buried the real setup error under a
+  // TypeError; interpolating the result directly printed "[object Object]".
   const share = signingShare(data)
   const count = (k) => m[k]?.values?.count ?? 0
   const trend = (k, s) => m[k]?.values?.[s]
@@ -291,9 +310,29 @@ export function handleSummary(data) {
     '',
     `    arrival->drain  avg ${fmt(trend('arrival_to_drain_ms', 'avg'))}  p95 ${fmt(trend('arrival_to_drain_ms', 'p(95)'))}`,
     `    gateway         avg ${fmt(trend('gateway_ms', 'avg'))}  p95 ${fmt(trend('gateway_ms', 'p(95)'))}`,
-    ...(share ? [`                  ${share}`] : []),
+    ...(share
+      ? [
+          `    signing         ${share.signing_avg_ms}ms of ${share.iteration_avg_ms}ms ` +
+            `(${share.signing_share_percent}%)`,
+          `                    ${share.verdict}`,
+        ]
+      : []),
     '',
   ]
+
+  // Publishes that never reached the gateway mean the GENERATOR ran out, not
+  // the service. Said plainly, because every other number here would otherwise
+  // describe the tunnel rather than the deployment.
+  const refusedN = count('publish_refused')
+  if (refusedN > count('published')) {
+    lines.push(
+      `    ${refusedN} publishes never reached the gateway, against ${count('published')} that did.`,
+      '    That is the LOAD GENERATOR saturating, not the service: an SSH tunnel',
+      '    multiplexes every VU onto one connection. Lower MAX_VUS, or run where',
+      '    the service is and point INTERNAL_URL at it directly.',
+      '',
+    )
+  }
 
   if (matchedN === 0) {
     lines.push(
