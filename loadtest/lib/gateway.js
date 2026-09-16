@@ -12,7 +12,12 @@ import http from 'k6/http'
 import { nip98Header } from './signed-request.js'
 import { gateway_ms, timed } from './metrics.js'
 
-export const GATEWAY = (__ENV.GATEWAY_URL || 'https://customer.staging.398ja.xyz').replace(/\/$/, '')
+// `customer.staging.398ja.xyz` was the old default and is now explicitly 404'd
+// as a retired host in imani-deploy's nginx, so a run that forgot the variable
+// failed against a name that no longer exists rather than against staging.
+// Every tier answers on this one name now: gateway-core, gateway-customer and
+// gateway-portal all sit behind it, routed by path.
+export const GATEWAY = (__ENV.GATEWAY_URL || 'https://wallet.staging.398ja.xyz').replace(/\/$/, '')
 export const PORTAL = (__ENV.PORTAL_URL || GATEWAY).replace(/\/$/, '')
 
 /**

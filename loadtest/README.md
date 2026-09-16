@@ -320,6 +320,35 @@ The summary says this explicitly whenever it happens, because an all-empty run
 looks identical to a healthy loaded one in every other number. A scenario that
 quietly measured nothing while reporting a clean p95 would be worse than none.
 
+## What can and cannot be run against staging
+
+Every tier answers on **`wallet.staging.398ja.xyz`**, routed by path.
+`customer.staging.398ja.xyz` is a retired name that nginx now 404s
+deliberately, so a run that predates this and relies on the old default fails
+against a host that no longer exists.
+
+| Scenario | Staging | Why |
+|---|---|---|
+| `smoke.js` | yes | NIP-98 only |
+| `drain.js` | yes, but throttled | see below |
+| `issuance.js` | **no** | the portal wants a session cookie |
+| `send.js` | **no** | needs issuance |
+
+Issuance and send are **local-stack scenarios**. Staging runs `nap_auth.lua`
+in front of `/api/v1/portal/`, and that gate clears any client-supplied
+`X-Edge-Auth` / `X-Auth-Permissions` before demanding a session cookie — which
+is the only thing standing between a customer and `coupon:issue`, so it is
+correct and should stay. It does mean a NIP-98-only client can never issue
+there. Both scripts now abort in about a second saying so, rather than ramping
+for three and a half minutes to report `issued 0`.
+
+A gateway-side run from one host is also bounded by a blanket **100
+requests/minute per caller address**, not per pubkey. A 21-VU drain ramp took
+2083 rejections against 241 successes because the whole pool is one address.
+Until that is keyed on the authenticated pubkey, no single-host run can find
+the deployment's real ceiling. Recorded with evidence in
+[`results/staging-2026-09-16.md`](results/staging-2026-09-16.md).
+
 ## Checking the stack before a run
 
     ./deploy/up.sh && ./deploy/check.sh

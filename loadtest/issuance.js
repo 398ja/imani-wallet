@@ -120,6 +120,32 @@ export function setup() {
       (probeIssue.status === 200 || probeIssue.status === 201) &&
       String(probeIssue.body).includes('voucher_id')
 
+    // A 401 is not a rate limit and will not become one by waiting. Staging
+    // gates /api/v1/portal/ behind nap_auth.lua, which clears any
+    // client-supplied X-Edge-Auth / X-Auth-Permissions and demands a session
+    // cookie instead — so a NIP-98-only client can never issue there, and
+    // retrying spends the whole 60s setup budget to re-learn that. Say so and
+    // stop. Only throttling is worth waiting out.
+    if (!issuanceWorks && probeIssue.status === 401) {
+      // Throw rather than warn-and-continue. The usual "not working" state is
+      // worth proceeding through, because failures under load are then
+      // reported as failures rather than excused as throttling. A 401 is
+      // different in kind: EVERY iteration will be refused identically, so the
+      // ramp would spend its full wall-clock to report `issued 0`. Observed:
+      // 3m20s of ramp for no measurement at all.
+      throw new Error(
+        `issuance is refused at ${PORTAL} with 401 ` +
+          `(${String(probeIssue.body).slice(0, 80)}).\n` +
+          '  This is an authentication refusal, not throttling, so no amount of ' +
+          'load will produce a measurement.\n' +
+          '  Staging gates /api/v1/portal/ behind nap_auth.lua, which clears any ' +
+          'client-supplied X-Edge-Auth and demands a session cookie, so a ' +
+          'NIP-98-only client cannot issue there.\n' +
+          '  Point PORTAL_URL at a local stack, or run loadtest/drain.js, which ' +
+          'needs only NIP-98. See loadtest/results/staging-2026-09-16.md.',
+      )
+    }
+
     if (!issuanceWorks && attempt < 3) {
       console.log(
         `issuance probe got ${probeIssue.status}; waiting 30s in case a ` +

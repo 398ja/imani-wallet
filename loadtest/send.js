@@ -98,6 +98,18 @@ export function setup() {
       memo: 'pre-run probe',
     })
     issuanceWorks = String(res.body).includes('voucher_id')
+    // Same reasoning as issuance.js: a 401 is an authentication refusal, not
+    // throttling, so waiting cannot change it. Staging's portal wants a
+    // session cookie that a NIP-98 client has no way to present.
+    if (!issuanceWorks && res.status === 401) {
+      throw new Error(
+        `issuance is refused at ${PORTAL} with 401, and sending needs a coupon ` +
+          'to send. This is an authentication refusal, not throttling, so the ' +
+          'ramp would run its full length to report `sent 0`.\n' +
+          '  Point PORTAL_URL at a local stack, or run loadtest/drain.js, which ' +
+          'needs only NIP-98. See loadtest/results/staging-2026-09-16.md.',
+      )
+    }
     if (!issuanceWorks && attempt < 3) sleep(30)
   }
 
