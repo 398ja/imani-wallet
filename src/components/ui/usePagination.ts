@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 
 /**
  * Paging for the record lists.
@@ -69,10 +69,18 @@ export function usePagination<T>(items: T[], pageSize: number = PAGE_SIZE) {
   const current = Math.min(page, pageCount)
   const start = (current - 1) * pageSize
 
-  const visible = useMemo(
-    () => items.slice(start, start + pageSize),
-    [items, start, pageSize],
-  )
+  /**
+   * Sliced on every render, deliberately not memoised.
+   *
+   * Callers build these lists inline — `issued ?? []`, a filter, a concat — so
+   * the array is a new object on most renders and a memo keyed on `items` would
+   * never hit anyway. Keying on something cheaper (length and offset) was the
+   * obvious fix and is wrong: these lists are LIVE, and a row whose contents
+   * changed without changing the length — a payment gaining its validation
+   * badge, a memo being edited — would go on rendering the stale copy. Serving
+   * a stale record to save a 21-element slice is not a trade worth making.
+   */
+  const visible = items.slice(start, start + pageSize)
 
   return {
     /** The rows to render right now. */
@@ -80,9 +88,7 @@ export function usePagination<T>(items: T[], pageSize: number = PAGE_SIZE) {
     page: current,
     pageCount,
     setPage,
-    /** Index of the first visible row in the full list, 1-based, for captions. */
-    firstIndex: items.length === 0 ? 0 : start + 1,
-    lastIndex: Math.min(start + pageSize, items.length),
+    /** The full count, for a caption that wants to say how much there is. */
     total: items.length,
   }
 }

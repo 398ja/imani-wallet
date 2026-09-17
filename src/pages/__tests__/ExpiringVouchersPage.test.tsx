@@ -93,6 +93,17 @@ describe('the expiring vouchers page', () => {
     )
   })
 
+  it('goes back to the dashboard, which is the only way in', async () => {
+    // The back link names the screen you came FROM. This page exists only as
+    // the dashboard's "See all", so sending it to the till (where the sibling
+    // lists go) would strand a merchant mid-read.
+    show([issued({ id: 'v1', inDays: 1 })])
+
+    await waitFor(() => expect(screen.getByText('Voucher v1')).toBeTruthy())
+    const back = screen.getByRole('link', { name: /Dashboard/ })
+    expect(back.getAttribute('href')).toBe('/merchant/dashboard')
+  })
+
   it('shows at most 21 at a time, and pages to the rest', async () => {
     show(soon(30))
 

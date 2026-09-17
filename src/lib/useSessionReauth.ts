@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { NapSession } from '@imani/nap-client-web'
 
+import { watchActivity } from './activity'
 import { watchSessionExpiry } from './sessionExpiry'
 import { validateSession } from './sessionValidate'
 
@@ -13,6 +14,18 @@ import { validateSession } from './sessionValidate'
  * walking out of a dead spot would want the wallet to notice.
  */
 const RETRY_AFTER_UNREACHABLE_S = 60
+
+/**
+ * The soonest the wallet will ask again after a server said "still valid".
+ *
+ * A floor under the confirmed deadline, not a polling interval. Near the
+ * session's absolute cap the server returns the SAME `expires_at` every time,
+ * so a deadline taken at face value stops moving and the expiry watcher — which
+ * fires on the transition only — latches and never asks again. Thirty seconds
+ * is short enough that the final refusal is noticed promptly and long enough
+ * that it can never become a busy loop.
+ */
+const MIN_RECHECK_S = 30
 
 /**
  * Deciding when to ask for the passphrase again.
@@ -80,6 +93,10 @@ export function useSessionReauth(
   useEffect(() => {
     let cancelled = false
 
+    // Started with the watcher and stopped with it, so presence is only ever
+    // observed while this hook is actually responsible for the session.
+    const activity = watchActivity()
+
     const stop = watchSessionExpiry({
       getExpiresAt: () => {
         const local = session.getSession()?.expiresAt ?? null
@@ -103,6 +120,29 @@ export function useSessionReauth(
        * is ever shown. Only a session the server AGREES is over prompts.
        */
       onExpired: () => {
+        /*
+          The local clock has run out. Whether that is a real lapse depends on
+          something only this tab knows.
+
+          `/auth/validate` SLIDES the idle window by being asked, so calling it
+          unconditionally here would renew the session on a timer — the wallet
+          would keep itself signed in on behalf of a phone lying on a table, and
+          the idle timeout would only ever be enforced by the 12-hour absolute
+          cap. That is not a smaller bug than the one this hook was written to
+          fix; it is the same disregard for the user pointing the other way.
+
+          So the question asked first is whether a PERSON has done anything
+          since the last check. If they have, the server's own rule holds — an
+          authenticated request means an active user — and confirming is
+          legitimate. If they have not, there is nothing to confirm: the session
+          has genuinely gone idle and the prompt is correct.
+        */
+        if (!activity.consumeActivity()) {
+          confirmedExpiry.current = null
+          setPrompt('lapsed')
+          return
+        }
+
         void validateSession().then((verdict) => {
           if (cancelled) return
 
@@ -111,7 +151,19 @@ export function useSessionReauth(
             // deadline so the watcher stops counting from the stale one, and
             // stay quiet: the user never learns this happened, which is the
             // entire point.
-            confirmedExpiry.current = verdict.expiresAt
+            //
+            // Floored, and that floor is load-bearing. The idle window slides
+            // but the session also has an ABSOLUTE cap (12h), and near it the
+            // server clamps `expires_at` to the same fixed instant on every
+            // call. The deadline then stops moving, and `watchSessionExpiry`
+            // fires `onExpired` only on the TRANSITION — so with a deadline
+            // permanently in the past the watcher latches, never asks again,
+            // and the wallet sits quiet against a session the server is about
+            // to refuse. The floor guarantees the next question gets asked.
+            confirmedExpiry.current = Math.max(
+              verdict.expiresAt ?? 0,
+              Math.floor(Date.now() / 1000) + MIN_RECHECK_S,
+            )
             setPrompt('quiet')
             return
           }
@@ -122,6 +174,11 @@ export function useSessionReauth(
             // lift, and typing it could not succeed anyway — re-authentication
             // needs the same network that just failed. Push the local deadline
             // out a little and let the watcher ask again.
+            //
+            // Bounded, so this cannot become the renewal loop avoided above: a
+            // user who is active but permanently offline gets a short reprieve
+            // each time, not an unending one, and the server's absolute cap is
+            // still the ceiling on all of it.
             confirmedExpiry.current = Math.floor(Date.now() / 1000) + RETRY_AFTER_UNREACHABLE_S
             setPrompt('quiet')
             return
@@ -144,6 +201,7 @@ export function useSessionReauth(
       // session this hook no longer speaks for.
       cancelled = true
       stop()
+      activity.stop()
     }
   }, [session, confirmedExpiry])
 
