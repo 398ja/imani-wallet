@@ -1,7 +1,10 @@
+import { toast } from 'sonner'
+
 import { displayDecimals, formatFace } from './format'
 import { getSigner } from './nap'
 import { signedFetch } from './nip98'
 import { recordNotification } from './notifications/inbox'
+import { wantsInApp } from './notifications/wants'
 import type { ReceiptPayload } from './paymentReceipt'
 
 /**
@@ -93,7 +96,12 @@ function fileReceipt(pubkey: string, delivery: ReceiptDelivery): boolean {
         })
       : 'Your voucher'
 
-  return recordNotification(pubkey, {
+  // The sender's own switch for "a coupon you sent was claimed". Consumed
+  // either way by the caller, so a receipt the user does not want to see is
+  // not redelivered forever.
+  if (!wantsInApp(pubkey, 'voucher_claimed')) return false
+
+  const filed = recordNotification(pubkey, {
     // The gateway's receiptId, so the same claim arriving by push and by drain
     // collapses to one row.
     id: delivery.receiptId,
@@ -103,6 +111,37 @@ function fileReceipt(pubkey: string, delivery: ReceiptDelivery): boolean {
     url: '/records',
     receivedAt: payload.redeemedAt ? payload.redeemedAt * 1000 : undefined,
   })
+
+  /*
+   * Say it on screen too, when the sender is actually looking.
+   *
+   * The settlement confirmation had a bell row and a Web Push and no toast, so
+   * a sender watching the app at the moment their payment was claimed — the
+   * single most likely moment for them to be watching, since they had just sent
+   * it — saw nothing happen. The recipient gets a toast on arrival; the sender
+   * gets one on settlement, and the pair is symmetric.
+   *
+   * Gated on `filed` so it fires exactly once per claim: the row is deduped by
+   * receiptId, so a redelivery that files nothing must not toast either. Push
+   * covers the closed-app case, and `recordNotification` dedupes across both.
+   *
+   * Never throws, for the same reason nothing else on this path does: a receipt
+   * is a record of money that has already moved.
+   */
+  if (filed) {
+    try {
+      toast.success(`${amount} was claimed.`, {
+        // Namespaced and keyed on the receipt so a re-render collapses rather
+        // than stacking, exactly as the arrival toasts do.
+        id: 'claimed-' + delivery.receiptId,
+        duration: 6000,
+      })
+    } catch (error) {
+      console.warn(LOG_PREFIX, 'could not toast a claim', error)
+    }
+  }
+
+  return filed
 }
 
 /**

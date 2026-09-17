@@ -4,6 +4,8 @@ import { toast } from 'sonner'
 import { ReceivedPaymentToast } from '../components/ui/IncomingPaymentToast'
 import { createBoundedSet } from './boundedSet'
 import { displayDecimals, formatFace } from './format'
+import { recordNotification } from './notifications/inbox'
+import { wantsInApp } from './notifications/wants'
 
 /**
  * The toast that fires when a coupon has ACTUALLY arrived.
@@ -57,10 +59,25 @@ export interface ArrivedVoucher {
  * failed to render must not turn a successful redemption into a failed one —
  * that would burn the proofs and then report an error, which is the worst
  * outcome available here.
+ *
+ * `recipientPubkey` is the wallet this landed in — our own key, not the
+ * sender's. It is what scopes the inbox row and the preference lookup, both of
+ * which are per-account. Optional so a caller with no identity to hand (tests,
+ * and any path that runs before the session is established) still gets the
+ * toast; without it the bell is skipped, because there is no inbox to write to.
  */
-export function announceArrival(voucher: ArrivedVoucher | undefined): void {
+export function announceArrival(
+  voucher: ArrivedVoucher | undefined,
+  recipientPubkey?: string,
+): void {
   try {
     if (!voucher) return
+
+    // The user's own switch, honoured on the in-app surfaces for the first
+    // time here. Checked BEFORE the dedupe set is touched: marking an
+    // announcement that never happened would suppress the real one if the
+    // preference were turned back on mid-session.
+    if (!wantsInApp(recipientPubkey, 'voucher_received')) return
 
     // Keyed on the voucher id where there is one. Without it there is no stable
     // identity to dedupe on, and announcing is still better than silence — a
@@ -108,6 +125,36 @@ export function announceArrival(voucher: ArrivedVoucher | undefined): void {
         duration: 6000,
       },
     )
+
+    /*
+     * And the same fact in the bell, which is the half that survives.
+     *
+     * The toast is gone in six seconds. Until this, settlement left NOTHING
+     * behind: the advance-notice drain wrote an inbox row for "payment on its
+     * way", and the arrival that actually moved the money wrote none — so a
+     * recipient who looked away saw one notification for a payment that had
+     * two events, and the one they kept was the optimistic one. That is the
+     * "B only gets the first notification" report.
+     *
+     * Namespaced `arrival:` so it cannot collide with the advance notice's
+     * `notificationId`, which is a different statement about the same payment
+     * and must remain its own line.
+     *
+     * Only with a voucher id: `recordNotification` dedupes on id, and a
+     * synthesised one would file a fresh row on every redelivery.
+     */
+    if (recipientPubkey && key) {
+      recordNotification(recipientPubkey, {
+        id: 'arrival:' + key,
+        type: 'voucher_received',
+        title: 'Payment received',
+        body: voucher.memo ? `${amount} received — ${voucher.memo}` : `${amount} received.`,
+        // The coupon list, where the thing that arrived actually is. The
+        // advance notice points at `/` because at that point there is nothing
+        // to look at yet; by now there is.
+        url: '/receive',
+      })
+    }
   } catch (e) {
     console.warn('[arrival] could not announce a received coupon:', e)
   }

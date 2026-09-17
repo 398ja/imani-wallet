@@ -40,6 +40,7 @@ import { displayDecimals, formatFace } from './format'
 import { signedFetch } from './nip98'
 import { validateEnvelope, type IncomingPaymentNotificationEnvelope } from './incomingNotification'
 import { recordNotification } from './notifications/inbox'
+import { wantsInApp } from './notifications/wants'
 
 /** Server-side Artemis producer drain endpoint. Same-origin; see dmPoll.ts. */
 const DRAIN_ENDPOINT = '/api/v1/incoming-notifications/drain'
@@ -255,6 +256,14 @@ function handleInboundEnvelope(raw: unknown, recipientPubkeyHex: string): string
   // the user had completed days before.
   if (TERMINAL_STATES.has(env.state)) {
     console.log(LOG_PREFIX, 'drain: skipping terminal envelope state=' + env.state)
+    return env.notificationId
+  }
+
+  // What the user asked to hear about. Acked either way: an envelope the user
+  // has switched off is still an envelope the server should stop redelivering,
+  // and leaving it queued would re-raise it the moment they switched it back
+  // on — announcing a payment that had long since settled.
+  if (!wantsInApp(recipientPubkeyHex, 'voucher_received')) {
     return env.notificationId
   }
 
