@@ -43,6 +43,7 @@ import {
   MerchantTransactionsPage,
   IssuedCouponsPage,
   IssuedCouponPage,
+  ExpiringVouchersPage,
 } from './pages/MerchantRecordPages'
 import { MerchantEditPage } from './pages/MerchantEditPage'
 import { PaymentsSettingsPage } from './pages/PaymentsSettingsPage'
@@ -391,6 +392,8 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
               <>
                 <Route path="/merchant/transactions" element={<MerchantTransactionsPage />} />
                 <Route path="/merchant/coupons" element={<IssuedCouponsPage />} />
+                {/* The full list behind the dashboard's capped "Expiring soon". */}
+                <Route path="/merchant/expiring" element={<ExpiringVouchersPage />} />
                 <Route path="/merchant/coupon/:voucherId" element={<IssuedCouponPage />} />
                 <Route
                   path="/merchant/dashboard"
