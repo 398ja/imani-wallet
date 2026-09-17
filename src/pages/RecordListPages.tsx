@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import type { VoucherRow } from '@imani/wallet-storage'
 
@@ -10,6 +10,8 @@ import {
   CouponListItem,
   TransactionListItem,
   IdentityInline,
+  Pagination,
+  usePagination,
 } from '../components/ui'
 import { listVouchers, transactionsWith, onWalletChanged } from '../lib/wallet'
 import { couponsFor, redeemedFor } from '../lib/merchants'
@@ -28,11 +30,14 @@ function ListFrame({
   title,
   subtitle,
   children,
+  footer,
 }: {
   pubkey: string
   title: string
   subtitle: string
   children: React.ReactNode
+  /** The pagination strip, outside the bordered list it controls. */
+  footer?: React.ReactNode
 }) {
   return (
     <Screen>
@@ -48,6 +53,7 @@ function ListFrame({
       <div className="divide-y divide-mono-200 overflow-hidden rounded-2xl border border-mono-200 dark:divide-mono-800 dark:border-mono-800">
         {children}
       </div>
+      {footer}
     </Screen>
   )
 }
@@ -67,6 +73,24 @@ export function CouponsPage() {
     return onWalletChanged(load)
   }, [pubkey])
 
+  /**
+   * Live coupons and spent ones are paged as ONE sequence, not two.
+   *
+   * They render as two groups under a heading, but a page is a page: paging
+   * them separately would put two sets of controls on one screen, and a reader
+   * on "page 2" would have to ask which list moved. Concatenating means the
+   * redeemed heading appears on whichever page the boundary falls in, exactly
+   * as it does when the whole list fits on one.
+   */
+  const { visible, page, pageCount, setPage } = usePagination([
+    ...coupons.map((row) => ({ row, redeemed: false })),
+    ...redeemed.map((row) => ({ row, redeemed: true })),
+  ])
+
+  // Where the spent ones start ON THIS PAGE, so the heading is drawn once and
+  // only when this page actually contains the first of them.
+  const firstRedeemed = visible.findIndex((item) => item.redeemed)
+
   return (
     <ListFrame
       pubkey={pubkey}
@@ -75,21 +99,21 @@ export function CouponsPage() {
       // sit below under their own heading rather than swelling this number: they
       // are receipts for value already burnt, not vouchers this wallet holds.
       subtitle={coupons.length === 1 ? '1 voucher' : `${coupons.length} vouchers`}
+      footer={<Pagination page={page} pageCount={pageCount} onPage={setPage} />}
     >
-      {coupons.length === 0 ? (
+      {visible.length === 0 ? (
         <EmptyRow>No vouchers.</EmptyRow>
       ) : (
-        coupons.map((row) => <CouponListItem key={row.token_id} row={row} />)
-      )}
-      {redeemed.length > 0 && (
-        <>
-          <p className="bg-mono-50 px-4 py-2 text-xs font-medium uppercase tracking-wide text-mono-500 dark:bg-mono-900">
-            Redeemed
-          </p>
-          {redeemed.map((row) => (
-            <CouponListItem key={row.token_id} row={row} />
-          ))}
-        </>
+        visible.map((item, index) => (
+          <Fragment key={item.row.token_id}>
+            {index === firstRedeemed && (
+              <p className="bg-mono-50 px-4 py-2 text-xs font-medium uppercase tracking-wide text-mono-500 dark:bg-mono-900">
+                Redeemed
+              </p>
+            )}
+            <CouponListItem row={item.row} />
+          </Fragment>
+        ))
       )}
     </ListFrame>
   )
@@ -107,16 +131,19 @@ export function TransactionsPage() {
     return onWalletChanged(load)
   }, [pubkey])
 
+  const { visible, page, pageCount, setPage } = usePagination(transactions)
+
   return (
     <ListFrame
       pubkey={pubkey}
       title="Transactions"
       subtitle={transactions.length === 1 ? '1 entry' : `${transactions.length} entries`}
+      footer={<Pagination page={page} pageCount={pageCount} onPage={setPage} />}
     >
       {transactions.length === 0 ? (
         <EmptyRow>Nothing yet.</EmptyRow>
       ) : (
-        transactions.map((tx) => <TransactionListItem key={tx.id} tx={tx} />)
+        visible.map((tx) => <TransactionListItem key={tx.id} tx={tx} />)
       )}
     </ListFrame>
   )

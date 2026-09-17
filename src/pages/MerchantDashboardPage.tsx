@@ -2,11 +2,18 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Clock } from 'lucide-react'
 
-import { Screen, BackLink, PageHeader, Panel, ListSection, DetailRow } from '../components/ui'
+import {
+  Screen,
+  BackLink,
+  PageHeader,
+  Panel,
+  ListSection,
+  SeeAll,
+  DetailRow,
+} from '../components/ui'
 import { SubscriptionNotice } from '../components/SubscriptionNotice'
-import { listTransactions, listVouchers, onWalletChanged } from '../lib/wallet'
+import { listTransactions, onWalletChanged } from '../lib/wallet'
 import { toTransaction, type WalletTransaction } from '../lib/transactions'
-import { toMerchants, walletTotals } from '../lib/merchants'
 import {
   expiringSoon,
   merchantStats,
@@ -43,6 +50,14 @@ const RANGES = [
 
 const DAY_MS = 86_400_000
 
+/**
+ * How many expiring vouchers the dashboard shows before linking out.
+ *
+ * Three, because this section is a nudge rather than a report — see the comment
+ * at the section itself. The full list lives at `/merchant/expiring`.
+ */
+const EXPIRING_PREVIEW = 3
+
 export function MerchantDashboardPage({
   pubkey,
   merchant,
@@ -52,20 +67,29 @@ export function MerchantDashboardPage({
 }) {
   const [days, setDays] = useState<number>(30)
   const [stats, setStats] = useState<MerchantStats | null>(null)
-  const [totals, setTotals] = useState<ReturnType<typeof walletTotals> | null>(null)
   const [owed, setOwed] = useState(0)
+  /**
+   * Every voucher expiring inside the window, not just the three on screen.
+   *
+   * The count is the reason: the section shows the three most urgent, and the
+   * link out has to say how many there are in total — and the "Expiring soon"
+   * row in the issued summary below counts the same set. Slicing at load time
+   * would leave both saying "3" forever.
+   */
   const [expiring, setExpiring] = useState<WalletTransaction[]>([])
 
   useEffect(() => {
     const load = async () => {
-      const [vouchers, transactions] = await Promise.all([listVouchers(), listTransactions()])
-      const rows = transactions.map(toTransaction)
+      // Only the transactions now. `listVouchers` used to be fetched alongside
+      // for the "Taken in" total, which has gone — see the balance panel.
+      const rows = (await listTransactions()).map(toTransaction)
       const now = Date.now()
-      setTotals(walletTotals(toMerchants(vouchers)))
       setOwed(outstandingLiability(rows, { pubkey, unit: merchant.issuanceCurrency, now }))
       // `Date.now()` here in the effect, not in the render body — an expiry that
       // silently flips between renders is the impurity lint catches elsewhere.
-      setExpiring(expiringSoon(rows, { now }).slice(0, 3))
+      // `expiringSoon` returns them soonest-first, which is the order that makes
+      // a capped list worth capping: the three shown are the three most urgent.
+      setExpiring(expiringSoon(rows, { now }))
       setStats(
         merchantStats(rows, {
           pubkey,
@@ -82,9 +106,6 @@ export function MerchantDashboardPage({
     return onWalletChanged(load)
   }, [pubkey, merchant.issuanceCurrency, days])
 
-  const [primary, ...rest] = totals ?? []
-  // The merchant's own currency stands in when there is nothing held yet:
-  // `formatFace(0, undefined)` has no unit to work with and renders a bare "0".
   const issuance = {
     unit: merchant.issuanceCurrency,
     decimals: currencyDecimals(merchant.issuanceCurrency),
@@ -112,26 +133,42 @@ export function MerchantDashboardPage({
           an absent element on every other day of the year. */}
       <SubscriptionNotice pubkey={pubkey} />
 
-      {/* The balance, off the till and onto the screen you choose to open. */}
+      {/* The balance, off the till and onto the screen you choose to open.
+
+          Only what is owed. "Taken in" used to sit under it — the customer
+          wallet's headline figure, carried over when the money moved here — but
+          on a merchant's dashboard it answers a question nobody was asking: it
+          totals the vouchers this wallet HOLDS, which for a stall is whatever
+          they happen to have been paid in vouchers, not their takings. The
+          takings are below, in "Value taken", computed over the chosen range and
+          in the merchant's own issuance currency. Two numbers both looking like
+          income, disagreeing, is worse than one. */}
       <Panel className="mb-6 p-5">
         <p className="text-sm text-mono-500">Outstanding vouchers</p>
         <p className="text-amount text-mono-900 dark:text-mono-50">{formatFace(owed, issuance)}</p>
-        {/* What is held, under what is owed — still worth a glance, and it is
-            the customer wallet's headline figure. */}
-        <p className="text-sm text-mono-500">
-          Taken in {formatFace(primary?.minor ?? 0, primary ?? issuance)}
-          {rest.map((total) => ` + ${formatFace(total.minor, total)}`).join('')}
-        </p>
       </Panel>
 
       {/*
         Rendered only when there is something to act on. An "Expiring soon (0)"
         box every day of the year trains a merchant to stop reading it, so the
         section is absent rather than empty — its presence IS the signal.
+
+        Capped at three. This is a prompt to act, not a report: a merchant
+        glancing at the dashboard needs the most urgent few, and a list that can
+        run to dozens pushes the rest of the screen off the phone. `expiringSoon`
+        sorts soonest-first, so the three shown are the three that matter. The
+        rest are one tap away, and the link says how many.
       */}
       {expiring.length > 0 && (
-        <ListSection title="Expiring soon">
-          {expiring.map((tx) => (
+        <ListSection
+          title="Expiring soon"
+          action={
+            expiring.length > EXPIRING_PREVIEW ? (
+              <SeeAll to="/merchant/expiring" count={expiring.length} />
+            ) : undefined
+          }
+        >
+          {expiring.slice(0, EXPIRING_PREVIEW).map((tx) => (
             <Link
               key={tx.id}
               to={`/merchant/coupon/${encodeURIComponent(tx.voucherId ?? '')}`}
@@ -192,6 +229,19 @@ export function MerchantDashboardPage({
 
           <ListSection title="Vouchers you have issued">
             <DetailRow label="Still valid" value={String(stats.active)} />
+            {/*
+              A subset of "Still valid", not a third category — these are valid
+              vouchers that stop being valid within the week. It sits directly
+              under the total it is carved out of, so the relationship is read
+              rather than explained.
+
+              Counted from `expiring`, which is the same set the section above
+              lists, so the row and the list can never disagree. Unlike that
+              section this row is ALWAYS shown: in a summary of counts a zero is
+              information ("nothing needs chasing"), whereas an empty panel is
+              just clutter.
+            */}
+            <DetailRow label="Expiring soon" value={String(expiring.length)} />
             <DetailRow label="Expired" value={String(stats.expired)} />
             {/*
               No "redeemed" or "revoked" row, which possa's snapshot has. Neither

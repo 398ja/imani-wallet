@@ -218,6 +218,15 @@ export function SendPage({ pubkey }: { pubkey: string }) {
 
   // A voucher going back to the merchant who issued it is a redemption. Said
   // here and nowhere else: the saga, the record and the history are identical.
+  //
+  // The word the CUSTOMER sees for it is "Pay", though, and that is not a
+  // quibble. "Redeem" is the merchant's word for what happens at their end —
+  // value coming back off their books — and the customer standing at the stall
+  // is doing the ordinary thing of paying for something. A button reading
+  // "Redeem" asks them to adopt the counterparty's accounting language for
+  // their own purchase, and it reads as a claim ("redeem a prize") rather than
+  // as handing money over. The underlying operation is unchanged: `asMerchant`
+  // still drives the saga, the record and the history.
   const asMerchant =
     recipient === null
       ? undefined
@@ -226,8 +235,8 @@ export function SendPage({ pubkey }: { pubkey: string }) {
     The recipient in prose — "Send to …", "… reached X."
 
     `asMerchant?.name` is the same floor `IdentityInline` gets as `fallbackName`,
-    and it matters for the same reason the merchant leg above did: redeeming at
-    a stall whose kind-0 has not landed yet would otherwise read "Redeem at
+    and it matters for the same reason the merchant leg above did: paying at
+    a stall whose kind-0 has not landed yet would otherwise read "Pay
     a1b2c3d4…ef56" while their name sits on the coupon being spent. `humanName`
     keeps the hex placeholder out, and the handle typed into the scanner is the
     last rung before a short key.
@@ -240,7 +249,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
           name: recipientIdentity?.name ?? humanName(asMerchant?.name),
           nip05: recipientIdentity?.nip05 ?? recipientHandle ?? undefined,
         })
-  const verb = asMerchant ? 'Redeem at' : 'Send to'
+  const verb = asMerchant ? 'Pay' : 'Send to'
 
   if (sent !== null && chosen) {
     // A bundle can land in pieces, and what landed cannot be taken back. So the
@@ -250,7 +259,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
     const partial = sent.delivered < sent.requested
     return (
       <Screen>
-        <PageHeader title={partial ? 'Partly sent' : asMerchant ? 'Redeemed' : 'Sent'} />
+        <PageHeader title={partial ? 'Partly sent' : asMerchant ? 'Paid' : 'Sent'} />
         <Panel>
           <div className="flex flex-col items-center py-4 text-center">
             <div
@@ -268,7 +277,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
             <p className="mt-1 text-sm text-mono-500">
               {partial
                 ? `of ${formatFace(sent.requested, chosen)} reached ${recipientLabel}.`
-                : `${asMerchant ? 'Redeemed at' : 'Sent to'} ${recipientLabel}.${
+                : `${asMerchant ? 'Paid' : 'Sent to'} ${recipientLabel}.${
                     asMerchant ? '' : ' It is in their wallet now.'
                   }`}
             </p>
@@ -353,12 +362,12 @@ export function SendPage({ pubkey }: { pubkey: string }) {
     return (
       <Screen>
         <BackLink to="/" label="Cancel" />
-        <PageHeader title={asMerchant ? 'Confirm redemption' : 'Confirm send'} />
+        <PageHeader title={asMerchant ? 'Confirm payment' : 'Confirm send'} />
 
         <div className="mb-6">
           <IdentityInline
             pubkey={recipient}
-            label={asMerchant ? 'Redeem at' : 'To'}
+            label={asMerchant ? 'Pay' : 'To'}
             size="md"
             fallbackName={asMerchant?.name}
             fallbackHandle={recipientHandle ?? undefined}
@@ -421,7 +430,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
               }
             }}
           >
-            {status.step === 'sending' ? 'Sending…' : asMerchant ? 'Redeem' : 'Send'}
+            {status.step === 'sending' ? 'Sending…' : asMerchant ? 'Pay' : 'Send'}
           </Button>
           <Button
             variant="ghost"
