@@ -74,16 +74,27 @@ function ListFrame({
   subtitle,
   children,
   footer,
+  back = { to: '/', label: 'Till' },
 }: {
   title: string
   subtitle: string
   children: React.ReactNode
   /** The pagination strip, outside the bordered list it controls. */
   footer?: React.ReactNode
+  /**
+   * Where "back" goes, which is not the same for every list here.
+   *
+   * The back link names the screen you came FROM, so it has to follow the way
+   * in: the transaction and issued-voucher lists are opened from the till, and
+   * the expiring list only exists as the dashboard's "See all". Sending that
+   * one to the till would strand a merchant who was reading their dashboard —
+   * the wayfinding rule this app's BackLink already follows everywhere else.
+   */
+  back?: { to: string; label: string }
 }) {
   return (
     <Screen>
-      <BackLink to="/" label="Till" />
+      <BackLink to={back.to} label={back.label} />
       <PageHeader title={title} subtitle={subtitle} />
       <div className="divide-y divide-mono-200 overflow-hidden rounded-2xl border border-mono-200 dark:divide-mono-800 dark:border-mono-800">
         {children}
@@ -174,6 +185,8 @@ export function ExpiringVouchersPage() {
           ? 'Loading…'
           : `${expiring.length} ${expiring.length === 1 ? 'voucher' : 'vouchers'} within 7 days`
       }
+      // Reached only from the dashboard's "See all".
+      back={{ to: '/merchant/dashboard', label: 'Dashboard' }}
       footer={<Pagination page={page} pageCount={pageCount} onPage={setPage} />}
     >
       {expiring === null ? (

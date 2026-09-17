@@ -62,10 +62,26 @@ function stubValidate(
   answer:
     | { expired: true }
     | { unreachable: true }
-    | { slidTo: number },
+    | { slidTo: number }
+    // The real server near the absolute cap: alive until the instant, refusing
+    // after it, and clamping `expires_at` to the SAME value on every call in
+    // between.
+    | { cappedAt: number },
 ) {
   const fetchMock = vi.fn(async () => {
     if ('unreachable' in answer) throw new TypeError('Failed to fetch')
+    if ('cappedAt' in answer) {
+      const now = Math.floor(Date.now() / 1000)
+      if (now >= answer.cappedAt) {
+        return new Response(JSON.stringify({ error: 'session_ended', reason: 'expired' }), {
+          status: 401,
+        })
+      }
+      return new Response(
+        JSON.stringify({ status: 'ok', expires_at: Math.min(now + 900, answer.cappedAt) }),
+        { status: 200 },
+      )
+    }
     if ('expired' in answer) {
       return new Response(JSON.stringify({ error: 'session_ended', reason: 'expired' }), {
         status: 401,
@@ -77,6 +93,19 @@ function stubValidate(
   })
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
+}
+
+/**
+ * A person touching the screen.
+ *
+ * This is not decoration. `/auth/validate` slides the server's idle window by
+ * being asked, so the hook only asks when a HUMAN has done something since the
+ * last check — otherwise the wallet would renew the session of a phone lying on
+ * a table and the idle timeout would never fire. Every test below that expects
+ * the session to survive therefore has to show a user who is actually there.
+ */
+function act_user() {
+  window.dispatchEvent(new Event('pointerdown'))
 }
 
 /**
@@ -279,7 +308,9 @@ describe('useSessionReauth', () => {
       const fetchMock = stubValidate({ slidTo })
       render(<Probe session={fakeSession(NOW_S + 900)} isAuthenticated />)
 
+      // They have been using the wallet the whole time.
       act(() => {
+        act_user()
         vi.advanceTimersByTime(900_000)
       })
       await settle()
@@ -299,6 +330,9 @@ describe('useSessionReauth', () => {
       // behaviour this is four passphrase dialogs in an hour.
       for (let i = 0; i < 4; i += 1) {
         act(() => {
+          // Still at the counter, still tapping — before the clock runs out,
+          // which is the order it happens in life.
+          act_user()
           vi.advanceTimersByTime(900_000)
         })
         await settle()
@@ -327,6 +361,7 @@ describe('useSessionReauth', () => {
       render(<Probe session={fakeSession(NOW_S + 900)} isAuthenticated />)
 
       act(() => {
+        act_user()
         vi.advanceTimersByTime(900_000)
       })
       await settle()
@@ -339,19 +374,140 @@ describe('useSessionReauth', () => {
       render(<Probe session={fakeSession(NOW_S + 900)} isAuthenticated />)
 
       act(() => {
+        act_user()
         vi.advanceTimersByTime(900_000)
       })
       await settle()
       const afterFirst = fetchMock.mock.calls.length
 
       // Postponed, not abandoned: a session that really did end must still be
-      // noticed once the network comes back.
+      // noticed once the network comes back — and the user is still here.
       act(() => {
+        act_user()
         vi.advanceTimersByTime(120_000)
       })
       await settle()
 
       expect(fetchMock.mock.calls.length).toBeGreaterThan(afterFirst)
+    })
+  })
+
+  /**
+   * The other half of the same problem, found reviewing the fix above.
+   *
+   * `/auth/validate` SLIDES the idle window as a side effect of being asked. A
+   * client that asks whenever its local clock runs out therefore renews its own
+   * session on a timer: the wallet keeps itself signed in on behalf of a phone
+   * lying face-down on a table, and the 15-minute idle timeout is enforced only
+   * by the server's 12-hour absolute cap.
+   *
+   * That is not a smaller bug than the interruption it replaced — it is an
+   * unlocked wallet on a café table. So the prompt is confirmed with the server
+   * only when a PERSON has done something since the last check.
+   */
+  describe('a wallet nobody is touching', () => {
+    it('locks on time, and does not renew itself in the background', async () => {
+      // A server that would happily slide the window every time it is asked,
+      // which is exactly what the real one does.
+      const fetchMock = stubValidate({ slidTo: NOW_S + 3600 })
+      render(<Probe session={fakeSession(NOW_S + 900)} isAuthenticated />)
+
+      // The deadline passes with no pointer, no key, no scroll.
+      act(() => {
+        vi.advanceTimersByTime(900_000)
+      })
+      await settle()
+
+      expect(state()).toBe('prompting')
+      // The important half: the wallet never asked, so it never slid the
+      // window. Asking would have kept an untouched session alive.
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('stays locked over a long absence rather than renewing all night', async () => {
+      const fetchMock = stubValidate({ slidTo: NOW_S + 3600 })
+      render(<Probe session={fakeSession(NOW_S + 900)} isAuthenticated />)
+
+      // Eight hours, well inside the server's 12-hour absolute cap — the
+      // window in which a self-renewing client would have kept the wallet open.
+      for (let i = 0; i < 32; i += 1) {
+        act(() => {
+          vi.advanceTimersByTime(900_000)
+        })
+        await settle()
+      }
+
+      expect(state()).toBe('prompting')
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('does not count a poller as a person', async () => {
+      // Only real input marks presence. If a background fetch or a timer could
+      // do it, the renewal loop returns by the back door.
+      const fetchMock = stubValidate({ slidTo: NOW_S + 3600 })
+      render(<Probe session={fakeSession(NOW_S + 900)} isAuthenticated />)
+
+      act(() => {
+        // Not user input: a synthetic event of the kind app code raises.
+        window.dispatchEvent(new Event('imani:poll'))
+        vi.advanceTimersByTime(900_000)
+      })
+      await settle()
+
+      expect(state()).toBe('prompting')
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('still prompts at the absolute cap, however busy the user has been', async () => {
+      /*
+        Found in review. The idle window slides, but the session also has a
+        12-hour absolute cap, and approaching it the server clamps `expires_at`
+        to the same fixed instant on every call.
+
+        `watchSessionExpiry` fires `onExpired` on the TRANSITION only. So a
+        confirmed deadline that has stopped moving — and is already in the
+        past — latched the watcher: it never asked again, and the wallet stayed
+        quiet against a session the server was about to refuse. The user's next
+        tap would have failed with no warning, which is the dead end this whole
+        hook exists to remove.
+      */
+      stubValidate({ cappedAt: NOW_S + 43_200 })
+      render(<Probe session={fakeSession(NOW_S + 900)} isAuthenticated />)
+
+      // Thirteen hours of constant use, past the cap.
+      for (let i = 0; i < 52; i += 1) {
+        act(() => {
+          act_user()
+          vi.advanceTimersByTime(900_000)
+        })
+        await settle()
+      }
+
+      expect(state()).toBe('prompting')
+    })
+
+    it('treats activity as spent once used, so one tap cannot renew forever', async () => {
+      const fetchMock = stubValidate({ slidTo: NOW_S + 3600 })
+      render(<Probe session={fakeSession(NOW_S + 900)} isAuthenticated />)
+
+      // One tap, then the user walks away.
+      act(() => {
+        act_user()
+        vi.advanceTimersByTime(900_000)
+      })
+      await settle()
+      expect(state()).toBe('quiet')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+
+      // The next deadline arrives with nothing new behind it. A flag that
+      // stayed true would renew on this tick and every one after it.
+      act(() => {
+        vi.advanceTimersByTime(3_600_000)
+      })
+      await settle()
+
+      expect(state()).toBe('prompting')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
     })
   })
 })
