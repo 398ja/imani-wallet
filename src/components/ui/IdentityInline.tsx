@@ -23,6 +23,7 @@ export function IdentityInline({
   label,
   size = 'sm',
   fallbackName,
+  fallbackHandle,
   linkToProfile = true,
 }: {
   pubkey: string
@@ -43,9 +44,19 @@ export function IdentityInline({
    * person published none. Pay knows the issuer from the coupon it is spending.
    */
   fallbackName?: string
+  /**
+   * A NIP-05 known without a fetch — the handle the person was reached
+   * THROUGH. Send passes the address that was typed or scanned, which is the
+   * only name the row will ever have for someone who published no kind-0.
+   */
+  fallbackHandle?: string
 }) {
   const fetched = useIdentity(pubkey)
-  const identity = { ...fetched, name: fetched?.name ?? fallbackName }
+  const identity = {
+    ...fetched,
+    name: fetched?.name ?? fallbackName,
+    nip05: fetched?.nip05 ?? fallbackHandle,
+  }
   const name = identityLabel(pubkey, identity)
   const handle = identitySubLabel(identity)
 

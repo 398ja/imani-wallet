@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ClipboardPaste } from 'lucide-react'
 
 import { Button, Alert, Input } from './ui'
-import { toRecipientPubkey } from '../lib/issue'
+import { resolveRecipient } from '../lib/issue'
 import { readClipboard } from '../lib/native'
 import { scannerBlocked } from '../lib/scannerSupport'
 
@@ -23,7 +23,14 @@ export function ScanRecipient({
   selfPubkey,
   manualLabel = 'Or enter their handle',
 }: {
-  onFound: (pubkey: string) => void
+  /**
+   * The second argument is the NIP-05 the person was reached THROUGH, when they
+   * were reached through one. Optional on purpose: three of the four callers
+   * only need a key, and a handle is the difference between "Send to @cocoa"
+   * and "Send to a1b2c3d4…ef56" on the screens that name them before their
+   * kind-0 arrives.
+   */
+  onFound: (pubkey: string, handle?: string) => void
   selfPubkey?: string
   manualLabel?: string
 }) {
@@ -54,17 +61,17 @@ export function ScanRecipient({
       if (resolving) return
       resolving = true
       try {
-        const hex = await toRecipientPubkey(text)
+        const found = await resolveRecipient(text)
         if (cancelled) return
-        if (!hex) {
+        if (!found) {
           setError('That code is not an account we can find.')
           return
         }
-        if (isSelf(hex)) {
+        if (isSelf(found.pubkey)) {
           setError('That is your own address.')
           return
         }
-        onFound(hex)
+        onFound(found.pubkey, found.handle)
       } finally {
         resolving = false
       }
@@ -111,17 +118,17 @@ export function ScanRecipient({
   const submitManual = async () => {
     setError(null)
     setLooking(true)
-    const hex = await toRecipientPubkey(manual)
+    const found = await resolveRecipient(manual)
     setLooking(false)
-    if (!hex) {
+    if (!found) {
       setError('That is not an account we can find.')
       return
     }
-    if (isSelf(hex)) {
+    if (isSelf(found.pubkey)) {
       setError('That is your own address.')
       return
     }
-    onFound(hex)
+    onFound(found.pubkey, found.handle)
   }
 
   return (

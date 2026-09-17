@@ -99,14 +99,34 @@ export function toPubkeyHex(input: string): string | null {
  * Returns null rather than throwing, for the camera loop.
  */
 export async function toRecipientPubkey(input: string): Promise<string | null> {
+  return (await resolveRecipient(input))?.pubkey ?? null
+}
+
+/**
+ * The same resolution, keeping the handle it went through.
+ *
+ * `toRecipientPubkey` throws away the one thing that names a stranger. Someone
+ * reached by typing `cocoa@staging.398ja.xyz` has, by definition, a handle
+ * worth showing — and until their kind-0 arrives (or forever, if they never
+ * published one) the send flow had nothing to print but a hex key. The
+ * resolution is identical; only the return shape differs, so the two cannot
+ * disagree about who a string points at.
+ *
+ * `handle` is undefined for an npub or hex input: those name nobody, and
+ * inventing a handle for them would be a lie about how they were reached.
+ */
+export async function resolveRecipient(
+  input: string,
+): Promise<{ pubkey: string; handle?: string } | null> {
   const direct = toPubkeyHex(input)
-  if (direct) return direct
+  if (direct) return { pubkey: direct }
 
   const raw = input.trim().replace(/^nostr:/i, '').replace(/^@/, '')
   const address = raw.includes('@') ? raw : await completeHandle(raw)
   if (!address || !/^[^\s@]+@[^\s@]+$/.test(address)) return null
 
-  return resolveNip05(address)
+  const pubkey = await resolveNip05(address)
+  return pubkey === null ? null : { pubkey, handle: address }
 }
 
 /**
