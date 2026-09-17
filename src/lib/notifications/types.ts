@@ -51,17 +51,26 @@
  * worse than not offering them.
  *
  * Be precise about "can send", because the three are not equal today. Checked
- * against gateway-core on 2026-09-11, counting only non-test callers:
+ * against gateway-core on 2026-09-17, counting only non-test callers:
  *
- *   voucher_claimed    EMITTED  — PaymentReceiptController:174
- *   voucher_received   wired, no production caller yet
+ *   voucher_claimed    EMITTED  — PaymentReceiptController.fireSettlementPush
+ *   voucher_received   EMITTED  — AtomicSendService.processDmDelivery
  *   voucher_expiring   wired, no production caller yet
  *
  * All three have an implemented, public `notifyVoucher*` method, so the
- * preference flags reach real code and the switches are not decorative. But
- * only a claim actually fires a push right now, and a reader who takes the
- * three as equally live will go looking for a bug that is not there when
- * testing the other two.
+ * preference flags reach real code and the switches are not decorative.
+ *
+ * `voucher_received` was in the "no caller" column until 2026-09-17, and the
+ * consequence is worth recording: the RECIPIENT's phone never rang. The method
+ * was fully built — preference flag, repository query filtering on it, rendered
+ * payload — and nothing called it, while the sender's `voucher_claimed` fired
+ * reliably from the receipts controller. The in-app advance-notice toast hid
+ * it, because that surface only exists while the app is OPEN, so anyone testing
+ * with the wallet in front of them saw a notification and concluded push
+ * worked. A phone in a pocket got nothing.
+ *
+ * `voucher_expiring` is the one still dark: expiry is a clock event with no
+ * request to hang a call on, so it needs a scheduler that does not exist yet.
  *
  * This is deliberately NOT surfaced in the settings screen. A wallet that
  * labelled two of its three switches "not yet" would be describing the
