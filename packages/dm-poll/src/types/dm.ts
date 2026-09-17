@@ -90,6 +90,21 @@ export interface TokenMetadata {
   /** Issuer's public key or ID */
   issuerId?: string;
 
+  /**
+   * Who actually PAID, hex — as distinct from `issuerId`, which is who MINTED.
+   *
+   * The gateway signs every gift wrap with its own key, so the envelope's
+   * signer is never the payer. Two different fields on the DM payload carry the
+   * two different answers, and conflating them sends the settlement receipt to
+   * the wrong party: on a merchant-issued coupon spent wallet-to-wallet,
+   * `issuerId` is the STALL that minted it and `senderPubkey` is the customer
+   * who handed it over. Only the latter is waiting to hear it was claimed.
+   *
+   * Set by `Nip17DmSendPublisher` (gateway-core) from the send row's own
+   * `sender_pubkey`, and forwarded verbatim by `WalletInternalController`.
+   */
+  senderPubkey?: string;
+
   /** Voucher ID if applicable */
   voucherId?: string;
 

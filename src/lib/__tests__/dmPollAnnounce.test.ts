@@ -65,6 +65,19 @@ vi.mock('../wallet', () => ({
   notifyWalletChanged: () => notifyWalletChanged(),
 }))
 
+/**
+ * The settlement receipt, captured at the boundary.
+ *
+ * Mocked rather than left to fail against an absent signer: it swallows its own
+ * errors by design, so the real thing "passes" every test while telling the
+ * wrong party. WHO it is addressed to is exactly the bug being pinned here, and
+ * that is only observable by looking at the call.
+ */
+const receipts: Array<Record<string, unknown>> = []
+vi.mock('../paymentReceipt', () => ({
+  postPaymentReceipt: async (p: Record<string, unknown>) => void receipts.push(p),
+}))
+
 vi.mock('../redemptionLedger', () => ({
   checkRedemption: async () => ({ allowed: true, alreadyRedeemed: 0, signedFaceValue: 0 }),
 }))
@@ -108,6 +121,7 @@ beforeEach(() => {
   stopDmPoll()
   announced.length = 0
   attested.length = 0
+  receipts.length = 0
   attestThrows = false
   // Reset, or the customer test leaks into every test after it.
   hasStall = true
@@ -275,5 +289,70 @@ describe('the attestation a redemption publishes', () => {
         metadata: { faceValue: 4, faceUnit: 'XAF', validation: VERIFIED },
       }),
     ).resolves.toBeDefined()
+  })
+})
+
+/**
+ * Who is told that a coupon was claimed.
+ *
+ * As reported: "the merchant gets the settlement notification, which is not
+ * desirable." A paid B with a coupon A had bought from a merchant, and B's
+ * redemption posted the receipt to `meta.issuerId` — the STALL that minted the
+ * coupon, not the person who handed it over. A learned nothing.
+ *
+ * The merchant's legitimate interest in a redemption is `attestRedemption`,
+ * which is a different mechanism with a different meaning ("I honoured this")
+ * and is tested above. This is about the payer.
+ */
+describe('who the settlement receipt is addressed to', () => {
+  const PAYER = '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'
+  const STALL = 'c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5'
+  const GATEWAY = '5cbdf0646e5db4eaa398f365f2ea7a0e3d419b7e0330e39ce92bddedcac4f9bc'
+
+  it('tells the PAYER, not the stall that minted the coupon', async () => {
+    redeem.mockResolvedValue(VOUCHER)
+    startDmPoll('f'.repeat(64))
+
+    await captured.redemptionAdapter!.redeem('cashuA-spent', {
+      // The shape of a merchant-issued coupon spent wallet-to-wallet: the
+      // payload names the payer, the voucher names the issuer, and the gift
+      // wrap is signed by the gateway. All three are different keys.
+      senderPubkey: GATEWAY,
+      deliveryEventId: 'evt-1',
+      metadata: { senderPubkey: PAYER, issuerId: STALL, faceValue: 4, faceUnit: 'XAF' },
+    })
+
+    expect(receipts).toHaveLength(1)
+    expect(receipts[0]!.senderPubkeyHex).toBe(PAYER)
+    expect(receipts[0]!.senderPubkeyHex).not.toBe(STALL)
+  })
+
+  it('falls back to the envelope signer for a bare wallet-to-wallet wrap', async () => {
+    // No payload `sender_pubkey` — a direct NIP-17 wrap, where the signer
+    // genuinely is the payer.
+    redeem.mockResolvedValue(VOUCHER)
+    startDmPoll('f'.repeat(64))
+
+    await captured.redemptionAdapter!.redeem('cashuA-direct', {
+      senderPubkey: PAYER,
+      deliveryEventId: 'evt-2',
+      metadata: { faceValue: 4, faceUnit: 'XAF' },
+    })
+
+    expect(receipts[0]!.senderPubkeyHex).toBe(PAYER)
+  })
+
+  it('still reaches the stall when the stall IS the sender', async () => {
+    // A merchant issuing straight to a customer: issuer and payer are one
+    // party, and the last-resort fallback is correct precisely here.
+    redeem.mockResolvedValue(VOUCHER)
+    startDmPoll('f'.repeat(64))
+
+    await captured.redemptionAdapter!.redeem('cashuA-issued', {
+      deliveryEventId: 'evt-3',
+      metadata: { issuerId: STALL, faceValue: 4, faceUnit: 'XAF' },
+    })
+
+    expect(receipts[0]!.senderPubkeyHex).toBe(STALL)
   })
 })

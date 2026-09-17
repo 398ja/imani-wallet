@@ -497,7 +497,11 @@ function redemptionAdapter(): RedemptionAdapter {
       // After notifyWalletChanged, so the balance behind the toast is already
       // the new one when the user looks. Never throws (see announceArrival), so
       // it cannot turn a completed redemption into a reported failure.
-      announceArrival(toArrivedVoucher(voucher))
+      //
+      // `currentPubkey` is OUR key — the wallet this landed in. It scopes the
+      // inbox row the toast now also files, and the preference check that gates
+      // both; without it the toast still shows but nothing reaches the bell.
+      announceArrival(toArrivedVoucher(voucher), currentPubkey)
 
       // And tell the SENDER it landed. They have no other way to know: the
       // money left their balance when they sent the gift wrap, and whether it
@@ -511,17 +515,31 @@ function redemptionAdapter(): RedemptionAdapter {
       // gateway that refuses the receipt must not turn a completed redemption
       // into a reported failure.
       void postPaymentReceipt({
-        // The ISSUER, not the envelope's signer. The gateway signs the gift
-        // wrap on a merchant's behalf, so `senderPubkey` is the GATEWAY —
-        // telling it a coupon was claimed tells the wrong party. Attribution
-        // rides on issuer_id inside the payload (see issue.ts), and `issuerId`
-        // here is the SIGNED value when a voucher verified: dmCrypto prefers
-        // the voucher's own fields over the envelope's for exactly this
-        // reason.
+        // The PAYER, in three descending degrees of confidence — and NOT the
+        // issuer, which is the bug this ordering replaces.
         //
-        // Falls back to the envelope signer for a wallet-to-wallet send, where
-        // the two are the same party and there is no issuer.
-        senderPubkeyHex: String(meta?.issuerId ?? opts?.senderPubkey ?? ''),
+        // `issuerId` used to come first, on the reasoning that the gateway
+        // signs the gift wrap so the envelope's signer is never the payer.
+        // The premise is right and the conclusion was wrong: `issuerId` is who
+        // MINTED the coupon, which on a merchant-issued coupon is the stall.
+        // So when A paid B with a coupon A had bought from a merchant, B's
+        // redemption told the MERCHANT their coupon was claimed and told A
+        // nothing — the reported defect exactly. The merchant learns about a
+        // redemption through `attestRedemption` below, which is the mechanism
+        // that actually means "I honoured this".
+        //
+        //   1. `meta.senderPubkey` — the payload's own `sender_pubkey`, which
+        //      gateway-core sets from the send row (Nip17DmSendPublisher). This
+        //      is the authoritative answer whenever the gateway relayed.
+        //   2. `opts.senderPubkey` — the envelope's signer, correct for a bare
+        //      wallet-to-wallet NIP-17 wrap with no payload field.
+        //   3. `issuerId` — last resort only. For a merchant delivering a
+        //      coupon straight to a customer the stall IS the sender, so this
+        //      still reaches the right party in the one case it is right, and
+        //      is now unreachable in the case where it was wrong.
+        senderPubkeyHex: String(
+          meta?.senderPubkey ?? opts?.senderPubkey ?? meta?.issuerId ?? '',
+        ),
         deliveryEventId: String(opts?.deliveryEventId ?? ''),
         voucherId: meta?.voucherId as string | undefined,
         // Amounts ONLY from a verified voucher.
