@@ -16,7 +16,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const PUBKEY = 'a'.repeat(64)
 
-const loadPreferences = vi.fn((_pubkey: string) => ({
+// No parameter: the tests assert the account scoping with
+// `toHaveBeenCalledWith` rather than by reading it here, and this repo's lint
+// config exempts no name from the unused-argument rule.
+const loadPreferences = vi.fn(() => ({
   enabled: false,
   couponReceived: true,
   couponClaimed: true,

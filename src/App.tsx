@@ -11,6 +11,7 @@ import { startDmPoll } from './lib/dmPoll'
 import { startIncomingNotifications } from './lib/incomingNotifications'
 import { startPaymentReceipts, stopPaymentReceipts } from './lib/paymentReceiptDrain'
 import { startPushListener, stopPushListener } from './lib/notifications/listener'
+import { resyncPushSubscription } from './lib/notifications/manager'
 import { reconcilePendingSends } from './lib/pay'
 import { reconcileRequests } from './lib/vreq'
 import { sweepBurnable } from './lib/burn'
@@ -125,6 +126,20 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         // on an empty inbox. Deduped on id against the drain loop above, so an
         // event delivered by both is still one line.
         startPushListener(pubkey)
+
+        // Repair a push registration that has quietly gone stale.
+        //
+        // Browsers rotate and expire push endpoints, and the
+        // `pushsubscriptionchange` event meant to announce that is unreliable.
+        // When it happens the wallet still says notifications are on, the
+        // browser still holds a subscription, and the gateway is pushing at a
+        // dead endpoint — so the phone goes silent with nothing on screen
+        // admitting it. Re-POSTing the current subscription upserts on the
+        // endpoint hash, so this is a no-op when nothing moved.
+        //
+        // Never prompts and never subscribes: it only repairs what the user
+        // already switched on. Never throws.
+        void resyncPushSubscription(pubkey)
 
         // And the SENDER's side of a settlement: receipts saying a coupon we
         // sent has been claimed. Distinct from the two loops above, which are

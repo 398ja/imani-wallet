@@ -190,6 +190,52 @@ export async function enableNotifications(pubkey: string): Promise<EnableResult>
 }
 
 /**
+ * Re-register an existing subscription with the gateway on startup.
+ *
+ * A Web Push subscription is not permanent. Browsers rotate the endpoint,
+ * expire it, or drop it when storage is cleared, and the `pushsubscriptionchange`
+ * event that is supposed to announce that is unreliable and unimplemented in
+ * several engines. The failure is silent in the worst way: the settings screen
+ * still reads "on" because the local preference says so, the browser still has
+ * a subscription, and the gateway is holding an endpoint that now 404s or
+ * 410s. Nothing tells the user their phone has stopped ringing.
+ *
+ * So on every startup, if the user has notifications on and the browser has a
+ * live subscription, re-POST it. `POST /subscriptions/{pubkey}` upserts on the
+ * endpoint hash, so re-registering an unchanged endpoint touches a row and
+ * changes nothing, and a rotated one replaces the stale entry. Cheap, and it
+ * is the only thing standing between a rotated endpoint and indefinite silence.
+ *
+ * Deliberately does NOT prompt, subscribe, or enable anything. It only repairs
+ * a registration the user already asked for: `enabled: false` returns straight
+ * away, and so does a browser with no current subscription, because creating
+ * one would need a permission prompt nobody requested.
+ *
+ * Never throws. Called from App startup beside the drain loops, where an
+ * unhandled rejection would surface as a broken session.
+ */
+export async function resyncPushSubscription(pubkey: string): Promise<boolean> {
+  try {
+    if (!loadPreferences(pubkey).enabled) return false
+
+    const current = await pickTransport().current()
+    // No live subscription. Either the user never enabled push on this device
+    // or the browser dropped it outright; both need a deliberate tap, not a
+    // silent prompt from a startup path.
+    if (!current) return false
+
+    const registered = await registerSubscription(pubkey, current)
+    if (!registered) {
+      console.warn('[push] could not resync this device with the gateway')
+    }
+    return registered
+  } catch (e) {
+    console.warn('[push] subscription resync failed:', e)
+    return false
+  }
+}
+
+/**
  * Turn notifications off.
  *
  * Deregisters at the gateway BEFORE unsubscribing locally: once the local
