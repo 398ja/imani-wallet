@@ -102,6 +102,21 @@ describe('usePagination', () => {
     expect(screen.getByTestId('count').textContent).toBe('0')
     expect(screen.queryByRole('button', { name: /Next/ })).toBeNull()
   })
+
+  it('reflects a row that changed in place, not just one that was added', () => {
+    // These lists are live. An earlier draft memoised the slice on
+    // `length:offset` to avoid re-slicing a new array each render, which served
+    // the STALE row whenever content changed without the count changing — a
+    // payment gaining its validation badge, a memo being edited.
+    const { rerender } = render(<Probe items={['row1', 'row2']} />)
+    expect(shown()).toEqual(['row1', 'row2'])
+
+    act(() => {
+      rerender(<Probe items={['row1', 'row2 edited']} />)
+    })
+
+    expect(shown()).toEqual(['row1', 'row2 edited'])
+  })
 })
 
 describe('Pagination', () => {
