@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, Check, ChevronRight } from 'lucide-react'
 import type { Voucher } from '@imani/voucher-send'
@@ -19,7 +19,13 @@ import { listVouchers } from '../lib/wallet'
 import { merchantStatus, type MerchantStatus } from '../lib/merchant'
 import { toMerchants, type Merchant } from '../lib/merchants'
 import { formatFace, parseAmountToMinor } from '../lib/format'
-import { identityLabel, useIdentity } from '../lib/identity'
+import {
+  humanName,
+  identityLabel,
+  useIdentity,
+  useMerchantHandle,
+  useMerchantLabel,
+} from '../lib/identity'
 import { sendVouchers, splitObstacle, type SendResult } from '../lib/pay'
 
 /**
@@ -90,6 +96,15 @@ export function SendPage({ pubkey }: { pubkey: string }) {
 
   const [merchants, setMerchants] = useState<Merchant[] | null>(null)
   const [recipient, setRecipient] = useState<string | null>(params.get('to'))
+  /**
+   * The NIP-05 they were reached through, when they were reached through one.
+   *
+   * Kept because it names someone the moment they are chosen, with no lookup:
+   * a customer who typed `cocoa@staging.398ja.xyz` should not then read as a
+   * hex key while kind-0 is in flight, and for a recipient who published no
+   * profile at all this is the ONLY name the flow will ever have.
+   */
+  const [recipientHandle, setRecipientHandle] = useState<string | null>(null)
   /** `${merchantPubkey}|${UNIT}`, the picker's answer. Null until it is given. */
   const [picked, setPicked] = useState<string | null>(null)
   const [amount, setAmount] = useState('')
@@ -207,7 +222,24 @@ export function SendPage({ pubkey }: { pubkey: string }) {
     recipient === null
       ? undefined
       : merchants.find((m) => m.pubkey.toLowerCase() === recipient.toLowerCase())
-  const recipientLabel = recipient === null ? '' : identityLabel(recipient, recipientIdentity)
+  /*
+    The recipient in prose — "Send to …", "… reached X."
+
+    `asMerchant?.name` is the same floor `IdentityInline` gets as `fallbackName`,
+    and it matters for the same reason the merchant leg above did: redeeming at
+    a stall whose kind-0 has not landed yet would otherwise read "Redeem at
+    a1b2c3d4…ef56" while their name sits on the coupon being spent. `humanName`
+    keeps the hex placeholder out, and the handle typed into the scanner is the
+    last rung before a short key.
+  */
+  const recipientLabel =
+    recipient === null
+      ? ''
+      : identityLabel(recipient, {
+          ...recipientIdentity,
+          name: recipientIdentity?.name ?? humanName(asMerchant?.name),
+          nip05: recipientIdentity?.nip05 ?? recipientHandle ?? undefined,
+        })
   const verb = asMerchant ? 'Redeem at' : 'Send to'
 
   if (sent !== null && chosen) {
@@ -264,7 +296,13 @@ export function SendPage({ pubkey }: { pubkey: string }) {
       <Screen>
         <BackLink to="/" label="Cancel" />
         <PageHeader title="Send" subtitle="Scan their code, or enter their handle" />
-        <ScanRecipient onFound={setRecipient} selfPubkey={pubkey} />
+        <ScanRecipient
+          onFound={(hex, handle) => {
+            setRecipient(hex)
+            setRecipientHandle(handle ?? null)
+          }}
+          selfPubkey={pubkey}
+        />
       </Screen>
     )
   }
@@ -286,10 +324,8 @@ export function SendPage({ pubkey }: { pubkey: string }) {
               onClick={() => setPicked(key(option))}
               className="flex w-full items-center justify-between rounded-2xl bg-white p-4 text-left dark:bg-mono-900"
             >
-              <div>
-                <p className="font-medium text-mono-900 dark:text-mono-50">
-                  {merchantLabel(option.merchant)}
-                </p>
+              <div className="min-w-0">
+                <MerchantName merchant={option.merchant} />
                 <p className="text-sm text-mono-500">
                   {formatFace(option.totalFaceValue, option)} ·{' '}
                   {option.vouchers.length === 1 ? '1 voucher' : `${option.vouchers.length} vouchers`}
@@ -325,6 +361,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
             label={asMerchant ? 'Redeem at' : 'To'}
             size="md"
             fallbackName={asMerchant?.name}
+            fallbackHandle={recipientHandle ?? undefined}
           />
         </div>
 
@@ -334,7 +371,10 @@ export function SendPage({ pubkey }: { pubkey: string }) {
           </p>
           {memo.trim() && <p className="mt-2 text-sm text-mono-500">{memo.trim()}</p>}
           <dl className="mt-4 space-y-1 text-sm">
-            <Row label="From your vouchers with" value={merchantLabel(chosen.merchant)} />
+            <Row
+              label="From your vouchers with"
+              value={<MerchantText merchant={chosen.merchant} />}
+            />
             <Row label="Your balance" value={formatFace(chosen.totalFaceValue, chosen)} />
           </dl>
         </Panel>
@@ -420,12 +460,16 @@ export function SendPage({ pubkey }: { pubkey: string }) {
             label={asMerchant ? 'Merchant' : 'To'}
             size="md"
             fallbackName={asMerchant?.name}
+            fallbackHandle={recipientHandle ?? undefined}
           />
           {/* Only offered when there is another way back to this step: arriving
               with `?to=` means the recipient was scanned, and re-scanning is a
               step, not a correction. */}
           {!params.get('to') && (
-            <Button variant="ghost" size="sm" onClick={() => setRecipient(null)}>
+            <Button variant="ghost" size="sm" onClick={() => {
+                setRecipient(null)
+                setRecipientHandle(null)
+              }}>
               Change
             </Button>
           )}
@@ -444,7 +488,8 @@ export function SendPage({ pubkey }: { pubkey: string }) {
           autoFocus
         />
         <p className="text-sm text-mono-500">
-          {formatFace(chosen.totalFaceValue, chosen)} available from {merchantLabel(chosen.merchant)}
+          {formatFace(chosen.totalFaceValue, chosen)} available from{' '}
+          <MerchantText merchant={chosen.merchant} />
           {choices.length > 1 && (
             <>
               {' · '}
@@ -488,21 +533,44 @@ export function SendPage({ pubkey }: { pubkey: string }) {
 }
 
 /**
- * A merchant's name, or a short key when they have none.
+ * A merchant's name on the picker, with their handle under it.
  *
- * `toMerchants` fills `name` with `merchantName || merchantId`, so an unbranded
- * merchant's "name" is 64 hex characters — which overflows every row it lands
- * in. `identityLabel` already knows to reject that.
+ * A COMPONENT rather than a call, because this renders inside the `choices`
+ * map and the lookup is a hook — one per row is the only way to ask for a
+ * list of them.
+ *
+ * The handle is shown here and not on the rows below because this is the
+ * screen where merchants are told APART. Two stalls trading under similar
+ * names are one tap from each other's coupons, and `@cocoa` under the name is
+ * what distinguishes them.
  */
-function merchantLabel(merchant: Merchant): string {
-  return identityLabel(merchant.pubkey, { name: merchant.name })
+function MerchantName({ merchant }: { merchant: Merchant }) {
+  const name = useMerchantLabel(merchant)
+  const handle = useMerchantHandle(merchant)
+  return (
+    <>
+      <p className="truncate font-medium text-mono-900 dark:text-mono-50">{name}</p>
+      {handle ? <p className="truncate text-xs text-mono-500">{handle}</p> : null}
+    </>
+  )
+}
+
+/**
+ * Just the merchant's fetched name, as text.
+ *
+ * Same reason as `MerchantName` for being a component: these two call sites sit
+ * AFTER this screen's early returns, where a hook cannot be added to the page
+ * body without changing the hook order between renders.
+ */
+function MerchantText({ merchant }: { merchant: Merchant }) {
+  return <>{useMerchantLabel(merchant)}</>
 }
 
 function key(option: SendOption): string {
   return `${option.merchant.pubkey}|${option.unit.toUpperCase()}`
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function Row({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex justify-between">
       <dt className="text-mono-500">{label}</dt>
