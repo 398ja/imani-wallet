@@ -232,6 +232,16 @@ export function createDmCryptoAdapter(): CryptoAdapter {
         tokenAmount: payload.token_amount ?? payload.amount_hint,
         backingStrategy: payload.backing_strategy as TokenMetadata['backingStrategy'],
         issuerId: payload.issuer_id,
+        // The PAYER, which is a different question from the issuer and has its
+        // own field on the wire. Dropping it here is what sent every settlement
+        // receipt to the stall that minted a coupon rather than the customer
+        // who spent it: dmPoll had nothing else to fall back to but `issuerId`.
+        //
+        // Deliberately NOT overridden by the signed voucher below. The voucher
+        // is signed by the ISSUER at mint time and cannot know who would later
+        // spend it, so it carries no opinion about the payer. This stays as the
+        // envelope wrote it.
+        senderPubkey: payload.sender_pubkey,
         voucherId: payload.voucher_id,
       }
 
@@ -330,7 +340,18 @@ export function toLegacyMetadata(
     expires_at: m.expiresAt,
     request_id: m.requestId,
     bundle_id: m.bundleId,
-    sender_pubkey: senderPubkey,
+    // The PAYLOAD's sender outranks the ENVELOPE's signer.
+    //
+    // The gateway signs every gift wrap it relays with its own key, so
+    // `senderPubkey` here — the rumor's author — is the gateway on every
+    // merchant-delivered and atomic-send coupon, and only coincidentally the
+    // payer on a direct wallet-to-wallet wrap. `sender_pubkey` on the payload is
+    // the party the gateway is relaying FOR, which is the one the recipient
+    // should see credited and the one owed a settlement receipt.
+    //
+    // The fallback keeps a bare NIP-17 wrap (no payload field) working, where
+    // the signer genuinely is the payer.
+    sender_pubkey: (m.senderPubkey as string | undefined) ?? senderPubkey,
   }
 }
 

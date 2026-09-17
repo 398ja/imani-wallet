@@ -35,6 +35,27 @@ vi.mock('../notifications/inbox', () => ({
   recordNotification: (...args: Parameters<typeof recordNotification>) => recordNotification(...args),
 }))
 
+/**
+ * Real sonner inserts a stylesheet at import time and this file runs without a
+ * DOM, so importing it for real fails the suite before a test runs — the same
+ * reason arrivalToast.test.ts mocks it.
+ */
+const toasts: Array<{ message: unknown; options?: Record<string, unknown> }> = []
+vi.mock('sonner', () => ({
+  toast: {
+    success: (message: unknown, options?: Record<string, unknown>) => {
+      toasts.push({ message, options })
+      return 'id'
+    },
+  },
+}))
+
+/** What the settings screen says, without standing up localStorage. */
+let wanted = true
+vi.mock('../notifications/wants', () => ({
+  wantsInApp: () => wanted,
+}))
+
 function drainResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -60,6 +81,9 @@ describe('payment receipt drain', () => {
   beforeEach(() => {
     signedFetch.mockReset()
     recordNotification.mockClear()
+    recordNotification.mockImplementation(() => true)
+    toasts.length = 0
+    wanted = true
     nip44Decrypt.mockClear()
     nip44Decrypt.mockReturnValue(
       JSON.stringify({ v: 1, faceValue: 150, faceUnit: 'GBP', redeemedAt: 1789152856 }),
@@ -165,6 +189,59 @@ describe('payment receipt drain', () => {
     await vi.waitFor(() => expect(signedFetch).toHaveBeenCalled())
     expect(recordNotification).not.toHaveBeenCalled()
     expect(signedFetch).toHaveBeenCalledTimes(1)
+  })
+
+  /**
+   * The sender's confirmation, on screen.
+   *
+   * "A gets a notification to confirm the settlement." A had a bell row and a
+   * Web Push and no toast, so a sender watching the app at the moment their
+   * payment was claimed — the likeliest moment for them to be watching, having
+   * just sent it — saw nothing happen at all.
+   */
+  describe('the confirmation the sender sees', () => {
+    it('toasts the claim, not only files it', async () => {
+      signedFetch
+        .mockResolvedValueOnce(drainResponse(ONE_RECEIPT))
+        .mockResolvedValueOnce(drainResponse({ acknowledged: 1 }))
+
+      startPaymentReceipts(SENDER)
+      await vi.waitFor(() => expect(toasts).toHaveLength(1))
+
+      // The same formatted figure as the inbox row: £1.50, never "150".
+      expect(String(toasts[0]!.message)).toContain('1.50')
+      expect(toasts[0]!.options?.id).toBe('claimed-r1')
+    })
+
+    it('does not toast a claim already filed, so a redelivery is silent', async () => {
+      // recordNotification dedupes on receiptId and returns false. The toast
+      // rides on that answer rather than repeating the announcement.
+      recordNotification.mockImplementation(() => false)
+      signedFetch
+        .mockResolvedValueOnce(drainResponse(ONE_RECEIPT))
+        .mockResolvedValueOnce(drainResponse({ acknowledged: 1 }))
+
+      startPaymentReceipts(SENDER)
+      await vi.waitFor(() => expect(signedFetch).toHaveBeenCalledTimes(2))
+      expect(toasts).toHaveLength(0)
+    })
+
+    it('honours a sender who switched coupon-claimed off, and still consumes', async () => {
+      // Suppressed, but acked: leaving it queued would re-announce a long-since
+      // settled payment the moment the preference came back on.
+      wanted = false
+      signedFetch
+        .mockResolvedValueOnce(drainResponse(ONE_RECEIPT))
+        .mockResolvedValueOnce(drainResponse({ acknowledged: 1 }))
+
+      startPaymentReceipts(SENDER)
+      await vi.waitFor(() => expect(signedFetch).toHaveBeenCalledTimes(2))
+
+      expect(toasts).toHaveLength(0)
+      expect(recordNotification).not.toHaveBeenCalled()
+      const [, , ackBody] = signedFetch.mock.calls[1] as [string, string, Record<string, unknown>]
+      expect(ackBody.consumeTokens).toEqual(['tok-1'])
+    })
   })
 
   describe('never surfaces as an error', () => {

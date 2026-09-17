@@ -26,6 +26,21 @@ vi.mock('../../components/ui/IncomingPaymentToast', () => ({
   ReceivedPaymentToast: () => null,
 }))
 
+/** Inbox writes, captured at the boundary. */
+const recorded: Array<Record<string, unknown>> = []
+vi.mock('../notifications/inbox', () => ({
+  recordNotification: (pubkey: string, item: Record<string, unknown>) => {
+    recorded.push({ pubkey, ...item })
+    return true
+  },
+}))
+
+/** What the settings screen says, without standing up localStorage. */
+let wanted = true
+vi.mock('../notifications/wants', () => ({
+  wantsInApp: () => wanted,
+}))
+
 const { announceArrival, resetAnnounced } = await import('../arrivalToast')
 
 const VOUCHER = {
@@ -39,6 +54,8 @@ const VOUCHER = {
 beforeEach(() => {
   resetAnnounced()
   toasts.length = 0
+  recorded.length = 0
+  wanted = true
 })
 
 describe('announcing a coupon that actually arrived', () => {
@@ -150,5 +167,76 @@ describe('announcing a coupon that actually arrived', () => {
     }))
     const { announceArrival: fragile } = await import('../arrivalToast')
     expect(() => fragile(VOUCHER)).not.toThrow()
+  })
+})
+
+/**
+ * The half that survives the toast.
+ *
+ * As reported: "B only gets the first notification." The advance-notice drain
+ * files an inbox row for "payment on its way"; settlement filed none, so the
+ * event that actually moved the money left nothing behind once the six-second
+ * toast expired. Two things happened and the bell recorded one.
+ */
+describe('the inbox row a settled arrival leaves behind', () => {
+  const ME = 'a'.repeat(64)
+
+  it('files the arrival in the bell, not just on screen', () => {
+    announceArrival(VOUCHER, ME)
+
+    expect(toasts).toHaveLength(1)
+    expect(recorded).toHaveLength(1)
+    expect(recorded[0]).toMatchObject({ pubkey: ME, type: 'voucher_received' })
+  })
+
+  it('keeps its row distinct from the advance notice for the same payment', () => {
+    // The two are different statements about one payment and must not collapse:
+    // the drain keys on the envelope's notificationId, so this namespaces the
+    // voucher id out of that space rather than risking a collision.
+    announceArrival(VOUCHER, ME)
+    expect(recorded[0]!.id).toBe('arrival:v-4-xaf')
+  })
+
+  it('renders the amount in the row the same way as the toast', () => {
+    // A bell that disagrees with the toast about how much arrived is worse than
+    // no bell: 4 XAF, never 0.04.
+    announceArrival({ ...VOUCHER, face_decimals: 2 }, ME)
+    expect(String(recorded[0]!.body)).not.toContain('0.04')
+    expect(String(recorded[0]!.body)).toMatch(/\b4\b/)
+  })
+
+  it('files one row however many times dm-poll reprocesses the coupon', () => {
+    announceArrival(VOUCHER, ME)
+    announceArrival(VOUCHER, ME)
+    expect(recorded).toHaveLength(1)
+  })
+
+  it('still toasts without an identity, but files nothing', () => {
+    // There is no inbox to write to before a session exists, and a missing
+    // pubkey must not cost the user the toast as well.
+    announceArrival(VOUCHER)
+    expect(toasts).toHaveLength(1)
+    expect(recorded).toHaveLength(0)
+  })
+
+  it('honours a user who switched coupon-received off', () => {
+    // The in-app surfaces ignored the settings screen entirely until now: push
+    // was filtered server-side and the toasts never asked.
+    wanted = false
+    announceArrival(VOUCHER, ME)
+
+    expect(toasts).toHaveLength(0)
+    expect(recorded).toHaveLength(0)
+  })
+
+  it('does not burn the dedupe key on a suppressed announcement', () => {
+    // Switching the preference back on mid-session must not find the coupon
+    // already marked as announced, which would silence the real one.
+    wanted = false
+    announceArrival(VOUCHER, ME)
+    wanted = true
+    announceArrival(VOUCHER, ME)
+
+    expect(toasts).toHaveLength(1)
   })
 })

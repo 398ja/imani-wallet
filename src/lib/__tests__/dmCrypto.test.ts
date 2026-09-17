@@ -185,6 +185,61 @@ describe('dm-poll CryptoAdapter', () => {
     expect(legacy.sender_pubkey).toBe('senderpubkey')
   })
 
+  /**
+   * Who PAID, as opposed to who MINTED.
+   *
+   * The gateway signs every gift wrap it relays with its own key, so the
+   * envelope's signer is never the payer on a relayed send. The payload carries
+   * the real answer in `sender_pubkey` — set by gateway-core's
+   * `Nip17DmSendPublisher` from the send row — and this parser used to drop it
+   * on the floor, leaving dm-poll with nothing but `issuer_id` to guess from.
+   * That guess sent the settlement receipt to the stall that minted the coupon
+   * instead of the customer who spent it.
+   */
+  it('carries the payload payer, distinct from the issuer that minted', () => {
+    const parsed = crypto.parseTokenTransferMessage(
+      JSON.stringify({
+        type: 'cashu_token_transfer',
+        token: 'cashuBv2xyz',
+        voucher_id: 'v-1',
+        face_value: 500,
+        face_unit: 'EUR',
+        issuer_id: 'merchantpubkey',
+        sender_pubkey: 'payerpubkey',
+      }),
+    ) as unknown as Record<string, unknown>
+
+    expect(parsed.senderPubkey).toBe('payerpubkey')
+    // Still recorded, and still a different question.
+    expect(parsed.issuerId).toBe('merchantpubkey')
+  })
+
+  it('lets the payload payer outrank the envelope signer', () => {
+    // The gateway wraps on the payer's behalf, so the signer is the GATEWAY.
+    // Preferring it would credit a relay for someone else's payment.
+    const parsed = crypto.parseTokenTransferMessage(
+      JSON.stringify({
+        type: 'cashu_token_transfer',
+        token: 'cashuBv2xyz',
+        sender_pubkey: 'payerpubkey',
+      }),
+    )
+    const legacy = toLegacyMetadata(parsed as unknown as Record<string, unknown>, 'gatewaypubkey')
+
+    expect(legacy.sender_pubkey).toBe('payerpubkey')
+  })
+
+  it('still uses the envelope signer for a bare wrap that names no payer', () => {
+    // A direct wallet-to-wallet NIP-17 wrap, where the signer genuinely is the
+    // payer and there is no payload field to prefer.
+    const parsed = crypto.parseTokenTransferMessage(
+      JSON.stringify({ type: 'cashu_token_transfer', token: 'cashuBv2xyz' }),
+    )
+    const legacy = toLegacyMetadata(parsed as unknown as Record<string, unknown>, 'directsender')
+
+    expect(legacy.sender_pubkey).toBe('directsender')
+  })
+
   it('carries the request and bundle ids the gateway sends', () => {
     // Both are on the wire — `TokenTransferMessage` has serialised them for as
     // long as bundles have existed — and both were dropped here. Without them a
