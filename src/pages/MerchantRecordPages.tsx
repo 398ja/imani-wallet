@@ -14,9 +14,12 @@ import {
   RawDetails,
   Centered,
   IdentityInline,
+  Pagination,
+  usePagination,
 } from '../components/ui'
 import { getTransactionRow, listTransactions, onWalletChanged } from '../lib/wallet'
 import { toTransaction, type WalletTransaction } from '../lib/transactions'
+import { expiringSoon } from '../lib/stats'
 import { formatDate, formatFace } from '../lib/format'
 import { identityLabel, useIdentity } from '../lib/identity'
 
@@ -70,10 +73,13 @@ function ListFrame({
   title,
   subtitle,
   children,
+  footer,
 }: {
   title: string
   subtitle: string
   children: React.ReactNode
+  /** The pagination strip, outside the bordered list it controls. */
+  footer?: React.ReactNode
 }) {
   return (
     <Screen>
@@ -82,6 +88,7 @@ function ListFrame({
       <div className="divide-y divide-mono-200 overflow-hidden rounded-2xl border border-mono-200 dark:divide-mono-800 dark:border-mono-800">
         {children}
       </div>
+      {footer}
     </Screen>
   )
 }
@@ -89,6 +96,7 @@ function ListFrame({
 /** Everything that moved, both directions. */
 export function MerchantTransactionsPage() {
   const transactions = useMerchantTransactions()?.transactions ?? null
+  const { visible, page, pageCount, setPage } = usePagination(transactions ?? [])
 
   return (
     <ListFrame
@@ -98,6 +106,7 @@ export function MerchantTransactionsPage() {
           ? 'Loading…'
           : `${transactions.length} ${transactions.length === 1 ? 'entry' : 'entries'}`
       }
+      footer={<Pagination page={page} pageCount={pageCount} onPage={setPage} />}
     >
       {transactions === null ? (
         <EmptyRow>Loading…</EmptyRow>
@@ -106,7 +115,7 @@ export function MerchantTransactionsPage() {
       ) : (
         // The same row component the customer screens use, so a movement looks
         // identical wherever it is listed.
-        transactions.map((tx) => <TransactionListItem key={tx.id} tx={tx} />)
+        visible.map((tx) => <TransactionListItem key={tx.id} tx={tx} />)
       )}
     </ListFrame>
   )
@@ -116,6 +125,7 @@ export function MerchantTransactionsPage() {
 export function IssuedCouponsPage() {
   const state = useMerchantTransactions()
   const issued = state?.transactions.filter((tx) => tx.type === 'issued') ?? null
+  const { visible, page, pageCount, setPage } = usePagination(issued ?? [])
 
   return (
     <ListFrame
@@ -123,13 +133,59 @@ export function IssuedCouponsPage() {
       subtitle={
         issued === null ? 'Loading…' : `${issued.length} ${issued.length === 1 ? 'voucher' : 'vouchers'}`
       }
+      footer={<Pagination page={page} pageCount={pageCount} onPage={setPage} />}
     >
       {issued === null ? (
         <EmptyRow>Loading…</EmptyRow>
       ) : issued.length === 0 ? (
         <EmptyRow>None yet. Vouchers you sell show up here.</EmptyRow>
       ) : (
-        issued.map((tx) => <IssuedCouponRow key={tx.id} tx={tx} now={state?.loadedAt ?? 0} />)
+        visible.map((tx) => <IssuedCouponRow key={tx.id} tx={tx} now={state?.loadedAt ?? 0} />)
+      )}
+    </ListFrame>
+  )
+}
+
+/**
+ * Every voucher about to run out, soonest first.
+ *
+ * The dashboard shows the three most urgent and links here for the rest. This
+ * is the same set from the same function — `expiringSoon` — rather than a
+ * second filter written to match, because two definitions of "expiring soon"
+ * that drift apart would have the dashboard's count disagreeing with the list
+ * it links to.
+ *
+ * Already-expired vouchers are absent, which is `expiringSoon`'s rule and the
+ * right one: nothing can be done about them, and mixing them in buries the ones
+ * a merchant could still ring a customer about. They are in "Issued vouchers",
+ * marked expired.
+ */
+export function ExpiringVouchersPage() {
+  const state = useMerchantTransactions()
+  const expiring =
+    state === null ? null : expiringSoon(state.transactions, { now: state.loadedAt })
+  const { visible, page, pageCount, setPage } = usePagination(expiring ?? [])
+
+  return (
+    <ListFrame
+      title="Expiring soon"
+      subtitle={
+        expiring === null
+          ? 'Loading…'
+          : `${expiring.length} ${expiring.length === 1 ? 'voucher' : 'vouchers'} within 7 days`
+      }
+      footer={<Pagination page={page} pageCount={pageCount} onPage={setPage} />}
+    >
+      {expiring === null ? (
+        <EmptyRow>Loading…</EmptyRow>
+      ) : expiring.length === 0 ? (
+        // Reachable by typing the URL or by keeping the tab open until the last
+        // one lapses, so it needs a real answer rather than an empty box.
+        <EmptyRow>Nothing expiring in the next 7 days.</EmptyRow>
+      ) : (
+        // The same row as the issued list: an expiring voucher IS an issued
+        // voucher, and its row already leads with the expiry date.
+        visible.map((tx) => <IssuedCouponRow key={tx.id} tx={tx} now={state?.loadedAt ?? 0} />)
       )}
     </ListFrame>
   )
