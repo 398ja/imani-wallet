@@ -2,6 +2,17 @@ import { useEffect, useState } from 'react'
 import type { NapSession } from '@imani/nap-client-web'
 
 import { watchSessionExpiry } from './sessionExpiry'
+import { validateSession } from './sessionValidate'
+
+/**
+ * How long to wait before asking again when the server could not be reached.
+ *
+ * Short, because the session really may have lapsed and this is a deliberate
+ * postponement of finding out. Not so short that a phone with no signal spends
+ * its battery re-asking: one minute is roughly the interval at which someone
+ * walking out of a dead spot would want the wallet to notice.
+ */
+const RETRY_AFTER_UNREACHABLE_S = 60
 
 /**
  * Deciding when to ask for the passphrase again.
@@ -49,17 +60,92 @@ export function useSessionReauth(
    */
   const [prompt, setPrompt] = useState<'quiet' | 'lapsed' | 'dismissed'>('quiet')
 
+  /**
+   * The server's answer, which overrides the local deadline.
+   *
+   * The local `expiresAt` is a snapshot taken at login, and the gateway slides
+   * its idle window forward on every authenticated request — so for anyone
+   * actually using the wallet the snapshot is stale within seconds and the
+   * watcher fires against a session that is nowhere near expiry. Holding the
+   * confirmed deadline here lets `watchSessionExpiry` count down from what the
+   * server currently believes rather than from what it said a quarter of an
+   * hour ago.
+   *
+   * A ref-like piece of state rather than a `useRef` because the watcher reads
+   * it through a closure that is created once per session; a plain mutable box
+   * is exactly what is wanted and re-rendering on every slide would be noise.
+   */
+  const [confirmedExpiry] = useState<{ current: number | null }>(() => ({ current: null }))
+
   useEffect(() => {
-    return watchSessionExpiry({
-      getExpiresAt: () => session.getSession()?.expiresAt ?? null,
-      // A fresh lapse always wins over an earlier dismissal.
-      onExpired: () => setPrompt('lapsed'),
+    let cancelled = false
+
+    const stop = watchSessionExpiry({
+      getExpiresAt: () => {
+        const local = session.getSession()?.expiresAt ?? null
+        const confirmed = confirmedExpiry.current
+        if (local === null) return confirmed
+        if (confirmed === null) return local
+        // Whichever deadline is LATER is the truthful one. `confirmed` comes
+        // from a validate that slid the window, and `local` moves forward on a
+        // fresh login; taking the max means neither a re-login nor a slide can
+        // be masked by the other's older number.
+        return Math.max(local, confirmed)
+      },
+      /**
+       * The local clock says time is up. Before interrupting anyone, ask the
+       * server — which is the only thing that knows about the sliding window,
+       * and which slides it once more by being asked.
+       *
+       * This is the fix for the every-15-minutes popup: an active user's
+       * session has already been extended by their own traffic, so this call
+       * returns a fresh deadline, the watcher re-arms against it, and no dialog
+       * is ever shown. Only a session the server AGREES is over prompts.
+       */
+      onExpired: () => {
+        void validateSession().then((verdict) => {
+          if (cancelled) return
+
+          if (verdict.valid) {
+            // Still alive, and now slid further forward. Record the server's
+            // deadline so the watcher stops counting from the stale one, and
+            // stay quiet: the user never learns this happened, which is the
+            // entire point.
+            confirmedExpiry.current = verdict.expiresAt
+            setPrompt('quiet')
+            return
+          }
+
+          if (verdict.reason === 'unreachable') {
+            // A network failure is not an expired session. Prompting here would
+            // put a passphrase box in front of every user who walked into a
+            // lift, and typing it could not succeed anyway — re-authentication
+            // needs the same network that just failed. Push the local deadline
+            // out a little and let the watcher ask again.
+            confirmedExpiry.current = Math.floor(Date.now() / 1000) + RETRY_AFTER_UNREACHABLE_S
+            setPrompt('quiet')
+            return
+          }
+
+          // The server says the session is over. Now the dialog is the truth.
+          confirmedExpiry.current = null
+          setPrompt('lapsed')
+        })
+      },
       // The watcher fires EARLY, while nap still considers the session live, so
       // a renewal in that window never flips `isAuthenticated`. Without this the
       // prompt would have nothing to close it.
       onRenewed: () => setPrompt('quiet'),
     })
-  }, [session])
+
+    return () => {
+      // An in-flight validate outlives the unmount, and resolving it into a
+      // dead component would both warn and, worse, decide the prompt state of a
+      // session this hook no longer speaks for.
+      cancelled = true
+      stop()
+    }
+  }, [session, confirmedExpiry])
 
   /**
    * Has this session ever been established?
