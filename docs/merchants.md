@@ -12,6 +12,7 @@ and what's still out there.
 - [Taking payment (Redeem)](#taking-payment-redeem)
 - [History, stats, and what's expiring](#history-stats-and-whats-expiring)
 - [Opening and closing your stall](#opening-and-closing-your-stall)
+- [Running more than one till](#running-more-than-one-till)
 - [Keeping your account safe](#keeping-your-account-safe)
 - [Common questions](#common-questions)
 
@@ -116,6 +117,16 @@ on your till and on your customer's screen.
   Receive). Your settings and history stay put; turn it back on to sell again.
 - **Starting to sell as a shopper:** go to **Settings → Start selling** and fill in
   your stall details. No new account, your coupons and identity come with you.
+
+## Running more than one till
+
+A device at the door, a till at the counter, the phone in your pocket: each
+extra device is a **terminal**. You name it, choose whether it may sell or only
+take coupons back, and revoke it whenever you like — including when the device
+is lost or stolen. A terminal never holds your money and never sees your
+figures, and your own phone keeps working exactly as it does now.
+
+Full walkthrough: **[Terminals guide](terminals.md)**.
 
 ## Keeping your account safe
 
