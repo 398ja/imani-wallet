@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **The send flow named people by hex key.** Every screen of it — the voucher picker, the amount
+  screen, the confirmation — printed something like `a1b2c3d4…ef56` where a name belongs. Two
+  separate causes. The MERCHANT was read from `Merchant.name`, which `VoucherGrouper` fills with
+  `merchant_metadata.merchant_name || merchantId`; a coupon issued without that optional metadata
+  therefore carried a 64-character key as its "name", which `humanName` correctly rejected and
+  `identityLabel` then dropped all the way to a short key. Nothing ever asked for the kind-0 that
+  was on the relay the whole time. The new `useMerchantLabel` / `useMerchantHandle` fetch it, and
+  the published profile wins over the coupon's stored copy — that copy was taken when the coupon
+  was ISSUED and never updates, so a stall that renames itself now reads as its new name on old
+  coupons. The RECIPIENT kept its handle only until `toRecipientPubkey` threw it away: someone
+  reached by typing `cocoa@staging.398ja.xyz` who has published no kind-0 left the flow with
+  nothing to show but a key, for a person the user had just named. `resolveRecipient` returns the
+  address it resolved through, and `IdentityInline` takes it as `fallbackHandle`. Both legs fall
+  back exactly as before when there is genuinely nothing to show.
+
 ## [0.4.1] - 2026-09-16
 
 ### Fixed

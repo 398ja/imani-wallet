@@ -94,6 +94,50 @@ export function nameOrNothing(
 }
 
 /**
+ * A merchant's name, fetched, with the coupon's stored name as the floor.
+ *
+ * The send flow printed a hex key for every unbranded merchant, and this is
+ * why: `Merchant.name` comes from `VoucherGrouper`, which fills it with
+ * `merchant_metadata.merchant_name || merchantId`. The `|| merchantId` half is
+ * a 64-character key wearing a name's clothes, so `humanName` rejected it and
+ * `identityLabel` fell all the way to `shortPubkey` — on the picker, the
+ * amount screen and the confirm screen alike. Nothing ever asked for the
+ * kind-0 that was sitting on the relay the whole time.
+ *
+ * THE FETCHED NAME WINS over the stored one, which is the opposite of
+ * `IdentityInline`'s `fallbackName` and deliberate. A coupon's copy of the name
+ * was taken when it was ISSUED and never updates; kind-0 is what the merchant
+ * currently calls themselves. A stall that renames itself should read as its
+ * new name on a coupon minted under the old one.
+ *
+ * Costs no request: `merchantBranding` caches per pubkey, and the pass above
+ * these screens has usually asked already.
+ */
+export function useMerchantLabel(merchant: { pubkey: string; name?: string }): string {
+  const fetched = useIdentity(merchant.pubkey)
+  // `humanName` on the stored name too, so the hex placeholder never becomes
+  // the answer — it must fall through to `shortPubkey` like any other unnamed
+  // key rather than printing 64 characters into a row.
+  const identity: Identity = {
+    ...fetched,
+    name: fetched?.name ?? humanName(merchant.name),
+  }
+  return identityLabel(merchant.pubkey, identity)
+}
+
+/**
+ * The handle to show UNDER a merchant's name, or nothing.
+ *
+ * Same question as `identitySubLabel` and same answer, but it takes the
+ * merchant rather than a resolved identity so a caller with only a `Merchant`
+ * does not have to hold its own `useIdentity` to ask.
+ */
+export function useMerchantHandle(merchant: { pubkey: string; name?: string }): string | undefined {
+  const fetched = useIdentity(merchant.pubkey)
+  return identitySubLabel({ ...fetched, name: fetched?.name ?? humanName(merchant.name) })
+}
+
+/**
  * Resolve a `name@domain` handle to the hex pubkey it points at.
  *
  * `GET /api/v1/resolve/{nip05}` is unauthenticated and lives on both gateways,
