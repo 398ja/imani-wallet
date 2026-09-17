@@ -9,7 +9,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-17
+
+### Added
+
+- **A merchant dashboard that prompts rather than reports.** "Expiring soon" now shows the three
+  most urgent vouchers and links to the rest, so a glance answers "what needs chasing today"
+  instead of scrolling past forty rows; the section is still absent entirely when nothing is
+  expiring, because a box that says zero every day trains people to stop reading it. The full list
+  is a new screen at `/merchant/expiring`, built from the SAME `expiringSoon` call the dashboard
+  uses rather than a second filter written to match — two definitions would drift and the link
+  would disagree with its own destination. "Vouchers you have issued" gained an "Expiring soon"
+  count beneath "Still valid", the total it is carved out of.
+
+- **Paging on every record list**, 21 to a page: transactions, vouchers, issued vouchers and the
+  new expiring list. These were unbounded, which is fine for a customer holding three coupons and
+  unusable for the stall that issued four hundred. The control strip renders nothing for a single
+  page, disables rather than hides its ends so the other control does not jump, announces the page
+  change to a screen reader, and does not glide the viewport for anyone who asked for reduced
+  motion.
+
+### Changed
+
+- **A customer paying a merchant back now reads "Pay", not "Redeem".** "Redeem" is the merchant's
+  word for value coming back off their books, and it stays that way on the till. The person at the
+  stall is doing the ordinary thing of paying for something, and asking them to "Redeem" made them
+  adopt the counterparty's accounting language for their own purchase — it also reads like claiming
+  a prize rather than handing money over. Renamed across the whole customer leg, so the flow does
+  not change its mind at the last screen. The underlying operation is untouched.
+
+- **The dashboard balance no longer shows "Taken in".** It totalled the vouchers this wallet
+  HOLDS, sat directly under a liability figure, and so read as income without being income. "Value
+  taken" below already answers that question properly, over the chosen range and in the stall's
+  issuance currency. Two numbers that both look like takings and disagree is worse than one.
+
 ### Fixed
+
+- **The re-authentication prompt interrupted people mid-payment, every fifteen minutes.** The
+  timeout was not too short; the client's clock had stopped agreeing with the server's. The gateway
+  runs a SLIDING idle window and `/api/v1/auth/validate` pushes `expires_at` out to `now + idleTtl`
+  on every authenticated request, so an active session is continually renewed and never reaches the
+  deadline it was issued with. Nothing told the client: `expiresAt` is recorded once, from the login
+  response, so the local watcher counted down from a snapshot the user's own traffic had invalidated
+  seconds later and fired on a session the server considered perfectly healthy. Dismissing it changed
+  nothing, because the next snapshot was just as stale. The local deadline is now a suspicion rather
+  than a verdict — the wallet asks the gateway, and only a session the server AGREES is over raises
+  the dialog. A dropped connection, a 502 or a 403 is none of those things and no longer prompts.
+
+- **...and then the wallet kept itself signed in.** Found reviewing the fix above. Asking
+  `/auth/validate` SLIDES the idle window as a side effect, so a client that asks whenever its local
+  clock runs out renews its own session on a timer: a phone lying face-down on a café table stayed
+  unlocked, with the 15-minute idle timeout enforced only by the server's 12-hour absolute cap. That
+  is not a smaller bug than the interruption it replaced. The wallet now answers locally the question
+  the server cannot — has a PERSON done anything since the last check — and only then confirms.
+  Real input only, nothing the app can raise itself, and the signal is spent on read so one ancient
+  tap cannot renew forever. Eight idle hours now produce zero renewals and a locked wallet, where
+  before they produced thirty-two and an open one.
+
+- **The prompt never arrived at the absolute cap.** Approaching the 12-hour ceiling the server
+  clamps `expires_at` to the same fixed instant on every call. The expiry watcher fires on the
+  TRANSITION only, so a confirmed deadline that had stopped moving latched it: the wallet never
+  asked again and sat quiet against a session about to be refused, and the user's next tap would
+  have failed with no warning. A floor under the confirmed deadline guarantees the next question
+  gets asked.
+
+
+- **The settlement receipt went to the wrong person.** On a merchant-issued coupon spent
+  wallet-to-wallet, dmPoll addressed it to `meta.issuerId` — who MINTED the coupon, not who SPENT
+  it — so the stall was told its own customer had been paid and the customer heard nothing. The
+  payload carried the right answer in `sender_pubkey` all along and `dmCrypto` was dropping it; it
+  is now parsed and preferred, with the stall kept as the fallback for the one case where it is
+  right. The recipient also got only the optimistic advance notice, so six seconds after a payment
+  the sole surviving record was the provisional one; settlement now files a bell row too. And the
+  sender, watching the app when their payment was claimed, saw nothing at all — there is a toast
+  now, deduped so a redelivery is silent. In-app notifications also honour the settings screen,
+  which they had never consulted; the lookup fails open, because a preference that throws must not
+  be what hides someone's money.
+
+- **A phone could stop ringing without saying so.** Web Push endpoints are rotated, expired or
+  dropped by the browser, and the `pushsubscriptionchange` event meant to announce that is
+  unreliable and missing from several engines. Nothing re-registered afterwards, so the gateway
+  went on pushing at an endpoint returning 410 while the settings screen still read "on" — a state
+  that was permanent until the user toggled push off and on by hand. The current subscription is
+  now re-POSTed on startup; the endpoint hash upserts, so an unchanged one is a no-op.
+
+- **The recipient's phone stayed silent when a coupon arrived** (gateway-core). `notifyVoucherReceived`
+  was fully implemented and called by nothing, while the sender's half of the pair had a caller and
+  worked — which is why push looked healthy. Fixed in gateway-core; the wallet's inventory note is
+  updated to match.
 
 - **The send flow named people by hex key.** Every screen of it — the voucher picker, the amount
   screen, the confirmation — printed something like `a1b2c3d4…ef56` where a name belongs. Two
@@ -25,6 +112,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing to show but a key, for a person the user had just named. `resolveRecipient` returns the
   address it resolved through, and `IdentityInline` takes it as `fallbackHandle`. Both legs fall
   back exactly as before when there is genuinely nothing to show.
+
+### Dependencies
+
+- `@imani/dm-poll` 0.4.1 → 0.4.2 (adds `TokenMetadata.senderPubkey`).
 
 ## [0.4.1] - 2026-09-16
 

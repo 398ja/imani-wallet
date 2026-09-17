@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-17
+
+### Added
+
+- **`TokenMetadata.senderPubkey`** — who actually PAID, as distinct from
+  `issuerId`, which is who MINTED. The gateway signs every gift wrap with its
+  own key, so the envelope's signer is never the payer; conflating the two sent
+  a settlement receipt to the stall that issued a coupon rather than to the
+  customer who spent it. Optional and additive, so a payload without it behaves
+  exactly as before. Set by gateway-core's `Nip17DmSendPublisher` from the send
+  row's own `sender_pubkey`.
+
 ## [0.4.1] - 2026-06-01
 
 ### Added
