@@ -6,6 +6,7 @@ import QRCode from 'qrcode'
 import type { PassField, PassJson } from '../../lib/pass'
 import { formatDate, formatFace, handleLabel, shortPubkey } from '../../lib/format'
 import { Avatar } from './Avatar'
+import { SkeletonLine } from './Skeleton'
 
 /**
  * A coupon, or a merchant's whole holding, rendered as a wallet pass.
@@ -40,6 +41,19 @@ interface PassProps {
    * passes both.
    */
   issuerTo?: string
+  /**
+   * The issuer's kind-0 has not arrived yet.
+   *
+   * Only the IDENTITY block waits on it. The balance, the expiry and the
+   * barcode come from the coupon in hand and are already correct — blanking the
+   * card while a name loads would hide the number the customer opened it for,
+   * and make a local fact hostage to a network one.
+   *
+   * Ignored once the pass carries a real `organizationName`: a caller whose
+   * fetch is still running but whose coupon already names its issuer has
+   * nothing to wait for.
+   */
+  loadingIssuer?: boolean
 }
 
 /** A raw 64-char hex pubkey standing in for a name would overflow the card. */
@@ -107,7 +121,7 @@ function IssuerBlock({ to, children }: { to?: string; children: ReactNode }) {
   )
 }
 
-export function Pass({ pass, to, issuerTo }: PassProps) {
+export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
   const balance = pass.storeCard.primaryFields?.[0]
   const expiry = pass.storeCard.auxiliaryFields?.[0]
   const code = pass.barcodes?.[0]
@@ -120,6 +134,16 @@ export function Pass({ pass, to, issuerTo }: PassProps) {
   // `to` wins because it is the older contract and the whole card moving is the
   // stronger promise; the inner one is dropped rather than nested.
   const linkIssuer = issuerTo !== undefined && to === undefined
+
+  /*
+    Waiting only counts when there is nothing to show. `organizationName` falls
+    back to the issuer id, and `displayName` truncates that to a hex fragment —
+    so "the name IS the key" is precisely the case where a placeholder is an
+    improvement, and any other case is a real name that must not be hidden
+    behind one.
+  */
+  const nameIsKey = /^[0-9a-f]{64}$/i.test(pass.organizationName)
+  const waiting = Boolean(loadingIssuer) && nameIsKey
 
   const card = (
     <div
@@ -152,12 +176,30 @@ export function Pass({ pass, to, issuerTo }: PassProps) {
         */}
         <IssuerBlock to={linkIssuer ? issuerTo : undefined}>
           <Avatar
-            src={logoUrl}
+            src={waiting ? undefined : logoUrl}
             name={displayName(pass.organizationName)}
             pubkey={issuer}
+            loading={waiting}
             size="md"
           />
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1" aria-busy={waiting || undefined}>
+            {waiting ? (
+              /* Name and handle, at the heights of the lines they replace, so
+                 the card does not resize under the balance when they land. The
+                 description between them is the coupon's own and needs no wait. */
+              <>
+                {/* The name's line, at the card's own weight and size. */}
+                <SkeletonLine text="text-base font-semibold" width="w-36" />
+                <p className="truncate text-xs" style={{ color: pass.labelColor, opacity: 0.7 }}>
+                  {pass.description}
+                </p>
+                {/* Unlike IdentityInline, a second bar here is honest: on a
+                    card with an issuer this line always renders, falling back to
+                    the short key when there is no handle. */}
+                <SkeletonLine text="text-[0.625rem]" width="w-24" />
+              </>
+            ) : (
+              <>
             <p className="truncate font-semibold">{displayName(pass.organizationName)}</p>
             <p className="truncate text-xs" style={{ color: pass.labelColor, opacity: 0.7 }}>
               {pass.description}
@@ -183,6 +225,8 @@ export function Pass({ pass, to, issuerTo }: PassProps) {
               >
                 {nip05 ? handleLabel(nip05) : shortPubkey(issuer)}
               </p>
+            )}
+              </>
             )}
           </div>
         </IssuerBlock>

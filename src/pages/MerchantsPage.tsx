@@ -1,6 +1,7 @@
 import {
   isValidElement,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
@@ -15,7 +16,7 @@ import { listTransactions, listVouchers, onWalletChanged } from '../lib/wallet'
 import { toMerchants, walletTotals, withPastMerchants, type Merchant } from '../lib/merchants'
 import { toTransaction } from '../lib/transactions'
 import { toMerchantPass, EMPTY_BRANDING, type MerchantBranding } from '../lib/pass'
-import { merchantBranding } from '../lib/branding'
+import { knownBranding, merchantBranding } from '../lib/branding'
 import {
   animateSpring,
   prefersReducedMotion,
@@ -347,6 +348,25 @@ export function MerchantsPage() {
     }
   }, [merchants])
 
+  /*
+    The names this device already holds, available on the FIRST render.
+
+    This is the screen the complaint was really about: the wallet home is a deck
+    of cards, one per stall, and every one of them rendered a truncated pubkey
+    until the effect above resolved. A stall whose coupons are in this wallet is
+    by definition one the user has met, so its name is on disk — there is no
+    reason to ask the network before showing it.
+
+    Keyed on the merchant list so it is one localStorage read per stall per
+    change of the list, not one per render of the deck.
+  */
+  const seeded = useMemo(() => {
+    const entries = (merchants ?? []).map(
+      (f) => [f.pubkey, knownBranding(f.pubkey) ?? EMPTY_BRANDING] as const,
+    )
+    return Object.fromEntries(entries)
+  }, [merchants])
+
   // One figure per currency. Adding EUR to SAT would be a confident lie, so a
   // second unit gets its own line rather than being folded into the first.
   const totals = merchants ? walletTotals(merchants) : []
@@ -394,7 +414,13 @@ export function MerchantsPage() {
           {merchants.map((merchant) => (
             <div key={merchant.pubkey}>
               <Pass
-                pass={toMerchantPass(merchant, branding[merchant.pubkey] ?? EMPTY_BRANDING)}
+                pass={toMerchantPass(
+                  merchant,
+                  branding[merchant.pubkey] ?? seeded[merchant.pubkey] ?? EMPTY_BRANDING,
+                )}
+                // Only until the fetch for THIS stall lands. `Pass` narrows it
+                // further to the case where the name is still a hex key.
+                loadingIssuer={branding[merchant.pubkey] === undefined}
                 to={`/merchants/${merchant.pubkey}`}
               />
               <p className="mt-2 text-center text-sm text-mono-500">

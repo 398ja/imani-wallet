@@ -1,8 +1,9 @@
 import { Link } from 'react-router-dom'
 
 import { Avatar } from './Avatar'
+import { SkeletonLine } from './Skeleton'
 import { useIsMerchant } from '../../hooks/useIsMerchant'
-import { identityLabel, identitySubLabel, useIdentity } from '../../lib/identity'
+import { identityLabel, identitySubLabel, useIdentityState } from '../../lib/identity'
 
 /**
  * Who a pubkey is, on one line: avatar, display name, NIP-05 under it.
@@ -51,12 +52,22 @@ export function IdentityInline({
    */
   fallbackHandle?: string
 }) {
-  const fetched = useIdentity(pubkey)
+  const { identity: fetched, loading: pending } = useIdentityState(pubkey)
   const identity = {
     ...fetched,
     name: fetched?.name ?? fallbackName,
     nip05: fetched?.nip05 ?? fallbackHandle,
   }
+  /*
+    Only a lookup with NOTHING to show is a loading state.
+
+    A caller that passed a `fallbackName` or a `fallbackHandle` already knows who
+    this is — Pay knows the issuer from the coupon it is spending, Send knows the
+    address it was given — so there is nothing to wait for and a skeleton there
+    would hide a name we hold. The wait only replaces the case that used to
+    render a truncated key.
+  */
+  const loading = pending && !identity.name && !identity.nip05
   const name = identityLabel(pubkey, identity)
   const handle = identitySubLabel(identity)
 
@@ -88,13 +99,41 @@ export function IdentityInline({
 
   return (
     <Row {...(rowProps as { to: string; className: string })}>
-      <Avatar src={identity.picture} name={name} pubkey={pubkey} size={size} className="shrink-0" />
-      <span className="min-w-0">
+      <Avatar
+        src={loading ? undefined : identity.picture}
+        name={name}
+        pubkey={pubkey}
+        loading={loading}
+        size={size}
+        className="shrink-0"
+      />
+      {/* `aria-busy` rather than a visually-hidden "loading" string: the row is
+          announced once, as a region that is still filling in, instead of the
+          skeleton bars being described one by one. */}
+      <span className="min-w-0 flex-1" aria-busy={loading || undefined}>
         {label ? (
           <span className="block text-xs uppercase tracking-wide text-mono-400">{label}</span>
         ) : null}
-        <span className="block truncate text-sm text-mono-900 dark:text-mono-50">{name}</span>
-        {handle ? <span className="block truncate text-xs text-mono-500">{handle}</span> : null}
+        {loading ? (
+          /*
+            ONE bar, for the name — carrying the same `text-sm` as the line it
+            replaces, so the row is already the height it will be and nothing
+            under it moves when the name lands.
+
+            Not two. The handle below is conditional (`identitySubLabel` returns
+            nothing when the name IS the handle, which is most people), so a
+            second bar would promise a line that usually never arrives and the
+            row would SHRINK on resolve — reflow in the other direction, which is
+            the thing being avoided. Under-promising settles; over-promising does
+            not.
+          */
+          <SkeletonLine text="text-sm" width="w-32" />
+        ) : (
+          <>
+            <span className="block truncate text-sm text-mono-900 dark:text-mono-50">{name}</span>
+            {handle ? <span className="block truncate text-xs text-mono-500">{handle}</span> : null}
+          </>
+        )}
       </span>
     </Row>
   )
