@@ -256,6 +256,12 @@ export function clearStoredBranding(): void {
  */
 export async function fetchNewestKind0(
   pubkey: string,
+  /**
+   * Called if the SLOWER store turns out to hold a newer event than the one
+   * already returned. See `fetchNewestKind0`'s note on racing: this is how the
+   * relay still gets to correct the gateway without anyone waiting for it.
+   */
+  onLater?: (newer: { content: string; createdAt: number }) => void,
 ): Promise<{ content: string; createdAt: number } | null> {
   // BOTH STORES, NEWEST WINS — not "cache first, relay as fallback". The
   // gateway's relay ingest subscribes to kind 1059 only, so a kind 0 published
@@ -264,25 +270,135 @@ export async function fetchNewestKind0(
   // Answering from it because it answered at all is how a merchant uploads a
   // logo, sees it on their own profile, and every customer keeps seeing their
   // initials for good.
-  const [cached, relayed] = await Promise.all([
-    gatewayKind0(pubkey).catch(() => null),
-    // Sort rather than trust order — querySync merges replies from several
-    // relays. kind 0 is replaceable, but relays are not obliged to have dropped
-    // the copy they replaced.
-    allEvents(pubkey, 0)
-      .then((events) => {
-        const newest = events.sort((a, b) => b.created_at - a.created_at)[0]
-        return newest ? { content: newest.content, createdAt: newest.created_at } : null
-      })
-      // Both stores unreachable. Callers all have a defensible fallback — the
-      // stored profile, or the pass defaults — and none of them should throw at
-      // a user over an avatar.
-      .catch(() => null),
-  ])
+  //
+  // BUT THE CALLER NO LONGER WAITS FOR BOTH. This was `Promise.all`, which
+  // means every profile read took as long as the SLOWER store — and the slower
+  // store is the relay, by two orders of magnitude, because a browser
+  // WebSocket to strfry fails on a CLOCK rather than on a packet:
+  //
+  //   healthy relay ..................... 25ms
+  //   port not published (refused) ....... 5ms
+  //   unroutable host (dropped) ....... 3001ms   <- SimplePool's connection timeout
+  //   no EOSE from a connected relay .. 4400ms   <- nostr-tools' baseEoseTimeout
+  //
+  // A deployment that does not publish strfry's port is the documented normal
+  // case (see lib/gatewayNostr.ts), and "dropped" rather than "refused" is what
+  // a firewall, a sleeping phone radio, or a container on an unroutable address
+  // produces. So the gateway's answer — which is itself fresh, because
+  // `CachingNostrGatewayDecorator` merges a live relay query SERVER-side — sat
+  // complete in milliseconds while the browser counted down someone else's
+  // timeout. That was the "profiles sometimes take too long" report: not a slow
+  // lookup, a fast lookup waiting on a slow one it had already beaten.
+  //
+  // Now whichever store answers first wins the RETURN, and the other is still
+  // read to completion in the background — if it turns out to be newer, it is
+  // handed to `onLater` and corrects what was already shown. Nothing is given
+  // up: the relay still overrules a frozen cache, it simply does so a moment
+  // after the name is on screen instead of holding it back until then.
+  const cached = gatewayKind0(pubkey).catch(() => null)
+  // Sort rather than trust order — querySync merges replies from several
+  // relays. kind 0 is replaceable, but relays are not obliged to have dropped
+  // the copy they replaced.
+  const relayed = allEvents(pubkey, 0)
+    .then((events) => {
+      const newest = events.sort((a, b) => b.created_at - a.created_at)[0]
+      return newest ? { content: newest.content, createdAt: newest.created_at } : null
+    })
+    // Both stores unreachable. Callers all have a defensible fallback — the
+    // stored profile, or the pass defaults — and none of them should throw at
+    // a user over an avatar.
+    .catch(() => null)
 
-  if (!cached) return relayed
-  if (!relayed) return cached
-  return relayed.createdAt > cached.createdAt ? relayed : cached
+  // NEWEST STILL WINS whenever both stores are actually answering.
+  //
+  // Returning the first answer outright would have been wrong, and a test
+  // caught it: a relay holding a SUPERSEDED kind-0 could beat the gateway by a
+  // microtask and hand back the old name. "Whoever is quickest" is not the rule
+  // this module wants — the rule is newest-wins, and the only thing wrong with
+  // the old code was how long it was prepared to wait to apply it.
+  //
+  // So the wait is bounded rather than removed. Once one store has answered,
+  // the other gets GRACE_MS to weigh in, and the newest of what arrived wins.
+  // A healthy store answers in 5-25ms, so in practice both are always in hand
+  // and the semantics are exactly what they were; a store that is timing out
+  // blows the budget and is left to the correction path instead of holding a
+  // name off the screen for three seconds.
+  const first = await firstAnswer(cached, relayed)
+  const best = await settledWithin(GRACE_MS, first, cached, relayed)
+
+  // Whatever is still outstanding is read to completion anyway, and may still
+  // correct what we returned. Detached deliberately: nobody is waiting on it.
+  void Promise.all([cached, relayed]).then(([a, b]) => {
+    const latest = newer(a, b)
+    if (latest && latest.createdAt > (best?.createdAt ?? 0)) onLater?.(latest)
+  })
+
+  return best
+}
+
+/**
+ * How long the faster store waits for the slower one before answering alone.
+ *
+ * Sized off measurements, not taste: a healthy relay EOSEs in 25ms and a
+ * refused connection fails in 5, while the failure modes worth escaping are
+ * 3000ms (connection timeout) and 4400ms (EOSE timeout). Anything comfortably
+ * above the first pair and far below the second preserves newest-wins in every
+ * healthy case while capping the unhealthy one. 150ms is also under the ~200ms
+ * that reads as instant, so nobody sees this window.
+ */
+const GRACE_MS = 150
+
+/**
+ * The newest of whatever has ARRIVED within `ms`, never worse than `fallback`.
+ *
+ * The point is the deadline: a lookup that has not answered by now is presumed
+ * to be one of the multi-second failure modes, and is dropped from the decision
+ * rather than waited on.
+ */
+async function settledWithin<T extends { createdAt: number }>(
+  ms: number,
+  fallback: T | null,
+  ...lookups: Promise<T | null>[]
+): Promise<T | null> {
+  let best = fallback
+  await Promise.race([
+    Promise.all(
+      lookups.map((lookup) =>
+        lookup.then((value) => {
+          best = newer(best, value)
+        }),
+      ),
+    ),
+    new Promise((resolve) => setTimeout(resolve, ms)),
+  ])
+  return best
+}
+
+function newer<T extends { createdAt: number }>(a: T | null, b: T | null): T | null {
+  if (!a) return b
+  if (!b) return a
+  return b.createdAt > a.createdAt ? b : a
+}
+
+/**
+ * The first of two lookups to produce an ACTUAL PROFILE, or null if neither does.
+ *
+ * Not `Promise.race`, which resolves on the first to SETTLE — and the fastest
+ * settlement is a store that is not configured answering `null` in 5ms, which
+ * would hand back "no such profile" while the store that has it is still
+ * reading. That is the same class of bug as caching a miss.
+ */
+async function firstAnswer<T>(...lookups: Promise<T | null>[]): Promise<T | null> {
+  return new Promise((resolve) => {
+    let outstanding = lookups.length
+    for (const lookup of lookups) {
+      void lookup.then((value) => {
+        if (value !== null) resolve(value)
+        // Only when EVERY lookup has come back empty is "nothing" the answer.
+        else if (--outstanding === 0) resolve(null)
+      })
+    }
+  })
 }
 
 async function gatewayKind0(
@@ -319,12 +435,58 @@ async function gatewayKind0(
 
 async function fetchBranding(pubkey: string): Promise<MerchantBranding> {
   try {
-    const newest = await fetchNewestKind0(pubkey)
+    // The late correction, when the slower store held a newer event than the
+    // one we answered with. Rare — it needs a profile edit that reached one
+    // store and not the other — but it is the entire reason both stores are
+    // read, so it must not be dropped now that nobody waits for it.
+    const newest = await fetchNewestKind0(pubkey, (later) => {
+      const corrected = brandingFromKind0(later.content)
+      if (corrected === EMPTY_BRANDING) return
+      cache.set(pubkey, Promise.resolve(corrected))
+      writeStored(pubkey, corrected)
+      // And tell whatever is on screen. Without this the correction sits in
+      // localStorage until the next reload, which is precisely the "I renamed
+      // myself and everyone still sees the old name" failure the two-store read
+      // exists to prevent.
+      announce(pubkey, corrected)
+    })
     return newest === null ? EMPTY_BRANDING : brandingFromKind0(newest.content)
   } catch {
     // Branding is decoration. A merchant whose profile cannot be fetched still has
     // coupons worth showing, so this never propagates.
     return EMPTY_BRANDING
+  }
+}
+
+/**
+ * Live updates for a pubkey's branding.
+ *
+ * A profile is no longer settled when `merchantBranding` resolves — the loser of
+ * the race can still arrive with something newer — so there has to be a way to
+ * tell a rendered row about it. A component that only read the promise would
+ * show the superseded name until it happened to remount.
+ *
+ * Deliberately tiny: a Set of callbacks per pubkey, no event names, no
+ * unsubscribe bookkeeping beyond removing the function. The wallet already has
+ * `onWalletChanged` for the storage layer; this is the same shape for the one
+ * value that can change underneath a render.
+ */
+type BrandingListener = (branding: MerchantBranding) => void
+const listeners = new Map<string, Set<BrandingListener>>()
+
+function announce(key: string, branding: MerchantBranding): void {
+  for (const listener of listeners.get(key) ?? []) listener(branding)
+}
+
+/** Subscribe to corrections for one pubkey. Returns the unsubscribe. */
+export function onBrandingChanged(pubkey: string, listener: BrandingListener): () => void {
+  const key = pubkey.toLowerCase()
+  const set = listeners.get(key) ?? new Set()
+  set.add(listener)
+  listeners.set(key, set)
+  return () => {
+    set.delete(listener)
+    if (set.size === 0) listeners.delete(key)
   }
 }
 
