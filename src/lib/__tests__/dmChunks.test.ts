@@ -39,8 +39,8 @@ const javaPayload = JSON.stringify(javaPayloadRaw)
 
 const enc = new TextEncoder()
 
-const sha256Hex = async (bytes: Uint8Array): Promise<string> => {
-  const digest = await crypto.subtle.digest('SHA-256', bytes as unknown as ArrayBuffer)
+const sha256Hex = async (bytes: Uint8Array<ArrayBuffer>): Promise<string> => {
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
@@ -50,10 +50,10 @@ const b64 = (bytes: Uint8Array): string => {
   return btoa(s)
 }
 
-const gzip = async (bytes: Uint8Array): Promise<Uint8Array> => {
+const gzip = async (bytes: Uint8Array<ArrayBuffer>): Promise<Uint8Array> => {
   const cs = new CompressionStream('gzip')
   const writer = cs.writable.getWriter()
-  void writer.write(bytes as unknown as Uint8Array)
+  void writer.write(bytes)
   void writer.close()
   const parts: Uint8Array[] = []
   const reader = cs.readable.getReader()
