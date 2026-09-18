@@ -14,9 +14,9 @@ import {
 import QRCode from "qrcode";
 import { nip19 } from "nostr-tools";
 
-import { Avatar, Screen, BackLink } from "../components/ui";
+import { Avatar, RemoteImage, Screen, BackLink, SkeletonLine } from "../components/ui";
 import { formatDate, handleLabel, shortPubkey } from "../lib/format";
-import { profileName, type Profile } from "../lib/profile";
+import { profileName, profileUnknown, type Profile } from "../lib/profile";
 import { canShare, shareText } from "../lib/native";
 import { LocationMap } from "../components/LocationMap";
 import type { MerchantProfile } from "../lib/merchant";
@@ -207,6 +207,29 @@ function IdentityLines({
   shown: string;
   className?: string;
 }) {
+  /*
+    Waiting, not nameless. `App` seeds its state with `emptyProfile` and then
+    awaits the relay, so on a first login — or any login after `logout`, which
+    wipes the device — this card had nothing but the npub `shown` falls back to,
+    printed at the full 18px weight of a name. It is the user's OWN key on the
+    page that exists to tell them who they are.
+
+    `profileUnknown` is the same discriminator the header uses: a record that has
+    been written but carries no name is a real answer (publishing no kind-0 is
+    allowed) and must show the npub, so the test is `updatedAt === 0` rather than
+    the absence of a name.
+  */
+  if (profileUnknown(profile)) {
+    return (
+      <div className={className} aria-busy="true">
+        {/* One bar at the weight the name will take, so the card is already the
+            height it will be and the controls beside it do not shift. */}
+        <SkeletonLine text="text-lg font-semibold" width="w-40" />
+        <SkeletonLine text="text-sm" width="w-28" />
+      </div>
+    );
+  }
+
   return (
     <div className={className}>
       {profile.displayName && (
@@ -290,22 +313,24 @@ function IdentityCard({
   return (
     <div className="overflow-hidden rounded-2xl border border-mono-200 bg-white dark:border-mono-800 dark:bg-mono-900">
       {profile.banner && (
-        // Issuer-supplied URL, same treatment as the pass strip: no referrer,
-        // and a dead link leaves a plain band rather than a broken-image icon.
-        <img
+        // Issuer-supplied URL, same treatment as the pass strip: no referrer, a
+        // placeholder while it loads, and a dead link leaving a plain band
+        // rather than a broken-image icon.
+        <RemoteImage
           src={profile.banner}
-          alt=""
-          referrerPolicy="no-referrer"
-          className="h-24 w-full bg-mono-100 object-cover dark:bg-mono-800"
+          className="h-24 w-full bg-mono-100 dark:bg-mono-800"
         />
       )}
 
       <div className="p-5">
         <div className="flex items-center gap-3">
+          {/* `loading` so the circle pulses rather than showing initials taken
+              from the npub `profileName` falls back to — "NP" is not anyone. */}
           <Avatar
             src={profile.picture}
             name={profileName(profile)}
             pubkey={profile.pubkey}
+            loading={profileUnknown(profile)}
             size="lg"
           />
           {/* Deliberately not `profileName`, which falls back through the
