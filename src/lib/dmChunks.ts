@@ -237,7 +237,16 @@ function constantTimeEquals(a: string, b: string): boolean {
   return diff === 0
 }
 
-function base64Decode(s: string): Uint8Array {
+/**
+ * Decode base64 into bytes.
+ *
+ * The `Uint8Array<ArrayBuffer>` return type is load-bearing, not decoration.
+ * TypeScript 5.7 made `Uint8Array` generic over its backing buffer, and the
+ * streams API accepts only a view over a real `ArrayBuffer` — never a
+ * `SharedArrayBuffer`. Returning the bare `Uint8Array` compiles under `tsc`
+ * here but fails `npm run build`, which is how this reached a deploy.
+ */
+function base64Decode(s: string): Uint8Array<ArrayBuffer> {
   const bin = atob(s)
   const out = new Uint8Array(bin.length)
   for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i)
@@ -256,7 +265,7 @@ function base64Decode(s: string): Uint8Array {
  * Async, unlike everything else here, because the streams API is — which is
  * why `offerChunk` and `decodeAssembly` return promises.
  */
-async function gunzip(input: Uint8Array): Promise<Uint8Array> {
+async function gunzip(input: Uint8Array<ArrayBuffer>): Promise<Uint8Array> {
   if (input.length < 18 || input[0] !== 0x1f || input[1] !== 0x8b) {
     throw new Error('not a gzip stream')
   }
