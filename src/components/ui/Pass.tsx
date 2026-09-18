@@ -6,6 +6,7 @@ import QRCode from 'qrcode'
 import type { PassField, PassJson } from '../../lib/pass'
 import { formatDate, formatFace, handleLabel, shortPubkey } from '../../lib/format'
 import { Avatar } from './Avatar'
+import { RemoteImage } from './RemoteImage'
 import { SkeletonLine } from './Skeleton'
 
 /**
@@ -151,16 +152,11 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
       style={{ backgroundColor: pass.backgroundColor, color: pass.foregroundColor }}
     >
       {stripUrl && (
-        // Issuer-supplied URL — see branding.ts. `no-referrer` keeps the coupon
-        // route out of the request to their host, and `lazy` avoids fetching a
-        // card that is scrolled off the deck.
-        <img
-          src={stripUrl}
-          alt=""
-          loading="lazy"
-          referrerPolicy="no-referrer"
-          className="h-24 w-full object-cover"
-        />
+        // Issuer-supplied URL — see branding.ts. `RemoteImage` carries the
+        // no-referrer and lazy rules this had, and adds the placeholder: the
+        // strip used to be a blank band until the bytes landed, which reads as
+        // "this stall has no banner" rather than "it is loading".
+        <RemoteImage src={stripUrl} className="h-24 w-full" />
       )}
 
       <div className="p-5">
