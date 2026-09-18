@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-09-18
+
+### Fixed
+
+Faults found reviewing the split-coupon and chunked-delivery work, each with a test that fails
+without its fix.
+
+- **Pieces of an already-received coupon were held forever.** Only the message that completes a
+  split coupon is recorded as handled, so the earlier pieces are re-read on every poll by design.
+  Each re-read started a new assembly that could never finish, because the piece that would finish
+  it is the one the wallet will not look at again. Finished transfers are now remembered, and a
+  coupon already in the wallet is not offered a second time. A transfer that FAILED to decode is
+  deliberately not remembered, so a corrupted delivery can still be retried.
+
+- **Half-assembled coupons outlived the session.** Those pieces are decrypted fragments of
+  someone's money held in memory, and neither signing out nor switching account cleared them. Both
+  now do.
+
+- **Nothing checked that the parts of a split sale added up.** Each part reporting success is not
+  the same claim as the customer receiving what was sold, and the gateway chooses the split. The
+  confirmation screen now shows the amount actually delivered rather than the amount typed, and
+  says plainly when the two differ. It warns rather than failing the sale, because those coupons
+  are already with the customer and cannot be recalled.
+
+### Changed
+
+- The issuance result no longer offers a single-coupon field. Reading the first coupon as though it
+  were the whole sale is precisely what delivered 200 of a 1000 sale, so the shape no longer makes
+  that possible.
+
 ## [0.5.4] - 2026-09-18
 
 ### Fixed
