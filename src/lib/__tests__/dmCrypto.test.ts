@@ -4,6 +4,9 @@ import { bytesToHex } from '@noble/hashes/utils'
 
 import { createDmCryptoAdapter, toLegacyMetadata } from '../dmCrypto'
 import { buildVoucherToken, dmEnvelope } from './voucherFixtures'
+import { resetChunkAssembly } from '../dmChunks'
+import javaChunks from './fixtures/java-encoded-chunks.json'
+import javaPayload from './fixtures/java-encoded-payload.json'
 import { hexToBytes } from '@noble/hashes/utils'
 
 /**
@@ -122,6 +125,62 @@ describe('dm-poll CryptoAdapter', () => {
       signerState.privkey = bytesToHex(generateSecretKey())
 
       expect(await createDmCryptoAdapter().unwrapNip17Dm(wrap as never, '')).toBeNull()
+    })
+
+    /**
+     * A coupon too big for one DM, through the real gift-wrap path.
+     *
+     * This is the incident end to end. A token above the gateway's
+     * `direct_limit_bytes` is sent as several `cashu_dm_chunk` wraps, and
+     * nothing reassembled them: each fell through to the text parser, produced
+     * no token, and was classified `non_token_dm` — marked processed and never
+     * retried. Three real coupons (200, 150, 150) were acked by two relays and
+     * never seen again.
+     *
+     * Wrapped for real rather than calling `offerChunk` directly, because the
+     * bug was not in the reassembly but in nothing CALLING it.
+     */
+    describe('a coupon that arrives in pieces', () => {
+      const chunkWraps = (recipientSk: Uint8Array, chunks: unknown[]) => {
+        const senderSk = generateSecretKey()
+        return chunks.map((chunk) =>
+          nip17.wrapEvent(senderSk, { publicKey: getPublicKey(recipientSk) }, JSON.stringify(chunk)),
+        )
+      }
+
+      it('yields the whole coupon once the last piece is unwrapped', async () => {
+        resetChunkAssembly()
+        const recipientSk = generateSecretKey()
+        signerState.privkey = bytesToHex(recipientSk)
+
+        const wraps = chunkWraps(recipientSk, javaChunks as unknown[])
+        const adapter = createDmCryptoAdapter()
+
+        // The first wrap is a real DM that is not yet a coupon. Null keeps it
+        // unconsumed so the poll re-offers it; anything else loses the money.
+        expect(await adapter.unwrapNip17Dm(wraps[0] as never, '')).toBeNull()
+
+        const done = await adapter.unwrapNip17Dm(wraps[1] as never, '')
+        expect(done?.content).toBe(JSON.stringify(javaPayload))
+      })
+
+      it('hands the reassembled coupon on as an ordinary token DM', async () => {
+        resetChunkAssembly()
+        const recipientSk = generateSecretKey()
+        signerState.privkey = bytesToHex(recipientSk)
+
+        const wraps = chunkWraps(recipientSk, javaChunks as unknown[])
+        const adapter = createDmCryptoAdapter()
+        await adapter.unwrapNip17Dm(wraps[0] as never, '')
+        const done = await adapter.unwrapNip17Dm(wraps[1] as never, '')
+
+        // Everything downstream is synchronous and expects a whole
+        // `cashu_token_transfer`, so the rest of the pipeline must not be able
+        // to tell this coupon was ever split.
+        expect(adapter.extractToken(done!.content)).toBe(
+          (javaPayload as { token: string }).token,
+        )
+      })
     })
   })
 
