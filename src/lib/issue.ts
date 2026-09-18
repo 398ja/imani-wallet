@@ -177,6 +177,8 @@ export interface IssuedVoucher {
   token?: string
   memo?: string
   face_value?: number
+  /** The CREATE response's spelling of `face_value`; the poll uses the other. */
+  face_value_minor?: number
   face_unit?: string
   face_decimals?: number
   token_amount?: number
@@ -550,7 +552,7 @@ export async function issueAndDeliver(
       // merchant is told the sale failed while the customer holds part of it,
       // and the two accounts of the same sale disagree. That is exactly the
       // confusion the lost 800 caused.
-      await recordSale(delivered, params)
+      await recordSale(delivered, params, created.length)
       throw new Error(
         `${error instanceof Error ? error.message : String(error)}` +
           (delivered.length > 0
@@ -561,7 +563,7 @@ export async function issueAndDeliver(
     delivered.push(ready)
   }
 
-  await recordSale(delivered, params)
+  await recordSale(delivered, params, created.length)
 
   return {
     vouchers: delivered,
@@ -569,6 +571,26 @@ export async function issueAndDeliver(
     eventIds,
     eventId: eventIds[0] || undefined,
   }
+}
+
+/** What one coupon is worth, for history and for reporting a partial sale.
+ *
+ * The POLLED voucher carries `face_value` (confirmed in production:
+ * `voucher_finalized ... face_value=20000`), while the CREATE response spells
+ * the same thing `face_value_minor` — so both are read, rather than trusting
+ * whichever endpoint the value happened to come from.
+ *
+ * The last resort divides the sale by its part count instead of falling back to
+ * the whole `faceValueMinor`. A missing field on a 5-part split would otherwise
+ * file five rows of 1000 for a 1000 sale and report five times the money as
+ * delivered, which is a worse lie than a rounded share.
+ */
+function partValue(voucher: IssuedVoucher, params: IssueParams, parts: number): number {
+  return (
+    voucher.face_value ??
+    voucher.face_value_minor ??
+    Math.round(params.faceValueMinor / Math.max(parts, 1))
+  )
 }
 
 /**
@@ -583,10 +605,7 @@ function describePartial(
   total: number,
   params: IssueParams,
 ): string {
-  const sent = delivered.reduce(
-    (sum, v) => sum + (v.face_value ?? 0),
-    0,
-  )
+  const sent = delivered.reduce((sum, v) => sum + partValue(v, params, total), 0)
   const decimals = currencyDecimals(params.currency)
   const amount = (sent / 10 ** decimals).toFixed(decimals)
   return (
@@ -607,7 +626,11 @@ function describePartial(
  * the customer at this point, so throwing would report a delivered sale as a
  * failed one. A missing history entry beats a phantom failure.
  */
-async function recordSale(delivered: IssuedVoucher[], params: IssueParams): Promise<void> {
+async function recordSale(
+  delivered: IssuedVoucher[],
+  params: IssueParams,
+  parts: number,
+): Promise<void> {
   if (delivered.length === 0) return
   try {
     for (const ready of delivered) {
@@ -616,7 +639,7 @@ async function recordSale(delivered: IssuedVoucher[], params: IssueParams): Prom
         // The PART's face value, not the whole sale's. Falling back to the
         // requested total would file each part at the full amount and inflate a
         // split sale by its part count in the merchant's own history.
-        amount: ready.face_value ?? params.faceValueMinor,
+        amount: partValue(ready, params, parts),
         unit: ready.face_unit ?? params.currency,
         // The CURRENCY's decimals, not the voucher's `face_decimals`. The
         // gateway stamps 2 on everything (probed: `face_value_minor: 1000`
