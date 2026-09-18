@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-09-18
+
+### Fixed
+
+- **Each coupon of a split sale is recorded at its own value.** The create and poll endpoints
+  spell the amount differently (`face_value_minor` and `face_value`), so half the pipeline saw no
+  amount at all, and the fallback filed the whole sale against every part — five rows of 1000 for
+  a 1000 sale, reporting five times the money as delivered. Either spelling is now read, and
+  failing both, the sale is divided by its part count.
+
 ## [0.5.1] - 2026-09-18
 
 ### Fixed
