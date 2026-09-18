@@ -268,6 +268,57 @@ describe('decoding what the Java sender actually produced', () => {
   })
 })
 
+/**
+ * What happens to the pieces AFTER a coupon has been reassembled.
+ *
+ * Found in review, not in the field. Only one of a transfer's events yields a
+ * token — the one that completed it — and dm-poll marks only that event
+ * processed. Every earlier chunk's event stays unprocessed by design, so the
+ * poll re-fetches and re-offers it on every cycle. Without a memory of finished
+ * transfers, each re-offer opened a pending entry that could never complete,
+ * because the sibling that would finish it is the one event that will never be
+ * offered again.
+ */
+describe('stragglers from a transfer already reassembled', () => {
+  it('ignores a chunk whose transfer is already complete', async () => {
+    const chunks = await makeChunks(payloadFor(BIG_TOKEN), 2)
+    await offerChunk(chunks[0])
+    expect(await offerChunk(chunks[1])).toBeTruthy()
+
+    // The poll comes round again with the first piece.
+    expect(await offerChunk(chunks[0])).toBeNull()
+    // A leak here is unbounded: rebuilt on every poll, for every split coupon.
+    expect(pendingChunkTransfers()).toBe(0)
+  })
+
+  it('does not re-deliver a coupon that already landed', async () => {
+    const payload = payloadFor(BIG_TOKEN)
+    const chunks = await makeChunks(payload, 2)
+    await offerChunk(chunks[0])
+    expect(await offerChunk(chunks[1])).toBe(payload)
+
+    // Re-offering the whole set must not hand the coupon over a second time.
+    // Double-crediting is caught downstream by the token fingerprint, but this
+    // is the cheaper place to stop it.
+    await offerChunk(chunks[0])
+    expect(await offerChunk(chunks[1])).toBeNull()
+  })
+
+  it('still allows a retry when the transfer FAILED to decode', async () => {
+    const chunks = await makeChunks(payloadFor(BIG_TOKEN), 2)
+    const corrupt = { ...chunks[1], payload: chunks[1].payload.replace(/.$/, 'A') }
+
+    await offerChunk(chunks[0])
+    expect(await offerChunk(corrupt)).toBeNull()
+
+    // A failure is not a completion. The pieces may have been corrupted in
+    // flight and the relay still holds the originals, so a later redelivery
+    // must be able to succeed.
+    await offerChunk(chunks[0])
+    expect(await offerChunk(chunks[1])).toBeTruthy()
+  })
+})
+
 describe('refusing a transfer that does not verify', () => {
   it('refuses a payload whose checksum does not match', async () => {
     const chunks = await makeChunks(payloadFor(BIG_TOKEN), 2)

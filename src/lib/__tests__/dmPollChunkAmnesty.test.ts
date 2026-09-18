@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { startDmPoll, stopDmPoll } from '../dmPoll'
+import { offerChunk, resetChunkAssembly, pendingChunkTransfers } from '../dmChunks'
 
 const fake = vi.hoisted(() => ({ fetchRecentDms: vi.fn(async () => []) }))
 vi.mock('@imani/dm-poll', async (orig) => ({
@@ -93,5 +94,70 @@ describe('amnesty for events abandoned before chunk reassembly existed', () => {
   it('records that it ran, even with nothing to forget', () => {
     startDmPoll(PUBKEY)
     expect(localStorage.getItem(AMNESTY_KEY)).toBeTruthy()
+  })
+})
+
+/**
+ * Half-assembled coupons must not outlive the session that received them.
+ *
+ * A pending chunk is a DECRYPTED fragment of someone's money sitting in memory.
+ * `startDmPoll` calls `stopDmPoll` on an identity change, so without an
+ * explicit clear the previous account's pieces would still be in the assembly
+ * map — and on logout they would simply persist. Found in review.
+ */
+describe('chunk assemblies do not survive the session', () => {
+  const PUBKEY_A = 'c'.repeat(64)
+  const PUBKEY_B = 'd'.repeat(64)
+
+  beforeEach(() => {
+    localStorage.clear()
+    vi.stubGlobal('EventSource', FakeEventSource)
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    resetChunkAssembly()
+  })
+
+  afterEach(() => {
+    stopDmPoll()
+    localStorage.clear()
+  })
+
+  it('drops pending pieces on logout', async () => {
+    const chunk = {
+      type: 'cashu_dm_chunk' as const,
+      transfer_id: 'someones-coupon',
+      chunk_index: 0,
+      chunk_total: 2,
+      content_encoding: 'identity' as const,
+      content_length: 10,
+      content_sha256: 'ab'.repeat(32),
+      payload: 'aGVsbG8=',
+    }
+    startDmPoll(PUBKEY_A)
+    await offerChunk(chunk)
+    expect(pendingChunkTransfers()).toBe(1)
+
+    stopDmPoll()
+    expect(pendingChunkTransfers()).toBe(0)
+  })
+
+  it('does not carry one account\'s pieces into the next', async () => {
+    const chunk = {
+      type: 'cashu_dm_chunk' as const,
+      transfer_id: 'account-a-coupon',
+      chunk_index: 0,
+      chunk_total: 2,
+      content_encoding: 'identity' as const,
+      content_length: 10,
+      content_sha256: 'ab'.repeat(32),
+      payload: 'aGVsbG8=',
+    }
+    startDmPoll(PUBKEY_A)
+    await offerChunk(chunk)
+    expect(pendingChunkTransfers()).toBe(1)
+
+    // An identity change restarts the poller internally.
+    startDmPoll(PUBKEY_B)
+    expect(pendingChunkTransfers()).toBe(0)
   })
 })
