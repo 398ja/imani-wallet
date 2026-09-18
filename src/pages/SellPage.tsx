@@ -146,6 +146,14 @@ function IssueForm({
   // split it. Shown on the confirmation so the merchant and the customer are
   // counting the same thing.
   const [sentParts, setSentParts] = useState(1)
+  /**
+   * How far short the delivery fell, in minor units. Zero on every normal sale.
+   *
+   * The portal decides how a large sale is split, so the parts adding up to the
+   * whole is its promise rather than this screen's. If it is ever broken, the
+   * merchant must see it while the customer is still there.
+   */
+  const [shortfall, setShortfall] = useState(0)
   // What this coupon actually got, once the gateway has settled it — which is
   // not always what was asked for, hence `waitForExpiry` in lib/issue.ts.
   const [sentExpiry, setSentExpiry] = useState<string>('')
@@ -166,7 +174,7 @@ function IssueForm({
     if (minor === null || validity === null) return
     setError(null)
     try {
-      const { vouchers } = await issueAndDeliver(
+      const { vouchers, deliveredValue } = await issueAndDeliver(
         {
           faceValueMinor: minor,
           currency: merchant.issuanceCurrency,
@@ -195,7 +203,11 @@ function IssueForm({
       // separate coupons in their wallet — so the merchant must be told, or
       // the two of them count the sale differently at the stall.
       setSentParts(vouchers.length)
-      setSent(minor)
+      // What the customer ACTUALLY received, not what was typed. The two agree
+      // on every ordinary sale; when they do not, the merchant is standing in
+      // front of the customer and needs the real figure, not the intended one.
+      setSent(deliveredValue)
+      setShortfall(deliveredValue !== minor ? minor - deliveredValue : 0)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -228,6 +240,15 @@ function IssueForm({
                 amount above.
               </p>
             )}
+            {/* Never expected, and loud when it happens: the amount above is
+                what the customer HOLDS, so a gap means the rest is still owed. */}
+            {shortfall > 0 && (
+              <p className="mt-2 text-sm font-medium text-red-600">
+                That is{' '}
+                {formatFace(shortfall, { unit: merchant.issuanceCurrency, decimals })} less
+                than you asked for. The rest was not delivered and is still owed.
+              </p>
+            )}
             {/* The expiry the coupon was actually granted, not the one asked
                 for. Blank when the gateway never returned one, which is a
                 degraded coupon rather than a failed sale — see lib/issue.ts. */}
@@ -244,6 +265,7 @@ function IssueForm({
             onClick={() => {
               setSent(null)
               setSentParts(1)
+              setShortfall(0)
               setAmount('')
               setMemo('')
               setValidity(merchant.voucherValidityDays)

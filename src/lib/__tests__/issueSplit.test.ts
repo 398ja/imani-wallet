@@ -188,8 +188,9 @@ describe('a sale the gateway split into several coupons', () => {
       const result = await issueAndDeliver(params)
       expect(result.vouchers).toHaveLength(1)
       expect(deliveries()).toBe(1)
-      // The legacy field still names the coupon, for callers not yet updated.
-      expect(result.voucher.voucher_id).toBe('v1')
+      // Even the one-coupon case is a LIST. There is no single-voucher field to
+      // reach for, which is what stops the original bug being rewritten.
+      expect(result.vouchers[0].voucher_id).toBe('v1')
     } finally {
       PARTS.push('v2', 'v3', 'v4', 'v5')
     }
@@ -234,6 +235,42 @@ describe('what each coupon is recorded as being worth', () => {
     }
     const total = transactions.reduce((t, r) => t + (r.amount as number), 0)
     expect(total).toBe(params.faceValueMinor)
+  })
+})
+
+/**
+ * Do the parts add up to the sale? Found in review.
+ *
+ * Each part reporting success is not the same claim as the customer receiving
+ * what the merchant sold. The PORTAL chooses the split, so the pieces summing
+ * to the whole is its promise, and nothing here was checking it — a gateway
+ * returning four parts of a five-part split would have read as a clean sale.
+ */
+describe('reconciling the delivered total against the sale', () => {
+  it('reports the delivered value, not the requested one', async () => {
+    const result = await issueAndDeliver(params)
+    expect(result.deliveredValue).toBe(params.faceValueMinor)
+  })
+
+  it('notices when the parts do not add up', async () => {
+    const shout = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // The portal returns one part fewer than the sale needs.
+    PARTS.splice(4)
+    try {
+      const result = await issueAndDeliver(params)
+
+      // Every part delivered, and the customer is still short a coupon. The
+      // caller is handed the true figure rather than the intended one.
+      expect(result.vouchers).toHaveLength(4)
+      expect(result.deliveredValue).toBe(PART_VALUE * 4)
+      expect(result.deliveredValue).not.toBe(params.faceValueMinor)
+      expect(shout).toHaveBeenCalledWith(
+        '[issue] the parts do not add up to the sale',
+        expect.objectContaining({ requested: params.faceValueMinor }),
+      )
+    } finally {
+      PARTS.push('v5')
+    }
   })
 })
 

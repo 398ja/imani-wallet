@@ -189,19 +189,26 @@ export interface IssuedVoucher {
 /**
  * The outcome of one sale, which may be several coupons.
  *
- * `vouchers` is the sale. `voucher`/`eventId` are the first part only, kept for
- * callers that predate splitting; reading them as "the sale" is the bug that
- * lost 800 of a 1000-unit sale, so prefer `vouchers` and sum it.
+ * There is deliberately NO single-voucher field. An earlier version kept
+ * `voucher`/`eventId` as "the first part" for convenience, but reading the
+ * first item as though it were the sale is the exact bug that delivered 200 of
+ * a 1000 sale — so the shape no longer offers it. Sum `vouchers` to state what
+ * the customer received.
  */
 export interface IssueResult {
   /** Every coupon delivered, in order. Sum `face_value` for what the customer got. */
   vouchers: IssuedVoucher[]
   /** DM event ids, index-aligned with `vouchers`. */
   eventIds: string[]
-  /** @deprecated The FIRST coupon, not the sale. Use `vouchers`. */
-  voucher: IssuedVoucher
-  /** @deprecated The first DM only. Use `eventIds`. */
-  eventId?: string
+  /**
+   * What the customer actually received, in minor units.
+   *
+   * Normally equal to the requested `faceValueMinor`. It is returned rather
+   * than assumed so the confirmation screen can show the real figure: the
+   * portal chooses how a large sale is split, and a shortfall must be visible
+   * to the merchant while the customer is still standing there.
+   */
+  deliveredValue: number
 }
 
 export interface IssueParams {
@@ -449,10 +456,9 @@ async function deliver(
  *
  * ONE SALE IS NOT ALWAYS ONE COUPON. The portal splits a face value whose Cashu
  * token would exceed the transport ceiling, and returns every part; this
- * function mints and delivers each in turn. `vouchers` is the full set and is
- * the field to trust. `voucher` is the first part, kept so existing callers
- * still compile — it is NOT the sale, and summing `vouchers` is the only way to
- * state what the customer received.
+ * function mints and delivers each in turn. The result carries `vouchers` and
+ * nothing that looks like a single coupon, because offering one is what let a
+ * caller read the first part as the whole sale.
  *
  * Partial delivery is possible and is reported as a THROW carrying what landed:
  * once a coupon is DM'd it cannot be recalled, so a later part failing does not
@@ -565,12 +571,33 @@ export async function issueAndDeliver(
 
   await recordSale(delivered, params, created.length)
 
-  return {
-    vouchers: delivered,
-    voucher: delivered[0],
-    eventIds,
-    eventId: eventIds[0] || undefined,
+  /**
+   * Did the customer actually receive what the merchant sold?
+   *
+   * Every part reported success individually, which is not the same claim. The
+   * portal chooses the split, and this code has never checked that the pieces
+   * add up to the whole — so a gateway that returned four parts of a five-part
+   * split, or mislabelled one, would read as a completed sale and the shortfall
+   * would surface at the stall rather than here.
+   *
+   * A WARNING, not a throw. Every coupon counted here is already in the
+   * customer's wallet and cannot be recalled, so failing the sale now would
+   * report delivered money as undelivered — the mirror of the original bug.
+   * The merchant is told the real figure and can make it up.
+   */
+  const deliveredValue = delivered.reduce(
+    (sum, v) => sum + partValue(v, params, created.length),
+    0,
+  )
+  if (deliveredValue !== params.faceValueMinor) {
+    console.error('[issue] the parts do not add up to the sale', {
+      requested: params.faceValueMinor,
+      delivered: deliveredValue,
+      parts: delivered.length,
+    })
   }
+
+  return { vouchers: delivered, eventIds, deliveredValue }
 }
 
 /** What one coupon is worth, for history and for reporting a partial sale.
