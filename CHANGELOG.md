@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.7] - 2026-09-18
+
+### Changed
+
+- **Relay reads no longer wait three seconds on a relay that is not there.** The same fault as
+  0.5.6's profile fix, in the two reads that were left: `allAddressable` and `newestAddressable`
+  query the relay and the gateway in parallel and merge the results, so the caller pays for the
+  slower store. Reaching strfry from a browser needs its port published, which a real deployment
+  does not do, and a socket to a host that DROPS packets ends on a timer rather than a refusal —
+  so the ordinary deployed state was also the worst case. Measured: 3002ms uncapped against a
+  black-holed address, 1201ms with the connection wait bounded, and 25ms either way to a healthy
+  relay.
+
+  These reads carry the merchant record and the issuance ledger, and a null answer takes away the
+  merchant role, so the bound is deliberately gentler than the 150ms used for profiles: 1200ms is
+  far above any healthy connect and far below the default. PUBLISHING IS NOT CAPPED — a read that
+  gives up early costs a slower answer from the other store, while a publish that gives up early is
+  an event the user believes they sent and nobody has.
+
+
 ## [0.5.6] - 2026-09-18
 
 ### Fixed
