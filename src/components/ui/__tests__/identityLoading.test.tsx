@@ -128,4 +128,29 @@ describe('a name that has not arrived', () => {
     expect(screen.getByText('Rosa Green Farm')).toBeTruthy()
     expect(document.querySelector('[aria-busy="true"]')).toBeNull()
   })
+
+  /**
+   * A FAILED LOOKUP MUST NOT ERASE A KNOWN NAME, found in review.
+   *
+   * `merchantBranding` resolves to empty fields when both stores were briefly
+   * unreachable — ordinary on a phone. Written as `fetched ?? known` the empty
+   * answer wins, because `??` only falls through on null, and the row would
+   * drop from a name the user has seen a hundred times back to a hex key the
+   * moment the signal dips. That is the exact failure this change removes,
+   * arriving by a different door.
+   */
+  it('keeps a known name when the lookup comes back empty', async () => {
+    localStorage.setItem(
+      `imani-wallet:identity:${STALL}`,
+      JSON.stringify({ branding: { organizationName: 'Rosa Green Farm' }, at: Date.now() }),
+    )
+    brandingFor = () => Promise.resolve({})
+
+    draw(<IdentityInline pubkey={STALL} />)
+
+    // Still named after the empty answer has settled.
+    await new Promise((r) => setTimeout(r, 10))
+    expect(screen.getByText('Rosa Green Farm')).toBeTruthy()
+    expect(screen.queryByText('aaaaaaaa…aaaa')).toBeNull()
+  })
 })

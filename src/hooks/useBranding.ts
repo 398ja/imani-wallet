@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 
-import { knownBranding, merchantBranding } from '../lib/branding'
+import { knownBranding, merchantBranding, onBrandingChanged } from '../lib/branding'
 import type { MerchantBranding } from '../lib/pass'
 
 /**
@@ -46,22 +46,44 @@ export function useBranding(pubkey: string | undefined): {
   useEffect(() => {
     if (!pubkey) return
     let cancelled = false
-    // Never rejects — an unbranded or unreachable stall resolves to empty fields.
-    void merchantBranding(pubkey).then((branding) => {
+    const take = (branding: MerchantBranding) => {
       if (!cancelled) setFetched({ pubkey, branding })
-    })
+    }
+    // Never rejects — an unbranded or unreachable stall resolves to empty fields.
+    void merchantBranding(pubkey).then(take)
+    /*
+      And the LATE CORRECTION from whichever store lost the race in
+      `fetchNewestKind0`. Without this a coupon card keeps the name the faster
+      store had until it remounts — which on the screen showing that stall's
+      coupons is exactly the "I renamed my stall and customers still see the old
+      name" failure that reading both stores exists to prevent.
+    */
+    const unsubscribe = onBrandingChanged(pubkey, take)
     return () => {
       cancelled = true
+      unsubscribe()
     }
   }, [pubkey])
 
   const resolved = fetched && fetched.pubkey === pubkey ? fetched.branding : undefined
-  // The seed only stands in until THIS pubkey's fetch lands. `resolved` being
-  // undefined while `fetched` holds another pubkey's answer is the row-reuse
-  // case, and there the seed is the right thing to show — it was read for the
-  // pubkey being rendered.
-  const seed = resolved === undefined ? known : undefined
-  const branding = resolved ?? seed
+  /*
+    The seed stands in until THIS pubkey's fetch lands — and ALSO when that
+    fetch came back with nothing.
+
+    That second case is not a detail. A lookup resolves to empty fields when
+    both stores were briefly unreachable, which on a phone is ordinary, and
+    `resolved ?? known` would then hand the card a blank name in preference to
+    the one sitting on disk. `toMerchantPass` turns a blank name into the issuer
+    id, which `Pass` truncates — so a moment of bad signal would put back the
+    exact hex key this change exists to remove, over a stall the user has seen
+    a hundred times.
+
+    `resolved` being undefined while `fetched` holds ANOTHER pubkey's answer is
+    the row-reuse case, and there the seed is right too: it was read for the
+    pubkey being rendered.
+  */
+  const gotSomething = resolved?.organizationName ?? resolved?.nip05 ?? resolved?.logoUrl
+  const branding = gotSomething ? resolved : (known ?? resolved)
 
   return {
     branding,

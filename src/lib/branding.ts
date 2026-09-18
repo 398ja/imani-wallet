@@ -171,6 +171,24 @@ const STORE_PREFIX = 'imani-wallet:identity:'
 /** How long a stored profile is served without question. A day. */
 const FRESH_MS = 24 * 60 * 60 * 1000
 
+/**
+ * How many profiles to keep. Oldest-written fall off first.
+ *
+ * Bounded for the reason lib/boundedSet.ts gives about its own stores: an
+ * unbounded localStorage key is a leak, and this one grows with every stall,
+ * customer and counterparty the wallet has ever named — a merchant's
+ * transaction list alone can name hundreds of people. localStorage is a hard
+ * ~5MB per origin SHARED with the coupons, the pending claims and the session,
+ * so letting profiles expand without limit means the eviction eventually lands
+ * on something that matters rather than on a cached avatar URL.
+ *
+ * 200 is far above any plausible working set (the stalls you hold coupons
+ * from, the people you have paid recently) and far below the point where the
+ * quota is at risk: a profile record is a few hundred bytes, so this caps the
+ * store at well under 100KB.
+ */
+const STORE_LIMIT = 200
+
 interface StoredBranding {
   branding: MerchantBranding
   at: number
@@ -204,8 +222,51 @@ function readStored(key: string): StoredBranding | undefined {
 function writeStored(key: string, branding: MerchantBranding): void {
   try {
     localStorage.setItem(STORE_PREFIX + key, JSON.stringify({ branding, at: Date.now() }))
+    evictOldest()
   } catch {
-    // A full or disabled store is not worth an error over a cached name.
+    // A full or disabled store is not worth an error over a cached name. Try
+    // once to make room, in case this origin is already at quota — if that
+    // fails too, the profile simply is not cached and everything still works.
+    try {
+      evictOldest(true)
+      localStorage.setItem(STORE_PREFIX + key, JSON.stringify({ branding, at: Date.now() }))
+    } catch {
+      // Genuinely cannot store. Not an error path worth surfacing.
+    }
+  }
+}
+
+/**
+ * Drop the oldest-written profiles once past the cap.
+ *
+ * Oldest-WRITTEN rather than least-recently-read: a read does not touch the
+ * record, so there is no access time to sort by, and adding one would mean a
+ * localStorage write on every render of every row. Write order is a decent
+ * proxy — a profile that matters is refetched and rewritten when it goes stale
+ * — and the cost of a wrong eviction is one refetch.
+ *
+ * @param aggressive halve the store rather than trim to the cap, for the
+ *        quota-exceeded path where we do not know how much room is needed.
+ */
+function evictOldest(aggressive = false): void {
+  const entries: { key: string; at: number }[] = []
+  for (const key of Object.keys(localStorage)) {
+    if (!key.startsWith(STORE_PREFIX)) continue
+    let at = 0
+    try {
+      at = (JSON.parse(localStorage.getItem(key) ?? '{}') as StoredBranding).at ?? 0
+    } catch {
+      // Unparseable: treat as oldest so it is the first thing evicted.
+    }
+    entries.push({ key, at })
+  }
+
+  const keep = aggressive ? Math.floor(STORE_LIMIT / 2) : STORE_LIMIT
+  if (entries.length <= keep) return
+
+  entries.sort((a, b) => a.at - b.at)
+  for (const { key } of entries.slice(0, entries.length - keep)) {
+    localStorage.removeItem(key)
   }
 }
 
@@ -317,16 +378,22 @@ export async function fetchNewestKind0(
   // this module wants — the rule is newest-wins, and the only thing wrong with
   // the old code was how long it was prepared to wait to apply it.
   //
-  // So the wait is bounded rather than removed. Once one store has answered,
-  // the other gets GRACE_MS to weigh in, and the newest of what arrived wins.
-  // A healthy store answers in 5-25ms, so in practice both are always in hand
-  // and the semantics are exactly what they were; a store that is timing out
-  // blows the budget and is left to the correction path instead of holding a
-  // name off the screen for three seconds.
-  const first = await firstAnswer(cached, relayed)
-  const best = await settledWithin(GRACE_MS, first, cached, relayed)
+  // So the wait is BOUNDED rather than removed: both stores are given GRACE_MS
+  // to answer, and the newest of whatever arrived in that time wins. A healthy
+  // store answers in 5-25ms, so in practice both are always in hand and the
+  // semantics are exactly what they were; a store that is timing out blows the
+  // budget and is left to the correction path below.
+  //
+  // The deadline runs from HERE, not from the first answer. An earlier version
+  // waited for an answer and only then started the clock, which looked
+  // equivalent and was not: when the fast store legitimately has NOTHING —
+  // routine for a stall whose kind-0 went straight to the relay, which is the
+  // very reason both stores are read — there is no first answer to start it,
+  // and the whole 3s relay timeout was back. Measured at 3003ms before this
+  // change, 0ms after.
+  const best = await settledWithin(GRACE_MS, cached, relayed)
 
-  // Whatever is still outstanding is read to completion anyway, and may still
+  // Whatever missed the deadline is still read to completion, and may still
   // correct what we returned. Detached deliberately: nobody is waiting on it.
   void Promise.all([cached, relayed]).then(([a, b]) => {
     const latest = newer(a, b)
@@ -349,28 +416,44 @@ export async function fetchNewestKind0(
 const GRACE_MS = 150
 
 /**
- * The newest of whatever has ARRIVED within `ms`, never worse than `fallback`.
+ * The newest profile any lookup produced within `ms`, or null.
  *
- * The point is the deadline: a lookup that has not answered by now is presumed
- * to be one of the multi-second failure modes, and is dropped from the decision
- * rather than waited on.
+ * Two ways to finish, and both matter:
+ *
+ *  - EVERY lookup settled: answer immediately. The common case, and why a
+ *    healthy read does not sit on the timer — 25ms, not 150.
+ *  - The deadline passed: answer with what arrived. A lookup still outstanding
+ *    is presumed to be one of the multi-second failure modes and is dropped
+ *    from the decision rather than waited on.
+ *
+ * Note that an empty result still COUNTS as settled. "No profile here" is a
+ * real answer from a store, and a read where both stores say so must return
+ * null promptly rather than idle until the deadline.
  */
 async function settledWithin<T extends { createdAt: number }>(
   ms: number,
-  fallback: T | null,
   ...lookups: Promise<T | null>[]
 ): Promise<T | null> {
-  let best = fallback
-  await Promise.race([
-    Promise.all(
-      lookups.map((lookup) =>
-        lookup.then((value) => {
-          best = newer(best, value)
-        }),
+  let best: T | null = null
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      Promise.all(
+        lookups.map((lookup) =>
+          lookup.then((value) => {
+            best = newer(best, value)
+          }),
+        ),
       ),
-    ),
-    new Promise((resolve) => setTimeout(resolve, ms)),
-  ])
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, ms)
+      }),
+    ])
+  } finally {
+    // Or the timer keeps the event loop alive past the answer — which in Node
+    // (the test runner, and any SSR) delays process exit for every profile read.
+    clearTimeout(timer)
+  }
   return best
 }
 
@@ -378,27 +461,6 @@ function newer<T extends { createdAt: number }>(a: T | null, b: T | null): T | n
   if (!a) return b
   if (!b) return a
   return b.createdAt > a.createdAt ? b : a
-}
-
-/**
- * The first of two lookups to produce an ACTUAL PROFILE, or null if neither does.
- *
- * Not `Promise.race`, which resolves on the first to SETTLE — and the fastest
- * settlement is a store that is not configured answering `null` in 5ms, which
- * would hand back "no such profile" while the store that has it is still
- * reading. That is the same class of bug as caching a miss.
- */
-async function firstAnswer<T>(...lookups: Promise<T | null>[]): Promise<T | null> {
-  return new Promise((resolve) => {
-    let outstanding = lookups.length
-    for (const lookup of lookups) {
-      void lookup.then((value) => {
-        if (value !== null) resolve(value)
-        // Only when EVERY lookup has come back empty is "nothing" the answer.
-        else if (--outstanding === 0) resolve(null)
-      })
-    }
-  })
 }
 
 async function gatewayKind0(
@@ -532,8 +594,16 @@ export function merchantBranding(pubkey: string): Promise<MerchantBranding> {
   return pending
 }
 
-/** Exported for tests, which must not share a cache between cases. */
+/**
+ * Exported for tests, which must not share state between cases.
+ *
+ * Clears the persisted store and the listeners as well as the session cache —
+ * all three now hold per-pubkey state, and a case that reset only one of them
+ * would inherit the others. Production never calls this; `logout` wipes the
+ * whole `imani-wallet:` prefix and reloads the document.
+ */
 export function clearBrandingCache(): void {
   cache.clear()
   clearStoredBranding()
+  listeners.clear()
 }

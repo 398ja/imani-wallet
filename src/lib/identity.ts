@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { knownBranding, merchantBranding, onBrandingChanged } from './branding'
 import { handleLabel, shortPubkey } from './format'
@@ -244,15 +244,38 @@ export function useIdentityState(pubkey: string | undefined): {
   loading: boolean
 } {
   const fetched = useIdentity(pubkey)
-  // Read once per render rather than held in state: it is a synchronous
-  // localStorage read, and putting it in state would need an effect to keep it
-  // in step with `pubkey` — the cascading-render pattern `Avatar` avoids.
-  const known = pubkey && !fetched ? knownBranding(pubkey) : undefined
-  const identity: Identity | undefined =
-    fetched ??
-    (known
+  /*
+    Memoised on the pubkey, matching `useBranding`.
+
+    This is a synchronous `localStorage.getItem` plus a `JSON.parse`, and this
+    hook renders once PER ROW — a coupon list, a transaction history, the
+    merchant deck. Read on every render it becomes a parse per row per frame on
+    the main thread, which is a strange way to pay for a change whose entire
+    purpose is that the screen appears sooner.
+
+    Not held in state: that would need an effect to keep it in step with
+    `pubkey`, which is the cascading-render pattern `Avatar` documents avoiding.
+    Memoisation derives it during the render instead, which is what it is for.
+  */
+  const known = useMemo(() => (pubkey ? knownBranding(pubkey) : undefined), [pubkey])
+  /*
+    `fetched ?? known` would be wrong, and subtly. `useIdentity` resolves to a
+    DEFINED but empty Identity when the lookup found nothing — both stores
+    briefly unreachable, which on a phone is ordinary — and `??` only falls
+    through on null/undefined, so the empty answer would win and discard the
+    name sitting on disk. A moment of bad signal would put a hex key back over
+    a stall the user has seen a hundred times, which is the failure this whole
+    change exists to remove.
+
+    So the test is whether the fetch actually NAMED anyone, not whether it
+    returned.
+  */
+  const named = fetched?.name ?? fetched?.nip05 ?? fetched?.picture
+  const identity: Identity | undefined = named
+    ? fetched
+    : known
       ? { name: known.organizationName, nip05: known.nip05, picture: known.logoUrl }
-      : undefined)
+      : fetched
 
   return {
     identity,
