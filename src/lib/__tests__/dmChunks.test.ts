@@ -279,6 +279,40 @@ describe('decoding what the Java sender actually produced', () => {
  * because the sibling that would finish it is the one event that will never be
  * offered again.
  */
+/**
+ * Both pieces arriving at once.
+ *
+ * Not hypothetical: the SSE subscription calls `processGiftWrap(event)` without
+ * awaiting it, so two chunks of one transfer really are in flight together.
+ * `offerChunk` is async and has an `await` in its decode, so the question is
+ * whether two callers can both see a complete set and deliver the coupon twice.
+ *
+ * They cannot, because everything that decides completeness — the pending
+ * lookup, the part insert, the size test and the delete — runs synchronously
+ * before the first await. This pins that property, since an innocuous-looking
+ * `await` moved above the delete would break it and nothing else would notice.
+ */
+describe('both chunks arriving concurrently', () => {
+  it('delivers the coupon exactly once', async () => {
+    const chunks = await makeChunks(payloadFor(BIG_TOKEN), 2)
+
+    const results = await Promise.all(chunks.map((c) => offerChunk(c)))
+
+    expect(results.filter((r) => r !== null)).toHaveLength(1)
+  })
+
+  it('delivers once even when every piece of a 3-part transfer races', async () => {
+    const payload = payloadFor(BIG_TOKEN)
+    const chunks = await makeChunks(payload, 3)
+
+    const results = await Promise.all(chunks.map((c) => offerChunk(c)))
+    const completed = results.filter((r) => r !== null)
+
+    expect(completed).toHaveLength(1)
+    expect(completed[0]).toBe(payload)
+  })
+})
+
 describe('stragglers from a transfer already reassembled', () => {
   it('ignores a chunk whose transfer is already complete', async () => {
     const chunks = await makeChunks(payloadFor(BIG_TOKEN), 2)
@@ -336,6 +370,27 @@ describe('refusing a transfer that does not verify', () => {
 
     await offerChunk(lying[0])
     expect(await offerChunk(lying[1])).toBeNull()
+  })
+
+  it('refuses a fragment that is not valid base64', async () => {
+    // `atob` THROWS on malformed input rather than returning null, so without
+    // the catch around the decode this would escape as an unhandled rejection
+    // and take down the poll tick for every later coupon.
+    const chunks = await makeChunks(payloadFor(BIG_TOKEN), 2)
+    const garbage = { ...chunks[1], payload: '!!!not base64!!!' }
+
+    await offerChunk(chunks[0])
+    expect(await offerChunk(garbage)).toBeNull()
+  })
+
+  it('refuses an absurdly large fragment without decoding it', async () => {
+    // Nothing forces a sender to respect the gateway's per-chunk size, so the
+    // ceiling is enforced on the ENCODED length, before a buffer is allocated.
+    const chunks = await makeChunks(payloadFor(BIG_TOKEN), 2)
+    const huge = { ...chunks[1], payload: 'A'.repeat(2_000_000) }
+
+    await offerChunk(chunks[0])
+    expect(await offerChunk(huge)).toBeNull()
   })
 
   it('drops the transfer when the sender disagrees about its own size', async () => {
