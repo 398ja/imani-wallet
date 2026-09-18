@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-09-18
+
+### Fixed
+
+- **A profile that had not loaded yet was rendered as a truncated pubkey.** Avatars, display names
+  and NIP-05s take time to arrive, and what stood in the gap was a hex key in the same type and
+  position as a real name — indistinguishable from an answer to anyone reading a receipt. Places
+  that are genuinely still waiting now show a loading placeholder instead. A lookup that came back
+  EMPTY still shows the short key: that is a settled answer, not a wait, and a spinner that never
+  resolves would be worse than the bug.
+
+- **A failed lookup erased a name the device already knew.** Both profile hooks preferred the
+  fetched record over the cached one, and a lookup that found nothing returns a defined-but-empty
+  record — so a moment of bad signal put a hex key back over a stall the user had seen a hundred
+  times.
+
+### Changed
+
+- **Profiles no longer wait for the relay to be read from nostrdb.** The kind-0 read awaited BOTH
+  stores, so every lookup cost the slower one — and a browser WebSocket to an unreachable relay
+  fails on a clock, not a packet: 3001ms to a host that drops, 4400ms with no EOSE, against 25ms
+  for a healthy relay and 5ms for a refused connection. A deployment that does not publish strfry's
+  port is the documented normal case, so nostrdb's answer sat complete in milliseconds while the
+  browser counted down someone else's timeout. Both stores now get a 150ms budget and the newest
+  answer within it wins; whatever arrives later still corrects what was shown, so the relay keeps
+  overruling a frozen cache without anyone waiting for it.
+
+- **Profiles are cached across sessions.** The cache was per-document, so every reload re-earned the
+  same answers over the network. kind-0 is a replaceable event carrying its own `created_at`, so a
+  stored copy is unambiguous — it is simply the newest this device has seen. A name already seen now
+  renders on the first frame. Bounded at 200 records, oldest-written evicted first, since
+  localStorage is a shared ~5MB quota.
+
+
 ## [0.5.5] - 2026-09-18
 
 ### Fixed
