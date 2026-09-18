@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-09-18
+
+### Fixed
+
+- **Banners and coupon strips showed a blank band while they loaded.** The band was the right size,
+  so nothing reflowed, but an empty grey rectangle asserts "this stall published no banner" — a
+  different claim from "it is loading", and while the request is in flight, a false one. They now
+  hold their space with a placeholder and fade in. A dead link still settles to the plain band
+  rather than pulsing forever, because these URLs are self-published and dying is ordinary.
+
+- **Your own profile page greeted you with your own npub.** `App` seeds its state with an empty
+  profile and then awaits the relay, so on a first login — or any login after logging out, which
+  wipes the device — the identity card printed the npub at the full weight a name gets. An account
+  that has genuinely published no name still shows its npub: that is a settled answer, and the
+  discriminator is whether anything has ever been written rather than whether a name is present.
+
+### Changed
+
+- Remote image loading is now one component (`RemoteImage`) rather than four copies of an `<img>`
+  tag. It keeps the lazy and no-referrer rules those had, which are privacy controls and not
+  tuning: fetching one of these hands the issuer the customer's IP and the moment they opened their
+  wallet.
 ## [0.5.7] - 2026-09-18
 
 ### Changed
