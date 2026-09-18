@@ -156,4 +156,47 @@ describe('a profile that was already fetched once', () => {
     localStorage.setItem(STORE_KEY, JSON.stringify({ nonsense: true }))
     expect(knownBranding(PUBKEY)).toBeUndefined()
   })
+
+  /**
+   * THE STORE MUST NOT GROW FOREVER, found in review.
+   *
+   * lib/boundedSet.ts already treats an unbounded localStorage key as a leak,
+   * and this one grows with every stall, customer and counterparty the wallet
+   * has ever named — a merchant's transaction list alone can name hundreds.
+   * localStorage is a hard ~5MB per origin SHARED with the coupons and the
+   * session, so an uncapped cache of avatar URLs eventually evicts something
+   * that actually matters.
+   */
+  it('keeps the newest records and drops the oldest', async () => {
+    relayHas([{ content: '{"name":"Rosa"}', created_at: 900 }])
+
+    // Well past the cap, each older than the last.
+    for (let i = 0; i < 260; i++) {
+      localStorage.setItem(
+        `imani-wallet:identity:${i.toString(16).padStart(64, '0')}`,
+        JSON.stringify({ branding: { organizationName: `Stall ${i}` }, at: i }),
+      )
+    }
+
+    // One more write triggers the trim.
+    await merchantBranding(PUBKEY)
+
+    const keys = Object.keys(localStorage).filter((k) =>
+      k.startsWith('imani-wallet:identity:'),
+    )
+    expect(keys.length).toBeLessThanOrEqual(200)
+    // The freshly written one survives; the oldest do not.
+    expect(localStorage.getItem(STORE_KEY)).not.toBeNull()
+    expect(localStorage.getItem(`imani-wallet:identity:${'0'.repeat(64)}`)).toBeNull()
+  })
+
+  /** A profile cached for one stall must not be readable as another's. */
+  it('does not confuse one pubkey for another', () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify({ branding: { organizationName: 'Rosa' }, at: Date.now() }),
+    )
+
+    expect(knownBranding('cd'.repeat(32))).toBeUndefined()
+  })
 })

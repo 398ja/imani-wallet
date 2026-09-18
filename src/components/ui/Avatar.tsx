@@ -66,25 +66,58 @@ export function Avatar({ src, name, pubkey, loading, size = 'md', className }: A
 
   const face =
     src && src !== failedSrc ? (
-      <span className={cn('relative inline-block', sizeClasses[size], className)}>
+      /*
+        The picture and its placeholder share one box, so the space is held
+        while the bytes arrive and the face fades into exactly the same spot.
+
+        `className` goes on the WRAPPER ONLY. It carries layout from the caller
+        — `shrink-0` on every row in the app — and putting it on the inner img
+        too meant the same flex rule applied twice at two nesting levels, which
+        is at best redundant and at worst contradictory once a caller passes a
+        margin.
+      */
+      <span className={cn('relative inline-block shrink-0', sizeClasses[size], className)}>
         {src !== loadedSrc && (
-          <Skeleton className={cn('absolute inset-0 rounded-full', sizeClasses[size])} />
+          <Skeleton className={cn('absolute inset-0 h-full w-full rounded-full')} />
         )}
         <img
           src={src}
           alt={name}
+          /*
+            STILL LAZY, and deliberately so after considering the alternative.
+
+            A lazy image below the fold does not start loading until it nears
+            the viewport, so the skeleton beneath it keeps pulsing until then —
+            which argues for eager loading, until you read why `imageUrl` exists
+            in branding.ts: these URLs point at hosts the ISSUER controls, and
+            fetching one hands them the customer's IP and the moment they opened
+            their wallet. Eager loading a deck of cards would beacon every stall
+            the user has ever dealt with on app open, including the ones they
+            never scroll to.
+
+            A placeholder animating off-screen is invisible; a privacy
+            regression is not. The pulse resolves as soon as the card is
+            actually looked at, which is exactly when the promise it makes comes
+            due.
+          */
           loading="lazy"
           // Third-party host: send no referrer with the request.
           referrerPolicy="no-referrer"
           onError={() => setFailedSrc(src)}
           onLoad={() => setLoadedSrc(src)}
           ref={(node) => {
-            // Cache hit: `load` may have fired before this handler existed.
+            // A CACHED image can finish decoding before React attaches `onLoad`,
+            // and then the event never fires and the skeleton never lifts. This
+            // catches that: `complete` with real pixels means it is already here.
+            //
+            // The callback returns undefined deliberately — React 19 treats a
+            // returned value as a cleanup function, so the concise arrow body
+            // this replaced was handing React a `setLoadedSrc` return as if it
+            // were one.
             if (node?.complete && node.naturalWidth > 0) setLoadedSrc(src);
           }}
           className={cn(
-            'rounded-full object-cover',
-            sizeClasses[size],
+            'h-full w-full rounded-full object-cover',
             // Faded in rather than popped in, so a picture that arrives late
             // does not snap over the placeholder it replaces.
             'transition-opacity duration-200',
@@ -93,7 +126,7 @@ export function Avatar({ src, name, pubkey, loading, size = 'md', className }: A
         />
       </span>
     ) : loading ? (
-      <Skeleton className={cn('rounded-full', sizeClasses[size], className)} />
+      <Skeleton className={cn('shrink-0 rounded-full', sizeClasses[size], className)} />
     ) : (
       <div
         className={cn(

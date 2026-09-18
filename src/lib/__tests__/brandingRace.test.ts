@@ -149,6 +149,30 @@ describe('the grace window', () => {
   })
 
   /**
+   * THE CASE THAT MADE THIS BOUND REAL, found in review.
+   *
+   * An earlier version waited for a first ANSWER and only then started the
+   * clock. That looks equivalent and is not: when the fast store legitimately
+   * holds nothing, there is no first answer to start it with, so the deadline
+   * never began and the entire relay timeout was back. And "nostrdb has no
+   * profile" is not an edge case — it is routine for a stall whose kind-0 was
+   * published straight to the relay, which is the very reason both stores are
+   * read at all.
+   *
+   * Measured at 3003ms before the fix, 150ms after.
+   */
+  it('caps the wait even when the fast store has nothing to say', async () => {
+    gatewayReturns({ events: [] })
+    vi.mocked(allEvents).mockReturnValue(
+      new Promise((resolve) => setTimeout(() => resolve([] as never), 3000)),
+    )
+
+    const started = Date.now()
+    await fetchNewestKind0(PUBKEY)
+    expect(Date.now() - started).toBeLessThan(600)
+  }, 10_000)
+
+  /**
    * The window is a CEILING, not a delay. A read where both stores answer
    * immediately must not sit waiting for a timer that has nothing left to wait
    * for — that would trade a 3s stall for a 150ms one on every profile in the
@@ -160,6 +184,21 @@ describe('the grace window', () => {
 
     const started = Date.now()
     await fetchNewestKind0(PUBKEY)
+    expect(Date.now() - started).toBeLessThan(50)
+  })
+
+  /**
+   * And an empty answer COUNTS as an answer. "No profile here" is a real
+   * reply from a store, so a pubkey that genuinely has no kind-0 anywhere must
+   * resolve at once rather than idling out the window — otherwise every
+   * unregistered key on a screen costs the full grace period.
+   */
+  it('resolves immediately when both stores answer empty', async () => {
+    gatewayReturns({ events: [] })
+    vi.mocked(allEvents).mockResolvedValue([] as never)
+
+    const started = Date.now()
+    expect(await fetchNewestKind0(PUBKEY)).toBeNull()
     expect(Date.now() - started).toBeLessThan(50)
   })
 })
