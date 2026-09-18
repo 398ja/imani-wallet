@@ -56,6 +56,70 @@ export interface PublishResult {
 }
 
 /**
+ * How long a READ may spend opening a socket to the relay.
+ *
+ * SimplePool's default is 3000ms, and that number is the wallet's worst
+ * latency in its ordinary deployed state rather than in a rare one. Reads go to
+ * the relay AND the gateway in parallel and merge the results, so the caller
+ * waits for the slower store — and reaching strfry from a browser needs its
+ * port published, which `imani-deploy/docker-compose.test.yml` deliberately
+ * does not do. Measured against a real strfry and two dead addresses:
+ *
+ *   healthy relay ..................... 25ms
+ *   port not published (refused) ....... 3ms
+ *   unroutable host (dropped) ....... 3002ms   <- the default, in full
+ *   the same, with this cap at 1200 . 1201ms
+ *
+ * A refused connection is already fast because the OS answers immediately; the
+ * expensive case is a host that DROPS packets — a firewall, a phone whose radio
+ * has gone to sleep, a container on an address that no longer routes — where
+ * nothing answers and only a timer ends the wait.
+ *
+ * 1200ms is far above a healthy connect (single-digit ms on a LAN, tens over
+ * the internet) and far below the default, so it cannot fail a relay that was
+ * going to answer. Deliberately NOT as aggressive as branding.ts' 150ms grace:
+ * that one has a second store holding the same answer and a correction path if
+ * it guesses wrong. These reads decide whether a merchant HAS a stall at all —
+ * `newestAddressable` returning null takes away the merchant role, the home
+ * screen and Stats — so the bias here is towards giving the relay its say.
+ *
+ * PUBLISHING IS NOT CAPPED. A read that gives up early costs a slower answer
+ * from the other store; a publish that gives up early is an event the user
+ * believes they sent and nobody has.
+ */
+const READ_CONNECT_TIMEOUT_MS = 1200
+
+/**
+ * A pool for reads, with the connection wait bounded.
+ *
+ * `maxWait` on `querySync` is NOT enough and this was measured, not assumed: it
+ * sets the EOSE timeout, so it bounds a relay that connects and then says
+ * nothing, while a relay that never connects still burns the full default. Both
+ * knobs are needed, and this is the one that fixes the expensive case.
+ */
+function readPool(): SimplePool {
+  /*
+    THE CAST IS AN UPSTREAM TYPE GAP, not a lie about the runtime.
+
+    `SimplePool`'s constructor is typed as
+    `Pick<AbstractPoolConstructorOptions, 'enablePing' | 'enableReconnect'>`,
+    which omits `maxWaitForConnection` — but its body is
+    `super({ ..., maxWaitForConnection: 3e3, ...options })`, so an option passed
+    here lands AFTER the default and replaces it. The declaration is narrower
+    than the implementation.
+
+    Verified by measurement rather than by reading: against a host that drops
+    packets, an uncapped pool takes 3002ms and this one 1201ms. If a future
+    nostr-tools widens the type, delete the cast and nothing else changes; if it
+    ever stops forwarding the option, the probe in `relayTimeouts.test.ts` fails
+    rather than the app silently going slow again.
+  */
+  return new SimplePool({
+    maxWaitForConnection: READ_CONNECT_TIMEOUT_MS,
+  } as ConstructorParameters<typeof SimplePool>[0])
+}
+
+/**
  * Publish a signed event, resolving with a count rather than throwing.
  *
  * A partial publish is the normal case on Nostr, not an error: the event is
@@ -154,9 +218,13 @@ export async function allEvents(
   kind: number,
   relays: string[] = [RELAY_URL],
 ): Promise<Event[]> {
-  const pool = new SimplePool()
+  const pool = readPool()
   try {
-    return await pool.querySync(relays, { authors: [pubkey], kinds: [kind] })
+    return await pool.querySync(
+      relays,
+      { authors: [pubkey], kinds: [kind] },
+      { maxWait: READ_CONNECT_TIMEOUT_MS },
+    )
   } finally {
     pool.close(relays)
   }
@@ -168,7 +236,7 @@ export async function newestAddressable(
   d: string,
   relays: string[] = [RELAY_URL],
 ): Promise<Event | null> {
-  const pool = new SimplePool()
+  const pool = readPool()
   try {
     // BOTH STORES, NEWEST WINS (DEV-144) — see the header of lib/gatewayNostr.
     // Without the gateway read, a deployment that does not publish strfry's
@@ -176,7 +244,11 @@ export async function newestAddressable(
     // merchant a merchant, and logout wipes the device.
     const [relayed, cached] = await Promise.all([
       pool
-        .querySync(relays, { authors: [pubkey], kinds: [kind], '#d': [d] })
+        .querySync(
+          relays,
+          { authors: [pubkey], kinds: [kind], '#d': [d] },
+          { maxWait: READ_CONNECT_TIMEOUT_MS },
+        )
         .catch(() => [] as Event[]),
       gatewayEvents(pubkey, kind, d),
     ])
