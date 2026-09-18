@@ -143,6 +143,23 @@ export function profileHandle(profile: Profile): string | undefined {
 }
 
 /**
+ * Do we actually KNOW who this is, or is `profileName` about to print an npub?
+ *
+ * `emptyProfile` is what a device with no stored copy renders while
+ * `refreshProfile` is in flight — a first login, or a login after a wipe — and
+ * `profileName`'s ladder bottoms out at `npub1abc…`, so for the seconds that
+ * fetch takes the header greeted the user with a key. It is their OWN key, which
+ * makes it worse rather than better: the one name the app should never fumble.
+ *
+ * A record that has been saved but carries no name is a real answer (some people
+ * publish no kind-0), so `updatedAt` is the discriminator rather than the
+ * absence of a name: zero means nothing has ever been written for this pubkey.
+ */
+export function profileUnknown(profile: Profile): boolean {
+  return !profile.displayName && !profile.nip05 && profile.updatedAt === 0
+}
+
+/**
  * Merge a kind-0 payload over a stored record.
  *
  * Absent and empty fields leave the existing value alone rather than clearing

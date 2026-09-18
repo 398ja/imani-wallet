@@ -12,12 +12,13 @@ import {
   EmptyRow,
   Centered,
   Pass,
+  SkeletonLine,
   TransactionListItem,
 } from '../components/ui'
 import { listVouchers, transactionsWith, onWalletChanged, walletIsOpen } from '../lib/wallet'
 import { findMerchantWithHistory, couponsFor, type Merchant } from '../lib/merchants'
 import { toMerchantPass, EMPTY_BRANDING, type MerchantBranding } from '../lib/pass'
-import { merchantBranding } from '../lib/branding'
+import { useBranding } from '../hooks/useBranding'
 import { fetchMerchantRecord, type MerchantProfile } from '../lib/merchant'
 import { LocationMap } from '../components/LocationMap'
 import type { WalletTransaction } from '../lib/transactions'
@@ -62,7 +63,13 @@ export function MerchantPage() {
   const [merchant, setMerchant] = useState<Merchant | null | undefined>(undefined)
   const [couponCount, setCouponCount] = useState(0)
   const [transactions, setTransactions] = useState<WalletTransaction[]>([])
-  const [branding, setBranding] = useState<MerchantBranding>(EMPTY_BRANDING)
+  /*
+    Seeded from the stall name this device has already seen, so arriving at a
+    stall you hold coupons from names it immediately rather than after a kind-0
+    round trip. `loading` is only true the first time this stall is ever seen.
+  */
+  const { branding: fetched, loading: loadingIssuer } = useBranding(pubkey)
+  const branding = fetched ?? EMPTY_BRANDING
   const [record, setRecord] = useState<MerchantProfile | null | undefined>(undefined)
 
   useEffect(() => {
@@ -90,11 +97,6 @@ export function MerchantPage() {
     }
     load()
     return onWalletChanged(load)
-  }, [pubkey])
-
-  useEffect(() => {
-    // Never rejects — an unbranded merchant falls back to the pass defaults.
-    merchantBranding(pubkey).then(setBranding)
   }, [pubkey])
 
   useEffect(() => {
@@ -162,13 +164,21 @@ export function MerchantPage() {
 
       {merchant !== null ? (
         <div className="mb-6">
-          <Pass pass={toMerchantPass(merchant, branding)} to={`/merchants/${pubkey}/coupons`} />
+          <Pass
+            pass={toMerchantPass(merchant, branding)}
+            loadingIssuer={loadingIssuer}
+            to={`/merchants/${pubkey}/coupons`}
+          />
           <p className="mt-2 text-center text-sm text-mono-500">
             {couponCount === 1 ? '1 voucher' : `${couponCount} vouchers`} · tap to see them
           </p>
         </div>
       ) : (
-        <StallHeader branding={branding} description={record?.storeDescription} />
+        <StallHeader
+          branding={branding}
+          loading={loadingIssuer}
+          description={record?.storeDescription}
+        />
       )}
 
       <div className="mb-6 grid gap-3">
@@ -251,9 +261,12 @@ export function MerchantPage() {
  */
 function StallHeader({
   branding,
+  loading,
   description,
 }: {
   branding: MerchantBranding
+  /** The stall's kind-0 has not arrived. See `useBranding`. */
+  loading?: boolean
   description?: string
 }) {
   const name = branding.organizationName
@@ -289,11 +302,19 @@ function StallHeader({
           deliberately plain: "This stall" is what an unbranded stall is, and
           inventing something friendlier would be putting words in their mouth. */}
       <h1 className="text-[22px] font-semibold leading-tight tracking-[-0.02em]">
-        {name ?? 'This stall'}
+        {/* "This stall" is the right thing to say about a stall that published
+            no name — it is honest and final. It is the WRONG thing to say while
+            we are still asking, because it will be replaced a second later by a
+            real name, and a heading that rewrites itself reads as a glitch. */}
+        {name ?? (loading ? <SkeletonLine text="text-[22px]" width="mx-auto w-40" /> : 'This stall')}
       </h1>
-      {branding.nip05 && (
+      {loading && !branding.nip05 ? (
+        <span className="mt-1 block">
+          <SkeletonLine text="text-[15px]" width="mx-auto w-28" />
+        </span>
+      ) : branding.nip05 ? (
         <p className="mt-1 text-[15px] text-mono-500">{branding.nip05}</p>
-      )}
+      ) : null}
       {description && (
         <p className="mx-auto mt-3 max-w-prose text-[15px] leading-relaxed text-mono-500">
           {description}

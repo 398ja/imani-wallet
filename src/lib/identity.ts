@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-import { merchantBranding } from './branding'
+import { knownBranding, merchantBranding } from './branding'
 import { handleLabel, shortPubkey } from './format'
 
 /**
@@ -208,4 +208,43 @@ export function useIdentity(pubkey: string | undefined): Identity | undefined {
   }, [pubkey])
 
   return resolved && resolved.pubkey === pubkey ? resolved.identity : undefined
+}
+
+/**
+ * The same lookup, but it says whether it is still WAITING.
+ *
+ * `useIdentity` cannot distinguish "no profile exists" from "the profile has not
+ * arrived yet" — both are `undefined` — so every caller rendered
+ * `identityLabel`'s hex fallback during the fetch, and a name that landed two
+ * seconds later replaced a key the user had already started reading. That flash
+ * is the bug: a key is not a worse name, it is not a name at all, and showing
+ * one as a placeholder tells the reader something false about who they are
+ * looking at.
+ *
+ * `known` is the answer we already had on disk, available on the FIRST render —
+ * which is why the persisted cache exists. When there is one there is no loading
+ * state at all: the row draws the name it drew last time and corrects itself if
+ * the fetch disagrees.
+ */
+export function useIdentityState(pubkey: string | undefined): {
+  identity: Identity | undefined
+  /** True only while there is nothing to show AND an answer is still coming. */
+  loading: boolean
+} {
+  const fetched = useIdentity(pubkey)
+  // Read once per render rather than held in state: it is a synchronous
+  // localStorage read, and putting it in state would need an effect to keep it
+  // in step with `pubkey` — the cascading-render pattern `Avatar` avoids.
+  const known = pubkey && !fetched ? knownBranding(pubkey) : undefined
+  const identity: Identity | undefined =
+    fetched ??
+    (known
+      ? { name: known.organizationName, nip05: known.nip05, picture: known.logoUrl }
+      : undefined)
+
+  return {
+    identity,
+    // An absent pubkey is not pending — there is nobody to wait for.
+    loading: Boolean(pubkey) && identity === undefined,
+  }
 }

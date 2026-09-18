@@ -146,6 +146,93 @@ export function brandingFromKind0(content: string): MerchantBranding {
 const cache = new Map<string, Promise<MerchantBranding>>()
 
 /**
+ * The same answers, kept ACROSS sessions in localStorage.
+ *
+ * The memory cache above only spares a second request inside one document. Every
+ * reload starts cold, and a cold lookup is two network round trips (the gateway
+ * and the relay, in parallel, measured at 2–4s on staging) before a name exists
+ * — which is exactly the window where a row has nothing to show but a key. A
+ * name a person has already seen should not have to be fetched again to be
+ * shown again: this makes the second visit render it on the first frame, and the
+ * fetch behind it becomes a background correction rather than a wait.
+ *
+ * PUBLIC METADATA ONLY, for the reason lib/profile.ts spells out for the user's
+ * own record: everything here is what any relay hands a stranger, so storing it
+ * in the clear is deliberate rather than an oversight. `logout` wipes
+ * localStorage wholesale, which takes this with it.
+ *
+ * Entries carry the time they were written so a stale name cannot outlive its
+ * usefulness forever. They are still SHOWN when stale — a name from last week
+ * beats a hex key today — the age only decides whether the refetch behind it is
+ * worth the request.
+ */
+const STORE_PREFIX = 'imani-wallet:identity:'
+
+/** How long a stored profile is served without question. A day. */
+const FRESH_MS = 24 * 60 * 60 * 1000
+
+interface StoredBranding {
+  branding: MerchantBranding
+  at: number
+}
+
+function readStored(key: string): StoredBranding | undefined {
+  try {
+    const raw = localStorage.getItem(STORE_PREFIX + key)
+    if (!raw) return undefined
+    const parsed = JSON.parse(raw) as StoredBranding
+    // A record written by an older build, or hand-edited, must not crash a
+    // render. Re-sanitising the URLs is not paranoia for its own sake: they were
+    // attacker-authored when they arrived and localStorage is not a trust
+    // boundary, so they are narrowed again on the way out.
+    if (!parsed || typeof parsed !== 'object' || typeof parsed.branding !== 'object') {
+      return undefined
+    }
+    return {
+      at: typeof parsed.at === 'number' ? parsed.at : 0,
+      branding: {
+        ...parsed.branding,
+        logoUrl: imageUrl(parsed.branding.logoUrl),
+        bannerUrl: imageUrl(parsed.branding.bannerUrl),
+      },
+    }
+  } catch {
+    return undefined
+  }
+}
+
+function writeStored(key: string, branding: MerchantBranding): void {
+  try {
+    localStorage.setItem(STORE_PREFIX + key, JSON.stringify({ branding, at: Date.now() }))
+  } catch {
+    // A full or disabled store is not worth an error over a cached name.
+  }
+}
+
+/**
+ * The profile we ALREADY have for a pubkey, without asking anyone — or nothing.
+ *
+ * Synchronous on purpose. `useIdentity` needs an answer during the first render
+ * to decide between a name and a loading placeholder; a promise, however fast,
+ * resolves after that frame and so paints the placeholder anyway.
+ */
+export function knownBranding(pubkey: string): MerchantBranding | undefined {
+  const key = pubkey.toLowerCase()
+  return readStored(key)?.branding
+}
+
+/** Exported for tests: forget the persisted answers as well as the session's. */
+export function clearStoredBranding(): void {
+  try {
+    for (const k of Object.keys(localStorage)) {
+      if (k.startsWith(STORE_PREFIX)) localStorage.removeItem(k)
+    }
+  } catch {
+    // As above.
+  }
+}
+
+/**
  * The newest kind-0 content for a pubkey, or null.
  *
  * Shared with lib/profile.ts, which reads the current user's own metadata from
@@ -246,6 +333,17 @@ export function merchantBranding(pubkey: string): Promise<MerchantBranding> {
   const key = pubkey.toLowerCase()
   let pending = cache.get(key)
   if (!pending) {
+    // A recently stored answer is served without a request at all. Older than
+    // FRESH_MS and we still fetch — but `knownBranding` has already given the
+    // renderer something to draw, so that fetch is a correction happening behind
+    // a named row rather than a wait in front of a key.
+    const stored = readStored(key)
+    if (stored && Date.now() - stored.at < FRESH_MS) {
+      pending = Promise.resolve(stored.branding)
+      cache.set(key, pending)
+      return pending
+    }
+
     // FAILURES ARE NOT CACHED, only answers. The cache exists so a merchant's
     // kind-0 is fetched once instead of once per card, and that argument holds
     // for a profile that was found. An empty result is the opposite: it means
@@ -256,7 +354,15 @@ export function merchantBranding(pubkey: string): Promise<MerchantBranding> {
     // relay the whole time. Dropping the entry costs one refetch on the next
     // render and lets the merchant appear.
     pending = fetchBranding(key).then((branding) => {
-      if (branding === EMPTY_BRANDING) cache.delete(key)
+      if (branding === EMPTY_BRANDING) {
+        cache.delete(key)
+        // And fall back to whatever we knew before, for the same reason: a
+        // lookup that failed must not downgrade a name the user has already
+        // seen to a hex key.
+        return stored?.branding ?? branding
+      }
+      // Only real answers are persisted, by the same argument.
+      writeStored(key, branding)
       return branding
     })
     cache.set(key, pending)
@@ -267,4 +373,5 @@ export function merchantBranding(pubkey: string): Promise<MerchantBranding> {
 /** Exported for tests, which must not share a cache between cases. */
 export function clearBrandingCache(): void {
   cache.clear()
+  clearStoredBranding()
 }

@@ -2,6 +2,7 @@ import { useState } from 'react';
 
 import { cn, getInitials } from '../../lib/utils';
 import { useIsMerchant } from '../../hooks/useIsMerchant';
+import { Skeleton } from './Skeleton';
 
 interface AvatarProps {
   src?: string;
@@ -12,11 +13,21 @@ interface AvatarProps {
    * know, and every screen showing the same person agrees.
    */
   pubkey?: string;
+  /**
+   * The profile behind this face has not arrived yet.
+   *
+   * Draws a pulsing disc instead of initials, because the initials would be
+   * derived from whatever `name` fell back to — and for an unresolved profile
+   * that is a hex key, so the circle read "AA". Two letters taken from a key
+   * look exactly like two letters taken from a name, which is the whole problem:
+   * the placeholder was indistinguishable from the answer.
+   */
+  loading?: boolean;
   size?: 'sm' | 'md' | 'lg' | 'xl';
   className?: string;
 }
 
-export function Avatar({ src, name, pubkey, size = 'md', className }: AvatarProps) {
+export function Avatar({ src, name, pubkey, loading, size = 'md', className }: AvatarProps) {
   // The only caller passes a URL from a merchant's own Nostr profile, so a dead
   // link is ordinary rather than exceptional. Falling back to the initials keeps
   // a broken-image icon off the card.
@@ -25,6 +36,16 @@ export function Avatar({ src, name, pubkey, size = 'md', className }: AvatarProp
   // without an effect to reset the flag — resetting state from an effect is the
   // cascading-render pattern react-hooks flags, and it fails lint.
   const [failedSrc, setFailedSrc] = useState<string>();
+  // Whether THIS url has finished decoding. Keyed by url rather than a boolean
+  // for the same reason `failedSrc` is: a new `src` must start pending again
+  // without an effect resetting a flag.
+  //
+  // A picture is a network fetch too, and a large avatar on a slow connection
+  // left an initials circle standing where a face was about to appear — the same
+  // flash as the name, one element to the left. The pulse holds the space until
+  // the bytes are there, and `complete` covers the case the browser had it
+  // cached and fired `load` before React attached the handler.
+  const [loadedSrc, setLoadedSrc] = useState<string>();
   const merchant = useIsMerchant(pubkey);
 
   const sizeClasses = {
@@ -45,15 +66,34 @@ export function Avatar({ src, name, pubkey, size = 'md', className }: AvatarProp
 
   const face =
     src && src !== failedSrc ? (
-      <img
-        src={src}
-        alt={name}
-        loading="lazy"
-        // Third-party host: send no referrer with the request.
-        referrerPolicy="no-referrer"
-        onError={() => setFailedSrc(src)}
-        className={cn('rounded-full object-cover', sizeClasses[size], className)}
-      />
+      <span className={cn('relative inline-block', sizeClasses[size], className)}>
+        {src !== loadedSrc && (
+          <Skeleton className={cn('absolute inset-0 rounded-full', sizeClasses[size])} />
+        )}
+        <img
+          src={src}
+          alt={name}
+          loading="lazy"
+          // Third-party host: send no referrer with the request.
+          referrerPolicy="no-referrer"
+          onError={() => setFailedSrc(src)}
+          onLoad={() => setLoadedSrc(src)}
+          ref={(node) => {
+            // Cache hit: `load` may have fired before this handler existed.
+            if (node?.complete && node.naturalWidth > 0) setLoadedSrc(src);
+          }}
+          className={cn(
+            'rounded-full object-cover',
+            sizeClasses[size],
+            // Faded in rather than popped in, so a picture that arrives late
+            // does not snap over the placeholder it replaces.
+            'transition-opacity duration-200',
+            src === loadedSrc ? 'opacity-100' : 'opacity-0',
+          )}
+        />
+      </span>
+    ) : loading ? (
+      <Skeleton className={cn('rounded-full', sizeClasses[size], className)} />
     ) : (
       <div
         className={cn(

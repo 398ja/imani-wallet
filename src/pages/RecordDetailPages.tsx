@@ -20,8 +20,8 @@ import {
 import { getVoucherRow, getTransactionRow, onWalletChanged } from '../lib/wallet'
 import { issuanceRatioOf } from '../lib/merchants'
 import { formatFace, formatDate, formatSats } from '../lib/format'
-import { toCouponPass, TERMS, EMPTY_BRANDING, type MerchantBranding } from '../lib/pass'
-import { merchantBranding } from '../lib/branding'
+import { toCouponPass, TERMS, EMPTY_BRANDING } from '../lib/pass'
+import { useBranding } from '../hooks/useBranding'
 import { humanName } from '../lib/identity'
 import {
   VALIDATION_SUMMARY,
@@ -70,21 +70,18 @@ function present<T>(entries: Array<[string, T | undefined | null]>): Array<[stri
 export function CouponPage() {
   const { tokenId = '' } = useParams()
   const [row, setRow] = useState<VoucherRow | null | undefined>(undefined)
-  const [branding, setBranding] = useState<MerchantBranding>(EMPTY_BRANDING)
+  /*
+    Seeded from what this device already knows about the stall, so a coupon you
+    have opened before names its issuer on the first frame instead of showing a
+    truncated key while a kind-0 lookup runs. The hook replaces a bare
+    `merchantBranding().then(setBranding)` that started every visit at empty.
+  */
+  const { branding, loading: loadingIssuer } = useBranding(row?.issuer_id)
 
   useEffect(() => {
     const load = async () => {
       const found = await getVoucherRow(tokenId)
       setRow(found)
-      // The pass renders the merchant's name from branding, so there is no
-      // findMerchant lookup here. There used to be, and it survived the pass
-      // rewrite as a full listVouchers() + toMerchants() pass over every coupon in
-      // the wallet — on mount and again on every wallet write — feeding a state
-      // value no JSX read.
-      if (found?.issuer_id) {
-        // Never rejects; an unbranded merchant falls back to the pass defaults.
-        merchantBranding(found.issuer_id).then(setBranding)
-      }
     }
     load()
     // A coupon can be spent from another screen while this one is open.
@@ -123,7 +120,8 @@ export function CouponPage() {
           asks who they are and offers to buy from them.
         */}
         <Pass
-          pass={toCouponPass(row, branding)}
+          pass={toCouponPass(row, branding ?? EMPTY_BRANDING)}
+          loadingIssuer={loadingIssuer}
           issuerTo={row.issuer_id ? `/profile/${row.issuer_id}` : undefined}
         />
       </div>

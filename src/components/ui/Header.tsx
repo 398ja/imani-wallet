@@ -12,7 +12,8 @@ import {
 
 import { Avatar } from './Avatar'
 import { NotificationBell } from './NotificationBell'
-import { profileHandle, profileName, type Profile } from '../../lib/profile'
+import { SkeletonLine } from './Skeleton'
+import { profileHandle, profileName, profileUnknown, type Profile } from '../../lib/profile'
 
 /**
  * The app header: who you are on the left, everything else on the right.
@@ -74,6 +75,9 @@ export function Header({
 
   const name = profileName(profile)
   const handle = profileHandle(profile)
+  // See `profileUnknown`: on a first login the relay fetch has not landed and
+  // the ladder bottoms out at the user's own npub.
+  const loading = profileUnknown(profile)
 
   return (
     <header className="material scroll-edge sticky top-0 z-10 pt-[env(safe-area-inset-top)]">
@@ -83,18 +87,31 @@ export function Header({
           className="pressable flex min-w-0 flex-1 items-center gap-3 rounded-full outline-none ring-mono-400 focus-visible:ring-2"
         >
           <Avatar
-            src={profile.picture}
+            src={loading ? undefined : profile.picture}
             name={name}
             pubkey={profile.pubkey}
+            loading={loading}
             size="sm"
             className="shrink-0"
           />
-          <span className="min-w-0">
-            <span className="block truncate text-sm font-medium text-mono-900 dark:text-mono-50">
-              {name}
-            </span>
-            {/* Absent when the name above IS the handle — see `profileHandle`. */}
-            {handle ? <span className="block truncate text-xs text-mono-500">{handle}</span> : null}
+          <span className="min-w-0 flex-1" aria-busy={loading || undefined}>
+            {loading ? (
+              /* One bar, not two: the header's second line is absent for most
+                 people anyway (see `profileHandle`), so stacking a second
+                 skeleton would promise a line that is not coming and shift the
+                 header's height when it does not arrive. */
+              <SkeletonLine text="text-sm" width="w-28" />
+            ) : (
+              <>
+                <span className="block truncate text-sm font-medium text-mono-900 dark:text-mono-50">
+                  {name}
+                </span>
+                {/* Absent when the name above IS the handle — see `profileHandle`. */}
+                {handle ? (
+                  <span className="block truncate text-xs text-mono-500">{handle}</span>
+                ) : null}
+              </>
+            )}
           </span>
         </Link>
 
