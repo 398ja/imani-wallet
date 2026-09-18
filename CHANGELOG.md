@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-09-18
+
+### Fixed
+
+- **Coupons that arrive split across several DMs are now reassembled, instead of vanishing.** A
+  coupon whose token exceeds the gateway's direct-send limit is not sent as one message: it is
+  split into `cashu_dm_chunk` pieces, one per gift wrap. Nothing put them back together. Each
+  piece failed the token-envelope test, fell through to the legacy text parser, produced no token,
+  and was recorded as "not a token DM" — which is marked processed and never retried. Coupons of
+  200, 150 and 150 were minted, backed, delivered to the relay and acked, and never appeared in
+  the recipient's wallet.
+
+  The wallet had assumed the gateway reassembled them. It cannot: the chunk metadata is inside the
+  encrypted message and the outer wrap carries only a recipient tag, so a server holding no
+  private key cannot even tell a chunk from any other DM, and it refuses to guess. The client is
+  the only place the pieces are legible. Reassembly now happens at unwrap time, verifying the
+  declared length and SHA-256 before the coupon is credited, and an incomplete transfer leaves its
+  pieces on the relay to be re-read rather than consuming them.
+
 ## [0.5.2] - 2026-09-18
 
 ### Fixed
