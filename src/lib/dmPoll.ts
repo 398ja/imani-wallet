@@ -333,6 +333,51 @@ function storageAdapter(): StorageAdapter {
   }
 }
 
+/** Marks that this device has already forgotten its pre-reassembly tombstones. */
+const CHUNK_AMNESTY_KEY = 'imani-wallet:dm-poll:chunk-amnesty'
+
+/**
+ * Forget, once, that this wallet gave up on the coupons it could not reassemble.
+ *
+ * Fixing the reassembly is not enough to recover the coupons it already lost. A
+ * chunk that arrived before `lib/dmChunks.ts` existed was classified
+ * `non_token_dm`, and that outcome carries `shouldMarkProcessed: true` with
+ * `retryEligible: false` — the event id went into `PROCESSED_KEY` and the
+ * poller skips it forever. The gift wraps are still on the relay (verified: 11
+ * of them for the recipient whose coupons went missing), so the ONLY thing
+ * standing between the customer and their money is this local tombstone.
+ *
+ * Clearing the whole processed set is safe and is the reason this is a blunt
+ * instrument rather than a targeted one. The set is a performance shortcut, not
+ * a correctness boundary: re-processing an already-redeemed coupon is caught by
+ * `hasTokenBeenReceived`, which keys on the TOKEN's fingerprint and is left
+ * untouched here. So the worst case is one wasted pass over old wraps, while
+ * the best case is three real coupons arriving.
+ *
+ * Runs at most once per device — after that the tombstones are honest again,
+ * because anything newly abandoned was abandoned by code that could reassemble.
+ */
+function grantChunkAmnesty(): void {
+  try {
+    if (localStorage.getItem(CHUNK_AMNESTY_KEY)) return
+
+    const abandoned = readSet(PROCESSED_KEY).size
+    localStorage.removeItem(PROCESSED_KEY)
+    localStorage.setItem(CHUNK_AMNESTY_KEY, new Date().toISOString())
+
+    if (abandoned > 0) {
+      console.log(
+        '[dmPoll] re-examining events this wallet gave up on before it could ' +
+          `reassemble chunked coupons (${abandoned} event ids forgotten)`,
+      )
+    }
+  } catch {
+    // localStorage can throw in private-browsing modes. A wallet that cannot
+    // run the amnesty still works for every coupon arriving from now on, so
+    // this must not stop the poller from starting.
+  }
+}
+
 /**
  * Refuses a coupon that would take its voucher past what the issuer signed.
  *
@@ -665,6 +710,11 @@ export function startDmPoll(pubkey: string): DmPollService {
     stopDmPoll()
   }
   currentPubkey = pubkey
+
+  // Before the poller reads its processed set, not after: coupons abandoned by
+  // a build that could not reassemble chunks are recoverable only if their
+  // tombstones are gone by the time the first catch-up runs.
+  grantChunkAmnesty()
 
   service = createDmPollService({
     recipientPubkey: pubkey,

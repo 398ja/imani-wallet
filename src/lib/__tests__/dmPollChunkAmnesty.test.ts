@@ -1,0 +1,97 @@
+/**
+ * @vitest-environment jsdom
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { startDmPoll, stopDmPoll } from '../dmPoll'
+
+const fake = vi.hoisted(() => ({ fetchRecentDms: vi.fn(async () => []) }))
+vi.mock('@imani/dm-poll', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  createDmPollService: () => ({ ...fake, start: async () => {}, stop: () => {} }),
+}))
+
+/** Enough of an EventSource for `startDmPoll` to wire its SSE adapter. */
+class FakeEventSource {
+  static readonly CONNECTING = 0
+  static readonly OPEN = 1
+  static readonly CLOSED = 2
+  readyState = FakeEventSource.OPEN
+  onmessage: ((e: { data: string }) => void) | null = null
+  onerror: (() => void) | null = null
+  onopen: (() => void) | null = null
+  constructor(readonly url: string) {}
+  addEventListener() {}
+  close() {}
+}
+
+/**
+ * Recovering the coupons this wallet already gave up on.
+ *
+ * Shipping the reassembler does not, by itself, bring back the coupons lost
+ * before it existed. A chunk that arrived earlier was classified
+ * `non_token_dm`, whose decision is `shouldMarkProcessed: true` with
+ * `retryEligible: false` — so the event id sits in the processed set and the
+ * poller skips it for good. The gift wraps are still on the relay, so that
+ * local tombstone is the only thing between the customer and their money.
+ */
+describe('amnesty for events abandoned before chunk reassembly existed', () => {
+  const PROCESSED_KEY = 'imani-wallet:dm-poll:processed'
+  const AMNESTY_KEY = 'imani-wallet:dm-poll:chunk-amnesty'
+  const PUBKEY = 'b'.repeat(64)
+
+  beforeEach(() => {
+    localStorage.clear()
+    vi.stubGlobal('EventSource', FakeEventSource)
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    stopDmPoll()
+    localStorage.clear()
+  })
+
+  it('forgets the tombstones so the abandoned wraps are read again', () => {
+    localStorage.setItem(PROCESSED_KEY, JSON.stringify(['lost-chunk-a', 'lost-chunk-b']))
+
+    startDmPoll(PUBKEY)
+
+    // Still present, and the poller would skip the very events carrying the
+    // customer's coupon.
+    expect(localStorage.getItem(PROCESSED_KEY)).toBeNull()
+  })
+
+  it('runs only once, so later tombstones are honoured', () => {
+    startDmPoll(PUBKEY)
+    stopDmPoll()
+
+    // Anything abandoned from now on was abandoned by code that CAN reassemble,
+    // so it is a real decision and must stick.
+    localStorage.setItem(PROCESSED_KEY, JSON.stringify(['genuinely-not-a-token']))
+    startDmPoll(PUBKEY)
+
+    expect(JSON.parse(localStorage.getItem(PROCESSED_KEY)!)).toEqual([
+      'genuinely-not-a-token',
+    ])
+  })
+
+  it('leaves the received-token set alone', () => {
+    // That set keys on the TOKEN fingerprint and is what actually prevents a
+    // coupon being credited twice. Clearing it alongside the event ids would
+    // turn a safe re-read into a double-redemption risk.
+    const received = 'imani-wallet:dm-poll:received'
+    localStorage.setItem(received, JSON.stringify(['fingerprint-of-a-spent-coupon']))
+    localStorage.setItem(PROCESSED_KEY, JSON.stringify(['old-event']))
+
+    startDmPoll(PUBKEY)
+
+    expect(JSON.parse(localStorage.getItem(received)!)).toEqual([
+      'fingerprint-of-a-spent-coupon',
+    ])
+  })
+
+  it('records that it ran, even with nothing to forget', () => {
+    startDmPoll(PUBKEY)
+    expect(localStorage.getItem(AMNESTY_KEY)).toBeTruthy()
+  })
+})
