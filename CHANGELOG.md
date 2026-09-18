@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.3] - 2026-09-18
+## [0.5.4] - 2026-09-18
 
 ### Fixed
 
@@ -27,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the only place the pieces are legible. Reassembly now happens at unwrap time, verifying the
   declared length and SHA-256 before the coupon is credited, and an incomplete transfer leaves its
   pieces on the relay to be re-read rather than consuming them.
+
+- **Coupons already abandoned are recovered.** Fixing the reassembly does not on its own bring
+  back what was lost to its absence: those messages were recorded as "not a token DM", which is
+  never retried, so the wallet skipped them forever. The gift wraps are still on the relay, so
+  that local record was the only thing between the customer and their money. Each device now
+  clears that record once, on the next start, and re-reads what it gave up on. Protection against
+  crediting the same coupon twice is unaffected, because it keys on the token itself and is left
+  untouched.
 
 ## [0.5.2] - 2026-09-18
 
