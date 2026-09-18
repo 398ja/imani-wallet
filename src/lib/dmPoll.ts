@@ -19,6 +19,7 @@ import { announceQueued, settleQueued } from './queuedToast'
 import { attestRedemption, nullifierFor } from './attestation'
 import { postPaymentReceipt } from './paymentReceipt'
 import { createDmCryptoAdapter, toLegacyMetadata } from './dmCrypto'
+import { resetChunkAssembly } from './dmChunks'
 import { loadMerchant } from './merchant'
 import { checkRedemption } from './redemptionLedger'
 import type { VoucherValidation } from './voucherToken'
@@ -771,4 +772,11 @@ export function stopDmPoll(): void {
   void service?.stop()
   service = undefined
   currentPubkey = undefined
+  // Half-assembled coupons are DECRYPTED fragments of someone's money, held in
+  // memory. They must not survive a logout, and must not be visible to the next
+  // account: `startDmPoll` calls this on an identity change, and without it the
+  // previous user's pieces would still be sitting in the assembly map. Losing a
+  // genuine half-transfer costs nothing, because its wraps are still on the
+  // relay and were never marked processed.
+  resetChunkAssembly()
 }
