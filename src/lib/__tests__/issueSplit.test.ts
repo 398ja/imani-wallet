@@ -31,6 +31,17 @@ const PART_VALUE = 20000
 const failDeliveryFor = new Set<string>()
 /** Voucher ids that never finish minting. */
 const stallMintFor = new Set<string>()
+/**
+ * Which spelling of the amount the mocked gateway offers.
+ *
+ * Both are real: the create response uses `face_value_minor`, the poll uses
+ * `face_value`. `none` stands for a gateway that omits it altogether.
+ */
+let valueField: 'face_value' | 'face_value_minor' | 'none' = 'face_value'
+
+/** The amount fields a mocked voucher carries, per `valueField`. */
+const valueOf = () =>
+  valueField === 'none' ? {} : { [valueField]: PART_VALUE }
 
 vi.mock('../nip98', () => ({
   signedFetch: async (path: string, _method?: string, body?: Record<string, unknown>) => {
@@ -46,7 +57,7 @@ vi.mock('../nip98', () => ({
             voucher_id: id,
             status: 'ISSUED',
             token: `cashu-${id}`,
-            face_value: PART_VALUE,
+            ...valueOf(),
             face_unit: 'GBP',
             expires_at: 1_900_000_000,
           })),
@@ -67,7 +78,7 @@ vi.mock('../nip98', () => ({
           voucher_id: polled,
           status: 'ISSUED',
           token: `cashu-${polled}`,
-          face_value: PART_VALUE,
+          ...valueOf(),
           face_unit: 'GBP',
           expires_at: 1_900_000_000,
         }),
@@ -122,6 +133,7 @@ beforeEach(() => {
   transactions.length = 0
   failDeliveryFor.clear()
   stallMintFor.clear()
+  valueField = 'face_value'
 })
 
 describe('a sale the gateway split into several coupons', () => {
@@ -181,6 +193,47 @@ describe('a sale the gateway split into several coupons', () => {
     } finally {
       PARTS.push('v2', 'v3', 'v4', 'v5')
     }
+  })
+})
+
+describe('what each coupon is recorded as being worth', () => {
+  /**
+   * The two spellings are not hypothetical. Probed against the deployed portal:
+   * POST /api/v1/portal/vouchers returns `face_value_minor`, while the polled
+   * GET /api/v1/wallet/vouchers/{id} returns `face_value` (and production logs
+   * show `voucher_finalized ... face_value=20000`). Reading only one of them
+   * leaves the amount undefined for half the pipeline.
+   */
+  it('reads face_value_minor when that is the spelling on offer', async () => {
+    valueField = 'face_value_minor'
+
+    const result = await issueAndDeliver(params)
+
+    expect(transactions).toHaveLength(PARTS.length)
+    for (const row of transactions) expect(row.amount).toBe(PART_VALUE)
+    const sum = result.vouchers.reduce(
+      (t, v) => t + (v.face_value ?? v.face_value_minor ?? 0),
+      0,
+    )
+    expect(sum).toBe(params.faceValueMinor)
+  })
+
+  /**
+   * The guard against the worst rounding error available here: filing the WHOLE
+   * sale against each part, which would report five times the money as
+   * delivered. An even share is wrong by pennies; the total is wrong by 400%.
+   */
+  it('never files the whole sale against a single part when the value is missing', async () => {
+    valueField = 'none'
+
+    await issueAndDeliver(params)
+
+    expect(transactions).toHaveLength(PARTS.length)
+    for (const row of transactions) {
+      expect(row.amount).toBe(params.faceValueMinor / PARTS.length)
+    }
+    const total = transactions.reduce((t, r) => t + (r.amount as number), 0)
+    expect(total).toBe(params.faceValueMinor)
   })
 })
 
