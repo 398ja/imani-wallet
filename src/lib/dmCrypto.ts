@@ -8,6 +8,7 @@ import {
 import type { CryptoAdapter, GiftWrapEvent, UnwrappedDm, TokenMetadata } from '@imani/dm-poll'
 
 import { getSigner } from './nap'
+import { asChunk, offerChunk } from './dmChunks'
 import {
   creditableFaceValue,
   parseVoucherToken,
@@ -204,6 +205,51 @@ export function createDmCryptoAdapter(): CryptoAdapter {
         console.log('[dmCrypto] unwrapping', event.id.slice(0, 8))
         const rumor = getSigner().withPrivkey((key) => nip17.unwrapEvent(event as never, key))
         console.log('[dmCrypto] unwrapped ok, content bytes:', rumor.content.length)
+
+        /**
+         * A coupon too big for one DM arrives in pieces, and this is the only
+         * place they are legible.
+         *
+         * The chunk envelope is INSIDE the encrypted rumor — the outer wrap
+         * carries nothing but a `p` tag — so the gateway cannot reassemble it
+         * and says so outright ("decrypt on client and reassemble plaintext").
+         * Everything downstream of here, `extractToken` included, is
+         * synchronous and expects a whole `cashu_token_transfer`, so the
+         * pieces are made whole HERE and the rest of the pipeline never learns
+         * that a coupon was ever split.
+         *
+         * Returning null for an incomplete transfer is what keeps the earlier
+         * pieces alive: dm-poll only marks an event processed on a success
+         * path, so the wraps are re-read and re-offered until the last one
+         * lands. Before this existed a chunk fell through to the text parser,
+         * yielded no token, and was classified `non_token_dm` — marked
+         * processed and never retried. That is how a 200 and two 150s were
+         * sent, acked by two relays, and never seen again.
+         */
+        const chunk = asChunk(rumor.content)
+        if (chunk) {
+          const whole = await offerChunk(chunk)
+          if (!whole) {
+            console.log('[dmCrypto] holding chunk', {
+              transfer: chunk.transfer_id.slice(0, 8),
+              index: chunk.chunk_index,
+              of: chunk.chunk_total,
+            })
+            return null
+          }
+          console.log('[dmCrypto] reassembled a chunked coupon', {
+            transfer: chunk.transfer_id.slice(0, 8),
+            chunks: chunk.chunk_total,
+            bytes: whole.length,
+          })
+          return {
+            eventId: event.id,
+            senderPubkey: rumor.pubkey,
+            content: whole,
+            createdAt: rumor.created_at,
+          }
+        }
+
         return {
           eventId: event.id,
           senderPubkey: rumor.pubkey,
