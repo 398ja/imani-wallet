@@ -258,6 +258,13 @@ async function decodeAssembly(entry: Pending): Promise<string> {
   // base64 string into fragments, so each fragment is not independently
   // decodable and decoding them separately would corrupt every boundary.
   const base64 = ordered.map((c) => c.payload).join('')
+  // Bounded BEFORE decoding as well as after. The decoded check below is what
+  // actually enforces the ceiling — base64 only ever shrinks — so this is not a
+  // second line of defence but an allocation saved: a hostile 50MB fragment is
+  // refused without first materialising 37MB of bytes to measure.
+  if (base64.length > MAX_REASSEMBLED_BYTES) {
+    throw new Error(`encoded payload too large: ${base64.length}`)
+  }
   const raw = base64Decode(base64)
   if (raw.length > MAX_REASSEMBLED_BYTES) {
     throw new Error(`reassembled payload too large: ${raw.length}`)
