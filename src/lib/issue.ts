@@ -184,6 +184,24 @@ export interface IssuedVoucher {
   expires_at?: number | string | null
 }
 
+/**
+ * The outcome of one sale, which may be several coupons.
+ *
+ * `vouchers` is the sale. `voucher`/`eventId` are the first part only, kept for
+ * callers that predate splitting; reading them as "the sale" is the bug that
+ * lost 800 of a 1000-unit sale, so prefer `vouchers` and sum it.
+ */
+export interface IssueResult {
+  /** Every coupon delivered, in order. Sum `face_value` for what the customer got. */
+  vouchers: IssuedVoucher[]
+  /** DM event ids, index-aligned with `vouchers`. */
+  eventIds: string[]
+  /** @deprecated The FIRST coupon, not the sale. Use `vouchers`. */
+  voucher: IssuedVoucher
+  /** @deprecated The first DM only. Use `eventIds`. */
+  eventId?: string
+}
+
 export interface IssueParams {
   /** Minor units — cents. The amount the merchant typed, already canonicalised. */
   faceValueMinor: number
@@ -265,8 +283,21 @@ async function detail(response: Response, fallback: string): Promise<string> {
   return `${fallback} (${response.status}): ${text.slice(0, 200)}`
 }
 
-/** Ask the portal to mint one coupon. Returns as soon as the record exists. */
-async function createVoucher(params: IssueParams): Promise<IssuedVoucher> {
+/**
+ * Ask the portal to mint this sale. Returns as soon as the records exist.
+ *
+ * Returns a LIST, because one sale is not always one coupon. The portal splits a
+ * face value whose Cashu token would exceed the transport ceiling into several
+ * smaller coupons (`portal_voucher_auto_split`) and returns all of them. A token
+ * carries one ~1840-char proof per set bit of its amount, so this triggers on
+ * ordinary round numbers, not just extreme ones.
+ *
+ * This used to read `items[0]` and drop the rest. That lost real customer money:
+ * a 1000-unit sale split into 5 parts of 200, the caller polled and delivered
+ * part 1, and parts 2-5 were left minted-but-PENDING and never delivered. The
+ * customer got 200 of their 1000. Every caller must handle N.
+ */
+async function createVouchers(params: IssueParams): Promise<IssuedVoucher[]> {
   const response = await signedFetch(
     '/api/v1/portal/vouchers',
     'POST',
@@ -294,9 +325,9 @@ async function createVoucher(params: IssueParams): Promise<IssuedVoucher> {
 
   const body = (await response.json()) as { items?: IssuedVoucher[] } | IssuedVoucher[]
   const items = Array.isArray(body) ? body : (body.items ?? [])
-  const voucher = items[0]
-  if (!voucher?.voucher_id) throw new Error('The portal issued no voucher.')
-  return voucher
+  const vouchers = items.filter((item) => item?.voucher_id)
+  if (vouchers.length === 0) throw new Error('The portal issued no voucher.')
+  return vouchers
 }
 
 /**
@@ -412,17 +443,31 @@ async function deliver(
 }
 
 /**
- * Issue one coupon and deliver it. The whole Sell flow.
+ * Issue a sale as one or more coupons, and deliver them. The whole Sell flow.
  *
- * `onStage` drives the progress screen. The caller is held for the full ~10s
- * because confirming earlier would mean confirming a delivery that has not
- * happened — and on a market stall the customer has already walked away by the
- * time a background failure surfaces.
+ * ONE SALE IS NOT ALWAYS ONE COUPON. The portal splits a face value whose Cashu
+ * token would exceed the transport ceiling, and returns every part; this
+ * function mints and delivers each in turn. `vouchers` is the full set and is
+ * the field to trust. `voucher` is the first part, kept so existing callers
+ * still compile — it is NOT the sale, and summing `vouchers` is the only way to
+ * state what the customer received.
+ *
+ * Partial delivery is possible and is reported as a THROW carrying what landed:
+ * once a coupon is DM'd it cannot be recalled, so a later part failing does not
+ * undo an earlier one. The alternative — resolving successfully with a subset —
+ * is what silently cost a customer 800 of a 1000 sale.
+ *
+ * The caller is held for the full run because confirming earlier would mean
+ * confirming a delivery that has not happened, and on a market stall the
+ * customer has already walked away by the time a background failure surfaces.
+ *
+ * `onStage` drives the progress screen. It fires per part, so a split sale
+ * cycles through minting/delivering once for each coupon.
  */
 export async function issueAndDeliver(
   params: IssueParams,
   onStage?: (stage: IssueStage) => void,
-): Promise<{ voucher: IssuedVoucher; eventId?: string }> {
+): Promise<IssueResult> {
   /**
    * Refused BEFORE anything is minted, not after.
    *
@@ -470,30 +515,109 @@ export async function issueAndDeliver(
   }
 
   onStage?.('issuing')
-  const created = await createVoucher(params)
+  const created = await createVouchers(params)
 
-  onStage?.('minting')
-  const minted = await waitForToken(created.voucher_id)
-  // Nothing to wait for when none was asked for: polling a coupon that never
-  // expires spends the whole 15s grace period to confirm a field that is
-  // correctly absent, on every sale.
-  const ready = params.expiryDays === NEVER_EXPIRES ? minted : await waitForExpiry(minted)
-
-  onStage?.('delivering')
-  const result = await deliver(ready, params)
-
-  // The merchant's own record of the sale, written here for the same reason
-  // payRequest writes its row: nothing else will. See buildIssueTransaction on
-  // why gateway-portal's voucher list is not this history.
+  // One sale, possibly several coupons — see `createVouchers`. Each part is
+  // minted and delivered in turn, and the parts are INDEPENDENT: part 2 failing
+  // says nothing about part 1, which is already in the customer's wallet and
+  // cannot be recalled.
   //
-  // Non-fatal but never silent, again matching payRequest: the coupon IS with
-  // the customer at this point, so throwing would report a delivered sale as a
-  // failed one. A missing history entry beats a phantom failure.
+  // SEQUENTIAL, not Promise.all. Each part's mint draws on the same merchant
+  // float, and the backing settles through a Lightning top-up per part; firing
+  // them together makes the order they draw in a race, and a partial failure
+  // then leaves an unpredictable subset delivered. In sequence, a failure at
+  // part k means exactly parts 1..k-1 landed, which is a fact worth reporting.
+  const delivered: IssuedVoucher[] = []
+  const eventIds: string[] = []
+
+  for (const part of created) {
+    let ready: IssuedVoucher
+    try {
+      onStage?.('minting')
+      const minted = await waitForToken(part.voucher_id)
+      // Nothing to wait for when none was asked for: polling a coupon that never
+      // expires spends the whole 15s grace period to confirm a field that is
+      // correctly absent, on every sale.
+      ready = params.expiryDays === NEVER_EXPIRES ? minted : await waitForExpiry(minted)
+
+      onStage?.('delivering')
+      const result = await deliver(ready, params)
+      eventIds.push(result.event_id ?? result.eventId ?? '')
+    } catch (error) {
+      // Report what DID land before failing — for a mint failure as well as a
+      // delivery one, because from the merchant's side both leave the same
+      // question: how much of this sale is already gone? Without this the
+      // merchant is told the sale failed while the customer holds part of it,
+      // and the two accounts of the same sale disagree. That is exactly the
+      // confusion the lost 800 caused.
+      await recordSale(delivered, params)
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}` +
+          (delivered.length > 0
+            ? ` ${describePartial(delivered, created.length, params)}`
+            : ''),
+      )
+    }
+    delivered.push(ready)
+  }
+
+  await recordSale(delivered, params)
+
+  return {
+    vouchers: delivered,
+    voucher: delivered[0],
+    eventIds,
+    eventId: eventIds[0] || undefined,
+  }
+}
+
+/**
+ * What the merchant needs to hear when a sale lands in pieces.
+ *
+ * States the amount that reached the customer, because that is the number they
+ * must reconcile against — not the number of coupons, which means nothing to
+ * either party.
+ */
+function describePartial(
+  delivered: IssuedVoucher[],
+  total: number,
+  params: IssueParams,
+): string {
+  const sent = delivered.reduce(
+    (sum, v) => sum + (v.face_value ?? 0),
+    0,
+  )
+  const decimals = currencyDecimals(params.currency)
+  const amount = (sent / 10 ** decimals).toFixed(decimals)
+  return (
+    `WARNING: this sale was split into ${total} coupons and ${delivered.length} ` +
+    `already reached the customer, worth ${amount} ${params.currency}. ` +
+    `Those cannot be recalled. Sell only the remainder.`
+  )
+}
+
+/**
+ * The merchant's own record of the sale — one row per coupon delivered.
+ *
+ * Written here for the same reason payRequest writes its row: nothing else
+ * will. See buildIssueTransaction on why gateway-portal's voucher list is not
+ * this history.
+ *
+ * Non-fatal but never silent, again matching payRequest: the coupons ARE with
+ * the customer at this point, so throwing would report a delivered sale as a
+ * failed one. A missing history entry beats a phantom failure.
+ */
+async function recordSale(delivered: IssuedVoucher[], params: IssueParams): Promise<void> {
+  if (delivered.length === 0) return
   try {
-    const row = buildIssueTransaction({
-      voucherId: ready.voucher_id,
-      amount: ready.face_value ?? params.faceValueMinor,
-      unit: ready.face_unit ?? params.currency,
+    for (const ready of delivered) {
+      const row = buildIssueTransaction({
+        voucherId: ready.voucher_id,
+        // The PART's face value, not the whole sale's. Falling back to the
+        // requested total would file each part at the full amount and inflate a
+        // split sale by its part count in the merchant's own history.
+        amount: ready.face_value ?? params.faceValueMinor,
+        unit: ready.face_unit ?? params.currency,
         // The CURRENCY's decimals, not the voucher's `face_decimals`. The
         // gateway stamps 2 on everything (probed: `face_value_minor: 1000`
         // returns `JPY 10.00` and `XOF 10.00` as readily as `€10.00`), so
@@ -507,26 +631,25 @@ export async function issueAndDeliver(
         //
         // Still do not "fix" anything here by scaling the amount — see
         // `currencyDecimals` in format.ts for what that costs.
-      decimals: currencyDecimals(ready.face_unit ?? params.currency),
-      recipientPubkey: params.recipientPubkey,
-      memo: params.memo,
-      expiresAt: toEpochSeconds(ready.expires_at),
-      at: Date.now(),
-      // Terminals ticket 09. The STALL's row only: this is written to the
-      // merchant's own encrypted history, while `deliver` above builds what
-      // the customer receives. Attribution deliberately does not appear there.
-      terminalPubkey: attributionFor(params.actor)?.terminalPubkey,
-    })
+        decimals: currencyDecimals(ready.face_unit ?? params.currency),
+        recipientPubkey: params.recipientPubkey,
+        memo: params.memo,
+        expiresAt: toEpochSeconds(ready.expires_at),
+        at: Date.now(),
+        // Terminals ticket 09. The STALL's row only: this is written to the
+        // merchant's own encrypted history, while `deliver` above builds what
+        // the customer receives. Attribution deliberately does not appear there.
+        terminalPubkey: attributionFor(params.actor)?.terminalPubkey,
+      })
 
-    // The relay copy rides along with the write: `openWallet` wraps
-    // `addTransaction` so every row is published, encrypted to this merchant's
-    // own key, and the sale survives this device (lib/txRecords.ts). Publishing
-    // from here as well would write the same sale twice.
-    await getWallet().addTransaction(row)
+      // The relay copy rides along with the write: `openWallet` wraps
+      // `addTransaction` so every row is published, encrypted to this merchant's
+      // own key, and the sale survives this device (lib/txRecords.ts). Publishing
+      // from here as well would write the same sale twice.
+      await getWallet().addTransaction(row)
+    }
     notifyWalletChanged()
   } catch (error) {
     console.error('[issue] delivered, but not recorded in local history', error)
   }
-
-  return { voucher: ready, eventId: result.event_id ?? result.eventId }
 }

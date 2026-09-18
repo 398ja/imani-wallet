@@ -142,6 +142,10 @@ function IssueForm({
   const [stage, setStage] = useState<IssueStage | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [sent, setSent] = useState<number | null>(null)
+  // How many coupons the sale became. Almost always 1; more when the gateway
+  // split it. Shown on the confirmation so the merchant and the customer are
+  // counting the same thing.
+  const [sentParts, setSentParts] = useState(1)
   // What this coupon actually got, once the gateway has settled it — which is
   // not always what was asked for, hence `waitForExpiry` in lib/issue.ts.
   const [sentExpiry, setSentExpiry] = useState<string>('')
@@ -162,7 +166,7 @@ function IssueForm({
     if (minor === null || validity === null) return
     setError(null)
     try {
-      const { voucher } = await issueAndDeliver(
+      const { vouchers } = await issueAndDeliver(
         {
           faceValueMinor: minor,
           currency: merchant.issuanceCurrency,
@@ -182,7 +186,15 @@ function IssueForm({
         },
         setStage,
       )
-      setSentExpiry(formatDate(voucher.expires_at))
+      // The LAST part's expiry. Every part of a split sale is issued with the
+      // same term, so they agree; the last is simply the one whose wait
+      // finished most recently.
+      setSentExpiry(formatDate(vouchers[vouchers.length - 1]?.expires_at))
+      // How many coupons the customer actually received. A big sale is split
+      // into several (see lib/issue.ts), and the customer sees that many
+      // separate coupons in their wallet — so the merchant must be told, or
+      // the two of them count the sale differently at the stall.
+      setSentParts(vouchers.length)
       setSent(minor)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -207,6 +219,15 @@ function IssueForm({
             <p className="mt-1 text-sm text-mono-500">
               Sent to {identityLabel(customer, customerIdentity)}. It is in their wallet now.
             </p>
+            {/* A split sale arrives as several separate coupons, so the customer
+                will not find one coupon for the amount on this screen. Saying so
+                here is what stops them reporting a shortfall at the stall. */}
+            {sentParts > 1 && (
+              <p className="mt-1 text-sm text-mono-500">
+                Sent as {sentParts} separate coupons, which together are worth the
+                amount above.
+              </p>
+            )}
             {/* The expiry the coupon was actually granted, not the one asked
                 for. Blank when the gateway never returned one, which is a
                 degraded coupon rather than a failed sale — see lib/issue.ts. */}
@@ -222,6 +243,7 @@ function IssueForm({
             className="w-full"
             onClick={() => {
               setSent(null)
+              setSentParts(1)
               setAmount('')
               setMemo('')
               setValidity(merchant.voucherValidityDays)
