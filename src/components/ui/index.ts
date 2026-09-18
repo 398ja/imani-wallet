@@ -1,6 +1,7 @@
 export { Button } from './Button'
 export { Avatar } from './Avatar'
 export { Skeleton, SkeletonLine } from './Skeleton'
+export { RemoteImage } from './RemoteImage'
 export { Input } from './Input'
 export { Switch } from './Switch'
 export {

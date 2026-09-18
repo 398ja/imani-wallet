@@ -4,7 +4,7 @@ import { Banknote, Check, Copy, CreditCard, Info, QrCode, Tag } from 'lucide-rea
 import QRCode from 'qrcode'
 import { nip19 } from 'nostr-tools'
 
-import { Avatar, BackLink, Button, Centered, Screen } from '../components/ui'
+import { Avatar, BackLink, Button, Centered, RemoteImage, Screen } from '../components/ui'
 import { LocationMap } from '../components/LocationMap'
 import { merchantBranding } from '../lib/branding'
 import { handleLabel, shortPubkey } from '../lib/format'
@@ -240,13 +240,11 @@ export function PublicProfilePage({ viewerPubkey }: { viewerPubkey?: string }) {
 
       <div className="overflow-hidden rounded-2xl border border-mono-200 bg-white dark:border-mono-800 dark:bg-mono-900">
         {branding.bannerUrl && (
-          // Their own URL, so: no referrer, and a dead link leaves a plain band
-          // rather than a broken-image icon.
-          <img
+          // Their own URL, so: no referrer, a placeholder while it loads, and a
+          // dead link leaving a plain band rather than a broken-image icon.
+          <RemoteImage
             src={branding.bannerUrl}
-            alt=""
-            referrerPolicy="no-referrer"
-            className="h-24 w-full bg-mono-100 object-cover dark:bg-mono-800"
+            className="h-24 w-full bg-mono-100 dark:bg-mono-800"
           />
         )}
         <div className="flex items-center gap-3 p-5">
