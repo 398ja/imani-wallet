@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-import { knownBranding, merchantBranding } from './branding'
+import { knownBranding, merchantBranding, onBrandingChanged } from './branding'
 import { handleLabel, shortPubkey } from './format'
 
 /**
@@ -190,20 +190,32 @@ export function useIdentity(pubkey: string | undefined): Identity | undefined {
   useEffect(() => {
     if (!pubkey) return
     let cancelled = false
-    void merchantBranding(pubkey).then((branding) => {
-      if (!cancelled) {
-        setResolved({
-          pubkey,
-          identity: {
-            name: branding.organizationName,
-            nip05: branding.nip05,
-            picture: branding.logoUrl,
-          },
-        })
-      }
-    })
+    const take = (branding: {
+      organizationName?: string
+      nip05?: string
+      logoUrl?: string
+    }) => {
+      if (cancelled) return
+      setResolved({
+        pubkey,
+        identity: {
+          name: branding.organizationName,
+          nip05: branding.nip05,
+          picture: branding.logoUrl,
+        },
+      })
+    }
+
+    void merchantBranding(pubkey).then(take)
+    // The lookup answers with whichever store was FASTER, and the other may
+    // still arrive holding something newer — see `fetchNewestKind0`. Without
+    // this subscription that correction would land in the cache and never on
+    // the screen.
+    const unsubscribe = onBrandingChanged(pubkey, take)
+
     return () => {
       cancelled = true
+      unsubscribe()
     }
   }, [pubkey])
 
