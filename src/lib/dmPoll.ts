@@ -57,8 +57,16 @@ export function isRateLimited(error: unknown): boolean {
 
 /**
  * Reads go through the gateway's nostrdb, never straight to a relay — that is
- * @imani/dm-poll's stated contract, and it is what gives us server-side chunk
- * reassembly. Writes (sending) still go browser → relay.
+ * @imani/dm-poll's stated contract.
+ *
+ * It does NOT give us chunk reassembly, which this comment claimed for a long
+ * time and which cost three real coupons. A DM too big to send whole is split
+ * into `cashu_dm_chunk` envelopes INSIDE the encrypted rumor, so the gateway
+ * cannot see them and refuses to try ("decrypt on client and reassemble
+ * plaintext" — NostrdbChunkReassemblyService). `lib/dmChunks.ts` does the
+ * reassembly, wired into `unwrapNip17Dm` in lib/dmCrypto.ts.
+ *
+ * Writes (sending) still go browser → relay.
  */
 export function nostrdbAdapter(): NostrdbAdapter {
   return {
