@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-18
+
+### Fixed
+
+- **A split sale now delivers every coupon, not just the first.** The gateway breaks a face value
+  whose Cashu token would exceed the transport ceiling into several smaller coupons and returns
+  all of them. This app read only the first and discarded the rest, so a 1000-unit sale issued as
+  5 coupons of 200 reached the customer as 200; the other four were minted, left pending, never
+  polled and never delivered. A token carries one proof per set bit of its amount, so the ceiling
+  is reached by ordinary round numbers rather than extreme ones, and any sale large enough to be
+  split was silently short-paying the customer.
+
+  A sale that fails part-way now FAILS LOUDLY, reporting the amount that already reached the
+  customer. A delivered coupon is a gift-wrapped DM and cannot be recalled, so a later part
+  failing cannot undo an earlier delivery — reporting such a sale as successful is what let the
+  shortfall go unnoticed. The merchant's own history records one row per coupon at the part's
+  value, and the confirmation screen says how many coupons a sale became, so the merchant and the
+  customer count the same sale the same way.
+
 ## [0.5.0] - 2026-09-17
 
 ### Added
