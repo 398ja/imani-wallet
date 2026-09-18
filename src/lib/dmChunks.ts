@@ -127,6 +127,36 @@ interface Pending {
  */
 const pending = new Map<string, Pending>()
 
+/**
+ * Transfers already reassembled, so their stragglers are not held again.
+ *
+ * Only ONE of a transfer's events ever yields a token — the one that completed
+ * it — and dm-poll marks only that event processed. Every earlier chunk's event
+ * stays unprocessed by design, so `fetchRecentDms` re-fetches and re-offers it
+ * on every poll, for as long as the wrap is inside the query window.
+ *
+ * Without this set each of those re-offers opened a fresh pending entry that
+ * could never complete, because the sibling that would finish it is the one
+ * event that IS marked processed and will never be offered again. The entry
+ * then sat until the sweep, and the next poll built it again: a slow leak and a
+ * "holding chunk" line every cycle for a coupon already in the wallet.
+ *
+ * Keyed by transfer id, which is exactly the identity that matters, and holds
+ * only ids — a few dozen bytes each, bounded below.
+ */
+const completed = new Map<string, number>()
+
+/** How long a completed transfer is remembered. */
+const COMPLETED_TTL_MS = 24 * 60 * 60 * 1000
+
+/**
+ * A ceiling on remembered transfers, so a long-lived session cannot grow this
+ * without bound. Oldest go first; forgetting one early is harmless, because the
+ * worst case is the re-hold this set exists to avoid, which the sweep then
+ * clears.
+ */
+const MAX_COMPLETED = 500
+
 /** How long an incomplete transfer may sit before its pieces are discarded. */
 const PENDING_TTL_MS = 10 * 60 * 1000
 
@@ -141,6 +171,20 @@ function sweep(now: number): void {
       pending.delete(id)
     }
   }
+  for (const [id, at] of completed) {
+    if (now - at > COMPLETED_TTL_MS) completed.delete(id)
+  }
+}
+
+/** Remember a finished transfer, evicting the oldest if the set is full. */
+function rememberCompleted(transferId: string, now: number): void {
+  // Map preserves insertion order, so the first key is the oldest.
+  while (completed.size >= MAX_COMPLETED) {
+    const oldest = completed.keys().next().value
+    if (oldest === undefined) break
+    completed.delete(oldest)
+  }
+  completed.set(transferId, now)
 }
 
 /**
@@ -154,6 +198,11 @@ export async function offerChunk(
   now = Date.now(),
 ): Promise<string | null> {
   sweep(now)
+
+  // A straggler from a transfer already reassembled. Its event was never marked
+  // processed, so the poll keeps offering it; holding it again would open an
+  // entry that can never complete.
+  if (completed.has(chunk.transfer_id)) return null
 
   let entry = pending.get(chunk.transfer_id)
   if (!entry) {
@@ -179,7 +228,12 @@ export async function offerChunk(
   pending.delete(chunk.transfer_id)
 
   try {
-    return await decodeAssembly(entry)
+    const whole = await decodeAssembly(entry)
+    // Only a transfer that actually decoded is remembered. A failed one must
+    // stay re-attemptable: the pieces may have been corrupted in flight, and
+    // the relay still holds them.
+    rememberCompleted(chunk.transfer_id, now)
+    return whole
   } catch (error) {
     // Integrity failures are refusals, not warnings to carry forward: the whole
     // point of the digest is that a payload failing it must not be credited.
@@ -303,6 +357,7 @@ async function gunzip(input: Uint8Array<ArrayBuffer>): Promise<Uint8Array> {
 /** Drop every half-assembled transfer. For tests and for sign-out. */
 export function resetChunkAssembly(): void {
   pending.clear()
+  completed.clear()
 }
 
 /** How many transfers are part-assembled. For tests and diagnostics. */
