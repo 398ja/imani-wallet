@@ -13,6 +13,7 @@ No bank account, no card reader, no app store sign-in with an email and password
 > - **[I'm a shopper](docs/customers.md)** — receive coupons and pay with them.
 > - **[I sell things](docs/merchants.md)** — issue coupons and take payment.
 > - **[I run more than one till](docs/terminals.md)** — set up, limit, and revoke terminals.
+> - **[I need to prove I honoured a coupon](docs/redemption-ledger-user-guide.md)** — your ledger ID, gaps, and audits.
 > - **[How it actually works](docs/how-it-works.md)** — the ideas behind it, in plain terms.
 > - **[The decentralised posture](docs/decentralised-posture.md)** — why there's no honeypot to raid.
 > - **[For developers](#for-developers)** — run and build the app.
@@ -134,6 +135,10 @@ npm run android    # build + sync the Capacitor Android project
 Start with [`docs/how-it-works.md`](docs/how-it-works.md) for the concepts, and
 [`docs/decentralised-posture.md`](docs/decentralised-posture.md) for why the
 architecture is shaped the way it is.
+
+For the public redemption ledger — kind-7377 attestations, the pseudonymous
+ledger key, Pedersen commitments, and the hosted audit API in `services/` —
+see [`docs/redemption-ledger-technical-guide.md`](docs/redemption-ledger-technical-guide.md).
 
 The original design record was retired once the code became the authority. It is
 still in git history (`docs/superpowers/specs/2026-08-11-farmer-coupon-wallet-design.md`,
