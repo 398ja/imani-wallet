@@ -13,6 +13,7 @@ and what's still out there.
 - [History, stats, and what's expiring](#history-stats-and-whats-expiring)
 - [Opening and closing your stall](#opening-and-closing-your-stall)
 - [Running more than one till](#running-more-than-one-till)
+- [Proving you honoured a coupon](#proving-you-honoured-a-coupon)
 - [Keeping your account safe](#keeping-your-account-safe)
 - [Common questions](#common-questions)
 
@@ -127,6 +128,18 @@ is lost or stolen. A terminal never holds your money and never sees your
 figures, and your own phone keeps working exactly as it does now.
 
 Full walkthrough: **[Terminals guide](terminals.md)**.
+
+## Proving you honoured a coupon
+
+Every time you redeem a coupon, the wallet publishes a small public record
+saying a coupon was honoured. It carries no amount, no customer, and not your
+stall name, so it proves you kept your side of the bargain without showing
+anyone your takings.
+
+You mostly never need to think about it. When you do — an auditor asks, or a
+coupon issuer wants to check your record — it lives at **Settings → Redemption
+ledger**, and the [redemption ledger guide](redemption-ledger-user-guide.md)
+covers your ledger ID, checking for gaps, and proving your totals.
 
 ## Keeping your account safe
 
