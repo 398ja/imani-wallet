@@ -24,22 +24,37 @@ import type { ParsedVoucherToken } from './voucherToken'
  * The review recommended mirroring `VITE_LICENCE_ISSUER_PUBKEY`: one key, in the
  * bundle. **Measurement refused that shape.** Parsing the eight real captured
  * tokens in `src/lib/__tests__/fixtures/` shows FOUR distinct
- * `issuerPublicKey` values, varying with the mint rather than the stall:
+ * `issuerPublicKey` values:
  *
- *   6a02bb64…  control-unlocked, witness-positive, witness-test   (127.0.0.1.mint)
- *   4b22d0ec…  live-licence, live-terminal-till                   (127.mint.local)
- *   0d042df7…  live-terminal-credential                           (127.0.0.1.mint)
- *   27aa1ecd…  magento-demo-credential, revocation-probe          (127.0.0.1.mint)
+ *   6a02bb64…  control-unlocked, witness-positive, witness-test
+ *   4b22d0ec…  live-licence, live-terminal-till
+ *   0d042df7…  live-terminal-credential
+ *   27aa1ecd…  magento-demo-credential, revocation-probe
  *
- * One stall (`b1787b2b…`) has coupons signed by all four. So the key is the
- * MINT's signing key for a keyset, not a stall identity and not a single
- * constant — `deploy/migrate-keys-to-hashi.sh` stores them per mint and per
- * keyset, and keysets rotate. A single pinned value would refuse most genuine
- * coupons, which is the shape of the error errata item 1 already records.
+ * **What the four are NOT**, each ruled out by the data rather than assumed:
  *
- * An allowlist is what ADR 0006 already specifies for the gateway's own path:
- * *"(mint, issuer) allowlisted — no, local config"*. This brings the same
- * control to the wallet.
+ *  - Not keysets. All eight tokens share ONE keyset, `00e3372e61d05605`.
+ *  - Not per-mint. `127.0.0.1.mint` alone accounts for three of the four.
+ *  - Not per-stall. Stall `b1787b2b…` has coupons under all four.
+ *
+ * **What they are.** The values partition by CAPTURE SESSION: fixtures added
+ * in one commit share a key, and the same (mint, stall) pair picks up a new
+ * one in a later commit. These are local dev stacks, and the issuer signing
+ * key is regenerated when the stack is rebuilt — so four is an artefact of
+ * this repo having captured fixtures on four occasions, not a number with any
+ * meaning in the protocol.
+ *
+ * That is the part which matters for the design: the count is incidental, and
+ * **a production deployment may well have exactly one**. What the data rules
+ * out is the assumption that the key is a fixed constant one can pin at build
+ * time and forget. It is a key the issuing side holds and can rotate, and
+ * `deploy/migrate-keys-to-hashi.sh` shows key material being migrated per mint
+ * and per keyset, so rotation is a real operation rather than a hypothetical.
+ *
+ * A list rather than a single value therefore costs nothing when there is one
+ * key, and is the difference between a working rotation and a flag day when
+ * there is more than one. It is also the shape ADR 0006 already specifies for
+ * the gateway's own path: *"(mint, issuer) allowlisted — no, local config"*.
  *
  * ## Unset means ALLOW, and that is the opposite of the licence rule
  *

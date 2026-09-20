@@ -23,7 +23,7 @@ All six recommendations are implemented. **Three of them changed shape under
 measurement**, and those reversals are the most useful thing in this document:
 
 - **Rec 4** was "pin one key". Real tokens carry four distinct issuer keys,
-  varying by mint and keyset. A single pin would have refused most genuine
+  and the field is not a constant. A single pin would have refused genuine
   coupons. It is an allowlist.
 - **Rec 5**'s obvious form — write `issuerId` into the event — would have
   de-anonymised every stall. Measured: a plain hash is brute-forceable over the
@@ -538,13 +538,35 @@ non-negative, so that wording named no property at all.
 **The recommendation was wrong and measurement said so.** It called for
 mirroring `VITE_LICENCE_ISSUER_PUBKEY`: one key, in the bundle. Parsing the
 eight real captured tokens in `src/lib/__tests__/fixtures/` shows **four
-distinct `issuerPublicKey` values**, and they vary with the MINT, not the
-stall — one stall has coupons signed by all four, and
-`deploy/migrate-keys-to-hashi.sh` stores these per mint and per keyset, where
-they rotate. A single pinned key would have refused most genuine coupons.
+distinct `issuerPublicKey` values**.
 
-So it is a comma-separated allowlist, which is the shape ADR 0006 already
-specifies for the gateway's own path.
+**Why four, and what that does and does not mean.** The obvious explanations
+are all wrong, and each is now refuted by an assertion in
+`issuerAllowlist.test.ts` rather than by a sentence:
+
+| Hypothesis | Refuted by |
+|---|---|
+| One key per keyset | All eight tokens share ONE keyset, `00e3372e61d05605` |
+| One key per mint | `127.0.0.1.mint` alone accounts for three of the four |
+| One key per stall | Stall `b1787b2b…` has coupons under all four |
+
+What the values actually track is the **capture session**: fixtures added in a
+single commit share a key, and the same (mint, stall) pair picks up a different
+one in a later commit. These are local dev stacks, and the issuer signing key
+is regenerated when the stack is rebuilt. So **four is an artefact of this repo
+having captured fixtures on four occasions** — it is not a protocol quantity,
+and a production deployment may well have exactly one.
+
+That distinction matters, because it changes what the finding is. The data does
+not show "there are always several keys". It shows the key is **not a fixed
+constant that can be pinned at build time and forgotten** — it belongs to the
+issuing side and can be regenerated or rotated. A list costs nothing when there
+is one key and is the difference between a working rotation and a flag day when
+there is more than one. The test asserts `> 1`, never `=== 4`, precisely
+because the count is incidental.
+
+It is also the shape ADR 0006 already specifies for the gateway's own path:
+*"(mint, issuer) allowlisted — no, local config"*.
 
 **Unset means ALLOW, the opposite of the licence rule**, and that asymmetry is
 deliberate: failing closed on a missing licence key turns a paid feature off,
@@ -763,12 +785,28 @@ the role model without checking what else arrives through the same door.
 ### 9. "Mirror the licence key" — refused by the real tokens
 
 Recommendation 4 as written. Parsing the captured fixtures shows four distinct
-`issuerPublicKey` values varying by mint and keyset, so a single pinned key
-would have refused most genuine coupons. Built as an allowlist instead.
+`issuerPublicKey` values, so a single pinned key would have refused genuine
+coupons. Built as an allowlist instead.
 
 The same root cause as errata item 1: both came from treating
-`issuerPublicKey` as a constant without checking. Twice now, which is why the
-measurement is asserted in `issuerAllowlist.test.ts` rather than described.
+`issuerPublicKey` as a constant without checking.
+
+### 9a. "…varying by mint and keyset" — the explanation was also wrong
+
+Having found four keys, the first write-up explained them as per-mint and
+per-keyset. **Both are false**, and the user asking *why exactly four* is what
+prompted checking rather than re-asserting: all eight tokens share ONE keyset,
+and one mint accounts for three of the four values. The keys track capture
+sessions on rebuilt dev stacks.
+
+The correction does not change the design — an allowlist is still right, for the
+weaker and more accurate reason that the key is not a pinnable constant — but
+it changes what the evidence supports, and a design resting on a stated reason
+should rest on a true one. Three hypothesis-refuting assertions now sit in
+`issuerAllowlist.test.ts` so the claim cannot drift back.
+
+This is the second time a confident structural claim about `issuerPublicKey`
+turned out to be wrong on inspection. Treat any third one with suspicion.
 
 ### 10. "Write `issuerId` into the attestation" — would have de-anonymised every stall
 

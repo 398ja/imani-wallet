@@ -2,7 +2,7 @@ import { describe, expect, it, vi, afterEach } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 
 import { checkIssuer, allowedIssuerKeys } from '../issuerAllowlist'
-import { parseVoucherToken } from '../voucherToken'
+import { parseVoucherToken, tokenProofs } from '../voucherToken'
 import { buildVoucherToken } from './voucherFixtures'
 
 /**
@@ -30,12 +30,21 @@ describe('what the real tokens say about issuer keys', () => {
    *
    * The audit review said to mirror `VITE_LICENCE_ISSUER_PUBKEY`: ONE key, in
    * the bundle. Parsing the captured tokens shows several distinct
-   * `issuerPublicKey` values, so a single pinned key would refuse most genuine
+   * `issuerPublicKey` values, so a single pinned key would refuse genuine
    * coupons — the same class of mistake as errata item 1, which also came from
    * assuming this field was a constant.
    *
-   * Asserted rather than described, so that if the fixtures ever collapse to
-   * one key this turns red and whoever sees it can simplify deliberately.
+   * **What the count is not.** An earlier version of this comment said the key
+   * varied "by mint and keyset". Checked, and wrong on both: all eight tokens
+   * share ONE keyset (`00e3372e61d05605`), and one mint accounts for three of
+   * the four values. The values actually partition by capture session — these
+   * are local dev stacks whose issuer key is regenerated on rebuild — so four
+   * is an artefact of this repo, not a protocol quantity.
+   *
+   * The assertion is `> 1` rather than `=== 4` precisely because the number is
+   * incidental: pinning it would make this test a tripwire for adding a
+   * fixture. What must stay true is that the field is NOT a constant, which is
+   * the only premise the allowlist design rests on.
    */
   it('shows more than one signing key across captured tokens', () => {
     const dir = 'src/lib/__tests__/fixtures'
@@ -51,6 +60,47 @@ describe('what the real tokens say about issuer keys', () => {
     }
 
     expect(keys.size).toBeGreaterThan(1)
+  })
+
+  it('rules out the explanations that would have allowed a single pin', () => {
+    // Three hypotheses, each of which would have meant the key IS derivable
+    // from something stable and so could be pinned or computed. All three are
+    // refuted by the same eight tokens, and the refutation is asserted here
+    // because the first write-up of this module asserted two of them as FACT.
+    const dir = 'src/lib/__tests__/fixtures'
+    const parsed: Array<{ pub: string; mint: string; issuer: string; keyset: string }> = []
+
+    for (const file of readdirSync(dir).filter((f) => f.endsWith('.token'))) {
+      try {
+        const raw = readFileSync(`${dir}/${file}`, 'utf8').trim()
+        const token = parseVoucherToken(raw)
+        parsed.push({
+          pub: token.voucher.issuerPublicKey,
+          mint: token.mintUrl,
+          issuer: token.voucher.issuerId,
+          keyset: tokenProofs(raw)[0].id,
+        })
+      } catch {
+        // Not a readable voucher; contributes nothing either way.
+      }
+    }
+
+    const distinct = <T>(xs: T[]) => new Set(xs).size
+
+    // NOT keysets. If the signing key were a property of the keyset, several
+    // keysets would be needed to explain several keys. There is exactly one.
+    expect(distinct(parsed.map((p) => p.keyset))).toBe(1)
+    expect(distinct(parsed.map((p) => p.pub))).toBeGreaterThan(1)
+
+    // NOT per-mint. One mint carries more than one key on its own.
+    const perMint = new Map<string, Set<string>>()
+    for (const p of parsed) perMint.set(p.mint, (perMint.get(p.mint) ?? new Set()).add(p.pub))
+    expect(Math.max(...[...perMint.values()].map((s) => s.size))).toBeGreaterThan(1)
+
+    // NOT per-stall. One stall's coupons carry more than one key.
+    const perStall = new Map<string, Set<string>>()
+    for (const p of parsed) perStall.set(p.issuer, (perStall.get(p.issuer) ?? new Set()).add(p.pub))
+    expect(Math.max(...[...perStall.values()].map((s) => s.size))).toBeGreaterThan(1)
   })
 })
 
