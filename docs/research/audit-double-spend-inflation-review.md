@@ -37,6 +37,22 @@ problem, and it deserves its own pass.
 Nothing was run against a live relay or mint. Every claim about the mint's
 behaviour is from reading ADR 0005/0006, not from observing it.
 
+**What the cross-stall fix was and was not exercised against.** The refusal is
+driven through the adapter `startDmPoll` installs, which is the integration
+boundary inside the wallet, with a stub standing in for the mint. Not exercised:
+a real gift wrap arriving over a relay, a real mint swap, or an end-to-end run
+on a merchant device.
+
+**And one gap that is not a testing limitation but a missing feature.**
+`DmPollService` emits `redemption:refused` when either refusal fires, and
+**nothing in this wallet subscribes to it** — verified by search. So a merchant
+whose till refuses a coupon sees the coupon simply not arrive, with no
+explanation on screen. This predates the cross-stall check: the ceiling refusal
+has always been silent the same way. It matters more now, because the new
+refusal has an honest and likely cause a merchant can act on — *"that coupon is
+for another stall"* — and telling them costs one listener. Worth its own ticket;
+deliberately not bundled into this change.
+
 Every claim below was executed against the repo's own code rather than reasoned
 about. The evidence is not all of the same grade, and the difference matters:
 
@@ -294,9 +310,23 @@ exists for precisely this hazard and supplies the predicate, which reads signed
 The licence exception is placed *after* the issuer comparison, so the ordinary
 path never pays for the token parse.
 
-`src/lib/__tests__/refuseIfAnotherStalls.test.ts` covers twelve cases. Mutation
-tested both ways: removing the check fails 3 tests, removing the licence
-exception fails exactly the licence test.
+`src/lib/__tests__/refuseIfAnotherStalls.test.ts` covers twelve cases at the
+function boundary. Mutation tested both ways: removing the check fails 3 tests,
+removing the licence exception fails exactly the licence test.
+
+**Those twelve cannot see the property the design rests on.** "Refused before
+the mint swap" is a claim about ORDERING, and a unit test on the check does not
+have the swap in its frame. So
+`src/lib/__tests__/crossStallAdapterOrdering.test.ts` drives the redemption
+adapter that `startDmPoll` actually installs, reading it back off the real
+`DmPollService`, with a stub standing in for the mint that records every token
+it is asked to swap. The assertion is not "it threw" but **"it threw and the
+mint was never called"**.
+
+Proved by mutation: moving the refusal to after `redemption.redeem` leaves all
+twelve unit tests green and fails exactly one case — the ordering test. Without
+it, a regression that burnt the customer's coupon and then refused the
+redemption would have shipped with a full green suite.
 
 ## Finding 2 — the issuer signature is self-referential
 
