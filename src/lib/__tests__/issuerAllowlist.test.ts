@@ -102,6 +102,54 @@ describe('what the real tokens say about issuer keys', () => {
     for (const p of parsed) perStall.set(p.issuer, (perStall.get(p.issuer) ?? new Set()).add(p.pub))
     expect(Math.max(...[...perStall.values()].map((s) => s.size))).toBeGreaterThan(1)
   })
+
+  it('shows one signing key serving SEVERAL stalls, so it is not a stall key', () => {
+    // The question this answers is the natural one: surely `issuerPublicKey`
+    // is the merchant's own key? It is not, and this is the cleanest possible
+    // refutation — a single key that signs vouchers for two DIFFERENT stalls
+    // cannot be either stall's identity.
+    //
+    // `issuerPublicKey` is the SERVICE's signing key. The stall lives in
+    // `issuerId`, inside the bytes that key signs, so the structure is "the
+    // issuing service attests that stall X issued this coupon" rather than
+    // "stall X signed this coupon".
+    //
+    // That is why `credentialActor` compares `issuerId` and never
+    // `issuerPublicKey` (errata 1), and why the allowlist checks the latter:
+    // one asks WHICH STALL, the other asks WHOSE SOFTWARE MINTED IT.
+    const dir = 'src/lib/__tests__/fixtures'
+    const stallsPerKey = new Map<string, Set<string>>()
+
+    for (const file of readdirSync(dir).filter((f) => f.endsWith('.token'))) {
+      try {
+        const v = parseVoucherToken(readFileSync(`${dir}/${file}`, 'utf8').trim()).voucher
+        stallsPerKey.set(
+          v.issuerPublicKey,
+          (stallsPerKey.get(v.issuerPublicKey) ?? new Set()).add(v.issuerId.toLowerCase()),
+        )
+      } catch {
+        // Not a readable voucher.
+      }
+    }
+
+    expect(Math.max(...[...stallsPerKey.values()].map((s) => s.size))).toBeGreaterThan(1)
+  })
+
+  it('never equals the stall it names, on any captured token', () => {
+    // The direct form of the same point, asserted because the assumption that
+    // these two fields are the same thing has now caused two separate errors
+    // in this work (errata 1 and 9a).
+    const dir = 'src/lib/__tests__/fixtures'
+
+    for (const file of readdirSync(dir).filter((f) => f.endsWith('.token'))) {
+      try {
+        const v = parseVoucherToken(readFileSync(`${dir}/${file}`, 'utf8').trim()).voucher
+        expect(v.issuerPublicKey.toLowerCase()).not.toBe(v.issuerId.toLowerCase())
+      } catch {
+        // Not a readable voucher.
+      }
+    }
+  })
 })
 
 describe('with no allowlist configured', () => {

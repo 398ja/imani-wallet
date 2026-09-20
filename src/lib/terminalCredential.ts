@@ -148,10 +148,19 @@ const HEX64 = /^[0-9a-f]{64}$/i
  *
  * The issuer here is the voucher's `issuerId`, NOT its `issuerPublicKey`.
  * Minting one against the live gateway is what showed the difference:
- * `issuerPublicKey` is the GATEWAY's signing key, the same for every voucher it
- * mints, so comparing the stall against it refuses every real credential ever
- * issued. `issuerId` is the stall, and it is inside the bytes the gateway
- * signs, so it is just as trustworthy and is actually the claim we mean.
+ * `issuerPublicKey` is the SIGNING SERVICE's key, not the stall's, so comparing
+ * the stall against it refuses every real credential ever issued. `issuerId` is
+ * the stall, and it is inside the bytes the service signs, so it is just as
+ * trustworthy and is actually the claim we mean.
+ *
+ * An earlier version of this comment added "the same for every voucher it
+ * mints". That is not true and the fixtures say so: one signing key serves two
+ * different stalls, one stall's coupons carry four different keys, and the
+ * value changes when a dev stack is rebuilt. The conclusion above is unaffected
+ * — `issuerPublicKey` is still not the stall — but the reason is "it is a
+ * service key" rather than "it is a constant". See `issuerAllowlist.ts`, which
+ * checks that field for a different question, and the assertions in
+ * `issuerAllowlist.test.ts` that pin both facts.
  *
  * Permissions are derived here from the role and stall, never read from the
  * wire, so a credential cannot claim more than its role allows.
