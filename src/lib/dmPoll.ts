@@ -21,6 +21,7 @@ import { postPaymentReceipt } from './paymentReceipt'
 import { createDmCryptoAdapter, toLegacyMetadata } from './dmCrypto'
 import { resetChunkAssembly } from './dmChunks'
 import { loadMerchant } from './merchant'
+import { licenceFromToken } from './licences'
 import { checkRedemption } from './redemptionLedger'
 import type { VoucherValidation } from './voucherToken'
 import { getWallet, notifyWalletChanged, recordReceiptByNullifier } from './wallet'
@@ -417,6 +418,111 @@ export async function refuseIfOverRedeemed(meta: Record<string, unknown> | undef
 }
 
 /**
+ * Refuses a coupon that is a claim on a different stall.
+ *
+ * A coupon is honoured by the stall that issued it and by nobody else. The
+ * signature says the voucher is genuine; it says nothing about whether THIS
+ * stall is the one that owes against it. `services/wallet-api/redeem.ts` has
+ * always drawn that line (`REFUSAL.ANOTHER_STALL`) and this path did not, so a
+ * till would take another stall's coupon, credit the customer, and publish an
+ * attestation claiming it had honoured it.
+ *
+ * Two harms, and the FIRST is the likelier one:
+ *
+ *  1. A customer at the wrong counter. The merchant credits a coupon they can
+ *     never redeem and absorbs the loss silently. No malice needed.
+ *  2. A public attestation misattributing the redemption. The committed value
+ *     is the coupon's own signed face value, so the number is true — what is
+ *     false is the claim of entitlement, which is what an auditor reads it as.
+ *
+ * **Only a stall may refuse on these grounds, and only for coupons it did not
+ * issue.** `loadMerchant` rather than `isMerchant`, deliberately, and matching
+ * the attestation gate in `redemptionAdapter` below: a stall that has switched
+ * "Open for business" off is still a stall, and its comment there — "a merchant
+ * who has closed their stall still has to attest the coupons they take while
+ * winding down" — applies with equal force to refusing coupons that were never
+ * theirs. Two gates disagreeing about who a wallet is would be worse than
+ * either answer.
+ *
+ * A CUSTOMER wallet never reaches this check, and must not: a customer holding
+ * a coupon is the ordinary case, and refusing it would break the product. The
+ * role model makes that unambiguous — `merchant.ts` says an account is a
+ * merchant "if and only if" it has a stall record, so there is no wallet that
+ * is both at once.
+ *
+ * A TERMINAL never reaches it either, and that is by construction rather than
+ * by luck: ADR 0005 has a payment request name the stall's own pubkey as
+ * recipient, "so redeemed coupons are gift-wrapped to the stall and never to
+ * the terminal that asked for them". The poller on a terminal device receives
+ * no coupons at all.
+ *
+ * Silent for plain ecash and for anything whose signature did not verify. The
+ * former carries no issuer claim to check; the latter was already refused by
+ * `dmCrypto`, and double-handling it here would only confuse the reason.
+ *
+ * **Silent for a LICENCE, and that exception is load-bearing.** A licence is a
+ * voucher too (ADR 0007), delivered by the same gift-wrapped DM and landing in
+ * the same store — but it is issued by US and sent TO the stall, so its
+ * `issuerId` is never the receiving stall's own key. Without this branch, the
+ * check would refuse every subscription a merchant ever bought, which is a
+ * worse outage than the bug it closes: a stall could not renew. `licences.ts`
+ * exists for exactly this hazard, and its rule is the one used here — a voucher
+ * is a licence when the ISSUER SAID SO in signed `merchant_metadata`, which a
+ * sender cannot forge without breaking `verifyVoucher`.
+ *
+ * Synchronous, unlike its sibling: this reads no storage, so making it async
+ * would only invite a caller to forget the `await` and get a check that always
+ * passes.
+ */
+export function refuseIfAnotherStalls(
+  meta: Record<string, unknown> | undefined,
+  stallPubkey: string | undefined,
+  /**
+   * The coupon's own bytes, for the licence exception above.
+   *
+   * Passed rather than read off `meta`, because whether something is a licence
+   * is a property of the SIGNED voucher and `meta` is the envelope-derived
+   * shape. Optional so the check degrades to "not a licence" rather than
+   * throwing when a caller has no token to hand.
+   */
+  token?: string,
+): void {
+  const validation = meta?.validation as VoucherValidation | undefined
+  if (!validation?.signatureValid) return
+
+  // Not a stall, so not our question. A customer receiving a coupon is the
+  // ordinary case and every coupon they hold is somebody else's claim.
+  if (!stallPubkey || loadMerchant(stallPubkey) === null) return
+
+  // From the SIGNED voucher, never the envelope. `dmCrypto` overwrites the
+  // envelope's `issuer_id` with the voucher's `issuerId` whenever the signature
+  // verified, so by here this is the issuer's own attested claim — but the
+  // guard is cheap and the failure it prevents is crediting on a sender-written
+  // field.
+  const issuerId = typeof meta?.issuerId === 'string' ? meta.issuerId : undefined
+  if (!issuerId) return
+
+  if (issuerId.toLowerCase() === stallPubkey.toLowerCase()) return
+
+  // A subscription we sold this stall. Arrives from another issuer BY DESIGN.
+  if (licenceFromToken(token) !== null) return
+
+  const voucherId = typeof meta?.voucherId === 'string' ? meta.voucherId : ''
+
+  throw new RedemptionRefusedError(
+    `Coupon ${voucherId || '(unknown)'} is a claim on stall ${issuerId.slice(0, 16)}…, ` +
+      'which is the only stall that can honour it. Refusing before the mint swap, so the ' +
+      'coupon stays the sender’s and reclaims at their next login.',
+    voucherId,
+    // Not a ceiling breach, and these fields say so rather than inventing
+    // numbers: nothing has been redeemed against this voucher HERE, and the
+    // signed face value is whatever the other stall issued.
+    0,
+    validation.signedFaceValue,
+  )
+}
+
+/**
  * Redemption, delegated to imani-apps' canonical coordinator.
  *
  * This is the only caller of `saveVoucher` in dm-poll's flow — without a
@@ -446,11 +552,17 @@ function redemptionAdapter(): RedemptionAdapter {
       // arriving coupons as the two halves of one payment request.
       const meta = opts?.metadata as Record<string, unknown> | undefined
 
-      // BEFORE the swap, which is the whole reason the check lives here rather
-      // than anywhere downstream: refusing now leaves the token untouched and
-      // still the sender's, and their send reclaims at their next login. The
-      // same refusal one line later — after redemption.redeem — would have
-      // already taken the money at the mint.
+      // BEFORE the swap, which is the whole reason these checks live here
+      // rather than anywhere downstream: refusing now leaves the token
+      // untouched and still the sender's, and their send reclaims at their next
+      // login. The same refusal one line later — after redemption.redeem —
+      // would have already taken the money at the mint.
+      //
+      // Whose coupon is it, before how much is left on it. A coupon this stall
+      // cannot honour has no ceiling worth computing, and asking that question
+      // first means the refusal names the real reason rather than whichever
+      // check happened to fire.
+      refuseIfAnotherStalls(meta, currentPubkey, token)
       await refuseIfOverRedeemed(meta)
 
       // Computed BEFORE the redeem, because it is derived from the RECEIVED

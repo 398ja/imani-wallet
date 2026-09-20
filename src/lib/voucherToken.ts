@@ -660,7 +660,33 @@ export interface VoucherVerification {
  * never as "verified".
  */
 export interface VoucherValidation {
-  /** The issuer's signature verified over the canonical bytes. */
+  /**
+   * The issuer's signature verified over the canonical bytes.
+   *
+   * **Read this as "internally consistent", NOT as "issued by someone I
+   * trust".** The signature is checked against `issuerPublicKey`, which is
+   * carried INSIDE the voucher being checked — so whoever signed it also chose
+   * the key it is verified against. A wholly self-issued voucher at any face
+   * value sets this to `true`, and so does one naming a real stall in
+   * `issuerId` while signed by somebody else entirely.
+   *
+   * What it does establish, and it is not nothing: the bytes have not been
+   * altered since they were signed. Every field on this record is therefore the
+   * issuer's own claim rather than a sender-written one, which is the whole
+   * reason `dmCrypto` prefers the voucher over the DM envelope.
+   *
+   * What stands behind it is the MINT, which signs proofs only for keysets it
+   * holds, and the `(mint, issuer)` allowlist of ADR 0006. A self-issued
+   * voucher has no valid mint signature and fails at the swap. Offline, there
+   * is no such backstop — see `src/lib/__tests__/auditSoundnessLimits.test.ts`,
+   * which pins this so the limit cannot be forgotten, and Finding 2 of
+   * `docs/research/audit-double-spend-inflation-review.md`.
+   *
+   * So: necessary for trusting any other field here, and never sufficient on
+   * its own for a claim about value. `attestRedemption` requires it before
+   * signing a public record, and `refuseIfAnotherStalls` supplies the part it
+   * cannot — that the coupon is a claim on THIS stall.
+   */
   signatureValid: boolean
   /** Signed before the canonicalizer fix, so `issuance_ratio` is not attested. */
   legacyCanonical: boolean
