@@ -17,6 +17,7 @@ one of the paths that should prevent it was missing a check.**
 | 3 — no range proof | **Fixed.** `/verify-openings` is sound; `/verify-total` stays and says what it is not. |
 | 4 — no issuer in the payload | **Fixed.** Attestation v2 carries a hiding commitment to the issuing stall. |
 | 5 — cashback unattested | By design. Now stated in the API's own payloads. |
+| **6 — issuance rests on the signing service** | **OPEN, and structural.** Not closable in the wallet. See below. |
 | Gap — refusals were silent | **Fixed.** `redemption:refused` is typed, carries a reason, and is shown. |
 
 All six recommendations are implemented. **Three of them changed shape under
@@ -31,6 +32,13 @@ measurement**, and those reversals are the most useful thing in this document:
 - **Rec 6**'s cheap form — range-check the disclosed amounts, then one
   aggregate check — is **not sound**, and that was measured rather than
   reasoned about. Only per-commitment openings tie a commitment to an amount.
+
+**One finding remains open and it is the largest.** Finding 6: a voucher
+carries exactly one signature and it is the signing *service's*, not the
+stall's — so "stall X issued this" is an attestation nobody can verify against
+X. A compromised service can mint any amount in any stall's name and the result
+is indistinguishable from a genuine coupon. It needs a stall countersignature,
+which is a protocol change outside this repo.
 
 ## Scope, and what was not looked at
 
@@ -74,6 +82,7 @@ about. The evidence is not all of the same grade, and the difference matters:
 | 3 — no range proof | `commitTo`/`verifyDisclosedTotal` called directly with a mod-n negative. Committed as a test. | Unit-level |
 | 4 — no issuer in the payload | Structural: read of the wire format and the reader. | Inspection |
 | 5 — cashback unattested | Read of `cashback.ts` and the design document's own list of innocent gaps. | Inspection |
+| 6 — issuance rests on the service | Eight real captured tokens, plus a forged coupon that verifies clean. Committed as a test. | **Real data + unit-level** |
 
 Findings 2 and 3 describe a **modified publisher or issuer**, which by
 definition cannot be exercised through the shipped wallet's own path — the
@@ -96,6 +105,7 @@ Finding 1 needed no such caveat and so was held to the higher standard.
 - [Finding 3 — commitments have no range proof](#finding-3--commitments-have-no-range-proof)
 - [Finding 4 — the attestation does not name the issuer](#finding-4--the-attestation-does-not-name-the-issuer)
 - [Finding 5 — the cashback path is a documented omission channel](#finding-5--the-cashback-path-is-a-documented-omission-channel)
+- [Finding 6 — the issuance claim rests entirely on the signing service](#finding-6--the-issuance-claim-rests-entirely-on-the-signing-service)
 - [What the implementation gets right](#what-the-implementation-gets-right)
 - [Recommendations](#recommendations)
 - [Errata: what this review got wrong, and when](#errata-what-this-review-got-wrong-and-when)
@@ -113,6 +123,7 @@ Finding 1 needed no such caveat and so was held to the higher standard.
 | **… and visible in the ledger afterwards** | **Yes** | v2 issuer commitment, on disclosure |
 | **A merchant inflating a disclosed total downwards** | **Refused** | `/verify-openings` |
 | **A self-issued voucher** | **Refused** | `issuerAllowlist`, where configured |
+| **A voucher minted by a COMPROMISED issuing service** | **No** | Finding 6 — needs a stall countersignature |
 
 Confidence that the ledger catches **double spend within the voucher layer**:
 **high**. The nullifier construction is sound, the cross-ledger grouping is
@@ -462,6 +473,72 @@ one entire redemption path never writes to the ledger at all.
 
 This is not a bug. It is a fact about what the ledger can and cannot say that
 belongs beside the other stated limits.
+
+## Finding 6 — the issuance claim rests entirely on the signing service
+
+**Severity: high, and structural. Not closable inside the wallet.**
+
+A voucher carries **one** signature, and it is the signing service's. The stall
+named in `issuerId` signs nothing — established in `issuerAllowlist.test.ts`:
+`issuerPublicKey` never equals `issuerId`, and one key signs for two different
+stalls.
+
+So *"stall X issued this coupon"* is an **attestation by the service**, not a
+statement stall X made. Which raises the question this finding exists for: how
+would anyone prove the attested claim is true?
+
+**They cannot, from the coupon.** Whoever holds the service key can mint any
+face value in any stall's name, and the result is indistinguishable from a
+genuine coupon by inspection. Demonstrated in
+`issuerAttestationLimit.test.ts`: a forged 50,000.00 EUR coupon naming a victim
+stall verifies clean.
+
+The existing controls do not help, and it is worth being precise about why:
+
+| Control | Why it misses this |
+|---|---|
+| `verifyVoucher` | Checks the service's signature. The service signed it. |
+| `issuerAllowlist` (Rec. 4) | Checks the key is a recognised *service* key. It is — that is the compromise. |
+| `refuseIfAnotherStalls` (Rec. 1) | Compares `issuerId` to the stall. It **matches** — the forgery names the victim. |
+| The mint | Signs proofs for its own keysets. A compromised issuing service is on the inside of that boundary. |
+
+**What the wallet-side work did and did not buy.** Recommendation 4 closes the
+case of a voucher minted by software nobody recognises. It does nothing against
+recognised software that has been compromised. Those are different threats and
+the review conflated them until this question was asked.
+
+### What would actually close it
+
+A **stall countersignature**: `issuerId` signs the voucher's canonical bytes
+with the stall's own key, alongside the service's signature. Then "stall X
+issued this" is checkable by anyone holding the coupon, offline, against the
+stall's published kind-0 identity — and a compromised service can forge nothing
+without also holding the stall's key.
+
+That is a protocol change, not a wallet change, and it has real costs:
+
+- **The stall's key must be present at issuance.** ADR 0009 rejected
+  exactly this for automated card purchases: *"which key signs, and where that
+  key sits when a card clears at 11pm and nobody is awake"*. A countersignature
+  reintroduces that problem for the automated path.
+- **`voucherCanonicalBytes` would need a second signature field**, and every
+  voucher issued before the change would lack it — so the check has to be
+  advisory until an epoch boundary, or it refuses all existing money.
+- The terminal-credential flow already has the right shape and could be the
+  precedent: authority is a voucher the stall owner minted, locked to a
+  device key. The same idea applied to coupons is the fix.
+
+**Interim mitigation, which is what is available today:** the stall's own
+`txRecords` are an independent record of what it actually issued, so a stall
+can detect coupons attributed to it that it never minted — after the fact,
+and only for stalls that look. The v2 attestation issuer commitment (Rec. 5)
+makes that reconciliation possible from the public ledger rather than only from
+local storage.
+
+**Recommendation: raise this with whoever owns the issuance service.** It is
+outside this repo, it is the largest remaining trust assumption in the coupon
+model, and it is not visible from the wallet's own code — which is precisely
+why it survived a full review until the right question was asked.
 
 ## What the implementation gets right
 
