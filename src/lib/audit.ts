@@ -3,7 +3,7 @@ import { schnorr } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils'
 
-import { ATTESTATION_KIND, ATTESTATION_VERSION } from './attestationKind'
+import { ATTESTATION_KIND, READABLE_ATTESTATION_VERSIONS } from './attestationKind'
 
 /**
  * The READER over the attestation stream — the audit service's whole logic.
@@ -74,6 +74,21 @@ export interface AuditedAttestation {
   eventId: string
   /** Epoch milliseconds. The event's own `created_at`, not the reader's clock. */
   at: number
+  /**
+   * The v2 hiding commitment to the ISSUING stall, when the event carries one.
+   *
+   * Opaque to every reader but the publishing merchant: it mixes their ledger
+   * SECRET, so a third party can neither compute it nor search it. What it
+   * enables is a merchant PROVING, on disclosure, which stall each redemption
+   * was against — which is what makes a cross-stall redemption visible in the
+   * ledger at all (Finding 4).
+   *
+   * `undefined` on every v1 event and on a v2 event swept from a row that
+   * predates the field. Absence is not a defect and must never be read as one.
+   */
+  issuerTag?: string
+  /** Which payload version this was read from. `1` carries no issuer tag. */
+  version: string
 }
 
 export interface RejectedAttestation {
@@ -88,6 +103,9 @@ export interface ReadResult {
 
 /** A 33-byte compressed secp256k1 point, hex. Same shape `commitTo` emits. */
 const COMMITMENT = /^0[23][0-9a-f]{64}$/i
+
+/** A 32-byte hash in hex, which is what the issuer commitment is. */
+const HEX64 = /^[0-9a-f]{64}$/i
 
 /**
  * Drop nostr-tools' cached verification verdict before re-checking a signature.
@@ -171,8 +189,16 @@ export function readAttestation(event: Event): AuditedAttestation | RejectedAtte
   // to catch it, but reports `nullifier_mismatch` and tells the operator the
   // publisher is malformed rather than ahead of this reader.
   if (Array.isArray(content.batch)) return reject('unknown_version')
-  const version = content.v ?? ATTESTATION_VERSION
-  if (String(version) !== ATTESTATION_VERSION) return reject('unknown_version')
+  const version = String(content.v ?? '1')
+  // A LIST of readable versions, not equality against the one this build
+  // writes. Those are different questions: the producer emits one shape, while
+  // a reader has to accept the whole history sitting on the relay. Testing
+  // against `ATTESTATION_VERSION` would make every version bump silently
+  // orphan every event published before it — the stream would appear to stop
+  // on the day of a deploy.
+  if (!READABLE_ATTESTATION_VERSIONS.includes(version as never)) {
+    return reject('unknown_version')
+  }
 
   if (content.nullifier !== tagged) return reject('nullifier_mismatch')
 
@@ -191,6 +217,14 @@ export function readAttestation(event: Event): AuditedAttestation | RejectedAtte
     ledgerPubkey: event.pubkey,
     eventId: event.id,
     at: event.created_at * 1000,
+    // Shape-checked but never REQUIRED, even on v2. A sweep republishing a row
+    // that predates the field legitimately emits a v2 event without one, and
+    // refusing those would make a merchant's own older redemptions unauditable
+    // to close a gap that is about new ones.
+    ...(typeof content.issuer === 'string' && HEX64.test(content.issuer)
+      ? { issuerTag: content.issuer }
+      : {}),
+    version,
   }
 }
 

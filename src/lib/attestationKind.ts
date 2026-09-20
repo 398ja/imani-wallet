@@ -26,8 +26,42 @@
 export const ATTESTATION_KIND = 7377
 
 /**
- * Payload version. `1` is one attestation per event; a batched format would be
- * `2`, carrying a list. Present from the first event so the migration is
- * detectable rather than a guess.
+ * Payload version.
+ *
+ * - `1` — `{nullifier, commitment, unit}`. One attestation per event.
+ * - `2` — adds `issuer`, a hiding commitment to the pubkey of the stall that
+ *   ISSUED the coupon. See `issuerTagFor` in `attestation.ts`.
+ *
+ * **Why v2 exists.** A v1 attestation says "I credited N against some coupon"
+ * and names no issuer, so a stall redeeming a coupon it never issued produced a
+ * ledger entry indistinguishable from an honest one. That is Finding 4 of
+ * `docs/research/audit-double-spend-inflation-review.md`, and it is why Finding
+ * 1 was invisible to the ledger however carefully the reader looked.
+ *
+ * **Why the issuer is COMMITTED and not written plainly.** `issuerId` is the
+ * stall's real Nostr pubkey. Publishing it beside a pseudonymous ledger key
+ * would link the two for every coupon a merchant ever issued to themselves,
+ * which is precisely the de-anonymisation the ledger key exists to prevent —
+ * the design document calls a `ledgerPubkey -> stall` mapping "the single
+ * artefact whose breach de-anonymises every merchant at once". A cleartext
+ * issuer would be that mapping, published voluntarily, one row at a time.
+ *
+ * **The migration this forces, stated plainly.** `readAttestation` refuses a
+ * version it does not know, which is the correct behaviour and also means a
+ * reader older than v2 refuses every v2 event — it will report them as
+ * `unknown_version` rather than mis-parsing, so nothing is silently wrong, but
+ * a stale deployment of the audit API will show a stream that appears to stop.
+ * Acceptable only because no attestation stream is in production yet. Deploy the
+ * reader before, or with, any wallet that publishes v2.
  */
-export const ATTESTATION_VERSION = '1'
+export const ATTESTATION_VERSION = '2'
+
+/**
+ * Versions this build's reader can read.
+ *
+ * Kept separate from the version it WRITES, because those are different
+ * questions and conflating them is what forces a flag day: a reader must accept
+ * the whole history on the relay, while a producer emits exactly one shape.
+ * Every v1 event ever published stays readable.
+ */
+export const READABLE_ATTESTATION_VERSIONS = ['1', '2'] as const

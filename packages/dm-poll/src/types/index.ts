@@ -40,6 +40,7 @@ export type {
   TokenReceivedEvent,
   RedemptionSuccessEvent,
   RedemptionErrorEvent,
+  RedemptionRefusedEvent,
   SubscriptionStateEvent,
   DmPollEvents,
   FailedEvent,

@@ -4,6 +4,7 @@
 
 import type { Voucher } from './voucher';
 import type { GiftWrapEvent, Profile, TokenDm } from './dm';
+import type { RefusalReason } from '../errors';
 
 /**
  * Emitted when a token DM is received
@@ -70,6 +71,54 @@ export interface RedemptionErrorEvent {
 
   /** Gift wrap event ID */
   eventId: string;
+}
+
+/**
+ * Emitted when the recipient refused a redemption on POLICY grounds.
+ *
+ * Distinct from `redemption:error`, and the difference is the whole point: an
+ * error is something that went wrong and might succeed on a retry, while this
+ * is a decision that will be the same every time. `DmPollService` marks the
+ * token received so the poller stops re-offering it, and emits no
+ * `redemption:success`, because no money arrived.
+ *
+ * **Nothing has moved when this fires.** The refusal happens before the mint
+ * swap, so the token is still the sender's and their send reclaims at their
+ * next login. A listener can say so plainly.
+ *
+ * Was emitted for a release before it appeared in this map, reachable only
+ * through the index signature below — so a listener could be written but got no
+ * type checking, and nothing in the wallet subscribed at all. A refusal the
+ * recipient cannot see reads as a coupon that silently failed to arrive.
+ */
+export interface RedemptionRefusedEvent {
+  /** Gift wrap event ID. */
+  eventId: string;
+
+  /** Who sent the coupon. */
+  senderPubkey: string;
+
+  /** The voucher refused. May be empty when the refusal is not voucher-specific. */
+  voucherId: string;
+
+  /**
+   * Face minor units already taken against this voucher.
+   *
+   * Zero when the refusal is not a ceiling breach — a coupon issued by another
+   * stall has had nothing redeemed against it HERE, and reporting a figure
+   * would tell the holder their coupon was spent, which is a different and
+   * untrue story.
+   */
+  alreadyRedeemed: number;
+
+  /** The issuer-signed ceiling, echoed so a listener can show its working. */
+  signedFaceValue: number;
+
+  /**
+   * Which refusal this is, so a listener never parses `message` to decide what
+   * to tell the user. See `RefusalReason`.
+   */
+  reason: RefusalReason;
 }
 
 /**
@@ -172,6 +221,7 @@ export type DmPollEvents = {
   'token:received': TokenReceivedEvent;
   'redemption:success': RedemptionSuccessEvent;
   'redemption:error': RedemptionErrorEvent;
+  'redemption:refused': RedemptionRefusedEvent;
   'subscription:state': SubscriptionStateEvent;
   [key: string]: unknown;
 };

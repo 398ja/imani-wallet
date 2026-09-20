@@ -143,10 +143,27 @@ describe('malformed records are refused with a reason, never dropped silently', 
   })
 
   it('refuses a payload version it cannot read, rather than mis-parsing it', () => {
-    // The batching migration: a v2 event carries a LIST. Parsing it as a single
-    // attestation would silently read one redemption out of a batch of twenty
-    // and report the other nineteen as missing.
-    expect(defectOf(attest(LEDGER_A, { nullifier: 'n1', v: '2' }))).toBe('unknown_version')
+    // The migration guard. A future format will carry a shape this reader does
+    // not know — a batch, say — and parsing it as v1 would silently read one
+    // redemption out of twenty and report the rest as missing.
+    //
+    // `3` rather than `2`: v2 is READABLE now (it adds the issuer commitment),
+    // so asserting against it would have pinned the reader to a version it has
+    // since learned. The test has to name a version genuinely ahead of the
+    // reader or it stops testing anything.
+    expect(defectOf(attest(LEDGER_A, { nullifier: 'n1', v: '3' }))).toBe('unknown_version')
+  })
+
+  it('still reads a v1 event, so published history does not become unreadable', () => {
+    // The other half of the version bump, and the one that would be silent:
+    // every attestation on the relay today is v1, and a reader that only
+    // accepted the version it writes would report the entire existing stream
+    // as `unknown_version` on the day of a deploy. The stream would look like
+    // it had stopped.
+    const read = accept(attest(LEDGER_A, { nullifier: 'n1', v: '1' }))
+    expect(read.version).toBe('1')
+    // v1 carries no issuer, and its absence is not a defect.
+    expect(read.issuerTag).toBeUndefined()
   })
 
   it('refuses a BATCH that carries no version at all', () => {

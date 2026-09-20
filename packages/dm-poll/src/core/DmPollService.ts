@@ -385,6 +385,7 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
           voucherId: error.voucherId,
           alreadyRedeemed: error.alreadyRedeemed,
           signedFaceValue: error.signedFaceValue,
+          reason: error.reason,
         });
         return null;
       }

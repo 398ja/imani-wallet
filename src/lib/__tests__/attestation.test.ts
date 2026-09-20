@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { hexToBytes } from '@noble/hashes/utils'
 
+import { ATTESTATION_VERSION } from '../attestationKind'
+
 /**
  * The attestation stream: what it proves, and what it must never leak.
  *
@@ -588,13 +590,58 @@ describe('attesting never breaks a redemption', () => {
 
   it('stamps a payload version on both the tags and the content', async () => {
     // A producer shipping ahead of its reader. Events already published cannot
-    // be amended, so if a batched v2 ever lands, v1 events must be
-    // distinguishable rather than mis-parsed. Pinned here so the wire format
-    // cannot drift silently.
+    // be amended, so a later format must be distinguishable rather than
+    // mis-parsed. Pinned here so the wire format cannot drift silently.
+    //
+    // Asserted against the CONSTANT rather than a literal. A literal was what
+    // this had, and it turned the v2 bump into a test failure that said
+    // nothing about correctness: the producer and the reader agreed perfectly,
+    // and only the test's own copy of the number was stale. What matters is
+    // that the tag and the content agree with each other and with the module.
     await attestRedemption({ token: 'cashuAv1', faceValue: 2500, unit: 'XAF', signatureValid: true })
     const [ev] = published as { tags: string[][]; content: string }[]
-    expect(ev.tags).toContainEqual(['v', '1'])
-    expect(JSON.parse(ev.content).v).toBe('1')
+    expect(ev.tags).toContainEqual(['v', ATTESTATION_VERSION])
+    expect(JSON.parse(ev.content).v).toBe(ATTESTATION_VERSION)
+  })
+
+  it('commits to the ISSUING stall when one is supplied', async () => {
+    // Finding 4: a v1 attestation named no issuer, so a stall redeeming a
+    // coupon it never issued produced a ledger entry indistinguishable from an
+    // honest one.
+    //
+    // Committed rather than written plainly, because stall pubkeys are public
+    // and a plain hash over a public value plus a public nullifier is
+    // brute-forceable — measured over a 500-stall list, the issuer falls out
+    // immediately. The ledger secret is what makes it hiding.
+    await attestRedemption({
+      token: 'cashuA-with-issuer',
+      faceValue: 2500,
+      unit: 'XAF',
+      signatureValid: true,
+      issuerId: 'ab'.repeat(32),
+    })
+    const [ev] = published as { content: string }[]
+    const issuer = JSON.parse(ev.content).issuer as string
+
+    expect(issuer).toMatch(/^[0-9a-f]{64}$/)
+    // The whole point of the salt: the commitment must not be the issuer, nor
+    // anything an observer can derive from what the event already carries.
+    expect(issuer).not.toContain('ab'.repeat(8))
+  })
+
+  it('publishes without an issuer when none is known, rather than not at all', async () => {
+    // A redemption recorded without an issuer is worth more than no record.
+    // Plain ecash and pre-v2 rows both reach here, and refusing them would
+    // punch gaps in the ledger to close a gap about something else.
+    await attestRedemption({
+      token: 'cashuA-no-issuer',
+      faceValue: 2500,
+      unit: 'XAF',
+      signatureValid: true,
+    })
+    const [ev] = published as { content: string }[]
+
+    expect(JSON.parse(ev.content).issuer).toBeUndefined()
   })
 
   it('publishes NOTHING for a coupon whose signature did not verify', async () => {

@@ -7,6 +7,7 @@ import {
 } from '@imani/dm-poll'
 import type { CryptoAdapter, GiftWrapEvent, UnwrappedDm, TokenMetadata } from '@imani/dm-poll'
 
+import { checkIssuer } from './issuerAllowlist'
 import { getSigner } from './nap'
 import { asChunk, offerChunk } from './dmChunks'
 import {
@@ -122,6 +123,30 @@ function verifiedVoucherFrom(token: string | undefined):
       parsed.voucher.voucherId,
       'claimed issuer',
       parsed.voucher.issuerId.slice(0, 16),
+    )
+    return REJECTED
+  }
+
+  // The signature proves the bytes were not altered. It does NOT prove who
+  // signed them: `issuerPublicKey` is inside the voucher, so a self-issued one
+  // verifies perfectly (Finding 2 of the audit review). This is the other half
+  // — is the signing key one this build was told to trust?
+  //
+  // Refuses only when an allowlist IS configured, so a deployment that has not
+  // set `VITE_VOUCHER_ISSUER_PUBKEYS` behaves exactly as before. See
+  // `issuerAllowlist.ts` for why unset must mean allow here and means refuse
+  // for licences.
+  //
+  // Placed with the signature check rather than at the till, because this is a
+  // statement about the coupon's provenance and holds identically for a
+  // customer receiving one and a stall taking one back. The cross-stall check
+  // is the opposite: it depends on who is asking, so it lives at the till.
+  if (checkIssuer(parsed) === 'unknown-issuer') {
+    console.warn(
+      '[dmCrypto] rejecting voucher signed by an unrecognised issuer key:',
+      parsed.voucher.voucherId,
+      'key',
+      parsed.voucher.issuerPublicKey.slice(0, 16),
     )
     return REJECTED
   }
