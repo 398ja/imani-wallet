@@ -6,7 +6,20 @@ A review of `src/lib/audit.ts`, `src/lib/attestation.ts` and
 > Can this detect a **double spend**? Can it detect **silent inflation**?
 
 Short answer: **double spend, yes, within one layer. Silent inflation, no — and
-one of the paths that should prevent it is missing a check.**
+one of the paths that should prevent it was missing a check.**
+
+## Status
+
+| Finding | State |
+|---|---|
+| 1 — cross-stall redemption | **Fixed.** `refuseIfAnotherStalls`, refusing before the mint swap. |
+| 2 — self-referential signature | Documented at the type; needs a pinned key (Rec. 4) to close. |
+| 3 — no range proof | Documented on `/verify-total`; needs a range proof (Rec. 6) to close. |
+| 4 — no issuer in the payload | Open. Wire-format change (Rec. 5). |
+| 5 — cashback unattested | By design. Now stated in the API's own payloads. |
+
+Recommendations 1, 2 and 3 are implemented. 4, 5 and 6 are deployment and
+wire-format decisions and are left open deliberately.
 
 ## Scope, and what was not looked at
 
@@ -69,8 +82,8 @@ Finding 1 needed no such caveat and so was held to the higher standard.
 | A forged attestation | **Yes** | BIP-340 on every event |
 | A merchant crediting less than face value | **Partly** | Only against their own disclosure |
 | A merchant omitting a redemption | **No** | Stated limit; needs the mint |
-| **A merchant redeeming a coupon they never issued** | **No** | No check anywhere on the DM path |
-| **A merchant inflating a disclosed total downwards** | **No** | No range proof |
+| **A merchant redeeming a coupon they never issued** | **Refused** | `refuseIfAnotherStalls`, before the swap |
+| **A merchant inflating a disclosed total downwards** | **No** | No range proof; now stated in the payload |
 | **A self-issued voucher** | **No** (offline) | Mint catches it at swap; wallet does not |
 
 Confidence that the ledger catches **double spend within the voucher layer**:
@@ -157,11 +170,11 @@ distinct ways to do it here, and the ledger sees none of them.
 Only #4 is acknowledged in the design. The other three are not written down
 anywhere, and #1 is a missing check rather than a design trade.
 
-## Finding 1 — the till does not check the coupon is its own
+## Finding 1 — the till did not check the coupon is its own
 
-**Severity: high. This is the one to fix.**
+**Severity: high. FIXED — `refuseIfAnotherStalls` in `dmPoll.ts`.**
 
-There are two redemption paths and they disagree:
+There were two redemption paths and they disagreed:
 
 | Path | Checks `issuerId == my stall`? |
 |---|---|
@@ -262,6 +275,28 @@ refusal belongs in the same place, for the same reason.
 terminal credentials, with the same justification: *"A voucher minted by some
 other stall, or by the terminal itself, is refused even though its signature is
 perfectly valid."*
+
+### How it was fixed, and the bug found while fixing it
+
+`refuseIfAnotherStalls(meta, currentPubkey, token)` runs in `dmPoll.ts`
+immediately before `refuseIfOverRedeemed` and before the mint swap. Whose coupon
+it is comes before how much is left on it, so the refusal names the real reason
+rather than whichever check fired first.
+
+**The first implementation was wrong and would have taken every stall off
+subscription.** A licence (ADR 0007) is also a voucher, delivered by the same
+gift-wrapped DM, issued by *us* and sent *to* the stall — so its `issuerId` is
+never the receiving stall's own key, and the check refused it. That is an outage
+strictly worse than the bug being closed: a stall could not renew. `licences.ts`
+exists for precisely this hazard and supplies the predicate, which reads signed
+`merchant_metadata` a sender cannot forge without breaking `verifyVoucher`.
+
+The licence exception is placed *after* the issuer comparison, so the ordinary
+path never pays for the token parse.
+
+`src/lib/__tests__/refuseIfAnotherStalls.test.ts` covers twelve cases. Mutation
+tested both ways: removing the check fails 3 tests, removing the licence
+exception fails exactly the licence test.
 
 ## Finding 2 — the issuer signature is self-referential
 
@@ -420,49 +455,39 @@ cover, and these are the cases they do not cover.
 
 Ordered by ratio of risk closed to effort and blast radius.
 
-### 1. Refuse another stall's coupon at the till — **do this first**
+### 1. Refuse another stall's coupon at the till — **DONE**
 
-Add the `issuerId != own stall` refusal where a stall takes a coupon in, and
-refuse **before the mint swap** so the sender's coupon stays whole and reclaims
-at their next login. `refuseIfOverRedeemed` in `dmPoll.ts` is already that
-place: it runs before `redemption.redeem`, is gated on the wallet being a
-merchant, and throws `RedemptionRefusedError` for the ceiling. A cross-stall
-refusal is a sibling check with the same shape.
+Implemented as `refuseIfAnotherStalls` in `dmPoll.ts`, called before
+`refuseIfOverRedeemed` and before the mint swap, so a refused coupon stays the
+sender's and reclaims at their next login.
 
-Unconditional for a stall. The role model has no merchant-who-is-also-shopping
-case to carve out (see Finding 1), and a *customer* wallet never reaches this
-check because it is inside the merchant gate.
-
-Mirrors `verifyCoupon` (`REFUSAL.ANOTHER_STALL`) and `credentialActor`. Small,
-testable, no wire change, no privacy cost.
-
-`crossStallRedemption.test.ts` pins the current behaviour at the adapter. Note
-that with the check placed at `refuseIfOverRedeemed` rather than `extractToken`,
-those two `FINDING` tests stay green — the adapter still hands the token
-through, and the refusal happens one layer later. The test that turns red on the
-fix belongs beside `refuseIfOverRedeemed`'s existing test, and should assert
-that another stall's coupon throws before the swap.
+Unconditional for a stall, with one exception that had to be discovered rather
+than designed: **licences**. See Finding 1 for the detail and for what the first
+implementation got wrong.
 
 What this does **not** do: catch a merchant who has modified their client to
 skip the check. That needs Recommendation 5.
 
-### 2. Say out loud what `signatureValid` means
+### 2. Say out loud what `signatureValid` means — **DONE**
 
-Rename or document it as *internally consistent*, not *trusted issuer*. Cheap,
-and it stops the next caller making the same inference `attestRedemption` makes.
+`VoucherValidation.signatureValid` now carries the full statement at its
+declaration: read it as *internally consistent*, never as *issued by someone I
+trust*, with what stands behind it (the mint, ADR 0006's allowlist) and what
+does not (anything offline). Pinned by `auditSoundnessLimits.test.ts`.
 
-### 3. State the soundness limit on `verify-total`
+### 3. State the soundness limit on `verify-total` — **DONE**
 
-Add to the `note`: a `true` binds the disclosed set *only if every disclosed
-commitment is to an amount inside a bounded range*, which the stream does not
-enforce — a commitment to `n − x` is well-formed and behaves as `−x`.
-Documentation-only, and it stops the endpoint overstating.
+`/api/v1/audit/verify-total` now returns a `limits` array beside `verified`,
+naming three things a `true` does not mean: set completeness, amount
+boundedness, and the cashback routing gap. Kept separate from `note` so a caller
+rendering only the headline still sees them.
 
-An earlier draft said "non-negative", which is not the right condition: every
-scalar mod `n` is non-negative. The property that is missing is *boundedness*.
+`/api/v1/audit/coupon/{nullifier}` gained the routing caveat too, since
+`missing` is the verdict most likely to be quoted at a merchant and cashback
+makes permanent innocent absence possible.
 
-While there: say that the cashback path never writes to the ledger (Finding 5),
-so a `missing` verdict has a routing explanation as well as a timing one.
+The condition is **boundedness**, not "non-negative": every scalar mod `n` is
+non-negative, so that wording named no property at all.
 
 ### 4. Pin a coupon issuer key (deployment decision)
 
@@ -618,11 +643,23 @@ which states the model in one line. The correct source was three files away.
 Recommendation 3's first wording. Every scalar mod `n` is non-negative; the
 missing property is *boundedness*.
 
-**Pattern across all seven:** every error came from reasoning one step past
+### 8. "Unconditional for a stall" — would have blocked every subscription
+
+The implementation of Recommendation 1, written from this document's own
+instruction that the refusal could be unconditional. It could not: a **licence**
+is a voucher delivered by the same DM path, issued by us and sent to the stall,
+so `issuerId` is never the receiving stall's key. The first version refused
+every one — a stall could not renew its subscription.
+
+Caught by reviewing the diff against `licences.ts`, whose header describes this
+exact hazard for a different feature. The document had asserted a property of
+the role model without checking what else arrives through the same door.
+
+**Pattern across all eight:** every error came from reasoning one step past
 what had been measured or read. Items 2–4 came from single-shot timing on a
 cold VM and are why `scripts/bench-commitments.mts` warms hard and takes
 medians. Items 1, 5 and 7 came from not re-reading a nearby comment or my own
-sentence. Item 6 came from reading one document and not the module that
-defines the thing the document describes — and was caught by the user, not by
-me. None survived a second look. Whoever extends this document should assume
-the same rate applies to them.
+sentence. Items 6 and 8 came from reading one document and not the module that
+defines the thing the document describes — 6 was caught by the user, 8 by
+reviewing the diff. None survived a second look. Whoever extends this document
+should assume the same rate applies to them.

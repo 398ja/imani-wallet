@@ -503,9 +503,16 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       // Said out loud in the payload, not just in a doc nobody reading JSON will
       // open. `missing` is the verdict most likely to be quoted at a merchant,
       // and it must never be repeated as proof of dishonesty.
+      //
+      // The ROUTING caveat is the one review added, and it is not a restatement
+      // of the timing one: `ABSENCE_SLA_MS` waits for a publish that may be
+      // late, but the cashback flow never publishes at all (by design — it is
+      // not a merchant honouring a claim on themselves). So a redemption can be
+      // permanently absent with nothing wrong, and no amount of waiting
+      // distinguishes it. See Finding 5 of the review document.
       note:
         verdict === 'missing'
-          ? 'Past the publication window with no record. This is evidence of a gap, NOT proof of a dishonest merchant: a lost publish looks identical until the merchant runs a reconciliation sweep.'
+          ? 'Past the publication window with no record. This is evidence of a gap, NOT proof of a dishonest merchant: a lost publish looks identical until the merchant runs a reconciliation sweep, and some redemption paths (cashback) never publish an attestation at all.'
           : snap.truncated && check.verdict === 'missing'
             ? 'No record found, but this service is reading a truncated view of the stream, so absence here means nothing. Retry once the snapshot is complete.'
             : undefined,
@@ -630,6 +637,37 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       note: verified
         ? 'The disclosed set sums to the disclosed total. This does NOT prove the set is complete: the merchant chooses which nullifiers to disclose, and omitting one reconciles at a lower total. Completeness must come from elsewhere.'
         : 'The published commitments do not sum to a commitment to this total.',
+      // Stated in the payload rather than in a document nobody reading JSON
+      // will open, and kept SEPARATE from `note` so that a caller rendering
+      // only the headline still sees the limits beside the verdict.
+      //
+      // Both of these were established by review and are pinned by tests; see
+      // docs/research/audit-double-spend-inflation-review.md (Findings 3 and
+      // 5) and src/lib/__tests__/auditSoundnessLimits.test.ts.
+      ...(verified
+        ? {
+            limits: [
+              // COMPLETENESS. The long-standing caveat, and the one the note
+              // above already carries.
+              'Set completeness is not proven. The merchant chooses which nullifiers to disclose, and omitting one reconciles perfectly at a lower total.',
+              // SOUNDNESS. A Pedersen commitment is additively homomorphic over
+              // a cyclic group, so a commitment to `n - x` is a well-formed
+              // point that behaves as `-x` and drags the sum DOWN. The reader
+              // validates only the shape of a published point, and `commitTo`
+              // refusing a negative amount binds the shipped wallet alone — a
+              // merchant running their own signer is not bound by it.
+              //
+              // An earlier draft of this text said "non-negative", which is not
+              // the property: every scalar mod n is non-negative. The missing
+              // property is BOUNDEDNESS, and closing it needs a range proof.
+              'Amounts are not proven to lie in any range. A publisher running modified software can emit a commitment that behaves as a negative amount, which makes an understated total reconcile. This check is sound only if every disclosed commitment is to an amount inside a sensible bound.',
+              // ROUTING. Not a property of this endpoint, but of what the
+              // stream can contain at all, and a caller comparing a disclosure
+              // against expected revenue needs it.
+              'Not every redemption reaches this ledger. The cashback flow redeems without publishing an attestation by design, so a redemption may be absent for reasons that have nothing to do with the merchant.',
+            ],
+          }
+        : {}),
     })
   }
 

@@ -7,7 +7,7 @@ import { createDmCryptoAdapter } from '../dmCrypto'
 import { buildVoucherToken, dmEnvelope } from './voucherFixtures'
 
 /**
- * Does the receive path refuse a coupon this stall never issued?
+ * Where the cross-stall boundary sits, and where it does not.
  *
  * Drives `createDmCryptoAdapter` — the adapter dm-poll actually installs — with
  * genuinely signed tokens from `voucherFixtures`, rather than calling
@@ -16,12 +16,14 @@ import { buildVoucherToken, dmEnvelope } from './voucherFixtures'
  * primitive stayed permissive. Asking the adapter is asking the question the
  * merchant's till actually asks.
  *
- * These tests DOCUMENT CURRENT BEHAVIOUR, including behaviour that is a finding
- * rather than a guarantee. Where an expectation encodes something undesirable it
- * says so, so that fixing the finding turns the test red on purpose and whoever
- * changes it is told why.
+ * These tests originally recorded Finding 1 of
+ * docs/research/audit-double-spend-inflation-review.md as UNFIXED. It is fixed
+ * now, and the refusal lives in `refuseIfAnotherStalls` (see its own test file)
+ * rather than here — deliberately, so that a coupon is refused before the mint
+ * swap but the gift wrap is not dropped, which would break the sender's reclaim.
  *
- * See docs/research/audit-double-spend-inflation-review.md, Finding 1.
+ * What remains here is the boundary itself: the adapter recognises and hands
+ * through, and the till decides. If that ever changes, these turn red.
  */
 
 const signerState = vi.hoisted(() => ({
@@ -63,25 +65,26 @@ describe('a coupon issued by another stall, arriving at this till', () => {
     ).toBe(true)
   })
 
-  it('FINDING: is accepted, though the coupon is a claim on a different stall', () => {
-    // `extractToken` is the refusal gate — dmCrypto's own comment calls it
-    // "the refusal gate, because parseTokenTransferMessage alone is not one",
-    // and returning null here is what makes dm-poll drop the wrap.
+  it('is accepted at the ADAPTER, which is no longer the whole story', () => {
+    // `extractToken` still returns the token, and that is now CORRECT rather
+    // than a finding: the refusal moved one layer later, to
+    // `refuseIfAnotherStalls` in dmPoll, so that it runs before the mint swap
+    // but after the coupon has been recognised.
     //
-    // It returns the token. So the till swaps another stall's coupon at the
-    // mint, credits the customer, and attests it publicly.
+    // Kept because it pins WHERE the boundary is. If a future change moves the
+    // refusal back to delivery, this turns red and whoever did it has to think
+    // about the sender's reclaim path, which a dropped wrap breaks.
     //
-    // EXPECTED TO FAIL once Finding 1 is fixed. When it does, change it to
-    // `toBeNull()` — do not delete it.
+    // See refuseIfAnotherStalls.test.ts for the refusal itself.
     const { token } = buildVoucherToken({ issuerId: OTHER_STALL })
 
     expect(crypto.extractToken(dmEnvelope(token))).toBe(token)
   })
 
-  it('FINDING: reports the other stall as the issuer, and no refusal with it', () => {
-    // The metadata knows perfectly well whose coupon this is — `issuerId` comes
-    // off the SIGNED voucher, not the envelope. Every input the check needs is
-    // present and in hand; nothing consults it.
+  it('reports the other stall as the issuer, which is what the refusal reads', () => {
+    // `issuerId` comes off the SIGNED voucher, not the envelope, so it is the
+    // issuer's own attested claim. This is the input `refuseIfAnotherStalls`
+    // compares against the wallet's own stall key.
     const { token } = buildVoucherToken({ issuerId: OTHER_STALL })
     const meta = crypto.parseTokenTransferMessage(dmEnvelope(token))
 
