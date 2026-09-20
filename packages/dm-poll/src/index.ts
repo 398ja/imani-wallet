@@ -95,6 +95,7 @@ export type {
   TokenReceivedEvent,
   RedemptionSuccessEvent,
   RedemptionErrorEvent,
+  RedemptionRefusedEvent,
   SubscriptionStateEvent,
   DmPollEvents,
 
@@ -141,6 +142,7 @@ export {
   SubscriptionError,
   AdapterError,
 } from './errors';
+export type { RefusalReason } from './errors';
 
 // Spec 038 — unified receive pipeline surfaces
 export {

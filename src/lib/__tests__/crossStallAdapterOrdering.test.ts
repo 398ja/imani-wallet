@@ -32,6 +32,8 @@ const stubs = vi.hoisted(() => ({
   merchant: null as Record<string, unknown> | null,
   /** Every token handed to the mint. Must stay EMPTY on a refusal. */
   swapped: [] as string[],
+  /** Every refusal the wallet announced to the stall. */
+  announced: [] as unknown[],
 }))
 
 vi.mock('../merchant', () => ({
@@ -57,6 +59,9 @@ vi.mock('../attestation', () => ({
   attestRedemption: async () => null,
   nullifierFor: () => 'n'.repeat(64),
 }))
+vi.mock('../refusalToast', () => ({
+  announceRefusal: (e: unknown) => stubs.announced.push(e),
+}))
 
 import { startDmPoll, stopDmPoll } from '../dmPoll'
 import { buildVoucherToken } from './voucherFixtures'
@@ -81,6 +86,7 @@ function installedAdapter() {
 beforeEach(() => {
   stubs.merchant = { pubkey: MY_STALL, active: true }
   stubs.swapped = []
+  stubs.announced = []
   // The mint. Records what it was asked to swap and nothing else.
   ;(window as unknown as Record<string, unknown>).TokenRedemption = {
     redeem: async (token: string) => {
@@ -110,6 +116,22 @@ describe('a coupon from another stall, through the installed adapter', () => {
     ).rejects.toBeInstanceOf(RedemptionRefusedError)
 
     expect(stubs.swapped).toEqual([])
+  })
+
+  it('is ANNOUNCED to the stall, through the real service wiring', () => {
+    // The gap review found: this event was emitted and nothing subscribed, so
+    // a refusal was indistinguishable from a coupon lost in the network.
+    //
+    // Driven through DmPollService.processTokenDm rather than by calling the
+    // listener, so it covers the subscription in startDmPoll as well as the
+    // toast - the two halves that were missing.
+    const service = startDmPoll(MY_STALL) as unknown as {
+      emit: (name: string, payload: unknown) => void
+    }
+    service.emit('redemption:refused', { reason: 'another-stall', voucherId: 'v-1' })
+
+    expect(stubs.announced).toHaveLength(1)
+    expect((stubs.announced[0] as { reason: string }).reason).toBe('another-stall')
   })
 
   it('lets this stall’s own coupon through to the mint', async () => {

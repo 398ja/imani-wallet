@@ -140,6 +140,7 @@ let pending:
       attestationNullifier?: string
       attestedValue?: number
       attestedUnit?: string
+      attestedIssuer?: string
     }
   | undefined
 
@@ -169,6 +170,7 @@ export async function withCorrelation<T>(
     attestationNullifier?: string
     attestedValue?: number
     attestedUnit?: string
+    attestedIssuer?: string
   },
   redeem: () => Promise<T>,
 ): Promise<T> {
@@ -214,6 +216,10 @@ function stampCorrelation(rows: unknown[]): unknown[] {
       // attestation actually committed, not the row's own amount.
       attestedValue: t.attestedValue ?? ids.attestedValue,
       attestedUnit: t.attestedUnit || ids.attestedUnit,
+      // And the issuing stall, so a swept republish can rebuild the v2 issuer
+      // commitment. Without it the sweep would close a gap with an attestation
+      // weaker than the one it replaces.
+      attestedIssuer: t.attestedIssuer || ids.attestedIssuer,
     }
   })
 }

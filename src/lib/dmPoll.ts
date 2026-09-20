@@ -16,6 +16,7 @@ import {
 
 import { announceArrival, type ArrivedVoucher } from './arrivalToast'
 import { announceQueued, settleQueued } from './queuedToast'
+import { announceRefusal } from './refusalToast'
 import { attestRedemption, nullifierFor } from './attestation'
 import { postPaymentReceipt } from './paymentReceipt'
 import { createDmCryptoAdapter, toLegacyMetadata } from './dmCrypto'
@@ -519,6 +520,7 @@ export function refuseIfAnotherStalls(
     // signed face value is whatever the other stall issued.
     0,
     validation.signedFaceValue,
+    'another-stall',
   )
 }
 
@@ -602,6 +604,12 @@ function redemptionAdapter(): RedemptionAdapter {
           // which is worse than the gap it set out to close.
           attestedValue: Number(meta?.faceValue ?? 0),
           attestedUnit: String(meta?.faceUnit ?? ''),
+          // The issuing stall, stamped for the same reason as the figures
+          // beside it: the reconciliation sweep republishes from the ROW, and
+          // without this a swept attestation would carry no issuer commitment
+          // even though the original did — so a gap closed by the sweep would
+          // silently lose the property this whole version bump exists for.
+          attestedIssuer: typeof meta?.issuerId === 'string' ? meta.issuerId : undefined,
           // What the wallet checked about this coupon. The vendored builder
           // reads `metadata.validation`, but the row that survives is rebuilt
           // from empty metadata (see legacyBridge.withCorrelation), so without
@@ -763,6 +771,11 @@ function redemptionAdapter(): RedemptionAdapter {
           faceValue: Number(meta?.faceValue ?? 0),
           unit: String(meta?.faceUnit ?? ''),
           signatureValid: validation?.signatureValid === true,
+          // The stall that ISSUED the coupon, for the v2 issuer commitment.
+          // Off the signed voucher (dmCrypto overwrites the envelope's value
+          // with it whenever the signature verified), so this is the issuer's
+          // own claim rather than a sender-written one.
+          issuerId: typeof meta?.issuerId === 'string' ? meta.issuerId : undefined,
         })
           // Record WHERE it was published, on the row it belongs to (DEV-246).
           //
@@ -851,6 +864,26 @@ export function startDmPoll(pubkey: string): DmPollService {
     // auto-redemption is on AND an adapter exists.
     enableAutoRedemption: true,
   })
+  // Tell the stall when its till turns a coupon away.
+  //
+  // Subscribed BEFORE `start()`, so a refusal during the first catch-up is not
+  // missed — the poller redeems as soon as it starts, and a listener attached
+  // afterwards would silently drop the very first one.
+  //
+  // This event has been emitted since the ceiling check shipped and nothing
+  // listened to it, which made every refusal indistinguishable from a coupon
+  // lost in the network: no balance change, no history row, no message, in
+  // front of a customer who believes they have paid.
+  //
+  // Guarded, because a TOAST must never be the reason the poller fails to
+  // start. Several suites build a partial service double with only the methods
+  // they exercise, and a hard call here turned "you get no notification" into
+  // "you receive no coupons at all" — a cosmetic feature taking down the
+  // money path. The guard is cheap and the failure it prevents is total.
+  if (typeof service.on === 'function') {
+    service.on('redemption:refused', announceRefusal)
+  }
+
   void service.start()
   // The first `onopen` fires after `start()` has already caught up, so it costs
   // one duplicate query per session — worth not special-casing.

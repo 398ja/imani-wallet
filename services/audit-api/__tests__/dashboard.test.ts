@@ -68,6 +68,7 @@ describe('the Grafana dashboard queries metrics this service actually emits', ()
           ledgerPubkey: 'k',
           eventId: 'e',
           at: Date.now(),
+          version: '2',
         },
       ],
       rejected: [{ eventId: 'e2', defect: 'bad_signature' }],

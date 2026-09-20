@@ -96,6 +96,71 @@ export { commitTo, verifyDisclosedTotal } from './audit'
 const LEDGER_KEY_TAG = 'imani-ledger-key-v1'
 const NULLIFIER_TAG = 'imani-redeem-v1'
 const BLIND_TAG = 'imani-blind-v1'
+const ISSUER_TAG = 'imani-issuer-v1'
+
+/**
+ * A hiding commitment to the stall that ISSUED the coupon.
+ *
+ * `H(tag | ledgerSk | issuerId | nullifier)`, and every input is load-bearing.
+ *
+ * ## What it is for
+ *
+ * A v1 attestation said "I credited N against some coupon" and named no issuer,
+ * so a stall redeeming a coupon it never issued produced a ledger entry
+ * indistinguishable from an honest one (Finding 4). With this, a merchant can
+ * prove on disclosure which stall each redemption was against, and an auditor
+ * given the disclosure can check that a stall's redemptions are its own.
+ *
+ * ## Why not publish `issuerId` plainly
+ *
+ * **Measured, not assumed.** Stall pubkeys are public — every stall publishes a
+ * kind-0 — so the candidate set is enumerable. A plain `H(issuerId | nullifier)`
+ * is brute-forceable: over a list of 500 stalls, an observer holding the event
+ * recovers the exact issuer immediately, because the nullifier is a public tag
+ * and the only other input is guessable. That would link a pseudonymous ledger
+ * key to a real stall on the first self-issued coupon, which is the
+ * de-anonymisation the whole scheme exists to prevent.
+ *
+ * Mixing the LEDGER SECRET defeats it: the same search finds nothing, while the
+ * merchant still reproduces the value exactly. Verified both directions before
+ * this shipped.
+ *
+ * ## Why the nullifier is in there
+ *
+ * Without it, one stall's every coupon from one issuer shares a single tag, and
+ * an observer can group a merchant's redemptions by supplier and count them —
+ * cardinality per counterparty, for free. Including it makes each attestation's
+ * issuer tag unique.
+ *
+ * Derived rather than random, for the reason `blindFor` is: a merchant who
+ * wiped their device must be able to reproduce it from their key alone, or
+ * self-audit dies with the device.
+ */
+function issuerTagFor(ledgerSk: Uint8Array, issuerId: string, nullifier: string): string {
+  return bytesToHex(
+    sha256(utf8ToBytes(`${ISSUER_TAG}:${bytesToHex(ledgerSk)}:${issuerId.toLowerCase()}:${nullifier}`)),
+  )
+}
+
+/**
+ * Re-derive an issuer tag to check a disclosed claim.
+ *
+ * The auditor's half, and it needs the merchant's ledger key — so it is used by
+ * the merchant proving a claim about their own ledger, not by a stranger. A
+ * third party cannot compute this, which is exactly the privacy property above.
+ */
+export function verifyOwnIssuerTag(
+  nullifier: string,
+  issuerId: string,
+  tag: string,
+): boolean {
+  try {
+    const { sk } = ledgerKey()
+    return issuerTagFor(sk, issuerId, nullifier) === tag
+  } catch {
+    return false
+  }
+}
 
 /**
  * The merchant's ledger key — a pseudonym that is also a fetch handle.
@@ -235,6 +300,17 @@ export interface Attestation {
   commitment: string
   /** The unit, needed to audit sums. Not identifying on its own. */
   unit: string
+  /**
+   * Hiding commitment to the issuing stall (v2). See `issuerTagFor`.
+   *
+   * Optional on the type because a republish of a pre-v2 row cannot produce
+   * one: the sweep needs `attestedIssuer` on the row, and rows written before
+   * that field existed do not carry it. Absent means the event is published
+   * without an `issuer`, which the reader accepts — it reports
+   * `issuerTag: undefined` rather than refusing, because refusing would make a
+   * merchant's own older redemptions unauditable.
+   */
+  issuerTag?: string
 }
 
 /**
@@ -254,6 +330,11 @@ export function buildAttestation(a: Attestation, ledgerSk: Uint8Array): Event {
     // The nullifier is a tag as well as content so an auditor can look up one
     // coupon with a filter instead of fetching and parsing the whole stream —
     // which is exactly what a customer checking their own coupon does.
+    //
+    // The ISSUER tag is deliberately NOT a nostr tag: tags are what relays
+    // index and filter on, and making this filterable would let an observer
+    // fetch every attestation sharing one issuer commitment. It is unique per
+    // nullifier so that buys them little, but there is no reason to offer it.
     tags: [
       ['n', a.nullifier],
       ['unit', a.unit],
@@ -273,6 +354,9 @@ export function buildAttestation(a: Attestation, ledgerSk: Uint8Array): Event {
       nullifier: a.nullifier,
       commitment: a.commitment,
       unit: a.unit,
+      // Omitted rather than written as null when absent, so a v2 event from a
+      // sweep over a pre-v2 row is not carrying a field that looks set.
+      ...(a.issuerTag ? { issuer: a.issuerTag } : {}),
     }),
   }
   return finalizeEvent(template, ledgerSk)
@@ -330,9 +414,24 @@ export async function attestRedemption(params: {
    * `hasValidationClaim` already draws for the Checks badge.
    */
   signatureValid: boolean
+  /**
+   * The stall that ISSUED this coupon, for the v2 issuer commitment.
+   *
+   * Off the SIGNED voucher, never the envelope — `dmCrypto` overwrites the
+   * envelope's value with the voucher's whenever the signature verified, so by
+   * the time this is called it is the issuer's own attested claim. Committing
+   * to a sender-written field would put a figure nobody established into a
+   * public record, which is the same error `signatureValid` exists to prevent
+   * for the amount.
+   *
+   * Optional: absent simply omits the commitment, and the attestation is still
+   * published. A redemption recorded without an issuer is worth more than no
+   * record at all.
+   */
+  issuerId?: string
 }): Promise<AttestationReceipt | null> {
   try {
-    const { token, faceValue, unit, signatureValid } = params
+    const { token, faceValue, unit, signatureValid, issuerId } = params
     if (!signatureValid) return null
     if (!token || !Number.isFinite(faceValue) || faceValue < 0) return null
 
@@ -342,6 +441,7 @@ export async function attestRedemption(params: {
       nullifier,
       commitment: commitTo(Math.round(faceValue), blindFor(sk, nullifier)),
       unit: unit || 'UNKNOWN',
+      ...(issuerId ? { issuerTag: issuerTagFor(sk, issuerId, nullifier) } : {}),
     }
 
     const event = buildAttestation(attestation, sk)
@@ -564,6 +664,13 @@ export async function reconcileAttestations(
       nullifier,
       commitment: commitTo(Math.round(value), blindFor(sk, nullifier)),
       unit: typeof row.attestedUnit === 'string' && row.attestedUnit ? row.attestedUnit : 'UNKNOWN',
+      // Republished from the ROW, so a swept gap carries the same issuer
+      // commitment the original publish would have. Rows written before
+      // `attestedIssuer` existed have none, and those republish without one —
+      // which the reader accepts rather than refusing.
+      ...(typeof row.attestedIssuer === 'string' && row.attestedIssuer
+        ? { issuerTag: issuerTagFor(sk, row.attestedIssuer, nullifier) }
+        : {}),
     }
     // Derived blinds make this idempotent: republishing after a partial relay
     // failure reproduces byte-identical content rather than a second,
