@@ -13,13 +13,24 @@ one of the paths that should prevent it was missing a check.**
 | Finding | State |
 |---|---|
 | 1 — cross-stall redemption | **Fixed.** `refuseIfAnotherStalls`, refusing before the mint swap. |
-| 2 — self-referential signature | Documented at the type; needs a pinned key (Rec. 4) to close. |
-| 3 — no range proof | Documented on `/verify-total`; needs a range proof (Rec. 6) to close. |
-| 4 — no issuer in the payload | Open. Wire-format change (Rec. 5). |
+| 2 — self-referential signature | **Fixed offline.** `issuerAllowlist.ts`, opt-in per deployment. |
+| 3 — no range proof | **Fixed.** `/verify-openings` is sound; `/verify-total` stays and says what it is not. |
+| 4 — no issuer in the payload | **Fixed.** Attestation v2 carries a hiding commitment to the issuing stall. |
 | 5 — cashback unattested | By design. Now stated in the API's own payloads. |
+| Gap — refusals were silent | **Fixed.** `redemption:refused` is typed, carries a reason, and is shown. |
 
-Recommendations 1, 2 and 3 are implemented. 4, 5 and 6 are deployment and
-wire-format decisions and are left open deliberately.
+All six recommendations are implemented. **Three of them changed shape under
+measurement**, and those reversals are the most useful thing in this document:
+
+- **Rec 4** was "pin one key". Real tokens carry four distinct issuer keys,
+  varying by mint and keyset. A single pin would have refused most genuine
+  coupons. It is an allowlist.
+- **Rec 5**'s obvious form — write `issuerId` into the event — would have
+  de-anonymised every stall. Measured: a plain hash is brute-forceable over the
+  public stall list. It is salted with the ledger secret.
+- **Rec 6**'s cheap form — range-check the disclosed amounts, then one
+  aggregate check — is **not sound**, and that was measured rather than
+  reasoned about. Only per-commitment openings tie a commitment to an amount.
 
 ## Scope, and what was not looked at
 
@@ -80,7 +91,7 @@ Finding 1 needed no such caveat and so was held to the higher standard.
 - [What the ledger is, precisely](#what-the-ledger-is-precisely)
 - [Double spend](#double-spend)
 - [Silent inflation](#silent-inflation)
-- [Finding 1 — the till does not check the coupon is its own](#finding-1--the-till-does-not-check-the-coupon-is-its-own)
+- [Finding 1 — the till did not check the coupon is its own](#finding-1--the-till-did-not-check-the-coupon-is-its-own)
 - [Finding 2 — the issuer signature is self-referential](#finding-2--the-issuer-signature-is-self-referential)
 - [Finding 3 — commitments have no range proof](#finding-3--commitments-have-no-range-proof)
 - [Finding 4 — the attestation does not name the issuer](#finding-4--the-attestation-does-not-name-the-issuer)
@@ -99,8 +110,9 @@ Finding 1 needed no such caveat and so was held to the higher standard.
 | A merchant crediting less than face value | **Partly** | Only against their own disclosure |
 | A merchant omitting a redemption | **No** | Stated limit; needs the mint |
 | **A merchant redeeming a coupon they never issued** | **Refused** | `refuseIfAnotherStalls`, before the swap |
-| **A merchant inflating a disclosed total downwards** | **No** | No range proof; now stated in the payload |
-| **A self-issued voucher** | **No** (offline) | Mint catches it at swap; wallet does not |
+| **… and visible in the ledger afterwards** | **Yes** | v2 issuer commitment, on disclosure |
+| **A merchant inflating a disclosed total downwards** | **Refused** | `/verify-openings` |
+| **A self-issued voucher** | **Refused** | `issuerAllowlist`, where configured |
 
 Confidence that the ledger catches **double spend within the voucher layer**:
 **high**. The nullifier construction is sound, the cross-ledger grouping is
@@ -519,18 +531,81 @@ makes permanent innocent absence possible.
 The condition is **boundedness**, not "non-negative": every scalar mod `n` is
 non-negative, so that wording named no property at all.
 
-### 4. Pin a coupon issuer key (deployment decision)
+### 4. Pin a coupon issuer key — **DONE, as an allowlist**
 
-Mirror the licence pattern. Needs a decision about *which* key and what happens
-to existing vouchers, so it is a design conversation rather than a patch.
+`src/lib/issuerAllowlist.ts`, checked in `dmCrypto` beside the signature.
 
-### 5. Commit to `issuerId` in the attestation (design pass)
+**The recommendation was wrong and measurement said so.** It called for
+mirroring `VITE_LICENCE_ISSUER_PUBKEY`: one key, in the bundle. Parsing the
+eight real captured tokens in `src/lib/__tests__/fixtures/` shows **four
+distinct `issuerPublicKey` values**, and they vary with the MINT, not the
+stall — one stall has coupons signed by all four, and
+`deploy/migrate-keys-to-hashi.sh` stores these per mint and per keyset, where
+they rotate. A single pinned key would have refused most genuine coupons.
 
-Makes Finding 1 detectable from the ledger without publishing stall identities.
-Wire-format change, `v: "2"`, and the reader is already built to refuse unknown
-versions — so the migration path exists.
+So it is a comma-separated allowlist, which is the shape ADR 0006 already
+specifies for the gateway's own path.
 
-### 6. Range proofs — and why "do it async" is the wrong question
+**Unset means ALLOW, the opposite of the licence rule**, and that asymmetry is
+deliberate: failing closed on a missing licence key turns a paid feature off,
+while failing closed here would turn MONEY off for every deployment that has
+not set the variable. A deployment that has not configured this is exactly as
+exposed as before and no worse — stated in the module rather than hidden.
+
+### 5. Commit to `issuerId` in the attestation — **DONE, as v2**
+
+`ATTESTATION_VERSION` is now `2`, and the payload carries `issuer`: a hiding
+commitment `H(tag | ledgerSk | issuerId | nullifier)`.
+
+**Committed rather than written plainly, and that was measured too.** Stall
+pubkeys are public, so the candidate set is enumerable: a plain
+`H(issuerId | nullifier)` is brute-forceable, and over a 500-stall list an
+observer holding the event recovers the exact issuer immediately — the
+nullifier is a public tag, so the only other input is guessable. That would
+link a pseudonymous ledger key to a real stall on the first coupon. Mixing the
+ledger secret defeats the search while the merchant still reproduces the value.
+
+The nullifier is in the preimage so one merchant's coupons from one supplier do
+not share a tag, which would otherwise leak per-counterparty cardinality.
+
+**The reader now separates the version it WRITES from the versions it READS.**
+Conflating them is what forces a flag day: every attestation on the relay today
+is v1, and a reader accepting only its own version would report the entire
+existing stream as `unknown_version` on the day of a deploy — the stream would
+look like it had stopped. Deploy the reader before, or with, any wallet that
+publishes v2.
+
+### 6. Range proofs — **DONE, as bounded openings rather than Bulletproofs**
+
+`POST /api/v1/audit/verify-openings`, backed by `verifyDisclosedOpenings`.
+
+**The cheap version does not work, and this was measured rather than
+reasoned about.** The tempting shape is: range-check each disclosed amount
+(free, it is just JavaScript), then do ONE aggregate homomorphic check. An
+attacker publishes a commitment behaving as `-6000` and discloses four amounts
+that are each perfectly in range and sum to the understated total. Every amount
+passes the range test, the aggregate reconciles, and the lie goes through —
+because the aggregate never ties an individual commitment to an individual
+amount. Asserted in `disclosedOpenings.test.ts` so nobody re-proposes it.
+
+Only a per-commitment opening ties them, at one scalar multiplication each.
+Hence:
+
+- `/verify-total` stays, cheap, capped at 500, and now says plainly what it
+  does not prove.
+- `/verify-openings` is sound, and capped at **50** — derived from the measured
+  ~3-4 ms per opening, which keeps a request near 200 ms on a single-threaded,
+  public, CORS-open service. Sharing the 500 cap would mean ~2 s per request,
+  which is the denial of service the other cap exists to prevent.
+
+No Bulletproofs, no new dependency. The opening also **derives** the total
+instead of accepting a claimed one, which removes the "claimed vs actual"
+disagreement entirely.
+
+What it still does not prove: completeness. That is unclosable from inside a
+disclosure and remains the honest limit.
+
+### Appendix to 6: why "do it async" was the wrong question
 
 **The premise to check first: proving is already off the hot path.**
 
@@ -685,11 +760,37 @@ Caught by reviewing the diff against `licences.ts`, whose header describes this
 exact hazard for a different feature. The document had asserted a property of
 the role model without checking what else arrives through the same door.
 
-**Pattern across all eight:** every error came from reasoning one step past
+### 9. "Mirror the licence key" — refused by the real tokens
+
+Recommendation 4 as written. Parsing the captured fixtures shows four distinct
+`issuerPublicKey` values varying by mint and keyset, so a single pinned key
+would have refused most genuine coupons. Built as an allowlist instead.
+
+The same root cause as errata item 1: both came from treating
+`issuerPublicKey` as a constant without checking. Twice now, which is why the
+measurement is asserted in `issuerAllowlist.test.ts` rather than described.
+
+### 10. "Write `issuerId` into the attestation" — would have de-anonymised every stall
+
+The obvious form of Recommendation 5, and the review nearly specified it that
+way. Stall pubkeys are public, so a plain hash over a public issuer and a
+public nullifier is brute-forceable — measured over a 500-stall list, the
+issuer falls out immediately. Salted with the ledger secret instead.
+
+### 11. "Range-check the amounts, then one aggregate check" — not sound
+
+The cheap form of Recommendation 6, which the document itself floated. An
+attacker discloses in-range amounts that sum to the lie while one commitment
+behaves as a negative: the range test passes, the aggregate reconciles, and
+nothing catches it. Only per-commitment openings tie a commitment to an amount.
+
+**Pattern across all eleven:** every error came from reasoning one step past
 what had been measured or read. Items 2–4 came from single-shot timing on a
 cold VM and are why `scripts/bench-commitments.mts` warms hard and takes
-medians. Items 1, 5 and 7 came from not re-reading a nearby comment or my own
-sentence. Items 6 and 8 came from reading one document and not the module that
-defines the thing the document describes — 6 was caught by the user, 8 by
-reviewing the diff. None survived a second look. Whoever extends this document
-should assume the same rate applies to them.
+medians. Items 1, 5, 7 and 9 came from not re-reading a nearby comment, my own
+sentence, or the data. Items 6 and 8 came from reading one document and not the
+module that defines the thing it describes — 6 was caught by the user, 8 by
+reviewing the diff. Items 9–11 were caught by MEASURING the recommendation
+before implementing it, which is the only reason three of the six shipped in a
+different shape than they were written. None survived a second look. Whoever
+extends this document should assume the same rate applies to them.

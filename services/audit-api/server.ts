@@ -48,6 +48,8 @@ import {
   summarise,
   tallyDefects,
   verifyDisclosedTotal,
+  verifyDisclosedOpenings,
+  type DisclosedOpening,
   type AuditedAttestation,
   type RejectedAttestation,
 } from '../../src/lib/audit'
@@ -168,6 +170,17 @@ const FETCH_LIMIT = Number(process.env.AUDIT_FETCH_LIMIT ?? 5000)
  * far more than a stall discloses for a trading day.
  */
 const DISCLOSURE_LIMIT = Number(process.env.AUDIT_DISCLOSURE_LIMIT ?? 500)
+/**
+ * Most redemptions ONE OPENING disclosure may cover.
+ *
+ * An order of magnitude below `DISCLOSURE_LIMIT`, because opening a commitment
+ * costs a scalar multiplication each while summing 500 of them costs one plus
+ * 499 cheap additions. Measured at roughly 30-40x
+ * (`scripts/bench-commitments.mts`), so the two endpoints cannot share a cap
+ * without one of them being wrong: at 500 this work would block the event loop
+ * for about two seconds per request.
+ */
+const OPENINGS_LIMIT = Number(process.env.AUDIT_OPENINGS_LIMIT ?? 50)
 /** Tolerance for a caller whose clock runs slightly ahead of this server's. */
 const CLOCK_SKEW_MS = 5 * 60 * 1000
 /**
@@ -665,6 +678,115 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
               // stream can contain at all, and a caller comparing a disclosure
               // against expected revenue needs it.
               'Not every redemption reaches this ledger. The cashback flow redeems without publishing an attestation by design, so a redemption may be absent for reasons that have nothing to do with the merchant.',
+            ],
+          }
+        : {}),
+    })
+  }
+
+  /**
+   * The SOUND disclosure check: open every commitment, do not sum them.
+   *
+   * `/verify-total` reconciles a homomorphic sum, which is cheap and is not
+   * sound against a modified publisher: a commitment behaving as a negative
+   * amount drags the sum down, and no amount of range-checking the DISCLOSED
+   * figures catches it, because the aggregate never ties one commitment to one
+   * amount. Measured and confirmed — see `verifyDisclosedOpenings`.
+   *
+   * This endpoint ties them. Each entry carries its own `amount` and `blind`,
+   * and each published commitment must reproduce exactly. That costs one
+   * elliptic-curve scalar multiplication per entry rather than one for the
+   * whole set, which is why the cap here is far lower than the sum's 500 and
+   * why both endpoints exist rather than one replacing the other.
+   *
+   * What it still does not prove: COMPLETENESS. The merchant chooses which
+   * nullifiers to disclose, and that is unclosable from inside a disclosure.
+   */
+  if (path === '/api/v1/audit/verify-openings' && req.method === 'POST') {
+    const body = await readJson(req).catch(() => null)
+    if (!body || typeof body !== 'object') {
+      return json(res, 400, { error: 'expected a JSON body' })
+    }
+    const { openings } = body as { openings?: unknown }
+    if (!Array.isArray(openings) || openings.length === 0) {
+      return json(res, 400, { error: 'openings must be a non-empty array' })
+    }
+    // An order of magnitude below the disclosure limit, and derived from
+    // measurement rather than chosen: an opening costs ~3-4ms of blocked event
+    // loop on the reference machine (`scripts/bench-commitments.mts`), so 50
+    // keeps a request near 200ms on a single-threaded, public, CORS-open
+    // service. Raising it to the sum's 500 would mean ~2s per request, which
+    // is the denial of service the sum's own cap exists to prevent.
+    if (openings.length > OPENINGS_LIMIT) {
+      return json(res, 400, {
+        error: `an opening disclosure may cover at most ${OPENINGS_LIMIT} redemptions`,
+        detail:
+          'Opening each commitment costs far more than summing them. Split the period, or use /verify-total and accept its weaker guarantee.',
+      })
+    }
+
+    const parsed: DisclosedOpening[] = []
+    for (const entry of openings) {
+      if (!entry || typeof entry !== 'object') {
+        return json(res, 400, { error: 'each opening must be an object' })
+      }
+      const { nullifier, amount, blind } = entry as Record<string, unknown>
+      if (typeof nullifier !== 'string' || !HEX64.test(nullifier)) {
+        return json(res, 400, { error: 'each opening needs a 64-hex nullifier' })
+      }
+      if (typeof amount !== 'number') {
+        return json(res, 400, { error: `opening ${nullifier} needs a numeric amount` })
+      }
+      if (typeof blind !== 'string' || !/^[0-9a-f]+$/i.test(blind)) {
+        return json(res, 400, { error: `opening ${nullifier} needs a hex blind` })
+      }
+      parsed.push({ nullifier, amount, blind })
+    }
+
+    const { accepted } = await snapshot()
+    const published = new Map(accepted.map((a) => [a.nullifier, a.commitment]))
+    const unknown = parsed.filter((o) => !published.has(o.nullifier)).map((o) => o.nullifier)
+    if (unknown.length > 0) {
+      // Same refusal `/verify-total` makes, for the same reason: reconciling a
+      // partial set answers a different question from the one asked.
+      return json(res, 200, {
+        verified: false,
+        reason: 'some disclosed nullifiers are not published',
+        unknownNullifiers: unknown,
+      })
+    }
+
+    const units = [
+      ...new Set(
+        parsed.map((o) => accepted.find((a) => a.nullifier === o.nullifier)!.unit),
+      ),
+    ]
+    if (units.length !== 1) {
+      return json(res, 200, {
+        verified: false,
+        reason: 'a disclosure must cover exactly one currency',
+        units,
+      })
+    }
+
+    const result = verifyDisclosedOpenings(published, parsed)
+    metrics.disclosureChecks[result.verified ? 'verified' : 'rejected'] += 1
+
+    return json(res, 200, {
+      verified: result.verified,
+      redemptions: parsed.length,
+      unit: units[0],
+      total: result.total,
+      ...(result.mismatched.length > 0 ? { mismatched: result.mismatched } : {}),
+      ...(result.outOfRange.length > 0 ? { outOfRange: result.outOfRange } : {}),
+      note: result.verified
+        ? 'Every disclosed commitment opens to the amount claimed for it, and every amount is within a sensible bound. This is sound against a publisher running modified software, which /verify-total is not.'
+        : 'At least one commitment does not open to the amount claimed for it, or claims an amount outside the permitted range.',
+      ...(result.verified
+        ? {
+            limits: [
+              'Set completeness is still not proven. The merchant chooses which nullifiers to disclose, and omitting one reconciles perfectly at a lower total.',
+              'Not every redemption reaches this ledger. The cashback flow redeems without publishing an attestation by design.',
             ],
           }
         : {}),
