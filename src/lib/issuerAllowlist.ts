@@ -19,6 +19,27 @@ import type { ParsedVoucherToken } from './voucherToken'
  * "a merchant at a stall with no signal must still be able to tell their own
  * coupon from someone else's". This module is that check.
  *
+ * ## `issuerPublicKey` is not the merchant's key, and that is the whole point
+ *
+ * The natural assumption is that a voucher is signed by the stall that issued
+ * it. It is not, and the fixtures refute it three ways:
+ *
+ *  - It NEVER equals `issuerId` on any captured token.
+ *  - One key signs vouchers for TWO DIFFERENT stalls, which no stall identity
+ *    could do.
+ *  - One stall's coupons carry four different keys.
+ *
+ * So the structure is *"the issuing service attests that stall X issued this
+ * coupon"*, not *"stall X signed this coupon"*. `issuerId` is the stall and it
+ * sits INSIDE the bytes the service signs, which is why it is trustworthy
+ * without being the signer.
+ *
+ * That split is why two different checks read two different fields, and mixing
+ * them up has caused two errors in this work already:
+ *
+ *  - `credentialActor` compares `issuerId` — *which stall is this for?*
+ *  - this module compares `issuerPublicKey` — *whose software minted it?*
+ *
  * ## Why an allowlist and not one pinned key
  *
  * The review recommended mirroring `VITE_LICENCE_ISSUER_PUBKEY`: one key, in the

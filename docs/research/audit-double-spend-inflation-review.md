@@ -805,8 +805,43 @@ it changes what the evidence supports, and a design resting on a stated reason
 should rest on a true one. Three hypothesis-refuting assertions now sit in
 `issuerAllowlist.test.ts` so the claim cannot drift back.
 
-This is the second time a confident structural claim about `issuerPublicKey`
-turned out to be wrong on inspection. Treat any third one with suspicion.
+### 9b. "The gateway's key, the same for every voucher it mints" — false, and it was load-bearing
+
+Asked whether `issuerPublicKey` is the merchant's key. It is not — but checking
+that turned up a stronger result, and exposed a wrong claim that had been
+sitting in `terminalCredential.ts` since long before this review and that
+**errata item 1 had quoted as authority**.
+
+That comment said the field is "the GATEWAY's signing key, the same for every
+voucher it mints". The fixtures refute the second half: one stall's coupons
+carry four different keys, and the value changes when a dev stack is rebuilt.
+
+What the data does establish is sharper than either claim, and it answers the
+original question definitively:
+
+| Observation | Consequence |
+|---|---|
+| `issuerPublicKey` never equals `issuerId`, on any token | It is not the stall's key |
+| One key signs for **two different stalls** | It cannot be *any* stall's identity |
+| One stall's coupons carry four keys | It is not per-stall |
+
+So the structure is **"the issuing service attests that stall X issued this
+coupon"**, not "stall X signed this coupon". `issuerId` is the stall, and it
+lives *inside* the bytes the service signs — which is why it is trustworthy
+without being the signer, and why `credentialActor` was right to compare it.
+
+The two fields answer different questions, and conflating them caused two of
+the eleven errata:
+
+- `issuerId` — **which stall is this coupon a claim on?**
+- `issuerPublicKey` — **whose software minted it?**
+
+Both are now asserted in `issuerAllowlist.test.ts` rather than described.
+
+Worth noting the shape of this one: the original comment was *right about what
+to do* and wrong about why, and the wrong reason survived because it was never
+tested. It then propagated into this review as a quotation. A false premise
+that produces a correct decision is the hardest kind to catch.
 
 ### 10. "Write `issuerId` into the attestation" — would have de-anonymised every stall
 
