@@ -348,12 +348,85 @@ Makes Finding 1 detectable from the ledger without publishing stall identities.
 Wire-format change, `v: "2"`, and the reader is already built to refuse unknown
 versions — so the migration path exists.
 
-### 6. Range proofs (probably not worth it)
+### 6. Range proofs — and why "do it async" is the wrong question
 
-Bulletproofs would close Finding 3 properly and cost a large dependency plus
-per-event proving time. The cheaper mitigation is to have `verify-total` require
-per-nullifier openings before reporting `verified`, which is sound and needs no
-new crypto. Recommend the cheap version.
+**The premise to check first: proving is already off the hot path.**
+
+Nothing in the app calls `blindSumFor`. Its only callers are its own tests and
+the audit API's documentation. Disclosure is a deliberate, later, merchant-
+initiated act at Settings → Redemption ledger — not part of redemption. So there
+is no "long proving time on the till" to move off the till. A range proof would
+be generated during a sweep or a disclosure, both of which are already
+asynchronous with respect to taking a customer's money.
+
+That reframes the question from *how do we hide the latency* to *what are we
+willing to pay, and where*.
+
+**Measured on this machine** (AMD Ryzen 5 7535U, Node 20; warm JIT, median of
+many runs) via `scripts/bench-commitments.mts`, which is committed so the
+numbers can be re-derived rather than believed:
+
+| Operation | Cost | Dominant work |
+|---|---|---|
+| `commitTo` (one redemption) | **~3–4 ms** | 2 scalar mults |
+| `verifyDisclosedTotal` @ 500 | **~50–60 ms** | 1 scalar mult + 499 additions |
+| Per-nullifier openings @ 500 | **~1.6–2.0 s** | 1,000 scalar mults |
+
+Ranges, not point values, deliberately: two consecutive runs on an idle machine
+gave 57 ms and 49 ms for the same call. Treat these as **orders of magnitude**.
+The ratio is the durable part — openings cost roughly **30–40x** the homomorphic
+sum — and that ratio is what the decision turns on.
+
+The homomorphic sum is cheap because point *addition* is far cheaper than
+scalar *multiplication*: 500 commitments cost one `commitTo` plus 499 adds.
+
+**This reverses the recommendation in the original draft of this document.**
+Per-nullifier openings were proposed as the cheap, sound alternative to
+Bulletproofs. They are sound, and they are not cheap: on the order of two
+seconds of blocked event loop on a single-threaded Node service that is public,
+unauthenticated and CORS-open. Swapping one in for the other at the current
+`AUDIT_DISCLOSURE_LIMIT` of 500 would introduce the denial of service the
+500-cap exists to prevent.
+
+If openings are adopted, the cap has to come down with them:
+
+| Event-loop budget | Openings per request |
+|---|---|
+| 50 ms | ~13 |
+| 100 ms | ~27 |
+| 200 ms | ~54 |
+
+**What openings buy that a proof does not.** Each opening is independent, so the
+work is resumable, cacheable per nullifier, and parallelisable. A homomorphic sum
+is atomic: 500 commitments or nothing. So the async strategy that actually pays
+off is not "compute the proof in the background" but "verify openings
+incrementally and cache the verdict per nullifier" — a disclosure is verified
+rarely and changes little between verifications.
+
+**Options, honestly ranked:**
+
+1. **Do nothing, document the limit.** Finding 3 needs a *modified publisher*;
+   the shipped wallet cannot construct a negative commitment. Recommendation 3
+   (state the soundness caveat in the `note`) closes the documentation gap at
+   zero cost and is the right first move.
+2. **Openings with a much lower cap**, if soundness against a modified publisher
+   is wanted without new crypto. Costs the amount privacy of the disclosed set —
+   which is already partly given up, since the total is disclosed anyway.
+3. **Bulletproofs, generated asynchronously.** Cost is linear in bit width, so a
+   32-bit range (max ~4.3bn minor units, far above any real face value) is half
+   the work of the usual 64-bit. Publish as a separate event referencing the
+   nullifier, and have the reader treat a missing proof as `unproven` rather than
+   as a finding — the same discipline `ABSENCE_SLA_MS` already applies to a
+   missing attestation. `scannerSupport.ts` is the precedent for a Web Worker.
+
+**A methodology caveat, recorded because it produced two wrong answers.**
+Earlier drafts of this section claimed `/verify-total` took ~2 s at 500 entries
+(it is 57 ms — the 2 s figure was 500 `commitTo` calls, a different operation)
+and that precomputing the Pedersen `H` point gave a 7.9x speedup (it does not;
+that was JIT warm-up, and noble already caches internally — the same call
+measured 0.39 ms and 4.1 ms in two runs on one machine). Both errors came from
+single-shot timing on a cold VM. Any future performance claim here should warm
+the JIT and take a median, and should state the machine.
 
 ## A correction made during this review
 
