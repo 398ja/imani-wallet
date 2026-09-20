@@ -462,6 +462,122 @@ export function commitTo(amountMinorUnits: number, blind: bigint): string {
 }
 
 /**
+ * The largest amount an opening may claim, in minor units.
+ *
+ * 2^32 minor units is about 43 million units of a two-decimal currency, which
+ * is far above any coupon and far below the curve order. The bound is what
+ * makes an opening meaningful: without it, "the amount is a scalar mod n" is
+ * vacuous, because `n - 6000` is a perfectly good scalar that behaves as
+ * -6000 under addition.
+ */
+const MAX_OPENING = 2 ** 32
+
+/** One disclosed redemption, opened. */
+export interface DisclosedOpening {
+  nullifier: string
+  /** The credited face value, in minor units. Must be a bounded integer. */
+  amount: number
+  /** The blinding scalar for this commitment, hex. */
+  blind: string
+}
+
+export interface OpeningsResult {
+  verified: boolean
+  /** Nullifiers whose commitment did not open to the amount claimed for it. */
+  mismatched: string[]
+  /** Nullifiers whose claimed amount was outside the permitted range. */
+  outOfRange: string[]
+  /** The sum of the disclosed amounts, once every one of them checked out. */
+  total: number
+}
+
+/**
+ * Verify a disclosure by OPENING each commitment, rather than summing them.
+ *
+ * This is the sound half of Finding 3, and it exists because the homomorphic
+ * sum cannot be made sound by any cheaper means.
+ *
+ * ## Why the obvious cheap version does not work
+ *
+ * The tempting shape is: check each disclosed amount is in range (free — it is
+ * just JavaScript), then do ONE homomorphic check over the set. **Measured, and
+ * it is not sound.** An attacker publishes a commitment behaving as `-6000`,
+ * then discloses four in-range amounts that sum to the understated total. Every
+ * amount passes the range test, the single aggregate check reconciles, and the
+ * lie goes through — because the aggregate never ties an individual commitment
+ * to an individual amount.
+ *
+ * Only a per-commitment opening does that, and it costs one `commitTo` per
+ * entry: roughly 30-40x the aggregate check (`scripts/bench-commitments.mts`).
+ * That cost is why the audit API keeps the aggregate as its default and offers
+ * this as the stronger, smaller-capped alternative rather than replacing it.
+ *
+ * ## What a `true` here means, and it is strictly more than the sum gives
+ *
+ * Every disclosed commitment opens to the amount claimed for it, and every
+ * amount is a non-negative integer below `MAX_OPENING`. A publisher running
+ * modified software cannot understate a total across this check, because the
+ * negative-behaving commitment has no in-range amount that opens it.
+ *
+ * It still says NOTHING about completeness — the merchant chooses which
+ * nullifiers to disclose. That limit is unchanged and unclosable from inside a
+ * disclosure.
+ *
+ * Needs no key: the merchant supplies the blinds, and the arithmetic either
+ * reconciles or does not.
+ */
+export function verifyDisclosedOpenings(
+  commitments: Map<string, string>,
+  openings: DisclosedOpening[],
+): OpeningsResult {
+  const mismatched: string[] = []
+  const outOfRange: string[] = []
+  let total = 0
+
+  for (const opening of openings) {
+    // Range FIRST, because `commitTo` throws on a negative or non-integer and
+    // a throw here would be reported as a server error rather than as the
+    // finding it is.
+    if (
+      !Number.isInteger(opening.amount) ||
+      opening.amount < 0 ||
+      opening.amount >= MAX_OPENING
+    ) {
+      outOfRange.push(opening.nullifier)
+      continue
+    }
+
+    const published = commitments.get(opening.nullifier)
+    if (!published) {
+      mismatched.push(opening.nullifier)
+      continue
+    }
+
+    try {
+      // Reduced mod n, matching `blindSumFor`: a hand-assembled or
+      // externally-summed scalar that is arithmetically equal must still open.
+      const blind = BigInt(`0x${opening.blind}`) % CURVE_ORDER
+      if (commitTo(opening.amount, blind) !== published) {
+        mismatched.push(opening.nullifier)
+        continue
+      }
+    } catch {
+      mismatched.push(opening.nullifier)
+      continue
+    }
+
+    total += opening.amount
+  }
+
+  return {
+    verified: mismatched.length === 0 && outOfRange.length === 0 && openings.length > 0,
+    mismatched,
+    outOfRange,
+    total,
+  }
+}
+
+/**
  * Check a merchant's claimed total against their published commitments.
  *
  * Needs no key and no wallet, which is what makes it an audit rather than a
