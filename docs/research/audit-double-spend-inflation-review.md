@@ -1,12 +1,28 @@
 # Can the audit ledger catch a double spend or silent inflation?
 
 A review of `src/lib/audit.ts`, `src/lib/attestation.ts` and
-`services/audit-api/`, against the two questions that matter for money:
+`services/audit-api/server.ts`, against the two questions that matter for money:
 
 > Can this detect a **double spend**? Can it detect **silent inflation**?
 
 Short answer: **double spend, yes, within one layer. Silent inflation, no — and
 one of the paths that should prevent it is missing a check.**
+
+## Scope, and what was not looked at
+
+Read closely: the reader, the producer, the hosted API's routing, the design
+document, the technical guide, the DM receive path (`dmCrypto.ts`, `dmPoll.ts`),
+the wallet-api redeem path, and the redemption ceiling.
+
+**Not reviewed**, and a reader should know it: `services/audit-api/metrics.ts`,
+`src/pages/LedgerPage.tsx` (the merchant's own view), `validationStatus.ts`,
+`scripts/verify-attestations.py` (the independent verifier), and the
+Prometheus alert rules. None of these is on the money path, but the merchant
+view in particular is where a self-auditing stall would first notice or miss a
+problem, and it deserves its own pass.
+
+Nothing was run against a live relay or mint. Every claim about the mint's
+behaviour is from reading ADR 0005/0006, not from observing it.
 
 Every claim below was executed against the repo's own code rather than reasoned
 about. The evidence is not all of the same grade, and the difference matters:
@@ -14,20 +30,24 @@ about. The evidence is not all of the same grade, and the difference matters:
 | Finding | How it was established | Grade |
 |---|---|---|
 | 1 — cross-stall redemption | `createDmCryptoAdapter()`, the adapter dm-poll installs, driven with signed fixtures. Committed as a test. | **Acceptance path** |
-| 2 — self-referential signature | `verifyVoucher` called directly. One layer below the gate. | Unit-level |
-| 3 — no range proof | `commitTo`/`verifyDisclosedTotal` called directly with a mod-n negative. | Unit-level |
+| 2 — self-referential signature | `verifyVoucher` called directly. One layer below the gate. Committed as a test. | Unit-level |
+| 3 — no range proof | `commitTo`/`verifyDisclosedTotal` called directly with a mod-n negative. Committed as a test. | Unit-level |
 | 4 — no issuer in the payload | Structural: read of the wire format and the reader. | Inspection |
+| 5 — cashback unattested | Read of `cashback.ts` and the design document's own list of innocent gaps. | Inspection |
 
 Findings 2 and 3 describe a **modified publisher or issuer**, which by
 definition cannot be exercised through the shipped wallet's own path — the
 wallet will not construct these inputs. That is a real constraint, recorded
-rather than papered over: they are reproducible against the exported primitives,
-and the fraud path they describe requires an attacker who has replaced the
-client.
+rather than papered over: they are reproducible against the exported primitives
+(`src/lib/__tests__/auditSoundnessLimits.test.ts` pins both, so a change that
+closed either would turn a test red on purpose), and the fraud path they
+describe requires an attacker who has replaced the client.
 
 Finding 1 needed no such caveat and so was held to the higher standard.
 
+- [Scope, and what was not looked at](#scope-and-what-was-not-looked-at)
 - [Verdict](#verdict)
+- [Threat model: who can do what](#threat-model-who-can-do-what)
 - [What the ledger is, precisely](#what-the-ledger-is-precisely)
 - [Double spend](#double-spend)
 - [Silent inflation](#silent-inflation)
@@ -35,9 +55,10 @@ Finding 1 needed no such caveat and so was held to the higher standard.
 - [Finding 2 — the issuer signature is self-referential](#finding-2--the-issuer-signature-is-self-referential)
 - [Finding 3 — commitments have no range proof](#finding-3--commitments-have-no-range-proof)
 - [Finding 4 — the attestation does not name the issuer](#finding-4--the-attestation-does-not-name-the-issuer)
+- [Finding 5 — the cashback path is a documented omission channel](#finding-5--the-cashback-path-is-a-documented-omission-channel)
 - [What the implementation gets right](#what-the-implementation-gets-right)
 - [Recommendations](#recommendations)
-- [A correction made during this review](#a-correction-made-during-this-review)
+- [Errata: what this review got wrong, and when](#errata-what-this-review-got-wrong-and-when)
 
 ## Verdict
 
@@ -60,6 +81,30 @@ Confidence that it catches **silent inflation**: **low**, and it is important
 to say this is mostly *by design* — the design document is explicit that
 omission is out of scope and that the mint is the completeness oracle. What is
 *not* by design is Finding 1.
+
+## Threat model: who can do what
+
+Severity labels on their own do not say who the attacker is or what they need.
+This table does, and it is what the recommendations are ordered by.
+
+| Finding | Attacker | Needs | Gains | Caught by |
+|---|---|---|---|---|
+| 1 | Any merchant, **or an honest one by accident** | Nothing — the shipped app | Credits and attests a coupon they cannot redeem; the honest case *loses* money | Nothing on the DM path |
+| 2 | Someone who can mint their own vouchers | A voucher signer, and the merchant offline | Offline, a self-issued voucher reads as genuine | The mint, at swap time, if online |
+| 3 | A merchant | A modified publisher | `verify-total` reconciles at an understated total | Nothing |
+| 4 | (structural) | — | Makes 1 invisible to the ledger | — |
+| 5 | A merchant | Nothing — use the cashback flow | A redemption with no public record, and an innocent explanation ready | Nothing, and by design |
+
+Two things fall out of the table:
+
+- **Finding 1 is the only one an honest actor triggers.** Every other row needs
+  intent and tooling. That is why it leads the recommendations despite the
+  others sounding more cryptographic.
+- **Findings 3 and 5 have the same shape**: a merchant *understating* their
+  takings. The ledger is built to catch overstating (a fabricated honoured
+  coupon) and is largely blind to understating. Whether that matters depends on
+  who the audit is *for* — a customer checking their coupon was honoured does
+  not care; a party reconciling a stall's declared revenue does.
 
 ## What the ledger is, precisely
 
@@ -169,14 +214,48 @@ off the *signed* voucher, so every input the check needs is already in hand.
 1. A merchant's till credits a customer for a coupon the merchant cannot
    redeem — the merchant absorbs the loss, exactly the harm `verifyCoupon`'s
    comment describes.
-2. The merchant then publishes a public attestation claiming they honoured it,
-   inflating their own apparent takings with value they never issued.
+2. The merchant then publishes a public attestation claiming they honoured it.
+   **Be precise about what this inflates.** The attested value is
+   `creditableFaceValue(parsed)` — the coupon's *own signed* face value, clamped
+   — so the number in the commitment is true. What is false is the *claim of
+   entitlement*: the ledger now records stall A honouring a coupon only stall B
+   could honour. This is **misattribution**, not a fabricated amount, and an
+   earlier draft of this document blurred the two.
 3. `redemptionLedger`'s ceiling is per-voucher and local, so the *issuing* stall
    never sees that someone else has been redeeming against their voucher.
 
 Note this is also a **liveness** bug before it is a fraud one: the honest case
 (a customer walking to the wrong stall) is more likely than the malicious one,
 and it silently costs the merchant money.
+
+**The role model is what makes the fix clean.** A wallet is a customer or a
+stall, and never both at once: `merchant.ts` is explicit that an account is a
+merchant *"if — and only if"* its key has published a live `imani:merchant`
+record, with *"deliberately NO separate role flag"*. A shopper may later
+**convert** (Settings → Start selling) but that is a one-way change of role, not
+a second role held alongside the first. So there is no legitimate case in which
+a stall receives another stall's coupon. Every such arrival is either a customer
+at the wrong counter or an attempt to get a coupon credited where it is not
+owed.
+
+One edge is worth naming so it is not rediscovered. A stall can switch **Open
+for business** off, at which point the docs say its home screen *"goes back to
+the shopper view"*. That is a UI change, not a role change: `loadMerchant()`
+still returns the record, only `isMerchant()` (which also checks `active`)
+says no. The attestation gate in `dmPoll.ts` uses `loadMerchant`, and its
+comment defends this — *"a merchant who has closed their stall still has to
+attest the coupons they take while winding down."* So a closed stall is still a
+stall for the purpose of this check, and the cross-stall refusal should use the
+same predicate the attestation gate uses, or the two will disagree about who a
+wallet is.
+
+That means the refusal can be unconditional at the till and needs no exception
+for a merchant-who-is-also-shopping. It also means the refusal can be **early**
+— before the mint swap — which is the point `refuseIfOverRedeemed` already
+makes for the ceiling: *"refusing now leaves the token untouched and still the
+sender's, and their send reclaims at their next login. The same refusal one
+line later would have already taken the money at the mint."* A cross-stall
+refusal belongs in the same place, for the same reason.
 
 **The precedent for the fix already exists in this codebase.**
 `credentialActor` (`terminalCredential.ts:181`) does exactly this comparison for
@@ -280,6 +359,33 @@ A commitment to `issuerId` (openable on disclosure) would preserve pseudonymity
 while making the check possible. That is a wire-format change and deserves its
 own design pass.
 
+## Finding 5 — the cashback path is a documented omission channel
+
+**Severity: low, and by design — but it changes what `missing` means.**
+
+`cashback.ts:657` calls `redemption.redeem(token, { source: 'cashback' })`
+directly, bypassing the DM adapter, and the comment beside it is explicit:
+*"Deliberately NOT attested."* The design document lists this as innocent-gap
+reason #3.
+
+The reasoning is sound — cashback is not a merchant honouring a claim on
+themselves, so an attestation would be a lie. But it has a consequence the
+review would be incomplete without:
+
+**Every `missing` verdict now has a known-honest explanation the reader cannot
+rule out.** A redemption that went through cashback is, from the ledger's side,
+indistinguishable from a merchant who chose not to publish. The `ABSENCE_SLA_MS`
+machinery guards against *timing* explanations (the sweep has not run yet); it
+cannot guard against *routing* explanations, because the sweep only republishes
+rows that carry an `attestationNullifier`, and cashback rows never get one.
+
+So the honest ceiling on `missing` is lower than the technical guide implies.
+"Evidence of a gap, not proof of dishonesty" is right; it should also say that
+one entire redemption path never writes to the ledger at all.
+
+This is not a bug. It is a fact about what the ledger can and cannot say that
+belongs beside the other stated limits.
+
 ## What the implementation gets right
 
 Worth recording, because the quality here is genuinely high and the findings
@@ -314,17 +420,31 @@ cover, and these are the cases they do not cover.
 
 Ordered by ratio of risk closed to effort and blast radius.
 
-### 1. Refuse another stall's coupon on the DM path — **do this first**
+### 1. Refuse another stall's coupon at the till — **do this first**
 
-Add the `issuerId != own stall` refusal to `dmCrypto.verifiedVoucherFrom`,
-mirroring `verifyCoupon` and `credentialActor`. Small, testable, no wire change,
-no privacy cost. Closes the honest-loss case as well as the fraud one.
+Add the `issuerId != own stall` refusal where a stall takes a coupon in, and
+refuse **before the mint swap** so the sender's coupon stays whole and reclaims
+at their next login. `refuseIfOverRedeemed` in `dmPoll.ts` is already that
+place: it runs before `redemption.redeem`, is gated on the wallet being a
+merchant, and throws `RedemptionRefusedError` for the ceiling. A cross-stall
+refusal is a sibling check with the same shape.
 
-Two details that need care:
-- Plain ecash (no voucher) must keep flowing, as it does today.
-- A **customer** receiving a coupon is not redeeming it, and must not be
-  refused. The check belongs where the merchant honours a claim on themselves,
-  so it should be gated the same way `attestRedemption` is.
+Unconditional for a stall. The role model has no merchant-who-is-also-shopping
+case to carve out (see Finding 1), and a *customer* wallet never reaches this
+check because it is inside the merchant gate.
+
+Mirrors `verifyCoupon` (`REFUSAL.ANOTHER_STALL`) and `credentialActor`. Small,
+testable, no wire change, no privacy cost.
+
+`crossStallRedemption.test.ts` pins the current behaviour at the adapter. Note
+that with the check placed at `refuseIfOverRedeemed` rather than `extractToken`,
+those two `FINDING` tests stay green — the adapter still hands the token
+through, and the refusal happens one layer later. The test that turns red on the
+fix belongs beside `refuseIfOverRedeemed`'s existing test, and should assert
+that another stall's coupon throws before the swap.
+
+What this does **not** do: catch a merchant who has modified their client to
+skip the check. That needs Recommendation 5.
 
 ### 2. Say out loud what `signatureValid` means
 
@@ -333,9 +453,16 @@ and it stops the next caller making the same inference `attestRedemption` makes.
 
 ### 3. State the soundness limit on `verify-total`
 
-Add to the `note`: a `true` binds the disclosed set *given every commitment is
-to a non-negative amount*, which the stream does not enforce. Documentation-only,
-and it stops the endpoint overstating.
+Add to the `note`: a `true` binds the disclosed set *only if every disclosed
+commitment is to an amount inside a bounded range*, which the stream does not
+enforce — a commitment to `n − x` is well-formed and behaves as `−x`.
+Documentation-only, and it stops the endpoint overstating.
+
+An earlier draft said "non-negative", which is not the right condition: every
+scalar mod `n` is non-negative. The property that is missing is *boundedness*.
+
+While there: say that the cashback path never writes to the ledger (Finding 5),
+so a `missing` verdict has a routing explanation as well as a timing one.
 
 ### 4. Pin a coupon issuer key (deployment decision)
 
@@ -419,21 +546,20 @@ rarely and changes little between verifications.
    as a finding — the same discipline `ABSENCE_SLA_MS` already applies to a
    missing attestation. `scannerSupport.ts` is the precedent for a Web Worker.
 
-**A methodology caveat, recorded because it produced two wrong answers.**
-Earlier drafts of this section claimed `/verify-total` took ~2 s at 500 entries
-(it is 57 ms — the 2 s figure was 500 `commitTo` calls, a different operation)
-and that precomputing the Pedersen `H` point gave a 7.9x speedup (it does not;
-that was JIT warm-up, and noble already caches internally — the same call
-measured 0.39 ms and 4.1 ms in two runs on one machine). Both errors came from
-single-shot timing on a cold VM. Any future performance claim here should warm
-the JIT and take a median, and should state the machine.
+The performance errors that shaped this section are in the errata (items 2–4).
 
-## A correction made during this review
+## Errata: what this review got wrong, and when
 
-An earlier draft of this analysis recommended **binding `issuerPublicKey` to
-`issuerId`** to fix Finding 2. That is wrong, and the codebase already knows it.
+Collected in one place, in the order they were caught. Each is left in rather
+than quietly removed, in the same spirit as the "review caught it" comments
+throughout this subsystem — and because every one of them is an easy mistake
+to make twice.
 
-`terminalCredential.ts:149`, established against the live gateway:
+### 1. "Bind `issuerPublicKey` to `issuerId`" — withdrawn
+
+An earlier draft recommended this to fix Finding 2. It is wrong, and the
+codebase already knows it. `terminalCredential.ts:149`, established against the
+live gateway:
 
 > The issuer here is the voucher's `issuerId`, NOT its `issuerPublicKey`.
 > Minting one against the live gateway is what showed the difference:
@@ -445,6 +571,58 @@ So that binding would refuse every genuine coupon. The correct pin is the
 **gateway's** key, which is Recommendation 4 and a deployment decision, not a
 code change.
 
-Recorded rather than quietly removed, in the same spirit as the "review caught
-it" comments throughout this subsystem — and because the mistake is an easy one
-to make twice.
+### 2. "`/verify-total` takes ~2 s at 500 entries" — wrong by 40x
+
+It is ~50 ms. The 2 s figure was 500 `commitTo` calls, which is a different
+operation: `verifyDisclosedTotal` does 499 cheap point *additions* and exactly
+one `commitTo`. Extrapolated across two operations that share a name in a
+sentence and nothing else.
+
+### 3. "Precomputing `H` gives 7.9x" — no speedup exists
+
+JIT warm-up. noble already caches internally. The same call measured 0.39 ms
+and 4.1 ms in two runs on one machine. The "one-line optimisation" was withdrawn
+before any code was written.
+
+### 4. "Per-nullifier openings are the cheap sound alternative" — reversed
+
+They are sound, and they cost 30–40x the homomorphic sum. See Recommendation 6.
+The original draft recommended them; measurement reversed it.
+
+### 5. "Inflating their own apparent takings with value they never issued" — imprecise
+
+The attested value on a cross-stall redemption is the coupon's *true* signed
+face value. What is false is the entitlement, not the number. Finding 1 now
+says *misattribution*, which is what it is.
+
+### 6. "A merchant is also a shopper" — wrong, and it was my own invention
+
+A draft of this document, produced while reviewing itself, read the README's
+*"you can start selling later if you begin as a shopper"* as meaning a merchant
+holds both roles at once, and rewrote Recommendation 1 to carve out a
+"merchant-as-shopper" exception. **There is no such case.** `merchant.ts` says
+an account is a merchant *if and only if* it has a live stall record, with no
+separate role flag; converting from shopper to stall is a change of role, not
+an addition. The user corrected this directly.
+
+The consequence runs the other way from what the draft claimed: the fix is
+*simpler*, not harder. The refusal can be unconditional at the till and can
+happen before the mint swap. Recommendation 1 now says so.
+
+Worth noting how this one happened: I read a sentence in the README, drew an
+inference about the role model, and did not check it against `merchant.ts`,
+which states the model in one line. The correct source was three files away.
+
+### 7. "Non-negative amount" — wrong condition
+
+Recommendation 3's first wording. Every scalar mod `n` is non-negative; the
+missing property is *boundedness*.
+
+**Pattern across all seven:** every error came from reasoning one step past
+what had been measured or read. Items 2–4 came from single-shot timing on a
+cold VM and are why `scripts/bench-commitments.mts` warms hard and takes
+medians. Items 1, 5 and 7 came from not re-reading a nearby comment or my own
+sentence. Item 6 came from reading one document and not the module that
+defines the thing the document describes — and was caught by the user, not by
+me. None survived a second look. Whoever extends this document should assume
+the same rate applies to them.
