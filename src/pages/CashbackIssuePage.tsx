@@ -7,6 +7,7 @@ import { generateCashback, type IssuedCashback } from '../lib/cashback'
 import { gatewayConfig, DEFAULT_CASHBACK_EXPIRY_DAYS } from '../lib/config'
 import { currencyDecimals, formatDate, formatFace, parseAmountToMinor } from '../lib/format'
 import type { MerchantProfile } from '../lib/merchant'
+import { issuingStall, ownerActor, type Actor } from '../lib/actor'
 import { buildIssuanceWarrant } from '../lib/warrantSigner'
 import { buildCashbackTransaction } from '../lib/transactions'
 import { getWallet, notifyWalletChanged } from '../lib/wallet'
@@ -23,7 +24,20 @@ import { getWallet, notifyWalletChanged } from '../lib/wallet'
  * amount field. Whoever repeats the code back gets the money, which is the
  * trade being made for reaching someone who cannot yet be addressed.
  */
-export function CashbackIssuePage({ merchant }: { merchant: MerchantProfile }) {
+export function CashbackIssuePage({
+  merchant,
+  actor,
+}: {
+  merchant: MerchantProfile
+  /**
+   * The terminal issuing, if this device is one.
+   *
+   * Passed for the same reason `SellPage` takes it: a warrant must be signed
+   * by the key it names, and a terminal's key is not the stall's. Absent means
+   * the stall's own device.
+   */
+  actor?: Actor
+}) {
   const navigate = useNavigate()
   const [amount, setAmount] = useState('')
   const [memo, setMemo] = useState('')
@@ -65,7 +79,7 @@ export function CashbackIssuePage({ merchant }: { merchant: MerchantProfile }) {
         memo: memo.trim() || undefined,
         expiryDays,
       })
-      await record(cashback, decimals, memo.trim(), merchant.pubkey)
+      await record(cashback, decimals, memo.trim(), actor ?? ownerActor(merchant.pubkey))
       setIssued(cashback)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -154,7 +168,22 @@ async function record(
   issued: IssuedCashback,
   decimals: number,
   memo: string,
-  stallPubkey: string,
+  /**
+   * WHO is issuing, not a key to stamp.
+   *
+   * An earlier version took a bare `stallPubkey` and fabricated
+   * `{ kind: 'owner', stallPubkey }` to sign with. That was wrong on a
+   * terminal: it asserted owner-ness of a device whose key is NOT the stall's,
+   * bypassing the one guard in `buildIssuanceWarrant` that exists to catch
+   * exactly that. The signer's own mismatch check caught it and fell back to
+   * `none`, so the bug was fail-safe rather than dangerous - but it made a
+   * comment claim behaviour the code did not have, and relied on a defensive
+   * check instead of the deliberate one.
+   *
+   * The route only guards on `canTrade`, which is a PERMISSION rather than a
+   * device kind, so a terminal holding `coupon:issue` does reach this screen.
+   */
+  actor: Actor | null,
 ): Promise<void> {
   try {
     const expiresAt = Date.parse(issued.expiresAt)
@@ -165,15 +194,13 @@ async function record(
     // own signature is the only evidence this sale will ever carry. That makes
     // it more important here than on the Sell path, not less.
     //
-    // Signed against an `owner` actor because a cashback is issued from the
-    // stall's own device. A terminal gets a signed `none`, which is correct:
-    // its key is not the stall's, so anything it signed would not verify.
-    const warrant = await buildIssuanceWarrant(
-      { kind: 'owner', stallPubkey },
-      issued.amountMinor,
-      decimals,
-      issued.unit,
-    )
+    // A terminal gets a signed `none` from the signer's own guard, which is
+    // correct: its key is not the stall's, so anything it signed would not
+    // verify at reconciliation.
+    const warrant = actor
+      ? await buildIssuanceWarrant(actor, issued.amountMinor, decimals, issued.unit)
+      : undefined
+    const stallPubkey = actor ? issuingStall(actor) : undefined
     await getWallet().addTransaction(
       buildCashbackTransaction({
         cashbackId: issued.cashbackId,

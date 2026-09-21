@@ -170,3 +170,36 @@ describe('the digest binds what it claims to bind', () => {
     expect(verifyIssuanceWarrant(tampered, STALL, coupon(2500)).verdict).toBe('failed')
   })
 })
+
+
+describe('an actor must be real, not fabricated at the call site', () => {
+  // Found in review. The cashback page built `{ kind: 'owner', stallPubkey }`
+  // by hand to sign with, which asserts owner-ness of whatever device is
+  // running - including a terminal, whose key is NOT the stall's. That bypasses
+  // the kind check below entirely.
+  //
+  // It was fail-safe, because the signer ALSO compares its own pubkey to the
+  // stall and falls back. But relying on the defensive check instead of the
+  // deliberate one is how a later edit removes the backstop and nobody notices,
+  // so both are pinned here.
+  it('refuses to sign as the stall when the signer is a terminal key', async () => {
+    mockSigner = signerFor(OTHER_SK)
+
+    // A fabricated owner actor, exactly as the buggy call site built one.
+    const fabricated = { kind: 'owner', stallPubkey: STALL } as Actor
+
+    const json = await buildIssuanceWarrant(fabricated, 2500, 2, 'EUR')
+
+    // The pubkey mismatch catches it even though the actor claims otherwise.
+    expect(parseIssuanceWarrant(json)).toEqual({ state: 'declared-none' })
+  })
+
+  it('a real terminal actor never reaches the signing path at all', async () => {
+    // The deliberate guard, which is the one that should be doing this work.
+    mockSigner = signerFor(STALL_SK)
+
+    const json = await buildIssuanceWarrant(terminal, 2500, 2, 'EUR')
+
+    expect(parseIssuanceWarrant(json)).toEqual({ state: 'declared-none' })
+  })
+})
