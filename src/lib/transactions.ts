@@ -60,6 +60,28 @@ export interface WalletTransaction {
    */
   validation?: VoucherValidation
   /**
+   * The warrant this stall signed when issuing, verbatim, on `issued` rows.
+   *
+   * The merchant's own copy of what they authorised. See
+   * `docs/cash-warrant-reconciliation.md` for why storing it turns "trust my
+   * ledger" into "verify my ledger", and for the limit that remains: it proves
+   * the stall meant to issue this value, never that cash arrived.
+   */
+  issuanceWarrant?: string
+  /**
+   * The voucher ids of every coupon minted from the same sale as this row.
+   *
+   * Present only on multi-coupon sales; a single-coupon sale needs no list.
+   * See `buildIssueTransaction` for what it does and does not establish.
+   */
+  saleVoucherIds?: readonly string[]
+  /**
+   * The customer's signed assertion that they paid for this sale, if they gave
+   * one. See `cashAttestation.ts`; always optional, and its absence is never a
+   * fault.
+   */
+  cashAttestation?: string
+  /**
    * The nullifier of the public attestation published for this redemption.
    *
    * Kept on the row because it cannot be recomputed: it hashes the RECEIVED
@@ -314,6 +336,58 @@ export function buildIssueTransaction(input: {
    * stall is staffed.
    */
   terminalPubkey?: string
+  /**
+   * The warrant this stall signed for the sale, verbatim.
+   *
+   * Kept so a merchant can verify their OWN history rather than only trust it.
+   * Without it the signed bytes exist nowhere after the request: the nonce in
+   * particular is generated per sale and never seen again, so a row and the
+   * warrant that authorised it share no identifier at all.
+   *
+   * That is the difference between reconciliation as arithmetic over a ledger
+   * you believe because it is yours, and reconciliation as a check anyone can
+   * repeat. It matters the moment the question turns adversarial — a terminal
+   * operator disputing what they issued, or an owner auditing a device they
+   * did not watch.
+   *
+   * On the STALL's row only, like `terminalPubkey`, and for the same reason:
+   * this record is encrypted to the merchant's own key while the coupon
+   * travels to the customer.
+   */
+  issuanceWarrant?: string
+  /**
+   * Every voucher id minted from this SALE, including this row's own.
+   *
+   * One sale can become several coupons — a requested quantity, each
+   * auto-splitting again when a coupon would be too large to receive — and the
+   * device cannot predict how many. Each part gets its own row, and each row
+   * carries the whole set, so a merchant holding any ONE coupon can find the
+   * sale it came from and the siblings issued beside it.
+   *
+   * That is the question actually asked at a till: a customer presents a
+   * coupon, and the merchant wants to know which sale produced it and whether
+   * the rest of that sale is accounted for.
+   *
+   * **The limit, stated because it is easy to over-read.** This links coupons
+   * to sales using THIS DEVICE's record of what the server returned. A
+   * compromised issuing service that minted extra coupons against a real
+   * warrant would not appear here, because it would never have told the
+   * wallet. It makes the honest case auditable; it does not make the dishonest
+   * one impossible.
+   */
+  saleVoucherIds?: readonly string[]
+  /**
+   * The customer's own signature that they PAID for this sale, if collected.
+   *
+   * Optional by design and must stay so — see `cashAttestation.ts`. Its absence
+   * is the ordinary case, never a fault, and nothing may refuse a sale for
+   * lacking one.
+   *
+   * What it adds is the claim a warrant cannot make. A warrant says the stall
+   * authorised issuing this value; on cash, nothing else says money arrived,
+   * because there is no third party to ask.
+   */
+  cashAttestation?: string
 }): TransactionRow {
   return {
     id: `issued:${input.voucherId}`,
@@ -331,6 +405,16 @@ export function buildIssueTransaction(input: {
     // Written only when there IS one, so an owner's row carries no empty field
     // and `describeHandler` reads its absence as "the stall".
     ...(input.terminalPubkey ? { terminalPubkey: input.terminalPubkey } : {}),
+    // Written only when there is one. Absent means this sale was issued
+    // unwarranted, which is a real state and not the same as a stored empty
+    // string — the reader distinguishes absent from a signed `none`.
+    ...(input.issuanceWarrant ? { issuanceWarrant: input.issuanceWarrant } : {}),
+    // Only when the sale produced more than this row, so a single-coupon sale
+    // carries no list repeating its own id back at itself.
+    ...(input.saleVoucherIds && input.saleVoucherIds.length > 1
+      ? { saleVoucherIds: [...input.saleVoucherIds] }
+      : {}),
+    ...(input.cashAttestation ? { cashAttestation: input.cashAttestation } : {}),
   } as unknown as TransactionRow
 }
 
