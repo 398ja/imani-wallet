@@ -167,7 +167,15 @@ function verifiedVoucherFrom(token: string | undefined):
   // about to credit - verifying against the signed face would let a clamped or
   // split coupon pass a check its actual credit never faced.
   const warrant = parseIssuanceWarrant(parsed.voucher.issuanceWarrant)
-  const warrantVerdict = verifyIssuanceWarrant(warrant, parsed.voucher.issuerId, faceValue)
+  const warrantVerdict = verifyIssuanceWarrant(warrant, parsed.voucher.issuerId, {
+    faceValueMinor: faceValue,
+    // The coupon's OWN unit and decimals, from its signed tags. Passing the
+    // warrant's back to itself would let a warrant for XAF 2500 authorise a
+    // EUR 2500 coupon worth a hundred times more - the signature verifies and
+    // the ceiling passes, because both compare bare numbers.
+    unit: parsed.voucher.unit,
+    faceDecimals: parsed.voucher.faceDecimals,
+  })
 
   if (warrantVerdict.verdict === 'failed') {
     // Recorded, not refused. Refusing an unwarranted or badly-warranted coupon

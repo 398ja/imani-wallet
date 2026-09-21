@@ -69,20 +69,40 @@ export type IssuanceWarrant =
        */
       state: 'declared-none'
     }
-  | {
+  | ({
       state: 'present'
-      form: Exclude<WarrantForm, 'none'>
       /** The sale total this warrant authorises, in minor units. The ceiling. */
       saleTotalMinor: number
+      /**
+       * The decimals and unit the warrant was signed FOR.
+       *
+       * A verifier must compare these against the coupon's own, not merely
+       * feed them back into the digest. See `verifyIssuanceWarrant`.
+       */
       faceDecimals: number
       unit: string
       /** Per-sale nonce, so two identical sales do not share a digest. */
       saleNonce: string
-      /** Signature hex, for `merchant` and `delegated`. Absent on `processor`. */
-      signature?: string
-      /** Processor reference, e.g. a charge id. Never a signature. */
-      reference?: string
-    }
+    } & (
+      | {
+          /**
+           * Signed forms carry the evidence, so `signature` is REQUIRED here
+           * rather than optional. The parser refuses a signed form without one,
+           * and expressing that in the type is what lets the verifier drop a
+           * non-null assertion that would otherwise rest on a parser invariant
+           * nothing enforced.
+           */
+          form: 'merchant' | 'delegated'
+          signature: string
+          reference?: undefined
+        }
+      | {
+          /** A processor references an external record instead of signing. */
+          form: 'processor'
+          signature?: undefined
+          reference?: string
+        }
+    ))
   | {
       /**
        * Present and unreadable: bad JSON, unknown form, missing fields.
@@ -144,13 +164,31 @@ export function parseIssuanceWarrant(raw: string | undefined | null): IssuanceWa
     return { state: 'invalid', reason: `unknown warrant form: ${String(form)}` }
   }
 
+  // Integers only, and within the safe range, because the digest stringifies
+  // these and the two languages must produce the SAME string.
+  //
+  //   2500.5  ->  TS "2500.5"   Java asLong() "2500"      digests diverge
+  //   1e30    ->  TS "1e+30"    Java "1000000000000..."   digests diverge
+  //
+  // A divergence is not a failed check, it is a warrant that verifies on one
+  // side and not the other, which is worse: the gateway accepts an issuance the
+  // wallet will refuse at the counter. Refusing the shape here keeps both sides
+  // reading the same bytes.
   const saleTotalMinor = Number(obj.sale_total)
-  if (!Number.isFinite(saleTotalMinor) || saleTotalMinor < 0) {
-    return { state: 'invalid', reason: 'warrant sale_total is missing or not a number' }
+  if (!Number.isSafeInteger(saleTotalMinor) || saleTotalMinor < 0) {
+    return {
+      state: 'invalid',
+      reason: 'warrant sale_total must be a non-negative integer within the safe range',
+    }
   }
   const faceDecimals = Number(obj.face_decimals)
-  if (!Number.isFinite(faceDecimals) || faceDecimals < 0) {
-    return { state: 'invalid', reason: 'warrant face_decimals is missing or not a number' }
+  if (!Number.isSafeInteger(faceDecimals) || faceDecimals < 0 || faceDecimals > 18) {
+    // 18 is well past any real currency (BTC uses 8) and keeps the value in a
+    // range both sides format identically.
+    return {
+      state: 'invalid',
+      reason: 'warrant face_decimals must be an integer between 0 and 18',
+    }
   }
   const unit = typeof obj.unit === 'string' ? obj.unit : undefined
   if (!unit) return { state: 'invalid', reason: 'warrant unit is missing' }
@@ -167,16 +205,34 @@ export function parseIssuanceWarrant(raw: string | undefined | null): IssuanceWa
     return { state: 'invalid', reason: `${form} warrant carries no signature` }
   }
 
-  return {
-    state: 'present',
-    form,
-    saleTotalMinor,
-    faceDecimals,
-    unit,
-    saleNonce,
-    signature,
-    reference: typeof obj.ref === 'string' ? obj.ref : undefined,
+  const common = { state: 'present' as const, saleTotalMinor, faceDecimals, unit, saleNonce }
+
+  // Built per form rather than as one object with two optional fields, so the
+  // type carries the invariant the checks above enforce: a signed form HAS a
+  // signature. That is what lets `verifyIssuanceWarrant` use it without a
+  // non-null assertion, which would otherwise rest on a parser guarantee the
+  // compiler could not see and a later edit could quietly remove.
+  if (form === 'processor') {
+    return { ...common, form, reference: typeof obj.ref === 'string' ? obj.ref : undefined }
   }
+  return { ...common, form, signature: signature as string }
+}
+
+/**
+ * The coupon a warrant is being checked against.
+ *
+ * Takes the unit and decimals rather than only the amount, because a warrant
+ * signed for one currency must not authorise a coupon in another. An earlier
+ * version of this function took a bare `couponFaceMinor: number` and could not
+ * make that comparison at all.
+ */
+export interface CouponUnderWarrant {
+  /** What this coupon is worth NOW, in minor units, which is what gets credited. */
+  faceValueMinor: number
+  /** The coupon's own currency, from its signed `unit` tag. */
+  unit: string
+  /** The coupon's own decimals, from its signed `face_decimals` tag. */
+  faceDecimals: number
 }
 
 /** What a verification concluded, and why. */
@@ -208,8 +264,9 @@ export type WarrantVerdict =
 export function verifyIssuanceWarrant(
   warrant: IssuanceWarrant,
   issuerId: string,
-  couponFaceMinor: number,
+  coupon: CouponUnderWarrant,
 ): WarrantVerdict {
+  const { faceValueMinor: couponFaceMinor } = coupon
   switch (warrant.state) {
     case 'absent-legacy':
       return { verdict: 'absent' }
@@ -219,6 +276,25 @@ export function verifyIssuanceWarrant(
       return { verdict: 'failed', reason: warrant.reason }
     case 'present':
       break
+  }
+
+  // THE DENOMINATION CHECK, and it must come first.
+  //
+  // Every other check below compares NUMBERS. Numbers in different currencies
+  // are not comparable, and the digest cannot catch this by itself: it is
+  // recomputed from the warrant's OWN unit and decimals, so a warrant for
+  // XAF 2500 (about EUR 3.80) has a signature that verifies perfectly and a
+  // ceiling that passes against a EUR 2500 coupon worth EUR 25.00.
+  //
+  // The signature proves the stall authorised `2500` of SOMETHING. Only this
+  // proves it authorised 2500 of what the coupon actually is.
+  if (warrant.unit !== coupon.unit || warrant.faceDecimals !== coupon.faceDecimals) {
+    return {
+      verdict: 'failed',
+      reason:
+        `warrant authorises ${warrant.unit}(${warrant.faceDecimals}) ` +
+        `but this coupon is ${coupon.unit}(${coupon.faceDecimals})`,
+    }
   }
 
   // The ceiling, checked BEFORE the signature and independently of it. A
@@ -248,7 +324,7 @@ export function verifyIssuanceWarrant(
   )
 
   try {
-    const ok = schnorr.verify(hexToBytes(warrant.signature!), digest, hexToBytes(issuerId))
+    const ok = schnorr.verify(hexToBytes(warrant.signature), digest, hexToBytes(issuerId))
     return ok
       ? { verdict: 'verified' }
       : { verdict: 'failed', reason: 'warrant signature did not verify against the stall' }

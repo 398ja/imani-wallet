@@ -70,6 +70,15 @@ export type RefusalReason =
   | 'over-redeemed'
   /** A claim on a different stall, which is the only one that can honour it. */
   | 'another-stall'
+  /**
+   * Nothing outside the issuing service authorised this coupon.
+   *
+   * Covers all three unauthorised states, because they have the same answer at
+   * the till: no warrant at all, a warrant the issuer signed as `none`, and a
+   * warrant that was present and did not hold. The merchant-facing copy
+   * distinguishes them; the refusal does not need to.
+   */
+  | 'unwarranted'
 
 /**
  * The recipient refused a redemption on policy grounds, before any swap.

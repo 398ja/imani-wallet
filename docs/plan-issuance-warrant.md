@@ -60,6 +60,68 @@ needs the verifier to also check the credential was minted by `issuerId` —
 unimplemented, and `verifyIssuanceWarrant` refuses rather than half-checks,
 because a half-check accepts a credential the attacker minted for themselves.
 
+### What a post-implementation review found, and fixed
+
+Four real defects, three of them in code I had already called verified. Each is
+now covered by a test that fails without the fix.
+
+**1. A warrant was portable across currencies.** The worst of them. The
+verifier recomputed the digest from the warrant's *own* `unit` and
+`faceDecimals` and never saw the coupon's, so every check compared bare
+numbers. A genuine warrant for **XAF 2500 (about EUR 3.80)** verified against a
+**EUR 2500** coupon worth **EUR 25.00**: the signature was real, and the
+ceiling passed 2500 <= 2500. Fixed on both sides by passing the coupon's own
+denomination and comparing it first, before any amount is compared.
+
+**2. `sale_total` accepted fractional and out-of-range numbers.** TypeScript
+stringifies `2500.5` as `"2500.5"` and `1e30` as `"1e+30"`; Java's `asLong()`
+gives `"2500"` and a plain integer. The digests then diverge, which is worse
+than a failed check: the gateway accepts an issuance the wallet refuses at the
+counter. Now `Number.isSafeInteger`, with decimals bounded to 0..18.
+
+**3. A non-null assertion rested on a parser invariant.** `warrant.signature!`
+was correct only because the parser refuses a signed form without one — a
+guarantee the type did not carry and an edit could have removed silently. The
+`present` variant is now discriminated, so signed forms have a required
+`signature` and the assertion is gone.
+
+**4. The refusal metric label was parsed out of the message.** Two different
+refusals shared the phrase "but this sale is", so a denomination mismatch would
+have been counted as a ceiling breach on the dashboard, and rewording a message
+would silently change what a metric meant. Refusals now carry their own tag.
+
+### Policy change: unwarranted coupons fail
+
+Originally `absent` and `unwarranted` were treated as tolerable silences. That
+was wrong, and for a specific reason: while only a *failed* warrant was refused,
+**omitting the warrant was strictly safer for an attacker than forging one** —
+a forgery showed red, an absence showed green. The scheme was opt-out for
+exactly the party it was written to catch.
+
+Now all three unauthorised states fail validation and are refused at redemption
+before the mint swap (`refuseIfUnwarranted`), and the send screen flags them
+(`isWarranted`). Sending is flagged rather than blocked: refusing to let a
+customer spend money already in their wallet punishes them for an issuer's
+omission, and the refusal that matters belongs where the defrauded party is the
+one deciding.
+
+Two states deliberately do **not** fail. `claimed` is a real external claim
+this build cannot check offline, and failing it would refuse every card-funded
+coupon. A record whose `warrant` is `undefined` predates the field entirely —
+that reads as `unchecked`, because refusing on a check that never ran rejects
+good coupons for a reason nobody can act on.
+
+### Grafana
+
+`WarrantObservability` exposes `voucher_issuance_warrant_total{outcome}` and
+`voucher_issuance_warrant_refused_total{reason}`. Every series is registered at
+startup, because the useful alert is a **ratio** — unwarranted over total — and
+a lazily-registered denominator makes the expression evaluate to nothing rather
+than zero. The panel then reads as coverage and provides none.
+
+The series worth alerting on is not `refused`; a refusal means the check
+worked. It is `none` and `absent` holding steady or rising.
+
 ### What is deliberately not done
 
 - **Phase 3, refusal by policy.** `absent` and `unwarranted` do not fail a

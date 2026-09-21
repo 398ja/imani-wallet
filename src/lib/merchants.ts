@@ -3,6 +3,8 @@ import type { Voucher, MerchantGroup } from '@imani/voucher-send'
 import type { VoucherRow } from '@imani/wallet-storage'
 
 import { toEpochMs } from './format'
+import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
+import { parseVoucherToken } from './voucherToken'
 import { isLicence } from './licences'
 import type { WalletTransaction } from './transactions'
 
@@ -269,6 +271,36 @@ export function isSpent(row: Pick<VoucherRow, 'status'>): boolean {
  * count and send-side selection grows from, so excluding it here excludes it
  * everywhere at once rather than in each screen that remembered.
  */
+/**
+ * Whether this coupon carries usable authorisation from the stall it names.
+ *
+ * Read from the coupon's own signed bytes rather than a stored flag, because
+ * rows written before warrants existed have no flag and re-deriving is cheap
+ * next to being wrong. Returns `true` when the question cannot be answered —
+ * an unparseable token is somebody else's error to report, and treating it as
+ * unauthorised here would hide the real failure behind the wrong message.
+ *
+ * Used to FLAG a coupon on the send screen, not to withhold it. Refusing to let
+ * a customer spend money already in their wallet punishes them for an issuer's
+ * omission; the refusal that matters happens at the till, where the party who
+ * would be defrauded is the one deciding. See `refuseIfUnwarranted`.
+ */
+export function isWarranted(row: Pick<VoucherRow, 'token'>): boolean {
+  if (!row.token) return true
+  try {
+    const parsed = parseVoucherToken(row.token)
+    const warrant = parseIssuanceWarrant(parsed.voucher.issuanceWarrant)
+    const verdict = verifyIssuanceWarrant(warrant, parsed.voucher.issuerId, {
+      faceValueMinor: parsed.voucher.faceValue,
+      unit: parsed.voucher.unit,
+      faceDecimals: parsed.voucher.faceDecimals,
+    })
+    return verdict.verdict === 'verified' || verdict.verdict === 'claimed'
+  } catch {
+    return true
+  }
+}
+
 export function spendable(rows: VoucherRow[]): VoucherRow[] {
   return rows.filter((row) => !isSpent(row) && !isLicence(row))
 }

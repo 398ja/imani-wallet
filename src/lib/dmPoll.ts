@@ -475,6 +475,56 @@ export async function refuseIfOverRedeemed(meta: Record<string, unknown> | undef
  * would only invite a caller to forget the `await` and get a check that always
  * passes.
  */
+/**
+ * Refuses a coupon that nothing outside the issuing service authorised.
+ *
+ * **Before the mint swap**, for the same reason `refuseIfAnotherStalls` is: a
+ * refusal one line later, after `redeem()`, would already have taken the money
+ * at the mint and left the customer with neither the coupon nor the goods.
+ *
+ * All three unauthorised states are refused together — no warrant, a warrant
+ * signed as `none`, and a warrant that was present and did not hold. They are
+ * different claims and the merchant-facing copy says so, but at the till they
+ * have one answer: nobody outside the service that minted this says the stall
+ * it names issued it.
+ *
+ * **Why absence is refused and not merely noted.** While only a failed warrant
+ * was refused, omitting the warrant was strictly safer for an attacker than
+ * forging one: a forgery was caught and an absence sailed through. That made
+ * the scheme opt-out for exactly the party it was written to catch.
+ *
+ * A row whose validation predates this field is NOT refused — `warrant` is
+ * undefined there, the question was never asked, and refusing on a check that
+ * never ran would reject good coupons for a reason nobody could act on.
+ */
+export function refuseIfUnwarranted(meta: Record<string, unknown> | undefined): void {
+  const validation = meta?.validation as VoucherValidation | undefined
+  if (!validation?.signatureValid) return
+
+  // Never checked, so there is nothing to refuse on. Distinct from `absent`,
+  // which IS a checked answer meaning the coupon carried no warrant.
+  if (validation.warrant === undefined) return
+
+  if (
+    validation.warrant !== 'absent' &&
+    validation.warrant !== 'unwarranted' &&
+    validation.warrant !== 'failed'
+  ) {
+    return
+  }
+
+  const voucherId = typeof meta?.voucherId === 'string' ? meta.voucherId : ''
+
+  throw new RedemptionRefusedError(
+    `Coupon ${voucherId || '(unknown)'} carries no usable authorisation from the stall ` +
+      'that issued it. Refusing before the mint swap, so the coupon stays the sender\u2019s.',
+    voucherId,
+    0,
+    validation.signedFaceValue,
+    'unwarranted',
+  )
+}
+
 export function refuseIfAnotherStalls(
   meta: Record<string, unknown> | undefined,
   stallPubkey: string | undefined,
@@ -565,6 +615,7 @@ function redemptionAdapter(): RedemptionAdapter {
       // first means the refusal names the real reason rather than whichever
       // check happened to fire.
       refuseIfAnotherStalls(meta, currentPubkey, token)
+      refuseIfUnwarranted(meta)
       await refuseIfOverRedeemed(meta)
 
       // Computed BEFORE the redeem, because it is derived from the RECEIVED

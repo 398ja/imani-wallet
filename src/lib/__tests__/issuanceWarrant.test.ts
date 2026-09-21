@@ -32,6 +32,11 @@ const DECIMALS = 2
 const UNIT = 'EUR'
 const NONCE = 'b7f3a1c2d4e5f607'
 
+/** The coupon a warrant is checked against: EUR, 2 decimals, given value. */
+function coupon(faceValueMinor: number, unit = UNIT, faceDecimals = DECIMALS) {
+  return { faceValueMinor, unit, faceDecimals }
+}
+
 function warrantJson(over: Record<string, unknown> = {}): string {
   return JSON.stringify({
     form: 'merchant',
@@ -56,7 +61,7 @@ function signAsStall(saleTotal: number): string {
 describe('the attack', () => {
   it('a genuine warrant verifies offline against the stall', () => {
     const warrant = parseIssuanceWarrant(warrantJson())
-    expect(verifyIssuanceWarrant(warrant, STALL_PUB, SALE_TOTAL)).toEqual({ verdict: 'verified' })
+    expect(verifyIssuanceWarrant(warrant, STALL_PUB, coupon(SALE_TOTAL))).toEqual({ verdict: 'verified' })
   })
 
   it('a warrant forged with the SERVICE key is refused', () => {
@@ -69,7 +74,7 @@ describe('the attack', () => {
       ),
     )
     const warrant = parseIssuanceWarrant(warrantJson({ sig: forged }))
-    const result = verifyIssuanceWarrant(warrant, STALL_PUB, SALE_TOTAL)
+    const result = verifyIssuanceWarrant(warrant, STALL_PUB, coupon(SALE_TOTAL))
 
     expect(result.verdict).toBe('failed')
   })
@@ -79,7 +84,7 @@ describe('the attack', () => {
     // sale, attached to a coupon minted for EUR 50,000.00. The signature
     // verifies perfectly. Only the ceiling refuses it.
     const warrant = parseIssuanceWarrant(warrantJson())
-    const result = verifyIssuanceWarrant(warrant, STALL_PUB, 5_000_000)
+    const result = verifyIssuanceWarrant(warrant, STALL_PUB, coupon(5_000_000))
 
     expect(result.verdict).toBe('failed')
     expect(result).toMatchObject({ reason: expect.stringContaining('exceeds warranted') })
@@ -91,14 +96,73 @@ describe('the attack', () => {
     const warrant = parseIssuanceWarrant(
       warrantJson({ sale_total: 5_000_000 }), // signature still over 2500
     )
-    expect(verifyIssuanceWarrant(warrant, STALL_PUB, 5_000_000).verdict).toBe('failed')
+    expect(verifyIssuanceWarrant(warrant, STALL_PUB, coupon(5_000_000)).verdict).toBe('failed')
+  })
+
+  it('a warrant for a DIFFERENT CURRENCY is refused', () => {
+    // Found in review, and it was a real hole.
+    //
+    // A merchant genuinely authorises XAF 2500, which is about EUR 3.80. The
+    // warrant ships inside every coupon of that sale, so it is public. Attach
+    // it to a EUR 2500 coupon - EUR 25.00, a hundred times more - and BOTH of
+    // the other checks pass:
+    //
+    //   signature: genuine, recomputed from the warrant's own unit, so valid
+    //   ceiling:   2500 <= 2500, passes
+    //
+    // Every check compares bare NUMBERS, and numbers in different currencies
+    // are not comparable. Only an explicit denomination check catches this.
+    const nonce = 'xaf-sale'
+    const xafDigest = warrantSaleDigest(STALL_PUB, 2500, 0, 'XAF', nonce)
+    const xafWarrant = parseIssuanceWarrant(
+      JSON.stringify({
+        form: 'merchant',
+        sale_total: 2500,
+        face_decimals: 0,
+        unit: 'XAF',
+        nonce,
+        sig: bytesToHex(schnorr.sign(xafDigest, hexToBytes(STALL_SK))),
+      }),
+    )
+
+    // Sanity: it is a perfectly good warrant for an XAF coupon.
+    expect(
+      verifyIssuanceWarrant(xafWarrant, STALL_PUB, coupon(2500, 'XAF', 0)).verdict,
+    ).toBe('verified')
+
+    // And useless against a EUR one.
+    const result = verifyIssuanceWarrant(xafWarrant, STALL_PUB, coupon(2500, 'EUR', 2))
+    expect(result.verdict).toBe('failed')
+    expect(result).toMatchObject({ reason: expect.stringContaining('XAF') })
+  })
+
+  it('a warrant with matching unit but different DECIMALS is refused', () => {
+    // The subtler half. Same currency code, different scale: a warrant for
+    // 2500 at 0 decimals is 2500 whole units, while a coupon at 2 decimals is
+    // 25.00. Decimals are part of what an amount MEANS.
+    const nonce = 'scale'
+    const warrant = parseIssuanceWarrant(
+      JSON.stringify({
+        form: 'merchant',
+        sale_total: 2500,
+        face_decimals: 0,
+        unit: 'EUR',
+        nonce,
+        sig: bytesToHex(
+          schnorr.sign(warrantSaleDigest(STALL_PUB, 2500, 0, 'EUR', nonce), hexToBytes(STALL_SK)),
+        ),
+      }),
+    )
+
+    expect(verifyIssuanceWarrant(warrant, STALL_PUB, coupon(2500, 'EUR', 2)).verdict)
+      .toBe('failed')
   })
 
   it('a warrant cannot be moved to another stall', () => {
     const otherStall = bytesToHex(schnorr.getPublicKey(hexToBytes(ATTACKER_SK)))
     const warrant = parseIssuanceWarrant(warrantJson())
 
-    expect(verifyIssuanceWarrant(warrant, otherStall, SALE_TOTAL).verdict).toBe('failed')
+    expect(verifyIssuanceWarrant(warrant, otherStall, coupon(SALE_TOTAL)).verdict).toBe('failed')
   })
 })
 
@@ -118,13 +182,14 @@ describe('three absence states, kept apart', () => {
   })
 
   it('their verdicts differ, so policy can refuse one and not the other', () => {
-    expect(verifyIssuanceWarrant(parseIssuanceWarrant(undefined), STALL_PUB, 1).verdict)
-      .toBe('absent')
+    expect(
+      verifyIssuanceWarrant(parseIssuanceWarrant(undefined), STALL_PUB, coupon(1)).verdict,
+    ).toBe('absent')
     expect(
       verifyIssuanceWarrant(
         parseIssuanceWarrant(JSON.stringify({ form: 'none' })),
         STALL_PUB,
-        1,
+        coupon(1),
       ).verdict,
     ).toBe('unwarranted')
   })
@@ -155,7 +220,7 @@ describe('malformed warrants are refused, never defaulted', () => {
 
   it('unreadable signature hex is refused rather than thrown', () => {
     const w = parseIssuanceWarrant(warrantJson({ sig: 'zz'.repeat(64) }))
-    expect(verifyIssuanceWarrant(w, STALL_PUB, SALE_TOTAL).verdict).toBe('failed')
+    expect(verifyIssuanceWarrant(w, STALL_PUB, coupon(SALE_TOTAL)).verdict).toBe('failed')
   })
 })
 
@@ -174,7 +239,7 @@ describe('processor warrants are recorded, never verified', () => {
         ref: 'ch_3Abc',
       }),
     )
-    expect(verifyIssuanceWarrant(w, STALL_PUB, SALE_TOTAL)).toEqual({
+    expect(verifyIssuanceWarrant(w, STALL_PUB, coupon(SALE_TOTAL))).toEqual({
       verdict: 'claimed',
       reference: 'ch_3Abc',
     })
@@ -191,7 +256,7 @@ describe('processor warrants are recorded, never verified', () => {
         nonce: NONCE,
       }),
     )
-    expect(verifyIssuanceWarrant(w, STALL_PUB, 5_000_000).verdict).toBe('failed')
+    expect(verifyIssuanceWarrant(w, STALL_PUB, coupon(5_000_000)).verdict).toBe('failed')
   })
 })
 
@@ -202,7 +267,7 @@ describe('delegated warrants refuse rather than half-check', () => {
     // Doing only the first accepts a credential the attacker minted for
     // themselves, so an unimplemented check must refuse.
     const w = parseIssuanceWarrant(warrantJson({ form: 'delegated' }))
-    expect(verifyIssuanceWarrant(w, STALL_PUB, SALE_TOTAL).verdict).toBe('failed')
+    expect(verifyIssuanceWarrant(w, STALL_PUB, coupon(SALE_TOTAL)).verdict).toBe('failed')
   })
 })
 

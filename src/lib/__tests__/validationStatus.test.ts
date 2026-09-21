@@ -20,6 +20,18 @@ const verified = {
   legacyCanonical: true,
   signedFaceValue: 1000,
   cappedAtFaceValue: false,
+  // A checked, authorised coupon. Carrying a warrant verdict is now part of
+  // what "verified" MEANS: a record without one was never asked the question,
+  // and `unchecked` is the honest answer for it. See the pre-warrant case
+  // below, which pins that deliberately rather than by omission.
+  warrant: 'verified' as const,
+}
+
+/** The `verified` record as it looked before the warrant field existed. */
+const preWarrantRecord = () => {
+  const record = { ...verified } as Partial<typeof verified>
+  delete record.warrant
+  return record as Omit<typeof verified, 'warrant'>
 }
 
 const tx = (over: Partial<WalletTransaction> = {}): WalletTransaction =>
@@ -55,6 +67,26 @@ describe('validationStatus', () => {
     // voucher is what a rewritten issuance_ratio looks like. The signature is
     // genuine; the coupon is still not worth what it claimed.
     expect(validationStatus({ ...verified, cappedAtFaceValue: true })).toBe('failed')
+  })
+
+  it('reports a record predating the warrant field as unchecked', () => {
+    // Every row stored before warrants shipped. NOT verified: the question was
+    // never asked, and a green dot would leave those rows reading as approved
+    // forever. NOT failed either - the coupon may be perfectly good.
+    expect(validationStatus(preWarrantRecord())).toBe('unchecked')
+  })
+
+  it('reports an unwarranted coupon as failed', () => {
+    // Nothing outside the issuing service vouches for it, which is exactly the
+    // coupon a compromised service mints.
+    expect(validationStatus({ ...verified, warrant: 'absent' })).toBe('failed')
+    expect(validationStatus({ ...verified, warrant: 'unwarranted' })).toBe('failed')
+  })
+
+  it('reports a clamped value as failed even when the warrant was never checked', () => {
+    // Ordering. A clamped coupon is a known failure whether or not the warrant
+    // question was asked, so it must not be downgraded to "unchecked".
+    expect(validationStatus({ ...preWarrantRecord(), cappedAtFaceValue: true })).toBe('failed')
   })
 
   it('does not treat legacyCanonical as a problem', () => {
