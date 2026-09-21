@@ -38,7 +38,8 @@ class FakeEventSource {
  */
 describe('amnesty for events abandoned before chunk reassembly existed', () => {
   const PROCESSED_KEY = 'imani-wallet:dm-poll:processed'
-  const AMNESTY_KEY = 'imani-wallet:dm-poll:chunk-amnesty'
+  const AMNESTY_KEY = 'imani-wallet:dm-poll:chunk-amnesty:v2'
+  const LEGACY_AMNESTY_KEY = 'imani-wallet:dm-poll:chunk-amnesty'
   const PUBKEY = 'b'.repeat(64)
 
   beforeEach(() => {
@@ -94,6 +95,23 @@ describe('amnesty for events abandoned before chunk reassembly existed', () => {
   it('records that it ran, even with nothing to forget', () => {
     startDmPoll(PUBKEY)
     expect(localStorage.getItem(AMNESTY_KEY)).toBeTruthy()
+  })
+
+  it('runs again on a device that already took the FIRST amnesty', () => {
+    // The exact state of every wallet affected by the 16-chunk ceiling: the v1
+    // amnesty ran long ago for the pre-reassembly bug, so an unversioned
+    // one-shot would decline to run and the coupons that ceiling abandoned
+    // would stay tombstoned forever. Versioning the key is what lets a later
+    // fix say "the tombstones written before me are not to be trusted".
+    localStorage.setItem(LEGACY_AMNESTY_KEY, new Date().toISOString())
+    localStorage.setItem(PROCESSED_KEY, JSON.stringify(['chunk-refused-by-the-16-ceiling']))
+
+    startDmPoll(PUBKEY)
+
+    expect(localStorage.getItem(PROCESSED_KEY)).toBeNull()
+    expect(localStorage.getItem(AMNESTY_KEY)).toBeTruthy()
+    // The superseded marker is cleared, so the storage carries one answer.
+    expect(localStorage.getItem(LEGACY_AMNESTY_KEY)).toBeNull()
   })
 })
 
