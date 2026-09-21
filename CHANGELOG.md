@@ -9,6 +9,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-21
+
+### Fixed
+
+- **A large sale delivered nothing, and left the wallet unable to receive anything afterwards.**
+  Reported as "selling 1000 GBP breaks the system: five batches of 200 were expected, none
+  arrived, and since then nothing goes through". Both halves are on the receive path and both are
+  reachable only once a sale is big enough to be split and chunked - a Cashu token carries one
+  ~1840-char proof per set bit of its amount, so the parts of a large sale are the biggest tokens
+  this system ever sends.
+
+  `MAX_CHUNKS` was 16, copied from one deployment's `max_chunks` and enforced as though it were a
+  protocol constant. It is the *sender's* setting. A transfer split more ways had every piece
+  refused by `asChunk`, which answers null for "not a chunk" and "a chunk I refuse" alike - so the
+  envelope fell through to the text parser, yielded no token, and was marked processed forever.
+  The gift wraps are still on the relay; the local tombstone was the only thing in the way. The
+  ceiling is now 64 with the byte bound derived from it, and `looksLikeChunk` keeps a refusal
+  retryable instead of turning it into a deletion.
+
+- **Why it stayed broken.** The completed-transfer set lived in memory while the processed-event
+  tombstones it partners with live in `localStorage`, so a reload dropped one and kept the other:
+  a big coupon's stragglers came back with no sibling that could finish them and rebuilt a wedged
+  pending entry on every poll. Its TTL was also 24h against a 7-day fetch window. The set is now
+  persisted, sized to the window, and outlives it.
+
+- **`maxProcessedEvents` was dm-poll's default 100 against that same 7-day window.** One large sale
+  is up to 80 gift wraps, so the set evicted ids still inside the window, which were re-fetched,
+  re-processed, and evicted the next batch in turn. It never converged - every cycle a full round
+  of redundant unwraps and mint round-trips, surviving a reload because the set is on disk. Now
+  sized against the window.
+
+- **The chunk amnesty could not run for the coupons the 16-chunk ceiling ate.** It exists to forget
+  exactly these tombstones, but its key was unversioned and had already fired on every affected
+  device for the earlier pre-reassembly bug. The key is versioned now, so a later fix can declare
+  that the tombstones written before it are not to be trusted.
+
+### Performance
+
+- **A catch-up no longer freezes the page.** Sizing the processed-event set to the fetch window made
+  an existing O(n) write into an O(n^2) one: dm-poll saves the set on every event it finishes and
+  `localStorage.setItem` is synchronous. Measured over a 2000-event pass - 134MB serialised across
+  ~1800 blocking writes, the largest ~335KB. Writes are coalesced now: the same pass does one write
+  of 0.134MB. The received-token set stays synchronous, because it is the first line of defence
+  against crediting a coupon twice and must survive a crash.
+
+- **The received-token set was re-parsed from storage on every event.** `hasTokenBeenReceived` runs
+  once per event and `markTokenAsReceived` re-read the whole set again to add one entry. Measured
+  over a 2000-event catch-up against a 5000-entry set: ~350MB parsed and ~1.8s of blocking work,
+  all re-deriving a value that had not changed. Held in memory now, mirrored to storage: 1784ms ->
+  0.8ms. Dropped on an account switch, so one account cannot answer another's "have I banked this?"
+
+- **That set also had no bound at all**, so every coupon a merchant ever banked made receiving money
+  permanently slower. Capped at 2000 - the cap bounds the *write*, so it is sized against the
+  seven-day window rather than "big enough to never evict". Evicting is safe because the mint, not
+  this set, is what actually prevents a double-spend: an evicted fingerprint costs one round trip
+  that fails safely. Oversized legacy sets are trimmed at load rather than on the first receive,
+  which was a ~400ms stall at the counter.
+
+- **The chunk-assembly map was unbounded in count.** The byte ceiling bounds one transfer; nothing
+  bounded how many could be open at once, each holding decrypted fragments of someone's money for a
+  10-minute TTL. Capped at 64, evicting the oldest, which costs a re-read and never a coupon.
+
 ## [0.6.0] - 2026-09-21
 
 ### Added
