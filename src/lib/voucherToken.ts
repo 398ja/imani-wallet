@@ -204,6 +204,21 @@ export interface SignedVoucherFields {
   issuanceRatio: number
   faceDecimals: number
   merchantMetadata?: string | null
+  /**
+   * What, outside the issuing service, authorised this issuance. Raw JSON.
+   *
+   * **Three states, and they are three.** `undefined` means the tag was ABSENT:
+   * the coupon predates warrants and the issuer signed nothing about the
+   * question. A warrant whose `form` is `none` is a different claim — the
+   * issuer has SIGNED that nothing authorised this beyond itself. A reader
+   * that collapses the two lets a stripped warrant read as a legacy coupon,
+   * which is the downgrade the `none` form exists to prevent.
+   *
+   * Kept as raw JSON rather than parsed here so this type stays a faithful
+   * record of the bytes. `parseIssuanceWarrant` in `issuanceWarrant.ts` turns
+   * it into something with opinions.
+   */
+  issuanceWarrant?: string
   nonce: string
   issuerSignature: string
   issuerPublicKey: string
@@ -488,6 +503,7 @@ function lockedVoucherFrom(secret: string): SignedVoucherFields | null {
     issuanceRatio: num('issuance_ratio', 1),
     faceDecimals: num('face_decimals', 0),
     merchantMetadata: tag('merchant_metadata') ?? null,
+    issuanceWarrant: tag('issuance_warrant'),
     nonce: typeof nonce === 'string' ? nonce : '',
     issuerSignature: required('issuer_sig'),
     issuerPublicKey: required('issuer_pubkey'),
@@ -548,6 +564,10 @@ function readVoucherFields(blob: Record<string, unknown>): SignedVoucherFields {
     issuanceRatio: blob.issuanceRatio == null ? 1 : Number(blob.issuanceRatio),
     faceDecimals: Number(blob.faceDecimals ?? 0),
     merchantMetadata: str('merchantMetadata') ?? null,
+    // `str` returns undefined for a missing or empty value, which is exactly
+    // the absent state. Do NOT coalesce to null here: `?? null` would make
+    // absent and signed-`none` indistinguishable downstream.
+    issuanceWarrant: str('issuanceWarrant'),
     nonce: required('nonce'),
     issuerSignature: required('issuerSignature'),
     issuerPublicKey: required('issuerPublicKey'),
@@ -634,6 +654,13 @@ export function voucherCanonicalBytes(v: SignedVoucherFields, legacy = false): U
   // setIssuanceRatio writes no tag at all when the ratio is exactly 1.0, so a
   // parity voucher must not emit one either.
   if (v.issuanceRatio !== 1) numTag('issuance_ratio', v.issuanceRatio)
+  // Order matches `VoucherSecret.Builder.build()`, which calls
+  // `setIssuanceWarrant` after `setIssuanceRatio` and `setMerchantMetadata`
+  // LAST — after the signature tags, which are excluded here. So the warrant
+  // sits between the ratio and the metadata, and this is not cosmetic: these
+  // bytes are hashed, so swapping these two lines fails every signature on
+  // every warranted coupon.
+  if (v.issuanceWarrant != null) strTag('issuance_warrant', v.issuanceWarrant)
   if (v.merchantMetadata != null) strTag('merchant_metadata', v.merchantMetadata)
 
   const dataHex = bytesToHex(new TextEncoder().encode(v.voucherId))
