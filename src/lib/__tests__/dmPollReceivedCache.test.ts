@@ -140,4 +140,44 @@ describe('the received-token mirror', () => {
     // And the mirror still dedupes for the rest of the session.
     expect(await adapter().hasTokenBeenReceived('coupon')).toBe(true)
   })
+
+  it('retries a write that storage refused, once storage recovers', async () => {
+    startDmPoll(PUBKEY_A)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError')
+    })
+    await adapter().markTokenAsReceived('coupon')
+    spy.mockRestore()
+
+    // The fingerprint is in memory but NOT on disk. Skipping the write on the
+    // memory hit alone would strand it there for the life of the session, so
+    // the coupon would be re-offered to the mint in every future session --
+    // the exact cost this set exists to avoid.
+    await adapter().markTokenAsReceived('coupon')
+
+    expect(JSON.parse(localStorage.getItem(RECEIVED_KEY)!)).toContain('coupon')
+  })
+
+  it('trims an oversized legacy set at load, not at the next receive', async () => {
+    // Every wallet upgrading to this build carries a set written while it was
+    // unbounded.
+    const legacy = Array.from({ length: 50000 }, (_, i) => `old-${i}`)
+    localStorage.setItem(RECEIVED_KEY, JSON.stringify(legacy))
+
+    startDmPoll(PUBKEY_A)
+
+    // Reading is enough to trim it: the cost lands at poller startup, where
+    // nothing is waiting, instead of on the first coupon to arrive. Before
+    // this, that first receive paid ~400ms of synchronous work with a
+    // customer standing at the counter.
+    await adapter().hasTokenBeenReceived('anything')
+
+    const stored = JSON.parse(localStorage.getItem(RECEIVED_KEY)!) as string[]
+    expect(stored.length).toBe(2000)
+    // The NEWEST survive, matching the oldest-first eviction on the write path.
+    expect(stored).toContain('old-49999')
+    expect(stored).not.toContain('old-0')
+  })
 })
