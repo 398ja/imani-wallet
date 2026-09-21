@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import { displayDecimals, formatFace } from './format'
 import { getSigner } from './nap'
 import { signedFetch } from './nip98'
+import { recordCashAttestation } from './wallet'
 import { recordNotification } from './notifications/inbox'
 import { wantsInApp } from './notifications/wants'
 import type { ReceiptPayload } from './paymentReceipt'
@@ -95,6 +96,17 @@ function fileReceipt(pubkey: string, delivery: ReceiptDelivery): boolean {
           decimals: displayDecimals(payload.faceUnit, payload.faceDecimals),
         })
       : 'Your voucher'
+
+  // File the customer's attestation before the notification gating below.
+  //
+  // Deliberately ahead of `wantsInApp`: a merchant who has turned OFF the
+  // "voucher claimed" notification has said they do not want to be TOLD, not
+  // that they do not want the evidence. Filing it after that gate would make a
+  // notification preference silently determine whether sales can be
+  // reconciled.
+  if (payload.cashAttestation && payload.voucherId) {
+    void recordCashAttestation(payload.voucherId, payload.cashAttestation)
+  }
 
   // The sender's own switch for "a coupon you sent was claimed". Consumed
   // either way by the caller, so a receipt the user does not want to see is

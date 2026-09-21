@@ -44,6 +44,8 @@ import { schnorr } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 
+import { parseIssuanceWarrant } from './issuanceWarrant'
+
 /**
  * Separates fields in the digest preimage. Same reasoning as the warrant's:
  * without it `total=25, decimals=00` and `total=2500, decimals=0` hash
@@ -267,4 +269,82 @@ export function serialiseCashAttestation(attestation: CashAttestation): string {
     nonce: attestation.saleNonce,
     sig: attestation.signature,
   })
+}
+
+
+/**
+ * Builds the attestation a customer sends back with their receipt, or
+ * undefined when there is nothing to attest.
+ *
+ * ## Where this runs
+ *
+ * On the CUSTOMER's device, at the moment a coupon is redeemed, beside the
+ * receipt the wallet already posts to the sender. Not at a counter: see
+ * `docs/attestation-ui-gap.md` for why a prompt during the sale would cost a
+ * queue, be skipped under pressure, and be worse than useless against the
+ * disputes it targets.
+ *
+ * ## Every failure is `undefined`, never a throw
+ *
+ * The redemption has already happened by the time this is called — the proofs
+ * are burnt and the money has moved. An exception here would turn a completed
+ * redemption into a reported failure over evidence that was optional in the
+ * first place, which is the same posture `postPaymentReceipt` takes.
+ *
+ * Returns undefined when:
+ *
+ * - the coupon carries no warrant, so there is no sale to bind to. That is
+ *   every coupon issued before warrants shipped, and it is a normal state
+ *   rather than an error.
+ * - the warrant is unreadable, or names a form with no sale figures.
+ * - the wallet cannot sign.
+ *
+ * @param issuanceWarrant the warrant from the received coupon, verbatim
+ * @param issuerId the stall that issued it, from the coupon's own signed tag
+ * @param sign borrows the customer's key; the caller owns that policy
+ */
+export function attestationForReceivedCoupon(
+  issuanceWarrant: string | undefined,
+  issuerId: string,
+  customerPubkey: string,
+  sign: (digest: Uint8Array) => string,
+): string | undefined {
+  const warrant = parseIssuanceWarrant(issuanceWarrant)
+  if (warrant.state !== 'present') return undefined
+
+  try {
+    const sale: AttestedSale = {
+      // The stall from the COUPON's signed tag, not from the DM envelope.
+      // Envelope fields are sender-written and unchecked, so attesting over
+      // one would let a sender name whichever stall suited them.
+      stallPubkey: issuerId,
+      saleTotalMinor: warrant.saleTotalMinor,
+      faceDecimals: warrant.faceDecimals,
+      unit: warrant.unit,
+      saleNonce: warrant.saleNonce,
+    }
+
+    const digest = cashAttestationDigest(
+      customerPubkey,
+      sale.stallPubkey,
+      sale.saleTotalMinor,
+      sale.faceDecimals,
+      sale.unit,
+      sale.saleNonce,
+    )
+
+    return serialiseCashAttestation({
+      customerPubkey,
+      stallPubkey: sale.stallPubkey,
+      paidMinor: sale.saleTotalMinor,
+      saleTotalMinor: sale.saleTotalMinor,
+      faceDecimals: sale.faceDecimals,
+      unit: sale.unit,
+      saleNonce: sale.saleNonce,
+      signature: sign(digest),
+    })
+  } catch (error) {
+    console.warn('[attestation] could not attest a received coupon', error)
+    return undefined
+  }
 }

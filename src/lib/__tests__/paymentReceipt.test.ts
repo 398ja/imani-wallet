@@ -228,3 +228,61 @@ describe('postPaymentReceipt', () => {
     })
   })
 })
+
+
+describe('the customer attestation reaches the sender', () => {
+  // Added after a mutation survived: deleting the line that puts the
+  // attestation on the payload broke nothing, because nothing asserted it was
+  // there. The whole receipt-time design rests on this one field travelling.
+  beforeEach(() => {
+    nip44Encrypt.mockClear()
+    signedFetch.mockReset()
+    signedFetch.mockResolvedValue(new Response('{}', { status: 200 }))
+  })
+
+  it('carries the attestation INSIDE the encrypted payload', async () => {
+    const attestation = JSON.stringify({ customer: 'cc', stall: 'dd', paid: 2500 })
+
+    await postPaymentReceipt({
+      senderPubkeyHex: SENDER,
+      deliveryEventId: 'evt-1',
+      voucherId: 'v-1',
+      cashAttestation: attestation,
+    })
+
+    const plaintext = JSON.parse(
+      (nip44Encrypt.mock.calls[0] as unknown as [string, string])[1],
+    ) as Record<string, unknown>
+    expect(plaintext.cashAttestation).toBe(attestation)
+  })
+
+  it('never puts it in the cleartext hints', async () => {
+    // The hints exist only to render a push body. A signature naming both
+    // parties and an amount is not a hint, and the gateway must never see it.
+    const attestation = JSON.stringify({ customer: 'cc', stall: 'dd', paid: 2500 })
+
+    await postPaymentReceipt({
+      senderPubkeyHex: SENDER,
+      deliveryEventId: 'evt-1',
+      voucherId: 'v-1',
+      cashAttestation: attestation,
+    })
+
+    const body = signedFetch.mock.calls[0]?.[2] as Record<string, unknown>
+    expect(JSON.stringify(body)).not.toContain(attestation)
+    expect(body.cashAttestation).toBeUndefined()
+  })
+
+  it('omits it entirely when there is none', async () => {
+    await postPaymentReceipt({
+      senderPubkeyHex: SENDER,
+      deliveryEventId: 'evt-1',
+      voucherId: 'v-1',
+    })
+
+    const plaintext = JSON.parse(
+      (nip44Encrypt.mock.calls[0] as unknown as [string, string])[1],
+    ) as Record<string, unknown>
+    expect(plaintext.cashAttestation).toBeUndefined()
+  })
+})

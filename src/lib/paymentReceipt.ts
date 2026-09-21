@@ -39,6 +39,26 @@ export interface ReceiptPayload {
    */
   faceDecimals?: number
   redeemedAt: number
+  /**
+   * The customer's own signature that they paid for this sale.
+   *
+   * Rides on the receipt the wallet was sending anyway, which is the whole
+   * design: the customer's key is on the customer's device, and this is
+   * already a message to exactly the right recipient at a moment when they are
+   * looking at their own phone rather than holding up a queue at a counter.
+   *
+   * See `docs/attestation-ui-gap.md` for why this is here and not in a prompt
+   * during the sale, and `cashAttestation.ts` for what it does and does not
+   * establish — chiefly that it attests RECEIPT rather than payment.
+   *
+   * Absent whenever the coupon carries no warrant to bind to, which is every
+   * coupon issued before warrants shipped.
+   *
+   * **Inside the encrypted payload, never beside it.** The cleartext hints on
+   * the request exist only to render a push body; a signature naming both
+   * parties and an amount is not a hint.
+   */
+  cashAttestation?: string
 }
 
 export interface PostReceiptParams {
@@ -55,6 +75,8 @@ export interface PostReceiptParams {
   recipientName?: string
   merchantName?: string
   merchantNip05?: string
+  /** The customer's signed attestation, if the coupon carried a warrant. */
+  cashAttestation?: string
 }
 
 const RECEIPTS_ENDPOINT = '/api/v1/payment-receipts'
@@ -99,6 +121,7 @@ export async function postPaymentReceipt(params: PostReceiptParams): Promise<voi
       faceUnit: params.faceUnit,
       faceDecimals: params.faceDecimals,
       redeemedAt: Math.floor(Date.now() / 1000),
+      cashAttestation: params.cashAttestation,
     }
 
     // To the SENDER's key, not our own: they are the one who reads this. The

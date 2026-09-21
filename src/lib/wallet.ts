@@ -311,6 +311,48 @@ export async function getTransactionRow(id: string): Promise<TransactionRow | nu
  * Never throws. The redemption is complete and the money has moved; failing to
  * record where it was published must not surface as a failed redemption.
  */
+/**
+ * Files the customer's cash attestation onto the `issued` row it belongs to.
+ *
+ * A write-back for the same reason `recordAttestationReceipt` is one: the
+ * attestation cannot exist when the row is written. It is signed on the
+ * CUSTOMER's device at the moment they redeem, which is minutes or days after
+ * the merchant filed the sale, and it arrives through the receipt drain.
+ *
+ * Keyed on `issued:<voucherId>`, which `buildIssueTransaction` uses as the row
+ * id, so one receipt lands on exactly one sale.
+ *
+ * **Refuses to overwrite.** An attestation already on the row was filed by an
+ * earlier receipt for the same coupon; replacing it would let a redelivery, or
+ * a second party claiming the same voucher id, substitute their own signature
+ * for the first. First one wins, and later ones are dropped.
+ *
+ * Never throws. The coupon is redeemed and the money has moved.
+ */
+export async function recordCashAttestation(
+  voucherId: string,
+  attestation: string,
+): Promise<void> {
+  try {
+    const id = 'issued:' + voucherId
+    const existing = await getWallet().getTransaction(id)
+
+    // No such sale on this device. Not an error: the coupon may have been
+    // issued on another terminal, or this may be a customer's wallet with no
+    // issuance history at all.
+    if (!existing) return
+
+    if ((existing as { cashAttestation?: string }).cashAttestation) return
+
+    await getWallet().updateTransaction(id, {
+      cashAttestation: attestation,
+    } as unknown as Partial<TransactionRow>)
+    notifyWalletChanged()
+  } catch (error) {
+    console.error('[wallet] cash attestation not recorded', error)
+  }
+}
+
 export async function recordAttestationReceipt(
   id: string,
   receipt: { nullifier: string; eventId: string; at: number },

@@ -17,14 +17,19 @@ import {
 import { announceArrival, type ArrivedVoucher } from './arrivalToast'
 import { announceQueued, settleQueued } from './queuedToast'
 import { announceRefusal } from './refusalToast'
+import { schnorr } from '@noble/curves/secp256k1.js'
+import { bytesToHex } from '@noble/hashes/utils'
+
 import { attestRedemption, nullifierFor } from './attestation'
+import { attestationForReceivedCoupon } from './cashAttestation'
+import { getSigner } from './nap'
 import { postPaymentReceipt } from './paymentReceipt'
 import { createDmCryptoAdapter, toLegacyMetadata } from './dmCrypto'
 import { resetChunkAssembly } from './dmChunks'
 import { loadMerchant } from './merchant'
 import { licenceFromToken } from './licences'
 import { checkRedemption } from './redemptionLedger'
-import type { VoucherValidation } from './voucherToken'
+import { parseVoucherToken, type VoucherValidation } from './voucherToken'
 import { getWallet, notifyWalletChanged, recordReceiptByNullifier } from './wallet'
 import { legacyApi, withCorrelation } from './legacyBridge'
 
@@ -497,6 +502,37 @@ export async function refuseIfOverRedeemed(meta: Record<string, unknown> | undef
  * undefined there, the question was never asked, and refusing on a check that
  * never ran would reject good coupons for a reason nobody could act on.
  */
+/**
+ * The customer's attestation for a coupon just received, or undefined.
+ *
+ * Re-parses the token rather than taking figures off `meta`, because a warrant
+ * is inside the SIGNED bytes and the envelope is not. Cheap: the token is
+ * already in hand, and this runs once per redemption.
+ *
+ * Never throws. The redemption has already happened when this is called, so an
+ * exception would turn a completed one into a reported failure over evidence
+ * that was optional — the same posture `postPaymentReceipt` takes.
+ */
+function attestReceived(token: string): string | undefined {
+  try {
+    const { voucher } = parseVoucherToken(token)
+    const signer = getSigner()
+    // The SIGNER's own pubkey, not the caller's notion of who is logged in.
+    // They are the same key in practice, and taking it from the signer means
+    // the attestation names whoever actually signed it - so the two can never
+    // disagree about who attested.
+    return attestationForReceivedCoupon(
+      voucher.issuanceWarrant,
+      voucher.issuerId,
+      signer.pubkey,
+      (digest) => signer.withPrivkey((key) => bytesToHex(schnorr.sign(digest, key))),
+    )
+  } catch (error) {
+    console.warn('[dmPoll] could not attest a received coupon', error)
+    return undefined
+  }
+}
+
 export function refuseIfUnwarranted(meta: Record<string, unknown> | undefined): void {
   const validation = meta?.validation as VoucherValidation | undefined
   if (!validation?.signatureValid) return
@@ -784,6 +820,19 @@ function redemptionAdapter(): RedemptionAdapter {
               faceDecimals: meta?.faceDecimals == null ? undefined : Number(meta.faceDecimals),
             }
           : {},
+        // Signed here, on the customer's own device, over the SALE the coupon's
+        // warrant describes. Gated on the same `signatureValid` as the amounts
+        // above and for the same reason: envelope fields are sender-written,
+        // and attesting over an unverified figure would sign a claim the
+        // sender chose.
+        //
+        // Undefined whenever the coupon carries no warrant, which is every
+        // coupon issued before warrants shipped. That is a normal state, not a
+        // failure, and the receipt goes out exactly as it does today.
+        cashAttestation:
+          (meta?.validation as { signatureValid?: boolean } | undefined)?.signatureValid === true
+            ? attestReceived(token)
+            : undefined,
       })
 
       // The public half of the record. `txRecords` writes the merchant's own
