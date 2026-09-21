@@ -341,8 +341,24 @@ function storageAdapter(): StorageAdapter {
   }
 }
 
-/** Marks that this device has already forgotten its pre-reassembly tombstones. */
-const CHUNK_AMNESTY_KEY = 'imani-wallet:dm-poll:chunk-amnesty'
+/**
+ * Marks that this device has already forgotten its pre-reassembly tombstones.
+ *
+ * **Versioned, because the amnesty is needed more than once.** The key used to
+ * be unversioned, so the one-shot fired for the chunk-reassembly fix and could
+ * never fire again — which made it useless for the NEXT defect that abandoned
+ * coupons the same way. Bumping the suffix is how a later fix declares that the
+ * tombstones written before it are not to be trusted.
+ *
+ * v2: coupons abandoned by the 16-chunk ceiling. A transfer split more ways had
+ * every piece refused, fell through to the text parser as a non-token DM, and
+ * was marked processed forever. Those wraps are still on the relay, and this is
+ * the only thing standing between the customer and their money.
+ */
+const CHUNK_AMNESTY_KEY = 'imani-wallet:dm-poll:chunk-amnesty:v2'
+
+/** The unversioned key the first amnesty used. Cleaned up, not read. */
+const LEGACY_CHUNK_AMNESTY_KEY = 'imani-wallet:dm-poll:chunk-amnesty'
 
 /**
  * Forget, once, that this wallet gave up on the coupons it could not reassemble.
@@ -362,8 +378,10 @@ const CHUNK_AMNESTY_KEY = 'imani-wallet:dm-poll:chunk-amnesty'
  * untouched here. So the worst case is one wasted pass over old wraps, while
  * the best case is three real coupons arriving.
  *
- * Runs at most once per device — after that the tombstones are honest again,
- * because anything newly abandoned was abandoned by code that could reassemble.
+ * Runs at most once per device PER VERSION of this key — after that the
+ * tombstones are honest again, because anything newly abandoned was abandoned
+ * by code that could reassemble. A later fix that invalidates that assumption
+ * again must bump the key rather than add a second mechanism.
  */
 function grantChunkAmnesty(): void {
   try {
@@ -372,6 +390,9 @@ function grantChunkAmnesty(): void {
     const abandoned = readSet(PROCESSED_KEY).size
     localStorage.removeItem(PROCESSED_KEY)
     localStorage.setItem(CHUNK_AMNESTY_KEY, new Date().toISOString())
+    // The v1 marker has done its job and its presence would only be misleading
+    // to read later. Removed here so the storage carries one answer, not two.
+    localStorage.removeItem(LEGACY_CHUNK_AMNESTY_KEY)
 
     if (abandoned > 0) {
       console.log(
