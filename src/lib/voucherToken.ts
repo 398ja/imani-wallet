@@ -2,6 +2,8 @@ import { schnorr } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 
+import type { WarrantVerdict } from './issuanceWarrant'
+
 /**
  * Reads a voucher out of the token it is actually carried in, and checks the
  * issuer signed it.
@@ -721,6 +723,34 @@ export interface VoucherValidation {
   signedFaceValue: number
   /** True when the derived value exceeded the signed face and was clamped down. */
   cappedAtFaceValue: boolean
+  /**
+   * What, outside the issuing service, authorised this issuance.
+   *
+   * Distinct from `signatureValid` and that distinction is the point.
+   * `signatureValid` says the bytes are internally consistent - whoever signed
+   * also chose the key it is checked against - so it is necessary and never
+   * sufficient for a claim about who issued this. THIS field is the part that
+   * reaches outside the issuing service.
+   *
+   * `'verified'` is the only value meaning a key outside the issuing service
+   * attested this. `'claimed'` is a processor reference nobody checked here.
+   * `'absent'` and `'unwarranted'` are two different silences and must stay
+   * two. `'failed'` is a present warrant that was refused.
+   *
+   * Undefined on rows written before warrants existed, which reads the same as
+   * `'absent'` - and neither may ever read as verified.
+   */
+  warrant?: WarrantVerdict['verdict']
+  /**
+   * The amount the warrant authorises, in minor units, when there is one.
+   *
+   * NOT the coupon's own value, and the gap between them is the finding. A
+   * warrant covers a SALE and a sale splits, so on any part this is LARGER
+   * than what the coupon is worth. UI must render this as the issued figure
+   * and never as the coupon's balance - see
+   * `__tests__/warrantSplitBinding.test.ts`.
+   */
+  warrantedSaleTotal?: number
 }
 
 /**
