@@ -15,6 +15,7 @@ export {
   Alert,
   EmptyRow,
   RawDetails,
+  present,
   Centered,
   Fatal,
 } from './layout'

@@ -302,4 +302,17 @@ describe('one voucher', () => {
       '/merchant/coupons',
     )
   })
+
+  it('still reaches the transaction that issued it', async () => {
+    // The voucher and its issuing movement are a pair. The transaction used to
+    // be the way IN, so its back arrow carried the pairing; now that the way in
+    // is the voucher list, the record itself has to carry it or the movement
+    // becomes unreachable from the coupon it produced.
+    showVoucher('v1', [issued({ id: 'v1', inDays: 30 })])
+
+    await waitFor(() => expect(screen.getByText('Claimed so far')).toBeTruthy())
+    expect(
+      screen.getByRole('link', { name: /The sale this came from/ }).getAttribute('href'),
+    ).toBe('/transaction/issued%3Av1')
+  })
 })

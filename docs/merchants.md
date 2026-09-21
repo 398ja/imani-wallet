@@ -97,7 +97,7 @@ the customer pays less than a whole coupon, they keep the change automatically.
 ## History, stats, and what's expiring
 
 - **Transactions** lists every movement: coupons you issued and coupons that came
-  back. Tap one to see its detail, and from there **View coupon**.
+  back. Tap one to see its detail.
 - **Vouchers** lists what you've issued. It shows the ones still valid by default,
   with a switch to bring in the ones that have run out — useful when a customer
   turns up holding a lapsed coupon and you want to see what it was worth.

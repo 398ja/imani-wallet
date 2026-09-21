@@ -16,6 +16,7 @@ import {
   Pass,
   IdentityInline,
   ValidationBadge,
+  present,
 } from '../components/ui'
 import { getVoucherRow, getTransactionRow, onWalletChanged } from '../lib/wallet'
 import { issuanceRatioOf } from '../lib/merchants'
@@ -60,11 +61,6 @@ function ratioLabel(row: VoucherRow): string | undefined {
   if (ratio === undefined) return undefined
   const unit = row.face_unit ?? 'face'
   return `${Number(ratio.toFixed(6))} per sat (${unit} minor units)`
-}
-
-/** Drop empty entries so the details block only ever shows real data. */
-function present<T>(entries: Array<[string, T | undefined | null]>): Array<[string, T]> {
-  return entries.filter((e): e is [string, T] => Boolean(e[1]))
 }
 
 export function CouponPage() {
