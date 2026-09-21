@@ -26,6 +26,7 @@ import { getSigner } from './nap'
 import { postPaymentReceipt } from './paymentReceipt'
 import { createDmCryptoAdapter, toLegacyMetadata } from './dmCrypto'
 import { resetChunkAssembly } from './dmChunks'
+import { cancelDeferredWrite, deferWrite } from './deferredWrite'
 import { loadMerchant } from './merchant'
 import { licenceFromToken } from './licences'
 import { checkRedemption } from './redemptionLedger'
@@ -330,13 +331,41 @@ function storageAdapter(): StorageAdapter {
     async markTokenAsReceived(fingerprint: string) {
       const seen = readSet(RECEIVED_KEY)
       seen.add(fingerprint)
+      // SYNCHRONOUS, and it must stay that way. This set is the correctness
+      // boundary: it is what stops a coupon already credited being redeemed a
+      // second time, and it is keyed on the token fingerprint precisely so it
+      // can be trusted when the processed-event cache below cannot. Deferring
+      // it would open a window in which a crash loses the record of a
+      // redemption that really happened.
       localStorage.setItem(RECEIVED_KEY, JSON.stringify([...seen]))
     },
     async getProcessedEventIds() {
       return [...readSet(PROCESSED_KEY)]
     },
     async saveProcessedEventIds(ids: string[]) {
-      localStorage.setItem(PROCESSED_KEY, JSON.stringify(ids))
+      // Deferred and coalesced, unlike `markTokenAsReceived` above.
+      //
+      // dm-poll calls this once per event it finishes, and `localStorage` is
+      // synchronous, so a catch-up over a week of wraps re-serialised the whole
+      // set on every one of them: measured at ~134MB across ~1800 blocking
+      // writes for a 2000-event pass, all on the main thread. Sizing the set to
+      // the 7-day fetch window is what made that reachable.
+      //
+      // Safe to defer BECAUSE it is only a cache. Losing the tail of it costs
+      // a re-read of wraps the wallet already handled, and the re-read is
+      // caught by the received set above, which is written synchronously. The
+      // two have different durability needs and now get different treatment.
+      //
+      // `ids` is captured per call rather than read back inside the callback:
+      // dm-poll owns this array and hands over the complete state each time, so
+      // the last queued call already carries the newest value.
+      deferWrite(PROCESSED_KEY, () => {
+        try {
+          localStorage.setItem(PROCESSED_KEY, JSON.stringify(ids))
+        } catch {
+          // Quota. The in-memory tracker still dedupes for this session.
+        }
+      })
     },
   }
 }
@@ -388,6 +417,10 @@ function grantChunkAmnesty(): void {
     if (localStorage.getItem(CHUNK_AMNESTY_KEY)) return
 
     const abandoned = readSet(PROCESSED_KEY).size
+    // Any queued write for this key is dropped first. The amnesty's whole
+    // purpose is to REMOVE these ids, and a deferred save queued moments
+    // earlier would land afterwards and put every one of them straight back.
+    cancelDeferredWrite(PROCESSED_KEY)
     localStorage.removeItem(PROCESSED_KEY)
     localStorage.setItem(CHUNK_AMNESTY_KEY, new Date().toISOString())
     // The v1 marker has done its job and its presence would only be misleading
