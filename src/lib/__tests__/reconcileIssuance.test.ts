@@ -11,6 +11,7 @@ import { schnorr } from '@noble/curves/secp256k1.js'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 
 import {
+  summariseReconciliation,
   reconcileIssuances,
   totalReconciliation,
   reconcileByUnit,
@@ -299,5 +300,50 @@ describe('consideration is reported separately from authorisation', () => {
     // Still authorised - the STALL's warrant is fine - but not corroborated.
     expect(result.verdict).toBe('authorised')
     expect(result.paid).toBe('invalid')
+  })
+})
+
+
+describe('the summary a merchant actually sees', () => {
+  it('carries each unit\'s own decimals', () => {
+    // Caught in review. The panel formats with these, and hardcoding 0 renders
+    // EUR 2500 as "EUR 2,500" instead of "EUR 25.00" - a hundredfold error in
+    // the one number a merchant is checking against their till.
+    const eur = issued(2500, {}, 'EUR', 2)
+    const [line] = summariseReconciliation([eur], STALL)
+
+    expect(line.unit).toBe('EUR')
+    expect(line.decimals).toBe(2)
+  })
+
+  it('flags mismatches for attention and nothing else', () => {
+    // Unwarranted sales are every sale issued before warrants shipped, and
+    // every sale a terminal made. Raising them all would bury the one row that
+    // actually disagrees with its own signature.
+    const clean = summariseReconciliation([issued(2500)], STALL)
+    expect(clean[0].needsAttention).toBe(false)
+
+    const legacy = summariseReconciliation([issued(2500, { issuanceWarrant: undefined })], STALL)
+    expect(legacy[0].needsAttention).toBe(false)
+
+    const tampered = issued(2500)
+    ;(tampered as { amount: number }).amount = 900
+    expect(summariseReconciliation([tampered], STALL)[0].needsAttention).toBe(true)
+  })
+
+  it('leads with the currency the stall actually trades in', () => {
+    // Rather than whichever row happened to be stored first.
+    const lines = summariseReconciliation(
+      [issued(100, {}, 'EUR', 2), issued(90_000, {}, 'XAF', 0)],
+      STALL,
+    )
+
+    expect(lines[0].unit).toBe('XAF')
+  })
+
+  it('renders nothing when nothing was issued', () => {
+    // A panel of zeroes teaches a merchant that this screen is usually blank,
+    // which is how a panel stops being read.
+    expect(summariseReconciliation([], STALL)).toEqual([])
   })
 })

@@ -7,6 +7,8 @@ import { ledgerPubkey, reconcileAttestations } from '../lib/attestation'
 import { findDuplicates, readAttestations, summarise, type LedgerSummary } from '../lib/audit'
 import { allEvents } from '../lib/relay'
 import { listTransactions, recordAttestationReceipt } from '../lib/wallet'
+import { IssuanceReconciliation } from '../components/IssuanceReconciliation'
+import { toTransaction, type WalletTransaction } from '../lib/transactions'
 
 /**
  * The merchant's public redemption ledger: their ledger ID, and the sweep that
@@ -52,7 +54,8 @@ import { listTransactions, recordAttestationReceipt } from '../lib/wallet'
  * nullifier to look up. That needs the gateway to return the nullifier on
  * COMPLETED, and it has its own card.
  */
-export function LedgerPage() {
+export function LedgerPage({ stallPubkey }: { stallPubkey: string }) {
+  const [issuanceRows, setIssuanceRows] = useState<WalletTransaction[]>([])
   const [pubkey, setPubkey] = useState('')
   const [failed, setFailed] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -100,6 +103,17 @@ export function LedgerPage() {
     } finally {
       setReading(false)
     }
+  }, [])
+
+  useEffect(() => {
+    // Read once on open. Independent of `audit()` above: that one reaches
+    // relays and can fail for network reasons, while this is purely local and
+    // must still render when the relay is unreachable.
+    void listTransactions()
+      .then((rows) => setIssuanceRows(rows.map(toTransaction)))
+      .catch((error) => {
+        console.warn('[ledger] could not read issuance history', error)
+      })
   }, [])
 
   useEffect(() => {
@@ -286,6 +300,8 @@ export function LedgerPage() {
           </div>
         </div>
       </Panel>
+
+      <IssuanceReconciliation transactions={issuanceRows} stallPubkey={stallPubkey} />
 
       <Panel className="mt-4 p-5">
         <p className="font-medium text-mono-900 dark:text-mono-50">Check for gaps</p>

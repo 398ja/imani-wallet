@@ -65,6 +65,26 @@ type HistoryContent = Nip60HistoryContent & {
    */
   cashback_id?: string
   claim_code?: string
+  /**
+   * The issuance evidence, on the stall's own `issued` rows.
+   *
+   * Carried for exactly the reason `cashback_id` is: none of it is recoverable
+   * from anywhere else once the device is wiped. The warrant's nonce is
+   * generated per sale and never seen again, the sibling ids exist only in what
+   * the portal returned at the moment of sale, and a customer's attestation was
+   * signed once at a counter.
+   *
+   * **Dropping these was a real defect, not a hypothetical one.** `toContent`
+   * is a fixed whitelist, so the fields were written to IndexedDB and silently
+   * absent from the relay copy — the copy that survives a wiped device, which
+   * is precisely the situation in which someone wants to audit a stall's
+   * history. A merchant restoring their records would have found every row
+   * reading `unwarranted`, indistinguishable from a stall that had issued
+   * without authorisation all along.
+   */
+  issuance_warrant?: string
+  sale_voucher_ids?: readonly string[]
+  cash_attestation?: string
 }
 
 /** Exported for tests: the unit and amount conversions are the easy things to get wrong. */
@@ -94,6 +114,9 @@ export function toContent(tx: WalletTransaction): HistoryContent {
     bundle_id: tx.bundleId,
     cashback_id: tx.cashbackId,
     claim_code: tx.claimCode,
+    issuance_warrant: tx.issuanceWarrant,
+    sale_voucher_ids: tx.saleVoucherIds,
+    cash_attestation: tx.cashAttestation,
   }
 }
 
@@ -130,6 +153,12 @@ export function toRow(id: string, content: HistoryContent): TransactionRow {
     bundleId: content.bundle_id,
     cashbackId: content.cashback_id,
     claimCode: content.claim_code,
+    // Restored so a recovered history can still be audited. Absent on every
+    // row written before this shipped, which reads as "not checked" rather
+    // than as a failure - see validationStatus.
+    issuanceWarrant: content.issuance_warrant,
+    saleVoucherIds: content.sale_voucher_ids,
+    cashAttestation: content.cash_attestation,
   } as unknown as TransactionRow
 }
 

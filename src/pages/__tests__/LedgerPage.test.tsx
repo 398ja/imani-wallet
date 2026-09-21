@@ -86,7 +86,7 @@ const valueFor = (label: string) => {
 const paint = () =>
   render(
     <MemoryRouter>
-      <LedgerPage />
+      <LedgerPage stallPubkey={"bb".repeat(32)} />
     </MemoryRouter>,
   )
 

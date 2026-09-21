@@ -234,6 +234,18 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     expiresAt: r.expiresAt === undefined ? undefined : toEpochMs(r.expiresAt),
     cashbackId: str(r.cashbackId),
     claimCode: str(r.claimCode),
+    // Issuance evidence, read from EITHER spelling: camelCase as this wallet
+    // writes it locally, snake_case as the relay copy carries it. A reader
+    // that knew only one would restore a history with the evidence silently
+    // missing, which reads as "never authorised" rather than as "not
+    // recovered".
+    issuanceWarrant: str(r.issuanceWarrant) ?? str(r.issuance_warrant),
+    cashAttestation: str(r.cashAttestation) ?? str(r.cash_attestation),
+    saleVoucherIds: Array.isArray(r.saleVoucherIds)
+      ? (r.saleVoucherIds as string[]).filter((id): id is string => typeof id === 'string')
+      : Array.isArray(r.sale_voucher_ids)
+        ? (r.sale_voucher_ids as string[]).filter((id): id is string => typeof id === 'string')
+        : undefined,
     cashbackStatus: str(r.cashbackStatus),
     // Same magnitude-discriminating normaliser as `timestamp`: the gateway
     // reports an ISO instant, this row stores milliseconds, and a relay

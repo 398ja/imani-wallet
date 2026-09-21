@@ -166,6 +166,38 @@ as proof of payment. The amount is checked for **equality**, unlike a warrant's
 ceiling — one payment for one sale, so a smaller attestation is not a weaker
 valid one, it is an attestation for a different amount.
 
+## What a review of the above then found
+
+Three defects, and the first two meant the feature did not work at all.
+
+**1. The evidence was dropped from the relay copy.** `toContent` is a fixed
+whitelist, and so is `toTransaction`. The warrant, sibling ids and attestation
+were written to IndexedDB and silently absent from the relay record — **the
+copy that survives a wiped device, which is exactly when someone wants to audit
+a stall's history.** A merchant restoring their records would have found every
+row reading `unwarranted`, indistinguishable from a stall that had never
+authorised anything. Fixed across all three hops, with a round-trip test.
+
+**2. Nothing produced an attestation, and nothing consumed the reconciliation.**
+611 lines of verification with no callers outside tests: rec 3 checked data that
+could not exist, and rec 1 answered a question nobody could ask. `IssueParams`
+now takes an optional `collectCashAttestation`, and `LedgerPage` renders an
+`IssuanceReconciliation` panel.
+
+**3. The panel formatted every currency at 0 decimals.** EUR 2500 would have
+rendered as "€2,500" rather than "€25.00" — a hundredfold error in the one
+number a merchant checks against their till. The summary now carries each
+unit's own decimals.
+
+### Still outstanding, stated rather than implied away
+
+**No UI offers the attestation yet.** The hook exists and is wired through to
+storage, reconciliation and the relay copy, but `SellPage` does not present it,
+so in practice every sale today is uncorroborated. That is the honest state:
+the plumbing is complete and the counter flow is not. Designing that flow is a
+separate piece of work, and doing it badly — a modal between a customer and
+their coupon — is the failure this feature's own documentation warns against.
+
 ## Original recommendation, before any of it was built
 
 **Do 1. Consider 2. Leave 3 unless a real dispute makes the case.**

@@ -487,7 +487,15 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             // Merchant-only, same predicate as the stall editor: the redemption
             // ledger is a record of coupons HONOURED, which a customer has none
             // of, and the ledger key is meaningless for them.
-            merchant !== null ? <LedgerPage /> : <Navigate to="/settings" replace />
+            // The STALL's key, not the ledger's. The ledger key is
+            // pseudonymous by design and warrants are signed by the stall, so
+            // reconciliation checked against the ledger key would report every
+            // sale as a mismatch.
+            merchant !== null ? (
+              <LedgerPage stallPubkey={merchant.pubkey} />
+            ) : (
+              <Navigate to="/settings" replace />
+            )
           }
         />
         <Route
