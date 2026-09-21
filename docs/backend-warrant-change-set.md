@@ -13,7 +13,39 @@ Everything below was read, not recalled. Line numbers are from today's HEAD.
 
 ---
 
-## 0. The blocker: the merchant is gone before `voucherId` exists
+## 0. The ordering problem, on the path the wallet actually uses
+
+**Corrected.** An earlier draft of this section traced
+`CashPaymentSagaService` and called its `@Async` the blocker. That is the
+*imani-apps* cash flow, and `imani-wallet` does not use it. The cash sale here
+was deliberately simplified: the merchant presses **Sell**, a coupon is issued,
+and it is sent to the recipient. No cash invoice, no confirmation webhook, no
+saga. The `@Async` finding is real but it is about a path this wallet does not
+take, so it is not the blocker and §3 below is rewritten accordingly.
+
+**What the Sell button actually does:**
+
+| Where | What |
+|---|---|
+| `imani-wallet/src/lib/issue.ts:311` | `signedFetch('/api/v1/portal/vouchers', 'POST')` — NIP-98 signed by the merchant's device |
+| `PortalVoucherController:220` | `createVouchers`, **no `@Async`** |
+| `PortalVoucherController:354` | `.issuerId(issuingStall(pubkey))` — the stall from the authenticated identity, never a request field |
+| `CustomerWalletPortAdapter:110` | forwards to customer-wallet |
+| `VoucherAdapter:510` | `UUID.randomUUID()` |
+
+**The good news, and it is substantial.** This path is **synchronous end to
+end**. The merchant's NIP-98 request is still open when the voucher is minted,
+so the retained event from step 1 reaches issuance through the ordinary call
+stack. No saga entry, no `@Async` boundary, no context-propagation problem.
+The portal already refuses to take the issuer from a request field, so the
+binding `warrant → issuerId` is enforced one layer above the codec.
+
+That makes the `merchant` warrant much cheaper here than their §4.2
+anticipated, because §4.2 was written against the cash-invoice flow.
+
+**The residual problem is narrower, and it survives.** `voucher_id` is still
+minted at `VoucherAdapter:510`, two hops downstream of the device, and the
+digest covers it:
 
 Your §4.2 is correct that the merchant signs, and it is the best finding in
 either document. But the digest in §5 is
@@ -22,50 +54,44 @@ either document. But the digest in §5 is
 SHA-256(voucher_id ‖ issuer_id ‖ face_value ‖ face_decimals ‖ unit ‖ expires_at ‖ payment_ref)
 ```
 
-and `voucher_id` does not exist when the merchant is signing.
+The device signs before the id exists. It is not a concurrency problem now,
+just an allocation-order one, and being synchronous makes the options better:
 
-**The cash path, traced:**
-
-| Where | What happens |
-|---|---|
-| `POST /api/v1/cash/invoice/{ref}/confirm` | merchant's NIP-98 event verified, `sig` available |
-| `CashPaymentSagaService:99` | `@Async` — **the HTTP request returns here** |
-| `CashPaymentSagaService:297` | `walletPortAdapter.createVoucher(request)` |
-| `VoucherAdapter:510` | `String voucherId = UUID.randomUUID().toString()` |
-
-The `@Async` at line 99 is the problem. The merchant's request has completed
-before issuance begins, and the id is minted server-side two hops later. There
-is no moment at which the device holds both its key and the `voucher_id`.
-
-So "the device that already signs the NIP-98 confirmation signs one additional
-32-byte digest" cannot be done as one extra signature over your §5 digest. The
-device cannot compute that digest.
-
-**Four ways out, and I do not know which you prefer:**
-
-1. **Client-supplied `voucher_id`.** The device generates the UUID and sends it
-   with the confirmation, so it can sign the digest. Server validates
-   uniqueness. Changes `VoucherAdapter:510` from generating to accepting, which
-   needs a collision/replay story you currently get free from `randomUUID`.
+1. **Client-supplied `voucher_id`.** The device generates a UUID, signs the
+   digest, sends both. `VoucherAdapter:510` accepts instead of generating.
+   Cheap on a synchronous path and the natural fit here, but it needs a
+   uniqueness and replay story that `randomUUID` currently gives for free.
 2. **Drop `voucher_id` from the digest.** Bind to
-   `(issuer_id, face_value, face_decimals, unit, payment_ref)`. `payment_ref` is
-   the cash invoice `ref`, which the device **does** have at confirmation time,
-   and which is already unique per sale. This is my guess at the cheapest fix,
-   but it weakens the binding: two identical sales against one `ref` become
-   interchangeable, so it rests entirely on `ref` uniqueness.
-3. **Two-phase.** Device signs an intent digest pre-issuance; server records it;
-   the warrant references the intent rather than the voucher. More moving parts,
-   and it is the shape that most resembles what you already do with quotes.
-4. **Synchronous issuance on the cash path.** Remove the `@Async` so the id
-   exists before the response. Almost certainly wrong — that `@Async` is load
-   bearing and the durable-claim logic around it is careful.
+   `(issuer_id, face_value, face_decimals, unit, expires_at)`. Note there is
+   **no `payment_ref` on this path** — the earlier draft leaned on the cash
+   invoice `ref`, and the simplified Sell flow does not have one. Without it,
+   two identical sales by the same stall on the same day produce identical
+   digests, so one warrant replays onto the other. That is weak enough here to
+   be worth saying plainly, and it is the option I would now argue against.
+3. **Server returns the id, device signs second.** Two round trips: mint the
+   id, return it unsigned-warrant, device signs, second call attaches. Only
+   viable because the path is synchronous and the merchant is present. Doubles
+   the calls on the hot Sell path.
+4. **Server-chosen id, derived deterministically** from fields the device
+   already signs, so both sides compute the same id independently. Removes the
+   ordering problem entirely, and constrains id allocation in a way you may not
+   want.
 
-**(2) also has the virtue of already being in your digest.** `payment_ref` is
-there. The question is whether it is sufficient alone, and that is your call
-because you own the `ref` allocation.
+**I am not going to recommend one, and §3 is why.** A first pass here argued
+for (1) on the grounds that the path is synchronous and the merchant is
+present. Then reading `createVouchersParallel` showed that **one Sell action
+can mint many vouchers**: a `quantity`, and each of those auto-splitting again
+server-side when a voucher would be too large to receive. The device cannot
+know how many ids there will be, so "the device generates the id up front"
+does not straightforwardly work either.
 
-I flag this rather than fix it because the answer determines the wire format,
-and everything in my wallet-side phase 1 is blocked on the wire format anyway.
+What survives is that (2) is weaker here than it looked — there is no
+`payment_ref` on this path to lean on — and that every option needs an answer
+to the auto-split. That answer is a design decision about **what a warrant
+attests**: the specific voucher, or the sale that produced it. See §3.
+
+I flag rather than fix because the answer determines the wire format, and my
+wallet-side phase 1 is blocked on the wire format anyway.
 
 ---
 
@@ -204,24 +230,69 @@ builder decide.
 
 Blocked on §0 above.
 
-`CashPaymentSagaService:292` already does `.issuerId(entry.merchantPubkey)`
-from the authenticated identity, so the binding is correct and only the proof
-is missing. `CashSagaEntry` (line 456) is the carrier that would need to hold
-the retained event from step 1 through the `@Async` boundary.
+### The portal path, which is the one that matters for this wallet
 
-Note that crossing `@Async` means the event must be **in the saga entry**, not
-in a `SecurityContext` — the context does not propagate to the async thread by
-default, and if anything currently reads it there it is reading a cleared one.
-Worth checking independently of this work.
+`PortalVoucherController:354` already does `.issuerId(issuingStall(pubkey))`,
+taking the stall from the authenticated identity and never from a request
+field. The class comment in `issue.ts` records why: voucher creation is refused
+outright on the customer tier, so issuance routes to the portal precisely
+*because* the portal derives the issuer from whoever it authenticated.
 
-**Checked, and it is not configured.** No
-`DelegatingSecurityContextAsyncTaskExecutor`, no
-`SecurityContextHolder.setStrategyName(MODE_INHERITABLETHREADLOCAL)` anywhere
-in `imani-gateway-core` or `imani-security`. So the async thread sees an empty
-context, and a warrant derived from `SecurityContextHolder` inside the saga
-would read `null` rather than the merchant. That is a fail-closed accident
-rather than a vulnerability — but it means the retained event **must** travel
-in `CashSagaEntry`, and there is no shortcut available.
+**So the binding is already correct and only the proof is missing** — exactly
+the shape their §4.2 found on the cash path, arriving here by a different
+route. The work is:
+
+1. Carry the retained NIP-98 event from step 1 down through
+   `createVoucherOfValue` into `CreateVoucherRequest`.
+2. Have the customer tier write it into the warrant tag before signing.
+
+No saga, no async boundary, no new carrier type. It is parameter passing on a
+synchronous call stack.
+
+**One caveat on `createVouchersParallel`.** `PortalVoucherController:473` fans
+a multi-voucher request across `Executors.newVirtualThreadPerTaskExecutor()`,
+so those vouchers are minted off the request thread and a
+`SecurityContextHolder` read inside the lambda would see an empty context.
+
+**The existing code already does the right thing** and is worth copying rather
+than working around: `pubkey` is threaded through as a **parameter**, from
+`createVouchersParallel` into `createWithAutoSplit` into
+`createVoucherOfValue`. The retained event should follow exactly that path.
+No context propagation needed, because the code never relied on context here.
+
+**Quantities multiply, twice.** A request has a `quantity`, and *each* of those
+then auto-splits when a single voucher would be too large to receive
+(`createWithAutoSplit`, which is why the method returns a `List` per future).
+So one Sell action can mint many vouchers, each with its **own** `voucher_id`
+and face value, and each needs **its own warrant**. Whichever option from §0
+is chosen must work *n* times per request, where *n* is not known until the
+split runs.
+
+That is an argument against §0 option 3 (device signs after the server returns
+the id): the device would have to sign an unknown number of digests in a second
+round trip. It is also the strongest argument for option 1, where the device
+can generate and sign ids up front only if it knows the count — which it does
+**not**, because auto-split is a server-side decision based on token size.
+
+**This is worth your attention before picking.** The auto-split means even
+option 1 needs a story for ids the device did not anticipate. The cleanest
+version may be that the device signs one warrant over the *requested* amount
+and the server records the split as derived from it, but that changes what a
+warrant attests, so it is your call and not mine.
+
+### The cash saga, for completeness
+
+`CashPaymentSagaService:292` does `.issuerId(entry.merchantPubkey)` and is the
+path `imani-apps` uses. If it is still live for other clients it needs the
+same treatment, with one extra constraint: **`@Async` security-context
+propagation is not configured** — no `DelegatingSecurityContextAsyncTaskExecutor`
+and no inheritable-threadlocal strategy anywhere in `imani-gateway-core` or
+`imani-security`. The async thread sees an empty context, so a warrant derived
+from `SecurityContextHolder` inside the saga would read `null`. Fail-closed
+rather than dangerous, but it means the event must travel in `CashSagaEntry`
+and there is no shortcut.
+
+Not this wallet's problem. Recorded because it was found and is easy to lose.
 
 ---
 
@@ -262,10 +333,27 @@ travel in `CashSagaEntry`).
 
 ## 6. The one thing I would most like an answer to
 
-Not the wire format. **How does the merchant sign a digest containing an id
-that does not exist yet?**
+Not the wire format. **Does a warrant attest a voucher, or a sale?**
 
-If the answer is option 2 (drop `voucher_id`, lean on `payment_ref`), say so
-and I will build the wallet reader against that. If it is option 1
-(client-supplied id), that is a bigger change than step 3 currently looks, and
-it is worth re-ordering §8 to put it first.
+Your §5 digest covers `voucher_id`, which makes it a statement about one
+voucher. But on this wallet's path one Sell action mints an unknown number of
+vouchers — a `quantity`, each auto-splitting server-side by token size — and
+none of their ids exist when the merchant signs. A per-voucher warrant
+therefore cannot be produced by the device, under any of the four options in
+§0, without a second round trip over a count it cannot predict.
+
+A per-**sale** warrant does not have that problem: the device signs the total
+it is selling, once, and the server records each minted voucher as derived
+from that warrant. It costs something real — a verifier can then check that a
+sale was authorised, but must trust the server's split arithmetic to relate a
+specific coupon to it, and that arithmetic is inside the trust boundary the
+scheme exists to get outside of.
+
+I do not think that is fatal, because the **amount** is still bound and the
+amount is what your §3 correctly identified as the thing that matters. But it
+is a real weakening and it should be a decision rather than a discovery.
+
+Whichever way it goes, say so explicitly and I will build the wallet reader
+against it. If it is per-sale, the wallet also needs to know how a coupon
+references its parent warrant, because that reference is what my reader
+verifies.
