@@ -6,6 +6,7 @@ import {
   Menu,
   Receipt,
   Settings,
+  Ticket,
   User,
   type LucideIcon,
 } from 'lucide-react'
@@ -180,6 +181,16 @@ export function Header({
               <>
                 <MenuLink to="/merchant/dashboard" icon={LayoutDashboard} onClick={close}>
                   Dashboard
+                </MenuLink>
+                {/* Above Transactions, because it is the narrower question and
+                    the one a merchant arrives with. Transactions is everything
+                    that moved in both directions; this is the coupons they put
+                    out and what has come back against each — which is what
+                    somebody standing at the counter holding a voucher is
+                    asking about. A general list before a specific one makes
+                    the reader filter in their head. */}
+                <MenuLink to="/merchant/coupons" icon={Ticket} onClick={close}>
+                  Vouchers
                 </MenuLink>
                 <MenuLink to="/merchant/transactions" icon={Receipt} onClick={close}>
                   Transactions
