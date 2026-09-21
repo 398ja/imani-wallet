@@ -17,8 +17,8 @@ import {
   Pagination,
   usePagination,
   Switch,
-  present,
 } from '../components/ui'
+import { present } from '../lib/detailRows'
 import { listTransactions, onWalletChanged } from '../lib/wallet'
 import { toTransaction, type WalletTransaction } from '../lib/transactions'
 import { expiringSoon } from '../lib/stats'

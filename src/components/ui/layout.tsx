@@ -165,26 +165,6 @@ export function EmptyRow({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * Drop entries with no value, so a record list only ever shows real data.
- *
- * Lives here because it is the other half of the rule `RawDetails` documents
- * below and `DetailRow` assumes: entries with nothing in them are dropped by
- * the CALLER rather than rendered as an em-dash, since on this stack a
- * DM-received coupon has no expiry and no memo and a fixed field list would be
- * mostly blanks. A convention every detail screen has to follow, with the
- * helper in a third file each time, is a convention waiting to be followed
- * slightly differently.
- *
- * `Boolean` is the filter, which makes this drop empty strings as well as
- * null and undefined — deliberate, and the reason callers pass `'No expiry'`
- * rather than a bare `formatDate(...)` for a field whose absence is itself a
- * fact worth printing.
- */
-export function present<T>(entries: Array<[string, T | undefined | null]>): Array<[string, T]> {
-  return entries.filter((e): e is [string, T] => Boolean(e[1]))
-}
-
-/**
  * The technical record, collapsed by default.
  *
  * Entries with no value are dropped by the caller rather than shown as an
