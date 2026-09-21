@@ -40,6 +40,23 @@ X. A compromised service can mint any amount in any stall's name and the result
 is indistinguishable from a genuine coupon. It needs a stall countersignature,
 which is a protocol change outside this repo.
 
+**Answered, and the answer was better than the question.** The gateway team
+confirmed the finding independently and then declined the countersignature for
+a reason we had missed: it authenticates the *debtor* and leaves the *amount*
+to whoever holds the key. Their counter-proposal, an `issuance_warrant`
+(`imani-gateway-core/docs/issuance-authorisation-warrant.md`), binds a digest
+that **covers the face value** to evidence from outside our trust boundary —
+the merchant's own NIP-98 signature on the cash path, a Stripe charge on the
+stall's own connected account on the card path. Forging a large coupon then
+requires routing that much real money into the victim's account, so it is
+self-defeating rather than merely detectable. Our reply, including one
+correction and one gap we found in it, is `docs/reply-issuance-warrant.md`.
+
+**The recordable decision, per their §9.3, verbatim:** a coupon's `issuerId`
+is an **assertion by the issuing service**, not a claim proven by the named
+stall. That is accurate today and stays accurate until their §8 sequencing
+completes.
+
 ## Scope, and what was not looked at
 
 Read closely: the reader, the producer, the hosted API's routing, the design
@@ -934,7 +951,39 @@ attacker discloses in-range amounts that sum to the lie while one commitment
 behaves as a negative: the range test passes, the aggregate reconciles, and
 nothing catches it. Only per-commitment openings tie a commitment to an amount.
 
-**Pattern across all eleven:** every error came from reasoning one step past
+### 12. "It needs a stall countersignature" — the right finding, the wrong fix
+
+Finding 6 is correct and was confirmed independently. The **remedy** attached
+to it was not, and the gateway team said so.
+
+A countersignature proves *stall X authorised this* and says nothing about
+*what was received for it*. But re-read our own attack: the harm is not that a
+coupon names the wrong stall, it is that a 50,000 EUR **claim** exists against
+a stall that was never paid 50,000 EUR. The countersignature authenticates the
+debtor and leaves the amount entirely to whoever holds the signing key.
+
+Worse, the evidence was already in our own handoff. §5 conceded the
+countersigning key would not be the stall's root key but a terminal lock key on
+an always-on service. We wrote that down and did not follow it: it swaps a
+compromise we defend against for one we do not, shrinking blast radius from all
+stalls to one while leaving the **amount unbounded**. The concession refuted
+the proposal and we did not notice.
+
+The failure was in the **question**. We asked "who authorised this", and that
+question has exactly one natural answer, so the design space closed before it
+opened. The better question was "what, outside our trust boundary, says this
+was authorised" — which admits a payment processor, and with it a forgery that
+**pays the victim** to execute.
+
+Two things would have caught it. Following our own §5 concession one step
+further, as above. And reading `application.yml`: `/api/v1/cash` sits under
+`nip98-protected`, so the merchant's key was *already signing* every cash
+issuance and the gateway was discarding the `sig`. We spent the handoff arguing
+ADR 0009 put that key out of reach, while on the cash path it was in the loop
+the whole time. Item 9b was the same mistake against the same repo: asserting
+the shape of the issuance side without reading it.
+
+**Pattern across all twelve:** every error came from reasoning one step past
 what had been measured or read. Items 2–4 came from single-shot timing on a
 cold VM and are why `scripts/bench-commitments.mts` warms hard and takes
 medians. Items 1, 5, 7 and 9 came from not re-reading a nearby comment, my own
@@ -942,5 +991,10 @@ sentence, or the data. Items 6 and 8 came from reading one document and not the
 module that defines the thing it describes — 6 was caught by the user, 8 by
 reviewing the diff. Items 9–11 were caught by MEASURING the recommendation
 before implementing it, which is the only reason three of the six shipped in a
-different shape than they were written. None survived a second look. Whoever
-extends this document should assume the same rate applies to them.
+different shape than they were written. Item 12 is the first caught by someone
+else, and it is the most expensive kind: the finding was right, the fix was
+wrong, and the refutation was sitting in our own §5. None survived a second
+look. Whoever extends this document should assume the same rate applies to
+them — and should note that item 12 was only found because the handoff was
+written to be checkable rather than persuasive. Send the reasoning, not just
+the conclusion, to someone who owns the code you are reasoning about.
