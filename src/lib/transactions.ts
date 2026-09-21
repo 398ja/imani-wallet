@@ -389,6 +389,14 @@ export function buildIssueTransaction(input: {
    */
   saleVoucherIds?: readonly string[]
   /**
+   * The stall this sale was issued for.
+   *
+   * Recorded so a later attestation can be checked against the stall it claims
+   * to have paid. Taking that from the attestation itself would compare a
+   * value to itself and accept anything.
+   */
+  merchantId?: string
+  /**
    * The customer's own signature that they PAID for this sale, if collected.
    *
    * Optional by design and must stay so — see `cashAttestation.ts`. Its absence
@@ -426,6 +434,7 @@ export function buildIssueTransaction(input: {
     ...(input.saleVoucherIds && input.saleVoucherIds.length > 1
       ? { saleVoucherIds: [...input.saleVoucherIds] }
       : {}),
+    ...(input.merchantId ? { merchantId: input.merchantId } : {}),
     ...(input.cashAttestation ? { cashAttestation: input.cashAttestation } : {}),
   } as unknown as TransactionRow
 }

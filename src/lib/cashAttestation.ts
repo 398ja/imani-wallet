@@ -53,6 +53,20 @@ import { parseIssuanceWarrant } from './issuanceWarrant'
  */
 const FIELD_SEPARATOR = '\u001f'
 
+/**
+ * The most an attestation may occupy, in characters.
+ *
+ * It arrives from a COUNTERPARTY, is written to the merchant's own row, and is
+ * republished to a relay — so an unbounded one is a blob a hostile sender gets
+ * to store in someone else's history and push through their bandwidth.
+ *
+ * A real one is around 300 characters: two 64-char pubkeys, a 128-char
+ * signature, a short nonce and the surrounding JSON. 1024 is generous enough
+ * that no honest attestation can hit it and tight enough to be worthless as a
+ * storage channel, matching the budget `merchant_metadata` already uses.
+ */
+const MAX_ATTESTATION_CHARS = 1024
+
 /** The sale an attestation refers to. */
 export interface AttestedSale {
   stallPubkey: string
@@ -218,6 +232,9 @@ export function parseCashAttestation(
   raw: string | undefined | null,
 ): CashAttestation | undefined {
   if (!raw) return undefined
+  // Checked before parsing, not after: JSON.parse on a hostile megabyte is the
+  // cost this is meant to avoid.
+  if (raw.length > MAX_ATTESTATION_CHARS) return undefined
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>
     const str = (k: string) => (typeof parsed[k] === 'string' ? (parsed[k] as string) : undefined)
@@ -346,5 +363,52 @@ export function attestationForReceivedCoupon(
   } catch (error) {
     console.warn('[attestation] could not attest a received coupon', error)
     return undefined
+  }
+}
+
+
+/**
+ * Whether an attestation arriving from a counterparty may be filed on a row.
+ *
+ * Extracted from the storage write-back so the DECISION can be tested without
+ * a database, and so the rule lives beside the verification it depends on
+ * rather than inside an IndexedDB call.
+ *
+ * Refuses, in order:
+ *
+ * - a row with an attestation already on it. A second receipt for one coupon
+ *   is a redelivery, and replacing a verified attestation would reopen the
+ *   substitution this whole check exists to close.
+ * - a row with no warrant. There is no sale definition to check against, and
+ *   storing an uncheckable signature is the hole this was written to fix.
+ * - a row with no stall recorded. The stall MUST come from the row: taking it
+ *   from the attestation would compare that field to itself and accept any
+ *   stall an attacker cared to name.
+ * - anything that does not verify against all three.
+ */
+export function mayFileAttestation(
+  row: { cashAttestation?: string; issuanceWarrant?: string; merchantId?: string },
+  attestation: string,
+): { file: boolean; reason?: string } {
+  if (row.cashAttestation) return { file: false, reason: 'already filed' }
+  if (!row.merchantId) return { file: false, reason: 'row records no stall' }
+
+  const warrant = parseIssuanceWarrant(row.issuanceWarrant)
+  if (warrant.state !== 'present') {
+    return { file: false, reason: 'row carries no warrant to check against' }
+  }
+
+  const verdict = verifyCashAttestation(parseCashAttestation(attestation), {
+    stallPubkey: row.merchantId,
+    saleTotalMinor: warrant.saleTotalMinor,
+    faceDecimals: warrant.faceDecimals,
+    unit: warrant.unit,
+    saleNonce: warrant.saleNonce,
+  })
+
+  if (verdict.verdict === 'attested') return { file: true }
+  return {
+    file: false,
+    reason: verdict.verdict === 'invalid' ? verdict.reason : verdict.verdict,
   }
 }
