@@ -24,6 +24,16 @@
 /** A pending deferred write, keyed by storage key so two stores cannot collide. */
 const scheduled = new Map<string, () => void>()
 
+/**
+ * The live timer per key, if any.
+ *
+ * Separate from `scheduled` because a key can have a timer with nothing queued
+ * (after a cancel) and must not then acquire a second timer. Keeping the handle
+ * also lets `cancelDeferredWrite` clear the timer rather than leave it to fire
+ * into an empty queue.
+ */
+const timers = new Map<string, ReturnType<typeof setTimeout>>()
+
 let flushBound = false
 
 /**
@@ -59,6 +69,10 @@ function runWrite(write: () => void): void {
 export function flushDeferredWrites(): void {
   const writes = [...scheduled.values()]
   scheduled.clear()
+  // The timers have nothing left to do, and leaving them pending would keep a
+  // key looking "covered" so the next deferWrite never started a fresh one.
+  for (const [, handle] of timers) clearTimeout(handle)
+  timers.clear()
   for (const write of writes) runWrite(write)
 }
 
@@ -87,20 +101,34 @@ function bindFlush(): void {
 export function deferWrite(key: string, write: () => void): void {
   bindFlush()
 
-  if (scheduled.has(key)) {
-    // Replace the queued callback so the newest state wins, but do NOT queue a
-    // second timer: one timer per key is what bounds this to one write.
-    scheduled.set(key, write)
-    return
-  }
-
+  // Replace the queued callback so the newest state wins.
   scheduled.set(key, write)
-  setTimeout(() => {
-    const pending = scheduled.get(key)
-    if (!pending) return // Already flushed by a page-hide, or cancelled.
-    scheduled.delete(key)
-    runWrite(pending)
-  }, 0)
+
+  // A live timer for this key already covers it. Tracked SEPARATELY from
+  // `scheduled` rather than inferred from it, because the two can disagree.
+  //
+  // `cancelDeferredWrite` empties the queue while its timer is still pending,
+  // so inferring "nothing queued" to mean "no timer" made the next
+  // `deferWrite` start a second one for the same key. Measured: one cancel
+  // plus one requeue left TWO pending timers where one was needed. The extra
+  // one fires into an empty queue and does no damage, but it is a timer per
+  // cancel that nothing clears — and sign-out and the amnesty both cancel, so
+  // it accumulates on exactly the paths that repeat.
+  //
+  // Holding the handle also lets a cancel clear its own timer instead of
+  // leaving it to fire for nothing.
+  if (timers.has(key)) return
+
+  timers.set(
+    key,
+    setTimeout(() => {
+      timers.delete(key)
+      const pending = scheduled.get(key)
+      if (!pending) return // Cancelled, or already flushed by a page-hide.
+      scheduled.delete(key)
+      runWrite(pending)
+    }, 0),
+  )
 }
 
 /**
@@ -113,9 +141,16 @@ export function deferWrite(key: string, write: () => void): void {
  */
 export function cancelDeferredWrite(key: string): void {
   scheduled.delete(key)
+  const handle = timers.get(key)
+  if (handle !== undefined) {
+    clearTimeout(handle)
+    timers.delete(key)
+  }
 }
 
 /** Drop every queued write without running any. For tests. */
 export function cancelDeferredWrites(): void {
   scheduled.clear()
+  for (const [, handle] of timers) clearTimeout(handle)
+  timers.clear()
 }

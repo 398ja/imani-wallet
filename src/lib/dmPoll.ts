@@ -269,6 +269,16 @@ function readSet(key: string): Set<string> {
 let receivedCache: Set<string> | null = null
 
 /**
+ * Whether the mirror is known to match what is on disk.
+ *
+ * False after a write that threw — quota, private browsing — which is the one
+ * state in which "it is already in memory" stops implying "it is already
+ * saved". `markTokenAsReceived` consults this so a failed write is retried on
+ * the next receive instead of being masked forever by its own memory hit.
+ */
+let receivedPersisted = true
+
+/**
  * A ceiling on the received set, so it cannot grow for the life of the wallet.
  *
  * It had none. Every coupon a merchant ever banked added a fingerprint that
@@ -296,7 +306,36 @@ let receivedCache: Set<string> | null = null
 const MAX_RECEIVED = 2000
 
 function receivedSet(): Set<string> {
-  receivedCache ??= readSet(RECEIVED_KEY)
+  if (receivedCache === null) {
+    const loaded = readSet(RECEIVED_KEY)
+    // TRIMMED AT LOAD, not on the first receive.
+    //
+    // Every wallet upgrading to this build carries a set written while it was
+    // unbounded, and the trim in `markTokenAsReceived` only runs when a coupon
+    // arrives — so the first receive after an upgrade paid for the whole
+    // oversized set at once. Measured with 50000 legacy entries: a 403ms
+    // synchronous stall, at the exact moment a customer is standing at the
+    // counter watching a coupon land.
+    //
+    // Doing it here moves that cost to poller startup, where nothing is
+    // waiting on it, and it happens once. `keep` takes the NEWEST entries,
+    // matching the oldest-first eviction on the write path.
+    if (loaded.size > MAX_RECEIVED) {
+      const keep = [...loaded].slice(-MAX_RECEIVED)
+      receivedCache = new Set(keep)
+      // Written back immediately so the next session loads the small set
+      // rather than re-trimming this one forever.
+      try {
+        localStorage.setItem(RECEIVED_KEY, JSON.stringify(keep))
+      } catch {
+        // Quota. The mirror is correct for this session; the flag below is
+        // what gets the write retried.
+        receivedPersisted = false
+      }
+    } else {
+      receivedCache = loaded
+    }
+  }
   return receivedCache
 }
 
@@ -308,6 +347,9 @@ function receivedSet(): Set<string> {
  */
 export function resetReceivedCache(): void {
   receivedCache = null
+  // A fresh load from storage is by definition in agreement with it, so the
+  // owed-write flag resets with the mirror it describes.
+  receivedPersisted = true
 }
 
 /**
@@ -398,7 +440,13 @@ function storageAdapter(): StorageAdapter {
     },
     async markTokenAsReceived(fingerprint: string) {
       const seen = receivedSet()
-      if (seen.has(fingerprint)) return
+      // The early return is on "already in memory AND memory is on disk", not
+      // on memory alone. A previous write that hit quota leaves the two
+      // disagreeing, and returning early on the memory hit would mean the
+      // fingerprint NEVER reaches storage — it would be re-offered to the mint
+      // on every future session, which is exactly the cost this set exists to
+      // avoid. While a write is owed, every mark retries it.
+      if (receivedPersisted && seen.has(fingerprint)) return
       seen.add(fingerprint)
       // Oldest first. `Set` iterates in insertion order, so the first value is
       // the longest-banked fingerprint and the least likely to be offered
@@ -422,11 +470,13 @@ function storageAdapter(): StorageAdapter {
       // resolves.
       try {
         localStorage.setItem(RECEIVED_KEY, JSON.stringify([...seen]))
+        receivedPersisted = true
       } catch (error) {
         // Quota or private browsing. The mirror still dedupes for this
         // session, which is strictly better than the previous behaviour of
         // letting the exception escape into dm-poll's redemption path.
         console.warn('[dmPoll] could not persist the received-token set', error)
+        receivedPersisted = false
       }
     },
     async getProcessedEventIds() {

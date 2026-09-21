@@ -111,4 +111,41 @@ describe('deferred writes', () => {
   it('flushDeferredWrites is safe with nothing queued', () => {
     expect(() => flushDeferredWrites()).not.toThrow()
   })
+
+  it('does not leak a timer when a cancel is followed by a requeue', () => {
+    deferWrite('k', () => {})
+    cancelDeferredWrite('k')
+    deferWrite('k', () => {})
+
+    // One key, one timer. Inferring "has a live timer" from "has a queued
+    // write" got this wrong, because a cancel empties the queue while its
+    // timer is still pending: the requeue then started a SECOND timer. It
+    // fires into an empty queue and does no damage, but nothing clears it,
+    // and sign-out and the amnesty both cancel -- so it accrues on exactly
+    // the paths that repeat.
+    expect(vi.getTimerCount()).toBe(1)
+  })
+
+  it('cancelling clears the timer rather than leaving it to fire', () => {
+    deferWrite('k', () => {})
+    cancelDeferredWrite('k')
+
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('flushing clears the timers it has just satisfied', () => {
+    deferWrite('a', () => {})
+    deferWrite('b', () => {})
+    flushDeferredWrites()
+
+    // Left pending, these would keep both keys looking "covered", so the next
+    // deferWrite for either would never start a timer and its write would sit
+    // in the queue until something else happened to flush it.
+    expect(vi.getTimerCount()).toBe(0)
+
+    const after = vi.fn()
+    deferWrite('a', after)
+    vi.runAllTimers()
+    expect(after).toHaveBeenCalledTimes(1)
+  })
 })
