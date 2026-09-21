@@ -139,3 +139,74 @@ describe('toContent / toRow', () => {
     expect(toRow(issued.id, toContent(toTransaction(issued))).id).toBe('issued:' + issued.voucherId)
   })
 })
+
+
+describe('issuance evidence survives the relay round trip', () => {
+  // `toContent` is a FIXED WHITELIST, and that is what makes this worth a
+  // test rather than an assumption. These fields were written to IndexedDB and
+  // silently dropped from the relay copy - the copy that survives a wiped
+  // device, which is exactly when someone wants to audit a stall's history. A
+  // merchant restoring their records would have found every row reading
+  // `unwarranted`, indistinguishable from a stall that never authorised
+  // anything.
+  const WARRANT = JSON.stringify({
+    form: 'merchant',
+    sale_total: 2500,
+    face_decimals: 0,
+    unit: 'XOF',
+    nonce: 'sale-nonce-1',
+    sig: 'ab'.repeat(64),
+  })
+  const ATTESTATION = JSON.stringify({
+    customer: 'dd'.repeat(32),
+    stall: 'ee'.repeat(32),
+    paid: 2500,
+    decimals: 0,
+    unit: 'XOF',
+    nonce: 'sale-nonce-1',
+    sig: 'cd'.repeat(64),
+  })
+
+  const warranted = buildIssueTransaction({
+    voucherId: 'df8f2cbe-1111-2222-3333-444455556666',
+    amount: 834,
+    unit: 'XOF',
+    decimals: 0,
+    recipientPubkey: 'cc'.repeat(32),
+    at: 1786891362412,
+    issuanceWarrant: WARRANT,
+    saleVoucherIds: ['v-a', 'v-b', 'v-c'],
+    cashAttestation: ATTESTATION,
+  })
+
+  it('carries the warrant to the relay and back', () => {
+    const restored = toRow(warranted.id, toContent(toTransaction(warranted)))
+
+    expect((restored as { issuanceWarrant?: string }).issuanceWarrant).toBe(WARRANT)
+  })
+
+  it('carries the sibling ids, so a restored history can still find a sale', () => {
+    // Without these a recovered row cannot answer "which coupons came from
+    // this sale", which is the question asked when one is handed back.
+    const restored = toRow(warranted.id, toContent(toTransaction(warranted)))
+
+    expect((restored as { saleVoucherIds?: readonly string[] }).saleVoucherIds)
+      .toEqual(['v-a', 'v-b', 'v-c'])
+  })
+
+  it('carries the customer attestation', () => {
+    // Signed once, at a counter, and recoverable from nowhere else.
+    const restored = toRow(warranted.id, toContent(toTransaction(warranted)))
+
+    expect((restored as { cashAttestation?: string }).cashAttestation).toBe(ATTESTATION)
+  })
+
+  it('leaves a row without evidence unchanged', () => {
+    // Every row written before this shipped. Absent must stay absent rather
+    // than becoming an empty string that reads as present-but-broken.
+    const restored = toRow(issued.id, toContent(toTransaction(issued)))
+
+    expect((restored as { issuanceWarrant?: string }).issuanceWarrant).toBeUndefined()
+    expect((restored as { cashAttestation?: string }).cashAttestation).toBeUndefined()
+  })
+})

@@ -11,6 +11,8 @@ import { canIssueNow, sessionState, type TerminalSession } from './terminalSessi
 import { attributionFor } from './terminalAttribution'
 import { currencyDecimals } from './format'
 import { buildIssuanceWarrant } from './warrantSigner'
+import { parseIssuanceWarrant } from './issuanceWarrant'
+import type { AttestedSale } from './cashAttestation'
 import { NEVER_EXPIRES } from './merchant'
 
 /**
@@ -213,6 +215,21 @@ export interface IssueResult {
 }
 
 export interface IssueParams {
+  /**
+   * Optionally collect the customer's own signature that they PAID.
+   *
+   * A warrant proves the stall authorised issuing a value; on cash nothing
+   * else says money arrived, because there is no third party to ask. This is
+   * the hook for asking the customer to say so themselves — see
+   * `cashAttestation.ts`.
+   *
+   * **Optional, and its absence must never block a sale.** It is called with
+   * the sale the warrant covers, and whatever it returns is filed alongside.
+   * Returning undefined, throwing, or taking too long all mean "no
+   * attestation", which is the ordinary case: most cash sales will not have
+   * one, and a queue at a counter is a worse cost than an uncorroborated sale.
+   */
+  collectCashAttestation?: (sale: AttestedSale) => Promise<string | undefined>
   /** Minor units — cents. The amount the merchant typed, already canonicalised. */
   faceValueMinor: number
   currency: string
@@ -309,7 +326,12 @@ async function detail(response: Response, fallback: string): Promise<string> {
  */
 async function createVouchers(
   params: IssueParams,
-): Promise<{ vouchers: IssuedVoucher[]; warrant: string | undefined }> {
+): Promise<{
+  vouchers: IssuedVoucher[]
+  warrant: string | undefined
+  /** The sale the warrant covers, for anything binding to it. */
+  sale: AttestedSale | undefined
+}> {
   const warrant = await buildIssuanceWarrant(
     params.actor,
     params.faceValueMinor,
@@ -361,7 +383,22 @@ async function createVouchers(
   const items = Array.isArray(body) ? body : (body.items ?? [])
   const vouchers = items.filter((item) => item?.voucher_id)
   if (vouchers.length === 0) throw new Error('The portal issued no voucher.')
-  return { vouchers, warrant }
+  // Parsed back out rather than threaded separately, so the sale described
+  // here is exactly the one the signature covers - including the nonce, which
+  // is generated inside buildIssuanceWarrant and exists nowhere else.
+  const parsed = parseIssuanceWarrant(warrant)
+  const sale =
+    parsed.state === 'present'
+      ? {
+          stallPubkey: issuingStall(params.actor),
+          saleTotalMinor: parsed.saleTotalMinor,
+          faceDecimals: parsed.faceDecimals,
+          unit: parsed.unit,
+          saleNonce: parsed.saleNonce,
+        }
+      : undefined
+
+  return { vouchers, warrant, sale }
 }
 
 /**
@@ -551,7 +588,12 @@ export async function issueAndDeliver(
   // Destructured so everything below keeps working on a plain list. The
   // warrant travels separately because it describes the SALE, not any one
   // coupon, and recordSale needs it to file what the stall actually signed.
-  const { vouchers: created, warrant: saleWarrant } = await createVouchers(params)
+  const { vouchers: created, warrant: saleWarrant, sale } = await createVouchers(params)
+
+  // Asked for AFTER the coupons exist and before the sale is filed. The
+  // customer is still at the counter either way, and doing it here means a
+  // slow or refused attestation cannot delay the thing they came for.
+  const cashAttestation = await collectAttestation(params, sale)
 
   // One sale, possibly several coupons — see `createVouchers`. Each part is
   // minted and delivered in turn, and the parts are INDEPENDENT: part 2 failing
@@ -586,7 +628,7 @@ export async function issueAndDeliver(
       // merchant is told the sale failed while the customer holds part of it,
       // and the two accounts of the same sale disagree. That is exactly the
       // confusion the lost 800 caused.
-      await recordSale(delivered, params, created.length, saleWarrant)
+      await recordSale(delivered, params, created.length, saleWarrant, cashAttestation)
       throw new Error(
         `${error instanceof Error ? error.message : String(error)}` +
           (delivered.length > 0
@@ -597,7 +639,7 @@ export async function issueAndDeliver(
     delivered.push(ready)
   }
 
-  await recordSale(delivered, params, created.length, saleWarrant)
+  await recordSale(delivered, params, created.length, saleWarrant, cashAttestation)
 
   /**
    * Did the customer actually receive what the merchant sold?
@@ -681,6 +723,29 @@ function describePartial(
  * the customer at this point, so throwing would report a delivered sale as a
  * failed one. A missing history entry beats a phantom failure.
  */
+/**
+ * Asks the caller to collect a cash attestation, and never lets that fail a sale.
+ *
+ * Every failure mode collapses to "no attestation": no collector configured, no
+ * sale to bind one to, a collector that returns nothing, and a collector that
+ * throws. That is deliberate and is the whole policy of this feature — the
+ * coupons are already with the customer by the time this runs, so an exception
+ * here would report a completed sale as a failed one over evidence that was
+ * optional in the first place.
+ */
+async function collectAttestation(
+  params: IssueParams,
+  sale: AttestedSale | undefined,
+): Promise<string | undefined> {
+  if (!params.collectCashAttestation || !sale) return undefined
+  try {
+    return await params.collectCashAttestation(sale)
+  } catch (error) {
+    console.warn('[issue] cash attestation not collected; the sale stands', error)
+    return undefined
+  }
+}
+
 async function recordSale(
   delivered: IssuedVoucher[],
   params: IssueParams,
@@ -697,6 +762,8 @@ async function recordSale(
    * what the coupons carry. Each part is verified against it as a ceiling.
    */
   saleWarrant?: string,
+  /** The customer's own signature that they paid, if they gave one. */
+  cashAttestation?: string,
 ): Promise<void> {
   if (delivered.length === 0) return
   try {
@@ -735,6 +802,7 @@ async function recordSale(
         // rather than from the original request, so it records what actually
         // reached the customer rather than what was asked for.
         saleVoucherIds: delivered.map((v) => v.voucher_id),
+        cashAttestation,
       })
 
       // The relay copy rides along with the write: `openWallet` wraps

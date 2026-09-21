@@ -339,3 +339,77 @@ export function reconcileByUnit(
   for (const [unit, items] of byUnit) out.set(unit, totalReconciliation(items))
   return out
 }
+
+
+/** One line of a reconciliation summary, ready to render. */
+export interface ReconciliationLine {
+  unit: string
+  /**
+   * Where the decimal point goes for this unit.
+   *
+   * Carried rather than left to the caller, because a renderer that assumes a
+   * value would get it wrong for half the estate: EUR 2500 at 0 decimals reads
+   * as "€2,500" instead of "€25.00". Taken from the rows themselves, which
+   * carry the currency's own decimals.
+   */
+  decimals: number
+  /** Sales the stall can prove it authorised, in minor units. */
+  authorisedMinor: number
+  /** Of those, how much the customer also attested paying. */
+  attestedMinor: number
+  /** Sales carrying no usable warrant. */
+  unwarrantedMinor: number
+  /** Sales whose warrant is present and does not hold. */
+  mismatchedMinor: number
+  counts: ReconciliationTotals['counts']
+  /**
+   * Whether anything here needs a human.
+   *
+   * True only for MISMATCHES. Unwarranted sales are not an alarm - they are
+   * every sale issued before warrants shipped, and every sale a terminal made,
+   * and raising them all would bury the one row that actually disagrees with
+   * its own signature.
+   */
+  needsAttention: boolean
+}
+
+/**
+ * A merchant-facing summary of their own issuance history, one line per
+ * currency.
+ *
+ * Separate from `reconcileByUnit` so the screen has a shape it can render
+ * directly rather than a Map it has to reduce, and so the "needs attention"
+ * judgement lives somewhere testable rather than inside JSX.
+ */
+export function summariseReconciliation(
+  rows: readonly WalletTransaction[],
+  stallPubkey: string,
+): ReconciliationLine[] {
+  const lines: ReconciliationLine[] = []
+
+  // The decimals each unit is actually stored with, so the summary renders in
+  // the same shape the rest of the wallet does.
+  const decimalsFor = new Map<string, number>()
+  for (const row of rows) {
+    if (row.type === 'issued' && !decimalsFor.has(row.unit)) {
+      decimalsFor.set(row.unit, row.decimals)
+    }
+  }
+
+  for (const [unit, totals] of reconcileByUnit(rows, stallPubkey)) {
+    lines.push({
+      unit,
+      decimals: decimalsFor.get(unit) ?? 0,
+      authorisedMinor: totals.authorisedMinor,
+      attestedMinor: totals.attestedMinor,
+      unwarrantedMinor: totals.unwarrantedMinor,
+      mismatchedMinor: totals.mismatchedMinor,
+      counts: totals.counts,
+      needsAttention: totals.counts.mismatch > 0,
+    })
+  }
+
+  // Largest authorised first, so the currency a stall actually trades in leads
+  // rather than whichever row happened to be stored first.
+  return lines.sort((a, b) => b.authorisedMinor - a.authorisedMinor)
+}
