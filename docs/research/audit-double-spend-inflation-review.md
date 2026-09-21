@@ -57,6 +57,25 @@ is an **assertion by the issuing service**, not a claim proven by the named
 stall. That is accurate today and stays accurate until their §8 sequencing
 completes.
 
+**IMPLEMENTED.** The warrant now ships end to end across six repos —
+`cashu-lib`, `cashu-voucher`, `imani-gateway-api`, `-core`, `-customer`,
+`-portal` and this wallet. An owner's device signs a digest covering the sale
+amount before the Sell request leaves it; the gateway refuses a warrant that
+does not cover the sale; the signature is inside the voucher's signed bytes so
+a compromised service cannot strip it; and a redeeming merchant sees the state
+on the coupon. See `docs/plan-issuance-warrant.md` for what shipped and the
+three things that plan got wrong.
+
+**Finding 6 is narrowed, not closed, and the distinction matters.** A
+compromised service still mints coupons naming any stall. What it can no longer
+do is produce a *warrant* for them, because that needs a key it does not hold.
+So the forgery becomes detectable rather than impossible, and only on coupons
+issued by an owner device: terminals emit a signed `none` because their key is
+not the stall's, and every coupon predating this carries no warrant at all.
+Until a policy flip refuses unwarranted coupons — which nobody has taken, and
+which would paint most of the estate red today — a forger's best move is simply
+to omit the warrant.
+
 ## Scope, and what was not looked at
 
 Read closely: the reader, the producer, the hosted API's routing, the design
