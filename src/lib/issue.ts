@@ -10,6 +10,7 @@ import { issuingStall, mayIssue, type Actor } from './actor'
 import { canIssueNow, sessionState, type TerminalSession } from './terminalSession'
 import { attributionFor } from './terminalAttribution'
 import { currencyDecimals } from './format'
+import { buildIssuanceWarrant } from './warrantSigner'
 import { NEVER_EXPIRES } from './merchant'
 
 /**
@@ -307,6 +308,13 @@ async function detail(response: Response, fallback: string): Promise<string> {
  * customer got 200 of their 1000. Every caller must handle N.
  */
 async function createVouchers(params: IssueParams): Promise<IssuedVoucher[]> {
+  const warrant = await buildIssuanceWarrant(
+    params.actor,
+    params.faceValueMinor,
+    currencyDecimals(params.currency),
+    params.currency,
+  )
+
   const response = await signedFetch(
     '/api/v1/portal/vouchers',
     'POST',
@@ -318,6 +326,21 @@ async function createVouchers(params: IssueParams): Promise<IssuedVoucher[]> {
       // as a coupon that never expires, and `expiry_days` still has a @Min(1).
       ...(params.expiryDays === NEVER_EXPIRES ? {} : { expiry_days: params.expiryDays }),
       memo: params.memo,
+      // The merchant's own authorisation for this sale, signed on THIS device
+      // before the request leaves it. Without it a coupon says only that the
+      // issuing service claims this stall issued it, which is a claim nobody
+      // can check against the stall.
+      //
+      // `faceValueMinor` is the whole sale here because `quantity` is 1 above.
+      // If that ever becomes variable, this must become the PRODUCT - a warrant
+      // over one coupon's value would leave the rest riding free under the
+      // ceiling. The portal computes the same product in `saleTotalMinor()` and
+      // refuses a mismatch, so a divergence is a 400 rather than a bad coupon.
+      //
+      // Omitted entirely when undefined: an absent field is "this coupon
+      // predates warrants", which is a different claim from a signed `none`,
+      // and JSON.stringify would drop the key anyway.
+      ...(warrant === undefined ? {} : { issuance_warrant: warrant }),
     },
     // No X-Auth-Pubkey from here, deliberately. The portal's NIP-98 filter does
     // not authenticate on this image — verified by calling :28084 directly with a
