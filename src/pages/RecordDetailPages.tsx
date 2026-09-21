@@ -16,8 +16,8 @@ import {
   Pass,
   IdentityInline,
   ValidationBadge,
-  present,
 } from '../components/ui'
+import { present } from '../lib/detailRows'
 import { getVoucherRow, getTransactionRow, onWalletChanged } from '../lib/wallet'
 import { issuanceRatioOf } from '../lib/merchants'
 import { formatFace, formatDate, formatSats } from '../lib/format'
