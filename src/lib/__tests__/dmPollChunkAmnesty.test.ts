@@ -77,6 +77,21 @@ describe('amnesty for events abandoned before chunk reassembly existed', () => {
     ])
   })
 
+  it('is not undone by a deferred write queued just before it', async () => {
+    // The processed-id save is coalesced now, so a write can be in flight when
+    // the amnesty runs. If it landed afterwards it would restore every id the
+    // amnesty just removed, and the recovery would silently do nothing.
+    const { deferWrite } = await import('../deferredWrite')
+    deferWrite('imani-wallet:dm-poll:processed', () => {
+      localStorage.setItem(PROCESSED_KEY, JSON.stringify(['resurrected']))
+    })
+
+    startDmPoll(PUBKEY)
+    await new Promise((r) => setTimeout(r, 5))
+
+    expect(localStorage.getItem(PROCESSED_KEY)).toBeNull()
+  })
+
   it('leaves the received-token set alone', () => {
     // That set keys on the TOKEN fingerprint and is what actually prevents a
     // coupon being credited twice. Clearing it alongside the event ids would

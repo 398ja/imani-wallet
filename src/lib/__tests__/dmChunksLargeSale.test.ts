@@ -135,4 +135,64 @@ describe('receiving a large, heavily chunked coupon', () => {
     expect(await offerChunk(parts[0], sixDaysOn)).toBeNull()
     expect(pendingChunkTransfers()).toBe(0)
   })
+
+  it('bounds how many transfers may be half-assembled at once', async () => {
+    // Each entry holds DECRYPTED fragments of someone's money for the full
+    // 10-minute TTL. The per-transfer byte ceiling bounds one of these; until
+    // this cap, nothing bounded how many could be open together, so the real
+    // exposure was that budget times however many transfer_ids a sender cared
+    // to mention. Raising the per-transfer budget raised that product too.
+    const first = 'transfer-0'
+    for (let i = 0; i < 200; i += 1) {
+      const chunk = asChunk(
+        JSON.stringify({
+          type: 'cashu_dm_chunk',
+          transfer_id: `transfer-${i}`,
+          // One piece of eight: this transfer never completes.
+          chunk_index: 0,
+          chunk_total: 8,
+          content_encoding: 'identity',
+          content_length: 10,
+          content_sha256: 'ab'.repeat(32),
+          payload: 'aGVsbG8=',
+        }),
+      )
+      await offerChunk(chunk!)
+    }
+
+    expect(pendingChunkTransfers()).toBe(64)
+
+    // The OLDEST was evicted, not the newest: a transfer still arriving is
+    // worth more than one that has sat unfinished the longest.
+    const revived = asChunk(
+      JSON.stringify({
+        type: 'cashu_dm_chunk',
+        transfer_id: first,
+        chunk_index: 1,
+        chunk_total: 8,
+        content_encoding: 'identity',
+        content_length: 10,
+        content_sha256: 'ab'.repeat(32),
+        payload: 'aGVsbG8=',
+      }),
+    )
+    await offerChunk(revived!)
+
+    // Evicting cost nothing permanent: none of its wraps were marked
+    // processed, so it simply starts assembling again.
+    expect(pendingChunkTransfers()).toBe(64)
+  })
+
+  it('does not resurrect a signed-out account\'s transfers', async () => {
+    const parts = envelopes(couponOf(400), 3).map((raw) => asChunk(raw)!)
+    for (const chunk of parts) await offerChunk(chunk)
+
+    // Completion queues a DEFERRED write. Signing out clears the store, and
+    // the queued write must not then land and put the ids back -- on a shared
+    // device, after the user believes they have left.
+    resetChunkAssembly()
+    await new Promise((r) => setTimeout(r, 5))
+
+    expect(localStorage.getItem('imani-wallet:dm-chunks:completed')).toBeNull()
+  })
 })

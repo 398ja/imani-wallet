@@ -40,6 +40,8 @@
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 
+import { cancelDeferredWrite, deferWrite } from './deferredWrite'
+
 /** The envelope the gateway sends for one piece of a split payload. */
 export interface ChunkEnvelope {
   type: 'cashu_dm_chunk'
@@ -222,12 +224,21 @@ function loadCompleted(): Map<string, number> {
 const completed = loadCompleted()
 
 function persistCompleted(): void {
-  try {
-    localStorage.setItem(COMPLETED_KEY, JSON.stringify([...completed]))
-  } catch {
-    // Quota or private browsing. The in-memory set still works for this
-    // session, and losing durability must not fail a receipt.
-  }
+  // Deferred and coalesced. This is called on every completed transfer, and a
+  // catch-up completes many in a burst; a synchronous write per completion
+  // serialises the whole set each time and blocks paint. See `deferredWrite`.
+  //
+  // The callback re-reads `completed` when it runs rather than closing over a
+  // snapshot, so a coalesced write persists the final state and not the state
+  // at the moment it was queued.
+  deferWrite(COMPLETED_KEY, () => {
+    try {
+      localStorage.setItem(COMPLETED_KEY, JSON.stringify([...completed]))
+    } catch {
+      // Quota or private browsing. The in-memory set still works for this
+      // session, and losing durability must not fail a receipt.
+    }
+  })
 }
 
 /**
@@ -258,6 +269,24 @@ const MAX_COMPLETED = 5000
 
 /** How long an incomplete transfer may sit before its pieces are discarded. */
 const PENDING_TTL_MS = 10 * 60 * 1000
+
+/**
+ * How many transfers may be part-assembled at once.
+ *
+ * `MAX_REASSEMBLED_BYTES` bounds ONE transfer. Nothing bounded how many could
+ * be open together, so the real ceiling on this map was the per-transfer budget
+ * times however many distinct `transfer_id`s a sender cared to mention — and
+ * every entry is decrypted fragments of someone's money, held for the full
+ * `PENDING_TTL_MS`. Raising the per-transfer budget to cover honest large
+ * coupons raised that product with it, so the count needs its own limit.
+ *
+ * 64 concurrent transfers is far past any real delivery: a sale splits into a
+ * handful of coupons and each arrives within seconds. When the map is full the
+ * OLDEST incomplete transfer is dropped, because it is the one least likely to
+ * still be arriving and the one closest to its TTL anyway. Its wraps are never
+ * marked processed, so dropping it costs a re-read and never a coupon.
+ */
+const MAX_PENDING_TRANSFERS = 64
 
 function sweep(now: number): void {
   for (const [id, p] of pending) {
@@ -316,6 +345,20 @@ export async function offerChunk(
 
   let entry = pending.get(chunk.transfer_id)
   if (!entry) {
+    // Evict before inserting, so the map never exceeds its bound. Map preserves
+    // insertion order, so the first key is the oldest assembly. A transfer
+    // dropped here is not lost: none of its wraps were marked processed, so the
+    // poll re-offers them and it starts again.
+    while (pending.size >= MAX_PENDING_TRANSFERS) {
+      const oldest = pending.keys().next().value
+      if (oldest === undefined) break
+      console.warn('[dmChunks] too many transfers in flight; dropping the oldest', {
+        transfer_id: oldest.slice(0, 8),
+        limit: MAX_PENDING_TRANSFERS,
+      })
+      pending.delete(oldest)
+    }
+
     entry = { total: chunk.chunk_total, parts: new Map(), firstSeenMs: now }
     pending.set(chunk.transfer_id, entry)
   }
@@ -475,9 +518,17 @@ async function gunzip(input: Uint8Array<ArrayBuffer>): Promise<Uint8Array> {
 export function resetChunkAssembly(): void {
   pending.clear()
   completed.clear()
-  // Clears the durable copy too. A sign-out that left it behind would carry
-  // one account's transfer ids into the next session on a shared device.
-  persistCompleted()
+  // Cleared SYNCHRONOUSLY, unlike every other write to this key. This is the
+  // sign-out path, and a deferred clear is a window in which one account's
+  // transfer ids are still on disk — on a shared device, after the user
+  // believes they have left. A queued write for this key is dropped first so
+  // it cannot land after the clear and resurrect them.
+  cancelDeferredWrite(COMPLETED_KEY)
+  try {
+    localStorage.removeItem(COMPLETED_KEY)
+  } catch {
+    // Private browsing. The in-memory clear above is the part that matters.
+  }
 }
 
 /** How many transfers are part-assembled. For tests and diagnostics. */
