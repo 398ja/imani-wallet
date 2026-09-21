@@ -7,6 +7,7 @@ import { generateCashback, type IssuedCashback } from '../lib/cashback'
 import { gatewayConfig, DEFAULT_CASHBACK_EXPIRY_DAYS } from '../lib/config'
 import { currencyDecimals, formatDate, formatFace, parseAmountToMinor } from '../lib/format'
 import type { MerchantProfile } from '../lib/merchant'
+import { buildIssuanceWarrant } from '../lib/warrantSigner'
 import { buildCashbackTransaction } from '../lib/transactions'
 import { getWallet, notifyWalletChanged } from '../lib/wallet'
 
@@ -64,7 +65,7 @@ export function CashbackIssuePage({ merchant }: { merchant: MerchantProfile }) {
         memo: memo.trim() || undefined,
         expiryDays,
       })
-      await record(cashback, decimals, memo.trim())
+      await record(cashback, decimals, memo.trim(), merchant.pubkey)
       setIssued(cashback)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -149,9 +150,30 @@ export function CashbackIssuePage({ merchant }: { merchant: MerchantProfile }) {
  * live cashback as a failed one. A missing history entry beats a phantom
  * failure.
  */
-async function record(issued: IssuedCashback, decimals: number, memo: string): Promise<void> {
+async function record(
+  issued: IssuedCashback,
+  decimals: number,
+  memo: string,
+  stallPubkey: string,
+): Promise<void> {
   try {
     const expiresAt = Date.parse(issued.expiresAt)
+
+    // Cashback is the ONE rail the receipt-time attestation cannot reach.
+    // There is no recipient to send a receipt back from - the whole point of
+    // this flow is reaching someone who has no wallet yet - so the merchant's
+    // own signature is the only evidence this sale will ever carry. That makes
+    // it more important here than on the Sell path, not less.
+    //
+    // Signed against an `owner` actor because a cashback is issued from the
+    // stall's own device. A terminal gets a signed `none`, which is correct:
+    // its key is not the stall's, so anything it signed would not verify.
+    const warrant = await buildIssuanceWarrant(
+      { kind: 'owner', stallPubkey },
+      issued.amountMinor,
+      decimals,
+      issued.unit,
+    )
     await getWallet().addTransaction(
       buildCashbackTransaction({
         cashbackId: issued.cashbackId,
@@ -164,6 +186,8 @@ async function record(issued: IssuedCashback, decimals: number, memo: string): P
         // the wire is carried.
         expiresAt: Number.isNaN(expiresAt) ? undefined : Math.floor(expiresAt / 1000),
         at: Date.now(),
+        issuanceWarrant: warrant,
+        merchantId: stallPubkey,
       }),
     )
     // The relay copy rides along with the write — `openWallet` wraps
