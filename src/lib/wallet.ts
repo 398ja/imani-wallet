@@ -2,6 +2,7 @@ import { WalletStorage } from '@imani/wallet-storage'
 import type { VoucherRow, TransactionRow } from '@imani/wallet-storage'
 
 import { burnIfSelfIssued } from './burn'
+import { mayFileAttestation } from './cashAttestation'
 import { toTransaction, type WalletTransaction } from './transactions'
 import { publishTx } from './txRecords'
 import { publishVoucher, tombstoneVoucher } from './voucherRecords'
@@ -322,10 +323,23 @@ export async function getTransactionRow(id: string): Promise<TransactionRow | nu
  * Keyed on `issued:<voucherId>`, which `buildIssueTransaction` uses as the row
  * id, so one receipt lands on exactly one sale.
  *
- * **Refuses to overwrite.** An attestation already on the row was filed by an
- * earlier receipt for the same coupon; replacing it would let a redelivery, or
- * a second party claiming the same voucher id, substitute their own signature
- * for the first. First one wins, and later ones are dropped.
+ * ## Verified BEFORE it is stored, and that is the whole point
+ *
+ * This value arrives from a COUNTERPARTY over the network. An earlier version
+ * stored it unchecked, which was a real hole rather than a tidiness problem:
+ * anyone who learned a voucher id could post a receipt carrying a garbage
+ * signature, it would land on the merchant's row, and — because the first
+ * write wins — the genuine attestation from the real customer would then be
+ * REFUSED. A merchant could be permanently denied evidence for their own sale
+ * by a stranger.
+ *
+ * So it is checked against the row's own warrant first. An attestation that
+ * does not verify is dropped and logged; nothing is written, so the real one
+ * can still arrive.
+ *
+ * **Refuses to overwrite a valid one.** A second receipt for the same coupon
+ * is a redelivery, and replacing a verified attestation with another would
+ * reopen the same substitution by a different route.
  *
  * Never throws. The coupon is redeemed and the money has moved.
  */
@@ -342,7 +356,19 @@ export async function recordCashAttestation(
     // issuance history at all.
     if (!existing) return
 
-    if ((existing as { cashAttestation?: string }).cashAttestation) return
+    const decision = mayFileAttestation(
+      existing as unknown as {
+        cashAttestation?: string
+        issuanceWarrant?: string
+        merchantId?: string
+      },
+      attestation,
+    )
+
+    if (!decision.file) {
+      console.warn('[wallet] not filing a cash attestation for', voucherId, decision.reason)
+      return
+    }
 
     await getWallet().updateTransaction(id, {
       cashAttestation: attestation,

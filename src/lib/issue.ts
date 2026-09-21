@@ -798,6 +798,11 @@ async function recordSale(
         // the customer receives. Attribution deliberately does not appear there.
         terminalPubkey: attributionFor(params.actor)?.terminalPubkey,
         issuanceWarrant: saleWarrant,
+        // The stall this sale was signed FOR, so the row can later check an
+        // attestation naming it. Without this the only stall available at
+        // verification time is the attestation's own claim, which is no check
+        // at all - it would be compared against itself.
+        merchantId: issuingStall(params.actor),
         // Every part of THIS sale, on every part's row. Taken from `delivered`
         // rather than from the original request, so it records what actually
         // reached the customer rather than what was asked for.
