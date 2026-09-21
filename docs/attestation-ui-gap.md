@@ -5,6 +5,11 @@ customer to sign. What is the best way to fix that?
 
 **The short answer:** do not build a counter ceremony. The path already exists.
 
+**Status: IMPLEMENTED.** The customer's wallet now signs an attestation while
+composing the receipt it already posts, the merchant's drain files it onto the
+matching sale, and `reconcileIssuances` reports it. No new screen, no prompt at
+a counter, no change to how a sale feels.
+
 ---
 
 ## What the obvious design costs, and why I am arguing against it

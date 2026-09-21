@@ -14,6 +14,8 @@ import {
   serialiseCashAttestation,
   signCashAttestation,
   verifyCashAttestation,
+  attestationForReceivedCoupon,
+  parseCashAttestation as parseStored,
   type AttestedSale,
 } from '../cashAttestation'
 
@@ -132,5 +134,73 @@ describe('the digest', () => {
     // Same reasoning as the warrant's: TS and Java must stringify identically,
     // and 2500.5 does not survive that round trip.
     expect(() => cashAttestationDigest(CUSTOMER, STALL, 2500.5, 0, 'XAF', 'n')).toThrow()
+  })
+})
+
+
+describe('attesting a coupon as it is received', () => {
+  // This is the path that actually runs: the customer's wallet signs while
+  // composing the receipt it already posts, with no prompt at a counter.
+  const warrantJson = JSON.stringify({
+    form: 'merchant',
+    sale_total: 2500,
+    face_decimals: 0,
+    unit: 'XAF',
+    nonce: 'sale-abc',
+    sig: 'ff'.repeat(64),
+  })
+
+  const signWith = (digest: Uint8Array) => bytesToHex(schnorr.sign(digest, CUSTOMER_SK))
+
+  it('produces an attestation the merchant can verify', () => {
+    const json = attestationForReceivedCoupon(warrantJson, STALL, CUSTOMER, signWith)
+
+    expect(json).toBeDefined()
+    expect(verifyCashAttestation(parseStored(json), sale)).toEqual({ verdict: 'attested' })
+  })
+
+  it('binds to the SALE, so every part of a split attests the same thing', () => {
+    // A split sale gives each coupon the same warrant, so a customer redeeming
+    // any part attests the whole sale - which is what a merchant reconciles.
+    const json = attestationForReceivedCoupon(warrantJson, STALL, CUSTOMER, signWith)
+    const parsed = parseStored(json)
+
+    expect(parsed?.saleNonce).toBe('sale-abc')
+    expect(parsed?.paidMinor).toBe(2500)
+  })
+
+  it('returns undefined for a coupon with no warrant', () => {
+    // Every coupon issued before warrants shipped. A normal state, not an
+    // error: the receipt goes out exactly as it does today.
+    expect(attestationForReceivedCoupon(undefined, STALL, CUSTOMER, signWith)).toBeUndefined()
+  })
+
+  it('returns undefined for a coupon whose issuer signed `none`', () => {
+    // A terminal's sale. There is no stall signature to corroborate.
+    const none = JSON.stringify({ form: 'none' })
+    expect(attestationForReceivedCoupon(none, STALL, CUSTOMER, signWith)).toBeUndefined()
+  })
+
+  it('returns undefined rather than throwing when signing fails', () => {
+    // The redemption has already happened when this runs. An exception would
+    // turn a completed redemption into a reported failure over optional
+    // evidence.
+    const boom = () => {
+      throw new Error('wallet locked')
+    }
+    expect(attestationForReceivedCoupon(warrantJson, STALL, CUSTOMER, boom)).toBeUndefined()
+  })
+
+  it('attests to the stall named on the COUPON, not one supplied elsewhere', () => {
+    // The caller passes issuerId from the coupon's own signed tag. Attesting
+    // over an envelope field would let a sender name whichever stall suited
+    // them.
+    const json = attestationForReceivedCoupon(warrantJson, STALL, CUSTOMER, signWith)
+
+    expect(parseStored(json)?.stallPubkey).toBe(STALL)
+    // ...and it does not verify as payment to anyone else.
+    expect(
+      verifyCashAttestation(parseStored(json), { ...sale, stallPubkey: 'aa'.repeat(32) }).verdict,
+    ).toBe('invalid')
   })
 })

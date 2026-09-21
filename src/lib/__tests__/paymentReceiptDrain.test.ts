@@ -28,6 +28,13 @@ const recordNotification = vi.fn((_pubkey: string, _item: Record<string, unknown
 vi.mock('../nap', () => ({
   getSigner: () => ({ pubkey: SENDER, nip44Decrypt }),
 }))
+const attestationsFiled: Array<{ voucherId: string; attestation: string }> = []
+vi.mock('../wallet', () => ({
+  recordCashAttestation: (voucherId: string, attestation: string) => {
+    attestationsFiled.push({ voucherId, attestation })
+    return Promise.resolve()
+  },
+}))
 vi.mock('../nip98', () => ({
   signedFetch: (...args: Parameters<typeof signedFetch>) => signedFetch(...args),
 }))
@@ -274,5 +281,74 @@ describe('payment receipt drain', () => {
 
     await runReceiptDrainTick()
     expect(signedFetch).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('the customer attestation rides in on the receipt', () => {
+  // The whole point of attesting at receipt time rather than at a counter:
+  // this path already runs, so the evidence arrives with no ceremony at all.
+  //
+  // Driven through the real drain rather than by calling the filer directly,
+  // because the thing worth proving is that an attestation on the wire reaches
+  // the row - every hop of that was a place the previous review found a
+  // silently dropped field.
+  beforeEach(() => {
+    attestationsFiled.length = 0
+    signedFetch.mockReset()
+    recordNotification.mockClear()
+    recordNotification.mockImplementation(() => true)
+    wanted = true
+    nip44Decrypt.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    stopPaymentReceipts()
+  })
+  afterEach(() => {
+    stopPaymentReceipts()
+    vi.restoreAllMocks()
+  })
+
+  async function drain(payload: Record<string, unknown>) {
+    nip44Decrypt.mockReturnValue(JSON.stringify({ v: 1, redeemedAt: 1, ...payload }))
+    signedFetch.mockImplementation(async (path: string) =>
+      drainResponse(String(path).endsWith('/ack') ? { acknowledged: 1 } : ONE_RECEIPT),
+    )
+    startPaymentReceipts(SENDER)
+    await vi.waitFor(() => expect(nip44Decrypt).toHaveBeenCalled())
+  }
+
+  it('files the attestation against the sale it names', async () => {
+    const attestation = JSON.stringify({ customer: 'cc', stall: 'dd', paid: 2500 })
+
+    await drain({ voucherId: 'v-1', cashAttestation: attestation })
+
+    expect(attestationsFiled).toEqual([{ voucherId: 'v-1', attestation }])
+  })
+
+  it('files nothing when the receipt carries no attestation', async () => {
+    // Every coupon issued before warrants, and every terminal sale.
+    await drain({ voucherId: 'v-1' })
+
+    expect(attestationsFiled).toHaveLength(0)
+  })
+
+  it('files nothing when the receipt names no voucher', async () => {
+    // Nothing to attach it to, and filing against a guessed row would be worse
+    // than filing nothing.
+    await drain({ cashAttestation: '{"customer":"cc"}' })
+
+    expect(attestationsFiled).toHaveLength(0)
+  })
+
+  it('files the attestation even when claim notifications are switched off', async () => {
+    // A merchant who turned OFF "voucher claimed" has said they do not want to
+    // be TOLD, not that they do not want the evidence. Filing after that gate
+    // would let a notification preference silently decide whether sales can be
+    // reconciled.
+    wanted = false
+
+    await drain({ voucherId: 'v-2', cashAttestation: '{"a":1}' })
+
+    expect(attestationsFiled).toEqual([{ voucherId: 'v-2', attestation: '{"a":1}' }])
   })
 })
