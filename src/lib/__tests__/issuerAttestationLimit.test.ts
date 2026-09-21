@@ -4,6 +4,7 @@ import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 
 import { verifyVoucher, voucherCanonicalBytes, type SignedVoucherFields } from '../voucherToken'
+import { credentialActor } from '../terminalCredential'
 
 /**
  * What a coupon proves about WHO ISSUED IT, and what it does not.
@@ -96,5 +97,40 @@ describe('what a voucher signature establishes', () => {
     const signatureFields = Object.keys(genuine).filter((k) => /sig|signature/i.test(k))
 
     expect(signatureFields).toEqual(['issuerSignature'])
+  })
+
+  it('LIMIT: the same key forges AUTHORITY, not only value', () => {
+    // The half of the blast radius that is easy to miss. `merchant_metadata`
+    // rides inside the canonical bytes, so the one service signature also
+    // covers a terminal credential's `stall_pubkey`, `role` and `lock_key`.
+    //
+    // `credentialActor` defends itself by comparing the voucher's `issuerId`
+    // against the metadata's `stall_pubkey` — and a forger supplies both, so
+    // they agree. The result is a credential granting issue-and-redeem
+    // authority over a stall that authorised nothing, locked to a device key
+    // the attacker generated.
+    //
+    // So a service compromise is an AUTHORISATION incident as well as a
+    // minting one, which is why §4 of the handoff lists it separately.
+    const attackerDevice = 'ab'.repeat(32)
+    const metadata = {
+      terminal: true as const,
+      stall_pubkey: VICTIM_STALL,
+      name: 'Forged',
+      role: 'issue-and-redeem' as const,
+      lock_key: attackerDevice,
+    }
+    const credential = signedBy(serviceSk, {
+      issuerId: VICTIM_STALL,
+      merchantMetadata: JSON.stringify(metadata),
+    })
+
+    expect(verifyVoucher(credential).signatureValid).toBe(true)
+
+    const actor = credentialActor(metadata, attackerDevice, { issuerId: credential.issuerId })
+
+    expect(actor).not.toBeNull()
+    expect(actor!.stallPubkey).toBe(VICTIM_STALL)
+    expect(actor!.permissions).toContain(`voucher:issue:${VICTIM_STALL}`)
   })
 })
