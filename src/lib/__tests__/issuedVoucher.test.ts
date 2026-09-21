@@ -131,6 +131,15 @@ describe('the vouchers a stall has issued', () => {
     ]
     expect(issuedVouchers(rows, { now: NOW }).map((r) => r.voucherId)).toEqual(['new', 'old'])
   })
+
+  it('drops a row with no voucher id, which has nowhere to link to', () => {
+    // Every row on this list links to `/merchant/coupon/<voucherId>`. An empty
+    // id makes that `/merchant/coupon/`, which matches no route and falls
+    // through App's catch-all to the till — a merchant taps a coupon and lands
+    // on the home screen with nothing explaining why.
+    const rows = [issued('v1', 1000), issued('', 500, { voucherId: undefined })]
+    expect(issuedVouchers(rows, { now: NOW }).map((r) => r.voucherId)).toEqual(['v1'])
+  })
 })
 
 describe('one issued voucher', () => {
@@ -161,6 +170,27 @@ describe('one issued voucher', () => {
 
   it('ignores claims against a different voucher', () => {
     const rows = [issued('v1', 1000), claim('v2', 900)]
+    expect(issuedVoucher(rows, 'v1', opts)?.claimedMinor).toBe(0)
+  })
+
+  it('refuses to subtract a claim in another currency', () => {
+    // Numbers in different currencies are not comparable, which is why the
+    // warrant verifier checks denomination FIRST and why every total in this
+    // wallet is per-unit. Without the guard a 900 XAF row would settle a
+    // EUR 9.00 voucher and report nothing outstanding.
+    const rows = [issued('v1', 900), { ...claim('v1', 900), unit: 'EUR', decimals: 2 }]
+    const voucher = issuedVoucher(rows, 'v1', opts)
+
+    expect(voucher?.claimedMinor).toBe(0)
+    expect(voucher?.outstandingMinor).toBe(900)
+    expect(voucher?.claims).toEqual([])
+  })
+
+  it('refuses a claim whose decimals differ, at the same unit name', () => {
+    // The subtler half of the same check: `displayDecimals` has corrected XAF
+    // rows from 2 to 0, so a pre-fix row and a post-fix row can share a unit
+    // and mean amounts a hundredfold apart.
+    const rows = [issued('v1', 900), { ...claim('v1', 900), decimals: 2 }]
     expect(issuedVoucher(rows, 'v1', opts)?.claimedMinor).toBe(0)
   })
 

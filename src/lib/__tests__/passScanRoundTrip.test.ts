@@ -135,12 +135,14 @@ describe('a real pass barcode, scanned', () => {
 
   it('yields the id IssuedCouponPage looks its record up by', async () => {
     // The end of the chain, and the part a wrong answer would break silently:
-    // `IssuedCouponPage` reads `getTransactionRow('issued:' + voucherId)`, so
+    // `IssuedCouponPage` finds the issuance row whose `voucherId` is this, so
     // an id that survived the QR but lost a character reads as a lost coupon.
     const printed = toCouponPass(couponRow()).barcodes![0].message
     const { rgba, dim } = render(printed)
     const parsed = await new VoucherRedeemHandler().parse(decodeQr(rgba, dim, dim)!)
     expect(parsed.voucherId).toBe(VOUCHER_ID)
+    // And the row that screen matches against still keys its id on the same
+    // value, which is what makes the scanned coupon findable at all.
     expect(`issued:${parsed.voucherId}`).toBe(`issued:${VOUCHER_ID}`)
   })
 

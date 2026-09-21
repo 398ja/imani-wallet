@@ -66,8 +66,17 @@ export type PaymentRail =
   /** Nothing on the row says. Not a fault — see the module note. */
   | { kind: 'unknown' }
 
-/** One issued voucher and everything this device knows about its life. */
-export interface IssuedVoucher {
+/**
+ * One issued voucher and everything this device knows about its life.
+ *
+ * `VoucherRecord` rather than `IssuedVoucher`, which is the obvious name and
+ * is taken: `issue.ts` exports an `IssuedVoucher` that is the gateway's wire
+ * shape for a freshly minted coupon — `voucher_id`, `token`, `payment_state`.
+ * Two different things under one name in one `src/lib` is how an import gets
+ * auto-completed to the wrong module and a snake_case field read off a
+ * camelCase object as undefined.
+ */
+export interface VoucherRecord {
   /** The issuance row itself: amount, unit, memo, customer, expiry. */
   row: WalletTransaction
   /** Against `now` as the caller captured it, never a fresh clock read. */
@@ -107,9 +116,24 @@ export interface IssuedVoucher {
  * stored field is hardcoded `'in'` by the writer, so reading it off the row
  * would count the stall's own issuance against its own ceiling. Same rule as
  * `redemptionLedger.priorRedemptionsOf`, deliberately.
+ *
+ * **The denomination check is not belt-and-braces.** Every other total in this
+ * wallet refuses to sum across units — `merchantStats` drops them and counts
+ * what it dropped, `outstandingLiability` takes one unit, `reconcileByUnit`
+ * exists solely to stop it, and the warrant verifier puts its own unit check
+ * FIRST because "numbers in different currencies are not comparable". A claim
+ * sum is the same arithmetic and needs the same guard: `voucher_id` is the
+ * gateway's id and nothing in this wallet's types stops a row carrying that id
+ * in another denomination, so without this a 2500 XAF row could subtract from
+ * a EUR 25.00 voucher and report it settled.
  */
-function isClaim(tx: WalletTransaction, voucherId: string): boolean {
-  return tx.voucherId === voucherId && tx.direction === 'in'
+function isClaim(tx: WalletTransaction, issuance: WalletTransaction): boolean {
+  return (
+    tx.voucherId === issuance.voucherId &&
+    tx.direction === 'in' &&
+    tx.unit === issuance.unit &&
+    tx.decimals === issuance.decimals
+  )
 }
 
 /** Has this issuance lapsed, as of the moment the caller loaded its rows? */
@@ -149,13 +173,23 @@ export function paymentRail(warrant: IssuanceWarrant): PaymentRail {
  * ones a customer is most likely to turn up holding, and a merchant deciding
  * whether to honour one needs to be able to find it. Default off because the
  * live ones are what a merchant is trading against today.
+ *
+ * **A row with no `voucherId` is dropped**, and that is a routing fact rather
+ * than tidiness. Every row this list renders links to
+ * `/merchant/coupon/<voucherId>`; an empty id makes that
+ * `/merchant/coupon/`, which matches no route and falls through App's
+ * catch-all to the till. A merchant would tap a coupon and land on the home
+ * screen with nothing explaining why. `buildIssueTransaction` always writes
+ * one — it keys the row id on it — so this only ever catches a restored or
+ * hand-edited row, which is precisely the row that would otherwise produce
+ * that silent bounce.
  */
 export function issuedVouchers(
   rows: readonly WalletTransaction[],
   { now, includeExpired = false }: { now: number; includeExpired?: boolean },
 ): WalletTransaction[] {
   return rows
-    .filter((row) => row.type === 'issued')
+    .filter((row) => row.type === 'issued' && Boolean(row.voucherId))
     .filter((row) => includeExpired || !isExpired(row, now))
     .sort((a, b) => b.at - a.at)
 }
@@ -176,13 +210,13 @@ export function issuedVoucher(
   rows: readonly WalletTransaction[],
   voucherId: string,
   { now, stallPubkey }: { now: number; stallPubkey: string },
-): IssuedVoucher | undefined {
+): VoucherRecord | undefined {
   if (!voucherId) return undefined
 
   const row = rows.find((tx) => tx.type === 'issued' && tx.voucherId === voucherId)
   if (!row) return undefined
 
-  const claims = rows.filter((tx) => isClaim(tx, voucherId)).sort((a, b) => b.at - a.at)
+  const claims = rows.filter((tx) => isClaim(tx, row)).sort((a, b) => b.at - a.at)
   const claimedMinor = claims.reduce(
     (total, tx) => total + (Number.isFinite(tx.amount) ? tx.amount : 0),
     0,

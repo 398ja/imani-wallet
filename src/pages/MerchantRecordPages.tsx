@@ -17,13 +17,14 @@ import {
   Pagination,
   usePagination,
   Switch,
+  present,
 } from '../components/ui'
 import { listTransactions, onWalletChanged } from '../lib/wallet'
 import { toTransaction, type WalletTransaction } from '../lib/transactions'
 import { expiringSoon } from '../lib/stats'
 import { formatDate, formatFace } from '../lib/format'
 import { identityLabel, useIdentity } from '../lib/identity'
-import { issuedVoucher, issuedVouchers, type IssuedVoucher } from '../lib/issuedVoucher'
+import { issuedVoucher, issuedVouchers, type VoucherRecord } from '../lib/issuedVoucher'
 import { describeRail, describeWarrant, describeAttestation, type EvidenceLine } from '../lib/issuedVoucherWording'
 
 /**
@@ -166,9 +167,14 @@ export function IssuedCouponsPage() {
   const state = useMerchantTransactions()
   const [includeExpired, setIncludeExpired] = useState(false)
 
-  // Memoised on the loaded rows and the switch, not recomputed per render:
-  // `usePagination` takes a list, and a fresh array identity every render is
-  // how a paged list quietly resets itself to page one under the reader.
+  // Recomputed only when the rows or the filter change, which is a cost
+  // saving and NOT a correctness guard.
+  //
+  // Worth saying plainly, because the tempting reason to memo here is wrong:
+  // `usePagination` keeps `page` in `useState` and clamps it against
+  // `pageCount`, so a fresh array identity does not move anybody off their
+  // page. What it does buy is not re-running a filter and a sort over a
+  // history that can hold hundreds of issuances on every unrelated render.
   const issued = useMemo(
     () =>
       state === null
@@ -326,10 +332,10 @@ export function IssuedCouponPage({ pubkey }: { pubkey: string }) {
   // records have not been restored yet.
   if (voucher === undefined) return <Centered>No record of this voucher.</Centered>
 
-  return <IssuedVoucherDetail voucher={voucher} />
+  return <VoucherRecordDetail voucher={voucher} />
 }
 
-function IssuedVoucherDetail({ voucher }: { voucher: IssuedVoucher }) {
+function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
   const { row, expired, claimedMinor, outstandingMinor, claims } = voucher
   const money = (minor: number) => formatFace(minor, { unit: row.unit, decimals: row.decimals })
 
@@ -405,6 +411,27 @@ function IssuedVoucherDetail({ voucher }: { voucher: IssuedVoucher }) {
         ]).map(([label, value]) => (
           <DetailRow key={label} label={label} value={value} />
         ))}
+        {/*
+          The movement this coupon came from, as a LINK rather than as an id.
+
+          The two screens are a pair — a voucher and the transaction that put
+          it into the world — and that pairing used to be the way in: the
+          detail screen was reached from the transaction, and its back arrow
+          went there. Now the voucher is reached from its own list, so without
+          this the transaction became unreachable from the record it belongs
+          to, and the id underneath was a string to read rather than somewhere
+          to go.
+        */}
+        <Link
+          to={`/transaction/${encodeURIComponent(row.id)}`}
+          className="flex items-center justify-between gap-4 p-4 press-row"
+        >
+          <span className="shrink-0 text-sm text-mono-500">Transaction</span>
+          <span className="flex min-w-0 items-center gap-1 text-right text-mono-900 dark:text-mono-50">
+            The sale this came from
+            <ChevronRight className="h-4 w-4 shrink-0 text-mono-400" />
+          </span>
+        </Link>
       </ListSection>
 
       {/*
@@ -518,11 +545,6 @@ function EvidenceRow({ label, line }: { label: string; line: EvidenceLine }) {
       ) : null}
     </div>
   )
-}
-
-/** Drop empty entries so a list only ever shows real data. */
-function present<T>(entries: Array<[string, T | undefined | null]>): Array<[string, T]> {
-  return entries.filter((e): e is [string, T] => Boolean(e[1]))
 }
 
 function IssuedCouponRow({ tx, now }: { tx: WalletTransaction; now: number }) {
