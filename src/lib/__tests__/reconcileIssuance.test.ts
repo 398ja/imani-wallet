@@ -347,3 +347,66 @@ describe('the summary a merchant actually sees', () => {
     expect(summariseReconciliation([], STALL)).toEqual([])
   })
 })
+
+
+describe('cashback is reconciled too', () => {
+  // The one rail the receipt-time attestation cannot reach: there is no
+  // recipient to send a receipt back from, because the whole point of the flow
+  // is reaching someone who has no wallet yet. So the merchant's own warrant
+  // is the ONLY evidence a cashback will ever carry, which makes leaving it
+  // out of the audit worse than leaving out a coupon.
+  const cashback = (amount: number, over: Partial<WalletTransaction> = {}) =>
+    ({
+      id: `cashback:c-${amount}`,
+      type: 'cashback',
+      direction: 'out',
+      at: 0,
+      amount,
+      unit: 'XAF',
+      decimals: 0,
+      issuanceWarrant: warrantFor(amount),
+      ...over,
+    }) as unknown as WalletTransaction
+
+  it('counts a warranted cashback as authorised', () => {
+    const [result] = reconcileIssuances([cashback(2500)], STALL)
+
+    expect(result.verdict).toBe('authorised')
+  })
+
+  it('catches a tampered cashback row', () => {
+    const tampered = cashback(2500)
+    ;(tampered as { amount: number }).amount = 900
+
+    expect(reconcileIssuances([tampered], STALL)[0].verdict).toBe('mismatch')
+  })
+
+  it('reports an unwarranted cashback rather than ignoring it', () => {
+    // Before this, a cashback was invisible to the audit entirely - a merchant
+    // could mint codes all day and the reconciliation would show nothing.
+    const [result] = reconcileIssuances(
+      [cashback(2500, { issuanceWarrant: undefined })],
+      STALL,
+    )
+
+    expect(result.verdict).toBe('unwarranted')
+  })
+
+  it('never reports a cashback as customer-attested', () => {
+    // There is no recipient, so there is nobody who could have signed. If this
+    // ever says otherwise, something is filing attestations onto rows that
+    // cannot have them.
+    const [result] = reconcileIssuances([cashback(2500)], STALL)
+
+    expect(result.paid).toBe('none')
+  })
+
+  it('totals cashback alongside coupons in the same currency', () => {
+    const totals = totalReconciliation(
+      reconcileIssuances([issued(1000), cashback(2500)], STALL),
+    )
+
+    expect(totals.authorisedMinor).toBe(3500)
+    expect(totals.counts.authorised).toBe(2)
+  })
+})

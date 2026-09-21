@@ -529,6 +529,18 @@ export function buildCashbackTransaction(input: {
   /** Epoch SECONDS, as the gateway reports it. */
   expiresAt?: number
   at: number
+  /**
+   * The warrant this stall signed for the sale, verbatim.
+   *
+   * Cashback is the one rail the receipt-time attestation cannot reach: there
+   * is no recipient to send a receipt back, because the whole point of the
+   * flow is reaching someone who has no wallet yet. So the merchant's own
+   * signature is the ONLY evidence this sale can ever carry, which makes it
+   * more important here than on the Sell path rather than less.
+   */
+  issuanceWarrant?: string
+  /** The stall this was issued for, so an audit has something to check against. */
+  merchantId?: string
 }): TransactionRow {
   return {
     id: `cashback:${input.cashbackId}`,
@@ -547,6 +559,8 @@ export function buildCashbackTransaction(input: {
     // what it would say — but writing that here would make an unfetched row
     // indistinguishable from a checked one, and the detail screen must be able
     // to tell "not checked" from "not claimed".
+    ...(input.issuanceWarrant ? { issuanceWarrant: input.issuanceWarrant } : {}),
+    ...(input.merchantId ? { merchantId: input.merchantId } : {}),
   } as unknown as TransactionRow
 }
 

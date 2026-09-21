@@ -159,3 +159,66 @@ noting: that coupon predates warrants. A customer receiving one of those has
 nothing to attest against, and the right behaviour is to send the receipt
 exactly as today — `parseIssuanceWarrant` already models that as a distinct
 state rather than a failure.
+
+
+---
+
+# Addendum: what "no UI at the counter" actually costs
+
+Asked again after shipping the receipt-time path, and the honest answer
+required checking which sales it fails to reach rather than repeating the
+original argument.
+
+## The coverage, measured rather than assumed
+
+| Rail | Stall warrant | Customer evidence |
+|---|---|---|
+| Sell, owner device | yes | receipt-time attestation, automatic |
+| Sell, terminal | signed `none` (key is not the stall's) | receipt-time attestation, automatic |
+| **Cashback** | **was: nothing** | **impossible, forever** |
+
+**Cashback was the real gap, and it was worse than a missing prompt.** It minted
+value with no warrant at all, and the reconciliation skipped `cashback` rows
+entirely — so a merchant could issue codes all day and their own audit would
+show nothing. Both are now fixed: `CashbackIssuePage` signs a warrant at
+issuance, and `reconcileIssuances` counts both rails.
+
+The customer half is **permanently unreachable** there, and not for want of UI.
+The flow exists to reach someone with no wallet — the code goes on a paper
+receipt and is redeemed "days later on a phone that does not exist yet". There
+is nobody to prompt and nobody to send a receipt back. A counter prompt would
+not have closed this; it would have had nothing to prompt.
+
+## One thing I checked and was wrong about
+
+`restoreIssued` rebuilds sales from the relay and does not carry a warrant,
+which looked like a third gap. It is not: that module is a **read-only legacy
+reader** for records written before warrants existed, and its own header says
+the live publisher is `txRecords` — which does carry the warrant. Nothing to
+fix, and worth recording so the next reader does not re-raise it.
+
+## So what remains, and is a counter prompt the answer?
+
+What remains is narrow and specific: **a customer who never redeems.** The
+receipt-time attestation fires on redemption, so a coupon sitting unclaimed in
+a wallet has the stall's warrant and nothing from the customer.
+
+A counter prompt would cover exactly that case. It would also:
+
+- slow every sale to corroborate the minority that are disputed
+- be skipped under pressure, so it would cover the quiet day and miss the busy one
+- do nothing for cashback, which is the rail with no customer evidence at all
+- still not prove cash arrived, only that someone tapped approve
+
+**The recommendation is unchanged, and now rests on measurement rather than
+argument.** The gap a prompt would close is smaller than it looked, the rail
+with the worst coverage cannot use one, and the two fixes that mattered were
+not UI at all.
+
+## If the prompt is wanted anyway
+
+`collectCashAttestation` is still on `IssueParams`, still unused, and still
+costs nothing to leave waiting. Wiring it is a screen and a call — the signing,
+verification, storage, relay round trip and reconciliation are all built and
+tested. That is deliberate: the expensive half is done, so the decision can be
+made on evidence from real disputes rather than on a guess about them.

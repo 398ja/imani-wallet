@@ -30,6 +30,20 @@ import { parseCashAttestation, verifyCashAttestation } from './cashAttestation'
 import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
 import type { WalletTransaction } from './transactions'
 
+/**
+ * Whether a row is this stall putting a claim into the world.
+ *
+ * `issued` is a coupon sent to a named customer; `cashback` is a code read out
+ * loud to someone with no wallet yet. Both take money at a counter and both
+ * are the merchant's own liability, so both belong in a reconciliation.
+ *
+ * The difference matters elsewhere and not here: a cashback can never carry a
+ * customer attestation, because there is no recipient to send one back.
+ */
+function isIssuance(row: WalletTransaction): boolean {
+  return row.type === 'issued' || row.type === 'cashback'
+}
+
 /** How one issuance row stands up to being re-checked. */
 export type ReconciledIssuance = {
   row: WalletTransaction
@@ -77,7 +91,11 @@ export function reconcileIssuances(
   const out: ReconciledIssuance[] = []
 
   for (const row of rows) {
-    if (row.type !== 'issued') continue
+    // Both rails that MINT value against this stall. A cashback is a sale like
+    // any other - the merchant took money and put a claim into the world - and
+    // leaving it out would let the one rail with no possible customer receipt
+    // also escape the merchant's own audit.
+    if (!isIssuance(row)) continue
 
     if (!row.issuanceWarrant) {
       // No warrant means no sale nonce, so there is nothing an attestation
@@ -391,7 +409,7 @@ export function summariseReconciliation(
   // the same shape the rest of the wallet does.
   const decimalsFor = new Map<string, number>()
   for (const row of rows) {
-    if (row.type === 'issued' && !decimalsFor.has(row.unit)) {
+    if (isIssuance(row) && !decimalsFor.has(row.unit)) {
       decimalsFor.set(row.unit, row.decimals)
     }
   }
