@@ -196,12 +196,16 @@ describe('one voucher', () => {
       claim({ id: 'v1', amount: 250 }),
     ])
 
-    await waitFor(() => expect(screen.getByText('Claimed so far')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText(/claimed/)).toBeTruthy())
     // 650 claimed of 1000, so 350 still out there. Matched loosely because the
     // currency formatter separates FCFA from its figure with a non-breaking
     // space, which a literal written by hand does not contain.
     expect(screen.getByText(/650/)).toBeTruthy()
     expect(screen.getByText(/350/)).toBeTruthy()
+    // The figures are WRITTEN, not only drawn: the bar is the fast path and
+    // the words are the fact, so neither number may exist as a fill width
+    // alone.
+    expect(screen.getByText(/outstanding/)).toBeTruthy()
   })
 
   it('lists the transactions that claimed it, so the total can be checked', async () => {
@@ -218,13 +222,13 @@ describe('one voucher', () => {
   it('shows nothing claimed on a voucher that has not come back', async () => {
     showVoucher('v1', [issued({ id: 'v1', amount: 1000, inDays: 30 })])
 
-    await waitFor(() => expect(screen.getByText('Claimed so far')).toBeTruthy())
-    // Scoped to its own row rather than searched for across the screen: "0"
-    // also appears under Details as the currency's decimal count, and a bare
-    // text match would pass on the wrong one.
-    expect(screen.getByText('Claimed so far').parentElement?.textContent).toMatch(/\b0\b/)
+    await waitFor(() => expect(screen.getByText(/claimed/)).toBeTruthy())
+    // Anchored to its own word rather than searched for loose: a bare "0" also
+    // appears under Details as the currency's decimal count, and that match
+    // would pass for the wrong reason.
+    expect(screen.getByText(/claimed/).textContent).toMatch(/\b0\b/)
     // Nothing claimed means the whole face value is still out there.
-    expect(screen.getByText('Still outstanding').parentElement?.textContent).toMatch(/1[\s,]?000/)
+    expect(screen.getByText(/1[\s,]?000\s*outstanding/)).toBeTruthy()
     // No empty "Claims" box under a line that already said zero.
     expect(screen.queryByText('Claims')).toBeNull()
   })
@@ -297,7 +301,7 @@ describe('one voucher', () => {
   it('goes back to the list it was opened from', async () => {
     showVoucher('v1', [issued({ id: 'v1', inDays: 30 })])
 
-    await waitFor(() => expect(screen.getByText('Claimed so far')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText(/claimed/)).toBeTruthy())
     expect(screen.getByRole('link', { name: /Vouchers/ }).getAttribute('href')).toBe(
       '/merchant/coupons',
     )
@@ -310,9 +314,30 @@ describe('one voucher', () => {
     // becomes unreachable from the coupon it produced.
     showVoucher('v1', [issued({ id: 'v1', inDays: 30 })])
 
-    await waitFor(() => expect(screen.getByText('Claimed so far')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText(/claimed/)).toBeTruthy())
     expect(
       screen.getByRole('link', { name: /The sale this came from/ }).getAttribute('href'),
     ).toBe('/transaction/issued%3Av1')
+  })
+
+  it('calls a lapsed remainder lapsed, not outstanding', async () => {
+    // Nobody can walk in with an expired coupon, so its remainder is not a
+    // liability the stall still carries. Saying "outstanding" would overstate
+    // what they owe; the number is the same and the word is not.
+    showVoucher('v1', [issued({ id: 'v1', amount: 1000, inDays: -3 })])
+
+    await waitFor(() => expect(screen.getByText(/claimed/)).toBeTruthy())
+    expect(screen.getByText(/lapsed/)).toBeTruthy()
+    expect(screen.queryByText(/outstanding/)).toBeNull()
+  })
+
+  it('marks an expired voucher with the same red clock the list row used', async () => {
+    // A merchant arrives here by tapping that row, so the mark they tapped has
+    // to be the mark they land on — a state that is loud on one screen and a
+    // plain word on the next reads as two different states.
+    const { container } = showVoucher('v1', [issued({ id: 'v1', inDays: -3 })])
+
+    await waitFor(() => expect(screen.getByText('Expired')).toBeTruthy())
+    expect(container.querySelector('.text-red-500')).toBeTruthy()
   })
 })

@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ChevronRight, Clock } from 'lucide-react'
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronRight,
+  Clock,
+  MinusCircle,
+  type LucideIcon,
+} from 'lucide-react'
 
 import {
   Screen,
@@ -25,7 +32,13 @@ import { expiringSoon } from '../lib/stats'
 import { formatDate, formatFace } from '../lib/format'
 import { identityLabel, useIdentity } from '../lib/identity'
 import { issuedVoucher, issuedVouchers, type VoucherRecord } from '../lib/issuedVoucher'
-import { describeRail, describeWarrant, describeAttestation, type EvidenceLine } from '../lib/issuedVoucherWording'
+import {
+  describeRail,
+  describeWarrant,
+  describeAttestation,
+  type EvidenceLine,
+  type EvidenceTone,
+} from '../lib/issuedVoucherWording'
 
 /**
  * The merchant's two history screens.
@@ -350,34 +363,35 @@ function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
           transaction it came from is still reachable, one row down. */}
       <BackLink to="/merchant/coupons" label="Vouchers" />
 
+      {/*
+        The face value and what has become of it, as ONE panel.
+
+        They were two — a hero with the amount, then a list section of two
+        label/value rows — and splitting them made the reader do the
+        arithmetic that is the whole question. "500 of 2,000 claimed" is a
+        single fact about a single coupon, so it is a single surface, with the
+        proportion drawn rather than described. Simplicity in the sense the
+        principle actually means: fewer things standing between a merchant and
+        the answer, not fewer pixels.
+
+        The face value keeps the hero treatment and the claimed figure sits
+        under it in the body size, because the coupon's worth is what a
+        customer will say out loud at the counter and what every other screen
+        leads with. Breaking that would cost the spatial consistency of the
+        amount always being the biggest thing on a record.
+      */}
       <Panel className="mb-6 p-5">
         <p className="text-amount text-mono-900 dark:text-mono-50">{money(row.amount)}</p>
         <p className="truncate text-sm text-mono-500">{row.memo || 'Voucher issued'}</p>
-      </Panel>
 
-      {/*
-        What has come back, as the first thing after the amount.
-
-        This is the question the screen is opened with, and it is a genuinely
-        new answer rather than a restatement: the issuance row says what went
-        out, and only the claims say what came home. Both figures are shown
-        rather than just one, because "300 claimed" and "700 still out there"
-        are different things to a merchant — the first is takings, the second
-        is a liability they may still have to honour.
-      */}
-      <ListSection title="Claimed">
-        <DetailRow label="Claimed so far" value={money(claimedMinor)} />
-        <DetailRow
-          label="Still outstanding"
-          value={
-            // Floored at zero in `issuedVoucher`, so this never reads as the
-            // stall being owed money by a coupon it issued.
-            <span className={outstandingMinor === 0 ? 'text-mono-500' : 'text-mono-900 dark:text-mono-50'}>
-              {money(outstandingMinor)}
-            </span>
-          }
+        <ClaimedBar
+          claimedMinor={claimedMinor}
+          outstandingMinor={outstandingMinor}
+          faceMinor={row.amount}
+          expired={expired}
+          money={money}
         />
-      </ListSection>
+      </Panel>
 
       {/*
         The movements themselves, so the total above can be checked rather than
@@ -395,10 +409,28 @@ function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
 
       <ListSection title="Voucher">
         {present<React.ReactNode>([
-          // Expiry only. Whether the customer has spent what is left is not
-          // knowable from here beyond what came back to this device, and the
-          // claimed figure above is the honest version of that question.
-          ['Status', expired ? 'Expired' : 'Issued'],
+          /*
+            Expiry only. Whether the customer has spent what is left is not
+            knowable from here beyond what came back to this device, and the
+            claimed figure above is the honest version of that question.
+
+            Carries the SAME red clock the list row shows, because a merchant
+            arrives here by tapping that row and the mark they tapped has to
+            be the mark they land on. A state that is loud on one screen and a
+            plain word on the next reads as two different states — the spatial
+            consistency rule applied to iconography rather than to motion.
+          */
+          [
+            'Status',
+            expired ? (
+              <span className="flex items-center gap-1.5 text-mono-900 dark:text-mono-50">
+                Expired
+                <Clock className="h-[1em] w-[1em] shrink-0 text-red-500" aria-hidden="true" />
+              </span>
+            ) : (
+              'Issued'
+            ),
+          ],
           ['Issued', formatDate(row.at)],
           // Kept even when absent, unlike the rest: "expires 3 Sep" and "never
           // expires" are different facts, and a missing row reads as the second.
@@ -443,8 +475,18 @@ function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
         as proof of payment. `reconcileIssuance.ts` keeps the same separation
         for the same reason.
       */}
-      <ListSection title="How it was paid for">
-        <EvidenceRow label="Payment" line={rail} />
+      {/*
+        "What stands behind this", not "How it was paid for".
+
+        The old heading named only the first of its three rows, so the two
+        under it read as answers to a question they were not answering — a
+        warrant is about authorisation and an attestation is about a customer's
+        word, neither of which is a payment method. A section heading that
+        over-claims is worse than a vague one: it tells the reader they have
+        understood when they have not.
+      */}
+      <ListSection title="What stands behind this">
+        <EvidenceRow label="Paid" line={rail} />
         <EvidenceRow label="Authorised" line={warrant} />
         <EvidenceRow label="Customer receipt" line={attestation} />
       </ListSection>
@@ -518,28 +560,160 @@ function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
 }
 
 /**
+ * How much of a coupon has come home, drawn rather than described.
+ *
+ * ## Why a bar at all
+ *
+ * "500 claimed" and "1,500 outstanding" as two rows make the reader hold two
+ * numbers and a face value in their head to answer the question they opened
+ * the screen with. A proportion is the one thing a bar says faster than a
+ * sentence, and this is a genuine proportion of a known whole — not a
+ * decorative gauge over an invented maximum.
+ *
+ * ## Never the only signal
+ *
+ * Both figures are written out underneath, at full precision and in the
+ * coupon's own currency. The bar is the fast path; the words are the fact.
+ * That ordering is the same one `ValidationBadge` sets out, and it is what
+ * keeps this readable with a screen reader, in bright sun, and for anyone who
+ * cannot separate the two fills by colour.
+ *
+ * `aria-hidden` on the bar itself for exactly that reason: it restates the
+ * figures beside it, and a screen reader announcing a decorative
+ * approximation of a number it is about to read exactly is noise.
+ */
+function ClaimedBar({
+  claimedMinor,
+  outstandingMinor,
+  faceMinor,
+  expired,
+  money,
+}: {
+  claimedMinor: number
+  outstandingMinor: number
+  faceMinor: number
+  expired: boolean
+  money: (minor: number) => string
+}) {
+  // Guarded against a zero face value, which would be a 0/0 sale but is not
+  // this component's business to report. Clamped at 100 because a coupon CAN
+  // come back for more than one row recorded going out — see the floor on
+  // `outstandingMinor` — and a bar overflowing its track would read as a
+  // rendering fault rather than as the data oddity it is.
+  const claimedPercent =
+    faceMinor > 0 ? Math.min(100, Math.round((claimedMinor / faceMinor) * 100)) : 0
+
+  return (
+    <div className="mt-4">
+      {/*
+        A hairline track with a filled portion, not a chart. 6px is enough to
+        read a proportion at a glance and small enough to stay subordinate to
+        the amount above it, which is still the thing the eye lands on first.
+      */}
+      <div
+        className="flex h-1.5 overflow-hidden rounded-full bg-mono-200 dark:bg-mono-800"
+        aria-hidden="true"
+      >
+        <div
+          // Green for value that has come home, the same green this app uses
+          // for incoming money everywhere else — a claimed coupon and a
+          // payment arriving are the same event from the stall's side, so they
+          // speak with one voice.
+          //
+          // A width transition, so a claim landing by DM while the screen is
+          // open GROWS the bar rather than teleporting it. 300ms on the curve
+          // the rest of the app uses; `motion-reduce` drops the movement and
+          // keeps the value, which is what the setting actually asks for.
+          className="h-full rounded-full bg-green-600 transition-[width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none"
+          style={{ width: `${claimedPercent}%` }}
+        />
+      </div>
+
+      <div className="mt-2 flex items-baseline justify-between gap-4">
+        <span className="text-sm text-mono-500">
+          {/* The claimed figure leads, because it is the new fact. The face
+              value is repeated as the denominator rather than left to the
+              reader's memory of the line above — "of 2,000" is what makes the
+              first number mean something. */}
+          <span className="font-medium text-mono-900 dark:text-mono-50">
+            {money(claimedMinor)}
+          </span>{' '}
+          claimed
+        </span>
+        {/*
+          The remainder, in the merchant's own terms. An expired coupon's
+          remainder is not a liability any more — nobody can walk in with it —
+          so the word changes rather than the number being hidden: "lapsed"
+          says what happened to the value, where "outstanding" would overstate
+          what the stall still owes.
+        */}
+        <span className="text-right text-sm text-mono-500">
+          {money(outstandingMinor)} {expired ? 'lapsed' : 'outstanding'}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The glyph and colour for each evidence tone.
+ *
+ * **Colour is never the only signal**, which is the rule `ValidationBadge`
+ * states and the reason each tone carries its own SHAPE: a tick, a dash, a
+ * warning triangle. The line still reads for anyone who cannot separate green
+ * from grey from red, in sun at a stall, or in a greyscale screenshot.
+ *
+ * `neutral` is a MINUS rather than a question mark, and grey rather than
+ * amber. "Nothing to check" is the resting state of most of a stall's history
+ * — every sale before warrants shipped, every terminal sale, every sale with
+ * no customer receipt — and a warning glyph on all of them would train a
+ * merchant to skim the one row that matters.
+ */
+const EVIDENCE_TONE: Record<EvidenceTone, { Icon: LucideIcon; className: string }> = {
+  confirmed: { Icon: CheckCircle2, className: 'text-green-600' },
+  // mono-500, not mono-400: the same contrast floor ValidationBadge measured
+  // for a non-text graphic carrying meaning.
+  neutral: { Icon: MinusCircle, className: 'text-mono-500' },
+  alarming: { Icon: AlertTriangle, className: 'text-red-500' },
+}
+
+/**
  * One line of evidence, with what it does and does not establish underneath.
  *
  * The caveat is on the screen rather than behind a tap, because every line
  * here is one a reader could take for more than it says — "signed by this
  * stall" reads as "and I was paid" to anyone not thinking about it. A sentence
  * costs a line of screen; the misreading costs a merchant a dispute.
+ *
+ * The glyph sits on the TRAILING edge beside its value, which is where this
+ * app already puts the mark that qualifies a value (see the menu rows, and
+ * `TransactionListItem`'s badge beside the label it qualifies). Leading-edge
+ * glyphs would make three icons into a column the eye reads as a list of
+ * statuses rather than as three separate answers.
  */
 function EvidenceRow({ label, line }: { label: string; line: EvidenceLine }) {
+  const { Icon, className: tone } = EVIDENCE_TONE[line.tone]
+
   return (
     <div className="p-4">
       <div className="flex items-baseline justify-between gap-4">
         <span className="shrink-0 text-sm text-mono-500">{label}</span>
         <span
-          className={`min-w-0 text-right ${
-            line.alarming
+          className={`flex min-w-0 items-baseline gap-1.5 text-right ${
+            line.tone === 'alarming'
               ? 'font-medium text-red-600 dark:text-red-400'
               : 'text-mono-900 dark:text-mono-50'
           }`}
         >
           {line.label}
+          {/* 1em, so the mark tracks the user's text size rather than
+              shrinking into insignificance at large Dynamic Type settings. */}
+          <Icon className={`h-[1em] w-[1em] shrink-0 self-center ${tone}`} aria-hidden="true" />
         </span>
       </div>
+      {/* `leading-relaxed` because this is a sentence rather than a field:
+          body copy wants looser leading than the dense label/value rows
+          around it, which is the leading-tracks-size-inversely rule. */}
       {line.detail ? (
         <p className="mt-1 text-sm leading-relaxed text-mono-500">{line.detail}</p>
       ) : null}

@@ -35,7 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The evidence behind a sale, as three lines that are never collapsed.** How it was paid for,
   whether the stall authorised issuing it, and whether the customer said money arrived are three
   different claims, and merging any two lets a merchant read authorisation as proof of payment.
-  Each line carries what it does and does not establish, on screen rather than behind a tap.
+  Each line carries what it does and does not establish, on screen rather than behind a tap, and
+  each carries its own **glyph as well as its colour** — a tick, a dash, a warning triangle — so
+  it still reads for anyone who cannot separate green from grey from red, in sun at a stall, or
+  in a greyscale screenshot.
 
   **Cash or card has three answers, not two.** A processor warrant is evidence of a card payment;
   a stall-signed warrant is evidence of a sale made at the counter. Everything else — every sale
@@ -43,11 +46,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — reads as *not recorded*. Printing "cash" over those would be the wallet inventing a fact about
   money.
 
+- **How much of a voucher has come home, drawn as well as written.** The claimed figure and the
+  face value are one panel rather than a hero and two label/value rows underneath it, with the
+  proportion shown as a fill: "how much of this is left" is a proportion of a known whole, which
+  is the one thing a bar says faster than a sentence. Both figures are still written out at full
+  precision beside it — the bar is the fast path, the words are the fact. An expired voucher's
+  remainder is called *lapsed* rather than *outstanding*, because nobody can walk in with it and
+  the stall no longer owes it.
+
 ### Changed
 
 - **A voucher row now opens the voucher rather than the transaction that issued it**, on the
   issued list, the expiring list, and a scanned pass. The question behind the row is what happened
-  to this coupon; the issuing movement is still one tap further in, in the record's own details.
+  to this coupon; the issuing movement is one row further in, as a link rather than an id.
+
 
 ## [0.6.1] - 2026-09-21
 
