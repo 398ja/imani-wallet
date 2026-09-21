@@ -1,0 +1,343 @@
+# Implementation plan: `issuance_warrant`, wallet side
+
+**Scope:** `imani-wallet` only. The gateway owns steps 1–4 and 6 of their §8;
+this is what we build, in what order, and what each step is blocked on.
+**Reference:** `imani-gateway-core/docs/issuance-authorisation-warrant.md`,
+our reply in `docs/reply-issuance-warrant.md`.
+**Status:** plan. Nothing here is started.
+
+---
+
+## 0. The shape of the problem, so the ordering makes sense
+
+Three constraints drive every decision below.
+
+**We cannot start until they publish the wire format.** Our reader refuses
+unknown shapes, which is correct and is also the thing that makes
+publish-before-produce mandatory. Guessing the field name or the digest
+preimage and shipping a reader for it means shipping a reader that refuses
+every real warrant. So phase 1 is blocked, hard, on two answers we asked for.
+
+**A warrant is a ceiling, not a balance.** §3 of our reply, proved in
+`warrantSplitBinding.test.ts`. Everything in the UI and the validation record
+has to carry that distinction or we build the `25 XAF credited as 5000` bug a
+third time.
+
+**Three absence states, not two.** Absent-legacy, signed-`none`, and
+present-and-valid are different claims. Collapsing the first two is how the
+downgrade attack walks back in through the legacy door. This shapes the type
+before it shapes anything else.
+
+---
+
+## Phase 0 — unblock, and harden what we already have
+
+Doable now. No dependency on the gateway.
+
+### 0.1 Send the two questions and get answers in writing
+
+Blocking everything else:
+
+1. **Field name and codec shape.** Where `issuance_warrant` sits in
+   `SignedVoucherCodec`'s field map, and what its JSON shape is on each of the
+   four forms.
+2. **Digest preimage separator.** Our test assumes `\u001f`. Without a
+   separator `faceValue=25,faceDecimals=00` collides with
+   `faceValue=2500,faceDecimals=0`, which is a real forgery.
+
+Also worth asking, because it changes phase 2's type: **does the tag name
+appear in the signed canonical bytes with the same spelling as the codec
+field?** Our canonical-bytes builder is snake_case on the wire
+(`face_value`, `issuance_ratio`) and camelCase in the blob (`faceValue`,
+`issuanceRatio`). Both spellings will exist and both must be handled.
+
+**Deliverable:** their answers appended to `docs/reply-issuance-warrant.md`.
+
+### 0.2 Fix their decoder, as a patch to their repo
+
+Per §2 of our reply their script is blind to all five P2PK fixtures. We found
+it, we can fix it: read the lock key from `data` and the voucher blob from the
+tag rows on the P2PK kind, the way `parseVoucherToken` does.
+
+Offer it as a patch rather than a bug report. It is twenty lines and it makes
+their regression check actually cover the terminal credentials, which are the
+tokens the whole scheme is about.
+
+**Deliverable:** patch to `scripts/verify-issuer-key-structure.mjs`, sent to
+them. Not ours to merge.
+
+### 0.3 Pin the ceiling rule before there is anything to apply it to
+
+`warrantSplitBinding.test.ts` exists and proves the gap. What does not exist is
+the rule in code. Nothing to enforce it on yet, so this is documentation with
+teeth: extend the test file with the exact predicate we will implement in phase
+2, as a pure function, so phase 2 is wiring rather than design.
+
+```ts
+// warrantCeiling.ts, pure, no deps
+export function warrantCoversHeldValue(
+  warrantedFaceValue: number,
+  heldFaceValue: number,
+): boolean
+```
+
+**Deliverable:** `src/lib/warrantCeiling.ts` + tests. Ships now, used later.
+
+**The one design decision worth settling before writing it:** the comparison is
+equality, **not** `>=`. "The warrant covers at least what is held" reads as the
+safe form and is exactly backwards — over-statement is the failure mode, so a
+`>=` test returns `true` on every split child, which is every case the function
+exists for. Whoever implements this should mutation-test that line specifically.
+
+**Status: drafted and then parked, not landed.** A working version with six
+tests exists outside the tree; the `>=` mutant was confirmed to fail three of
+them. It is held back until this plan is agreed, because a pure predicate with
+no caller is still a design commitment and the type in phase 1.1 may change
+what it should take.
+
+---
+
+## Phase 1 — the reader
+
+**Blocked on 0.1.** This is the wallet's half of their §8 step 2.
+
+### 1.1 The type, with three absence states
+
+The type is the whole design. Get it wrong and every call site inherits it.
+
+```ts
+export type IssuanceWarrant =
+  | { state: 'absent-legacy' }        // no field; issuer signed nothing about it
+  | { state: 'declared-none' }        // signed `none`; issuer states there is none
+  | { state: 'present'; form: 'merchant' | 'processor' | 'delegated'; … }
+```
+
+`absent-legacy` and `declared-none` are deliberately not one variant with a
+boolean. A boolean invites `if (!warrant)`, which is exactly the conflation we
+are guarding against.
+
+An **unknown** `form` is not a fourth state: it is a parse failure, and the
+voucher is refused. Their §5 wants one code path where an unknown shape is
+refused rather than guessed at, and that has to be enforced on read.
+
+### 1.2 Parse it in both representations
+
+`voucherToken.ts` has two readers that must agree:
+
+| Reader | Function | Source |
+|---|---|---|
+| NUT-10 tag rows | around `required('voucher_id')` | the signed wire |
+| CBOR blob | `readVoucherFields` | the codec's output |
+
+Both get the field. A warrant present in one and absent in the other is the
+`longValue()` shape and must be a loud failure, not a silent preference for
+whichever we read first. **Assert they agree**; refuse if they do not.
+
+Add the field to the `NUMERIC`/tag handling only if the digest inputs require
+it — the warrant itself is a string blob, so probably not, but this is the line
+where the canonical bytes are built and it must be checked against their
+published format rather than assumed.
+
+### 1.3 Verify the signature, offline forms only
+
+Their §5 verification, forms one and two:
+
+- `merchant` — recompute the digest, verify against `issuerId` directly.
+- `delegated` — verify against `lock_key`, **then** verify the credential was
+  minted by `issuerId`. We already have credential parsing from Finding 6 work
+  (`terminalCredential.ts`), and `issuerAttestationLimit.test.ts` shows exactly
+  how a forged credential looks, so the second half of that check has a test
+  fixture already written.
+- `processor` — record the claim, verify nothing. Explicitly not a signature
+  check. The type must make it impossible to read a `processor` warrant as
+  cryptographically verified.
+- `declared-none` / `absent-legacy` — nothing to verify.
+
+### 1.4 Extend `VoucherValidation`
+
+One new field on the record `dmCrypto` builds:
+
+```ts
+warrant: IssuanceWarrant
+warrantCoversFaceValue?: number   // the amount the warrant attests
+```
+
+The second field is the ceiling from 0.3, carried on the record so the UI never
+recomputes it. Note it is **not** `faceValue`: on a split child they differ, and
+that difference is the finding.
+
+`validationStatus` does **not** change in this phase. A missing or invalid
+warrant is not yet a failure, because nothing is issuing warrants. Advisory
+only, which is their step 5.
+
+**Deliverables:** `src/lib/issuanceWarrant.ts`, parser changes in
+`voucherToken.ts`, field on `VoucherValidation`, tests covering: each of the
+four forms, unknown form refused, tag/blob disagreement refused, forged
+`merchant` sig refused, forged `delegated` credential refused, `processor`
+recorded-not-verified, and a round trip that asserts the warrant survives the
+codec.
+
+---
+
+## Phase 2 — the ceiling rule, enforced
+
+**Blocked on phase 1.** This is the part that exists because of our §3.
+
+### 2.1 Record split provenance
+
+The wallet already knows when it splits: `pay.ts` `replaceVoucher` takes the
+new `faceValue` and writes it to the row. What it does not record is that the
+row is **now a child**. Add it:
+
+```ts
+warrantCoversFaceValue: row.face_value   // captured BEFORE the split writes the new one
+```
+
+This is a one-line capture at a site that already exists, and it is the only
+place a split is visible. Miss it and the ceiling rule has no data to work on.
+
+Note the ordering trap: `replaceVoucher` spreads `...row` and then overrides
+`face_value`. The capture must read the **old** value, so it goes before the
+spread or reads `row.face_value` explicitly.
+
+### 2.2 Apply the rule at the till
+
+`warrantCoversHeldValue` from 0.3, called where the credit decision is made.
+Not a refusal in this phase, a **flag on the record**, so the UI can say the
+warrant over-states without blocking a redemption over a rule that is still
+advisory.
+
+### 2.3 UI
+
+Per our §3 suggested wording: never render "authorised" against a split child's
+current balance. Concretely:
+
+| Row state | Badge reads |
+|---|---|
+| `present`, covers held value | "Issuance authorised by the stall" |
+| `present`, over-states (split child) | "Issued amount authorised" + the issued figure |
+| `declared-none` | "No issuance authorisation" |
+| `absent-legacy` | nothing — no badge |
+
+The last row matters. A grey dot on every pre-epoch coupon is the noise
+`hasValidationClaim` was written to avoid, and the same reasoning applies.
+
+`VALIDATION_SUMMARY` gains entries; `RecordDetailPages` gains the detail line.
+Per the existing note in `validationStatus.ts`, the **predicate** lives in a
+testable module and only the JSX lives in the component.
+
+**Deliverables:** provenance capture in `pay.ts`, rule applied in `dmCrypto`,
+badge predicate + strings, tests including a split child asserting the badge
+does not claim the held amount.
+
+---
+
+## Phase 3 — refusal, per rail
+
+**Blocked on the gateway's step 7, which is per rail and not ours to trigger.**
+
+### 3.1 A refusal reason
+
+`RefusalReason` already exists from the Finding 1 work and
+`refusalToast.ts` already maps reasons to merchant-facing copy. Add:
+
+- `warrant-missing` — signed `none` where policy requires one.
+- `warrant-invalid` — signature did not verify.
+
+Note `absent-legacy` gets **no** refusal reason, because refusing pre-epoch
+coupons is not a security decision, it is a migration decision, and it is
+governed by expiry rather than by policy. Their step 7 says flip "once their
+uncountersigned populations have expired" and that is the right trigger.
+
+### 3.2 Policy, per rail, configurable
+
+Mirroring `issuerAllowlist.ts`, which is the precedent in this repo for an
+opt-in policy that is inert until configured:
+
+```
+VITE_REQUIRE_ISSUANCE_WARRANT = ""            # unset: advisory, today
+VITE_REQUIRE_ISSUANCE_WARRANT = "cash,stripe" # refuse signed-none on these rails
+```
+
+Unset means inert. This matters because the Lightning-funded atomic purchase
+path mints `warrant: none` legitimately (their §4.1) and an estate-wide flip
+would refuse every one of them.
+
+### 3.3 `validationStatus` gains a verdict
+
+Only in this phase, and only when policy says the rail is required. Before
+this, a warrant never turns a badge red.
+
+**Deliverables:** two refusal reasons + copy, `src/lib/warrantPolicy.ts`,
+`validationStatus` verdict, tests that the unset default refuses nothing.
+
+---
+
+## What could go wrong, in the order it is likely to
+
+**The digest preimage is not separated.** Asked in 0.1. If they concatenate,
+`25|00` and `2500|0` collide and the scheme has a forgery in it. This is the
+single highest-value question in the document and it is why 0.1 blocks
+everything.
+
+**The codec drops the field.** Their own §5 flagged this and their probe already
+demonstrates the codec whitelists thirteen keys. Our round-trip test in 1.2 is
+the wallet-side half of that guard. It must assert on a **warranted** voucher,
+not a shape-only fixture.
+
+**`warrantCoversFaceValue` is not captured on some split path.** 2.1 handles
+`replaceVoucher`. If there is a second path that writes a reduced `face_value`
+we will silently treat a child as a parent, and the badge will over-claim. Grep
+for every write to `face_value` before implementing 2.1 rather than trusting
+this plan's claim that there is one.
+
+**Checked while writing this, rather than left as advice.** Seven sites write
+`face_value` outside tests:
+
+| Site | What it is |
+|---|---|
+| `pay.ts:175` | **the split.** The only one writing a REDUCED value |
+| `issue.ts:426` | issuance, outbound request body |
+| `dmCrypto.ts:405` | inbound, from the signed voucher |
+| `dmPoll.ts:280,298` | pass-through of a value already on the row |
+| `merchants.ts:59` | read-through with an `?? row.amount` fallback |
+| `txRecords.ts:81` | a transaction record, not a voucher row |
+
+So the claim holds today and 2.1 has one site. It is recorded here **with the
+list** so that a future reader can re-run the grep and see what changed, rather
+than re-deriving whether the claim was ever true.
+
+**Consolidation.** Their §7.4 says it needs an explicit rule and does not give
+one, beyond "carry the set of parent digests, refuse mixed states". That rule is
+not designed yet. It is not on our critical path because the wallet does not
+consolidate today, but if it starts before the rule lands, mixed-state
+consolidation is a laundering seam. **Flag it, do not build against it.**
+
+---
+
+## Sequencing summary
+
+| Phase | Blocked on | Ships |
+|---|---|---|
+| 0.1 questions | nothing | now |
+| 0.2 decoder patch | nothing | now, to their repo |
+| 0.3 ceiling predicate | nothing | now |
+| 1 reader | 0.1 answers + their step 2 | after they publish |
+| 2 ceiling enforced | 1 | after reader |
+| 3 refusal | their step 7, per rail | their call |
+
+Phases 0.2 and 0.3 are independent of everything and can land today. Phase 1 is
+the real work and it cannot start on guesses.
+
+---
+
+## What this plan does not cover
+
+- **Consolidation warrant rules.** Undesigned, flagged above, not ours alone.
+- **Lightning.** Out of scope per their §4.1, and the custody question is
+  theirs.
+- **Reconciling `processor` warrants against Stripe.** Their step 6, server
+  side. The wallet records the claim and never resolves it.
+- **Re-signing existing vouchers.** Per the user's standing decision, existing
+  vouchers can be ignored: this is the dev phase. That collapses their
+  four-step migration to one for us, and it is why phase 3 is small.
