@@ -307,7 +307,9 @@ async function detail(response: Response, fallback: string): Promise<string> {
  * part 1, and parts 2-5 were left minted-but-PENDING and never delivered. The
  * customer got 200 of their 1000. Every caller must handle N.
  */
-async function createVouchers(params: IssueParams): Promise<IssuedVoucher[]> {
+async function createVouchers(
+  params: IssueParams,
+): Promise<{ vouchers: IssuedVoucher[]; warrant: string | undefined }> {
   const warrant = await buildIssuanceWarrant(
     params.actor,
     params.faceValueMinor,
@@ -359,7 +361,7 @@ async function createVouchers(params: IssueParams): Promise<IssuedVoucher[]> {
   const items = Array.isArray(body) ? body : (body.items ?? [])
   const vouchers = items.filter((item) => item?.voucher_id)
   if (vouchers.length === 0) throw new Error('The portal issued no voucher.')
-  return vouchers
+  return { vouchers, warrant }
 }
 
 /**
@@ -546,7 +548,10 @@ export async function issueAndDeliver(
   }
 
   onStage?.('issuing')
-  const created = await createVouchers(params)
+  // Destructured so everything below keeps working on a plain list. The
+  // warrant travels separately because it describes the SALE, not any one
+  // coupon, and recordSale needs it to file what the stall actually signed.
+  const { vouchers: created, warrant: saleWarrant } = await createVouchers(params)
 
   // One sale, possibly several coupons — see `createVouchers`. Each part is
   // minted and delivered in turn, and the parts are INDEPENDENT: part 2 failing
@@ -581,7 +586,7 @@ export async function issueAndDeliver(
       // merchant is told the sale failed while the customer holds part of it,
       // and the two accounts of the same sale disagree. That is exactly the
       // confusion the lost 800 caused.
-      await recordSale(delivered, params, created.length)
+      await recordSale(delivered, params, created.length, saleWarrant)
       throw new Error(
         `${error instanceof Error ? error.message : String(error)}` +
           (delivered.length > 0
@@ -592,7 +597,7 @@ export async function issueAndDeliver(
     delivered.push(ready)
   }
 
-  await recordSale(delivered, params, created.length)
+  await recordSale(delivered, params, created.length, saleWarrant)
 
   /**
    * Did the customer actually receive what the merchant sold?
@@ -680,6 +685,18 @@ async function recordSale(
   delivered: IssuedVoucher[],
   params: IssueParams,
   parts: number,
+  /**
+   * The warrant this stall signed for the sale, if it signed one.
+   *
+   * Passed down rather than rebuilt here, and that is not merely tidier: the
+   * nonce is fresh per call, so recomputing would file a DIFFERENT warrant
+   * from the one the coupons actually carry, and a merchant reconciling the
+   * two would find they disagree.
+   *
+   * The SAME warrant is filed against every part of a split sale, matching
+   * what the coupons carry. Each part is verified against it as a ceiling.
+   */
+  saleWarrant?: string,
 ): Promise<void> {
   if (delivered.length === 0) return
   try {
@@ -713,6 +730,11 @@ async function recordSale(
         // merchant's own encrypted history, while `deliver` above builds what
         // the customer receives. Attribution deliberately does not appear there.
         terminalPubkey: attributionFor(params.actor)?.terminalPubkey,
+        issuanceWarrant: saleWarrant,
+        // Every part of THIS sale, on every part's row. Taken from `delivered`
+        // rather than from the original request, so it records what actually
+        // reached the customer rather than what was asked for.
+        saleVoucherIds: delivered.map((v) => v.voucher_id),
       })
 
       // The relay copy rides along with the write: `openWallet` wraps
