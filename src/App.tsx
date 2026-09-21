@@ -399,7 +399,15 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
                 <Route path="/merchant/coupons" element={<IssuedCouponsPage />} />
                 {/* The full list behind the dashboard's capped "Expiring soon". */}
                 <Route path="/merchant/expiring" element={<ExpiringVouchersPage />} />
-                <Route path="/merchant/coupon/:voucherId" element={<IssuedCouponPage />} />
+                {/* `pubkey` is the STALL's own key, which the detail screen
+                    needs to re-check each sale's warrant against. Warrants are
+                    signed by the stall and `issuerId` names it, so any other
+                    key would report every honest sale as a mismatch — the same
+                    trap `/settings/ledger` notes below. */}
+                <Route
+                  path="/merchant/coupon/:voucherId"
+                  element={<IssuedCouponPage pubkey={pubkey} />}
+                />
                 <Route
                   path="/merchant/dashboard"
                   element={<MerchantDashboardPage pubkey={pubkey} merchant={merchant} />}

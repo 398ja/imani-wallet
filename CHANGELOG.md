@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A Vouchers entry on the merchant menu, and a record behind each one.** A stall could see the
+  coupons it had issued only by going through Transactions, and the screen behind a coupon could
+  say what was issued and nothing about what happened next. The menu now carries **Vouchers**
+  between Dashboard and Transactions, listing what the stall put into circulation.
+
+  **Still-valid vouchers lead, expired ones are one switch away.** A merchant trades against the
+  live ones, so a list led by last year's lapsed coupons buries the answer. But the customer most
+  likely to present a coupon at a counter is the one holding a coupon that has run out, so they
+  cannot simply be absent. The switch says how many are behind it, and the heading follows the
+  switch rather than counting a set the list is not showing.
+
+- **What has actually been claimed against a voucher.** The question a merchant opens the record
+  with, and the one it could not previously answer. A coupon is spent down rather than used up, so
+  one issuance legitimately comes back several times — the figure is a sum over every incoming row
+  sharing the voucher id, shown beside what is still outstanding, with the claiming transactions
+  listed underneath so the total can be checked rather than only believed.
+
+  The trap here is real and is pinned by a test: stored rows carry a hardcoded `direction: 'in'`,
+  so anything reading direction off the row rather than through `toTransaction` would report a
+  voucher fully claimed on the day it was sold.
+
+- **The evidence behind a sale, as three lines that are never collapsed.** How it was paid for,
+  whether the stall authorised issuing it, and whether the customer said money arrived are three
+  different claims, and merging any two lets a merchant read authorisation as proof of payment.
+  Each line carries what it does and does not establish, on screen rather than behind a tap.
+
+  **Cash or card has three answers, not two.** A processor warrant is evidence of a card payment;
+  a stall-signed warrant is evidence of a sale made at the counter. Everything else — every sale
+  issued before warrants shipped, and every sale made on a terminal, whose key is not the stall's
+  — reads as *not recorded*. Printing "cash" over those would be the wallet inventing a fact about
+  money.
+
+### Changed
+
+- **A voucher row now opens the voucher rather than the transaction that issued it**, on the
+  issued list, the expiring list, and a scanned pass. The question behind the row is what happened
+  to this coupon; the issuing movement is still one tap further in, in the record's own details.
+
 ## [0.6.1] - 2026-09-21
 
 ### Fixed

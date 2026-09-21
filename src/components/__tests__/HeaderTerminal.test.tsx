@@ -36,17 +36,29 @@ const show = (props: Record<string, unknown>) =>
   )
 
 describe('the menu on a terminal', () => {
-  it('offers the owner their dashboard and transactions', () => {
+  it('offers the owner their dashboard, vouchers and transactions', () => {
     show({ merchant: true })
     expect(screen.getByText('Dashboard')).toBeTruthy()
+    expect(screen.getByText('Vouchers')).toBeTruthy()
     expect(screen.getByText('Transactions')).toBeTruthy()
   })
 
-  it('offers a terminal neither', () => {
+  it('sends Vouchers to the list of what the stall has issued', () => {
+    show({ merchant: true })
+    expect(screen.getByRole('link', { name: 'Vouchers' }).getAttribute('href')).toBe(
+      '/merchant/coupons',
+    )
+  })
+
+  it('offers a terminal none of them', () => {
     // A full till may sell and still has no business reading the books, so
-    // this is gated on being a terminal at all rather than on the role.
+    // this is gated on being a terminal at all rather than on the role. The
+    // issued-voucher list belongs with the other two: it is a record of what
+    // the stall put out and what has come back against it, which is turnover
+    // by another name.
     show({ merchant: true, terminal: true })
     expect(screen.queryByText('Dashboard')).toBeNull()
+    expect(screen.queryByText('Vouchers')).toBeNull()
     expect(screen.queryByText('Transactions')).toBeNull()
   })
 
@@ -60,6 +72,9 @@ describe('the menu on a terminal', () => {
   it('leaves a customer’s menu alone', () => {
     show({})
     expect(screen.queryByText('Dashboard')).toBeNull()
+    // A customer issues nothing, so there is no such list for them — their own
+    // coupons live on the merchant screens they already have.
+    expect(screen.queryByText('Vouchers')).toBeNull()
   })
 
   /**

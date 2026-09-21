@@ -98,10 +98,32 @@ the customer pays less than a whole coupon, they keep the change automatically.
 
 - **Transactions** lists every movement: coupons you issued and coupons that came
   back. Tap one to see its detail, and from there **View coupon**.
-- **Coupons** lists what you've issued.
+- **Vouchers** lists what you've issued. It shows the ones still valid by default,
+  with a switch to bring in the ones that have run out — useful when a customer
+  turns up holding a lapsed coupon and you want to see what it was worth.
 - **Expiring soon** on the till surfaces coupons about to lapse, soonest first, so
   you can nudge customers to spend them.
 - **Stats** gives you the totals: issued, returned, and a simple day-by-day chart.
+
+### What a voucher's own screen tells you
+
+Tap a voucher, or scan a customer's pass, and you get its record:
+
+- **How much has been claimed** against it so far, and how much is still out
+  there. A coupon can be spent in parts, so these are running totals rather than
+  a yes or no, and the transactions that claimed it are listed underneath.
+- **How it was paid for**: by card, at the counter, or not recorded. That last one
+  is normal — it covers every sale you made before signing was added, and every
+  sale made on one of your terminals.
+- **Whether it was authorised**: whether the signature your stall put on the sale
+  still matches the sale beside it. If it ever says the two don't match, that is
+  worth looking at.
+- **Whether the customer signed for it.** Most sales have none, and that is not a
+  fault — it's evidence a customer can offer, never something a sale requires.
+
+Worth keeping straight: *authorised* means you meant to issue that value. It does
+not mean you were paid. Only the customer's own signature says money arrived, and
+on a counter sale there is nobody else to ask.
 
 A note on honesty: these figures are **your device's own record** of what you've
 issued and what's returned. The app tells you so on the Stats screen. Whether a
