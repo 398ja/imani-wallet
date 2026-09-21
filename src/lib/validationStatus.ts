@@ -61,6 +61,21 @@ export function hasPublishedAttestation(tx: WalletTransaction): boolean {
 export function validationStatus(v: VoucherValidation | undefined): ValidationStatus {
   if (!v) return 'unchecked'
   if (!v.signatureValid) return 'failed'
+  // A REFUSED warrant is a failure. Not because the coupon is necessarily
+  // forged - the signature verified, so the bytes are intact - but because
+  // something claimed an authorisation and that claim did not hold. The two
+  // ways to get here are a warrant that does not cover this coupon's value and
+  // one signed by a key that is not the stall, and both are exactly what the
+  // scheme exists to catch.
+  //
+  // Deliberately NOT triggered by `absent` or `unwarranted`. Those are
+  // silences, not failed claims: `absent` means the coupon predates warrants
+  // and `unwarranted` means the issuer signed that nothing authorised it.
+  // Turning either red would paint most of the estate red over a policy
+  // decision nobody has taken, and a badge that is red for everything trains
+  // people to ignore the ones that matter - the same reasoning that keeps
+  // `hasValidationClaim` from putting a grey dot on every payment.
+  if (v.warrant === 'failed') return 'failed'
   // A clamped value means the derived amount exceeded what the issuer signed,
   // which on a legacy voucher is what a rewritten `issuance_ratio` looks like.
   // The signature verified, so this is not forgery — but the coupon is not what

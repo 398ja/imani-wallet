@@ -9,6 +9,7 @@ import type { CryptoAdapter, GiftWrapEvent, UnwrappedDm, TokenMetadata } from '@
 
 import { checkIssuer } from './issuerAllowlist'
 import { getSigner } from './nap'
+import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
 import { asChunk, offerChunk } from './dmChunks'
 import {
   creditableFaceValue,
@@ -161,6 +162,25 @@ function verifiedVoucherFrom(token: string | undefined):
     )
   }
 
+  // Checked against the CREDITABLE value, not the signed face value. A warrant
+  // bounds what this coupon may be worth now, and `faceValue` is what we are
+  // about to credit - verifying against the signed face would let a clamped or
+  // split coupon pass a check its actual credit never faced.
+  const warrant = parseIssuanceWarrant(parsed.voucher.issuanceWarrant)
+  const warrantVerdict = verifyIssuanceWarrant(warrant, parsed.voucher.issuerId, faceValue)
+
+  if (warrantVerdict.verdict === 'failed') {
+    // Recorded, not refused. Refusing an unwarranted or badly-warranted coupon
+    // is a policy decision nobody has taken, and taking it here would break
+    // every coupon issued before this shipped. The merchant is shown the state
+    // instead; `validationStatus` decides what the badge says.
+    console.warn(
+      '[dmCrypto] issuance warrant refused for voucher:',
+      parsed.voucher.voucherId,
+      warrantVerdict.reason,
+    )
+  }
+
   return {
     parsed,
     validation: {
@@ -170,6 +190,10 @@ function verifiedVoucherFrom(token: string | undefined):
         legacyCanonical,
         signedFaceValue: parsed.voucher.faceValue,
         cappedAtFaceValue,
+        warrant: warrantVerdict.verdict,
+        ...(warrant.state === 'present'
+          ? { warrantedSaleTotal: warrant.saleTotalMinor }
+          : {}),
       },
     },
   }
