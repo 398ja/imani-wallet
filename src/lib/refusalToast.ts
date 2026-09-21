@@ -56,6 +56,13 @@ const MESSAGES: Record<RefusalReason, { title: string; detail: string }> = {
    * the only way that matters: this one IS the stall's own, and there is
    * nothing left on it.
    */
+  unwarranted: {
+    title: 'Coupon not authorised',
+    detail:
+      'Nothing outside the issuing service vouches for this coupon, so there is no ' +
+      'evidence the stall it names actually issued it. Ask the customer where it came ' +
+      'from before accepting it.',
+  },
   'over-redeemed': {
     title: 'That coupon is already spent',
     detail: 'It has paid out everything it was issued for. Nothing was taken.',

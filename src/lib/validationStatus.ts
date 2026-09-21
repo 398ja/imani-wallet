@@ -61,26 +61,55 @@ export function hasPublishedAttestation(tx: WalletTransaction): boolean {
 export function validationStatus(v: VoucherValidation | undefined): ValidationStatus {
   if (!v) return 'unchecked'
   if (!v.signatureValid) return 'failed'
-  // A REFUSED warrant is a failure. Not because the coupon is necessarily
-  // forged - the signature verified, so the bytes are intact - but because
-  // something claimed an authorisation and that claim did not hold. The two
-  // ways to get here are a warrant that does not cover this coupon's value and
-  // one signed by a key that is not the stall, and both are exactly what the
-  // scheme exists to catch.
+  // An UNWARRANTED coupon fails, and so does one whose warrant was refused.
   //
-  // Deliberately NOT triggered by `absent` or `unwarranted`. Those are
-  // silences, not failed claims: `absent` means the coupon predates warrants
-  // and `unwarranted` means the issuer signed that nothing authorised it.
-  // Turning either red would paint most of the estate red over a policy
-  // decision nobody has taken, and a badge that is red for everything trains
-  // people to ignore the ones that matter - the same reasoning that keeps
-  // `hasValidationClaim` from putting a grey dot on every payment.
-  if (v.warrant === 'failed') return 'failed'
+  // The three failing states are different problems with the same answer:
+  //
+  //   failed      a warrant was present and did not hold - wrong amount,
+  //               wrong currency, or signed by a key that is not the stall
+  //   unwarranted the issuer SIGNED that nothing outside itself authorised
+  //               this, which is an honest statement of an unbacked claim
+  //   absent      no warrant at all, so nothing but the issuing service says
+  //               this stall issued it
+  //
+  // An earlier version of this function failed only the first and treated the
+  // other two as silences worth tolerating. That was the wrong call: a coupon
+  // nobody outside the issuing service authorised is exactly the coupon a
+  // compromised service mints, and letting it read as verified means the
+  // forgery is invisible at the only moment a human looks.
+  //
+  // It also made the scheme opt-out for an attacker. Omitting the warrant was
+  // strictly safer than forging one, because a forgery showed red and an
+  // absence showed green.
+  //
+  // `claimed` is NOT here. A processor warrant is a real external claim that
+  // this build cannot check offline; it is reconciled against the processor
+  // out of band. Failing it would refuse every card-funded coupon.
+  if (v.warrant === 'failed' || v.warrant === 'unwarranted' || v.warrant === 'absent') {
+    return 'failed'
+  }
+
   // A clamped value means the derived amount exceeded what the issuer signed,
   // which on a legacy voucher is what a rewritten `issuance_ratio` looks like.
   // The signature verified, so this is not forgery — but the coupon is not what
   // it claimed to be worth, and that is worth a red dot rather than a green one.
+  //
+  // BEFORE the unchecked case below, and the order is not arbitrary. A clamped
+  // coupon is a known failure whether or not the warrant question was ever
+  // asked, so reporting "unchecked" for it would downgrade a definite problem
+  // to an open one. An earlier arrangement of this function did exactly that
+  // and three existing tests caught it.
   if (v.cappedAtFaceValue) return 'failed'
+
+  // A row written before the warrant field existed. NOT verified: the question
+  // was never asked, and saying "verified" would leave every pre-warrant row
+  // reading green forever — the same hole by a slower route.
+  //
+  // `unchecked` rather than `failed` because the coupon may be perfectly good.
+  // The merchant is told the truth, which is that this one has not been
+  // checked, and that is actionable in a way a red dot on everything is not.
+  if (v.warrant === undefined) return 'unchecked'
+
   return 'verified'
 }
 

@@ -29,6 +29,11 @@ const terminal: Actor = {
   role: 'issue-and-redeem',
 } as Actor
 
+/** The coupon a warrant is checked against: EUR, 2 decimals, given value. */
+function coupon(faceValueMinor: number, unit = 'EUR', faceDecimals = 2) {
+  return { faceValueMinor, unit, faceDecimals }
+}
+
 /** A signer standing in for an unlocked wallet holding `sk`. */
 function signerFor(sk: string) {
   return {
@@ -67,7 +72,7 @@ describe('an owner signs a verifiable merchant warrant', () => {
 
     // The round trip that matters: signed here, verified by the same code a
     // redeeming merchant runs.
-    expect(verifyIssuanceWarrant(warrant, STALL, 2500)).toEqual({ verdict: 'verified' })
+    expect(verifyIssuanceWarrant(warrant, STALL, coupon(2500))).toEqual({ verdict: 'verified' })
   })
 
   it('covers the SALE, so every part of a split still verifies', async () => {
@@ -76,7 +81,7 @@ describe('an owner signs a verifiable merchant warrant', () => {
     const warrant = parseIssuanceWarrant(json)
 
     for (const part of [834, 833, 833]) {
-      expect(verifyIssuanceWarrant(warrant, STALL, part).verdict).toBe('verified')
+      expect(verifyIssuanceWarrant(warrant, STALL, coupon(part)).verdict).toBe('verified')
     }
   })
 
@@ -84,7 +89,7 @@ describe('an owner signs a verifiable merchant warrant', () => {
     const json = await buildIssuanceWarrant(owner, 2500, 2, 'EUR')
     const warrant = parseIssuanceWarrant(json)
 
-    expect(verifyIssuanceWarrant(warrant, STALL, 5_000_000).verdict).toBe('failed')
+    expect(verifyIssuanceWarrant(warrant, STALL, coupon(5_000_000)).verdict).toBe('failed')
   })
 
   it('uses a fresh nonce per sale', async () => {
@@ -162,6 +167,6 @@ describe('the digest binds what it claims to bind', () => {
       }),
     )
 
-    expect(verifyIssuanceWarrant(tampered, STALL, 2500).verdict).toBe('failed')
+    expect(verifyIssuanceWarrant(tampered, STALL, coupon(2500)).verdict).toBe('failed')
   })
 })

@@ -42,18 +42,25 @@ describe('the badge reflects a refused warrant', () => {
   })
 })
 
-describe('the two silences stay silent', () => {
-  it('an absent warrant does not fail the coupon', () => {
-    // Every coupon issued before warrants shipped is here. Failing them would
-    // paint most of the estate red over a policy decision nobody has taken.
-    expect(validationStatus(record({ warrant: 'absent' }))).toBe('verified')
+describe('an unwarranted coupon FAILS', () => {
+  it('an absent warrant fails the coupon', () => {
+    // Nothing outside the issuing service says this stall issued it, which is
+    // exactly the coupon a compromised service mints.
+    expect(validationStatus(record({ warrant: 'absent' }))).toBe('failed')
   })
 
-  it('a signed `none` does not fail the coupon either', () => {
-    // The issuer stated that nothing outside the service authorised this. That
-    // is honest rather than broken, and refusing it is a per-rail policy flip
-    // that has not happened.
-    expect(validationStatus(record({ warrant: 'unwarranted' }))).toBe('verified')
+  it('a signed `none` fails the coupon', () => {
+    // An honest statement of an unbacked claim is still an unbacked claim.
+    expect(validationStatus(record({ warrant: 'unwarranted' }))).toBe('failed')
+  })
+
+  it('omitting a warrant is not safer than forging one', () => {
+    // The property that made the earlier policy wrong. When only `failed` was
+    // red, an attacker's best move was to omit the warrant: a forgery showed
+    // red and an absence showed green, so the scheme was opt-out for exactly
+    // the party it was written to catch. These must agree.
+    expect(validationStatus(record({ warrant: 'absent' })))
+      .toBe(validationStatus(record({ warrant: 'failed' })))
   })
 
   it('a processor claim does not read as verification', () => {
@@ -65,9 +72,12 @@ describe('the two silences stay silent', () => {
     expect(claimed.warrant).not.toBe('verified')
   })
 
-  it('a row predating this field is unaffected', () => {
-    // `warrant` undefined, as every stored row has it today.
-    expect(validationStatus(record())).toBe('verified')
+  it('a row predating this field is NOT silently verified', () => {
+    // Stored rows written before the warrant field existed have it undefined.
+    // Treating that as verified would leave a permanent hole: every pre-warrant
+    // row would read green forever. It is unchecked, which is honest, and the
+    // badge says so rather than claiming an assurance nobody made.
+    expect(validationStatus(record())).toBe('unchecked')
   })
 })
 
