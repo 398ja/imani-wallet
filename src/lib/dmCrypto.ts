@@ -1,6 +1,6 @@
 import { nip17, nip44 } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
-import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
+import { bytesToHex } from '@noble/hashes/utils'
 import {
   extractToken as extractTokenFromText,
   parseTokenTransferMessage as parseTextMessage,
@@ -10,7 +10,7 @@ import type { CryptoAdapter, GiftWrapEvent, UnwrappedDm, TokenMetadata } from '@
 import { checkIssuer } from './issuerAllowlist'
 import { getSigner } from './nap'
 import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
-import { asChunk, offerChunk } from './dmChunks'
+import { asChunk, looksLikeChunk, offerChunk } from './dmChunks'
 import {
   creditableFaceValue,
   parseVoucherToken,
@@ -305,6 +305,35 @@ export function createDmCryptoAdapter(): CryptoAdapter {
             content: whole,
             createdAt: rumor.created_at,
           }
+        }
+
+        /**
+         * A chunk this build could not accept. NULL, not a fall-through.
+         *
+         * `asChunk` refuses an envelope whose shape it cannot use — too many
+         * pieces, an impossible index, a missing field. Falling through to the
+         * plain return below hands the raw chunk JSON to the rest of the
+         * pipeline, which finds no token in it, classifies it `non_token_dm`,
+         * and marks the event PROCESSED. The wrap is then never offered again,
+         * so the coupon is destroyed by a client-side limit — exactly how a 200
+         * and two 150s were lost once already.
+         *
+         * Null is the retryable answer: dm-poll records it in `failedTracker`
+         * and only its success paths call `eventTracker.add`. So a build that
+         * later accepts the shape, as this one now does for transfers above the
+         * old 16-chunk ceiling, still finds the wrap on the relay and pays the
+         * customer.
+         *
+         * Distinguished from a non-chunk by `looksLikeChunk`, which tests only
+         * `type`. A DM that was never a chunk still falls through unchanged.
+         */
+        if (looksLikeChunk(rumor.content)) {
+          console.warn(
+            '[dmCrypto] refusing a chunk envelope this build cannot read; ' +
+              'keeping the event unprocessed so a later build can recover it',
+            event.id.slice(0, 8),
+          )
+          return null
         }
 
         return {

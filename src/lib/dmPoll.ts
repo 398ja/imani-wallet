@@ -956,6 +956,32 @@ export function startDmPoll(pubkey: string): DmPollService {
     // can carry a timestamp from two days back and fall outside a 24h `since`
     // window — present on the relay, invisible to the wallet.
     recentDmsSince: 7 * 24 * 60 * 60,
+    /**
+     * The processed set must be able to cover the FETCH WINDOW above.
+     *
+     * These two numbers are one decision and were made separately, which is
+     * the bug. Every poll re-reads every wrap in the 7-day window, and the
+     * processed set is the only thing that stops one being unwrapped and
+     * offered to the mint again. dm-poll's default cap is 100 ids.
+     *
+     * A 1000 GBP sale is what made that ceiling reachable: the portal splits
+     * it into 5 coupons, and a coupon whose Cashu token exceeds
+     * `direct_limit_bytes` is delivered as up to 16 chunk DMs. One sale is
+     * therefore as many as 80 gift wraps, on top of a week of ordinary
+     * traffic. Past 100, the set evicts ids that are still inside the window:
+     * the next poll re-fetches them, re-processes them, and evicts the next
+     * batch in turn. It never converges. Every cycle is a full round of
+     * redundant unwraps and mint round-trips, which is what made the wallet
+     * "unusable" rather than merely slow, and it survives a reload because
+     * the set is in localStorage.
+     *
+     * 5000 is chosen against the window, not the sale: a week of wraps for a
+     * busy stall, with room for the chunk multiplier. At ~64 bytes an id this
+     * is ~320KB of localStorage, well inside the quota, and the cost of being
+     * wrong in this direction is memory while the cost of being wrong in the
+     * other is the churn above.
+     */
+    maxProcessedEvents: 5000,
     nostrdbAdapter: nostrdbAdapter(),
     cryptoAdapter: createDmCryptoAdapter(),
     storageAdapter: storageAdapter(),

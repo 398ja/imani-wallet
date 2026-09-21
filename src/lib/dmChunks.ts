@@ -59,12 +59,58 @@ export const CHUNK_TYPE = 'cashu_dm_chunk'
 
 /**
  * A ceiling on what one transfer may hold, so a malicious or broken sender
- * cannot grow the buffer without bound. 16 chunks is the gateway's own
- * `max_chunks`, and 24576 chars is its `chunk_payload_chars`; this is that
- * budget with room to spare rather than a number chosen here.
+ * cannot grow the buffer without bound.
+ *
+ * **64, not 16, and the 16 was a real loss.** The old value was taken from the
+ * gateway's `max_chunks` at one moment on one deployment and hard-coded as
+ * though it were a protocol constant. It is not: it is the SENDER's
+ * configuration, and the receiver refusing anything above it means a gateway
+ * that raises its own limit, or a coupon whose token is simply bigger than the
+ * one that was measured, becomes silently unreceivable. A 1000-unit sale is
+ * exactly when that happens — a Cashu token carries one ~1840-char proof per
+ * set bit of its amount, so the parts of a large sale are the largest tokens
+ * the system ever sends.
+ *
+ * The real defence was never this count. It is `MAX_REASSEMBLED_BYTES`, which
+ * bounds the thing that actually costs memory and is enforced before and after
+ * decoding. This number only has to be high enough not to refuse honest
+ * traffic, so it is set well clear of any sender's chunking rather than level
+ * with one.
  */
-const MAX_CHUNKS = 16
-const MAX_REASSEMBLED_BYTES = 16 * 24576 * 2
+const MAX_CHUNKS = 64
+/**
+ * The ceiling that actually matters, and it is derived from `MAX_CHUNKS` rather
+ * than fixed beside it — a transfer of the maximum permitted number of chunks
+ * must be reassemblable, or the count above is a limit the code cannot reach.
+ * 24576 chars is the gateway's `chunk_payload_chars`; the doubling is headroom
+ * for a sender that uses a larger fragment than the one measured.
+ */
+const MAX_REASSEMBLED_BYTES = MAX_CHUNKS * 24576 * 2
+
+/**
+ * Is this DM body a chunk envelope AT ALL, whatever we then make of it?
+ *
+ * Separate from `asChunk` because the two answer different questions and
+ * conflating them loses coupons. `asChunk` says "here is a chunk I can work
+ * with", and returns null both for a DM that is not a chunk and for a chunk
+ * this build refuses. Those must not be handled alike: a non-chunk DM is
+ * correctly marked processed and forgotten, while a REFUSED chunk marked
+ * processed is a coupon deleted forever — the wrap is never offered again, so
+ * raising a limit or fixing a parser later cannot recover it.
+ *
+ * Deliberately the loosest possible test, `type` and nothing else. Anything
+ * stricter would start making the judgements that belong to `asChunk`, and a
+ * chunk failing a stricter test here would land back in the silent-loss path
+ * this exists to close.
+ */
+export function looksLikeChunk(content: string): boolean {
+  try {
+    const parsed = JSON.parse(content) as { type?: unknown } | null
+    return parsed?.type === CHUNK_TYPE
+  } catch {
+    return false
+  }
+}
 
 /** Is this decrypted DM body one piece of a larger coupon? */
 export function asChunk(content: string): ChunkEnvelope | null {
@@ -141,21 +187,74 @@ const pending = new Map<string, Pending>()
  * then sat until the sweep, and the next poll built it again: a slow leak and a
  * "holding chunk" line every cycle for a coupon already in the wallet.
  *
+ * **Persisted, because the thing it guards against outlives the tab.** This was
+ * in memory only, and the processed set it partners with is in localStorage —
+ * so every reload dropped the memory of completed transfers while keeping the
+ * tombstones that make their stragglers un-completable. The first poll after a
+ * reload then rebuilt exactly the wedged pending entry described above, for
+ * every large coupon received in the last seven days, and rebuilt it again on
+ * every poll thereafter. Both halves of the pair must have the same lifetime or
+ * one contradicts the other.
+ *
  * Keyed by transfer id, which is exactly the identity that matters, and holds
- * only ids — a few dozen bytes each, bounded below.
+ * only ids and a timestamp — a few dozen bytes each, bounded below.
  */
-const completed = new Map<string, number>()
+const COMPLETED_KEY = 'imani-wallet:dm-chunks:completed'
 
-/** How long a completed transfer is remembered. */
-const COMPLETED_TTL_MS = 24 * 60 * 60 * 1000
+function loadCompleted(): Map<string, number> {
+  try {
+    const raw = localStorage.getItem(COMPLETED_KEY)
+    if (!raw) return new Map()
+    const parsed = JSON.parse(raw) as [string, number][]
+    // Shape-checked rather than trusted: this is parsed storage, and a bad
+    // entry here would throw on every poll. A corrupt store is simply an empty
+    // one, which costs one round of re-holds and then self-heals.
+    return Array.isArray(parsed) ? new Map(parsed.filter(
+      (e) => Array.isArray(e) && typeof e[0] === 'string' && typeof e[1] === 'number',
+    )) : new Map()
+  } catch {
+    // Private-browsing modes throw on access. In-memory only is the old
+    // behaviour and still correct, just less durable.
+    return new Map()
+  }
+}
+
+const completed = loadCompleted()
+
+function persistCompleted(): void {
+  try {
+    localStorage.setItem(COMPLETED_KEY, JSON.stringify([...completed]))
+  } catch {
+    // Quota or private browsing. The in-memory set still works for this
+    // session, and losing durability must not fail a receipt.
+  }
+}
+
+/**
+ * How long a completed transfer is remembered.
+ *
+ * **Must outlast the poll's fetch window**, which is 7 days — see
+ * `recentDmsSince` in `dmPoll.ts`. At the old 24 hours, a transfer's
+ * stragglers were still being re-fetched for six more days after this set had
+ * forgotten the transfer was ever completed, which is precisely the condition
+ * that re-opens a pending entry nothing can finish. One day longer than the
+ * window, so the guard is retired only once the wraps it guards against have
+ * dropped out of the query.
+ */
+const COMPLETED_TTL_MS = 8 * 24 * 60 * 60 * 1000
 
 /**
  * A ceiling on remembered transfers, so a long-lived session cannot grow this
- * without bound. Oldest go first; forgetting one early is harmless, because the
- * worst case is the re-hold this set exists to avoid, which the sweep then
- * clears.
+ * without bound. Oldest go first.
+ *
+ * Forgetting one early is NOT harmless now that the TTL spans the whole fetch
+ * window: an evicted id whose stragglers are still inside that window is the
+ * re-hold this set exists to prevent, and the sweep cannot clear it because
+ * the pending entry is rebuilt on the very next poll. 5000 is sized against
+ * the window rather than the session, matching `maxProcessedEvents`, and at a
+ * transfer id plus a timestamp it is a few hundred KB at worst.
  */
-const MAX_COMPLETED = 500
+const MAX_COMPLETED = 5000
 
 /** How long an incomplete transfer may sit before its pieces are discarded. */
 const PENDING_TTL_MS = 10 * 60 * 1000
@@ -171,9 +270,16 @@ function sweep(now: number): void {
       pending.delete(id)
     }
   }
+  let expired = false
   for (const [id, at] of completed) {
-    if (now - at > COMPLETED_TTL_MS) completed.delete(id)
+    if (now - at > COMPLETED_TTL_MS) {
+      completed.delete(id)
+      expired = true
+    }
   }
+  // Written back only when something actually aged out, so the ordinary poll
+  // -- which expires nothing -- does not serialise the whole set every cycle.
+  if (expired) persistCompleted()
 }
 
 /** Remember a finished transfer, evicting the oldest if the set is full. */
@@ -185,6 +291,10 @@ function rememberCompleted(transferId: string, now: number): void {
     completed.delete(oldest)
   }
   completed.set(transferId, now)
+  // Persisted at the moment of completion rather than on unload: a wallet on a
+  // phone is killed rather than closed, and a beforeunload that never fires
+  // would lose exactly the entries a reload is about to need.
+  persistCompleted()
 }
 
 /**
@@ -365,6 +475,9 @@ async function gunzip(input: Uint8Array<ArrayBuffer>): Promise<Uint8Array> {
 export function resetChunkAssembly(): void {
   pending.clear()
   completed.clear()
+  // Clears the durable copy too. A sign-out that left it behind would carry
+  // one account's transfer ids into the next session on a shared device.
+  persistCompleted()
 }
 
 /** How many transfers are part-assembled. For tests and diagnostics. */
