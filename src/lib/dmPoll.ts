@@ -26,7 +26,7 @@ import { getSigner } from './nap'
 import { postPaymentReceipt } from './paymentReceipt'
 import { createDmCryptoAdapter, toLegacyMetadata } from './dmCrypto'
 import { resetChunkAssembly } from './dmChunks'
-import { cancelDeferredWrite, deferWrite } from './deferredWrite'
+import { cancelDeferredWrite, deferWrite, flushDeferredWrites } from './deferredWrite'
 import { loadMerchant } from './merchant'
 import { licenceFromToken } from './licences'
 import { checkRedemption } from './redemptionLedger'
@@ -246,6 +246,71 @@ function readSet(key: string): Set<string> {
 }
 
 /**
+ * The received-token set, held in memory and mirrored to storage.
+ *
+ * **Why a mirror rather than reading through.** `hasTokenBeenReceived` runs
+ * once per event in the poll loop and `markTokenAsReceived` re-read the whole
+ * set again to add one entry — each call a synchronous `getItem` plus a
+ * `JSON.parse` of every fingerprint the wallet has ever banked. Measured on a
+ * 2000-event catch-up against a 5000-entry set: ~350MB parsed and ~2s of
+ * blocking main-thread work, all of it re-deriving a value that had not
+ * changed. That was the dominant cost of a catch-up once the write side was
+ * coalesced.
+ *
+ * The adapter OWNS this key — dm-poll reaches storage only through here — so
+ * the in-memory copy cannot drift behind another writer. It is loaded once,
+ * lazily, and every read is answered from it thereafter.
+ *
+ * **Not deferred on write, deliberately.** This set is the first line of
+ * defence against crediting a coupon twice, so the `setItem` stays
+ * synchronous; what is removed here is the redundant READ, which costs
+ * nothing to skip because memory already holds the answer.
+ */
+let receivedCache: Set<string> | null = null
+
+/**
+ * A ceiling on the received set, so it cannot grow for the life of the wallet.
+ *
+ * It had none. Every coupon a merchant ever banked added a fingerprint that
+ * was never removed, and the whole set is re-serialised on each addition — so
+ * a busy stall's wallet got permanently slower at receiving money, with no
+ * bound and no way back short of clearing storage.
+ *
+ * **The cap is what bounds the WRITE, so it is sized small deliberately.**
+ * Every receive serialises the whole set synchronously, which makes the cost
+ * of one receive proportional to the cap: at 20000 fingerprints that is ~700KB
+ * of blocking `JSON.stringify` per coupon, which is worse than the unbounded
+ * growth it was meant to fix. 2000 keeps it near 70KB while still covering far
+ * more than the seven-day window the poll actually re-reads — and the window
+ * is the only thing this set has to outlast, because a wrap older than that is
+ * never offered again.
+ *
+ * **Trimming is safe because this set is not the last line of defence.** It is
+ * a fast local "I have seen this already" that saves a pointless mint round
+ * trip. The MINT is what actually prevents a double-spend: re-presenting a
+ * spent token returns an already-redeemed error, which dm-poll recognises
+ * (`isAlreadyRedeemedError`) and handles by marking the token received and
+ * moving on. So the worst case for an evicted fingerprint is one wasted round
+ * trip that fails safely, and never a coupon credited twice.
+ */
+const MAX_RECEIVED = 2000
+
+function receivedSet(): Set<string> {
+  receivedCache ??= readSet(RECEIVED_KEY)
+  return receivedCache
+}
+
+/**
+ * Drop the mirror so the next read reloads from storage.
+ *
+ * For sign-out and for tests. An account switch must not answer the next
+ * user's "have I seen this?" from the previous user's memory.
+ */
+export function resetReceivedCache(): void {
+  receivedCache = null
+}
+
+/**
  * Vouchers land in the same IndexedDB the rest of the wallet reads, so an
  * arriving coupon shows up on the merchant list through WalletStorage's existing
  * broadcast — no extra plumbing between receive and render.
@@ -326,18 +391,43 @@ function storageAdapter(): StorageAdapter {
     },
 
     async hasTokenBeenReceived(fingerprint: string) {
-      return readSet(RECEIVED_KEY).has(fingerprint)
+      // Answered from memory. This runs once per event in the poll loop, and
+      // re-parsing the whole set from storage to answer it was the single
+      // largest cost of a catch-up.
+      return receivedSet().has(fingerprint)
     },
     async markTokenAsReceived(fingerprint: string) {
-      const seen = readSet(RECEIVED_KEY)
+      const seen = receivedSet()
+      if (seen.has(fingerprint)) return
       seen.add(fingerprint)
-      // SYNCHRONOUS, and it must stay that way. This set is the correctness
-      // boundary: it is what stops a coupon already credited being redeemed a
-      // second time, and it is keyed on the token fingerprint precisely so it
-      // can be trusted when the processed-event cache below cannot. Deferring
-      // it would open a window in which a crash loses the record of a
-      // redemption that really happened.
-      localStorage.setItem(RECEIVED_KEY, JSON.stringify([...seen]))
+      // Oldest first. `Set` iterates in insertion order, so the first value is
+      // the longest-banked fingerprint and the least likely to be offered
+      // again — the poll only looks back seven days.
+      while (seen.size > MAX_RECEIVED) {
+        const oldest = seen.values().next().value
+        if (oldest === undefined) break
+        seen.delete(oldest)
+      }
+      // SYNCHRONOUS, and it must stay that way. This set is the first line of
+      // defence against crediting a coupon twice, and it is keyed on the
+      // token fingerprint precisely so it can be trusted when the
+      // processed-event cache below cannot. Deferring it would open a window
+      // in which a crash loses the record of a redemption that really
+      // happened. (The mint is the BACKSTOP -- see `MAX_RECEIVED` -- but a
+      // backstop that costs a network round trip is not a reason to be
+      // careless with the local record.)
+      //
+      // The READ that used to precede this is gone — memory already holds the
+      // set — but the write itself is unchanged and still lands before this
+      // resolves.
+      try {
+        localStorage.setItem(RECEIVED_KEY, JSON.stringify([...seen]))
+      } catch (error) {
+        // Quota or private browsing. The mirror still dedupes for this
+        // session, which is strictly better than the previous behaviour of
+        // letting the exception escape into dm-poll's redemption path.
+        console.warn('[dmPoll] could not persist the received-token set', error)
+      }
     },
     async getProcessedEventIds() {
       return [...readSet(PROCESSED_KEY)]
@@ -355,7 +445,6 @@ function storageAdapter(): StorageAdapter {
       // a re-read of wraps the wallet already handled, and the re-read is
       // caught by the received set above, which is written synchronously. The
       // two have different durability needs and now get different treatment.
-      //
       // `ids` is captured per call rather than read back inside the callback:
       // dm-poll owns this array and hands over the complete state each time, so
       // the last queued call already carries the newest value.
@@ -1104,4 +1193,15 @@ export function stopDmPoll(): void {
   // genuine half-transfer costs nothing, because its wraps are still on the
   // relay and were never marked processed.
   resetChunkAssembly()
+  // The received-token mirror is per-ACCOUNT state too. `startDmPoll` calls
+  // this on an identity change, and a mirror left loaded would answer the next
+  // user's "have I already banked this?" from the previous user's memory —
+  // which, on a shared device, silently suppresses a real coupon. Dropping it
+  // costs one re-read from storage on the next receive.
+  resetReceivedCache()
+  // Anything still queued is flushed rather than abandoned. A deferred write
+  // holding the last few processed ids would otherwise be dropped on logout,
+  // and those ids are what stop the next session re-reading wraps it has
+  // already handled.
+  flushDeferredWrites()
 }
