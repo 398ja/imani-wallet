@@ -50,14 +50,19 @@
 
 import { check, sleep } from 'k6'
 import exec from 'k6/execution'
+import crypto from 'k6/crypto'
 import { Counter, Trend } from 'k6/metrics'
 import { requireSigner, napLogin } from './lib/signed-request.js'
 import { abortIfInvalid } from './lib/abort.js'
 import {
-  issueCoupon,
   issueCouponAsStall,
+  readCoupon,
+  deliverCoupon,
+  deploymentRelayUrl,
   drainNotifications,
   ackNotifications,
+  envelopesFrom,
+  envelopeIds,
   resolve,
   GATEWAY,
   PORTAL,
@@ -76,6 +81,17 @@ const stall_ms = new Trend('stall_ms', true)
 const issuer_ms = new Trend('issuer_ms', true)
 
 const coupons_acquired = new Counter('coupons_acquired')
+// Minted and DELIVERED are different events, and only the second is a sale the
+// customer got. Counted apart so a gateway that mints but cannot deliver is
+// visible rather than averaged away.
+const coupons_delivered = new Counter('coupons_delivered')
+// How long the seller waits for the mint. Measured on staging at ~7s, which is
+// the bulk of a sale and was entirely unmeasured before.
+const mint_wait_ms = new Trend('mint_wait_ms', true)
+const mint_polls = new Trend('mint_polls')
+const mint_timeouts = new Counter('mint_timeouts')
+const boot_ticks = new Counter('boot_ticks')
+const hidden_ticks = new Counter('hidden_ticks')
 const customer_drains = new Counter('customer_drains')
 const customer_envelopes = new Counter('customer_envelopes')
 const stall_drains = new Counter('stall_drains')
@@ -144,6 +160,28 @@ const ISSUER_POLL_SECONDS = Number(__ENV.ISSUER_POLL_SECONDS || 15)
 // that costs the gateway real work.
 const COUPONS_PER_CUSTOMER = Number(__ENV.COUPONS_PER_CUSTOMER || 1)
 const CUSTOMER_POLL_SECONDS = Number(__ENV.CUSTOMER_POLL_SECONDS || 10)
+
+// The seller's wait for the mint, matching src/lib/issue.ts exactly: 30
+// attempts at 2s, a 60s budget. Copied rather than invented, because a load
+// test that gives up sooner than the app reports failures the app would not.
+const MINT_POLL_ATTEMPTS = Number(__ENV.MINT_POLL_ATTEMPTS || 30)
+const MINT_POLL_SECONDS = Number(__ENV.MINT_POLL_SECONDS || 2)
+
+/**
+ * The share of customers whose tab is hidden, and so are NOT polling.
+ *
+ * The wallet pauses its drain loop while the tab is hidden, and catches up on
+ * a visibilitychange tick. `incomingNotifications.ts` says why: every tick is
+ * a signature, a round trip and a gateway thread, and a background tab has no
+ * toast to show for it. Staging logs one forgotten client draining 119 times
+ * in 20 minutes.
+ *
+ * A model where every customer polls forever therefore overstates drain load,
+ * and in the one direction that matters: it invents traffic the deployment
+ * will never see. 30% is an ESTIMATE, like the populations, and the honest
+ * thing is that nobody measured how many market-goers leave the tab open.
+ */
+const HIDDEN_SHARE = Number(__ENV.HIDDEN_SHARE || 0.3)
 
 const FACE_VALUE_MINOR = Number(__ENV.FACE_VALUE_MINOR || 500)
 const CURRENCY = __ENV.CURRENCY || 'EUR'
@@ -304,9 +342,15 @@ export function setup() {
 
   const issuerConfigured = PURCHASE_API_URL !== '' && PURCHASE_API_TOKEN !== ''
 
+  // Asked once, here, rather than guessed at per VU. A delivered coupon names
+  // the relay the gateway should publish its gift wrap to, and the local
+  // stack's alias means nothing on staging.
+  const relayUrl = deploymentRelayUrl()
+
   console.log(`gateway    ${GATEWAY}`)
   console.log(`account    ${ACCOUNT}`)
   console.log(`portal     ${PORTAL}`)
+  console.log(`relay      ${relayUrl}`)
   console.log(`day        ${DAY}, peak ${CUSTOMER_PEAK} customers, ${STALL_COUNT} stalls`)
   console.log(
     `issuance   ${issuanceWorks ? 'confirmed working, stalls are trading' : acquiringRefused ? 'REFUSED, customers will not acquire' : 'NOT working'}`,
@@ -315,7 +359,7 @@ export function setup() {
     `issuer     ${issuerConfigured ? `polling ${PURCHASE_API_URL} every ${ISSUER_POLL_SECONDS}s` : 'NOT configured, behaviour will be skipped'}`,
   )
 
-  return { issuanceWorks, issuerConfigured, acquiringRefused }
+  return { issuanceWorks, issuerConfigured, acquiringRefused, relayUrl }
 }
 
 let backoffSeconds = 1
@@ -332,6 +376,30 @@ let backoffSeconds = 1
  * hundred and thirty customers who are only polling.
  */
 let myStallSession
+
+/**
+ * Whether this VU's tab is hidden, decided once.
+ *
+ * Per-VU rather than per-iteration: a customer who pockets their phone stays
+ * pocketed for a while. Rolling the dice every ten seconds would model
+ * something that does not exist.
+ */
+let hiddenCache
+
+function isHidden() {
+  // Resolved on first use, not at init: k6 refuses exec.vu in the init
+  // context, and a module-scope read throws before the run starts.
+  if (hiddenCache === undefined) {
+    // Hashed, not `id % 100 < share * 100`. That form looked right and was
+    // wrong at every small VU count: ids 1..4 are all below 30, so a run at
+    // four customers hid ALL of them and reported 36 of 40 ticks skipped.
+    // Caught by a staging run whose customer drains had collapsed to the boot
+    // tick alone.
+    const hash = parseInt(crypto.sha256(`hidden-${exec.vu.idInTest}`, 'hex').slice(0, 8), 16)
+    hiddenCache = HIDDEN_SHARE > 0 && hash % 100 < HIDDEN_SHARE * 100
+  }
+  return hiddenCache
+}
 
 function stallSessionForThisVu() {
   if (myStallSession !== undefined) return myStallSession
@@ -353,6 +421,107 @@ function stallSessionForThisVu() {
 
   myStallSession = session
   return myStallSession
+}
+
+/** The stall this VU sells through. Paired with its session. */
+function stallForThisVu() {
+  return STALLS[exec.vu.idInTest % STALLS.length]
+}
+
+/**
+ * One sale, as the wallet performs it.
+ *
+ * THREE STAGES, not one. `src/lib/issue.ts` issues, then polls
+ * `/api/v1/wallet/vouchers/{id}` every 2s until the coupon is ISSUED and
+ * carries a token, then delivers it by gift-wrapped DM. An earlier version of
+ * this file fired the first POST and counted the sale, which measured about a
+ * tenth of the work and produced coupons no customer ever held.
+ *
+ * Measured against staging: POST ~900ms, ISSUED after 2 polls (~7s), DM 200.
+ * The mint wait is the bulk of a sale and nothing here measured it before.
+ *
+ * The poll is on the WALLET tier with NIP-98, not the portal with the session
+ * cookie. Reading the portal instead returns nothing useful and the loop runs
+ * its whole budget: measured, 30 polls over 67s and no status at all.
+ */
+function sellCoupon(session, stall, recipientPubkey, relayUrl) {
+  const created = issueCouponAsStall(session, {
+    faceValueMinor: FACE_VALUE_MINOR,
+    currency: CURRENCY,
+    expiryDays: 90,
+    memo: 'market day',
+  })
+
+  // The same inference the issuance ramp makes, and it is still only sound
+  // because setup proved the endpoint works. See #37.
+  const opaque = created.status >= 500 && !String(created.body).includes('voucher_id')
+  if (
+    created.status === 429 ||
+    (created.status >= 500 && String(created.body).includes('RATE_001')) ||
+    opaque
+  ) {
+    return { limited: true, issued: false, delivered: false }
+  }
+
+  let voucherId = null
+  try {
+    const items = JSON.parse(created.body).items
+    voucherId = items && items[0] && items[0].voucher_id
+  } catch {
+    voucherId = null
+  }
+  if (!voucherId) return { limited: false, issued: false, delivered: false }
+
+  // Wait for the mint, as the seller's screen does. Bounded by the same 30
+  // attempts the wallet uses, because a sale that never mints must fail rather
+  // than hang a VU for the rest of the day.
+  const startedWait = Date.now()
+  let voucher = null
+  let polls = 0
+  let pollsRefused = 0
+  for (let attempt = 0; attempt < MINT_POLL_ATTEMPTS; attempt++) {
+    polls++
+    const read = readCoupon(stall, voucherId)
+    if (read.status === 200) {
+      try {
+        const body = JSON.parse(read.body)
+        if (body.status === 'ISSUED' && body.token) {
+          voucher = body
+          break
+        }
+      } catch {
+        // Keep polling: a malformed body is not a verdict.
+      }
+    }
+
+    // A throttled poll learned nothing about the mint. Counted, so a sale that
+    // "timed out" while never actually being answered is not reported as the
+    // mint being slow. Observed on staging: a 75s wait against a 60s budget,
+    // because every poll was refused and slept anyway.
+    if (read.status === 429 || read.status >= 500) pollsRefused++
+
+    sleep(MINT_POLL_SECONDS)
+  }
+
+  const mintWaitMs = Date.now() - startedWait
+  if (!voucher) {
+    // Throttled throughout rather than slow: report it as the rate limit it
+    // was, not as a mint that could not keep up.
+    if (pollsRefused >= polls / 2) {
+      return { limited: true, issued: false, delivered: false }
+    }
+    mint_timeouts.add(1)
+    return { limited: false, issued: true, delivered: false, mintWaitMs, polls }
+  }
+
+  const delivered = deliverCoupon(stall, recipientPubkey, voucher, 'market day', relayUrl)
+  return {
+    limited: false,
+    issued: true,
+    delivered: delivered.status === 200 || delivered.status === 201,
+    mintWaitMs,
+    polls,
+  }
 }
 
 /** Close a customer iteration that ended early, so its time is still counted. */
@@ -379,6 +548,23 @@ export function customer(data) {
   const started = Date.now()
   const firstIteration = exec.vu.iterationInInstance === 0
 
+  // The boot tick. `startIncomingNotifications` drains IMMEDIATELY on login,
+  // before the first interval, so anything already queued surfaces without a
+  // ten-second wait. Every real customer therefore does one extra drain the
+  // moment they arrive, and a model that waits a full period understates the
+  // burst that a crowd arriving together actually produces.
+  if (firstIteration) {
+    const boot = drainNotifications(me)
+    customer_drains.add(1)
+    boot_ticks.add(1)
+    const bootEnvelopes = envelopesFrom(boot)
+    if (bootEnvelopes.length > 0) {
+      customer_envelopes.add(bootEnvelopes.length)
+      const ids = envelopeIds(bootEnvelopes)
+      if (ids.length > 0) ackNotifications(me, ids)
+    }
+  }
+
   // Skipped entirely when the portal refused before load. Attempting it would
   // record one failure per customer for a reason setup already established,
   // and drown the drains the run CAN measure.
@@ -399,22 +585,9 @@ export function customer(data) {
     if (!stallSession) return finishCustomer(me, started)
 
     for (let i = 0; i < COUPONS_PER_CUSTOMER; i++) {
-      const res = issueCouponAsStall(stallSession, {
-        faceValueMinor: FACE_VALUE_MINOR,
-        currency: CURRENCY,
-        expiryDays: 90,
-        memo: 'market day',
-      })
+      const sale = sellCoupon(stallSession, stallForThisVu(), me.pubHex, data && data.relayUrl)
 
-      // The same inference the issuance ramp makes, and it is still only sound
-      // because setup proved the endpoint works. See #37.
-      const opaque = res.status >= 500 && !String(res.body).includes('voucher_id')
-      const limited =
-        res.status === 429 ||
-        (res.status >= 500 && String(res.body).includes('RATE_001')) ||
-        (opaque && data && data.issuanceWorks)
-
-      if (limited) {
+      if (sale.limited) {
         rate_limited.add(1)
         // Back off rather than hammering a closed door. Per ADR 0013 this run
         // REPORTS the limit as its finding rather than raising it, so pacing
@@ -425,30 +598,45 @@ export function customer(data) {
         break
       }
 
-      const issued = String(res.body).includes('voucher_id')
-      if (issued) {
+      if (sale.issued) {
         coupons_acquired.add(1)
         backoffSeconds = 1
+        // Only successful waits. A timeout contributes the whole 60s budget,
+        // and averaging that into the wait reports the budget rather than the
+        // mint: observed, one timeout dragged the p95 to 75s.
+        if (sale.delivered) {
+          mint_wait_ms.add(sale.mintWaitMs)
+          mint_polls.add(sale.polls)
+        }
       }
-      outcome_verified.add(issued)
-      if (issued) succeeded.add(1)
+      if (sale.delivered) coupons_delivered.add(1)
+
+      // The sale is verified by DELIVERY, not by the mint. A coupon minted and
+      // never delivered is a sale the customer did not get, and counting the
+      // 201 alone would report it as a success.
+      outcome_verified.add(sale.delivered)
+      if (sale.delivered) succeeded.add(1)
       else failed.add(1)
     }
+  }
+
+  // A hidden tab does not poll. The wallet's drain loop returns early while
+  // document.visibilityState is 'hidden', so a customer whose tab is in the
+  // background costs the gateway nothing until they look at it again.
+  //
+  // Deterministic per VU rather than random per iteration: a customer who put
+  // the phone in their pocket is hidden for a WHILE, and flipping a coin every
+  // ten seconds would model a hummingbird instead.
+  if (isHidden()) {
+    hidden_ticks.add(1)
+    return finishCustomer(me, started)
   }
 
   // The poll the wallet makes every ten seconds.
   const drained = drainNotifications(me)
   customer_drains.add(1)
 
-  let envelopes = []
-  if (drained.status === 200) {
-    try {
-      const body = JSON.parse(drained.body)
-      envelopes = body.notifications || body.items || []
-    } catch {
-      envelopes = []
-    }
-  }
+  const envelopes = envelopesFrom(drained)
 
   check(drained, {
     'customer drain answered': (r) => r.status === 200,
@@ -458,7 +646,7 @@ export function customer(data) {
 
   if (envelopes.length > 0) {
     customer_envelopes.add(envelopes.length)
-    const ids = envelopes.map((e) => e.id || e.notificationId).filter(Boolean)
+    const ids = envelopeIds(envelopes)
     if (ids.length > 0) ackNotifications(me, ids)
   }
 
@@ -488,15 +676,7 @@ export function stall() {
   const drained = drainNotifications(me)
   stall_drains.add(1)
 
-  let envelopes = []
-  if (drained.status === 200) {
-    try {
-      const body = JSON.parse(drained.body)
-      envelopes = body.notifications || body.items || []
-    } catch {
-      envelopes = []
-    }
-  }
+  const envelopes = envelopesFrom(drained)
 
   check(drained, {
     'stall drain answered': (r) => r.status === 200,
@@ -506,7 +686,7 @@ export function stall() {
 
   if (envelopes.length > 0) {
     stall_envelopes.add(envelopes.length)
-    const ids = envelopes.map((e) => e.id || e.notificationId).filter(Boolean)
+    const ids = envelopeIds(envelopes)
     if (ids.length > 0) ackNotifications(me, ids)
   }
 
@@ -583,8 +763,12 @@ export function handleSummary(data) {
     `    ${DAY}, peaking at ${CUSTOMER_PEAK} customers and ${STALL_COUNT} stalls`,
     '',
     '    Customers',
-    `      coupons acquired  ${n('coupons_acquired')}`,
+    `      coupons minted    ${n('coupons_acquired')}`,
+    `      coupons DELIVERED ${n('coupons_delivered')}${n('mint_timeouts') > 0 ? `, ${n('mint_timeouts')} never minted` : ''}`,
+    `      mint wait         avg ${ms('mint_wait_ms', 'avg')}ms   p95 ${ms('mint_wait_ms', 'p(95)')}ms   ` +
+      `(${(m.mint_polls?.values?.avg ?? 0).toFixed(1)} polls)`,
     `      drains            ${n('customer_drains')}, ${n('customer_envelopes')} envelopes`,
+    `                        ${n('boot_ticks')} boot ticks, ${n('hidden_ticks')} skipped as hidden`,
     `      per iteration     avg ${ms('customer_ms', 'avg')}ms   p95 ${ms('customer_ms', 'p(95)')}ms`,
     '',
     '    Stalls',
@@ -635,10 +819,41 @@ export function handleSummary(data) {
     '    A regression here names a SUSPECT, not a cause. Confirm it with the',
     '    isolated scenarios: issuance.js, drain.js, receive.js.',
     '',
-    '    Drain numbers are NOT comparable with drain.js. That ramp measures an',
-    '    empty queue; here the queues hold what the day put in them.',
-    '',
   )
+
+  // Only claim this when it is true. The warning was printed unconditionally
+  // while every queue in the run was empty, which made it advice about a
+  // situation that had not arisen. It is now a statement about THIS run.
+  const drainedEnvelopes = n('customer_envelopes') + n('stall_envelopes')
+  if (drainedEnvelopes > 0) {
+    lines.push(
+      `    ${drainedEnvelopes} envelopes were drained, so these drain numbers are NOT`,
+      '    comparable with drain.js: that ramp measures an empty queue, and this one',
+      '    measures the work of returning and acknowledging what the day delivered.',
+      '',
+    )
+  } else {
+    lines.push(
+      '    Every drain came back EMPTY, so this measures the cost of answering',
+      '    "nothing waiting" and not the work of delivering envelopes. Same',
+      '    measurement drain.js makes, and comparable with it.',
+      '',
+    )
+  }
+
+  // A sale that mints and never delivers is the failure most likely to read as
+  // success, because the 201 already happened and the coupon exists. Said
+  // plainly whenever the two counts disagree.
+  const minted = n('coupons_acquired')
+  const delivered = n('coupons_delivered')
+  if (minted > delivered) {
+    lines.push(
+      `    ${minted - delivered} of ${minted} coupons were MINTED BUT NOT DELIVERED.`,
+      '    Those are coupons no customer holds. A sale is delivery, not issuance,',
+      '    so they are counted as failures here however clean the 201 looked.',
+      '',
+    )
+  }
 
   // A day with no coupons acquired is a different day, and a reader who missed
   // the setup warning would otherwise see a zero and assume issuance broke.
@@ -665,14 +880,30 @@ export function handleSummary(data) {
   ]) {
     const med = m[metric]?.values?.med ?? 0
     const p95 = m[metric]?.values?.['p(95)'] ?? 0
-    if (med > 0 && p95 > med * 5) {
+    if (med === 0 || p95 <= med * 5) continue
+
+    // A customer's first iteration includes a whole sale, and a sale waits
+    // seconds for the mint. That is EXPECTED and is not a latency finding, so
+    // saying "look at the distribution" about it would train the reader to
+    // ignore the warning when it means something. Named as the sale when the
+    // sale accounts for it.
+    const mintWait = m.mint_wait_ms?.values?.['p(95)'] ?? 0
+    if (label === 'customers' && mintWait > 0 && p95 < mintWait * 3) {
       lines.push(
-        `    ${label}: p95 ${p95.toFixed(0)}ms is ${(p95 / med).toFixed(0)}x the median ${med.toFixed(0)}ms.`,
-        '    That is a step rather than a tail, so look at the distribution before',
-        '    reading the p95 as load. Confirm with drain.js, which is isolated.',
+        `    customers: p95 ${p95.toFixed(0)}ms against a median of ${med.toFixed(0)}ms, because the`,
+        `    first iteration of each VU makes a SALE and waits ${mintWait.toFixed(0)}ms at p95 for`,
+        '    the mint. Expected, and not a drain latency finding.',
         '',
       )
+      continue
     }
+
+    lines.push(
+      `    ${label}: p95 ${p95.toFixed(0)}ms is ${(p95 / med).toFixed(0)}x the median ${med.toFixed(0)}ms.`,
+      '    That is a step rather than a tail, so look at the distribution before',
+      '    reading the p95 as load. Confirm with drain.js, which is isolated.',
+      '',
+    )
   }
 
   const limited = n('rate_limited')
