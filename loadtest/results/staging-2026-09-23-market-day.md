@@ -18,7 +18,7 @@ harness fault.
 | Behaviour | Result | Why |
 |---|---|---|
 | Customer, polling | **RAN**, 71 drains over 4m, 0 envelopes | healthy |
-| Customer, acquiring | **BLOCKED**, 0 coupons | portal needs a session cookie |
+| Customer, acquiring | **BLOCKED at first, then RAN** | see the correction below |
 | Stall | **RAN**, 49 drains over 4m, 0 envelopes | healthy |
 | Purchase Issuer | **NOT MEASURED** | `PURCHASE_API_URL` unset, unreachable from here |
 
@@ -93,18 +93,62 @@ realistic crowd unreachable from one host.
 **So this run does not answer the contention question.** It answers "does the
 mix run, and are its numbers trustworthy", which was the point of a first run.
 
-### Acquiring is blocked, as documented
+### Acquiring was not blocked, and the first explanation was wrong
 
-Staging runs `nap_auth.lua` in front of `/api/v1/portal/` and demands a session
-cookie a NIP-98 client cannot obtain, so issuance answers **401** before load
-starts. Confirmed by hand as well as by the run.
+The first runs reported **0 coupons acquired** and blamed the session cookie,
+repeating this repository's own README: that staging demands a cookie a NIP-98
+client cannot obtain. That was **wrong**, and worth recording because it stood
+unchallenged through two earlier run reports.
 
-The mix **degrades rather than aborting** on this, which is a deliberate
-difference from `issuance.js`. There, issuance is the whole scenario and a run
-that cannot issue has nothing to measure. Here it is one act inside one
-behaviour, and the polling half is both runnable and worth measuring, so
-aborting would make the mix permanently unrunnable against staging. The summary
-states that no coupons were acquired on every such run.
+A script **can** log in. Verified against staging:
+
+| Step | Result |
+|---|---|
+| `POST /auth/init {npub}` | **200**, returns a challenge |
+| Sign kind-27235, `POST /auth/complete` | **200**, sets `merchant_session` |
+| `GET /auth/validate` | **200**, `coupon:pay,coupon:receive` |
+
+So authentication was never the problem. **Authorisation** was, one layer in: a
+pool identity is a *customer*, and the portal answers `403 Insufficient
+permissions` because `coupon:issue` belongs to a stall.
+
+#### What makes a key a stall
+
+Publishing a **stall record**: a kind-30078 event tagged `d=imani:merchant`, the
+same one an owner's phone writes when setting up a business. Measured end to
+end on staging:
+
+| Moment | Permissions | Issue |
+|---|---|---|
+| Before publishing | `coupon:pay,coupon:receive` | **403** |
+| ~5s after publishing | `coupon:pay,coupon:receive` | **403** |
+| ~90s after publishing | `coupon:issue,coupon:pay,coupon:redeem,coupon:receive` | **201** |
+
+The record was on the relay within seconds and readable through the gateway's
+own `/api/v1/nostr/query`, so the delay is the ACL resolving it rather than
+propagation. `loadtest/stalls.mjs` therefore polls instead of sleeping.
+
+#### The detour worth not repeating
+
+A **terminal credential** (ADR 0005) was tried first, because that ADR describes
+the gateway resolving permissions from a voucher. It was the wrong tool: a
+terminal is how a *second device* gains authority for a stall that already
+exists. It also cannot work on staging today, since the gateway's mint quote
+answers `500 mint_error_code=90008` while the mint itself is healthy and issued
+a bolt11 quote directly when asked.
+
+The question that ended the detour was a good one: *the merchant sells from
+their phone, that works today, why introduce a terminal?* The answer was that
+there was no reason to.
+
+#### A domain error it exposed
+
+The mix had **customers issuing to themselves**. A customer acquires a coupon
+because a stall issued one, and only a stall can. Stalls now issue, spread
+across the pool's stalls by VU so the crowd does not queue behind one.
+
+With stalls enrolled, a 90s run at 4 customers and 2 stalls acquired **4
+coupons**, 92 checks, 0 failed.
 
 ## A bug this run found
 
