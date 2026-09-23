@@ -472,9 +472,70 @@ is invisible across two summaries:
 
 | Behaviour | Population | What it does | Executor |
 |---|---|---|---|
-| Customer | 130 at peak | acquires a coupon from a stall on arrival, then polls every 10s | `ramping-vus` |
+| Customer | 130 at peak | buys from a stall on arrival, then polls every 10s | `ramping-vus` |
 | Stall | 10, all day | polls for takings every 10s | `constant-arrival-rate` |
 | Purchase Issuer | 1 | polls `/api/v1/purchases/owed` every 15s | `constant-arrival-rate` |
+
+### A sale is three stages, not one request
+
+`src/lib/issue.ts` is the authority, and the mix follows it:
+
+1. `POST /api/v1/portal/vouchers` on the session, which returns a voucher id
+2. **poll** `/api/v1/wallet/vouchers/{id}` every 2s until `ISSUED` with a token,
+   up to 30 times
+3. `POST /api/v1/dm/tokens/send`, delivering the coupon as a gift-wrapped DM
+
+The first cut did step 1 alone and counted the sale. That measured roughly a
+tenth of the work and minted coupons **no customer ever held**. Measured against
+staging, the mint wait is the bulk of a sale: **~6s at 2.2 polls**, against a
+~900ms POST.
+
+Note the tier change in step 2: the poll is on the **wallet** tier with NIP-98,
+not the portal with the session cookie. Polling the portal returns nothing
+useful and the loop runs its whole budget, measured as 30 polls over 67s with no
+status at all.
+
+The summary counts **minted** and **delivered** separately, and treats delivery
+as the outcome. A coupon that minted and never reached anyone is the failure
+most likely to read as success, because the 201 already happened.
+
+### This is the first scenario whose queues are not empty
+
+Delivering a real coupon is what puts an envelope on the recipient's queue. Every
+other scenario here measures drains against an **empty** one and says so;
+`receive.js` escapes it only by publishing through `/internal/v1`, which is not
+reachable from outside a deployment.
+
+A run that delivers needs no such workaround, so the mix measures the work of
+returning and acknowledging envelopes rather than the cost of answering "nothing
+waiting". It says which of the two it did, per run, rather than assuming.
+
+**The drain response field is `envelopes`.** The mix read `notifications` at
+first, which would have counted zero however full the queue was, and that is
+invisible by construction: it looks exactly like a healthy run against an empty
+queue. `envelopesFrom` is now the one place that knows the shape.
+
+### A hidden tab does not poll
+
+The wallet **pauses** its drain loop while the tab is hidden, and runs a catch-up
+tick on `visibilitychange`. `incomingNotifications.ts` explains why: every tick
+is a signature, a round trip and a gateway thread, and a background tab has no
+toast to show for it. Staging logged one forgotten client draining 119 times in
+20 minutes.
+
+So a model where all 130 customers poll forever **invents traffic the deployment
+will never see**. `HIDDEN_SHARE` defaults to 30%, decided per VU rather than per
+iteration, because a customer who pockets their phone stays pocketed.
+
+Every customer also does a **boot tick**: `startIncomingNotifications` drains
+immediately on login so anything already queued surfaces without a ten-second
+wait. A crowd arriving together makes that a burst, and a model that waits a full
+period understates it.
+
+The first cut of the hidden share was `id % 100 < share * 100`, which is correct
+only at scale: VU ids 1 to 4 are all below 30, so a four-customer run hid **all**
+of them and collapsed customer drains to the boot tick alone. Now hashed, and
+verified at 32% of 130 VUs and 1 of 4.
 
 ### Why only the crowd is VUs
 
@@ -516,18 +577,31 @@ This run **reports the limit rather than raising it**, so the summary names how
 much less issuance load the day applied than it intended. What it must never do
 is apply a tenth of the intended load and present the result as a day.
 
-### Its drain numbers are not comparable with `drain.js`
+### Its drain numbers may not be comparable with `drain.js`
 
-That ramp measures an **empty** queue. Here the queues hold whatever the day put
-in them, so the per-poll cost is higher by construction. Quoting one against the
-other would read as a regression in a scenario that did not change.
+That ramp measures an **empty** queue. When the mix has delivered coupons, its
+queues hold what the day put in them, so the per-poll cost is higher by
+construction and quoting one against the other would read as a regression in a
+scenario that did not change.
+
+When nothing was delivered, the two **are** comparable, because both measured
+the same empty queue. The summary says which of the two this run did rather than
+leaving it to be inferred.
 
 ### The populations are estimates
 
 130 customers, 10 stalls, 10 purchases an hour. Nobody measured a market to get
 these. They are recorded as estimates so they do not harden into folklore, and
 every one is an env knob: `CUSTOMER_PEAK`, `STALL_COUNT`, `COUPONS_PER_CUSTOMER`,
-`CUSTOMER_POLL_SECONDS`, `STALL_POLL_SECONDS`, `ISSUER_POLL_SECONDS`.
+`CUSTOMER_POLL_SECONDS`, `STALL_POLL_SECONDS`, `ISSUER_POLL_SECONDS`,
+`HIDDEN_SHARE`.
+
+`HIDDEN_SHARE` deserves naming twice: nobody measured how many market-goers
+leave the tab open, and it scales drain load directly.
+
+The values NOT estimated are the ones read from the client source, and they are
+marked as such where they appear: the 10s drain period, the 2s mint poll and its
+30-attempt budget, and the three stages of a sale.
 
 ### The day's shape
 
