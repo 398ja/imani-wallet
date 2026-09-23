@@ -406,10 +406,57 @@ The summary says this explicitly whenever it happens, because an all-empty run
 looks identical to a healthy loaded one in every other number. A scenario that
 quietly measured nothing while reporting a clean p95 would be worse than none.
 
+## The stalls
+
+    node loadtest/stalls.mjs --count 10            # enrol, or top up
+    node loadtest/stalls.mjs --count 10 --verify   # and prove each can issue
+
+A pool identity is a **customer**: its NAP session carries
+`coupon:pay,coupon:receive`, and the portal answers `403` to any attempt to
+issue. That is correct, and it is why the market day's acquiring half reported
+zero coupons for its first several runs.
+
+A **stall** is not a different kind of account. It is a key that has published a
+**stall record**: a kind-30078 addressable event tagged `d=imani:merchant`, the
+same one a stall owner's phone writes when they set up their business.
+gateway-core derives the session's role from it, and the session then carries
+`coupon:issue,coupon:pay,coupon:redeem,coupon:receive`.
+
+So this script does by hand exactly what the app does, for the pool's first
+`--count` identities, which are the same ones `market-day.js` uses as stalls.
+
+**The ACL is not immediate.** Publishing is not enough on its own: the record
+has to reach the gateway and the ACL has to resolve it. Measured on staging, a
+session opened ~5s after publishing still carried customer permissions, while
+~60s later the same key could issue. So the script **polls** rather than
+sleeping a guessed interval, and reports how long each stall took.
+
+| Command | Result |
+|---|---|
+| `--count 3` on a fresh pool | 2 published, both trading after ~60s |
+| `--count 3` again | "nothing to do; every stall can already issue" |
+| `--count 3 --verify` | **3/3 stalls issue**, each proven with a real 201 |
+
+`--verify` issues a real coupon rather than trusting the permission string,
+because the two came apart once already on this stack: a registry image granted
+a flat role while the portal refused every merchant anyway.
+
+### Why not a terminal credential
+
+That was tried first and was the wrong tool. A terminal (ADR 0005) is how a
+**second device** gains authority to act for a stall that already exists, which
+is a different problem from making a stall exist. It needs a mint quote staging
+currently answers with `mint_error_code=90008`, and terminal enrolment is not
+wired to any screen yet (`.scratch/terminals/OUTSTANDING.md`).
+
+An owner selling from their own phone mints no terminal credential. Neither does
+this.
+
 ## The market day
 
     node loadtest/signer.mjs &
     node loadtest/pool.mjs --size 140
+    node loadtest/stalls.mjs --count 10 --verify
     GATEWAY_URL=http://localhost:28082 PORTAL_URL=http://localhost:28084 \
       ACCOUNT_URL=http://localhost:28081 \
       EDGE_SECRET=dev-edge-secret-local-only \
@@ -425,7 +472,7 @@ is invisible across two summaries:
 
 | Behaviour | Population | What it does | Executor |
 |---|---|---|---|
-| Customer | 130 at peak | acquires a coupon on arrival, then polls every 10s | `ramping-vus` |
+| Customer | 130 at peak | acquires a coupon from a stall on arrival, then polls every 10s | `ramping-vus` |
 | Stall | 10, all day | polls for takings every 10s | `constant-arrival-rate` |
 | Purchase Issuer | 1 | polls `/api/v1/purchases/owed` every 15s | `constant-arrival-rate` |
 
@@ -450,7 +497,7 @@ reachable from here at all:
 |---|---|
 | Redemption | no gateway path, ADR 0003. It happens on the device |
 | Splitting | likewise, ADR 0004 |
-| Sending | needs issuance through the cookie-gated portal, so a NIP-98 client cannot originate one |
+| Sending | the escrowed saga needs coupons in a customer's own wallet, which the gateway does not hold |
 
 So a customer here **acquires and polls**, and the summary says so on every run
 rather than only when something looks wrong. The send and redemption halves are
@@ -506,13 +553,25 @@ Every failure mode was exercised rather than assumed, against a stub gateway:
 | Gateway unreachable | exit 107, "did not answer; is the stack up?" |
 | Pool too small for the stalls asked for | names the `pool.mjs --size` to run |
 | `PURCHASE_API_URL` unset | issuer reported **NOT MEASURED**, not as zero polls |
-| Portal refuses issuance (staging, 401) | degrades: polls still run, summary says no coupons acquired |
+| Stalls hold no `coupon:issue` | degrades: polls still run, and the summary names `stalls.mjs` |
 
 That last one matters more than it looks. A counter at zero reads identically
 for "polled and found nothing" and "never ran", and only one of those is a
 measurement.
 
-### It ran against staging, and found a bug in itself
+### It ran against staging, and now acquires there too
+
+The first runs reported **0 coupons acquired**, and the reason recorded for it
+was wrong (see [what can and cannot be run against staging](#what-can-and-cannot-be-run-against-staging)).
+With the stalls enrolled, a 90s run at 4 customers and 2 stalls acquired **4
+coupons, 92 checks, 0 failed** against staging.
+
+The mix also had **customers issuing to themselves**, which is not a thing that
+happens: a customer acquires a coupon because a stall issued one. Stalls now
+issue, spread across the pool's stalls by VU so the crowd does not queue behind
+one of them.
+
+### It found a bug in itself
 
 [`results/staging-2026-09-23-market-day.md`](results/staging-2026-09-23-market-day.md).
 
@@ -539,17 +598,27 @@ against a host that no longer exists.
 |---|---|---|
 | `smoke.js` | yes | NIP-98 only |
 | `drain.js` | yes, but throttled | see below |
-| `issuance.js` | **no** | the portal wants a session cookie |
+| `issuance.js` | **no** | signs NIP-98 only, which cannot carry `coupon:issue` |
 | `send.js` | **no** | needs issuance |
-| `market-day.js` | yes, degraded | polls run; acquiring is refused, and it says so |
+| `market-day.js` | **yes, fully** | once `stalls.mjs` has enrolled the stalls |
 
-Issuance and send are **local-stack scenarios**. Staging runs `nap_auth.lua`
-in front of `/api/v1/portal/`, and that gate clears any client-supplied
-`X-Edge-Auth` / `X-Auth-Permissions` before demanding a session cookie — which
-is the only thing standing between a customer and `coupon:issue`, so it is
-correct and should stay. It does mean a NIP-98-only client can never issue
-there. Both scripts now abort in about a second saying so, rather than ramping
-for three and a half minutes to report `issued 0`.
+Staging runs `nap_auth.lua` in front of `/api/v1/portal/`, and that gate clears
+any client-supplied `X-Edge-Auth` / `X-Auth-Permissions` before demanding a
+session cookie. That is correct and should stay: those headers are the only
+thing standing between a customer and `coupon:issue`.
+
+**A script CAN obtain that cookie**, and this README said otherwise until
+2026-09-23. `POST /auth/init {npub}` returns a challenge, a kind-27235 event
+signs it, and `POST /auth/complete` sets the session. That is the wallet's own
+login performed without a browser, and `loadtest/lib/signed-request.js`
+now does it (`napLogin`).
+
+What actually blocks `issuance.js` is **authorisation**, one layer further in.
+It signs NIP-98, and `Nip98AuthFilter` grants only `ROLE_NOSTR_USER`:
+`coupon:issue` comes solely from `NapProxyAuthFilter`, on the session path. So
+no amount of per-request signing reaches it, whatever key signs. `market-day.js`
+takes the session path instead and issues fine. See
+[the market day](#the-market-day) below.
 
 A gateway-side run from one host is also bounded by a blanket **100
 requests/minute per caller address**, not per pubkey. A 21-VU drain ramp took
