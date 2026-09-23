@@ -95,6 +95,93 @@ export function nip98Header(url, method, body, customer) {
   return `Nostr ${encoding.b64encode(JSON.stringify(event))}`
 }
 
+/**
+ * Open a NAP session, and return the cookie plus what it may do.
+ *
+ * A NIP-98 signature authorises ONE REQUEST. Issuance is not guarded that way:
+ * `coupon:issue` is granted only on the NAP session path
+ * (`NapProxyAuthFilter`), so no amount of per-request signing reaches it. This
+ * is the session login the wallet itself performs, done without a browser.
+ *
+ * `loadtest/README.md` used to say a script could never obtain a session
+ * cookie. That was wrong, and it kept the acquiring half of the market day
+ * unmeasured: `/auth/init` returns a challenge, a kind-27235 event signs it,
+ * and `/auth/complete` sets the cookie. Verified against staging.
+ *
+ * The session is opened ONCE PER VU and reused, because logging in per
+ * iteration would measure the login rather than the issuance, and a NAP
+ * session lasts hours.
+ */
+export function napLogin(base, identity) {
+  const init = http.post(
+    `${base}/api/v1/auth/init`,
+    JSON.stringify({ npub: identity.npub }),
+    { headers: { 'Content-Type': 'application/json' }, tags: { name: 'auth init' } },
+  )
+  if (init.status !== 200) return { error: `auth/init ${init.status}` }
+
+  const challenge = JSON.parse(init.body)
+  const body = JSON.stringify({ challenge_id: challenge.challenge_id })
+
+  const event = {
+    pubkey: identity.pubHex,
+    created_at: Math.floor(Date.now() / 1000),
+    kind: 27235,
+    tags: [
+      ['u', challenge.auth_url],
+      ['method', challenge.auth_method],
+      ['payload', crypto.sha256(body, 'hex')],
+      ['challenge', challenge.challenge],
+      ['challenge_id', challenge.challenge_id],
+    ],
+    content: '',
+  }
+  event.id = eventId(event)
+
+  const signed = timed(signing_ms, () =>
+    http.post(
+      `${SIGNER_URL}/sign`,
+      JSON.stringify({ privHex: identity.privHex, msgHex: event.id }),
+      { headers: { 'Content-Type': 'application/json' }, tags: { name: 'signer' } },
+    ),
+  )
+  if (signed.status !== 200) {
+    throw new Error(`the signer refused to sign a NAP challenge (${signed.status})`)
+  }
+  event.sig = JSON.parse(signed.body).sigHex
+
+  // `auth_url` names the account tier's own host, which on staging does not
+  // resolve from outside (account.staging.398ja.xyz is NXDOMAIN). Every tier
+  // answers on the one host by path, so keep the path and take the origin
+  // from the base that is known to be reachable.
+  const url = challenge.auth_url.replace(/^https?:\/\/[^/]+/, base)
+  const complete = http.post(url, body, {
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Nostr ${encoding.b64encode(JSON.stringify(event))}`,
+    },
+    tags: { name: 'auth complete' },
+  })
+  if (complete.status !== 200) return { error: `auth/complete ${complete.status}` }
+
+  // k6 keeps its own cookie jar per VU, so the session rides along on later
+  // requests automatically. The header is returned as well for the calls that
+  // set one explicitly.
+  const setCookie = complete.headers['Set-Cookie'] ?? ''
+  const cookie = String(setCookie).split(';')[0]
+
+  const validate = http.get(`${base}/api/v1/auth/validate`, {
+    headers: cookie ? { Cookie: cookie } : {},
+    tags: { name: 'auth validate' },
+  })
+  const permissions = String(validate.headers['X-Auth-Permissions'] ?? '')
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean)
+
+  return { cookie, permissions }
+}
+
 /** Derive a public key, for a customer known only by their private key. */
 export function derivePub(privHex) {
   const res = http.post(`${SIGNER_URL}/derivePub`, JSON.stringify({ privHex }), {

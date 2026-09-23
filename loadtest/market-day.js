@@ -51,10 +51,11 @@
 import { check, sleep } from 'k6'
 import exec from 'k6/execution'
 import { Counter, Trend } from 'k6/metrics'
-import { requireSigner } from './lib/signed-request.js'
+import { requireSigner, napLogin } from './lib/signed-request.js'
 import { abortIfInvalid } from './lib/abort.js'
 import {
   issueCoupon,
+  issueCouponAsStall,
   drainNotifications,
   ackNotifications,
   resolve,
@@ -251,15 +252,28 @@ export function setup() {
     throw new Error(`${GATEWAY} did not answer; is the stack up?`)
   }
 
-  // Same probe the issuance ramp does, for the same reason: the portal
-  // flattens a 429 into a bare 500 (#37), so "throttled" and "broken" are
-  // indistinguishable unless something is known to have worked first.
-  const probeIssue = issueCoupon(CUSTOMERS[0], {
-    faceValueMinor: FACE_VALUE_MINOR,
-    currency: CURRENCY,
-    expiryDays: 90,
-    memo: 'market day probe',
-  })
+  // Probe issuance AS A STALL, which is the only thing that can issue.
+  //
+  // This used to probe as a customer over NIP-98 and conclude that staging
+  // refuses issuance outright. It does not: it refuses a CUSTOMER, correctly,
+  // and the run then reported "no coupons acquired" for a reason that was its
+  // own. See `loadtest/stalls.mjs`.
+  //
+  // The probe still matters for the other reason the issuance ramp has one:
+  // the portal flattens a 429 into a bare 500 (#37), so "throttled" and
+  // "broken" are indistinguishable unless something is known to have worked.
+  const probeStall = napLogin(PORTAL, STALLS[0])
+  const stallCanIssue =
+    !probeStall.error && probeStall.permissions.includes('coupon:issue')
+
+  const probeIssue = stallCanIssue
+    ? issueCouponAsStall(probeStall, {
+        faceValueMinor: FACE_VALUE_MINOR,
+        currency: CURRENCY,
+        expiryDays: 90,
+        memo: 'market day probe',
+      })
+    : { status: 0, body: '' }
   const issuanceWorks =
     (probeIssue.status === 200 || probeIssue.status === 201) &&
     String(probeIssue.body).includes('voucher_id')
@@ -270,16 +284,21 @@ export function setup() {
   // would mean the mix could never run against staging at all. Degrade and
   // say so instead: the crowd still polls, and the summary reports that its
   // customers arrived holding coupons they did not acquire here.
-  const acquiringRefused = probeIssue.status === 401
-  if (acquiringRefused) {
+  // Not a refusal of the RUN, only of acquiring. The drains are the larger
+  // half of the day and run either way, so this degrades rather than aborts.
+  const acquiringRefused = !stallCanIssue || probeIssue.status === 401 || probeIssue.status === 403
+  if (!stallCanIssue) {
     console.warn(
-      `issuance is refused at ${PORTAL} with 401, so customers will NOT ` +
-        'acquire coupons in this run.\n' +
-        '  An authentication refusal, not throttling: staging gates ' +
-        '/api/v1/portal/ behind nap_auth.lua and demands a session cookie, ' +
-        'which a NIP-98 client cannot obtain.\n' +
-        '  The polling half of the day still runs. Point PORTAL_URL at a ' +
-        'local stack to measure the acquiring half.',
+      `stall #${String(STALLS[0].index).padStart(4, '0')} holds no coupon:issue ` +
+        `(${probeStall.error ?? (probeStall.permissions.join(',') || 'no permissions')}), ` +
+        'so customers will NOT acquire coupons.\n' +
+        '  A pool identity is a customer until it publishes a stall record.\n' +
+        `  Run: node loadtest/stalls.mjs --count ${STALL_COUNT} --verify`,
+    )
+  } else if (acquiringRefused) {
+    console.warn(
+      `the stall holds coupon:issue but the portal refused it (${probeIssue.status}), ` +
+        'so customers will NOT acquire coupons.',
     )
   }
 
@@ -290,7 +309,7 @@ export function setup() {
   console.log(`portal     ${PORTAL}`)
   console.log(`day        ${DAY}, peak ${CUSTOMER_PEAK} customers, ${STALL_COUNT} stalls`)
   console.log(
-    `issuance   ${issuanceWorks ? 'confirmed working before load' : acquiringRefused ? 'REFUSED (401), customers will not acquire' : 'NOT working'}`,
+    `issuance   ${issuanceWorks ? 'confirmed working, stalls are trading' : acquiringRefused ? 'REFUSED, customers will not acquire' : 'NOT working'}`,
   )
   console.log(
     `issuer     ${issuerConfigured ? `polling ${PURCHASE_API_URL} every ${ISSUER_POLL_SECONDS}s` : 'NOT configured, behaviour will be skipped'}`,
@@ -300,6 +319,50 @@ export function setup() {
 }
 
 let backoffSeconds = 1
+
+/**
+ * The stall session this VU issues through, opened once and reused.
+ *
+ * A NAP login costs two round trips and a signature, and a session lasts
+ * hours, so logging in per iteration would measure the login. Module scope is
+ * per-VU in k6, which is exactly the lifetime wanted here.
+ *
+ * `null` rather than a thrown error when login fails: one stall being
+ * unreachable should cost that VU its acquiring, not end the run for the
+ * hundred and thirty customers who are only polling.
+ */
+let myStallSession
+
+function stallSessionForThisVu() {
+  if (myStallSession !== undefined) return myStallSession
+
+  const stall = STALLS[exec.vu.idInTest % STALLS.length]
+  const session = napLogin(PORTAL, stall)
+
+  if (session.error || !session.permissions.includes('coupon:issue')) {
+    // Said once per VU, not once per iteration, because at 130 customers the
+    // repeat would bury everything else in the log.
+    console.warn(
+      `stall #${String(stall.index).padStart(4, '0')} cannot issue ` +
+        `(${session.error ?? (session.permissions.join(',') || 'no permissions')}). ` +
+        'Run: node loadtest/stalls.mjs --count ' + STALL_COUNT + ' --verify',
+    )
+    myStallSession = null
+    return null
+  }
+
+  myStallSession = session
+  return myStallSession
+}
+
+/** Close a customer iteration that ended early, so its time is still counted. */
+function finishCustomer(me, started) {
+  const elapsed = Date.now() - started
+  customer_ms.add(elapsed)
+  iteration_ms.add(elapsed)
+  const remaining = CUSTOMER_POLL_SECONDS - elapsed / 1000
+  if (remaining > 0) sleep(remaining)
+}
 
 /**
  * A customer's day, gateway-side: acquire, then poll for arrivals.
@@ -322,8 +385,21 @@ export function customer(data) {
   const canAcquire = !(data && data.acquiringRefused)
 
   if (firstIteration && canAcquire && COUPONS_PER_CUSTOMER > 0) {
+    // A STALL issues the coupon, not the customer.
+    //
+    // This was wrong at first and the fix is a domain correction, not a
+    // refactor: the earlier version had each customer issue to themselves,
+    // which is not a thing that happens. A customer acquires a coupon BECAUSE
+    // A STALL ISSUED ONE, and only a stall holds `coupon:issue`.
+    //
+    // Spread across stalls by VU so the crowd does not queue behind one of
+    // them, which would measure a single stall's throughput and call it a
+    // market.
+    const stallSession = stallSessionForThisVu()
+    if (!stallSession) return finishCustomer(me, started)
+
     for (let i = 0; i < COUPONS_PER_CUSTOMER; i++) {
-      const res = issueCoupon(me, {
+      const res = issueCouponAsStall(stallSession, {
         faceValueMinor: FACE_VALUE_MINOR,
         currency: CURRENCY,
         expiryDays: 90,
@@ -568,10 +644,11 @@ export function handleSummary(data) {
   // the setup warning would otherwise see a zero and assume issuance broke.
   if (n('coupons_acquired') === 0 && n('customer_drains') > 0) {
     lines.push(
-      '    NO COUPONS WERE ACQUIRED. Either the portal refused issuance (401,',
-      '    which staging always does to a NIP-98 client) or it was never',
-      '    reachable. Only the polling half of the customer behaviour ran, so',
-      '    this measures a crowd that arrived already holding what it holds.',
+      '    NO COUPONS WERE ACQUIRED, so only the polling half of the customer',
+      '    behaviour ran and this measures a crowd that arrived already holding',
+      '    what it holds. The usual cause is that the pool stalls have not',
+      '    published a stall record and so hold no coupon:issue.',
+      `    Run: node loadtest/stalls.mjs --count ${STALL_COUNT} --verify`,
       '',
     )
   }
