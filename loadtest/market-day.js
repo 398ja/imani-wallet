@@ -122,9 +122,21 @@ const DAY_SECONDS = durationSeconds(DAY)
 const STALLS = IDENTITIES.slice(0, STALL_COUNT)
 const CUSTOMERS = IDENTITIES.slice(STALL_COUNT)
 
-// Polls per second, from the periods the real clients use.
+// The stalls' combined poll rate, expressed as "STALL_COUNT polls per poll
+// period" rather than as a per-second figure.
+//
+// Per-second was wrong and a staging run caught it: rate was
+// Math.max(1, Math.round(STALL_COUNT / STALL_POLL_SECONDS)), which for 2
+// stalls on a 10s period is max(1, round(0.2)) = 1 PER SECOND, five times the
+// intended load. It happened to be right at the default of 10 stalls, so it
+// would have survived every run that did not vary the count. Observed: 120
+// drains in two minutes where 24 were intended.
+//
+// k6 takes rate over an arbitrary timeUnit, so the honest statement of "each
+// stall polls every 10 seconds" is STALL_COUNT per 10s, with no division and
+// nothing to round.
 const STALL_POLL_SECONDS = Number(__ENV.STALL_POLL_SECONDS || 10)
-const STALL_POLL_RATE = Math.max(1, Math.round(STALL_COUNT / STALL_POLL_SECONDS))
+const STALL_POLL_RATE = STALL_COUNT
 const ISSUER_POLL_SECONDS = Number(__ENV.ISSUER_POLL_SECONDS || 15)
 
 // What one customer does per visit, beyond polling. An estimate, and the one
@@ -186,7 +198,7 @@ export const options = {
     stalls: {
       executor: 'constant-arrival-rate',
       rate: STALL_POLL_RATE,
-      timeUnit: '1s',
+      timeUnit: `${STALL_POLL_SECONDS}s`,
       duration: DAY,
       preAllocatedVUs: Math.max(2, STALL_COUNT),
       maxVUs: Math.max(4, STALL_COUNT * 2),
@@ -252,13 +264,22 @@ export function setup() {
     (probeIssue.status === 200 || probeIssue.status === 201) &&
     String(probeIssue.body).includes('voucher_id')
 
-  if (probeIssue.status === 401) {
-    throw new Error(
-      `issuance is refused at ${PORTAL} with 401.\n` +
-        '  An authentication refusal, not throttling, so no amount of load ' +
-        'produces a measurement. Staging gates /api/v1/portal/ behind ' +
-        'nap_auth.lua and demands a session cookie.\n' +
-        '  Point PORTAL_URL at a local stack.',
+  // A 401 aborts issuance.js, because issuance IS that scenario and a ramp
+  // that cannot issue has nothing to measure. Here it is one act inside one
+  // behaviour, and the drains are the larger part of the day, so aborting
+  // would mean the mix could never run against staging at all. Degrade and
+  // say so instead: the crowd still polls, and the summary reports that its
+  // customers arrived holding coupons they did not acquire here.
+  const acquiringRefused = probeIssue.status === 401
+  if (acquiringRefused) {
+    console.warn(
+      `issuance is refused at ${PORTAL} with 401, so customers will NOT ` +
+        'acquire coupons in this run.\n' +
+        '  An authentication refusal, not throttling: staging gates ' +
+        '/api/v1/portal/ behind nap_auth.lua and demands a session cookie, ' +
+        'which a NIP-98 client cannot obtain.\n' +
+        '  The polling half of the day still runs. Point PORTAL_URL at a ' +
+        'local stack to measure the acquiring half.',
     )
   }
 
@@ -268,12 +289,14 @@ export function setup() {
   console.log(`account    ${ACCOUNT}`)
   console.log(`portal     ${PORTAL}`)
   console.log(`day        ${DAY}, peak ${CUSTOMER_PEAK} customers, ${STALL_COUNT} stalls`)
-  console.log(`issuance   ${issuanceWorks ? 'confirmed working before load' : 'NOT working'}`)
+  console.log(
+    `issuance   ${issuanceWorks ? 'confirmed working before load' : acquiringRefused ? 'REFUSED (401), customers will not acquire' : 'NOT working'}`,
+  )
   console.log(
     `issuer     ${issuerConfigured ? `polling ${PURCHASE_API_URL} every ${ISSUER_POLL_SECONDS}s` : 'NOT configured, behaviour will be skipped'}`,
   )
 
-  return { issuanceWorks, issuerConfigured }
+  return { issuanceWorks, issuerConfigured, acquiringRefused }
 }
 
 let backoffSeconds = 1
@@ -293,7 +316,12 @@ export function customer(data) {
   const started = Date.now()
   const firstIteration = exec.vu.iterationInInstance === 0
 
-  if (firstIteration && COUPONS_PER_CUSTOMER > 0) {
+  // Skipped entirely when the portal refused before load. Attempting it would
+  // record one failure per customer for a reason setup already established,
+  // and drown the drains the run CAN measure.
+  const canAcquire = !(data && data.acquiringRefused)
+
+  if (firstIteration && canAcquire && COUPONS_PER_CUSTOMER > 0) {
     for (let i = 0; i < COUPONS_PER_CUSTOMER; i++) {
       const res = issueCoupon(me, {
         faceValueMinor: FACE_VALUE_MINOR,
@@ -535,6 +563,40 @@ export function handleSummary(data) {
     '    empty queue; here the queues hold what the day put in them.',
     '',
   )
+
+  // A day with no coupons acquired is a different day, and a reader who missed
+  // the setup warning would otherwise see a zero and assume issuance broke.
+  if (n('coupons_acquired') === 0 && n('customer_drains') > 0) {
+    lines.push(
+      '    NO COUPONS WERE ACQUIRED. Either the portal refused issuance (401,',
+      '    which staging always does to a NIP-98 client) or it was never',
+      '    reachable. Only the polling half of the customer behaviour ran, so',
+      '    this measures a crowd that arrived already holding what it holds.',
+      '',
+    )
+  }
+
+  // A p95 far above the median is either a heavy tail or two populations, and
+  // those want opposite responses: a tail is load, a step is a fixed cost that
+  // load will not explain. Observed on staging 2026-09-23, where ten slow
+  // drains landed within 172ms of each other at ~2.2s against a 150ms median.
+  // Reported as a question rather than a verdict, because this run cannot tell
+  // them apart on its own.
+  for (const [label, metric] of [
+    ['customers', 'customer_ms'],
+    ['stalls', 'stall_ms'],
+  ]) {
+    const med = m[metric]?.values?.med ?? 0
+    const p95 = m[metric]?.values?.['p(95)'] ?? 0
+    if (med > 0 && p95 > med * 5) {
+      lines.push(
+        `    ${label}: p95 ${p95.toFixed(0)}ms is ${(p95 / med).toFixed(0)}x the median ${med.toFixed(0)}ms.`,
+        '    That is a step rather than a tail, so look at the distribution before',
+        '    reading the p95 as load. Confirm with drain.js, which is isolated.',
+        '',
+      )
+    }
+  }
 
   const limited = n('rate_limited')
   if (limited > 0) {
