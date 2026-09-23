@@ -122,6 +122,39 @@ export function issueCoupon(stall, { faceValueMinor, currency, expiryDays, memo 
   )
 }
 
+/**
+ * Issue a coupon as a stall, authorised by a NAP SESSION rather than NIP-98.
+ *
+ * This is the path that actually works. `issueCoupon` above signs each request
+ * with NIP-98, which authenticates perfectly and is then refused 403:
+ * `coupon:issue` is granted only by `NapProxyAuthFilter`, on the session path.
+ * MEASURED against staging, where a NIP-98 issue is 403 and the same key with
+ * a NAP session is 201.
+ *
+ * The caller must hold a session from `napLogin`, and the identity must have
+ * published a stall record (`loadtest/stalls.mjs`). A session without one
+ * carries `coupon:pay,coupon:receive` and is refused, which is correct: a
+ * customer is not a stall.
+ */
+export function issueCouponAsStall(session, { faceValueMinor, currency, expiryDays, memo }) {
+  const body = JSON.stringify({
+    face_value_minor: faceValueMinor,
+    currency,
+    quantity: 1,
+    expiry_days: expiryDays,
+    memo,
+  })
+  return timed(gateway_ms, () =>
+    http.post(`${PORTAL}/api/v1/portal/vouchers`, body, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(session.cookie ? { Cookie: session.cookie } : {}),
+      },
+      tags: { name: 'issue coupon' },
+    }),
+  )
+}
+
 /** Read a coupon back, to confirm issuance actually produced one. */
 export function readCoupon(customer, couponId) {
   return signed(GATEWAY, `/api/v1/wallet/vouchers/${couponId}`, 'GET', undefined, customer, 'read coupon')
