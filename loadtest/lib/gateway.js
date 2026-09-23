@@ -58,6 +58,38 @@ const EDGE_SECRET = __ENV.EDGE_SECRET || ''
 export const INTERNAL = (__ENV.INTERNAL_URL || 'http://localhost:8081').replace(/\/$/, '')
 
 /**
+ * The relay address the GATEWAY can reach, which is not the one a browser can.
+ *
+ * A delivered coupon names the relays to publish its gift wrap to, and the
+ * gateway is what does the publishing. Sending the browser-facing name here
+ * produces a DM the gateway cannot deliver. Same distinction, and the same
+ * default, as `INTERNAL_RELAY_URL` in `src/lib/relay.ts`.
+ */
+export const INTERNAL_RELAY_URL = __ENV.INTERNAL_RELAY_URL || 'ws://nostr-relay:7777'
+
+/**
+ * The relay this deployment actually names, read from its own config.
+ *
+ * The default above is the local stack's internal alias, and it is wrong
+ * anywhere else: staging answers `wss://relay.staging.398ja.xyz`. Guessing
+ * produces a DM the gateway cannot publish, and nothing in the 200 it returns
+ * says so.
+ *
+ * Called from `setup`, once, because every VU asking would be a request per VU
+ * for a value that cannot change mid-run.
+ */
+export function deploymentRelayUrl() {
+  if (__ENV.INTERNAL_RELAY_URL) return __ENV.INTERNAL_RELAY_URL
+  const res = http.get(`${GATEWAY}/api/v1/config`, { tags: { name: 'config' } })
+  if (res.status !== 200) return INTERNAL_RELAY_URL
+  try {
+    return JSON.parse(res.body).relay_url || INTERNAL_RELAY_URL
+  } catch {
+    return INTERNAL_RELAY_URL
+  }
+}
+
+/**
  * Service credential for the `/internal/v1` tier.
  *
  * Row-scoped in `service_credentials.allowed_paths`, bcrypt-hashed, so this is
@@ -155,6 +187,65 @@ export function issueCouponAsStall(session, { faceValueMinor, currency, expiryDa
   )
 }
 
+/**
+ * Deliver an issued coupon to a customer, as a gift-wrapped DM.
+ *
+ * The third and last stage of a sale, and the one that makes a customer
+ * actually hold something. `src/lib/issue.ts` calls this `deliver`, and
+ * without it a coupon is minted and nobody has it.
+ *
+ * This is also what puts an envelope on the recipient's queue. Every scenario
+ * in this directory measured drains against an EMPTY queue because nothing
+ * here ever made a sale; `receive.js` works around that by publishing through
+ * `/internal/v1`, which is not reachable from outside a deployment. A real
+ * sale needs no such workaround.
+ *
+ * `issuer_id` and `sender_pubkey` are both the STALL, never the device that
+ * sold: a customer must hold a coupon from a stall they can look up.
+ */
+export function deliverCoupon(stall, recipientPubkey, voucher, memo, relayUrl) {
+  return signed(
+    GATEWAY,
+    '/api/v1/dm/tokens/send',
+    'POST',
+    {
+      recipient_pubkey: recipientPubkey,
+      token: voucher.token,
+      memo: voucher.memo ?? memo,
+      voucher_id: voucher.voucher_id,
+      face_value: voucher.face_value,
+      face_unit: voucher.face_unit,
+      face_decimals: voucher.face_decimals,
+      token_amount: voucher.token_amount,
+      backing_strategy: voucher.backing_strategy,
+      issuer_id: stall.pubHex,
+      sender_pubkey: stall.pubHex,
+      expires_at: epochSeconds(voucher.expires_at),
+      relay_urls: [relayUrl || INTERNAL_RELAY_URL],
+    },
+    stall,
+    'deliver coupon',
+  )
+}
+
+/**
+ * Epoch SECONDS from whatever the gateway returned.
+ *
+ * `expires_at` has been seen as an ISO string and as a number, and the number
+ * as both seconds and milliseconds. The DM endpoint declares a `Long` in
+ * seconds: an ISO string fails Jackson's binding, and milliseconds date the
+ * coupon to the year 58000. Mirrors `toEpochSeconds` in `src/lib/issue.ts`.
+ */
+function epochSeconds(value) {
+  if (value === undefined || value === null || value === '') return undefined
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || value <= 0) return undefined
+    return value > 1e11 ? Math.floor(value / 1000) : Math.floor(value)
+  }
+  const parsed = Date.parse(value)
+  return Number.isNaN(parsed) ? undefined : Math.floor(parsed / 1000)
+}
+
 /** Read a coupon back, to confirm issuance actually produced one. */
 export function readCoupon(customer, couponId) {
   return signed(GATEWAY, `/api/v1/wallet/vouchers/${couponId}`, 'GET', undefined, customer, 'read coupon')
@@ -243,6 +334,35 @@ export function publishArrival(params) {
       tags: { name: 'publish arrival' },
     }),
   )
+}
+
+/**
+ * The envelopes in a drain response.
+ *
+ * The field is `envelopes`. `src/lib/incomingNotifications.ts` reads
+ * `body.envelopes` and nothing else, and a real sale confirms it.
+ *
+ * This exists because reading the wrong field is INVISIBLE: a scenario that
+ * looks for `notifications` finds nothing, reports "0 envelopes", and looks
+ * exactly like a healthy run against an empty queue. `market-day.js` did
+ * precisely that, and would have gone on reporting empty queues after the
+ * sales that fill them. The fallbacks are kept for older shapes but
+ * `envelopes` is what a current deployment sends.
+ */
+export function envelopesFrom(response) {
+  if (response.status !== 200) return []
+  try {
+    const body = JSON.parse(response.body)
+    const list = body.envelopes || body.items || body.notifications || []
+    return Array.isArray(list) ? list : []
+  } catch {
+    return []
+  }
+}
+
+/** The ids to acknowledge, named as the wallet names them. */
+export function envelopeIds(envelopes) {
+  return envelopes.map((e) => e.notificationId || e.id).filter(Boolean)
 }
 
 /** Drain pending arrival notifications. On the ACCOUNT tier. */
