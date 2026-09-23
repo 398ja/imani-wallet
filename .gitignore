@@ -51,3 +51,8 @@ till.png
 # when it is worth keeping, rather than accumulating every local run.
 perf/results/*.json
 perf/results/*.md
+
+# Same for the gateway mix, which writes a summary on every run including a
+# smoke run against a stub. A run worth keeping is committed by hand, as the
+# dated reports in loadtest/results/ already are.
+loadtest/results/market-day-summary.json
