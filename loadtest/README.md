@@ -506,10 +506,27 @@ Every failure mode was exercised rather than assumed, against a stub gateway:
 | Gateway unreachable | exit 107, "did not answer; is the stack up?" |
 | Pool too small for the stalls asked for | names the `pool.mjs --size` to run |
 | `PURCHASE_API_URL` unset | issuer reported **NOT MEASURED**, not as zero polls |
+| Portal refuses issuance (staging, 401) | degrades: polls still run, summary says no coupons acquired |
 
 That last one matters more than it looks. A counter at zero reads identically
 for "polled and found nothing" and "never ran", and only one of those is a
 measurement.
+
+### It ran against staging, and found a bug in itself
+
+[`results/staging-2026-09-23-market-day.md`](results/staging-2026-09-23-market-day.md).
+
+The stalls' poll rate was polls-per-**second**, rounded: two stalls on a ten
+second period became `max(1, round(0.2))` = one per second, **five times** the
+intended load. It was correct at the default of ten stalls, so only a run that
+varied the count could have found it.
+
+The same run also found that **~17% of authenticated drains cost 2.2s** against
+a 140ms median, a step rather than a tail. Warm-up, contention between
+behaviours, error paths, the network, the signer and pacing alone were each
+tested and ruled out, and `drain.js` at 958 drains shows no step at all. It is
+recorded as unexplained rather than guessed at, and the summary now names the
+shape so nobody reads that p95 as load.
 
 ## What can and cannot be run against staging
 
@@ -524,6 +541,7 @@ against a host that no longer exists.
 | `drain.js` | yes, but throttled | see below |
 | `issuance.js` | **no** | the portal wants a session cookie |
 | `send.js` | **no** | needs issuance |
+| `market-day.js` | yes, degraded | polls run; acquiring is refused, and it says so |
 
 Issuance and send are **local-stack scenarios**. Staging runs `nap_auth.lua`
 in front of `/api/v1/portal/`, and that gate clears any client-supplied
