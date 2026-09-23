@@ -92,6 +92,26 @@ One execution of one scenario, against one deployment, at one moment. Two runs
 are comparable only if they say so; nothing about their order implies it.
 _Avoid_: Trial, execution
 
+**Behaviour**:
+What one kind of actor does, repeatedly, over a trading day: the acts and the
+rate they happen at. Named after the actor rather than the endpoint, so a
+behaviour survives a change of API. Sits between a scenario, which measures one
+subsystem, and a mix, which runs several behaviours at once.
+_Avoid_: Profile, persona, workload, journey
+
+**Mix**:
+Several behaviours running together on one clock, at the proportions a real
+trading day has. Deliberately gives up a scenario's isolation to answer what
+isolation cannot: whether these actors can coexist. A regression in a mix names
+a suspect, not a cause, and the scenarios are what confirm it.
+_Avoid_: Blend, composite, soak, day
+
+**Shaped day**:
+A mix whose load follows a day's own curve (a morning build, a midday peak, a
+slower afternoon) rather than holding one level. Realistic at the cost of
+comparability, since two runs match only where their curves do.
+_Avoid_: Profile, ramp, curve
+
 **Baseline**:
 The committed reference a run is judged against. Changing it is a deliberate act
 that appears in the diff, which is what stops a slow drift from passing as
