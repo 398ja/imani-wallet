@@ -406,6 +406,111 @@ The summary says this explicitly whenever it happens, because an all-empty run
 looks identical to a healthy loaded one in every other number. A scenario that
 quietly measured nothing while reporting a clean p95 would be worse than none.
 
+## The market day
+
+    node loadtest/signer.mjs &
+    node loadtest/pool.mjs --size 140
+    GATEWAY_URL=http://localhost:28082 PORTAL_URL=http://localhost:28084 \
+      ACCOUNT_URL=http://localhost:28081 \
+      EDGE_SECRET=dev-edge-secret-local-only \
+      k6 run loadtest/market-day.js
+
+Everything above this heading is a **scenario**: one subsystem, isolated, so a
+regression names its own cause. This is a **mix**, and it is the only file here
+that gives that up. Settled in
+[ADR 0013](../docs/adr/0013-a-mix-runs-behaviours-on-one-clock.md).
+
+Three **behaviours** run together on one clock, because contention between them
+is invisible across two summaries:
+
+| Behaviour | Population | What it does | Executor |
+|---|---|---|---|
+| Customer | 130 at peak | acquires a coupon on arrival, then polls every 10s | `ramping-vus` |
+| Stall | 10, all day | polls for takings every 10s | `constant-arrival-rate` |
+| Purchase Issuer | 1 | polls `/api/v1/purchases/owed` every 15s | `constant-arrival-rate` |
+
+### Why only the crowd is VUs
+
+A VU is the honest unit for customers, where the question really is how many
+people are in the market at once. It is the wrong unit for the two pollers: a
+stall's takings poll does not speed up because more customers arrived, and the
+Purchase Issuer is one process on a fixed period.
+
+`constant-arrival-rate` also **holds the rate when latency moves**, and
+`ramping-vus` does not. A VU that is waiting is a VU not applying load, so a
+VU-driven poller quietly reduces its load exactly when the gateway slows, which
+is the moment the measurement matters most.
+
+### It is the gateway's share of a day, not a day
+
+A customer acquires, receives, **sends**, and **redeems**. The last two are not
+reachable from here at all:
+
+| Act | Why not |
+|---|---|
+| Redemption | no gateway path, ADR 0003. It happens on the device |
+| Splitting | likewise, ADR 0004 |
+| Sending | needs issuance through the cookie-gated portal, so a NIP-98 client cannot originate one |
+
+So a customer here **acquires and polls**, and the summary says so on every run
+rather than only when something looks wrong. The send and redemption halves are
+modelled device-side in [`perf/`](../perf/README.md), which has its own runner
+and cannot share k6's clock. The model is defined once and executed in two
+places, so contention is measurable *within* the mix and not across the boundary
+between the two harnesses.
+
+### The rate limit is the finding, not a failure
+
+Issuance is limited per **client IP**, and one k6 process is one IP, so the whole
+crowd shares one budget. A realistic day of issuance for 130 customers is
+therefore not reachable from a single load generator against a default stack.
+
+This run **reports the limit rather than raising it**, so the summary names how
+much less issuance load the day applied than it intended. What it must never do
+is apply a tenth of the intended load and present the result as a day.
+
+### Its drain numbers are not comparable with `drain.js`
+
+That ramp measures an **empty** queue. Here the queues hold whatever the day put
+in them, so the per-poll cost is higher by construction. Quoting one against the
+other would read as a regression in a scenario that did not change.
+
+### The populations are estimates
+
+130 customers, 10 stalls, 10 purchases an hour. Nobody measured a market to get
+these. They are recorded as estimates so they do not harden into folklore, and
+every one is an env knob: `CUSTOMER_PEAK`, `STALL_COUNT`, `COUPONS_PER_CUSTOMER`,
+`CUSTOMER_POLL_SECONDS`, `STALL_POLL_SECONDS`, `ISSUER_POLL_SECONDS`.
+
+### The day's shape
+
+A **shaped day** rather than a plateau, because the question is realism: opens at
+20% of peak, builds through the morning, a third of the day at peak, then falls
+to 30% by close. The cost is comparability, since two runs match only where their
+curves do, which makes a mix weaker evidence of a regression than a scenario is.
+
+Both axes are fractions, so `DAY_DURATION` scales the whole curve. That is what
+makes a short run possible:
+
+    DAY_DURATION=40s CUSTOMER_PEAK=6 STALL_COUNT=2 k6 run loadtest/market-day.js
+
+The first version wrote the stages as `18m`, which pinned the crowd to a real
+hour while `DAY_DURATION` shortened only the pollers. Nobody would ever have
+smoke-tested a file that costs an hour to try, so this was found by trying it.
+
+Every failure mode was exercised rather than assumed, against a stub gateway:
+
+| Situation | Result |
+|---|---|
+| Everything working | 126 checks passed, per-behaviour latencies reported separately |
+| Gateway unreachable | exit 107, "did not answer; is the stack up?" |
+| Pool too small for the stalls asked for | names the `pool.mjs --size` to run |
+| `PURCHASE_API_URL` unset | issuer reported **NOT MEASURED**, not as zero polls |
+
+That last one matters more than it looks. A counter at zero reads identically
+for "polled and found nothing" and "never ran", and only one of those is a
+measurement.
+
 ## What can and cannot be run against staging
 
 Every tier answers on **`wallet.staging.398ja.xyz`**, routed by path.
