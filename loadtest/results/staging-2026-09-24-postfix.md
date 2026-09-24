@@ -302,3 +302,63 @@ A measurement taken with a malformed input measured the malformed input. The
 7.5s was real, reproducible and consistent to within 20ms, and still meant
 something other than what it looked like. Contrast against a known-good input
 is what separated them, and it was one command.
+
+---
+
+# Addendum 4: the 2s CLOSE, fixed and measured
+
+## The real p95 cause, proved by experiment
+
+Addendum 3 identified a 2s CLOSE handshake from reading the code. Tested it by
+varying `wallet.relay.subscription.closeTimeoutMs` on staging:
+
+| closeTimeoutMs | response | implied base work |
+|---|---|---|
+| 2000 | 2.061s | 0.061s |
+| 250 | 0.315s | 0.065s |
+| 50 | 0.115s | 0.065s |
+
+Three points, perfectly linear. The response is held for **exactly** the
+timeout, every time, so nothing is being waited for. Real work is ~65ms, making
+the old default 97% dead time.
+
+## Deployed at 100ms
+
+| endpoint | before | after |
+|---|---|---|
+| `/api/v1/auth/complete` | 2.12s | **0.291s** |
+| `/api/v1/profiles/{pubkey}/relays` | 2.13s | **0.232s** |
+| `/api/v1/incoming-notifications/drain` | 2.03s | **0.193s** |
+
+7-10x on every affected endpoint, no errors, no restarts. The code fix (not
+joining on the request path at all) is still open as imani-gateway-core#90.
+
+## And the seller wait was never what this report said
+
+The main report quotes 7460ms and calls it "the seller's screen waiting" for
+the mint. Changing only the harness's poll interval moves it:
+
+| `MINT_POLL_SECONDS` | reported wait |
+|---|---|
+| 2.00 | 7731ms |
+| 0.25 | **5626ms** |
+
+Two seconds of the number was the harness sleeping. Of what remains, ~2s is
+`phoenixd-mock`'s deliberate `auto_settle_in=2s`, and roughly 1.1s is mint work
+on top of a 0.69s issue call.
+
+A number that moves by 2.1s when the observer changes is not a measurement of
+the system. Filed as imani-wallet#92.
+
+## Corrected picture of where a sale's time goes
+
+```
+issue call                    0.69s   real
+phoenixd-mock settle          2.00s   test fixture
+mint quote -> ISSUED          1.1s    real, on top of the settle
+gateway endpoints             <0.3s   was ~2.1s before the CLOSE fix
+mint HTTP                     0.062s
+```
+
+Nothing in the stack is a 7-second bottleneck. The 7-second figure was three
+smaller numbers plus an observation artifact.
