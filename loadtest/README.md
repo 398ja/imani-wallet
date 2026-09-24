@@ -675,6 +675,7 @@ against a host that no longer exists.
 | `issuance.js` | **no** | signs NIP-98 only, which cannot carry `coupon:issue` |
 | `send.js` | **no** | needs issuance |
 | `market-day.js` | **yes, fully** | once `stalls.mjs` has enrolled the stalls |
+| `swap-race.js` | **yes** | a probe, not a ramp: does concurrent issuance still burn proofs? |
 
 Staging runs `nap_auth.lua` in front of `/api/v1/portal/`, and that gate clears
 any client-supplied `X-Edge-Auth` / `X-Auth-Permissions` before demanding a
