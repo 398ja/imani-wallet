@@ -88,6 +88,10 @@ const coupons_delivered = new Counter('coupons_delivered')
 // How long the seller waits for the mint. Measured on staging at ~7s, which is
 // the bulk of a sale and was entirely unmeasured before.
 const mint_wait_ms = new Trend('mint_wait_ms', true)
+// The same wait with this loop's own sleeps removed. See the derivation at the
+// poll loop: mint_wait_ms measures how often we LOOKED as much as how long the
+// mint took, and moved 2.1s when only MINT_POLL_SECONDS changed.
+const mint_wait_bound_ms = new Trend('mint_wait_bound_ms', true)
 const mint_polls = new Trend('mint_polls')
 const mint_timeouts = new Counter('mint_timeouts')
 const boot_ticks = new Counter('boot_ticks')
@@ -479,6 +483,10 @@ function sellCoupon(session, stall, recipientPubkey, relayUrl) {
   let voucher = null
   let polls = 0
   let pollsRefused = 0
+  // When the LAST sleep before the winning poll ended. Everything after this
+  // is the only part of the wait the server could still have been working.
+  let lastSleepEndedAt = startedWait
+  let observedAt = null
   for (let attempt = 0; attempt < MINT_POLL_ATTEMPTS; attempt++) {
     polls++
     const read = readCoupon(stall, voucherId)
@@ -487,6 +495,7 @@ function sellCoupon(session, stall, recipientPubkey, relayUrl) {
         const body = JSON.parse(read.body)
         if (body.status === 'ISSUED' && body.token) {
           voucher = body
+          observedAt = Date.now()
           break
         }
       } catch {
@@ -501,9 +510,27 @@ function sellCoupon(session, stall, recipientPubkey, relayUrl) {
     if (read.status === 429 || read.status >= 500) pollsRefused++
 
     sleep(MINT_POLL_SECONDS)
+    lastSleepEndedAt = Date.now()
   }
 
   const mintWaitMs = Date.now() - startedWait
+
+  // THE WAIT, WITHOUT THE OBSERVER IN IT.
+  //
+  // mintWaitMs includes this loop's own sleeps, so it measures how often we
+  // looked as much as how long the mint took. Changing only MINT_POLL_SECONDS
+  // from 2.0 to 0.25 moved the reported figure from 7731ms to 5626ms on the
+  // same system: two seconds of the headline number was the harness sleeping.
+  //
+  // A number that moves when the observer changes is not a measurement of the
+  // system, and this one sent an investigation after the mint, which answers
+  // in 62ms.
+  //
+  // The coupon became ready somewhere between the previous poll and the one
+  // that saw it, so all that can be said honestly is an UPPER BOUND: the time
+  // from the last sleep ending to the observation. It does not depend on the
+  // poll interval, which is the property that was missing.
+  const mintWaitBoundMs = observedAt !== null ? observedAt - lastSleepEndedAt : null
   if (!voucher) {
     // Throttled throughout rather than slow: report it as the rate limit it
     // was, not as a mint that could not keep up.
@@ -511,7 +538,7 @@ function sellCoupon(session, stall, recipientPubkey, relayUrl) {
       return { limited: true, issued: false, delivered: false }
     }
     mint_timeouts.add(1)
-    return { limited: false, issued: true, delivered: false, mintWaitMs, polls }
+    return { limited: false, issued: true, delivered: false, mintWaitMs, mintWaitBoundMs, polls }
   }
 
   const delivered = deliverCoupon(stall, recipientPubkey, voucher, 'market day', relayUrl)
@@ -520,6 +547,7 @@ function sellCoupon(session, stall, recipientPubkey, relayUrl) {
     issued: true,
     delivered: delivered.status === 200 || delivered.status === 201,
     mintWaitMs,
+    mintWaitBoundMs,
     polls,
   }
 }
@@ -606,6 +634,9 @@ export function customer(data) {
         // mint: observed, one timeout dragged the p95 to 75s.
         if (sale.delivered) {
           mint_wait_ms.add(sale.mintWaitMs)
+          if (sale.mintWaitBoundMs !== null && sale.mintWaitBoundMs !== undefined) {
+            mint_wait_bound_ms.add(sale.mintWaitBoundMs)
+          }
           mint_polls.add(sale.polls)
         }
       }
@@ -766,7 +797,12 @@ export function handleSummary(data) {
     `      coupons minted    ${n('coupons_acquired')}`,
     `      coupons DELIVERED ${n('coupons_delivered')}${n('mint_timeouts') > 0 ? `, ${n('mint_timeouts')} never minted` : ''}`,
     `      mint wait         avg ${ms('mint_wait_ms', 'avg')}ms   p95 ${ms('mint_wait_ms', 'p(95)')}ms   ` +
-      `(${(m.mint_polls?.values?.avg ?? 0).toFixed(1)} polls)`,
+      `(${(m.mint_polls?.values?.avg ?? 0).toFixed(1)} polls @ ${MINT_POLL_SECONDS}s)`,
+    // Reported beside it rather than instead of it, because both are true and
+    // neither alone is honest: the first is what the SELLER experiences, the
+    // second is the most the SERVER can be blamed for.
+    `      of which server    <= ${ms('mint_wait_bound_ms', 'avg')}ms avg   <= ${ms('mint_wait_bound_ms', 'p(95)')}ms p95` +
+      `  (the rest is this harness sleeping)`,
     `      drains            ${n('customer_drains')}, ${n('customer_envelopes')} envelopes`,
     `                        ${n('boot_ticks')} boot ticks, ${n('hidden_ticks')} skipped as hidden`,
     `      per iteration     avg ${ms('customer_ms', 'avg')}ms   p95 ${ms('customer_ms', 'p(95)')}ms`,
