@@ -125,8 +125,46 @@ face values, and 6736 sats charges 673 and works fine.
 5. **Clean up the 9 stranded quotes** on staging once the fix lands, otherwise
    the retry loop continues against rows that can never succeed.
 
+## The portal 500s have their own root cause, also found
+
+`imani-gateway-portal#44` is **not** a code regression. The portal's stack trace
+names the real condition:
+
+```
+HttpClientErrorException$BadRequest: 400 on POST .../internal/v1/wallet/vouchers
+  "Failed to request voucher mint quote: ... HTTP client error: 429"
+	at CustomerWalletClient.createVoucher(CustomerWalletClient.java:110)
+```
+
+The mint is returning **429**, and `IssuanceRateLimitProperties` carries two
+limits:
+
+```java
+private int perMinuteBurst = 10;
+private int perDay = 60;          // <- this one
+```
+
+Measured over 24h on `/v1/mint/quote/voucher/{method}`: **36 x 200, 76 x 429**,
+so 118 attempts against a budget of **60 per day**. The bucket has been empty for
+hours and will not refill until the day rolls over, which is why waiting 25
+seconds between probes changed nothing.
+
+Two defects fall out of it:
+
+1. **The portal converts 429 into 500.** A caller cannot tell a quota from a
+   crash, which is exactly what made the first report here conclude the portal
+   was broken outright. Same conflation as #37, now with a measured cost.
+2. **Every caller shares one bucket.** The limit is keyed on remote address and
+   refined by `X-Dalia-Identity` only for `trustedProxies = 172.16.0.0/12`. All
+   gateway traffic arrives from inside that range, so the whole deployment
+   shares a single 60/day quota. That is not a plausible production figure and
+   wants a deliberate decision rather than a default.
+
+The earlier reading that "201s at 17:21, 500s from 00:21" indicated a deploy
+regression was wrong. It is the daily budget running out partway through the
+load runs.
+
 ## Not this cause
 
-`imani-gateway-portal#44` (every portal write 500s) and
-`imani-gateway-customer#104` (concurrent issuance races on backing proofs) are
-unaffected by the above and remain open on their own evidence.
+`imani-gateway-customer#104` (concurrent issuance racing on backing proofs)
+is unaffected by either finding and remains open on its own evidence.
