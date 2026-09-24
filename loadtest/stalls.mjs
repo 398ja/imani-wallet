@@ -255,11 +255,22 @@ async function main() {
   const started = Date.now()
   const pending = new Set(toEnrol.map((s) => s.index))
 
+  // The last thing each pending stall reported, so a timeout can say WHY.
+  // Without this the failure is only "still cannot issue", which reads like a
+  // slow ACL no matter what actually happened. The distinction that matters:
+  // an empty permission list means the session is fine and the merchant record
+  // has not resolved yet, whereas customer permissions without `coupon:issue`
+  // means it resolved and decided against issuing, and a `why` means the login
+  // never completed and the ACL is not involved at all. Those have different
+  // causes and only the first is worth waiting longer for.
+  const lastSeen = new Map()
+
   while (pending.size > 0 && Date.now() - started < ACL_TIMEOUT_MS) {
     await new Promise((r) => setTimeout(r, ACL_POLL_MS))
     for (const stall of toEnrol) {
       if (!pending.has(stall.index)) continue
       const state = await canIssue(stall)
+      lastSeen.set(stall.index, state)
       if (state.trading) {
         pending.delete(stall.index)
         const seconds = ((Date.now() - started) / 1000).toFixed(0)
@@ -269,9 +280,17 @@ async function main() {
   }
 
   if (pending.size > 0) {
+    const detail = [...pending]
+      .map((index) => {
+        const state = lastSeen.get(index) ?? {}
+        if (state.why) return `  #${String(index).padStart(4, '0')} login failed: ${state.why}`
+        const granted = state.permissions?.length ? state.permissions.join(',') : '(none)'
+        return `  #${String(index).padStart(4, '0')} session ok, permissions: ${granted}`
+      })
+      .join('\n')
     console.error(
       `\n${pending.size} stall(s) still cannot issue after ${ACL_TIMEOUT_MS / 1000}s: ` +
-        `${[...pending].join(', ')}\n` +
+        `${[...pending].join(', ')}\n${detail}\n` +
         '  The record is published either way, so this may simply be slower than the\n' +
         '  timeout. Re-run to check rather than publishing again.',
     )
