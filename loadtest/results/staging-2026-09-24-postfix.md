@@ -235,3 +235,70 @@ Checked and healthy, so none of these explain the latency: mint lock wait
 (0.9ms), HikariCP acquire (max 4ms, zero pending), blocked threads (0 on
 gateway-core), executor queues (empty), nostrdb query duration itself (2ms when
 it runs).
+
+---
+
+# Addendum 3: correcting Addendum 2
+
+Addendum 2 says the seller's 7.5s is the nostrdb cache failing on every query.
+That is wrong, and the correction matters more than the original claim.
+
+## What the deployed diagnostic printed
+
+The cause had been swallowed as `e.getMessage()`, which for an
+`EventStoreException` is the literal string "Failed to query events". Shipping
+the logging change printed it in one deploy:
+
+```
+local_query_failed error=Failed to query events
+  cause=java.lang.IllegalArgumentException: Invalid hex character at position 6
+```
+
+Position 6 is the `1` in `npub1...`. A bech32 npub reaching a hex-only query.
+
+## I was generating the failure I was measuring
+
+Every probe in Addendum 2 used an `npub1...` pubkey.
+
+| input | result |
+|---|---|
+| `npub1...` (bech32) | `local_query_failed`, **7.5s** |
+| valid 64-char hex | no failure, **2.06s** |
+
+Real traffic produced **one** `local_query_failed` in 24 hours, and that one was
+mine. The cache is not failing on 100% of queries.
+
+`source="local"` being 0 is also deliberate rather than a bug: a cache-fresh
+short-circuit was deliberately removed because it served stale reads. The code
+says "the relay is the authority. Always consult it."
+
+## The real bottleneck
+
+With valid input the endpoint is still a flat 2.06s +/- 0.002, which is exactly
+the 2.1s p95 the dashboard showed:
+
+```
+13:02:37.358  relay query_completed    <- the relay has answered
+13:02:37.359  CLOSE sent               <- +1ms
+13:02:39.359  query_complete           <- +2000ms EXACTLY
+```
+
+Two seconds of waiting after the data is in hand, from a CLOSE handshake whose
+own comment says "CLOSE messages don't get responses per the Nostr protocol"
+and which then joins for 2000ms waiting for one. Filed as
+imani-gateway-core#90.
+
+## What survives from Addendum 2
+
+- The endpoints really are ~2.1s p95 while the mint answers in 62ms.
+- The market-day run really did blame the mint for a 7460ms wait it did not
+  cause.
+- The logging and metric changes earn their place: the cause was unreadable
+  until they shipped, and readable one deploy later.
+
+## The lesson worth keeping
+
+A measurement taken with a malformed input measured the malformed input. The
+7.5s was real, reproducible and consistent to within 20ms, and still meant
+something other than what it looked like. Contrast against a known-good input
+is what separated them, and it was one command.
