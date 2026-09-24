@@ -175,3 +175,63 @@ swap-race result from the main report is unaffected.
   issuance gets no per-merchant benefit yet.
 - **2000 per merchant is a different number from 2000 shared.** Worth lowering
   once real per-stall volume is known; both knobs are env-configurable.
+
+---
+
+# Addendum 2: the dashboards, and where the seller's 7.5s actually goes
+
+Reviewed the Grafana dashboards for p95 bottlenecks after the deploy. The
+headline finding corrects something the main report above says.
+
+## The mint was never the bottleneck
+
+The market-day run reported the seller waiting **7460ms avg, p95 9173ms** for
+the mint, and the report above calls that "the seller's screen waiting" and the
+obvious next thing to look at. That framing was wrong.
+
+| | p95 |
+|---|---|
+| cashu-mint, all endpoints | **0.062s** |
+| gateway-core `/profiles/{pubkey}/relays` | **2.13s** dashboard, **7.56s** measured |
+
+The mint answers in 62ms. The 7.5s is a Nostr relay round trip taken because
+the local nostrdb cache never answers a query.
+
+`7460ms` and `7558ms` are the same number.
+
+## What the cache is doing
+
+```
+nostrdb_cache_queries_total{source="local"}  = 0
+nostrdb_cache_queries_total{source="hybrid"} = 150
+```
+
+Every query logs `local_query_failed` and falls through to the relay. The cache
+is not empty: 361,629 events and 500MB on gateway-customer. The write path works
+and the read path has never once succeeded.
+
+One query decomposes as ~5.5s waiting for events/EOSE plus a hard 2s teardown,
+returning `total=0`.
+
+## A second, unrelated finding
+
+`payment-receipts.q` redelivers 29 messages on an exact 30-second cycle, 580
+consumptions per ten minutes, and the oldest was enqueued on **May 10** — about
+390,000 deliveries for one message. Nothing reaches the DLQ, so the alert built
+for it (`PaymentReceiptDlqGrowing`) has never fired: it counts DLQ arrivals, and
+this loop has no exit.
+
+## Filed
+
+| Issue | |
+|---|---|
+| imani-gateway-core#88 | the nostrdb cache serves zero queries, 7.5s per lookup |
+| imani-gateway-core#89 | payment-receipts.q redelivers forever, 137 days |
+| imani-deploy#62 | no alert watches gateway request latency at all |
+
+## What was ruled out
+
+Checked and healthy, so none of these explain the latency: mint lock wait
+(0.9ms), HikariCP acquire (max 4ms, zero pending), blocked threads (0 on
+gateway-core), executor queues (empty), nostrdb query duration itself (2ms when
+it runs).
