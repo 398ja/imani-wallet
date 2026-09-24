@@ -362,3 +362,66 @@ mint HTTP                     0.062s
 
 Nothing in the stack is a 7-second bottleneck. The 7-second figure was three
 smaller numbers plus an observation artifact.
+
+---
+
+# Addendum 5: the CLOSE fix landed, and two of my own findings were wrong
+
+## The 2s is gone, measured at the deployed default
+
+| endpoint | before | after | |
+|---|---|---|---|
+| `/api/v1/auth/complete` | 2.12s | **0.133s** | 15.9x |
+| `/api/v1/profiles/{pubkey}/relays` | 2.13s | **0.155s** | 13.7x |
+| `/api/v1/incoming-notifications/drain` | 2.03s | **0.100s** | 20.3x |
+
+## The first attempt did not work, and nearly passed as if it had
+
+0.15.6 removed the join but left `webSocketSubscription.close()` on the
+request path, taking the SAME `sendLock` the CLOSE handshake holds. The wait
+moved rather than went.
+
+It looked fixed only because the env knob had been lowered to 100ms in the same
+change, so the measurement was of the knob, not the code. Restoring
+`closeTimeoutMs` to its original 2000ms default after deploying gave 2.06s
+again. 0.15.7 moves both socket operations off the request path.
+
+**The habit worth keeping: after a latency fix, put the tuning knob back to its
+original value and re-measure.** If the number only improves with the knob
+turned down, the code is not fixed.
+
+A residual remains, bounded and stated on imani-gateway-core#90: the close
+holds the lock in the background, so back-to-back requests contend. 0.145s
+worst case at the deployed 100ms, 0.067s when calls are spaced.
+
+## Two findings of mine were wrong
+
+**The nostrdb cache was not failing on every query.** My probes used `npub1...`
+and I was generating the failure I was measuring. Real traffic produced one
+such error in 24 hours. Fixed properly as imani-gateway-core#88 by refusing
+non-hex at the boundary, which is what the endpoint's contract already
+required.
+
+**payment-receipts.q is not a redelivery loop.** I read 580 consumptions of 31
+messages as 20x retries. It is a `@Scheduled(fixedRate = 30_000L)` depth gauge
+calling `jmsTemplate.browse()`, which enumerates every message to count it, and
+Artemis logs each one as "is consuming a message". 31 x 20 cycles = ~620
+predicted, 580 observed. The exact 30-second period I cited as proof of a
+runaway was the sampler's own `fixedRate`.
+
+What is real there: 31 receipts undrained since May, with
+`gateway_payment_receipts_drained_total` at 0. Nobody is collecting them.
+imani-gateway-core#89, retitled.
+
+## The pattern across this session
+
+Three times a clean, reproducible, tightly-consistent measurement meant
+something other than it appeared to:
+
+- 7.5s relay latency, from feeding the system a malformed pubkey
+- 7460ms "mint wait", 2s of which was the harness sleeping
+- 580 "redeliveries", which were one gauge counting
+
+Each was consistent to within a few percent, which is exactly what made them
+persuasive. The discriminator was always a contrast: a known-good input, a
+different poll interval, the original default restored.
