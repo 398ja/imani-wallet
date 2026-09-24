@@ -117,3 +117,61 @@ obvious next thing to look at.
 - **18 old PAID quotes at `amount=0`** remain undelivered from before the fix.
   They are now bounded rather than looping, but what a paid-unissued quote is
   owed is still an open decision.
+
+---
+
+# Addendum: the issuance quota is per-merchant, 2026-09-24
+
+Deployed `cashu-mint 0.38.6` and `gateway-customer 0.14.2`, which rename the
+identity header and make the mint's quota divide per stall instead of per
+deployment.
+
+## Why an addendum rather than a line in the table
+
+The first verification proved the **mint** splits buckets, using curl with
+hand-set headers. That says nothing about whether the **gateway** sends one, and
+those are different claims: the second is the one the product depends on. The
+issue was briefly reported as done on the strength of the first, which overstated
+what had been measured.
+
+## The test that actually discriminates
+
+Exhaust one stall's per-minute burst, then immediately sell from another. A
+shared bucket refuses the second stall; a per-merchant bucket does not.
+
+| Step | Result |
+|---|---|
+| stall 0, 12 attempts | **10 issued, then 2 refused** (bucket spent) |
+| stall 1, 4 attempts, seconds later | **4 issued, 0 refused** |
+
+If the header never reached the mint both stalls would draw on one bucket and
+stall 1 would have been refused 4 of 4. It was refused 0 of 4.
+
+`STALL_OFFSET` was added to `swap-race.js` for this, because the probe always
+started at pool index 0 and therefore could not ask the question at all. The
+first attempt at this test silently re-ran stall 0 and would have been read as a
+pass.
+
+## Mint-side, for completeness
+
+From a single address against the deployed mint:
+
+```
+no identity                            200 x10 then 429    address bucket
+X-Mint-Issuer-Identity: stall-alpha    200 x10 then 429    own bucket
+X-Mint-Issuer-Identity: stall-beta     200 x10 then 429    own bucket
+X-Dalia-Identity: stall-gamma          429 x4              no alias
+```
+
+## Still true afterwards
+
+15 issuances across 3 stalls in one minute: 15 of 15, zero burned proofs. The
+swap-race result from the main report is unaffected.
+
+## Open
+
+- `@Async` work does not carry the thread-local and falls back to the shared
+  address bucket. That is the previous behaviour, so nothing regresses, but async
+  issuance gets no per-merchant benefit yet.
+- **2000 per merchant is a different number from 2000 shared.** Worth lowering
+  once real per-stall volume is known; both knobs are env-configurable.

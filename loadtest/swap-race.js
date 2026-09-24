@@ -47,7 +47,14 @@ const IDENTITIES = Object.values(POOL).sort((a, b) => a.index - b.index)
 // what `stalls.mjs --count N` enrols.
 const CONCURRENCY = Number(__ENV.CONCURRENCY || 3)
 const ROUNDS = Number(__ENV.ROUNDS || 3)
-const STALLS = IDENTITIES.slice(0, CONCURRENCY)
+
+// Which stall to start from. Exists to ask the one question this probe cannot
+// otherwise ask: after one stall's burst bucket is exhausted, can a DIFFERENT
+// stall still sell? A shared bucket refuses it; a per-merchant bucket does not.
+// That is the only way to prove from outside that the identity header actually
+// reaches the mint, rather than inferring it from a run that never hit a limit.
+const STALL_OFFSET = Number(__ENV.STALL_OFFSET || 0)
+const STALLS = IDENTITIES.slice(STALL_OFFSET, STALL_OFFSET + CONCURRENCY)
 
 // One satoshi of face value. The race is about WHICH proof is selected, not how
 // many, and a large amount would drag in the mint's per-operation cap and the
@@ -115,7 +122,8 @@ export function setup() {
     )
   }
 
-  console.log(`swap-race: ${CONCURRENCY} stalls x ${ROUNDS} rounds, ${FACE_VALUE_MINOR} ${CURRENCY} each`)
+  console.log(`swap-race: ${CONCURRENCY} stalls from index ${STALL_OFFSET} x ${ROUNDS} rounds, `
+    + `${FACE_VALUE_MINOR} ${CURRENCY} each`)
   return { concurrency: CONCURRENCY }
 }
 
