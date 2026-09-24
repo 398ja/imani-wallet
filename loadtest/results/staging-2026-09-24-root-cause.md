@@ -108,7 +108,52 @@ this.
 It is also the reason the bug survived until now. Real traffic uses realistic
 face values, and 6736 sats charges 673 and works fine.
 
-## Fixes, in the order I would apply them
+## Does this explain #468 and #469?
+
+**#468: entirely.** Measured before the fix: 189 rejections in ten minutes from
+**exactly nine quote ids**, all `invalid_amount`. The counter reaching 9962 is
+retry traffic against those nine and nothing else.
+`payment_adapter_paid_unforwarded` is still exactly 9, the same nine seen from
+the other side.
+
+**#469: no, and this is worth stating because the two look related.** Checked
+against the adapter's database rather than assumed. Every quote created on 09-21
+and 09-22 has a non-zero amount (110, 120, 2000, 50, 132, 265, 266, 3325, 3335,
+19968, 133223, 8388608), so the gauge's first four steps (2 → 5) **predate any
+zero-amount quote in September**. The later rise overlaps the incident and is
+plausibly mostly it, but the early steps have a different cause that is still
+unexplained.
+
+The gauge is now **12**, up from 8 when it was filed, and still has never been
+observed to fall.
+
+Zero-amount quotes are not new either: they exist back to June, with 12 on
+08-29. The minimum-fee bug has been reachable for months and simply needed
+somebody to ask for a voucher under 10 sats.
+
+## What was fixed
+
+`cashu-mint@12da540f` and `imani-deploy@755f698`:
+
+- **`calculateChargeableFee(amount, percent, minimum)`** raises a computed fee to
+  a configured floor. `calculateFee` keeps its meaning as the pure percentage,
+  because reporting a price and charging one are different questions.
+- **`VoucherMintQuoteTask` refuses the quote** when the price is still not
+  positive, which can now only happen for a deliberate 0% fee or a zero face
+  value. The error lands where the client can see it rather than three services
+  downstream.
+- **`VOUCHER_QUOTE_FEE_MIN_SAT`** configures the floor through the same three
+  sources as the percentage, defaulting to 1. Setting it to 0 restores the old
+  behaviour deliberately.
+- **Both knobs now pass through compose** and are documented in
+  `.env.staging.example`. They were code defaults only, so what staging charged
+  appeared in no config anywhere and could not be changed without a rebuild.
+
+A test had **asserted the defect**: `testExecuteWithVerySmallAmount` verified
+`createMintQuote(0, null)`. So this was not unnoticed, it was pinned as correct.
+Inverted, with the reason recorded. 396 tests pass in the module.
+
+## Fixes still outstanding
 
 1. **Floor the charge at 1 sat** in `VoucherFeeCalculator`, or reject the quote
    outright when the computed price is zero. A voucher that cannot be charged
