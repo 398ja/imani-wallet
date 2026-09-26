@@ -130,9 +130,19 @@ export async function publish(event: Event, relays: string[] = [RELAY_URL]): Pro
   const pool = new SimplePool()
   try {
     const results = await Promise.allSettled(pool.publish(relays, event))
-    const errors = results
-      .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
-      .map((r) => (r.reason instanceof Error ? r.reason.message : String(r.reason)))
+    // A relay that could not be REACHED does not reject. nostr-tools (2.24)
+    // catches the connection error and resolves with the string
+    // "connection failure: ...", so counting fulfilled results counted every
+    // unreachable relay as having accepted the event. Measured against
+    // ws://127.0.0.1:9 and an unresolvable host: {ok: 1, errors: []}. Callers
+    // that record "this is on the relay" on ok > 0 (attestation receipts, the
+    // transfer receipt queue) then believed something no relay held.
+    const errors = results.flatMap((r) => {
+      if (r.status === 'rejected') {
+        return [r.reason instanceof Error ? r.reason.message : String(r.reason)]
+      }
+      return typeof r.value === 'string' && r.value.startsWith('connection failure') ? [r.value] : []
+    })
 
     return { ok: results.length - errors.length, total: results.length, errors }
   } finally {
