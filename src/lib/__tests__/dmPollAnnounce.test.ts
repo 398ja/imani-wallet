@@ -83,6 +83,7 @@ vi.mock('../paymentReceipt', () => ({
 
 vi.mock('../redemptionLedger', () => ({
   checkRedemption: async () => ({ allowed: true, alreadyRedeemed: 0, signedFaceValue: 0 }),
+  redeemLockName: (voucherId: string) => `imani-redeem:${voucherId}`,
 }))
 
 vi.mock('../dmCrypto', () => ({

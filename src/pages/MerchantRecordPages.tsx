@@ -651,6 +651,14 @@ function ClaimedBar({
           {money(outstandingMinor)} {expired ? 'lapsed' : 'outstanding'}
         </span>
       </div>
+      {/*
+        What the figures above are counted from, said where they are read
+        (#95, #97, ADR 0015). Small and grey: it qualifies the numbers, it is
+        not a warning about them.
+      */}
+      <p className="mt-1 text-xs text-mono-500">
+        As recorded on this device. Claims taken on your other devices show here once this one syncs.
+      </p>
     </div>
   )
 }

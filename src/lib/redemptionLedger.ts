@@ -40,6 +40,27 @@ import { toTransaction } from './transactions'
 export type { RedemptionCheck } from '@imani/redemption'
 
 /**
+ * The Web Lock every read-check-write against one voucher's rows is taken
+ * under, across every tab of this origin (#97).
+ *
+ * The ceiling is a read of local rows followed, later, by the write of a new
+ * one, so two tabs that both check before either writes each see the same
+ * priors and can take the same remaining value twice. `dmPoll`'s redemption
+ * adapter holds this lock from the check through the mint swap to the row
+ * write, and `claimReconcile` holds it while it re-files a row, so the two
+ * cannot interleave on one voucher either.
+ *
+ * One definition, because two spellings of a lock name are two locks, and two
+ * locks serialise nothing.
+ *
+ * Per DEVICE only. It says nothing about a second till on another device; see
+ * ADR 0015 for why that is accepted and where the bound comes from instead.
+ */
+export function redeemLockName(voucherId: string): string {
+  return `imani-redeem:${voucherId}`
+}
+
+/**
  * Sums prior redemptions of one voucher, in face minor units.
  *
  * Counts incoming rows only. A merchant issuing the voucher writes an `issued`
