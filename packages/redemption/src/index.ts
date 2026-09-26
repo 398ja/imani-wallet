@@ -34,4 +34,4 @@
  */
 
 export type { PriorRedemption, RedemptionCheck, CeilingInput } from './types.js'
-export { checkCeiling, redeemedTotalOf } from './ceiling.js'
+export { checkCeiling, checkPart, cumulativeCredit, redeemedTotalOf } from './ceiling.js'

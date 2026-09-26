@@ -1,10 +1,10 @@
-import { checkCeiling, type PriorRedemption } from '@imani/redemption'
+import { checkCeiling, checkPart, type PriorRedemption } from '@imani/redemption'
 
 import {
   parseVoucherToken,
   verifyVoucher,
   creditableFaceValue,
-  creditIsRounded,
+  exactFaceValue,
   type ParsedVoucherToken,
 } from '../../src/lib/voucherToken.js'
 import { effectiveNow } from './testSeams'
@@ -231,7 +231,17 @@ export function parseCheckInput(body: unknown, callerPubkey: string, defaultNow:
       return fail(`priorRedemptions[${i}].direction`, "expected 'in' or 'out'")
     }
 
-    priorRedemptions.push({ amount, direction })
+    // Optional: the part's value before rounding, as the till stores it. Same
+    // validation as `amount` minus the whole-number rule, for the same reason.
+    let exact: number | undefined
+    if (r.exact !== undefined) {
+      exact = Number(r.exact)
+      if (!Number.isFinite(exact) || exact < 0 || exact > Number.MAX_SAFE_INTEGER) {
+        return fail(`priorRedemptions[${i}].exact`, 'expected a finite number, zero or greater')
+      }
+    }
+
+    priorRedemptions.push(exact === undefined ? { amount, direction } : { amount, direction, exact })
   }
 
   return { ok: true, value: { ...base.value, requested, priorRedemptions } }
@@ -248,16 +258,36 @@ export function checkRedemption(input: CheckInput) {
   const verdict = verifyCoupon(input)
   if (!verdict.ok || !verdict.voucher) return { verdict, ceiling: null }
 
+  // The till's rule exactly (`checkPart` in @imani/redemption): the part is
+  // taken only if its exact value fits, and may book at most its CUMULATIVE
+  // credit. Per-part rounding let a voucher split into many tiny parts book
+  // half a unit on each; asking for more than `creditable` is refused however
+  // much room the ceiling has.
+  //
+  // Bounded by the voucher's SIGNED face, as the till is (dmCrypto's
+  // `validation.signedFaceValue`), not by `verdict.voucher.signedFaceValue`,
+  // which is this token's own clamped value: bounding by that refused the later
+  // parts of every split, since each part's value is less than the face.
+  const parsed = parseVoucherToken(input.token)
+  const face = parsed.voucher.faceValue
+  const part = checkPart({
+    signedFaceValue: face,
+    exact: exactFaceValue(parsed),
+    priorRedemptions: input.priorRedemptions,
+  })
+  const ceiling = checkCeiling({
+    signedFaceValue: face,
+    requested: input.requested,
+    priorRedemptions: input.priorRedemptions,
+  })
+
   return {
     verdict,
-    ceiling: checkCeiling({
-      signedFaceValue: verdict.voucher.signedFaceValue,
-      requested: input.requested,
-      priorRedemptions: input.priorRedemptions,
-      // The same rounding slack the till allows, read from the same token, so
-      // the API and a till cannot disagree about the last part of a split.
-      perPartRounding: roundedCredit(input.token),
-    }),
+    ceiling: {
+      ...ceiling,
+      allowed: ceiling.allowed && part.check.allowed && input.requested <= part.credit,
+      creditable: part.credit,
+    },
     /**
      * IW-06: says out loud whose history this is.
      *
@@ -267,15 +297,6 @@ export function checkRedemption(input: CheckInput) {
      * and a courier that is mistaken for a ledger is how a double-spend gets approved politely.
      */
     historySource: 'caller-supplied' as const,
-  }
-}
-
-/** Whether this token's credit was rounded. False when it cannot be read. */
-function roundedCredit(token: string): boolean {
-  try {
-    return creditIsRounded(parseVoucherToken(token))
-  } catch {
-    return false
   }
 }
 

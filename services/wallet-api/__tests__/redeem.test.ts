@@ -181,3 +181,62 @@ describe('what to sign to accept a coupon', () => {
     expect(receiveBody('cashuBabc')).toBe('{"token":"cashuBabc"}')
   })
 })
+
+describe('the ceiling on a fractional-ratio part', () => {
+  // Built here, signed by the test: the service's rule is the same `checkPart`
+  // the till calls, so it must agree with the till on both cases.
+  const partToken = async (proofs: number, ratio: number) => {
+    const { buildVoucherToken } = await import('../../../src/lib/__tests__/voucherFixtures')
+    // The fixture signs with its own key and names it as issuer, so the stall
+    // this check runs as is that key.
+    const built = buildVoucherToken({ issuanceRatio: ratio, faceValue: 1000, expiresAt: undefined }, [proofs])
+    return { token: built.token, issuer: built.voucher.issuerId }
+  }
+  const run = (token: string, issuer: string, body: Record<string, unknown>) => {
+    const parsed = parseCheckInput({ token, ...body }, issuer, NOW)
+    if (!parsed.ok) throw new Error(`${parsed.error.field}: ${parsed.error.detail}`)
+    return checkRedemption(parsed.value)
+  }
+
+  it('lets the last honest part of a 9 + 9 + 17802 split book 999', async () => {
+    const RATIO = 0.05611672278338945
+    const { token, issuer } = await partToken(17802, RATIO)
+    const priorRedemptions = [
+      { amount: 0, direction: 'in', exact: 9 * RATIO },
+      { amount: 1, direction: 'in', exact: 9 * RATIO },
+    ]
+    const out = run(token, issuer, { requested: 999, priorRedemptions })
+    expect(out.ceiling?.allowed).toBe(true)
+    expect(out.ceiling?.creditable).toBe(999)
+  })
+
+  it('refuses a tiny part asking for its per-part rounding', async () => {
+    // Worth 0.5, rounds to 1 on its own; the cumulative credit is 0.
+    const { token, issuer } = await partToken(1, 0.5)
+    const out = run(token, issuer, { requested: 1, priorRedemptions: [] })
+    expect(out.ceiling?.creditable).toBe(0)
+    expect(out.ceiling?.allowed).toBe(false)
+  })
+
+  it('refuses a tiny part once the genuine value is booked', async () => {
+    const { token, issuer } = await partToken(1, 0.5)
+    const priorRedemptions = Array.from({ length: 2000 }, (_, i) => ({
+      amount: i % 2,
+      direction: 'in',
+      exact: 0.5,
+    }))
+    const out = run(token, issuer, { requested: 1, priorRedemptions })
+    expect(out.ceiling?.allowed).toBe(false)
+  })
+
+  it('rejects a negative exact figure', async () => {
+    const { token, issuer } = await partToken(1, 0.5)
+    const parsed = parseCheckInput(
+      { token, requested: 1, priorRedemptions: [{ amount: 0, direction: 'in', exact: -5 }] },
+      issuer,
+      NOW,
+    )
+    expect(parsed.ok).toBe(false)
+    if (!parsed.ok) expect(parsed.error.field).toBe('priorRedemptions[0].exact')
+  })
+})

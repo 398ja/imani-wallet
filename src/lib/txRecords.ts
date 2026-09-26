@@ -85,6 +85,8 @@ type HistoryContent = Nip60HistoryContent & {
   issuance_warrant?: string
   sale_voucher_ids?: readonly string[]
   cash_attestation?: string
+  /** See `WalletTransaction.exactValue`. Restored so the ceiling survives a wipe. */
+  exact_value?: number
 }
 
 /** Exported for tests: the unit and amount conversions are the easy things to get wrong. */
@@ -117,6 +119,7 @@ export function toContent(tx: WalletTransaction): HistoryContent {
     issuance_warrant: tx.issuanceWarrant,
     sale_voucher_ids: tx.saleVoucherIds,
     cash_attestation: tx.cashAttestation,
+    exact_value: tx.exactValue,
   }
 }
 
@@ -159,6 +162,7 @@ export function toRow(id: string, content: HistoryContent): TransactionRow {
     issuanceWarrant: content.issuance_warrant,
     saleVoucherIds: content.sale_voucher_ids,
     cashAttestation: content.cash_attestation,
+    exactValue: content.exact_value,
   } as unknown as TransactionRow
 }
 

@@ -99,6 +99,12 @@ export interface MerchantClaim {
   amount: number
   unit: string
   decimals?: number
+  /**
+   * The part's value before rounding, stamped as the row's `exactValue` so the
+   * next part of the same voucher is credited by cumulative rounding. See
+   * `cumulativeCredit` in `@imani/redemption`.
+   */
+  exact?: number
 }
 
 /**
@@ -111,6 +117,8 @@ export interface MerchantClaim {
 export function merchantClaimFor(
   meta: Record<string, unknown> | undefined,
   stallPubkey: string | undefined,
+  /** See `MerchantClaim.exact`. Omitted, the row carries no exact figure. */
+  exact?: number,
 ): MerchantClaim | undefined {
   const validation = meta?.validation as VoucherValidation | undefined
   if (validation?.signatureValid !== true) return undefined
@@ -123,12 +131,23 @@ export function merchantClaimFor(
   const voucherId = typeof meta?.voucherId === 'string' ? meta.voucherId : ''
   const amount = Number(meta?.faceValue)
   const unit = typeof meta?.faceUnit === 'string' ? meta.faceUnit.trim().toUpperCase() : ''
-  if (!voucherId || !unit || !Number.isFinite(amount) || amount <= 0) return undefined
+  const hasExact = exact !== undefined && Number.isFinite(exact) && exact > 0
+  // A zero credit is still filed when there is an exact figure behind it: a
+  // part worth half a unit books 0 now and its half carries into the next
+  // part's credit, which only works if this row records it.
+  if (!voucherId || !unit || !Number.isFinite(amount) || amount < 0) return undefined
+  if (amount === 0 && !hasExact) return undefined
 
   // The issuance rule, not the voucher's signed `face_decimals`. See the module
   // note: `isClaim` compares decimals strictly, and for a non-ISO unit each
   // side's stored value is what it reads back.
-  return { voucherId, amount, unit, decimals: currencyDecimals(unit) }
+  return {
+    voucherId,
+    amount,
+    unit,
+    decimals: currencyDecimals(unit),
+    ...(hasExact ? { exact } : {}),
+  }
 }
 
 /**
@@ -155,7 +174,7 @@ export function boundedClaim(
     .filter((tx) => isClaim(tx, issued))
     .reduce((sum, tx) => sum + (Number.isFinite(tx.amount) ? tx.amount : 0), 0)
   const left = issued.amount - alreadyClaimed
-  if (left <= 0) return undefined
+  if (left < 0 || (left === 0 && claim.amount > 0)) return undefined
 
   return {
     voucherId: claim.voucherId,
@@ -163,6 +182,7 @@ export function boundedClaim(
     // The issuance's own spelling, so the two rows read identically.
     unit: issued.unit,
     decimals: issued.decimals,
+    ...(claim.exact === undefined ? {} : { exact: claim.exact }),
   }
 }
 
@@ -175,8 +195,9 @@ export function boundedClaim(
 export async function claimToFile(
   meta: Record<string, unknown> | undefined,
   stallPubkey: string | undefined,
+  exact?: number,
 ): Promise<MerchantClaim | undefined> {
-  const claim = merchantClaimFor(meta, stallPubkey)
+  const claim = merchantClaimFor(meta, stallPubkey, exact)
   if (!claim) return undefined
   try {
     const rows = (await listTransactions()).map(toTransaction)

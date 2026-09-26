@@ -1,80 +1,109 @@
 import { describe, expect, it } from 'vitest'
-import { checkCeiling, type PriorRedemption } from '@imani/redemption'
+import { checkPart, cumulativeCredit, type PriorRedemption } from '@imani/redemption'
 
-import { creditIsRounded, creditableFaceValue, parseVoucherToken } from '../voucherToken'
+import { creditableFaceValue, exactFaceValue, parseVoucherToken } from '../voucherToken'
 import { buildVoucherToken } from './voucherFixtures'
 
 /**
  * A voucher split into parts, redeemed part by part against the ceiling.
  *
- * `creditableFaceValue` rounds `tokenAmount * issuanceRatio` PER PART. With a
- * non-integer ratio each part can round up by up to half a minor unit, so the
- * parts can sum to more than the signed face. Before #90 the ceiling never saw
- * a prior redemption and this could not bite; now it does, and an honest last
- * part must not be refused over rounding the wallet itself introduced.
+ * `creditableFaceValue` rounds `tokenAmount * issuanceRatio` PER PART, so with
+ * a non-integer ratio the parts' rounded values can sum past the face (honest
+ * case) or be inflated at will by splitting finely (attack case). The ledger
+ * books the CUMULATIVE credit instead (`cumulativeCredit`), and both cases
+ * below are decided by that one rule under the exact ceiling.
  *
- * The numbers are real rather than contrived: the fixture's ratio is the one a
- * live PROPORTIONAL voucher carried, 1000 face units backed by 17820 proofs.
- * Splitting 17820 as 9 + 9 + 17802 rounds 0.505 + 0.505 + 998.99 to
- * 1 + 1 + 999 = 1001, one over the face. Without `perPartRounding` the last
- * part was refused (observed before the fix).
+ *  - Honest: the live fixture ratio, 1000 face backed by 17820 proofs, split
+ *    9 + 9 + 17802. Rounded per part that is 1 + 1 + 999 = 1001 and the last
+ *    part was refused. Cumulatively it books 0 + 1 + 999 = 1000.
+ *  - Attack: ratio 0.5, 2000 one-sat proofs, each worth 0.5. Rounded per part
+ *    each is 1, and the count-based slack of 1a87c4f let all 2000 through
+ *    (2000 booked on a 1000 face, observed at that commit). Cumulatively the
+ *    total booked is 1000.
  */
-const RATIO = 0.05611672278338945
 const FACE = 1000
 
-/** One part as the till sees it, through the shipping parser. */
-function part(proofs: number, ratio = RATIO) {
+/** One part as the till sees it, through the shipping parser. Memoised: signing is slow. */
+const parts = new Map<string, { rounded: number; exact: number }>()
+function part(proofs: number, ratio: number) {
+  const key = `${proofs}@${ratio}`
+  const hit = parts.get(key)
+  if (hit) return hit
   const { token } = buildVoucherToken({ issuanceRatio: ratio, faceValue: FACE }, [proofs])
   const parsed = parseVoucherToken(token)
-  return { value: creditableFaceValue(parsed).faceValue, rounded: creditIsRounded(parsed) }
+  const value = { rounded: creditableFaceValue(parsed).faceValue, exact: exactFaceValue(parsed) }
+  parts.set(key, value)
+  return value
 }
 
-/** Presents every part in turn, the way the till does. Returns each verdict. */
-function redeemAll(parts: number[], ratio = RATIO): boolean[] {
+/** Presents every part in turn the way the till does. Returns the total booked. */
+function redeemAll(parts: number[], ratio: number): { booked: number; refused: number } {
   const prior: PriorRedemption[] = []
-  return parts.map((proofs) => {
-    const { value, rounded } = part(proofs, ratio)
-    const check = checkCeiling({
-      signedFaceValue: FACE,
-      requested: value,
-      priorRedemptions: prior,
-      perPartRounding: rounded,
-    })
-    if (check.allowed) prior.push({ amount: value, direction: 'in' })
-    return check.allowed
-  })
+  let refused = 0
+  for (const proofs of parts) {
+    const { exact } = part(proofs, ratio)
+    const { credit, check } = checkPart({ signedFaceValue: FACE, exact, priorRedemptions: prior })
+    if (!check.allowed) {
+      refused += 1
+      continue
+    }
+    prior.push({ amount: credit, direction: 'in', exact })
+  }
+  return { booked: prior.reduce((sum, r) => sum + r.amount, 0), refused }
 }
 
-describe('a 3-part split with a fractional issuance ratio', () => {
+describe('an honest 3-part split at a fractional ratio', () => {
+  const RATIO = 0.05611672278338945
   const parts = [9, 9, 17802]
 
-  it('covers exactly the whole backing, so every part is honest', () => {
+  it('covers exactly the whole backing', () => {
     expect(parts.reduce((a, b) => a + b, 0)).toBe(Math.round(FACE / RATIO))
   })
 
-  it('rounds past the face, which is the problem', () => {
-    expect(parts.map((p) => part(p).value)).toEqual([1, 1, 999])
+  it('rounds past the face when each part is rounded alone, which is the problem', () => {
+    expect(parts.map((p) => part(p, RATIO).rounded)).toEqual([1, 1, 999])
   })
 
-  it('lets every part through the ceiling, including the last', () => {
-    expect(redeemAll(parts)).toEqual([true, true, true])
+  it('books the full face, every part accepted, in any order', () => {
+    for (const order of [parts, [17802, 9, 9], [9, 17802, 9]]) {
+      expect(redeemAll(order, RATIO)).toEqual({ booked: FACE, refused: 0 })
+    }
   })
 
   it('still refuses presenting the whole backing twice', () => {
-    // The slack is at most half a unit per part. A second full presentation is
-    // a whole face over, far beyond anything rounding can explain.
-    expect(redeemAll([17820, 17820])).toEqual([true, false])
+    expect(redeemAll([17820, 17820], RATIO)).toEqual({ booked: FACE, refused: 1 })
   })
 })
 
-describe('an integer ratio keeps the exact bound', () => {
-  it('reports its credit as not rounded', () => {
-    expect(part(400, 1).rounded).toBe(false)
-    // Float noise is not rounding: 10 * 0.1 is 1.0000000000000002 in binary.
-    expect(part(10, 0.1).rounded).toBe(false)
+describe('the many-tiny-parts attack', () => {
+  it('books no more than the genuine value of 2000 one-sat parts at ratio 0.5', () => {
+    // Each part is worth 0.5 and rounds to 1 on its own. 2000 of them are 1000
+    // of genuine value, and that is all the ceiling may ever let through.
+    expect(part(1, 0.5)).toEqual({ rounded: 1, exact: 0.5 })
+    const { booked } = redeemAll(Array.from({ length: 2000 }, () => 1), 0.5)
+    expect(booked).toBe(1000)
   })
 
-  it('refuses one minor unit past the face', () => {
-    expect(redeemAll([600, 401], 1)).toEqual([true, false])
+  it('refuses a further tiny part once the genuine value is booked', () => {
+    const { booked, refused } = redeemAll(Array.from({ length: 2004 }, () => 1), 0.5)
+    expect(booked).toBe(1000)
+    expect(refused).toBe(4)
+  })
+
+  it('books nothing for a lone part worth less than a unit', () => {
+    expect(redeemAll([1], 0.5)).toEqual({ booked: 0, refused: 0 })
+  })
+})
+
+describe('an integer ratio is unchanged', () => {
+  it('books each part at its own value and refuses one unit past the face', () => {
+    expect(redeemAll([600, 401], 1)).toEqual({ booked: 600, refused: 1 })
+    expect(redeemAll([600, 400], 1)).toEqual({ booked: 1000, refused: 0 })
+  })
+
+  it('treats float noise as whole', () => {
+    // 10 * 0.1 is 1.0000000000000002 in binary, and 17820 * RATIO is 999.99...
+    expect(cumulativeCredit(part(10, 0.1).exact, [])).toBe(1)
+    expect(cumulativeCredit(part(17820, 0.05611672278338945).exact, [])).toBe(1000)
   })
 })

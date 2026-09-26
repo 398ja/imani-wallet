@@ -774,21 +774,19 @@ export function creditableFaceValue(parsed: ParsedVoucherToken): {
 }
 
 /**
- * Was this token's credit ROUNDED from a fractional issuance ratio?
+ * This token's value in face minor units BEFORE rounding, clamped like
+ * `creditableFaceValue` to the signed face.
  *
- * The signal the redemption ceiling needs for its `perPartRounding` slack. When
- * `tokenAmount * issuanceRatio` is already whole the credit is exact and the
- * ceiling must stay exact, so this answers false there. A clamped token is
- * credited the signed face, which is exact too.
- *
- * The tolerance absorbs float noise only (1e-9 of a minor unit), so a ratio
- * like 0.1 on 10 proofs still reads as whole.
+ * What the redemption ledger books against, via `cumulativeCredit` in
+ * `@imani/redemption`: rounding each part on its own lets an attacker who
+ * splits a voucher into many tiny parts collect half a unit per part, so the
+ * ledger rounds the running total instead.
  */
-export function creditIsRounded(parsed: ParsedVoucherToken): boolean {
+export function exactFaceValue(parsed: ParsedVoucherToken): number {
   const { voucher, tokenAmount } = parsed
   const exact = tokenAmount * voucher.issuanceRatio
-  if (voucher.faceValue > 0 && Math.round(exact) > voucher.faceValue) return false
-  return Math.abs(exact - Math.round(exact)) > 1e-9
+  if (voucher.faceValue > 0 && exact > voucher.faceValue) return voucher.faceValue
+  return exact
 }
 
 /**
