@@ -31,7 +31,7 @@ import { cancelDeferredWrite, deferWrite, flushDeferredWrites } from './deferred
 import { loadMerchant } from './merchant'
 import { licenceFromToken } from './licences'
 import { checkRedemption } from './redemptionLedger'
-import { parseVoucherToken, type VoucherValidation } from './voucherToken'
+import { creditIsRounded, parseVoucherToken, type VoucherValidation } from './voucherToken'
 import { getWallet, notifyWalletChanged, recordReceiptByNullifier } from './wallet'
 import { legacyApi, withCorrelation } from './legacyBridge'
 import { claimToFile } from './merchantClaim'
@@ -595,8 +595,18 @@ function grantChunkAmnesty(): void {
  * Exported for its own test: it is reached in production only through
  * `redemptionAdapter`, which needs the legacy bridge and a live
  * `window.TokenRedemption`, and this is the money decision in it.
+ *
+ * `token` is the presented coupon, read only to learn whether its credit was
+ * rounded from a fractional issuance ratio (`creditIsRounded`). When it was,
+ * the ceiling allows the bounded rounding slack described on
+ * `CeilingInput.perPartRounding`, so the last honest part of a split voucher
+ * is not refused over rounding the wallet itself did. Without a token, or one
+ * that does not parse, the bound stays exact.
  */
-export async function refuseIfOverRedeemed(meta: Record<string, unknown> | undefined): Promise<void> {
+export async function refuseIfOverRedeemed(
+  meta: Record<string, unknown> | undefined,
+  token?: string,
+): Promise<void> {
   const validation = meta?.validation as VoucherValidation | undefined
   const voucherId = typeof meta?.voucherId === 'string' ? meta.voucherId : undefined
   if (!validation?.signatureValid || !voucherId) return
@@ -606,6 +616,7 @@ export async function refuseIfOverRedeemed(meta: Record<string, unknown> | undef
     voucherId,
     requested,
     signedFaceValue: validation.signedFaceValue,
+    perPartRounding: roundedCredit(token),
   })
   if (check.allowed) return
 
@@ -616,6 +627,16 @@ export async function refuseIfOverRedeemed(meta: Record<string, unknown> | undef
     check.alreadyRedeemed,
     check.signedFaceValue,
   )
+}
+
+/** Whether this token's credit was rounded. False when it cannot be read. */
+function roundedCredit(token: string | undefined): boolean {
+  if (!token) return false
+  try {
+    return creditIsRounded(parseVoucherToken(token))
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -847,7 +868,7 @@ function redemptionAdapter(): RedemptionAdapter {
       // check happened to fire.
       refuseIfAnotherStalls(meta, currentPubkey, token)
       refuseIfUnwarranted(meta)
-      await refuseIfOverRedeemed(meta)
+      await refuseIfOverRedeemed(meta, token)
 
       // Computed BEFORE the redeem, because it is derived from the RECEIVED
       // token and `redeem()` swaps that token at the mint — afterwards the

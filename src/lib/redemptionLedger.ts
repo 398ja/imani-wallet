@@ -76,8 +76,10 @@ export async function checkRedemption(input: {
   requested: number
   signedFaceValue: number
   excludeTransactionId?: string
+  /** See `CeilingInput.perPartRounding` in `@imani/redemption`. */
+  perPartRounding?: boolean
 }): Promise<RedemptionCheck> {
-  const { voucherId, requested, signedFaceValue, excludeTransactionId } = input
+  const { voucherId, requested, signedFaceValue, excludeTransactionId, perPartRounding } = input
 
   // Reads the rows, then hands the ARITHMETIC to the shared package. This
   // module keeps the part that is genuinely local — which rows count, and how
@@ -87,6 +89,7 @@ export async function checkRedemption(input: {
     signedFaceValue,
     requested,
     priorRedemptions: await priorRedemptionsOf(voucherId, { excludeTransactionId }),
+    perPartRounding,
   })
 }
 

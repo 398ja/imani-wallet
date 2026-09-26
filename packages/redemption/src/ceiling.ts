@@ -30,19 +30,30 @@ export function redeemedTotalOf(priorRedemptions: readonly PriorRedemption[]): n
  * does.
  */
 export function checkCeiling(input: CeilingInput): RedemptionCheck {
-  const { signedFaceValue, requested, priorRedemptions } = input
+  const { signedFaceValue, requested, priorRedemptions, perPartRounding = false } = input
 
   const alreadyRedeemed = redeemedTotalOf(priorRedemptions)
   const remaining = Math.max(0, signedFaceValue - alreadyRedeemed)
+  // Bounded, not a percentage: half a minor unit per rounding is the whole of
+  // the error `Math.round` can introduce, so this admits every honest split
+  // and nothing a genuine presentation could not have produced. See
+  // `CeilingInput.perPartRounding`.
+  const slack = perPartRounding ? roundingSlack(priorRedemptions) : 0
 
   return {
     // A voucher with no signed face value has no ceiling to enforce — legacy
     // derive-only tokens store nothing there. Saying so plainly beats inventing
     // a bound and refusing honest coupons.
-    allowed: signedFaceValue <= 0 || alreadyRedeemed + requested <= signedFaceValue,
+    allowed: signedFaceValue <= 0 || alreadyRedeemed + requested <= signedFaceValue + slack,
     alreadyRedeemed,
     requested,
     signedFaceValue,
     remaining,
   }
+}
+
+/** The most `n` roundings of at most half a minor unit each can add up to. */
+function roundingSlack(priorRedemptions: readonly PriorRedemption[]): number {
+  const parts = priorRedemptions.filter((r) => r.direction === 'in').length + 1
+  return Math.floor(parts / 2)
 }

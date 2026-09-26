@@ -4,6 +4,7 @@ import {
   parseVoucherToken,
   verifyVoucher,
   creditableFaceValue,
+  creditIsRounded,
   type ParsedVoucherToken,
 } from '../../src/lib/voucherToken.js'
 import { effectiveNow } from './testSeams'
@@ -253,6 +254,9 @@ export function checkRedemption(input: CheckInput) {
       signedFaceValue: verdict.voucher.signedFaceValue,
       requested: input.requested,
       priorRedemptions: input.priorRedemptions,
+      // The same rounding slack the till allows, read from the same token, so
+      // the API and a till cannot disagree about the last part of a split.
+      perPartRounding: roundedCredit(input.token),
     }),
     /**
      * IW-06: says out loud whose history this is.
@@ -263,6 +267,15 @@ export function checkRedemption(input: CheckInput) {
      * and a courier that is mistaken for a ledger is how a double-spend gets approved politely.
      */
     historySource: 'caller-supplied' as const,
+  }
+}
+
+/** Whether this token's credit was rounded. False when it cannot be read. */
+function roundedCredit(token: string): boolean {
+  try {
+    return creditIsRounded(parseVoucherToken(token))
+  } catch {
+    return false
   }
 }
 

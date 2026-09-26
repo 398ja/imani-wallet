@@ -774,6 +774,24 @@ export function creditableFaceValue(parsed: ParsedVoucherToken): {
 }
 
 /**
+ * Was this token's credit ROUNDED from a fractional issuance ratio?
+ *
+ * The signal the redemption ceiling needs for its `perPartRounding` slack. When
+ * `tokenAmount * issuanceRatio` is already whole the credit is exact and the
+ * ceiling must stay exact, so this answers false there. A clamped token is
+ * credited the signed face, which is exact too.
+ *
+ * The tolerance absorbs float noise only (1e-9 of a minor unit), so a ratio
+ * like 0.1 on 10 proofs still reads as whole.
+ */
+export function creditIsRounded(parsed: ParsedVoucherToken): boolean {
+  const { voucher, tokenAmount } = parsed
+  const exact = tokenAmount * voucher.issuanceRatio
+  if (voucher.faceValue > 0 && Math.round(exact) > voucher.faceValue) return false
+  return Math.abs(exact - Math.round(exact)) > 1e-9
+}
+
+/**
  * Checks the issuer's BIP-340 signature over the canonical bytes.
  *
  * Tries the current form first and falls back to the pre-fix truncated one, the
