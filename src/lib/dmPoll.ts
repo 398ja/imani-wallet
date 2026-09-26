@@ -25,6 +25,7 @@ import { attestationForReceivedCoupon } from './cashAttestation'
 import { getSigner } from './nap'
 import { postPaymentReceipt } from './paymentReceipt'
 import {
+  awaitsHeldWrap,
   noteTransferReceived,
   resetHeldTransfers,
   resumeTransferReceipts,
@@ -1209,7 +1210,13 @@ function redemptionAdapter(): RedemptionAdapter {
                 decimals: meta?.faceDecimals == null ? undefined : Number(meta.faceDecimals),
               }
             : {}),
-        }).catch((error) => console.error('[dmPoll] transfer receipt failed', error))
+        })
+          // Not paired, and its signature's wrap is held at the relay (#99):
+          // the cached copy was evicted, so re-read the wrap now.
+          .then((paired) => {
+            if (!paired && awaitsHeldWrap(token)) catchUp()
+          })
+          .catch((error) => console.error('[dmPoll] transfer receipt failed', error))
       }
 
       return voucher

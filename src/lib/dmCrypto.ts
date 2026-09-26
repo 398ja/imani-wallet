@@ -11,7 +11,12 @@ import { checkIssuer } from './issuerAllowlist'
 import { getSigner } from './nap'
 import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
 import { asChunk, looksLikeChunk, offerChunk } from './dmChunks'
-import { offerTransferSignature, parseTransferSignature, sealAuthorOf } from './transferSignature'
+import {
+  heldWrapDecision,
+  holdTransferSignatureWrap,
+  parseTransferSignature,
+  sealAuthorOf,
+} from './transferSignature'
 import {
   creditableFaceValue,
   parseVoucherToken,
@@ -259,6 +264,25 @@ export function createDmCryptoAdapter(): CryptoAdapter {
       // below borrows it for exactly as long as it needs.
       getSigner().withPrivkey(() => undefined)
 
+      /**
+       * A transfer signature's wrap held unprocessed at the relay (#99),
+       * decided from its id alone, so a held wrap costs no decryption on each
+       * catch-up. `hold` keeps it unprocessed, `release` hands dm-poll an
+       * empty non-token DM so it is marked processed, and `reread` (its
+       * coupon is here but the cached signature is gone) falls through to a
+       * normal unwrap, which offers it again below.
+       */
+      const decision = heldWrapDecision(event.id)
+      if (decision === 'hold' || decision === 'release') {
+        return {
+          eventId: event.id,
+          senderPubkey: '',
+          content: '',
+          createdAt: event.created_at,
+          ...(decision === 'hold' ? { hold: true } : {}),
+        }
+      }
+
       try {
         console.log('[dmCrypto] unwrapping', event.id.slice(0, 8))
         const rumor = getSigner().withPrivkey((key) => nip17.unwrapEvent(event as never, key))
@@ -339,12 +363,14 @@ export function createDmCryptoAdapter(): CryptoAdapter {
 
         /**
          * A sender's signature over a transfer (#91), which arrives in a gift
-         * wrap of its own beside the coupon. Handed off and NOT awaited:
-         * `offerTransferSignature` never throws, verifies before it stores
-         * anything, and queues the receipt only once the coupon has also been
-         * redeemed here AND was sent by the same key. The wrap then flows on
-         * unchanged, carries no token, and dm-poll marks it processed as the
-         * non-token DM it is.
+         * wrap of its own beside the coupon. `holdTransferSignatureWrap` never
+         * throws, verifies before it stores anything, and queues the receipt
+         * only once the coupon has also been redeemed here AND was sent by the
+         * same key. Awaited, because its answer decides the wrap's fate: one
+         * that did not pair is HELD (left unprocessed at the relay, #99), so a
+         * flood that evicts the local copy cannot lose it. Anything else flows
+         * on unchanged, carries no token, and dm-poll marks it processed as
+         * the non-token DM it is.
          *
          * `rumor.pubkey` is NOT authenticated: nostr-tools' `unwrapEvent`
          * checks neither the seal's signature nor that the seal and rumor
@@ -358,9 +384,16 @@ export function createDmCryptoAdapter(): CryptoAdapter {
         if (transferSignature) {
           const sealAuthor = getSigner().withPrivkey((key) => sealAuthorOf(event as never, key))
           if (sealAuthor && sealAuthor === rumor.pubkey) {
-            void offerTransferSignature(transferSignature, sealAuthor).catch((error) =>
-              console.error('[dmCrypto] transfer signature not taken', error),
-            )
+            const hold = await holdTransferSignatureWrap(transferSignature, sealAuthor, event)
+            if (hold) {
+              return {
+                eventId: event.id,
+                senderPubkey: rumor.pubkey,
+                content: rumor.content,
+                createdAt: rumor.created_at,
+                hold: true,
+              }
+            }
           } else {
             console.warn('[dmCrypto] transfer signature in a wrap whose seal does not match its rumor')
           }

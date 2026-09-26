@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`UnwrappedDm.hold`** and the **`held_until_paired`** outcome
+  (imani-wallet #99). An adapter can leave a non-token DM unprocessed on
+  purpose, so the relay keeps it and the next fetch offers it again, without
+  it counting as a failure. `DmPollService` returns early for it.
+  `runCatchupTick` never lets the persisted watermark pass a held event, but
+  examines each at most once per tick, lets at most `maxHeldPins` (50) pin the
+  watermark, and releases one older than `heldTtlSeconds` (default: the
+  fresh-install lookback). `CatchupTickSummary.held` counts them.
+
 ## [0.4.2] - 2026-09-17
 
 ### Added

@@ -211,6 +211,12 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
         return null;
       }
 
+      // Held by the adapter until it pairs (`UnwrappedDm.hold`): neither
+      // processed nor failed, so the next fetch offers it again.
+      if (unwrapped.hold) {
+        return null;
+      }
+
       // Extract token from content
       const token = this.config.cryptoAdapter.extractToken(unwrapped.content);
       if (!token) {

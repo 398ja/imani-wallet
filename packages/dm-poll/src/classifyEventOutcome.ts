@@ -23,7 +23,8 @@ export type EventOutcome =
   | 'transient_receive_budget_exhausted'
   | 'terminal_receive'
   | 'success'
-  | 'atomic_write_failed';
+  | 'atomic_write_failed'
+  | 'held_until_paired';
 
 /**
  * Outcome of the classifier — the trio of decisions a per-event
@@ -58,6 +59,12 @@ const OUTCOME_TABLE: Readonly<Record<EventOutcome, OutcomeDecision>> = Object.fr
   terminal_receive: Object.freeze({ shouldMarkProcessed: true, shouldAdvanceWatermark: true, retryEligible: false }),
   success: Object.freeze({ shouldMarkProcessed: true, shouldAdvanceWatermark: true, retryEligible: false }),
   atomic_write_failed: Object.freeze({ shouldMarkProcessed: false, shouldAdvanceWatermark: false, retryEligible: true }),
+  // A non-token DM the app is deliberately leaving on the relay until
+  // something else arrives (imani-wallet #99: a transfer signature waiting
+  // for its coupon). Not processed, so the next catch-up sees it again, and
+  // the watermark must not pass it. Unlike a deferred event it does NOT stop
+  // the batch: see runCatchupTick, which also bounds how many and how old.
+  held_until_paired: Object.freeze({ shouldMarkProcessed: false, shouldAdvanceWatermark: false, retryEligible: true }),
 });
 
 /**
