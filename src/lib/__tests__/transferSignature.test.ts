@@ -47,8 +47,17 @@ vi.mock('../relay', () => ({
 const mirrored: Array<{ path: string; method: string; body: Record<string, unknown> }> = []
 /** `ok` answers 200, `refuse` 400, `throw` rejects, `hang` never settles. */
 let mirrorMode: 'ok' | 'refuse' | 'throw' | 'hang' = 'ok'
+/** The signal the last mirror request was given, to see it aborted. */
+let mirrorSignal: AbortSignal | undefined
 vi.mock('../nip98', () => ({
-  signedFetch: async (path: string, method: string, body: Record<string, unknown>) => {
+  signedFetch: async (
+    path: string,
+    method: string,
+    body: Record<string, unknown>,
+    _signer?: unknown,
+    options?: { signal?: AbortSignal },
+  ) => {
+    mirrorSignal = options?.signal
     if (mirrorMode === 'throw') throw new Error('gateway down')
     if (mirrorMode === 'hang') return new Promise(() => {})
     mirrored.push({ path, method, body })
@@ -145,6 +154,7 @@ beforeEach(() => {
   publishThrows = false
   mirrored.length = 0
   mirrorMode = 'ok'
+  mirrorSignal = undefined
   signerThrows = false
   hasStall = false
   currentSk = SENDER_SK
@@ -354,6 +364,25 @@ describe('sending the signature', () => {
     await vi.advanceTimersByTimeAsync(15_001)
     await expect(sending).resolves.toBe(true)
     expect(published).toHaveLength(1)
+  })
+
+  it('aborts the hung mirror request on timeout, rather than leaving it running (review L2)', async () => {
+    mirrorMode = 'hang'
+    const sending = sendTransferSignature({
+      transfer: TRANSFER, recipient: RECEIVER, amount: 1, unit: 'EUR', decimals: 2,
+    })
+    await vi.advanceTimersByTimeAsync(1)
+    expect(mirrorSignal).toBeDefined()
+    expect(mirrorSignal!.aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(15_000)
+    await sending
+    expect(mirrorSignal!.aborted).toBe(true)
+  })
+
+  it('does not abort a mirror that answered in time', async () => {
+    await sendTransferSignature({ transfer: TRANSFER, recipient: RECEIVER, amount: 1, unit: 'EUR', decimals: 2 })
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(mirrorSignal?.aborted).toBe(false)
   })
 
   it('reports false when the relay refuses and the gateway hangs past its timeout', async () => {

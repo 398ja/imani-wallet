@@ -11,10 +11,10 @@
  * Untested until now, which is how the missing nonce survived: every consumer
  * signed one request at a time and never compared two.
  */
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure'
 
-import { nip98Header } from '../nip98'
+import { nip98Header, signedFetch } from '../nip98'
 
 const signerFor = (secret = generateSecretKey()) => ({
   async signEvent(template: {
@@ -94,5 +94,26 @@ describe('uniqueness', () => {
     // 16 bytes as hex. Short enough to be cheap, long enough that a birthday
     // collision inside a two-minute replay window is not a real event.
     expect([...nonces][0]).toMatch(/^[0-9a-f]{32}$/)
+  })
+})
+
+describe('signedFetch', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('passes an abort signal through to fetch, so a caller that gives up can cancel', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new AbortController()
+    await signedFetch('/api/v1/nostr/events', 'POST', { a: 1 }, signerFor(), { signal: controller.signal })
+    const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]
+    expect(init.signal).toBe(controller.signal)
+  })
+
+  it('sends no signal when none is given', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await signedFetch('/v1/whoami', 'GET', undefined, signerFor())
+    const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]
+    expect('signal' in init).toBe(false)
   })
 })

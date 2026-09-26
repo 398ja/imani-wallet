@@ -667,20 +667,35 @@ const MIRROR_TIMEOUT_MS = 15_000
  * camelCase `createdAt`, because that is what the gateway's DTO reads.
  */
 export async function mirrorToGateway(wrap: Event): Promise<boolean> {
+  // On timeout the request is aborted, not just stopped being waited for, so
+  // a slow gateway does not keep a connection busy for a result nobody reads.
+  // The race stays: it bounds the wait even where signing, not the fetch, is
+  // what hangs.
+  const controller = new AbortController()
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     const response = await Promise.race([
-      signedFetch('/api/v1/nostr/events', 'POST', {
-        id: wrap.id,
-        pubkey: wrap.pubkey,
-        createdAt: wrap.created_at,
-        kind: wrap.kind,
-        tags: wrap.tags,
-        content: wrap.content,
-        sig: wrap.sig,
-      }),
-      new Promise<never>((_, reject) =>
-        (timer = setTimeout(() => reject(new Error('mirror timed out')), MIRROR_TIMEOUT_MS)),
+      signedFetch(
+        '/api/v1/nostr/events',
+        'POST',
+        {
+          id: wrap.id,
+          pubkey: wrap.pubkey,
+          createdAt: wrap.created_at,
+          kind: wrap.kind,
+          tags: wrap.tags,
+          content: wrap.content,
+          sig: wrap.sig,
+        },
+        undefined,
+        { signal: controller.signal },
+      ),
+      new Promise<never>(
+        (_, reject) =>
+          (timer = setTimeout(() => {
+            controller.abort()
+            reject(new Error('mirror timed out'))
+          }, MIRROR_TIMEOUT_MS)),
       ),
     ])
     if (!response.ok) {
