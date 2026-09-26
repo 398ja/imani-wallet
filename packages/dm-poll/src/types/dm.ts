@@ -43,6 +43,17 @@ export interface UnwrappedDm {
 
   /** Actual creation timestamp (from rumor) */
   createdAt: number;
+
+  /**
+   * Leave this gift wrap UNPROCESSED on purpose, so the next catch-up offers
+   * it again. For a non-token DM the app is waiting to pair with something
+   * that has not arrived yet (imani-wallet #99: a transfer signature ahead of
+   * its coupon), where the relay is a better place to keep it than local
+   * storage. The adapter owns the bound: it must stop asking once the DM has
+   * paired or expired, or the wrap is re-offered for as long as it is in the
+   * fetch window. Not a failure: nothing is recorded in the failed tracker.
+   */
+  hold?: boolean;
 }
 
 /**

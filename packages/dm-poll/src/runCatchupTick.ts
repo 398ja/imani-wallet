@@ -30,6 +30,15 @@
  *      with `since = max(events.map(e => e.createdAt))` (NOT `+1` — the
  *      same-second-collision case at the boundary is handled by
  *      client-side dedup against processedEventIds; see contracts/catch-up-query.md).
+ *   6. A `held_until_paired` event (imani-wallet #99) is left unprocessed
+ *      ON PURPOSE, and the PERSISTED watermark may not pass it, so the next
+ *      tick fetches it again. It does not stop the batch, and it does not
+ *      hold the in-tick query cursor back either (that would re-page the
+ *      same events and stall on the no-progress check). Bounded so it
+ *      cannot pin the watermark forever or become a re-processing storm:
+ *      at most `maxHeldPins` held events pin it per tick, and one older
+ *      than `heldTtlSeconds` is released (marked processed) instead. Each
+ *      held event is examined at most once per tick.
  *
  * Single-flight + coalesce is bridge-side (page-lifecycle state, not
  * the loop's responsibility).
@@ -101,6 +110,19 @@ export interface CatchupTickDeps {
   maxBatchesPerTick?: number;
   /** Optional fresh-install lookback in seconds. Defaults to 7 * 86400 per R-4. */
   freshInstallLookbackSeconds?: number;
+  /**
+   * How many `held_until_paired` events may pin the persisted watermark in
+   * one tick. Past it, a held event is examined but no longer pins, so a
+   * flood of them cannot freeze the cursor. Defaults to 50.
+   */
+  maxHeldPins?: number;
+  /**
+   * A `held_until_paired` event whose `createdAt` is older than this is
+   * released: marked processed and allowed to advance the watermark.
+   * Defaults to the fresh-install lookback (7 days), past which a fresh
+   * device would not fetch it either.
+   */
+  heldTtlSeconds?: number;
 }
 
 /** Summary of one tick. Useful for telemetry + tests. */
@@ -117,6 +139,8 @@ export interface CatchupTickSummary {
   seen: number;
   /** Total events deduped at the dedupHas gate. */
   deduped: number;
+  /** Events left unprocessed on purpose (`held_until_paired`), this tick. */
+  held: number;
   /** Watermark value after the tick (may be unchanged if all batches were empty). */
   watermarkAfter: number | null;
 }
@@ -124,6 +148,7 @@ export interface CatchupTickSummary {
 const DEFAULT_BATCH_LIMIT = 50;
 const DEFAULT_MAX_BATCHES = 20;
 const DEFAULT_FRESH_INSTALL_LOOKBACK_SEC = 7 * 86400;
+const DEFAULT_MAX_HELD_PINS = 50;
 const KIND_GIFT_WRAP = 1059;
 
 /**
@@ -136,6 +161,8 @@ export async function runCatchupTick(deps: CatchupTickDeps): Promise<CatchupTick
   const batchLimit = deps.batchLimit ?? DEFAULT_BATCH_LIMIT;
   const maxBatches = deps.maxBatchesPerTick ?? DEFAULT_MAX_BATCHES;
   const lookback = deps.freshInstallLookbackSeconds ?? DEFAULT_FRESH_INSTALL_LOOKBACK_SEC;
+  const maxHeldPins = deps.maxHeldPins ?? DEFAULT_MAX_HELD_PINS;
+  const heldTtl = deps.heldTtlSeconds ?? lookback;
   const now = deps.now ?? (() => Math.floor(Date.now() / 1000));
   const logger = deps.logger ?? {};
 
@@ -158,6 +185,12 @@ export async function runCatchupTick(deps: CatchupTickDeps): Promise<CatchupTick
   let batches = 0;
   let seen = 0;
   let deduped = 0;
+  let held = 0;
+  // Held events seen this tick, so a re-paged one is not examined twice.
+  const heldThisTick = new Set<string>();
+  // The earliest createdAt the persisted watermark may not pass, or null.
+  let pin: number | null = null;
+  let pins = 0;
 
   // 2. Multi-batch loop. Terminates when (a) the response is short of
   //    `limit`, (b) we hit maxBatchesPerTick, (c) since stops advancing.
@@ -195,6 +228,13 @@ export async function runCatchupTick(deps: CatchupTickDeps): Promise<CatchupTick
         continue;
       }
 
+      if (heldThisTick.has(event.id)) {
+        // Already examined and held this tick: the query cursor moves past
+        // it, the pin (if it took one) stays.
+        maxCreatedAtThisBatch = Math.max(maxCreatedAtThisBatch, event.createdAt);
+        continue;
+      }
+
       let outcome: EventOutcome;
       try {
         const result = await deps.processFn(event);
@@ -207,6 +247,25 @@ export async function runCatchupTick(deps: CatchupTickDeps): Promise<CatchupTick
           error: err instanceof Error ? err.message : String(err),
         });
         outcome = 'transient_receive_within_budget';
+      }
+
+      if (outcome === 'held_until_paired') {
+        if (event.createdAt < now() - heldTtl) {
+          // Expired: released, exactly like a non-token DM.
+          deps.dedupAdd(event.id);
+          advanced++;
+          maxCreatedAtThisBatch = Math.max(maxCreatedAtThisBatch, event.createdAt);
+          continue;
+        }
+        held++;
+        heldThisTick.add(event.id);
+        if (pins < maxHeldPins) {
+          pins++;
+          pin = pin === null ? event.createdAt : Math.min(pin, event.createdAt);
+        }
+        // The in-tick cursor moves on; only the persisted watermark is pinned.
+        maxCreatedAtThisBatch = Math.max(maxCreatedAtThisBatch, event.createdAt);
+        continue;
       }
 
       const decision = classifyEventOutcome(outcome);
@@ -235,10 +294,15 @@ export async function runCatchupTick(deps: CatchupTickDeps): Promise<CatchupTick
     const sinceBeforeBatch = since;
     if (maxCreatedAtThisBatch > sinceBeforeBatch) {
       since = maxCreatedAtThisBatch;
-      saveDmWatermark(deps.userPubkeyHex, since, deps.watermarkStorage, {
+      // Never past a held event: the next tick has to fetch it again.
+      // `saveDmWatermark` is monotonic, so a pin below the stored value is a
+      // no-op rather than a regression; the stored value is then already at
+      // or below `pin + buffer`, which the next query still covers.
+      const persisted = pin === null ? since : Math.min(since, pin);
+      const saved = saveDmWatermark(deps.userPubkeyHex, persisted, deps.watermarkStorage, {
         warn: logger.warn ?? (() => {}),
       });
-      watermark = since;
+      watermark = pin === null ? since : saved;
     }
 
     // No-progress termination: if the batch returned events but the
@@ -269,6 +333,7 @@ export async function runCatchupTick(deps: CatchupTickDeps): Promise<CatchupTick
     batches,
     seen,
     deduped,
+    held,
     watermarkAfter: watermark,
   };
 }

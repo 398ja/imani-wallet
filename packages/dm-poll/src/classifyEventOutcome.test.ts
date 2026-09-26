@@ -115,3 +115,13 @@ describe('classifyEventOutcome', () => {
     expect(classifyEventOutcome('success').shouldMarkProcessed).toBe(true);
   });
 });
+
+describe('classifyEventOutcome: held_until_paired (imani-wallet #99)', () => {
+  it('is neither processed nor advancing, and is retried', () => {
+    expect(classifyEventOutcome('held_until_paired')).toEqual({
+      shouldMarkProcessed: false,
+      shouldAdvanceWatermark: false,
+      retryEligible: true,
+    });
+  });
+});

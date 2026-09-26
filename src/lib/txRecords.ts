@@ -96,6 +96,45 @@ type HistoryContent = Nip60HistoryContent & {
    */
   transfer_id?: string
   transfer_signature?: string
+  /**
+   * Filler that brings the plaintext to a size bucket (#99), so a record's
+   * length does not say what it carries. Ignored on read: `toRow` never looks
+   * at it, and a record written before it existed simply has none.
+   */
+  pad?: string
+}
+
+/**
+ * The plaintext sizes a 7376 is padded up to, in UTF-8 bytes (#99).
+ *
+ * NIP-44 v2 already pads, but to powers of two above 256 bytes, and that is
+ * exactly what leaks: measured on a typical `received` row, the JSON is about
+ * 450 bytes without the sender's transfer signature and about 1380 with it,
+ * which NIP-44 turns into 772 and 2140 characters of ciphertext. Anyone
+ * reading the relay could tell which rows carry a signature. Every row seen
+ * in measurement (received, payment, issued, cashback) is 150 to 1400 bytes,
+ * with issuance evidence and a long memo reaching past 2 KB.
+ *
+ * So every record is padded to the first bucket that fits. 2048 covers every
+ * ordinary row with or without a transfer signature (2048 bytes becomes 2820
+ * characters of ciphertext, far inside the relay's 64 KB event limit), and
+ * the larger buckets only hold rows with unusual evidence or memos, which are
+ * rare and still carry no transfer-signature signal of their own. Past the
+ * last bucket a record is left as is. NIP-44's own padding then lands on the
+ * same length for every record in a bucket.
+ */
+export const TX_PAD_BUCKETS = [2048, 4096, 8192, 16384] as const
+
+/** `content` as JSON, padded to the first bucket it fits. Exported for tests. */
+export function paddedJson(content: HistoryContent): string {
+  const plain = JSON.stringify(content)
+  const size = new TextEncoder().encode(plain).length
+  // `,"pad":""` adds 9 bytes before any filler. The filler is ASCII, so one
+  // character is one byte.
+  const overhead = 9
+  const target = TX_PAD_BUCKETS.find((b) => b >= size + overhead)
+  if (target === undefined) return plain
+  return JSON.stringify({ ...content, pad: '0'.repeat(target - size - overhead) })
 }
 
 /** Exported for tests: the unit and amount conversions are the easy things to get wrong. */
@@ -194,7 +233,9 @@ export function buildTxEvent(tx: WalletTransaction): EventTemplate | null {
       ['type', tx.type],
       ['direction', tx.direction],
     ],
-    content: signer.nip44Encrypt(signer.pubkey, JSON.stringify(toContent(tx))),
+    // Padded, so the length does not say which rows carry a transfer
+    // signature or anything else: see TX_PAD_BUCKETS.
+    content: signer.nip44Encrypt(signer.pubkey, paddedJson(toContent(tx))),
   }
 }
 

@@ -365,3 +365,109 @@ describe('runCatchupTick', () => {
     );
   });
 });
+
+/**
+ * `held_until_paired` (imani-wallet #99): a DM the app leaves on the relay
+ * until it pairs. It must be fetched again next tick, so the persisted
+ * watermark may not pass it, and it must not become a storm or pin forever.
+ */
+describe('runCatchupTick: held_until_paired', () => {
+  /** A relay: returns stored events with createdAt >= since, ascending, up to limit. */
+  function relay(events: CatchupNostrEvent[]) {
+    return vi.fn(async ({ since, limit }: { since: number; limit: number }) =>
+      events.filter((e) => e.createdAt >= since).sort((a, b) => a.createdAt - b.createdAt).slice(0, limit),
+    );
+  }
+
+  it('does not mark it processed, and keeps the watermark at or before it, so the next tick re-fetches it', async () => {
+    const storage = memStorage();
+    const processed = new Set<string>();
+    const events = [event('aa', 1000), event('sig', 2000), event('cc', 3000)];
+    const processFn = vi.fn(async (e: CatchupNostrEvent) =>
+      e.id === 'sig' ? { outcome: 'held_until_paired' as const } : { outcome: 'success' as const },
+    );
+    const deps = makeDeps({
+      queryEventsFn: relay(events),
+      processFn,
+      watermarkStorage: storage,
+      dedupHas: (id) => processed.has(id),
+      dedupAdd: (id) => void processed.add(id),
+      now: () => 4000,
+      freshInstallLookbackSeconds: 3500,
+    });
+    const first = await runCatchupTick(deps);
+    expect(first.held).toBe(1);
+    // It does not stop the batch: the event after it is processed.
+    expect(processed).toEqual(new Set(['aa', 'cc']));
+    expect(Number(storage.data[KEY])).toBeLessThanOrEqual(2000);
+
+    processFn.mockClear();
+    await runCatchupTick(deps);
+    expect(processFn).toHaveBeenCalledTimes(1);
+    expect(processFn).toHaveBeenCalledWith(expect.objectContaining({ id: 'sig' }));
+  });
+
+  it('is examined at most once per tick, however many pages re-return it (no storm)', async () => {
+    const processed = new Set<string>();
+    // 120 held events plus a same-second tail, small pages: every page
+    // after the first re-returns events already seen.
+    const events = Array.from({ length: 120 }, (_, i) => event(`h${i}`, 1000 + i));
+    const processFn = vi.fn(async () => ({ outcome: 'held_until_paired' as const }));
+    const summary = await runCatchupTick(
+      makeDeps({
+        queryEventsFn: relay(events),
+        processFn,
+        dedupHas: (id) => processed.has(id),
+        dedupAdd: (id) => void processed.add(id),
+        batchLimit: 10,
+        now: () => 2000,
+        freshInstallLookbackSeconds: 1500,
+      }),
+    );
+    expect(processFn).toHaveBeenCalledTimes(120);
+    expect(summary.held).toBe(120);
+    expect(summary.batches).toBeLessThanOrEqual(20);
+    expect(processed.size).toBe(0);
+  });
+
+  it('pins the watermark for at most maxHeldPins held events, so a flood cannot freeze it', async () => {
+    const storage = memStorage();
+    const events = Array.from({ length: 30 }, (_, i) => event(`h${i}`, 1000 + i * 100));
+    const summary = await runCatchupTick(
+      makeDeps({
+        queryEventsFn: relay(events),
+        processFn: vi.fn(async () => ({ outcome: 'held_until_paired' as const })),
+        watermarkStorage: storage,
+        maxHeldPins: 5,
+        now: () => 9000,
+        freshInstallLookbackSeconds: 8500,
+      }),
+    );
+    expect(summary.held).toBe(30);
+    // Pinned at the earliest of the first five, which covers all five.
+    expect(Number(storage.data[KEY])).toBe(1000 - WATERMARK_GRACE_SECONDS);
+  });
+
+  it('releases a held event older than heldTtlSeconds: marked processed, watermark advances', async () => {
+    const storage = memStorage();
+    const processed = new Set<string>();
+    const events = [event('old', 1000), event('cc', 5000)];
+    const summary = await runCatchupTick(
+      makeDeps({
+        queryEventsFn: relay(events),
+        processFn: vi.fn(async (e: CatchupNostrEvent) =>
+          e.id === 'old' ? { outcome: 'held_until_paired' as const } : { outcome: 'success' as const },
+        ),
+        watermarkStorage: storage,
+        dedupHas: (id) => processed.has(id),
+        dedupAdd: (id) => void processed.add(id),
+        heldTtlSeconds: 3000,
+        now: () => 6000,
+        freshInstallLookbackSeconds: 5500,
+      }),
+    );
+    expect(summary.held).toBe(0);
+    expect(processed).toEqual(new Set(['old', 'cc']));
+    expect(storage.data[KEY]).toBe(String(5000 - WATERMARK_GRACE_SECONDS));
+  });
+});

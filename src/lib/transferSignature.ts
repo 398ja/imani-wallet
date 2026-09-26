@@ -728,6 +728,12 @@ type Received = {
  * `publishDue`.
  */
 type Due = { publishAt: number; attempts: number; phase?: 'receipt' | 'backup'; transfer?: string }
+/**
+ * A signature's gift wrap left UNPROCESSED at the relay until it pairs (#99).
+ * Keyed by wrap id. `paired` is set once its receipt is queued, so the next
+ * sight of the wrap releases it instead of holding it again.
+ */
+type HeldWrap = { transfer: string; sender: string; at: number; paired?: true }
 
 /** Global cap per store. */
 const MAX_HELD = 200
@@ -740,9 +746,10 @@ const MAX_HELD = 200
  * never evicts a signature that is already paired and queued, nor one whose
  * signer is someone this wallet has dealt with (a sender of a coupon waiting
  * here, or a counterparty in its history), while any other entry is left.
- * What a flood of fresh keys can still evict is a signature from a FIRST-TIME
- * sender in the seconds before their coupon arrives. That costs a receipt,
- * never money; see the ADR.
+ * A flood of fresh keys can still evict a FIRST-TIME sender's entry here, but
+ * this store is only a cache now: the wrap it came in is held unprocessed at
+ * the relay until it pairs (`HeldWrap`), and is read again when its coupon
+ * arrives. See the ADR.
  */
 const MAX_PER_AUTHOR = 20
 /**
@@ -750,6 +757,22 @@ const MAX_PER_AUTHOR = 20
  * older build, never pairs, and should not sit in storage forever.
  */
 const HELD_TTL_MS = 30 * 24 * 60 * 60 * 1000
+/**
+ * How long a signature wrap is held unprocessed at the relay. The poller's
+ * fetch window (`recentDmsSince` in dmPoll), past which it would not be
+ * fetched again anyway. Measured from the wrap's own `created_at`, which
+ * NIP-59 only ever moves into the past, and from first sight, whichever is
+ * earlier.
+ */
+export const WRAP_HOLD_TTL_MS = 7 * 24 * 60 * 60 * 1000
+/**
+ * Most signature wraps held at once. Each costs one entry of about 150 bytes
+ * here and no decryption per catch-up (see `heldWrapDecision`). Past it a NEW
+ * wrap is not held, so a flood cannot push out one already held, it can only
+ * stop later ones being held (their signature still goes into the cache
+ * above). 1000 is about 150 KB, the same order as dm-poll's processed set.
+ */
+export const MAX_HELD_WRAPS = 1000
 
 /**
  * The random publish delay, uniform in [MIN, MAX], and the backward jitter on
@@ -766,7 +789,7 @@ const MAX_ATTEMPTS = 3
 
 const memory = new Map<string, string>()
 
-function storeKey(kind: 'signatures' | 'received' | 'due', pubkey: string) {
+function storeKey(kind: 'signatures' | 'received' | 'due' | 'wraps', pubkey: string) {
   return `imani-wallet:transfer-${kind}:${pubkey.toLowerCase()}`
 }
 
@@ -808,10 +831,10 @@ function readHeld<T>(key: string): Record<string, T> {
   }
 }
 
-function writeHeld<T>(key: string, held: Record<string, T>): void {
+function writeHeld<T>(key: string, held: Record<string, T>, cap = MAX_HELD): void {
   // Oldest out first, so a flood of unmatched halves cannot grow this forever.
   const entries = Object.entries(held)
-  const kept = Object.fromEntries(entries.slice(Math.max(0, entries.length - MAX_HELD)))
+  const kept = Object.fromEntries(entries.slice(Math.max(0, entries.length - cap)))
   const raw = JSON.stringify(kept)
   memory.set(key, raw)
   try {
@@ -916,6 +939,7 @@ let timer: ReturnType<typeof setTimeout> | undefined
 export function resetHeldTransfers(): void {
   memory.clear()
   memoryOnly.clear()
+  wrapsCache = undefined
   stopTransferReceipts()
 }
 
@@ -1131,12 +1155,17 @@ async function queueIfPaired(me: string, transfer: string): Promise<boolean> {
   }
 
   const due = readHeld<Due>(dueKey)
-  if (due[key]) return true
+  if (due[key]) {
+    markWrapsPaired(me, transfer, r.sender)
+    return true
+  }
   due[key] = { publishAt: Date.now() + randomDelay(), attempts: 0 }
   writeHeld(dueKey, due)
+  // Its wrap, if held at the relay, is released on the next catch-up.
+  markWrapsPaired(me, transfer, r.sender)
 
   // The payload is what opens and discloses the receipt, and the only copy
-  // otherwise is this store and a gift wrap already marked processed. So it
+  // otherwise is this store and a gift wrap about to be released. So it
   // goes on the received row now, LOCALLY. The row's relay backup is left to
   // `publishDue`, on a random delay of its own after the 7378: re-publishing
   // it here would put a visibly larger kind-7376 by this identity on the relay
@@ -1163,13 +1192,21 @@ export async function offerTransferSignature(
   p: TransferSignature,
   authorPubkey: string,
 ): Promise<boolean> {
+  return (await takeSignature(p, authorPubkey)) === 'paired'
+}
+
+/** `offerTransferSignature`, saying whether it was refused, held, or paired. */
+async function takeSignature(
+  p: TransferSignature,
+  authorPubkey: string,
+): Promise<'refused' | 'held' | 'paired'> {
   try {
     const me = getSigner().pubkey.toLowerCase()
-    if (isMerchantWallet(me)) return false
+    if (isMerchantWallet(me)) return 'refused'
     const verdict = verifyTransferSignature(p, { recipient: me, authorPubkey })
     if (!verdict.ok) {
       console.warn('[transfer] refusing a sender signature:', verdict.reason)
-      return false
+      return 'refused'
     }
     const sigKey = storeKey('signatures', me)
     const now = Date.now()
@@ -1184,9 +1221,153 @@ export async function offerTransferSignature(
     const held = readHeld<HeldSignature>(sigKey)
     if (!held[key]) held[key] = { p, at: now }
     writeHeld(sigKey, pruneSignatures(held, now, isProtected))
-    return await queueIfPaired(me, p.transfer)
+    return (await queueIfPaired(me, p.transfer)) ? 'paired' : 'held'
   } catch (error) {
     console.warn('[transfer] could not take a sender signature', error)
+    return 'refused'
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Signature wraps held at the relay (#99)
+//
+// The local store above is a cache with a cap, and keys are free, so a flood
+// of validly self-signed payloads from fresh keys can push a first-time
+// sender's signature out of it before their coupon arrives. The wrap it came
+// in is still on the relay, though. So a signature that does not pair on
+// arrival leaves its wrap UNPROCESSED (dm-poll's `UnwrappedDm.hold`), and the
+// poller's next catch-up offers it again. Only the wrap id is remembered here,
+// so a held wrap costs no decryption per catch-up: it is opened again only
+// once its coupon has arrived from the same sender and the pair has not
+// formed, which is exactly the flood case. A wrap is released (marked
+// processed) once it pairs, once it expires, or when it is refused.
+
+function markWrapsPaired(me: string, transfer: string, sender: string): void {
+  const key = storeKey('wraps', me)
+  const wraps = readHeld<HeldWrap>(key)
+  let changed = false
+  for (const w of Object.values(wraps)) {
+    if (w && w.transfer === transfer && w.sender === sender && !w.paired) {
+      w.paired = true
+      changed = true
+    }
+  }
+  if (changed) writeHeld(key, wraps, MAX_HELD_WRAPS)
+}
+
+function pruneWraps(wraps: Record<string, HeldWrap>, now: number): Record<string, HeldWrap> {
+  return Object.fromEntries(Object.entries(wraps).filter(([, w]) => w && now - w.at < WRAP_HOLD_TTL_MS))
+}
+
+/**
+ * What to do with a gift wrap seen before, WITHOUT opening it. Never throws.
+ *
+ * - `undefined`: not a held signature wrap. Unwrap it as usual.
+ * - `hold`: still waiting for its coupon. Leave it unprocessed, unopened.
+ * - `release`: paired, expired, or no longer wanted. Mark it processed.
+ * - `reread`: its coupon has arrived from the same sender and no receipt is
+ *   queued, so the cached signature was evicted. Open it and offer it again.
+ */
+export function heldWrapDecision(wrapId: string): 'hold' | 'release' | 'reread' | undefined {
+  try {
+    const me = getSigner().pubkey.toLowerCase()
+    const key = storeKey('wraps', me)
+    // Asked once per held wrap on every catch-up, so the common answer comes
+    // from a parse cached against the stored string, not a fresh parse.
+    const w = readWrapsCached(key)[wrapId]
+    if (!w) return undefined
+    const expired = Date.now() - w.at >= WRAP_HOLD_TTL_MS
+    if (w.paired || expired || isMerchantWallet(me)) {
+      const wraps = readHeld<HeldWrap>(key)
+      delete wraps[wrapId]
+      writeHeld(key, wraps, MAX_HELD_WRAPS)
+      return 'release'
+    }
+    const r = readHeld<Received>(storeKey('received', me))[w.transfer]
+    return r?.sender === w.sender ? 'reread' : 'hold'
+  } catch {
+    return undefined
+  }
+}
+
+let wrapsCache: { key: string; raw: string | null | undefined; value: Readonly<Record<string, HeldWrap>> } | undefined
+
+/** A read-only view of the wraps store, re-parsed only when it changed. */
+function readWrapsCached(key: string): Readonly<Record<string, HeldWrap>> {
+  let raw: string | null | undefined
+  const storage = globalThis.localStorage
+  try {
+    raw = storage && !memoryOnly.has(key) ? storage.getItem(key) : memory.get(key)
+  } catch {
+    raw = memory.get(key)
+  }
+  if (wrapsCache && wrapsCache.key === key && wrapsCache.raw === raw) return wrapsCache.value
+  const value = readHeld<HeldWrap>(key)
+  wrapsCache = { key, raw, value }
+  return value
+}
+
+/**
+ * Whether a signature wrap for this coupon is held at the relay, unpaired. The
+ * redemption path asks after `noteTransferReceived` did not pair, and runs a
+ * catch-up if so, which re-reads the wrap now rather than on the next poll.
+ */
+export function awaitsHeldWrap(token: string): boolean {
+  try {
+    const me = getSigner().pubkey.toLowerCase()
+    const transfer = transferIdFor(token)
+    return Object.values(readHeld<HeldWrap>(storeKey('wraps', me))).some(
+      (w) => w?.transfer === transfer && !w.paired,
+    )
+  } catch {
+    return false
+  }
+}
+
+/**
+ * A sender's signature arrived in gift wrap `wrap`. Offer it, and say whether
+ * the wrap should be held unprocessed at the relay (`true`) or released. Never
+ * throws.
+ *
+ * Held only when the signature was taken and did not pair, and only while
+ * fewer than `MAX_HELD_WRAPS` are held: past that a new wrap is released, so
+ * a flood cannot displace a wrap already held. `at` is the earlier of now and
+ * the wrap's `created_at`, so the hold ends within the poller's fetch window.
+ */
+export async function holdTransferSignatureWrap(
+  p: TransferSignature,
+  authorPubkey: string,
+  wrap: { id: string; created_at: number },
+): Promise<boolean> {
+  try {
+    const outcome = await takeSignature(p, authorPubkey)
+    const me = getSigner().pubkey.toLowerCase()
+    const key = storeKey('wraps', me)
+    const now = Date.now()
+    const wraps = pruneWraps(readHeld<HeldWrap>(key), now)
+    // Its coupon is already here and it still did not pair, so it never will:
+    // the coupon came from another key, or the pairing check refused it.
+    // Holding it would only re-open it on every catch-up until it expired.
+    const couponHere = Boolean(readHeld<Received>(storeKey('received', me))[p.transfer])
+    if (outcome !== 'held' || couponHere) {
+      delete wraps[wrap.id]
+      writeHeld(key, wraps, MAX_HELD_WRAPS)
+      return false
+    }
+    if (!wraps[wrap.id]) {
+      if (Object.keys(wraps).length >= MAX_HELD_WRAPS) {
+        writeHeld(key, wraps, MAX_HELD_WRAPS)
+        return false
+      }
+      const createdMs = Number.isFinite(wrap.created_at) ? wrap.created_at * 1000 : now
+      wraps[wrap.id] = { transfer: p.transfer, sender: p.sender, at: Math.min(now, createdMs) }
+    }
+    const held = now - wraps[wrap.id]!.at < WRAP_HOLD_TTL_MS
+    if (!held) delete wraps[wrap.id]
+    writeHeld(key, wraps, MAX_HELD_WRAPS)
+    return held
+  } catch (error) {
+    console.warn('[transfer] could not hold a signature wrap', error)
     return false
   }
 }

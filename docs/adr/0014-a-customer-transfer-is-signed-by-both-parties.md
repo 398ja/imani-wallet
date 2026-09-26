@@ -275,9 +275,22 @@ row's backup is a kind-7376 authored by the identity key, about 1.1 KB larger
 once it carries the payload. Re-publishing it at pairing would tell any relay
 reader "this identity just paired a customer-transfer signature". So the row is
 updated locally at pairing, and its backup goes out as a second queued step,
-after the 7378 publishes, on another random 10-minute to 6-hour delay. The
-7376's size still says a row carries a payload, but no longer when it paired.
-Padding 7376 content to size buckets would close that too, and is not done.
+after the 7378 publishes, on another random 10-minute to 6-hour delay.
+
+**The backup's size (#99).** NIP-44 v2 pads plaintext to powers of two, and
+that is what leaked: a typical `received` row is about 450 bytes of JSON
+without the payload and about 1380 with it, which became 772 and 2140
+characters of ciphertext, so the size said "this row carries a transfer
+signature". Every kind-7376 is now padded to the first of a fixed set of
+plaintext sizes (`TX_PAD_BUCKETS` in `src/lib/txRecords.ts`: 2048, 4096, 8192,
+16384 bytes) with a `pad` field the reader ignores. Every ordinary row (received
+with or without the payload, payment, issued, cashback) measured under 2048, so
+all of them produce the same ciphertext length (2820 characters), far inside
+the relay's 64 KB event limit. Only rows with unusual issuance evidence or long
+memos reach a larger bucket, and that says nothing about a transfer signature.
+Records written before this have no `pad` and still restore. What remains is
+the event itself: a 7376 for a `received` row appearing hours after the row
+was first backed up says the row changed, not how.
 
 **Several tabs.** Every tab runs the poller and arms a timer over the same
 queue. A publish pass runs under a Web Lock per account
@@ -326,10 +339,34 @@ Keys are free, though, so a flood can come from many. The global cap (200)
 therefore evicts unprotected entries first: a signature already paired and
 queued, or one signed by a key this wallet has dealt with (the sender of a
 coupon held here, or a counterparty anywhere in its history), goes only when
-nothing else is left. What a flood of fresh keys can still evict is a
-signature from a first-time sender that arrived before its coupon. That costs
-the receipt, never money. Keeping the wrap unprocessed at the relay until it
-pairs would close even that, and is not done.
+nothing else is left.
+
+**The wrap is held at the relay until it pairs (#99).** A flood of fresh keys
+could still evict a first-time sender's signature from that local store before
+its coupon arrived (the re-review's repro: one genuine signature, 200 one-shot
+keys, then the coupon, 0 receipts). The local store is now only a cache. A
+signature that does not pair on arrival leaves its gift wrap UNPROCESSED
+(dm-poll's `UnwrappedDm.hold`, and the `held_until_paired` outcome for the
+catch-up tick), so the relay keeps it and every catch-up offers it again. When
+the coupon arrives and the cached signature is gone, the redemption path runs
+a catch-up at once and the wrap is read again and pairs. Bounds:
+
+- A held wrap is answered from its id alone (`heldWrapDecision`), so it costs
+  no decryption per catch-up. It is opened again only when its coupon is here
+  and has not paired, which is the flood case.
+- It is released (marked processed) once it pairs, once its coupon has arrived
+  from another key, or after 7 days (`WRAP_HOLD_TTL_MS`, the poller's fetch
+  window, counted from the wrap's own `created_at` or first sight, whichever is
+  earlier).
+- At most 1000 wraps are held (`MAX_HELD_WRAPS`, about 150 KB). Past that a new
+  wrap is not held, so a flood cannot displace one already held.
+- `runCatchupTick` never lets the persisted watermark pass a held event, so it
+  is fetched again, but examines each held event at most once per tick, lets
+  at most 50 pin the watermark, and releases one older than its TTL.
+
+What a flood can still do is fill the 1000 slots before a genuine signature
+arrives, and then evict that signature from the cache before its coupon: that
+takes a thousand wraps within the week, and still costs a receipt, never money.
 
 **The gateway can still name the sender.** On every gateway-relayed coupon the
 envelope's `sender_pubkey` is written by the gateway, and pairing trusts it. A
