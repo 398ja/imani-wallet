@@ -413,6 +413,9 @@ async function settleSend(
             recipientPubkey: pending.recipientPubkey,
             recipientName: pending.recipientName,
             bundleId: pending.bundleId,
+            // What the transfer signature below is keyed on, kept so it can
+            // be rebuilt after a wipe (its nonce derives from our key and this).
+            transferId: status.sent_voucher_id,
           })
         : buildPaymentTransaction({ ...common, bundleId: pending.bundleId }),
     )
@@ -420,22 +423,32 @@ async function settleSend(
     console.error('[pay] payment recorded at the gateway but not in local history', error)
   }
 
-  // Sign the transfer for the recipient (#91), on a customer-to-customer send
-  // only: a redemption is attested by the stall with a 7377, and a signature
-  // riding beside it would claim a different thing about the same coupon.
+  // Sign the transfer for the recipient (#91), on a CUSTOMER-to-customer send
+  // only. A payment request has no `recipientPubkey`, and a plain send to a
+  // stall's key (which `sendVouchers` allows when it is the issuer) is asked
+  // about with the same `merchantStatus` that `refuseIfWrongMerchant` uses: a
+  // stall attests what it takes with a 7377 and would only hold a signature
+  // that can never pair. 'unknown' (relay unreachable) skips too, costing the
+  // receipt and nothing else.
   //
   // After the coupon has settled and the row is written, and NOT awaited:
-  // `sendTransferSignature` never throws, and nothing it does can change the
-  // outcome of a send the mint has already completed. Here rather than in the
-  // live path so a send finished late by `reconcilePendingSends` is signed too.
+  // neither call throws, and nothing they do can change the outcome of a send
+  // the mint has already completed. Here rather than in the live path so a
+  // send finished late by `reconcilePendingSends` is signed too.
   if (pending.recipientPubkey) {
-    void sendTransferSignature({
-      transfer: status.sent_voucher_id,
-      recipient: pending.recipientPubkey,
-      amount: pending.amount,
-      unit: pending.unit,
-      decimals: pending.decimals,
-    })
+    const recipient = pending.recipientPubkey
+    void merchantStatus(recipient)
+      .then((role) =>
+        role === 'customer'
+          ? sendTransferSignature({
+              transfer: status.sent_voucher_id,
+              recipient,
+              amount: pending.amount,
+              unit: pending.unit,
+              decimals: pending.decimals,
+            })
+          : false,
+      )
       // `sendTransferSignature` swallows its own failures, so this should never
       // fire. It is here because the promise is not awaited: if that contract
       // broke, the rejection would be unhandled, on a send that succeeded.
@@ -736,9 +749,27 @@ async function awaitAndSettle(
   rememberPendingSend(payer, pending)
 
   let status: SendStatus = { status: initialStatus }
+  let polled = false
   for (let i = 0; i < POLL_ATTEMPTS && !TERMINAL.includes(String(status.status)); i += 1) {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
     status = await api.getAtomicSendStatus(pending.sendId)
+    polled = true
+  }
+
+  // An idempotent `initiate` can answer with a send that is ALREADY
+  // COMPLETED, and then the loop above never runs and `status` is the bare
+  // `{ status }` the initiate returned. The transfer signature (#91) needs
+  // `sent_voucher_id`, which only the status endpoint carries, so ask once.
+  // Only that one field is taken: the settle below has always worked from
+  // the initiate's answer in this case, and this is not the place to change
+  // what it does with the money. A failed read costs the receipt, not the send.
+  if (!polled && status.status === 'COMPLETED' && pending.recipientPubkey && !status.sent_voucher_id) {
+    try {
+      const full = await api.getAtomicSendStatus(pending.sendId)
+      if (full.sent_voucher_id) status = { ...status, sent_voucher_id: full.sent_voucher_id }
+    } catch {
+      // Unsigned, and otherwise exactly as before.
+    }
   }
 
   const wallet = getWallet()
