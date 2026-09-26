@@ -72,16 +72,33 @@ describe('refuseIfOverRedeemed', () => {
     ).resolves.toBeUndefined()
   })
 
-  it('lets the last part of a fractional-ratio split through, given its token', async () => {
-    // 9 + 9 + 17802 proofs at this ratio credit 1 + 1 + 999 of 1000. The token
-    // is what tells the ceiling the 999 was rounded; see
-    // fractionalSplitCeiling.test.ts for the arithmetic.
-    stubs.rows = [received(1), { ...received(1), id: 'tx-1b' } as unknown as TransactionRow]
-    const { token } = buildVoucherToken({ issuanceRatio: 0.05611672278338945, faceValue: 1000 }, [17802])
+  it('books the last part of a fractional-ratio split at its cumulative credit', async () => {
+    // 9 + 9 + 17802 proofs at this ratio: the first two booked 0 and 1 (their
+    // exact values 0.505 each ride on the rows), so the last books 999 and the
+    // voucher closes at exactly its face.
+    const RATIO = 0.05611672278338945
+    stubs.rows = [
+      { ...received(0), id: 'tx-a', exactValue: 9 * RATIO },
+      { ...received(1), id: 'tx-b', exactValue: 9 * RATIO },
+    ] as unknown as TransactionRow[]
+    const { token } = buildVoucherToken({ issuanceRatio: RATIO, faceValue: 1000 }, [17802])
     const meta = { voucherId: VOUCHER, faceValue: 999, validation: verified }
 
-    await expect(refuseIfOverRedeemed(meta, token)).resolves.toBeUndefined()
-    // Without the token the bound stays exact, and the same part is refused.
-    await expect(refuseIfOverRedeemed(meta)).rejects.toBeInstanceOf(RedemptionRefusedError)
+    await expect(refuseIfOverRedeemed(meta, token)).resolves.toBe(999)
+  })
+
+  it('refuses the many-tiny-parts attack once the genuine value is booked', async () => {
+    // 2000 one-sat parts at ratio 0.5 have booked their genuine 1000 already.
+    // The next is worth 0.5 and rounds to 1 on its own; cumulatively it books
+    // 1 on a full face, which the exact ceiling refuses.
+    stubs.rows = Array.from({ length: 2000 }, (_, i) => ({
+      ...received(i % 2),
+      id: `tx-${i}`,
+      exactValue: 0.5,
+    })) as unknown as TransactionRow[]
+    const { token } = buildVoucherToken({ issuanceRatio: 0.5, faceValue: 1000 }, [1])
+    const meta = { voucherId: VOUCHER, faceValue: 1, validation: verified }
+
+    await expect(refuseIfOverRedeemed(meta, token)).rejects.toBeInstanceOf(RedemptionRefusedError)
   })
 })

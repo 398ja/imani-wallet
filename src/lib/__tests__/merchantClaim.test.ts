@@ -392,3 +392,54 @@ describe('a customer receiving a voucher it did not issue (review item 6)', () =
     expect(record().claimedMinor).toBe(0)
   })
 })
+
+describe('fractional-ratio parts through the till (review of 1a87c4f)', () => {
+  /** A real token for one part, and the metadata dmCrypto would derive from it. */
+  const presented = (proofs: number, ratio: number, face: number) => {
+    const { token } = buildVoucherToken(
+      { issuerId: STALL, voucherId: VOUCHER_ID, faceValue: face, unit: 'XAF', faceDecimals: 0, issuanceRatio: ratio },
+      [proofs],
+    )
+    const parsed = parseVoucherToken(token)
+    return {
+      token,
+      metadata: {
+        ...verified(creditableFaceValue(parsed).faceValue),
+        validation: { ...verified(0).validation, signedFaceValue: face },
+      },
+    }
+  }
+
+  const issuedFor = (amount: number) =>
+    ({ ...issued(), amount }) as Record<string, unknown>
+
+  it('books an honest 9 + 9 + 17802 split at exactly the face', async () => {
+    const RATIO = 0.05611672278338945
+    for (const proofs of [9, 9, 17802]) {
+      const { token, metadata } = presented(proofs, RATIO, 1000)
+      await captured.redemptionAdapter!.redeem(token, { metadata })
+    }
+
+    expect(redemptions().map((r) => r.amount)).toEqual([0, 1, 999])
+    expect(record().claimedMinor).toBe(1000)
+    expect(record().outstandingMinor).toBe(0)
+  })
+
+  it('refuses tiny parts past the genuine value, before the swap', async () => {
+    // Face 10 at ratio 0.5: 20 one-sat parts are the whole genuine value. Each
+    // rounds to 1 on its own, so per-part rounding would honour 24 of them.
+    store.rows = [issuedFor(10)]
+    const { token, metadata } = presented(1, 0.5, 10)
+    let refused = 0
+    for (let i = 0; i < 24; i++) {
+      await captured.redemptionAdapter!.redeem(token, { metadata }).catch(() => {
+        refused += 1
+      })
+    }
+
+    expect(refused).toBe(4)
+    expect(swaps).toBe(20)
+    expect(redemptions().reduce((sum, r) => sum + Number(r.amount), 0)).toBe(10)
+    expect(record().claimedMinor).toBe(10)
+  })
+})

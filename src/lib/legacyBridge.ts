@@ -236,6 +236,7 @@ function stampCorrelation(rows: unknown[]): unknown[] {
             amount: ids.claim.amount,
             unit: ids.claim.unit,
             ...(ids.claim.decimals === undefined ? {} : { decimals: ids.claim.decimals }),
+            ...(ids.claim.exact === undefined ? {} : { exactValue: ids.claim.exact }),
           }
         : {}),
     }

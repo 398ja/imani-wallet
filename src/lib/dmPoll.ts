@@ -30,8 +30,8 @@ import { resetChunkAssembly } from './dmChunks'
 import { cancelDeferredWrite, deferWrite, flushDeferredWrites } from './deferredWrite'
 import { loadMerchant } from './merchant'
 import { licenceFromToken } from './licences'
-import { checkRedemption } from './redemptionLedger'
-import { creditIsRounded, parseVoucherToken, type VoucherValidation } from './voucherToken'
+import { checkPart, checkRedemption } from './redemptionLedger'
+import { exactFaceValue, parseVoucherToken, type VoucherValidation } from './voucherToken'
 import { getWallet, notifyWalletChanged, recordReceiptByNullifier } from './wallet'
 import { legacyApi, withCorrelation } from './legacyBridge'
 import { claimToFile } from './merchantClaim'
@@ -596,29 +596,45 @@ function grantChunkAmnesty(): void {
  * `redemptionAdapter`, which needs the legacy bridge and a live
  * `window.TokenRedemption`, and this is the money decision in it.
  *
- * `token` is the presented coupon, read only to learn whether its credit was
- * rounded from a fractional issuance ratio (`creditIsRounded`). When it was,
- * the ceiling allows the bounded rounding slack described on
- * `CeilingInput.perPartRounding`, so the last honest part of a split voucher
- * is not refused over rounding the wallet itself did. Without a token, or one
- * that does not parse, the bound stays exact.
+ * `token` is the presented coupon. When it parses, the part is checked at its
+ * CUMULATIVE credit (`checkPart`): the floor of the voucher's exact running
+ * total less what is already booked, rather than `meta.faceValue`, which is
+ * this part rounded on its own. Per-part rounding let 2000 one-sat parts at
+ * ratio 0.5 (each worth 0.5, each rounded to 1) book 2000 against a face of
+ * 1000; cumulative rounding books 1000 and the exact ceiling holds with no
+ * allowance, while an honest split still books the full face. Without a
+ * token, or one that does not parse, the rounded `faceValue` is checked.
+ *
+ * Resolves to the cumulative credit when one was computed, which the caller
+ * must BOOK in place of `meta.faceValue` (the row, the attestation and the
+ * arrival all read that field). Undefined means nothing changed.
  */
 export async function refuseIfOverRedeemed(
   meta: Record<string, unknown> | undefined,
   token?: string,
-): Promise<void> {
+): Promise<number | undefined> {
   const validation = meta?.validation as VoucherValidation | undefined
   const voucherId = typeof meta?.voucherId === 'string' ? meta.voucherId : undefined
-  if (!validation?.signatureValid || !voucherId) return
+  if (!validation?.signatureValid || !voucherId) return undefined
 
-  const requested = Number(meta?.faceValue ?? 0)
-  const check = await checkRedemption({
-    voucherId,
-    requested,
-    signedFaceValue: validation.signedFaceValue,
-    perPartRounding: roundedCredit(token),
-  })
-  if (check.allowed) return
+  const exact = exactOf(token)
+  const { requested, check } =
+    exact === undefined
+      ? await (async () => {
+          const requested = Number(meta?.faceValue ?? 0)
+          return {
+            requested,
+            check: await checkRedemption({
+              voucherId,
+              requested,
+              signedFaceValue: validation.signedFaceValue,
+            }),
+          }
+        })()
+      : await checkPart({ voucherId, exact, signedFaceValue: validation.signedFaceValue }).then(
+          ({ credit, check }) => ({ requested: credit, check }),
+        )
+  if (check.allowed) return exact === undefined ? undefined : requested
 
   throw new RedemptionRefusedError(
     `Voucher ${voucherId} has already paid out ${check.alreadyRedeemed} of ` +
@@ -629,13 +645,13 @@ export async function refuseIfOverRedeemed(
   )
 }
 
-/** Whether this token's credit was rounded. False when it cannot be read. */
-function roundedCredit(token: string | undefined): boolean {
-  if (!token) return false
+/** The token's unrounded value in face minor units, or undefined if unreadable. */
+function exactOf(token: string | undefined): number | undefined {
+  if (!token) return undefined
   try {
-    return creditIsRounded(parseVoucherToken(token))
+    return exactFaceValue(parseVoucherToken(token))
   } catch {
-    return false
+    return undefined
   }
 }
 
@@ -854,7 +870,7 @@ function redemptionAdapter(): RedemptionAdapter {
       // off the DM payload (see dmCrypto) and the row builder has no other way
       // to reach them — this is what lets a merchant's till recognise two
       // arriving coupons as the two halves of one payment request.
-      const meta = opts?.metadata as Record<string, unknown> | undefined
+      let meta = opts?.metadata as Record<string, unknown> | undefined
 
       // BEFORE the swap, which is the whole reason these checks live here
       // rather than anywhere downstream: refusing now leaves the token
@@ -868,7 +884,17 @@ function redemptionAdapter(): RedemptionAdapter {
       // check happened to fire.
       refuseIfAnotherStalls(meta, currentPubkey, token)
       refuseIfUnwarranted(meta)
-      await refuseIfOverRedeemed(meta, token)
+      // The part's CUMULATIVE credit, when the token could be read: what is
+      // booked and honoured from here on, in place of the per-part rounding
+      // dmCrypto put on `faceValue`. See `refuseIfOverRedeemed`.
+      //
+      // Only for a coupon coming HOME, the one case its row is filed against
+      // the issuance (see merchantClaim.ts). A customer's figure is untouched.
+      const credit = await refuseIfOverRedeemed(meta, token)
+      const issuer = typeof meta?.issuerId === 'string' ? meta.issuerId.toLowerCase() : ''
+      if (credit !== undefined && issuer !== '' && issuer === currentPubkey?.toLowerCase()) {
+        meta = { ...meta, faceValue: credit }
+      }
 
       // Computed BEFORE the redeem, because it is derived from the RECEIVED
       // token and `redeem()` swaps that token at the mint — afterwards the
@@ -880,7 +906,7 @@ function redemptionAdapter(): RedemptionAdapter {
       // Read against local history BEFORE the swap and outside the retry, so
       // the bound it applies (an `issued` row here, capped at what that issue
       // has left) sees the same rows `refuseIfOverRedeemed` just checked.
-      const claim = await claimToFile(meta, currentPubkey)
+      const claim = await claimToFile(meta, currentPubkey, exactOf(token))
 
       // Retry a rate-limited redemption instead of losing the coupon.
       //

@@ -25,6 +25,15 @@ export interface PriorRedemption {
    * because its stored rows disagree with themselves about direction.
    */
   direction: 'in' | 'out'
+  /**
+   * The part's EXACT value in minor units, before any rounding, when known.
+   *
+   * `amount` is what was credited, a whole number. `cumulativeCredit` needs
+   * the unrounded figure too, so that the credits for a voucher's parts sum to
+   * the floor of their true total rather than to a sum of per-part roundings
+   * an attacker can inflate by splitting finely.
+   */
+  exact?: number
 }
 
 export interface CeilingInput {
@@ -47,22 +56,6 @@ export interface CeilingInput {
    * generous, and no amount of arithmetic here can detect that.
    */
   priorRedemptions: PriorRedemption[]
-  /**
-   * Each redemption's figure was ROUNDED from a fractional issuance ratio.
-   *
-   * `creditableFaceValue` credits `round(tokenAmount * issuanceRatio)` per
-   * presented part. With a non-integer ratio each part can round up by up to
-   * half a minor unit, so the honest parts of one voucher can sum past its
-   * signed face (9 + 9 + 17802 proofs at the fixture ratio credit 1 + 1 + 999
-   * of 1000). Without slack the last honest part is refused over rounding the
-   * wallet itself introduced.
-   *
-   * When true the check allows `floor(n / 2)` minor units past the face, where
-   * `n` counts the incoming priors plus this one: the most n roundings of at
-   * most half a unit each can add. Leave it false (the default) for an
-   * integer ratio, where the figures are exact and the bound stays exact.
-   */
-  perPartRounding?: boolean
 }
 
 export interface RedemptionCheck {

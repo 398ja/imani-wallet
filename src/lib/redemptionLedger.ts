@@ -1,4 +1,9 @@
-import { checkCeiling, type PriorRedemption, type RedemptionCheck } from '@imani/redemption'
+import {
+  checkCeiling,
+  checkPart as checkPartCeiling,
+  type PriorRedemption,
+  type RedemptionCheck,
+} from '@imani/redemption'
 
 import { listTransactions } from './wallet'
 import { toTransaction } from './transactions'
@@ -76,10 +81,8 @@ export async function checkRedemption(input: {
   requested: number
   signedFaceValue: number
   excludeTransactionId?: string
-  /** See `CeilingInput.perPartRounding` in `@imani/redemption`. */
-  perPartRounding?: boolean
 }): Promise<RedemptionCheck> {
-  const { voucherId, requested, signedFaceValue, excludeTransactionId, perPartRounding } = input
+  const { voucherId, requested, signedFaceValue, excludeTransactionId } = input
 
   // Reads the rows, then hands the ARITHMETIC to the shared package. This
   // module keeps the part that is genuinely local — which rows count, and how
@@ -89,7 +92,24 @@ export async function checkRedemption(input: {
     signedFaceValue,
     requested,
     priorRedemptions: await priorRedemptionsOf(voucherId, { excludeTransactionId }),
-    perPartRounding,
+  })
+}
+
+/**
+ * What to book for one part worth `exact` (unrounded), and whether it fits.
+ *
+ * `checkPart` in `@imani/redemption` over this voucher's local rows, the same
+ * rule wallet-api applies to caller-supplied rows.
+ */
+export async function checkPart(input: {
+  voucherId: string
+  exact: number
+  signedFaceValue: number
+}): Promise<{ credit: number; check: RedemptionCheck }> {
+  return checkPartCeiling({
+    signedFaceValue: input.signedFaceValue,
+    exact: input.exact,
+    priorRedemptions: await priorRedemptionsOf(input.voucherId),
   })
 }
 
@@ -110,5 +130,9 @@ async function priorRedemptionsOf(
   return rows
     .map(toTransaction)
     .filter((tx) => tx.voucherId === voucherId && tx.id !== excludeTransactionId)
-    .map((tx) => ({ amount: tx.amount, direction: tx.direction === 'in' ? 'in' : 'out' }))
+    .map((tx) => ({
+      amount: tx.amount,
+      direction: tx.direction === 'in' ? 'in' : 'out',
+      ...(tx.exactValue === undefined ? {} : { exact: tx.exactValue }),
+    }))
 }

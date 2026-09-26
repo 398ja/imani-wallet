@@ -104,6 +104,15 @@ export interface WalletTransaction {
   attestationEventId?: string
   /** Epoch milliseconds. The EVENT's `created_at`, not the redemption's date. */
   attestationAt?: number
+  /**
+   * A merchant claim's value BEFORE rounding, in face minor units (#90).
+   *
+   * `amount` is the whole-unit credit. The ledger needs the unrounded figure
+   * to credit the next part of the same voucher by cumulative rounding (see
+   * `cumulativeCredit` in `@imani/redemption`), which is what stops a voucher
+   * split into many tiny parts from collecting half a unit on each.
+   */
+  exactValue?: number
   memo?: string
   bundleId?: string
   /**
@@ -225,6 +234,8 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     // through a relay record could carry seconds, and dating a receipt to 1970
     // reads as data loss.
     attestationAt: r.attestationAt === undefined ? undefined : toEpochMs(r.attestationAt),
+    exactValue:
+      typeof r.exactValue === 'number' && Number.isFinite(r.exactValue) ? r.exactValue : undefined,
     memo: str(r.memo),
     recipientName: str(r.recipientName),
     bundleId: str(r.bundleId) ?? str(r.bundle_id),

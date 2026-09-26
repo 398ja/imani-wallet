@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-import { checkCeiling, redeemedTotalOf } from '../ceiling.js'
+import { checkCeiling, cumulativeCredit, redeemedTotalOf } from '../ceiling.js'
 import type { PriorRedemption } from '../types.js'
 
 /**
@@ -148,44 +148,31 @@ describe('the ceiling cannot be talked around', () => {
   })
 })
 
-describe('per-part rounding slack', () => {
-  // `creditableFaceValue` rounds each part of a split voucher on its own, so
-  // honest parts at a fractional ratio can sum past the face by up to half a
-  // minor unit each. The slack admits exactly that and no more.
+describe('cumulative credit', () => {
+  const tookExact = (amount: number, exact: number): PriorRedemption => ({ amount, direction: 'in', exact })
 
-  it('is off by default, so an exact ratio keeps the exact bound', () => {
-    const c = checkCeiling({ signedFaceValue: 1000, requested: 999, priorRedemptions: [took(1), took(1)] })
-    expect(c.allowed).toBe(false)
+  it('credits the floor of the running exact total less what is booked', () => {
+    expect(cumulativeCredit(0.505, [])).toBe(0)
+    expect(cumulativeCredit(0.505, [tookExact(0, 0.505)])).toBe(1)
+    expect(cumulativeCredit(998.99, [tookExact(0, 0.505), tookExact(1, 0.505)])).toBe(999)
   })
 
-  it('admits the last part of a 3-part split that rounded one over', () => {
-    const c = checkCeiling({
-      signedFaceValue: 1000,
-      requested: 999,
-      priorRedemptions: [took(1), took(1)],
-      perPartRounding: true,
-    })
-    expect(c.allowed).toBe(true)
+  it('cannot be inflated by splitting: n half-unit parts book n / 2', () => {
+    const prior: PriorRedemption[] = []
+    for (let i = 0; i < 2000; i++) {
+      const credit = cumulativeCredit(0.5, prior)
+      prior.push(tookExact(credit, 0.5))
+    }
+    expect(redeemedTotalOf(prior)).toBe(1000)
   })
 
-  it('grows by half a unit per part, never more', () => {
-    // 3 parts may add at most 1.5, so floor 1: 1001 fits, 1002 does not.
-    const base = { signedFaceValue: 1000, priorRedemptions: [took(1), took(1)], perPartRounding: true }
-    expect(checkCeiling({ ...base, requested: 1000 }).allowed).toBe(false)
-    // A single part cannot round past by a whole unit.
-    expect(
-      checkCeiling({ signedFaceValue: 1000, requested: 1001, priorRedemptions: [], perPartRounding: true })
-        .allowed,
-    ).toBe(false)
+  it('counts a legacy prior with no exact figure at its booked amount', () => {
+    expect(cumulativeCredit(400, [took(600)])).toBe(400)
   })
 
-  it('does not count outgoing rows as parts', () => {
-    const c = checkCeiling({
-      signedFaceValue: 1000,
-      requested: 1001,
-      priorRedemptions: [gave(1000), gave(1000), gave(1000)],
-      perPartRounding: true,
-    })
-    expect(c.allowed).toBe(false)
+  it('ignores outgoing rows and never goes negative', () => {
+    expect(cumulativeCredit(400, [gave(1000)])).toBe(400)
+    expect(cumulativeCredit(0.2, [tookExact(5, 4.9)])).toBe(0)
+    expect(cumulativeCredit(Number.NaN, [])).toBe(0)
   })
 })
