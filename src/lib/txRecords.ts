@@ -115,26 +115,59 @@ type HistoryContent = Nip60HistoryContent & {
  * in measurement (received, payment, issued, cashback) is 150 to 1400 bytes,
  * with issuance evidence and a long memo reaching past 2 KB.
  *
- * So every record is padded to the first bucket that fits. 2048 covers every
- * ordinary row with or without a transfer signature (2048 bytes becomes 2820
+ * So every record is padded to the first bucket that fits, a `received` row
+ * sized as if it carried a signature (`TRANSFER_SIGNATURE_RESERVE`), so its
+ * bucket never depends on whether it does. 2048 covers every ordinary row
+ * with or without a transfer signature (2048 bytes becomes 2820
  * characters of ciphertext, far inside the relay's 64 KB event limit), and
- * the larger buckets only hold rows with unusual evidence or memos, which are
- * rare and still carry no transfer-signature signal of their own. Past the
+ * the larger buckets only hold rows with unusual evidence or long memos, which
+ * are rare and, thanks to the reserve, carry no transfer-signature signal
+ * either. 32768 bytes becomes about 43.8 KB of ciphertext, still inside the
+ * relay's 64 KB limit; a row past it (a memo of about 31 KB) is left
+ * unpadded, and its length then says what it carries. Past the
  * last bucket a record is left as is. NIP-44's own padding then lands on the
  * same length for every record in a bucket.
  */
-export const TX_PAD_BUCKETS = [2048, 4096, 8192, 16384] as const
+export const TX_PAD_BUCKETS = [2048, 4096, 8192, 16384, 32768] as const
+
+/**
+ * Bytes a `received` row's bucket is chosen as if its transfer signature were
+ * present, whether or not it is (#98/#99 review L1).
+ *
+ * Choosing the bucket from the row's actual size leaked the signature for a
+ * band of rows: one about 1100 to 2039 bytes without it (in practice a sender
+ * memo of 650 bytes or more, and the memo is the sender's to choose) fitted
+ * 2048 without the signature and needed 4096 with it. Reserving the most the
+ * field can take puts both in the same bucket for every memo length. The
+ * payload is fixed-width hex apart from `amount` (at most a 16-digit safe
+ * integer), `unit` (at most 5 letters) and `decimals` (one digit), and is
+ * stored as an escaped JSON string: its largest serialisation, field name
+ * included, is under 1000 bytes (asserted in txRecordsPadding.test.ts), so
+ * 1100 leaves room for a later payload version to grow a little.
+ */
+export const TRANSFER_SIGNATURE_RESERVE = 1100
 
 /** `content` as JSON, padded to the first bucket it fits. Exported for tests. */
 export function paddedJson(content: HistoryContent): string {
   const plain = JSON.stringify(content)
-  const size = new TextEncoder().encode(plain).length
+  const size = utf8Length(plain)
   // `,"pad":""` adds 9 bytes before any filler. The filler is ASCII, so one
   // character is one byte.
   const overhead = 9
-  const target = TX_PAD_BUCKETS.find((b) => b >= size + overhead)
+  // A received row is bucketed as if it carried the signature: see
+  // TRANSFER_SIGNATURE_RESERVE. Never less than its real size, so a payload
+  // larger than the reserve still fits the bucket it is padded to.
+  const sizing =
+    content.type === 'received'
+      ? Math.max(size, utf8Length(JSON.stringify({ ...content, transfer_signature: undefined })) + TRANSFER_SIGNATURE_RESERVE)
+      : size
+  const target = TX_PAD_BUCKETS.find((b) => b >= sizing + overhead)
   if (target === undefined) return plain
   return JSON.stringify({ ...content, pad: '0'.repeat(target - size - overhead) })
+}
+
+function utf8Length(text: string): number {
+  return new TextEncoder().encode(text).length
 }
 
 /** Exported for tests: the unit and amount conversions are the easy things to get wrong. */
