@@ -36,7 +36,7 @@ import { resetChunkAssembly } from './dmChunks'
 import { cancelDeferredWrite, deferWrite, flushDeferredWrites } from './deferredWrite'
 import { loadMerchant } from './merchant'
 import { licenceFromToken } from './licences'
-import { checkPart, checkRedemption } from './redemptionLedger'
+import { checkPart, checkRedemption, redeemLockName } from './redemptionLedger'
 import { exactFaceValue, parseVoucherToken, type VoucherValidation } from './voucherToken'
 import { getWallet, notifyWalletChanged, recordReceiptByNullifier } from './wallet'
 import { legacyApi, withCorrelation } from './legacyBridge'
@@ -896,9 +896,10 @@ function redemptionAdapter(): RedemptionAdapter {
       // both read the same priors: each would book its credit from the same
       // base, and the ceiling and the `issued` bound would each be checked
       // against rows the other was about to write. Where there is no Locks API
-      // this runs as before.
+      // this runs as before. Per device only: a second till on another
+      // device is not serialised by this, see ADR 0015 (#97).
       const lockName = typeof meta?.voucherId === 'string' && meta.voucherId !== ''
-        ? `imani-redeem:${meta.voucherId}`
+        ? redeemLockName(meta.voucherId)
         : undefined
       const checkSwapAndWrite = async (): Promise<Voucher> => {
         refuseIfAnotherStalls(meta, currentPubkey, token)

@@ -130,6 +130,13 @@ issued and what's returned. The app tells you so on the Stats screen. Whether a
 customer has spent a coupon you gave them isn't something you can see, it's value
 in their wallet until it comes back to you.
 
+If you take coupons on more than one device, each device counts the claims that
+reached it. The others' catch up when that device next restores your history, so
+for a short while a voucher can read as having more left than it does. The mint
+still refuses any coupon that has already been spent. Coupons redeemed before
+claimed figures existed are matched up when you next log in, as long as the
+coupon itself is still on this device.
+
 If you sell in a currency without cents (like XAF or JPY), amounts show correctly
 on your till and on your customer's screen.
 
