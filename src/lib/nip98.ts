@@ -142,6 +142,8 @@ export async function signedFetch(
   method: string,
   payload?: unknown,
   signer?: RequestSigner,
+  /** Passed to `fetch`, so a caller that gives up can cancel the request. */
+  options: { signal?: AbortSignal } = {},
 ): Promise<Response> {
   const body = payload === undefined ? undefined : JSON.stringify(payload)
   const headers: Record<string, string> = {
@@ -149,5 +151,11 @@ export async function signedFetch(
   }
   if (body !== undefined) headers['Content-Type'] = 'application/json'
 
-  return fetch(path, { method, headers, body, credentials: 'include' })
+  return fetch(path, {
+    method,
+    headers,
+    body,
+    credentials: 'include',
+    ...(options.signal ? { signal: options.signal } : {}),
+  })
 }
