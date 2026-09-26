@@ -197,7 +197,13 @@ async function main() {
       store.set(dueKey!, JSON.stringify(due))
     }
   }
-  result.published = await ts.publishDue(B.pk)
+  // With the real delay, the wallet's OWN timer (`arm`, set when the pair was
+  // queued) fires at publishAt and publishes the receipt itself, which is the
+  // behaviour under test. This call then finds nothing due and returns 0.
+  // Without it, this call is what publishes.
+  const publishedNow = await ts.publishDue(B.pk)
+  result.published = publishedNow
+  result.publishedBy = process.env.PROBE_REAL_DELAY === '1' ? 'the wallet timer' : 'publishDue (delay skipped)'
 
   // 5. Find it on the relay and check it as a stranger and as an auditor.
   //    Looked up two ways: by its `n` tag (how a party holding the nonce finds
@@ -262,7 +268,8 @@ async function main() {
     wraps.length === 1 &&
     held === 1 &&
     result.paired === true &&
-    result.published === 1 &&
+    (process.env.PROBE_REAL_DELAY === '1' ? true : result.published === 1) &&
+    result.onRelay === 1 &&
     result.verifies === true &&
     (result.opens as { ok?: boolean; amount?: number })?.ok === true &&
     (result.opens as { amount?: number })?.amount === amount
