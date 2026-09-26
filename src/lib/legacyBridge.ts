@@ -49,6 +49,7 @@ import tokenRedemptionUrl from '../../shared/tokenRedemption.js?url'
 
 import { getWallet } from './wallet'
 import { getSigner } from './nap'
+import type { MerchantClaim } from './merchantClaim'
 // Not re-exported from the package index, so imported from source — the alias
 // already points at src/, and this is the exact derivation the store itself
 // uses, which is the whole point of not recomputing it here.
@@ -141,6 +142,7 @@ let pending:
       attestedValue?: number
       attestedUnit?: string
       attestedIssuer?: string
+      claim?: MerchantClaim
     }
   | undefined
 
@@ -171,11 +173,15 @@ export async function withCorrelation<T>(
     attestedValue?: number
     attestedUnit?: string
     attestedIssuer?: string
+    /** See `merchantClaim.ts`. Present only on a verified coupon coming home. */
+    claim?: MerchantClaim
   },
   redeem: () => Promise<T>,
 ): Promise<T> {
   pending =
-    ids.bundleId || ids.requestId || ids.validation || ids.attestationNullifier ? ids : undefined
+    ids.bundleId || ids.requestId || ids.validation || ids.attestationNullifier || ids.claim
+      ? ids
+      : undefined
   try {
     return await redeem()
   } finally {
@@ -220,6 +226,18 @@ function stampCorrelation(rows: unknown[]): unknown[] {
       // commitment. Without it the sweep would close a gap with an attestation
       // weaker than the one it replaces.
       attestedIssuer: t.attestedIssuer || ids.attestedIssuer,
+      // OVERWRITES, unlike everything above: the builder's voucher id is the
+      // gateway's (in practice a random UUID) and its amount can be a derived
+      // figure, so neither matches the issuance they must be summed against.
+      // Only ever set from a verified voucher coming home (#90).
+      ...(ids.claim
+        ? {
+            voucherId: ids.claim.voucherId,
+            amount: ids.claim.amount,
+            unit: ids.claim.unit,
+            ...(ids.claim.decimals === undefined ? {} : { decimals: ids.claim.decimals }),
+          }
+        : {}),
     }
   })
 }

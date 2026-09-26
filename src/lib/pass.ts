@@ -230,6 +230,13 @@ function isVoided(status: string | undefined): boolean {
 }
 
 function balanceField(minorUnits: number, unit: string, decimals: number): PassField {
+  // "Balance" is honest here only because of how the ROW is kept, not because
+  // anything on it records a balance. `face_value` is what these proofs are
+  // worth now: tokenRedemption derives it from the proofs on receipt, and
+  // `pay.ts replaceVoucherToken` rewrites the row with the change's face after
+  // a partial spend. Nothing keeps the original face or the amount claimed
+  // (`VoucherRow` has no field for either); the issuer's claimed/outstanding
+  // view lives on the stall's side, in `issuedVoucher.ts` (#90).
   return {
     key: 'balance',
     label: 'BALANCE',
