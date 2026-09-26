@@ -368,18 +368,24 @@ describe('runCatchupTick', () => {
 
 /**
  * `held_until_paired` (imani-wallet #99): a DM the app leaves on the relay
- * until it pairs. It must be fetched again next tick, so the persisted
- * watermark may not pass it, and it must not become a storm or pin forever.
+ * until it pairs. It must be examined again on later ticks, without holding
+ * the watermark back (the #98/#99 review's M1), and without becoming a storm.
  */
 describe('runCatchupTick: held_until_paired', () => {
-  /** A relay: returns stored events with createdAt >= since, ascending, up to limit. */
+  /**
+   * A relay: returns stored events with createdAt >= since (and in `ids`,
+   * when given), ascending, up to limit.
+   */
   function relay(events: CatchupNostrEvent[]) {
-    return vi.fn(async ({ since, limit }: { since: number; limit: number }) =>
-      events.filter((e) => e.createdAt >= since).sort((a, b) => a.createdAt - b.createdAt).slice(0, limit),
+    return vi.fn(async ({ since, limit, ids }: { since: number; limit: number; ids?: string[] }) =>
+      events
+        .filter((e) => e.createdAt >= since && (!ids || ids.includes(e.id)))
+        .sort((a, b) => a.createdAt - b.createdAt)
+        .slice(0, limit),
     );
   }
 
-  it('does not mark it processed, and keeps the watermark at or before it, so the next tick re-fetches it', async () => {
+  it('does not mark it processed, lets the watermark pass it, and re-examines it by id next tick', async () => {
     const storage = memStorage();
     const processed = new Set<string>();
     const events = [event('aa', 1000), event('sig', 2000), event('cc', 3000)];
@@ -399,12 +405,59 @@ describe('runCatchupTick: held_until_paired', () => {
     expect(first.held).toBe(1);
     // It does not stop the batch: the event after it is processed.
     expect(processed).toEqual(new Set(['aa', 'cc']));
-    expect(Number(storage.data[KEY])).toBeLessThanOrEqual(2000);
+    // The watermark is NOT pinned at the held event.
+    expect(storage.data[KEY]).toBe(String(3000 - WATERMARK_GRACE_SECONDS));
+    expect(first.heldTracked).toBe(1);
 
     processFn.mockClear();
-    await runCatchupTick(deps);
+    const second = await runCatchupTick(deps);
     expect(processFn).toHaveBeenCalledTimes(1);
     expect(processFn).toHaveBeenCalledWith(expect.objectContaining({ id: 'sig' }));
+    expect(second.held).toBe(1);
+
+    // It pairs: processed, and dropped from the held set.
+    processFn.mockImplementation(async () => ({ outcome: 'success' as const }));
+    const third = await runCatchupTick(deps);
+    expect(processed.has('sig')).toBe(true);
+    expect(third.heldTracked).toBe(0);
+    processFn.mockClear();
+    await runCatchupTick(deps);
+    expect(processFn).not.toHaveBeenCalled();
+  });
+
+  it('M1: a held event does not starve events more than maxBatches x limit after it', async () => {
+    // One held wrap, then 1200 others, then a coupon: more than the 20 x 50
+    // a tick reads. With the watermark pinned at the held wrap, every tick
+    // re-read the same 1000 and never reached the coupon.
+    const storage = memStorage();
+    const processed = new Set<string>();
+    const NOW = 1_000_000;
+    const events = [event('held', NOW - 86400)];
+    for (let i = 0; i < 1200; i++) events.push(event(`j${i}`, NOW - 86000 + i * 10));
+    events.push(event('COUPON', NOW - 100));
+    const processFn = vi.fn(async (e: CatchupNostrEvent) =>
+      e.id === 'held' ? { outcome: 'held_until_paired' as const } : { outcome: 'success' as const },
+    );
+    const deps = makeDeps({
+      queryEventsFn: relay(events),
+      processFn,
+      watermarkStorage: storage,
+      dedupHas: (id) => processed.has(id),
+      dedupAdd: (id) => void processed.add(id),
+      now: () => NOW,
+      freshInstallLookbackSeconds: 7 * 86400,
+    });
+    for (let t = 0; t < 3; t++) await runCatchupTick(deps);
+    expect(processed.has('COUPON')).toBe(true);
+    // And the #99 guarantee holds: the held wrap is still unprocessed and is
+    // still offered again on every tick.
+    expect(processed.has('held')).toBe(false);
+    processFn.mockClear();
+    const summary = await runCatchupTick(deps);
+    expect(processFn).toHaveBeenCalledWith(expect.objectContaining({ id: 'held' }));
+    expect(summary.held).toBe(1);
+    // The steady state is cheap: one window query and one by-id query.
+    expect(summary.batches).toBe(1);
   });
 
   it('is examined at most once per tick, however many pages re-return it (no storm)', async () => {
@@ -430,22 +483,78 @@ describe('runCatchupTick: held_until_paired', () => {
     expect(processed.size).toBe(0);
   });
 
-  it('pins the watermark for at most maxHeldPins held events, so a flood cannot freeze it', async () => {
+  it('tracks at most maxHeldEvents held ids, and a flood cannot displace one already tracked', async () => {
     const storage = memStorage();
     const events = Array.from({ length: 30 }, (_, i) => event(`h${i}`, 1000 + i * 100));
-    const summary = await runCatchupTick(
-      makeDeps({
-        queryEventsFn: relay(events),
-        processFn: vi.fn(async () => ({ outcome: 'held_until_paired' as const })),
-        watermarkStorage: storage,
-        maxHeldPins: 5,
-        now: () => 9000,
-        freshInstallLookbackSeconds: 8500,
-      }),
-    );
+    const queryEventsFn = relay(events);
+    const deps = makeDeps({
+      queryEventsFn,
+      processFn: vi.fn(async () => ({ outcome: 'held_until_paired' as const })),
+      watermarkStorage: storage,
+      maxHeldEvents: 5,
+      now: () => 9000,
+      freshInstallLookbackSeconds: 8500,
+    });
+    const summary = await runCatchupTick(deps);
     expect(summary.held).toBe(30);
-    // Pinned at the earliest of the first five, which covers all five.
-    expect(Number(storage.data[KEY])).toBe(1000 - WATERMARK_GRACE_SECONDS);
+    expect(summary.heldTracked).toBe(5);
+    // The watermark is not pinned by any of them.
+    expect(Number(storage.data[KEY])).toBe(3900 - WATERMARK_GRACE_SECONDS);
+    // The first five are tracked and re-queried by id.
+    queryEventsFn.mockClear();
+    await runCatchupTick(deps);
+    const byId = queryEventsFn.mock.calls.map((c) => c[0]).find((a) => a.ids);
+    expect(byId?.ids).toEqual(['h0', 'h1', 'h2', 'h3', 'h4']);
+  });
+
+  it('keeps a tracked id whose re-query fails or does not return it, until it resolves or expires', async () => {
+    const storage = memStorage();
+    const events = [event('sig', 2000)];
+    let failIds = false;
+    const base = relay(events);
+    const queryEventsFn = vi.fn(async (a: { since: number; limit: number; ids?: string[] }) => {
+      if (a.ids && failIds) throw new Error('gateway down');
+      return base(a);
+    });
+    const deps = makeDeps({
+      queryEventsFn,
+      processFn: vi.fn(async () => ({ outcome: 'held_until_paired' as const })),
+      watermarkStorage: storage,
+      now: () => 4000,
+      freshInstallLookbackSeconds: 3500,
+    });
+    await runCatchupTick(deps);
+    failIds = true;
+    const summary = await runCatchupTick(deps);
+    expect(summary.heldTracked).toBe(1);
+    events.length = 0; // gone from the relay
+    failIds = false;
+    expect((await runCatchupTick(deps)).heldTracked).toBe(1);
+  });
+
+  it('releases a tracked held id once it is older than heldTtlSeconds', async () => {
+    const storage = memStorage();
+    const processed = new Set<string>();
+    const events = [event('sig', 2000)];
+    let clock = 4000;
+    const processFn = vi.fn(async () => ({ outcome: 'held_until_paired' as const }));
+    const deps = makeDeps({
+      queryEventsFn: relay(events),
+      processFn,
+      watermarkStorage: storage,
+      dedupHas: (id) => processed.has(id),
+      dedupAdd: (id) => void processed.add(id),
+      heldTtlSeconds: 5000,
+      now: () => clock,
+      freshInstallLookbackSeconds: 3500,
+    });
+    await runCatchupTick(deps);
+    clock = 7500;
+    processFn.mockClear();
+    const summary = await runCatchupTick(deps);
+    expect(processFn).not.toHaveBeenCalled();
+    expect(processed.has('sig')).toBe(true);
+    expect(summary.heldTracked).toBe(0);
   });
 
   it('releases a held event older than heldTtlSeconds: marked processed, watermark advances', async () => {

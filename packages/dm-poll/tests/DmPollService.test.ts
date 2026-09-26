@@ -391,3 +391,65 @@ describe('DmPollService', () => {
     });
   });
 });
+
+/**
+ * The #98/#99 review's M1, on the path the wallet actually runs. A held wrap
+ * (`UnwrappedDm.hold`) must be offered again on every fetch, and must not stop
+ * a fetch reaching events after it, however many there are. `fetchRecentDms`
+ * has no watermark (it pages the whole window, newest first), so this pins
+ * down that it stays that way.
+ */
+describe('DmPollService.fetchRecentDms: a held wrap neither starves later events nor is lost', () => {
+  it('reaches a coupon more than 1000 wraps after a held one, and still re-offers the held one', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const events: GiftWrapEvent[] = [createMockGiftWrap({ id: 'held', created_at: now - 86400 })];
+    for (let i = 0; i < 1200; i++) events.push(createMockGiftWrap({ id: `j${i}`, created_at: now - 86000 + i * 10 }));
+    events.push(createMockGiftWrap({ id: 'COUPON', created_at: now - 100 }));
+    // A relay that honours since/until/limit, newest first, as the gateway does.
+    const queried: number[] = [];
+    const nostrdb = {
+      isAvailable: () => true,
+      queryEvents: async (f: { since?: number; until?: number; limit?: number }) => {
+        const page = events
+          .filter((e) => (f.since === undefined || e.created_at >= f.since) && (f.until === undefined || e.created_at <= f.until))
+          .sort((a, b) => b.created_at - a.created_at)
+          .slice(0, f.limit ?? events.length);
+        queried.push(page.length);
+        return page;
+      },
+      subscribeEvents: () => ({ id: 'x', stop: () => {}, isActive: () => false }),
+      getProfile: async () => null,
+    };
+    const offered: string[] = [];
+    const crypto = createMockCryptoAdapter();
+    crypto.unwrapNip17Dm = vi.fn(async (event: GiftWrapEvent): Promise<UnwrappedDm> => {
+      offered.push(event.id);
+      if (event.id === 'held') return { eventId: event.id, senderPubkey: '', content: '', createdAt: event.created_at, hold: true };
+      return { eventId: event.id, senderPubkey: 's', content: event.id === 'COUPON' ? 'coupon' : '', createdAt: event.created_at };
+    });
+    crypto.extractToken = vi.fn((content: string) => (content === 'coupon' ? 'cashuA-coupon' : null));
+    const storage = createMockStorageAdapter();
+    const service = new DmPollService({
+      recipientPubkey: 'recipient-pubkey-456',
+      recipientPrivkey: 'priv',
+      nostrdbAdapter: nostrdb as never,
+      cryptoAdapter: crypto,
+      storageAdapter: storage,
+      enableAutoRedemption: false,
+      fetchRecentOnStart: false,
+      recentDmsSince: 7 * 86400,
+      maxProcessedEvents: 5000,
+    });
+
+    const first = await service.fetchRecentDms();
+    expect(first.map((d) => d.eventId)).toEqual(['COUPON']);
+    expect(offered).toContain('held');
+
+    offered.length = 0;
+    await service.fetchRecentDms();
+    // Offered again (it is still unprocessed), and only it: everything else
+    // is answered from the processed set without an unwrap.
+    expect(offered).toEqual(['held']);
+    expect(await storage.getProcessedEventIds()).not.toContain('held');
+  });
+});

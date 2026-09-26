@@ -13,10 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (imani-wallet #99). An adapter can leave a non-token DM unprocessed on
   purpose, so the relay keeps it and the next fetch offers it again, without
   it counting as a failure. `DmPollService` returns early for it.
-  `runCatchupTick` never lets the persisted watermark pass a held event, but
-  examines each at most once per tick, lets at most `maxHeldPins` (50) pin the
-  watermark, and releases one older than `heldTtlSeconds` (default: the
-  fresh-install lookback). `CatchupTickSummary.held` counts them.
+  `runCatchupTick` lets the watermark move past a held event and tracks its id
+  in a small persisted set (`imani_dm_held:<pubkey>`), which every tick
+  re-queries by id (`queryEventsFn` now receives `ids` on that call, and a
+  bridge must forward it). Each held event is examined at most once per tick,
+  at most `maxHeldEvents` (50) ids are tracked (a new one past that is not, so
+  a flood cannot displace one already tracked), and one older than
+  `heldTtlSeconds` (default: the fresh-install lookback) is released.
+  `CatchupTickSummary.held` and `heldTracked` count them. An earlier draft
+  pinned the watermark at the held event instead, which made every tick
+  re-read the whole window after it, and past `maxBatchesPerTick x batchLimit`
+  later events never reached the newest ones.
 
 ## [0.4.2] - 2026-09-17
 
