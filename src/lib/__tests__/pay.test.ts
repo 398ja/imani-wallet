@@ -9,6 +9,7 @@ import {
   payRequest,
   reconcilePendingSends,
   replaceVoucherToken,
+  signedPartOf,
 } from '../pay'
 
 // Stand-ins for the wallet store and imani-apps' classic-script API client. The
@@ -61,6 +62,8 @@ vi.mock('../transferSignature', () => ({
 }))
 import { tokenIdFrom } from '../../../packages/wallet-storage/src/tokenId'
 import type { NUT18VRequest } from '../nap'
+import { creditableFaceValue, parseVoucherToken } from '../voucherToken'
+import { buildVoucherToken } from './voucherFixtures'
 
 /** A €5.00 coupon, the only denomination this stack issues. */
 const coupon = (over: Partial<Voucher> = {}): Voucher =>
@@ -1137,9 +1140,92 @@ describe('sendVouchers and payRequest', () => {
 
       expect(result.delivered).toBe(250)
       expect(transactions).toHaveLength(1)
+      // Nothing to sign without the id: the signature would be unpairable.
+      expect(signatures.calls).toEqual([])
+    })
+
+    it('writes the local row before that extra status read answers (N-b)', async () => {
+      stubs.rows = [row()]
+      const { transactions } = wallet([row()])
+      let answer!: (s: Record<string, unknown>) => void
+      const patched: Array<[string, Record<string, unknown>]> = []
+      Object.assign(stubs.wallet, {
+        updateTransaction: async (id: string, patch: Record<string, unknown>) => {
+          patched.push([id, patch])
+          return { id, ...patch }
+        },
+      })
+      Object.assign(stubs.api, {
+        initiateAtomicSend: async () => ({ send_id: 'as_1', status: 'COMPLETED' }),
+        // A slow gateway: the status read does not answer until told to.
+        getAtomicSendStatus: () => new Promise((resolve) => (answer = resolve)),
+        ackKeepToken: async () => {},
+      })
+
+      const result = await sendVouchers({
+        payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 250,
+      })
+      // The send has settled, and its row is written, with the read still open.
+      expect(result.delivered).toBe(250)
+      expect(transactions).toHaveLength(1)
+      expect(signatures.calls).toHaveLength(0)
+
+      answer({ status: 'COMPLETED', sent_voucher_id: SENT_ID })
+      await flush()
+      await flush()
       expect(signatures.calls).toEqual([
-        { transfer: undefined, recipient: FRIEND, amount: 250, unit: 'EUR', decimals: 2 },
+        { transfer: SENT_ID, recipient: FRIEND, amount: 250, unit: 'EUR', decimals: 2 },
       ])
+      // And the id reaches the row after all, for recovery after a wipe (D3).
+      expect(patched).toEqual([[transactions[0]!.id, { transferId: SENT_ID }]])
+    })
+
+    it('signs what the receiver will credit on a fractional ratio, in the signed decimals (N-c)', async () => {
+      // A real signed voucher: 200 sats at 25 XAF a sat, face 5000 with 0
+      // decimals signed, while the wallet row says 2 decimals.
+      const RATIO = 25
+      const ls = new Map<string, string>()
+      vi.stubGlobal('localStorage', {
+        getItem: (k: string) => ls.get(k) ?? null,
+        setItem: (k: string, v: string) => void ls.set(k, v),
+        removeItem: (k: string) => void ls.delete(k),
+      })
+      const { token } = buildVoucherToken(
+        { issuanceRatio: RATIO, faceValue: 5000, faceDecimals: 0, unit: 'XAF' },
+        [200],
+      )
+      const source = row({ token, face_value: 5000, face_unit: 'XAF', face_decimals: 2, token_amount: 200 })
+      stubs.rows = [source]
+      completingWith({
+        status: 'COMPLETED',
+        sent_voucher_id: SENT_ID,
+        keep_token: `cashuB${'k'.repeat(30)}`,
+        keep_face_value: 4500,
+      })
+      wallet([source])
+
+      await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'XAF', amount: 510 })
+      await flush()
+
+      // The gateway sends floor(510 / 25) = 20 sats, which the receiver
+      // credits as round(20 x 25) = 500, not the 510 asked for.
+      const sentSats = Math.floor(510 / RATIO)
+      const received = parseVoucherToken(
+        buildVoucherToken({ issuanceRatio: RATIO, faceValue: 5000, faceDecimals: 0, unit: 'XAF' }, [sentSats]).token,
+      )
+      const credited = creditableFaceValue(received).faceValue
+      expect(credited).toBe(500)
+      // Exactly the figures the receiver's `withCommitment` compares, so the
+      // receipt carries its commitment instead of dropping to the bare form.
+      expect(signatures.calls).toEqual([
+        { transfer: SENT_ID, recipient: FRIEND, amount: credited, unit: 'XAF', decimals: received.voucher.faceDecimals },
+      ])
+    })
+
+    it('signs the whole token on a full send, however the ratio rounds (N-c)', () => {
+      const { token } = buildVoucherToken({ issuanceRatio: 25, faceValue: 5000, faceDecimals: 0, unit: 'XAF' }, [200])
+      expect(signedPartOf(token, 5000, true)).toEqual({ amount: 5000, unit: 'XAF', decimals: 0 })
+      expect(signedPartOf(`cashuB${'o'.repeat(30)}`, 250, false)).toBeUndefined()
     })
 
     it('does NOT sign a payment to a stall, which the stall attests instead', async () => {

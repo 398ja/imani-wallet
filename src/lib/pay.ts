@@ -1,5 +1,5 @@
 import type { Voucher } from '@imani/voucher-send'
-import type { VoucherRow } from '@imani/wallet-storage'
+import type { TransactionRow, VoucherRow } from '@imani/wallet-storage'
 
 import { getWallet, listVouchers, notifyWalletChanged } from './wallet'
 import { legacyApi } from './legacyBridge'
@@ -9,6 +9,8 @@ import { getSigner } from './nap'
 import { spentTokenIds, withoutSpent } from './spentCoupons'
 import { buildPaymentTransaction, buildSentTransaction } from './transactions'
 import { sendTransferSignature } from './transferSignature'
+import { creditableFaceValue, parseVoucherToken } from './voucherToken'
+import { publishTx } from './txRecords'
 import type { NUT18VRequest } from './nap'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
 
@@ -351,11 +353,51 @@ function forgetPendingSend(pubkey: string, sendId: string): void {
  * second pass would rewrite the change coupon from `null` and strip its issuer,
  * unit and decimals.
  */
+/**
+ * What the RECEIVER will credit for the part this send delivered, in the
+ * signed voucher's own unit and decimals, so the sender signs the figures the
+ * receiver compares and the receipt can carry its commitment (#91).
+ *
+ * The receiver's figure is `creditableFaceValue` of the token it gets, which
+ * is round(sent sats x ratio), clamped to the face. The sent sats are the
+ * gateway's split rule: the whole source token on a full send (no change
+ * came back), else floor(amount / ratio), gateway-core's default
+ * (`VoucherSplitProperties.roundingMode = FLOOR`). On a fractional ratio that
+ * can differ from `amount`, and signing `amount` then drops every such receipt
+ * to the bare form. Undefined when the source token does not parse (plain
+ * ecash), and the caller signs what it asked for, as before.
+ */
+export function signedPartOf(
+  sourceToken: string | undefined,
+  amount: number,
+  fullSend: boolean,
+): { amount: number; unit: string; decimals: number } | undefined {
+  if (!sourceToken) return undefined
+  try {
+    const parsed = parseVoucherToken(sourceToken)
+    const { issuanceRatio, unit, faceDecimals } = parsed.voucher
+    if (!(issuanceRatio > 0)) return undefined
+    const sats = fullSend
+      ? parsed.tokenAmount
+      : Math.min(parsed.tokenAmount, Math.floor(amount / issuanceRatio + 1e-9))
+    const { faceValue } = creditableFaceValue({ ...parsed, tokenAmount: sats })
+    return { amount: faceValue, unit, decimals: faceDecimals }
+  } catch {
+    return undefined
+  }
+}
+
 async function settleSend(
   api: { ackKeepToken(sendId: string): Promise<void> },
   wallet: ReturnType<typeof getWallet>,
   pending: PendingSend,
   status: SendStatus,
+  /**
+   * The transfer id, fetched AFTER the settle when the status in hand has
+   * none (an idempotent initiate that answered COMPLETED at once). Never
+   * awaited here, so a slow gateway cannot hold up the local row.
+   */
+  transferIdLater?: () => Promise<string | undefined>,
 ): Promise<boolean> {
   const spentTokenId = pending.tokenId
   const source = await wallet.getVoucher(spentTokenId)
@@ -364,6 +406,12 @@ async function settleSend(
     await api.ackKeepToken(pending.sendId).catch(() => {})
     return false
   }
+  // Read before the settle below removes or replaces the source row.
+  const part = signedPartOf(
+    (source as { token?: string }).token,
+    pending.amount,
+    !status.keep_token,
+  )
 
   if (status.keep_token) {
     // Partial send: what comes back is the change. Prefer the server's
@@ -437,22 +485,41 @@ async function settleSend(
   // send finished late by `reconcilePendingSends` is signed too.
   if (pending.recipientPubkey) {
     const recipient = pending.recipientPubkey
-    void merchantStatus(recipient)
-      .then((role) =>
+    const sign = (transfer: string | undefined) =>
+      merchantStatus(recipient).then((role) =>
         role === 'customer'
           ? sendTransferSignature({
-              transfer: status.sent_voucher_id,
+              transfer,
               recipient,
-              amount: pending.amount,
-              unit: pending.unit,
-              decimals: pending.decimals,
+              // What the receiver will credit, in the signed unit and
+              // decimals, so the receipt can commit to it (see `signedPartOf`).
+              amount: part?.amount ?? pending.amount,
+              unit: part?.unit ?? pending.unit,
+              decimals: part?.decimals ?? pending.decimals,
             })
           : false,
       )
-      // `sendTransferSignature` swallows its own failures, so this should never
-      // fire. It is here because the promise is not awaited: if that contract
-      // broke, the rejection would be unhandled, on a send that succeeded.
-      .catch((error) => console.error('[pay] transfer signature failed', error))
+    const signing =
+      status.sent_voucher_id || !transferIdLater
+        ? sign(status.sent_voucher_id)
+        : transferIdLater().then(async (transfer) => {
+            if (!transfer) return false
+            // Onto the row written above, and into its backup, for the same D3
+            // reason as there: a wiped sender rebuilds the signature from it.
+            try {
+              const merged = await wallet.updateTransaction(`sent:${spentTokenId}`, {
+                transferId: transfer,
+              } as unknown as Partial<TransactionRow>)
+              if (merged) void publishTx(merged)
+            } catch {
+              // The receipt still goes out; only its recovery after a wipe is lost.
+            }
+            return sign(transfer)
+          })
+    // `sendTransferSignature` swallows its own failures, so this should never
+    // fire. It is here because the promise is not awaited: if that contract
+    // broke, the rejection would be unhandled, on a send that succeeded.
+    void signing.catch((error) => console.error('[pay] transfer signature failed', error))
   }
 
   await api.ackKeepToken(pending.sendId).catch(() => {
@@ -759,18 +826,19 @@ async function awaitAndSettle(
   // An idempotent `initiate` can answer with a send that is ALREADY
   // COMPLETED, and then the loop above never runs and `status` is the bare
   // `{ status }` the initiate returned. The transfer signature (#91) needs
-  // `sent_voucher_id`, which only the status endpoint carries, so ask once.
-  // Only that one field is taken: the settle below has always worked from
-  // the initiate's answer in this case, and this is not the place to change
-  // what it does with the money. A failed read costs the receipt, not the send.
-  if (!polled && status.status === 'COMPLETED' && pending.recipientPubkey && !status.sent_voucher_id) {
-    try {
-      const full = await api.getAtomicSendStatus(pending.sendId)
-      if (full.sent_voucher_id) status = { ...status, sent_voucher_id: full.sent_voucher_id }
-    } catch {
-      // Unsigned, and otherwise exactly as before.
-    }
-  }
+  // `sent_voucher_id`, which only the status endpoint carries, so it is asked
+  // for once, AFTER the settle and not awaited by it (`settleSend`'s
+  // `transferIdLater`): a slow gateway must not hold up the local row for the
+  // sake of a receipt. Only that one field is taken, and a failed read costs
+  // the receipt, not the send.
+  const transferIdLater =
+    !polled && status.status === 'COMPLETED' && pending.recipientPubkey && !status.sent_voucher_id
+      ? () =>
+          api.getAtomicSendStatus(pending.sendId).then(
+            (full) => full.sent_voucher_id,
+            () => undefined,
+          )
+      : undefined
 
   const wallet = getWallet()
   const noun = pending.recipientPubkey ? 'send' : 'payment'
@@ -811,7 +879,7 @@ async function awaitAndSettle(
     )
   }
 
-  await settleSend(api, wallet, pending, status)
+  await settleSend(api, wallet, pending, status, transferIdLater)
   forgetPendingSend(payer, pending.sendId)
   notifyWalletChanged()
 }
