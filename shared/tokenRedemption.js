@@ -1944,27 +1944,27 @@ const TokenRedemption = {
         // the existing row for type='received' + same tokenId, so the
         // second-arriving downstream write is a no-op.
         //
-        // Fallback: if the bridge / wallet-storage doesn't expose
-        // atomicallyWrite (pre-0.3.0), drop back to the legacy
-        // saveVoucher path. The downstream listeners still write the
-        // tx row on this leg; FR-015's boot reconcile pass is the
-        // backstop for any partial-write that survives a crash on
-        // this leg.
+        // imani-wallet #95: NO non-atomic fallback. There used to be one
+        // (a bare `saveVoucher` when `atomicallyWrite` was missing). It
+        // wrote the coupon without its transaction row, and the row is
+        // the only place a redemption's claim is filed: the wallet's
+        // `legacyBridge.stampCorrelation` stamps the voucher id the stall
+        // issued onto rows written through `atomicallyWrite`, and
+        // nowhere else. A redemption saved by the fallback therefore left
+        // the stall's claimed figure and redemption ceiling blind to it.
+        // A missing `atomicallyWrite` is now a failed save: the proofs
+        // stay in backend escrow, exactly as for any other write failure.
         const canAtomic = typeof walletStorageIntegration !== 'undefined'
             && typeof walletStorageIntegration.atomicallyWrite === 'function';
         try {
-            if (canAtomic) {
-                const txRow = _buildReceiveTransactionRow(voucherWithProvenance, metadata);
-                await walletStorageIntegration.atomicallyWrite({
-                    vouchers: [voucherWithProvenance],
-                    transactions: txRow ? [txRow] : [],
-                });
-            } else {
-                const savePromise = saveVoucher(voucherWithProvenance);
-                if (savePromise && typeof savePromise.then === 'function') {
-                    await savePromise;
-                }
+            if (!canAtomic) {
+                throw new Error('walletStorageIntegration.atomicallyWrite unavailable; refusing a write that files no claim');
             }
+            const txRow = _buildReceiveTransactionRow(voucherWithProvenance, metadata);
+            await walletStorageIntegration.atomicallyWrite({
+                vouchers: [voucherWithProvenance],
+                transactions: txRow ? [txRow] : [],
+            });
         } catch (saveErr) {
             console.error('[tokenRedemption] _persistRedeemed write failed, proofs are safe in backend escrow:', saveErr);
             // Spec 022 / spec 038 contract: throw RedemptionSaveError so
@@ -2050,6 +2050,37 @@ const TokenRedemption = {
      * @returns {Promise<number>} Number of recovered vouchers
      */
     async recoverPendingReceives() {
+        // imani-wallet #95: disabled, deliberately, and it files no claim.
+        //
+        //  - It cannot restore anything. The gateway stopped storing the
+        //    fresh token (receive_escrow V4, issue #58), so every pending
+        //    entry arrives with `fresh_token` absent and the coupon below
+        //    would be a row with no money in it.
+        //  - It cannot file a claim. `PendingReceive` carries no voucher
+        //    id, so the row got `crypto.randomUUID()` and, written by a
+        //    bare `saveVoucher` outside `withCorrelation`, no transaction
+        //    row at all: the stall's claimed figure and redemption ceiling
+        //    could never see it.
+        //  - It then ACKNOWLEDGED the escrow, discarding the gateway's only
+        //    record that the receive happened.
+        //
+        // A receive whose save failed is instead retried by dm-poll (the
+        // event is not marked processed on a RedemptionSaveError), and that
+        // retry writes its row through the same claim-filing
+        // `atomicallyWrite` as any other redemption. (Whether the retry
+        // still holds the fresh proofs is a separate question, and the
+        // same one: the gateway replays a receive without its token.)
+        // Nothing in imani-wallet calls this; `claimPaths.test.ts` pins
+        // both that and this body.
+        return 0;
+    },
+
+    /**
+     * The original escrow-recovery body, kept for reference only and
+     * unreachable. See `recoverPendingReceives` above.
+     * @private
+     */
+    async _legacyRecoverPendingReceives() {
         if (typeof api === 'undefined' || !api.getPendingReceives) {
             return 0;
         }
