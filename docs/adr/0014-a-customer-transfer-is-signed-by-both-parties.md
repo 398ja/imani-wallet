@@ -239,11 +239,60 @@ The warmer here used `now`, which is the worst case.
   to remove (loadtest run 004). For this wrap the mirror makes it moot. Other
   wallet-to-relay-only 1059s share the gap and would want the same mirror.
 
-Not measured on staging: that the receiver then publishes the kind-7378 within
-the 10 min to 6 h window. That needs a real A to B coupon send between two
-customers on staging and a wait of up to six hours. The pairing, delay and
-publish logic after the wrap arrives is covered by
-`src/lib/__tests__/transferSignature.test.ts`.
+### End to end: the receipt itself (#98)
+
+`e2e/probe-transfer-receipt-live.mts` closes the loop the wrap probe left
+open. It runs the wallet's OWN code on both sides against
+`wallet.staging.398ja.xyz` and its relay, with throwaway identities:
+
+1. A runs `sendTransferSignature`, which publishes the wrap to the relay and
+   mirrors it to the gateway.
+2. B, never online before, catches up with the query dm-poll issues. Each wrap
+   goes through the real `dmCrypto` unwrap, which checks the seal and holds
+   the signature.
+3. B redeems (`noteTransferReceived`, called as dm-poll calls it, with a
+   verified credited value). That pairs the two halves and queues the receipt
+   on its random delay.
+4. `publishDue` publishes it.
+5. The receipt is found on the relay by its `n` tag and checked twice: with
+   `verifyTransferReceipt` (anyone) and with `openTransferReceipt` against the
+   sender's payload (an auditor).
+
+On 2026-09-26 it passed on each of five runs with the delay skipped (step 4
+brought forward). Every time, the receipt was on the relay, verified, and
+opened to the 25.00 GBP A signed, with `created_at` jittered backwards (0 to
+59 minutes). The probe deletes its receipt afterwards (NIP-09, signed by the
+receipt's own per-transfer key). `PROBE_REAL_DELAY=1` waits out the real
+random delay instead (up to 6 h).
+
+With `PROBE_MIRROR_ONLY=1` the wallet's relay is dead, so the gateway mirror
+is the only way the wrap can reach B. That run also passed: delivered, held
+and paired. With the mirror disabled in code it FAILS (no wrap reaches B), so
+the probe detects the fix going missing.
+
+Writing the mirror-only mode turned up a real bug. `relay.publish` counted an
+unreachable relay as one that had accepted the event, because nostr-tools
+resolves a connection failure instead of rejecting it. So `sendTransferSignature`
+reported a signature as sent when only a dead relay had been tried, and the
+7378 queue and the attestation receipts treated an unpublished event as
+published. Fixed in `relay.ts`, and pinned over real sockets in
+`relayPublishCount.test.ts`, which fails against the old count.
+
+What it stands in for, so the result is not over-read:
+- It uses a stand-in token string rather than a minted coupon. Pairing reads
+  only the transfer id.
+- It opens no IndexedDB. The payload's copy on the received row is not
+  written, and `recordTransferSignature` logs that and never blocks.
+- It drives dm-poll's calls directly, not through a running poller.
+
+The send saga and the poller that surround this path are covered elsewhere:
+the atomic-send saga by the gateway's own tests, and the poller by
+`dmPoll*.test.ts`.
+
+What stays unobserved is a receipt from a coupon two real customers sent each
+other on staging, with the wallet build that carries the mirror. It would
+exercise the same code as the probe, reached through a live poller and a
+minted coupon. Staging runs imani-wallet v0.7.0, which predates the mirror.
 
 ## Timing, and what the nonce does not hide
 
