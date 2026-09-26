@@ -142,6 +142,7 @@ let pending:
       attestedValue?: number
       attestedUnit?: string
       attestedIssuer?: string
+      transferId?: string
       claim?: MerchantClaim
     }
   | undefined
@@ -173,13 +174,24 @@ export async function withCorrelation<T>(
     attestedValue?: number
     attestedUnit?: string
     attestedIssuer?: string
+    /**
+     * sha256(received token)[:32], the id a sender's transfer signature (#91)
+     * is keyed on. Stamped so `recordTransferSignature` can find this row
+     * after the mint swap has changed the row's own token id.
+     */
+    transferId?: string
     /** See `merchantClaim.ts`. Present only on a verified coupon coming home. */
     claim?: MerchantClaim
   },
   redeem: () => Promise<T>,
 ): Promise<T> {
   pending =
-    ids.bundleId || ids.requestId || ids.validation || ids.attestationNullifier || ids.claim
+    ids.bundleId ||
+    ids.requestId ||
+    ids.validation ||
+    ids.attestationNullifier ||
+    ids.transferId ||
+    ids.claim
       ? ids
       : undefined
   try {
@@ -226,6 +238,8 @@ function stampCorrelation(rows: unknown[]): unknown[] {
       // commitment. Without it the sweep would close a gap with an attestation
       // weaker than the one it replaces.
       attestedIssuer: t.attestedIssuer || ids.attestedIssuer,
+      // The transfer id, so the sender's signature can be filed here later.
+      transferId: t.transferId || ids.transferId,
       // OVERWRITES, unlike everything above: the builder's voucher id is the
       // gateway's (in practice a random UUID) and its amount can be a derived
       // figure, so neither matches the issuance they must be summed against.

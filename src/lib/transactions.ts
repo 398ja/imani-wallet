@@ -153,6 +153,22 @@ export interface WalletTransaction {
   cashbackStatus?: string
   /** When the customer redeemed it, epoch milliseconds. */
   claimedAt?: number
+  /**
+   * sha256(transferred token)[:32]: the gateway's `sent_voucher_id` on a
+   * `sent` row, and the received token's fingerprint on a `received` one. The
+   * id a customer-to-customer transfer signature (#91) is keyed on.
+   *
+   * On a `sent` row it is all the sender needs: the signature's nonce is
+   * derived from their own key and this id, so `signTransfer` rebuilds the
+   * whole payload after a wipe. See ADR 0014.
+   */
+  transferId?: string
+  /**
+   * The sender's signed payload (#91), JSON, on the RECEIVER's `received`
+   * row. The only lasting copy of the nonce that finds, opens and discloses
+   * the kind-7378 receipt this wallet published. Never shown; kept for audit.
+   */
+  transferSignature?: string
 }
 
 /**
@@ -262,6 +278,9 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     // reports an ISO instant, this row stores milliseconds, and a relay
     // round-trip could turn either into seconds.
     claimedAt: r.claimedAt === undefined || r.claimedAt === null ? undefined : toEpochMs(r.claimedAt),
+    // Either spelling, as for the issuance evidence above.
+    transferId: str(r.transferId) ?? str(r.transfer_id),
+    transferSignature: str(r.transferSignature) ?? str(r.transfer_signature),
   }
 }
 
@@ -490,6 +509,11 @@ export function buildSentTransaction(input: {
    * wallet reads off the DM's `Bundle-Id:` line.
    */
   bundleId?: string
+  /**
+   * The gateway's `sent_voucher_id`, when it returned one. Kept so the
+   * sender's transfer signature (#91) can be rebuilt; see `transferId` above.
+   */
+  transferId?: string
   at: number
 }): TransactionRow {
   return {
@@ -508,6 +532,7 @@ export function buildSentTransaction(input: {
     voucherId: input.voucherId,
     tokenId: input.tokenId,
     bundleId: input.bundleId,
+    ...(input.transferId ? { transferId: input.transferId } : {}),
     memo: input.memo || 'Voucher sent',
   } as unknown as TransactionRow
 }

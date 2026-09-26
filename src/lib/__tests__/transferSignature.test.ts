@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { nip17, type Event } from 'nostr-tools'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { finalizeEvent, nip17, type Event } from 'nostr-tools'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 
@@ -43,25 +43,48 @@ vi.mock('../relay', () => ({
   },
 }))
 
+let hasStall = false
+vi.mock('../merchant', () => ({
+  loadMerchant: () => (hasStall ? { pubkey: RECEIVER, categories: [] } : null),
+}))
+
+const filed: Array<[string, string]> = []
+vi.mock('../wallet', () => ({
+  recordTransferSignature: async (transfer: string, payload: string) => {
+    filed.push([transfer, payload])
+  },
+}))
+
 const {
   signTransfer,
   parseTransferSignature,
   verifyTransferSignature,
   verifyTransferReceipt,
+  openTransferReceipt,
   transferIdFor,
   transferTag,
   transferBlind,
+  transferNonce,
+  transferPubkeyFor,
+  transferSecretFor,
   sendTransferSignature,
   offerTransferSignature,
   noteTransferReceived,
   resetHeldTransfers,
+  stopTransferReceipts,
+  resumeTransferReceipts,
+  sealAuthorOf,
+  RECEIPT_DELAY_MIN_MS,
+  RECEIPT_DELAY_MAX_MS,
+  RECEIPT_JITTER_MAX_S,
 } = await import('../transferSignature')
 
 const TOKEN = 'cashuB-the-send-token'
 const TRANSFER = transferIdFor(TOKEN)
+const G = schnorr.Point.BASE
 
-function signed(over: Partial<Parameters<typeof signTransfer>[1]> = {}) {
-  return signTransfer(hexToBytes(SENDER_SK), {
+function signed(over: Partial<Parameters<typeof signTransfer>[1]> = {}, sk = SENDER_SK) {
+  return signTransfer(hexToBytes(sk), {
     transfer: TRANSFER,
     recipient: RECEIVER,
     amount: 250,
@@ -71,20 +94,47 @@ function signed(over: Partial<Parameters<typeof signTransfer>[1]> = {}) {
   })
 }
 
+/** What the coupon's envelope says, as dmPoll hands it over. */
+const received = (over: Partial<Parameters<typeof noteTransferReceived>[0]> = {}) =>
+  noteTransferReceived({ token: TOKEN, sender: SENDER, credited: 250, unit: 'EUR', decimals: 2, ...over })
+
+/** Let every queued receipt come due. */
+const elapse = () => vi.advanceTimersByTimeAsync(RECEIPT_DELAY_MAX_MS + 1)
+
+/** Pin the CSPRNG to its maximum, so the delay and the jitter are both the largest allowed. */
+function pinRandomToMax() {
+  const real = crypto.getRandomValues.bind(crypto)
+  vi.spyOn(crypto, 'getRandomValues').mockImplementation(((array: ArrayBufferView) => {
+    if (array instanceof Uint32Array) return array.fill(0xffffffff)
+    return real(array as Uint8Array)
+  }) as typeof crypto.getRandomValues)
+}
+
 beforeEach(() => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date('2026-09-26T12:00:00Z'))
   published.length = 0
+  filed.length = 0
   publishOk = 1
   publishThrows = false
   signerThrows = false
+  hasStall = false
   currentSk = SENDER_SK
   resetHeldTransfers()
+})
+
+afterEach(() => {
+  resetHeldTransfers()
+  vi.restoreAllMocks()
+  vi.useRealTimers()
 })
 
 describe('the sender signature', () => {
   it('verifies at the receiver', () => {
     const p = signed()
-    expect(verifyTransferSignature(p, { recipient: RECEIVER, transfer: TRANSFER, authorPubkey: SENDER }))
-      .toEqual({ ok: true })
+    expect(
+      verifyTransferSignature(p, { recipient: RECEIVER, transfer: TRANSFER, authorPubkey: SENDER, sender: SENDER }),
+    ).toEqual({ ok: true })
   })
 
   it('survives the trip through the gift-wrap payload', () => {
@@ -98,8 +148,11 @@ describe('the sender signature', () => {
     ['amount', { amount: 25_000 }],
     ['recipient', { recipient: STRANGER }],
     ['unit', { unit: 'XAF' }],
+    ['decimals', { decimals: 0 }],
     ['transfer', { transfer: 'f'.repeat(32) }],
+    ['nonce', { nonce: 'a'.repeat(64) }],
     ['transferKey', { transferKey: STRANGER }],
+    ['bareSig', { bareSig: 'b'.repeat(128) }],
   ])('does NOT verify once %s is tampered with', (_field, patch) => {
     const tampered = { ...signed(), ...patch }
     const recipient = 'recipient' in patch ? STRANGER : RECEIVER
@@ -107,10 +160,18 @@ describe('the sender signature', () => {
   })
 
   it('does NOT verify when someone else wrapped it', () => {
-    // A signature the receiver got from a third party must not count: the
-    // payload names its signer and the wrap has to agree.
     expect(verifyTransferSignature(signed(), { recipient: RECEIVER, authorPubkey: STRANGER }).ok)
       .toBe(false)
+  })
+
+  it('does NOT verify when it was not signed by whoever sent the coupon', () => {
+    // A stranger's own, perfectly valid, self-signed payload for this transfer.
+    const theirs = signed({}, STRANGER_SK)
+    expect(verifyTransferSignature(theirs, { recipient: RECEIVER }).ok).toBe(true)
+    expect(verifyTransferSignature(theirs, { recipient: RECEIVER, sender: SENDER })).toEqual({
+      ok: false,
+      reason: 'signed by someone other than the coupon sender',
+    })
   })
 
   it('does NOT verify for the wrong transfer', () => {
@@ -118,9 +179,10 @@ describe('the sender signature', () => {
       .toBe(false)
   })
 
-  it('refuses a version it does not know, so #94 can extend it safely', () => {
-    const p = { ...signed(), v: 2 }
+  it.each([1, 3])('refuses version %i, so #94 can extend it safely and v1 stays dead', (v) => {
+    const p = { ...signed(), v }
     expect(parseTransferSignature(JSON.stringify(p))).toBeUndefined()
+    expect(verifyTransferSignature(p, { recipient: RECEIVER }).ok).toBe(false)
   })
 
   it('refuses an oversized payload before parsing it', () => {
@@ -128,16 +190,57 @@ describe('the sender signature', () => {
     expect(parseTransferSignature(JSON.stringify(p))).toBeUndefined()
   })
 
-  it('uses a fresh nonce, so two sends of one coupon share no public tag', () => {
-    const a = signed()
-    const b = signed()
-    expect(a.nonce).not.toBe(b.nonce)
-    expect(transferTag(a.transfer, a.nonce)).not.toBe(transferTag(b.transfer, b.nonce))
-    expect(a.transferKey).not.toBe(b.transferKey)
+  it.each([['cashuBxyz'], ['EUR\u001f1'], ['eur'], [''], ['TOOLONGUNIT']])(
+    'refuses a unit outside the wallet alphabet on the wire: %j',
+    (unit) => {
+      expect(parseTransferSignature(JSON.stringify({ ...signed(), unit }))).toBeUndefined()
+    },
+  )
+
+  it('refuses to sign a unit outside the alphabet, and normalises case', () => {
+    expect(() => signed({ unit: 'EUR\u001f' })).toThrow(/alphabet/)
+    expect(signed({ unit: 'eur' }).unit).toBe('EUR')
   })
 
-  it('never uses the identity key as the per-transfer key', () => {
-    expect(signed().transferKey).not.toBe(SENDER)
+  it('derives the nonce from the sender key, so a wiped sender rebuilds the same keys and commitment', () => {
+    // D3: nothing about the payload has to be stored by the sender. Their key
+    // and the transfer id on their `sent` row are enough. (The signatures
+    // themselves differ, because BIP-340 mixes in fresh aux randomness, and
+    // both verify.)
+    const a = signed()
+    const b = signed()
+    expect(a.nonce).toBe(transferNonce(hexToBytes(SENDER_SK), TRANSFER, RECEIVER))
+    expect(b.nonce).toBe(a.nonce)
+    expect(b.transferKey).toBe(a.transferKey)
+    expect(verifyTransferSignature(b, { recipient: RECEIVER })).toEqual({ ok: true })
+  })
+
+  it('uses a different nonce per transfer and per recipient, and one nobody else can compute', () => {
+    const a = signed()
+    expect(signed({ transfer: 'c'.repeat(32) }).nonce).not.toBe(a.nonce)
+    expect(signed({ recipient: STRANGER }).nonce).not.toBe(a.nonce)
+    // The gateway knows transfer and both parties; without the key it gets
+    // a different answer.
+    expect(transferNonce(hexToBytes(STRANGER_SK), TRANSFER, RECEIVER)).not.toBe(a.nonce)
+  })
+
+  it('makes the per-transfer key the sender identity tweaked by the secret nonce', () => {
+    const p = signed()
+    const tag = transferTag(p.transfer, p.nonce)
+    expect(p.transferKey).not.toBe(SENDER)
+    expect(p.transferKey).toBe(transferPubkeyFor(SENDER, 'sender', tag, p.nonce))
+    // Only the key holder can sign with it: the matching secret needs theirs.
+    const sk = transferSecretFor(hexToBytes(SENDER_SK), 'sender', tag, p.nonce)
+    expect(bytesToHex(schnorr.getPublicKey(sk))).toBe(p.transferKey)
+  })
+
+  it('handles an identity key whose point has an odd y', () => {
+    // BIP-340 negates such a key; the tweak must be added to the negated one.
+    let odd = 1n
+    while (G.multiply(odd).toAffine().y % 2n === 0n) odd += 1n
+    const sk = hexToBytes(odd.toString(16).padStart(64, '0'))
+    const p = signTransfer(sk, { transfer: TRANSFER, recipient: RECEIVER, amount: 1, unit: 'EUR', decimals: 2 })
+    expect(verifyTransferSignature(p, { recipient: RECEIVER })).toEqual({ ok: true })
   })
 })
 
@@ -149,11 +252,11 @@ describe('sending the signature', () => {
     expect(ok).toBe(true)
     expect(published).toHaveLength(1)
     expect(published[0]!.kind).toBe(1059)
-    // The outer wrap names neither the sender nor the amount.
     expect(published[0]!.pubkey).not.toBe(SENDER)
     expect(published[0]!.content).not.toContain('250')
 
     const rumor = nip17.unwrapEvent(published[0]! as never, hexToBytes(RECEIVER_SK))
+    expect(sealAuthorOf(published[0]!, hexToBytes(RECEIVER_SK))).toBe(SENDER)
     const p = parseTransferSignature(rumor.content)!
     expect(verifyTransferSignature(p, { recipient: RECEIVER, transfer: TRANSFER, authorPubkey: rumor.pubkey }))
       .toEqual({ ok: true })
@@ -179,15 +282,28 @@ describe('sending the signature', () => {
     ).resolves.toBe(false)
     expect(published).toHaveLength(0)
   })
+
+  it('sends nothing for a unit it will not sign', async () => {
+    await expect(
+      sendTransferSignature({ transfer: TRANSFER, recipient: RECEIVER, amount: 1, unit: 'cashuB', decimals: 2 }),
+    ).resolves.toBe(false)
+    expect(published).toHaveLength(0)
+  })
 })
 
 describe('the receiver attestation', () => {
-  it('publishes a kind-7378, never a 7377, once both halves are here', async () => {
+  beforeEach(() => {
     currentSk = RECEIVER_SK
+  })
+
+  it('publishes a kind-7378, never a 7377, once both halves are here and the delay has passed', async () => {
     await offerTransferSignature(signed(), SENDER)
     expect(published).toHaveLength(0) // Not yet redeemed.
 
-    await expect(noteTransferReceived({ token: TOKEN, credited: 250, unit: 'EUR' })).resolves.toBe(true)
+    await expect(received()).resolves.toBe(true)
+    expect(published).toHaveLength(0) // Queued, not published.
+
+    await elapse()
     expect(published).toHaveLength(1)
     expect(published[0]!.kind).toBe(TRANSFER_RECEIPT_KIND)
     expect(published.some((e) => e.kind === ATTESTATION_KIND)).toBe(false)
@@ -195,18 +311,51 @@ describe('the receiver attestation', () => {
   })
 
   it('pairs in either order', async () => {
-    currentSk = RECEIVER_SK
-    await noteTransferReceived({ token: TOKEN, credited: 250, unit: 'EUR' })
-    expect(published).toHaveLength(0)
+    await received()
     await offerTransferSignature(signed(), SENDER)
+    await elapse()
     expect(published).toHaveLength(1)
   })
 
+  it('waits a random, bounded delay, and never blocks the redemption on it', async () => {
+    // Pin the CSPRNG to its maximum: delay = MAX, jitter = MAX.
+    pinRandomToMax()
+    await offerTransferSignature(signed(), SENDER)
+    const start = Date.now()
+    await received()
+
+    await vi.advanceTimersByTimeAsync(RECEIPT_DELAY_MIN_MS)
+    expect(published).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(RECEIPT_DELAY_MAX_MS - RECEIPT_DELAY_MIN_MS - 1000)
+    expect(published).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(published).toHaveLength(1)
+
+    // `created_at` is jittered backward from the publish time, never forward.
+    const publishAt = Math.floor((start + RECEIPT_DELAY_MAX_MS) / 1000)
+    expect(published[0]!.created_at).toBeLessThanOrEqual(publishAt)
+    expect(published[0]!.created_at).toBeGreaterThanOrEqual(publishAt - RECEIPT_JITTER_MAX_S)
+    expect(published[0]!.created_at).toBeLessThan(publishAt - RECEIPT_JITTER_MAX_S / 2)
+  })
+
+  it('survives a closed tab: queued in storage, published on the next start', async () => {
+    await offerTransferSignature(signed(), SENDER)
+    await received()
+    stopTransferReceipts() // The tab closes; the timer dies with it.
+    await elapse()
+    expect(published).toHaveLength(0)
+
+    resumeTransferReceipts(RECEIVER) // The next session's poller starts.
+    await vi.advanceTimersByTimeAsync(0)
+    expect(published).toHaveLength(1)
+    expect(verifyTransferReceipt(published[0]!)).toBe(true)
+  })
+
   it('names neither party, the amount, the voucher, or the transfer id', async () => {
-    currentSk = RECEIVER_SK
     const p = signed()
     await offerTransferSignature(p, SENDER)
-    await noteTransferReceived({ token: TOKEN, credited: 250, unit: 'EUR' })
+    await received()
+    await elapse()
     const event = published[0]!
     const wire = JSON.stringify(event)
     expect(event.pubkey).not.toBe(RECEIVER)
@@ -216,91 +365,265 @@ describe('the receiver attestation', () => {
     expect(JSON.parse(event.content)).not.toHaveProperty('amount')
   })
 
-  it('links to the sender only through the per-transfer key', async () => {
-    currentSk = RECEIVER_SK
+  it('is signed by the receiver identity tweaked, which the sender predicted and signed', async () => {
     const p = signed()
     await offerTransferSignature(p, SENDER)
-    await noteTransferReceived({ token: TOKEN, credited: 250, unit: 'EUR' })
+    await received()
+    await elapse()
+    const tag = transferTag(TRANSFER, p.nonce)
+    expect(published[0]!.pubkey).toBe(transferPubkeyFor(RECEIVER, 'receiver', tag, p.nonce))
     const content = JSON.parse(published[0]!.content)
     expect(content.senderKey).toBe(p.transferKey)
-    expect(content.tag).toBe(transferTag(TRANSFER, p.nonce))
+    expect(content.senderSig).toBe(p.transferSig)
+    expect(content.tag).toBe(tag)
   })
 
-  it('commits to the amount so either party can open it, and nobody else', async () => {
-    currentSk = RECEIVER_SK
+  it('commits to the amount, unit and decimals so either party can open it', async () => {
     const p = signed()
     await offerTransferSignature(p, SENDER)
-    await noteTransferReceived({ token: TOKEN, credited: 250, unit: 'EUR' })
+    await received()
+    await elapse()
     const content = JSON.parse(published[0]!.content)
+    expect(content).toMatchObject({ unit: 'EUR', decimals: 2 })
     expect(content.commitment).toBe(commitTo(250, transferBlind(p.nonce)))
-    expect(content.commitment).not.toBe(commitTo(250, transferBlind('0'.repeat(64))))
+    expect(openTransferReceipt(published[0]!, p)).toEqual({ ok: true, amount: 250, unit: 'EUR', decimals: 2 })
   })
 
-  it('publishes no commitment when the parties disagree on the amount', async () => {
-    currentSk = RECEIVER_SK
-    await offerTransferSignature(signed(), SENDER)
-    await noteTransferReceived({ token: TOKEN, credited: 200, unit: 'EUR' })
-    expect(JSON.parse(published[0]!.content)).not.toHaveProperty('commitment')
-  })
-
-  it('publishes no commitment for an unverified voucher', async () => {
-    currentSk = RECEIVER_SK
-    await offerTransferSignature(signed(), SENDER)
-    await noteTransferReceived({ token: TOKEN })
-    expect(JSON.parse(published[0]!.content)).not.toHaveProperty('commitment')
+  it.each([
+    ['amount', { credited: 200 }],
+    ['unit', { unit: 'XAF' }],
+    ['decimals', { decimals: 0 }],
+    ['verification (unverified voucher)', { credited: undefined, unit: undefined, decimals: undefined }],
+  ])('publishes the signed "no commitment" form when the parties disagree on %s', async (_what, over) => {
+    const p = signed()
+    await offerTransferSignature(p, SENDER)
+    await received(over)
+    await elapse()
+    const content = JSON.parse(published[0]!.content)
+    expect(content).not.toHaveProperty('commitment')
+    expect(content).not.toHaveProperty('unit')
+    expect(content.senderSig).toBe(p.bareSig)
+    expect(verifyTransferReceipt(published[0]!)).toBe(true)
+    expect(openTransferReceipt(published[0]!, p)).toEqual({ ok: true })
   })
 
   it('publishes NOTHING without a sender signature', async () => {
-    // A unilateral "I received something" links to nothing, and would record
-    // a gift the sender never asked to have recorded.
-    currentSk = RECEIVER_SK
-    await expect(noteTransferReceived({ token: TOKEN, credited: 250, unit: 'EUR' })).resolves.toBe(false)
+    await expect(received()).resolves.toBe(false)
+    await elapse()
+    expect(published).toHaveLength(0)
+  })
+
+  it('publishes NOTHING when the coupon names no sender', async () => {
+    await offerTransferSignature(signed(), SENDER)
+    await expect(received({ sender: undefined })).resolves.toBe(false)
+    await elapse()
     expect(published).toHaveLength(0)
   })
 
   it('ignores a tampered signature instead of publishing it', async () => {
-    currentSk = RECEIVER_SK
     await offerTransferSignature({ ...signed(), amount: 99_999 }, SENDER)
-    await noteTransferReceived({ token: TOKEN, credited: 250, unit: 'EUR' })
+    await received()
+    await elapse()
     expect(published).toHaveLength(0)
   })
 
   it('ignores a signature addressed to someone else', async () => {
-    currentSk = RECEIVER_SK
     await offerTransferSignature(signed({ recipient: STRANGER }), SENDER)
-    await noteTransferReceived({ token: TOKEN, credited: 250, unit: 'EUR' })
+    await received()
+    await elapse()
     expect(published).toHaveLength(0)
   })
 
-  it('never throws when the publish fails', async () => {
-    currentSk = RECEIVER_SK
+  describe('a signature from someone other than the coupon sender (D2)', () => {
+    it('cannot replace the real one, whichever arrives first', async () => {
+      const real = signed()
+      const theirs = signed({}, STRANGER_SK)
+      await offerTransferSignature(theirs, STRANGER)
+      await offerTransferSignature(real, SENDER)
+      await offerTransferSignature(theirs, STRANGER)
+      await received()
+      await elapse()
+      expect(published).toHaveLength(1)
+      expect(JSON.parse(published[0]!.content).senderKey).toBe(real.transferKey)
+    })
+
+    it('is never published on its own', async () => {
+      await offerTransferSignature(signed({}, STRANGER_SK), STRANGER)
+      await received()
+      await elapse()
+      expect(published).toHaveLength(0)
+    })
+
+    it('a later payload from the same signer does not overwrite the first', async () => {
+      const first = signed()
+      await offerTransferSignature(first, SENDER)
+      // Validly signed by the sender, for another amount.
+      await offerTransferSignature(signed({ amount: 1 }), SENDER)
+      await received()
+      await elapse()
+      expect(JSON.parse(published[0]!.content).commitment).toBe(commitTo(250, transferBlind(first.nonce)))
+    })
+
+    it('cannot flood a genuine one out of the store (L5)', async () => {
+      // More than the 200-entry global cap, all from one validly-signing key.
+      await offerTransferSignature(signed(), SENDER)
+      for (let i = 0; i < 205; i += 1) {
+        const transfer = i.toString(16).padStart(32, '0')
+        await offerTransferSignature(signed({ transfer }, STRANGER_SK), STRANGER)
+      }
+      await received()
+      await elapse()
+      expect(published).toHaveLength(1)
+    }, 60_000)
+  })
+
+  it('files the payload on the received row, so the receipt can be opened after a wipe (D3)', async () => {
+    const p = signed()
+    await offerTransferSignature(p, SENDER)
+    await received()
+    expect(filed).toEqual([[TRANSFER, JSON.stringify(p)]])
+    await elapse()
+    expect(openTransferReceipt(published[0]!, parseTransferSignature(filed[0]![1])!).ok).toBe(true)
+  })
+
+  it('retries a refused publish on a fresh delay, then gives up, never throwing', async () => {
+    // Pinned to the maximum delay, so each `elapse` is exactly one attempt.
+    pinRandomToMax()
+    await offerTransferSignature(signed(), SENDER)
+    publishOk = 0
+    await received()
+    await elapse()
+    await elapse()
+    publishOk = 1
+    await elapse() // Third attempt succeeds.
+    expect(published).toHaveLength(1)
+
+    published.length = 0
+    resetHeldTransfers()
     publishThrows = true
     await offerTransferSignature(signed(), SENDER)
-    await expect(noteTransferReceived({ token: TOKEN, credited: 250, unit: 'EUR' })).resolves.toBe(false)
+    await received()
+    for (let i = 0; i < 5; i += 1) await elapse()
+    publishThrows = false
+    await elapse()
+    expect(published).toHaveLength(0) // Dropped after three attempts.
   })
 
   it('never throws on a locked wallet', async () => {
     signerThrows = true
-    await expect(noteTransferReceived({ token: TOKEN })).resolves.toBe(false)
+    await expect(received()).resolves.toBe(false)
     await expect(offerTransferSignature(signed(), SENDER)).resolves.toBe(false)
   })
 
+  it('a stall never queues or publishes one, even if it opened after noting a receipt (L3)', async () => {
+    await received()
+    hasStall = true
+    await expect(offerTransferSignature(signed(), SENDER)).resolves.toBe(false)
+    await elapse()
+    expect(published).toHaveLength(0)
+
+    // And a receipt already queued as a customer is not published by a stall.
+    hasStall = false
+    resetHeldTransfers()
+    await offerTransferSignature(signed(), SENDER)
+    await received()
+    hasStall = true
+    await elapse()
+    expect(published).toHaveLength(0)
+  })
+
+  it('forgets a coupon whose signature never came, after a month (N2)', async () => {
+    await received()
+    await vi.advanceTimersByTimeAsync(31 * 24 * 60 * 60 * 1000)
+    await received({ token: 'cashuB-some-other' }) // Prunes on write.
+    await offerTransferSignature(signed(), SENDER)
+    await elapse()
+    expect(published).toHaveLength(0)
+  })
+
   it('a per-transfer receiver key: two receipts share no author', async () => {
-    currentSk = RECEIVER_SK
     const tokenB = 'cashuB-another'
     await offerTransferSignature(signed(), SENDER)
     await offerTransferSignature(signed({ transfer: transferIdFor(tokenB) }), SENDER)
-    await noteTransferReceived({ token: TOKEN })
-    await noteTransferReceived({ token: tokenB })
+    await received()
+    await received({ token: tokenB })
+    await elapse()
     expect(published).toHaveLength(2)
     expect(published[0]!.pubkey).not.toBe(published[1]!.pubkey)
   })
+})
 
-  it('a receipt with a forged sender half does not verify', async () => {
+describe('a published receipt cannot be re-used (D1)', () => {
+  async function genuine(over: Partial<Parameters<typeof noteTransferReceived>[0]> = {}) {
     currentSk = RECEIVER_SK
-    await offerTransferSignature(signed(), SENDER)
-    await noteTransferReceived({ token: TOKEN })
-    const forged = { ...published[0]!, content: JSON.stringify({ ...JSON.parse(published[0]!.content), senderKey: STRANGER }) }
+    const p = signed()
+    await offerTransferSignature(p, SENDER)
+    await received(over)
+    await elapse()
+    return { p, event: published[0]! }
+  }
+
+  /** Re-sign `content` under a fresh author, as anyone could. */
+  function republish(event: Event, content: Record<string, unknown>) {
+    return finalizeEvent(
+      { kind: event.kind, created_at: event.created_at, tags: event.tags, content: JSON.stringify(content) },
+      hexToBytes('4'.repeat(64)),
+    )
+  }
+
+  it('a copied {tag, senderKey, senderSig} under a new author does not verify', async () => {
+    const { event } = await genuine()
+    const copy = republish(event, JSON.parse(event.content))
+    expect(verifyTransferReceipt(event)).toBe(true)
+    expect(verifyTransferReceipt(copy)).toBe(false)
+  })
+
+  it('the same holds for the no-commitment form', async () => {
+    const { event } = await genuine({ credited: 1 })
+    expect(verifyTransferReceipt(republish(event, JSON.parse(event.content)))).toBe(false)
+  })
+
+  it('a shifted commitment C + kG does not verify, even from the genuine author', async () => {
+    const { p, event } = await genuine()
+    const content = JSON.parse(event.content)
+    const shifted = schnorr.Point.fromHex(content.commitment).add(G.multiply(1000n)).toHex(true)
+    // It WOULD open to 250 + 1000 with the same blind, which is the attack.
+    expect(shifted).toBe(commitTo(1250, transferBlind(p.nonce)))
+
+    const receiverSk = transferSecretFor(hexToBytes(RECEIVER_SK), 'receiver', content.tag, p.nonce)
+    const forged = finalizeEvent(
+      { kind: event.kind, created_at: event.created_at, tags: event.tags, content: JSON.stringify({ ...content, commitment: shifted }) },
+      receiverSk,
+    )
     expect(verifyTransferReceipt(forged)).toBe(false)
+  })
+
+  it('neither dropping nor adding a commitment verifies', async () => {
+    const { p, event } = await genuine()
+    const content = JSON.parse(event.content)
+    const receiverSk = transferSecretFor(hexToBytes(RECEIVER_SK), 'receiver', content.tag, p.nonce)
+    const resign = (c: Record<string, unknown>) =>
+      finalizeEvent({ kind: event.kind, created_at: event.created_at, tags: event.tags, content: JSON.stringify(c) }, receiverSk)
+    const bare = { ...content }
+    delete bare.commitment
+    delete bare.unit
+    delete bare.decimals
+    expect(verifyTransferReceipt(resign(bare))).toBe(false)
+    expect(verifyTransferReceipt(resign({ ...content, unit: 'XAF' }))).toBe(false)
+    expect(verifyTransferReceipt(resign({ ...content, decimals: 0 }))).toBe(false)
+  })
+
+  it('a forged sender half does not verify', async () => {
+    const { event } = await genuine()
+    const forged = { ...event, content: JSON.stringify({ ...JSON.parse(event.content), senderKey: STRANGER }) }
+    expect(verifyTransferReceipt(forged)).toBe(false)
+  })
+
+  it('opening against another transfer, sender or amount fails', async () => {
+    const { p, event } = await genuine()
+    expect(openTransferReceipt(event, signed({ amount: 251 })).ok).toBe(false)
+    expect(openTransferReceipt(event, signed({ transfer: 'c'.repeat(32) })).ok).toBe(false)
+    expect(openTransferReceipt(event, signed({}, STRANGER_SK)).ok).toBe(false)
+    expect(openTransferReceipt(event, p).ok).toBe(true)
   })
 })

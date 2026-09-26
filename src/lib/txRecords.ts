@@ -87,6 +87,15 @@ type HistoryContent = Nip60HistoryContent & {
   cash_attestation?: string
   /** See `WalletTransaction.exactValue`. Restored so the ceiling survives a wipe. */
   exact_value?: number
+  /**
+   * The customer-to-customer transfer signature evidence (#91). `transfer_id`
+   * on both sides, `transfer_signature` (the sender's payload) on the
+   * receiver's side only. Carried for the reason the issuance evidence is: the
+   * nonce inside it exists nowhere else once the device is wiped, and without
+   * it the receipt this wallet published can be neither found nor opened.
+   */
+  transfer_id?: string
+  transfer_signature?: string
 }
 
 /** Exported for tests: the unit and amount conversions are the easy things to get wrong. */
@@ -120,6 +129,8 @@ export function toContent(tx: WalletTransaction): HistoryContent {
     sale_voucher_ids: tx.saleVoucherIds,
     cash_attestation: tx.cashAttestation,
     exact_value: tx.exactValue,
+    transfer_id: tx.transferId,
+    transfer_signature: tx.transferSignature,
   }
 }
 
@@ -163,6 +174,8 @@ export function toRow(id: string, content: HistoryContent): TransactionRow {
     saleVoucherIds: content.sale_voucher_ids,
     cashAttestation: content.cash_attestation,
     exactValue: content.exact_value,
+    transferId: content.transfer_id,
+    transferSignature: content.transfer_signature,
   } as unknown as TransactionRow
 }
 
