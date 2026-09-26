@@ -453,6 +453,40 @@ describe('fractional-ratio parts through the till (review of 1a87c4f)', () => {
     expect(record().outstandingMinor).toBe(0)
   })
 
+  it('checks, swaps and books two parts of one voucher one at a time across tabs (R9)', async () => {
+    // Two tabs, each with its own poller, redeeming two half-unit parts of the
+    // same voucher at once. Checked against the same priors, both would book 1
+    // against a genuine 1. Under the per-voucher lock the second reads the
+    // first's row and books 0.
+    store.rows = [issuedFor(10)]
+    const names: string[] = []
+    let chain = Promise.resolve<unknown>(undefined)
+    const before = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, writable: true, value: {
+      locks: {
+        request: (name: string, fn: () => Promise<unknown>) => {
+          names.push(name)
+          const run = chain.then(fn)
+          chain = run.catch(() => {})
+          return run
+        },
+      },
+    } })
+    try {
+      const a = presented(1, 0.5, 10)
+      const b = presented(1, 0.5, 10)
+      await Promise.all([
+        captured.redemptionAdapter!.redeem(a.token, { metadata: a.metadata }),
+        captured.redemptionAdapter!.redeem(b.token, { metadata: b.metadata }),
+      ])
+      expect(names).toEqual([`imani-redeem:${VOUCHER_ID}`, `imani-redeem:${VOUCHER_ID}`])
+      expect(redemptions().map((r) => r.amount)).toEqual([0, 1])
+    } finally {
+      if (before) Object.defineProperty(globalThis, 'navigator', before)
+      else delete (globalThis as { navigator?: unknown }).navigator
+    }
+  })
+
   it('refuses tiny parts past the genuine value, before the swap', async () => {
     // Face 10 at ratio 0.5: 20 one-sat parts are the whole genuine value. Each
     // rounds to 1 on its own, so per-part rounding would honour 24 of them.

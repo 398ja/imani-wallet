@@ -26,8 +26,8 @@ import { getSigner } from './nap'
 import { postPaymentReceipt } from './paymentReceipt'
 import {
   noteTransferReceived,
+  resetHeldTransfers,
   resumeTransferReceipts,
-  stopTransferReceipts,
   transferIdFor,
 } from './transferSignature'
 import { createDmCryptoAdapter, toLegacyMetadata } from './dmCrypto'
@@ -40,6 +40,7 @@ import { exactFaceValue, parseVoucherToken, type VoucherValidation } from './vou
 import { getWallet, notifyWalletChanged, recordReceiptByNullifier } from './wallet'
 import { legacyApi, withCorrelation } from './legacyBridge'
 import { claimToFile } from './merchantClaim'
+import { withWebLock } from './webLock'
 
 /**
  * Gateway REST, same-origin: `/api/v1/...` reaches customer-wallet through the
@@ -887,127 +888,142 @@ function redemptionAdapter(): RedemptionAdapter {
       // cannot honour has no ceiling worth computing, and asking that question
       // first means the refusal names the real reason rather than whichever
       // check happened to fire.
-      refuseIfAnotherStalls(meta, currentPubkey, token)
-      refuseIfUnwarranted(meta)
-      // The part's CUMULATIVE credit, when the token could be read: what is
-      // booked and honoured from here on, in place of the per-part rounding
-      // dmCrypto put on `faceValue`. See `refuseIfOverRedeemed`.
       //
-      // Only for a coupon coming HOME, the one case its row is filed against
-      // the issuance (see merchantClaim.ts). A customer's figure is untouched.
-      const credit = await refuseIfOverRedeemed(meta, token)
-      const issuer = typeof meta?.issuerId === 'string' ? meta.issuerId.toLowerCase() : ''
-      if (credit !== undefined && issuer !== '' && issuer === currentPubkey?.toLowerCase()) {
-        meta = { ...meta, faceValue: credit }
-      }
-
-      // Computed BEFORE the redeem, because it is derived from the RECEIVED
-      // token and `redeem()` swaps that token at the mint — afterwards the
-      // bytes it hashes no longer exist anywhere. Riding the correlation slot
-      // is what puts it on the row, which is what makes self-audit possible on
-      // a device that has been wiped.
-      const attestationNullifier = nullifierFor(token)
-
-      // Read against local history BEFORE the swap and outside the retry, so
-      // the bound it applies (an `issued` row here, capped at what that issue
-      // has left) sees the same rows `refuseIfOverRedeemed` just checked.
-      const claim = await claimToFile(meta, currentPubkey, exactOf(token))
-
-      // Retry a rate-limited redemption instead of losing the coupon.
-      //
-      // The gateway limits /api/v1/wallet/receive to 10 requests a minute per
-      // pubkey, and dm-poll redeems in a tight sequential loop, so any wallet
-      // receiving more than ten coupons in a minute trips it. Without this the
-      // failure was silent and permanent: DmPollService logged, moved on, and
-      // the coupon was never redeemed. Measured at 120 coupons: 320 rate-limit
-      // errors and 50 coupons stored (#39).
-      //
-      // Waits out the window rather than guessing a safe rate. The wallet
-      // cannot know what limit is enforced, and a rate it guesses will drift
-      // from the server's — whereas Retry-After is the server saying it.
-      let voucher: Voucher
-      try {
-        voucher = (await retryOnTransientMintError(
-        () =>
-          withCorrelation(
-        {
-          bundleId: meta?.bundleId as string | undefined,
-          requestId: meta?.requestId as string | undefined,
-          attestationNullifier,
-          // The EXACT figures the attestation commits to, stamped alongside the
-          // nullifier so the reconciliation sweep republishes a byte-identical
-          // commitment. The row's own `amount` is NOT usable for this: it comes
-          // off the voucher (`token_amount`), while the attestation commits
-          // `meta.faceValue`, and those can differ. A sweep reading `amount`
-          // would publish a SECOND, conflicting commitment for one redemption,
-          // which is worse than the gap it set out to close.
-          attestedValue: Number(meta?.faceValue ?? 0),
-          attestedUnit: String(meta?.faceUnit ?? ''),
-          // The issuing stall, stamped for the same reason as the figures
-          // beside it: the reconciliation sweep republishes from the ROW, and
-          // without this a swept attestation would carry no issuer commitment
-          // even though the original did — so a gap closed by the sweep would
-          // silently lose the property this whole version bump exists for.
-          attestedIssuer: typeof meta?.issuerId === 'string' ? meta.issuerId : undefined,
-          // The id a customer-to-customer transfer signature is keyed on
-          // (#91), so the sender's payload can be filed on this row once it
-          // pairs. Computed here because the swap below changes the token.
-          transferId: transferIdFor(token),
-          // The part's unrounded value, on every VERIFIED coupon and not only
-          // one coming home: a customer's rows are the priors of the next part
-          // too, and a prior without it is legacy history to the ceiling.
-          exactValue: (meta?.validation as VoucherValidation | undefined)?.signatureValid
-            ? exactOf(token)
-            : undefined,
-          // What the wallet checked about this coupon. The vendored builder
-          // reads `metadata.validation`, but the row that survives is rebuilt
-          // from empty metadata (see legacyBridge.withCorrelation), so without
-          // this the merchant's Checks section reads "Not checked" on a coupon
-          // whose signature verified.
-          validation: meta?.validation as Record<string, unknown> | undefined,
-          // Files the row against the voucher the stall ISSUED, so its claimed
-          // figure and redemption ceiling see it (#90). See merchantClaim.ts.
-          claim,
-        },
-        () =>
-          redemption.redeem(token, {
-            ...options,
-            metadata: toLegacyMetadata(meta, opts?.senderPubkey as string | undefined),
-            // Spec-039 canonical source value. It is plumbed onto ctx.source and
-            // gates the inspect-before-save precondition, so it must be a
-            // recognised value rather than something descriptive.
-            source: 'dm-poll',
-            // dm-poll already deduped by fingerprint before calling us.
-            skipDuplicateCheck: true,
-          }),
-          ),
-        {
-          isTransient: isRateLimited,
-          // Long enough to outlast a one-minute window, which the short
-          // default (1s/4s/15s) cannot: it would exhaust its budget inside the
-          // window it is waiting for and drop the coupon anyway.
-          backoffsMs: RATE_LIMIT_BACKOFFS_MS,
-          onRetry: ({ attempt, delayMs }) => {
-            console.info(`[dmPoll] rate limited, retrying in ${delayMs}ms (attempt ${attempt})`)
-            // Say so on screen. Until this, a coupon waiting out the limiter
-            // and a coupon that failed looked exactly alike — which is the one
-            // thing a person cannot be left guessing about when it is their
-            // money (#40).
-            announceQueued(meta?.voucherId as string | undefined, delayMs)
-          },
-        },
-        )) as unknown as Voucher
-      } finally {
-        // The wait is over, whichever way it went — and `finally` because the
-        // way that matters most is the one that throws. A toast saying "still
-        // receiving" left open above a redemption that has given up is worse
-        // than never having shown it: it is the wallet asserting something
-        // untrue about the customer's money, indefinitely.
+      // Check, swap and write run under one Web Lock per voucher. Within a
+      // tab dm-poll is sequential, but every tab runs its own poller over the
+      // same history, and two parts of one voucher checked in two tabs would
+      // both read the same priors: each would book its credit from the same
+      // base, and the ceiling and the `issued` bound would each be checked
+      // against rows the other was about to write. Where there is no Locks API
+      // this runs as before.
+      const lockName = typeof meta?.voucherId === 'string' && meta.voucherId !== ''
+        ? `imani-redeem:${meta.voucherId}`
+        : undefined
+      const checkSwapAndWrite = async (): Promise<Voucher> => {
+        refuseIfAnotherStalls(meta, currentPubkey, token)
+        refuseIfUnwarranted(meta)
+        // The part's CUMULATIVE credit, when the token could be read: what is
+        // booked and honoured from here on, in place of the per-part rounding
+        // dmCrypto put on `faceValue`. See `refuseIfOverRedeemed`.
         //
-        // Dismissed rather than left to expire so it cannot briefly overlap
-        // the arrival toast below, which would read as two separate payments.
-        settleQueued(meta?.voucherId as string | undefined)
+        // Only for a coupon coming HOME, the one case its row is filed against
+        // the issuance (see merchantClaim.ts). A customer's figure is untouched.
+        const credit = await refuseIfOverRedeemed(meta, token)
+        const issuer = typeof meta?.issuerId === 'string' ? meta.issuerId.toLowerCase() : ''
+        if (credit !== undefined && issuer !== '' && issuer === currentPubkey?.toLowerCase()) {
+          meta = { ...meta, faceValue: credit }
+        }
+
+        // Computed BEFORE the redeem, because it is derived from the RECEIVED
+        // token and `redeem()` swaps that token at the mint — afterwards the
+        // bytes it hashes no longer exist anywhere. Riding the correlation slot
+        // is what puts it on the row, which is what makes self-audit possible on
+        // a device that has been wiped.
+        const attestationNullifier = nullifierFor(token)
+
+        // Read against local history BEFORE the swap and outside the retry, so
+        // the bound it applies (an `issued` row here, capped at what that issue
+        // has left) sees the same rows `refuseIfOverRedeemed` just checked.
+        const claim = await claimToFile(meta, currentPubkey, exactOf(token))
+
+        // Retry a rate-limited redemption instead of losing the coupon.
+        //
+        // The gateway limits /api/v1/wallet/receive to 10 requests a minute per
+        // pubkey, and dm-poll redeems in a tight sequential loop, so any wallet
+        // receiving more than ten coupons in a minute trips it. Without this the
+        // failure was silent and permanent: DmPollService logged, moved on, and
+        // the coupon was never redeemed. Measured at 120 coupons: 320 rate-limit
+        // errors and 50 coupons stored (#39).
+        //
+        // Waits out the window rather than guessing a safe rate. The wallet
+        // cannot know what limit is enforced, and a rate it guesses will drift
+        // from the server's — whereas Retry-After is the server saying it.
+        let voucher: Voucher
+        try {
+          voucher = (await retryOnTransientMintError(
+          () =>
+            withCorrelation(
+          {
+            bundleId: meta?.bundleId as string | undefined,
+            requestId: meta?.requestId as string | undefined,
+            attestationNullifier,
+            // The EXACT figures the attestation commits to, stamped alongside the
+            // nullifier so the reconciliation sweep republishes a byte-identical
+            // commitment. The row's own `amount` is NOT usable for this: it comes
+            // off the voucher (`token_amount`), while the attestation commits
+            // `meta.faceValue`, and those can differ. A sweep reading `amount`
+            // would publish a SECOND, conflicting commitment for one redemption,
+            // which is worse than the gap it set out to close.
+            attestedValue: Number(meta?.faceValue ?? 0),
+            attestedUnit: String(meta?.faceUnit ?? ''),
+            // The issuing stall, stamped for the same reason as the figures
+            // beside it: the reconciliation sweep republishes from the ROW, and
+            // without this a swept attestation would carry no issuer commitment
+            // even though the original did — so a gap closed by the sweep would
+            // silently lose the property this whole version bump exists for.
+            attestedIssuer: typeof meta?.issuerId === 'string' ? meta.issuerId : undefined,
+            // The id a customer-to-customer transfer signature is keyed on
+            // (#91), so the sender's payload can be filed on this row once it
+            // pairs. Computed here because the swap below changes the token.
+            transferId: transferIdFor(token),
+            // The part's unrounded value, on every VERIFIED coupon and not only
+            // one coming home: a customer's rows are the priors of the next part
+            // too, and a prior without it is legacy history to the ceiling.
+            exactValue: (meta?.validation as VoucherValidation | undefined)?.signatureValid
+              ? exactOf(token)
+              : undefined,
+            // What the wallet checked about this coupon. The vendored builder
+            // reads `metadata.validation`, but the row that survives is rebuilt
+            // from empty metadata (see legacyBridge.withCorrelation), so without
+            // this the merchant's Checks section reads "Not checked" on a coupon
+            // whose signature verified.
+            validation: meta?.validation as Record<string, unknown> | undefined,
+            // Files the row against the voucher the stall ISSUED, so its claimed
+            // figure and redemption ceiling see it (#90). See merchantClaim.ts.
+            claim,
+          },
+          () =>
+            redemption.redeem(token, {
+              ...options,
+              metadata: toLegacyMetadata(meta, opts?.senderPubkey as string | undefined),
+              // Spec-039 canonical source value. It is plumbed onto ctx.source and
+              // gates the inspect-before-save precondition, so it must be a
+              // recognised value rather than something descriptive.
+              source: 'dm-poll',
+              // dm-poll already deduped by fingerprint before calling us.
+              skipDuplicateCheck: true,
+            }),
+            ),
+          {
+            isTransient: isRateLimited,
+            // Long enough to outlast a one-minute window, which the short
+            // default (1s/4s/15s) cannot: it would exhaust its budget inside the
+            // window it is waiting for and drop the coupon anyway.
+            backoffsMs: RATE_LIMIT_BACKOFFS_MS,
+            onRetry: ({ attempt, delayMs }) => {
+              console.info(`[dmPoll] rate limited, retrying in ${delayMs}ms (attempt ${attempt})`)
+              // Say so on screen. Until this, a coupon waiting out the limiter
+              // and a coupon that failed looked exactly alike — which is the one
+              // thing a person cannot be left guessing about when it is their
+              // money (#40).
+              announceQueued(meta?.voucherId as string | undefined, delayMs)
+            },
+          },
+          )) as unknown as Voucher
+        } finally {
+          // The wait is over, whichever way it went — and `finally` because the
+          // way that matters most is the one that throws. A toast saying "still
+          // receiving" left open above a redemption that has given up is worse
+          // than never having shown it: it is the wallet asserting something
+          // untrue about the customer's money, indefinitely.
+          //
+          // Dismissed rather than left to expire so it cannot briefly overlap
+          // the arrival toast below, which would read as two separate payments.
+          settleQueued(meta?.voucherId as string | undefined)
+        }
+        return voucher
       }
+      const voucher = lockName ? await withWebLock(lockName, checkSwapAndWrite) : await checkSwapAndWrite()
 
       // tokenRedemption wrote straight into IndexedDB, and this tab does not
       // hear its own BroadcastChannel post — see notifyWalletChanged.
@@ -1235,8 +1251,9 @@ export function startDmPoll(pubkey: string): DmPollService {
 
   // Customer transfer receipts (#91) are published after a random delay, so a
   // tab that closed while one was waiting left it queued in local storage.
-  // Arms the timer for those; overdue ones go out on the next tick. Never
-  // throws, and a merchant wallet publishes none.
+  // Arms the timer for those; overdue ones get a fresh delay of one to thirty
+  // minutes rather than going out beside this login. Never throws, and a
+  // merchant wallet publishes none.
   resumeTransferReceipts(pubkey)
 
   // Before the poller reads its processed set, not after: coupons abandoned by
@@ -1352,10 +1369,11 @@ export function stopDmPoll(): void {
   // genuine half-transfer costs nothing, because its wraps are still on the
   // relay and were never marked processed.
   resetChunkAssembly()
-  // The receipt timer is per-account too. Stopping it loses nothing: the
-  // queue is in local storage, and `startDmPoll` re-arms it for whoever
-  // signs in next, if it is theirs.
-  stopTransferReceipts()
+  // The receipt timer is per-account too, and so is the in-memory copy of the
+  // receipt queue. Dropping both loses nothing: the queue is in local storage
+  // (which logout clears), and `startDmPoll` re-arms it for whoever signs in
+  // next, if it is theirs.
+  resetHeldTransfers()
   // The received-token mirror is per-ACCOUNT state too. `startDmPoll` calls
   // this on an identity change, and a mirror left loaded would answer the next
   // user's "have I already banked this?" from the previous user's memory —
