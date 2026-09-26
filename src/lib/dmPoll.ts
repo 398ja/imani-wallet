@@ -33,6 +33,7 @@ import { checkRedemption } from './redemptionLedger'
 import { parseVoucherToken, type VoucherValidation } from './voucherToken'
 import { getWallet, notifyWalletChanged, recordReceiptByNullifier } from './wallet'
 import { legacyApi, withCorrelation } from './legacyBridge'
+import { merchantClaimFor } from './merchantClaim'
 
 /**
  * Gateway REST, same-origin: `/api/v1/...` reaches customer-wallet through the
@@ -896,6 +897,9 @@ function redemptionAdapter(): RedemptionAdapter {
           // this the merchant's Checks section reads "Not checked" on a coupon
           // whose signature verified.
           validation: meta?.validation as Record<string, unknown> | undefined,
+          // Files the row against the voucher the stall ISSUED, so its claimed
+          // figure and redemption ceiling see it (#90). See merchantClaim.ts.
+          claim: merchantClaimFor(meta, currentPubkey),
         },
         () =>
           redemption.redeem(token, {
