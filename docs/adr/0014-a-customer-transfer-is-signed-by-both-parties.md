@@ -283,11 +283,18 @@ without the payload and about 1380 with it, which became 772 and 2140
 characters of ciphertext, so the size said "this row carries a transfer
 signature". Every kind-7376 is now padded to the first of a fixed set of
 plaintext sizes (`TX_PAD_BUCKETS` in `src/lib/txRecords.ts`: 2048, 4096, 8192,
-16384 bytes) with a `pad` field the reader ignores. Every ordinary row (received
-with or without the payload, payment, issued, cashback) measured under 2048, so
-all of them produce the same ciphertext length (2820 characters), far inside
-the relay's 64 KB event limit. Only rows with unusual issuance evidence or long
-memos reach a larger bucket, and that says nothing about a transfer signature.
+16384, 32768 bytes) with a `pad` field the reader ignores. Every ordinary row
+(received with or without the payload, payment, issued, cashback) measured
+under 2048, so all of them produce the same ciphertext length (2820
+characters), far inside the relay's 64 KB event limit. A `received` row's
+bucket is chosen as if the payload were present, whether or not it is
+(`TRANSFER_SIGNATURE_RESERVE`, 1100 bytes, above the largest payload the
+format allows). Choosing it from the actual size left a band where it still
+leaked: a sender memo of about 650 bytes or more fitted 2048 without the
+payload and 4096 with it, and the memo is the sender's to choose. With the
+reserve, rows with unusual issuance evidence or long memos still reach a larger
+bucket, but the same one with or without the payload. Past 32768 bytes (a memo
+of about 31 KB) a row is left unpadded and its length is readable again.
 Records written before this have no `pad` and still restore. What remains is
 the event itself: a 7376 for a `received` row appearing hours after the row
 was first backed up says the row changed, not how.

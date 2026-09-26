@@ -39,7 +39,7 @@ vi.mock('../wallet', () => ({
   listTransactions: async () => [],
 }))
 
-const { buildTxEvent, restoreTx, TX_PAD_BUCKETS } = await import('../txRecords')
+const { buildTxEvent, restoreTx, TX_PAD_BUCKETS, TRANSFER_SIGNATURE_RESERVE } = await import('../txRecords')
 const { toTransaction, buildPaymentTransaction, buildIssueTransaction, buildCashbackTransaction } = await import(
   '../transactions'
 )
@@ -115,9 +115,62 @@ describe('7376 size buckets', () => {
     expect([...lengths]).toEqual([2820])
   })
 
+  it('a long sender memo does not put the signed and unsigned row in different buckets (review L1)', () => {
+    // The review's band: about 650 to 1600 bytes of memo fitted 2048 without
+    // the signature and 4096 with it. Swept past every bucket boundary, up to
+    // a memo that no longer fits the last bucket with the signature.
+    const mismatches: number[] = []
+    for (let memo = 0; memo <= TX_PAD_BUCKETS.at(-1)! - 1600; memo += 100) {
+      const plain = { ...received, memo: 'm'.repeat(memo) } as unknown as TransactionRow
+      const signed = { ...withSignature, memo: 'm'.repeat(memo) } as unknown as TransactionRow
+      if (lengthOf(plain) !== lengthOf(signed)) mismatches.push(memo)
+    }
+    expect(mismatches).toEqual([])
+  })
+
+  it('at every bucket edge, the max-length memo with the signature and without it land together', () => {
+    const memoRow = (row: TransactionRow, memo: number) => ({ ...row, memo: 'm'.repeat(memo) }) as unknown as TransactionRow
+    const sealed = (bytes: number) => nip44.encrypt('0'.repeat(bytes), conversation).length
+    for (const bucket of TX_PAD_BUCKETS) {
+      // The longest memo whose SIGNED row still pads into this bucket.
+      let lo = 0
+      let hi = bucket
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2)
+        if (lengthOf(memoRow(withSignature, mid)) <= sealed(bucket)) lo = mid
+        else hi = mid - 1
+      }
+      expect(lengthOf(memoRow(withSignature, lo))).toBe(sealed(bucket))
+      expect(lengthOf(memoRow(received, lo))).toBe(sealed(bucket))
+      // One byte more moves both out of it, together. Past the last bucket a
+      // row is left unpadded (the residual stated on TX_PAD_BUCKETS).
+      if (bucket === TX_PAD_BUCKETS.at(-1)) continue
+      expect(lengthOf(memoRow(received, lo + 1))).toBe(lengthOf(memoRow(withSignature, lo + 1)))
+      expect(lengthOf(memoRow(received, lo + 1))).toBeGreaterThan(sealed(bucket))
+    }
+  })
+
+  it('the reserve covers the largest transfer signature the payload allows', () => {
+    // Largest amount, longest unit, most decimals: every variable field at
+    // its widest. Measured as it is stored: an escaped JSON string field.
+    const widest = JSON.stringify(
+      signTransfer(hexToBytes('1'.repeat(64)), {
+        transfer: TRANSFER,
+        recipient: ME,
+        amount: Number.MAX_SAFE_INTEGER,
+        unit: 'ABCDE',
+        decimals: 8,
+      }),
+    )
+    const field = new TextEncoder().encode(`,"transfer_signature":${JSON.stringify(widest)}`).length
+    expect(field).toBeLessThan(1000)
+    expect(field).toBeLessThanOrEqual(TRANSFER_SIGNATURE_RESERVE)
+  })
+
   it('stays far inside the relay event limit (64 KB), even for the largest bucket', () => {
     const huge = { ...withSignature, memo: 'x'.repeat(TX_PAD_BUCKETS.at(-1)! - 3000) } as unknown as TransactionRow
-    expect(lengthOf(huge)).toBeLessThan(32 * 1024)
+    expect(lengthOf(huge)).toBeGreaterThan(40 * 1024) // it did reach the largest bucket
+    expect(lengthOf(huge)).toBeLessThan(48 * 1024)
   })
 })
 
