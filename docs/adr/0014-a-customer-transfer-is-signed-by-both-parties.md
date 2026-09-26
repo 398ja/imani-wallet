@@ -164,18 +164,86 @@ customer reaches the recipient through one of two paths:
    SSE stream, with a 7-day `since`.
 2. The catch-up `/api/v1/nostr/query`, through
    `CachingNostrGatewayDecorator.queryEventsWithCache`, which asks the relay
-   only when its local cache is stale or empty. Freshness is judged on
-   kinds/authors, not `#p`, over a 30-minute default window, so a catch-up that
-   finds any fresh local 1059 can skip a signature wrap sent while the
-   recipient was offline.
+   only when its local cache is stale or empty, over a 30-minute default
+   window. This section first said freshness was judged without `#p`; the
+   measurement below shows it is judged on the recipient's own cached wraps,
+   and that those alone are enough to hide a relay-only wrap.
 
 The coupon's own wrap has neither problem, because the gateway publishes it and
 mirrors it into its cache. So the signature is delivered **best-effort**. The
 common case, a recipient with a live stream, works as the wallet's other
-user-to-user wraps do, and a miss costs the receipt and nothing else. Verifying
-this on staging with the recipient offline, and the more robust option of a
-gateway endpoint that accepts a pre-signed 1059 and publish-mirrors it (the
-content is encrypted, so it leaks nothing new), is tracked in #98.
+user-to-user wraps do, and a miss costs the receipt and nothing else.
+
+### Measured on staging (#98)
+
+`e2e/probe-transfer-signature-delivery.mts`, run twice on 2026-09-26 against
+`wallet.staging.398ja.xyz` (relay `wss://relay.staging.398ja.xyz`), with
+throwaway identities only. B never opens an SSE stream. Each arm uses fresh
+identities, and B's catch-up is the query `DmPollService.fetchRecentDms`
+issues: `{kinds:[1059], pTags:[B], since: now - 7d, limit: 50}`. "Warm" means a
+1059 for B with `created_at = now` was stored through
+`POST /api/v1/nostr/events` and served back by one catch-up before the wrap was
+sent. Each arm queried twice, 1.5 s and 6.5 s after the send.
+
+| Arm | Wrap sent to | B's cache | Delivered (run 1) | Delivered (run 2) |
+|---|---|---|---|---|
+| cold | relay only | empty | yes | yes |
+| warm | relay only | fresh 1059 for B | **no** | **no** |
+| warm-other | relay only | fresh 1059 for C, none for B | yes | yes |
+| warm+mirror | relay and `POST /nostr/events` | fresh 1059 for B | yes | yes |
+| mirror-only | `POST /nostr/events` only | empty | yes | yes |
+
+What this shows:
+
+- **The warm-cache miss is real.** A recipient with any 1059 of their own
+  inside the 30-minute window is answered from the cache, and a relay-only wrap
+  is invisible to that catch-up. It stays invisible until the cached one ages
+  out of the window.
+- **Freshness is already per recipient.** The local result set is filtered by
+  the server filter, `#p` included, before the freshness check, so a fresh wrap
+  for someone else does not hide B's (warm-other). The issue's worry that any
+  fresh local 1059 short-circuits every recipient does not hold. Only B's own
+  fresh wraps do.
+- **The mirror closes it.** A wrap posted to `POST /api/v1/nostr/events` is
+  stored where the catch-up reads, so it is returned whether or not the cache
+  was warm, and even with no relay copy at all.
+
+How likely the miss was in practice is a separate question the probe does not
+answer: NIP-59 back-dates a wrap's `created_at` by up to two days, so a real
+wrap only makes B's cache "fresh" if it happens to land in the last 30 minutes.
+The warmer here used `now`, which is the worst case.
+
+### Decision
+
+- **The wallet mirrors the wrap** (`mirrorToGateway` in
+  `src/lib/transferSignature.ts`). `sendTransferSignature` publishes to the
+  relay and posts the same signed event to `POST /api/v1/nostr/events` (NIP-98,
+  `signedFetch`) side by side. Either one succeeding counts as delivered; the
+  mirror has its own 15 s cap, never throws, and the relay result does not wait
+  on it longer than that. The call is still fire-and-forget from `pay.ts`.
+- **No new gateway endpoint.** The existing `POST /api/v1/nostr/events` already
+  does what #98 proposed, minus the relay publish, which the wallet keeps doing
+  itself. It is NIP-98 authenticated and verifies the id and signature. It
+  leaks nothing new: the wrap is signed by NIP-59's throwaway key and its
+  content is encrypted to the recipient. It is not rate-limited per pubkey
+  beyond the gateway's general limits; one extra POST per customer send does
+  not change that picture.
+- **No SSE dispatch from `storeEvent`.** A recipient with a live stream gets the
+  relay copy through `RecipientRelaySubscriptions`, which is unaffected by the
+  cache (read from source, not re-measured here). A gateway change is not
+  needed for this wrap.
+- **`#p`-aware freshness in nostrdb: declined.** It is already effectively
+  per recipient (warm-other above). Removing the remaining short-circuit, a
+  recipient's own fresh wrap, would put a relay round trip back on every
+  non-addressable query, which is the hot-path cost the short-circuit was added
+  to remove (loadtest run 004). For this wrap the mirror makes it moot. Other
+  wallet-to-relay-only 1059s share the gap and would want the same mirror.
+
+Not measured on staging: that the receiver then publishes the kind-7378 within
+the 10 min to 6 h window. That needs a real A to B coupon send between two
+customers on staging and a wait of up to six hours. The pairing, delay and
+publish logic after the wrap arrives is covered by
+`src/lib/__tests__/transferSignature.test.ts`.
 
 ## Timing, and what the nonce does not hide
 
