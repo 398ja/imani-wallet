@@ -295,6 +295,11 @@ export function checkRedemption(input: CheckInput) {
      * (ADR 0001), so `fits: true` is not a promise that the coupon is unspent — only the mint's
      * swap settles that. Callers treat a 200 as authority unless the response says otherwise,
      * and a courier that is mistaken for a ledger is how a double-spend gets approved politely.
+     *
+     * Concurrency is the caller's too. Two checks for two parts of one voucher, made against
+     * the same `priorRedemptions`, are each answered as if the other did not exist. A caller
+     * that redeems in parallel must serialise check, swap and write per voucher, as the till
+     * does with a Web Lock (`imani-redeem:<voucherId>` in dmPoll).
      */
     historySource: 'caller-supplied' as const,
   }
