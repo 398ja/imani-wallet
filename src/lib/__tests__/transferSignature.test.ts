@@ -43,6 +43,19 @@ vi.mock('../relay', () => ({
   },
 }))
 
+/** What the wallet posted to the gateway's `POST /api/v1/nostr/events` (#98). */
+const mirrored: Array<{ path: string; method: string; body: Record<string, unknown> }> = []
+/** `ok` answers 200, `refuse` 400, `throw` rejects, `hang` never settles. */
+let mirrorMode: 'ok' | 'refuse' | 'throw' | 'hang' = 'ok'
+vi.mock('../nip98', () => ({
+  signedFetch: async (path: string, method: string, body: Record<string, unknown>) => {
+    if (mirrorMode === 'throw') throw new Error('gateway down')
+    if (mirrorMode === 'hang') return new Promise(() => {})
+    mirrored.push({ path, method, body })
+    return { ok: mirrorMode === 'ok', status: mirrorMode === 'ok' ? 200 : 400 }
+  },
+}))
+
 let hasStall = false
 vi.mock('../merchant', () => ({
   loadMerchant: () => (hasStall ? { pubkey: RECEIVER, categories: [] } : null),
@@ -130,6 +143,8 @@ beforeEach(() => {
   history.length = 0
   publishOk = 1
   publishThrows = false
+  mirrored.length = 0
+  mirrorMode = 'ok'
   signerThrows = false
   hasStall = false
   currentSk = SENDER_SK
@@ -276,11 +291,79 @@ describe('sending the signature', () => {
       .toEqual({ ok: true })
   })
 
-  it('never throws, and reports false, when the relay refuses', async () => {
+  it('never throws, and reports false, when the relay AND the gateway both fail', async () => {
     publishThrows = true
+    mirrorMode = 'throw'
     await expect(
       sendTransferSignature({ transfer: TRANSFER, recipient: RECEIVER, amount: 1, unit: 'EUR', decimals: 2 }),
     ).resolves.toBe(false)
+  })
+
+  it('mirrors the same wrap into the gateway cache, in the shape its DTO reads (#98)', async () => {
+    await expect(
+      sendTransferSignature({ transfer: TRANSFER, recipient: RECEIVER, amount: 250, unit: 'EUR', decimals: 2 }),
+    ).resolves.toBe(true)
+    expect(mirrored).toHaveLength(1)
+    const { path, method, body } = mirrored[0]!
+    expect(path).toBe('/api/v1/nostr/events')
+    expect(method).toBe('POST')
+    const wrap = published[0]!
+    // camelCase `createdAt`: the gateway's NostrEventDto does not read `created_at`.
+    expect(body).toEqual({
+      id: wrap.id,
+      pubkey: wrap.pubkey,
+      createdAt: wrap.created_at,
+      kind: 1059,
+      tags: wrap.tags,
+      content: wrap.content,
+      sig: wrap.sig,
+    })
+  })
+
+  it('counts a gateway mirror alone as delivered when the relay throws', async () => {
+    publishThrows = true
+    await expect(
+      sendTransferSignature({ transfer: TRANSFER, recipient: RECEIVER, amount: 1, unit: 'EUR', decimals: 2 }),
+    ).resolves.toBe(true)
+    expect(mirrored).toHaveLength(1)
+  })
+
+  it('counts a gateway mirror alone as delivered when no relay accepts', async () => {
+    publishOk = 0
+    await expect(
+      sendTransferSignature({ transfer: TRANSFER, recipient: RECEIVER, amount: 1, unit: 'EUR', decimals: 2 }),
+    ).resolves.toBe(true)
+  })
+
+  it.each(['throw', 'refuse'] as const)(
+    'counts the relay alone as delivered when the gateway mirror %ss',
+    async (mode) => {
+      mirrorMode = mode
+      await expect(
+        sendTransferSignature({ transfer: TRANSFER, recipient: RECEIVER, amount: 1, unit: 'EUR', decimals: 2 }),
+      ).resolves.toBe(true)
+      expect(published).toHaveLength(1)
+    },
+  )
+
+  it('gives up on a gateway that never answers, without blocking the relay result', async () => {
+    mirrorMode = 'hang'
+    const sending = sendTransferSignature({
+      transfer: TRANSFER, recipient: RECEIVER, amount: 1, unit: 'EUR', decimals: 2,
+    })
+    await vi.advanceTimersByTimeAsync(15_001)
+    await expect(sending).resolves.toBe(true)
+    expect(published).toHaveLength(1)
+  })
+
+  it('reports false when the relay refuses and the gateway hangs past its timeout', async () => {
+    publishOk = 0
+    mirrorMode = 'hang'
+    const sending = sendTransferSignature({
+      transfer: TRANSFER, recipient: RECEIVER, amount: 1, unit: 'EUR', decimals: 2,
+    })
+    await vi.advanceTimersByTimeAsync(15_001)
+    await expect(sending).resolves.toBe(false)
   })
 
   it('never throws on a locked wallet', async () => {
@@ -288,6 +371,7 @@ describe('sending the signature', () => {
     await expect(
       sendTransferSignature({ transfer: TRANSFER, recipient: RECEIVER, amount: 1, unit: 'EUR', decimals: 2 }),
     ).resolves.toBe(false)
+    expect(mirrored).toHaveLength(0)
   })
 
   it('sends nothing when an older gateway returned no transfer id', async () => {
@@ -295,6 +379,7 @@ describe('sending the signature', () => {
       sendTransferSignature({ transfer: undefined, recipient: RECEIVER, amount: 1, unit: 'EUR', decimals: 2 }),
     ).resolves.toBe(false)
     expect(published).toHaveLength(0)
+    expect(mirrored).toHaveLength(0)
   })
 
   it('sends nothing for a unit it will not sign', async () => {

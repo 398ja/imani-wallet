@@ -8,6 +8,7 @@ import { TRANSFER_RECEIPT_KIND, TRANSFER_SIGNATURE_VERSION } from './attestation
 import { commitTo } from './audit'
 import { loadMerchant } from './merchant'
 import { getSigner } from './nap'
+import { signedFetch } from './nip98'
 import { publish } from './relay'
 import { backUpTransferSignature, listTransactions, recordTransferSignature } from './wallet'
 import { toTransaction } from './transactions'
@@ -593,7 +594,7 @@ export function sealAuthorOf(wrap: Event, recipientSecret: Uint8Array): string |
 
 /**
  * Sign a completed send and gift-wrap the signature to the recipient.
- * NEVER THROWS, and resolves to whether a relay took it.
+ * NEVER THROWS, and resolves to whether the relay OR the gateway took it.
  *
  * Runs after the saga has completed and the local row is written: the coupon
  * has already moved, so a locked wallet, an old gateway that returned no
@@ -605,10 +606,12 @@ export function sealAuthorOf(wrap: Event, recipientSecret: Uint8Array): string |
  * whole payload can be rebuilt after a wipe (`signTransfer` again).
  *
  * Wrapped by THIS wallet rather than the gateway, because the atomic-send API
- * has no field for it (see the ADR). Published to the wallet's relay, where the
- * gateway picks a customer-to-customer wrap up only through the recipient's
- * live relay subscription or a catch-up query. That is best-effort in ways the
- * coupon's own wrap is not; the ADR's "Delivery" section has the details.
+ * has no field for it (see the ADR). Published to the wallet's relay AND
+ * mirrored into the gateway's cache (`mirrorToGateway`, #98). The relay copy
+ * alone was measured to be invisible to a recipient whose catch-up the gateway
+ * answers from a warm cache; the mirrored copy is served from that cache. The
+ * two run side by side and either one landing counts as delivered. The ADR's
+ * "Delivery" section has the measurements.
  */
 export async function sendTransferSignature(params: {
   transfer: string | undefined
@@ -627,15 +630,69 @@ export async function sendTransferSignature(params: {
       const payload = signTransfer(key, { ...params, transfer })
       return nip17.wrapEvent(key, { publicKey: payload.recipient }, JSON.stringify(payload))
     })
-    const result = await publish(wrap)
-    if (result.ok === 0) {
-      console.warn('[transfer] no relay accepted the signature', result.errors)
+    const [relayed, mirrored] = await Promise.all([
+      publish(wrap).then(
+        (result) => {
+          if (result.ok === 0) console.warn('[transfer] no relay accepted the signature', result.errors)
+          return result.ok > 0
+        },
+        (error: unknown) => {
+          console.warn('[transfer] relay publish failed', error)
+          return false
+        },
+      ),
+      mirrorToGateway(wrap),
+    ])
+    return relayed || mirrored
+  } catch (error) {
+    console.warn('[transfer] send not signed', error)
+    return false
+  }
+}
+
+/** How long the mirror may take before it is given up on. */
+const MIRROR_TIMEOUT_MS = 15_000
+
+/**
+ * Store the wrap in the gateway's nostrdb cache (#98). NEVER THROWS.
+ *
+ * `POST /api/v1/nostr/events` is NIP-98 authenticated, re-derives the id,
+ * checks the signature and stores the event where the catch-up query reads.
+ * It does not publish to the relay, which is why this runs beside `publish`
+ * rather than instead of it. The wrap is signed by NIP-59's throwaway key and
+ * its content is NIP-44 encrypted to the recipient, so the gateway learns
+ * nothing it does not already know from the send itself.
+ *
+ * Same body shape as imani-apps' `shared/api.js` `_buildBackendMirrorPayload`:
+ * camelCase `createdAt`, because that is what the gateway's DTO reads.
+ */
+export async function mirrorToGateway(wrap: Event): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const response = await Promise.race([
+      signedFetch('/api/v1/nostr/events', 'POST', {
+        id: wrap.id,
+        pubkey: wrap.pubkey,
+        createdAt: wrap.created_at,
+        kind: wrap.kind,
+        tags: wrap.tags,
+        content: wrap.content,
+        sig: wrap.sig,
+      }),
+      new Promise<never>((_, reject) =>
+        (timer = setTimeout(() => reject(new Error('mirror timed out')), MIRROR_TIMEOUT_MS)),
+      ),
+    ])
+    if (!response.ok) {
+      console.warn('[transfer] gateway refused the signature mirror', response.status)
       return false
     }
     return true
   } catch (error) {
-    console.warn('[transfer] send not signed', error)
+    console.warn('[transfer] gateway mirror failed', error)
     return false
+  } finally {
+    clearTimeout(timer)
   }
 }
 
