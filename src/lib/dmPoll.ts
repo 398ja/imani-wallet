@@ -34,7 +34,7 @@ import { checkRedemption } from './redemptionLedger'
 import { parseVoucherToken, type VoucherValidation } from './voucherToken'
 import { getWallet, notifyWalletChanged, recordReceiptByNullifier } from './wallet'
 import { legacyApi, withCorrelation } from './legacyBridge'
-import { merchantClaimFor } from './merchantClaim'
+import { claimToFile } from './merchantClaim'
 
 /**
  * Gateway REST, same-origin: `/api/v1/...` reaches customer-wallet through the
@@ -856,6 +856,11 @@ function redemptionAdapter(): RedemptionAdapter {
       // a device that has been wiped.
       const attestationNullifier = nullifierFor(token)
 
+      // Read against local history BEFORE the swap and outside the retry, so
+      // the bound it applies (an `issued` row here, capped at what that issue
+      // has left) sees the same rows `refuseIfOverRedeemed` just checked.
+      const claim = await claimToFile(meta, currentPubkey)
+
       // Retry a rate-limited redemption instead of losing the coupon.
       //
       // The gateway limits /api/v1/wallet/receive to 10 requests a minute per
@@ -900,7 +905,7 @@ function redemptionAdapter(): RedemptionAdapter {
           validation: meta?.validation as Record<string, unknown> | undefined,
           // Files the row against the voucher the stall ISSUED, so its claimed
           // figure and redemption ceiling see it (#90). See merchantClaim.ts.
-          claim: merchantClaimFor(meta, currentPubkey),
+          claim,
         },
         () =>
           redemption.redeem(token, {
