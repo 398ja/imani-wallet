@@ -9,7 +9,9 @@ import { commitTo } from './audit'
 import { loadMerchant } from './merchant'
 import { getSigner } from './nap'
 import { publish } from './relay'
-import { recordTransferSignature } from './wallet'
+import { backUpTransferSignature, listTransactions, recordTransferSignature } from './wallet'
+import { toTransaction } from './transactions'
+import { withWebLock } from './webLock'
 
 /**
  * Both signatures over a customer-to-customer transfer (#91).
@@ -662,15 +664,28 @@ type Received = {
   decimals?: number
   at: number
 }
-type Due = { publishAt: number; attempts: number }
+/**
+ * A queued publish. `receipt` (the default, and all a v2 entry written before
+ * phases existed can be) publishes the 7378. `backup` re-publishes the
+ * received row with the payload on it, on a delay of its own: see
+ * `publishDue`.
+ */
+type Due = { publishAt: number; attempts: number; phase?: 'receipt' | 'backup'; transfer?: string }
 
 /** Global cap per store. */
 const MAX_HELD = 200
 /**
  * Per-author cap on held signatures. Any npub can send validly self-signed
- * payloads addressed to anyone; without this, 200 of them would evict a
- * genuine one still waiting for its coupon. On overflow the author holding the
- * MOST goes first, so a flood evicts itself.
+ * payloads addressed to anyone, so one key may hold at most this many.
+ *
+ * That alone does not stop a flood: keys are free, and 200 one-shot keys each
+ * holding one entry are all under it. So on global overflow `pruneSignatures`
+ * never evicts a signature that is already paired and queued, nor one whose
+ * signer is someone this wallet has dealt with (a sender of a coupon waiting
+ * here, or a counterparty in its history), while any other entry is left.
+ * What a flood of fresh keys can still evict is a signature from a FIRST-TIME
+ * sender in the seconds before their coupon arrives. That costs a receipt,
+ * never money; see the ADR.
  */
 const MAX_PER_AUTHOR = 20
 /**
@@ -703,14 +718,30 @@ function heldKey(transfer: string, sender: string) {
   return `${transfer}:${sender}`
 }
 
+/**
+ * Keys whose last write did not reach local storage (quota, private mode), so
+ * memory is the only copy of the latest state.
+ */
+const memoryOnly = new Set<string>()
+
+/**
+ * Local storage when there is one, memory only where there is none or the last
+ * write to it failed. An ABSENT key in a working store means empty: that is
+ * what logout's sweep leaves, and falling back to memory there would read a
+ * queue the user asked to erase straight back.
+ */
 function readHeld<T>(key: string): Record<string, T> {
   let raw: string | null | undefined
-  try {
-    raw = globalThis.localStorage?.getItem(key)
-  } catch {
-    raw = undefined
+  const storage = globalThis.localStorage
+  if (storage && !memoryOnly.has(key)) {
+    try {
+      raw = storage.getItem(key)
+    } catch {
+      raw = memory.get(key)
+    }
+  } else {
+    raw = memory.get(key)
   }
-  raw ??= memory.get(key)
   if (!raw) return {}
   try {
     const parsed = JSON.parse(raw) as unknown
@@ -727,14 +758,28 @@ function writeHeld<T>(key: string, held: Record<string, T>): void {
   const raw = JSON.stringify(kept)
   memory.set(key, raw)
   try {
-    globalThis.localStorage?.setItem(key, raw)
+    const storage = globalThis.localStorage
+    if (storage) {
+      storage.setItem(key, raw)
+      memoryOnly.delete(key)
+    }
   } catch {
-    // Memory still holds it for this session.
+    // Memory still holds it for this session, and is read in preference.
+    memoryOnly.add(key)
   }
 }
 
-/** Drop expired entries, then enforce the per-author and global caps. */
-function pruneSignatures(held: Record<string, HeldSignature>, now: number): Record<string, HeldSignature> {
+/**
+ * Drop expired entries, then enforce the per-author and global caps.
+ *
+ * `isProtected` marks entries the global cap evicts last: see
+ * `MAX_PER_AUTHOR`. It is asked only when the store is actually over the cap.
+ */
+function pruneSignatures(
+  held: Record<string, HeldSignature>,
+  now: number,
+  isProtected: (key: string, h: HeldSignature) => boolean = () => false,
+): Record<string, HeldSignature> {
   let entries = Object.entries(held).filter(([, h]) => h && now - h.at < HELD_TTL_MS)
   const byAuthor = () => {
     const counts = new Map<string, number>()
@@ -747,12 +792,16 @@ function pruneSignatures(held: Record<string, HeldSignature>, now: number): Reco
     let excess = count - MAX_PER_AUTHOR
     entries = entries.filter(([, h]) => !(h.p.sender === author && excess-- > 0))
   }
-  // Global: evict the oldest entry of whoever holds the most, one at a time.
+  // Global: unprotected entries go first, the oldest of whoever holds the most,
+  // one at a time. Only once none is left does a protected one go.
   while (entries.length > MAX_HELD) {
-    const counts = byAuthor()
+    const open = entries.filter(([key, h]) => !isProtected(key, h))
+    const pool = open.length > 0 ? open : entries
+    const counts = new Map<string, number>()
+    for (const [, h] of pool) counts.set(h.p.sender, (counts.get(h.p.sender) ?? 0) + 1)
     const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0]
-    const index = entries.findIndex(([, h]) => h.p.sender === top)
-    entries.splice(index, 1)
+    const victim = pool.find(([, h]) => h.p.sender === top)!
+    entries.splice(entries.indexOf(victim), 1)
   }
   return Object.fromEntries(entries)
 }
@@ -776,11 +825,40 @@ function isMerchantWallet(me: string): boolean {
   return loadMerchant(me) !== null
 }
 
+/**
+ * Which held signatures the global cap evicts last: one already paired and
+ * queued, or one signed by a key this wallet has dealt with (the sender of a
+ * coupon waiting here, or a counterparty anywhere in its history). A flood of
+ * fresh keys is neither, and those keys cost an attacker nothing, so they go
+ * first. Never throws: without history, only the local stores count.
+ */
+async function protectedSigners(me: string): Promise<(key: string, h: HeldSignature) => boolean> {
+  const due = readHeld<Due>(storeKey('due', me))
+  const known = new Set<string>()
+  for (const r of Object.values(readHeld<Received>(storeKey('received', me)))) {
+    if (r?.sender) known.add(r.sender)
+  }
+  try {
+    for (const row of await listTransactions()) {
+      const tx = toTransaction(row)
+      if (tx.counterparty) known.add(tx.counterparty.toLowerCase())
+    }
+  } catch {
+    // A wallet not open yet, or a store that will not read. The local stores
+    // above still protect a pair that has formed.
+  }
+  return (key, h) => key in due || known.has(h.p.sender)
+}
+
 let timer: ReturnType<typeof setTimeout> | undefined
 
-/** Test seam, and account switch: forget everything held in memory and stop the timer. */
+/**
+ * Forget everything held in memory and stop the timer. Called by `stopDmPoll`,
+ * which runs on logout and on an account switch, and by tests.
+ */
 export function resetHeldTransfers(): void {
   memory.clear()
+  memoryOnly.clear()
   stopTransferReceipts()
 }
 
@@ -807,11 +885,30 @@ function arm(me: string): void {
  *
  * Exported so startup can drain what a closed tab left behind (via
  * `resumeTransferReceipts`) and tests can drive it.
+ *
+ * **Claim before publish.** Each due entry is removed from the store BEFORE
+ * the relay round trip and put back only if the publish fails, and every read
+ * and write around the await re-reads the store and touches only its own key.
+ * Holding snapshots across the await used to write them back whole and drop
+ * whatever `queueIfPaired` had queued in the meantime.
+ *
+ * **One tab at a time.** Every tab arms its own timer over the same storage,
+ * so the pass runs under a per-account Web Lock. Where there is no Locks API
+ * the claim above still makes a second tab find nothing due.
  */
 export async function publishDue(me: string): Promise<number> {
+  me = me.toLowerCase()
+  try {
+    return await withWebLock(`imani-transfer-receipts:${me}`, () => publishDueLocked(me))
+  } catch (error) {
+    console.warn('[transfer] receipts not published now', error)
+    return 0
+  }
+}
+
+async function publishDueLocked(me: string): Promise<number> {
   let published = 0
   try {
-    me = me.toLowerCase()
     const signer = getSigner()
     // A different account is open now. Its own resume will pick these up.
     if (signer.pubkey.toLowerCase() !== me) return 0
@@ -821,18 +918,38 @@ export async function publishDue(me: string): Promise<number> {
     const dueKey = storeKey('due', me)
     const sigKey = storeKey('signatures', me)
     const recKey = storeKey('received', me)
-    const due = readHeld<Due>(dueKey)
-    const signatures = readHeld<HeldSignature>(sigKey)
-    const received = readHeld<Received>(recKey)
+    const forget = (key: string, transfer: string | undefined) => {
+      const signatures = readHeld<HeldSignature>(sigKey)
+      delete signatures[key]
+      writeHeld(sigKey, signatures)
+      if (transfer) {
+        const received = readHeld<Received>(recKey)
+        delete received[transfer]
+        writeHeld(recKey, received)
+      }
+    }
 
-    for (const [key, d] of Object.entries(due)) {
-      if (d.publishAt > now) continue
-      const held = signatures[key]
-      const r = held ? received[held.p.transfer] : undefined
-      if (!held || !r) {
-        delete due[key]
+    for (const key of Object.keys(readHeld<Due>(dueKey))) {
+      // Claim: re-read, and take the entry out before any await.
+      const due = readHeld<Due>(dueKey)
+      const d = due[key]
+      if (!d || d.publishAt > now) continue
+      delete due[key]
+      writeHeld(dueKey, due)
+
+      if (d.phase === 'backup') {
+        // The received row's backup, re-published with the payload on it.
+        // Its own random delay, so it is next to neither the redemption nor
+        // the 7378 in time. Best-effort: `backUpTransferSignature` never
+        // throws, and the payload is already on the local row.
+        if (d.transfer) await backUpTransferSignature(d.transfer)
+        forget(key, d.transfer)
         continue
       }
+
+      const held = readHeld<HeldSignature>(sigKey)[key]
+      const r = held ? readHeld<Received>(recKey)[held.p.transfer] : undefined
+      if (!held || !r) continue
       const p = held.p
       const withCommitment =
         r.credited !== undefined &&
@@ -845,8 +962,8 @@ export async function publishDue(me: string): Promise<number> {
       // can land on either side of the redemption it records, which is the
       // point: `created_at` alone no longer says which redemption that was.
       const createdAt = Math.floor(now / 1000) - randomUpTo(RECEIPT_JITTER_MAX_S)
-      const event = signer.withPrivkey((key) => {
-        const sk = transferSecretFor(key, 'receiver', tag, p.nonce)
+      const event = signer.withPrivkey((sk0) => {
+        const sk = transferSecretFor(sk0, 'receiver', tag, p.nonce)
         try {
           return buildTransferReceipt(p, sk, withCommitment, createdAt)
         } finally {
@@ -862,22 +979,22 @@ export async function publishDue(me: string): Promise<number> {
       }
       if (ok) {
         published += 1
-        delete due[key]
-        delete signatures[key]
-        delete received[p.transfer]
+        // Now the backup, later and on its own clock. The signature and the
+        // received entry are no longer needed: the payload is on the row.
+        const after = readHeld<Due>(dueKey)
+        after[key] = { publishAt: Date.now() + randomDelay(), attempts: 0, phase: 'backup', transfer: p.transfer }
+        writeHeld(dueKey, after)
+        forget(key, p.transfer)
       } else if (d.attempts + 1 >= MAX_ATTEMPTS) {
         console.warn('[transfer] giving up on a receipt no relay would take')
-        delete due[key]
-        delete signatures[key]
-        delete received[p.transfer]
+        forget(key, p.transfer)
       } else {
-        due[key] = { publishAt: now + randomDelay(), attempts: d.attempts + 1 }
+        const after = readHeld<Due>(dueKey)
+        after[key] = { publishAt: Date.now() + randomDelay(), attempts: d.attempts + 1 }
+        writeHeld(dueKey, after)
       }
     }
 
-    writeHeld(dueKey, due)
-    writeHeld(sigKey, signatures)
-    writeHeld(recKey, received)
     arm(me)
   } catch (error) {
     // Most likely a locked wallet. Everything stays queued for the next
@@ -887,13 +1004,35 @@ export async function publishDue(me: string): Promise<number> {
   return published
 }
 
+/** Where an overdue entry lands after a resume: uniform in [MIN, MAX] from now. */
+export const RESUME_DELAY_MIN_MS = 60 * 1000
+export const RESUME_DELAY_MAX_MS = 30 * 60 * 1000
+
 /**
  * Pick up receipts a previous session queued. Called when the poller starts.
- * Never throws. Overdue ones go out on the next tick.
+ * Never throws.
+ *
+ * Overdue ones do NOT go out on the next tick. The minimum delay is ten
+ * minutes and mobile sessions are short, so most receipts come due while the
+ * app is closed, and publishing them all at startup would put a burst of
+ * 7378s in the same second as this login's NIP-98 traffic, from the same IP,
+ * to the relay the gateway runs. Each overdue entry gets a fresh random delay
+ * of one to thirty minutes instead. Entries not yet due keep their time.
  */
 export function resumeTransferReceipts(me: string): void {
   try {
-    arm(me.toLowerCase())
+    me = me.toLowerCase()
+    const dueKey = storeKey('due', me)
+    const due = readHeld<Due>(dueKey)
+    const now = Date.now()
+    let changed = false
+    for (const [key, d] of Object.entries(due)) {
+      if (d.publishAt > now) continue
+      due[key] = { ...d, publishAt: now + RESUME_DELAY_MIN_MS + randomUpTo(RESUME_DELAY_MAX_MS - RESUME_DELAY_MIN_MS) }
+      changed = true
+    }
+    if (changed) writeHeld(dueKey, due)
+    arm(me)
   } catch (error) {
     console.warn('[transfer] could not resume receipts', error)
   }
@@ -941,9 +1080,12 @@ async function queueIfPaired(me: string, transfer: string): Promise<boolean> {
 
   // The payload is what opens and discloses the receipt, and the only copy
   // otherwise is this store and a gift wrap already marked processed. So it
-  // goes on the received row, which is backed up to the relay sealed to self.
+  // goes on the received row now, LOCALLY. The row's relay backup is left to
+  // `publishDue`, on a random delay of its own after the 7378: re-publishing
+  // it here would put a visibly larger kind-7376 by this identity on the relay
+  // at the moment of pairing, which says "a signed transfer just arrived".
   // Not awaited: a failure costs the disclosure, never the redemption.
-  void recordTransferSignature(transfer, JSON.stringify(held.p)).catch(() => {})
+  void recordTransferSignature(transfer, JSON.stringify(held.p), { backUp: false }).catch(() => {})
 
   arm(me)
   return true
@@ -974,10 +1116,17 @@ export async function offerTransferSignature(
     }
     const sigKey = storeKey('signatures', me)
     const now = Date.now()
-    const held = pruneSignatures(readHeld<HeldSignature>(sigKey), now)
     const key = heldKey(p.transfer, p.sender)
+    const before = readHeld<HeldSignature>(sigKey)
+    if (!before[key]) before[key] = { p, at: now }
+    // Only an overflowing store needs to know who is protected, and that
+    // costs a history read, so it is asked for only then.
+    const isProtected = Object.keys(before).length > MAX_HELD ? await protectedSigners(me) : undefined
+    // Re-read after the await, so a signature another call stored meanwhile
+    // is not written over.
+    const held = readHeld<HeldSignature>(sigKey)
     if (!held[key]) held[key] = { p, at: now }
-    writeHeld(sigKey, pruneSignatures(held, now))
+    writeHeld(sigKey, pruneSignatures(held, now, isProtected))
     return await queueIfPaired(me, p.transfer)
   } catch (error) {
     console.warn('[transfer] could not take a sender signature', error)

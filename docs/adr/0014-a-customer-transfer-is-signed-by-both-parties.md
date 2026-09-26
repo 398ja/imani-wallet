@@ -146,8 +146,9 @@ must be able to get it back:
   with the same key and row rebuilds the same nonce, tag, keys and commitment.
 - **Receiver**: the redemption stamps `transferId` on the `received` row
   (`withCorrelation`), and once a signature pairs, `recordTransferSignature`
-  files the whole payload on that row as `transferSignature` and re-publishes
-  the row to the backup. First writer wins.
+  files the whole payload on that row as `transferSignature`, locally. First
+  writer wins. The row's relay backup (a kind-7376 re-published under the same
+  `d`) is NOT sent at pairing: see "Timing" for why it waits.
 
 Both fields round-trip through `toContent`/`toRow`
 (`src/lib/__tests__/transferRecovery.test.ts`).
@@ -189,11 +190,32 @@ timing alone.
 So the receiver does not publish at redemption. A paired receipt is queued in
 local storage and published after a **uniformly random delay of 10 minutes to
 6 hours**, with `created_at` jittered up to **1 hour backward** from the
-publish time. The queue survives a closed tab: `startDmPoll` re-arms it and
-overdue receipts go out on the next tick. A failed publish is retried on a
-fresh random delay, three attempts in all, then dropped. Nothing blocks on any
-of this, and a receiver who never opens their wallet again simply never
-publishes.
+publish time. A failed publish is retried on a fresh random delay, three
+attempts in all, then dropped. Nothing blocks on any of this, and a receiver
+who never opens their wallet again simply never publishes.
+
+**Resume.** The queue survives a closed tab, and because the delay is at least
+ten minutes and mobile sessions are short, most receipts come due while the app
+is closed. Publishing them at startup would put a burst of 7378s in the same
+second as the login's NIP-98 traffic, from the same IP. So `startDmPoll` gives
+every overdue entry a **fresh random delay of 1 to 30 minutes** from start
+instead. A session shorter than that publishes nothing and the entries wait for
+the next.
+
+**The backup.** Pairing also files the payload on the `received` row, and that
+row's backup is a kind-7376 authored by the identity key, about 1.1 KB larger
+once it carries the payload. Re-publishing it at pairing would tell any relay
+reader "this identity just paired a customer-transfer signature". So the row is
+updated locally at pairing, and its backup goes out as a second queued step,
+after the 7378 publishes, on another random 10-minute to 6-hour delay. The
+7376's size still says a row carries a payload, but no longer when it paired.
+Padding 7376 content to size buckets would close that too, and is not done.
+
+**Several tabs.** Every tab runs the poller and arms a timer over the same
+queue. A publish pass runs under a Web Lock per account
+(`imani-transfer-receipts:<pubkey>`), and each entry is claimed (removed from
+the queue) before its relay round trip and put back only on failure, so a
+second tab, or a browser without the Locks API, finds nothing to publish twice.
 
 **Residual leak, accepted.** This narrows the gateway's guess from "the 7378
 that arrived within a second" to "one of the 7378s in a six-hour window", and
@@ -230,7 +252,24 @@ author for a bare wallet-to-wallet wrap, and never `issuerId`. Signatures are
 held one per `(transfer, signer)`, first writer wins, so a stranger who learns
 a coupon's fingerprint can neither pre-empt nor overwrite the genuine
 signature. The held store caps each signer at 20 entries and expires anything
-unpaired after 30 days, so a flood from one key evicts itself.
+unpaired after 30 days, so a flood from ONE key only evicts its own entries.
+
+Keys are free, though, so a flood can come from many. The global cap (200)
+therefore evicts unprotected entries first: a signature already paired and
+queued, or one signed by a key this wallet has dealt with (the sender of a
+coupon held here, or a counterparty anywhere in its history), goes only when
+nothing else is left. What a flood of fresh keys can still evict is a
+signature from a first-time sender that arrived before its coupon. That costs
+the receipt, never money. Keeping the wrap unprocessed at the relay until it
+pairs would close even that, and is not done.
+
+**The gateway can still name the sender.** On every gateway-relayed coupon the
+envelope's `sender_pubkey` is written by the gateway, and pairing trusts it. A
+malicious gateway can therefore name a key of its own as sender and send the
+matching signature, and the receiver will publish a receipt linking that key.
+This is closed against third parties, not against the gateway. The receiver
+has no end-to-end way to learn who paid, short of the sender signing the coupon
+itself, so this is accepted rather than fixed here.
 
 `nip59.unwrapEvent` in nostr-tools 2.24.1 checks neither the seal's signature
 nor that the seal and rumor name the same author, so `rumor.pubkey` is not

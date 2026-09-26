@@ -474,7 +474,11 @@ export async function recordReceiptByNullifier(receipt: {
  *
  * First writer wins, and it never throws.
  */
-export async function recordTransferSignature(transferId: string, payload: string): Promise<void> {
+export async function recordTransferSignature(
+  transferId: string,
+  payload: string,
+  { backUp = true }: { backUp?: boolean } = {},
+): Promise<void> {
   try {
     const rows = await listTransactions()
     const match = rows.find(
@@ -485,10 +489,30 @@ export async function recordTransferSignature(transferId: string, payload: strin
     const merged = await getWallet().updateTransaction(match.id, {
       transferSignature: payload,
     } as unknown as Partial<TransactionRow>)
-    if (merged) void publishTx(merged)
+    // `backUp: false` is the receipt queue, which re-publishes the row later
+    // through `backUpTransferSignature`, on a random delay, so the relay does
+    // not see a larger kind-7376 appear the moment a signature pairs.
+    if (merged && backUp) void publishTx(merged)
     notifyWalletChanged()
   } catch (error) {
     console.error('[wallet] transfer signature not recorded', error)
+  }
+}
+
+/**
+ * Re-publish the backup of the row carrying `transferId`'s signature. Never
+ * throws. The delayed half of `recordTransferSignature(..., { backUp: false })`.
+ */
+export async function backUpTransferSignature(transferId: string): Promise<void> {
+  try {
+    const rows = await listTransactions()
+    const match = rows.find((row) => {
+      const r = row as unknown as Record<string, unknown>
+      return r.transferId === transferId && typeof r.transferSignature === 'string'
+    })
+    if (match) await publishTx(match)
+  } catch (error) {
+    console.error('[wallet] transfer signature not backed up', error)
   }
 }
 
