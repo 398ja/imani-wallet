@@ -47,6 +47,13 @@ export interface OwedPurchase {
   /** False for test-mode. Real value must never be minted from a test payment. */
   livemode: boolean
   attempts: number
+  /**
+   * The processor's own record of the payment (a Stripe payment intent),
+   * copied verbatim into the coupon's `processor` issuance warrant so the
+   * stall can reconcile it on its own dashboard (imani-wallet#96). Null when
+   * payment-adapter recorded none.
+   */
+  processorReference: string | null
 }
 
 export type DischargeOutcome =
@@ -63,6 +70,9 @@ const HEX64 = /^[0-9a-fA-F]{64}$/
 
 /** An ISO-4217 alphabetic currency code. */
 const ISO4217 = /^[A-Za-z]{3}$/
+
+/** A processor record id, e.g. Stripe's `pi_...`: short, printable, no spaces. */
+const PROCESSOR_REF = /^[A-Za-z0-9_-]{1,100}$/
 
 /**
  * A hard ceiling on a single coupon's face value, in minor units.
@@ -130,6 +140,16 @@ export function parseOwedPurchase(row: unknown): OwedPurchase | null {
     return null
   }
 
+  // Optional and opaque, but bounded and printable: it is written into signed
+  // coupon bytes, where a control character or a kilobyte of junk is a
+  // smuggling surface rather than a reference.
+  const rawRef = r.processorReference
+  let processorReference: string | null = null
+  if (rawRef !== null && rawRef !== undefined) {
+    if (typeof rawRef !== 'string' || !PROCESSOR_REF.test(rawRef)) return null
+    processorReference = rawRef
+  }
+
   return {
     eventId,
     paymentRequestId,
@@ -139,6 +159,7 @@ export function parseOwedPurchase(row: unknown): OwedPurchase | null {
     currency,
     livemode: r.livemode,
     attempts,
+    processorReference,
   }
 }
 
@@ -154,17 +175,26 @@ export class PurchasesApi {
    * hides an attack.
    */
   private readonly onInvalidRow?: (row: unknown) => void
+  /** Delays between failure-report retries. Injected so tests do not wait. */
+  private readonly reportBackoffsMs: readonly number[]
+  private readonly sleep: (ms: number) => Promise<void>
 
   constructor(
     baseUrl: string,
     token: string,
     fetchImpl: typeof fetch = fetch,
     onInvalidRow?: (row: unknown) => void,
+    {
+      reportBackoffsMs = [1_000, 4_000, 15_000],
+      sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    }: { reportBackoffsMs?: readonly number[]; sleep?: (ms: number) => Promise<void> } = {},
   ) {
     this.baseUrl = baseUrl.replace(/\/$/, '')
     this.token = token
     this.fetchImpl = fetchImpl
     this.onInvalidRow = onInvalidRow
+    this.reportBackoffsMs = reportBackoffsMs
+    this.sleep = sleep
   }
 
   private headers(): Record<string, string> {
@@ -249,10 +279,47 @@ export class PurchasesApi {
   }
 
   /**
+   * Claim one purchase before minting for it (imani-wallet#96).
+   *
+   * `payment-adapter` moves the row OWED -> ISSUING in one conditional update,
+   * so of any number of workers asking, exactly one hears `'claimed'`. Only
+   * that one may mint. Everything else, an unreachable API included, is "do
+   * not mint": a purchase left unminted is late, one minted twice is lost
+   * money.
+   */
+  async claim(eventId: string, worker: string): Promise<'claimed' | 'taken' | 'unknown-purchase' | 'unreachable'> {
+    let response: Response
+    try {
+      response = await this.fetchImpl(
+        `${this.baseUrl}/api/v1/purchases/${encodeURIComponent(eventId)}/claim`,
+        {
+          method: 'POST',
+          headers: this.headers(),
+          body: JSON.stringify({ worker }),
+        },
+      )
+    } catch {
+      return 'unreachable'
+    }
+    if (response.ok) return 'claimed'
+    if (response.status === 409) return 'taken'
+    if (response.status === 404) return 'unknown-purchase'
+    return 'unreachable'
+  }
+
+  /**
    * Report that an attempt failed, closing nothing.
    *
-   * Best-effort by design: this is a note for whoever reads the row later, and
-   * failing to write it must not stop the worker moving to the next debt.
+   * NOT best-effort any more (imani-wallet#96). When `voucherId` is set this
+   * report is what takes the row out of the mintable queue, and a report that
+   * silently fails leaves a coupon-bearing row looking unminted. So it is
+   * retried with backoff, and if it still does not land it THROWS
+   * `ReportLostError`: the worker must stop rather than carry on polling a
+   * queue it can no longer keep honest.
+   *
+   * A report with no voucher id is retried the same way. Losing one of those
+   * is harmless on its own (the row is re-claimed after its lease), but the
+   * API being unreachable for every retry is the same signal either way.
    */
   async reportFailure(
     eventId: string,
@@ -266,18 +333,64 @@ export class PurchasesApi {
      * mints again — one payment, a coupon per wake.
      */
     voucherId?: string,
+    /**
+     * `worker`: who is reporting, so a late report cannot release a claim
+     * another worker now holds. `keepClaim`: the outcome is ambiguous (the
+     * mint may still be in flight), so the claim is left to lapse rather than
+     * handing the row straight back (imani-wallet#96).
+     */
+    { worker, keepClaim = false }: { worker?: string; keepClaim?: boolean } = {},
   ): Promise<void> {
-    try {
-      await this.fetchImpl(
-        `${this.baseUrl}/api/v1/purchases/${encodeURIComponent(eventId)}/failure`,
-        {
-          method: 'POST',
-          headers: this.headers(),
-          body: JSON.stringify({ reason, permanent, voucherId: voucherId ?? null }),
-        },
-      )
-    } catch {
-      // Nothing to do. The debt is unchanged, which is the important part.
+    let lastError = ''
+    for (let attempt = 0; attempt <= this.reportBackoffsMs.length; attempt++) {
+      if (attempt > 0) await this.sleep(this.reportBackoffsMs[attempt - 1])
+      try {
+        const response = await this.fetchImpl(
+          `${this.baseUrl}/api/v1/purchases/${encodeURIComponent(eventId)}/failure`,
+          {
+            method: 'POST',
+            headers: this.headers(),
+            body: JSON.stringify({
+              reason,
+              permanent,
+              voucherId: voucherId ?? null,
+              worker: worker ?? null,
+              keepClaim,
+            }),
+          },
+        )
+        // 2xx is recorded. 404 means there is no such row to keep honest, so
+        // there is nothing for a retry to fix.
+        if (response.ok || response.status === 404) return
+        lastError = `status ${response.status}`
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error)
+      }
     }
+    throw new ReportLostError(eventId, voucherId, lastError)
+  }
+}
+
+/**
+ * A failure report that could not be recorded after every retry
+ * (imani-wallet#96).
+ *
+ * When it names a voucher, a coupon exists that the purchases API does not
+ * know about, and its row may still look mintable once its claim lapses. The
+ * worker halts on this rather than continue.
+ */
+export class ReportLostError extends Error {
+  readonly eventId: string
+  readonly voucherId?: string
+
+  constructor(eventId: string, voucherId: string | undefined, cause: string) {
+    super(
+      `could not record the outcome of purchase ${eventId}` +
+        (voucherId ? ` (voucher ${voucherId} was minted)` : '') +
+        `: ${cause}`,
+    )
+    this.name = 'ReportLostError'
+    this.eventId = eventId
+    this.voucherId = voucherId
   }
 }
