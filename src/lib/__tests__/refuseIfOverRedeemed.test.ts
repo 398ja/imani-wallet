@@ -11,6 +11,7 @@ vi.mock('../wallet', () => ({
 vi.mock('../legacyBridge', () => ({ legacyApi: async () => ({}), withCorrelation: vi.fn() }))
 
 import { refuseIfOverRedeemed } from '../dmPoll'
+import { buildVoucherToken } from './voucherFixtures'
 
 const VOUCHER = '1d4410af-70f5-4c14-8606-519404684ea7'
 const verified = { signatureValid: true, legacyCanonical: false, signedFaceValue: 1000, cappedAtFaceValue: false }
@@ -69,5 +70,18 @@ describe('refuseIfOverRedeemed', () => {
         validation: { ...verified, signatureValid: false },
       }),
     ).resolves.toBeUndefined()
+  })
+
+  it('lets the last part of a fractional-ratio split through, given its token', async () => {
+    // 9 + 9 + 17802 proofs at this ratio credit 1 + 1 + 999 of 1000. The token
+    // is what tells the ceiling the 999 was rounded; see
+    // fractionalSplitCeiling.test.ts for the arithmetic.
+    stubs.rows = [received(1), { ...received(1), id: 'tx-1b' } as unknown as TransactionRow]
+    const { token } = buildVoucherToken({ issuanceRatio: 0.05611672278338945, faceValue: 1000 }, [17802])
+    const meta = { voucherId: VOUCHER, faceValue: 999, validation: verified }
+
+    await expect(refuseIfOverRedeemed(meta, token)).resolves.toBeUndefined()
+    // Without the token the bound stays exact, and the same part is refused.
+    await expect(refuseIfOverRedeemed(meta)).rejects.toBeInstanceOf(RedemptionRefusedError)
   })
 })

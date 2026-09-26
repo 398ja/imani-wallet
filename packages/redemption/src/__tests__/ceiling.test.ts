@@ -147,3 +147,45 @@ describe('the ceiling cannot be talked around', () => {
     expect(JSON.stringify(rows)).toBe(before)
   })
 })
+
+describe('per-part rounding slack', () => {
+  // `creditableFaceValue` rounds each part of a split voucher on its own, so
+  // honest parts at a fractional ratio can sum past the face by up to half a
+  // minor unit each. The slack admits exactly that and no more.
+
+  it('is off by default, so an exact ratio keeps the exact bound', () => {
+    const c = checkCeiling({ signedFaceValue: 1000, requested: 999, priorRedemptions: [took(1), took(1)] })
+    expect(c.allowed).toBe(false)
+  })
+
+  it('admits the last part of a 3-part split that rounded one over', () => {
+    const c = checkCeiling({
+      signedFaceValue: 1000,
+      requested: 999,
+      priorRedemptions: [took(1), took(1)],
+      perPartRounding: true,
+    })
+    expect(c.allowed).toBe(true)
+  })
+
+  it('grows by half a unit per part, never more', () => {
+    // 3 parts may add at most 1.5, so floor 1: 1001 fits, 1002 does not.
+    const base = { signedFaceValue: 1000, priorRedemptions: [took(1), took(1)], perPartRounding: true }
+    expect(checkCeiling({ ...base, requested: 1000 }).allowed).toBe(false)
+    // A single part cannot round past by a whole unit.
+    expect(
+      checkCeiling({ signedFaceValue: 1000, requested: 1001, priorRedemptions: [], perPartRounding: true })
+        .allowed,
+    ).toBe(false)
+  })
+
+  it('does not count outgoing rows as parts', () => {
+    const c = checkCeiling({
+      signedFaceValue: 1000,
+      requested: 1001,
+      priorRedemptions: [gave(1000), gave(1000), gave(1000)],
+      perPartRounding: true,
+    })
+    expect(c.allowed).toBe(false)
+  })
+})
