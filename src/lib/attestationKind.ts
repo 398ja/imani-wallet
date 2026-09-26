@@ -65,3 +65,20 @@ export const ATTESTATION_VERSION = '2'
  * Every v1 event ever published stays readable.
  */
 export const READABLE_ATTESTATION_VERSIONS = ['1', '2'] as const
+
+/**
+ * A customer's receipt of a customer-to-customer transfer (#91).
+ *
+ * NOT a 7377, and must never become one. A 7377 means "I honoured this
+ * coupon", which only a stall does, and `reconcileAttestations` and the audit
+ * reader treat every 7377 under a ledger key as a redemption. A customer who
+ * was handed a gift honoured nothing, so their claim ("I received this from
+ * the holder of that key") gets its own kind, beside its family for the same
+ * reason 7377 sits beside 7375/7376. Regular, so append-only.
+ *
+ * Design, keys and disclosure: `docs/adr/0014-a-customer-transfer-is-signed-by-both-parties.md`.
+ */
+export const TRANSFER_RECEIPT_KIND = 7378
+
+/** Payload version of both the sender's signature and the receipt. */
+export const TRANSFER_SIGNATURE_VERSION = 1

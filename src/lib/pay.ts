@@ -8,6 +8,7 @@ import { merchantStatus } from './merchant'
 import { getSigner } from './nap'
 import { spentTokenIds, withoutSpent } from './spentCoupons'
 import { buildPaymentTransaction, buildSentTransaction } from './transactions'
+import { sendTransferSignature } from './transferSignature'
 import type { NUT18VRequest } from './nap'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
 
@@ -79,6 +80,12 @@ type SendStatus = {
   /** Face value of the change, authoritative — the split may round. */
   keep_face_value?: number
   is_full_send?: boolean
+  /**
+   * sha256(send token)[:32], the gateway's delivery-correlation id. The one
+   * identifier for this transfer that the recipient can also compute, which is
+   * what the sender's signature (#91) is keyed on. Absent from older gateways.
+   */
+  sent_voucher_id?: string
   error?: string
   error_message?: string
 }
@@ -411,6 +418,28 @@ async function settleSend(
     )
   } catch (error) {
     console.error('[pay] payment recorded at the gateway but not in local history', error)
+  }
+
+  // Sign the transfer for the recipient (#91), on a customer-to-customer send
+  // only: a redemption is attested by the stall with a 7377, and a signature
+  // riding beside it would claim a different thing about the same coupon.
+  //
+  // After the coupon has settled and the row is written, and NOT awaited:
+  // `sendTransferSignature` never throws, and nothing it does can change the
+  // outcome of a send the mint has already completed. Here rather than in the
+  // live path so a send finished late by `reconcilePendingSends` is signed too.
+  if (pending.recipientPubkey) {
+    void sendTransferSignature({
+      transfer: status.sent_voucher_id,
+      recipient: pending.recipientPubkey,
+      amount: pending.amount,
+      unit: pending.unit,
+      decimals: pending.decimals,
+    })
+      // `sendTransferSignature` swallows its own failures, so this should never
+      // fire. It is here because the promise is not awaited: if that contract
+      // broke, the rejection would be unhandled, on a send that succeeded.
+      .catch((error) => console.error('[pay] transfer signature failed', error))
   }
 
   await api.ackKeepToken(pending.sendId).catch(() => {

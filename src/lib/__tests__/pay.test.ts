@@ -45,6 +45,20 @@ vi.mock('../merchant', () => ({
     return stubs.merchants.has(key) ? 'merchant' : 'customer'
   },
 }))
+// The sender's signature over a transfer (#91), captured at the boundary so a
+// test can say WHEN the send path signs, and that a failure there changes
+// nothing about the send. transferSignature.test.ts covers the crypto.
+const signatures = vi.hoisted(() => ({
+  calls: [] as Record<string, unknown>[],
+  rejects: false,
+}))
+vi.mock('../transferSignature', () => ({
+  sendTransferSignature: async (p: Record<string, unknown>) => {
+    signatures.calls.push(p)
+    if (signatures.rejects) throw new Error('relay down')
+    return true
+  },
+}))
 import { tokenIdFrom } from '../../../packages/wallet-storage/src/tokenId'
 import type { NUT18VRequest } from '../nap'
 
@@ -1032,5 +1046,73 @@ describe('sendVouchers and payRequest', () => {
       }),
     ).rejects.toThrow(/no EUR voucher/)
     expect(sent).toEqual([])
+  })
+
+  describe('the sender signature (#91)', () => {
+    const SENT_ID = 'ab'.repeat(16)
+
+    function completingWith(status: Record<string, unknown>) {
+      const sent = gateway()
+      stubs.api.getAtomicSendStatus = async () => status
+      stubs.api.initiateAtomicSend = async (params: Record<string, unknown>) => {
+        sent.push(params)
+        return { send_id: 'as_1', status: 'PENDING' }
+      }
+      return sent
+    }
+
+    beforeEach(() => {
+      signatures.calls.length = 0
+      signatures.rejects = false
+    })
+
+    it('signs a person-to-person send over the id the recipient can compute', async () => {
+      stubs.rows = [row()]
+      completingWith({ status: 'COMPLETED', sent_voucher_id: SENT_ID })
+      wallet([row()])
+
+      await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 250 })
+
+      expect(signatures.calls).toEqual([
+        { transfer: SENT_ID, recipient: FRIEND, amount: 250, unit: 'EUR', decimals: 2 },
+      ])
+    })
+
+    it('does NOT sign a payment to a stall, which the stall attests instead', async () => {
+      stubs.rows = [row()]
+      completingWith({ status: 'COMPLETED', sent_voucher_id: SENT_ID })
+      wallet([row()])
+
+      await payRequest({ request: request(250), raw: 'vreqA', merchant, payer: PAYER })
+
+      expect(signatures.calls).toHaveLength(0)
+    })
+
+    it('does not sign a send that did not complete', async () => {
+      stubs.rows = [row()]
+      completingWith({ status: 'FAILED' })
+      stubs.api.reclaimAtomicSend = async () => ({ status: 'RECLAIMED' })
+      wallet([row()])
+
+      await expect(
+        sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 250 }),
+      ).rejects.toThrow()
+      expect(signatures.calls).toHaveLength(0)
+    })
+
+    it('never fails or blocks the send when signing fails', async () => {
+      signatures.rejects = true
+      stubs.rows = [row()]
+      completingWith({ status: 'COMPLETED', sent_voucher_id: SENT_ID })
+      const { transactions } = wallet([row()])
+
+      const result = await sendVouchers({
+        payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 250,
+      })
+
+      expect(result.delivered).toBe(250)
+      expect(transactions).toHaveLength(1)
+      expect(transactions[0]).toMatchObject({ type: 'sent', direction: 'out' })
+    })
   })
 })
