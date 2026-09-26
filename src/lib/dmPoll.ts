@@ -24,6 +24,7 @@ import { attestRedemption, nullifierFor } from './attestation'
 import { attestationForReceivedCoupon } from './cashAttestation'
 import { getSigner } from './nap'
 import { postPaymentReceipt } from './paymentReceipt'
+import { noteTransferReceived } from './transferSignature'
 import { createDmCryptoAdapter, toLegacyMetadata } from './dmCrypto'
 import { resetChunkAssembly } from './dmChunks'
 import { cancelDeferredWrite, deferWrite, flushDeferredWrites } from './deferredWrite'
@@ -1089,6 +1090,30 @@ function redemptionAdapter(): RedemptionAdapter {
           // contract ever broke, the rejection would be unhandled rather than
           // visible, and on a completed redemption it must be neither.
           .catch((error) => console.error('[dmPoll] attestation failed', error))
+      } else {
+        // A CUSTOMER received it, so the only public record this wallet may
+        // make is a kind-7378 transfer receipt (#91), never a 7377: see
+        // `TRANSFER_RECEIPT_KIND` for why the two claims cannot share a kind.
+        //
+        // Published only if the sender also signed this transfer, which
+        // `noteTransferReceived` checks; a coupon from an older build or
+        // straight from a stall therefore leaves no public trace. The credited
+        // value is passed only when the voucher verified, for the reason
+        // `attestRedemption` gives, so a sender-written envelope figure is
+        // never committed to.
+        //
+        // Fire-and-forget and never throwing, like everything else here: the
+        // proofs are already burnt, and a relay refusing a receipt must not
+        // turn a completed redemption into a reported failure.
+        void noteTransferReceived({
+          token,
+          ...(validation?.signatureValid === true
+            ? {
+                credited: Number(meta?.faceValue),
+                unit: meta?.faceUnit == null ? undefined : String(meta.faceUnit),
+              }
+            : {}),
+        }).catch((error) => console.error('[dmPoll] transfer receipt failed', error))
       }
 
       return voucher

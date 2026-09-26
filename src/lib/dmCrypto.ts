@@ -11,6 +11,7 @@ import { checkIssuer } from './issuerAllowlist'
 import { getSigner } from './nap'
 import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
 import { asChunk, looksLikeChunk, offerChunk } from './dmChunks'
+import { offerTransferSignature, parseTransferSignature } from './transferSignature'
 import {
   creditableFaceValue,
   parseVoucherToken,
@@ -334,6 +335,24 @@ export function createDmCryptoAdapter(): CryptoAdapter {
             event.id.slice(0, 8),
           )
           return null
+        }
+
+        /**
+         * A sender's signature over a transfer (#91), which arrives in a gift
+         * wrap of its own beside the coupon. Handed off and NOT awaited:
+         * `offerTransferSignature` never throws, verifies before it stores
+         * anything, and publishes the receipt only once the coupon has also
+         * been redeemed here. The wrap then flows on unchanged, carries no
+         * token, and dm-poll marks it processed as the non-token DM it is.
+         *
+         * `rumor.pubkey` is the author the payload's `sender` must match, so a
+         * signature forwarded by anyone else is refused.
+         */
+        const transferSignature = parseTransferSignature(rumor.content)
+        if (transferSignature) {
+          void offerTransferSignature(transferSignature, rumor.pubkey).catch((error) =>
+            console.error('[dmCrypto] transfer signature not taken', error),
+          )
         }
 
         return {
