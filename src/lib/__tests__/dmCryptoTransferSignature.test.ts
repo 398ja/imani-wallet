@@ -35,7 +35,11 @@ vi.mock('../relay', () => ({
   },
 }))
 vi.mock('../merchant', () => ({ loadMerchant: () => null }))
-vi.mock('../wallet', () => ({ recordTransferSignature: async () => {} }))
+vi.mock('../wallet', () => ({
+  recordTransferSignature: async () => {},
+  backUpTransferSignature: async () => {},
+  listTransactions: async () => [],
+}))
 
 const { createDmCryptoAdapter } = await import('../dmCrypto')
 const { GiftWrapProcessor } = await import('@imani/dm-poll')

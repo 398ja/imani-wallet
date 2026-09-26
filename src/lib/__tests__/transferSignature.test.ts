@@ -49,10 +49,18 @@ vi.mock('../merchant', () => ({
 }))
 
 const filed: Array<[string, string]> = []
+const backedUp: string[] = []
+/** Rows `listTransactions` returns, for the counterparties the flood cap protects. */
+const history: Array<Record<string, unknown>> = []
 vi.mock('../wallet', () => ({
-  recordTransferSignature: async (transfer: string, payload: string) => {
+  recordTransferSignature: async (transfer: string, payload: string, opts?: { backUp?: boolean }) => {
     filed.push([transfer, payload])
+    if (opts?.backUp !== false) backedUp.push(transfer)
   },
+  backUpTransferSignature: async (transfer: string) => {
+    backedUp.push(transfer)
+  },
+  listTransactions: async () => history,
 }))
 
 const {
@@ -77,6 +85,9 @@ const {
   RECEIPT_DELAY_MIN_MS,
   RECEIPT_DELAY_MAX_MS,
   RECEIPT_JITTER_MAX_S,
+  RESUME_DELAY_MIN_MS,
+  RESUME_DELAY_MAX_MS,
+  publishDue,
 } = await import('../transferSignature')
 
 const TOKEN = 'cashuB-the-send-token'
@@ -115,6 +126,8 @@ beforeEach(() => {
   vi.setSystemTime(new Date('2026-09-26T12:00:00Z'))
   published.length = 0
   filed.length = 0
+  backedUp.length = 0
+  history.length = 0
   publishOk = 1
   publishThrows = false
   signerThrows = false
@@ -253,7 +266,8 @@ describe('sending the signature', () => {
     expect(published).toHaveLength(1)
     expect(published[0]!.kind).toBe(1059)
     expect(published[0]!.pubkey).not.toBe(SENDER)
-    expect(published[0]!.content).not.toContain('250')
+    // Not the bare digits: 2 KB of random base64 contains "250" about one run in 130.
+    expect(published[0]!.content).not.toContain('"amount"')
 
     const rumor = nip17.unwrapEvent(published[0]! as never, hexToBytes(RECEIVER_SK))
     expect(sealAuthorOf(published[0]!, hexToBytes(RECEIVER_SK))).toBe(SENDER)
@@ -346,9 +360,124 @@ describe('the receiver attestation', () => {
     expect(published).toHaveLength(0)
 
     resumeTransferReceipts(RECEIVER) // The next session's poller starts.
-    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(RESUME_DELAY_MAX_MS + 1)
     expect(published).toHaveLength(1)
     expect(verifyTransferReceipt(published[0]!)).toBe(true)
+  })
+
+  it('reads an erased queue as empty, not from memory, while the module lives on (N-a)', async () => {
+    const store = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    })
+    try {
+      await offerTransferSignature(signed(), SENDER)
+      await received()
+      expect(store.size).toBeGreaterThan(0)
+      // Logout's sweep removes every `imani-wallet:` key, with no reload after.
+      stopTransferReceipts()
+      store.clear()
+      resumeTransferReceipts(RECEIVER)
+      await elapse()
+      await elapse()
+      expect(published).toHaveLength(0)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('does not publish overdue receipts beside the login, but on a fresh delay (R5)', async () => {
+    await offerTransferSignature(signed(), SENDER)
+    await received()
+    stopTransferReceipts()
+    await elapse() // Overdue while the app was closed.
+
+    resumeTransferReceipts(RECEIVER)
+    await vi.advanceTimersByTimeAsync(RESUME_DELAY_MIN_MS - 1000)
+    expect(published).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(RESUME_DELAY_MAX_MS - RESUME_DELAY_MIN_MS + 2000)
+    expect(published).toHaveLength(1)
+  })
+
+  it('backs the payload up to the relay later, not at pairing (R6)', async () => {
+    // Pinned so each delay is the maximum and each `elapse` is exactly one step.
+    pinRandomToMax()
+    await offerTransferSignature(signed(), SENDER)
+    await received()
+    // Filed on the local row at once, but that row is not re-published yet.
+    expect(filed).toHaveLength(1)
+    expect(backedUp).toHaveLength(0)
+    await elapse() // The 7378.
+    expect(published).toHaveLength(1)
+    expect(backedUp).toHaveLength(0)
+    await elapse() // Then the backup, on a delay of its own.
+    expect(backedUp).toEqual([TRANSFER])
+  })
+
+  it('does not lose a receipt queued while another is being published (R2)', async () => {
+    // Hold the relay open on the first publish, and pair a second transfer
+    // while it is held.
+    const tokenB = 'cashuB-queued-mid-publish'
+    await offerTransferSignature(signed(), SENDER)
+    await received()
+    let release!: () => void
+    const relay = await import('../relay')
+    const spy = vi.spyOn(relay, 'publish').mockImplementationOnce(async (event) => {
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+      published.push(event)
+      return { ok: 1, total: 1, errors: [] }
+    })
+    await vi.advanceTimersByTimeAsync(RECEIPT_DELAY_MAX_MS + 1)
+    expect(spy).toHaveBeenCalledTimes(1) // Held.
+
+    await offerTransferSignature(signed({ transfer: transferIdFor(tokenB) }), SENDER)
+    await received({ token: tokenB })
+    release()
+    spy.mockRestore()
+    await elapse()
+    expect(published).toHaveLength(2)
+  })
+
+  it('publishes a receipt once, even when two tabs drain the same queue (R3)', async () => {
+    await offerTransferSignature(signed(), SENDER)
+    await received()
+    stopTransferReceipts()
+    vi.advanceTimersByTime(RECEIPT_DELAY_MAX_MS + 1)
+    // Two passes at once, as two tabs' timers would fire. No Locks API here,
+    // so it is the claim-before-publish that makes the second find nothing.
+    const [a, b] = await Promise.all([publishDue(RECEIVER), publishDue(RECEIVER)])
+    expect(a + b).toBe(1)
+    expect(published).toHaveLength(1)
+  })
+
+  it('serialises a pass per account through navigator.locks when there is one (R3)', async () => {
+    const names: string[] = []
+    let chain = Promise.resolve<unknown>(undefined)
+    vi.stubGlobal('navigator', {
+      locks: {
+        request: (name: string, fn: () => Promise<unknown>) => {
+          names.push(name)
+          const run = chain.then(fn)
+          chain = run.catch(() => {})
+          return run
+        },
+      },
+    })
+    try {
+      await offerTransferSignature(signed(), SENDER)
+      await received()
+      stopTransferReceipts()
+      vi.advanceTimersByTime(RECEIPT_DELAY_MAX_MS + 1)
+      await Promise.all([publishDue(RECEIVER), publishDue(RECEIVER)])
+      expect(published).toHaveLength(1)
+      expect(names).toEqual([`imani-transfer-receipts:${RECEIVER}`, `imani-transfer-receipts:${RECEIVER}`])
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('names neither party, the amount, the voucher, or the transfer id', async () => {
@@ -464,7 +593,7 @@ describe('the receiver attestation', () => {
       expect(JSON.parse(published[0]!.content).commitment).toBe(commitTo(250, transferBlind(first.nonce)))
     })
 
-    it('cannot flood a genuine one out of the store (L5)', async () => {
+    it('a flood from ONE key cannot push a genuine one out of the store (L5)', async () => {
       // More than the 200-entry global cap, all from one validly-signing key.
       await offerTransferSignature(signed(), SENDER)
       for (let i = 0; i < 205; i += 1) {
@@ -472,6 +601,33 @@ describe('the receiver attestation', () => {
         await offerTransferSignature(signed({ transfer }, STRANGER_SK), STRANGER)
       }
       await received()
+      await elapse()
+      expect(published).toHaveLength(1)
+    }, 60_000)
+
+    /** 200 one-shot keys, one validly self-signed payload each. Keys are free. */
+    async function floodFromFreshKeys() {
+      for (let i = 0; i < 200; i += 1) {
+        const sk = bytesToHex(schnorr.utils.randomSecretKey())
+        const transfer = (i + 1).toString(16).padStart(32, 'f')
+        await offerTransferSignature(signed({ transfer }, sk), pub(sk))
+      }
+    }
+
+    it('a flood from fresh keys cannot push out a signature from a known counterparty (R4)', async () => {
+      // The sender is someone this wallet has dealt with before.
+      history.push({ id: 'received:earlier', type: 'received', counterparty: SENDER, amount: 1 })
+      await offerTransferSignature(signed(), SENDER)
+      await floodFromFreshKeys()
+      await received()
+      await elapse()
+      expect(published).toHaveLength(1)
+    }, 60_000)
+
+    it('a flood from fresh keys cannot push out a signature already paired and queued (R4)', async () => {
+      await offerTransferSignature(signed(), SENDER)
+      await received() // Paired and queued before the flood.
+      await floodFromFreshKeys()
       await elapse()
       expect(published).toHaveLength(1)
     }, 60_000)
