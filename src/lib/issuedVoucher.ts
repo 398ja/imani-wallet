@@ -126,14 +126,34 @@ export interface VoucherRecord {
  * gateway's id and nothing in this wallet's types stops a row carrying that id
  * in another denomination, so without this a 2500 XAF row could subtract from
  * a EUR 25.00 voucher and report it settled.
+ *
+ * Units compare by `sameUnit`, not `===`. Issuance stores the gateway's
+ * `face_unit` as it came, so a stall whose gateway answered "xaf" would
+ * otherwise never see a claim stamped "XAF", and the bar would read claimed 0
+ * again: the #90 symptom by a different route.
+ *
+ * Exported for `merchantClaim.ts`, which must sum the same set to know how
+ * much of a voucher is left to file against.
  */
-function isClaim(tx: WalletTransaction, issuance: WalletTransaction): boolean {
+export function isClaim(tx: WalletTransaction, issuance: WalletTransaction): boolean {
   return (
     tx.voucherId === issuance.voucherId &&
     tx.direction === 'in' &&
-    tx.unit === issuance.unit &&
+    sameUnit(tx.unit, issuance.unit) &&
     tx.decimals === issuance.decimals
   )
+}
+
+/**
+ * One currency, however it was spelled.
+ *
+ * Trimmed and upper-cased, the same normalisation `format.ts` applies before
+ * resolving decimals, so two spellings that resolve to the same decimals also
+ * compare equal here.
+ */
+export function sameUnit(a: string | undefined, b: string | undefined): boolean {
+  const norm = (u: string | undefined) => u?.trim().toUpperCase() ?? ''
+  return norm(a) !== '' && norm(a) === norm(b)
 }
 
 /** Has this issuance lapsed, as of the moment the caller loaded its rows? */

@@ -23,12 +23,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const STALL = 'f'.repeat(64)
 const VOUCHER_ID = '1d4410af-70f5-4c14-8606-519404684ea7'
 
-const store = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[] }))
+const store = vi.hoisted(() => ({
+  rows: [] as Record<string, unknown>[],
+  /** Null makes this wallet a customer, which `refuseIfAnotherStalls` skips. */
+  merchant: null as Record<string, unknown> | null,
+}))
 
 vi.mock('../arrivalToast', () => ({ announceArrival: () => {} }))
 vi.mock('../refusalToast', () => ({ announceRefusal: () => {} }))
 vi.mock('../queuedToast', () => ({ announceQueued: () => {}, settleQueued: () => {} }))
-vi.mock('../merchant', () => ({ loadMerchant: () => ({ pubkey: STALL, categories: [] }) }))
+vi.mock('../merchant', () => ({ loadMerchant: () => store.merchant }))
 vi.mock('../attestation', () => ({
   attestRedemption: async () => null,
   nullifierFor: (t: string) => `nullifier-of:${t}`,
@@ -68,7 +72,10 @@ const { startDmPoll, stopDmPoll, refuseIfOverRedeemed } = await import('../dmPol
 const { installTokenIdFill } = await import('../legacyBridge')
 const { toTransaction, buildIssueTransaction } = await import('../transactions')
 const { issuedVoucher } = await import('../issuedVoucher')
-const { merchantClaimFor } = await import('../merchantClaim')
+const { merchantClaimFor, boundedClaim } = await import('../merchantClaim')
+const { toContent, toRow } = await import('../txRecords')
+const { buildVoucherToken } = await import('./voucherFixtures')
+const { parseVoucherToken, verifyVoucher, creditableFaceValue } = await import('../voucherToken')
 
 const buildRow = new Function(
   readFileSync('shared/tokenRedemption.js', 'utf8') + '; return _buildReceiveTransactionRow;',
@@ -122,6 +129,7 @@ beforeEach(() => {
   stopDmPoll()
   swaps = 0
   store.rows = [issued()]
+  store.merchant = { pubkey: STALL, categories: [] }
   ;(globalThis as unknown as Record<string, unknown>)._buildReceiveTransactionRow = buildRow
   vi.stubGlobal('window', {
     TokenRedemption: { redeem },
@@ -202,5 +210,185 @@ describe('merchantClaimFor', () => {
       unit: 'XAF',
       decimals: 0,
     })
+  })
+})
+
+/** A stall issuance in any unit, for the unit and decimals cases. */
+const issuedIn = (unit: string, decimals: number, voucherId = VOUCHER_ID) =>
+  buildIssueTransaction({
+    voucherId,
+    amount: 1000,
+    unit,
+    decimals,
+    recipientPubkey: 'c'.repeat(64),
+    at: 1_700_000_000_000,
+  }) as unknown as Record<string, unknown>
+
+/** Rows the adapter wrote, excluding the stall's own issuance. */
+const redemptions = () => store.rows.filter((r) => r.type !== 'issued')
+
+describe('a self-signed voucher naming a victim voucher (review item 1)', () => {
+  // The attack, built for real rather than described: a voucher that names
+  // THIS stall as issuer and a voucher id of the attacker's choosing, signed
+  // by a key the attacker made up. It verifies, because the key it is checked
+  // against rides inside the voucher. That is why the signature gate alone is
+  // not a claim gate.
+  // `value` is what the token carries; `signedFace` is the ceiling the forger
+  // chose. A big signed face is what lets the ceiling wave the token through.
+  const forged = (voucherId: string, value: number, unit = 'XAF', signedFace = value) => {
+    const { token } = buildVoucherToken(
+      { issuerId: STALL, voucherId, faceValue: signedFace, unit, faceDecimals: 0, issuanceRatio: 1 },
+      [value],
+    )
+    const parsed = parseVoucherToken(token)
+    const { signatureValid } = verifyVoucher(parsed.voucher)
+    return {
+      voucherId: parsed.voucher.voucherId,
+      issuerId: parsed.voucher.issuerId,
+      faceValue: creditableFaceValue(parsed).faceValue,
+      faceUnit: parsed.voucher.unit,
+      faceDecimals: parsed.voucher.faceDecimals,
+      validation: {
+        signatureValid,
+        legacyCanonical: false,
+        signedFaceValue: parsed.voucher.faceValue,
+        cappedAtFaceValue: false,
+      },
+    }
+  }
+
+  it('verifies, which is the premise of the attack', () => {
+    expect(forged(VOUCHER_ID, 1000).validation.signatureValid).toBe(true)
+  })
+
+  it('files nothing against a voucher id this stall never issued', async () => {
+    const made_up = '00000000-0000-4000-8000-000000000000'
+    await captured.redemptionAdapter!.redeem('cashuA-forged-id', { metadata: forged(made_up, 500) })
+
+    expect(redemptions().map((r) => r.voucherId)).not.toContain(made_up)
+    expect(record().claimedMinor).toBe(0)
+  })
+
+  it('never claims more than the victim voucher has left', async () => {
+    // The real customer has already spent 700 of 1000. The forger presents
+    // 400 under a self-signed face of 5000, so the ceiling (which trusts the
+    // SIGNED face) lets it through: 700 + 400 fits under 5000.
+    await captured.redemptionAdapter!.redeem('cashuA-honest', { metadata: verified(700) })
+    await captured.redemptionAdapter!.redeem('cashuA-forged-big', {
+      metadata: forged(VOUCHER_ID, 400, 'XAF', 5000),
+    })
+
+    // Capped at the 300 the issuance had left: claimed never passes issued and
+    // outstanding never goes negative.
+    expect(record().claimedMinor).toBe(1000)
+    expect(record().outstandingMinor).toBe(0)
+    expect(redemptions().map((r) => r.amount)).toEqual([700, 300])
+  })
+
+  it('files nothing once the victim voucher is fully claimed', async () => {
+    await captured.redemptionAdapter!.redeem('cashuA-all', { metadata: verified(1000) })
+    await captured.redemptionAdapter!.redeem('cashuA-forged-late', {
+      metadata: forged(VOUCHER_ID, 400, 'XAF', 5000),
+    })
+
+    expect(record().claimedMinor).toBe(1000)
+    // The second row exists (the mint swap happened) but carries the builder's
+    // id, so it is not summed against the voucher.
+    expect(redemptions()).toHaveLength(2)
+    expect(redemptions()[1].voucherId).not.toBe(VOUCHER_ID)
+  })
+
+  it('files nothing when the unit does not match the issuance', async () => {
+    await captured.redemptionAdapter!.redeem('cashuA-forged-eur', {
+      metadata: forged(VOUCHER_ID, 400, 'EUR'),
+    })
+
+    expect(redemptions()[0].voucherId).not.toBe(VOUCHER_ID)
+    expect(record().claimedMinor).toBe(0)
+  })
+})
+
+describe('boundedClaim', () => {
+  const rows = () => store.rows.map((r) => toTransaction(r as unknown as TransactionRow))
+  const claim = { voucherId: VOUCHER_ID, amount: 400, unit: 'XAF', decimals: 0 }
+
+  it('passes a claim that fits, unchanged', () => {
+    expect(boundedClaim(claim, rows())).toEqual(claim)
+  })
+
+  it('refuses a claim with no local issuance', () => {
+    expect(boundedClaim({ ...claim, voucherId: 'nope' }, rows())).toBeUndefined()
+    expect(boundedClaim(claim, [])).toBeUndefined()
+  })
+
+  it('caps at what the issuance has left', () => {
+    expect(boundedClaim({ ...claim, amount: 1500 }, rows())?.amount).toBe(1000)
+  })
+})
+
+describe('unit spelling and decimals (review item 2)', () => {
+  it('counts a claim when the issuance stored a lower-case unit', async () => {
+    store.rows = [issuedIn('xaf', 0)]
+    await captured.redemptionAdapter!.redeem('cashuA-lower', { metadata: verified(400) })
+
+    expect(record().claimedMinor).toBe(400)
+  })
+
+  it('counts a lower-case coupon unit against an upper-case issuance', async () => {
+    await captured.redemptionAdapter!.redeem('cashuA-lower-coupon', {
+      metadata: { ...verified(400), faceUnit: 'xaf' },
+    })
+
+    expect(record().claimedMinor).toBe(400)
+  })
+
+  it('counts a non-ISO unit even when the coupon signed different decimals', async () => {
+    // Issuance files a merchant's own unit with `currencyDecimals`, which
+    // falls back to 2. The coupon here signed 0. Taking the coupon's figure
+    // would split the claim from its issuance under `isClaim`'s strict check.
+    store.rows = [issuedIn('BEANS', 2)]
+    await captured.redemptionAdapter!.redeem('cashuA-beans', {
+      metadata: { ...verified(400), faceUnit: 'BEANS', faceDecimals: 0 },
+    })
+
+    expect(record().claimedMinor).toBe(400)
+    expect(record().outstandingMinor).toBe(600)
+  })
+
+  it('derives candidate decimals by the issuance rule, not the signed one', () => {
+    expect(merchantClaimFor({ ...verified(1), faceUnit: 'beans', faceDecimals: 0 }, STALL)).toEqual(
+      { voucherId: VOUCHER_ID, amount: 1, unit: 'BEANS', decimals: 2 },
+    )
+  })
+})
+
+describe('the claim survives a restore (review item 6)', () => {
+  it('is still counted after toContent/toRow', async () => {
+    await captured.redemptionAdapter!.redeem('cashuA-restore', { metadata: verified(400) })
+    const [stamped] = redemptions()
+
+    const id = String(stamped.id)
+    const restored = toRow(id, toContent(toTransaction(stamped as unknown as TransactionRow)))
+    store.rows = [issued(), restored as unknown as Record<string, unknown>]
+
+    expect(record().claimedMinor).toBe(400)
+    expect(record().outstandingMinor).toBe(600)
+  })
+})
+
+describe('a customer receiving a voucher it did not issue (review item 6)', () => {
+  it('keeps the builder id, so no ceiling switches on for the customer', async () => {
+    // A customer wallet: no stall record, so the cross-stall refusal is not
+    // asked. The coupon is someone else's, whatever id it names.
+    store.merchant = null
+    const OTHER = 'a'.repeat(64)
+    await captured.redemptionAdapter!.redeem('cashuA-customer', {
+      metadata: { ...verified(400), issuerId: OTHER },
+    })
+
+    const [row] = redemptions()
+    expect(row.voucherId).not.toBe(VOUCHER_ID)
+    expect(row.amount).toBe(400)
+    expect(record().claimedMinor).toBe(0)
   })
 })
