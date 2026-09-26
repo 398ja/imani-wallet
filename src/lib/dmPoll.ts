@@ -953,6 +953,12 @@ function redemptionAdapter(): RedemptionAdapter {
           // (#91), so the sender's payload can be filed on this row once it
           // pairs. Computed here because the swap below changes the token.
           transferId: transferIdFor(token),
+          // The part's unrounded value, on every VERIFIED coupon and not only
+          // one coming home: a customer's rows are the priors of the next part
+          // too, and a prior without it is legacy history to the ceiling.
+          exactValue: (meta?.validation as VoucherValidation | undefined)?.signatureValid
+            ? exactOf(token)
+            : undefined,
           // What the wallet checked about this coupon. The vendored builder
           // reads `metadata.validation`, but the row that survives is rebuilt
           // from empty metadata (see legacyBridge.withCorrelation), so without

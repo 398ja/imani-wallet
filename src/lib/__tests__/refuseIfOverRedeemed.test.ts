@@ -101,4 +101,37 @@ describe('refuseIfOverRedeemed', () => {
 
     await expect(refuseIfOverRedeemed(meta, token)).rejects.toBeInstanceOf(RedemptionRefusedError)
   })
+
+  it("passes a customer's last honest part when the earlier parts carry no exact figure (R1)", async () => {
+    // A customer's received rows as they were written before every verified
+    // row carried `exactValue`: 9 proofs each, booked at their own rounding, 1
+    // and 1. The last part is worth 998.99; without an allowance for those two
+    // legacy rows the exact ceiling sees 2 + 998.99 > 1000 and refuses it.
+    const RATIO = 0.05611672278338945
+    stubs.rows = [
+      { ...received(1), id: 'tx-a' },
+      { ...received(1), id: 'tx-b' },
+    ] as unknown as TransactionRow[]
+    const { token } = buildVoucherToken({ issuanceRatio: RATIO, faceValue: 1000 }, [17802])
+    const meta = { voucherId: VOUCHER, faceValue: 999, validation: verified }
+
+    await expect(refuseIfOverRedeemed(meta, token)).resolves.toBe(998)
+  })
+
+  it('gives legacy rows no allowance that new tiny parts can grow (R1)', async () => {
+    // Two legacy rows buy at most one unit of exact slack, however many new
+    // parts follow. Here 1998 new half-unit parts (999 exact) sit on top of
+    // them, so the exact total is 1001, the face plus that whole allowance,
+    // and the next part is refused. A slack over the PART count would have
+    // admitted another thousand.
+    stubs.rows = [
+      { ...received(1), id: 'legacy-a' },
+      { ...received(1), id: 'legacy-b' },
+      ...Array.from({ length: 1998 }, (_, i) => ({ ...received(i % 2), id: `tx-${i}`, exactValue: 0.5 })),
+    ] as unknown as TransactionRow[]
+    const { token } = buildVoucherToken({ issuanceRatio: 0.5, faceValue: 1000 }, [1])
+    const meta = { voucherId: VOUCHER, faceValue: 1, validation: verified }
+
+    await expect(refuseIfOverRedeemed(meta, token)).rejects.toBeInstanceOf(RedemptionRefusedError)
+  })
 })

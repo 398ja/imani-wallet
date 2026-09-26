@@ -180,6 +180,12 @@ export async function withCorrelation<T>(
      * after the mint swap has changed the row's own token id.
      */
     transferId?: string
+    /**
+     * The part's value before rounding, on EVERY verified coupon, so the
+     * redemption ceiling can round the running total (see `cumulativeCredit`).
+     * A claim's own `exact` takes precedence on a coupon coming home.
+     */
+    exactValue?: number
     /** See `merchantClaim.ts`. Present only on a verified coupon coming home. */
     claim?: MerchantClaim
   },
@@ -191,6 +197,7 @@ export async function withCorrelation<T>(
     ids.validation ||
     ids.attestationNullifier ||
     ids.transferId ||
+    ids.exactValue !== undefined ||
     ids.claim
       ? ids
       : undefined
@@ -240,6 +247,10 @@ function stampCorrelation(rows: unknown[]): unknown[] {
       attestedIssuer: t.attestedIssuer || ids.attestedIssuer,
       // The transfer id, so the sender's signature can be filed here later.
       transferId: t.transferId || ids.transferId,
+      // The unrounded value, so the ceiling sees what this part was worth
+      // rather than its per-part rounding. Without it every such row counts as
+      // legacy history (see `checkPart`).
+      ...(t.exactValue === undefined && ids.exactValue !== undefined ? { exactValue: ids.exactValue } : {}),
       // OVERWRITES, unlike everything above: the builder's voucher id is the
       // gateway's (in practice a random UUID) and its amount can be a derived
       // figure, so neither matches the issuance they must be summed against.

@@ -391,6 +391,34 @@ describe('a customer receiving a voucher it did not issue (review item 6)', () =
     expect(row.amount).toBe(400)
     expect(record().claimedMinor).toBe(0)
   })
+
+  it('stamps the exact value on a verified customer row, and keeps it through a restore (R1)', async () => {
+    // A customer's received rows are the priors of the next part of the same
+    // voucher. Without the unrounded value on them the ceiling treats them as
+    // legacy history.
+    store.merchant = null
+    const RATIO = 0.05611672278338945
+    const { token } = buildVoucherToken(
+      { issuerId: 'a'.repeat(64), voucherId: VOUCHER_ID, faceValue: 1000, unit: 'XAF', faceDecimals: 0, issuanceRatio: RATIO },
+      [9],
+    )
+    await captured.redemptionAdapter!.redeem(token, {
+      metadata: { ...verified(1), issuerId: 'a'.repeat(64) },
+    })
+
+    const [row] = redemptions()
+    expect(row.exactValue).toBeCloseTo(9 * RATIO, 12)
+    const restored = toTransaction(toRow('d', toContent(toTransaction(row as unknown as TransactionRow))))
+    expect(restored.exactValue).toBeCloseTo(9 * RATIO, 12)
+  })
+
+  it('stamps no exact value on an unverified coupon', async () => {
+    store.merchant = null
+    await captured.redemptionAdapter!.redeem('cashuA-unverified', {
+      metadata: { ...verified(400), issuerId: 'a'.repeat(64), validation: undefined },
+    })
+    expect(redemptions()[0].exactValue).toBeUndefined()
+  })
 })
 
 describe('fractional-ratio parts through the till (review of 1a87c4f)', () => {

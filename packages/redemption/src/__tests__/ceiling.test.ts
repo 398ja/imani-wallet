@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-import { checkCeiling, cumulativeCredit, redeemedTotalOf } from '../ceiling.js'
+import { checkCeiling, checkPart, cumulativeCredit, redeemedTotalOf } from '../ceiling.js'
 import type { PriorRedemption } from '../types.js'
 
 /**
@@ -174,5 +174,58 @@ describe('cumulative credit', () => {
     expect(cumulativeCredit(400, [gave(1000)])).toBe(400)
     expect(cumulativeCredit(0.2, [tookExact(5, 4.9)])).toBe(0)
     expect(cumulativeCredit(Number.NaN, [])).toBe(0)
+  })
+})
+
+describe('checkPart with legacy priors (R1)', () => {
+  const tookExact = (amount: number, exact: number): PriorRedemption => ({ amount, direction: 'in', exact })
+  const RATIO = 0.05611672278338945
+
+  it('admits the last honest part after two legacy rows booked at their own rounding', () => {
+    const out = checkPart({ signedFaceValue: 1000, exact: 17802 * RATIO, priorRedemptions: [took(1), took(1)] })
+    expect(out.check.allowed).toBe(true)
+    expect(out.credit).toBe(998)
+  })
+
+  it('bounds an attack by the LEGACY row count, never by the parts the attacker adds', () => {
+    const prior: PriorRedemption[] = [took(1), took(1)]
+    let accepted = 0
+    for (let i = 0; i < 4000; i++) {
+      const { credit, check } = checkPart({ signedFaceValue: 1000, exact: 0.5, priorRedemptions: prior })
+      if (!check.allowed) continue
+      accepted += 1
+      prior.push(tookExact(credit, 0.5))
+    }
+    // 998 of exact room plus one unit of legacy allowance is at most 1998
+    // half-parts, and the credit ceiling stops the last one booking past the
+    // face. A slack over the part count would have taken all 4000.
+    expect(accepted).toBeLessThanOrEqual(1998)
+    expect(accepted).toBeGreaterThanOrEqual(1996)
+    expect(redeemedTotalOf(prior)).toBeLessThanOrEqual(1000)
+  })
+})
+
+describe('checkPart against a bad prior exact (R8)', () => {
+  it("caps one part's credit at what that part is worth", () => {
+    // The reviewer's example: a caller-supplied exact of 999 on a prior that
+    // booked 0, then a part worth 0.5. Unbounded, that books 999.
+    const out = checkPart({
+      signedFaceValue: 1000,
+      exact: 0.5,
+      priorRedemptions: [{ amount: 0, direction: 'in', exact: 999 }],
+    })
+    expect(out.credit).toBeLessThanOrEqual(1)
+  })
+
+  it('never credits past ceil(exact), whatever the prior drift', () => {
+    for (const drift of [-5, -0.5, 0, 0.3, 0.99, 1, 7, 1e6]) {
+      const credit = cumulativeCredit(3.2, [{ amount: 10, direction: 'in', exact: 10 + drift }])
+      expect(credit).toBeGreaterThanOrEqual(0)
+      expect(credit).toBeLessThanOrEqual(4)
+    }
+  })
+
+  it('still books an honest running total exactly', () => {
+    expect(cumulativeCredit(0.505, [{ amount: 0, direction: 'in', exact: 0.505 }])).toBe(1)
   })
 })
