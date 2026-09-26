@@ -143,6 +143,7 @@ let pending:
       attestedUnit?: string
       attestedIssuer?: string
       transferId?: string
+      exactValue?: number
       claim?: MerchantClaim
     }
   | undefined
