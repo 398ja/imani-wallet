@@ -65,6 +65,8 @@ vi.mock('../wallet', () => ({
   notifyWalletChanged: () => {},
   recordReceiptByNullifier: async () => {},
   recordTransferSignature: async () => {},
+  backUpTransferSignature: async () => {},
+  listTransactions: async () => [],
 }))
 
 let captured: { redemptionAdapter?: { redeem: (t: string, o?: unknown) => Promise<unknown> } } = {}
@@ -204,6 +206,17 @@ describe('a CUSTOMER receiving a transfer', () => {
     await senderSigned()
     publishThrows = true
     await expect(receive()).resolves.toMatchObject({ voucher_id: 'v-1' })
+  })
+})
+
+describe('logout and account switch (N-a)', () => {
+  it('stopDmPoll drops the in-memory receipt queue, so nothing held carries over', async () => {
+    // No local storage in this suite, so memory is the only copy: exactly the
+    // copy a logout without a reload would otherwise leave readable.
+    await senderSigned()
+    stopDmPoll()
+    await receive()
+    expect(published).toHaveLength(0)
   })
 })
 
