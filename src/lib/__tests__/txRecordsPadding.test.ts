@@ -39,7 +39,9 @@ vi.mock('../wallet', () => ({
   listTransactions: async () => [],
 }))
 
-const { buildTxEvent, restoreTx, TX_PAD_BUCKETS, TRANSFER_SIGNATURE_RESERVE } = await import('../txRecords')
+const { buildTxEvent, restoreTx, paddedJson, toContent, TX_PAD_BUCKETS, TRANSFER_SIGNATURE_RESERVE } = await import(
+  '../txRecords'
+)
 const { toTransaction, buildPaymentTransaction, buildIssueTransaction, buildCashbackTransaction } = await import(
   '../transactions'
 )
@@ -119,11 +121,16 @@ describe('7376 size buckets', () => {
     // The review's band: about 650 to 1600 bytes of memo fitted 2048 without
     // the signature and 4096 with it. Swept past every bucket boundary, up to
     // a memo that no longer fits the last bucket with the signature.
+    // Compared on the padded plaintext, whose length alone fixes the NIP-44
+    // ciphertext length (the edge test below checks real ciphertext), so the
+    // sweep stays fast.
+    const padded = (row: TransactionRow) =>
+      new TextEncoder().encode(paddedJson(toContent(toTransaction(row)))).length
     const mismatches: number[] = []
-    for (let memo = 0; memo <= TX_PAD_BUCKETS.at(-1)! - 1600; memo += 100) {
+    for (let memo = 0; memo <= TX_PAD_BUCKETS.at(-1)! - 1600; memo += 50) {
       const plain = { ...received, memo: 'm'.repeat(memo) } as unknown as TransactionRow
       const signed = { ...withSignature, memo: 'm'.repeat(memo) } as unknown as TransactionRow
-      if (lengthOf(plain) !== lengthOf(signed)) mismatches.push(memo)
+      if (padded(plain) !== padded(signed)) mismatches.push(memo)
     }
     expect(mismatches).toEqual([])
   })
@@ -199,7 +206,6 @@ describe('restore', () => {
     // Written by a build before #99: plain JSON, no `pad`.
     const tx = toTransaction(withSignature)
     const old = { ...buildTxEvent(tx)! }
-    const { toContent } = await import('../txRecords')
     old.content = nip44.encrypt(JSON.stringify(toContent(tx)), conversation)
     relayEvents = [finalizeEvent(old, SK)]
     expect(await restoreTx(ME)).toBe(1)
