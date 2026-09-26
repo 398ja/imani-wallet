@@ -1050,6 +1050,8 @@ describe('sendVouchers and payRequest', () => {
 
   describe('the sender signature (#91)', () => {
     const SENT_ID = 'ab'.repeat(16)
+    /** The signature waits on a `merchantStatus` lookup and is not awaited by the send. */
+    const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 
     function completingWith(status: Record<string, unknown>) {
       const sent = gateway()
@@ -1069,12 +1071,74 @@ describe('sendVouchers and payRequest', () => {
     it('signs a person-to-person send over the id the recipient can compute', async () => {
       stubs.rows = [row()]
       completingWith({ status: 'COMPLETED', sent_voucher_id: SENT_ID })
-      wallet([row()])
+      const { transactions } = wallet([row()])
 
       await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 250 })
+      await flush()
 
       expect(signatures.calls).toEqual([
         { transfer: SENT_ID, recipient: FRIEND, amount: 250, unit: 'EUR', decimals: 2 },
+      ])
+      // D3: the id is kept on the sent row, which is all a wiped sender needs
+      // to rebuild the signature (its nonce derives from their key and this).
+      expect(transactions[0]).toMatchObject({ type: 'sent', transferId: SENT_ID })
+    })
+
+    it('does NOT sign a plain send to a stall key, which attests with a 7377 instead (L4)', async () => {
+      // Sending a stall its own coupon is allowed without a payment request.
+      stubs.rows = [row()]
+      stubs.merchants.add(ISSUER)
+      completingWith({ status: 'COMPLETED', sent_voucher_id: SENT_ID })
+      wallet([row()])
+
+      await sendVouchers({ payer: PAYER, recipient: { pubkey: ISSUER }, merchant, unit: 'EUR', amount: 250 })
+      await flush()
+
+      expect(signatures.calls).toHaveLength(0)
+    })
+
+    it('fetches the transfer id once when an idempotent initiate says COMPLETED straight away (D4)', async () => {
+      stubs.rows = [row()]
+      wallet([row()])
+      let statusReads = 0
+      Object.assign(stubs.api, {
+        initiateAtomicSend: async () => ({ send_id: 'as_1', status: 'COMPLETED' }),
+        getAtomicSendStatus: async () => {
+          statusReads += 1
+          return { status: 'COMPLETED', sent_voucher_id: SENT_ID }
+        },
+        ackKeepToken: async () => {},
+      })
+
+      await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 250 })
+      await flush()
+
+      expect(statusReads).toBe(1)
+      expect(signatures.calls).toEqual([
+        { transfer: SENT_ID, recipient: FRIEND, amount: 250, unit: 'EUR', decimals: 2 },
+      ])
+    })
+
+    it('still completes the send when that extra status read fails', async () => {
+      stubs.rows = [row()]
+      const { transactions } = wallet([row()])
+      Object.assign(stubs.api, {
+        initiateAtomicSend: async () => ({ send_id: 'as_1', status: 'COMPLETED' }),
+        getAtomicSendStatus: async () => {
+          throw new Error('gateway down')
+        },
+        ackKeepToken: async () => {},
+      })
+
+      const result = await sendVouchers({
+        payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 250,
+      })
+      await flush()
+
+      expect(result.delivered).toBe(250)
+      expect(transactions).toHaveLength(1)
+      expect(signatures.calls).toEqual([
+        { transfer: undefined, recipient: FRIEND, amount: 250, unit: 'EUR', decimals: 2 },
       ])
     })
 
