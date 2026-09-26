@@ -31,14 +31,18 @@
  *      same-second-collision case at the boundary is handled by
  *      client-side dedup against processedEventIds; see contracts/catch-up-query.md).
  *   6. A `held_until_paired` event (imani-wallet #99) is left unprocessed
- *      ON PURPOSE, and the PERSISTED watermark may not pass it, so the next
- *      tick fetches it again. It does not stop the batch, and it does not
- *      hold the in-tick query cursor back either (that would re-page the
- *      same events and stall on the no-progress check). Bounded so it
- *      cannot pin the watermark forever or become a re-processing storm:
- *      at most `maxHeldPins` held events pin it per tick, and one older
- *      than `heldTtlSeconds` is released (marked processed) instead. Each
- *      held event is examined at most once per tick.
+ *      ON PURPOSE and must be examined again later, until it pairs or
+ *      expires. It does NOT hold the watermark back: the watermark moves past
+ *      it like any other event, and its id goes into a small persisted set
+ *      (`imani_dm_held:<pubkey>`, next to the watermark) that every tick
+ *      re-queries BY ID after the main window. Pinning the watermark instead
+ *      made every tick re-page everything after the held event, and past
+ *      `maxBatchesPerTick * batchLimit` later events the tick never reached
+ *      the newest ones at all (the #98/#99 review's M1). Bounds: at most
+ *      `maxHeldEvents` ids are tracked (a new held event past that is not
+ *      tracked, so a flood cannot displace one already held), each is
+ *      examined at most once per tick, and one older than `heldTtlSeconds`
+ *      is released (marked processed) and dropped.
  *
  * Single-flight + coalesce is bridge-side (page-lifecycle state, not
  * the loop's responsibility).
@@ -48,7 +52,7 @@
  */
 
 import { classifyEventOutcome, type EventOutcome } from './classifyEventOutcome';
-import { loadDmWatermark, saveDmWatermark, type WatermarkStorage } from './watermark';
+import { loadDmWatermark, saveDmWatermark, watermarkKey, type WatermarkStorage } from './watermark';
 
 /**
  * Minimal NostrEvent shape consumed by the catch-up tick. The gateway
@@ -87,7 +91,19 @@ export interface CatchupTickDeps {
    * Query the gateway for kind-1059 events. The bridge wraps the existing
    * `nostrApi.queryEvents({kinds, pTags, since, limit})` call.
    */
-  queryEventsFn(args: { kinds: number[]; pTags: string[]; since: number; limit: number }): Promise<CatchupNostrEvent[]>;
+  queryEventsFn(args: {
+    kinds: number[];
+    pTags: string[];
+    since: number;
+    limit: number;
+    /**
+     * Only on the held-event re-query: the ids to fetch. The bridge MUST
+     * forward it (`nostrApi.queryEvents` does). The answer is filtered to
+     * these ids here as well, so a bridge that dropped it would only fail to
+     * re-examine held events, never process the wrong ones.
+     */
+    ids?: string[];
+  }): Promise<CatchupNostrEvent[]>;
   /**
    * Process one gift wrap. The bridge wraps the existing
    * `processGiftWrapFromApi → processNip17Dm → TokenRedemption.redeem`
@@ -111,16 +127,17 @@ export interface CatchupTickDeps {
   /** Optional fresh-install lookback in seconds. Defaults to 7 * 86400 per R-4. */
   freshInstallLookbackSeconds?: number;
   /**
-   * How many `held_until_paired` events may pin the persisted watermark in
-   * one tick. Past it, a held event is examined but no longer pins, so a
-   * flood of them cannot freeze the cursor. Defaults to 50.
+   * How many `held_until_paired` event ids are tracked for re-examination.
+   * Past it a new held event is not tracked (it is left unprocessed, but no
+   * later tick asks for it), so a flood cannot displace one already held.
+   * Defaults to 50.
    */
-  maxHeldPins?: number;
+  maxHeldEvents?: number;
   /**
    * A `held_until_paired` event whose `createdAt` is older than this is
-   * released: marked processed and allowed to advance the watermark.
-   * Defaults to the fresh-install lookback (7 days), past which a fresh
-   * device would not fetch it either.
+   * released: marked processed and dropped from the held set. Defaults to
+   * the fresh-install lookback (7 days), past which a fresh device would not
+   * fetch it either.
    */
   heldTtlSeconds?: number;
 }
@@ -141,6 +158,8 @@ export interface CatchupTickSummary {
   deduped: number;
   /** Events left unprocessed on purpose (`held_until_paired`), this tick. */
   held: number;
+  /** Held event ids tracked for re-examination after this tick. */
+  heldTracked: number;
   /** Watermark value after the tick (may be unchanged if all batches were empty). */
   watermarkAfter: number | null;
 }
@@ -148,7 +167,7 @@ export interface CatchupTickSummary {
 const DEFAULT_BATCH_LIMIT = 50;
 const DEFAULT_MAX_BATCHES = 20;
 const DEFAULT_FRESH_INSTALL_LOOKBACK_SEC = 7 * 86400;
-const DEFAULT_MAX_HELD_PINS = 50;
+const DEFAULT_MAX_HELD_EVENTS = 50;
 const KIND_GIFT_WRAP = 1059;
 
 /**
@@ -161,7 +180,7 @@ export async function runCatchupTick(deps: CatchupTickDeps): Promise<CatchupTick
   const batchLimit = deps.batchLimit ?? DEFAULT_BATCH_LIMIT;
   const maxBatches = deps.maxBatchesPerTick ?? DEFAULT_MAX_BATCHES;
   const lookback = deps.freshInstallLookbackSeconds ?? DEFAULT_FRESH_INSTALL_LOOKBACK_SEC;
-  const maxHeldPins = deps.maxHeldPins ?? DEFAULT_MAX_HELD_PINS;
+  const maxHeldEvents = deps.maxHeldEvents ?? DEFAULT_MAX_HELD_EVENTS;
   const heldTtl = deps.heldTtlSeconds ?? lookback;
   const now = deps.now ?? (() => Math.floor(Date.now() / 1000));
   const logger = deps.logger ?? {};
@@ -186,11 +205,13 @@ export async function runCatchupTick(deps: CatchupTickDeps): Promise<CatchupTick
   let seen = 0;
   let deduped = 0;
   let held = 0;
-  // Held events seen this tick, so a re-paged one is not examined twice.
+  // Held events examined this tick, so a re-paged one is not examined twice.
   const heldThisTick = new Set<string>();
-  // The earliest createdAt the persisted watermark may not pass, or null.
-  let pin: number | null = null;
-  let pins = 0;
+  // Held ids from earlier ticks (id -> createdAt), re-examined after the
+  // main window.
+  const heldStore = loadHeld(deps.userPubkeyHex, deps.watermarkStorage);
+  const earlierHeld = new Set(Object.keys(heldStore));
+  let heldDirty = false;
 
   // 2. Multi-batch loop. Terminates when (a) the response is short of
   //    `limit`, (b) we hit maxBatchesPerTick, (c) since stops advancing.
@@ -228,9 +249,9 @@ export async function runCatchupTick(deps: CatchupTickDeps): Promise<CatchupTick
         continue;
       }
 
-      if (heldThisTick.has(event.id)) {
-        // Already examined and held this tick: the query cursor moves past
-        // it, the pin (if it took one) stays.
+      if (heldThisTick.has(event.id) || earlierHeld.has(event.id)) {
+        // Held and tracked (or examined this tick already): the re-query
+        // below looks at it, so the cursor just moves past it.
         maxCreatedAtThisBatch = Math.max(maxCreatedAtThisBatch, event.createdAt);
         continue;
       }
@@ -259,11 +280,14 @@ export async function runCatchupTick(deps: CatchupTickDeps): Promise<CatchupTick
         }
         held++;
         heldThisTick.add(event.id);
-        if (pins < maxHeldPins) {
-          pins++;
-          pin = pin === null ? event.createdAt : Math.min(pin, event.createdAt);
+        if (Object.keys(heldStore).length < maxHeldEvents) {
+          heldStore[event.id] = event.createdAt;
+          heldDirty = true;
+        } else {
+          logger.warn?.('[dmPoll] catchup-held-set-full', { eventId: event.id, maxHeldEvents });
         }
-        // The in-tick cursor moves on; only the persisted watermark is pinned.
+        // The watermark moves past it: it is re-examined by id, not by
+        // re-paging the window after it.
         maxCreatedAtThisBatch = Math.max(maxCreatedAtThisBatch, event.createdAt);
         continue;
       }
@@ -294,15 +318,16 @@ export async function runCatchupTick(deps: CatchupTickDeps): Promise<CatchupTick
     const sinceBeforeBatch = since;
     if (maxCreatedAtThisBatch > sinceBeforeBatch) {
       since = maxCreatedAtThisBatch;
-      // Never past a held event: the next tick has to fetch it again.
-      // `saveDmWatermark` is monotonic, so a pin below the stored value is a
-      // no-op rather than a regression; the stored value is then already at
-      // or below `pin + buffer`, which the next query still covers.
-      const persisted = pin === null ? since : Math.min(since, pin);
-      const saved = saveDmWatermark(deps.userPubkeyHex, persisted, deps.watermarkStorage, {
+      // Held ids are saved BEFORE the watermark passes them, so a crash
+      // between the two can only re-fetch an event, never lose one.
+      if (heldDirty) {
+        saveHeld(deps.userPubkeyHex, deps.watermarkStorage, heldStore, logger);
+        heldDirty = false;
+      }
+      saveDmWatermark(deps.userPubkeyHex, since, deps.watermarkStorage, {
         warn: logger.warn ?? (() => {}),
       });
-      watermark = pin === null ? since : saved;
+      watermark = since;
     }
 
     // No-progress termination: if the batch returned events but the
@@ -325,6 +350,22 @@ export async function runCatchupTick(deps: CatchupTickDeps): Promise<CatchupTick
     //    boundary-overlap event is suppressed by the dedup gate above.
     if (events.length < batchLimit) break;
   }
+  if (heldDirty) {
+    saveHeld(deps.userPubkeyHex, deps.watermarkStorage, heldStore, logger);
+    heldDirty = false;
+  }
+
+  // 6. Re-examine held events from EARLIER ticks, by id. After the main
+  //    window, so a coupon that arrived in it can pair its held signature in
+  //    the same tick. Never throws: the watermark is already saved.
+  held += await reexamineHeld({
+    deps,
+    heldStore,
+    ids: [...earlierHeld].filter((id) => !heldThisTick.has(id) && id in heldStore),
+    expired: (createdAt) => createdAt < now() - heldTtl,
+    batchLimit,
+    logger,
+  });
 
   return {
     processed,
@@ -334,6 +375,122 @@ export async function runCatchupTick(deps: CatchupTickDeps): Promise<CatchupTick
     seen,
     deduped,
     held,
+    heldTracked: Object.keys(heldStore).length,
     watermarkAfter: watermark,
   };
+}
+
+/** Storage key for an identity's held event ids. */
+export function heldEventsKey(userPubkeyHex: string): string {
+  return watermarkKey(userPubkeyHex).replace(/^imani_dm_watermark:/, 'imani_dm_held:');
+}
+
+function loadHeld(userPubkeyHex: string, storage: WatermarkStorage): Record<string, number> {
+  try {
+    const raw = storage.getItem(heldEventsKey(userPubkeyHex));
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: Record<string, number> = {};
+    for (const [id, at] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof at === 'number' && Number.isFinite(at)) out[id] = at;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function saveHeld(
+  userPubkeyHex: string,
+  storage: WatermarkStorage,
+  held: Record<string, number>,
+  logger: NonNullable<CatchupTickDeps['logger']>,
+): void {
+  try {
+    storage.setItem(heldEventsKey(userPubkeyHex), JSON.stringify(held));
+  } catch (err) {
+    logger.warn?.('[dmPoll] catchup-held-save-failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * Fetch the given held ids and offer each to `processFn` again. Returns how
+ * many are still held. Expired ones are released (marked processed); one that
+ * now resolves leaves the set; one the relay did not return, or whose retry
+ * was deferred, stays until it resolves or expires.
+ */
+async function reexamineHeld(args: {
+  deps: CatchupTickDeps;
+  heldStore: Record<string, number>;
+  ids: string[];
+  expired: (createdAt: number) => boolean;
+  batchLimit: number;
+  logger: NonNullable<CatchupTickDeps['logger']>;
+}): Promise<number> {
+  const { deps, heldStore, logger } = args;
+  let stillHeld = 0;
+  let changed = false;
+  const live: string[] = [];
+  for (const id of args.ids) {
+    if (args.expired(heldStore[id]!) || deps.dedupHas(id)) {
+      // Expired, or processed elsewhere (the SSE path): release.
+      if (!deps.dedupHas(id)) deps.dedupAdd(id);
+      delete heldStore[id];
+      changed = true;
+    } else {
+      live.push(id);
+    }
+  }
+  try {
+    for (let i = 0; i < live.length; i += args.batchLimit) {
+      const chunk = live.slice(i, i + args.batchLimit);
+      const wanted = new Set(chunk);
+      const since = Math.min(...chunk.map((id) => heldStore[id]!));
+      const events = await deps.queryEventsFn({
+        kinds: [KIND_GIFT_WRAP],
+        pTags: [deps.userPubkeyHex],
+        ids: chunk,
+        since,
+        limit: chunk.length,
+      });
+      const examined = new Set<string>();
+      for (const event of events) {
+        if (!wanted.has(event.id) || examined.has(event.id)) continue;
+        examined.add(event.id);
+        let outcome: EventOutcome;
+        try {
+          outcome = (await deps.processFn(event)).outcome;
+        } catch (err) {
+          logger.warn?.('[dmPoll] catchup-process-uncaught', {
+            eventId: event.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          outcome = 'transient_receive_within_budget';
+        }
+        if (outcome === 'held_until_paired') {
+          stillHeld++;
+          continue;
+        }
+        const decision = classifyEventOutcome(outcome);
+        if (decision.shouldMarkProcessed) {
+          deps.dedupAdd(event.id);
+          delete heldStore[event.id];
+          changed = true;
+        }
+        // Deferred: stays in the set, retried next tick.
+      }
+      // Not returned (relay lag, or a bridge that dropped `ids`): kept until
+      // it resolves or expires.
+      stillHeld += chunk.filter((id) => !examined.has(id)).length;
+    }
+  } catch (err) {
+    logger.warn?.('[dmPoll] catchup-held-requery-failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  if (changed) saveHeld(deps.userPubkeyHex, deps.watermarkStorage, heldStore, logger);
+  return stillHeld;
 }

@@ -61,9 +61,10 @@ const OUTCOME_TABLE: Readonly<Record<EventOutcome, OutcomeDecision>> = Object.fr
   atomic_write_failed: Object.freeze({ shouldMarkProcessed: false, shouldAdvanceWatermark: false, retryEligible: true }),
   // A non-token DM the app is deliberately leaving on the relay until
   // something else arrives (imani-wallet #99: a transfer signature waiting
-  // for its coupon). Not processed, so the next catch-up sees it again, and
-  // the watermark must not pass it. Unlike a deferred event it does NOT stop
-  // the batch: see runCatchupTick, which also bounds how many and how old.
+  // for its coupon). Not processed, so a later catch-up sees it again. Unlike
+  // a deferred event it does NOT stop the batch, and runCatchupTick re-queries
+  // it by id rather than holding the watermark back, bounding how many and
+  // how old.
   held_until_paired: Object.freeze({ shouldMarkProcessed: false, shouldAdvanceWatermark: false, retryEligible: true }),
 });
 

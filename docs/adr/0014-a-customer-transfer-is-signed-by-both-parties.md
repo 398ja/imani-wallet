@@ -360,9 +360,16 @@ a catch-up at once and the wrap is read again and pairs. Bounds:
   earlier).
 - At most 1000 wraps are held (`MAX_HELD_WRAPS`, about 150 KB). Past that a new
   wrap is not held, so a flood cannot displace one already held.
-- `runCatchupTick` never lets the persisted watermark pass a held event, so it
-  is fetched again, but examines each held event at most once per tick, lets
-  at most 50 pin the watermark, and releases one older than its TTL.
+- `runCatchupTick` (imani-apps' poller, not this wallet's) lets its watermark
+  move past a held event and re-queries the held ids by id on every tick, at
+  most 50 of them, each at most once per tick, releasing one older than its
+  TTL. Pinning the watermark at the held event instead would make every tick
+  re-read everything after it, and stall past 1000 later events.
+- This wallet's poller (`DmPollService.fetchRecentDms`) has no watermark: it
+  pages the whole 7-day window on every fetch, so a held wrap is offered again
+  simply because it is still in the window, and it cannot starve later events
+  (paging runs newest first, to 10,000 events). The cost of a held wrap there
+  is one id lookup per fetch, no decryption.
 
 What a flood can still do is fill the 1000 slots before a genuine signature
 arrives, and then evict that signature from the cache before its coupon: that
