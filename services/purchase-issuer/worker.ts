@@ -7,6 +7,8 @@
  * and only one of those is recoverable.
  */
 
+import { hostname } from 'node:os'
+
 import { getDecimals } from '@imani/money'
 
 import { discharge, type Obligation, type Ports } from './discharge'
@@ -27,7 +29,15 @@ export interface WorkerDeps {
    * minting the wrong thing.
    */
   livemode: boolean
+  /**
+   * Who is claiming, recorded on the row for an operator (imani-wallet#96).
+   * Not an authority; the bearer token is.
+   */
+  workerId?: string
 }
+
+/** Host and process, which is what an operator needs to find the claimant. */
+const DEFAULT_WORKER_ID = `${hostname()}:${process.pid}`
 
 export interface PassResult {
   discharged: number
@@ -39,13 +49,16 @@ export interface PassResult {
 /**
  * One pass over the queue.
  *
- * Sequential, deliberately. Minting is cheap to parallelise and expensive to
- * get wrong: two workers racing the same debt is exactly how one payment
- * becomes two coupons, and the queue is short enough that the ordering costs
- * nothing worth having.
+ * Sequential, deliberately: the queue is short and ordering costs nothing
+ * worth having. It is no longer what stops two workers racing one debt; the
+ * claim is (imani-wallet#96), so replicas are safe.
+ *
+ * Throws `ReportLostError` when an outcome could not be recorded after every
+ * retry. The caller must stop rather than carry on (see `server.ts`).
  */
 export async function runPass(deps: WorkerDeps): Promise<PassResult> {
   const result: PassResult = { discharged: 0, deferred: 0, blocked: 0, skipped: 0 }
+  const worker = deps.workerId ?? DEFAULT_WORKER_ID
   const owed = await deps.api.owed()
 
   for (const purchase of owed) {
@@ -61,6 +74,25 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
       // and marking it would hide a misconfiguration behind a stream of
       // failures.
       result.skipped += 1
+      continue
+    }
+
+    // A stall with no enrolled issuer is issued by hand. Checked BEFORE the
+    // claim, so that ordinary case never holds a lease on a row it will not
+    // work, and never writes a note on every pass.
+    if ((await deps.ports.credentialFor(purchase.stallPubkey)) === null) {
+      result.skipped += 1
+      continue
+    }
+
+    // Claim before mint (imani-wallet#96). The purchases API moves the row
+    // OWED -> ISSUING in one conditional update, so of any number of workers
+    // (replicas, or this one restarted mid-pass) exactly one mints. Anything
+    // but 'claimed', an unreachable API included, means do not mint.
+    const claim = await deps.api.claim(purchase.eventId, worker)
+    if (claim !== 'claimed') {
+      if (claim === 'unreachable') result.deferred += 1
+      else result.skipped += 1
       continue
     }
 
@@ -108,19 +140,25 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
 
       case 'blocked':
         result.blocked += 1
-        await deps.api.reportFailure(purchase.eventId, outcome.reason, true)
+        await deps.api.reportFailure(purchase.eventId, outcome.reason, true, undefined, { worker })
         break
 
       case 'owed':
         result.deferred += 1
-        await deps.api.reportFailure(purchase.eventId, outcome.reason, false)
+        await deps.api.reportFailure(purchase.eventId, outcome.reason, false, undefined, {
+          worker,
+          keepClaim: outcome.ambiguous,
+        })
         break
 
       case 'manual':
-        // A stall with no credential. Ordinary, not a failure, and not
-        // reported: writing a note on every pass would fill the row with
-        // repetitions of a fact that is not going to change by itself.
+        // The credential vanished between the check above and the mint (a
+        // stall re-enrolling mid-pass). Nothing was minted, so the claim is
+        // released back to OWED rather than left to lapse.
         result.skipped += 1
+        await deps.api.reportFailure(purchase.eventId, 'no issuing credential at mint time', false, undefined, {
+          worker,
+        })
         break
     }
   }
@@ -154,5 +192,6 @@ function toObligation(purchase: OwedPurchase): Obligation {
         ? { kind: 'claim' }
         : { kind: 'pubkey', pubkey: purchase.recipientPubkey },
     attempts: purchase.attempts,
+    processorReference: purchase.processorReference,
   }
 }

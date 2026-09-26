@@ -115,6 +115,7 @@ function owed(over: Partial<OwedPurchase> = {}): OwedPurchase {
     currency: 'gbp',
     livemode: true,
     attempts: 0,
+    processorReference: 'pi_1',
     ...over,
   }
 }
@@ -122,6 +123,7 @@ function owed(over: Partial<OwedPurchase> = {}): OwedPurchase {
 function deps(over: Partial<WorkerDeps> = {}): WorkerDeps & { api: PurchasesApi } {
   const api = {
     owed: vi.fn().mockResolvedValue([owed()]),
+    claim: vi.fn().mockResolvedValue('claimed'),
     discharge: vi.fn().mockResolvedValue('accepted'),
     reportFailure: vi.fn().mockResolvedValue(undefined),
   } as unknown as PurchasesApi

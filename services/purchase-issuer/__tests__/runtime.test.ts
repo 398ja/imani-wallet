@@ -21,6 +21,7 @@ import { CredentialVault } from '../vault'
 
 const KEY = 'a'.repeat(64)
 const LOCK = '11'.repeat(32)
+const LIVE_URL = 'https://payment-adapter.internal'
 
 function env(overrides: Record<string, string | undefined> = {}): NodeJS.ProcessEnv {
   return {
@@ -75,7 +76,7 @@ describe('config', () => {
   })
 
   it('accepts both spellings of livemode', () => {
-    expect(readConfig(env({ PURCHASE_LIVEMODE: 'true' })).livemode).toBe(true)
+    expect(readConfig(env({ PURCHASE_LIVEMODE: 'true', PURCHASE_API_URL: LIVE_URL })).livemode).toBe(true)
     expect(readConfig(env({ PURCHASE_LIVEMODE: 'false' })).livemode).toBe(false)
   })
 
@@ -87,7 +88,7 @@ describe('config', () => {
    * "on" — where guessing which one the author meant is the actual risk.
    */
   it('forgives the whitespace and case a compose file introduces', () => {
-    expect(readConfig(env({ PURCHASE_LIVEMODE: ' TRUE ' })).livemode).toBe(true)
+    expect(readConfig(env({ PURCHASE_LIVEMODE: ' TRUE ', PURCHASE_API_URL: LIVE_URL })).livemode).toBe(true)
     expect(readConfig(env({ PURCHASE_LIVEMODE: 'False' })).livemode).toBe(false)
   })
 
@@ -120,6 +121,35 @@ describe('config', () => {
 
   it('takes a real interval', () => {
     expect(readConfig(env({ PURCHASE_INTERVAL_MS: '500' })).intervalMs).toBe(500)
+  })
+
+  /*
+   * imani-wallet#96. In live mode the owed feed decides what real value is
+   * minted and for whom, so a plaintext hop anyone on the network can answer
+   * must stop the deploy.
+   */
+  it.each(['http://payment-adapter:8080', 'payment-adapter:8080', 'not a url'])(
+    'refuses a live worker whose purchases API is not https: %o',
+    (url) => {
+      expect(() => readConfig(env({ PURCHASE_LIVEMODE: 'true', PURCHASE_API_URL: url }))).toThrow(
+        /must be https/,
+      )
+    },
+  )
+
+  it('boots a live worker on https', () => {
+    expect(readConfig(env({ PURCHASE_LIVEMODE: 'true', PURCHASE_API_URL: LIVE_URL })).purchasesUrl).toBe(LIVE_URL)
+  })
+
+  it('lets test mode stay plaintext, as local and staging are', () => {
+    expect(readConfig(env({ PURCHASE_LIVEMODE: 'false' })).purchasesUrl).toBe('http://payment-adapter:8080')
+  })
+
+  it('allows plaintext in live mode only when a deployment says so explicitly', () => {
+    const config = readConfig(
+      env({ PURCHASE_LIVEMODE: 'true', PURCHASE_API_ALLOW_PLAINTEXT: 'true' }),
+    )
+    expect(config.livemode).toBe(true)
   })
 })
 
@@ -322,7 +352,9 @@ describe('fetching a token for a coupon still minting', () => {
 describe('wiring', () => {
   it('builds a worker whose ports reach the vault', async () => {
     const path = await tempPath()
-    const config = readConfig(env({ PURCHASE_CREDENTIALS_PATH: path, PURCHASE_LIVEMODE: 'true' }))
+    const config = readConfig(
+      env({ PURCHASE_CREDENTIALS_PATH: path, PURCHASE_LIVEMODE: 'true', PURCHASE_API_URL: LIVE_URL }),
+    )
 
     await new CredentialVault(KEY, new FileCredentialStore(path)).put({
       stallPubkey: 'b'.repeat(64),

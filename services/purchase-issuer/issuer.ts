@@ -50,6 +50,12 @@ import { sha256 } from '@noble/hashes/sha256'
 export const CREDENTIAL_HEADER = 'X-Imani-Terminal-Credential'
 
 /**
+ * The header the gateway's voucher-create replay store is keyed on,
+ * namespaced there by caller.
+ */
+export const IDEMPOTENCY_HEADER = 'Idempotency-Key'
+
+/**
  * Where issuance happens: customer-wallet, NOT the portal.
  *
  * `wallet-api`'s `issue.ts` names this trap and it is worth repeating where
@@ -60,6 +66,13 @@ export const CREDENTIAL_HEADER = 'X-Imani-Terminal-Credential'
  */
 export const ISSUE_PATH = '/api/v1/wallet/vouchers'
 export const DELIVER_PATH = '/api/v1/dm/tokens/send'
+
+/**
+ * How long a mint request may take. Well inside the purchase claim's lease
+ * (payment-adapter `purchase.claim.lease-seconds`, 600 s by default), so a
+ * slow mint is abandoned long before another worker could take the row.
+ */
+export const ISSUE_TIMEOUT_MS = 30_000
 
 /**
  * How long a coupon bought by card stays spendable.
@@ -90,6 +103,52 @@ export interface IssuePlan {
   faceDecimals: number
   memo: string
   expiresInDays: number
+  /**
+   * Sent as `Idempotency-Key` (imani-wallet#96). The same purchase always
+   * mints under the same key, so a retry after a crash between the mint and
+   * the discharge gets the ORIGINAL coupon back from a gateway that honours
+   * it, rather than a second coupon for one payment.
+   */
+  idempotencyKey?: string
+  /**
+   * The issuance warrant JSON, carried verbatim into the coupon's signed
+   * bytes. See `processorWarrant`.
+   */
+  issuanceWarrant?: string
+}
+
+/**
+ * A `processor` issuance warrant for a card purchase (imani-wallet#96).
+ *
+ * A claim, not a proof: this service reads the processor, so it could assert
+ * a charge that does not exist. What it buys is falsifiability outside the
+ * trust boundary: the stall reads `ref` on its own Stripe dashboard and a
+ * forged coupon resolves to "no such charge" at reconciliation. The wallet
+ * shows it as "paid by card" (`issuedVoucher.paymentRail`).
+ *
+ * The nonce is DERIVED from the purchase, not random, so every attempt at
+ * one purchase sends a byte-identical body under the same idempotency key.
+ */
+export function processorWarrant(input: {
+  eventId: string
+  saleTotalMinor: number
+  faceDecimals: number
+  unit: string
+  reference: string | null
+}): string {
+  return JSON.stringify({
+    form: 'processor',
+    sale_total: input.saleTotalMinor,
+    face_decimals: input.faceDecimals,
+    unit: input.unit,
+    nonce: bytesToHex(sha256(new TextEncoder().encode(`imani-purchase-warrant-v1:${input.eventId}`))).slice(0, 32),
+    ...(input.reference ? { ref: input.reference } : {}),
+  })
+}
+
+/** The key a purchase mints under. One purchase, one key, forever. */
+export function purchaseIdempotencyKey(eventId: string): string {
+  return `purchase:${eventId}`
 }
 
 export interface IssuedCoupon {
@@ -103,11 +162,18 @@ export interface IssuedCoupon {
 export class IssuanceFailed extends Error {
   /** True when retrying could plausibly succeed. */
   readonly retryable: boolean
+  /**
+   * True when the gateway may have minted despite the failure: the request
+   * could not be confirmed either way (unreachable, timeout, 5xx, a 2xx with
+   * an unreadable body). False for a definite refusal (4xx).
+   */
+  readonly ambiguous: boolean
 
-  constructor(message: string, retryable: boolean) {
+  constructor(message: string, retryable: boolean, ambiguous = retryable) {
     super(message)
     this.name = 'IssuanceFailed'
     this.retryable = retryable
+    this.ambiguous = ambiguous
   }
 }
 
@@ -168,6 +234,7 @@ export function issueBody(plan: IssuePlan): string {
     backing_strategy: 'PROPORTIONAL',
     memo: plan.memo,
     expires_in_days: plan.expiresInDays,
+    ...(plan.issuanceWarrant ? { issuance_warrant: plan.issuanceWarrant } : {}),
   })
 }
 
@@ -189,8 +256,14 @@ export async function issueAsStall(
         'Content-Type': 'application/json',
         Authorization: authorization('POST', url, body, credential.lockKeyHex),
         [CREDENTIAL_HEADER]: credential.credentialId,
+        ...(plan.idempotencyKey ? { [IDEMPOTENCY_HEADER]: plan.idempotencyKey } : {}),
       },
       body,
+      // Bounded (imani-wallet#96 review). A hung gateway otherwise holds the
+      // worker, and the purchase's claim, indefinitely. A timeout is an
+      // AMBIGUOUS failure: the claim is left to lapse, and the retry after it
+      // goes out under the same idempotency key.
+      signal: AbortSignal.timeout(ISSUE_TIMEOUT_MS),
     })
   } catch (error) {
     // Unreachable is retryable: the money is already taken, so the debt stands
@@ -204,7 +277,13 @@ export async function issueAsStall(
   const raw = await response.text()
 
   if (response.status !== 200 && response.status !== 201) {
-    throw new IssuanceFailed(explain(response.status, raw), isRetryableStatus(response.status))
+    // A 4xx (429 included) is a refusal: nothing was minted. A 5xx may have
+    // minted before failing.
+    throw new IssuanceFailed(
+      explain(response.status, raw),
+      isRetryableStatus(response.status),
+      response.status >= 500,
+    )
   }
 
   let decoded: unknown

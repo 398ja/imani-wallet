@@ -51,6 +51,22 @@ describe('IW-07: the debt queue is a trust boundary', () => {
       expect(parseOwedPurchase(validRow({ recipientPubkey: null }))).not.toBeNull()
     })
 
+    describe('the processor reference, which is written into signed coupon bytes (#96)', () => {
+      it('accepts a Stripe id, and its absence', () => {
+        expect(parseOwedPurchase(validRow({ processorReference: 'pi_3Nabc_XYZ-1' }))?.processorReference)
+          .toBe('pi_3Nabc_XYZ-1')
+        expect(parseOwedPurchase(validRow())?.processorReference).toBeNull()
+        expect(parseOwedPurchase(validRow({ processorReference: null }))?.processorReference).toBeNull()
+      })
+
+      it.each([['has spaces'], ['"quote"'], ['x'.repeat(101)], [''], [42], ['pi_\n1']])(
+        'refuses the row for %o',
+        (ref) => {
+          expect(parseOwedPurchase(validRow({ processorReference: ref }))).toBeNull()
+        },
+      )
+    })
+
     describe('the face value, which decides how much is minted', () => {
       it('refuses the attacker amount from the finding', () => {
         // A GBP 1,000,000 coupon signed by a stall that never agreed to it.

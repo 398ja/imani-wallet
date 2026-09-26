@@ -21,12 +21,20 @@
  * the normal path THE SAME CODE. A missed push is a bug; a missed poll is the
  * next poll.
  *
- * ## Single instance, deliberately
+ * ## More than one instance is now safe
  *
- * `runPass` is sequential because two workers racing one debt is how one
- * payment becomes two coupons. Nothing here holds a lock, so running two
- * replicas would reintroduce exactly that race. If this ever needs to scale,
- * the fix is a claim on the row in payment-adapter, not another replica.
+ * Each purchase is CLAIMED in payment-adapter before it is minted (one
+ * conditional update, so exactly one worker wins), and every mint for a
+ * purchase carries the same `Idempotency-Key` (imani-wallet#96). Replicas no
+ * longer race; a dead worker's claim lapses and is taken over under the same
+ * key.
+ *
+ * ## It halts rather than guess
+ *
+ * If the outcome of a mint cannot be recorded after every retry, the loop
+ * STOPS and `/health` answers 503 with the reason. Carrying on would poll a
+ * queue this worker can no longer keep honest, which is how one payment
+ * becomes two coupons. A person restarts it once payment-adapter is back.
  */
 
 import { createServer } from 'node:http'
@@ -34,7 +42,7 @@ import { createServer } from 'node:http'
 import { tokenFor, FileCredentialStore } from './adapters'
 import { readConfig, ConfigError, type IssuerConfig } from './config'
 import type { Ports } from './discharge'
-import { PurchasesApi } from './purchasesApi'
+import { PurchasesApi, ReportLostError } from './purchasesApi'
 import { CredentialVault } from './vault'
 import { runPass, type WorkerDeps } from './worker'
 
@@ -93,6 +101,11 @@ interface LastPass {
 
 let lastPass: LastPass | null = null
 let running = true
+/**
+ * Why the loop stopped itself, when it did (imani-wallet#96). Set once; only
+ * a restart clears it.
+ */
+let halted: string | null = null
 
 /**
  * The loop.
@@ -101,7 +114,7 @@ let running = true
  * which is the recoverable state the whole design aims for — and a crash here
  * would stop every OTHER debt from being worked too.
  */
-async function loop(deps: WorkerDeps, intervalMs: number): Promise<void> {
+export async function loop(deps: WorkerDeps, intervalMs: number): Promise<void> {
   while (running) {
     try {
       const result = await runPass(deps)
@@ -117,16 +130,41 @@ async function loop(deps: WorkerDeps, intervalMs: number): Promise<void> {
         )
       }
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      lastPass = { at: Date.now(), discharged: 0, deferred: 0, blocked: 0, skipped: 0, error: message }
+      if (error instanceof ReportLostError) {
+        // Fail closed (imani-wallet#96). Loud, structured, and the loop stops.
+        halted = message
+        running = false
+        console.error(
+          JSON.stringify({
+            event: 'purchase_issuer_halted',
+            reason: 'failure_report_lost',
+            event_id: error.eventId,
+            voucher_id: error.voucherId ?? null,
+            detail: message,
+          }),
+        )
+        return
+      }
       // Recorded on the health endpoint as well as logged, so a persistently
       // failing pass is visible to a probe rather than only to whoever reads
       // container output.
-      const message = error instanceof Error ? error.message : String(error)
-      lastPass = { at: Date.now(), discharged: 0, deferred: 0, blocked: 0, skipped: 0, error: message }
       console.error('[purchase-issuer] pass failed', error)
     }
 
     await new Promise((resolve) => setTimeout(resolve, intervalMs))
   }
+}
+
+/** Test seam: the halt state, and a way to reset module state between tests. */
+export function haltReason(): string | null {
+  return halted
+}
+export function resetForTest(): void {
+  halted = null
+  running = true
+  lastPass = null
 }
 
 /**
@@ -139,6 +177,14 @@ async function loop(deps: WorkerDeps, intervalMs: number): Promise<void> {
  */
 export const server = createServer((req, res) => {
   if (req.url === '/health') {
+    // Halted is the ONE state that fails the probe (imani-wallet#96): a
+    // worker that stopped itself to avoid a double mint must be seen, and a
+    // restart is the intended recovery once the purchases API is back.
+    if (halted !== null) {
+      res.writeHead(503, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ status: 'halted', reason: halted, lastPass }))
+      return
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ status: 'ok', lastPass }))
     return
