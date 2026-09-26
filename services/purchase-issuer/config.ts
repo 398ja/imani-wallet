@@ -107,6 +107,22 @@ export function readConfig(env: NodeJS.ProcessEnv): IssuerConfig {
 
   if (missing.length > 0) throw new ConfigError(missing)
 
+  const livemode = livemodeRaw === 'true'
+
+  // Transport (imani-wallet#96). The owed feed decides how much real value is
+  // minted and for whom, so in LIVE mode it must arrive over TLS: a plaintext
+  // intra-cluster hop is answerable by any pod on the network. Test mode may
+  // stay plaintext (local compose, staging with Stripe test keys), and a
+  // deployment that terminates TLS in a sidecar (mTLS mesh) says so
+  // explicitly, rather than by leaving the check off.
+  const plaintextAllowed = (env.PURCHASE_API_ALLOW_PLAINTEXT ?? '').trim().toLowerCase() === 'true'
+  if (livemode && !plaintextAllowed && !isHttps(purchasesUrl)) {
+    throw new ConfigError([
+      'PURCHASE_API_URL: must be https:// when PURCHASE_LIVEMODE=true; the owed feed decides ' +
+        'what real value is minted. Set PURCHASE_API_ALLOW_PLAINTEXT=true only behind an mTLS sidecar',
+    ])
+  }
+
   return {
     purchasesUrl,
     purchasesToken,
@@ -115,9 +131,18 @@ export function readConfig(env: NodeJS.ProcessEnv): IssuerConfig {
     // A path CAN be defaulted: it names a location, not a secret or a mode, and
     // a wrong one fails loudly on the first read rather than silently.
     credentialsPath: (env.PURCHASE_CREDENTIALS_PATH ?? '/var/lib/imani/purchase-credentials.json').trim(),
-    livemode: livemodeRaw === 'true',
+    livemode,
     intervalMs: positive(env.PURCHASE_INTERVAL_MS, 15_000),
     port: positive(env.PURCHASE_ISSUER_PORT, 8791),
+  }
+}
+
+/** A parseable https URL. Anything else, including a typo, is not TLS. */
+function isHttps(raw: string): boolean {
+  try {
+    return new URL(raw).protocol === 'https:'
+  } catch {
+    return false
   }
 }
 

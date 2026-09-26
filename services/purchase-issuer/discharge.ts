@@ -20,7 +20,14 @@
  * (ADR 0010).
  */
 
-import { IssuanceFailed, issueAsStall, type IssuedCoupon, type StallCredential } from './issuer'
+import {
+  IssuanceFailed,
+  issueAsStall,
+  purchaseIdempotencyKey,
+  processorWarrant,
+  type IssuedCoupon,
+  type StallCredential,
+} from './issuer'
 import { deliver, type Recipient } from './delivery'
 
 /** One coupon a stall owes because a card payment cleared. */
@@ -43,14 +50,23 @@ export interface Obligation {
   recipient: Recipient
   /** How many times issuance has already been tried. */
   attempts: number
+  /** The processor's record of the payment, for the coupon's warrant. */
+  processorReference?: string | null
 }
 
 export type Outcome =
   | { kind: 'discharged'; voucherId: string; issuerId: string; eventId?: string }
   /** Issued but not delivered: value exists and has not reached anyone. */
   | { kind: 'undelivered'; voucherId: string; reason: string }
-  /** Nothing minted. The debt stands and can be tried again. */
-  | { kind: 'owed'; reason: string }
+  /**
+   * Nothing minted as far as we know. The debt stands and can be tried again.
+   *
+   * `ambiguous` when the request may have reached the gateway and minted
+   * anyway (network error, timeout, 5xx). The claim is then left to lapse
+   * rather than released, so the retry comes after anything in flight has
+   * settled and the idempotency key can answer it (imani-wallet#96).
+   */
+  | { kind: 'owed'; reason: string; ambiguous: boolean }
   /** Nothing minted and retrying cannot help. Needs a person. */
   | { kind: 'blocked'; reason: string }
   /** No credential for this stall. Ordinary, not an error. */
@@ -108,16 +124,28 @@ export async function discharge(
       faceDecimals: obligation.faceDecimals,
       memo: obligation.memo,
       expiresInDays: 365,
+      // The purchase's own id, so every attempt at this debt (including one
+      // after a lapsed claim) mints under one key (imani-wallet#96).
+      idempotencyKey: purchaseIdempotencyKey(obligation.id),
+      // A card purchase is warranted by the processor that took the money,
+      // so the stall can reconcile it against its own account.
+      issuanceWarrant: processorWarrant({
+        eventId: obligation.id,
+        saleTotalMinor: obligation.faceValue,
+        faceDecimals: obligation.faceDecimals,
+        unit: obligation.faceUnit,
+        reference: obligation.processorReference ?? null,
+      }),
     })
   } catch (error) {
     if (error instanceof IssuanceFailed) {
       // A burnt credential will never mint. Retrying it forever would bury the
       // one case that needs a human in a log of identical failures.
       return error.retryable
-        ? { kind: 'owed', reason: error.message }
+        ? { kind: 'owed', reason: error.message, ambiguous: error.ambiguous }
         : { kind: 'blocked', reason: error.message }
     }
-    return { kind: 'owed', reason: describe(error) }
+    return { kind: 'owed', reason: describe(error), ambiguous: true }
   }
 
   // From here a coupon EXISTS. Nothing below may report the debt as unminted,
