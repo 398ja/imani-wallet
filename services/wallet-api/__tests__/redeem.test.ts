@@ -218,6 +218,18 @@ describe('the ceiling on a fractional-ratio part', () => {
     expect(out.ceiling?.allowed).toBe(false)
   })
 
+  it('never approves more than the part is worth, whatever exact the caller claims (R8)', async () => {
+    // The reviewer's example: a prior booked 0 but claims an exact of 999, and
+    // a 1-sat part at ratio 0.5 (worth 0.5) asks for 999.
+    const { token, issuer } = await partToken(1, 0.5)
+    const out = run(token, issuer, {
+      requested: 999,
+      priorRedemptions: [{ amount: 0, direction: 'in', exact: 999 }],
+    })
+    expect(out.ceiling?.allowed).toBe(false)
+    expect(out.ceiling?.creditable).toBeLessThanOrEqual(1)
+  })
+
   it('refuses a tiny part once the genuine value is booked', async () => {
     const { token, issuer } = await partToken(1, 0.5)
     const priorRedemptions = Array.from({ length: 2000 }, (_, i) => ({

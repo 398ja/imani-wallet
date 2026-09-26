@@ -73,27 +73,45 @@ const EPSILON = 1e-6
  * face; 2000 half-unit parts credit 1000.
  *
  * A prior with no `exact` (a row written before this existed) counts its
- * credited `amount` as exact. That can only understate what is left to credit
- * by less than a unit per such row, never overstate it.
+ * credited `amount` as exact. That can only understate what is left to credit,
+ * never overstate it. `checkPart` gives such rows a bounded allowance on its
+ * exact ceiling so they cannot refuse an honest last part.
+ *
+ * **Bounded against a bad `exact`.** On honest data the running exact total is
+ * never below what was booked and never a whole unit above it, because every
+ * credit is the floor of that total. A prior `exact` outside that band (a
+ * corrupted restored row, or a caller's own history on wallet-api) is clamped
+ * into it, and the credit is capped at `ceil(exact)`, so no history can make
+ * one part book more than the part itself is worth.
  */
 export function cumulativeCredit(exact: number, priorRedemptions: readonly PriorRedemption[]): number {
   if (!Number.isFinite(exact) || exact <= 0) return 0
   const { exactPrior, creditedPrior } = totals(priorRedemptions)
-  return Math.max(0, Math.floor(exactPrior + exact + EPSILON) - creditedPrior)
+  // Only the upper side is clamped. A running exact total BELOW what was booked
+  // (per-part rounding on a customer's rows) only lowers the credit, which is
+  // the safe direction.
+  const drift = Math.min(exactPrior - creditedPrior, 1 - 2 * EPSILON)
+  const credit = Math.floor(creditedPrior + drift + exact + EPSILON) - creditedPrior
+  return Math.max(0, Math.min(credit, Math.ceil(exact - EPSILON)))
 }
 
-/** Incoming priors, exact and credited. A prior with no `exact` counts its `amount`. */
+/**
+ * Incoming priors, exact and credited. A prior with no `exact` counts its
+ * `amount`, and is counted in `legacy`.
+ */
 function totals(priorRedemptions: readonly PriorRedemption[]) {
   let exactPrior = 0
   let creditedPrior = 0
+  let legacy = 0
   for (const r of priorRedemptions) {
     if (r.direction !== 'in') continue
     const amount = Number.isFinite(r.amount) ? r.amount : 0
-    const e = r.exact !== undefined && Number.isFinite(r.exact) && r.exact >= 0 ? r.exact : amount
-    exactPrior += e
+    const known = r.exact !== undefined && Number.isFinite(r.exact) && r.exact >= 0
+    if (!known) legacy += 1
+    exactPrior += known ? (r.exact as number) : amount
     creditedPrior += amount
   }
-  return { exactPrior, creditedPrior }
+  return { exactPrior, creditedPrior, legacy }
 }
 
 /**
@@ -110,6 +128,12 @@ function totals(priorRedemptions: readonly PriorRedemption[]) {
  * Every honest split passes both (its parts sum to the face, exactly), and
  * however an attacker splits genuine proofs the booked total is the floor of
  * their genuine value.
+ *
+ * **Legacy priors.** A prior with no `exact` was booked at its own rounding,
+ * which can overstate its exact value by up to half a unit, so the exact bound
+ * allows half a unit per such row. Only those rows earn it: every row booked
+ * now carries `exact`, so the allowance is fixed by history an attacker cannot
+ * add to, unlike a slack over the part count, which the attacker chooses.
  */
 export function checkPart(input: {
   signedFaceValue: number
@@ -119,7 +143,8 @@ export function checkPart(input: {
   const { signedFaceValue, exact, priorRedemptions } = input
   const credit = cumulativeCredit(exact, priorRedemptions)
   const check = checkCeiling({ signedFaceValue, requested: credit, priorRedemptions })
+  const { exactPrior, legacy } = totals(priorRedemptions)
   const exactFits =
-    signedFaceValue <= 0 || totals(priorRedemptions).exactPrior + exact <= signedFaceValue + EPSILON
+    signedFaceValue <= 0 || exactPrior + exact <= signedFaceValue + legacy / 2 + EPSILON
   return { credit, check: { ...check, allowed: check.allowed && exactFits } }
 }
