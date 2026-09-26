@@ -11,7 +11,7 @@ import { checkIssuer } from './issuerAllowlist'
 import { getSigner } from './nap'
 import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
 import { asChunk, looksLikeChunk, offerChunk } from './dmChunks'
-import { offerTransferSignature, parseTransferSignature } from './transferSignature'
+import { offerTransferSignature, parseTransferSignature, sealAuthorOf } from './transferSignature'
 import {
   creditableFaceValue,
   parseVoucherToken,
@@ -341,18 +341,29 @@ export function createDmCryptoAdapter(): CryptoAdapter {
          * A sender's signature over a transfer (#91), which arrives in a gift
          * wrap of its own beside the coupon. Handed off and NOT awaited:
          * `offerTransferSignature` never throws, verifies before it stores
-         * anything, and publishes the receipt only once the coupon has also
-         * been redeemed here. The wrap then flows on unchanged, carries no
-         * token, and dm-poll marks it processed as the non-token DM it is.
+         * anything, and queues the receipt only once the coupon has also been
+         * redeemed here AND was sent by the same key. The wrap then flows on
+         * unchanged, carries no token, and dm-poll marks it processed as the
+         * non-token DM it is.
          *
-         * `rumor.pubkey` is the author the payload's `sender` must match, so a
-         * signature forwarded by anyone else is refused.
+         * `rumor.pubkey` is NOT authenticated: nostr-tools' `unwrapEvent`
+         * checks neither the seal's signature nor that the seal and rumor
+         * agree on the author. So the seal is opened again here and must be
+         * validly signed by the same key the rumor names, or the payload is
+         * not offered at all. Even then, what really binds the signer is the
+         * payload's own identity `sig`, and what binds it to the COUPON is the
+         * sender check in `transferSignature.queueIfPaired`.
          */
         const transferSignature = parseTransferSignature(rumor.content)
         if (transferSignature) {
-          void offerTransferSignature(transferSignature, rumor.pubkey).catch((error) =>
-            console.error('[dmCrypto] transfer signature not taken', error),
-          )
+          const sealAuthor = getSigner().withPrivkey((key) => sealAuthorOf(event as never, key))
+          if (sealAuthor && sealAuthor === rumor.pubkey) {
+            void offerTransferSignature(transferSignature, sealAuthor).catch((error) =>
+              console.error('[dmCrypto] transfer signature not taken', error),
+            )
+          } else {
+            console.warn('[dmCrypto] transfer signature in a wrap whose seal does not match its rumor')
+          }
         }
 
         return {

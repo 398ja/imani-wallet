@@ -80,5 +80,13 @@ export const READABLE_ATTESTATION_VERSIONS = ['1', '2'] as const
  */
 export const TRANSFER_RECEIPT_KIND = 7378
 
-/** Payload version of both the sender's signature and the receipt. */
-export const TRANSFER_SIGNATURE_VERSION = 1
+/**
+ * Payload version of both the sender's signature and the receipt.
+ *
+ * 2: the sender's public signature binds the receiver's per-transfer key and
+ * the commitment, per-transfer keys are identity keys tweaked by the secret
+ * nonce, and the nonce is derived from the sender's key. Version 1 is refused
+ * everywhere: its public half signed only the tag, so a receipt could be
+ * copied under another author with a shifted commitment (ADR 0014).
+ */
+export const TRANSFER_SIGNATURE_VERSION = 2

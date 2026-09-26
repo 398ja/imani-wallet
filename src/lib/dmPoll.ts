@@ -24,7 +24,12 @@ import { attestRedemption, nullifierFor } from './attestation'
 import { attestationForReceivedCoupon } from './cashAttestation'
 import { getSigner } from './nap'
 import { postPaymentReceipt } from './paymentReceipt'
-import { noteTransferReceived } from './transferSignature'
+import {
+  noteTransferReceived,
+  resumeTransferReceipts,
+  stopTransferReceipts,
+  transferIdFor,
+} from './transferSignature'
 import { createDmCryptoAdapter, toLegacyMetadata } from './dmCrypto'
 import { resetChunkAssembly } from './dmChunks'
 import { cancelDeferredWrite, deferWrite, flushDeferredWrites } from './deferredWrite'
@@ -944,6 +949,10 @@ function redemptionAdapter(): RedemptionAdapter {
           // even though the original did — so a gap closed by the sweep would
           // silently lose the property this whole version bump exists for.
           attestedIssuer: typeof meta?.issuerId === 'string' ? meta.issuerId : undefined,
+          // The id a customer-to-customer transfer signature is keyed on
+          // (#91), so the sender's payload can be filed on this row once it
+          // pairs. Computed here because the swap below changes the token.
+          transferId: transferIdFor(token),
           // What the wallet checked about this coupon. The vendored builder
           // reads `metadata.validation`, but the row that survives is rebuilt
           // from empty metadata (see legacyBridge.withCorrelation), so without
@@ -1147,22 +1156,29 @@ function redemptionAdapter(): RedemptionAdapter {
         // make is a kind-7378 transfer receipt (#91), never a 7377: see
         // `TRANSFER_RECEIPT_KIND` for why the two claims cannot share a kind.
         //
-        // Published only if the sender also signed this transfer, which
-        // `noteTransferReceived` checks; a coupon from an older build or
+        // Queued only if the sender also signed this transfer, which
+        // `noteTransferReceived` checks, and only a signature by the key that
+        // actually SENT this coupon pairs: the payload's `sender_pubkey`
+        // (which gateway-core sets from the send row), else the envelope's
+        // signer for a bare wallet-to-wallet wrap. Never `issuerId`, which is
+        // who minted the coupon, not who paid. A coupon from an older build or
         // straight from a stall therefore leaves no public trace. The credited
-        // value is passed only when the voucher verified, for the reason
-        // `attestRedemption` gives, so a sender-written envelope figure is
-        // never committed to.
+        // value, unit and decimals are passed only when the voucher verified,
+        // for the reason `attestRedemption` gives, so a sender-written
+        // envelope figure is never committed to.
         //
         // Fire-and-forget and never throwing, like everything else here: the
         // proofs are already burnt, and a relay refusing a receipt must not
         // turn a completed redemption into a reported failure.
+        const couponSender = meta?.senderPubkey ?? opts?.senderPubkey
         void noteTransferReceived({
           token,
+          sender: typeof couponSender === 'string' ? couponSender : undefined,
           ...(validation?.signatureValid === true
             ? {
                 credited: Number(meta?.faceValue),
                 unit: meta?.faceUnit == null ? undefined : String(meta.faceUnit),
+                decimals: meta?.faceDecimals == null ? undefined : Number(meta.faceDecimals),
               }
             : {}),
         }).catch((error) => console.error('[dmPoll] transfer receipt failed', error))
@@ -1210,6 +1226,12 @@ export function startDmPoll(pubkey: string): DmPollService {
     stopDmPoll()
   }
   currentPubkey = pubkey
+
+  // Customer transfer receipts (#91) are published after a random delay, so a
+  // tab that closed while one was waiting left it queued in local storage.
+  // Arms the timer for those; overdue ones go out on the next tick. Never
+  // throws, and a merchant wallet publishes none.
+  resumeTransferReceipts(pubkey)
 
   // Before the poller reads its processed set, not after: coupons abandoned by
   // a build that could not reassemble chunks are recoverable only if their
@@ -1324,6 +1346,10 @@ export function stopDmPoll(): void {
   // genuine half-transfer costs nothing, because its wraps are still on the
   // relay and were never marked processed.
   resetChunkAssembly()
+  // The receipt timer is per-account too. Stopping it loses nothing: the
+  // queue is in local storage, and `startDmPoll` re-arms it for whoever
+  // signs in next, if it is theirs.
+  stopTransferReceipts()
   // The received-token mirror is per-ACCOUNT state too. `startDmPoll` calls
   // this on an identity change, and a mirror left loaded would answer the next
   // user's "have I already banked this?" from the previous user's memory —

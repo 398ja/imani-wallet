@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Event } from 'nostr-tools'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
@@ -16,6 +16,7 @@ import { ATTESTATION_KIND, TRANSFER_RECEIPT_KIND } from '../attestationKind'
 
 const SENDER_SK = '1'.repeat(64)
 const RECEIVER_SK = '2'.repeat(64)
+const STRANGER_SK = '3'.repeat(64)
 const pub = (sk: string) => bytesToHex(schnorr.getPublicKey(hexToBytes(sk)))
 const SENDER = pub(SENDER_SK)
 const RECEIVER = pub(RECEIVER_SK)
@@ -63,6 +64,7 @@ vi.mock('../wallet', () => ({
   getWallet: () => ({}),
   notifyWalletChanged: () => {},
   recordReceiptByNullifier: async () => {},
+  recordTransferSignature: async () => {},
 }))
 
 let captured: { redemptionAdapter?: { redeem: (t: string, o?: unknown) => Promise<unknown> } } = {}
@@ -83,15 +85,28 @@ vi.stubGlobal('window', {
 })
 
 const { startDmPoll, stopDmPoll } = await import('../dmPoll')
-const { offerTransferSignature, resetHeldTransfers, signTransfer, transferIdFor } =
-  await import('../transferSignature')
+const {
+  offerTransferSignature,
+  resetHeldTransfers,
+  signTransfer,
+  transferIdFor,
+  RECEIPT_DELAY_MAX_MS,
+} = await import('../transferSignature')
 
 const TOKEN = 'cashuB-gift-from-a-friend'
 const VERIFIED = { signatureValid: true, legacyCanonical: true, signedFaceValue: 250, cappedAtFaceValue: false }
-const META = { faceValue: 250, faceUnit: 'EUR', issuerId: 'c'.repeat(64), validation: VERIFIED }
+// `senderPubkey` is the envelope's `sender_pubkey`: who actually sent it.
+const META = {
+  faceValue: 250,
+  faceUnit: 'EUR',
+  faceDecimals: 2,
+  issuerId: 'c'.repeat(64),
+  senderPubkey: SENDER,
+  validation: VERIFIED,
+}
 
-/** Let the fire-and-forget publishes settle. */
-const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+/** Let the fire-and-forget work settle, and every randomly delayed receipt come due. */
+const settle = () => vi.advanceTimersByTimeAsync(RECEIPT_DELAY_MAX_MS + 1)
 
 async function receive(metadata: Record<string, unknown> = META) {
   startDmPoll(RECEIVER)
@@ -101,6 +116,7 @@ async function receive(metadata: Record<string, unknown> = META) {
 }
 
 beforeEach(() => {
+  vi.useFakeTimers()
   stopDmPoll()
   published.length = 0
   publishThrows = false
@@ -110,15 +126,21 @@ beforeEach(() => {
   redeem.mockResolvedValue({ voucher_id: 'v-1', face_value: 250, face_unit: 'EUR' })
 })
 
-async function senderSigned() {
-  const p = signTransfer(hexToBytes(SENDER_SK), {
+afterEach(() => {
+  stopDmPoll()
+  vi.useRealTimers()
+})
+
+async function senderSigned(sk = SENDER_SK) {
+  const p = signTransfer(hexToBytes(sk), {
     transfer: transferIdFor(TOKEN),
     recipient: RECEIVER,
     amount: 250,
     unit: 'EUR',
     decimals: 2,
   })
-  await offerTransferSignature(p, SENDER)
+  await offerTransferSignature(p, pub(sk))
+  return p
 }
 
 describe('a CUSTOMER receiving a transfer', () => {
@@ -138,7 +160,39 @@ describe('a CUSTOMER receiving a transfer', () => {
     await receive()
     expect(published).toHaveLength(0)
     await senderSigned()
+    await settle()
     expect(published.map((e) => e.kind)).toEqual([TRANSFER_RECEIPT_KIND])
+  })
+
+  it('commits to the verified amount, unit and decimals', async () => {
+    await senderSigned()
+    await receive()
+    expect(JSON.parse(published[0]!.content)).toMatchObject({ unit: 'EUR', decimals: 2 })
+  })
+
+  it('pairs only the signature of whoever SENT the coupon, not a stranger who signed first (D2)', async () => {
+    const stranger = await senderSigned(STRANGER_SK)
+    const real = await senderSigned()
+    await receive()
+    expect(published).toHaveLength(1)
+    expect(JSON.parse(published[0]!.content).senderKey).toBe(real.transferKey)
+    expect(JSON.parse(published[0]!.content).senderKey).not.toBe(stranger.transferKey)
+  })
+
+  it('falls back to the wrap author when the envelope names no sender', async () => {
+    await senderSigned()
+    startDmPoll(RECEIVER)
+    const noSender: Record<string, unknown> = { ...META, senderPubkey: undefined }
+    await captured.redemptionAdapter!.redeem(TOKEN, { metadata: noSender, senderPubkey: SENDER })
+    await settle()
+    expect(published.map((e) => e.kind)).toEqual([TRANSFER_RECEIPT_KIND])
+  })
+
+  it('never pairs with the ISSUER, who minted the coupon but did not send it', async () => {
+    await senderSigned()
+    const noSender: Record<string, unknown> = { ...META, senderPubkey: undefined }
+    await receive({ ...noSender, issuerId: SENDER })
+    expect(published).toHaveLength(0)
   })
 
   it('publishes nothing at all without a sender signature', async () => {

@@ -460,6 +460,38 @@ export async function recordReceiptByNullifier(receipt: {
   }
 }
 
+/**
+ * File the sender's signature over a transfer (#91) on the received row it
+ * belongs to, found by `transferId` (sha256 of the RECEIVED token, stamped
+ * during the redemption by `withCorrelation`, for the reason
+ * `recordReceiptByNullifier` gives).
+ *
+ * The payload is what lets this wallet later find, open and disclose the
+ * kind-7378 receipt it published, and after the publish there is no other copy
+ * on the device. So the row is also re-published to the relay backup (sealed
+ * to self): `updateTransaction` bypasses the backup hook, and `backfillTx`
+ * only publishes ids the relay has never seen.
+ *
+ * First writer wins, and it never throws.
+ */
+export async function recordTransferSignature(transferId: string, payload: string): Promise<void> {
+  try {
+    const rows = await listTransactions()
+    const match = rows.find(
+      (row) => (row as unknown as Record<string, unknown>).transferId === transferId,
+    )
+    if (!match?.id) return
+    if ((match as unknown as Record<string, unknown>).transferSignature) return
+    const merged = await getWallet().updateTransaction(match.id, {
+      transferSignature: payload,
+    } as unknown as Partial<TransactionRow>)
+    if (merged) void publishTx(merged)
+    notifyWalletChanged()
+  } catch (error) {
+    console.error('[wallet] transfer signature not recorded', error)
+  }
+}
+
 export async function listTransactions(): Promise<TransactionRow[]> {
   return getWallet().getAllTransactions()
 }
