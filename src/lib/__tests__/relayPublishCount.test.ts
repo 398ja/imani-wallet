@@ -5,13 +5,14 @@ import { createServer, type Server } from 'node:net'
 
 import { beforeAll, describe, expect, it } from 'vitest'
 import { finalizeEvent } from 'nostr-tools'
-import { useWebSocketImplementation } from 'nostr-tools/pool'
+// Aliased: not a React hook, it only starts with `use`.
+import { useWebSocketImplementation as setWebSocketImplementation } from 'nostr-tools/pool'
 import { secp256k1 } from '@noble/curves/secp256k1.js'
 import WebSocket from 'ws'
 
 import { publish } from '../relay'
 
-useWebSocketImplementation(WebSocket)
+setWebSocketImplementation(WebSocket)
 
 /**
  * `publish` must not count a relay it never reached as one that accepted the
