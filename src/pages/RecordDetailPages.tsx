@@ -97,9 +97,9 @@ export function CouponPage() {
         The pass replaces what used to be a bare amount-and-name panel. It leads
         with what this coupon is worth now (its row's `face_value`, which a
         partial spend rewrites to the change; see `balanceField` in pass.ts for
-        why that is the only balance there is) and carries the redemption QR — the code a
-        merchant scans to redeem against the ledger, NOT the share QR, which
-        would hand over the token's bearer value.
+        why that is the only balance there is). It carries the redemption QR,
+        the code a merchant scans to redeem against the ledger, NOT the share
+        QR, which would hand over the token's bearer value.
       */}
       <div className="mb-6">
         {/*
