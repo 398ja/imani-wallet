@@ -24,9 +24,34 @@
  * are gift wraps between those identities, plus the cache warmers, which go to
  * the gateway cache only and never to the relay.
  *
+ * Cleanup. The probe keeps the key of every event it publishes, the gift
+ * wrap's own NIP-59 throwaway key included (it builds the wrap itself rather
+ * than letting `nip17.wrapEvent` pick and discard one). At the end it
+ * publishes a NIP-09 deletion request (kind 5, `e` and `k` tags) for each of
+ * them, signed by that event's author, and prints what was and was not
+ * accepted. What that does and does not remove:
+ *
+ *   - Relay (strfry, which implements NIP-09): each wrap the probe published
+ *     there gets a deletion request from its own author, and the script
+ *     prints how many the relay accepted. The kind-5 requests themselves
+ *     stay, as junk signed by keys nobody holds once the probe exits.
+ *   - Gateway cache (nostrdb, via POST /api/v1/nostr/events): NOT removed.
+ *     `storeEvent` stores what it is given and never applies a kind 5, and
+ *     there is no delete endpoint. The warmers and the mirrored wraps stay in
+ *     staging nostrdb until it is pruned or reset by someone with admin
+ *     access. They are harmless: tagged to throwaway recipients whose keys are
+ *     discarded when the probe exits. The deletions are not sent there, since
+ *     they would only add more events it keeps.
+ *   - Seals (kind 13) and NIP-98 auth events (kind 27235) are never published,
+ *     so there is nothing to remove.
+ *   - Runs before this cleanup existed (the #98 staging run) discarded the
+ *     wrap keys, so their wraps cannot be deleted by anyone but a relay admin.
+ *
+ * Set PROBE_KEEP=1 to skip the cleanup and leave the events in place.
+ *
  *   GATEWAY_URL=https://wallet.staging.398ja.xyz npx tsx e2e/probe-transfer-signature-delivery.mts
  */
-import { finalizeEvent, nip17, type Event } from 'nostr-tools'
+import { finalizeEvent, nip44, nip59, type Event } from 'nostr-tools'
 import { Relay, useWebSocketImplementation } from 'nostr-tools/relay'
 import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha2.js'
@@ -36,6 +61,9 @@ import WebSocket from 'ws'
 useWebSocketImplementation(WebSocket)
 
 const GATEWAY = (process.env.GATEWAY_URL ?? 'https://wallet.staging.398ja.xyz').replace(/\/$/, '')
+
+/** Every event this run put anywhere, with the key that can ask to delete it. */
+const published: Array<{ event: Event; sk: Uint8Array; where: 'relay' | 'gateway cache' }> = []
 
 interface Id {
   sk: Uint8Array
@@ -106,25 +134,91 @@ async function catchUp(recipient: string): Promise<string[]> {
  * freshness window. Its content is not a real rumor: nothing will ever unwrap
  * it, it only has to be a validly signed kind 1059 tagged `p`.
  */
-function warmer(to: string): Event {
-  return finalizeEvent(
+function warmer(to: string): { event: Event; sk: Uint8Array } {
+  const { sk } = identity()
+  const event = finalizeEvent(
     {
       kind: 1059,
       created_at: Math.floor(Date.now() / 1000),
       tags: [['p', to]],
       content: `probe-98-warmer-${bytesToHex(randomBytes(8))}`,
     },
-    identity().sk,
+    sk,
+  )
+  return { event, sk }
+}
+
+/**
+ * The wrap, built as `nip17.wrapEvent` (what sendTransferSignature calls)
+ * builds it: a kind-14 rumor, sealed by the sender, wrapped with a one-off
+ * key, `created_at` backdated up to two days. The one difference is that the
+ * one-off wrap key is returned rather than discarded, so the wrap can be
+ * deleted afterwards.
+ */
+export function wrap(from: Id, to: string): { event: Event; sk: Uint8Array } {
+  const rumor = nip59.createRumor(
+    {
+      kind: 14,
+      created_at: Math.ceil(Date.now() / 1000),
+      tags: [['p', to]],
+      content: JSON.stringify({ type: 'probe_98_transfer_signature', note: 'throwaway identities, no value' }),
+    },
+    from.sk,
+  )
+  const seal = nip59.createSeal(rumor, from.sk, to)
+  const { sk } = identity()
+  const event = finalizeEvent(
+    {
+      kind: 1059,
+      created_at: Math.round(Date.now() / 1000 - Math.random() * 2 * 24 * 60 * 60),
+      tags: [['p', to]],
+      content: nip44.encrypt(JSON.stringify(seal), nip44.getConversationKey(sk, to)),
+    },
+    sk,
+  )
+  return { event, sk }
+}
+
+/** A NIP-09 deletion request for `event`, signed by its author's key. */
+export function deletionFor(event: Event, sk: Uint8Array): Event {
+  return finalizeEvent(
+    {
+      kind: 5,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [
+        ['e', event.id],
+        ['k', String(event.kind)],
+      ],
+      content: 'probe-98 cleanup: throwaway test event',
+    },
+    sk,
   )
 }
 
-/** The wrap, built exactly as sendTransferSignature builds it. */
-function wrap(from: Id, to: string): Event {
-  return nip17.wrapEvent(
-    from.sk,
-    { publicKey: to },
-    JSON.stringify({ type: 'probe_98_transfer_signature', note: 'throwaway identities, no value' }),
-  ) as Event
+/**
+ * Ask the relay to delete everything this run published. Never throws: a
+ * cleanup failure is reported, not fatal, and must not hide the results.
+ */
+async function cleanup(relay: Relay): Promise<void> {
+  let relayDeleted = 0
+  const failures: string[] = []
+  const onRelay = published.filter((p) => p.where === 'relay')
+  for (const { event, sk } of onRelay) {
+    try {
+      await relay.publish(deletionFor(event, sk))
+      relayDeleted++
+    } catch (error) {
+      failures.push(`${event.id.slice(0, 8)}: ${String(error)}`)
+    }
+  }
+  const cacheOnly = published.filter((p) => p.where === 'gateway cache').length
+  console.log(
+    `cleanup: ${relayDeleted}/${onRelay.length} deletion requests accepted by the relay` +
+      (failures.length ? `; refused: ${failures.join(', ')}` : ''),
+  )
+  console.log(
+    `cleanup: ${cacheOnly} event(s) sent to the gateway cache stay there (no NIP-09 there, see the header)`,
+  )
 }
 
 async function relayUrl(): Promise<string> {
@@ -143,10 +237,14 @@ async function run(arm: Arm, relay: Relay) {
   const notes: string[] = []
 
   if (arm === 'warm' || arm === 'warm+mirror') {
-    notes.push(`warm B: ${await storeEvent(A, warmer(B.pk))}`)
+    const w = warmer(B.pk)
+    published.push({ ...w, where: 'gateway cache' })
+    notes.push(`warm B: ${await storeEvent(A, w.event)}`)
   }
   if (arm === 'warm-other') {
-    notes.push(`warm C: ${await storeEvent(A, warmer(C.pk))}`)
+    const w = warmer(C.pk)
+    published.push({ ...w, where: 'gateway cache' })
+    notes.push(`warm C: ${await storeEvent(A, w.event)}`)
     // Prime the gateway's view of C too, so the warmer is in play.
     await catchUp(C.pk)
   }
@@ -157,12 +255,16 @@ async function run(arm: Arm, relay: Relay) {
     notes.push(`pre-catch-up returned ${(await catchUp(B.pk)).length}`)
   }
 
-  const w = wrap(A, B.pk)
+  const { event: w, sk: wrapSk } = wrap(A, B.pk)
   if (arm !== 'mirror-only') {
+    published.push({ event: w, sk: wrapSk, where: 'relay' })
     await relay.publish(w)
     notes.push('relay: ok')
   }
   if (arm === 'warm+mirror' || arm === 'mirror-only') {
+    // In the relay-and-mirror arm it is already listed; the relay copy is the
+    // one a deletion can remove.
+    if (arm === 'mirror-only') published.push({ event: w, sk: wrapSk, where: 'gateway cache' })
     notes.push(`mirror: ${await storeEvent(A, w)}`)
   }
 
@@ -195,11 +297,17 @@ async function main() {
       rows.push({ arm, error: String(error) })
     }
   }
-  relay.close()
   console.table(rows)
+  if (process.env.PROBE_KEEP === '1') console.log('cleanup: skipped (PROBE_KEEP=1)')
+  else await cleanup(relay)
+  relay.close()
 }
 
-main().catch((e) => {
-  console.error(e)
-  process.exit(1)
-})
+// Only when run, not when imported (the wrap and deletion builders are checked
+// offline by importing them).
+if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+  main().catch((e) => {
+    console.error(e)
+    process.exit(1)
+  })
+}
