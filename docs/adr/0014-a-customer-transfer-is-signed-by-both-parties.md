@@ -263,7 +263,10 @@ brought forward). Every time, the receipt was on the relay, verified, and
 opened to the 25.00 GBP A signed, with `created_at` jittered backwards (0 to
 59 minutes). The probe deletes its receipt afterwards (NIP-09, signed by the
 receipt's own per-transfer key). `PROBE_REAL_DELAY=1` waits out the real
-random delay instead (up to 6 h).
+random delay instead. One such run on 2026-09-26 drew an 89-minute delay. The
+wallet's own timer (`arm`) fired at the due time and published the receipt
+with nothing driving it, and the receipt was on the relay, verified, and
+opened to 25.00 GBP, with `created_at` 52 minutes in the past.
 
 With `PROBE_MIRROR_ONLY=1` the wallet's relay is dead, so the gateway mirror
 is the only way the wrap can reach B. That run also passed: delivered, held
