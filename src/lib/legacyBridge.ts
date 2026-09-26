@@ -144,6 +144,7 @@ let pending:
       attestedIssuer?: string
       transferId?: string
       exactValue?: number
+      zeroCredit?: boolean
       claim?: MerchantClaim
     }
   | undefined
@@ -187,6 +188,13 @@ export async function withCorrelation<T>(
      * A claim's own `exact` takes precedence on a coupon coming home.
      */
     exactValue?: number
+    /**
+     * The verified credit for this coupon is 0 (a part worth less than half a
+     * unit). The vendored builder reads `face_value || token_amount`, so a 0
+     * falls through to the token's SATS and books them as face units. Set,
+     * the row's amount is written as 0.
+     */
+    zeroCredit?: boolean
     /** See `merchantClaim.ts`. Present only on a verified coupon coming home. */
     claim?: MerchantClaim
   },
@@ -199,6 +207,7 @@ export async function withCorrelation<T>(
     ids.attestationNullifier ||
     ids.transferId ||
     ids.exactValue !== undefined ||
+    ids.zeroCredit ||
     ids.claim
       ? ids
       : undefined
@@ -252,6 +261,8 @@ function stampCorrelation(rows: unknown[]): unknown[] {
       // rather than its per-part rounding. Without it every such row counts as
       // legacy history (see `checkPart`).
       ...(t.exactValue === undefined && ids.exactValue !== undefined ? { exactValue: ids.exactValue } : {}),
+      // A verified zero credit, which the builder turned into the sats.
+      ...(ids.zeroCredit ? { amount: 0 } : {}),
       // OVERWRITES, unlike everything above: the builder's voucher id is the
       // gateway's (in practice a random UUID) and its amount can be a derived
       // figure, so neither matches the issuance they must be summed against.

@@ -972,6 +972,12 @@ function redemptionAdapter(): RedemptionAdapter {
             exactValue: (meta?.validation as VoucherValidation | undefined)?.signatureValid
               ? exactOf(token)
               : undefined,
+            // A verified credit of 0 is booked as 0. The vendored row builder
+            // reads `face_value || token_amount` and would otherwise book the
+            // token's sats as face units.
+            zeroCredit:
+              (meta?.validation as VoucherValidation | undefined)?.signatureValid === true &&
+              Number(meta?.faceValue) === 0,
             // What the wallet checked about this coupon. The vendored builder
             // reads `metadata.validation`, but the row that survives is rebuilt
             // from empty metadata (see legacyBridge.withCorrelation), so without

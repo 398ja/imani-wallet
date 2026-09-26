@@ -111,6 +111,9 @@ const redeem = vi.fn(async (_token: string, opts: { metadata?: Record<string, un
     token: `cashuBfresh${swaps}`,
     voucher_id: crypto.randomUUID(),
     face_value: Number(opts.metadata?.faceValue ?? 0),
+    // As `buildVoucher` sets it: the proofs' sats, which the row builder
+    // falls back to when `face_value` is 0.
+    token_amount: Number(opts.metadata?.tokenAmount ?? 0) || undefined,
     face_unit: 'XAF',
     face_decimals: 0,
     issuer_id: STALL,
@@ -410,6 +413,33 @@ describe('a customer receiving a voucher it did not issue (review item 6)', () =
     expect(row.exactValue).toBeCloseTo(9 * RATIO, 12)
     const restored = toTransaction(toRow('d', toContent(toTransaction(row as unknown as TransactionRow))))
     expect(restored.exactValue).toBeCloseTo(9 * RATIO, 12)
+  })
+
+  it('books a verified zero credit as 0, never as the token sats (N-d)', async () => {
+    // tokenRedemption's row builder reads `face_value || token_amount`, so a
+    // part credited 0 fell through to its sats. Here: a customer's 7-sat part
+    // at ratio 0.05, worth 0.35, credited 0.
+    store.merchant = null
+    const { token } = buildVoucherToken(
+      { issuerId: 'a'.repeat(64), voucherId: VOUCHER_ID, faceValue: 1000, unit: 'XAF', faceDecimals: 0, issuanceRatio: 0.05 },
+      [7],
+    )
+    await captured.redemptionAdapter!.redeem(token, {
+      metadata: { ...verified(0), issuerId: 'a'.repeat(64), tokenAmount: 7 },
+    })
+    expect(redemptions()[0].amount).toBe(0)
+  })
+
+  it('books a zero credit on a coupon coming home with no issuance as 0 too (N-d)', async () => {
+    // A stall's own coupon it has no `issued` row for, so no claim overwrites
+    // the row. Its cumulative credit is 0.
+    store.rows = []
+    const { token } = buildVoucherToken(
+      { issuerId: STALL, voucherId: VOUCHER_ID, faceValue: 1000, unit: 'XAF', faceDecimals: 0, issuanceRatio: 0.05 },
+      [7],
+    )
+    await captured.redemptionAdapter!.redeem(token, { metadata: { ...verified(0), tokenAmount: 7 } })
+    expect(redemptions()[0].amount).toBe(0)
   })
 
   it('stamps no exact value on an unverified coupon', async () => {
