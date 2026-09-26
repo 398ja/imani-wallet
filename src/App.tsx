@@ -15,6 +15,7 @@ import { resyncPushSubscription } from './lib/notifications/manager'
 import { reconcilePendingSends } from './lib/pay'
 import { reconcileRequests } from './lib/vreq'
 import { sweepBurnable } from './lib/burn'
+import { reconcileClaims } from './lib/claimReconcile'
 import { restoreIssued } from './lib/issuedRecords'
 import { restoreTx, backfillTx } from './lib/txRecords'
 import { restoreVouchers, backfillVouchers } from './lib/voucherRecords'
@@ -215,6 +216,15 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             // before this existed, while a relay was refusing writes, or whose
             // publish lost the race with a closing tab.
             return backfillTx(pubkey)
+          })
+          // Last, once both the coupons and the history are back: re-files
+          // redemptions written without their claim (pre-#90 rows) against
+          // the issuance, so claimed/outstanding and the ceiling see them
+          // (#95). Never throws; a customer wallet returns at once.
+          .then(() => reconcileClaims(pubkey))
+          .then(({ filed, unreadable }) => {
+            if (filed > 0) console.info(`[app] re-filed ${filed} redemption(s) against their issuance`)
+            if (unreadable > 0) console.info(`[app] ${unreadable} redemption(s) could not be matched: coupon not on this device`)
           })
       },
       (e) => live && setError(e as Error),

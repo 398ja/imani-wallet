@@ -451,6 +451,55 @@ describe('a customer receiving a voucher it did not issue (review item 6)', () =
   })
 })
 
+describe('two tabs redeeming one voucher past its ceiling (#97)', () => {
+  /** A Locks API double that serialises per name, as the browser's does. */
+  const withLocks = async (run: () => Promise<void>, serialise: boolean) => {
+    const chains = new Map<string, Promise<unknown>>()
+    const before = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, writable: true, value: serialise
+      ? { locks: { request: (name: string, fn: () => Promise<unknown>) => {
+          const run = (chains.get(name) ?? Promise.resolve()).then(fn)
+          chains.set(name, run.catch(() => {}))
+          return run
+        } } }
+      : {} })
+    try {
+      await run()
+    } finally {
+      if (before) Object.defineProperty(globalThis, 'navigator', before)
+      else delete (globalThis as { navigator?: unknown }).navigator
+    }
+  }
+
+  const twoTabs = () =>
+    Promise.allSettled([
+      captured.redemptionAdapter!.redeem('cashuA-tab-1', { metadata: verified(700) }),
+      captured.redemptionAdapter!.redeem('cashuA-tab-2', { metadata: verified(700) }),
+    ])
+
+  it('lets exactly one through when together they exceed the face', async () => {
+    await withLocks(async () => {
+      const outcomes = await twoTabs()
+      expect(outcomes.filter((o) => o.status === 'fulfilled')).toHaveLength(1)
+      expect(outcomes.filter((o) => o.status === 'rejected')).toHaveLength(1)
+      expect(String((outcomes.find((o) => o.status === 'rejected') as PromiseRejectedResult).reason))
+        .toMatch(/already paid out 700 of 1000/)
+    }, true)
+    expect(swaps).toBe(1)
+    expect(record().claimedMinor).toBe(700)
+  })
+
+  it('without the Locks API both check the same priors, which is the race the lock closes', async () => {
+    // The control: proves the test above exercises a real interleaving
+    // rather than passing because the calls happened to run one by one.
+    await withLocks(async () => {
+      const outcomes = await twoTabs()
+      expect(outcomes.filter((o) => o.status === 'fulfilled')).toHaveLength(2)
+    }, false)
+    expect(swaps).toBe(2)
+  })
+})
+
 describe('fractional-ratio parts through the till (review of 1a87c4f)', () => {
   /** A real token for one part, and the metadata dmCrypto would derive from it. */
   const presented = (proofs: number, ratio: number, face: number) => {
