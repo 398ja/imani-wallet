@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A coupon swapped at the mint can no longer be lost to a retry of itself (#110).** The receive
+  idempotency key had a random suffix, so a retry of a token whose first swap had already
+  succeeded went out under a new key, re-swapped spent proofs and failed with 11001, and the first
+  swap's proofs were gone. Staging lost €100 that way. The key is now `rcv_<fingerprint>`, the
+  same on every attempt, so a retry gets the first swap's result back. The resubmission itself is
+  proven: a failed save after a successful swap files the wrap as failed, and the next catch-up
+  resubmits it. The gateway's `409 RECEIVE_ALREADY_SETTLED`, and an 11001 on a token this wallet
+  already holds a receive_id for, are now terminal instead of retried.
+- **Escrow acks are retried instead of dropped (#110).** A failed ack used to promise "retry on
+  next startup" to a recovery that is disabled (#95). It now retries in the background, honouring
+  `Retry-After` on a 429, and unacknowledged receive_ids are kept per account (bounded, in
+  localStorage) and retried at startup and on every catch-up.
+- **A rate-limited burn retries once after `Retry-After` (#110)**, like a 409, instead of leaving a
+  redeemed coupon counted as money until the next login.
+- **A multi-voucher payment no longer blows the gateway's rate limit (#110).** Redemptions start
+  at most four a minute, under the 10/min per-pubkey budget, and the 429 retry stays underneath as
+  a backstop. The bundle wait window grows from 3 to 5 minutes so a paced part is not called
+  missing.
+- Receive, persist and ack are logged by receive_id (never the token) so the next incident can be
+  traced.
+
 ## [0.8.0] - 2026-09-27
 
 ### Added
