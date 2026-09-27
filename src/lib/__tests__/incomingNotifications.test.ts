@@ -536,6 +536,18 @@ describe('one payment in several coupons (#94)', () => {
     expect(rows[0]!.body).toMatch(/6.*\(2 vouchers\)/)
   })
 
+  it('flags a later part whose declaration disagrees, keeping the first', async () => {
+    respondWith([
+      part('evt-a', { bundleTotal: 6, bundlePartCount: 2 }),
+      part('evt-b', { bundleTotal: 600, bundlePartCount: 9 }),
+    ])
+    startIncomingNotifications(RECIPIENT)
+    await settle()
+    const body = (await inbox())[0]!.body
+    expect(body).toMatch(/\(2 vouchers\)\. Some parts of this payment did not match/)
+    expect(body).not.toMatch(/600/)
+  })
+
   it('does not re-toast a redelivered part after a reload', async () => {
     respondWith([part('evt-a', { bundleTotal: 6, bundlePartCount: 2 })])
     startIncomingNotifications(RECIPIENT)

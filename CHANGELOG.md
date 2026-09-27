@@ -26,9 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **A part that never comes is said so.** Three minutes after the first part (longer than the
   wallet's own rate-limit retries, so a queued part is not called missing), an unfinished payment
-  reads "€3.00 of an expected €6.00 received. 1 voucher has not arrived." A part waiting out the
-  rate limiter shows as "1 of 2 in, 1 still receiving" on the same toast instead of a toast of its
-  own. A single-voucher send, or a sender that does not declare a bundle, behaves exactly as before.
+  reads "€3.00 of an expected €6.00 received. 1 voucher has not arrived." as a warning that stays
+  up until dismissed. A part waiting out the rate limiter shows as "1 of 2 in, 1 still receiving"
+  on the same toast instead of a toast of its own, including when it is the first part to arrive.
+  Merchant tills get the same one-toast-per-payment treatment; request settlement still sums the
+  individual rows. A single-voucher send, or a sender that does not declare a bundle, behaves
+  exactly as before.
 
 ## [0.7.0] - 2026-09-22
 

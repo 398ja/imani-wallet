@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  * person would actually see in the bell. Sonner is captured at the boundary.
  */
 
-type Call = { kind: 'success' | 'plain' | 'loading' | 'dismiss'; message?: unknown; options?: Record<string, unknown> }
+type Call = { kind: 'success' | 'plain' | 'warning' | 'loading' | 'dismiss'; message?: unknown; options?: Record<string, unknown> }
 const calls: Call[] = []
 vi.mock('sonner', () => {
   const toast = (message: unknown, options?: Record<string, unknown>) => {
@@ -21,6 +21,10 @@ vi.mock('sonner', () => {
   }
   toast.success = (message: unknown, options?: Record<string, unknown>) => {
     calls.push({ kind: 'success', message, options })
+    return 'id'
+  }
+  toast.warning = (message: unknown, options?: Record<string, unknown>) => {
+    calls.push({ kind: 'warning', message, options })
     return 'id'
   }
   toast.loading = (message: unknown, options?: Record<string, unknown>) => {
@@ -60,7 +64,7 @@ const coupon = (id: string, face = 300) => ({
 })
 const declared = (index: number) => ({ bundleId: BUNDLE, total: 600, index, count: 2 })
 
-const toasts = () => calls.filter((c) => c.kind === 'success' || c.kind === 'plain')
+const toasts = () => calls.filter((c) => c.kind === 'success' || c.kind === 'plain' || c.kind === 'warning')
 const props = (c: Call) => (c.message as { props: Record<string, string> }).props
 
 beforeEach(() => {
@@ -117,8 +121,10 @@ describe('a two-part payment on the recipient', () => {
     await vi.advanceTimersByTimeAsync(BUNDLE_WAIT_WINDOW_MS + 1_000)
 
     const closing = toasts().at(-1)!
-    // Neutral, not a success tick and not an error: what came is safe.
-    expect(closing.kind).toBe('plain')
+    // A warning (decided on #94): part of what was promised is missing, and
+    // it stays up until the recipient dismisses it.
+    expect(closing.kind).toBe('warning')
+    expect(closing.options?.duration).toBe(Infinity)
     const row = listNotifications(ME)[0]!
     expect(row.title).toBe('Payment partly received')
     expect(row.body).toMatch(/3\.00 of an expected €6\.00 received\. 1 voucher has not arrived\./)
@@ -159,6 +165,28 @@ describe('a rate-limited part', () => {
   it('falls back to the ordinary queued toast when no part has landed yet', () => {
     announceQueued('v1', 20_000, BUNDLE)
     expect(calls.some((c) => c.kind === 'loading')).toBe(true)
+  })
+
+  it('opens the bundle toast at 0 of 2 when the FIRST part is the one held back', async () => {
+    const seed = { declaredTotal: 600, declaredCount: 2, senderPubkey: ALICE, recipientPubkey: ME, unit: 'EUR', decimals: 2 }
+    announceQueued('v1', 20_000, BUNDLE, seed)
+
+    expect(calls.some((c) => c.kind === 'loading')).toBe(false)
+    const opened = toasts().at(-1)!
+    expect(opened.options?.id).toBe('received-bundle-' + BUNDLE)
+    expect(props(opened).progress).toBe('0 of 2 in — 1 still receiving')
+    // Nothing has arrived, so nothing is filed in the bell yet.
+    expect(listNotifications(ME)).toHaveLength(0)
+
+    // The other part lands: the same toast, not a second one.
+    await announceBundleArrival(coupon('v2'), declared(1), ME, 'wrap-1')
+    expect(new Set(toasts().map((c) => c.options?.id))).toEqual(new Set(['received-bundle-' + BUNDLE]))
+    expect(props(toasts().at(-1)!).progress).toBe('1 of 2 in — 1 still receiving')
+
+    // Then the held part lands too.
+    settleQueued('v1', BUNDLE)
+    await announceBundleArrival(coupon('v1'), declared(0), ME, 'wrap-0')
+    expect(props(toasts().at(-1)!).progress).toBe('2 vouchers')
   })
 })
 

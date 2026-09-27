@@ -204,6 +204,10 @@ const timers = new Map<string, ReturnType<typeof setTimeout>>()
 /**
  * Announce a coupon that may be one part of a multi-coupon payment.
  *
+ * Every wallet, merchant tills included, sees one toast per payment (decided
+ * on #94). A till settles requests from the rows in its history, which stay
+ * one per coupon; only the announcement is grouped.
+ *
  * With no usable declaration this is `announceArrival`, unchanged: a single
  * coupon, or a sender that does not speak the bundle fields, behaves exactly
  * as before. With one, every part of the bundle updates ONE toast and ONE bell
@@ -300,7 +304,9 @@ function renderBundle(
     memo,
     progress: words.progress,
     settledLine: open
-      ? 'What has arrived is in your balance.'
+      ? view.receivedCount === 0
+        ? 'Nothing has arrived yet — your coupon is safe.'
+        : 'What has arrived is in your balance.'
       : view.state === 'incomplete'
         ? 'What arrived is in your balance.'
         : undefined,
@@ -311,13 +317,16 @@ function renderBundle(
     id: 'received-bundle-' + view.bundleId,
     // Held open while a part is waiting out the limiter, for the reason
     // queuedToast gives: a status that vanishes leaves the guessing it was
-    // raised to end. Otherwise it times out like any arrival.
-    duration: open && queued > 0 ? Infinity : 6000,
+    // raised to end. Otherwise it times out like any arrival. A shortfall is
+    // held until dismissed: it is the one outcome the recipient has to act on.
+    duration: view.state === 'incomplete' ? Infinity : open && queued > 0 ? Infinity : 6000,
   }
   if (opts.toast !== false) {
-    // A shortfall is status, not an error (the money that came is safe), so
-    // it wears the neutral toast rather than the success tick or a warning.
-    if (view.state === 'incomplete') toast(message, options)
+    // A shortfall is a WARNING (product decision on #94): money the sender
+    // said was coming has not arrived, and the recipient may need to ask
+    // them. What did arrive is safe, which the sub-line says; the warning is
+    // about the gap, not about the balance.
+    if (view.state === 'incomplete') toast.warning(message, options)
     else toast.success(message, options)
   }
 
@@ -410,11 +419,42 @@ export function stopBundleArrivals(): void {
 }
 
 // A queued part redraws its bundle's toast ("1 of 2 in, 1 still receiving")
-// instead of raising a toast of its own. Returns whether there was a live
-// bundle toast to carry it.
-onBundleQueueChange((bundleId) => {
-  const entry = live.get(bundleId)
-  if (!entry || entry.view.state !== 'in_flight') return false
-  renderBundle(entry.view, entry.recipient, entry.memo, false)
-  return true
+// instead of raising a toast of its own. Returns whether there was a bundle
+// toast to carry it.
+onBundleQueueChange((bundleId, seed) => {
+  try {
+    const entry = live.get(bundleId)
+    if (entry && entry.view.state === 'in_flight') {
+      // Redrawn, never dismissed. With no part still queued the toast drops
+      // its hold and times out like any arrival, so a part that gave up does
+      // not leave "still receiving" up forever; and a part that succeeded is
+      // redrawn in place a moment later by its own arrival, with no flicker.
+      renderBundle(entry.view, entry.recipient, entry.memo, false)
+      return true
+    }
+    // The FIRST part to reach the wallet is the one being held back. Open the
+    // bundle's toast at "0 of 2" from what the part declares, so that when the
+    // other part lands it redraws this toast instead of standing beside it.
+    if (!seed || !isBundleId(bundleId) || seed.declaredCount < 2) return false
+    if (seed.recipientPubkey && !wantsInApp(seed.recipientPubkey, 'voucher_received')) return false
+    const view: BundleView = {
+      bundleId,
+      senderPubkey: seed.senderPubkey ?? '',
+      unit: seed.unit,
+      decimals: displayDecimals(seed.unit, seed.decimals),
+      declaredTotal: seed.declaredTotal,
+      declaredCount: seed.declaredCount,
+      receivedTotal: 0,
+      receivedCount: 0,
+      state: 'in_flight',
+      mismatch: false,
+    }
+    // No bell row yet: nothing has arrived, and the advance notice already
+    // says the payment is on its way. The first landed part files the row.
+    renderBundle(view, undefined, undefined, false)
+    return true
+  } catch (e) {
+    console.warn('[arrival] could not redraw a bundle for a queued part:', e)
+    return false
+  }
 })
