@@ -390,6 +390,98 @@ describe('DmPollService', () => {
       );
     });
   });
+
+  /**
+   * #110: which path resubmits a token whose swap already SUCCEEDED.
+   *
+   * tokenRedemption throws RedemptionSaveError when the swap succeeds and the
+   * local write fails. Its message is not an "already redeemed" one, so
+   * redeemToken rethrows, processGiftWrap files the wrap in the failed tracker
+   * and never marks the token received, and the replay (retry cooldown, or a
+   * catch-up once the cooldown passes) calls redeem() with the SAME token. That
+   * is the resubmission; the wallet's fix is that it now carries the same
+   * idempotency key (see src/lib/__tests__/receiveIdempotency.test.ts).
+   */
+  describe('re-submission of a settled token (#110)', () => {
+    it('a save failure after a successful swap is replayed with the same token', async () => {
+      const saveError = Object.assign(
+        new Error('Voucher swap succeeded but local save failed; proofs are recoverable on next boot'),
+        { name: 'RedemptionSaveError', receiveId: '0c707915' },
+      );
+      const redeem = redemptionAdapter.redeem as ReturnType<typeof vi.fn>;
+      redeem.mockRejectedValueOnce(saveError);
+      const storageAdapter = createMockStorageAdapter();
+
+      const service = new DmPollService({
+        recipientPubkey: 'recipient-pub',
+        recipientPrivkey: 'recipient-priv',
+        nostrdbAdapter,
+        cryptoAdapter,
+        redemptionAdapter,
+        storageAdapter,
+        enableAutoRedemption: true,
+        fetchRecentOnStart: false,
+        retryCooldownMs: 0,
+      });
+
+      const event = createMockGiftWrap({ id: 'settled-then-save-failed' });
+      expect(await service.processGiftWrap(event)).toBeNull();
+      expect(storageAdapter.markTokenAsReceived).not.toHaveBeenCalled();
+      expect(service.getFailedEvents().map((f) => f.eventId)).toEqual(['settled-then-save-failed']);
+
+      await service.replayEvent('settled-then-save-failed');
+      expect(redeem).toHaveBeenCalledTimes(2);
+      expect(redeem.mock.calls[1][0]).toBe(redeem.mock.calls[0][0]);
+    });
+
+    /**
+     * And not only after the hour's cooldown: fetchRecentDms does not consult
+     * the failed tracker, so the very next catch-up (SSE reconnect, tab
+     * visible, back online) resubmits it within seconds, which fits the 3.4 s
+     * gap between the two receives on staging.
+     */
+    it('the next catch-up resubmits a failed wrap immediately, ignoring the cooldown', async () => {
+      const redeem = redemptionAdapter.redeem as ReturnType<typeof vi.fn>;
+      redeem.mockRejectedValueOnce(new Error('Voucher swap succeeded but local save failed'));
+      const event = createMockGiftWrap({ id: 'caught-up-again' });
+      nostrdbAdapter.setEvents([event]);
+
+      const service = new DmPollService({
+        recipientPubkey: 'recipient-pubkey-456',
+        recipientPrivkey: 'recipient-priv',
+        nostrdbAdapter,
+        cryptoAdapter,
+        redemptionAdapter,
+        enableAutoRedemption: true,
+        fetchRecentOnStart: false,
+      });
+
+      await service.fetchRecentDms();
+      await service.fetchRecentDms();
+      expect(redeem).toHaveBeenCalledTimes(2);
+    });
+
+    it("treats the gateway's RECEIVE_ALREADY_SETTLED as terminal: marked received, never refiled", async () => {
+      const settled = Object.assign(new Error('Conflict'), { status: 409, code: 'RECEIVE_ALREADY_SETTLED' });
+      (redemptionAdapter.redeem as ReturnType<typeof vi.fn>).mockRejectedValueOnce(settled);
+      const storageAdapter = createMockStorageAdapter();
+
+      const service = new DmPollService({
+        recipientPubkey: 'recipient-pub',
+        recipientPrivkey: 'recipient-priv',
+        nostrdbAdapter,
+        cryptoAdapter,
+        redemptionAdapter,
+        storageAdapter,
+        enableAutoRedemption: true,
+        fetchRecentOnStart: false,
+      });
+
+      await service.processGiftWrap(createMockGiftWrap({ id: 'already-settled' }));
+      expect(storageAdapter.markTokenAsReceived).toHaveBeenCalledWith('fingerprint-abc123');
+      expect(service.getFailedEvents()).toEqual([]);
+    });
+  });
 });
 
 /**

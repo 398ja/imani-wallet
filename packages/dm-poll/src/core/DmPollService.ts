@@ -526,8 +526,14 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
    * These are idempotent — the token was successfully redeemed, just not by this call.
    */
   private isAlreadyRedeemedError(error: unknown): boolean {
+    // #110: the gateway's distinct 409 for a same-token re-receive, by code as
+    // well as by wording, so a reworded message cannot turn it back into a
+    // transient failure that the failed tracker resubmits every hour.
+    const code = (error as { code?: unknown } | null | undefined)?.code;
+    if (code === 'RECEIVE_ALREADY_SETTLED') return true;
     const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
     return (
+      message.includes('already settled') ||
       message.includes('already redeemed') ||
       message.includes('already been redeemed') ||
       message.includes('proof already used') ||
