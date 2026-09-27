@@ -1,4 +1,5 @@
 import { parseTerminalMetadata } from './terminalCredential'
+import { CALLS_PER_RECEIVE, receivePacer } from './receivePacer'
 
 /**
  * Revocation by spending, and the check that must never spend.
@@ -142,6 +143,8 @@ export async function revokeCredential(
   }
 
   try {
+    // Same per-pubkey receive budget as redemptions and burns (#110).
+    await receivePacer().acquire(CALLS_PER_RECEIVE)
     await api.receive(token)
     return { revoked: true }
   } catch {

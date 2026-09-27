@@ -390,6 +390,157 @@ describe('DmPollService', () => {
       );
     });
   });
+
+  /**
+   * #110: which path resubmits a token whose swap already SUCCEEDED.
+   *
+   * tokenRedemption throws RedemptionSaveError when the swap succeeds and the
+   * local write fails. Its message is not an "already redeemed" one, so
+   * redeemToken rethrows, processGiftWrap files the wrap in the failed tracker
+   * and never marks the token received, and the replay (retry cooldown, or a
+   * catch-up once the cooldown passes) calls redeem() with the SAME token. That
+   * is the resubmission; the wallet's fix is that it now carries the same
+   * idempotency key (see src/lib/__tests__/receiveIdempotency.test.ts).
+   */
+  describe('re-submission of a settled token (#110)', () => {
+    it('a save failure after a successful swap is replayed with the same token', async () => {
+      const saveError = Object.assign(
+        new Error('Voucher swap succeeded but local save failed; proofs are recoverable on next boot'),
+        { name: 'RedemptionSaveError', receiveId: '0c707915' },
+      );
+      const redeem = redemptionAdapter.redeem as ReturnType<typeof vi.fn>;
+      redeem.mockRejectedValueOnce(saveError);
+      const storageAdapter = createMockStorageAdapter();
+
+      const service = new DmPollService({
+        recipientPubkey: 'recipient-pub',
+        recipientPrivkey: 'recipient-priv',
+        nostrdbAdapter,
+        cryptoAdapter,
+        redemptionAdapter,
+        storageAdapter,
+        enableAutoRedemption: true,
+        fetchRecentOnStart: false,
+        retryCooldownMs: 0,
+      });
+
+      const event = createMockGiftWrap({ id: 'settled-then-save-failed' });
+      expect(await service.processGiftWrap(event)).toBeNull();
+      expect(storageAdapter.markTokenAsReceived).not.toHaveBeenCalled();
+      expect(service.getFailedEvents().map((f) => f.eventId)).toEqual(['settled-then-save-failed']);
+
+      await service.replayEvent('settled-then-save-failed');
+      expect(redeem).toHaveBeenCalledTimes(2);
+      expect(redeem.mock.calls[1][0]).toBe(redeem.mock.calls[0][0]);
+    });
+
+    /**
+     * And not only after the hour's cooldown: fetchRecentDms does not consult
+     * the failed tracker, so the very next catch-up (SSE reconnect, tab
+     * visible, back online) resubmits it within seconds, which fits the 3.4 s
+     * gap between the two receives on staging.
+     */
+    it('the next catch-up resubmits a failed wrap immediately, ignoring the cooldown', async () => {
+      const redeem = redemptionAdapter.redeem as ReturnType<typeof vi.fn>;
+      redeem.mockRejectedValueOnce(new Error('Voucher swap succeeded but local save failed'));
+      const event = createMockGiftWrap({ id: 'caught-up-again' });
+      nostrdbAdapter.setEvents([event]);
+
+      const service = new DmPollService({
+        recipientPubkey: 'recipient-pubkey-456',
+        recipientPrivkey: 'recipient-priv',
+        nostrdbAdapter,
+        cryptoAdapter,
+        redemptionAdapter,
+        enableAutoRedemption: true,
+        fetchRecentOnStart: false,
+      });
+
+      await service.fetchRecentDms();
+      await service.fetchRecentDms();
+      expect(redeem).toHaveBeenCalledTimes(2);
+    });
+
+    /**
+     * Review of #111, item 3: a receive the gateway settled whose value is NOT
+     * in this wallet is terminal for re-swapping but must never read as a
+     * success: not marked received, no redemption:success, a distinct
+     * redemption:unsaved carrying the receive_id for reconciliation.
+     */
+    it.each([
+      ['tokenRedemption settled-not-saved', { code: 'RECEIVE_SETTLED_NOT_SAVED', receiveId: '0c707915', reason: 'replay-without-token' }],
+      ["the gateway's raw 409", { code: 'RECEIVE_ALREADY_SETTLED', status: 409, receiveId: '0c707915' }],
+    ])('%s: terminal, not success, not marked received, surfaced as unsaved', async (_name, extra) => {
+      // Worded like an already-spent error on purpose: the code must win.
+      const err = Object.assign(new Error('Proof already used (settled)'), extra);
+      (redemptionAdapter.redeem as ReturnType<typeof vi.fn>).mockRejectedValueOnce(err);
+      const storageAdapter = createMockStorageAdapter();
+
+      const service = new DmPollService({
+        recipientPubkey: 'recipient-pub',
+        recipientPrivkey: 'recipient-priv',
+        nostrdbAdapter,
+        cryptoAdapter,
+        redemptionAdapter,
+        storageAdapter,
+        enableAutoRedemption: true,
+        fetchRecentOnStart: false,
+      });
+      const success = vi.fn();
+      const unsaved = vi.fn();
+      service.on('redemption:success', success);
+      service.on('redemption:unsaved', unsaved);
+
+      await service.processGiftWrap(createMockGiftWrap({ id: 'settled-unsaved' }));
+
+      expect(storageAdapter.markTokenAsReceived).not.toHaveBeenCalled();
+      expect(success).not.toHaveBeenCalled();
+      expect(unsaved).toHaveBeenCalledWith(expect.objectContaining({ eventId: 'settled-unsaved', receiveId: '0c707915' }));
+      expect(service.getFailedEvents()).toEqual([]);
+    });
+
+    /**
+     * #111 delta review: a receive the wallet deferred itself (pacer reset on
+     * logout, per-token call budget spent) is retried later, quietly: no error
+     * toast, no redemption:error, no success, not marked received.
+     */
+    it('a deferred receive (RECEIVE_DEFERRED) is retried later without an error toast', async () => {
+      const err = Object.assign(new Error('receive pacer was reset'), { code: 'RECEIVE_DEFERRED' });
+      const redeem = redemptionAdapter.redeem as ReturnType<typeof vi.fn>;
+      redeem.mockRejectedValueOnce(err);
+      const storageAdapter = createMockStorageAdapter();
+      const showErrorNotification = vi.fn();
+
+      const service = new DmPollService({
+        recipientPubkey: 'recipient-pub',
+        recipientPrivkey: 'recipient-priv',
+        nostrdbAdapter,
+        cryptoAdapter,
+        redemptionAdapter,
+        storageAdapter,
+        uiAdapter: { showErrorNotification } as never,
+        enableAutoRedemption: true,
+        fetchRecentOnStart: false,
+        retryCooldownMs: 0,
+      });
+      const success = vi.fn();
+      const failure = vi.fn();
+      service.on('redemption:success', success);
+      service.on('redemption:error', failure);
+
+      expect(await service.processGiftWrap(createMockGiftWrap({ id: 'deferred' }))).toBeNull();
+
+      expect(showErrorNotification).not.toHaveBeenCalled();
+      expect(failure).not.toHaveBeenCalled();
+      expect(success).not.toHaveBeenCalled();
+      expect(storageAdapter.markTokenAsReceived).not.toHaveBeenCalled();
+      // Kept for a retry, not marked processed.
+      expect(service.getFailedEvents().map((f) => f.eventId)).toEqual(['deferred']);
+
+      await service.replayEvent('deferred');
+      expect(redeem).toHaveBeenCalledTimes(2);
+    });
+  });
 });
 
 /**

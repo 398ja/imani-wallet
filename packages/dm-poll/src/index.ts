@@ -96,6 +96,7 @@ export type {
   RedemptionSuccessEvent,
   RedemptionErrorEvent,
   RedemptionRefusedEvent,
+  RedemptionUnsavedEvent,
   SubscriptionStateEvent,
   DmPollEvents,
 

@@ -74,6 +74,11 @@ vi.stubGlobal('document', { addEventListener: () => {}, removeEventListener: () 
 vi.stubGlobal('window', { addEventListener: () => {}, removeEventListener: () => {} })
 
 const { startDmPoll, stopDmPoll, refuseIfOverRedeemed } = await import('../dmPoll')
+const { _setReceivePacerForTests } = await import('../receivePacer')
+// The ceiling tests below push up to 24 redemptions through the adapter in a
+// loop; #110's pacing would make that minutes of real waiting. Pacing is
+// pinned in receivePacer.test.ts.
+_setReceivePacerForTests({ acquire: async () => {}, reset: () => {} })
 const { installTokenIdFill } = await import('../legacyBridge')
 const { toTransaction, buildIssueTransaction } = await import('../transactions')
 const { issuedVoucher } = await import('../issuedVoucher')

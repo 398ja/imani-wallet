@@ -821,6 +821,9 @@ class GatewayAPI {
       error.status = response.status;
       error.code = errorData.code || data.code || 'UNKNOWN_ERROR';
       error.data = data;
+      error.retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'));
+      // #110: the 409 RECEIVE_ALREADY_SETTLED names its escrow in X-Receive-Id.
+      error.headers = response.headers;
       throw error;
     }
 
@@ -1363,6 +1366,12 @@ class GatewayAPI {
         || data.error_code
         || 'UNKNOWN_ERROR';
       error.data = data;
+      // #110: a 429 says how long to wait, and every retry loop that ignored it
+      // guessed instead: too short and it burns another slot of the same
+      // per-pubkey window it is waiting on. Null when absent or unparseable.
+      error.retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'));
+      // #110: the 409 RECEIVE_ALREADY_SETTLED names its escrow in X-Receive-Id.
+      error.headers = response.headers;
       throw error;
     }
 
@@ -3328,6 +3337,10 @@ class GatewayAPI {
  * Uses token fingerprint (if available) combined with a random component
  * to ensure unique keys while allowing retry detection.
  *
+ * NOT for `/wallet/receive`: use generateReceiveIdempotencyKey. The random
+ * suffix here makes every call a new key, which is exactly wrong for a swap
+ * (#110). Kept for any caller that wants a fresh key per call.
+ *
  * @param {string} [tokenFingerprint] - Optional token fingerprint for correlation
  * @returns {string} Idempotency key (format: fp_<fingerprint>_<random> or idem_<timestamp>_<random>)
  */
@@ -3355,9 +3368,51 @@ function generateIdempotencyKey(tokenFingerprint = null) {
   return `idem_${timestamp}_${random}`;
 }
 
+/**
+ * The idempotency key for receiving ONE token: a pure function of its
+ * fingerprint, so every attempt at the same token sends the same key (#110).
+ *
+ * Why it matters: the gateway claims the key before the irreversible mint swap
+ * and replays the settled result for a repeated key. With the old random
+ * suffix, a retry of a token whose first swap had already succeeded (its
+ * response lost) arrived under a NEW key, was treated as a fresh receive,
+ * swapped already-spent proofs and failed 11001 — and the fresh proofs of the
+ * first swap were gone with the dropped response. Staging lost €100 that way.
+ * With a stable key the retry gets the first call's proofs back instead.
+ *
+ * The whole fingerprint, not a 16-char prefix: the key is the gateway's only
+ * way to tell two tokens apart, and a prefix collision would replay one
+ * token's proofs as the answer to another's receive.
+ *
+ * @param {string} tokenFingerprint - TokenSecurity.getFingerprint(token)
+ * @returns {string|null} `rcv_<fingerprint>`, or null with no fingerprint (no
+ *   header is then sent, as before: a guessed key is worse than none).
+ */
+function generateReceiveIdempotencyKey(tokenFingerprint) {
+  if (typeof tokenFingerprint !== 'string' || tokenFingerprint === '') return null;
+  return `rcv_${tokenFingerprint}`;
+}
+
+/**
+ * `Retry-After` as milliseconds. Accepts delta-seconds or an HTTP date.
+ * Returns null when absent or unparseable; never throws.
+ * @param {string|null} value
+ * @returns {number|null}
+ */
+function parseRetryAfterMs(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
+  const at = Date.parse(String(value));
+  if (Number.isFinite(at)) return Math.max(0, at - Date.now());
+  return null;
+}
+
 const api = new GatewayAPI();
 
 // Expose api globally for integrations that need window.api
 if (typeof window !== 'undefined') {
   window.api = api;
+  window.generateReceiveIdempotencyKey = generateReceiveIdempotencyKey;
+  window.parseRetryAfterMs = parseRetryAfterMs;
 }

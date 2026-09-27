@@ -43,10 +43,18 @@ import { displayDecimals, formatFace } from './format'
  * gateway's one-minute window, possibly twice (`RATE_LIMIT_BACKOFFS_MS` in
  * dmPoll sums to 155 s), and calling a queued coupon "has not arrived" is the
  * wallet crying wolf about its own limiter — the exact thing queuedToast.ts
- * exists to avoid. Three minutes outlasts the whole retry budget; a test pins
- * that relationship so the two cannot drift apart silently.
+ * exists to avoid.
+ *
+ * #110 put pacing in front of that retry (receivePacer.ts), counted per CALL
+ * and shared with burns (acks are exempt from the gateway limit since
+ * imani-gateway-customer#120). `worstCaseBundleMs` counts every call an
+ * 8-part bundle can make through the pacer at its per-token caps, assumes a
+ * full window on arrival, and adds every retry sleep and a two-minute margin:
+ * about 13 minutes. Fifteen minutes outlasts it. Deliberately pessimistic: a
+ * part is only called missing once the wallet can no longer be the reason it
+ * is late. A test pins the relationship.
  */
-export const BUNDLE_WAIT_WINDOW_MS = 180_000
+export const BUNDLE_WAIT_WINDOW_MS = 900_000
 
 /** Bundles kept per account. Far above anything a person has in flight. */
 const MAX_BUNDLES = 50

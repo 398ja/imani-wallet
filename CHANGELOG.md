@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A coupon swapped at the mint can no longer be lost to a retry of itself (#110).** The receive
+  idempotency key had a random suffix, so a retry of a token whose first swap had already
+  succeeded went out under a new key, re-swapped spent proofs and failed with 11001. The key is now
+  `rcv_<SHA-256 of the token>`, the same on every attempt. It is never derived from TokenSecurity's
+  prefix-based fallback fingerprint, which two tokens can share.
+- **A settled receive the wallet does not hold is never shown as money or as success (#110).** The
+  gateway's same-key replay returns the receive_id with no fresh token. The wallet used to fall
+  back to saving the original, already-spent token, which is a balance with nothing behind it. That
+  case, the gateway's `409 RECEIVE_ALREADY_SETTLED` (id read from `X-Receive-Id`, else `details`),
+  and an 11001 on a token the wallet already has a receive_id for are now a distinct "settled at the
+  gateway, not saved here" state. It is terminal for re-swapping, never reported as received, and
+  logged with its receive_id for reconciliation.
+- **Escrow acks are retried instead of dropped, and only for saved value (#110).** An escrow is
+  acknowledged only after its voucher is saved. A failed ack retries in the background, honouring
+  `Retry-After`. Saved-but-unacknowledged receive_ids are kept per account (bounded, localStorage)
+  and flushed at startup and on catch-up, at most two per run, through the pacer, stopping at any
+  429.
+- **A rate-limited burn retries once after `Retry-After` (#110)**, like a 409.
+- **A multi-voucher payment no longer blows the gateway's rate limit (#110).** Receives, acks and
+  burns share one pacer counted in calls (8 a minute, under the gateway's 10). The bundle wait
+  window grows from 3 to 10 minutes to outlast the conservative pacing bound plus the 429 retries.
+- Receive, persist and ack are logged by receive_id (never the token).
+
 ## [0.8.0] - 2026-09-27
 
 ### Added

@@ -15,6 +15,7 @@ import {
   type BundleView,
 } from '../bundleArrival'
 import { RATE_LIMIT_BACKOFFS_MS } from '../dmPoll'
+import { PACED_BUNDLE_PARTS, RETRY_SLEEP_BUDGET_MS, worstCaseBundleMs } from '../receivePacer'
 
 /**
  * One multi-coupon payment, counted as one (#94).
@@ -146,6 +147,13 @@ describe('tracking the parts of one payment', () => {
     // retrying it. If the backoffs grow, this window has to grow with them.
     const retryBudget = RATE_LIMIT_BACKOFFS_MS.reduce((a, b) => a + b, 0)
     expect(BUNDLE_WAIT_WINDOW_MS).toBeGreaterThan(retryBudget)
+  })
+
+  it('waits longer than the conservative pacing bound, every call and retry sleep counted (#110)', () => {
+    const retryBudget = RATE_LIMIT_BACKOFFS_MS.reduce((a, b) => a + b, 0)
+    // The pacer's sleep budget must include dmPoll's real 429 backoffs.
+    expect(RETRY_SLEEP_BUDGET_MS).toBeGreaterThanOrEqual(retryBudget + 20_000)
+    expect(BUNDLE_WAIT_WINDOW_MS).toBeGreaterThan(worstCaseBundleMs(PACED_BUNDLE_PARTS))
   })
 })
 
