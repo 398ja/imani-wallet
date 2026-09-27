@@ -84,6 +84,37 @@ async function alreadySpent(api: BurnApi, token: string): Promise<boolean> {
 const RETRY_AFTER_CONFLICT_MS = 1_500
 
 /**
+ * The longest `Retry-After` a burn will sit out before its single retry (#110).
+ *
+ * The gateway's limiter is a one-minute window, so a 429 usually says 60s.
+ * Honoured up to a little past that; anything longer is not worth holding a
+ * `saveVoucher` caller for, and the row stays `active` for `sweepBurnable` at
+ * the next login, exactly as before.
+ */
+const MAX_RATE_LIMIT_WAIT_MS = 65_000
+
+/** When the 429 carries no usable Retry-After: the window the gateway uses. */
+const DEFAULT_RATE_LIMIT_WAIT_MS = 60_000
+
+/**
+ * How long to wait before the one retry, or undefined for "do not retry".
+ *
+ * 409: the burn is already running (see below). 429: the per-pubkey budget is
+ * spent — on staging an 8-part bundle's redeems ate it, and every burn caught
+ * behind them fell through to "not burnt", leaving a redeemed coupon counted as
+ * money until the next login. Both resolve by waiting, so both get one retry.
+ */
+function retryDelayMs(error: unknown): number | undefined {
+  const e = error as { status?: number; retryAfterMs?: number | null } | undefined
+  if (e?.status === 409) return RETRY_AFTER_CONFLICT_MS
+  if (e?.status === 429) {
+    const hinted = typeof e.retryAfterMs === 'number' && e.retryAfterMs >= 0 ? e.retryAfterMs : DEFAULT_RATE_LIMIT_WAIT_MS
+    return Math.min(hinted, MAX_RATE_LIMIT_WAIT_MS)
+  }
+  return undefined
+}
+
+/**
  * Spend this coupon's proofs at the mint and mark the row redeemed. Never throws.
  *
  * Order is the whole safety property: the status is written only AFTER the mint
@@ -137,8 +168,13 @@ export async function burnIfSelfIssued(row: VoucherRow, ownPubkey: string): Prom
     // something that resolves itself. One retry after a short pause turns the
     // common case into a success; anything still contended falls through to
     // the honest failure below.
-    if ((error as { status?: number })?.status === 409) {
-      await new Promise((r) => setTimeout(r, RETRY_AFTER_CONFLICT_MS))
+    //
+    // A 429 gets the same single retry, after the gateway's Retry-After
+    // (#110). The key is stable (`burn_<token_id>`), so the retry is the same
+    // call, never a second swap.
+    const delay = retryDelayMs(error)
+    if (delay !== undefined) {
+      await new Promise((r) => setTimeout(r, delay))
       try {
         const api = (await legacyApi()) as unknown as BurnApi
         const replay = await api.receive(row.token, {
