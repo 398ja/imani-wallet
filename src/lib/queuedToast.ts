@@ -40,13 +40,30 @@ import { toast } from 'sonner'
 const queuedByBundle = new Map<string, Set<string>>()
 
 /**
- * Redraws the bundle toast for `bundleId`, returning whether one is on
- * screen to carry the news. Registered by arrivalToast, which owns that toast;
- * injected rather than imported so this module keeps no dependency on it.
+ * What a queued part knows about its bundle before any part has landed:
+ * enough to open the bundle's toast at "0 of 2" rather than a toast of its own.
+ * The figures are the sender's declaration, shown only as expected.
  */
-let bundleHandler: ((bundleId: string) => boolean) | undefined
+export interface QueuedBundleSeed {
+  declaredTotal: number
+  declaredCount: number
+  senderPubkey?: string
+  /** Our own key, which scopes the "voucher received" preference. */
+  recipientPubkey?: string
+  unit: string
+  decimals?: number
+}
 
-export function onBundleQueueChange(handler: ((bundleId: string) => boolean) | undefined): void {
+/**
+ * Redraws the bundle toast for `bundleId`, returning whether one is on
+ * screen to carry the news. With a `seed`, it may open that toast when none
+ * exists yet. Registered by arrivalToast, which owns that toast; injected
+ * rather than imported so this module keeps no dependency on it.
+ */
+type BundleHandler = (bundleId: string, seed?: QueuedBundleSeed) => boolean
+let bundleHandler: BundleHandler | undefined
+
+export function onBundleQueueChange(handler: BundleHandler | undefined): void {
   bundleHandler = handler
 }
 
@@ -69,6 +86,7 @@ export function announceQueued(
   voucherId: string | undefined,
   delayMs: number,
   bundleId?: string,
+  seed?: QueuedBundleSeed,
 ): void {
   try {
     // One part of a multi-coupon payment whose other parts are already on
@@ -80,7 +98,7 @@ export function announceQueued(
       const waiting = queuedByBundle.get(bundleId) ?? new Set<string>()
       waiting.add(voucherId ?? 'unidentified')
       queuedByBundle.set(bundleId, waiting)
-      if (bundleHandler?.(bundleId)) {
+      if (bundleHandler?.(bundleId, seed)) {
         // Attached. A standalone toast from an earlier attempt, raised before
         // the bundle toast existed, would now be a duplicate statement.
         toast.dismiss(queuedId(voucherId))

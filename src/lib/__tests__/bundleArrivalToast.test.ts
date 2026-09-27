@@ -160,6 +160,28 @@ describe('a rate-limited part', () => {
     announceQueued('v1', 20_000, BUNDLE)
     expect(calls.some((c) => c.kind === 'loading')).toBe(true)
   })
+
+  it('opens the bundle toast at 0 of 2 when the FIRST part is the one held back', async () => {
+    const seed = { declaredTotal: 600, declaredCount: 2, senderPubkey: ALICE, recipientPubkey: ME, unit: 'EUR', decimals: 2 }
+    announceQueued('v1', 20_000, BUNDLE, seed)
+
+    expect(calls.some((c) => c.kind === 'loading')).toBe(false)
+    const opened = toasts().at(-1)!
+    expect(opened.options?.id).toBe('received-bundle-' + BUNDLE)
+    expect(props(opened).progress).toBe('0 of 2 in — 1 still receiving')
+    // Nothing has arrived, so nothing is filed in the bell yet.
+    expect(listNotifications(ME)).toHaveLength(0)
+
+    // The other part lands: the same toast, not a second one.
+    await announceBundleArrival(coupon('v2'), declared(1), ME, 'wrap-1')
+    expect(new Set(toasts().map((c) => c.options?.id))).toEqual(new Set(['received-bundle-' + BUNDLE]))
+    expect(props(toasts().at(-1)!).progress).toBe('1 of 2 in — 1 still receiving')
+
+    // Then the held part lands too.
+    settleQueued('v1', BUNDLE)
+    await announceBundleArrival(coupon('v1'), declared(0), ME, 'wrap-0')
+    expect(props(toasts().at(-1)!).progress).toBe('2 vouchers')
+  })
 })
 
 describe('what does not change', () => {

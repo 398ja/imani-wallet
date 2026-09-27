@@ -20,7 +20,7 @@ import {
   stopBundleArrivals,
   type ArrivedVoucher,
 } from './arrivalToast'
-import { announceQueued, settleQueued } from './queuedToast'
+import { announceQueued, settleQueued, type QueuedBundleSeed } from './queuedToast'
 import { announceRefusal } from './refusalToast'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { bytesToHex } from '@noble/hashes/utils'
@@ -434,6 +434,29 @@ function declaredBundleOf(
     return undefined
   }
   return { bundleId, index, count, total }
+}
+
+/**
+ * What a rate-limited part tells the arrival toast before anything has landed,
+ * so the first part being held back opens the payment's one toast at "0 of 2"
+ * instead of a separate "Still receiving" (#94). Declared figures, display only.
+ */
+function queuedSeed(
+  meta: Record<string, unknown> | undefined,
+  envelopeSigner: string | undefined,
+): QueuedBundleSeed | undefined {
+  const declared = declaredBundleOf(meta)
+  const unit = meta?.faceUnit
+  if (!declared || typeof unit !== 'string') return undefined
+  return {
+    declaredTotal: declared.total,
+    declaredCount: declared.count,
+    // The payer, in the same order the arrival and the receipt use.
+    senderPubkey: (meta?.senderPubkey as string | undefined) ?? envelopeSigner,
+    recipientPubkey: currentPubkey,
+    unit,
+    decimals: typeof meta?.faceDecimals === 'number' ? meta.faceDecimals : undefined,
+  }
 }
 
 function storageAdapter(): StorageAdapter {
@@ -1051,6 +1074,7 @@ function redemptionAdapter(): RedemptionAdapter {
                 meta?.voucherId as string | undefined,
                 delayMs,
                 meta?.bundleId as string | undefined,
+                queuedSeed(meta, opts?.senderPubkey as string | undefined),
               )
             },
           },
