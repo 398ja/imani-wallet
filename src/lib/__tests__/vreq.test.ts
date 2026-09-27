@@ -324,6 +324,23 @@ describe('reconcileRequests', () => {
     expect(read()[0].receivedAmount).toBe(800)
   })
 
+  // #94: the sender's declared bundle total is a display hint. A row that
+  // somehow carried one (in any spelling) must not settle a request that the
+  // coupons which actually arrived do not cover.
+  it('ignores a declared bundle total when settling', async () => {
+    const asked = request({ paymentId: 'req9', amount: 800 })
+    stored.set(key, JSON.stringify([asked]))
+    const lie = { bundleTotal: 800, bundle_total: 800, bundlePartCount: 2, bundle_part_count: 2 }
+    wallet.rows = [
+      { id: 'tx1', type: 'received', timestamp: asked.createdAt + 1000, amount: 300, unit: 'EUR', bundleId: 'b9', requestId: 'req9', ...lie },
+    ]
+
+    const { settled } = await reconcileRequests(pubkey)
+
+    expect(settled).toBe(0)
+    expect(read()[0].status).toBe('pending')
+  })
+
   // Matching runs BEFORE expiry: a sale paid ten minutes in and reconciled a
   // day later was paid. Expiring first would hide it behind a status
   // `matchPayment` will not look at, and the merchant has the money.
