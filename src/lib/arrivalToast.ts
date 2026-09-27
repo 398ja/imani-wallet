@@ -300,7 +300,9 @@ function renderBundle(
     memo,
     progress: words.progress,
     settledLine: open
-      ? 'What has arrived is in your balance.'
+      ? view.receivedCount === 0
+        ? 'Nothing has arrived yet — your coupon is safe.'
+        : 'What has arrived is in your balance.'
       : view.state === 'incomplete'
         ? 'What arrived is in your balance.'
         : undefined,
@@ -410,11 +412,42 @@ export function stopBundleArrivals(): void {
 }
 
 // A queued part redraws its bundle's toast ("1 of 2 in, 1 still receiving")
-// instead of raising a toast of its own. Returns whether there was a live
-// bundle toast to carry it.
-onBundleQueueChange((bundleId) => {
-  const entry = live.get(bundleId)
-  if (!entry || entry.view.state !== 'in_flight') return false
-  renderBundle(entry.view, entry.recipient, entry.memo, false)
-  return true
+// instead of raising a toast of its own. Returns whether there was a bundle
+// toast to carry it.
+onBundleQueueChange((bundleId, seed) => {
+  try {
+    const entry = live.get(bundleId)
+    if (entry && entry.view.state === 'in_flight') {
+      // Redrawn, never dismissed. With no part still queued the toast drops
+      // its hold and times out like any arrival, so a part that gave up does
+      // not leave "still receiving" up forever; and a part that succeeded is
+      // redrawn in place a moment later by its own arrival, with no flicker.
+      renderBundle(entry.view, entry.recipient, entry.memo, false)
+      return true
+    }
+    // The FIRST part to reach the wallet is the one being held back. Open the
+    // bundle's toast at "0 of 2" from what the part declares, so that when the
+    // other part lands it redraws this toast instead of standing beside it.
+    if (!seed || !isBundleId(bundleId) || seed.declaredCount < 2) return false
+    if (seed.recipientPubkey && !wantsInApp(seed.recipientPubkey, 'voucher_received')) return false
+    const view: BundleView = {
+      bundleId,
+      senderPubkey: seed.senderPubkey ?? '',
+      unit: seed.unit,
+      decimals: displayDecimals(seed.unit, seed.decimals),
+      declaredTotal: seed.declaredTotal,
+      declaredCount: seed.declaredCount,
+      receivedTotal: 0,
+      receivedCount: 0,
+      state: 'in_flight',
+      mismatch: false,
+    }
+    // No bell row yet: nothing has arrived, and the advance notice already
+    // says the payment is on its way. The first landed part files the row.
+    renderBundle(view, undefined, undefined, false)
+    return true
+  } catch (e) {
+    console.warn('[arrival] could not redraw a bundle for a queued part:', e)
+    return false
+  }
 })
