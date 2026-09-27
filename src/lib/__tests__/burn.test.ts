@@ -115,6 +115,55 @@ describe('burnIfSelfIssued', () => {
     expect(stubs.saved).toHaveLength(0)
   })
 
+  /**
+   * #110: a rate-limited burn used to fall straight through to "not burnt",
+   * leaving a redeemed coupon counted as money until the next login. It is
+   * treated like the 409: wait (here, the gateway's Retry-After) and retry once
+   * under the same key.
+   */
+  it('retries once after Retry-After when the burn is rate limited', async () => {
+    vi.useFakeTimers()
+    try {
+      const keys: Array<string | undefined> = []
+      stubs.api.receive = async (_token: string, o?: { idempotencyKey?: string }) => {
+        keys.push(o?.idempotencyKey)
+        if (keys.length === 1) {
+          throw Object.assign(new Error('Rate limit exceeded'), { status: 429, retryAfterMs: 30_000 })
+        }
+        return { receive_id: 'escrow-1', token: 'cashuBfresh' }
+      }
+
+      const pending = burnIfSelfIssued(row(), MERCHANT)
+      await vi.advanceTimersByTimeAsync(29_000)
+      expect(keys).toHaveLength(1) // still honouring Retry-After
+      await vi.advanceTimersByTimeAsync(1_500)
+
+      expect(await pending).toBe(true)
+      expect(keys).toEqual(['burn_token-1', 'burn_token-1'])
+      expect(stubs.saved.at(-1)?.status).toBe('redeemed')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('caps an absurd Retry-After and still fails honestly if the retry is limited too', async () => {
+    vi.useFakeTimers()
+    try {
+      let attempts = 0
+      stubs.api.receive = async () => {
+        attempts += 1
+        throw Object.assign(new Error('Rate limit exceeded'), { status: 429, retryAfterMs: 3_600_000 })
+      }
+      const pending = burnIfSelfIssued(row(), MERCHANT)
+      await vi.advanceTimersByTimeAsync(65_000)
+      expect(await pending).toBe(false)
+      expect(attempts).toBe(2)
+      expect(stubs.saved).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('does not retry a failure that is not a conflict', async () => {
     // A 500 is not contention. Retrying it just doubles the load on a gateway
     // that is already struggling.
