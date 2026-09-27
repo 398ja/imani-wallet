@@ -47,7 +47,7 @@ import { getWallet, notifyWalletChanged, recordReceiptByNullifier } from './wall
 import { legacyApi, withCorrelation } from './legacyBridge'
 import { claimToFile } from './merchantClaim'
 import { withWebLock } from './webLock'
-import { CALLS_PER_ACK, CALLS_PER_RECEIVE, receivePacer } from './receivePacer'
+import { CALLS_PER_RECEIVE, receivePacer } from './receivePacer'
 
 /**
  * Gateway REST, same-origin: `/api/v1/...` reaches customer-wallet through the
@@ -1341,12 +1341,13 @@ function catchUp(): void {
  */
 /**
  * Route every `/wallet/receive*` call tokenRedemption makes through the page's
- * pacer, one reservation per call (#110 review C). Idempotent.
+ * pacer, one reservation per call (#110 review C). Idempotent. Acks are not
+ * paced: imani-gateway-customer#120 exempts the POST ack path from the limit,
+ * so `_ackGate` stays tokenRedemption's no-op.
  */
 function installPacingGates(redemption: object): void {
-  const r = redemption as { _receiveGate?: () => Promise<void>; _ackGate?: () => Promise<void> }
+  const r = redemption as { _receiveGate?: () => Promise<void> }
   r._receiveGate = () => receivePacer().acquire(CALLS_PER_RECEIVE)
-  r._ackGate = () => receivePacer().acquire(CALLS_PER_ACK)
 }
 
 async function flushUnacknowledgedEscrows(): Promise<void> {

@@ -657,7 +657,27 @@ describe('second review of #111', () => {
     expect(atomicallyWrite).not.toHaveBeenCalled()
   })
 
-  it('B: buildVoucher never falls back to the input token', () => {
+  /**
+   * #111 delta review: a duplicate response carries no fresh token either. It
+   * must keep its "already redeemed" wording (dm-poll's idempotent path), not
+   * be swallowed by the no-fresh-token guard into a retried failure.
+   */
+  it.each([
+    ['duplicate_count > 0', { duplicate_count: 2, imported_count: 0, amount: 5, token: null }],
+    ['amount 0', { amount: 0, imported_count: 0, token: null }],
+  ])('B: a %s response with no token is still "already redeemed"', async (_n, shape) => {
+    const atomicallyWrite = vi.fn(async () => {})
+    const r = loadRedemption({
+      api: { receive: async () => shape, acknowledgeReceive: vi.fn(), _nostrPublicKey: PUBKEY },
+      walletStorageIntegration: { atomicallyWrite },
+      localStorage: memoryStorage(),
+    })
+    const err = await r._doRedeem(TOKEN, { fingerprint: FP_A, skipDuplicateCheck: true }).catch((e: unknown) => e)
+    expect(String((err as Error).message)).toMatch(/already (been )?redeemed/)
+    expect(atomicallyWrite).not.toHaveBeenCalled()
+  })
+
+  it('B (original): buildVoucher never falls back to the input token', () => {
     const r = loadRedemption({ api: {}, localStorage: memoryStorage() })
     const v = r.buildVoucher(TOKEN, { amount: 5, token: null }, {}, null, 5, null)
     expect(v.token).not.toBe(TOKEN)

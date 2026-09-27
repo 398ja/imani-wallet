@@ -3,7 +3,7 @@ import type { VoucherRow } from '@imani/wallet-storage'
 import { legacyApi } from './legacyBridge'
 import { isRedeemed, issuerKey } from './merchants'
 import { getWallet, listVouchers, notifyWalletChanged } from './wallet'
-import { CALLS_PER_BURN, receivePacer } from './receivePacer'
+import { CALLS_PER_BURN, PacerResetError, receivePacer } from './receivePacer'
 
 /**
  * Burning a coupon the merchant themselves issued, the moment it comes back.
@@ -159,6 +159,10 @@ export async function burnIfSelfIssued(row: VoucherRow, ownPubkey: string): Prom
     notifyWalletChanged()
     return true
   } catch (error) {
+    // Logged out while waiting for the pacer: nothing was sent. The next
+    // login's sweepBurnable retries it; no "not burnt" alarm, no spend check.
+    if (error instanceof PacerResetError) return false
+
     // A 409 can mean the burn is ALREADY RUNNING, not that it failed.
     //
     // The gateway claims the idempotency key before the irreversible swap, so

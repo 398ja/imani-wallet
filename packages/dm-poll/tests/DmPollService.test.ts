@@ -498,6 +498,48 @@ describe('DmPollService', () => {
       expect(unsaved).toHaveBeenCalledWith(expect.objectContaining({ eventId: 'settled-unsaved', receiveId: '0c707915' }));
       expect(service.getFailedEvents()).toEqual([]);
     });
+
+    /**
+     * #111 delta review: a receive the wallet deferred itself (pacer reset on
+     * logout, per-token call budget spent) is retried later, quietly: no error
+     * toast, no redemption:error, no success, not marked received.
+     */
+    it('a deferred receive (RECEIVE_DEFERRED) is retried later without an error toast', async () => {
+      const err = Object.assign(new Error('receive pacer was reset'), { code: 'RECEIVE_DEFERRED' });
+      const redeem = redemptionAdapter.redeem as ReturnType<typeof vi.fn>;
+      redeem.mockRejectedValueOnce(err);
+      const storageAdapter = createMockStorageAdapter();
+      const showErrorNotification = vi.fn();
+
+      const service = new DmPollService({
+        recipientPubkey: 'recipient-pub',
+        recipientPrivkey: 'recipient-priv',
+        nostrdbAdapter,
+        cryptoAdapter,
+        redemptionAdapter,
+        storageAdapter,
+        uiAdapter: { showErrorNotification } as never,
+        enableAutoRedemption: true,
+        fetchRecentOnStart: false,
+        retryCooldownMs: 0,
+      });
+      const success = vi.fn();
+      const failure = vi.fn();
+      service.on('redemption:success', success);
+      service.on('redemption:error', failure);
+
+      expect(await service.processGiftWrap(createMockGiftWrap({ id: 'deferred' }))).toBeNull();
+
+      expect(showErrorNotification).not.toHaveBeenCalled();
+      expect(failure).not.toHaveBeenCalled();
+      expect(success).not.toHaveBeenCalled();
+      expect(storageAdapter.markTokenAsReceived).not.toHaveBeenCalled();
+      // Kept for a retry, not marked processed.
+      expect(service.getFailedEvents().map((f) => f.eventId)).toEqual(['deferred']);
+
+      await service.replayEvent('deferred');
+      expect(redeem).toHaveBeenCalledTimes(2);
+    });
   });
 });
 
