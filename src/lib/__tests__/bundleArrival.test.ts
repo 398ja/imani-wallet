@@ -9,6 +9,7 @@ import {
   bundleView,
   describeBundle,
   reconcileBundles,
+  stopBundleTracking,
   trackArrival,
   type ArrivedPart,
   type BundleView,
@@ -82,6 +83,21 @@ describe('tracking the parts of one payment', () => {
     const other = await trackArrival(ME, part(0, { eventId: 'another-wrap' }))
     expect(other).toMatchObject({ kind: 'standalone', reason: 'duplicate_index' })
     expect(await bundleView(ME, BUNDLE)).toMatchObject({ receivedCount: 1, mismatch: true })
+  })
+
+  it('never hides a part as a repeat when there is no wrap id to prove it', async () => {
+    // Review finding: a missing event id used to count as "the same wrap",
+    // silently swallowing a different coupon under an already-filled index.
+    await trackArrival(ME, part(0, { eventId: undefined }))
+    const other = await trackArrival(ME, part(0, { eventId: undefined }))
+    expect(other.kind).toBe('standalone')
+  })
+
+  it('drops work queued before logout instead of writing it back', async () => {
+    const pending = trackArrival(ME, part(0))
+    stopBundleTracking()
+    expect(await pending).toMatchObject({ kind: 'standalone', reason: 'stopped' })
+    expect(localStorage.getItem(`imani-wallet:bundle-arrivals:${ME}`)).toBeNull()
   })
 
   it('keeps the first declaration and flags a later one that disagrees', async () => {

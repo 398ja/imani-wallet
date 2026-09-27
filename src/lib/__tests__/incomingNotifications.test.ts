@@ -519,6 +519,13 @@ describe('one payment in several coupons (#94)', () => {
     expect(acked.flat()).toHaveLength(2)
   })
 
+  it('headlines what was announced, with the declared total only as "of"', async () => {
+    respondWith([part('evt-a', { bundleTotal: 6, bundlePartCount: 2 })])
+    startIncomingNotifications(RECIPIENT)
+    await settle()
+    expect((await inbox())[0]!.body).toMatch(/3.* of .*6.* \(2 vouchers\)/)
+  })
+
   it('sums the parts it has seen when the gateway declares nothing', async () => {
     respondWith([part('evt-a'), part('evt-b')])
     startIncomingNotifications(RECIPIENT)

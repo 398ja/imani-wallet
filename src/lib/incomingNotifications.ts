@@ -36,6 +36,7 @@ import { toast } from 'sonner'
 
 import { IncomingPaymentToast } from '../components/ui/IncomingPaymentToast'
 import { createBoundedSet, createPersistentBoundedSet } from './boundedSet'
+import { vouchers } from './bundleArrival'
 import { displayDecimals, formatFace } from './format'
 import { signedFetch } from './nip98'
 import { validateEnvelope, type IncomingPaymentNotificationEnvelope } from './incomingNotification'
@@ -382,17 +383,17 @@ function announceBundlePart(env: IncomingPaymentNotificationEnvelope, pubkey: st
   const seen = Object.values(bundle.parts)
   const seenTotal = seen.reduce((sum, n) => sum + n, 0)
   const fmt = (n: number) => formatFace(n, { unit: bundle.unit, decimals: bundle.decimals })
-  // Declared is what the SENDER says is coming; prefer it for the headline
-  // only while it is at least what has been seen, so money already announced
-  // is never understated.
+  // What has been announced is the headline. The sender's declared total only
+  // ever appears as "of", the same rule as the settlement toast, since it is a
+  // figure the sender chose.
   const headline =
-    bundle.declaredTotal !== undefined && bundle.declaredTotal >= seenTotal
-      ? fmt(bundle.declaredTotal)
+    bundle.declaredTotal !== undefined && bundle.declaredTotal > seenTotal
+      ? `${fmt(seenTotal)} of ${fmt(bundle.declaredTotal)}`
       : fmt(seenTotal)
   const count = bundle.declaredCount !== undefined && bundle.declaredCount >= seen.length
     ? bundle.declaredCount
     : seen.length
-  const vouchers = `${count} voucher${count === 1 ? '' : 's'}`
+  const partsLabel = vouchers(count)
   const name = env.sender.displayName ?? 'someone'
 
   // Toast once per part, never for a redelivery: the persistent seen set is
@@ -406,7 +407,7 @@ function announceBundlePart(env: IncomingPaymentNotificationEnvelope, pubkey: st
           amount: headline,
           fallbackName: env.sender.displayName ?? undefined,
           fallbackPicture: env.sender.picture ?? undefined,
-          progress: vouchers,
+          progress: partsLabel,
         }),
         {
           // One id for the bundle, so each part redraws the same toast.
@@ -426,7 +427,7 @@ function announceBundlePart(env: IncomingPaymentNotificationEnvelope, pubkey: st
     id: 'pending:bundle:' + bundleId,
     type: 'voucher_received',
     title: 'Payment on its way',
-    body: `${headline} from ${name} (${vouchers})`,
+    body: `${headline} from ${name} (${partsLabel})`,
     url: '/',
   })
   return true
