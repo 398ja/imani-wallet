@@ -183,6 +183,18 @@ describe("a voucher coming home to the stall that issued it (#90)", () => {
     await expect(refuseIfOverRedeemed(verified(300))).resolves.toBeUndefined()
   })
 
+  // #94: a sender's declared bundle figures ride the same metadata. They are
+  // display hints, so neither the booked amount nor the ceiling may read them.
+  it('books and caps by the coupon, never by a declared bundle total', async () => {
+    const declared = { bundleId: 'b'.repeat(32), bundleTotal: 999_999, bundlePartIndex: 0, bundlePartCount: 2 }
+    await captured.redemptionAdapter!.redeem('cashuA-bundled', { metadata: { ...verified(400), ...declared } })
+
+    expect(record().claimedMinor).toBe(400)
+    expect(record().outstandingMinor).toBe(600)
+    await expect(refuseIfOverRedeemed({ ...verified(700), ...declared })).rejects.toThrow(/already paid out 400 of 1000/)
+    await expect(refuseIfOverRedeemed({ ...verified(600), ...declared })).resolves.toBeUndefined()
+  })
+
   it('never files an UNVERIFIED coupon against a voucher, whatever the envelope says', async () => {
     // Envelope fields are sender-written. A coupon whose signature did not
     // verify naming our voucher id must not eat into (or pad) its figures.
