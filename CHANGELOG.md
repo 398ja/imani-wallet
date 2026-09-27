@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A payment sent as several vouchers reads as one payment (#94).** Sending €6 from €3 + €3
+  coupons used to give the recipient two "€3.00 received" toasts and two bell rows, and the sender
+  two "€3.00 was claimed" lines, with nothing saying €6.00 or "2 of 2". Now each side sees one
+  toast and one bell row that updates in place: "€3.00 of €6.00 (1 of 2 vouchers so far)", then
+  "€6.00 received (2 vouchers)". The advance "on its way" notice collapses the same way, and the
+  sender's success screen says "Sent as 2 vouchers".
+
+  **Declared and received are kept apart.** The total and count come from the sender and are
+  unverified, so they are only ever shown as "expected". The headline is always what actually
+  redeemed; nothing about balances, ledger rows, redemption ceilings or request settlement reads
+  the declaration. The first declaration wins, and a later part that disagrees, comes from another
+  sender or is in another currency is flagged and announced on its own rather than folded in.
+
+  **A part that never comes is said so.** Three minutes after the first part (longer than the
+  wallet's own rate-limit retries, so a queued part is not called missing), an unfinished payment
+  reads "€3.00 of an expected €6.00 received. 1 voucher has not arrived." A part waiting out the
+  rate limiter shows as "1 of 2 in, 1 still receiving" on the same toast instead of a toast of its
+  own. A single-voucher send, or a sender that does not declare a bundle, behaves exactly as before.
+
 ## [0.7.0] - 2026-09-22
 
 ### Added

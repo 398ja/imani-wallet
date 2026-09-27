@@ -477,3 +477,75 @@ describe('what the drain loop files under the bell', () => {
     expect(listNotifications(RECIPIENT)).toHaveLength(0)
   })
 })
+
+describe('one payment in several coupons (#94)', () => {
+  const BUNDLE = 'abcdefabcdefabcdefabcdefabcdefab'
+
+  function part(deliveryEventId: string, correlation: Record<string, unknown> = {}) {
+    return envelope({
+      deliveryEventId,
+      notificationId: computeNotificationId({
+        recipientPubkeyHex: RECIPIENT,
+        senderPubkeyHex: SENDER,
+        correlationId: deliveryEventId,
+        currencyUnit: 'XAF',
+      }),
+      total: { minorUnits: 3, display: '3 XAF' },
+      parts: [{ partId: deliveryEventId, amount: { minorUnits: 3, display: '3 XAF' }, state: 'pending' }],
+      correlation: { deliveryEventId, bundleId: BUNDLE, ...correlation },
+    })
+  }
+
+  async function inbox() {
+    const { listNotifications } = await import('../notifications/inbox')
+    return listNotifications(RECIPIENT)
+  }
+
+  it('raises one "on its way" toast id and one bell row for both parts', async () => {
+    const acked = respondWith([
+      part('evt-a', { bundleTotal: 6, bundlePartCount: 2 }),
+      part('evt-b', { bundleTotal: 6, bundlePartCount: 2 }),
+    ])
+    startIncomingNotifications(RECIPIENT)
+    await settle()
+
+    const ids = new Set(toasts.map((t) => (t.options as { id: string }).id))
+    expect(ids).toEqual(new Set(['pending-bundle-' + BUNDLE]))
+    const rows = await inbox()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ id: 'pending:bundle:' + BUNDLE, title: 'Payment on its way' })
+    expect(rows[0]!.body).toMatch(/6.*\(2 vouchers\)/)
+    // Both parts are still acked individually.
+    expect(acked.flat()).toHaveLength(2)
+  })
+
+  it('sums the parts it has seen when the gateway declares nothing', async () => {
+    respondWith([part('evt-a'), part('evt-b')])
+    startIncomingNotifications(RECIPIENT)
+    await settle()
+
+    const rows = await inbox()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.body).toMatch(/6.*\(2 vouchers\)/)
+  })
+
+  it('does not re-toast a redelivered part after a reload', async () => {
+    respondWith([part('evt-a', { bundleTotal: 6, bundlePartCount: 2 })])
+    startIncomingNotifications(RECIPIENT)
+    await settle()
+    stopIncomingNotifications()
+    toasts.length = 0
+
+    respondWith([part('evt-a', { bundleTotal: 6, bundlePartCount: 2 })])
+    startIncomingNotifications(RECIPIENT)
+    await settle()
+    expect(toasts).toHaveLength(0)
+  })
+
+  it('leaves an envelope with no bundle exactly as before', async () => {
+    respondWith([envelope()])
+    startIncomingNotifications(RECIPIENT)
+    await settle()
+    expect(String((toasts[0]!.options as { id: string }).id)).toMatch(/^pending-(?!bundle)/)
+  })
+})

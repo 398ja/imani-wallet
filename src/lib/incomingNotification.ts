@@ -82,6 +82,19 @@ export interface EnvelopeCorrelation {
    * prefers deliveryEventId over bundleId.
    */
   paymentRequestId?: string | null
+  /**
+   * What the sender declared the whole bundle to be, in minor units and parts
+   * (#94). Optional and sender-written: a display hint for "€6.00 on its way
+   * (2 vouchers)", never a figure anything books. Absent on gateways that
+   * predate it, in which case the wallet sums the parts it has seen.
+   *
+   * Validated leniently on purpose: an older wallet must accept an envelope
+   * carrying these, and a newer one must not reject an envelope because one is
+   * garbled — it just ignores the hint (see `declaredOf` in
+   * incomingNotifications.ts).
+   */
+  bundleTotal?: number | null
+  bundlePartCount?: number | null
 }
 
 export interface NotificationPart {
