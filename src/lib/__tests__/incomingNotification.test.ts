@@ -114,6 +114,29 @@ describe('validateEnvelope', () => {
     expect(res.ok).toBe(true)
   })
 
+  it('accepts the optional declared bundle fields (#94)', () => {
+    // The gateway may add these ahead of or behind the wallet; either order
+    // must validate. They are display hints and never change the id check.
+    const base = happyPath()
+    const res = validateEnvelope(
+      { ...base, correlation: { ...base.correlation, bundleId: 'a'.repeat(32), bundleTotal: 1050, bundlePartCount: 2 } },
+      RECIPIENT_PUBKEY,
+    )
+    expect(res.ok).toBe(true)
+  })
+
+  it('still validates an envelope whose declared bundle fields are garbled', () => {
+    const base = happyPath()
+    const res = validateEnvelope(
+      {
+        ...base,
+        correlation: { ...base.correlation, bundleTotal: 'lots', bundlePartCount: -3, somethingNewer: true },
+      } as unknown as IncomingPaymentNotificationEnvelope,
+      RECIPIENT_PUBKEY,
+    )
+    expect(res.ok).toBe(true)
+  })
+
   it('accepts a backend id with a tracking prefix', () => {
     const base = happyPath()
     const res = validateEnvelope(
