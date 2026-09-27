@@ -25,8 +25,6 @@
  * copy in `src/lib/notifications/render.ts` carries the reasoning.
  */
 
-/* eslint-env serviceworker */
-
 const ROUTE_FOR_TYPE = {
   voucher_received: '/receive',
   voucher_claimed: '/merchant/transactions',
