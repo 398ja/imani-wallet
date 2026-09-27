@@ -40,6 +40,8 @@ vi.mock('../nip98', () => ({
 }))
 vi.mock('../notifications/inbox', () => ({
   recordNotification: (...args: Parameters<typeof recordNotification>) => recordNotification(...args),
+  // The bundle path (#94) has its own suite with the real inbox.
+  upsertNotification: () => true,
 }))
 
 /**

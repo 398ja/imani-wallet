@@ -286,3 +286,41 @@ describe('the customer attestation reaches the sender', () => {
     expect(plaintext.cashAttestation).toBeUndefined()
   })
 })
+
+describe('the bundle a claimed coupon belonged to (#94)', () => {
+  beforeEach(() => {
+    nip44Encrypt.mockClear()
+    signedFetch.mockReset()
+    signedFetch.mockResolvedValue(new Response('{}', { status: 200 }))
+  })
+
+  const bundle = { bundleId: 'a'.repeat(32), index: 1, count: 2, total: 600 }
+
+  it('rides inside the ciphertext, so the sender can collapse the claims', async () => {
+    await postPaymentReceipt({ senderPubkeyHex: SENDER, deliveryEventId: 'evt-1', bundle })
+
+    const plaintext = JSON.parse(
+      (nip44Encrypt.mock.calls[0] as unknown as [string, string])[1],
+    ) as Record<string, unknown>
+    expect(plaintext).toMatchObject({
+      bundleId: 'a'.repeat(32),
+      bundlePartIndex: 1,
+      bundlePartCount: 2,
+      bundleTotal: 600,
+    })
+  })
+
+  it('never appears in the cleartext the gateway reads', async () => {
+    await postPaymentReceipt({ senderPubkeyHex: SENDER, deliveryEventId: 'evt-1', bundle })
+    const body = signedFetch.mock.calls[0]?.[2] as Record<string, unknown>
+    expect(JSON.stringify(body)).not.toContain('a'.repeat(32))
+  })
+
+  it('is absent for a single coupon', async () => {
+    await postPaymentReceipt({ senderPubkeyHex: SENDER, deliveryEventId: 'evt-1' })
+    const plaintext = JSON.parse(
+      (nip44Encrypt.mock.calls[0] as unknown as [string, string])[1],
+    ) as Record<string, unknown>
+    expect(plaintext).not.toHaveProperty('bundleId')
+  })
+})
