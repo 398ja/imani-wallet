@@ -1002,8 +1002,8 @@ function redemptionAdapter(): RedemptionAdapter {
         // the budget; this retry still catches whatever else spent it.
         //
         // Pacing is per CALL: tokenRedemption passes every api.receive (every
-        // retry layer included) and every ack through the gates installed by
-        // installPacingGates, so nothing reaches the gateway unpaced.
+        // retry layer included) through the gate installed by
+        // installPacingGates. Acks are exempt from the limit (#120), unpaced.
         installPacingGates(redemption)
         let voucher: Voucher
         try {
