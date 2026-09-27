@@ -603,6 +603,280 @@ try {
     }
 } catch (_) { /* swallow */ }
 
+// ============================================================================
+// #110 — the receive ledger: what this wallet knows about each receive_id.
+//
+// Every entry is one escrow, in one of three states:
+//
+//   'settled'   the swap succeeded and the voucher is NOT saved (yet). Kept so
+//               a retry can recognise the token as ours. NEVER acknowledged:
+//               an ack tells the gateway the value is safe on this device,
+//               and it is not. Acking one would release the only record the
+//               gateway has of money this wallet never kept (review of #111).
+//   'saved'     the voucher is durably saved, the ack is owed. This is the
+//               only state `unacknowledged()` returns and the flush acks.
+//   'acked'     done.
+//
+// `_acknowledgeEscrow` used to promise "retry on next startup" to a recovery
+// that is disabled (#95); five escrows sat HELD on staging for that reason.
+// 'saved' entries are what the next poll or startup now retries.
+//
+// Shaped like src/lib/accountStore.ts (this is a classic script and cannot
+// import it): PER ACCOUNT under `imani-wallet:<name>:<pubkey>` so logout's
+// `imani-wallet:*` sweep clears it; BOUNDED, newest kept; FILTERED on read;
+// NEVER THROWING. With no signed-in account it does nothing at all rather
+// than pool several people's escrows under one shared key.
+//
+// Holds no secret: a receive_id is the gateway's escrow id and `fp` is the
+// SHA-256 fingerprint of the token, never the token or its proofs.
+// ============================================================================
+const RECEIVE_STATES = ['settled', 'saved', 'acked'];
+
+const ReceiveLedger = {
+    NAME: 'receive-ledger',
+    LIMIT: 200,
+
+    _account() {
+        try {
+            const pk = typeof api !== 'undefined' && api && api._nostrPublicKey;
+            return typeof pk === 'string' && pk !== '' ? pk : null;
+        } catch (_) {
+            return null;
+        }
+    },
+    _key() {
+        const account = this._account();
+        return account ? `imani-wallet:${this.NAME}:${account}` : null;
+    },
+    _valid(e) {
+        return !!e && typeof e === 'object'
+            && typeof e.receiveId === 'string' && e.receiveId !== ''
+            && typeof e.at === 'number'
+            && RECEIVE_STATES.indexOf(e.state) >= 0
+            && (e.fp === null || typeof e.fp === 'string');
+    },
+    list() {
+        try {
+            const key = this._key();
+            if (!key || typeof localStorage === 'undefined') return [];
+            const raw = localStorage.getItem(key);
+            if (!raw) return [];
+            const parsed = JSON.parse(raw);
+            return Array.isArray(parsed) ? parsed.filter((e) => this._valid(e)) : [];
+        } catch (_) {
+            return [];
+        }
+    },
+    _write(entries) {
+        try {
+            const key = this._key();
+            if (!key || typeof localStorage === 'undefined') return;
+            const next = entries.slice().sort((a, b) => b.at - a.at).slice(0, this.LIMIT);
+            localStorage.setItem(key, JSON.stringify(next));
+        } catch (e) {
+            console.warn('[receiveLedger] could not persist:', e && e.message);
+        }
+    },
+    _set(receiveId, fp, state) {
+        if (!receiveId) return;
+        const entries = this.list();
+        const prev = entries.find((e) => e.receiveId === receiveId);
+        // States only move forward: a late 'settled' must not undo 'saved'.
+        const nextState = prev && RECEIVE_STATES.indexOf(prev.state) > RECEIVE_STATES.indexOf(state)
+            ? prev.state : state;
+        const rest = entries.filter((e) => e.receiveId !== receiveId);
+        this._write([{
+            receiveId,
+            fp: fp || (prev && prev.fp) || null,
+            at: Date.now(),
+            state: nextState,
+        }, ...rest]);
+    },
+    /** The swap succeeded; nothing is saved. Never acked from this state. */
+    recordSettled(receiveId, fp) { this._set(receiveId, fp, 'settled'); },
+    /** The voucher is durably saved; the escrow's ack is now owed. */
+    recordSaved(receiveId, fp) { this._set(receiveId, fp, 'saved'); },
+    markAcked(receiveId) {
+        if (!receiveId) return;
+        if (!this.list().some((e) => e.receiveId === receiveId)) return;
+        this._set(receiveId, null, 'acked');
+    },
+    /** The receive_id this wallet already holds for a token fingerprint, if any. */
+    receiveIdFor(fp) {
+        if (!fp) return null;
+        const hit = this.list().find((e) => e.fp === fp);
+        return hit ? hit.receiveId : null;
+    },
+    /** The whole entry for a token fingerprint ({ receiveId, state }), or null. */
+    entryFor(fp) {
+        if (!fp) return null;
+        return this.list().find((e) => e.fp === fp) || null;
+    },
+    /** Saved but not acknowledged: the ONLY ids anything may ack. */
+    unacknowledged() {
+        return this.list().filter((e) => e.state === 'saved').map((e) => e.receiveId);
+    },
+    /** Swapped at the gateway, never saved here: for reconciliation, never acked. */
+    settledUnsaved() {
+        return this.list().filter((e) => e.state === 'settled').map((e) => e.receiveId);
+    },
+};
+
+/**
+ * #110 — a receive the gateway settled for this token whose value is NOT in
+ * this wallet.
+ *
+ * Raised when:
+ *   - the gateway answers a same-token receive with 409 RECEIVE_ALREADY_SETTLED
+ *     (imani-gateway-customer#119);
+ *   - a mint 11001 / already-spent comes back for a token this wallet already
+ *     holds a receive_id for;
+ *   - a receive returns a receive_id but no fresh token (the gateway's
+ *     same-Idempotency-Key replay, "Receive: repeats" in its docs/api.md).
+ *
+ * Terminal for RE-SWAPPING, and deliberately NOT a success. The message does
+ * not say "already redeemed", so dm-poll does not mark the token received or
+ * emit a synthetic redemption:success, which would make the loss silent. The
+ * name, code and receiveId make it visible for reconciliation (review of #111).
+ */
+class ReceiveSettledNotSavedError extends Error {
+    constructor(receiveId, reason, cause) {
+        super('Receive settled at the gateway but not saved in this wallet; needs reconciliation');
+        this.name = 'ReceiveSettledNotSavedError';
+        this.code = 'RECEIVE_SETTLED_NOT_SAVED';
+        this.receiveId = receiveId || null;
+        this.reason = reason || null;
+        this.terminal = true;
+        if (cause !== undefined) this.cause = cause;
+    }
+}
+
+/**
+ * Is `err` the gateway saying this token's receive already settled?
+ * Either the explicit 409 code, or 11001/already-spent from the mint on a
+ * token the ledger shows we already received (`knownReceiveId`).
+ */
+function _isAlreadySettledReceive(err, knownReceiveId) {
+    if (!err) return false;
+    const code = err.code || (err.data && (err.data.code || (err.data.error && err.data.error.code)));
+    if (code === 'RECEIVE_ALREADY_SETTLED') return true;
+    if (!knownReceiveId) return false;
+    const msg = String(err.message || err);
+    return /11001|already[\s_]spent|proof already used/i.test(msg);
+}
+
+/**
+ * The receive_id a 409 RECEIVE_ALREADY_SETTLED names. The gateway puts it in
+ * the `X-Receive-Id` header and in `details: "receive_id=… status=…"`; the
+ * header wins, the details string is the fallback.
+ */
+function _settledReceiveIdFrom(err) {
+    if (!err) return null;
+    try {
+        const h = err.headers;
+        const fromHeader = h && (typeof h.get === 'function' ? h.get('x-receive-id') : (h['x-receive-id'] || h['X-Receive-Id']));
+        if (typeof fromHeader === 'string' && fromHeader) return fromHeader;
+        const data = err.data || {};
+        const details = [data.details, data.error && data.error.details, err.details]
+            .find((d) => typeof d === 'string');
+        const m = details && /receive_id=([^\s,;]+)/.exec(details);
+        return m ? m[1] : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+/**
+ * A fingerprint safe to key a receive on: 64 hex characters, i.e. a SHA-256
+ * of the whole token. TokenSecurity's `_fallbackFingerprint` is
+ * `fallback_<first 50 chars>_<length>`, and two different tokens can share it;
+ * keyed on that, the gateway would replay token A's result for token B.
+ */
+function _isStrongFingerprint(fp) {
+    return typeof fp === 'string' && /^[0-9a-f]{64}$/i.test(fp);
+}
+
+/** SHA-256 of the full token, hex, or null if WebCrypto is unavailable. */
+async function _sha256Hex(text) {
+    try {
+        const subtle = typeof crypto !== 'undefined' && crypto && crypto.subtle;
+        if (!subtle || typeof TextEncoder === 'undefined') return null;
+        const digest = await subtle.digest('SHA-256', new TextEncoder().encode(text));
+        return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+    } catch (_) {
+        return null;
+    }
+}
+
+/** The receive key for a fingerprint; null (no header) for anything weak. */
+function _receiveKeyFor(fp) {
+    if (!_isStrongFingerprint(fp)) return null;
+    return typeof generateReceiveIdempotencyKey === 'function'
+        ? generateReceiveIdempotencyKey(fp)
+        : null;
+}
+
+/** A short, non-reversible handle for logs: never the token itself. */
+function _fpTag(fp) {
+    return typeof fp === 'string' && fp ? fp.slice(0, 8) : null;
+}
+
+/** Waits for `_acknowledgeEscrow`'s background retry, overridable by tests. */
+const ACK_RETRY_BACKOFFS_MS = [2000, 10000, 30000];
+/** Longest Retry-After honoured; beyond it the next poll takes over. */
+const ACK_RETRY_MAX_WAIT_MS = 65000;
+/** Acks one flush may send, so a backlog cannot spend the receive budget. */
+const ACK_FLUSH_MAX_PER_RUN = 2;
+/** Minimum gap between flushes. */
+const ACK_FLUSH_MIN_INTERVAL_MS = 60000;
+/** Consecutive 403s on one ack before it is dropped. */
+const ACK_FORBIDDEN_MAX = 3;
+
+/**
+ * #110 review C — a hard ceiling on `api.receive` calls for ONE token, across
+ * every retry layer (the inner transient retry, the 409 in-flight wait, and
+ * dmPoll's outer 429 retry, which re-enters `redeem()`). Without it the layers
+ * multiply (5 outer × 4 inner) and no pacing bound is honest. Past it the
+ * redemption fails as an ordinary (non-success) failure, dm-poll files it, and
+ * a later poll tries again once the span has passed. Mirrored by
+ * `MAX_RECEIVE_CALLS_PER_TOKEN` in src/lib/receivePacer.ts; a test pins them
+ * equal.
+ */
+const RECEIVE_CALLS_PER_TOKEN = 5;
+/**
+ * At least the bundle wait window (src/lib/bundleArrival.ts
+ * BUNDLE_WAIT_WINDOW_MS; a test pins it), so one token cannot spend its cap
+ * twice inside the window the pacing bound is computed for.
+ */
+const RECEIVE_CALLS_SPAN_MS = 20 * 60 * 1000;
+
+/**
+ * #110 review D — the gateway answers a duplicate that arrives while the first
+ * call is mid-swap with 409 + `Retry-After: 2` and an empty body. That is "wait
+ * a moment", not a failure: wait (capped) and retry under the SAME key, at most
+ * this many times, each counted against RECEIVE_CALLS_PER_TOKEN.
+ */
+const IN_FLIGHT_RETRIES = 2;
+const IN_FLIGHT_MAX_WAIT_MS = 5000;
+
+/** The gateway's "your first call is still running" 409, as opposed to a settled one. */
+function _isInFlightConflict(err) {
+    if (!err || err.status !== 409) return false;
+    const code = err.code || (err.data && err.data.code);
+    if (code === 'RECEIVE_ALREADY_SETTLED') return false;
+    return typeof err.retryAfterMs === 'number';
+}
+
+/**
+ * The receive was already SAVED in this wallet (ledger state saved/acked): a
+ * redelivery of a coupon we hold. Reported with the old "already redeemed"
+ * wording so dm-poll takes its idempotent path (mark received, bundle success)
+ * rather than raising a false loss (#110 review A).
+ */
+function _alreadyRedeemedHere() {
+    return new Error('This token has already been redeemed');
+}
+
 const TokenRedemption = {
     // Single-flight in-memory map: token fingerprint → in-flight redemption
     // promise. When two callers race on the SAME token (e.g., dmPoll +
@@ -688,6 +962,15 @@ const TokenRedemption = {
             } catch (e) {
                 console.warn('[tokenRedemption] Fingerprint computation failed:', e);
             }
+        }
+        // #110 review: never key a receive, a cross-tab claim or the in-flight
+        // join on TokenSecurity's `fallback_<prefix>_<len>` fingerprint. Two
+        // different tokens can share it, and the gateway would replay one's
+        // settled result for the other. Replace it with a real SHA-256 of the
+        // whole token, or go without (no key, no join) if that is unavailable.
+        if (fingerprint && !_isStrongFingerprint(fingerprint)) {
+            fingerprint = await _sha256Hex(token);
+            console.warn('[tokenRedemption] weak fingerprint replaced', { strong: !!fingerprint });
         }
 
         // Single-flight join. If another concurrent caller is already
@@ -1128,27 +1411,135 @@ const TokenRedemption = {
                 }
             }
 
-            // Generate idempotency key from fingerprint
-            let idempotencyKey = null;
-            if (fingerprint && typeof generateIdempotencyKey === 'function') {
-                idempotencyKey = generateIdempotencyKey(fingerprint);
-                console.log('[tokenRedemption] Using idempotency key:', idempotencyKey.substring(0, 24) + '...');
+            // #110: the key is a pure function of the token's fingerprint, so a
+            // retry of the same token (dm-poll's failed tracker, a second
+            // delivery, the rate-limit wrapper re-running redeem()) reaches the
+            // gateway under the SAME key and is answered with the first call's
+            // settled result instead of re-swapping already-spent proofs. The
+            // old `generateIdempotencyKey` appended a random suffix, which made
+            // every attempt a fresh receive — the €100 lost on staging.
+            //
+            // Only from a real SHA-256 fingerprint (`_receiveKeyFor`): a weak
+            // one sends no key at all, since a shared key would make the
+            // gateway answer one token with another's proofs.
+            const idempotencyKey = _receiveKeyFor(fingerprint);
+            // Held BEFORE the call: if this wallet already has a receive_id for
+            // the token, an "already spent" from the mint is our own settled
+            // swap coming back, not someone else's spend.
+            //
+            // #110 review A: only a 'settled' entry (swapped, NOT saved) means
+            // that. A 'saved' or 'acked' entry is a coupon this wallet already
+            // holds: a redelivery of it is the old idempotent "already
+            // redeemed" success, never a reported loss, and needs no call.
+            const knownEntry = ReceiveLedger.entryFor(fingerprint);
+            if (knownEntry && (knownEntry.state === 'saved' || knownEntry.state === 'acked')) {
+                console.info('[tokenRedemption] token already saved in this wallet — idempotent', {
+                    fp: _fpTag(fingerprint), receiveId: knownEntry.receiveId,
+                });
+                throw _alreadyRedeemedHere();
             }
+            const knownReceiveId = knownEntry ? knownEntry.receiveId : null;
+            console.info('[tokenRedemption] receive start', {
+                fp: _fpTag(fingerprint), source, knownReceiveId,
+            });
 
             // Call API to receive/redeem the token with idempotency key.
             // Spec 038 T018: wrap with FR-016 transient-error retry (3 attempts at
             // 1s/4s/15s) via the @imani/dm-poll retry helper. Terminal errors
             // (already_spent, 4xx auth, 4xx request) propagate immediately;
             // transient ones (network, 5xx) retry up to the budget.
-            const result = await _withReceiveRetry(
-                () => api.receive(token, { idempotencyKey })
-            );
+            let result;
+            try {
+                // #110 review C: every api.receive for this token, across all
+                // retry layers, spends from one bounded per-token budget.
+                const budgetKey = fingerprint || token;
+                const receiveOnce = async () => {
+                    if (!this._takeReceiveCall(budgetKey)) {
+                        const deferred = new Error('Receive call budget for this token is spent; a later poll will retry');
+                        // Quiet, retryable non-success in dm-poll (isDeferredError).
+                        deferred.code = 'RECEIVE_DEFERRED';
+                        throw deferred;
+                    }
+                    // Paced per CALL (dmPoll installs the page's pacer here),
+                    // so inner retries spend from the same budget as first tries.
+                    await this._receiveGate();
+                    return api.receive(token, { idempotencyKey });
+                };
+                // #110 review D: the gateway's 409 "first call still in flight"
+                // (Retry-After, empty body) is a short wait and a retry under
+                // the same key, not a failure.
+                for (let inFlight = 0; ; inFlight++) {
+                    try {
+                        result = await _withReceiveRetry(receiveOnce);
+                        break;
+                    } catch (e) {
+                        if (!_isInFlightConflict(e) || inFlight >= IN_FLIGHT_RETRIES) throw e;
+                        const wait = Math.min(Math.max(e.retryAfterMs, 0), IN_FLIGHT_MAX_WAIT_MS);
+                        console.info('[tokenRedemption] receive in flight at the gateway — waiting', {
+                            fp: _fpTag(fingerprint), waitMs: wait,
+                        });
+                        await this._inFlightSleep(wait);
+                    }
+                }
+            } catch (receiveErr) {
+                // #110: the gateway (or, on an older gateway, the mint) says
+                // this token's receive already settled. Terminal for
+                // re-swapping, but NOT a success: this wallet does not hold the
+                // value, so it surfaces as "settled, not saved" for
+                // reconciliation and is never acked from here.
+                if (_isAlreadySettledReceive(receiveErr, knownReceiveId)) {
+                    const settledId = _settledReceiveIdFrom(receiveErr) || knownReceiveId;
+                    ReceiveLedger.recordSettled(settledId, fingerprint);
+                    console.error('[tokenRedemption] receive settled at the gateway, not saved here — needs reconciliation', {
+                        fp: _fpTag(fingerprint), receiveId: settledId,
+                        status: receiveErr && receiveErr.status, code: receiveErr && receiveErr.code,
+                    });
+                    throw new ReceiveSettledNotSavedError(settledId, 'already-settled', receiveErr);
+                }
+                console.warn('[tokenRedemption] receive failed', {
+                    fp: _fpTag(fingerprint),
+                    status: receiveErr && receiveErr.status,
+                    code: receiveErr && receiveErr.code,
+                    message: receiveErr && receiveErr.message,
+                });
+                throw receiveErr;
+            }
 
             if (!result || result.error) {
                 throw new Error(result?.error || 'Failed to receive voucher');
             }
 
-            // Check for already-redeemed token
+            // The swap is done. Record it as 'settled' BEFORE anything that can
+            // fail, so a retry recognises the token as ours. 'settled' is never
+            // acknowledged: the ack is owed only once the save succeeds
+            // (`_persistRedeemed` moves it to 'saved').
+            const settledReceiveId = result.receive_id || result.receiveId || null;
+            {
+                ReceiveLedger.recordSettled(settledReceiveId, fingerprint);
+                console.info('[tokenRedemption] receive settled', {
+                    fp: _fpTag(fingerprint), receiveId: settledReceiveId,
+                    replay: result.idempotent_replay === true || result.replayed === true || undefined,
+                });
+            }
+
+            // #110 review (BLOCKER): the gateway's same-key replay answers 200
+            // with `token: null` ("Receive: repeats"). buildVoucher falls back
+            // to the INPUT token (`result.token || token`), which is already
+            // spent, so saving it would show a balance with nothing behind it.
+            // A receive_id with no fresh token is a settled receive whose
+            // proofs this wallet does not have: never saved, never acked.
+            //
+            if (!result.token && !result.change_token && settledReceiveId) {
+                console.error('[tokenRedemption] receive replayed without a fresh token — not saved, needs reconciliation', {
+                    fp: _fpTag(fingerprint), receiveId: settledReceiveId,
+                });
+                throw new ReceiveSettledNotSavedError(settledReceiveId, 'replay-without-token');
+            }
+
+            // Check for already-redeemed token. BEFORE the no-fresh-token
+            // guard below: a duplicate response carries no token either, and
+            // it must keep its "already redeemed" wording so dm-poll takes the
+            // idempotent path (#111 delta review) instead of a retried failure.
             const duplicateCount = result.duplicate_count ?? result.duplicateCount ?? 0;
             const importedCount = result.imported_count ?? result.importedCount ?? 0;
 
@@ -1158,6 +1549,17 @@ const TokenRedemption = {
 
             if (result.amount === 0 && importedCount === 0) {
                 throw new Error('This token has no value or was already redeemed');
+            }
+
+            // #110 second review B: unconditional. Any other result with no
+            // fresh token is never saved; there is nothing to keep, and with
+            // no receive_id nothing to reconcile, so it is an ordinary
+            // (non-success) failure.
+            if (!result.token && !result.change_token) {
+                console.error('[tokenRedemption] receive returned no fresh token — nothing saved', {
+                    fp: _fpTag(fingerprint),
+                });
+                throw new Error('Receive returned no fresh token; nothing was saved');
             }
 
             const receivedAmount = result.amount || result.balance || 0;
@@ -1271,6 +1673,8 @@ const TokenRedemption = {
 
         // Acknowledge escrow (proofs consumed, release backend hold)
         const receiveId = result.receive_id || result.receiveId;
+        // #110: a burn keeps nothing by design, so the burn itself is "done".
+        ReceiveLedger.recordSaved(receiveId, fingerprint);
         await this._acknowledgeEscrow(receiveId);
 
         // Mark token as received (fingerprint duplicate prevention)
@@ -1671,7 +2075,10 @@ const TokenRedemption = {
 
         return {
             voucher_id: result.voucher_id || result.id || crypto.randomUUID(),
-            token: result.token || token,
+            // #110 second review B: never the INPUT token. After a swap it is
+            // spent; saving it would be a balance with nothing behind it.
+            // _doRedeem refuses a result without a fresh token before here.
+            token: result.token || result.change_token || null,
             face_value: _resolvedFaceValue,
             face_value_source: _faceValueSource,
             face_unit: unit,
@@ -1966,7 +2373,18 @@ const TokenRedemption = {
                 transactions: txRow ? [txRow] : [],
             });
         } catch (saveErr) {
-            console.error('[tokenRedemption] _persistRedeemed write failed, proofs are safe in backend escrow:', saveErr);
+            // #110: the old text here said "proofs are safe in backend escrow".
+            // They are not: the gateway stopped storing the fresh token (V4,
+            // #58) and recovery is disabled (#95). A retry of the same token is
+            // NOT a recovery either: the gateway's same-key replay returns the
+            // receive_id with `token: null`, so the value is not recoverable by
+            // this wallet. The escrow stays 'settled' on the ledger, never
+            // acked, for reconciliation.
+            // TODO(imani-gateway-customer#121/#119): recover a HELD escrow's
+            // proofs (kept encrypted to the recipient, or replayed by key).
+            console.error('[tokenRedemption] persist failed after a settled swap; value NOT recoverable by retry — needs reconciliation', {
+                receiveId, source, message: saveErr && saveErr.message,
+            });
             // Spec 022 / spec 038 contract: throw RedemptionSaveError so
             // callers can distinguish "swap succeeded but persist failed"
             // (recoverable on next boot via FR-015 + escrow recovery)
@@ -1985,6 +2403,11 @@ const TokenRedemption = {
 
         // Acknowledge escrow after successful save. Non-fatal — if the
         // ack fails the next sweep retries against the still-HELD row.
+        //
+        // #110 review: 'saved' is recorded HERE, after the write, and is the
+        // only state the flush acks. A receive whose save threw stays
+        // 'settled' and is never acknowledged.
+        ReceiveLedger.recordSaved(receiveId, null);
         await this._acknowledgeEscrow(receiveId);
 
         // Mark token as received for dedup. Skip if no token (the
@@ -2029,19 +2452,198 @@ const TokenRedemption = {
 
     /**
      * Acknowledge successful save to release backend escrow.
-     * Non-fatal if this fails — escrow will be recovered on next startup.
+     * Never throws.
+     *
+     * #110: this used to swallow a failure with "will retry on next startup",
+     * but the startup recovery that would have retried it is disabled (#95),
+     * so a single rate-limited ack left the escrow HELD for good (five on
+     * staging in one bundle). Now:
+     *
+     *  - the first attempt is awaited, as before, so the common case finishes
+     *    inside the redemption;
+     *  - a failure schedules a BOUNDED background retry (ACK_RETRY_BACKOFFS_MS)
+     *    that honours the gateway's Retry-After on a 429, capped so a hostile
+     *    or confused header cannot park it forever. Background, because a
+     *    redemption must not stall a minute on bookkeeping for money that is
+     *    already saved;
+     *  - the id stays on the ReceiveLedger until an ack succeeds, and
+     *    `flushUnacknowledgedEscrows` (called by the poller at startup and on
+     *    every catch-up) retries whatever the loop gave up on.
+     *
      * @param {string|null} receiveId - The escrow receive ID
+     * @returns {Promise<boolean>} true iff the first attempt acknowledged it
      */
     async _acknowledgeEscrow(receiveId) {
-        if (!receiveId) return;
+        if (!receiveId) return false;
+        // Never throws: a gate that rejects (the pacer reset on logout) just
+        // leaves the id on the ledger for the next session's flush.
+        try { await this._ackGate(); } catch (_) { return false; }
+        const ok = await this._ackOnce(receiveId);
+        if (!ok.acked && ok.retryable) this._scheduleAckRetry(receiveId, ok.retryAfterMs);
+        return ok.acked;
+    },
+
+    /** One ack attempt. Never throws. @private */
+    async _ackOnce(receiveId) {
         try {
-            if (typeof api !== 'undefined' && api.acknowledgeReceive) {
-                await api.acknowledgeReceive(receiveId);
-                console.log('[tokenRedemption] Escrow acknowledged:', receiveId);
+            if (typeof api === 'undefined' || !api || typeof api.acknowledgeReceive !== 'function') {
+                return { acked: false, retryable: false, rateLimited: false, retryAfterMs: null };
             }
+            // #110 review: nothing is acked unless its save succeeded. A caller
+            // passing a 'settled' id (value never kept) is refused here, so a
+            // future call site cannot reintroduce ack-before-save.
+            if (ReceiveLedger.settledUnsaved().indexOf(receiveId) >= 0) {
+                console.error('[tokenRedemption] refusing to ack an escrow whose value was never saved', { receiveId });
+                return { acked: false, retryable: false, rateLimited: false, retryAfterMs: null };
+            }
+            await api.acknowledgeReceive(receiveId);
+            ReceiveLedger.markAcked(receiveId);
+            this._ackForbidden.delete(receiveId);
+            console.info('[tokenRedemption] escrow acknowledged', { receiveId });
+            return { acked: true, retryable: false, rateLimited: false, retryAfterMs: null };
         } catch (err) {
-            console.warn('[tokenRedemption] Escrow acknowledge failed, will retry on next startup:', err.message);
+            const status = err && err.status;
+            // 404/410: the gateway no longer has this escrow (already acked,
+            // or expired). Nothing to retry, and keeping it would retry forever.
+            if (status === 404 || status === 410) {
+                ReceiveLedger.markAcked(receiveId);
+                console.info('[tokenRedemption] escrow ack: gateway has no such escrow, dropped', { receiveId, status });
+                return { acked: false, retryable: false, rateLimited: false, retryAfterMs: null };
+            }
+            // 403: usually auth that has not caught up (a signer mid-unlock),
+            // occasionally an escrow that is not ours. Retried a bounded number
+            // of times across runs, then dropped so it cannot loop forever.
+            if (status === 403) {
+                const n = (this._ackForbidden.get(receiveId) || 0) + 1;
+                this._ackForbidden.set(receiveId, n);
+                if (n >= ACK_FORBIDDEN_MAX) {
+                    ReceiveLedger.markAcked(receiveId);
+                    this._ackForbidden.delete(receiveId);
+                    console.warn('[tokenRedemption] escrow ack forbidden repeatedly, dropped', { receiveId });
+                    return { acked: false, retryable: false, rateLimited: false, retryAfterMs: null };
+                }
+            }
+            console.warn('[tokenRedemption] escrow ack failed, kept for retry', {
+                receiveId, status, code: err && err.code, message: err && err.message,
+            });
+            return {
+                acked: false,
+                retryable: true,
+                rateLimited: status === 429,
+                retryAfterMs: typeof (err && err.retryAfterMs) === 'number' ? err.retryAfterMs : null,
+            };
         }
+    },
+
+    // receive_id → background retry promise, so one escrow has one loop.
+    _ackRetries: new Map(),
+    // receive_id → consecutive 403s.
+    _ackForbidden: new Map(),
+    // Bumped on reset, so a loop started for the previous account stops.
+    _ackEpoch: 0,
+    // Overridable by tests; production uses real timers.
+    _ackSleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    _ackBackoffsMs: ACK_RETRY_BACKOFFS_MS,
+    /**
+     * Gate every ack goes through, so acks share the receive budget's pacing
+     * instead of spending it behind the pacer's back. dmPoll installs its
+     * pacer here; the default lets it through.
+     */
+    _ackGate: async () => {},
+    /** Gate every api.receive goes through; dmPoll installs its pacer. */
+    _receiveGate: async () => {},
+    // Overridable by tests; the 409 in-flight wait.
+    _inFlightSleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    // token fingerprint → timestamps of api.receive calls (review C).
+    _receiveCalls: new Map(),
+    /** Book one api.receive for this token; false once the budget is spent. */
+    _takeReceiveCall(key) {
+        const now = Date.now();
+        const recent = (this._receiveCalls.get(key) || []).filter((t) => now - t < RECEIVE_CALLS_SPAN_MS);
+        if (recent.length >= RECEIVE_CALLS_PER_TOKEN) {
+            this._receiveCalls.set(key, recent);
+            return false;
+        }
+        recent.push(now);
+        this._receiveCalls.set(key, recent);
+        if (this._receiveCalls.size > 500) {
+            this._receiveCalls.delete(this._receiveCalls.keys().next().value);
+        }
+        return true;
+    },
+    RECEIVE_CALLS_PER_TOKEN,
+    // Last flush start, so catch-ups cannot flush more than once a minute.
+    _lastFlushAt: 0,
+
+    /**
+     * Forget in-memory ack state. Called on logout / account switch so a retry
+     * loop for the previous account cannot ack under the next one's session.
+     */
+    resetAckState() {
+        this._ackEpoch += 1;
+        this._lastFlushAt = 0;
+        this._receiveCalls.clear();
+        this._ackRetries.clear();
+        this._ackForbidden.clear();
+    },
+
+    /** @private */
+    _scheduleAckRetry(receiveId, firstRetryAfterMs) {
+        if (this._ackRetries.has(receiveId)) return this._ackRetries.get(receiveId);
+        const self = this;
+        const epoch = this._ackEpoch;
+        const loop = (async () => {
+            let retryAfterMs = firstRetryAfterMs;
+            for (const backoff of self._ackBackoffsMs) {
+                const wait = Math.min(
+                    Math.max(backoff, typeof retryAfterMs === 'number' ? retryAfterMs : 0),
+                    ACK_RETRY_MAX_WAIT_MS,
+                );
+                await self._ackSleep(wait);
+                if (epoch !== self._ackEpoch) return false;
+                await self._ackGate();
+                if (epoch !== self._ackEpoch) return false;
+                const r = await self._ackOnce(receiveId);
+                if (r.acked || !r.retryable) return r.acked;
+                retryAfterMs = r.retryAfterMs;
+            }
+            console.warn('[tokenRedemption] escrow ack retries exhausted; left for the next poll', { receiveId });
+            return false;
+        })().catch(() => false).finally(() => {
+            if (self._ackRetries.get(receiveId) === loop) self._ackRetries.delete(receiveId);
+        });
+        this._ackRetries.set(receiveId, loop);
+        return loop;
+    },
+
+    /**
+     * #110 — acknowledge escrows this account SAVED but never acknowledged.
+     * Called by the poller at startup and on catch-up. Never touches a
+     * 'settled' (unsaved) escrow. At most ACK_FLUSH_MAX_PER_RUN acks per run,
+     * each through `_ackGate` (the receive pacer), and it stops at the first
+     * 429 with or without a Retry-After: a backlog must never spend the
+     * budget the next coupon needs. Never throws. Returns how many were acked.
+     */
+    async flushUnacknowledgedEscrows() {
+        let acked = 0;
+        let sent = 0;
+        // Catch-ups fire on SSE open, focus and online; throttled so their
+        // flushes cost at most ACK_FLUSH_MAX_PER_RUN calls a minute (review C).
+        const now = Date.now();
+        if (now - this._lastFlushAt < ACK_FLUSH_MIN_INTERVAL_MS) return 0;
+        this._lastFlushAt = now;
+        try {
+            for (const receiveId of ReceiveLedger.unacknowledged()) {
+                if (sent >= ACK_FLUSH_MAX_PER_RUN) break;
+                if (this._ackRetries.has(receiveId)) continue;
+                await this._ackGate();
+                sent += 1;
+                const r = await this._ackOnce(receiveId);
+                if (r.acked) acked += 1;
+                else if (r.rateLimited) break;
+            }
+        } catch (_) { /* never throws */ }
+        return acked;
     },
 
     /**
@@ -2140,6 +2742,10 @@ TokenRedemption.RedemptionClaimContendedError = RedemptionClaimContendedError;
 // to callers in voucher/js/scan.js + voucher/js/receive.js so they can
 // render an actionable error modal (FR-006 + FR-018).
 TokenRedemption.ProvenanceVerificationError = ProvenanceVerificationError;
+// #110 — terminal "this receive already settled" error, and the ledger, for
+// callers (dmPoll) and tests.
+TokenRedemption.ReceiveSettledNotSavedError = ReceiveSettledNotSavedError;
+TokenRedemption.ReceiveLedger = ReceiveLedger;
 
 // Export for use in other modules
 if (typeof module !== 'undefined' && module.exports) {

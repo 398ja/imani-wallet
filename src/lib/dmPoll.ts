@@ -47,6 +47,7 @@ import { getWallet, notifyWalletChanged, recordReceiptByNullifier } from './wall
 import { legacyApi, withCorrelation } from './legacyBridge'
 import { claimToFile } from './merchantClaim'
 import { withWebLock } from './webLock'
+import { CALLS_PER_RECEIVE, receivePacer } from './receivePacer'
 
 /**
  * Gateway REST, same-origin: `/api/v1/...` reaches customer-wallet through the
@@ -55,6 +56,7 @@ import { withWebLock } from './webLock'
  * the query string, and the SSE subscription below is all query string.
  */
 const GATEWAY = ''
+
 
 /**
  * Backoffs for a rate-limited redemption.
@@ -992,11 +994,22 @@ function redemptionAdapter(): RedemptionAdapter {
         // Waits out the window rather than guessing a safe rate. The wallet
         // cannot know what limit is enforced, and a rate it guesses will drift
         // from the server's — whereas Retry-After is the server saying it.
+        //
+        // #110 adds pacing IN FRONT of this, not instead of it. Waiting out a
+        // 429 is right for the stray one; as the only mechanism it meant an
+        // 8-part bundle fired 32 calls at a 10/min budget, drew 16 429s, and
+        // the acks caught in them were dropped. The pacer keeps a bundle under
+        // the budget; this retry still catches whatever else spent it.
+        //
+        // Pacing is per CALL: tokenRedemption passes every api.receive (every
+        // retry layer included) through the gate installed by
+        // installPacingGates. Acks are exempt from the limit (#120), unpaced.
+        installPacingGates(redemption)
         let voucher: Voucher
         try {
           voucher = (await retryOnTransientMintError(
-          () =>
-            withCorrelation(
+          async () => {
+            return withCorrelation(
           {
             bundleId: meta?.bundleId as string | undefined,
             requestId: meta?.requestId as string | undefined,
@@ -1053,7 +1066,8 @@ function redemptionAdapter(): RedemptionAdapter {
               // dm-poll already deduped by fingerprint before calling us.
               skipDuplicateCheck: true,
             }),
-            ),
+            )
+          },
           {
             isTransient: isRateLimited,
             // Long enough to outlast a one-minute window, which the short
@@ -1314,6 +1328,43 @@ let onSseOpen: (() => void) | undefined
  */
 function catchUp(): void {
   void service?.fetchRecentDms()
+  void flushUnacknowledgedEscrows()
+}
+
+/**
+ * Acknowledge escrows an earlier redemption left HELD (#110). Never throws.
+ *
+ * `_acknowledgeEscrow` used to promise "retry on next startup" to an escrow
+ * recovery that is disabled (#95), so a rate-limited ack was never retried and
+ * the escrow stayed HELD indefinitely. tokenRedemption now keeps unacked
+ * receive_ids per account; this is the next-poll/startup retry it relies on.
+ */
+/**
+ * Route every `/wallet/receive*` call tokenRedemption makes through the page's
+ * pacer, one reservation per call (#110 review C). Idempotent. Acks are not
+ * paced: imani-gateway-customer#120 exempts the POST ack path from the limit,
+ * so `_ackGate` stays tokenRedemption's no-op.
+ */
+function installPacingGates(redemption: object): void {
+  const r = redemption as { _receiveGate?: () => Promise<void> }
+  r._receiveGate = () => receivePacer().acquire(CALLS_PER_RECEIVE)
+}
+
+async function flushUnacknowledgedEscrows(): Promise<void> {
+  try {
+    // Only if the legacy scripts are already loaded (signing in loads them).
+    // Loading them HERE, for bookkeeping, would drag the whole classic-script
+    // stack into every poller start, including the many test doubles that
+    // start one; the next catch-up after they load does the flush instead.
+    const redemption = (typeof window === 'undefined' ? undefined : window.TokenRedemption) as
+      | { flushUnacknowledgedEscrows?: () => Promise<number>; _ackGate?: () => Promise<void> }
+      | undefined
+    if (redemption) installPacingGates(redemption)
+    const acked = await redemption?.flushUnacknowledgedEscrows?.()
+    if (acked) console.info(`[dmPoll] acknowledged ${acked} escrow(s) left over from an earlier receive`)
+  } catch (error) {
+    console.warn('[dmPoll] could not flush unacknowledged escrows', error)
+  }
 }
 
 /**
@@ -1424,6 +1475,9 @@ export function startDmPoll(pubkey: string): DmPollService {
   }
 
   void service.start()
+  // Startup half of the ack retry (#110). The legacy API client is signed in
+  // by now, so the per-account ledger resolves to this account.
+  void flushUnacknowledgedEscrows()
   // The first `onopen` fires after `start()` has already caught up, so it costs
   // one duplicate query per session — worth not special-casing.
   onSseOpen = catchUp
@@ -1456,6 +1510,14 @@ export function stopDmPoll(): void {
   void service?.stop()
   service = undefined
   currentPubkey = undefined
+  // The pacing window belongs to the account that spent it, and so do any
+  // background ack retries: one left running would ack under the next session.
+  receivePacer().reset()
+  try {
+    ;(window.TokenRedemption as { resetAckState?: () => void } | undefined)?.resetAckState?.()
+  } catch {
+    /* never throws on logout */
+  }
   // Half-assembled coupons are DECRYPTED fragments of someone's money, held in
   // memory. They must not survive a logout, and must not be visible to the next
   // account: `startDmPoll` calls this on an identity change, and without it the

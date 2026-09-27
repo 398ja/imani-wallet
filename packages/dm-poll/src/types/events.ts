@@ -222,6 +222,21 @@ export type DmPollEvents = {
   'redemption:success': RedemptionSuccessEvent;
   'redemption:error': RedemptionErrorEvent;
   'redemption:refused': RedemptionRefusedEvent;
+  'redemption:unsaved': RedemptionUnsavedEvent;
   'subscription:state': SubscriptionStateEvent;
   [key: string]: unknown;
 };
+
+/**
+ * #110: the gateway settled a receive of this token (the swap happened) but
+ * the value is NOT in this wallet. Not a success, and not retryable by
+ * re-swapping. Emitted so the wallet can surface it for reconciliation.
+ */
+export interface RedemptionUnsavedEvent {
+  eventId: string;
+  senderPubkey: string;
+  /** The gateway escrow the value sits behind, when known. */
+  receiveId: string | null;
+  /** e.g. 'already-settled' | 'replay-without-token'. */
+  reason: string | null;
+}
