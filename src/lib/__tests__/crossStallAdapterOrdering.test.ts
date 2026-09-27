@@ -52,7 +52,12 @@ vi.mock('../wallet', () => ({
   recordReceiptByNullifier: async () => {},
 }))
 vi.mock('../relay', () => ({ allEvents: async () => [], publish: async () => ({ ok: 1 }) }))
-vi.mock('../arrivalToast', () => ({ announceArrival: () => {} }))
+vi.mock('../arrivalToast', () => ({
+  announceArrival: () => {},
+  announceBundleArrival: async () => {},
+  resumeBundleArrivals: () => {},
+  stopBundleArrivals: () => {},
+}))
 vi.mock('../queuedToast', () => ({ announceQueued: () => {}, settleQueued: () => {} }))
 vi.mock('../paymentReceipt', () => ({ postPaymentReceipt: () => {} }))
 vi.mock('../attestation', () => ({

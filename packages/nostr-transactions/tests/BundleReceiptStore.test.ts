@@ -544,3 +544,42 @@ describe('BundleReceiptStore E-2 — RedemptionStatus + FINALIZED_PARTIAL shape'
     expect([claimed, failedPerm, failedTrans, pending].length).toBe(4);
   });
 });
+
+/* =========================================================================
+ * Display-only mode (#94) — a host whose ledger already writes one row per
+ * redeemed part runs the store without a TransactionStore.
+ * =======================================================================*/
+
+describe('BundleReceiptStore — display-only and configurable window', () => {
+  it('aggregates without writing any transaction row when none is configured', async () => {
+    const storage = inMemoryStorage();
+    const store = createBundleReceiptStore({ storage, clock: fixedClock(T0) });
+
+    const first = await store.ingest(ingestInput(0, 50));
+    expect(first).toMatchObject({ kind: 'BUNDLE_PART_INGESTED', transactionId: '', newState: 'IN_FLIGHT' });
+    const second = await store.ingest(ingestInput(1, 50));
+    expect(second).toMatchObject({ kind: 'BUNDLE_PART_INGESTED', newState: 'FINALIZED', receivedAmount: 100 });
+
+    const rec = await store.get(USER_ID, BUNDLE_ID);
+    expect(rec?.linkedTransactionId).toBeNull();
+  });
+
+  it('reconciles an expired bundle without a transaction store', async () => {
+    const storage = inMemoryStorage();
+    const store = createBundleReceiptStore({ storage, clock: fixedClock(T0) });
+    await store.ingest(ingestInput(0, 50));
+    const results = await store.reconcileExpired(USER_ID, new Date(T0.getTime() + 91_000));
+    expect(results).toEqual([
+      expect.objectContaining({ transition: 'IN_FLIGHT_TO_INCOMPLETE', finalReceivedAmount: 50 }),
+    ]);
+  });
+
+  it('honours a wider wait window', async () => {
+    const storage = inMemoryStorage();
+    const store = createBundleReceiptStore({ storage, clock: fixedClock(T0), waitWindowMs: 180_000 });
+    await store.ingest(ingestInput(0, 50));
+    expect(await store.reconcileExpired(USER_ID, new Date(T0.getTime() + 91_000))).toEqual([]);
+    const rec = await store.get(USER_ID, BUNDLE_ID);
+    expect(Date.parse(rec!.waitWindowExpiresAt) - T0.getTime()).toBe(180_000);
+  });
+});
