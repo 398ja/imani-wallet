@@ -19,11 +19,10 @@ const nip44Decrypt = vi.fn(() => JSON.stringify({ v: 1, faceValue: 150, faceUnit
 // so `mock.calls[0]` is a tuple instead of `[]`. A bare `vi.fn()` makes every
 // destructuring below need an `as` cast, which tsc rejects — and a cast that
 // compiled would assert the call's shape rather than check it.
-const signedFetch = vi.fn(
-  async (_path: string, _method: string, _payload?: unknown, _signer?: unknown) =>
-    new Response(null, { status: 200 }),
-)
-const recordNotification = vi.fn((_pubkey: string, _item: Record<string, unknown>) => true)
+const signedFetch = vi.fn<
+  (path: string, method: string, payload?: unknown, signer?: unknown) => Promise<Response>
+>(async () => new Response(null, { status: 200 }))
+const recordNotification = vi.fn<(pubkey: string, item: Record<string, unknown>) => boolean>(() => true)
 
 vi.mock('../nap', () => ({
   getSigner: () => ({ pubkey: SENDER, nip44Decrypt }),

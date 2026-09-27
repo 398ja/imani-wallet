@@ -1,7 +1,7 @@
 import { finalizeEvent, type Event, type EventTemplate } from 'nostr-tools'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha2.js'
-import { bytesToHex, hexToBytes, utf8ToBytes } from '@noble/hashes/utils'
+import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils'
 
 import { ATTESTATION_KIND, ATTESTATION_VERSION } from './attestationKind'
 import { commitTo } from './audit'

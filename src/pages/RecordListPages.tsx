@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import type { VoucherRow } from '@imani/wallet-storage'
 
@@ -8,7 +8,7 @@ import {
   PageHeader,
   EmptyRow,
   CouponListItem,
-  TransactionListItem,
+  HistoryListItem,
   IdentityInline,
   Pagination,
   usePagination,
@@ -16,6 +16,7 @@ import {
 import { listVouchers, transactionsWith, onWalletChanged } from '../lib/wallet'
 import { couponsFor, redeemedFor } from '../lib/merchants'
 import type { WalletTransaction } from '../lib/transactions'
+import { entryKey, groupHistory } from '../lib/historyGroups'
 
 /**
  * The full lists behind "See all" on the merchant screen.
@@ -131,19 +132,24 @@ export function TransactionsPage() {
     return onWalletChanged(load)
   }, [pubkey])
 
-  const { visible, page, pageCount, setPage } = usePagination(transactions)
+  // One line per PAYMENT: a bundle's rows fold under one entry (#106), so the
+  // count and the pages are of what the reader sees, not of stored rows.
+  const entries = useMemo(() => groupHistory(transactions), [transactions])
+  const { visible, page, pageCount, setPage } = usePagination(entries)
 
   return (
     <ListFrame
       pubkey={pubkey}
       title="Transactions"
-      subtitle={transactions.length === 1 ? '1 entry' : `${transactions.length} entries`}
+      subtitle={entries.length === 1 ? '1 entry' : `${entries.length} entries`}
       footer={<Pagination page={page} pageCount={pageCount} onPage={setPage} />}
     >
       {transactions.length === 0 ? (
         <EmptyRow>Nothing yet.</EmptyRow>
       ) : (
-        visible.map((tx) => <TransactionListItem key={tx.id} tx={tx} />)
+        visible.map((entry) => (
+          <HistoryListItem key={entryKey(entry)} entry={entry} />
+        ))
       )}
     </ListFrame>
   )

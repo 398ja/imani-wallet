@@ -70,7 +70,9 @@ export function IncomingPaymentToast({
           </span>
         ) : null}
         {progress ? (
-          <span className="mt-0.5 block truncate text-[13px] font-normal leading-snug tracking-normal text-mono-600 dark:text-mono-300">
+          // tabular-nums: this line is redrawn in place as parts land ("1 of 2"
+          // -> "2 of 2"), and proportional digits would shift it on every update.
+          <span className="mt-0.5 block truncate text-[13px] font-normal leading-snug tracking-normal tabular-nums text-mono-600 dark:text-mono-300">
             {progress}
           </span>
         ) : null}
@@ -161,7 +163,9 @@ export function ReceivedPaymentToast({
           </span>
         ) : null}
         {progress ? (
-          <span className="mt-0.5 block truncate text-[13px] font-normal leading-snug tracking-normal text-mono-600 dark:text-mono-300">
+          // tabular-nums: this line is redrawn in place as parts land ("1 of 2"
+          // -> "2 of 2"), and proportional digits would shift it on every update.
+          <span className="mt-0.5 block truncate text-[13px] font-normal leading-snug tracking-normal tabular-nums text-mono-600 dark:text-mono-300">
             {progress}
           </span>
         ) : null}
