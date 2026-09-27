@@ -40,4 +40,18 @@ export default defineConfig([
     languageOptions: { globals: globals.node },
     rules: { 'react-hooks/rules-of-hooks': 'off' },
   },
+  {
+    // The push service worker is plain JS served as-is from public/. It runs in
+    // a ServiceWorkerGlobalScope (self, clients, registration), not a window,
+    // so it gets those globals here. This replaces the `/* eslint-env
+    // serviceworker */` comment it used to carry, which flat config ignores
+    // and ESLint v10 rejects outright.
+    files: ['public/sw.js'],
+    extends: [js.configs.recommended],
+    languageOptions: {
+      ecmaVersion: 2020,
+      sourceType: 'script',
+      globals: globals.serviceworker,
+    },
+  },
 ])
