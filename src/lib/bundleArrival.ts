@@ -165,10 +165,28 @@ const store: BundleReceiptStore = createBundleReceiptStore({
  * the one error this module must not make.
  */
 let queue: Promise<unknown> = Promise.resolve()
-function serial<T>(fn: () => Promise<T>): Promise<T> {
-  const run = queue.then(fn, fn)
+/**
+ * Bumped on logout or an account switch. Work queued before the bump is
+ * dropped rather than run, so a part still in the queue cannot write the
+ * previous account's bundle back into storage after logout wiped it.
+ */
+let epoch = 0
+function serial<T>(fn: () => Promise<T>, dropped: T): Promise<T> {
+  const queuedAt = epoch
+  const guarded = () => (queuedAt === epoch ? fn() : Promise.resolve(dropped))
+  const run = queue.then(guarded, guarded)
   queue = run.catch(() => undefined)
   return run
+}
+
+/** Drop every queued operation. Called when the account's session ends. */
+export function stopBundleTracking(): void {
+  epoch += 1
+}
+
+/** The current epoch, so a caller can tell its session ended mid-await. */
+export function bundleEpoch(): number {
+  return epoch
 }
 
 /* ------------------------------------------------------------------------ */
@@ -273,7 +291,7 @@ export function trackArrival(recipientPubkey: string, part: ArrivedPart): Promis
       console.warn('[bundle] could not track a bundle part:', e)
       return { kind: 'standalone', reason: 'error' }
     }
-  })
+  }, { kind: 'standalone', reason: 'stopped' })
 }
 
 async function flagDuplicate(record: BundleReceiptRecord, partIndex: number) {
@@ -289,8 +307,10 @@ async function flagDuplicate(record: BundleReceiptRecord, partIndex: number) {
 function isSameDelivery(record: BundleReceiptRecord, part: ArrivedPart): boolean {
   const existing = record.receivedParts.find((p) => p.bundlePartIndex === part.partIndex)
   if (!existing) return false
-  if (!existing.eventId || !part.eventId) return true
-  return existing.eventId === part.eventId
+  // Only a matching gift-wrap id proves it is the same delivery. Without one
+  // on both sides it is announced on its own: a duplicate toast is a
+  // nuisance, a coupon hidden as a "repeat" is money the user never hears of.
+  return !!existing.eventId && existing.eventId === part.eventId
 }
 
 /** The current view of one bundle, if the account has it. */
@@ -298,7 +318,7 @@ export function bundleView(recipientPubkey: string, bundleId: string): Promise<B
   return serial(async () => {
     const record = await store.get(recipientPubkey, bundleId)
     return record ? toView(record) : undefined
-  })
+  }, undefined)
 }
 
 /**
@@ -319,7 +339,7 @@ export function reconcileBundles(recipientPubkey: string, now = new Date()): Pro
       console.warn('[bundle] could not reconcile bundles:', e)
       return []
     }
-  })
+  }, [])
 }
 
 /** Bundles still waiting on parts, with when their window closes (epoch ms). */
@@ -339,7 +359,8 @@ export function bundleExpiresAt(recipientPubkey: string, bundleId: string): numb
 /* Wording                                                                   */
 /* ------------------------------------------------------------------------ */
 
-const vouchers = (n: number) => `${n} voucher${n === 1 ? '' : 's'}`
+/** "1 voucher", "2 vouchers". Shared by every bundle surface. */
+export const vouchers = (n: number) => `${n} voucher${n === 1 ? '' : 's'}`
 
 export interface BundleWording {
   /** The figure beside the sender's name: received, with the expected total when short. */
@@ -418,6 +439,7 @@ export function describeBundle(view: BundleView, opts: { queued?: number } = {})
 /** Test seam: forget every bundle for an account and drop the queue. */
 export function _resetBundleArrivalsForTests(pubkey?: string): void {
   queue = Promise.resolve()
+  epoch = 0
   if (pubkey) {
     try {
       localStorage.removeItem(storageKey(pubkey))

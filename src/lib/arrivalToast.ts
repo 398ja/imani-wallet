@@ -4,10 +4,12 @@ import { toast } from 'sonner'
 import { ReceivedPaymentToast } from '../components/ui/IncomingPaymentToast'
 import { createBoundedSet } from './boundedSet'
 import {
+  bundleEpoch,
   describeBundle,
   isBundleId,
   openBundles,
   reconcileBundles,
+  stopBundleTracking,
   trackArrival,
   type BundleView,
 } from './bundleArrival'
@@ -233,6 +235,7 @@ export async function announceBundleArrival(
     if (!wantsInApp(recipientPubkey, 'voucher_received')) return
 
     const unit = voucher.face_unit ?? ''
+    const session = bundleEpoch()
     const result = await trackArrival(recipientPubkey, {
       bundleId: declared.bundleId,
       declaredTotal: declared.total,
@@ -245,6 +248,8 @@ export async function announceBundleArrival(
       eventId: deliveryEventId,
     })
 
+    // The account logged out while this part was being counted.
+    if (session !== bundleEpoch()) return
     if (result.kind === 'repeat') return
     if (result.kind === 'standalone') {
       // Money that could not be counted towards the bundle is still money:
@@ -359,10 +364,11 @@ const STALE_CLOSE_MS = 10 * 60 * 1000
 /** Settle every bundle whose window has closed, and say how each ended. */
 async function closeExpired(recipientPubkey: string): Promise<void> {
   try {
+    const session = bundleEpoch()
     const now = Date.now()
     const closing = new Map(openBundles(recipientPubkey).map((b) => [b.bundleId, b.expiresAt]))
     const closed = await reconcileBundles(recipientPubkey)
-    if (!wantsInApp(recipientPubkey, 'voucher_received')) return
+    if (session !== bundleEpoch() || !wantsInApp(recipientPubkey, 'voucher_received')) return
     for (const view of closed) {
       const expiredAt = closing.get(view.bundleId) ?? now
       renderBundle(view, recipientPubkey, live.get(view.bundleId)?.memo, true, {
@@ -383,7 +389,9 @@ async function closeExpired(recipientPubkey: string): Promise<void> {
  */
 export function resumeBundleArrivals(recipientPubkey: string): void {
   try {
+    const session = bundleEpoch()
     void closeExpired(recipientPubkey).then(() => {
+      if (session !== bundleEpoch()) return
       for (const open of openBundles(recipientPubkey)) {
         schedule(recipientPubkey, open.bundleId, open.expiresAt)
       }
@@ -395,6 +403,7 @@ export function resumeBundleArrivals(recipientPubkey: string): void {
 
 /** Drop every timer and live toast, on logout or an account switch. */
 export function stopBundleArrivals(): void {
+  stopBundleTracking()
   for (const timer of timers.values()) clearTimeout(timer)
   timers.clear()
   live.clear()
