@@ -131,6 +131,11 @@ export function PayPage({ pubkey }: { pubkey: string }) {
           {formatFace(status.result.delivered, denom)}
           {partial ? ` of ${formatFace(status.result.requested, denom)}` : ''} to {issuerLabel}
         </p>
+        {status.result.parts > 1 && (
+          <p className="text-sm text-mono-500">
+            {partial ? `${status.result.parts} vouchers went before the rest stopped.` : `Paid as ${status.result.parts} vouchers.`}
+          </p>
+        )}
         {partial && (
           <Alert>
             The rest was not paid and your remaining vouchers are untouched — the

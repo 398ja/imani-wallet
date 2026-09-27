@@ -179,19 +179,37 @@ const BUNDLE_ID_RE = /^[0-9a-f]{32}$/;
 
 export interface BundleReceiptStoreConfig {
   storage: BundleReceiptStorageAdapter;
-  transactions: TransactionStore;
+  /**
+   * Where the bundle's display row is written. Optional: a host whose ledger
+   * already writes one row per redeemed part (the wallet's tokenRedemption
+   * path) must NOT get a second, declared-total-derived row beside it, so it
+   * runs the store display-only and `transactionId` in the directive is ''.
+   */
+  transactions?: TransactionStore;
   clock?: BundleReceiptClock;
+  /**
+   * How long after the first part a bundle waits before an unfinished one is
+   * called INCOMPLETE. Defaults to the spec's 90 s. A host that retries a
+   * rate-limited part for longer than that should widen it, or a part that is
+   * merely queued gets reported as missing.
+   */
+  waitWindowMs?: number;
 }
 
 export class BundleReceiptStore {
   private readonly storage: BundleReceiptStorageAdapter;
-  private readonly transactions: TransactionStore;
+  private readonly transactions: TransactionStore | undefined;
   private readonly clock: BundleReceiptClock;
+  private readonly waitWindowMs: number;
 
   constructor(config: BundleReceiptStoreConfig) {
     this.storage = config.storage;
     this.transactions = config.transactions;
     this.clock = config.clock ?? { now: () => new Date() };
+    this.waitWindowMs =
+      typeof config.waitWindowMs === 'number' && config.waitWindowMs > 0
+        ? config.waitWindowMs
+        : WAIT_WINDOW_MS;
   }
 
   /**
@@ -317,7 +335,7 @@ export class BundleReceiptStore {
       faceUnit: input.faceUnit,
       faceDecimals: input.faceDecimals,
       firstPartAt: input.receivedAt.toISOString(),
-      waitWindowExpiresAt: new Date(firstPartAtMs + WAIT_WINDOW_MS).toISOString(),
+      waitWindowExpiresAt: new Date(firstPartAtMs + this.waitWindowMs).toISOString(),
       receivedParts: [part],
       receivedAmount: part.partAmount,
       disagreements: [],
@@ -327,13 +345,13 @@ export class BundleReceiptStore {
     };
 
     const tx = await this.upsertTransactionRow(record, input);
-    record.linkedTransactionId = tx.id;
+    record.linkedTransactionId = tx?.id ?? null;
     await this.storage.upsert(record);
 
     return {
       kind: 'BUNDLE_PART_INGESTED',
       bundleId: record.bundleId,
-      transactionId: tx.id,
+      transactionId: tx?.id ?? '',
       newState: record.state,
       receivedAmount: record.receivedAmount,
       declaredTotal: record.declaredTotal,
@@ -380,13 +398,13 @@ export class BundleReceiptStore {
     }
 
     const tx = await this.upsertTransactionRow(existing, input);
-    existing.linkedTransactionId = tx.id;
+    existing.linkedTransactionId = tx?.id ?? existing.linkedTransactionId;
     await this.storage.upsert(existing);
 
     return {
       kind: 'BUNDLE_PART_INGESTED',
       bundleId: existing.bundleId,
-      transactionId: tx.id,
+      transactionId: tx?.id ?? '',
       newState: existing.state,
       receivedAmount: existing.receivedAmount,
       declaredTotal: existing.declaredTotal,
@@ -446,6 +464,7 @@ export class BundleReceiptStore {
     record: BundleReceiptRecord,
     input: BundleReceiptIngestInput
   ) {
+    if (!this.transactions) return undefined;
     const stateForDisplay = record.state;
     return this.transactions.upsertBundleRecord({
       type: TransactionType.RECEIVED,
@@ -473,7 +492,7 @@ export class BundleReceiptStore {
    * display flips from "Receiving X of Y" to "Received X of Y (incomplete)".
    */
   private async refreshTransactionRow(record: BundleReceiptRecord) {
-    if (!record.linkedTransactionId) return;
+    if (!this.transactions || !record.linkedTransactionId) return;
     await this.transactions.update(record.linkedTransactionId, {
       bundleReceivedAmount: record.receivedAmount,
       bundleState: record.state,

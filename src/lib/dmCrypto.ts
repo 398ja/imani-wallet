@@ -67,12 +67,18 @@ interface TokenTransferPayload {
    * Without them a merchant's till cannot tell that two arriving coupons are
    * one €7 payment for one request, and settles neither.
    *
-   * Only these two are read. The other three are derivable from the rows the
-   * till already has — summing the parts of a bundle answers "how much
-   * arrived" without trusting a count the sender chose.
+   * The ids are what the till settles by. The other three (`bundle_total`,
+   * `bundle_part_index`, `bundle_part_count`) are read too, since #94, but
+   * only as DECLARED display hints: what the sender says the bundle holds,
+   * shown as "expected" beside the parts that actually redeemed. They are a
+   * count and a total the sender chose, so nothing that books, caps or
+   * settles money reads them — the till still sums the rows it has.
    */
   request_id?: string | null
   bundle_id?: string | null
+  bundle_total?: number | null
+  bundle_part_index?: number | null
+  bundle_part_count?: number | null
 }
 
 /**
@@ -90,7 +96,33 @@ function ride(payload: TokenTransferPayload) {
     expiresAt: payload.expires_at ?? undefined,
     requestId: payload.request_id ?? undefined,
     bundleId: payload.bundle_id ?? undefined,
+    // Declared, not trusted (see the payload comment). Dropped unless a bundle
+    // id rides with them and each is a sane non-negative integer, so a garbled
+    // declaration degrades to today's per-part behaviour rather than to a
+    // "0 of NaN" on screen.
+    ...(payload.bundle_id ? declaredBundle(payload) : {}),
   }
+}
+
+function declaredBundle(payload: TokenTransferPayload): {
+  bundleTotal?: number
+  bundlePartIndex?: number
+  bundlePartCount?: number
+} {
+  const total = wholeNumber(payload.bundle_total)
+  const index = wholeNumber(payload.bundle_part_index)
+  const count = wholeNumber(payload.bundle_part_count)
+  // All three or none: a count without an index cannot be deduped, and a
+  // total without a count cannot say "1 of 2".
+  if (total === undefined || index === undefined || count === undefined || count < 1) return {}
+  return { bundleTotal: total, bundlePartIndex: index, bundlePartCount: count }
+}
+
+function wholeNumber(value: unknown): number | undefined {
+  // A digit string too: a JSON serialiser on the relaying side may render a
+  // long as a string, and that is the same number rather than a garbled one.
+  const n = typeof value === 'string' && /^\d{1,15}$/.test(value) ? Number(value) : value
+  return typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : undefined
 }
 
 /** A voucher token whose issuer signature did not check out. */

@@ -281,6 +281,16 @@ export function SendPage({ pubkey }: { pubkey: string }) {
                     asMerchant ? '' : ' It is in their wallet now.'
                   }`}
             </p>
+            {/* One payment drawn from several coupons (#94). Said here so the
+                sender knows why the recipient's wallet counts parts, and so
+                "Sent €6.00 as 2 vouchers" matches what the recipient sees. */}
+            {sent.parts > 1 && (
+              <p className="mt-1 text-sm text-mono-500">
+                {partial
+                  ? `${sent.parts} vouchers went before the rest stopped.`
+                  : `Sent as ${sent.parts} vouchers.`}
+              </p>
+            )}
           </div>
         </Panel>
         {partial && (

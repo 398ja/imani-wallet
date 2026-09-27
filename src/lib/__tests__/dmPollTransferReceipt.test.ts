@@ -45,7 +45,12 @@ vi.mock('../merchant', () => ({
   loadMerchant: () => (hasStall ? { pubkey: RECEIVER, categories: [] } : null),
 }))
 
-vi.mock('../arrivalToast', () => ({ announceArrival: () => {} }))
+vi.mock('../arrivalToast', () => ({
+  announceArrival: () => {},
+  announceBundleArrival: async () => {},
+  resumeBundleArrivals: () => {},
+  stopBundleArrivals: () => {},
+}))
 vi.mock('../refusalToast', () => ({ announceRefusal: vi.fn() }))
 vi.mock('../queuedToast', () => ({ announceQueued: () => {}, settleQueued: () => {} }))
 vi.mock('../paymentReceipt', () => ({ postPaymentReceipt: async () => {} }))

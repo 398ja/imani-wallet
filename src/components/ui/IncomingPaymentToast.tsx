@@ -31,12 +31,15 @@ export function IncomingPaymentToast({
   amount,
   fallbackName,
   fallbackPicture,
+  progress,
 }: {
   pubkey: string
   /** Already formatted by the gateway, in the sender's own unit. */
   amount: string
   fallbackName?: string
   fallbackPicture?: string
+  /** One payment sent as several coupons: "2 vouchers" (#94). */
+  progress?: string
 }) {
   const fetched = useIdentity(pubkey)
   const identity = {
@@ -64,6 +67,11 @@ export function IncomingPaymentToast({
         {handle ? (
           <span className="block truncate text-[13px] font-normal leading-snug tracking-normal text-mono-600 dark:text-mono-300">
             {handle}
+          </span>
+        ) : null}
+        {progress ? (
+          <span className="mt-0.5 block truncate text-[13px] font-normal leading-snug tracking-normal text-mono-600 dark:text-mono-300">
+            {progress}
           </span>
         ) : null}
         <span className="mt-0.5 block text-[13px] font-normal leading-snug tracking-normal text-mono-600 dark:text-mono-300">
@@ -106,10 +114,19 @@ export function ReceivedPaymentToast({
   pubkey,
   amount,
   memo,
+  progress,
+  settledLine,
 }: {
   pubkey?: string
   amount: string
   memo?: string
+  /**
+   * Where a multi-coupon payment stands: "1 of 2 vouchers so far" (#94).
+   * Absent for a single coupon, which renders exactly as before.
+   */
+  progress?: string
+  /** Replaces "Received — it is in your balance." when that is not the whole story. */
+  settledLine?: string
 }) {
   // Hooks cannot be called conditionally, so this runs for the anonymous case
   // too; `useIdentity` treats an empty pubkey as "nothing to look up".
@@ -143,8 +160,13 @@ export function ReceivedPaymentToast({
             {memo}
           </span>
         ) : null}
+        {progress ? (
+          <span className="mt-0.5 block truncate text-[13px] font-normal leading-snug tracking-normal text-mono-600 dark:text-mono-300">
+            {progress}
+          </span>
+        ) : null}
         <span className="mt-0.5 block text-[13px] font-normal leading-snug tracking-normal text-mono-600 dark:text-mono-300">
-          Received — it is in your balance.
+          {settledLine ?? 'Received — it is in your balance.'}
         </span>
       </span>
     </span>
