@@ -27,10 +27,9 @@ const nip44Encrypt = vi.fn(() => 'ciphertext==')
 // of a call below needed an `as` cast that tsc rejects outright — and a cast
 // that did compile would assert the shape instead of checking it, which is the
 // opposite of what these assertions are for.
-const signedFetch = vi.fn(
-  async (_path: string, _method: string, _payload?: unknown, _signer?: unknown) =>
-    new Response(null, { status: 202 }),
-)
+const signedFetch = vi.fn<
+  (path: string, method: string, payload?: unknown, signer?: unknown) => Promise<Response>
+>(async () => new Response(null, { status: 202 }))
 
 vi.mock('../nap', () => ({
   getSigner: () => ({ pubkey: RECIPIENT, nip44Encrypt }),

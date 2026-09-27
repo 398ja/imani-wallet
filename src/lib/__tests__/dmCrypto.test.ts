@@ -25,9 +25,9 @@ vi.mock('../nap', () => ({
     },
     // IW-14: the scoped borrow, which throws while locked exactly as privkeyHex did — the
     // locked-wallet case must stay distinguishable from a malformed wrap.
-    withPrivkey<T>(use: (key: Uint8Array) => T): T {
+    withPrivkey<T>(borrow: (key: Uint8Array) => T): T {
       if (!signerState.privkey) throw new Error('The wallet is locked.')
-      return use(hexToBytes(signerState.privkey))
+      return borrow(hexToBytes(signerState.privkey))
     },
   }),
 }))

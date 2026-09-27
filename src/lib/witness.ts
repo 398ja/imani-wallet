@@ -1,6 +1,6 @@
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha2.js'
-import { bytesToHex, hexToBytes, utf8ToBytes } from '@noble/hashes/utils'
+import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils'
 
 import { getSigner } from './nap'
 import { proofSecrets } from './voucherToken'

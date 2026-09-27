@@ -130,6 +130,7 @@ export class NativePushTransport implements PushTransport {
    * client-side key to do here. Declaring the parameter rather than omitting
    * it keeps every caller able to treat the two transports identically.
    */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept for transport parity, see above
   async subscribe(_vapidPublicKey?: string | null): Promise<TransportSubscription | null> {
     try {
       const token = await this.awaitToken()

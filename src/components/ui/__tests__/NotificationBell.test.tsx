@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
-import { NotificationBell, relativeTime } from '../NotificationBell'
+import { NotificationBell } from '../NotificationBell'
+import { relativeTime } from '../../../lib/relativeTime'
 import { _resetInboxCacheForTests, recordNotification } from '../../../lib/notifications/inbox'
 
 const PUBKEY = 'a'.repeat(64)
