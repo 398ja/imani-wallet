@@ -29,7 +29,7 @@ import {
 import { present } from '../lib/detailRows'
 import { listTransactions, onWalletChanged } from '../lib/wallet'
 import { toTransaction, type WalletTransaction } from '../lib/transactions'
-import { groupHistory } from '../lib/historyGroups'
+import { entryKey, groupHistory } from '../lib/historyGroups'
 import { expiringSoon } from '../lib/stats'
 import { formatDate, formatFace } from '../lib/format'
 import { identityLabel, useIdentity } from '../lib/identity'
@@ -159,7 +159,7 @@ export function MerchantTransactionsPage() {
         // The same row component the customer screens use, so a movement looks
         // identical wherever it is listed.
         visible.map((entry) => (
-          <HistoryListItem key={entry.kind === 'single' ? entry.tx.id : entry.id} entry={entry} />
+          <HistoryListItem key={entryKey(entry)} entry={entry} />
         ))
       )}
     </ListFrame>

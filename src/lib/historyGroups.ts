@@ -1,4 +1,6 @@
 import type { WalletTransaction } from './transactions'
+import { hasValidationClaim, validationStatus, type ValidationStatus } from './validationStatus'
+import type { VoucherValidation } from './voucherToken'
 
 /**
  * One payment made of several vouchers, as one line in history (#106).
@@ -23,9 +25,12 @@ export type HistoryEntry =
   | { kind: 'single'; tx: WalletTransaction }
   | {
       kind: 'bundle'
-      /** `bundle:<bundleId>`, stable as parts land. */
+      /**
+       * Unique per group, derived from everything the group shares, so it is a
+       * safe React key: two groups with one bundle id (a received and a
+       * cashback row, or two counterparties) never collide.
+       */
       id: string
-      bundleId: string
       /** Newest first, the order the list itself uses. */
       parts: WalletTransaction[]
       /** Sum of the parts' `amount`, in the shared unit. */
@@ -33,15 +38,34 @@ export type HistoryEntry =
       unit: string
       decimals: number
       direction: 'in' | 'out'
-      type: string
       /** The newest part's time, so the group sorts where its latest part would. */
       at: number
     }
 
-/** What rows must share to be added up as one payment. */
+/**
+ * What rows must share to be added up as one payment.
+ *
+ * The bundle id is sender-chosen, so it is not trusted to be unique on its
+ * own: a stall's list spans every customer, and nothing stops two senders
+ * (or one sender on two days) reusing an id. The counterparty and the stall
+ * are part of the key so different parties' money is never folded together.
+ */
 function groupKey(tx: WalletTransaction): string | undefined {
   if (!tx.bundleId) return undefined
-  return [tx.bundleId, tx.direction, tx.type, tx.unit, tx.decimals].join('\u0000')
+  return [
+    tx.bundleId,
+    tx.direction,
+    tx.type,
+    tx.unit,
+    tx.decimals,
+    tx.counterparty ?? '',
+    tx.merchantId ?? '',
+  ].join('\u0000')
+}
+
+/** A stable, unique React key for any entry. */
+export function entryKey(entry: HistoryEntry): string {
+  return entry.kind === 'single' ? entry.tx.id : entry.id
 }
 
 /**
@@ -74,16 +98,39 @@ export function groupHistory(transactions: WalletTransaction[]): HistoryEntry[] 
     emitted.add(key)
     out.push({
       kind: 'bundle',
-      id: `bundle:${tx.bundleId}`,
-      bundleId: tx.bundleId!,
+      // The newest part's row id rides along so the key stays unique even if
+      // every shared field above matched another group's.
+      id: `bundle:${key}:${tx.id}`,
       parts: rows,
       amount: rows.reduce((sum, r) => sum + r.amount, 0),
       unit: tx.unit,
       decimals: tx.decimals,
       direction: tx.direction,
-      type: tx.type,
       at: Math.max(...rows.map((r) => r.at)),
     })
   }
   return out
+}
+
+/** Worst first: the order a reader must hear about them. */
+const SEVERITY: Record<ValidationStatus, number> = { failed: 2, unchecked: 1, verified: 0 }
+
+/**
+ * The validation to show on a folded line: its WORST part's.
+ *
+ * Folding must not hide a check that failed. A payment whose second voucher
+ * did not verify shows the failure on the one line the reader sees, not only
+ * once they think to open it. Undefined when no part makes a claim to check,
+ * exactly as a single row shows no badge then.
+ */
+export function worstValidation(parts: WalletTransaction[]): VoucherValidation | 'none' | undefined {
+  const claims = parts.filter(hasValidationClaim)
+  if (claims.length === 0) return undefined
+  let worst = claims[0]!
+  for (const p of claims) {
+    if (SEVERITY[validationStatus(p.validation)] > SEVERITY[validationStatus(worst.validation)]) worst = p
+  }
+  // An unchecked part has no validation object; the badge reads undefined as
+  // "not checked", which is what it is.
+  return worst.validation ?? 'none'
 }

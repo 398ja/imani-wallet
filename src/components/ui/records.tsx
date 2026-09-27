@@ -4,7 +4,7 @@ import type { VoucherRow } from '@imani/wallet-storage'
 
 import { vouchers } from '../../lib/bundleWording'
 import { formatFace, formatDate, displayDecimals } from '../../lib/format'
-import type { HistoryEntry } from '../../lib/historyGroups'
+import { worstValidation, type HistoryEntry } from '../../lib/historyGroups'
 import { isRedeemed } from '../../lib/merchants'
 import { transactionLabel, type WalletTransaction } from '../../lib/transactions'
 import { hasValidationClaim } from '../../lib/validationStatus'
@@ -76,6 +76,12 @@ export function HistoryListItem({ entry }: { entry: HistoryEntry }) {
   const label = transactionLabel(entry.parts[0]!)
   const total = formatFace(entry.amount, { unit: entry.unit, decimals: entry.decimals })
   const count = vouchers(entry.parts.length)
+  const date = formatDate(entry.at)
+  // Folding must not hide a failed check: the worst part's status rides on
+  // the line (see worstValidation). And one payment has one memo, which the
+  // sender wrote on every part; shown once, from whichever part carries it.
+  const worst = worstValidation(entry.parts)
+  const memo = entry.parts.find((p) => p.memo)?.memo
 
   return (
     <details className="group">
@@ -93,7 +99,7 @@ export function HistoryListItem({ entry }: { entry: HistoryEntry }) {
         make columns of money wobble.
       */}
       <summary
-        aria-label={`${label}, ${outgoing ? 'minus' : 'plus'} ${total}, ${count}`}
+        aria-label={`${label}, ${outgoing ? 'minus' : 'plus'} ${total}, ${count}, ${date}`}
         className="flex cursor-pointer list-none items-center gap-3 p-4 outline-none ring-inset ring-mono-400 press-row focus-visible:ring-2 [&::-webkit-details-marker]:hidden"
       >
         <Arrow className={`h-4 w-4 shrink-0 ${outgoing ? 'text-mono-500' : 'text-green-600'}`} />
@@ -108,8 +114,14 @@ export function HistoryListItem({ entry }: { entry: HistoryEntry }) {
             <span className="shrink-0 rounded-full px-2 py-0.5 text-xs font-medium tabular-nums text-mono-600 ring-1 ring-inset ring-mono-300 dark:text-mono-300 dark:ring-mono-700">
               {count}
             </span>
+            {worst !== undefined ? (
+              <ValidationBadge validation={worst === 'none' ? undefined : worst} />
+            ) : null}
           </p>
-          <p className="truncate text-sm text-mono-500">{formatDate(entry.at)}</p>
+          <p className="truncate text-sm text-mono-500">
+            {date}
+            {memo ? ` · ${memo}` : ''}
+          </p>
         </div>
         <p className="shrink-0 text-right tabular-nums text-mono-900 dark:text-mono-50">
           {outgoing ? '−' : '+'}
@@ -131,6 +143,11 @@ export function HistoryListItem({ entry }: { entry: HistoryEntry }) {
         as belonging to the line above. They open out of that line (`expand-row`,
         a short slide and fade, already reduced to nothing under reduced motion)
         and each is the ordinary row, linking to its own detail screen.
+
+        It closes instantly, which is asymmetric with the open (design §7). That
+        is the same accepted trade the header menu documents: <details> cannot
+        animate its own close, and a hand-rolled disclosure would give up the
+        free keyboard, focus and Escape handling to buy 180ms of motion.
       */}
       <div className="expand-row divide-y divide-mono-200 border-t border-mono-200 bg-mono-50 pl-6 dark:divide-mono-800 dark:border-mono-800 dark:bg-mono-900/40">
         {entry.parts.map((tx) => (

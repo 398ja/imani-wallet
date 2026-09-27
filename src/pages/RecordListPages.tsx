@@ -16,7 +16,7 @@ import {
 import { listVouchers, transactionsWith, onWalletChanged } from '../lib/wallet'
 import { couponsFor, redeemedFor } from '../lib/merchants'
 import type { WalletTransaction } from '../lib/transactions'
-import { groupHistory } from '../lib/historyGroups'
+import { entryKey, groupHistory } from '../lib/historyGroups'
 
 /**
  * The full lists behind "See all" on the merchant screen.
@@ -148,7 +148,7 @@ export function TransactionsPage() {
         <EmptyRow>Nothing yet.</EmptyRow>
       ) : (
         visible.map((entry) => (
-          <HistoryListItem key={entry.kind === 'single' ? entry.tx.id : entry.id} entry={entry} />
+          <HistoryListItem key={entryKey(entry)} entry={entry} />
         ))
       )}
     </ListFrame>

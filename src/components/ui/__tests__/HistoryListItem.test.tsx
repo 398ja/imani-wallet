@@ -44,7 +44,7 @@ describe('HistoryListItem', () => {
     expect(summary.textContent).toMatch(/6\.00/)
     expect(summary.textContent).toMatch(/2 vouchers/)
     // A screen reader hears the whole line as one statement.
-    expect(summary.getAttribute('aria-label')).toMatch(/Received, plus .*6\.00, 2 vouchers/)
+    expect(summary.getAttribute('aria-label')).toMatch(/Received, plus .*6\.00, 2 vouchers, .*2026/)
   })
 
   it('opens to the rows it was made of, each linking to its own record', () => {
@@ -64,6 +64,14 @@ describe('HistoryListItem', () => {
     // <summary> is focusable and toggled by Enter/Space by the platform; no
     // tabindex or key handler is needed, and none should be added.
     expect(container.querySelector('details > summary')).not.toBeNull()
+  })
+
+  it('shows a failed check on the folded line, not only inside it', () => {
+    const { container } = draw([
+      tx('a', 300, { voucherId: 'v1', validation: { signatureValid: true } as never }),
+      tx('b', 300, { voucherId: 'v2', validation: { signatureValid: false } as never }),
+    ])
+    expect(container.querySelector('summary')!.textContent).toMatch(/fail|not verified|check/i)
   })
 
   it('renders a single transaction exactly as before', () => {
