@@ -33,6 +33,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   individual rows. A single-voucher send, or a sender that does not declare a bundle, behaves
   exactly as before.
 
+- **A payment of several vouchers is one line in history (#106).** The Transactions list, for
+  customers and stalls, folds the rows of one multi-voucher payment into a single line showing
+  the total and a "2 vouchers" tag. Tap it and the rows it was made of open underneath, each still
+  linking to its own record. The total is the sum of those rows, never a figure the sender
+  declared, and rows in different currencies or directions are never added together. Settling
+  payment requests and reconciling merchant claims still read the individual rows.
+
+### Changed
+
+- **The send and pay confirmation say it in one sentence.** "Sent to Alice as 2 vouchers."
+  replaces a second grey line under the amount; when a payment stops short, the count moves into
+  the warning that explains it.
+- **Amounts line up.** Transaction amounts use tabular figures, so a payment's total and the
+  vouchers beneath it share one column the eye can add up.
+
+### Fixed
+
+- **Lint is clean.** `npx eslint .` reports nothing: the `withPrivkey` callback is no longer named
+  `use` (which the hooks rule mistook for React's), and a handful of unused imports and parameters
+  are gone.
+
 ## [0.7.0] - 2026-09-22
 
 ### Added

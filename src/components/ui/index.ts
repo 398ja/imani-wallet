@@ -21,6 +21,6 @@ export {
 export { Pass } from './Pass'
 export { IdentityInline } from './IdentityInline'
 export { ValidationBadge } from './ValidationBadge'
-export { CouponListItem, TransactionListItem } from './records'
+export { CouponListItem, HistoryListItem, TransactionListItem } from './records'
 export { Pagination } from './Pagination'
 export { usePagination, PAGE_SIZE } from './usePagination'
