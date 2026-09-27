@@ -130,14 +130,12 @@ export function PayPage({ pubkey }: { pubkey: string }) {
         <p className="text-sm text-mono-500">
           {formatFace(status.result.delivered, denom)}
           {partial ? ` of ${formatFace(status.result.requested, denom)}` : ''} to {issuerLabel}
+          {/* In the sentence, not a second line: see SendPage (#94). */}
+          {!partial && status.result.parts > 1 ? ` as ${status.result.parts} vouchers` : ''}
         </p>
-        {status.result.parts > 1 && (
-          <p className="text-sm text-mono-500">
-            {partial ? `${status.result.parts} vouchers went before the rest stopped.` : `Paid as ${status.result.parts} vouchers.`}
-          </p>
-        )}
         {partial && (
           <Alert>
+            {status.result.parts > 1 ? `${status.result.parts} vouchers went before the rest stopped. ` : ''}
             The rest was not paid and your remaining vouchers are untouched — the
             merchant's request is still open for the difference.
             {status.result.shortfall ? ` (${status.result.shortfall})` : ''}

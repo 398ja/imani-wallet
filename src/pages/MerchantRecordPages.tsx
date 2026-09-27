@@ -14,6 +14,7 @@ import {
   BackLink,
   PageHeader,
   EmptyRow,
+  HistoryListItem,
   TransactionListItem,
   Panel,
   ListSection,
@@ -28,6 +29,7 @@ import {
 import { present } from '../lib/detailRows'
 import { listTransactions, onWalletChanged } from '../lib/wallet'
 import { toTransaction, type WalletTransaction } from '../lib/transactions'
+import { groupHistory } from '../lib/historyGroups'
 import { expiringSoon } from '../lib/stats'
 import { formatDate, formatFace } from '../lib/format'
 import { identityLabel, useIdentity } from '../lib/identity'
@@ -134,15 +136,18 @@ function ListFrame({
 /** Everything that moved, both directions. */
 export function MerchantTransactionsPage() {
   const transactions = useMerchantTransactions()?.transactions ?? null
-  const { visible, page, pageCount, setPage } = usePagination(transactions ?? [])
+  // One line per payment, as on the customer's list (#106). Display only: the
+  // claims and request settlement read the flat rows, never these entries.
+  const entries = useMemo(() => (transactions ? groupHistory(transactions) : null), [transactions])
+  const { visible, page, pageCount, setPage } = usePagination(entries ?? [])
 
   return (
     <ListFrame
       title="Transactions"
       subtitle={
-        transactions === null
+        entries === null
           ? 'Loading…'
-          : `${transactions.length} ${transactions.length === 1 ? 'entry' : 'entries'}`
+          : `${entries.length} ${entries.length === 1 ? 'entry' : 'entries'}`
       }
       footer={<Pagination page={page} pageCount={pageCount} onPage={setPage} />}
     >
@@ -153,7 +158,9 @@ export function MerchantTransactionsPage() {
       ) : (
         // The same row component the customer screens use, so a movement looks
         // identical wherever it is listed.
-        visible.map((tx) => <TransactionListItem key={tx.id} tx={tx} />)
+        visible.map((entry) => (
+          <HistoryListItem key={entry.kind === 'single' ? entry.tx.id : entry.id} entry={entry} />
+        ))
       )}
     </ListFrame>
   )

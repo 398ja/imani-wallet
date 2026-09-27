@@ -277,25 +277,21 @@ export function SendPage({ pubkey }: { pubkey: string }) {
             <p className="mt-1 text-sm text-mono-500">
               {partial
                 ? `of ${formatFace(sent.requested, chosen)} reached ${recipientLabel}.`
-                : `${asMerchant ? 'Paid' : 'Sent to'} ${recipientLabel}.${
-                    asMerchant ? '' : ' It is in their wallet now.'
-                  }`}
+                : `${asMerchant ? 'Paid' : 'Sent to'} ${recipientLabel}${
+                    // One payment drawn from several vouchers (#94), said in
+                    // the same sentence rather than a second grey line under
+                    // it: it qualifies how the payment went, so it belongs to
+                    // the sentence that says the payment went. Matches the
+                    // recipient's "€6.00 received (2 vouchers)".
+                    sent.parts > 1 ? ` as ${sent.parts} vouchers` : ''
+                  }.${asMerchant ? '' : ' It is in their wallet now.'}`}
             </p>
-            {/* One payment drawn from several coupons (#94). Said here so the
-                sender knows why the recipient's wallet counts parts, and so
-                "Sent €6.00 as 2 vouchers" matches what the recipient sees. */}
-            {sent.parts > 1 && (
-              <p className="mt-1 text-sm text-mono-500">
-                {partial
-                  ? `${sent.parts} vouchers went before the rest stopped.`
-                  : `Sent as ${sent.parts} vouchers.`}
-              </p>
-            )}
           </div>
         </Panel>
         {partial && (
           <div className="mt-3">
             <Alert>
+              {sent.parts > 1 ? `${sent.parts} vouchers went before the rest stopped. ` : ''}
               The rest was not sent and your remaining vouchers are untouched — send
               the difference again if you still mean to.
               {sent.shortfall ? ` (${sent.shortfall})` : ''}
