@@ -204,6 +204,10 @@ const timers = new Map<string, ReturnType<typeof setTimeout>>()
 /**
  * Announce a coupon that may be one part of a multi-coupon payment.
  *
+ * Every wallet, merchant tills included, sees one toast per payment (decided
+ * on #94). A till settles requests from the rows in its history, which stay
+ * one per coupon; only the announcement is grouped.
+ *
  * With no usable declaration this is `announceArrival`, unchanged: a single
  * coupon, or a sender that does not speak the bundle fields, behaves exactly
  * as before. With one, every part of the bundle updates ONE toast and ONE bell
@@ -313,13 +317,16 @@ function renderBundle(
     id: 'received-bundle-' + view.bundleId,
     // Held open while a part is waiting out the limiter, for the reason
     // queuedToast gives: a status that vanishes leaves the guessing it was
-    // raised to end. Otherwise it times out like any arrival.
-    duration: open && queued > 0 ? Infinity : 6000,
+    // raised to end. Otherwise it times out like any arrival. A shortfall is
+    // held until dismissed: it is the one outcome the recipient has to act on.
+    duration: view.state === 'incomplete' ? Infinity : open && queued > 0 ? Infinity : 6000,
   }
   if (opts.toast !== false) {
-    // A shortfall is status, not an error (the money that came is safe), so
-    // it wears the neutral toast rather than the success tick or a warning.
-    if (view.state === 'incomplete') toast(message, options)
+    // A shortfall is a WARNING (product decision on #94): money the sender
+    // said was coming has not arrived, and the recipient may need to ask
+    // them. What did arrive is safe, which the sub-line says; the warning is
+    // about the gap, not about the balance.
+    if (view.state === 'incomplete') toast.warning(message, options)
     else toast.success(message, options)
   }
 

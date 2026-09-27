@@ -7,7 +7,13 @@
  * tracker (and the aggregation package behind it) to get a plural right.
  */
 
-/** "1 voucher", "2 vouchers". */
+/**
+ * "1 voucher", "2 vouchers".
+ *
+ * "Voucher", not CONTEXT.md's "coupon", by product decision on #94: it is the
+ * word the send screens and the rest of the notification copy already use,
+ * and one payment described in two vocabularies would read as two things.
+ */
 export const vouchers = (n: number) => `${n} voucher${n === 1 ? '' : 's'}`
 
 /**
