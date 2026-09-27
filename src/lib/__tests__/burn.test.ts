@@ -262,6 +262,25 @@ describe('sweepBurnable', () => {
  * backs.
  */
 describe('when the burn fails', () => {
+  /** #111 delta review: logged out while queued. Nothing sent, nothing checked, no alarm. */
+  it('a pacer reset (logout) returns quietly without checking the mint', async () => {
+    const { PacerResetError } = await import('../receivePacer')
+    const validateToken = vi.fn(async () => ({ state: 'SPENT' }))
+    stubs.api.validateToken = validateToken
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    _setReceivePacerForTests({ acquire: async () => { throw new PacerResetError() }, reset: () => {} })
+    try {
+      await expect(burnIfSelfIssued(row(), MERCHANT)).resolves.toBe(false)
+      expect(received).toEqual([])
+      expect(validateToken).not.toHaveBeenCalled()
+      expect(stubs.saved).toEqual([])
+      expect(error).not.toHaveBeenCalled()
+    } finally {
+      _setReceivePacerForTests({ acquire: async () => {}, reset: () => {} })
+      error.mockRestore()
+    }
+  })
+
   it('settles the row when the proofs are already spent', async () => {
     stubs.api.receive = async () => {
       throw Object.assign(new Error('Token already spent'), { status: 400, code: 'TOKEN_SPENT' })

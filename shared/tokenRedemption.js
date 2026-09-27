@@ -843,7 +843,12 @@ const ACK_FORBIDDEN_MAX = 3;
  * equal.
  */
 const RECEIVE_CALLS_PER_TOKEN = 5;
-const RECEIVE_CALLS_SPAN_MS = 10 * 60 * 1000;
+/**
+ * At least the bundle wait window (src/lib/bundleArrival.ts
+ * BUNDLE_WAIT_WINDOW_MS; a test pins it), so one token cannot spend its cap
+ * twice inside the window the pacing bound is computed for.
+ */
+const RECEIVE_CALLS_SPAN_MS = 20 * 60 * 1000;
 
 /**
  * #110 review D — the gateway answers a duplicate that arrives while the first
@@ -1450,7 +1455,10 @@ const TokenRedemption = {
                 const budgetKey = fingerprint || token;
                 const receiveOnce = async () => {
                     if (!this._takeReceiveCall(budgetKey)) {
-                        throw new Error('Receive call budget for this token is spent; a later poll will retry');
+                        const deferred = new Error('Receive call budget for this token is spent; a later poll will retry');
+                        // Quiet, retryable non-success in dm-poll (isDeferredError).
+                        deferred.code = 'RECEIVE_DEFERRED';
+                        throw deferred;
                     }
                     // Paced per CALL (dmPoll installs the page's pacer here),
                     // so inner retries spend from the same budget as first tries.
@@ -1521,24 +1529,17 @@ const TokenRedemption = {
             // A receive_id with no fresh token is a settled receive whose
             // proofs this wallet does not have: never saved, never acked.
             //
-            // #110 second review B: unconditional. A result with no fresh token
-            // is never saved, whether or not it carries a receive_id; there is
-            // simply nothing to keep. With no receive_id there is nothing to
-            // reconcile either, so it is an ordinary (non-success) failure.
-            if (!result.token && !result.change_token && !settledReceiveId) {
-                console.error('[tokenRedemption] receive returned no fresh token — nothing saved', {
-                    fp: _fpTag(fingerprint),
-                });
-                throw new Error('Receive returned no fresh token; nothing was saved');
-            }
-            if (!result.token && !result.change_token) {
+            if (!result.token && !result.change_token && settledReceiveId) {
                 console.error('[tokenRedemption] receive replayed without a fresh token — not saved, needs reconciliation', {
                     fp: _fpTag(fingerprint), receiveId: settledReceiveId,
                 });
                 throw new ReceiveSettledNotSavedError(settledReceiveId, 'replay-without-token');
             }
 
-            // Check for already-redeemed token
+            // Check for already-redeemed token. BEFORE the no-fresh-token
+            // guard below: a duplicate response carries no token either, and
+            // it must keep its "already redeemed" wording so dm-poll takes the
+            // idempotent path (#111 delta review) instead of a retried failure.
             const duplicateCount = result.duplicate_count ?? result.duplicateCount ?? 0;
             const importedCount = result.imported_count ?? result.importedCount ?? 0;
 
@@ -1548,6 +1549,17 @@ const TokenRedemption = {
 
             if (result.amount === 0 && importedCount === 0) {
                 throw new Error('This token has no value or was already redeemed');
+            }
+
+            // #110 second review B: unconditional. Any other result with no
+            // fresh token is never saved; there is nothing to keep, and with
+            // no receive_id nothing to reconcile, so it is an ordinary
+            // (non-success) failure.
+            if (!result.token && !result.change_token) {
+                console.error('[tokenRedemption] receive returned no fresh token — nothing saved', {
+                    fp: _fpTag(fingerprint),
+                });
+                throw new Error('Receive returned no fresh token; nothing was saved');
             }
 
             const receivedAmount = result.amount || result.balance || 0;

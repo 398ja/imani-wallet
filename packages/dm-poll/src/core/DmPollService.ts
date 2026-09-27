@@ -502,6 +502,16 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
         return null;
       }
 
+      // #111 delta review: a call the wallet chose not to make yet (its pacer
+      // was reset on logout, or this token's per-token call budget is spent)
+      // is neither a success nor a failure the user can act on. Rethrown so
+      // the event stays out of eventTracker and a later poll retries it, but
+      // with no error toast and no redemption:error.
+      if (this.isDeferredError(error)) {
+        console.info('[DmPollService] Redemption deferred to a later poll:', tokenDm.eventId.substring(0, 8));
+        throw error;
+      }
+
       console.error('[DmPollService] Redemption failed:', error);
 
       this.emit('redemption:error', {
@@ -559,6 +569,11 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
   private isSettledNotSavedError(error: unknown): boolean {
     const code = (error as { code?: unknown } | null | undefined)?.code;
     return code === 'RECEIVE_SETTLED_NOT_SAVED' || code === 'RECEIVE_ALREADY_SETTLED';
+  }
+
+  /** A receive the wallet deferred itself (pacer reset, per-token budget spent). */
+  private isDeferredError(error: unknown): boolean {
+    return (error as { code?: unknown } | null | undefined)?.code === 'RECEIVE_DEFERRED';
   }
 
   private isAlreadyRedeemedError(error: unknown): boolean {
