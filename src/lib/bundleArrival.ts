@@ -45,14 +45,15 @@ import { displayDecimals, formatFace } from './format'
  * wallet crying wolf about its own limiter — the exact thing queuedToast.ts
  * exists to avoid.
  *
- * #110 put pacing in front of that retry (receivePacer.ts), counted in CALLS
- * and shared with burns and ack retries. Its conservative bound for an 8-part
- * self-issued bundle arriving into a full window is 7 minutes before the last
- * part's first attempt, and the 155 s retry budget can follow that: about
- * 9.6 minutes. Ten minutes outlasts both. A test pins the relationship so it
- * cannot drift silently.
+ * #110 put pacing in front of that retry (receivePacer.ts), counted per CALL
+ * and shared with acks, ack retries, flushes and burns. `worstCaseBundleMs`
+ * counts every call an 8-part bundle can make through the pacer at its
+ * per-token caps, assumes a full window on arrival, and adds every retry sleep
+ * and a two-minute margin: about 24 minutes. Thirty minutes outlasts it. That
+ * is deliberately pessimistic: a part is only called missing once the wallet
+ * can no longer be the reason it is late. A test pins the relationship.
  */
-export const BUNDLE_WAIT_WINDOW_MS = 600_000
+export const BUNDLE_WAIT_WINDOW_MS = 1_800_000
 
 /** Bundles kept per account. Far above anything a person has in flight. */
 const MAX_BUNDLES = 50

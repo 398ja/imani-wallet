@@ -47,7 +47,7 @@ import { getWallet, notifyWalletChanged, recordReceiptByNullifier } from './wall
 import { legacyApi, withCorrelation } from './legacyBridge'
 import { claimToFile } from './merchantClaim'
 import { withWebLock } from './webLock'
-import { CALLS_PER_ACK, CALLS_PER_REDEEM, receivePacer } from './receivePacer'
+import { CALLS_PER_ACK, CALLS_PER_RECEIVE, receivePacer } from './receivePacer'
 
 /**
  * Gateway REST, same-origin: `/api/v1/...` reaches customer-wallet through the
@@ -1001,13 +1001,14 @@ function redemptionAdapter(): RedemptionAdapter {
         // the acks caught in them were dropped. The pacer keeps a bundle under
         // the budget; this retry still catches whatever else spent it.
         //
-        // Reserved per ATTEMPT (inside the retried function), so a 429 retry
-        // is paced like a first try instead of spending the budget unseen.
+        // Pacing is per CALL: tokenRedemption passes every api.receive (every
+        // retry layer included) and every ack through the gates installed by
+        // installPacingGates, so nothing reaches the gateway unpaced.
+        installPacingGates(redemption)
         let voucher: Voucher
         try {
           voucher = (await retryOnTransientMintError(
           async () => {
-            await receivePacer().acquire(CALLS_PER_REDEEM)
             return withCorrelation(
           {
             bundleId: meta?.bundleId as string | undefined,
@@ -1338,6 +1339,16 @@ function catchUp(): void {
  * the escrow stayed HELD indefinitely. tokenRedemption now keeps unacked
  * receive_ids per account; this is the next-poll/startup retry it relies on.
  */
+/**
+ * Route every `/wallet/receive*` call tokenRedemption makes through the page's
+ * pacer, one reservation per call (#110 review C). Idempotent.
+ */
+function installPacingGates(redemption: object): void {
+  const r = redemption as { _receiveGate?: () => Promise<void>; _ackGate?: () => Promise<void> }
+  r._receiveGate = () => receivePacer().acquire(CALLS_PER_RECEIVE)
+  r._ackGate = () => receivePacer().acquire(CALLS_PER_ACK)
+}
+
 async function flushUnacknowledgedEscrows(): Promise<void> {
   try {
     // Only if the legacy scripts are already loaded (signing in loads them).
@@ -1347,9 +1358,7 @@ async function flushUnacknowledgedEscrows(): Promise<void> {
     const redemption = (typeof window === 'undefined' ? undefined : window.TokenRedemption) as
       | { flushUnacknowledgedEscrows?: () => Promise<number>; _ackGate?: () => Promise<void> }
       | undefined
-    // Every ack (the flush and the background retry) spends from the same
-    // pacer as the receives, so a backlog cannot eat the next coupon's budget.
-    if (redemption) redemption._ackGate = () => receivePacer().acquire(CALLS_PER_ACK)
+    if (redemption) installPacingGates(redemption)
     const acked = await redemption?.flushUnacknowledgedEscrows?.()
     if (acked) console.info(`[dmPoll] acknowledged ${acked} escrow(s) left over from an earlier receive`)
   } catch (error) {

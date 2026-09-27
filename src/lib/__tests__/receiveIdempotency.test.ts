@@ -60,6 +60,9 @@ interface Redemption {
   resetAckState(): void
   _ackSleep: (ms: number) => Promise<void>
   _ackGate: () => Promise<void>
+  _receiveGate: () => Promise<void>
+  _inFlightSleep: (ms: number) => Promise<void>
+  buildVoucher(...a: unknown[]): { token: unknown }
   _ackBackoffsMs: number[]
   _ackRetries: Map<string, Promise<boolean>>
   ReceiveLedger: {
@@ -461,7 +464,8 @@ describe('_acknowledgeEscrow (#110 item 3)', () => {
 
     expect(acknowledgeReceive).toHaveBeenCalledTimes(2)
     expect(waits[0]).toBe(45_000)
-    expect(gate).toHaveBeenCalledTimes(1)
+    // The first ack and its retry are both paced (review C).
+    expect(gate).toHaveBeenCalledTimes(2)
     expect(r.ReceiveLedger.unacknowledged()).toEqual([])
   })
 
@@ -604,5 +608,135 @@ describe('logging (#110 item 6)', () => {
     expect(all).not.toContain(TOKEN)
     expect(all).not.toContain('cashuAfresh')
     expect(all).not.toContain(FP_A)
+  })
+})
+
+describe('second review of #111', () => {
+  /** A: a coupon this wallet already SAVED must not be reported as a loss. */
+  it.each(['saved', 'acked'])('A: a redelivered token already %s here is the idempotent "already redeemed", not unsaved', async (state) => {
+    const receive = vi.fn()
+    const r = loadRedemption({ api: { receive, _nostrPublicKey: PUBKEY }, localStorage: memoryStorage() })
+    r.ReceiveLedger.recordSettled('0c707915', FP_A)
+    if (state === 'saved') r.ReceiveLedger.recordSaved('0c707915', FP_A)
+    else {
+      r.ReceiveLedger.recordSaved('0c707915', FP_A)
+      ;(r.ReceiveLedger as unknown as { markAcked(id: string): void }).markAcked('0c707915')
+    }
+    const err = await r
+      ._doRedeem(TOKEN, { fingerprint: FP_A, skipDuplicateCheck: true, source: 'dm-poll' })
+      .catch((e: unknown) => e)
+    expect(err).not.toBeInstanceOf(r.ReceiveSettledNotSavedError)
+    expect((err as Error).message).toMatch(/already been redeemed/)
+    expect(receive).not.toHaveBeenCalled()
+  })
+
+  it("A: only a 'settled' entry turns 11001 into settled-not-saved", async () => {
+    const r = loadRedemption({
+      api: { receive: async () => { throw httpError(400, 'mint_error_code=11001') }, _nostrPublicKey: PUBKEY },
+      localStorage: memoryStorage(),
+    })
+    r.ReceiveLedger.recordSettled('0c707915', FP_A)
+    const err = await r._doRedeem(TOKEN, { fingerprint: FP_A, skipDuplicateCheck: true }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(r.ReceiveSettledNotSavedError)
+  })
+
+  /** B: never save the input token as the fresh voucher, whatever the shape. */
+  it.each([
+    ['with a receive_id', { receive_id: 'r-1', amount: 5, token: null, imported_count: 1 }, true],
+    ['with NO receive_id', { amount: 5, token: null, imported_count: 1 }, false],
+  ])('B: a no-fresh-token result %s saves nothing', async (_n, shape, reconcilable) => {
+    const atomicallyWrite = vi.fn(async () => {})
+    const r = loadRedemption({
+      api: { receive: async () => shape, acknowledgeReceive: vi.fn(), _nostrPublicKey: PUBKEY },
+      walletStorageIntegration: { atomicallyWrite },
+      localStorage: memoryStorage(),
+    })
+    const err = await r._doRedeem(TOKEN, { fingerprint: FP_A, skipDuplicateCheck: true }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect(err instanceof r.ReceiveSettledNotSavedError).toBe(reconcilable)
+    expect(atomicallyWrite).not.toHaveBeenCalled()
+  })
+
+  it('B: buildVoucher never falls back to the input token', () => {
+    const r = loadRedemption({ api: {}, localStorage: memoryStorage() })
+    const v = r.buildVoucher(TOKEN, { amount: 5, token: null }, {}, null, 5, null)
+    expect(v.token).not.toBe(TOKEN)
+    expect(v.token).toBeNull()
+  })
+
+  /** C: every api.receive for one token, across all retry layers, is capped and gated. */
+  it('C: api.receive for one token is capped across retries, and every call goes through the gate', async () => {
+    const receive = vi.fn(async (): Promise<unknown> => { throw httpError(503, 'HTTP 503') })
+    const r = loadRedemption({
+      api: { receive, _nostrPublicKey: PUBKEY },
+      localStorage: memoryStorage(),
+      ImaniDmPoll: {
+        retryOnTransientMintError: async <T,>(fn: () => Promise<T>) => {
+          let last: unknown
+          for (let i = 0; i < 4; i++) {
+            try { return await fn() } catch (e) { last = e }
+          }
+          throw last
+        },
+      },
+    })
+    const gate = vi.fn(async () => {})
+    r._receiveGate = gate
+    // The outer (dmPoll 429) layer re-enters redeem up to 5 times.
+    for (let outer = 0; outer < 5; outer++) {
+      await r._doRedeem(TOKEN, { fingerprint: FP_A, skipDuplicateCheck: true }).catch(() => undefined)
+    }
+    expect(receive).toHaveBeenCalledTimes(5)
+    expect(gate).toHaveBeenCalledTimes(5)
+  })
+
+  /** D: the in-flight 409 (Retry-After: 2, empty body) waits and retries under the same key. */
+  it('D: 409 with Retry-After and no body waits and retries under the same key', async () => {
+    const keys: Array<string | undefined> = []
+    const receive = vi.fn(async (_t: string, o: { idempotencyKey?: string }) => {
+      keys.push(o.idempotencyKey)
+      if (keys.length === 1) throw httpError(409, 'API request failed', { code: 'UNKNOWN_ERROR', retryAfterMs: 2000 })
+      return okReceive('0c707915')
+    })
+    const r = loadRedemption({
+      api: { receive, acknowledgeReceive: async () => {}, _nostrPublicKey: PUBKEY },
+      walletStorageIntegration: { atomicallyWrite: async () => {} },
+      localStorage: memoryStorage(),
+    })
+    const waits: number[] = []
+    r._inFlightSleep = async (ms: number) => void waits.push(ms)
+    await r._doRedeem(TOKEN, { fingerprint: FP_A, skipDuplicateCheck: true })
+    expect(waits).toEqual([2000])
+    expect(keys).toEqual([`rcv_${FP_A}`, `rcv_${FP_A}`])
+  })
+
+  it('D: a persistent in-flight 409 gives up after its bounded retries', async () => {
+    const receive = vi.fn(async (): Promise<unknown> => {
+      throw httpError(409, 'API request failed', { retryAfterMs: 2000 })
+    })
+    const r = loadRedemption({ api: { receive, _nostrPublicKey: PUBKEY }, localStorage: memoryStorage() })
+    r._inFlightSleep = async () => {}
+    await expect(r._doRedeem(TOKEN, { fingerprint: FP_A, skipDuplicateCheck: true })).rejects.toThrow()
+    expect(receive).toHaveBeenCalledTimes(3)
+  })
+
+  /** E: the save-failure log must not claim a retry recovers the value. */
+  it('E: the persist-failure log does not promise a replay recovers it', async () => {
+    const logs: string[] = []
+    const spy = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => void logs.push(String(a[0])))
+    try {
+      const r = loadRedemption({
+        api: { receive: async () => okReceive('0c707915'), _nostrPublicKey: PUBKEY },
+        walletStorageIntegration: { atomicallyWrite: async () => { throw new Error('quota') } },
+        localStorage: memoryStorage(),
+      })
+      await r._doRedeem(TOKEN, { fingerprint: FP_A, skipDuplicateCheck: true }).catch(() => undefined)
+    } finally {
+      spy.mockRestore()
+    }
+    const line = logs.find((l) => l.includes('persist failed')) ?? ''
+    expect(line).toMatch(/NOT recoverable/)
+    expect(line).not.toMatch(/replays it/)
+    expect(REDEMPTION_SOURCE).toMatch(/TODO\(imani-gateway-customer#121\/#119\)/)
   })
 })
