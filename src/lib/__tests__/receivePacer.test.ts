@@ -1,16 +1,18 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  CALLS_PER_BURN,
+  CALLS_PER_REDEEM,
+  CALLS_PER_WINDOW,
   createReceivePacer,
-  PACED_BUNDLE_PARTS,
-  REDEMPTIONS_PER_WINDOW,
   WINDOW_MS,
   worstCasePacingDelayMs,
 } from '../receivePacer'
 
 /**
- * #110: one bundle must not blow the gateway's 10/min per-pubkey budget.
- * Driven by a fake clock, so what is pinned is WHEN each redemption may start.
+ * #110: one bundle must not blow the gateway's 10/min per-pubkey budget on
+ * `/wallet/receive*`. Paced on CALLS (receive, ack, burn), driven by a fake
+ * clock, so what is pinned is WHEN each call may start.
  */
 function fakeClock() {
   let t = 0
@@ -22,48 +24,57 @@ function fakeClock() {
   }
 }
 
+/** Largest number of calls started in any rolling window. */
+function peak(starts: number[]): number {
+  return Math.max(...starts.map((s) => starts.filter((x) => x >= s && x < s + WINDOW_MS).length))
+}
+
 describe('receivePacer', () => {
-  it('lets a small bundle straight through', async () => {
+  it('lets a single coupon straight through', async () => {
     const clock = fakeClock()
     const pacer = createReceivePacer(clock)
-    const starts: number[] = []
-    for (let i = 0; i < REDEMPTIONS_PER_WINDOW; i++) {
-      await pacer.acquire()
-      starts.push(clock.now())
-    }
-    expect(starts.every((s) => s === 0)).toBe(true)
+    await pacer.acquire(CALLS_PER_REDEEM)
+    expect(clock.now()).toBe(0)
   })
 
-  it("keeps staging's 8-part bundle under the budget: never more than 4 starts a minute", async () => {
+  it("keeps staging's 8-part SELF-ISSUED bundle (32 calls) under the gateway's 10/min", async () => {
     const clock = fakeClock()
     const pacer = createReceivePacer(clock)
     const starts: number[] = []
-    await Promise.all(
-      Array.from({ length: 8 }, async () => {
-        await pacer.acquire()
-        starts.push(clock.now())
-      }),
-    )
-    starts.sort((a, b) => a - b)
-    for (const s of starts) {
-      // A redemption is a receive and an ack: 2 calls each.
-      const inWindow = starts.filter((x) => x >= s && x < s + WINDOW_MS).length
-      expect(inWindow * 2).toBeLessThanOrEqual(10)
+    const book = async (n: number) => {
+      await pacer.acquire(n)
+      for (let i = 0; i < n; i++) starts.push(clock.now())
     }
-    expect(Math.max(...starts)).toBe(worstCasePacingDelayMs(8))
+    // Sequential: the pacer is FIFO, and a shared fake clock would otherwise be
+    // advanced by the next waiter before this one records its start.
+    for (let i = 0; i < 8; i++) {
+      await book(CALLS_PER_REDEEM)
+      await book(CALLS_PER_BURN)
+    }
+    expect(starts).toHaveLength(32)
+    expect(peak(starts)).toBeLessThanOrEqual(CALLS_PER_WINDOW)
+    expect(CALLS_PER_WINDOW).toBeLessThan(10)
+  })
+
+  it('stays within its conservative bound even when the window starts full', async () => {
+    const clock = fakeClock()
+    const pacer = createReceivePacer(clock)
+    await pacer.acquire(CALLS_PER_WINDOW) // someone else spent the window
+    for (let i = 0; i < 8; i++) {
+      await pacer.acquire(CALLS_PER_REDEEM)
+      await pacer.acquire(CALLS_PER_BURN)
+      await pacer.acquire(1) // a background ack retry
+    }
+    await pacer.acquire(2) // a flush at its cap
+    expect(clock.now()).toBeLessThanOrEqual(worstCasePacingDelayMs(8))
   })
 
   it('starts afresh after reset (account switch)', async () => {
     const clock = fakeClock()
     const pacer = createReceivePacer(clock)
-    for (let i = 0; i < REDEMPTIONS_PER_WINDOW; i++) await pacer.acquire()
+    await pacer.acquire(CALLS_PER_WINDOW)
     pacer.reset()
-    await pacer.acquire()
+    await pacer.acquire(1)
     expect(clock.now()).toBe(0)
-  })
-
-  it('names the bundle size it is sized for', () => {
-    expect(worstCasePacingDelayMs(1)).toBe(0)
-    expect(worstCasePacingDelayMs(PACED_BUNDLE_PARTS)).toBe(2 * WINDOW_MS)
   })
 })

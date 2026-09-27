@@ -822,6 +822,8 @@ class GatewayAPI {
       error.code = errorData.code || data.code || 'UNKNOWN_ERROR';
       error.data = data;
       error.retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'));
+      // #110: the 409 RECEIVE_ALREADY_SETTLED names its escrow in X-Receive-Id.
+      error.headers = response.headers;
       throw error;
     }
 
@@ -1368,6 +1370,8 @@ class GatewayAPI {
       // guessed instead: too short and it burns another slot of the same
       // per-pubkey window it is waiting on. Null when absent or unparseable.
       error.retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'));
+      // #110: the 409 RECEIVE_ALREADY_SETTLED names its escrow in X-Receive-Id.
+      error.headers = response.headers;
       throw error;
     }
 
