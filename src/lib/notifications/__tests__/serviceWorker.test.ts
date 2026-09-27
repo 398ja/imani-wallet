@@ -52,7 +52,6 @@ function loadWorker(): WorkerScope {
     },
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-implied-eval
   new Function('self', source)(self)
   return scope
 }

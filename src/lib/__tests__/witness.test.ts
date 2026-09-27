@@ -14,7 +14,7 @@ const OTHER_PUBKEY_COMPRESSED = `02${bytesToHex(schnorr.getPublicKey(hexToBytes(
 const mockSigner = {
   pubkey: HOLDER_PUBKEY_XONLY,
   privkeyHex: () => HOLDER_KEY,
-  withPrivkey: <T,>(use: (key: Uint8Array) => T) => use(hexToBytes(HOLDER_KEY)),
+  withPrivkey: <T,>(borrow: (key: Uint8Array) => T) => borrow(hexToBytes(HOLDER_KEY)),
 }
 
 vi.mock('../nap', () => ({

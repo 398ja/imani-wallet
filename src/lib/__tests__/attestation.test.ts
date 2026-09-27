@@ -23,7 +23,7 @@ vi.mock('../nap', () => ({
     if (signerThrows) throw new Error('No signer — the wallet has not been unlocked.')
     return {
       privkeyHex: () => currentKey,
-      withPrivkey: <T,>(use: (key: Uint8Array) => T) => use(hexToBytes(currentKey)),
+      withPrivkey: <T,>(borrow: (key: Uint8Array) => T) => borrow(hexToBytes(currentKey)),
       pubkey: 'ff'.repeat(32),
     }
   },

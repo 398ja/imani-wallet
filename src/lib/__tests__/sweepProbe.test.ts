@@ -23,7 +23,7 @@ vi.mock('../nap', () => ({
   getSigner: () => ({
     privkeyHex: () => MERCHANT,
     // IW-14: the scoped borrow the production signer now offers.
-    withPrivkey: <T,>(use: (key: Uint8Array) => T) => use(hexToBytes(MERCHANT)),
+    withPrivkey: <T,>(borrow: (key: Uint8Array) => T) => borrow(hexToBytes(MERCHANT)),
   }),
 }))
 
