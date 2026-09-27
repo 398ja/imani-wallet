@@ -75,19 +75,19 @@ describe('the sender sees one payment in several coupons', () => {
   it('says how many vouchers carried it', async () => {
     result = { id: 'x', requested: 100, delivered: 100, parts: 2 }
     await send()
-    await waitFor(() => expect(screen.getByText('Sent as 2 vouchers.')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText(/Paid .* as 2 vouchers\./)).toBeTruthy())
   })
 
   it('says nothing extra for a single coupon', async () => {
     result = { id: 'x', requested: 100, delivered: 100, parts: 1 }
     await send()
     await waitFor(() => expect(screen.getByText('Done')).toBeTruthy())
-    expect(screen.queryByText(/Sent as/)).toBeNull()
+    expect(screen.queryByText(/ as \d+ vouchers/)).toBeNull()
   })
 
   it('counts only what went when the bundle stopped short', async () => {
     result = { id: 'x', requested: 100, delivered: 50, parts: 2, shortfall: 'mint down' }
     await send()
-    await waitFor(() => expect(screen.getByText('2 vouchers went before the rest stopped.')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText(/2 vouchers went before the rest stopped\./)).toBeTruthy())
   })
 })

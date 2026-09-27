@@ -38,7 +38,7 @@ const senderSk = generateSecretKey()
 vi.mock('../nap', () => ({
   getSigner: () => ({
     privkeyHex: () => bytesToHex(customerSk),
-    withPrivkey: <T,>(use: (key: Uint8Array) => T) => use(customerSk),
+    withPrivkey: <T,>(borrow: (key: Uint8Array) => T) => borrow(customerSk),
   }),
 }))
 

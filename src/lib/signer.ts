@@ -46,7 +46,7 @@ export interface WalletSigner extends EvictableSigner {
    * there is no key in memory to steal"; that is true of the Uint8Array half and false of the
    * hex beside it. Scoping the borrow is what makes the promise checkable.
    */
-  withPrivkey<T>(use: (key: Uint8Array) => T): T
+  withPrivkey<T>(borrow: (key: Uint8Array) => T): T
 }
 
 export class SessionLockedError extends Error {
@@ -150,12 +150,12 @@ export function createWalletSigner(privkeyHex: string): WalletSigner {
       return hex
     },
 
-    withPrivkey(use) {
+    withPrivkey(borrow) {
       const borrowed = Uint8Array.from(require())
       try {
-        return use(borrowed)
+        return borrow(borrowed)
       } finally {
-        // The borrow ends here whatever `use` did, which is the whole difference from handing
+        // The borrow ends here whatever `borrow` did, which is the whole difference from handing
         // out a reference and hoping.
         borrowed.fill(0)
       }
