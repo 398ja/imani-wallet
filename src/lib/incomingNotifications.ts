@@ -36,7 +36,8 @@ import { toast } from 'sonner'
 
 import { IncomingPaymentToast } from '../components/ui/IncomingPaymentToast'
 import { createBoundedSet, createPersistentBoundedSet } from './boundedSet'
-import { vouchers } from './bundleArrival'
+import { createAccountStore } from './accountStore'
+import { MISMATCH_NOTE, vouchers } from './bundleWording'
 import { displayDecimals, formatFace } from './format'
 import { signedFetch } from './nip98'
 import { validateEnvelope, type IncomingPaymentNotificationEnvelope } from './incomingNotification'
@@ -296,13 +297,13 @@ function handleInboundEnvelope(raw: unknown, recipientPubkeyHex: string): string
 /* ------------------------------------------------------------------------ */
 
 const BUNDLE_HEX = /^[0-9a-f]{32}$/
-const MAX_PENDING_BUNDLES = 50
-const pendingBundlesKey = (pubkey: string) => `imani-wallet:pending-bundles:${pubkey}`
 
 /** The advance notices seen so far for one bundle. */
 interface PendingBundle {
   bundleId: string
   sender: string
+  /** The first part's display name, so a mismatched later part cannot rename the row. */
+  senderName?: string
   unit: string
   decimals: number
   /** First declaration wins, as on the settlement side. Absent on older gateways. */
@@ -310,31 +311,22 @@ interface PendingBundle {
   declaredCount?: number
   /** notificationId → that part's minor units. */
   parts: Record<string, number>
+  /** A later part disagreed with this bundle. Said on the row, never hidden. */
+  conflict?: boolean
   updatedAt: number
 }
 
-function readPendingBundles(pubkey: string): Record<string, PendingBundle> {
-  try {
-    const raw = localStorage.getItem(pendingBundlesKey(pubkey))
-    const parsed: unknown = raw ? JSON.parse(raw) : {}
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, PendingBundle>)
-      : {}
-  } catch {
-    return {}
-  }
-}
-
-function writePendingBundles(pubkey: string, all: Record<string, PendingBundle>): void {
-  const kept = Object.values(all)
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, MAX_PENDING_BUNDLES)
-  try {
-    localStorage.setItem(pendingBundlesKey(pubkey), JSON.stringify(Object.fromEntries(kept.map((b) => [b.bundleId, b]))))
-  } catch (e) {
-    console.warn(LOG_PREFIX, 'could not persist pending bundles:', e)
-  }
-}
+const pendingBundles = createAccountStore<PendingBundle>({
+  name: 'pending-bundles',
+  limit: 50,
+  idOf: (b) => b.bundleId,
+  ageOf: (b) => b.updatedAt,
+  isValid: (b): b is PendingBundle =>
+    !!b &&
+    typeof b === 'object' &&
+    typeof (b as PendingBundle).bundleId === 'string' &&
+    typeof (b as PendingBundle).parts === 'object',
+})
 
 /** A declared figure, if it is a sane one. Garbled hints are ignored, never fatal. */
 function declaredOf(value: unknown, min: number): number | undefined {
@@ -344,42 +336,72 @@ function declaredOf(value: unknown, min: number): number | undefined {
 /**
  * Fold one advance notice into its bundle's single toast and bell row.
  *
- * Returns false when the envelope is not a bundle part — no bundle id, or the
- * gateway correlated it by bundle id alone (then the notificationId already IS
- * per-bundle and the ordinary path shows one line for it). The caller then
- * announces it exactly as before.
+ * Returns false when the envelope is not a bundle part (no bundle id, or the
+ * gateway correlated it by bundle id alone, which makes the notificationId
+ * already per-bundle), or when it cannot belong to this bundle (another
+ * sender or currency). The caller then announces it exactly as before, and in
+ * the second case the bundle's own row says something did not match.
  */
 function announceBundlePart(env: IncomingPaymentNotificationEnvelope, pubkey: string): boolean {
-  const bundleId = env.correlation?.bundleId
-  if (!bundleId || !BUNDLE_HEX.test(bundleId) || !env.correlation?.deliveryEventId) return false
+  const correlation = env.correlation
+  const bundleId = correlation?.bundleId
+  if (!correlation || !bundleId || !BUNDLE_HEX.test(bundleId) || !correlation.deliveryEventId) return false
 
-  const all = readPendingBundles(pubkey)
-  const existing = all[bundleId]
-  // A part from another sender or in another currency cannot be one payment
-  // with this bundle. Shown on its own, as before.
+  const existing = pendingBundles.get(pubkey, bundleId)
+  const declaredTotal = declaredOf(correlation.bundleTotal, 0)
+  const declaredCount = declaredOf(correlation.bundlePartCount, 1)
+
   if (existing && (existing.sender !== env.sender.pubkeyHex || existing.unit !== env.currency.unit)) {
+    if (!existing.conflict) {
+      existing.conflict = true
+      pendingBundles.put(pubkey, existing)
+      showPendingBundle(pubkey, existing, env)
+    }
     return false
   }
+
   const bundle: PendingBundle = existing ?? {
     bundleId,
     sender: env.sender.pubkeyHex,
+    senderName: env.sender.displayName ?? undefined,
     unit: env.currency.unit,
     decimals: displayDecimals(env.currency.unit, env.currency.decimals),
-    declaredTotal: declaredOf(env.correlation.bundleTotal, 0),
-    declaredCount: declaredOf(env.correlation.bundlePartCount, 1),
+    declaredTotal,
+    declaredCount,
     parts: {},
     updatedAt: Date.now(),
   }
-  // A declaration first seen on a later part still counts, if none came before.
-  bundle.declaredTotal ??= declaredOf(env.correlation.bundleTotal, 0)
-  bundle.declaredCount ??= declaredOf(env.correlation.bundlePartCount, 1)
+  // First declaration wins. A later one that differs is flagged, not adopted;
+  // one first seen on a later part still counts if none came before.
+  if (
+    (declaredTotal !== undefined && bundle.declaredTotal !== undefined && declaredTotal !== bundle.declaredTotal) ||
+    (declaredCount !== undefined && bundle.declaredCount !== undefined && declaredCount !== bundle.declaredCount)
+  ) {
+    bundle.conflict = true
+  }
+  bundle.declaredTotal ??= declaredTotal
+  bundle.declaredCount ??= declaredCount
 
   const isNew = !(env.notificationId in bundle.parts)
   bundle.parts[env.notificationId] = env.total.minorUnits
   bundle.updatedAt = Date.now()
-  all[bundleId] = bundle
-  writePendingBundles(pubkey, all)
+  pendingBundles.put(pubkey, bundle)
 
+  // Toast once per part, never for a redelivery: the persistent seen set is
+  // still the gate, exactly as on the per-part path.
+  const toastIt = isNew && !hasSeen(pubkey, env.notificationId)
+  markSeen(pubkey, env.notificationId)
+  showPendingBundle(pubkey, bundle, env, toastIt)
+  return true
+}
+
+/** Draw the bundle's one "on its way" bell row and, when asked, its toast. */
+function showPendingBundle(
+  pubkey: string,
+  bundle: PendingBundle,
+  env: IncomingPaymentNotificationEnvelope,
+  toastIt = false,
+): void {
   const seen = Object.values(bundle.parts)
   const seenTotal = seen.reduce((sum, n) => sum + n, 0)
   const fmt = (n: number) => formatFace(n, { unit: bundle.unit, decimals: bundle.decimals })
@@ -390,20 +412,17 @@ function announceBundlePart(env: IncomingPaymentNotificationEnvelope, pubkey: st
     bundle.declaredTotal !== undefined && bundle.declaredTotal > seenTotal
       ? `${fmt(seenTotal)} of ${fmt(bundle.declaredTotal)}`
       : fmt(seenTotal)
-  const count = bundle.declaredCount !== undefined && bundle.declaredCount >= seen.length
-    ? bundle.declaredCount
-    : seen.length
+  const count =
+    bundle.declaredCount !== undefined && bundle.declaredCount >= seen.length ? bundle.declaredCount : seen.length
   const partsLabel = vouchers(count)
-  const name = env.sender.displayName ?? 'someone'
+  const name = bundle.senderName ?? 'someone'
+  const caveat = bundle.conflict ? ` ${MISMATCH_NOTE}` : ''
 
-  // Toast once per part, never for a redelivery: the persistent seen set is
-  // still the gate, exactly as on the per-part path.
-  if (isNew && !hasSeen(pubkey, env.notificationId)) {
-    markSeen(pubkey, env.notificationId)
+  if (toastIt) {
     try {
       toast.success(
         createElement(IncomingPaymentToast, {
-          pubkey: env.sender.pubkeyHex,
+          pubkey: bundle.sender,
           amount: headline,
           fallbackName: env.sender.displayName ?? undefined,
           fallbackPicture: env.sender.picture ?? undefined,
@@ -411,7 +430,7 @@ function announceBundlePart(env: IncomingPaymentNotificationEnvelope, pubkey: st
         }),
         {
           // One id for the bundle, so each part redraws the same toast.
-          id: 'pending-bundle-' + bundleId,
+          id: 'pending-bundle-' + bundle.bundleId,
           icon: null,
           duration: 5000,
         },
@@ -419,18 +438,15 @@ function announceBundlePart(env: IncomingPaymentNotificationEnvelope, pubkey: st
     } catch (e) {
       console.warn(LOG_PREFIX, 'could not toast a bundle part:', e)
     }
-  } else {
-    markSeen(pubkey, env.notificationId)
   }
 
   upsertNotification(pubkey, {
-    id: 'pending:bundle:' + bundleId,
+    id: 'pending:bundle:' + bundle.bundleId,
     type: 'voucher_received',
     title: 'Payment on its way',
-    body: `${headline} from ${name} (${partsLabel})`,
+    body: `${headline} from ${name} (${partsLabel}).${caveat}`,
     url: '/',
   })
-  return true
 }
 
 /** One drain tick. Single-flight; self-heals on the next interval on any error. */

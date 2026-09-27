@@ -131,6 +131,16 @@ describe('claim receipts for one multi-coupon payment', () => {
     await drain(receipt('r1b', part(0)))
     const ids = listNotifications(SENDER).map((r) => r.id)
     expect(ids).toEqual(expect.arrayContaining(['claimed:bundle:' + BUNDLE, 'r1b']))
+    // And the bundle's own row says something did not match.
+    const row = listNotifications(SENDER).find((r) => r.id === 'claimed:bundle:' + BUNDLE)!
+    expect(row.body).toMatch(/did not match/)
+  })
+
+  it('keep the first declaration and flag a later one that disagrees', async () => {
+    await drain(receipt('r1', part(0)))
+    await drain(receipt('r2', part(1, { bundleTotal: 60_000, bundlePartCount: 9 })))
+    const row = listNotifications(SENDER)[0]!
+    expect(row.body).toMatch(/6\.00 was claimed \(2 of 2 vouchers\)\. Some parts/)
   })
 
   it('leave a receipt with no bundle exactly as before', async () => {
