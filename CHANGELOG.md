@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-27
+
+Pairs with imani-gateway-customer 0.15.1, whose `409 RECEIVE_ALREADY_SETTLED` and unpaced ack
+this relies on.
+
 ### Fixed
 
 - **A coupon swapped at the mint can no longer be lost to a retry of itself (#110).** The receive
