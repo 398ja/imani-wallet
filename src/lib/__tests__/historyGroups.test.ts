@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { groupHistory } from '../historyGroups'
+import { entryKey, groupHistory, worstValidation } from '../historyGroups'
 import type { WalletTransaction } from '../transactions'
 
 /**
@@ -27,7 +27,7 @@ describe('groupHistory', () => {
       tx('b', { bundleId: 'b1', at: 2_000 }),
     ])
     expect(entries).toHaveLength(1)
-    expect(entries[0]).toMatchObject({ kind: 'bundle', id: 'bundle:b1', amount: 600, at: 3_000 })
+    expect(entries[0]).toMatchObject({ kind: 'bundle', amount: 600, at: 3_000 })
     if (entries[0]!.kind === 'bundle') expect(entries[0]!.parts.map((p) => p.id)).toEqual(['a', 'b'])
   })
 
@@ -38,7 +38,7 @@ describe('groupHistory', () => {
       tx('y', { at: 7_000 }),
       tx('b', { bundleId: 'b1', at: 6_000 }),
     ])
-    expect(entries.map((e) => (e.kind === 'single' ? e.tx.id : e.id))).toEqual(['x', 'bundle:b1', 'y'])
+    expect(entries.map((e) => (e.kind === 'single' ? e.tx.id : 'group'))).toEqual(['x', 'group', 'y'])
   })
 
   it('leaves a lone row, and rows with no bundle, exactly as they were', () => {
@@ -63,5 +63,36 @@ describe('groupHistory', () => {
       tx('b', { bundleId: 'b2', direction: 'out', type: 'sent' }),
     ])
     expect(entries).toEqual([expect.objectContaining({ kind: 'bundle', direction: 'out', amount: 600 })])
+  })
+})
+
+describe('review fixes', () => {
+  it('never folds together rows from different counterparties under one bundle id', () => {
+    const entries = groupHistory([
+      tx('a', { bundleId: 'b1', counterparty: 'alice' }),
+      tx('b', { bundleId: 'b1', counterparty: 'alice' }),
+      tx('c', { bundleId: 'b1', counterparty: 'bob' }),
+      tx('d', { bundleId: 'b1', counterparty: 'bob' }),
+    ])
+    expect(entries).toHaveLength(2)
+    expect(entries.map((e) => (e.kind === 'bundle' ? e.amount : 0))).toEqual([600, 600])
+  })
+
+  it('gives every group a unique key, even two sharing a bundle id', () => {
+    const entries = groupHistory([
+      tx('a', { bundleId: 'b1' }),
+      tx('b', { bundleId: 'b1' }),
+      tx('c', { bundleId: 'b1', type: 'cashback' }),
+      tx('d', { bundleId: 'b1', type: 'cashback' }),
+    ])
+    const keys = entries.map(entryKey)
+    expect(new Set(keys).size).toBe(keys.length)
+  })
+
+  it('carries the worst part validation onto the folded line', () => {
+    const ok = { signatureValid: true } as never
+    const bad = { signatureValid: false } as never
+    expect(worstValidation([tx('a', { voucherId: 'v', validation: ok }), tx('b', { voucherId: 'w', validation: bad })])).toBe(bad)
+    expect(worstValidation([tx('a'), tx('b')])).toBeUndefined()
   })
 })

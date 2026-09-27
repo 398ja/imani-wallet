@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Check, Copy, CreditCard, Send, Share2 } from 'lucide-react'
 import { nip19 } from 'nostr-tools'
@@ -13,7 +13,7 @@ import {
   Centered,
   Pass,
   SkeletonLine,
-  TransactionListItem,
+  HistoryListItem,
 } from '../components/ui'
 import { listVouchers, transactionsWith, onWalletChanged, walletIsOpen } from '../lib/wallet'
 import { findMerchantWithHistory, couponsFor, type Merchant } from '../lib/merchants'
@@ -22,6 +22,7 @@ import { useBranding } from '../hooks/useBranding'
 import { fetchMerchantRecord, type MerchantProfile } from '../lib/merchant'
 import { LocationMap } from '../components/LocationMap'
 import type { WalletTransaction } from '../lib/transactions'
+import { entryKey, groupHistory } from '../lib/historyGroups'
 import { canShare, shareText } from '../lib/native'
 
 /** How many transactions the summary list shows before deferring to a full page. */
@@ -63,6 +64,8 @@ export function MerchantPage() {
   const [merchant, setMerchant] = useState<Merchant | null | undefined>(undefined)
   const [couponCount, setCouponCount] = useState(0)
   const [transactions, setTransactions] = useState<WalletTransaction[]>([])
+  // One line per payment in the preview too, so it agrees with the full list.
+  const entries = useMemo(() => groupHistory(transactions), [transactions])
   /*
     Seeded from the stall name this device has already seen, so arriving at a
     stall you hold coupons from names it immediately rather than after a kind-0
@@ -231,15 +234,17 @@ export function MerchantPage() {
         <ListSection
           title="Transactions"
           action={
-            transactions.length > PREVIEW ? (
-              <SeeAll to={`/merchants/${pubkey}/transactions`} count={transactions.length} />
+            // Counted in entries, as the page behind it counts them (#106):
+            // "See all 5" over a page that says "4 entries" reads as a bug.
+            entries.length > PREVIEW ? (
+              <SeeAll to={`/merchants/${pubkey}/transactions`} count={entries.length} />
             ) : undefined
           }
         >
-          {transactions.length === 0 ? (
+          {entries.length === 0 ? (
             <EmptyRow>Nothing yet.</EmptyRow>
           ) : (
-            transactions.slice(0, PREVIEW).map((tx) => <TransactionListItem key={tx.id} tx={tx} />)
+            entries.slice(0, PREVIEW).map((entry) => <HistoryListItem key={entryKey(entry)} entry={entry} />)
           )}
         </ListSection>
       )}
