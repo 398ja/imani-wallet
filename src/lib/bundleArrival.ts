@@ -43,10 +43,15 @@ import { displayDecimals, formatFace } from './format'
  * gateway's one-minute window, possibly twice (`RATE_LIMIT_BACKOFFS_MS` in
  * dmPoll sums to 155 s), and calling a queued coupon "has not arrived" is the
  * wallet crying wolf about its own limiter — the exact thing queuedToast.ts
- * exists to avoid. Three minutes outlasts the whole retry budget; a test pins
- * that relationship so the two cannot drift apart silently.
+ * exists to avoid.
+ *
+ * #110 put pacing in front of that retry (receivePacer.ts): a bundle's parts
+ * now start at most four a minute, so the last part of a 12-part bundle may
+ * wait two minutes for its slot BEFORE the 155 s retry budget even begins.
+ * 275 s outgrew the old three minutes; five minutes outlasts both, and a test
+ * pins that relationship so they cannot drift apart silently.
  */
-export const BUNDLE_WAIT_WINDOW_MS = 180_000
+export const BUNDLE_WAIT_WINDOW_MS = 300_000
 
 /** Bundles kept per account. Far above anything a person has in flight. */
 const MAX_BUNDLES = 50

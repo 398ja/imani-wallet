@@ -15,6 +15,7 @@ import {
   type BundleView,
 } from '../bundleArrival'
 import { RATE_LIMIT_BACKOFFS_MS } from '../dmPoll'
+import { PACED_BUNDLE_PARTS, worstCasePacingDelayMs } from '../receivePacer'
 
 /**
  * One multi-coupon payment, counted as one (#94).
@@ -146,6 +147,13 @@ describe('tracking the parts of one payment', () => {
     // retrying it. If the backoffs grow, this window has to grow with them.
     const retryBudget = RATE_LIMIT_BACKOFFS_MS.reduce((a, b) => a + b, 0)
     expect(BUNDLE_WAIT_WINDOW_MS).toBeGreaterThan(retryBudget)
+  })
+
+  it('waits longer than a paced part can take to start AND retry (#110)', () => {
+    // Pacing delays a late part's first attempt; the 429 retry budget then
+    // starts from there. The window must outlast the sum.
+    const retryBudget = RATE_LIMIT_BACKOFFS_MS.reduce((a, b) => a + b, 0)
+    expect(BUNDLE_WAIT_WINDOW_MS).toBeGreaterThan(worstCasePacingDelayMs(PACED_BUNDLE_PARTS) + retryBudget)
   })
 })
 
