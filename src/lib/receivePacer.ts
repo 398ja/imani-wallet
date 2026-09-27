@@ -15,11 +15,10 @@
  * `CALLS_PER_WINDOW` calls start in any rolling `WINDOW_MS`. That is 8 of the
  * gateway's 10, leaving 2 for what cannot be paced here (another tab, a manual
  * receive). Every spender reserves before it calls:
- *   - dmPoll: 2 per receive ATTEMPT (receive + its ack), inside the 429 retry,
- *     so retries are paced too;
- *   - burn.ts: 2 per burn attempt;
- *   - tokenRedemption's background ack retry and startup/catch-up flush: 1
- *     per ack (through `TokenRedemption._ackGate`).
+ *   - tokenRedemption: 1 per api.receive (`_receiveGate`, so every retry
+ *     layer is paced) and 1 per ack (`_ackGate`: first ack, background retry,
+ *     startup/catch-up flush), both installed by dmPoll;
+ *   - burn.ts: 2 per burn attempt (its receive and ack).
  * The 429 retry (`RATE_LIMIT_BACKOFFS_MS`) stays underneath as the backstop.
  *
  * One pacer per page, because the budget is per pubkey and a page serves one
@@ -29,12 +28,38 @@
 export const CALLS_PER_WINDOW = 8
 export const WINDOW_MS = 60_000
 
-/** Calls one redemption attempt reserves: the receive and its ack. */
-export const CALLS_PER_REDEEM = 2
-/** Calls one burn attempt reserves: its receive and its ack. */
-export const CALLS_PER_BURN = 2
-/** Calls one ack reserves. */
+/** One `/wallet/receive` call: what each api.receive reserves (tokenRedemption's receive gate). */
+export const CALLS_PER_RECEIVE = 1
+/** One ack: what each `/receive/{id}/ack` reserves (tokenRedemption's ack gate). */
 export const CALLS_PER_ACK = 1
+/** Calls one burn attempt reserves in burn.ts: its receive and its ack. */
+export const CALLS_PER_BURN = 2
+
+/**
+ * Hard ceiling on api.receive calls for one token across EVERY retry layer
+ * (inner transient retry, 409 in-flight wait, dmPoll's outer 429 retry).
+ * Enforced in shared/tokenRedemption.js as RECEIVE_CALLS_PER_TOKEN; a test pins
+ * the two equal, because this bound is only honest while that cap holds.
+ */
+export const MAX_RECEIVE_CALLS_PER_TOKEN = 5
+/** An ack's first attempt plus tokenRedemption's ACK_RETRY_BACKOFFS_MS (3). */
+export const MAX_ACK_CALLS_PER_PART = 4
+/** burn.ts: one attempt plus its single 409/429 retry, 2 calls each. */
+export const MAX_BURN_CALLS_PER_PART = 2 * CALLS_PER_BURN
+/** The startup/catch-up flush: ACK_FLUSH_MAX_PER_RUN, at most once a minute. */
+export const FLUSH_CALLS_PER_WINDOW = 2
+
+/**
+ * Every sleep a part's own retries can add on top of waiting for the pacer:
+ * dmPoll's RATE_LIMIT_BACKOFFS_MS (155 s), dm-poll's transient backoffs
+ * (1 + 4 + 15 s) and two 409 in-flight waits (5 s cap each). Kept here as a
+ * plain number so this module stays free of dmPoll's imports; the bundle test
+ * recomputes it from the real RATE_LIMIT_BACKOFFS_MS.
+ */
+export const RETRY_SLEEP_BUDGET_MS = 155_000 + 20_000 + 2 * 5_000
+
+/** Slack on top of the bound: clock skew, slow responses, timer drift. */
+export const PACING_MARGIN_MS = 2 * WINDOW_MS
 
 /**
  * The bundle size the #94 wait window is sized for. Staging's largest was 8
@@ -43,34 +68,45 @@ export const CALLS_PER_ACK = 1
 export const PACED_BUNDLE_PARTS = 8
 
 /**
- * A conservative bound on how long the pacer can hold back the LAST part of
- * a `parts`-part bundle before its first receive may start.
+ * A conservative bound on how long the LAST part of a `parts`-part bundle can
+ * take, from the bundle's arrival, to finish every call it may make.
  *
- * It does NOT assume an empty window. Everything that can be queued ahead of
- * that part is counted, at the worst case for each:
- *   - every part redeemed AND burnt (self-issued): (2 + 2) calls each;
- *   - every part's first ack failing, so each gets one background ack retry
- *     (1 call each);
- *   - one startup/catch-up flush at its per-run cap (2 calls);
- *   - the window already full when the bundle arrives (CALLS_PER_WINDOW).
- * `bundleArrival.test.ts` requires the bundle wait window to exceed this PLUS
- * the full 429 retry budget, so a part still waiting its turn is never called
- * missing.
+ * Counts every call that goes through the pacer, at its maximum, for every
+ * part ahead of it and itself (#110 second review C):
+ *   - the window already full when the bundle arrives: CALLS_PER_WINDOW;
+ *   - per part: every receive the per-token cap allows (5), every ack attempt
+ *     (4), and a burn with its retry (4): 13 calls;
+ *   - flushes run alongside, taking FLUSH_CALLS_PER_WINDOW of every window, so
+ *     the bundle only gets the rest.
+ * Then adds every retry sleep and a margin. `bundleArrival.test.ts` pins
+ * BUNDLE_WAIT_WINDOW_MS above this.
  */
-export function worstCasePacingDelayMs(parts: number): number {
-  const calls =
-    CALLS_PER_WINDOW + parts * (CALLS_PER_REDEEM + CALLS_PER_BURN + CALLS_PER_ACK) + 2
-  return Math.ceil(calls / CALLS_PER_WINDOW) * WINDOW_MS
+export function worstCaseBundleMs(parts: number): number {
+  const perPart = MAX_RECEIVE_CALLS_PER_TOKEN + MAX_ACK_CALLS_PER_PART + MAX_BURN_CALLS_PER_PART
+  const calls = CALLS_PER_WINDOW + parts * perPart
+  const windows = Math.ceil(calls / (CALLS_PER_WINDOW - FLUSH_CALLS_PER_WINDOW))
+  return windows * WINDOW_MS + RETRY_SLEEP_BUDGET_MS + PACING_MARGIN_MS
 }
 
 type Sleep = (ms: number) => Promise<void>
 
+/** A waiter the pacer dropped because it was reset (logout / account switch). */
+export class PacerResetError extends Error {
+  constructor() {
+    super('receive pacer was reset; the waiting call belongs to the previous session')
+    this.name = 'PacerResetError'
+  }
+}
+
 export interface ReceivePacer {
   /**
    * Resolves when `calls` more calls fit in the window, and books them.
-   * Never throws. Waiters are served in arrival order.
+   * Waiters are served in arrival order. Rejects ONLY with PacerResetError,
+   * when `reset()` runs while it waits: a call queued for the previous account
+   * must never go out under the next one's session.
    */
   acquire(calls?: number): Promise<void>
+  /** Empty the window and settle every waiter with PacerResetError. */
   reset(): void
 }
 
@@ -86,33 +122,40 @@ export function createReceivePacer(opts: {
   const sleep: Sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)))
   let starts: number[] = []
   let queue: Promise<void> = Promise.resolve()
+  let generation = 0
+  // Resolved by reset(), so a waiter mid-sleep wakes at once instead of
+  // finishing its sleep and firing a call for the previous account.
+  let wake: () => void = () => {}
+  let resetSignal = new Promise<void>((r) => (wake = r))
 
-  async function take(calls: number): Promise<void> {
-    // A reservation larger than the window can never fit; clamp it so it
-    // waits for an empty window rather than forever.
+  async function take(calls: number, gen: number): Promise<void> {
     const need = Math.max(1, Math.min(calls, limit))
     for (;;) {
+      if (gen !== generation) throw new PacerResetError()
       const t = now()
       starts = starts.filter((s) => t - s < windowMs)
       if (starts.length + need <= limit) {
         for (let i = 0; i < need; i++) starts.push(t)
         return
       }
-      // Wait until enough of the oldest calls have aged out.
       const freeAt = starts[starts.length + need - limit - 1] + windowMs
-      await sleep(Math.max(1, freeAt - t))
+      await Promise.race([sleep(Math.max(1, freeAt - t)), resetSignal])
     }
   }
 
   return {
     acquire(calls = 1) {
-      const turn = queue.then(() => take(calls), () => take(calls))
+      const gen = generation
+      const turn = queue.then(() => take(calls, gen), () => take(calls, gen))
       queue = turn.catch(() => undefined)
-      return turn.catch(() => undefined)
+      return turn
     },
     reset() {
+      generation += 1
       starts = []
       queue = Promise.resolve()
+      wake()
+      resetSignal = new Promise<void>((r) => (wake = r))
     },
   }
 }

@@ -707,6 +707,11 @@ const ReceiveLedger = {
         const hit = this.list().find((e) => e.fp === fp);
         return hit ? hit.receiveId : null;
     },
+    /** The whole entry for a token fingerprint ({ receiveId, state }), or null. */
+    entryFor(fp) {
+        if (!fp) return null;
+        return this.list().find((e) => e.fp === fp) || null;
+    },
     /** Saved but not acknowledged: the ONLY ids anything may ack. */
     unacknowledged() {
         return this.list().filter((e) => e.state === 'saved').map((e) => e.receiveId);
@@ -822,8 +827,50 @@ const ACK_RETRY_BACKOFFS_MS = [2000, 10000, 30000];
 const ACK_RETRY_MAX_WAIT_MS = 65000;
 /** Acks one flush may send, so a backlog cannot spend the receive budget. */
 const ACK_FLUSH_MAX_PER_RUN = 2;
+/** Minimum gap between flushes. */
+const ACK_FLUSH_MIN_INTERVAL_MS = 60000;
 /** Consecutive 403s on one ack before it is dropped. */
 const ACK_FORBIDDEN_MAX = 3;
+
+/**
+ * #110 review C — a hard ceiling on `api.receive` calls for ONE token, across
+ * every retry layer (the inner transient retry, the 409 in-flight wait, and
+ * dmPoll's outer 429 retry, which re-enters `redeem()`). Without it the layers
+ * multiply (5 outer × 4 inner) and no pacing bound is honest. Past it the
+ * redemption fails as an ordinary (non-success) failure, dm-poll files it, and
+ * a later poll tries again once the span has passed. Mirrored by
+ * `MAX_RECEIVE_CALLS_PER_TOKEN` in src/lib/receivePacer.ts; a test pins them
+ * equal.
+ */
+const RECEIVE_CALLS_PER_TOKEN = 5;
+const RECEIVE_CALLS_SPAN_MS = 10 * 60 * 1000;
+
+/**
+ * #110 review D — the gateway answers a duplicate that arrives while the first
+ * call is mid-swap with 409 + `Retry-After: 2` and an empty body. That is "wait
+ * a moment", not a failure: wait (capped) and retry under the SAME key, at most
+ * this many times, each counted against RECEIVE_CALLS_PER_TOKEN.
+ */
+const IN_FLIGHT_RETRIES = 2;
+const IN_FLIGHT_MAX_WAIT_MS = 5000;
+
+/** The gateway's "your first call is still running" 409, as opposed to a settled one. */
+function _isInFlightConflict(err) {
+    if (!err || err.status !== 409) return false;
+    const code = err.code || (err.data && err.data.code);
+    if (code === 'RECEIVE_ALREADY_SETTLED') return false;
+    return typeof err.retryAfterMs === 'number';
+}
+
+/**
+ * The receive was already SAVED in this wallet (ledger state saved/acked): a
+ * redelivery of a coupon we hold. Reported with the old "already redeemed"
+ * wording so dm-poll takes its idempotent path (mark received, bundle success)
+ * rather than raising a false loss (#110 review A).
+ */
+function _alreadyRedeemedHere() {
+    return new Error('This token has already been redeemed');
+}
 
 const TokenRedemption = {
     // Single-flight in-memory map: token fingerprint → in-flight redemption
@@ -1374,7 +1421,19 @@ const TokenRedemption = {
             // Held BEFORE the call: if this wallet already has a receive_id for
             // the token, an "already spent" from the mint is our own settled
             // swap coming back, not someone else's spend.
-            const knownReceiveId = ReceiveLedger.receiveIdFor(fingerprint);
+            //
+            // #110 review A: only a 'settled' entry (swapped, NOT saved) means
+            // that. A 'saved' or 'acked' entry is a coupon this wallet already
+            // holds: a redelivery of it is the old idempotent "already
+            // redeemed" success, never a reported loss, and needs no call.
+            const knownEntry = ReceiveLedger.entryFor(fingerprint);
+            if (knownEntry && (knownEntry.state === 'saved' || knownEntry.state === 'acked')) {
+                console.info('[tokenRedemption] token already saved in this wallet — idempotent', {
+                    fp: _fpTag(fingerprint), receiveId: knownEntry.receiveId,
+                });
+                throw _alreadyRedeemedHere();
+            }
+            const knownReceiveId = knownEntry ? knownEntry.receiveId : null;
             console.info('[tokenRedemption] receive start', {
                 fp: _fpTag(fingerprint), source, knownReceiveId,
             });
@@ -1386,9 +1445,34 @@ const TokenRedemption = {
             // transient ones (network, 5xx) retry up to the budget.
             let result;
             try {
-                result = await _withReceiveRetry(
-                    () => api.receive(token, { idempotencyKey })
-                );
+                // #110 review C: every api.receive for this token, across all
+                // retry layers, spends from one bounded per-token budget.
+                const budgetKey = fingerprint || token;
+                const receiveOnce = async () => {
+                    if (!this._takeReceiveCall(budgetKey)) {
+                        throw new Error('Receive call budget for this token is spent; a later poll will retry');
+                    }
+                    // Paced per CALL (dmPoll installs the page's pacer here),
+                    // so inner retries spend from the same budget as first tries.
+                    await this._receiveGate();
+                    return api.receive(token, { idempotencyKey });
+                };
+                // #110 review D: the gateway's 409 "first call still in flight"
+                // (Retry-After, empty body) is a short wait and a retry under
+                // the same key, not a failure.
+                for (let inFlight = 0; ; inFlight++) {
+                    try {
+                        result = await _withReceiveRetry(receiveOnce);
+                        break;
+                    } catch (e) {
+                        if (!_isInFlightConflict(e) || inFlight >= IN_FLIGHT_RETRIES) throw e;
+                        const wait = Math.min(Math.max(e.retryAfterMs, 0), IN_FLIGHT_MAX_WAIT_MS);
+                        console.info('[tokenRedemption] receive in flight at the gateway — waiting', {
+                            fp: _fpTag(fingerprint), waitMs: wait,
+                        });
+                        await this._inFlightSleep(wait);
+                    }
+                }
             } catch (receiveErr) {
                 // #110: the gateway (or, on an older gateway, the mint) says
                 // this token's receive already settled. Terminal for
@@ -1436,7 +1520,18 @@ const TokenRedemption = {
             // spent, so saving it would show a balance with nothing behind it.
             // A receive_id with no fresh token is a settled receive whose
             // proofs this wallet does not have: never saved, never acked.
-            if (settledReceiveId && !result.token && !result.change_token) {
+            //
+            // #110 second review B: unconditional. A result with no fresh token
+            // is never saved, whether or not it carries a receive_id; there is
+            // simply nothing to keep. With no receive_id there is nothing to
+            // reconcile either, so it is an ordinary (non-success) failure.
+            if (!result.token && !result.change_token && !settledReceiveId) {
+                console.error('[tokenRedemption] receive returned no fresh token — nothing saved', {
+                    fp: _fpTag(fingerprint),
+                });
+                throw new Error('Receive returned no fresh token; nothing was saved');
+            }
+            if (!result.token && !result.change_token) {
                 console.error('[tokenRedemption] receive replayed without a fresh token — not saved, needs reconciliation', {
                     fp: _fpTag(fingerprint), receiveId: settledReceiveId,
                 });
@@ -1968,7 +2063,10 @@ const TokenRedemption = {
 
         return {
             voucher_id: result.voucher_id || result.id || crypto.randomUUID(),
-            token: result.token || token,
+            // #110 second review B: never the INPUT token. After a swap it is
+            // spent; saving it would be a balance with nothing behind it.
+            // _doRedeem refuses a result without a fresh token before here.
+            token: result.token || result.change_token || null,
             face_value: _resolvedFaceValue,
             face_value_source: _faceValueSource,
             face_unit: unit,
@@ -2265,10 +2363,14 @@ const TokenRedemption = {
         } catch (saveErr) {
             // #110: the old text here said "proofs are safe in backend escrow".
             // They are not: the gateway stopped storing the fresh token (V4,
-            // #58) and recovery is disabled (#95). What saves this coupon now
-            // is the deterministic idempotency key — the caller's retry of the
-            // same token is answered with this swap's proofs — so say that.
-            console.error('[tokenRedemption] persist failed after a settled swap; a retry of the same token replays it', {
+            // #58) and recovery is disabled (#95). A retry of the same token is
+            // NOT a recovery either: the gateway's same-key replay returns the
+            // receive_id with `token: null`, so the value is not recoverable by
+            // this wallet. The escrow stays 'settled' on the ledger, never
+            // acked, for reconciliation.
+            // TODO(imani-gateway-customer#121/#119): recover a HELD escrow's
+            // proofs (kept encrypted to the recipient, or replayed by key).
+            console.error('[tokenRedemption] persist failed after a settled swap; value NOT recoverable by retry — needs reconciliation', {
                 receiveId, source, message: saveErr && saveErr.message,
             });
             // Spec 022 / spec 038 contract: throw RedemptionSaveError so
@@ -2361,6 +2463,9 @@ const TokenRedemption = {
      */
     async _acknowledgeEscrow(receiveId) {
         if (!receiveId) return false;
+        // Never throws: a gate that rejects (the pacer reset on logout) just
+        // leaves the id on the ledger for the next session's flush.
+        try { await this._ackGate(); } catch (_) { return false; }
         const ok = await this._ackOnce(receiveId);
         if (!ok.acked && ok.retryable) this._scheduleAckRetry(receiveId, ok.retryAfterMs);
         return ok.acked;
@@ -2433,6 +2538,30 @@ const TokenRedemption = {
      * pacer here; the default lets it through.
      */
     _ackGate: async () => {},
+    /** Gate every api.receive goes through; dmPoll installs its pacer. */
+    _receiveGate: async () => {},
+    // Overridable by tests; the 409 in-flight wait.
+    _inFlightSleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    // token fingerprint → timestamps of api.receive calls (review C).
+    _receiveCalls: new Map(),
+    /** Book one api.receive for this token; false once the budget is spent. */
+    _takeReceiveCall(key) {
+        const now = Date.now();
+        const recent = (this._receiveCalls.get(key) || []).filter((t) => now - t < RECEIVE_CALLS_SPAN_MS);
+        if (recent.length >= RECEIVE_CALLS_PER_TOKEN) {
+            this._receiveCalls.set(key, recent);
+            return false;
+        }
+        recent.push(now);
+        this._receiveCalls.set(key, recent);
+        if (this._receiveCalls.size > 500) {
+            this._receiveCalls.delete(this._receiveCalls.keys().next().value);
+        }
+        return true;
+    },
+    RECEIVE_CALLS_PER_TOKEN,
+    // Last flush start, so catch-ups cannot flush more than once a minute.
+    _lastFlushAt: 0,
 
     /**
      * Forget in-memory ack state. Called on logout / account switch so a retry
@@ -2440,6 +2569,8 @@ const TokenRedemption = {
      */
     resetAckState() {
         this._ackEpoch += 1;
+        this._lastFlushAt = 0;
+        this._receiveCalls.clear();
         this._ackRetries.clear();
         this._ackForbidden.clear();
     },
@@ -2484,6 +2615,11 @@ const TokenRedemption = {
     async flushUnacknowledgedEscrows() {
         let acked = 0;
         let sent = 0;
+        // Catch-ups fire on SSE open, focus and online; throttled so their
+        // flushes cost at most ACK_FLUSH_MAX_PER_RUN calls a minute (review C).
+        const now = Date.now();
+        if (now - this._lastFlushAt < ACK_FLUSH_MIN_INTERVAL_MS) return 0;
+        this._lastFlushAt = now;
         try {
             for (const receiveId of ReceiveLedger.unacknowledged()) {
                 if (sent >= ACK_FLUSH_MAX_PER_RUN) break;
