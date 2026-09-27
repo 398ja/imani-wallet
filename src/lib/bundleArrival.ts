@@ -5,6 +5,8 @@ import {
   type BundleReceiptStore,
 } from '@imani/nostr-transactions'
 
+import { createAccountStore } from './accountStore'
+import { MISMATCH_NOTE, vouchers } from './bundleWording'
 import { displayDecimals, formatFace } from './format'
 
 /**
@@ -51,7 +53,6 @@ const MAX_BUNDLES = 50
 
 const BUNDLE_ID = /^[0-9a-f]{32}$/
 
-const storageKey = (pubkey: string) => `imani-wallet:bundle-arrivals:${pubkey}`
 
 /** What one redeemed part tells the tracker. */
 export interface ArrivedPart {
@@ -106,48 +107,26 @@ export type TrackResult =
 /* Storage: per account, bounded, synchronous under an async face.          */
 /* ------------------------------------------------------------------------ */
 
-function readAll(userId: string): BundleReceiptRecord[] {
-  try {
-    const raw = localStorage.getItem(storageKey(userId))
-    if (!raw) return []
-    const parsed: unknown = JSON.parse(raw)
-    return Array.isArray(parsed)
-      ? (parsed.filter(
-          (r) => r && typeof r === 'object' && typeof (r as BundleReceiptRecord).bundleId === 'string',
-        ) as BundleReceiptRecord[])
-      : []
-  } catch {
-    return []
-  }
-}
-
-function writeAll(userId: string, records: BundleReceiptRecord[]): void {
-  // Newest first, then trimmed: an old finished bundle is the cheapest thing
-  // to forget.
-  const bounded = records
-    .slice()
-    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
-    .slice(0, MAX_BUNDLES)
-  try {
-    localStorage.setItem(storageKey(userId), JSON.stringify(bounded))
-  } catch (e) {
-    // Display state only. A private window that refuses the write loses the
-    // aggregation across reloads, never money.
-    console.warn('[bundle] could not persist bundle arrivals:', e)
-  }
-}
+const records = createAccountStore<BundleReceiptRecord>({
+  name: 'bundle-arrivals',
+  limit: MAX_BUNDLES,
+  idOf: (r) => r.bundleId,
+  // An old finished bundle is the cheapest thing to forget.
+  ageOf: (r) => Date.parse(r.createdAt) || 0,
+  isValid: (r): r is BundleReceiptRecord =>
+    !!r && typeof r === 'object' && typeof (r as BundleReceiptRecord).bundleId === 'string',
+})
 
 const storage: BundleReceiptStorageAdapter = {
   async get(userId, bundleId) {
-    return readAll(userId).find((r) => r.bundleId === bundleId) ?? null
+    return records.get(userId, bundleId) ?? null
   },
   async upsert(record) {
-    const rest = readAll(record.userId).filter((r) => r.bundleId !== record.bundleId)
-    writeAll(record.userId, [record, ...rest])
+    records.put(record.userId, record)
     return record
   },
   async listAll(userId) {
-    return readAll(userId)
+    return records.list(userId)
   },
 }
 
@@ -344,7 +323,7 @@ export function reconcileBundles(recipientPubkey: string, now = new Date()): Pro
 
 /** Bundles still waiting on parts, with when their window closes (epoch ms). */
 export function openBundles(recipientPubkey: string): Array<{ bundleId: string; expiresAt: number }> {
-  return readAll(recipientPubkey)
+  return records.list(recipientPubkey)
     .filter((r) => r.state === 'IN_FLIGHT')
     .map((r) => ({ bundleId: r.bundleId, expiresAt: Date.parse(r.waitWindowExpiresAt) }))
     .filter((r) => Number.isFinite(r.expiresAt))
@@ -359,8 +338,6 @@ export function bundleExpiresAt(recipientPubkey: string, bundleId: string): numb
 /* Wording                                                                   */
 /* ------------------------------------------------------------------------ */
 
-/** "1 voucher", "2 vouchers". Shared by every bundle surface. */
-export const vouchers = (n: number) => `${n} voucher${n === 1 ? '' : 's'}`
 
 export interface BundleWording {
   /** The figure beside the sender's name: received, with the expected total when short. */
@@ -388,7 +365,7 @@ export function describeBundle(view: BundleView, opts: { queued?: number } = {})
   const over = view.receivedTotal > view.declaredTotal || view.receivedCount > view.declaredCount
   const short = view.receivedTotal < view.declaredTotal
   const missing = Math.max(0, view.declaredCount - view.receivedCount)
-  const caveat = view.mismatch ? ' Some parts of this payment did not match the others.' : ''
+  const caveat = view.mismatch ? ` ${MISMATCH_NOTE}` : ''
 
   if (over) {
     return {
@@ -442,7 +419,7 @@ export function _resetBundleArrivalsForTests(pubkey?: string): void {
   epoch = 0
   if (pubkey) {
     try {
-      localStorage.removeItem(storageKey(pubkey))
+      localStorage.removeItem(`imani-wallet:bundle-arrivals:${pubkey}`)
     } catch {
       /* nothing to clear */
     }
