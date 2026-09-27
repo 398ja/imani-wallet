@@ -135,8 +135,9 @@ export async function burnIfSelfIssued(row: VoucherRow, ownPubkey: string): Prom
 
   try {
     const api = (await legacyApi()) as unknown as BurnApi
-    // A burn is a receive and an ack against the same per-pubkey budget as
-    // redemptions (#110), so it waits its turn in the same pacer.
+    // A burn's receive spends the same per-pubkey budget as redemptions
+    // (#110), so it waits its turn in the same pacer. Its ack is exempt from
+    // the limit (imani-gateway-customer#120) and is not paced.
     await receivePacer().acquire(CALLS_PER_BURN)
     const result = await api.receive(row.token, {
       // Keyed on the coupon, so a burn retried after a lost response is the
