@@ -6,6 +6,8 @@ import { signedFetch } from './nip98'
 import { recordCashAttestation } from './wallet'
 import { recordNotification, upsertNotification } from './notifications/inbox'
 import { wantsInApp } from './notifications/wants'
+import { createAccountStore } from './accountStore'
+import { MISMATCH_NOTE } from './bundleWording'
 import type { ReceiptPayload } from './paymentReceipt'
 
 /**
@@ -117,7 +119,7 @@ function fileReceipt(pubkey: string, delivery: ReceiptDelivery): boolean {
   // and one toast instead of filing "€3.00 was claimed" twice (#94).
   const bundle = bundleOf(payload)
   if (bundle) {
-    const filedInBundle = fileBundleClaim(pubkey, delivery.receiptId, payload, bundle)
+    const filedInBundle = fileBundleClaim(pubkey, delivery.receiptId, counterparty, payload, bundle)
     // `undefined`: this claim cannot be folded in (another currency, or a
     // second receipt for a part already claimed). It is still a claim, so it
     // gets its own row below rather than vanishing.
@@ -181,6 +183,8 @@ interface BundleDeclaration {
 /** The claims collected so far for one bundle this account sent. */
 interface BundleClaims {
   bundleId: string
+  /** Who redeemed the first part. One payment has one recipient. */
+  redeemer: string
   /** The declaration as the first receipt echoed it. First write wins. */
   count: number
   total: number
@@ -188,12 +192,28 @@ interface BundleClaims {
   decimals?: number
   /** receiptId → the part it settled. Keyed on the receipt so a redelivery is one claim. */
   parts: Record<string, { index: number; faceValue?: number }>
+  /**
+   * A later receipt disagreed with this bundle: another total or count, another
+   * redeemer or currency, or a second claim for a part already claimed. Said on
+   * the row, so the sender is not shown a clean total that hides it.
+   */
+  conflict?: boolean
   updatedAt: number
 }
 
 const BUNDLE_HEX = /^[0-9a-f]{32}$/
-const MAX_BUNDLES = 50
-const claimsKey = (pubkey: string) => `imani-wallet:bundle-claims:${pubkey}`
+
+const bundleClaims = createAccountStore<BundleClaims>({
+  name: 'bundle-claims',
+  limit: 50,
+  idOf: (c) => c.bundleId,
+  ageOf: (c) => c.updatedAt,
+  isValid: (c): c is BundleClaims =>
+    !!c &&
+    typeof c === 'object' &&
+    typeof (c as BundleClaims).bundleId === 'string' &&
+    typeof (c as BundleClaims).parts === 'object',
+})
 
 function bundleOf(payload: ReceiptPayload): BundleDeclaration | undefined {
   const { bundleId, bundlePartIndex, bundlePartCount, bundleTotal } = payload
@@ -205,44 +225,22 @@ function bundleOf(payload: ReceiptPayload): BundleDeclaration | undefined {
   return { bundleId, index: bundlePartIndex, count: bundlePartCount, total: bundleTotal }
 }
 
-function readClaims(pubkey: string): Record<string, BundleClaims> {
-  try {
-    const raw = localStorage.getItem(claimsKey(pubkey))
-    const parsed: unknown = raw ? JSON.parse(raw) : {}
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, BundleClaims>)
-      : {}
-  } catch {
-    return {}
-  }
-}
-
-function writeClaims(pubkey: string, all: Record<string, BundleClaims>): void {
-  const kept = Object.values(all)
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, MAX_BUNDLES)
-  try {
-    localStorage.setItem(claimsKey(pubkey), JSON.stringify(Object.fromEntries(kept.map((c) => [c.bundleId, c]))))
-  } catch (error) {
-    // Display grouping only; the receipt itself is already consumed either way.
-    console.warn(LOG_PREFIX, 'could not persist bundle claims', error)
-  }
-}
-
 /**
  * Fold one claim into its bundle's row. Returns whether anything new was
  * said, or `undefined` when this claim does not belong in the bundle's figure
- * and should be filed on its own.
+ * and should be filed on its own (the bundle's row then carries a caveat).
  */
 function fileBundleClaim(
   pubkey: string,
   receiptId: string,
+  redeemer: string,
   payload: ReceiptPayload,
   declared: BundleDeclaration,
 ): boolean | undefined {
-  const all = readClaims(pubkey)
-  const claims: BundleClaims = all[declared.bundleId] ?? {
+  const existing = bundleClaims.get(pubkey, declared.bundleId)
+  const claims: BundleClaims = existing ?? {
     bundleId: declared.bundleId,
+    redeemer,
     count: declared.count,
     total: declared.total,
     unit: payload.faceUnit,
@@ -252,18 +250,46 @@ function fileBundleClaim(
   }
   // A redelivered receipt is the same claim: nothing new to say.
   if (claims.parts[receiptId]) return false
-  // A second receipt for a part already claimed, or one in another currency,
-  // cannot be summed into this bundle's figure honestly.
-  if (Object.values(claims.parts).some((p) => p.index === declared.index)) return undefined
-  if (claims.unit && payload.faceUnit && claims.unit !== payload.faceUnit) return undefined
+
+  // Cannot be summed into this bundle's figure honestly: another redeemer,
+  // another currency, or a second receipt for a part already claimed. Filed on
+  // its own by the caller, and the bundle's row says something did not match.
+  const foreign =
+    claims.redeemer !== redeemer ||
+    (!!claims.unit && !!payload.faceUnit && claims.unit !== payload.faceUnit) ||
+    Object.values(claims.parts).some((p) => p.index === declared.index)
+  if (foreign) {
+    if (existing && !existing.conflict) {
+      existing.conflict = true
+      bundleClaims.put(pubkey, existing)
+      showBundleClaims(pubkey, existing, payload.redeemedAt, false)
+    }
+    return undefined
+  }
+
+  // Folded in, but its declaration disagrees with the first: first write wins,
+  // and the disagreement is flagged rather than silently dropped.
+  if (existing && (declared.total !== claims.total || declared.count !== claims.count)) {
+    claims.conflict = true
+  }
 
   claims.parts[receiptId] = { index: declared.index, faceValue: payload.faceValue }
   claims.unit ??= payload.faceUnit
   claims.decimals ??= payload.faceDecimals
   claims.updatedAt = Date.now()
-  all[declared.bundleId] = claims
-  writeClaims(pubkey, all)
+  bundleClaims.put(pubkey, claims)
 
+  showBundleClaims(pubkey, claims, payload.redeemedAt, true)
+  return true
+}
+
+/** Draw the bundle's one bell row and, when `toastIt`, its one toast. */
+function showBundleClaims(
+  pubkey: string,
+  claims: BundleClaims,
+  redeemedAt: number | undefined,
+  toastIt: boolean,
+): void {
   const parts = Object.values(claims.parts)
   const claimed = parts.length
   const done = claimed >= claims.count
@@ -278,41 +304,42 @@ function fileBundleClaim(
   const sum = everyAmount ? parts.reduce((s, p) => s + (p.faceValue ?? 0), 0) : undefined
   const summed = sum !== undefined ? fmt(sum) : undefined
   const declaredTotal = fmt(claims.total)
-  const vouchers = `${claimed} of ${claims.count} vouchers`
+  const progress = `${claimed} of ${claims.count} vouchers`
 
-  const body = done
-    ? summed
-      ? `${summed} was claimed (${vouchers}).`
-      : `Your payment was claimed (${vouchers}).`
-    : summed && declaredTotal
-      ? `${summed} of ${declaredTotal} claimed so far (${vouchers}).`
-      : `${vouchers} claimed so far.`
+  const body =
+    (done
+      ? summed
+        ? `${summed} was claimed (${progress}).`
+        : `Your payment was claimed (${progress}).`
+      : summed && declaredTotal
+        ? `${summed} of ${declaredTotal} claimed so far (${progress}).`
+        : `${progress} claimed so far.`) + (claims.conflict ? ` ${MISMATCH_NOTE}` : '')
 
   upsertNotification(
     pubkey,
     {
-      id: 'claimed:bundle:' + declared.bundleId,
+      id: 'claimed:bundle:' + claims.bundleId,
       type: 'voucher_claimed',
       title: 'Voucher Claimed',
       body,
       url: '/records',
-      receivedAt: payload.redeemedAt ? payload.redeemedAt * 1000 : undefined,
+      receivedAt: redeemedAt ? redeemedAt * 1000 : undefined,
     },
     // Back to unread when the whole payment is claimed: the outcome the
     // sender is waiting for, even if they already opened the bell at "1 of 2".
-    { reopen: done },
+    { reopen: done && toastIt },
   )
 
+  if (!toastIt) return
   try {
     toast.success(body, {
       // One id per bundle, so each claim redraws the same toast.
-      id: 'claimed-bundle-' + declared.bundleId,
+      id: 'claimed-bundle-' + claims.bundleId,
       duration: 6000,
     })
   } catch (error) {
     console.warn(LOG_PREFIX, 'could not toast a claim', error)
   }
-  return true
 }
 
 /**
