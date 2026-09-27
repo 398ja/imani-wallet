@@ -26,6 +26,10 @@ vi.mock('../wallet', () => ({
 vi.mock('../legacyBridge', () => ({ legacyApi: async () => stubs.api }))
 
 import { burnIfSelfIssued, sweepBurnable } from '../burn'
+import { _setReceivePacerForTests } from '../receivePacer'
+
+// Pacing is pinned in receivePacer.test.ts; here it would only add real waits.
+_setReceivePacerForTests({ acquire: async () => {}, reset: () => {} })
 
 const MERCHANT = 'a'.repeat(64)
 const OTHER = 'b'.repeat(64)

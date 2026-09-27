@@ -47,7 +47,7 @@ import { getWallet, notifyWalletChanged, recordReceiptByNullifier } from './wall
 import { legacyApi, withCorrelation } from './legacyBridge'
 import { claimToFile } from './merchantClaim'
 import { withWebLock } from './webLock'
-import { createReceivePacer, type ReceivePacer } from './receivePacer'
+import { CALLS_PER_ACK, CALLS_PER_REDEEM, receivePacer } from './receivePacer'
 
 /**
  * Gateway REST, same-origin: `/api/v1/...` reaches customer-wallet through the
@@ -57,24 +57,6 @@ import { createReceivePacer, type ReceivePacer } from './receivePacer'
  */
 const GATEWAY = ''
 
-/**
- * One pacer per page: the gateway's budget is per pubkey, and a page redeems
- * for one account at a time (`stopDmPoll` resets it on an account switch).
- * See receivePacer.ts for the rate and why (#110).
- */
-let receivePacer: ReceivePacer = createReceivePacer()
-
-/**
- * Swap the pacer. For tests that drive many redemptions through the adapter
- * to exercise something else (the redemption ceiling), where real pacing
- * would turn a loop into minutes of wall-clock wait. Pacing itself is pinned
- * in receivePacer.test.ts. Returns the previous one so it can be restored.
- */
-export function _setReceivePacerForTests(pacer: ReceivePacer): ReceivePacer {
-  const previous = receivePacer
-  receivePacer = pacer
-  return previous
-}
 
 /**
  * Backoffs for a rate-limited redemption.
@@ -1018,12 +1000,15 @@ function redemptionAdapter(): RedemptionAdapter {
         // 8-part bundle fired 32 calls at a 10/min budget, drew 16 429s, and
         // the acks caught in them were dropped. The pacer keeps a bundle under
         // the budget; this retry still catches whatever else spent it.
-        await receivePacer.acquire()
+        //
+        // Reserved per ATTEMPT (inside the retried function), so a 429 retry
+        // is paced like a first try instead of spending the budget unseen.
         let voucher: Voucher
         try {
           voucher = (await retryOnTransientMintError(
-          () =>
-            withCorrelation(
+          async () => {
+            await receivePacer().acquire(CALLS_PER_REDEEM)
+            return withCorrelation(
           {
             bundleId: meta?.bundleId as string | undefined,
             requestId: meta?.requestId as string | undefined,
@@ -1080,7 +1065,8 @@ function redemptionAdapter(): RedemptionAdapter {
               // dm-poll already deduped by fingerprint before calling us.
               skipDuplicateCheck: true,
             }),
-            ),
+            )
+          },
           {
             isTransient: isRateLimited,
             // Long enough to outlast a one-minute window, which the short
@@ -1359,8 +1345,11 @@ async function flushUnacknowledgedEscrows(): Promise<void> {
     // stack into every poller start, including the many test doubles that
     // start one; the next catch-up after they load does the flush instead.
     const redemption = (typeof window === 'undefined' ? undefined : window.TokenRedemption) as
-      | { flushUnacknowledgedEscrows?: () => Promise<number> }
+      | { flushUnacknowledgedEscrows?: () => Promise<number>; _ackGate?: () => Promise<void> }
       | undefined
+    // Every ack (the flush and the background retry) spends from the same
+    // pacer as the receives, so a backlog cannot eat the next coupon's budget.
+    if (redemption) redemption._ackGate = () => receivePacer().acquire(CALLS_PER_ACK)
     const acked = await redemption?.flushUnacknowledgedEscrows?.()
     if (acked) console.info(`[dmPoll] acknowledged ${acked} escrow(s) left over from an earlier receive`)
   } catch (error) {
@@ -1511,8 +1500,14 @@ export function stopDmPoll(): void {
   void service?.stop()
   service = undefined
   currentPubkey = undefined
-  // The pacing window belongs to the account that spent it.
-  receivePacer.reset()
+  // The pacing window belongs to the account that spent it, and so do any
+  // background ack retries: one left running would ack under the next session.
+  receivePacer().reset()
+  try {
+    ;(window.TokenRedemption as { resetAckState?: () => void } | undefined)?.resetAckState?.()
+  } catch {
+    /* never throws on logout */
+  }
   // Half-assembled coupons are DECRYPTED fragments of someone's money, held in
   // memory. They must not survive a logout, and must not be visible to the next
   // account: `startDmPoll` calls this on an identity change, and without it the

@@ -3,6 +3,7 @@ import type { VoucherRow } from '@imani/wallet-storage'
 import { legacyApi } from './legacyBridge'
 import { isRedeemed, issuerKey } from './merchants'
 import { getWallet, listVouchers, notifyWalletChanged } from './wallet'
+import { CALLS_PER_BURN, receivePacer } from './receivePacer'
 
 /**
  * Burning a coupon the merchant themselves issued, the moment it comes back.
@@ -134,6 +135,9 @@ export async function burnIfSelfIssued(row: VoucherRow, ownPubkey: string): Prom
 
   try {
     const api = (await legacyApi()) as unknown as BurnApi
+    // A burn is a receive and an ack against the same per-pubkey budget as
+    // redemptions (#110), so it waits its turn in the same pacer.
+    await receivePacer().acquire(CALLS_PER_BURN)
     const result = await api.receive(row.token, {
       // Keyed on the coupon, so a burn retried after a lost response is the
       // same call rather than a second swap.
@@ -177,6 +181,7 @@ export async function burnIfSelfIssued(row: VoucherRow, ownPubkey: string): Prom
       await new Promise((r) => setTimeout(r, delay))
       try {
         const api = (await legacyApi()) as unknown as BurnApi
+        await receivePacer().acquire(CALLS_PER_BURN)
         const replay = await api.receive(row.token, {
           idempotencyKey: `burn_${row.token_id}`,
         })

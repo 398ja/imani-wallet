@@ -461,9 +461,19 @@ describe('DmPollService', () => {
       expect(redeem).toHaveBeenCalledTimes(2);
     });
 
-    it("treats the gateway's RECEIVE_ALREADY_SETTLED as terminal: marked received, never refiled", async () => {
-      const settled = Object.assign(new Error('Conflict'), { status: 409, code: 'RECEIVE_ALREADY_SETTLED' });
-      (redemptionAdapter.redeem as ReturnType<typeof vi.fn>).mockRejectedValueOnce(settled);
+    /**
+     * Review of #111, item 3: a receive the gateway settled whose value is NOT
+     * in this wallet is terminal for re-swapping but must never read as a
+     * success: not marked received, no redemption:success, a distinct
+     * redemption:unsaved carrying the receive_id for reconciliation.
+     */
+    it.each([
+      ['tokenRedemption settled-not-saved', { code: 'RECEIVE_SETTLED_NOT_SAVED', receiveId: '0c707915', reason: 'replay-without-token' }],
+      ["the gateway's raw 409", { code: 'RECEIVE_ALREADY_SETTLED', status: 409, receiveId: '0c707915' }],
+    ])('%s: terminal, not success, not marked received, surfaced as unsaved', async (_name, extra) => {
+      // Worded like an already-spent error on purpose: the code must win.
+      const err = Object.assign(new Error('Proof already used (settled)'), extra);
+      (redemptionAdapter.redeem as ReturnType<typeof vi.fn>).mockRejectedValueOnce(err);
       const storageAdapter = createMockStorageAdapter();
 
       const service = new DmPollService({
@@ -476,9 +486,16 @@ describe('DmPollService', () => {
         enableAutoRedemption: true,
         fetchRecentOnStart: false,
       });
+      const success = vi.fn();
+      const unsaved = vi.fn();
+      service.on('redemption:success', success);
+      service.on('redemption:unsaved', unsaved);
 
-      await service.processGiftWrap(createMockGiftWrap({ id: 'already-settled' }));
-      expect(storageAdapter.markTokenAsReceived).toHaveBeenCalledWith('fingerprint-abc123');
+      await service.processGiftWrap(createMockGiftWrap({ id: 'settled-unsaved' }));
+
+      expect(storageAdapter.markTokenAsReceived).not.toHaveBeenCalled();
+      expect(success).not.toHaveBeenCalled();
+      expect(unsaved).toHaveBeenCalledWith(expect.objectContaining({ eventId: 'settled-unsaved', receiveId: '0c707915' }));
       expect(service.getFailedEvents()).toEqual([]);
     });
   });

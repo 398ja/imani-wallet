@@ -396,6 +396,32 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
         return null;
       }
 
+      // #110 review: the gateway settled a receive of this token but the value
+      // is NOT in this wallet (409 RECEIVE_ALREADY_SETTLED, an 11001 on a token
+      // we already hold a receive_id for, or a same-key replay with no fresh
+      // token). Terminal for re-swapping: another attempt cannot fetch the
+      // proofs and only spends the rate budget. But NOT a success: the token
+      // is NOT marked received and no redemption:success is emitted, so the
+      // loss stays visible. `redemption:unsaved` carries the receive_id for
+      // reconciliation; the event is closed so the poll stops re-offering it.
+      if (this.isSettledNotSavedError(error)) {
+        const e = error as { receiveId?: unknown; reason?: unknown };
+        const receiveId = typeof e.receiveId === 'string' ? e.receiveId : null;
+        const reason = typeof e.reason === 'string' ? e.reason : null;
+        console.error('[DmPollService] Receive settled at the gateway but not saved in this wallet:', {
+          eventId: tokenDm.eventId.substring(0, 8),
+          receiveId,
+          reason,
+        });
+        this.emit('redemption:unsaved', {
+          eventId: tokenDm.eventId,
+          senderPubkey: tokenDm.senderPubkey,
+          receiveId,
+          reason,
+        });
+        return null;
+      }
+
       if (this.isAlreadyRedeemedError(error)) {
         console.log('[DmPollService] Token already redeemed (idempotent):', tokenDm.eventId.substring(0, 8));
 
@@ -525,15 +551,24 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
    * Check if an error indicates the token was already redeemed.
    * These are idempotent — the token was successfully redeemed, just not by this call.
    */
-  private isAlreadyRedeemedError(error: unknown): boolean {
-    // #110: the gateway's distinct 409 for a same-token re-receive, by code as
-    // well as by wording, so a reworded message cannot turn it back into a
-    // transient failure that the failed tracker resubmits every hour.
+  /**
+   * #110: a receive the gateway settled whose value this wallet does not hold.
+   * Matched on the error's code (tokenRedemption's ReceiveSettledNotSavedError,
+   * or the gateway's raw RECEIVE_ALREADY_SETTLED), never on wording.
+   */
+  private isSettledNotSavedError(error: unknown): boolean {
     const code = (error as { code?: unknown } | null | undefined)?.code;
-    if (code === 'RECEIVE_ALREADY_SETTLED') return true;
+    return code === 'RECEIVE_SETTLED_NOT_SAVED' || code === 'RECEIVE_ALREADY_SETTLED';
+  }
+
+  private isAlreadyRedeemedError(error: unknown): boolean {
+    // #110 review: a settled-but-unsaved receive must never land here. This
+    // branch marks the token received and emits a synthetic success, which
+    // for money this wallet does not hold turns a loss silent. See
+    // isSettledNotSavedError, checked first.
+    if (this.isSettledNotSavedError(error)) return false;
     const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
     return (
-      message.includes('already settled') ||
       message.includes('already redeemed') ||
       message.includes('already been redeemed') ||
       message.includes('proof already used') ||
