@@ -33,6 +33,29 @@ import { toast } from 'sonner'
  */
 
 /**
+ * Parts of a bundle currently waiting out the limiter, by bundle id (#94).
+ * In memory only: a wait does not survive a reload, and neither does the
+ * retry loop it describes.
+ */
+const queuedByBundle = new Map<string, Set<string>>()
+
+/**
+ * Redraws the bundle toast for `bundleId`, returning whether one is on
+ * screen to carry the news. Registered by arrivalToast, which owns that toast;
+ * injected rather than imported so this module keeps no dependency on it.
+ */
+let bundleHandler: ((bundleId: string) => boolean) | undefined
+
+export function onBundleQueueChange(handler: ((bundleId: string) => boolean) | undefined): void {
+  bundleHandler = handler
+}
+
+/** How many parts of this bundle are waiting right now. */
+export function queuedInBundle(bundleId: string): number {
+  return queuedByBundle.get(bundleId)?.size ?? 0
+}
+
+/**
  * Announce that a coupon is waiting to be redeemed.
  *
  * Safe to call repeatedly for the same coupon — each retry replaces the
@@ -42,8 +65,29 @@ import { toast } from 'sonner'
  * Never throws. It is called from inside the redemption path, and a toast that
  * failed to render must not turn a recoverable pause into a failed redemption.
  */
-export function announceQueued(voucherId: string | undefined, delayMs: number): void {
+export function announceQueued(
+  voucherId: string | undefined,
+  delayMs: number,
+  bundleId?: string,
+): void {
   try {
+    // One part of a multi-coupon payment whose other parts are already on
+    // screen as one toast (#94): say "1 of 2 still receiving" on THAT toast
+    // rather than raising a second one beside it, which would read as a second
+    // payment. Falls through to the ordinary toast when there is nothing to
+    // attach to yet (the first part is the one that is queued).
+    if (bundleId) {
+      const waiting = queuedByBundle.get(bundleId) ?? new Set<string>()
+      waiting.add(voucherId ?? 'unidentified')
+      queuedByBundle.set(bundleId, waiting)
+      if (bundleHandler?.(bundleId)) {
+        // Attached. A standalone toast from an earlier attempt, raised before
+        // the bundle toast existed, would now be a duplicate statement.
+        toast.dismiss(queuedId(voucherId))
+        return
+      }
+    }
+
     const seconds = Math.max(1, Math.round(delayMs / 1000))
 
     toast.loading('Still receiving', {
@@ -75,9 +119,17 @@ export function announceQueued(voucherId: string | undefined, delayMs: number): 
  * here rather than letting it expire keeps the two from briefly overlapping,
  * which would read as two separate payments.
  */
-export function settleQueued(voucherId: string | undefined): void {
+export function settleQueued(voucherId: string | undefined, bundleId?: string): void {
   try {
     toast.dismiss(queuedId(voucherId))
+    if (bundleId) {
+      const waiting = queuedByBundle.get(bundleId)
+      if (waiting?.delete(voucherId ?? 'unidentified')) {
+        if (waiting.size === 0) queuedByBundle.delete(bundleId)
+        // Redraw the bundle toast without this part's "still receiving".
+        bundleHandler?.(bundleId)
+      }
+    }
   } catch (e) {
     console.warn('[queued] could not dismiss a queued coupon toast:', e)
   }

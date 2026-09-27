@@ -321,6 +321,54 @@ describe('dm-poll CryptoAdapter', () => {
     expect(legacy.request_id).toBe('pay-1')
     expect(legacy.bundle_id).toBe('b'.repeat(32))
   })
+
+  it('carries the declared bundle total and count as hints (#94)', () => {
+    const parsed = crypto.parseTokenTransferMessage(
+      JSON.stringify({
+        type: 'cashu_token_transfer',
+        token: 'cashuBv2xyz',
+        bundle_id: 'b'.repeat(32),
+        bundle_total: 600,
+        bundle_part_index: 1,
+        bundle_part_count: '2',
+      }),
+    ) as unknown as Record<string, unknown>
+
+    expect(parsed.bundleTotal).toBe(600)
+    expect(parsed.bundlePartIndex).toBe(1)
+    expect(parsed.bundlePartCount).toBe(2)
+
+    // Declared figures never reach the ledger's snake_case metadata: the row
+    // builder reads face_value / token_amount, and a sender-chosen total must
+    // not be able to stand in for either.
+    const legacy = toLegacyMetadata(parsed)
+    expect(legacy.face_value).toBeUndefined()
+    expect(legacy).not.toHaveProperty('bundle_total')
+  })
+
+  it('drops a garbled or partial declaration rather than half of it', () => {
+    for (const extra of [
+      { bundle_total: -1, bundle_part_index: 0, bundle_part_count: 2 },
+      { bundle_total: 600, bundle_part_index: 0, bundle_part_count: 0 },
+      { bundle_total: 600, bundle_part_count: 2 },
+      { bundle_total: 'lots', bundle_part_index: 0, bundle_part_count: 2 },
+    ]) {
+      const parsed = crypto.parseTokenTransferMessage(
+        JSON.stringify({ type: 'cashu_token_transfer', token: 'cashuBv2xyz', bundle_id: 'b'.repeat(32), ...extra }),
+      ) as unknown as Record<string, unknown>
+      expect(parsed.bundleId).toBe('b'.repeat(32))
+      expect(parsed.bundleTotal).toBeUndefined()
+      expect(parsed.bundlePartCount).toBeUndefined()
+    }
+  })
+
+  it('ignores declared fields with no bundle id (a single-voucher send)', () => {
+    const parsed = crypto.parseTokenTransferMessage(
+      JSON.stringify({ type: 'cashu_token_transfer', token: 'cashuBv2xyz', bundle_total: 600, bundle_part_index: 0, bundle_part_count: 2 }),
+    ) as unknown as Record<string, unknown>
+    expect(parsed.bundleId).toBeUndefined()
+    expect(parsed.bundleTotal).toBeUndefined()
+  })
 })
 
 describe('voucher metadata comes from the token, not the envelope', () => {

@@ -3,9 +3,18 @@ import { toast } from 'sonner'
 
 import { ReceivedPaymentToast } from '../components/ui/IncomingPaymentToast'
 import { createBoundedSet } from './boundedSet'
+import {
+  describeBundle,
+  isBundleId,
+  openBundles,
+  reconcileBundles,
+  trackArrival,
+  type BundleView,
+} from './bundleArrival'
 import { displayDecimals, formatFace } from './format'
-import { recordNotification } from './notifications/inbox'
+import { recordNotification, upsertNotification } from './notifications/inbox'
 import { wantsInApp } from './notifications/wants'
+import { onBundleQueueChange, queuedInBundle } from './queuedToast'
 
 /**
  * The toast that fires when a coupon has ACTUALLY arrived.
@@ -163,4 +172,240 @@ export function announceArrival(
 /** Test seam: forget what has been announced. */
 export function resetAnnounced(): void {
   announced.clear()
+  live.clear()
+  for (const timer of timers.values()) clearTimeout(timer)
+  timers.clear()
 }
+
+/* ------------------------------------------------------------------------ */
+/* One payment in several coupons (#94)                                      */
+/* ------------------------------------------------------------------------ */
+
+/** What the sender declared about the bundle this coupon belongs to. */
+export interface DeclaredBundle {
+  bundleId?: string
+  /** Sender-written. Display only, never money. */
+  total?: number
+  index?: number
+  count?: number
+}
+
+/**
+ * Bundles with a toast on screen this session, so a queued part or a closing
+ * window can redraw the same toast in place. Keyed by bundle id.
+ */
+const live = new Map<string, { view: BundleView; recipient?: string; memo?: string }>()
+
+/** Wait-window timers, one per open bundle. */
+const timers = new Map<string, ReturnType<typeof setTimeout>>()
+
+/**
+ * Announce a coupon that may be one part of a multi-coupon payment.
+ *
+ * With no usable declaration this is `announceArrival`, unchanged: a single
+ * coupon, or a sender that does not speak the bundle fields, behaves exactly
+ * as before. With one, every part of the bundle updates ONE toast and ONE bell
+ * row, showing what has arrived against what the sender said was coming.
+ *
+ * Never rejects, for the same reason `announceArrival` never throws.
+ */
+export async function announceBundleArrival(
+  voucher: ArrivedVoucher | undefined,
+  declared: DeclaredBundle | undefined,
+  recipientPubkey?: string,
+  deliveryEventId?: string,
+): Promise<void> {
+  try {
+    if (
+      !voucher ||
+      !recipientPubkey ||
+      !declared ||
+      !isBundleId(declared.bundleId) ||
+      declared.total === undefined ||
+      declared.index === undefined ||
+      declared.count === undefined ||
+      // A one-part "bundle" is a single coupon: nothing to aggregate.
+      declared.count < 2
+    ) {
+      announceArrival(voucher, recipientPubkey)
+      return
+    }
+    if (!wantsInApp(recipientPubkey, 'voucher_received')) return
+
+    const unit = voucher.face_unit ?? ''
+    const result = await trackArrival(recipientPubkey, {
+      bundleId: declared.bundleId,
+      declaredTotal: declared.total,
+      declaredCount: declared.count,
+      partIndex: declared.index,
+      amount: Number(voucher.face_value ?? 0),
+      unit,
+      decimals: voucher.face_decimals,
+      senderPubkey: voucher.sender_pubkey ?? '',
+      eventId: deliveryEventId,
+    })
+
+    if (result.kind === 'repeat') return
+    if (result.kind === 'standalone') {
+      // Money that could not be counted towards the bundle is still money:
+      // announced on its own, exactly as it would have been before #94.
+      announceArrival(voucher, recipientPubkey)
+      // And if it was turned away because it contradicted the bundle, the
+      // bundle's own line now carries the caveat.
+      if (result.view && live.has(result.view.bundleId)) {
+        renderBundle(result.view, recipientPubkey, live.get(result.view.bundleId)?.memo, false)
+      }
+      return
+    }
+
+    // Counted. The voucher id joins the announced set so a later standalone
+    // path (a re-read without the bundle fields) cannot announce it again.
+    if (voucher.voucher_id) announced.add(voucher.voucher_id)
+    const memo = voucher.memo ?? live.get(result.view.bundleId)?.memo
+    const settledNow = result.view.state !== 'in_flight' && result.previous !== result.view.state
+    renderBundle(result.view, recipientPubkey, memo, settledNow)
+    if (result.view.state === 'in_flight') schedule(recipientPubkey, result.view.bundleId)
+    else unschedule(result.view.bundleId)
+  } catch (e) {
+    console.warn('[arrival] could not announce a bundle part:', e)
+  }
+}
+
+/**
+ * Draw the one toast and the one bell row for a bundle. `reopen` puts the bell
+ * row back to unread, for the transitions worth a second look.
+ */
+function renderBundle(
+  view: BundleView,
+  recipientPubkey: string | undefined,
+  memo: string | undefined,
+  reopen: boolean,
+  opts: { toast?: boolean } = {},
+): void {
+  const queued = queuedInBundle(view.bundleId)
+  const words = describeBundle(view, { queued })
+  const open = view.state === 'in_flight'
+
+  if (open) live.set(view.bundleId, { view, recipient: recipientPubkey, memo })
+  else live.delete(view.bundleId)
+
+  const message = createElement(ReceivedPaymentToast, {
+    pubkey: view.senderPubkey || undefined,
+    amount: words.amount,
+    memo,
+    progress: words.progress,
+    settledLine: open
+      ? 'What has arrived is in your balance.'
+      : view.state === 'incomplete'
+        ? 'What arrived is in your balance.'
+        : undefined,
+  })
+  const options = {
+    // One id for the whole bundle, so each part redraws the same toast.
+    // Namespaced away from the per-coupon `received-<voucher>` ids.
+    id: 'received-bundle-' + view.bundleId,
+    // Held open while a part is waiting out the limiter, for the reason
+    // queuedToast gives: a status that vanishes leaves the guessing it was
+    // raised to end. Otherwise it times out like any arrival.
+    duration: open && queued > 0 ? Infinity : 6000,
+  }
+  if (opts.toast !== false) {
+    // A shortfall is status, not an error (the money that came is safe), so
+    // it wears the neutral toast rather than the success tick or a warning.
+    if (view.state === 'incomplete') toast(message, options)
+    else toast.success(message, options)
+  }
+
+  if (recipientPubkey) {
+    upsertNotification(
+      recipientPubkey,
+      {
+        id: 'arrival:bundle:' + view.bundleId,
+        type: 'voucher_received',
+        title: view.state === 'incomplete' ? 'Payment partly received' : 'Payment received',
+        body: memo ? `${words.body} — ${memo}` : words.body,
+        url: '/receive',
+      },
+      { reopen },
+    )
+  }
+}
+
+/** Arm the wait-window timer for an open bundle, once. */
+function schedule(recipientPubkey: string, bundleId: string, expiresAt?: number): void {
+  if (timers.has(bundleId)) return
+  const due = expiresAt ?? openBundles(recipientPubkey).find((b) => b.bundleId === bundleId)?.expiresAt
+  if (due === undefined) return
+  const timer = setTimeout(() => {
+    timers.delete(bundleId)
+    void closeExpired(recipientPubkey)
+  }, Math.max(0, due - Date.now()) + 50)
+  timers.set(bundleId, timer)
+}
+
+function unschedule(bundleId: string): void {
+  const timer = timers.get(bundleId)
+  if (timer) clearTimeout(timer)
+  timers.delete(bundleId)
+}
+
+/**
+ * How long after a window closed its outcome is still news. A bundle that ran
+ * out while the app was shut for a day is recorded in the bell, not popped up
+ * over whatever the user opened the app to do.
+ */
+const STALE_CLOSE_MS = 10 * 60 * 1000
+
+/** Settle every bundle whose window has closed, and say how each ended. */
+async function closeExpired(recipientPubkey: string): Promise<void> {
+  try {
+    const now = Date.now()
+    const closing = new Map(openBundles(recipientPubkey).map((b) => [b.bundleId, b.expiresAt]))
+    const closed = await reconcileBundles(recipientPubkey)
+    if (!wantsInApp(recipientPubkey, 'voucher_received')) return
+    for (const view of closed) {
+      const expiredAt = closing.get(view.bundleId) ?? now
+      renderBundle(view, recipientPubkey, live.get(view.bundleId)?.memo, true, {
+        toast: now - expiredAt < STALE_CLOSE_MS,
+      })
+    }
+  } catch (e) {
+    console.warn('[arrival] could not close expired bundles:', e)
+  }
+}
+
+/**
+ * Pick up bundles left open by a previous session.
+ *
+ * A tab closed between two parts leaves a bundle IN_FLIGHT in storage with
+ * nothing to close it. Called when the poller starts for an account: the ones
+ * already past their window are settled now, the rest get their timer back.
+ */
+export function resumeBundleArrivals(recipientPubkey: string): void {
+  try {
+    void closeExpired(recipientPubkey).then(() => {
+      for (const open of openBundles(recipientPubkey)) {
+        schedule(recipientPubkey, open.bundleId, open.expiresAt)
+      }
+    })
+  } catch (e) {
+    console.warn('[arrival] could not resume bundle arrivals:', e)
+  }
+}
+
+/** Drop every timer and live toast, on logout or an account switch. */
+export function stopBundleArrivals(): void {
+  for (const timer of timers.values()) clearTimeout(timer)
+  timers.clear()
+  live.clear()
+}
+
+// A queued part redraws its bundle's toast ("1 of 2 in, 1 still receiving")
+// instead of raising a toast of its own. Returns whether there was a live
+// bundle toast to carry it.
+onBundleQueueChange((bundleId) => {
+  const entry = live.get(bundleId)
+  if (!entry || entry.view.state !== 'in_flight') return false
+  renderBundle(entry.view, entry.recipient, entry.memo, false)
+  return true
+})
