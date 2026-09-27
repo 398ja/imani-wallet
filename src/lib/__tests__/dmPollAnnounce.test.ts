@@ -357,6 +357,36 @@ describe('who the settlement receipt is addressed to', () => {
     expect(receipts[0]!.senderPubkeyHex).not.toBe(STALL)
   })
 
+  it('hands the sender their own bundle declaration back, so their claims collapse (#94)', async () => {
+    redeem.mockResolvedValue(VOUCHER)
+    startDmPoll('f'.repeat(64))
+
+    await captured.redemptionAdapter!.redeem('cashuA-part', {
+      deliveryEventId: 'evt-1',
+      metadata: {
+        senderPubkey: PAYER,
+        bundleId: 'b'.repeat(32),
+        bundleTotal: 600,
+        bundlePartIndex: 0,
+        bundlePartCount: 2,
+      },
+    })
+
+    expect(receipts[0]!.bundle).toEqual({ bundleId: 'b'.repeat(32), index: 0, count: 2, total: 600 })
+  })
+
+  it('sends no bundle on a single coupon', async () => {
+    redeem.mockResolvedValue(VOUCHER)
+    startDmPoll('f'.repeat(64))
+
+    await captured.redemptionAdapter!.redeem('cashuA-solo', {
+      deliveryEventId: 'evt-1',
+      metadata: { senderPubkey: PAYER, bundleId: 'b'.repeat(32) },
+    })
+
+    expect(receipts[0]!.bundle).toBeUndefined()
+  })
+
   it('falls back to the envelope signer for a bare wallet-to-wallet wrap', async () => {
     // No payload `sender_pubkey` — a direct NIP-17 wrap, where the signer
     // genuinely is the payer.

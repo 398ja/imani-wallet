@@ -4,7 +4,7 @@ import { displayDecimals, formatFace } from './format'
 import { getSigner } from './nap'
 import { signedFetch } from './nip98'
 import { recordCashAttestation } from './wallet'
-import { recordNotification } from './notifications/inbox'
+import { recordNotification, upsertNotification } from './notifications/inbox'
 import { wantsInApp } from './notifications/wants'
 import type { ReceiptPayload } from './paymentReceipt'
 
@@ -113,6 +113,17 @@ function fileReceipt(pubkey: string, delivery: ReceiptDelivery): boolean {
   // not redelivered forever.
   if (!wantsInApp(pubkey, 'voucher_claimed')) return false
 
+  // One part of a multi-coupon payment: fold it into that payment's one row
+  // and one toast instead of filing "€3.00 was claimed" twice (#94).
+  const bundle = bundleOf(payload)
+  if (bundle) {
+    const filedInBundle = fileBundleClaim(pubkey, delivery.receiptId, payload, bundle)
+    // `undefined`: this claim cannot be folded in (another currency, or a
+    // second receipt for a part already claimed). It is still a claim, so it
+    // gets its own row below rather than vanishing.
+    if (filedInBundle !== undefined) return filedInBundle
+  }
+
   const filed = recordNotification(pubkey, {
     // The gateway's receiptId, so the same claim arriving by push and by drain
     // collapses to one row.
@@ -154,6 +165,154 @@ function fileReceipt(pubkey: string, delivery: ReceiptDelivery): boolean {
   }
 
   return filed
+}
+
+/* ------------------------------------------------------------------------ */
+/* One payment in several coupons (#94), the sender's side                   */
+/* ------------------------------------------------------------------------ */
+
+interface BundleDeclaration {
+  bundleId: string
+  index: number
+  count: number
+  total: number
+}
+
+/** The claims collected so far for one bundle this account sent. */
+interface BundleClaims {
+  bundleId: string
+  /** The declaration as the first receipt echoed it. First write wins. */
+  count: number
+  total: number
+  unit?: string
+  decimals?: number
+  /** receiptId → the part it settled. Keyed on the receipt so a redelivery is one claim. */
+  parts: Record<string, { index: number; faceValue?: number }>
+  updatedAt: number
+}
+
+const BUNDLE_HEX = /^[0-9a-f]{32}$/
+const MAX_BUNDLES = 50
+const claimsKey = (pubkey: string) => `imani-wallet:bundle-claims:${pubkey}`
+
+function bundleOf(payload: ReceiptPayload): BundleDeclaration | undefined {
+  const { bundleId, bundlePartIndex, bundlePartCount, bundleTotal } = payload
+  if (typeof bundleId !== 'string' || !BUNDLE_HEX.test(bundleId)) return undefined
+  const whole = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0
+  if (!whole(bundlePartIndex) || !whole(bundlePartCount) || !whole(bundleTotal)) return undefined
+  // A one-part bundle is one coupon: the plain row says it perfectly well.
+  if (bundlePartCount < 2) return undefined
+  return { bundleId, index: bundlePartIndex, count: bundlePartCount, total: bundleTotal }
+}
+
+function readClaims(pubkey: string): Record<string, BundleClaims> {
+  try {
+    const raw = localStorage.getItem(claimsKey(pubkey))
+    const parsed: unknown = raw ? JSON.parse(raw) : {}
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, BundleClaims>)
+      : {}
+  } catch {
+    return {}
+  }
+}
+
+function writeClaims(pubkey: string, all: Record<string, BundleClaims>): void {
+  const kept = Object.values(all)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, MAX_BUNDLES)
+  try {
+    localStorage.setItem(claimsKey(pubkey), JSON.stringify(Object.fromEntries(kept.map((c) => [c.bundleId, c]))))
+  } catch (error) {
+    // Display grouping only; the receipt itself is already consumed either way.
+    console.warn(LOG_PREFIX, 'could not persist bundle claims', error)
+  }
+}
+
+/**
+ * Fold one claim into its bundle's row. Returns whether anything new was
+ * said, or `undefined` when this claim does not belong in the bundle's figure
+ * and should be filed on its own.
+ */
+function fileBundleClaim(
+  pubkey: string,
+  receiptId: string,
+  payload: ReceiptPayload,
+  declared: BundleDeclaration,
+): boolean | undefined {
+  const all = readClaims(pubkey)
+  const claims: BundleClaims = all[declared.bundleId] ?? {
+    bundleId: declared.bundleId,
+    count: declared.count,
+    total: declared.total,
+    unit: payload.faceUnit,
+    decimals: payload.faceDecimals,
+    parts: {},
+    updatedAt: Date.now(),
+  }
+  // A redelivered receipt is the same claim: nothing new to say.
+  if (claims.parts[receiptId]) return false
+  // A second receipt for a part already claimed, or one in another currency,
+  // cannot be summed into this bundle's figure honestly.
+  if (Object.values(claims.parts).some((p) => p.index === declared.index)) return undefined
+  if (claims.unit && payload.faceUnit && claims.unit !== payload.faceUnit) return undefined
+
+  claims.parts[receiptId] = { index: declared.index, faceValue: payload.faceValue }
+  claims.unit ??= payload.faceUnit
+  claims.decimals ??= payload.faceDecimals
+  claims.updatedAt = Date.now()
+  all[declared.bundleId] = claims
+  writeClaims(pubkey, all)
+
+  const parts = Object.values(claims.parts)
+  const claimed = parts.length
+  const done = claimed >= claims.count
+  const fmt = (n: number) =>
+    claims.unit
+      ? formatFace(n, { unit: claims.unit, decimals: displayDecimals(claims.unit, claims.decimals) })
+      : undefined
+  // Summed only when every claimed part came with a verified amount (the
+  // redeemer omits it otherwise). A sum with a hole in it would understate
+  // what was claimed; counting parts is true either way.
+  const everyAmount = parts.every((p) => typeof p.faceValue === 'number')
+  const sum = everyAmount ? parts.reduce((s, p) => s + (p.faceValue ?? 0), 0) : undefined
+  const summed = sum !== undefined ? fmt(sum) : undefined
+  const declaredTotal = fmt(claims.total)
+  const vouchers = `${claimed} of ${claims.count} vouchers`
+
+  const body = done
+    ? summed
+      ? `${summed} was claimed (${vouchers}).`
+      : `Your payment was claimed (${vouchers}).`
+    : summed && declaredTotal
+      ? `${summed} of ${declaredTotal} claimed so far (${vouchers}).`
+      : `${vouchers} claimed so far.`
+
+  upsertNotification(
+    pubkey,
+    {
+      id: 'claimed:bundle:' + declared.bundleId,
+      type: 'voucher_claimed',
+      title: 'Voucher Claimed',
+      body,
+      url: '/records',
+      receivedAt: payload.redeemedAt ? payload.redeemedAt * 1000 : undefined,
+    },
+    // Back to unread when the whole payment is claimed: the outcome the
+    // sender is waiting for, even if they already opened the bell at "1 of 2".
+    { reopen: done },
+  )
+
+  try {
+    toast.success(body, {
+      // One id per bundle, so each claim redraws the same toast.
+      id: 'claimed-bundle-' + declared.bundleId,
+      duration: 6000,
+    })
+  } catch (error) {
+    console.warn(LOG_PREFIX, 'could not toast a claim', error)
+  }
+  return true
 }
 
 /**

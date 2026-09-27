@@ -59,6 +59,20 @@ export interface ReceiptPayload {
    * parties and an amount is not a hint.
    */
   cashAttestation?: string
+  /**
+   * The bundle this coupon was one part of, as the SENDER declared it in the
+   * DM (#94). Echoed back so the sender's claim receipts for one multi-coupon
+   * payment collapse into one notification. Inside the ciphertext for the same
+   * reason as everything else here: it links parts of one payment.
+   *
+   * The sender wrote these figures in the first place, so they are the
+   * sender's own words returned to them — a display grouping, not a claim
+   * about money.
+   */
+  bundleId?: string
+  bundlePartIndex?: number
+  bundlePartCount?: number
+  bundleTotal?: number
 }
 
 export interface PostReceiptParams {
@@ -77,6 +91,8 @@ export interface PostReceiptParams {
   merchantNip05?: string
   /** The customer's signed attestation, if the coupon carried a warrant. */
   cashAttestation?: string
+  /** See `ReceiptPayload.bundleId`. All four or none. */
+  bundle?: { bundleId: string; index: number; count: number; total: number }
 }
 
 const RECEIPTS_ENDPOINT = '/api/v1/payment-receipts'
@@ -122,6 +138,14 @@ export async function postPaymentReceipt(params: PostReceiptParams): Promise<voi
       faceDecimals: params.faceDecimals,
       redeemedAt: Math.floor(Date.now() / 1000),
       cashAttestation: params.cashAttestation,
+      ...(params.bundle
+        ? {
+            bundleId: params.bundle.bundleId,
+            bundlePartIndex: params.bundle.index,
+            bundlePartCount: params.bundle.count,
+            bundleTotal: params.bundle.total,
+          }
+        : {}),
     }
 
     // To the SENDER's key, not our own: they are the one who reads this. The

@@ -412,6 +412,30 @@ function toArrivedVoucher(voucher: Voucher): ArrivedVoucher {
   }
 }
 
+/**
+ * The sender's bundle declaration off the parsed DM, whole or not at all (#94).
+ *
+ * dmCrypto already drops a partial or garbled one, so this only narrows the
+ * types. Display hints: nothing that books or caps money reads the result.
+ */
+function declaredBundleOf(
+  meta: Record<string, unknown> | undefined,
+): { bundleId: string; index: number; count: number; total: number } | undefined {
+  const bundleId = meta?.bundleId
+  const index = meta?.bundlePartIndex
+  const count = meta?.bundlePartCount
+  const total = meta?.bundleTotal
+  if (
+    typeof bundleId !== 'string' ||
+    typeof index !== 'number' ||
+    typeof count !== 'number' ||
+    typeof total !== 'number'
+  ) {
+    return undefined
+  }
+  return { bundleId, index, count, total }
+}
+
 function storageAdapter(): StorageAdapter {
   return {
     async saveVoucher(voucher: Voucher) {
@@ -1072,12 +1096,7 @@ function redemptionAdapter(): RedemptionAdapter {
       // with no usable declaration takes the plain `announceArrival` path.
       void announceBundleArrival(
         toArrivedVoucher(voucher),
-        {
-          bundleId: meta?.bundleId as string | undefined,
-          total: meta?.bundleTotal as number | undefined,
-          index: meta?.bundlePartIndex as number | undefined,
-          count: meta?.bundlePartCount as number | undefined,
-        },
+        declaredBundleOf(meta),
         currentPubkey,
         opts?.deliveryEventId as string | undefined,
       )
@@ -1151,6 +1170,9 @@ function redemptionAdapter(): RedemptionAdapter {
           (meta?.validation as { signatureValid?: boolean } | undefined)?.signatureValid === true
             ? attestReceived(token)
             : undefined,
+        // The sender's own bundle declaration, handed back so their claim
+        // receipts for one multi-coupon payment collapse into one (#94).
+        bundle: declaredBundleOf(meta),
       })
 
       // The public half of the record. `txRecords` writes the merchant's own
