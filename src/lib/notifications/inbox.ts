@@ -178,6 +178,54 @@ export function recordNotification(
   return true
 }
 
+/**
+ * Record or rewrite one line in place.
+ *
+ * For a notification that is one story told in several steps — a multi-coupon
+ * payment arriving part by part (#94) — where `recordNotification`'s "first
+ * write wins" would freeze the row at "€3.00 of €6.00" forever.
+ *
+ * The row keeps its position and its read state unless `reopen` is set, which
+ * is for the transitions a user should look at again (the bundle finishing, or
+ * being called incomplete). Without that a reader who opened the bell at "1 of
+ * 2" would never see the badge for the outcome.
+ *
+ * Returns whether the row was new.
+ */
+export function upsertNotification(
+  pubkey: string,
+  item: Omit<InboxItem, 'readAt' | 'receivedAt'> & { receivedAt?: number },
+  opts: { reopen?: boolean } = {},
+): boolean {
+  const existing = read(pubkey)
+  const index = existing.findIndex((candidate) => candidate.id === item.id)
+  if (index === -1) return recordNotification(pubkey, item)
+
+  const current = existing[index]!
+  const readAt = opts.reopen ? null : current.readAt
+  if (
+    current.title === item.title &&
+    current.body === item.body &&
+    current.url === item.url &&
+    current.type === item.type &&
+    current.readAt === readAt
+  ) {
+    // Nothing moved: do not churn storage or wake every subscriber.
+    return false
+  }
+  const next = existing.slice()
+  next[index] = {
+    ...current,
+    type: item.type,
+    title: item.title,
+    body: item.body,
+    url: item.url,
+    readAt,
+  }
+  write(pubkey, next)
+  return false
+}
+
 export function markRead(pubkey: string, id: string): void {
   const items = read(pubkey)
   let changed = false

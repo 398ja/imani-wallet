@@ -14,7 +14,12 @@ import {
   retryOnTransientMintError,
 } from '@imani/dm-poll'
 
-import { announceArrival, type ArrivedVoucher } from './arrivalToast'
+import {
+  announceBundleArrival,
+  resumeBundleArrivals,
+  stopBundleArrivals,
+  type ArrivedVoucher,
+} from './arrivalToast'
 import { announceQueued, settleQueued } from './queuedToast'
 import { announceRefusal } from './refusalToast'
 import { schnorr } from '@noble/curves/secp256k1.js'
@@ -1014,7 +1019,15 @@ function redemptionAdapter(): RedemptionAdapter {
               // and a coupon that failed looked exactly alike — which is the one
               // thing a person cannot be left guessing about when it is their
               // money (#40).
-              announceQueued(meta?.voucherId as string | undefined, delayMs)
+              //
+              // A part of a multi-coupon payment attaches to that payment's
+              // one toast instead (#94), so a queued part reads "1 of 2 still
+              // receiving" rather than as a second payment.
+              announceQueued(
+                meta?.voucherId as string | undefined,
+                delayMs,
+                meta?.bundleId as string | undefined,
+              )
             },
           },
           )) as unknown as Voucher
@@ -1027,7 +1040,7 @@ function redemptionAdapter(): RedemptionAdapter {
           //
           // Dismissed rather than left to expire so it cannot briefly overlap
           // the arrival toast below, which would read as two separate payments.
-          settleQueued(meta?.voucherId as string | undefined)
+          settleQueued(meta?.voucherId as string | undefined, meta?.bundleId as string | undefined)
         }
         return voucher
       }
@@ -1051,7 +1064,23 @@ function redemptionAdapter(): RedemptionAdapter {
       // `currentPubkey` is OUR key — the wallet this landed in. It scopes the
       // inbox row the toast now also files, and the preference check that gates
       // both; without it the toast still shows but nothing reaches the bell.
-      announceArrival(toArrivedVoucher(voucher), currentPubkey)
+      //
+      // One coupon of a multi-coupon payment updates that payment's ONE toast
+      // and bell row instead of raising its own (#94). The sender's declared
+      // total and count ride along as display hints only: the row above was
+      // written from the coupon itself, and nothing here touches it. A coupon
+      // with no usable declaration takes the plain `announceArrival` path.
+      void announceBundleArrival(
+        toArrivedVoucher(voucher),
+        {
+          bundleId: meta?.bundleId as string | undefined,
+          total: meta?.bundleTotal as number | undefined,
+          index: meta?.bundlePartIndex as number | undefined,
+          count: meta?.bundlePartCount as number | undefined,
+        },
+        currentPubkey,
+        opts?.deliveryEventId as string | undefined,
+      )
 
       // And tell the SENDER it landed. They have no other way to know: the
       // money left their balance when they sent the gift wrap, and whether it
@@ -1270,6 +1299,11 @@ export function startDmPoll(pubkey: string): DmPollService {
   // merchant wallet publishes none.
   resumeTransferReceipts(pubkey)
 
+  // A multi-coupon payment still waiting on parts when the tab closed has
+  // nothing to close its window (#94). Settles the overdue ones and re-arms
+  // the rest. Display state only; never throws.
+  resumeBundleArrivals(pubkey)
+
   // Before the poller reads its processed set, not after: coupons abandoned by
   // a build that could not reassemble chunks are recoverable only if their
   // tombstones are gone by the time the first catch-up runs.
@@ -1388,6 +1422,9 @@ export function stopDmPoll(): void {
   // (which logout clears), and `startDmPoll` re-arms it for whoever signs in
   // next, if it is theirs.
   resetHeldTransfers()
+  // Bundle wait-window timers are per account: one left armed would file the
+  // previous user's "payment partly received" into whoever signs in next.
+  stopBundleArrivals()
   // The received-token mirror is per-ACCOUNT state too. `startDmPoll` calls
   // this on an identity change, and a mirror left loaded would answer the next
   // user's "have I already banked this?" from the previous user's memory —

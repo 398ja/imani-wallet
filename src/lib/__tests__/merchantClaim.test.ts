@@ -29,7 +29,12 @@ const store = vi.hoisted(() => ({
   merchant: null as Record<string, unknown> | null,
 }))
 
-vi.mock('../arrivalToast', () => ({ announceArrival: () => {} }))
+vi.mock('../arrivalToast', () => ({
+  announceArrival: () => {},
+  announceBundleArrival: async () => {},
+  resumeBundleArrivals: () => {},
+  stopBundleArrivals: () => {},
+}))
 vi.mock('../refusalToast', () => ({ announceRefusal: () => {} }))
 vi.mock('../queuedToast', () => ({ announceQueued: () => {}, settleQueued: () => {} }))
 vi.mock('../merchant', () => ({ loadMerchant: () => store.merchant }))

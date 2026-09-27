@@ -11,8 +11,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
  */
 
 const announced: unknown[] = []
+const declarations: unknown[] = []
 vi.mock('../arrivalToast', () => ({
   announceArrival: (v: unknown) => void announced.push(v),
+  // The bundle path is its own module's business (arrivalToast.test.ts);
+  // here it is captured, since it is now the call dm-poll makes.
+  announceBundleArrival: async (v: unknown, declared: unknown) => {
+    announced.push(v)
+    declarations.push(declared)
+  },
+  resumeBundleArrivals: () => {},
+  stopBundleArrivals: () => {},
 }))
 
 // Mocked for the same reason as arrivalToast: this file runs without a DOM,
@@ -124,6 +133,7 @@ const VOUCHER = {
 beforeEach(() => {
   stopDmPoll()
   announced.length = 0
+  declarations.length = 0
   attested.length = 0
   receipts.length = 0
   attestThrows = false
@@ -166,6 +176,22 @@ describe('a coupon arriving through dm-poll', () => {
     order.push('announced')
 
     expect(order).toEqual(['redeem', 'wallet', 'announced'])
+  })
+
+  it('hands the declared bundle over as display hints (#94)', async () => {
+    redeem.mockResolvedValue(VOUCHER)
+    startDmPoll('f'.repeat(64))
+
+    await captured.redemptionAdapter!.redeem('cashuAtoken', {
+      metadata: { bundleId: 'b'.repeat(32), bundleTotal: 600, bundlePartIndex: 1, bundlePartCount: 2 },
+    })
+
+    expect(declarations).toEqual([{ bundleId: 'b'.repeat(32), total: 600, index: 1, count: 2 }])
+    // The row is booked from the coupon, never from the declaration: the
+    // correlation stamped on it carries the bundle id and nothing declared.
+    expect(correlation).toMatchObject({ bundleId: 'b'.repeat(32) })
+    expect(correlation).not.toHaveProperty('bundleTotal')
+    expect(correlation).not.toHaveProperty('bundlePartCount')
   })
 
   it('says nothing when the redemption failed', async () => {

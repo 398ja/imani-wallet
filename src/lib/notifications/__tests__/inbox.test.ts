@@ -12,6 +12,7 @@ import {
   recordNotification,
   subscribeToNotifications,
   unreadCount,
+  upsertNotification,
 } from '../inbox'
 
 const PUBKEY = 'a'.repeat(64)
@@ -149,5 +150,54 @@ describe('notification inbox', () => {
     expect(listNotifications(PUBKEY)).toHaveLength(1)
 
     setItem.mockRestore()
+  })
+})
+
+describe('upsertNotification (#94)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    _resetInboxCacheForTests()
+  })
+
+  const row = (body: string) => ({
+    id: 'arrival:bundle:x',
+    type: 'voucher_received' as const,
+    title: 'Payment received',
+    body,
+    url: '/receive',
+  })
+
+  it('files a new row the first time', () => {
+    expect(upsertNotification(PUBKEY, row('€3.00 of €6.00'))).toBe(true)
+    expect(listNotifications(PUBKEY)).toHaveLength(1)
+  })
+
+  it('rewrites the same row in place rather than adding a second', () => {
+    add(PUBKEY, 'older', 1000)
+    upsertNotification(PUBKEY, row('€3.00 of €6.00'))
+    add(PUBKEY, 'newer', 3000)
+    upsertNotification(PUBKEY, row('€6.00 received'))
+
+    const items = listNotifications(PUBKEY)
+    expect(items.map((i) => i.id)).toEqual(['newer', 'arrival:bundle:x', 'older'])
+    expect(items[1]!.body).toBe('€6.00 received')
+  })
+
+  it('keeps it read unless asked to reopen it', () => {
+    upsertNotification(PUBKEY, row('€3.00 of €6.00'))
+    markRead(PUBKEY, 'arrival:bundle:x')
+    upsertNotification(PUBKEY, row('€3.00 of €6.00 (still)'))
+    expect(unreadCount(PUBKEY)).toBe(0)
+
+    upsertNotification(PUBKEY, row('€6.00 received'), { reopen: true })
+    expect(unreadCount(PUBKEY)).toBe(1)
+  })
+
+  it('does not wake subscribers when nothing changed', () => {
+    upsertNotification(PUBKEY, row('same'))
+    const listener = vi.fn()
+    subscribeToNotifications(listener)
+    upsertNotification(PUBKEY, row('same'))
+    expect(listener).not.toHaveBeenCalled()
   })
 })
