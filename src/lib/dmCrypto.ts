@@ -8,6 +8,7 @@ import {
 import type { CryptoAdapter, GiftWrapEvent, UnwrappedDm, TokenMetadata } from '@imani/dm-poll'
 
 import { checkIssuer } from './issuerAllowlist'
+import { checkMintAndUnit } from './trustedMint'
 import { getSigner } from './nap'
 import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
 import { asChunk, looksLikeChunk, offerChunk } from './dmChunks'
@@ -186,6 +187,28 @@ function verifiedVoucherFrom(token: string | undefined):
       parsed.voucher.voucherId,
       'key',
       parsed.voucher.issuerPublicKey.slice(0, 16),
+    )
+    return REJECTED
+  }
+
+  // Where the value actually is. Neither check above says anything about it:
+  // the signature covers the voucher's terms and names no mint, so a copy of a
+  // genuine coupon backed by proofs at a mint nobody has heard of passes both.
+  //
+  // Placed here for the same reason as the issuer check, and it is the same kind
+  // of statement: a fact about the coupon that holds identically for a customer
+  // receiving one and a stall taking one back. It is also a precondition of the
+  // wallet swapping its own receives, because from that point the mint URL is
+  // not a field we record but the address we send money to. See
+  // `docs/explanation/the-wallet-swaps-its-own-receives.md`.
+  const backing = checkMintAndUnit(parsed)
+  if (backing === 'untrusted-mint' || backing === 'wrong-unit') {
+    console.warn(
+      '[dmCrypto] rejecting voucher whose proofs are not at a trusted mint in sat:',
+      parsed.voucher.voucherId,
+      backing,
+      parsed.mintUrl,
+      parsed.unit,
     )
     return REJECTED
   }
