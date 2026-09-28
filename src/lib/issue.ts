@@ -183,6 +183,8 @@ export interface IssuedVoucher {
   /** The CREATE response's spelling of `face_value`; the poll uses the other. */
   face_value_minor?: number
   face_unit?: string
+  /** The CREATE response's spelling of `face_unit`. */
+  currency?: string
   face_decimals?: number
   token_amount?: number
   backing_strategy?: string
@@ -401,9 +403,34 @@ async function createVouchers(
   return { vouchers, warrant, sale }
 }
 
-/** A coupon that already carries its token and needs no polling. */
+/**
+ * A coupon that already carries its token and needs no polling.
+ *
+ * The token is the signal, not the status: the portal reports `ISSUED` for every
+ * create item, quote-backed ones included, and only a present `token` means the
+ * coupon was minted (imani-gateway-portal#48). A portal that predates #48 sends
+ * no token at all, so every part falls through to polling.
+ */
 export function isMinted(voucher: IssuedVoucher): boolean {
   return Boolean(voucher.token) && voucher.status === 'ISSUED'
+}
+
+/**
+ * Give a minted create item the fields delivery reads.
+ *
+ * The portal's `CreatedVoucherItem` spells the amount `face_value_minor` and the
+ * unit `currency`, while the polled voucher (and the DM payload) use
+ * `face_value` / `face_unit`. Without this a coupon delivered straight from the
+ * create response would reach the customer with no face value.
+ */
+export function fromCreatedItem(item: IssuedVoucher, currency: string): IssuedVoucher {
+  const unit = item.face_unit ?? item.currency ?? currency
+  return {
+    ...item,
+    face_value: item.face_value ?? item.face_value_minor,
+    face_unit: unit,
+    face_decimals: item.face_decimals ?? currencyDecimals(unit),
+  }
 }
 
 /**
@@ -618,11 +645,13 @@ export async function issueAndDeliver(
     try {
       onStage?.('minting')
       // Issued from the merchant's float, the create response already carries
-      // the token (gateway-customer#126), so use it. Re-reading it by id is a
+      // the token (gateway-customer#126, imani-gateway-portal#48), so use it. Re-reading it by id is a
       // server-side read-after-create the gateway need not honour, and when it
       // 404'd the sale failed AFTER the proofs were spent. Only quote-backed
       // (PENDING) coupons still need polling for their token.
-      const minted = isMinted(part) ? part : await waitForToken(part.voucher_id)
+      const minted = isMinted(part)
+        ? fromCreatedItem(part, params.currency)
+        : await waitForToken(part.voucher_id)
       // Nothing to wait for when none was asked for: polling a coupon that never
       // expires spends the whole 15s grace period to confirm a field that is
       // correctly absent, on every sale.
