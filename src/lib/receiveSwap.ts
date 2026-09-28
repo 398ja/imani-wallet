@@ -56,6 +56,22 @@ import {
  * See `docs/explanation/the-wallet-swaps-its-own-receives.md`.
  */
 
+/**
+ * Is this a voucher secret rather than a plain bearer one?
+ *
+ * A plain ecash secret is opaque: the wallet may choose any value, which is what
+ * makes a wallet-side swap possible at all. A VOUCHER or P2PK_VOUCHER secret is a
+ * NUT-10 structure carrying the lock key, the issuer's signature and the warrant,
+ * and the issuer signature covers those bytes. The wallet cannot produce one,
+ * because it does not hold the issuer key.
+ *
+ * Matched on the declared kind, which is what the mint dispatches on, the same
+ * way `witness.ts` decides whether a secret needs a signature.
+ */
+function isVoucherSecret(secret: string): boolean {
+  return secret.startsWith('["VOUCHER"') || secret.startsWith('["P2PK_VOUCHER"')
+}
+
 /** A proof being received, with its witness when the coupon is locked. */
 export interface ReceivableProof extends SwapInputProof {
   /**
@@ -133,6 +149,27 @@ export async function receiveByOwnSwap(
   const { pubkey, mintUrl, proofs } = request
   if (!mintUrl) throw new Error('cannot receive without a mint URL')
   if (proofs.length === 0) throw new Error('cannot receive with no proofs')
+
+  // Vouchers are refused here, loudly, rather than handled badly.
+  //
+  // This path generates RANDOM output secrets, which is correct for plain ecash
+  // and destroys a voucher. A voucher's secret carries its id, face value, lock
+  // key, issuer signature and warrant, so swapping one into a random secret would
+  // hand back proofs of the right SATS with no coupon attached: the face value,
+  // the warrant and the issuer's attestation all silently gone. The customer
+  // would hold ecash worth a fraction of the coupon they were paid.
+  //
+  // Doing it properly needs the issuer to sign each fresh secret, which is the
+  // one place the design keeps the gateway (see the explanation doc). Until that
+  // endpoint exists a voucher receive must keep using the old path, so this
+  // refuses instead of failing quietly or corrupting money.
+  const voucherInput = proofs.find((proof) => isVoucherSecret(proof.secret))
+  if (voucherInput) {
+    throw new Error(
+      'cannot receive a voucher by wallet-side swap yet: its fresh secret needs the ' +
+        'issuer signature, so this path would strip the voucher and its warrant',
+    )
+  }
 
   const total = proofs.reduce((sum, proof) => sum + proof.amount, 0)
   // `splitIntoDenominations` refuses a non-positive total, but reaching it via
