@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Sell uses the voucher returned by the create call when it already carries its token
+  (imani-gateway-portal#48).** Until now Sell always read each new voucher back from the gateway
+  to get its token. That read is served from one gateway instance's memory, so a restart, an
+  eviction or a request landing on another instance returned 404 after the backing had been spent.
+  Vouchers still awaiting payment, and every voucher from a portal that predates the field, are
+  polled as before.
+
 ## [0.9.0] - 2026-09-27
 
 Pairs with imani-gateway-customer 0.15.1, whose `409 RECEIVE_ALREADY_SETTLED` and unpaced ack

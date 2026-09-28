@@ -31,6 +31,10 @@ const PART_VALUE = 20000
 const failDeliveryFor = new Set<string>()
 /** Voucher ids that never finish minting. */
 const stallMintFor = new Set<string>()
+/** When true, the create response returns quote-backed parts with no token yet. */
+let createPending = false
+/** When true, GET /api/v1/wallet/vouchers/{id} answers 404 (gateway-customer#126). */
+let pollNotFound = false
 /**
  * Which spelling of the amount the mocked gateway offers.
  *
@@ -38,6 +42,38 @@ const stallMintFor = new Set<string>()
  * `face_value`. `none` stands for a gateway that omits it altogether.
  */
 let valueField: 'face_value' | 'face_value_minor' | 'none' = 'face_value'
+
+/**
+ * When false, the portal predates imani-gateway-portal#48 and its create items
+ * have no `token` field at all, so every part must be polled.
+ */
+let portalReturnsToken = true
+/** Parts the portal returns without a token (quote-backed), though their poll succeeds. */
+const noTokenAtCreate = new Set<string>()
+
+/**
+ * One item of the portal's create response, in the exact shape of
+ * `CreatePortalVouchersResponse.CreatedVoucherItem` (imani-gateway-api 0.12.0):
+ * `voucher_id`, `status`, `face_value_minor`, `currency`, `expires_at` (an
+ * ISO-8601 Instant), `claim_url` and `token`. No `face_unit`, no `face_value`.
+ *
+ * The portal reports `status: 'ISSUED'` for EVERY item, including quote-backed
+ * ones that have no token yet (`toCreatedItem` hard-codes it). So `status` alone
+ * never means "minted": only a present `token` does. `token` is omitted (the
+ * portal's NON_NULL) for a quote-backed part, and entirely for an old portal.
+ */
+const createdItem = (id: string) => ({
+  voucher_id: id,
+  status: 'ISSUED',
+  ...(valueField === 'none' ? {} : { face_value_minor: PART_VALUE }),
+  currency: 'GBP',
+  expires_at: '2030-03-17T17:46:40Z',
+  claim_url: `https://app.example/voucher/${id}`,
+  // A part that never finishes minting is, by construction, still unminted at create.
+  ...(portalReturnsToken && !createPending && !stallMintFor.has(id) && !noTokenAtCreate.has(id)
+    ? { token: `cashu-${id}` }
+    : {}),
+})
 
 /** The amount fields a mocked voucher carries, per `valueField`. */
 const valueOf = () =>
@@ -52,16 +88,7 @@ vi.mock('../nip98', () => ({
     if (path === '/api/v1/portal/vouchers') {
       return {
         ok: true,
-        json: async () => ({
-          items: PARTS.map((id) => ({
-            voucher_id: id,
-            status: 'ISSUED',
-            token: `cashu-${id}`,
-            ...valueOf(),
-            face_unit: 'GBP',
-            expires_at: 1_900_000_000,
-          })),
-        }),
+        json: async () => ({ items: PARTS.map(createdItem) }),
         text: async () => '',
       }
     }
@@ -69,6 +96,9 @@ vi.mock('../nip98', () => ({
     // Polling one part.
     const polled = path.match(/\/api\/v1\/wallet\/vouchers\/(.+)$/)?.[1]
     if (polled) {
+      if (pollNotFound) {
+        return { ok: false, status: 404, json: async () => ({}), text: async () => 'not found' }
+      }
       if (stallMintFor.has(polled)) {
         return { ok: true, json: async () => ({ voucher_id: polled, status: 'PENDING' }), text: async () => '' }
       }
@@ -134,6 +164,10 @@ beforeEach(() => {
   failDeliveryFor.clear()
   stallMintFor.clear()
   valueField = 'face_value'
+  createPending = false
+  pollNotFound = false
+  portalReturnsToken = true
+  noTokenAtCreate.clear()
 })
 
 describe('a sale the gateway split into several coupons', () => {
@@ -145,12 +179,74 @@ describe('a sale the gateway split into several coupons', () => {
     expect(result.vouchers).toHaveLength(PARTS.length)
   })
 
-  it('polls every part for its token', async () => {
+  it('polls every quote-backed (PENDING) part for its token', async () => {
+    createPending = true
+
     await issueAndDeliver(params)
 
     for (const id of PARTS) {
       expect(calls).toContain(`/api/v1/wallet/vouchers/${id}`)
     }
+    expect(deliveries()).toBe(PARTS.length)
+  })
+
+  /**
+   * gateway-customer#126: a coupon issued from the float comes back from create
+   * already ISSUED with its token. Re-reading it 404'd, so the sale failed after
+   * the proofs were spent. The create response is enough.
+   */
+  it('uses the token from the create response without re-reading it', async () => {
+    pollNotFound = true
+
+    const result = await issueAndDeliver(params)
+
+    expect(calls.some((c) => c.startsWith('/api/v1/wallet/vouchers/'))).toBe(false)
+    expect(deliveries()).toBe(PARTS.length)
+    expect(result.vouchers.map((v) => v.token)).toEqual(PARTS.map((id) => `cashu-${id}`))
+  })
+
+  /**
+   * Rolling-deploy safety: until imani-gateway-portal#48 ships, the create
+   * response has no `token` field. The wallet must fall back to polling, not
+   * deliver an empty token.
+   */
+  it('still polls every part against an old portal that returns no token', async () => {
+    portalReturnsToken = false
+
+    const result = await issueAndDeliver(params)
+
+    for (const id of PARTS) {
+      expect(calls).toContain(`/api/v1/wallet/vouchers/${id}`)
+    }
+    expect(deliveries()).toBe(PARTS.length)
+    expect(result.vouchers.map((v) => v.token)).toEqual(PARTS.map((id) => `cashu-${id}`))
+  })
+
+  it('delivers a create-response coupon with its face value and unit', async () => {
+    valueField = 'face_value_minor'
+
+    await issueAndDeliver(params)
+
+    const sent = bodies.filter((b) => 'token' in b)
+    expect(sent).toHaveLength(PARTS.length)
+    for (const b of sent) {
+      expect(b.face_value).toBe(PART_VALUE)
+      expect(b.face_unit).toBe('GBP')
+      expect(b.face_decimals).toBe(2)
+      expect(b.expires_at).toBe(1_900_000_000)
+    }
+  })
+
+  it('polls only the parts that came back without a token', async () => {
+    // Mixed batch: v2 is quote-backed, the rest were issued from float.
+    noTokenAtCreate.add('v2')
+
+    const result = await issueAndDeliver(params)
+
+    expect(calls.filter((c) => c.startsWith('/api/v1/wallet/vouchers/'))).toEqual([
+      '/api/v1/wallet/vouchers/v2',
+    ])
+    expect(result.vouchers.map((v) => v.token)).toEqual(PARTS.map((id) => `cashu-${id}`))
   })
 
   it('delivers the whole face value the merchant sold', async () => {
