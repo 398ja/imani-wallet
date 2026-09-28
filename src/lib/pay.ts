@@ -562,7 +562,19 @@ async function settleSend(
  * Run on login, beside the other reconciliations. Never throws: a wallet must
  * open whether or not the gateway is reachable.
  */
-export async function reconcilePendingSends(pubkey: string): Promise<number> {
+export function reconcilePendingSends(pubkey: string): Promise<number> {
+  // One pass at a time per wallet. Login and a send can now both ask for one, and two passes
+  // over the same entry would settle the same send twice.
+  const running = reconcilesInFlight.get(pubkey)
+  if (running) return running
+  const pass = reconcileOnce(pubkey).finally(() => reconcilesInFlight.delete(pubkey))
+  reconcilesInFlight.set(pubkey, pass)
+  return pass
+}
+
+const reconcilesInFlight = new Map<string, Promise<number>>()
+
+async function reconcileOnce(pubkey: string): Promise<number> {
   const pending = loadPendingSends(pubkey)
   if (pending.length === 0) return 0
 
@@ -1354,6 +1366,9 @@ async function deliver(
   unitLabel?: string,
 ): Promise<SendResult> {
   await refuseIfWrongMerchant(ctx.recipient.pubkey, ctx.merchant.pubkey)
+  // Ask the gateway about anything still pending BEFORE refusing: a send that has finished since
+  // the wallet stopped waiting would otherwise block this person until the next login.
+  await reconcilePendingSends(ctx.payer)
   refuseIfUnconfirmedTo(ctx)
 
   // One coupon first: fewer mint splits, one DM, and the path that has been

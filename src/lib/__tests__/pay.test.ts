@@ -1125,6 +1125,11 @@ describe('sendVouchers and payRequest', () => {
     onTestFinished(() => localStorage.removeItem(key))
   }
 
+  /** The gateway still has the earlier send mid-flight, so asking about it changes nothing. */
+  function stillInFlightAtTheGateway() {
+    stubs.api.getAtomicSendStatus = async () => ({ status: 'DM_SENT' })
+  }
+
   // #128: a coupon whose send is still in flight may already have reached the recipient. Paying
   // again must never draw on it, so a second tap cannot pay twice with the "same" money.
   it('never draws on a coupon whose earlier send is still in flight', async () => {
@@ -1157,6 +1162,63 @@ describe('sendVouchers and payRequest', () => {
     expect(sent).toEqual([])
   })
 
+  // A send that finished at the gateway after the wallet stopped waiting no longer blocks the
+  // next payment to that person: the wallet asks the gateway before refusing (#129 review).
+  it('asks the gateway first, and pays once the earlier send has completed', async () => {
+    const earlier = row({ token_id: '1'.repeat(32), voucher_id: 'v-earlier', face_value: 500, token_amount: 500 })
+    const free = row({ token_id: '2'.repeat(32), voucher_id: 'v-free', face_value: 500, token_amount: 500 })
+    stubs.rows = [earlier, free]
+    pendingSendHolding(earlier.token_id as string, { recipientPubkey: FRIEND, sendId: 'as_done_since' })
+    const sent = gateway()
+    wallet([earlier, free])
+
+    await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 500 })
+
+    expect(sent).toHaveLength(1)
+    expect(loadPendingSends(PAYER).map((p) => p.sendId)).not.toContain('as_done_since')
+  })
+
+  // End to end: a payment whose outcome is unknown records its request, so paying that request
+  // again is refused, while a different request from the same stall still goes through.
+  it('records the request of an unconfirmed payment, and refuses only that request again', async () => {
+    const coupons = trio()
+    stubs.rows = coupons
+    const sent = gateway()
+    let sendId = ''
+    stubs.api.initiateAtomicSend = async (params: Record<string, unknown>) => {
+      sent.push(params)
+      sendId = `as_${sent.length}`
+      return { send_id: sendId, status: 'PENDING' }
+    }
+    stillInFlightAtTheGateway()
+    wallet(coupons)
+    const pay = (paymentId: string) =>
+      payRequest({
+        request: { paymentId, amount: 400, unit: 'EUR', issuerId: ISSUER } as unknown as NUT18VRequest,
+        raw: '',
+        merchant,
+        payer: PAYER,
+      })
+    const quietWarnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    onTestFinished(() => quietWarnings.mockRestore())
+    vi.useFakeTimers()
+    try {
+      const first = expect(pay('req-1')).rejects.toBeInstanceOf(SendOutcomeUnknownError)
+      await vi.runAllTimersAsync()
+      await first
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(loadPendingSends(PAYER).map((p) => p.paymentRequestId)).toEqual(['req-1'])
+
+    await expect(pay('req-1')).rejects.toBeInstanceOf(SendOutcomeUnknownError)
+    expect(sent).toHaveLength(1)
+
+    stubs.api.getAtomicSendStatus = async (id: string) => ({ status: id === 'as_1' ? 'DM_SENT' : 'COMPLETED' })
+    await pay('req-2')
+    expect(sent).toHaveLength(2)
+  })
+
   // #128: a second send to the same person, while the first is unconfirmed, is refused outright.
   // Moving it onto another coupon would still pay them twice; the screen's lock is easy to get
   // past (Back, or leaving and coming back), so the refusal lives here.
@@ -1166,6 +1228,7 @@ describe('sendVouchers and payRequest', () => {
     stubs.rows = [inFlight, free]
     pendingSendHolding(inFlight.token_id as string, { recipientPubkey: FRIEND })
     const sent = gateway()
+    stillInFlightAtTheGateway()
     wallet([inFlight, free])
 
     await expect(
@@ -1182,6 +1245,7 @@ describe('sendVouchers and payRequest', () => {
     stubs.rows = [inFlight, free]
     pendingSendHolding(inFlight.token_id as string, { recipientPubkey: undefined, paymentRequestId: 'req-1' })
     const sent = gateway()
+    stillInFlightAtTheGateway()
     wallet([inFlight, free])
 
     await expect(
