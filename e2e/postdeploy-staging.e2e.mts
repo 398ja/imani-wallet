@@ -263,6 +263,32 @@ async function notificationRows(page: Page): Promise<string[]> {
   return rows.map((r) => r.replace(/\n+/g, ' ').trim()).filter(Boolean)
 }
 
+/**
+ * What the stall holds of its OWN coupons, read off its own merchant page (BALANCE), polled
+ * until it stops moving. A page with no balance panel ("Nothing yet", or no row) is zero.
+ */
+async function ownCouponsHeld(merchant: Page, stallPubkey: string, windowMs: number): Promise<{ value: number; text: string }> {
+  const read = async (): Promise<string> => {
+    await goto(merchant, `${BASE}/merchants/${stallPubkey}`)
+    await unlockIfLocked(merchant)
+    await merchant.waitForTimeout(4000)
+    const page = await screenText(merchant, 1200)
+    return /BALANCE\s*\n?([^\n]+)/i.exec(page)?.[1]?.trim() ?? '€0.00 (no balance shown)'
+  }
+  const deadline = Date.now() + windowMs
+  let last = await read()
+  let stableSince = Date.now()
+  while (Date.now() < deadline && Date.now() - stableSince < 90_000) {
+    await merchant.waitForTimeout(POLL_MS)
+    const now = await read()
+    if (now !== last) {
+      last = now
+      stableSince = Date.now()
+    }
+  }
+  return { value: euros(last), text: last }
+}
+
 /** The Transactions page states its own count ("1 entry", "3 entries"); read that. */
 async function transactionCount(page: Page, stallPubkey: string): Promise<number> {
   await goto(page, `${BASE}/merchants/${stallPubkey}/transactions`)
@@ -470,9 +496,12 @@ async function main(): Promise<number> {
     !FAILURE_WORDS.test(paid) && paidParts >= SELF_ISSUED_PARTS, `parts=${paidParts} | ${oneLine(paid)}`)
   const afterPayBack = await waitForBalanceToSettle(recipient, BUNDLE_WINDOW_MS)
   record('T9 B balance falls to zero', euros(afterPayBack) === 0, `B balance ${heldByB} -> ${afterPayBack}`)
-  const merchantHolds = await waitForBalanceToSettle(merchant, BUNDLE_WINDOW_MS)
-  record('T9 the stall holds none of its own coupons afterwards (each part burnt)', euros(merchantHolds) === 0,
-    `merchant balance ${merchantHolds}`)
+  // A trading merchant's home is the till and shows no balance; what the stall HOLDS of its own
+  // coupons is on its merchant page. Each part must have been received and then burnt, so that
+  // holding returns to nothing once the 8 parts have landed.
+  const stallHolds = await ownCouponsHeld(merchant, merchantPubkey, BUNDLE_WINDOW_MS)
+  record('T9 the stall holds none of its own coupons afterwards (each part burnt)', stallHolds.value === 0,
+    `stall's own-coupon balance: ${stallHolds.text}`)
 
   // T10: neither wallet reported a settled-but-not-saved receive.
   const unsaved = consoleLines.filter((l) => /redemption:unsaved|settled but not saved|settled at the gateway, not saved|not saved here/i.test(l))
