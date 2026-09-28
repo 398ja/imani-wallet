@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-09-28
+
+Pairs with imani-gateway-portal 0.9.0 (token in the create response); still works against an
+older portal by polling.
+
 ### Changed
 
 - **Sell uses the voucher returned by the create call when it already carries its token
