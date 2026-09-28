@@ -787,6 +787,52 @@ async function initiateOnFirstFree(
 }
 
 /**
+ * One status read, where a read that fails leaves the status as it was.
+ *
+ * A failed read says nothing about the send: the saga runs at the gateway whether or not
+ * this wallet can reach it for a moment. Letting it throw reported a completed part as
+ * "not sent" and told the customer to send the difference again, which paid it twice
+ * (#125). An outcome still unknown when the polls run out is the "still going through"
+ * answer below, and the pending ledger finishes it on the next login.
+ */
+async function readStatusOrKeepLast(api: SendApi, sendId: string, last: SendStatus): Promise<StatusRead> {
+  try {
+    return { status: (await api.getAtomicSendStatus(sendId)) ?? last }
+  } catch (error) {
+    return { status: last, unreadable: error }
+  }
+}
+
+type StatusRead = { status: SendStatus; unreadable?: unknown }
+
+/** An HTTP answer that will not change on the next read (a 4xx other than a timeout or 429). */
+function isPermanentHttpError(error: unknown): boolean {
+  const status = (error as { status?: unknown } | null)?.status
+  return typeof status === 'number' && status >= 400 && status < 500 && status !== 408 && status !== 429
+}
+
+/** How long to wait before the next read: what a 429 asked for, never less than the poll interval. */
+function nextReadDelayMs(unreadable: unknown): number {
+  const retryAfterMs = (unreadable as { retryAfterMs?: unknown } | null)?.retryAfterMs
+  return typeof retryAfterMs === 'number' ? Math.max(POLL_INTERVAL_MS, retryAfterMs) : POLL_INTERVAL_MS
+}
+
+/**
+ * The gateway accepted the send and the wallet could not learn how it ended. NOT a failure:
+ * the money may well have arrived, and must never be offered to send again. Typed, so a
+ * bundle can tell this part apart from one that really failed.
+ */
+export class SendOutcomeUnknownError extends Error {
+  constructor(
+    message: string,
+    readonly sendId: string,
+  ) {
+    super(message)
+    this.name = 'SendOutcomeUnknownError'
+  }
+}
+
+/**
  * Wait for the saga to reach a terminal state, then settle the local side.
  *
  * Shared by the merchant-payment and person-to-person paths deliberately: this
@@ -817,10 +863,23 @@ async function awaitAndSettle(
 
   let status: SendStatus = { status: initialStatus }
   let polled = false
+  let unreadable: unknown
+  let delayMs = POLL_INTERVAL_MS
+  // The whole wait is bounded in time, not only in reads: a 429 asking for longer than is left
+  // ends the wait with the outcome unknown, rather than holding the screen on "Sending".
+  const waitEndsAt = Date.now() + (POLL_ATTEMPTS + 1) * POLL_INTERVAL_MS
   for (let i = 0; i < POLL_ATTEMPTS && !TERMINAL.includes(String(status.status)); i += 1) {
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
-    status = await api.getAtomicSendStatus(pending.sendId)
+    if (Date.now() + delayMs > waitEndsAt) break
+    await new Promise((resolve) => setTimeout(resolve, delayMs))
+    const read = await readStatusOrKeepLast(api, pending.sendId, status)
+    if (read.unreadable !== undefined && unreadable === undefined) {
+      console.warn('[pay] send status unreadable, still waiting:', pending.sendId, read.unreadable)
+    }
+    status = read.status
+    unreadable = read.unreadable
+    delayMs = nextReadDelayMs(unreadable)
     polled = true
+    if (isPermanentHttpError(unreadable)) break
   }
 
   // An idempotent `initiate` can answer with a send that is ALREADY
@@ -857,10 +916,15 @@ async function awaitAndSettle(
   // login. Before that, a saga that completed late completed only at the
   // gateway; see that function for what it cost.
   if (!TERMINAL.includes(String(status.status))) {
-    throw new Error(
+    const cause =
+      unreadable === undefined
+        ? ''
+        : ` We could not confirm it with the gateway (${unreadable instanceof Error ? unreadable.message : String(unreadable)}).`
+    throw new SendOutcomeUnknownError(
       `This ${noun} is still going through at the gateway (send ${pending.sendId}, ` +
         `${status.status ?? 'no status'}). It has NOT failed and your voucher is ` +
-        `unchanged here — check your history again in a moment before retrying.`,
+        `unchanged here — check your history again in a moment before retrying.${cause}`,
+      pending.sendId,
     )
   }
 
@@ -946,8 +1010,13 @@ export type SendResult = {
   requested: number
   /** Minor units that reached the recipient. Equal to `requested` on success. */
   delivered: number
+  /**
+   * Minor units of a part the gateway accepted but whose outcome the wallet could not learn.
+   * It may already have arrived, so it must never be offered to send again.
+   */
+  inFlight?: number
   parts: number
-  /** Why the rest did not go, when `delivered` fell short. */
+  /** Why the rest did not go (or is not confirmed), when `delivered` fell short. */
   shortfall?: string
 }
 
@@ -1258,12 +1327,15 @@ async function deliver(
       // Nothing has moved yet, so there is nothing to explain away.
       if (delivered === 0) throw error
       // Money has left. Stop — a part that failed at the mint will fail again,
-      // and every further attempt risks delivering more than was intended.
+      // and every further attempt risks delivering more than was intended. A part
+      // whose outcome is unknown is reported as in flight, never as unsent (#125).
+      const unknownOutcome = error instanceof SendOutcomeUnknownError
       return {
         id: bundleId,
         requested: amount,
         delivered,
-        parts: index,
+        ...(unknownOutcome ? { inFlight: part.amount } : {}),
+        parts: unknownOutcome ? index + 1 : index,
         shortfall: error instanceof Error ? error.message : String(error),
       }
     }
