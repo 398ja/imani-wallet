@@ -119,6 +119,8 @@ export function PayPage({ pubkey }: { pubkey: string }) {
     const partial = status.result.delivered < status.result.requested
     // See SendPage: an unconfirmed part may already have arrived, so it is never offered again (#125).
     const inFlight = status.result.inFlight ?? 0
+    // The parts after an unconfirmed one were never tried: that money did not move.
+    const notPaid = status.result.requested - status.result.delivered - inFlight
     return (
       <div className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center gap-3 p-5 text-center">
         {partial ? (
@@ -139,6 +141,9 @@ export function PayPage({ pubkey }: { pubkey: string }) {
           <Alert>
             {formatFace(inFlight, denom)} more is still going through and may already have
             arrived. Do not pay it again — check your history in a moment.
+            {notPaid > 0
+              ? ` The last ${formatFace(notPaid, denom)} was not paid and those vouchers are untouched.`
+              : ''}
             {status.result.shortfall ? ` (${status.result.shortfall})` : ''}
           </Alert>
         )}

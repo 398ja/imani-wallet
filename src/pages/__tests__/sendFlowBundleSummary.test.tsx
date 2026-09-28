@@ -99,4 +99,11 @@ describe('the sender sees one payment in several coupons', () => {
     await waitFor(() => expect(screen.getByText(/Do not send it again/)).toBeTruthy())
     expect(screen.queryByText(/send\s+the difference again/)).toBeNull()
   })
+
+  // #125 review: the parts after an unconfirmed one were never tried, and the sender is told so.
+  it('says what was never sent after a part that is still going through', async () => {
+    result = { id: 'x', requested: 100, delivered: 40, inFlight: 40, parts: 2, shortfall: 'still going through' }
+    await send()
+    await waitFor(() => expect(screen.getByText(/The last .*0\.20 was not sent/)).toBeTruthy())
+  })
 })

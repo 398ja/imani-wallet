@@ -1071,6 +1071,44 @@ describe('sendVouchers and payRequest', () => {
     expect(readAt[1]! - readAt[0]!).toBeGreaterThanOrEqual(RETRY_AFTER_MS)
   })
 
+  // A 429 asking for longer than the whole wait ends it at once: the outcome is unknown, and the
+  // screen must not sit on "Sending" for a minute.
+  it('stops waiting when a rate-limited read asks for longer than the wait has left', async () => {
+    stubs.rows = [row()]
+    const RETRY_AFTER_MS = 60_000
+    let reads = 0
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async () => ({ send_id: 'as_long_limit', status: 'PENDING' }),
+      getAtomicSendStatus: async () => {
+        reads += 1
+        throw Object.assign(new Error('Too many requests'), { status: 429, retryAfterMs: RETRY_AFTER_MS })
+      },
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    wallet([row()])
+    const quietWarnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    onTestFinished(() => quietWarnings.mockRestore())
+    vi.useFakeTimers()
+    try {
+      const startedAt = Date.now()
+      const sending = sendVouchers({
+        payer: PAYER,
+        recipient: { pubkey: FRIEND },
+        merchant,
+        unit: 'EUR',
+        amount: 250,
+      })
+      const outcome = expect(sending).rejects.toThrow(SendOutcomeUnknownError)
+      await vi.runAllTimersAsync()
+      await outcome
+      expect(Date.now() - startedAt).toBeLessThan(RETRY_AFTER_MS)
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(reads).toBe(1)
+  })
+
   it('throws when the first part fails, because nothing has moved', async () => {
     stubs.rows = trio()
     Object.assign(stubs.api, {
