@@ -401,6 +401,11 @@ async function createVouchers(
   return { vouchers, warrant, sale }
 }
 
+/** A coupon that already carries its token and needs no polling. */
+export function isMinted(voucher: IssuedVoucher): boolean {
+  return Boolean(voucher.token) && voucher.status === 'ISSUED'
+}
+
 /**
  * Wait until the coupon actually carries a Cashu token.
  *
@@ -612,7 +617,12 @@ export async function issueAndDeliver(
     let ready: IssuedVoucher
     try {
       onStage?.('minting')
-      const minted = await waitForToken(part.voucher_id)
+      // Issued from the merchant's float, the create response already carries
+      // the token (gateway-customer#126), so use it. Re-reading it by id is a
+      // server-side read-after-create the gateway need not honour, and when it
+      // 404'd the sale failed AFTER the proofs were spent. Only quote-backed
+      // (PENDING) coupons still need polling for their token.
+      const minted = isMinted(part) ? part : await waitForToken(part.voucher_id)
       // Nothing to wait for when none was asked for: polling a coupon that never
       // expires spends the whole 15s grace period to confirm a field that is
       // correctly absent, on every sale.
