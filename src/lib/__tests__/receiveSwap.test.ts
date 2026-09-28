@@ -2,10 +2,12 @@
  * @vitest-environment jsdom
  */
 import { describe, expect, it, beforeEach, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
 
 import { receiveByOwnSwap, recoverInterruptedSwaps, settleReceive } from '../receiveSwap'
 import { loadSwapIntents, pendingSwapIntents, rememberSwapIntent } from '../swapIntent'
 import { blindOutputs, splitIntoDenominations } from '../walletSwap'
+import { tokenProofs } from '../voucherToken'
 
 /**
  * Receiving a coupon by swapping it ourselves.
@@ -422,6 +424,91 @@ describe('what the mint is told', () => {
     expect((sent as { inputs: { witness?: string }[] }).inputs[0].witness).toBe(
       '{"signatures":["ab"]}',
     )
+  })
+})
+
+describe('a voucher is refused, not mangled', () => {
+  /**
+   * The bug this guard exists to prevent, and it is a money-losing one.
+   *
+   * This path generates RANDOM output secrets, which is right for plain ecash. A
+   * voucher's secret is a NUT-10 structure carrying its id, face value, lock key,
+   * issuer signature and warrant. Swapping one into a random secret would return
+   * proofs worth the right number of SATS with no coupon attached: a EUR 5.00
+   * coupon becomes a handful of sats, and the warrant and issuer attestation are
+   * gone with it.
+   *
+   * Handling it properly needs the issuer to sign each fresh secret, which is the
+   * one place the design keeps the gateway. Until that exists, refusing is the
+   * only honest behaviour.
+   *
+   * Uses a REAL captured voucher token, so the guard is matched against the
+   * secret shape the product actually issues rather than one written to suit it.
+   */
+  it('refuses a real captured voucher proof', async () => {
+    const mint = await fakeMint()
+    const voucherProofs = tokenProofs(
+      readFileSync('src/lib/__tests__/fixtures/witness-positive.token', 'utf8').trim(),
+    )
+    expect(voucherProofs[0].secret.startsWith('["P2PK_VOUCHER"')).toBe(true)
+
+    await expect(
+      receiveByOwnSwap({ pubkey: PUBKEY, mintUrl: MINT, proofs: voucherProofs }, mint.transport),
+    ).rejects.toThrow(/voucher/i)
+  })
+
+  /** Refused before anything is written down or spent. */
+  it('writes no intent and makes no swap for a voucher', async () => {
+    const mint = await fakeMint()
+    const voucherProofs = tokenProofs(
+      readFileSync('src/lib/__tests__/fixtures/witness-positive.token', 'utf8').trim(),
+    )
+
+    await expect(
+      receiveByOwnSwap({ pubkey: PUBKEY, mintUrl: MINT, proofs: voucherProofs }, mint.transport),
+    ).rejects.toThrow()
+
+    expect(loadSwapIntents(PUBKEY)).toEqual([])
+    expect(mint.calls.swap).toBe(0)
+  })
+
+  /** The unlocked voucher kind is refused too, for the same reason. */
+  it('refuses the unlocked VOUCHER kind as well', async () => {
+    const mint = await fakeMint()
+    const unlocked = [
+      {
+        amount: 2,
+        id: KEYSET,
+        secret: '["VOUCHER","abcd",{"nonce":"00"}]',
+        C: '02' + 'bb'.repeat(32),
+      },
+    ]
+
+    await expect(
+      receiveByOwnSwap({ pubkey: PUBKEY, mintUrl: MINT, proofs: unlocked }, mint.transport),
+    ).rejects.toThrow(/voucher/i)
+  })
+
+  /**
+   * A mixed token must be refused whole. Receiving the plain part and dropping
+   * the voucher part would be the same loss, just partial.
+   */
+  it('refuses a mixed set containing one voucher proof', async () => {
+    const mint = await fakeMint()
+    const mixed = [
+      ...sourceProofs(2),
+      {
+        amount: 2,
+        id: KEYSET,
+        secret: '["VOUCHER","abcd",{"nonce":"00"}]',
+        C: '02' + 'cc'.repeat(32),
+      },
+    ]
+
+    await expect(
+      receiveByOwnSwap({ pubkey: PUBKEY, mintUrl: MINT, proofs: mixed }, mint.transport),
+    ).rejects.toThrow(/voucher/i)
+    expect(mint.calls.swap).toBe(0)
   })
 })
 
