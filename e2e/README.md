@@ -107,6 +107,36 @@ producer of a `lock_key` — is called only from tests. So no locked coupon
 reaches the saga today. It becomes a real defect the moment either is switched
 on, which is why the probes exist now rather than later.
 
+## `postdeploy-staging.e2e.mts` — after every staging deploy
+
+The browser half of the post-deploy suite; the server half (escrow states, gateway
+logs, mint API, Flyway) is `imani-deploy/scripts/postdeploy/run.sh`, which runs this
+file and reads the wallets it prints on its `CONTEXT` line. Run it through that script:
+
+```sh
+../imani-deploy/scripts/postdeploy/run.sh snapshot   # before any test traffic
+../imani-deploy/scripts/postdeploy/run.sh all
+```
+
+Against the LIVE staging wallet (`E2E_BASE`, default `https://wallet.staging.398ja.xyz`),
+it registers a merchant and two customers and drives: an EUR sale (#95); the receive,
+its `rcv_` key and a re-submit under a new key answered `409 RECEIVE_ALREADY_SETTLED`
+(#110, #119); a 3-voucher payment between customers, checked on the toast, the bell and
+the Transactions list (#94, #106); and an 8-part payment back to the stall that issued
+it (#110). Customer A logs in with a key the suite generates, so it can sign the #119
+re-submit itself. A pays B everything it holds, so the bundle is always every coupon
+whole (4 parts), and B's 8-part payback count is reported on `CONTEXT` as `payBackParts`
+for `run.sh` to match against the stall's escrows.
+
+Optional environment: `E2E_BASE` (the wallet URL) and `E2E_EXPECTED_BUNDLE` (the
+`index-*.js` the deploy should serve; T0+ fails on any other). The browser runs in the
+`en-GB` locale, because amounts are read off the screen.
+
+Its first runs found imani-wallet#114, #122, #123, imani-wallet-lib#103 and
+imani-gateway-core#112. Flakes it absorbs are on the test host: a crash-looping local
+container churns Docker bridges and Chromium aborts loads with `ERR_NETWORK_CHANGED`,
+so navigation and registration retry once, and each retry is reported.
+
 ## `purchase.e2e.ts` — the card purchase
 
 Written after a shopper's card was refused inside Stripe's hosted checkout
