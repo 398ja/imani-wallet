@@ -1,0 +1,251 @@
+import { sha256 } from '@noble/hashes/sha2.js'
+import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils'
+
+import {
+  forgetSwapIntent,
+  pendingSwapIntents,
+  rememberSwapIntent,
+  type SwapInputProof,
+} from './swapIntent'
+import {
+  blindOutputs,
+  splitIntoDenominations,
+  unblindOutputs,
+  type BlindSignatureResponse,
+  type UnblindedProof,
+} from './walletSwap'
+
+/**
+ * Receiving a coupon by swapping it at the mint ourselves.
+ *
+ * ## What this replaces
+ *
+ * `POST /api/v1/wallet/receive`, where the GATEWAY performed the swap. That one
+ * decision produced both open bugs: the gateway chose the output secrets, so it
+ * kept a spendable copy of every coupon received (imani-gateway-customer#133),
+ * and it was the only party holding the money when a response was lost
+ * (imani-wallet#123).
+ *
+ * Here the wallet chooses the secrets and the blinding factors, so the gateway is
+ * not in the path at all and there is nothing for it to hold.
+ *
+ * ## The order of operations IS the correctness argument
+ *
+ *   1. read the mint's active keyset
+ *   2. blind the outputs
+ *   3. PERSIST the intent, synchronously
+ *   4. POST /v1/swap
+ *   5. unblind
+ *   6. hand the proofs to the caller
+ *   7. forget the intent, once the caller has saved them
+ *
+ * Steps 1 and 2 touch nothing and can fail freely. From step 3 the wallet can
+ * always finish, even if the page dies: the record holds the inputs for a NUT-19
+ * replay and the blinded outputs for a NUT-09 restore. Anything after step 3 that
+ * fails therefore KEEPS the record, because the swap may have succeeded and the
+ * money may already have moved.
+ *
+ * `recoverInterruptedSwaps` is the other half, run when the wallet comes back.
+ *
+ * ## The transport is injected
+ *
+ * So the whole sequence can be driven against a fake mint, including the
+ * failures that matter, which are exactly the ones a real mint will not produce
+ * on request. `swapRecoveryProbe` covers the same flow against the live mint.
+ *
+ * See `docs/explanation/the-wallet-swaps-its-own-receives.md`.
+ */
+
+/** A proof being received, with its witness when the coupon is locked. */
+export interface ReceivableProof extends SwapInputProof {
+  /**
+   * The NUT-11 witness unlocking this proof, when it is locked to us.
+   *
+   * Supplied by the caller rather than signed here: signing needs the wallet's
+   * key, and this module stays free of key access so it can be tested without
+   * one. `witness.ts` is what produces these.
+   */
+  witness?: string
+}
+
+/** What the mint is asked, and what it answers. Injected so it can be faked. */
+export interface MintTransport {
+  activeKeysetId(mintUrl: string): Promise<string>
+  keysetKeys(mintUrl: string, keysetId: string): Promise<Record<string, string>>
+  swap(
+    mintUrl: string,
+    request: {
+      inputs: ReceivableProof[]
+      outputs: { amount: number; id: string; B_: string }[]
+    },
+  ): Promise<{ signatures: BlindSignatureResponse[] }>
+  restore(
+    mintUrl: string,
+    outputs: { amount: number; id: string; B_: string }[],
+  ): Promise<{ signatures: BlindSignatureResponse[] }>
+}
+
+export interface ReceiveRequest {
+  /** Whose wallet this is. Scopes the intent record. */
+  pubkey: string
+  mintUrl: string
+  proofs: ReceivableProof[]
+}
+
+export interface ReceiveResult {
+  swapId: string
+  proofs: UnblindedProof[]
+}
+
+/**
+ * Identifies a swap by WHAT IT SPENDS, rather than randomly.
+ *
+ * A random id would give a retried receive of the same coupon a second record,
+ * and the first would then be recovered separately into proofs the wallet has
+ * already saved. Deriving it from the inputs means a retry overwrites, which is
+ * what `rememberSwapIntent` keys on.
+ *
+ * The input secrets are the natural identity: they are exactly what this swap
+ * destroys, so two swaps with the same id are the same swap.
+ */
+function swapIdFor(proofs: ReceivableProof[]): string {
+  const material = proofs.map((proof) => `${proof.id}:${proof.amount}:${proof.secret}`).join('|')
+  return bytesToHex(sha256(utf8ToBytes(material))).slice(0, 32)
+}
+
+/** The outputs as the mint wants them: blinded messages, nothing else. */
+function asMintOutputs(outputs: { amount: number; id: string; B_: string }[]) {
+  return outputs.map((output) => ({ amount: output.amount, id: output.id, B_: output.B_ }))
+}
+
+/**
+ * Receives a coupon by swapping its proofs for fresh ones only we can spend.
+ *
+ * Throws when the receive could not be completed. The intent is left on disk in
+ * every case where the swap MIGHT have gone through, so the caller can retry and
+ * a later sweep can finish it. The caller must save the returned proofs and then
+ * call `settleReceive`.
+ */
+export async function receiveByOwnSwap(
+  request: ReceiveRequest,
+  transport: MintTransport,
+): Promise<ReceiveResult> {
+  const { pubkey, mintUrl, proofs } = request
+  if (!mintUrl) throw new Error('cannot receive without a mint URL')
+  if (proofs.length === 0) throw new Error('cannot receive with no proofs')
+
+  const total = proofs.reduce((sum, proof) => sum + proof.amount, 0)
+  // `splitIntoDenominations` refuses a non-positive total, but reaching it via
+  // this path would mean an intent had already been written for a swap that can
+  // never be made. Check before anything is recorded.
+  if (!Number.isInteger(total) || total <= 0) {
+    throw new Error(`cannot receive a non-positive amount: ${total}`)
+  }
+
+  // Before anything is written. A failure here has spent nothing and recorded
+  // nothing, so it is an ordinary retryable error.
+  const keysetId = await transport.activeKeysetId(mintUrl)
+  // The mint's ACTIVE keyset, deliberately, not the input's. Receiving into a
+  // retired keyset produces proofs whose keys the mint may stop serving, which
+  // is how a coupon becomes unspendable weeks after it was safely received.
+  const outputs = blindOutputs(splitIntoDenominations(total), keysetId)
+  const swapId = swapIdFor(proofs)
+
+  // The line the design turns on. After this the wallet can always finish.
+  rememberSwapIntent(pubkey, {
+    swapId,
+    mintUrl,
+    keysetId,
+    inputs: proofs.map(({ amount, id, secret, C }) => ({ amount, id, secret, C })),
+    outputs,
+    at: Date.now(),
+  })
+
+  try {
+    const { signatures } = await transport.swap(mintUrl, {
+      inputs: proofs,
+      outputs: asMintOutputs(outputs),
+    })
+    const keys = await transport.keysetKeys(mintUrl, keysetId)
+    const unblinded = unblindOutputs(outputs, signatures, keys)
+    return { swapId, proofs: unblinded }
+  } catch (failure) {
+    // The intent STAYS. From here the swap may have succeeded, so this record is
+    // the only route back to money that has already moved. Said loudly because a
+    // silent unfinished receive is how the loss in #110 went unnoticed.
+    console.warn(
+      '[receiveSwap] receive unfinished — the swap may have gone through, intent kept for recovery',
+      { swapId, mintUrl, reason: failure instanceof Error ? failure.message : String(failure) },
+    )
+    throw failure
+  }
+}
+
+/**
+ * Drops the record for a receive whose proofs the caller has now saved.
+ *
+ * Separate from `receiveByOwnSwap` on purpose. Forgetting inside it would clear
+ * the record while the proofs were still only in memory, which is the window this
+ * whole mechanism exists to cover.
+ */
+export function settleReceive(pubkey: string, swapId: string): void {
+  forgetSwapIntent(pubkey, swapId)
+}
+
+/**
+ * Finishes every swap that was interrupted, by asking the mint what it signed.
+ *
+ * Uses NUT-09 restore, NOT a second swap. The inputs of an interrupted swap are
+ * already burnt, so re-swapping would either be refused or, worse, succeed as a
+ * second spend. Restore is a lookup keyed on the blinded messages, which is
+ * exactly why the intent stores them.
+ *
+ * A restore that returns nothing means the mint never signed those outputs, so
+ * the swap never happened and the coupon can simply be received again. That
+ * record is dropped rather than retried for ever (#127).
+ *
+ * Failures are per-intent. Each one is a separate piece of somebody's money, so
+ * one unreachable mint must not abandon the rest.
+ */
+export async function recoverInterruptedSwaps(
+  pubkey: string,
+  transport: MintTransport,
+): Promise<ReceiveResult[]> {
+  const recovered: ReceiveResult[] = []
+
+  for (const intent of pendingSwapIntents(pubkey)) {
+    try {
+      const { signatures } = await transport.restore(intent.mintUrl, asMintOutputs(intent.outputs))
+
+      if (signatures.length === 0) {
+        console.info(
+          '[receiveSwap] the mint never signed this swap, so nothing was spent — dropping it',
+          { swapId: intent.swapId },
+        )
+        forgetSwapIntent(pubkey, intent.swapId)
+        continue
+      }
+
+      const keys = await transport.keysetKeys(intent.mintUrl, intent.keysetId)
+      const proofs = unblindOutputs(intent.outputs, signatures, keys)
+      recovered.push({ swapId: intent.swapId, proofs })
+      // Safe to forget: the proofs are in the returned array and the caller saves
+      // them. A caller that drops them can still restore again, because restore
+      // is idempotent for as long as the mint serves the keyset.
+      forgetSwapIntent(pubkey, intent.swapId)
+      console.info('[receiveSwap] recovered an interrupted receive', {
+        swapId: intent.swapId,
+        amount: proofs.reduce((sum, proof) => sum + proof.amount, 0),
+      })
+    } catch (failure) {
+      // KEPT, so a later sweep tries again. A mint that is unreachable now is
+      // not a coupon that is gone.
+      console.warn('[receiveSwap] could not recover this receive yet, keeping it', {
+        swapId: intent.swapId,
+        reason: failure instanceof Error ? failure.message : String(failure),
+      })
+    }
+  }
+
+  return recovered
+}
