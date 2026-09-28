@@ -28,6 +28,8 @@ const BUNDLE_PARTS = ['3.00', '4.00', '5.00']
 /** T9 reproduces the 8-part self-issued payment that lost EUR 100 (imani-wallet#110). */
 const SELF_ISSUED_PARTS = 8
 const SELF_ISSUED_TOP_UP = '2.00'
+/** Kept from the END: the late receives (T8/T9) are where money goes missing. */
+const CONSOLE_EVIDENCE_LINES = 400
 const PERMISSION_CACHE_MS = 62_000
 const BUNDLE_WINDOW_MS = 13 * 60_000
 const POLL_MS = 10_000
@@ -489,6 +491,9 @@ async function main(): Promise<number> {
     if (!/It is in their wallet now/.test(sold)) record(`T9 setup: sell EUR ${part} to B`, false, oneLine(sold))
   }
   const heldByB = await waitForBalanceToSettle(recipient, 5 * 60_000)
+  const expectedHeldByB = selfIssued.reduce((sum, p) => sum + euros(p), 0)
+  record(`T9 setup: B holds every coupon it was sent (EUR ${expectedHeldByB.toFixed(2)})`,
+    euros(heldByB) === expectedHeldByB, `B balance ${heldByB}`)
   const payBackTotal = heldByB.replace(/[^\d.,]/g, '').replace(',', '.')
   const paid = await send(recipient, merchantPubkey, payBackTotal).catch((e) => `ERR ${e}`)
   const paidParts = Number(/as (\d+) vouchers/.exec(paid)?.[1] ?? '1')
@@ -513,7 +518,7 @@ async function main(): Promise<number> {
   console.log('--- failed requests ---')
   for (const r of failedRequests.slice(0, 60)) console.log(r)
   console.log('--- notable console ---')
-  for (const l of consoleLines.filter((x) => /PAGEERROR|error|redemption|settled|429|receive_id/i.test(x)).slice(0, 80)) console.log(l)
+  for (const l of consoleLines.filter((x) => /PAGEERROR|error|redemption|settled|429|receive_id/i.test(x)).slice(-CONSOLE_EVIDENCE_LINES)) console.log(l)
   console.log('CONTEXT ' + JSON.stringify({ customerHandle, customerPubkey, recipientHandle, recipientPubkey, merchantHandle, merchantPubkey, bundle }))
   console.log('SUMMARY ' + JSON.stringify(checks.map((c) => [c.step, c.ok])))
   await browser.close()
@@ -527,7 +532,7 @@ main().then((code) => process.exit(code), (e) => {
   console.log('--- failed requests ---')
   for (const r of failedRequests.slice(0, 60)) console.log(r)
   console.log('--- notable console ---')
-  for (const l of consoleLines.filter((x) => /PAGEERROR|error|redemption|settled|429|receive_id/i.test(x)).slice(0, 80)) console.log(l)
+  for (const l of consoleLines.filter((x) => /PAGEERROR|error|redemption|settled|429|receive_id/i.test(x)).slice(-CONSOLE_EVIDENCE_LINES)) console.log(l)
   if (runContext) console.log('CONTEXT ' + JSON.stringify(runContext))
   process.exit(1)
 })
