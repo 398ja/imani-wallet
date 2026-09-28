@@ -1,6 +1,7 @@
 import type { TransactionRow, VoucherRow } from '@imani/wallet-storage'
 
 import { checkIssuer } from './issuerAllowlist'
+import { checkMintAndUnit } from './trustedMint'
 import { boundedClaim, type MerchantClaim } from './merchantClaim'
 import { redeemLockName } from './redemptionLedger'
 import { toTransaction, type WalletTransaction } from './transactions'
@@ -40,6 +41,9 @@ import { withWebLock } from './webLock'
  *
  *  - The stored voucher's issuer signature verifies, and its key is not
  *    refused by a configured issuer allowlist (`checkIssuer`).
+ *  - Its proofs are at a mint this build trusts, in sat (`checkMintAndUnit`).
+ *    The signature covers no mint, so without this a genuine signed coupon
+ *    backed by some other mint's proofs credits exactly like the real one.
  *  - It names THIS stall as issuer: a claim is a coupon coming home.
  *  - `boundedClaim`: only against a local `issued` row of the same id and
  *    unit, and never for more than that issuance has left. This is the gate
@@ -159,6 +163,13 @@ export function candidateClaim(
   const v = parsed.voucher
   if (!verifyVoucher(v).signatureValid) return undefined
   if (checkIssuer(parsed) === 'unknown-issuer') return undefined
+  // The issuer signature covers the voucher's terms and no mint at all, so a
+  // copy backed by another mint's proofs verifies just as well as the real
+  // coupon. `unchecked` passes: a deployment that names no mint is no worse off
+  // than before this gate existed, which is the same direction `checkIssuer`
+  // takes and for the same reason (a gate on money must not strand it).
+  const backing = checkMintAndUnit(parsed)
+  if (backing === 'untrusted-mint' || backing === 'wrong-unit') return undefined
   if (!v.issuerId || v.issuerId.toLowerCase() !== stallPubkey.toLowerCase()) return undefined
   if (!v.voucherId || !v.unit) return undefined
 
