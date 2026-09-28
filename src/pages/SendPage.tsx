@@ -257,9 +257,14 @@ export function SendPage({ pubkey }: { pubkey: string }) {
     // showing the full amount here would send the customer away believing money
     // arrived that never did.
     const partial = sent.delivered < sent.requested
+    // A part the gateway accepted but could not confirm may already have arrived: the screen
+    // says so, and never suggests sending it again (#125).
+    const inFlight = sent.inFlight ?? 0
     return (
       <Screen>
-        <PageHeader title={partial ? 'Partly sent' : asMerchant ? 'Paid' : 'Sent'} />
+        <PageHeader
+          title={inFlight > 0 ? 'Still going through' : partial ? 'Partly sent' : asMerchant ? 'Paid' : 'Sent'}
+        />
         <Panel>
           <div className="flex flex-col items-center py-4 text-center">
             <div
@@ -290,12 +295,20 @@ export function SendPage({ pubkey }: { pubkey: string }) {
         </Panel>
         {partial && (
           <div className="mt-3">
-            <Alert>
-              {sent.parts > 1 ? `${sent.parts} vouchers went before the rest stopped. ` : ''}
-              The rest was not sent and your remaining vouchers are untouched — send
-              the difference again if you still mean to.
-              {sent.shortfall ? ` (${sent.shortfall})` : ''}
-            </Alert>
+            {inFlight > 0 ? (
+              <Alert>
+                {formatFace(inFlight, chosen)} more is still going through and may already have
+                arrived. Do not send it again — check your history in a moment.
+                {sent.shortfall ? ` (${sent.shortfall})` : ''}
+              </Alert>
+            ) : (
+              <Alert>
+                {sent.parts > 1 ? `${sent.parts} vouchers went before the rest stopped. ` : ''}
+                The rest was not sent and your remaining vouchers are untouched — send
+                the difference again if you still mean to.
+                {sent.shortfall ? ` (${sent.shortfall})` : ''}
+              </Alert>
+            )}
           </div>
         )}
         <Button size="lg" className="mt-4 w-full" onClick={() => navigate('/')}>

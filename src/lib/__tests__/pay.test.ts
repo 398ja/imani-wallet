@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest'
 import type { Voucher } from '@imani/voucher-send'
 import type { VoucherRow } from '@imani/wallet-storage'
 
@@ -9,6 +9,7 @@ import {
   payRequest,
   reconcilePendingSends,
   replaceVoucherToken,
+  SendOutcomeUnknownError,
   signedPartOf,
 } from '../pay'
 
@@ -896,6 +897,7 @@ describe('sendVouchers and payRequest', () => {
   // unsent. The gateway completed it; "send the difference again" would pay it twice.
   it('counts a part delivered when a status read fails once on the way', async () => {
     stubs.rows = trio()
+    const FAILING_READ = 3
     let reads = 0
     Object.assign(stubs.api, {
       initiateAtomicSend: async (params: Record<string, unknown>) => ({
@@ -904,13 +906,15 @@ describe('sendVouchers and payRequest', () => {
       }),
       getAtomicSendStatus: async () => {
         reads += 1
-        if (reads === 3) throw new TypeError('Failed to fetch')
+        if (reads === FAILING_READ) throw new TypeError('Failed to fetch')
         return { status: 'COMPLETED' }
       },
       ackKeepToken: async () => {},
       reclaimAtomicSend: async () => ({}),
     })
     wallet(trio())
+    const quietWarnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    onTestFinished(() => quietWarnings.mockRestore())
 
     const result = await sendVouchers({
       payer: PAYER,
@@ -922,6 +926,47 @@ describe('sendVouchers and payRequest', () => {
 
     expect(result).toMatchObject({ requested: 1000, delivered: 1000, parts: 3 })
     expect(result.shortfall).toBeUndefined()
+    expect(result.inFlight).toBeUndefined()
+  })
+
+  // #125: a bundle part whose status cannot be read for the whole wait is IN FLIGHT: it may
+  // have arrived, so it is reported apart from what was delivered and the bundle stops there.
+  it('reports a bundle part it could not confirm as in flight, not as unsent', async () => {
+    stubs.rows = trio()
+    const tried: number[] = []
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async (params: Record<string, unknown>) => {
+        tried.push(Number(params.bundlePartIndex))
+        return { send_id: `as_${String(params.bundlePartIndex)}`, status: 'PENDING' }
+      },
+      getAtomicSendStatus: async (sendId: string) => {
+        if (sendId === 'as_1') throw new TypeError('Failed to fetch')
+        return { status: 'COMPLETED' }
+      },
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    wallet(trio())
+    const quietWarnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    onTestFinished(() => quietWarnings.mockRestore())
+    vi.useFakeTimers()
+    try {
+      const sending = sendVouchers({
+        payer: PAYER,
+        recipient: { pubkey: FRIEND },
+        merchant,
+        unit: 'EUR',
+        amount: 1000,
+      })
+      await vi.runAllTimersAsync()
+      const result = await sending
+
+      expect(result).toMatchObject({ requested: 1000, delivered: 400, inFlight: 400, parts: 2 })
+      expect(result.shortfall).toMatch(/still going through.*could not confirm/s)
+      expect(tried).toEqual([0, 1])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   // #125: a gateway that cannot be read at all leaves the outcome UNKNOWN. That is the
@@ -941,16 +986,89 @@ describe('sendVouchers and payRequest', () => {
       reclaimAtomicSend: async () => ({}),
     })
     wallet([row()])
+    const quietWarnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    onTestFinished(() => quietWarnings.mockRestore())
     vi.useFakeTimers()
     try {
-      const sending = sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 250 })
-      const outcome = expect(sending).rejects.toThrow(/still going through.*has NOT failed/s)
+      const sending = sendVouchers({
+        payer: PAYER,
+        recipient: { pubkey: FRIEND },
+        merchant,
+        unit: 'EUR',
+        amount: 250,
+      })
+      const outcome = expect(sending).rejects.toThrow(SendOutcomeUnknownError)
       await vi.runAllTimersAsync()
       await outcome
     } finally {
       vi.useRealTimers()
     }
     expect(loadPendingSends(PAYER).map((p) => p.sendId)).toContain(sendId)
+  })
+
+  // A 4xx on the status read will say the same thing next time, so the wallet stops asking at
+  // once, and still reports the outcome as unknown rather than failed.
+  it('stops polling on a status read the gateway refuses outright', async () => {
+    stubs.rows = [row()]
+    let reads = 0
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async () => ({ send_id: 'as_refused', status: 'PENDING' }),
+      getAtomicSendStatus: async () => {
+        reads += 1
+        throw Object.assign(new Error('Not found'), { status: 404 })
+      },
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    wallet([row()])
+    const quietWarnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    onTestFinished(() => quietWarnings.mockRestore())
+
+    await expect(
+      sendVouchers({
+        payer: PAYER,
+        recipient: { pubkey: FRIEND },
+        merchant,
+        unit: 'EUR',
+        amount: 250,
+      }),
+    ).rejects.toThrow(/still going through.*could not confirm it with the gateway \(Not found\)/s)
+    expect(reads).toBe(1)
+  })
+
+  // #110: a 429 says how long to wait; polling sooner only burns the same rate window.
+  it('waits as long as a rate-limited status read asks before reading again', async () => {
+    stubs.rows = [row()]
+    const RETRY_AFTER_MS = 3000
+    const readAt: number[] = []
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async () => ({ send_id: 'as_limited', status: 'PENDING' }),
+      getAtomicSendStatus: async () => {
+        readAt.push(Date.now())
+        if (readAt.length === 1) throw Object.assign(new Error('Too many requests'), { status: 429, retryAfterMs: RETRY_AFTER_MS })
+        return { status: 'COMPLETED' }
+      },
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    wallet([row()])
+    const quietWarnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    onTestFinished(() => quietWarnings.mockRestore())
+    vi.useFakeTimers()
+    try {
+      const sending = sendVouchers({
+        payer: PAYER,
+        recipient: { pubkey: FRIEND },
+        merchant,
+        unit: 'EUR',
+        amount: 250,
+      })
+      await vi.runAllTimersAsync()
+      await sending
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(readAt[1]! - readAt[0]!).toBeGreaterThanOrEqual(RETRY_AFTER_MS)
   })
 
   it('throws when the first part fails, because nothing has moved', async () => {

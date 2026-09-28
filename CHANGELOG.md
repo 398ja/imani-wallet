@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sent ... send the difference again", which pays it twice. A failed read now leaves the outcome
   unknown and the wallet keeps waiting. If it is still unknown at the end, the send is reported as
   still going through and is finished from the pending ledger on the next login.
+  - **A bundle part whose outcome stays unknown is reported as in flight.** The send and pay
+    screens show "still going through ... do not send it again" and no longer offer to send the
+    difference.
+  - **Faster answers from a gateway that cannot confirm:** a status read refused with a 4xx
+    stops the wait at once. A 429 is re-read no sooner than its `Retry-After`.
 
 ## [0.9.1] - 2026-09-28
 
