@@ -90,4 +90,20 @@ describe('the sender sees one payment in several coupons', () => {
     await send()
     await waitFor(() => expect(screen.getByText(/2 vouchers went before the rest stopped\./)).toBeTruthy())
   })
+
+  // #125: a part the gateway accepted but could not confirm may already have arrived, so the
+  // screen says it is still going through and never tells the sender to send it again.
+  it('never offers to resend a part that is still going through', async () => {
+    result = { id: 'x', requested: 100, delivered: 50, inFlight: 50, parts: 2, shortfall: 'still going through' }
+    await send()
+    await waitFor(() => expect(screen.getByText(/Do not send it again/)).toBeTruthy())
+    expect(screen.queryByText(/send\s+the difference again/)).toBeNull()
+  })
+
+  // #125 review: the parts after an unconfirmed one were never tried, and the sender is told so.
+  it('says what was never sent after a part that is still going through', async () => {
+    result = { id: 'x', requested: 100, delivered: 40, inFlight: 40, parts: 2, shortfall: 'still going through' }
+    await send()
+    await waitFor(() => expect(screen.getByText(/The last .*0\.20 was not sent/)).toBeTruthy())
+  })
 })
