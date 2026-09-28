@@ -256,6 +256,11 @@ export interface PendingSend {
    */
   recipientPubkey?: string
   recipientName?: string
+  /**
+   * Set on a payment of a merchant's request, so a second payment of the same request can be
+   * refused while this one is unconfirmed (#128). A redemption has no `recipientPubkey`.
+   */
+  paymentRequestId?: string
   voucherId?: string
   memo?: string
   /**
@@ -273,6 +278,21 @@ export interface PendingSend {
 // Same `imani-wallet:` prefix and pubkey scoping as the profile, merchant and
 // payment-request records.
 const pendingKey = (pubkey: string) => `imani-wallet:pending-sends:${pubkey}`
+
+/**
+ * How long an unconfirmed send is still taken to be in flight. The saga's own expiry is well
+ * inside it, so a send still unanswered after this is one that is never going to answer (#127).
+ */
+const PENDING_SEND_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000
+
+function isStillInFlight(send: PendingSend): boolean {
+  return Date.now() - send.at < PENDING_SEND_LIFETIME_MS
+}
+
+/** The pending sends that still hold their coupon and their recipient back (#128). */
+function inFlightSends(payer: string): PendingSend[] {
+  return loadPendingSends(payer).filter(isStillInFlight)
+}
 
 /**
  * What a pre-rename build wrote. These two fields were `farmerPubkey` and
@@ -542,7 +562,19 @@ async function settleSend(
  * Run on login, beside the other reconciliations. Never throws: a wallet must
  * open whether or not the gateway is reachable.
  */
-export async function reconcilePendingSends(pubkey: string): Promise<number> {
+export function reconcilePendingSends(pubkey: string): Promise<number> {
+  // One pass at a time per wallet. Login and a send can now both ask for one, and two passes
+  // over the same entry would settle the same send twice.
+  const running = reconcilesInFlight.get(pubkey)
+  if (running) return running
+  const pass = reconcileOnce(pubkey).finally(() => reconcilesInFlight.delete(pubkey))
+  reconcilesInFlight.set(pubkey, pass)
+  return pass
+}
+
+const reconcilesInFlight = new Map<string, Promise<number>>()
+
+async function reconcileOnce(pubkey: string): Promise<number> {
   const pending = loadPendingSends(pubkey)
   if (pending.length === 0) return 0
 
@@ -572,7 +604,7 @@ export async function reconcilePendingSends(pubkey: string): Promise<number> {
         // login for the life of the wallet. The saga's own expiry is well inside
         // this window, so anything still non-terminal after a week is a row that
         // is never going to answer.
-        if (Date.now() - send.at < 7 * 24 * 60 * 60 * 1000) unresolved.push(send)
+        if (isStillInFlight(send)) unresolved.push(send)
         else console.error('[pay] giving up on a send that never reached a terminal state:', send.sendId)
         continue
       }
@@ -698,12 +730,16 @@ async function sendApi(): Promise<SendApi> {
  * that is the only thing that can address one coupon in the store. Object
  * identity is safe as the map key because `selectVouchers` filters and sorts —
  * it never clones — so the candidates it returns are these same objects.
+ *
+ * Coupons still held by an unconfirmed send are left out (`withoutInFlight`, #128). The Send
+ * and Pay screens apply the same filter to what they show, so the balance offered matches
+ * what can be spent.
  */
-async function spendableFrom(merchantPubkey: string): Promise<{
+async function spendableFrom(merchantPubkey: string, payer: string): Promise<{
   mine: Voucher[]
   rowOf: Map<Voucher, VoucherRow>
 }> {
-  const rows = couponsFor(await listVouchers(), merchantPubkey)
+  const rows = withoutInFlight(couponsFor(await listVouchers(), merchantPubkey), payer)
 
   /**
    * Drop anything this wallet has already spent, according to its own
@@ -738,6 +774,42 @@ async function spendableFrom(merchantPubkey: string): Promise<{
     return voucher
   })
   return { mine, rowOf }
+}
+
+/**
+ * Drop every coupon that is the source of a send still in flight (#128).
+ *
+ * Such a send may already have reached its recipient: its outcome is unknown, not failed. Its
+ * coupon stays in the wallet until `reconcilePendingSends` settles it, and offering it again
+ * let a second tap pay the same money twice, from a coupon the gateway had not yet refused.
+ */
+export function withoutInFlight(rows: VoucherRow[], payer: string): VoucherRow[] {
+  const held = new Set(inFlightSends(payer).map((send) => send.tokenId))
+  return held.size === 0 ? rows : rows.filter((row) => !held.has(row.token_id))
+}
+
+/**
+ * Refuse a second payment to someone whose first is still unconfirmed (#128).
+ *
+ * Leaving the in-flight coupon out is not enough on its own: the second payment would simply
+ * draw on another coupon and pay the same person twice. The screen locks its button too, but
+ * a screen is easy to leave and come back to, so the rule that protects the money lives here,
+ * at the one door it leaves by. Keyed on the payment request when there is one (a redemption),
+ * otherwise on the recipient.
+ */
+function refuseIfUnconfirmedTo(ctx: SendContext): void {
+  const unconfirmed = inFlightSends(ctx.payer).find((send) =>
+    ctx.paymentRequestId
+      ? send.paymentRequestId === ctx.paymentRequestId
+      : send.recipientPubkey?.toLowerCase() === ctx.recipient.pubkey.toLowerCase(),
+  )
+  if (!unconfirmed) return
+  throw new SendOutcomeUnknownError(
+    `Your last ${ctx.paymentRequestId ? 'payment of this request' : 'send to them'} is still going ` +
+      `through (send ${unconfirmed.sendId}) and may already have arrived. Nothing has been sent ` +
+      'this time — check your history in a moment before trying again.',
+    unconfirmed.sendId,
+  )
 }
 
 /**
@@ -967,7 +1039,7 @@ export async function payRequest({
   }
 
   const api = await sendApi()
-  const { mine, rowOf } = await spendableFrom(merchant.pubkey)
+  const { mine, rowOf } = await spendableFrom(merchant.pubkey, payer)
   // Filtered by the request's unit, which this door did not do while it spent
   // exactly one coupon and `selectVouchers` compared amounts within it. Drawing
   // across several makes a mixed-unit wallet dangerous: 300 EUR + 200 XAF add
@@ -1117,7 +1189,7 @@ async function sendPart(
       // the merchant, so it would be easy to — files money paid to a shop as a
       // transfer to a friend, and puts that shop on the home deck twice.
       ...(ctx.paymentRequestId
-        ? {}
+        ? { paymentRequestId: ctx.paymentRequestId }
         : { recipientPubkey: ctx.recipient.pubkey, recipientName: ctx.recipient.name }),
       voucherId: voucher.voucher_id,
       memo: ctx.memo,
@@ -1219,7 +1291,7 @@ export async function sendVouchers({
   }
 
   const api = await sendApi()
-  const { mine, rowOf } = await spendableFrom(merchant.pubkey)
+  const { mine, rowOf } = await spendableFrom(merchant.pubkey, payer)
   const inUnit = mine.filter(
     (v) => (v.face_unit ?? '').toUpperCase() === unit.toUpperCase(),
   )
@@ -1294,6 +1366,10 @@ async function deliver(
   unitLabel?: string,
 ): Promise<SendResult> {
   await refuseIfWrongMerchant(ctx.recipient.pubkey, ctx.merchant.pubkey)
+  // Ask the gateway about anything still pending BEFORE refusing: a send that has finished since
+  // the wallet stopped waiting would otherwise block this person until the next login.
+  await reconcilePendingSends(ctx.payer)
+  refuseIfUnconfirmedTo(ctx)
 
   // One coupon first: fewer mint splits, one DM, and the path that has been
   // carrying every payment on this stack since the beginning.
