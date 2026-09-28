@@ -84,9 +84,17 @@ export function splitIntoDenominations(amount: number): number[] {
   if (!Number.isInteger(amount) || amount <= 0) {
     throw new Error(`amount must be a positive integer, got ${amount}`)
   }
+  if (!Number.isSafeInteger(amount)) {
+    throw new Error(`amount is too large to split exactly: ${amount}`)
+  }
   const parts: number[] = []
+  // `amount & bit` would be wrong here, and silently so. Bitwise operators coerce
+  // to int32, so any amount at or above 2^32 loses its high bits: 2^32 + 7 splits
+  // as [1, 2, 4], which passes every guard downstream because the mint signs
+  // exactly what it was asked for. The result is billions of sats burnt for seven.
+  // Division keeps full precision across the whole safe-integer range.
   for (let bit = 1; bit <= amount; bit *= 2) {
-    if (amount & bit) parts.push(bit)
+    if (Math.floor(amount / bit) % 2 === 1) parts.push(bit)
   }
   return parts.reverse()
 }
@@ -124,6 +132,10 @@ export function blindOutputs(denominations: number[], keysetId: string): Blinded
  * up means this is not an answer to the request we made, and pairing on past it
  * would mint a proof claiming an amount its signature does not cover. The mint
  * would then refuse it at the next spend, with nothing left to explain why.
+ *
+ * For a SWAP that positional rule is right. NUT-09 restore is different: it omits
+ * the messages it has no signature for, so its answer is a SUBSET and must be
+ * paired by `B_` instead. Use `unblindRestored` for that.
  */
 export function unblindOutputs(
   outputs: BlindedOutput[],
@@ -143,27 +155,113 @@ export function unblindOutputs(
         `mint signed amount ${signature.amount} for an output of ${output.amount}`,
       )
     }
+    // The keyset must match too. A signature returned under a different keyset is
+    // the same class of wrong answer as a mismatched amount, and it is the one
+    // field that used to go unchecked: the proof took the OUTPUT's id, so a
+    // signature made under keyset B would be recorded against keyset A and fail
+    // at the next spend with nothing to explain why.
+    if (signature.id !== output.id) {
+      throw new Error(
+        `mint signed under keyset ${signature.id} for an output of keyset ${output.id}`,
+      )
+    }
     const mintKey = keysetKeys[String(output.amount)]
     if (!mintKey) {
       throw new Error(`keyset has no public key for amount ${output.amount}`)
     }
-
-    // `@cashu/crypto` bundles its own @noble/curves, so its Point type is
-    // nominally different from the one this repo resolves even though the
-    // runtime values are identical. Cast at this seam only, as burnProbe does.
-    const point = (hex: string) => secp256k1.Point.fromHex(hex) as never
-    const proof = constructProofFromPromise(
-      { id: signature.id, amount: signature.amount, C_: point(signature.C_) },
-      BigInt('0x' + output.r),
-      new TextEncoder().encode(output.secret),
-      point(mintKey),
-    )
-    const serialized = serializeProof(proof)
-    return {
-      amount: output.amount,
-      id: output.id,
-      secret: output.secret,
-      C: serialized.C,
-    }
+    return buildProof(output, signature, mintKey)
   })
+}
+
+/** What a restore recovered, and which outputs the mint had never signed. */
+export interface RestoredProofs {
+  proofs: UnblindedProof[]
+  /** The outputs the mint held no signature for. Still ours to retry or abandon. */
+  unmatched: BlindedOutput[]
+}
+
+/**
+ * A NUT-09 restore answer as proofs, pairing by `B_` rather than by position.
+ *
+ * Restore returns only the messages it HAS signatures for, alongside those
+ * signatures, so a partial answer is normal rather than a fault. The mint creates
+ * that state deliberately: a swap that fails partway through still spends its
+ * inputs and leaves the earlier outputs durably signed, recoverable only here.
+ *
+ * So this must take what it can and report the rest. An earlier version reused
+ * `unblindOutputs`, whose positional count check threw on any partial answer,
+ * which abandoned every signature the mint really had issued. That is money the
+ * wallet owns and cannot otherwise reach.
+ */
+export function unblindRestored(
+  outputs: BlindedOutput[],
+  restored: { outputs: { B_: string }[]; signatures: BlindSignatureResponse[] },
+  keysetKeys: Record<string, string>,
+): RestoredProofs {
+  if (restored.outputs.length !== restored.signatures.length) {
+    throw new Error(
+      `restore paired ${restored.outputs.length} output(s) with ` +
+        `${restored.signatures.length} signature(s)`,
+    )
+  }
+
+  const signatureFor = new Map<string, BlindSignatureResponse>()
+  restored.outputs.forEach((output, index) => {
+    signatureFor.set(output.B_.toLowerCase(), restored.signatures[index])
+  })
+
+  const proofs: UnblindedProof[] = []
+  const unmatched: BlindedOutput[] = []
+
+  for (const output of outputs) {
+    const signature = signatureFor.get(output.B_.toLowerCase())
+    if (!signature) {
+      unmatched.push(output)
+      continue
+    }
+    if (signature.amount !== output.amount) {
+      throw new Error(
+        `restore returned amount ${signature.amount} for an output of ${output.amount}`,
+      )
+    }
+    if (signature.id !== output.id) {
+      throw new Error(
+        `restore returned keyset ${signature.id} for an output of keyset ${output.id}`,
+      )
+    }
+    const mintKey = keysetKeys[String(output.amount)]
+    if (!mintKey) {
+      throw new Error(`keyset has no public key for amount ${output.amount}`)
+    }
+    proofs.push(buildProof(output, signature, mintKey))
+  }
+
+  return { proofs, unmatched }
+}
+
+/** One blinded output plus the mint's signature over it, as a spendable proof. */
+function buildProof(
+  output: BlindedOutput,
+  signature: BlindSignatureResponse,
+  mintKey: string,
+): UnblindedProof {
+  // `@cashu/crypto` bundles its own @noble/curves, so its Point type is nominally
+  // different from the one this repo resolves even though the runtime values are
+  // identical. Cast at this seam only, as burnProbe does. `as unknown as` rather
+  // than `as never`: never is assignable to everything, so it would also silence a
+  // real signature change on a future @cashu/crypto bump.
+  const point = (hex: string) =>
+    secp256k1.Point.fromHex(hex) as unknown as Parameters<typeof constructProofFromPromise>[3]
+  const proof = constructProofFromPromise(
+    { id: signature.id, amount: signature.amount, C_: point(signature.C_) },
+    BigInt('0x' + output.r),
+    new TextEncoder().encode(output.secret),
+    point(mintKey),
+  )
+  return {
+    amount: output.amount,
+    id: output.id,
+    secret: output.secret,
+    C: serializeProof(proof).C,
+  }
 }

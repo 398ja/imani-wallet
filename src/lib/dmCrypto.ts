@@ -202,7 +202,12 @@ function verifiedVoucherFrom(token: string | undefined):
   // not a field we record but the address we send money to. See
   // `docs/explanation/the-wallet-swaps-its-own-receives.md`.
   const backing = checkMintAndUnit(parsed)
-  if (backing === 'untrusted-mint' || backing === 'wrong-unit') {
+  // `not-ready` is refused too, not waved through. It means the gateway's config
+  // has not arrived, so the trusted set is unknown. Treating unknown as permitted
+  // would let anyone who can merely DELAY /api/v1/config disable this check.
+  // Refusing is safe here: the caller retries a DM, so a coupon refused during
+  // start-up is received moments later rather than lost.
+  if (backing === 'untrusted-mint' || backing === 'wrong-unit' || backing === 'not-ready') {
     console.warn(
       '[dmCrypto] rejecting voucher whose proofs are not at a trusted mint in sat:',
       parsed.voucher.voucherId,

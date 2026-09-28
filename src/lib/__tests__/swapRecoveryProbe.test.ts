@@ -4,7 +4,12 @@
 import { describe, expect, it, beforeEach } from 'vitest'
 
 import { rememberSwapIntent, pendingSwapIntents, forgetSwapIntent } from '../swapIntent'
-import { splitIntoDenominations, blindOutputs, unblindOutputs } from '../walletSwap'
+import {
+  splitIntoDenominations,
+  blindOutputs,
+  unblindOutputs,
+  unblindRestored,
+} from '../walletSwap'
 
 /**
  * Recovering a swap whose response was lost, against a real mint.
@@ -155,11 +160,12 @@ swapLive('a swap whose response was never read', () => {
     // has expired.
     const restore = await post('/v1/restore', { outputs: recoveredOutputs })
     expect(restore.status).toBe(200)
-    const fromRestore = unblindOutputs(
+    const { proofs: fromRestore, unmatched } = unblindRestored(
       recovered.outputs,
-      (restore.body as unknown as { signatures: never[] }).signatures,
+      restore.body as unknown as { outputs: { B_: string }[]; signatures: never[] },
       keys,
     )
+    expect(unmatched, 'the mint signed the whole swap, so nothing is unmatched').toEqual([])
 
     // Both routes must produce the SAME proofs, because both are recovering the
     // one set of signatures the mint issued.

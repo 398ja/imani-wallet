@@ -24,6 +24,7 @@ import { parseVoucherToken } from '../voucherToken'
 
 afterEach(() => {
   vi.unstubAllEnvs()
+  delete (globalThis as { GatewayConfig?: unknown }).GatewayConfig
 })
 
 const token = readFileSync('src/lib/__tests__/fixtures/witness-positive.token', 'utf8').trim()
@@ -53,11 +54,32 @@ describe('crediting a coupon depends on where its value is', () => {
 
   /**
    * The default direction, stated as a test so it cannot drift silently. A
-   * deployment naming no mint is exactly as exposed as before this gate, and no
-   * worse, which is the same choice `issuerAllowlist` makes for the same reason.
+   * deployment whose gateway has answered and named no mint is exactly as exposed
+   * as before this gate, and no worse, which is the same choice `issuerAllowlist`
+   * makes for the same reason.
+   *
+   * Note this requires the gateway to have ANSWERED. Before that the verdict is
+   * `not-ready` and the claim is refused, because otherwise delaying one request
+   * would turn the gate off. See `trustedMint.test.ts`.
    */
-  it('accepts the coupon when no mint is configured at all', () => {
+  it('accepts the coupon when the gateway has answered and names no mint', () => {
     vi.stubEnv('VITE_TRUSTED_MINT_URLS', '')
+    ;(globalThis as { GatewayConfig?: unknown }).GatewayConfig = {
+      mintUrl: '',
+      whenReady: (callback: () => void) => callback(),
+    }
     expect(candidateClaim({ amount: 0 }, token, stall)).toBeDefined()
+  })
+
+  /** And refuses it while a PRESENT gateway config is still outstanding. */
+  it('refuses the coupon before a pending gateway config has arrived', () => {
+    vi.stubEnv('VITE_TRUSTED_MINT_URLS', '')
+    ;(globalThis as { GatewayConfig?: unknown }).GatewayConfig = {
+      mintUrl: '',
+      whenReady: () => {
+        /* still in flight */
+      },
+    }
+    expect(candidateClaim({ amount: 0 }, token, stall)).toBeUndefined()
   })
 })

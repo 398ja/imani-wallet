@@ -197,6 +197,57 @@ describe('which intents are still worth recovering', () => {
   })
 })
 
+describe('when the store is full', () => {
+  /**
+   * The cap must sacrifice records that can no longer be acted on, not whichever
+   * happens to be oldest.
+   *
+   * Found in review. The original sliced the newest 20 regardless, so a wallet
+   * holding 20 dead records and one live one could drop the live one, which may be
+   * the only copy of the blinding factors for money the mint has already moved.
+   * `pendingSwapIntents` refuses exactly this hazard on a clock read two functions
+   * away, and the same argument applies to a count.
+   */
+  it('drops expired records before any live one', () => {
+    const stale = Date.now() - SWAP_INTENT_LIFETIME_MS - 1
+    for (let index = 0; index < 20; index++) {
+      rememberSwapIntent(PUBKEY, intent({ swapId: `dead-${index}`, at: stale }))
+    }
+    expect(loadSwapIntents(PUBKEY)).toHaveLength(20)
+
+    rememberSwapIntent(PUBKEY, intent({ swapId: 'live', at: Date.now() }))
+
+    const held = loadSwapIntents(PUBKEY)
+    expect(
+      held.map((i) => i.swapId),
+      'the live record must survive and the dead ones make way',
+    ).toEqual(['live'])
+  })
+
+  /**
+   * Only when there are genuinely more LIVE records than the cap is one that might
+   * still be recoverable dropped, and then it is said out loud, because that is
+   * money going out of reach.
+   */
+  it('warns when it has to drop a record that may still be recoverable', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    for (let index = 0; index < 21; index++) {
+      rememberSwapIntent(PUBKEY, intent({ swapId: `live-${index}`, at: Date.now() }))
+    }
+
+    expect(loadSwapIntents(PUBKEY)).toHaveLength(20)
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  /** Under the cap nothing is touched, expired or not. */
+  it('keeps everything while there is room', () => {
+    rememberSwapIntent(PUBKEY, intent({ swapId: 'a', at: Date.now() - SWAP_INTENT_LIFETIME_MS - 1 }))
+    rememberSwapIntent(PUBKEY, intent({ swapId: 'b', at: Date.now() }))
+    expect(loadSwapIntents(PUBKEY)).toHaveLength(2)
+  })
+})
+
 describe('a store that has been corrupted', () => {
   /**
    * Reading must never throw. This is called on the receive path, and an

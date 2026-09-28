@@ -11,6 +11,7 @@ import {
   blindOutputs,
   splitIntoDenominations,
   unblindOutputs,
+  unblindRestored,
   type BlindSignatureResponse,
   type UnblindedProof,
 } from './walletSwap'
@@ -18,16 +19,22 @@ import {
 /**
  * Receiving a coupon by swapping it at the mint ourselves.
  *
- * ## What this replaces
+ * ## What this is FOR, and what it is not yet
  *
- * `POST /api/v1/wallet/receive`, where the GATEWAY performed the swap. That one
- * decision produced both open bugs: the gateway chose the output secrets, so it
- * kept a spendable copy of every coupon received (imani-gateway-customer#133),
- * and it was the only party holding the money when a response was lost
- * (imani-wallet#123).
+ * This is the MECHANISM intended to replace `POST /api/v1/wallet/receive`, where
+ * the GATEWAY performs the swap. That one decision produced both open bugs: the
+ * gateway chooses the output secrets, so it keeps a spendable copy of every coupon
+ * received (imani-gateway-customer#133), and it is the only party holding the money
+ * when a response is lost (imani-wallet#123).
  *
- * Here the wallet chooses the secrets and the blinding factors, so the gateway is
- * not in the path at all and there is nothing for it to hold.
+ * **Nothing calls this yet.** The live receive is still the gateway endpoint, so
+ * neither bug is closed in a shipped build by this module alone. Two things are
+ * outstanding: a `MintTransport` implementation against the real mint, and the
+ * issuer re-signing call that a VOUCHER receive needs (see the refusal below).
+ * Until both exist, this is the tested mechanism and not the behaviour.
+ *
+ * What it establishes: the wallet chooses the secrets and the blinding factors, so
+ * the gateway is not in the path and there is nothing for it to hold.
  *
  * ## The order of operations IS the correctness argument
  *
@@ -98,7 +105,16 @@ export interface MintTransport {
   restore(
     mintUrl: string,
     outputs: { amount: number; id: string; B_: string }[],
-  ): Promise<{ signatures: BlindSignatureResponse[] }>
+  ): Promise<{
+    /**
+     * The subset of blinded messages the mint held a signature for, paired
+     * positionally with `signatures`. Kept rather than discarded: a partial answer
+     * is normal, and without these the wallet cannot tell WHICH outputs were
+     * signed, so it could only take all or nothing.
+     */
+    outputs: { B_: string }[]
+    signatures: BlindSignatureResponse[]
+  }>
 }
 
 export interface ReceiveRequest {
@@ -193,7 +209,17 @@ export async function receiveByOwnSwap(
     swapId,
     mintUrl,
     keysetId,
-    inputs: proofs.map(({ amount, id, secret, C }) => ({ amount, id, secret, C })),
+    // The witness is carried too. A NUT-19 replay must be byte-identical, and a
+    // locked input without its witness is both a different request and one the
+    // mint would refuse, so dropping it would leave replay silently unavailable
+    // for exactly the customer-to-customer transfer case.
+    inputs: proofs.map(({ amount, id, secret, C, witness }) => ({
+      amount,
+      id,
+      secret,
+      C,
+      ...(witness === undefined ? {} : { witness }),
+    })),
     outputs,
     at: Date.now(),
   })
@@ -211,7 +237,7 @@ export async function receiveByOwnSwap(
     // the only route back to money that has already moved. Said loudly because a
     // silent unfinished receive is how the loss in #110 went unnoticed.
     console.warn(
-      '[receiveSwap] receive unfinished — the swap may have gone through, intent kept for recovery',
+      '[receiveSwap] receive unfinished, so the swap may have gone through: intent kept for recovery',
       { swapId, mintUrl, reason: failure instanceof Error ? failure.message : String(failure) },
     )
     throw failure
@@ -252,11 +278,11 @@ export async function recoverInterruptedSwaps(
 
   for (const intent of pendingSwapIntents(pubkey)) {
     try {
-      const { signatures } = await transport.restore(intent.mintUrl, asMintOutputs(intent.outputs))
+      const restored = await transport.restore(intent.mintUrl, asMintOutputs(intent.outputs))
 
-      if (signatures.length === 0) {
+      if (restored.signatures.length === 0) {
         console.info(
-          '[receiveSwap] the mint never signed this swap, so nothing was spent — dropping it',
+          '[receiveSwap] the mint never signed this swap, so nothing was spent: dropping it',
           { swapId: intent.swapId },
         )
         forgetSwapIntent(pubkey, intent.swapId)
@@ -264,7 +290,23 @@ export async function recoverInterruptedSwaps(
       }
 
       const keys = await transport.keysetKeys(intent.mintUrl, intent.keysetId)
-      const proofs = unblindOutputs(intent.outputs, signatures, keys)
+      // Paired by `B_`, taking whatever the mint has. A PARTIAL answer is a state
+      // the mint creates deliberately: a swap that fails partway still spends its
+      // inputs and leaves the earlier outputs signed and recoverable only here.
+      // Insisting on a complete answer would abandon those signatures, which is
+      // money the wallet owns and has no other route to.
+      const { proofs, unmatched } = unblindRestored(intent.outputs, restored, keys)
+      if (unmatched.length > 0) {
+        console.warn(
+          '[receiveSwap] the mint signed only part of this swap, taking what it did sign',
+          {
+            swapId: intent.swapId,
+            recovered: proofs.length,
+            neverSigned: unmatched.length,
+            recoveredAmount: proofs.reduce((sum, proof) => sum + proof.amount, 0),
+          },
+        )
+      }
       recovered.push({ swapId: intent.swapId, proofs })
       // Safe to forget: the proofs are in the returned array and the caller saves
       // them. A caller that drops them can still restore again, because restore

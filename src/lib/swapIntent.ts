@@ -1,3 +1,4 @@
+import type { TokenProof } from './voucherToken'
 import type { BlindedOutput } from './walletSwap'
 
 /**
@@ -36,12 +37,23 @@ import type { BlindedOutput } from './walletSwap'
  * See `docs/explanation/the-wallet-swaps-its-own-receives.md`.
  */
 
-/** A proof being spent as a swap input, in the shape the mint expects. */
-export interface SwapInputProof {
-  amount: number
-  id: string
-  secret: string
-  C: string
+/**
+ * A proof being spent as a swap input.
+ *
+ * Extends `TokenProof`, which is what `tokenProofs()` already returns, so a decoded
+ * token flows into a receive without a re-declaration the two could drift apart on.
+ */
+export interface SwapInputProof extends TokenProof {
+  /**
+   * The NUT-11 witness unlocking this proof, when it is locked.
+   *
+   * Persisted because a NUT-19 replay must be BYTE-IDENTICAL: the mint
+   * fingerprints the whole request, and a locked input without its witness is
+   * both a different request and one the mint would refuse anyway. Dropping this
+   * made replay silently unavailable for exactly the transfer case the design
+   * cares most about.
+   */
+  witness?: string
 }
 
 /** Everything needed to finish, or to recover, one swap. */
@@ -89,7 +101,18 @@ const intentsKey = (pubkey: string) => `imani-wallet:swap-intents:${pubkey}`
  */
 export const SWAP_INTENT_LIFETIME_MS = 60 * 60 * 1000
 
-/** How many unfinished swaps to keep. Matches the pending-send cap. */
+/**
+ * How many unfinished swaps to keep.
+ *
+ * A cap is necessary, and evicting on COUNT is the same hazard `pendingSwapIntents`
+ * refuses to accept on a clock read: the record dropped may be the only copy of
+ * the blinding factors for money the mint has already moved. `pay.ts` can afford
+ * its identical cap because losing a pending-send record loses a status lookup;
+ * losing a swap intent loses the coupon.
+ *
+ * So eviction takes EXPIRED records first and only warns if it has to touch a live
+ * one. See `capIntents`.
+ */
 const MAX_INTENTS = 20
 
 /** Is this shape usable for a recovery, rather than merely present? */
@@ -101,13 +124,21 @@ function isUsable(value: unknown): value is SwapIntent {
     typeof intent.mintUrl === 'string' &&
     typeof intent.keysetId === 'string' &&
     Array.isArray(intent.inputs) &&
+    intent.inputs.length > 0 &&
     Array.isArray(intent.outputs) &&
     intent.outputs.length > 0 &&
-    // Every output must carry the two fields recovery cannot do without. An
-    // output missing `r` cannot be unblinded and one missing `B_` cannot be
-    // restored, so a record containing either is not a usable record.
+    // Every output must carry the four fields recovery cannot do without. Without
+    // `r` it cannot be unblinded, without `B_` it cannot be restored, and without
+    // `amount` or `id` a returned signature cannot be matched to it. A record
+    // missing any of them throws inside `unblindRestored` on every sweep, is
+    // caught, kept, and retried until it expires, which reads as an unreachable
+    // coupon rather than a malformed record.
     intent.outputs.every(
-      (output) => typeof output?.r === 'string' && typeof output?.B_ === 'string',
+      (output) =>
+        typeof output?.r === 'string' &&
+        typeof output?.B_ === 'string' &&
+        typeof output?.amount === 'number' &&
+        typeof output?.id === 'string',
     ) &&
     typeof intent.at === 'number'
   )
@@ -146,6 +177,29 @@ export function pendingSwapIntents(pubkey: string): SwapIntent[] {
   return loadSwapIntents(pubkey).filter((intent) => now - intent.at < SWAP_INTENT_LIFETIME_MS)
 }
 
+/**
+ * Trims to the cap, sacrificing records that can no longer be acted on first.
+ *
+ * Expired records are past the window in which the mint will still answer for
+ * them, so they are the honest thing to lose. Only when there are more than
+ * `MAX_INTENTS` LIVE records does this drop one that might still be recoverable,
+ * and then it says so, because that is money going out of reach.
+ */
+function capIntents(intents: SwapIntent[]): SwapIntent[] {
+  if (intents.length <= MAX_INTENTS) return intents
+
+  const now = Date.now()
+  const live = intents.filter((intent) => now - intent.at < SWAP_INTENT_LIFETIME_MS)
+  if (live.length <= MAX_INTENTS) return live
+
+  console.warn(
+    '[swapIntent] more unfinished receives than the store holds, so the oldest is being ' +
+      'dropped and its proofs may not be recoverable afterwards',
+    { held: live.length, cap: MAX_INTENTS, dropping: live.length - MAX_INTENTS },
+  )
+  return live.slice(0, MAX_INTENTS)
+}
+
 function save(pubkey: string, intents: SwapIntent[]): void {
   if (intents.length === 0) localStorage.removeItem(intentsKey(pubkey))
   else localStorage.setItem(intentsKey(pubkey), JSON.stringify(intents))
@@ -159,7 +213,7 @@ function save(pubkey: string, intents: SwapIntent[]): void {
  */
 export function rememberSwapIntent(pubkey: string, intent: SwapIntent): void {
   const others = loadSwapIntents(pubkey).filter((held) => held.swapId !== intent.swapId)
-  save(pubkey, [intent, ...others].slice(0, MAX_INTENTS))
+  save(pubkey, capIntents([intent, ...others]))
 }
 
 /**

@@ -1,7 +1,12 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 
-import { checkMintAndUnit, trustedMintUrls, TOKEN_UNIT } from '../trustedMint'
+import {
+  checkMintAndUnit,
+  trustedMintUrls,
+  gatewayConfigLoaded,
+  TOKEN_UNIT,
+} from '../trustedMint'
 import { parseVoucherToken } from '../voucherToken'
 
 /**
@@ -35,9 +40,40 @@ import { parseVoucherToken } from '../voucherToken'
 
 afterEach(() => {
   vi.unstubAllEnvs()
+  delete (globalThis as { GatewayConfig?: unknown }).GatewayConfig
 })
 
 const trust = (...urls: string[]) => vi.stubEnv('VITE_TRUSTED_MINT_URLS', urls.join(','))
+
+/**
+ * The gateway having answered `/api/v1/config`.
+ *
+ * `whenReady` fires its callback SYNCHRONOUSLY once the real config module has
+ * resolved, which is the contract `gatewayConfigLoaded` reads. Mirrored here rather
+ * than faked with a boolean so the test exercises the same signal production does.
+ */
+const gatewaySays = (mintUrl: string) => {
+  ;(globalThis as { GatewayConfig?: unknown }).GatewayConfig = {
+    mintUrl,
+    whenReady: (callback: () => void) => callback(),
+  }
+}
+
+/**
+ * The script loaded but the fetch still in flight, so `whenReady` DEFERS.
+ *
+ * This is the window that used to read as "no mint configured" and wave every
+ * coupon through. Note it is indistinguishable from a ready gateway by `mintUrl`
+ * alone, which is exactly why readiness is read from `whenReady` instead.
+ */
+const gatewayNotReady = () => {
+  ;(globalThis as { GatewayConfig?: unknown }).GatewayConfig = {
+    mintUrl: '',
+    whenReady: () => {
+      /* deferred until the fetch resolves, so never called here */
+    },
+  }
+}
 
 const fixture = (name: string) =>
   readFileSync(`src/lib/__tests__/fixtures/${name}`, 'utf8').trim()
@@ -156,31 +192,114 @@ describe('the mint the proofs came from', () => {
 
 describe('when no mint is configured', () => {
   /**
-   * The direction of the default, which is the one decision here that can
-   * strand money.
+   * The direction of the default, which is the one decision here that can strand
+   * money.
    *
-   * `issuerAllowlist` fails OPEN when unset, reasoning that refusing every
-   * coupon on an unconfigured deployment turns money off. That reasoning does
-   * not carry over. This check has a value it can always compute for itself:
-   * the wallet's own gateway tells it which mint to use, so "unset" is a
-   * deployment error rather than a deployment choice.
-   *
-   * But failing closed on an empty list would break every existing wallet the
-   * moment this ships, so the fallback is the configured gateway mint, and only
-   * a wallet with NEITHER is unchecked. That is recorded here rather than left
-   * to be discovered.
+   * `issuerAllowlist` fails OPEN when unset, reasoning that refusing every coupon
+   * on an unconfigured deployment turns money off. That carries over only when we
+   * KNOW nothing is configured. This case is the gateway having answered and named
+   * no mint, which is a genuine deployment choice.
    */
-  it('makes no claim when neither the list nor the gateway names a mint', () => {
+  it('makes no claim when the gateway has answered and names no mint', () => {
     vi.stubEnv('VITE_TRUSTED_MINT_URLS', '')
+    gatewaySays('')
     expect(trustedMintUrls()).toEqual([])
     expect(checkMintAndUnit(parseVoucherToken(fixture('control-unlocked.token')))).toBe('unchecked')
   })
 
   /**
-   * The unit is checked even with no mint configured. It needs no
-   * configuration, so there is no reason to let it lapse with the mint.
+   * The unit is checked even with no mint configured. It needs no configuration,
+   * so there is no reason to let it lapse with the mint.
    */
   it('still refuses a non-sat unit', () => {
+    vi.stubEnv('VITE_TRUSTED_MINT_URLS', '')
+    gatewaySays('')
+    const parsed = parseVoucherToken(fixture('control-unlocked.token'))
+    expect(checkMintAndUnit({ ...parsed, unit: 'usd' })).toBe('wrong-unit')
+  })
+})
+
+describe('the gateway mint fallback', () => {
+  /**
+   * The fallback is the whole argument for the default direction, and it had no
+   * test at all: replacing it with an empty array left all 19 tests green. The
+   * module claims a wallet told which mint to use is "protected without anybody
+   * configuring anything", and that claim now has evidence.
+   */
+  it('trusts the mint the gateway names, with nothing else configured', () => {
+    vi.stubEnv('VITE_TRUSTED_MINT_URLS', '')
+    const parsed = parseVoucherToken(fixture('control-unlocked.token'))
+    gatewaySays(parsed.mintUrl)
+
+    expect(trustedMintUrls()).toEqual([parsed.mintUrl.toLowerCase()])
+    expect(checkMintAndUnit(parsed)).toBe('trusted')
+  })
+
+  /** And it still refuses a different mint, so the fallback is a gate not a pass. */
+  it('refuses another mint even when the gateway names one', () => {
+    vi.stubEnv('VITE_TRUSTED_MINT_URLS', '')
+    gatewaySays('https://mint.example.test')
+    expect(checkMintAndUnit(parseVoucherToken(fixture('control-unlocked.token')))).toBe(
+      'untrusted-mint',
+    )
+  })
+
+  /** Both sources combine, so a migration can span the configured and the reported mint. */
+  it('combines the configured list with the gateway mint', () => {
+    const parsed = parseVoucherToken(fixture('control-unlocked.token'))
+    trust('https://mint.example.test')
+    gatewaySays(parsed.mintUrl)
+
+    expect(trustedMintUrls()).toHaveLength(2)
+    expect(checkMintAndUnit(parsed)).toBe('trusted')
+  })
+})
+
+describe('before the gateway config has arrived', () => {
+  /**
+   * The finding that mattered most in review. `/api/v1/config` is fetched
+   * asynchronously, and `shared/gateway-config.js` is itself loaded lazily, so
+   * there is a window where no mint is known.
+   *
+   * Treating that window as "nothing configured" returned `unchecked` and waved
+   * every coupon through, which means anyone who can merely DELAY one request
+   * turns the whole gate off. A slow network or an unretried 500 would do it. So
+   * "not knowable yet" is now its own verdict and callers refuse on it.
+   */
+  it('reports not-ready rather than unchecked', () => {
+    vi.stubEnv('VITE_TRUSTED_MINT_URLS', '')
+    gatewayNotReady()
+    expect(checkMintAndUnit(parseVoucherToken(fixture('control-unlocked.token')))).toBe('not-ready')
+  })
+
+  /**
+   * A config script that was never loaded is NOT a pending fetch.
+   *
+   * `shared/gateway-config.js` is pulled in lazily by the legacy bridge, so on a
+   * path that never touches it `GatewayConfig` is absent for ever rather than
+   * briefly. Deferring on that would refuse every coupon permanently, which is the
+   * opposite failure and a worse one. Only a config that is PRESENT and has not
+   * resolved is worth waiting for.
+   */
+  it('does not defer when the config script was never loaded', () => {
+    vi.stubEnv('VITE_TRUSTED_MINT_URLS', '')
+    expect(gatewayConfigLoaded()).toBe(true)
+    expect(checkMintAndUnit(parseVoucherToken(fixture('control-unlocked.token')))).toBe('unchecked')
+  })
+
+  /**
+   * An explicitly configured list needs no gateway at all, so a deployment that
+   * sets the variable is never subject to this race.
+   */
+  it('is unaffected when the list is configured explicitly', () => {
+    const parsed = parseVoucherToken(fixture('control-unlocked.token'))
+    trust(parsed.mintUrl)
+    gatewayNotReady()
+    expect(checkMintAndUnit(parsed)).toBe('trusted')
+  })
+
+  /** The unit is still checked: it depends on nothing that can be delayed. */
+  it('still refuses a non-sat unit before the config arrives', () => {
     vi.stubEnv('VITE_TRUSTED_MINT_URLS', '')
     const parsed = parseVoucherToken(fixture('control-unlocked.token'))
     expect(checkMintAndUnit({ ...parsed, unit: 'usd' })).toBe('wrong-unit')

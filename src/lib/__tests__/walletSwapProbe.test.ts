@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { splitIntoDenominations, blindOutputs, unblindOutputs } from '../walletSwap'
+import {
+  splitIntoDenominations,
+  blindOutputs,
+  unblindOutputs,
+  unblindRestored,
+} from '../walletSwap'
 
 /**
  * The wallet's own swap, against a real mint.
@@ -125,14 +130,16 @@ swapLive('a swap the wallet performs itself', () => {
 
     // Claim 3: NUT-09 restore. The lost-response fix after the window closes.
     // Keyed on B_, which the wallet can reproduce because it kept the secrets
-    // and blinding factors.
+    // and blinding factors. Read through `unblindRestored`, which pairs by B_,
+    // because restore returns only the messages it has signatures for.
     const restore = await post('/v1/restore', { outputs: asOutputs })
     expect(restore.status).toBe(200)
-    const restored = unblindOutputs(
+    const restored = unblindRestored(
       swapOutputs,
-      (restore.body as unknown as { signatures: never[] }).signatures,
+      restore.body as unknown as { outputs: { B_: string }[]; signatures: never[] },
       keys,
     )
-    expect(restored, 'restore must rebuild the identical proofs').toEqual(fresh)
+    expect(restored.proofs, 'restore must rebuild the identical proofs').toEqual(fresh)
+    expect(restored.unmatched, 'the mint signed every output, so none is unmatched').toEqual([])
   }, 90_000)
 })
