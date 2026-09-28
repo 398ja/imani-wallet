@@ -27,6 +27,7 @@ import { useSessionReauth } from './lib/useSessionReauth'
 import { ReauthDialog } from './components/ui/ReauthDialog'
 import {
   canTrade,
+  isMerchant,
   loadMerchant,
   refreshMerchant,
   type MerchantProfile,
@@ -72,6 +73,7 @@ import { SubscriptionPage } from './pages/SubscriptionPage'
 import { TerminalsPage } from './pages/TerminalsPage'
 import { TerminalEnrolPage } from './pages/TerminalEnrolPage'
 import { useTerminalIdentity } from './lib/useTerminalIdentity'
+import { useStallActivation } from './lib/useStallActivation'
 import { ProfileEditPage } from './pages/ProfileEditPage'
 import { SecurityPage } from './pages/SecurityPage'
 import { BackupPage, RestorePage } from './pages/BackupPages'
@@ -95,6 +97,11 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
   // no merchant record, which is what makes an account a customer. Seeded from
   // localStorage so the first render already knows which home screen to show.
   const [merchant, setMerchant] = useState<MerchantProfile | null>(() => loadMerchant(pubkey))
+
+  // A merchant who registered in this tab may hold a customer session: it was
+  // minted before the gateway saw the stall (#114). This re-runs the handshake
+  // until the session can sell, and says so while it does.
+  const stallActivation = useStallActivation(pubkey, isMerchant(merchant), permissions)
 
   // A registration that just finished leaves the new nsec here. Reading it once,
   // on mount, is what lets the backup screen survive the remount that logging in
@@ -324,6 +331,23 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
   return (
     <>
       <Header profile={profile} merchant={trading} terminal={terminal.actor !== null} onLogout={onLogout} />
+      {stallActivation === 'activating' && (
+        <p
+          role="status"
+          className="flex items-center justify-center gap-2 bg-mono-100 px-4 py-2 text-sm text-mono-600 dark:bg-mono-800 dark:text-mono-300"
+        >
+          <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+          Setting up your stall… Selling unlocks in about a minute.
+        </p>
+      )}
+      {stallActivation === 'gave-up' && (
+        <p
+          role="alert"
+          className="bg-mono-100 px-4 py-2 text-center text-sm text-mono-600 dark:bg-mono-800 dark:text-mono-300"
+        >
+          Your stall is saved, but selling is not unlocked yet. Log out and unlock again to finish.
+        </p>
+      )}
       <Routes>
         {/*
           The role split. A merchant gets a different home and the two money

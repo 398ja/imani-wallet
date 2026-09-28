@@ -22,6 +22,7 @@ import {
 import { keyStore } from './nap'
 import { createWalletSigner } from './signer'
 import { stashPendingBackup } from './onboardingHandoff'
+import { confirmStallVisible, markStallActivation } from './stallActivation'
 
 /**
  * Creating an account: mint a key, claim a handle, then keep both.
@@ -269,6 +270,16 @@ export async function register(
   //    remounts the app into its authenticated tree, and that remount is what
   //    reads this — stashing afterwards means the screen never sees it.
   stashPendingBackup(pubkey, nsec)
+
+  // 4b. A merchant's session is only a merchant's if the gateway can see the
+  //     stall when it mints it (#114): permissions are fixed at /auth/complete
+  //     and a customer decision is then cached for 60 s. So wait, briefly, for
+  //     the record to be readable back before the handshake, and flag the tab
+  //     so AuthedApp re-runs the handshake if the first one still raced.
+  if (merchantRecord?.active) {
+    await confirmStallVisible(pubkey, merchantRecord.eventAt)
+    markStallActivation(pubkey)
+  }
 
   // 5. Last. Everything above is durable, so a session failure here is
   //    recoverable by unlocking normally.
