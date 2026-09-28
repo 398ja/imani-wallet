@@ -31,6 +31,10 @@ const PART_VALUE = 20000
 const failDeliveryFor = new Set<string>()
 /** Voucher ids that never finish minting. */
 const stallMintFor = new Set<string>()
+/** When true, the create response returns quote-backed PENDING parts with no token. */
+let createPending = false
+/** When true, GET /api/v1/wallet/vouchers/{id} answers 404 (gateway-customer#126). */
+let pollNotFound = false
 /**
  * Which spelling of the amount the mocked gateway offers.
  *
@@ -55,8 +59,10 @@ vi.mock('../nip98', () => ({
         json: async () => ({
           items: PARTS.map((id) => ({
             voucher_id: id,
-            status: 'ISSUED',
-            token: `cashu-${id}`,
+            // A part that never finishes minting is, by construction, still PENDING at create.
+            ...(createPending || stallMintFor.has(id)
+              ? { status: 'PENDING' }
+              : { status: 'ISSUED', token: `cashu-${id}` }),
             ...valueOf(),
             face_unit: 'GBP',
             expires_at: 1_900_000_000,
@@ -69,6 +75,9 @@ vi.mock('../nip98', () => ({
     // Polling one part.
     const polled = path.match(/\/api\/v1\/wallet\/vouchers\/(.+)$/)?.[1]
     if (polled) {
+      if (pollNotFound) {
+        return { ok: false, status: 404, json: async () => ({}), text: async () => 'not found' }
+      }
       if (stallMintFor.has(polled)) {
         return { ok: true, json: async () => ({ voucher_id: polled, status: 'PENDING' }), text: async () => '' }
       }
@@ -134,6 +143,8 @@ beforeEach(() => {
   failDeliveryFor.clear()
   stallMintFor.clear()
   valueField = 'face_value'
+  createPending = false
+  pollNotFound = false
 })
 
 describe('a sale the gateway split into several coupons', () => {
@@ -145,12 +156,30 @@ describe('a sale the gateway split into several coupons', () => {
     expect(result.vouchers).toHaveLength(PARTS.length)
   })
 
-  it('polls every part for its token', async () => {
+  it('polls every quote-backed (PENDING) part for its token', async () => {
+    createPending = true
+
     await issueAndDeliver(params)
 
     for (const id of PARTS) {
       expect(calls).toContain(`/api/v1/wallet/vouchers/${id}`)
     }
+    expect(deliveries()).toBe(PARTS.length)
+  })
+
+  /**
+   * gateway-customer#126: a coupon issued from the float comes back from create
+   * already ISSUED with its token. Re-reading it 404'd, so the sale failed after
+   * the proofs were spent. The create response is enough.
+   */
+  it('uses the token from the create response without re-reading it', async () => {
+    pollNotFound = true
+
+    const result = await issueAndDeliver(params)
+
+    expect(calls.some((c) => c.startsWith('/api/v1/wallet/vouchers/'))).toBe(false)
+    expect(deliveries()).toBe(PARTS.length)
+    expect(result.vouchers.map((v) => v.token)).toEqual(PARTS.map((id) => `cashu-${id}`))
   })
 
   it('delivers the whole face value the merchant sold', async () => {
