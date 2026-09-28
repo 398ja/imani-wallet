@@ -49,14 +49,20 @@ vi.mock('../../lib/wallet', async (importOriginal) => ({
 }))
 
 let result = { id: 'x', requested: 100, delivered: 100, parts: 2 } as Record<string, unknown>
+/** When set, the send ends by throwing this instead of resolving `result`. */
+let failure: Error | undefined
 vi.mock('../../lib/pay', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/pay')>()),
-  sendVouchers: () => Promise.resolve(result),
+  sendVouchers: () => (failure ? Promise.reject(failure) : Promise.resolve(result)),
 }))
 
 import { SendPage } from '../SendPage'
+import { SendOutcomeUnknownError } from '../../lib/pay'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  failure = undefined
+})
 
 async function send() {
   render(
@@ -105,5 +111,26 @@ describe('the sender sees one payment in several coupons', () => {
     result = { id: 'x', requested: 100, delivered: 40, inFlight: 40, parts: 2, shortfall: 'still going through' }
     await send()
     await waitFor(() => expect(screen.getByText(/The last .*0\.20 was not sent/)).toBeTruthy())
+  })
+
+  // #128: a send whose outcome is unknown may already have arrived, so the button that would send
+  // it again is locked and says why; only a real failure leaves it free to retry.
+  it('locks the pay button after a send whose outcome is unknown', async () => {
+    failure = new SendOutcomeUnknownError('This send is still going through at the gateway. It has NOT failed.', 'as_1')
+    await send()
+    const locked = await screen.findByRole('button', { name: 'Still going through' })
+    expect((locked as HTMLButtonElement).disabled).toBe(true)
+    // Back would clear the lock, so it is locked too; Done leaves without paying.
+    expect((screen.getByRole('button', { name: 'Back' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Done' })).toBeTruthy()
+    expect(screen.getByText(/has NOT failed/)).toBeTruthy()
+  })
+
+  // A send that really failed moved nothing, so trying again is safe and the button stays live.
+  it('leaves the pay button live after a send that failed', async () => {
+    failure = new Error('mint refused the split')
+    await send()
+    await screen.findByText('mint refused the split')
+    expect((screen.getByRole('button', { name: 'Pay' }) as HTMLButtonElement).disabled).toBe(false)
   })
 })

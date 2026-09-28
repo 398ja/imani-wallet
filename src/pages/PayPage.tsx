@@ -7,7 +7,13 @@ import { listVouchers } from '../lib/wallet'
 import { toMerchants, type Merchant } from '../lib/merchants'
 import { formatFace } from '../lib/format'
 import { identityLabel, useIdentity } from '../lib/identity'
-import { payRequest, splitObstacle, type SendResult } from '../lib/pay'
+import {
+  payRequest,
+  SendOutcomeUnknownError,
+  splitObstacle,
+  withoutInFlight,
+  type SendResult,
+} from '../lib/pay'
 import type { NUT18VRequest } from '../lib/nap'
 import {
   Button,
@@ -25,6 +31,8 @@ type Status =
   | { step: 'paying' }
   | { step: 'done'; result: SendResult }
   | { step: 'failed'; message: string }
+  /** The gateway took the payment and its outcome is unknown: Pay stays locked (#128). */
+  | { step: 'unconfirmed'; message: string }
 
 /**
  * Confirmation for a scanned voucher payment request, then the payment itself.
@@ -57,10 +65,11 @@ export function PayPage({ pubkey }: { pubkey: string }) {
 
   useEffect(() => {
     listVouchers().then((rows) => {
-      setMerchants(toMerchants(rows))
+      // What can be spent, not all that is held: a coupon behind an unconfirmed send is out (#128).
+      setMerchants(toMerchants(withoutInFlight(rows, pubkey)))
       setLoadedAt(Date.now())
     })
-  }, [])
+  }, [pubkey])
 
   // Before the early returns, and so before `merchant` exists — hooks cannot be
   // called conditionally. It is the same fetch the merchant pages make, cached per
@@ -216,12 +225,12 @@ export function PayPage({ pubkey }: { pubkey: string }) {
           cannot be divided below one sat's worth of face value. Surfaced here
           so the obstacle is visible before the tap, not thrown afterwards. */}
       {!expired && group && shortfall <= 0 && obstacle && <Alert>{obstacle}</Alert>}
-      {status.step === 'failed' && <Alert>{status.message}</Alert>}
+      {(status.step === 'failed' || status.step === 'unconfirmed') && <Alert>{status.message}</Alert>}
 
       <Button
         size="lg"
         className="mt-4 w-full"
-        disabled={!payable || status.step === 'paying'}
+        disabled={!payable || status.step === 'paying' || status.step === 'unconfirmed'}
         onClick={async () => {
           setStatus({ step: 'paying' })
           try {
@@ -229,13 +238,13 @@ export function PayPage({ pubkey }: { pubkey: string }) {
             setStatus({ step: 'done', result })
           } catch (e) {
             setStatus({
-              step: 'failed',
+              step: e instanceof SendOutcomeUnknownError ? 'unconfirmed' : 'failed',
               message: e instanceof Error ? e.message : 'Payment failed.',
             })
           }
         }}
       >
-        {status.step === 'paying' ? 'Paying…' : 'Pay'}
+        {status.step === 'paying' ? 'Paying…' : status.step === 'unconfirmed' ? 'Still going through' : 'Pay'}
       </Button>
     </Screen>
   )
