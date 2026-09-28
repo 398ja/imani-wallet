@@ -787,6 +787,24 @@ async function initiateOnFirstFree(
 }
 
 /**
+ * One status read, where a read that fails leaves the status as it was.
+ *
+ * A failed read says nothing about the send: the saga runs at the gateway whether or not
+ * this wallet can reach it for a moment. Letting it throw reported a completed part as
+ * "not sent" and told the customer to send the difference again, which paid it twice
+ * (#125). An outcome still unknown when the polls run out is the "still going through"
+ * answer below, and the pending ledger finishes it on the next login.
+ */
+async function readStatusOrKeepLast(api: SendApi, sendId: string, last: SendStatus): Promise<SendStatus> {
+  try {
+    return await api.getAtomicSendStatus(sendId)
+  } catch (error) {
+    console.warn('[pay] send status unreadable, still waiting:', sendId, error)
+    return last
+  }
+}
+
+/**
  * Wait for the saga to reach a terminal state, then settle the local side.
  *
  * Shared by the merchant-payment and person-to-person paths deliberately: this
@@ -819,7 +837,7 @@ async function awaitAndSettle(
   let polled = false
   for (let i = 0; i < POLL_ATTEMPTS && !TERMINAL.includes(String(status.status)); i += 1) {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
-    status = await api.getAtomicSendStatus(pending.sendId)
+    status = await readStatusOrKeepLast(api, pending.sendId, status)
     polled = true
   }
 

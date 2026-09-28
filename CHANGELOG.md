@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A network blip while a send settles no longer reports it as unsent (#125).** One failed
+  status read threw out of the wait, so a part the gateway had completed was shown as "Partly
+  sent ... send the difference again", which pays it twice. A failed read now leaves the outcome
+  unknown and the wallet keeps waiting. If it is still unknown at the end, the send is reported as
+  still going through and is finished from the pending ledger on the next login.
+
 ## [0.9.1] - 2026-09-28
 
 Pairs with imani-gateway-portal 0.9.0 (token in the create response); still works against an
