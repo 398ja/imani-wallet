@@ -699,11 +699,11 @@ async function sendApi(): Promise<SendApi> {
  * identity is safe as the map key because `selectVouchers` filters and sorts —
  * it never clones — so the candidates it returns are these same objects.
  */
-async function spendableFrom(merchantPubkey: string): Promise<{
+async function spendableFrom(merchantPubkey: string, payer: string): Promise<{
   mine: Voucher[]
   rowOf: Map<Voucher, VoucherRow>
 }> {
-  const rows = couponsFor(await listVouchers(), merchantPubkey)
+  const rows = withoutInFlight(couponsFor(await listVouchers(), merchantPubkey), payer)
 
   /**
    * Drop anything this wallet has already spent, according to its own
@@ -738,6 +738,18 @@ async function spendableFrom(merchantPubkey: string): Promise<{
     return voucher
   })
   return { mine, rowOf }
+}
+
+/**
+ * Drop every coupon that is the source of a send still in flight (#128).
+ *
+ * Such a send may already have reached its recipient: its outcome is unknown, not failed. Its
+ * coupon stays in the wallet until `reconcilePendingSends` settles it, and offering it again
+ * let a second tap pay the same money twice, from a coupon the gateway had not yet refused.
+ */
+function withoutInFlight(rows: VoucherRow[], payer: string): VoucherRow[] {
+  const held = new Set(loadPendingSends(payer).map((send) => send.tokenId))
+  return held.size === 0 ? rows : rows.filter((row) => !held.has(row.token_id))
 }
 
 /**
@@ -967,7 +979,7 @@ export async function payRequest({
   }
 
   const api = await sendApi()
-  const { mine, rowOf } = await spendableFrom(merchant.pubkey)
+  const { mine, rowOf } = await spendableFrom(merchant.pubkey, payer)
   // Filtered by the request's unit, which this door did not do while it spent
   // exactly one coupon and `selectVouchers` compared amounts within it. Drawing
   // across several makes a mixed-unit wallet dangerous: 300 EUR + 200 XAF add
@@ -1219,7 +1231,7 @@ export async function sendVouchers({
   }
 
   const api = await sendApi()
-  const { mine, rowOf } = await spendableFrom(merchant.pubkey)
+  const { mine, rowOf } = await spendableFrom(merchant.pubkey, payer)
   const inUnit = mine.filter(
     (v) => (v.face_unit ?? '').toUpperCase() === unit.toUpperCase(),
   )

@@ -26,7 +26,7 @@ import {
   useMerchantHandle,
   useMerchantLabel,
 } from '../lib/identity'
-import { sendVouchers, splitObstacle, type SendResult } from '../lib/pay'
+import { SendOutcomeUnknownError, sendVouchers, splitObstacle, type SendResult } from '../lib/pay'
 
 /**
  * Send a voucher to someone — a friend, or a merchant redeeming it.
@@ -87,7 +87,15 @@ function sendOptions(merchants: Merchant[]): SendOption[] {
   return [...byUnit.values()].sort((a, b) => b.totalFaceValue - a.totalFaceValue)
 }
 
-type Status = { step: 'idle' } | { step: 'sending' } | { step: 'failed'; message: string }
+/**
+ * `unconfirmed`: the gateway took the send and the wallet could not learn how it ended. It may
+ * already have arrived, so the button stays locked: pressing it again could pay twice (#128).
+ */
+type Status =
+  | { step: 'idle' }
+  | { step: 'sending' }
+  | { step: 'failed'; message: string }
+  | { step: 'unconfirmed'; message: string }
 
 export function SendPage({ pubkey }: { pubkey: string }) {
   const navigate = useNavigate()
@@ -420,13 +428,13 @@ export function SendPage({ pubkey }: { pubkey: string }) {
           Once sent, this cannot be undone from here.
         </p>
 
-        {status.step === 'failed' && <Alert>{status.message}</Alert>}
+        {(status.step === 'failed' || status.step === 'unconfirmed') && <Alert>{status.message}</Alert>}
 
         <div className="space-y-2">
           <Button
             size="lg"
             className="w-full"
-            disabled={status.step === 'sending'}
+            disabled={status.step === 'sending' || status.step === 'unconfirmed'}
             onClick={async () => {
               setStatus({ step: 'sending' })
               try {
@@ -448,13 +456,19 @@ export function SendPage({ pubkey }: { pubkey: string }) {
                 setStatus({ step: 'idle' })
               } catch (e) {
                 setStatus({
-                  step: 'failed',
+                  step: e instanceof SendOutcomeUnknownError ? 'unconfirmed' : 'failed',
                   message: e instanceof Error ? e.message : 'Send failed.',
                 })
               }
             }}
           >
-            {status.step === 'sending' ? 'Sending…' : asMerchant ? 'Pay' : 'Send'}
+            {status.step === 'sending'
+              ? 'Sending…'
+              : status.step === 'unconfirmed'
+                ? 'Still going through'
+                : asMerchant
+                  ? 'Pay'
+                  : 'Send'}
           </Button>
           <Button
             variant="ghost"

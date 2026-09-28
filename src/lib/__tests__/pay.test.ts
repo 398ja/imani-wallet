@@ -574,6 +574,8 @@ describe('sendVouchers and payRequest', () => {
     stubs.notified.count = 0
     stubs.merchants.clear()
     stubs.unreachable.clear()
+    // A send left in flight by an earlier test would hold its coupon out of this one (#128).
+    localStorage.removeItem(`imani-wallet:pending-sends:${PAYER}`)
   })
 
   it('refuses to send to yourself', async () => {
@@ -1107,6 +1109,51 @@ describe('sendVouchers and payRequest', () => {
       vi.useRealTimers()
     }
     expect(reads).toBe(1)
+  })
+
+  /** Records a send still in flight whose source is the coupon `tokenId`, and clears it afterwards. */
+  function pendingSendHolding(tokenId: string) {
+    const key = `imani-wallet:pending-sends:${PAYER}`
+    localStorage.setItem(key, JSON.stringify([{
+      sendId: 'as_in_flight', tokenId, amount: 500, unit: 'EUR', decimals: 2,
+      merchantPubkey: ISSUER, recipientPubkey: FRIEND, sourceFaceValue: 500, at: Date.now(),
+    }]))
+    onTestFinished(() => localStorage.removeItem(key))
+  }
+
+  // #128: a coupon whose send is still in flight may already have reached the recipient. Paying
+  // again must never draw on it, so a second tap cannot pay twice with the "same" money.
+  it('never draws on a coupon whose earlier send is still in flight', async () => {
+    const heldBySend = row({ token_id: '1'.repeat(32), voucher_id: 'v-held', face_value: 500, token_amount: 500 })
+    const free = row({ token_id: '2'.repeat(32), voucher_id: 'v-free', face_value: 500, token_amount: 500 })
+    stubs.rows = [heldBySend, free]
+    pendingSendHolding(heldBySend.token_id as string)
+    const sent = gateway()
+    wallet([heldBySend, free])
+
+    await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 500 })
+    // And the other way round, so the result cannot come from the selector's own order.
+    localStorage.setItem(`imani-wallet:pending-sends:${PAYER}`, JSON.stringify([{
+      sendId: 'as_in_flight_2', tokenId: free.token_id, amount: 500, unit: 'EUR', decimals: 2,
+      merchantPubkey: ISSUER, recipientPubkey: FRIEND, sourceFaceValue: 500, at: Date.now(),
+    }]))
+    await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 500 })
+
+    expect(sent.map((s) => s.voucherId)).toEqual(['v-free', 'v-held'])
+  })
+
+  // #128: with only the in-flight coupon left, the wallet says so rather than paying from it.
+  it('refuses to pay when the only coupon is held by a send still in flight', async () => {
+    const heldBySend = row({ token_id: '1'.repeat(32), voucher_id: 'v-held', face_value: 500, token_amount: 500 })
+    stubs.rows = [heldBySend]
+    pendingSendHolding(heldBySend.token_id as string)
+    const sent = gateway()
+    wallet([heldBySend])
+
+    await expect(
+      sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 500 }),
+    ).rejects.toThrow()
+    expect(sent).toEqual([])
   })
 
   it('throws when the first part fails, because nothing has moved', async () => {
