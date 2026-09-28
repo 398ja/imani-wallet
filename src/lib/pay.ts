@@ -76,7 +76,7 @@ const TERMINAL = [
   'SPLIT_ERROR',
 ]
 
-type SendStatus = {
+export type SendStatus = {
   status?: string
   keep_token?: string
   /** Face value of the change, authoritative — the split may round. */
@@ -90,6 +90,8 @@ type SendStatus = {
   sent_voucher_id?: string
   error?: string
   error_message?: string
+  /** Gateway-core's typed failure reason (e.g. SPLIT_NEVER_SIGNED). */
+  error_code?: string
 }
 
 /**
@@ -117,8 +119,35 @@ function satsInToken(token: string): number | null {
  * split endpoints this tier refuses. Otherwise the smallest coupon that covers
  * the amount, which is the ordinary split-and-change case.
  */
-/** States where the backend holds the token and expects the sender to take it back. */
-const RECLAIMABLE = ['DM_ERROR', 'RECLAIM_READY', 'EXPIRED', 'FAILED', 'SPLIT_ERROR']
+/**
+ * States where the backend really holds a token and will accept a reclaim.
+ * Mirrors gateway-core's `SendState.isReclaimable()`. FAILED / SPLIT_ERROR /
+ * EXPIRED are NOT here: the gateway refuses to reclaim them, and on those
+ * states no token is held, so saying "held by the gateway" would be false.
+ */
+const RECLAIMABLE = ['TOKEN_HELD', 'DM_ERROR', 'DM_RETRY_PENDING', 'RECLAIM_READY']
+
+/**
+ * What to tell the user about their voucher when a send ended in a state that
+ * cannot be reclaimed. Keyed on gateway-core's `error_code` (#117).
+ */
+export function unreclaimableNote(status: SendStatus, sendId: string): string {
+  switch (status.error_code) {
+    case 'SPLIT_NEVER_SIGNED':
+      // The mint never signed the split: inputs are unspent, nothing left the wallet.
+      return ' The send did not go through. Your voucher is still in your wallet.'
+    case 'SOURCE_PROOFS_NOT_UNSPENT':
+      return ' The send did not go through: the mint reports this voucher was already spent.'
+    case 'PHANTOM_SPEND':
+    case 'SPLIT_PROOFS_SPENT':
+      return (
+        ` The send did not go through, but an earlier attempt already spent this voucher at` +
+        ` the mint. It could not be returned automatically (send ${sendId}).`
+      )
+    default:
+      return ''
+  }
+}
 
 export const POLL_ATTEMPTS = 40
 export const POLL_INTERVAL_MS = 500
@@ -203,7 +232,7 @@ async function reclaim(
   tokenId: string,
   status: SendStatus,
 ): Promise<string> {
-  if (!RECLAIMABLE.includes(String(status.status))) return ''
+  if (!RECLAIMABLE.includes(String(status.status))) return unreclaimableNote(status, sendId)
   try {
     const result = await api.reclaimAtomicSend(sendId)
     if (!result?.reclaimed_token) {
