@@ -169,7 +169,18 @@ export function candidateClaim(
   // than before this gate existed, which is the same direction `checkIssuer`
   // takes and for the same reason (a gate on money must not strand it).
   const backing = checkMintAndUnit(parsed)
-  if (backing === 'untrusted-mint' || backing === 'wrong-unit') return undefined
+  // `not-ready` is also refused, for the reason given in `trustedMint.ts`: it means
+  // the trusted set is not yet knowable, and treating unknown as permitted would let
+  // a delayed /api/v1/config turn the check off. Safe to refuse here because this is
+  // a SWEEP: a row skipped now is a candidate again on the next pass, so the only
+  // cost is a later reconciliation rather than a lost claim.
+  if (
+    backing === 'untrusted-mint' ||
+    backing === 'wrong-unit' ||
+    backing === 'not-ready'
+  ) {
+    return undefined
+  }
   if (!v.issuerId || v.issuerId.toLowerCase() !== stallPubkey.toLowerCase()) return undefined
   if (!v.voucherId || !v.unit) return undefined
 

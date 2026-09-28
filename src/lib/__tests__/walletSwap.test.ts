@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { splitIntoDenominations, blindOutputs, unblindOutputs } from '../walletSwap'
+import {
+  splitIntoDenominations,
+  blindOutputs,
+  unblindOutputs,
+  unblindRestored,
+} from '../walletSwap'
 
 /**
  * The wallet's own half of a swap: choose the outputs, blind them, unblind the
@@ -60,6 +65,34 @@ describe('splitting an amount into denominations', () => {
     expect(() => splitIntoDenominations(-1)).toThrow(/positive/)
     expect(() => splitIntoDenominations(1.5)).toThrow(/positive/)
     expect(() => splitIntoDenominations(Number.NaN)).toThrow(/positive/)
+  })
+
+  /**
+   * Found in review, and it was silent, which is what made it serious.
+   *
+   * Bitwise operators coerce to int32, so the original `amount & bit` dropped the
+   * high bits of anything at or above 2^32. Measured on the old code: 2^32 + 7
+   * split as parts summing to SEVEN. Every guard downstream would have been
+   * satisfied, because the mint signs exactly what it is asked for, so the wallet
+   * would have burnt about 4.3 billion sats of input and minted 7 sats of output
+   * with nothing reporting a fault.
+   *
+   * Not a realistic coupon. But a money function whose failure mode is silent and
+   * undetectable downstream should not have one.
+   */
+  it('stays exact above the 32-bit boundary', () => {
+    for (const amount of [2 ** 31 - 1, 2 ** 31, 2 ** 32, 2 ** 32 + 7, 2 ** 40 + 12345]) {
+      const parts = splitIntoDenominations(amount)
+      expect(parts.reduce((a, b) => a + b, 0), `split of ${amount}`).toBe(amount)
+    }
+  })
+
+  /**
+   * Past the safe-integer range the arithmetic stops being exact at all, so there
+   * is no split to return. Refusing is the only honest answer.
+   */
+  it('refuses an amount too large to represent exactly', () => {
+    expect(() => splitIntoDenominations(Number.MAX_SAFE_INTEGER + 2)).toThrow(/too large/)
   })
 })
 
@@ -192,5 +225,133 @@ describe('unblinding what the mint returned', () => {
     expect(() =>
       unblindOutputs(outputs, [{ id: keysetId, amount: 2, C_: '02'.padEnd(66, 'a') }], {}),
     ).toThrow(/key/)
+  })
+
+  /**
+   * The keyset must match too, and it was the one field left unchecked. The proof
+   * takes the OUTPUT's id, so a signature made under keyset B would be recorded
+   * against keyset A and fail at the next spend with nothing to explain why. Found
+   * in review: swapping `id: output.id` for `id: signature.id` left every test
+   * green, which is the definition of an unpinned field.
+   */
+  it('refuses a signature made under a different keyset', () => {
+    const outputs = blindOutputs([2], keysetId)
+    expect(() =>
+      unblindOutputs(outputs, [{ id: '00e3372e61d05605', amount: 2, C_: '02'.padEnd(66, 'a') }], {
+        '2': '02'.padEnd(66, 'b'),
+      }),
+    ).toThrow(/keyset/)
+  })
+})
+
+describe('unblinding a NUT-09 restore', () => {
+  const keysetId = '01ef5b830da1f32acd88bdf30c246627833672eb53112b7e2962a608ba96773aa9'
+
+  /**
+   * Builds a fake mint's answer for a chosen SUBSET of outputs, in the shape the
+   * real mint returns: matched messages paired with their signatures.
+   */
+  async function restoreAnswer(outputs: ReturnType<typeof blindOutputs>, indices: number[]) {
+    const { secp256k1 } = await import('@noble/curves/secp256k1.js')
+    const { bytesToHex } = await import('@noble/hashes/utils')
+    const secretKey = secp256k1.utils.randomSecretKey()
+    const scalar = BigInt('0x' + bytesToHex(secretKey))
+    const publicKey = secp256k1.Point.BASE.multiply(scalar).toHex(true)
+
+    const matched = indices.map((index) => outputs[index])
+    return {
+      answer: {
+        outputs: matched.map((o) => ({ B_: o.B_ })),
+        signatures: matched.map((o) => ({
+          id: o.id,
+          amount: o.amount,
+          C_: secp256k1.Point.fromHex(o.B_).multiply(scalar).toHex(true),
+        })),
+      },
+      keys: { '1': publicKey, '2': publicKey, '4': publicKey },
+    }
+  }
+
+  /**
+   * The finding that mattered most in review, and it loses money.
+   *
+   * A swap that fails partway still SPENDS its inputs, and the mint deliberately
+   * leaves the outputs it did sign durably recoverable through restore. So a
+   * partial answer is a designed state, not a fault. Reusing the swap's positional
+   * count check threw on any partial answer, which abandoned every signature the
+   * mint really had issued: money the wallet owns and has no other route to.
+   */
+  it('recovers the subset the mint signed and reports the rest', async () => {
+    const outputs = blindOutputs([4, 2, 1], keysetId)
+    const { answer, keys } = await restoreAnswer(outputs, [0, 2])
+
+    const { proofs, unmatched } = unblindRestored(outputs, answer, keys)
+
+    expect(proofs.map((p) => p.amount)).toEqual([4, 1])
+    expect(proofs.map((p) => p.secret)).toEqual([outputs[0].secret, outputs[2].secret])
+    expect(unmatched.map((o) => o.amount)).toEqual([2])
+  })
+
+  /** A complete answer is just the case where nothing is unmatched. */
+  it('recovers everything when the mint signed everything', async () => {
+    const outputs = blindOutputs([2, 1], keysetId)
+    const { answer, keys } = await restoreAnswer(outputs, [0, 1])
+
+    const { proofs, unmatched } = unblindRestored(outputs, answer, keys)
+
+    expect(proofs.map((p) => p.amount)).toEqual([2, 1])
+    expect(unmatched).toEqual([])
+  })
+
+  /** Nothing signed means nothing recovered, and nothing thrown. */
+  it('reports every output as unmatched when the mint signed none', async () => {
+    const outputs = blindOutputs([2, 1], keysetId)
+    const { answer, keys } = await restoreAnswer(outputs, [])
+
+    const { proofs, unmatched } = unblindRestored(outputs, answer, keys)
+
+    expect(proofs).toEqual([])
+    expect(unmatched).toHaveLength(2)
+  })
+
+  /**
+   * Paired by `B_`, not by position, which is the whole difference from a swap.
+   * The mint returns matches in its own order, and pairing positionally would
+   * attach a signature to the wrong output.
+   */
+  it('pairs by blinded message rather than by position', async () => {
+    const outputs = blindOutputs([4, 2, 1], keysetId)
+    const { answer, keys } = await restoreAnswer(outputs, [2, 0])
+
+    const { proofs } = unblindRestored(outputs, answer, keys)
+
+    // Returned in OUR order, regardless of the order the mint answered in.
+    expect(proofs.map((p) => p.amount)).toEqual([4, 1])
+    expect(proofs.map((p) => p.secret)).toEqual([outputs[0].secret, outputs[2].secret])
+  })
+
+  /** An answer whose own two arrays disagree is not an answer we can read. */
+  it('refuses an answer whose outputs and signatures do not pair up', () => {
+    const outputs = blindOutputs([2], keysetId)
+    expect(() =>
+      unblindRestored(outputs, { outputs: [{ B_: outputs[0].B_ }], signatures: [] }, {}),
+    ).toThrow(/paired/)
+  })
+
+  /** The same amount and keyset guards apply as on a swap. */
+  it('refuses a restored signature whose amount does not match', async () => {
+    const outputs = blindOutputs([2], keysetId)
+    const { answer, keys } = await restoreAnswer(outputs, [0])
+    answer.signatures[0].amount = 1
+
+    expect(() => unblindRestored(outputs, answer, { ...keys, '1': keys['2'] })).toThrow(/amount/)
+  })
+
+  it('refuses a restored signature made under a different keyset', async () => {
+    const outputs = blindOutputs([2], keysetId)
+    const { answer, keys } = await restoreAnswer(outputs, [0])
+    answer.signatures[0].id = '00e3372e61d05605'
+
+    expect(() => unblindRestored(outputs, answer, keys)).toThrow(/keyset/)
   })
 })

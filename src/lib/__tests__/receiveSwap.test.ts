@@ -72,9 +72,19 @@ async function fakeMint() {
       },
       async restore(_mintUrl: string, outputs: { amount: number; id: string; B_: string }[]) {
         calls.restore++
-        // Restore answers only for messages the mint has actually signed.
-        const found = outputs.map((o) => signed.get(o.B_)).filter((s) => s !== undefined)
-        return { signatures: found as { id: string; amount: number; C_: string }[] }
+        // Mirrors the real mint: only the messages it HAS a signature for come
+        // back, paired with those signatures, so a partial answer is normal.
+        // Verified against the live mint, which returns `{outputs: [], signatures: []}`
+        // for an unknown B_ and matched pairs otherwise.
+        const matchedOutputs: { B_: string }[] = []
+        const signatures: { id: string; amount: number; C_: string }[] = []
+        for (const output of outputs) {
+          const signature = signed.get(output.B_)
+          if (!signature) continue
+          matchedOutputs.push({ B_: output.B_ })
+          signatures.push(signature)
+        }
+        return { outputs: matchedOutputs, signatures }
       },
     },
   }
@@ -295,6 +305,11 @@ describe('recovering interrupted swaps', () => {
     })
 
     expect(await recoverInterruptedSwaps(PUBKEY, mint.transport)).toEqual([])
+    // And the record is DROPPED, not retried for ever. Found in review: asserting
+    // only the empty return passed whether or not the drop happened, so the #127
+    // claim in the module comment was unpinned. A record that can never succeed
+    // would otherwise be swept on every login until it expired.
+    expect(loadSwapIntents(PUBKEY)).toEqual([])
   })
 
   /**
@@ -364,6 +379,110 @@ describe('recovering interrupted swaps', () => {
     const mint = await fakeMint()
     expect(await recoverInterruptedSwaps(PUBKEY, mint.transport)).toEqual([])
     expect(mint.calls.restore).toBe(0)
+  })
+
+  /**
+   * The review finding that loses money, exercised through the sweep.
+   *
+   * The mint deliberately creates this state: a swap that fails partway still
+   * SPENDS its inputs and leaves the outputs it did sign recoverable only through
+   * restore. Insisting on a complete answer abandoned those signatures, which the
+   * wallet owns and can reach no other way. Here the mint signed two of three.
+   */
+  it('recovers the part the mint signed when a swap was cut short', async () => {
+    const mint = await fakeMint()
+    const outputs = blindOutputs(splitIntoDenominations(7), KEYSET)
+    expect(outputs.map((o) => o.amount)).toEqual([4, 2, 1])
+
+    // Only the 4 and the 1 were signed before the swap was interrupted.
+    await mint.transport.swap(MINT, { inputs: [], outputs: [outputs[0], outputs[2]] })
+
+    rememberSwapIntent(PUBKEY, {
+      swapId: 'cut-short',
+      mintUrl: MINT,
+      keysetId: KEYSET,
+      inputs: sourceProofs(7),
+      outputs,
+      at: Date.now(),
+    })
+
+    const recovered = await recoverInterruptedSwaps(PUBKEY, mint.transport)
+
+    expect(recovered).toHaveLength(1)
+    expect(recovered[0].proofs.map((p) => p.amount)).toEqual([4, 1])
+    expect(recovered[0].proofs.reduce((sum, p) => sum + p.amount, 0)).toBe(5)
+    // Settled, because what could be recovered has been. The unsigned output is
+    // value the mint never created, so there is nothing left to come back for.
+    expect(loadSwapIntents(PUBKEY)).toEqual([])
+  })
+
+  /** And it says so, because a short recovery is worth an operator's attention. */
+  it('warns when only part of a swap could be recovered', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const mint = await fakeMint()
+    const outputs = blindOutputs(splitIntoDenominations(7), KEYSET)
+    await mint.transport.swap(MINT, { inputs: [], outputs: [outputs[0]] })
+    rememberSwapIntent(PUBKEY, {
+      swapId: 'cut-short',
+      mintUrl: MINT,
+      keysetId: KEYSET,
+      inputs: sourceProofs(7),
+      outputs,
+      at: Date.now(),
+    })
+
+    await recoverInterruptedSwaps(PUBKEY, mint.transport)
+
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+})
+
+describe('a locked coupon', () => {
+  /**
+   * The witness must be PERSISTED, not just sent.
+   *
+   * A NUT-19 replay has to be byte-identical, because the mint fingerprints the
+   * whole request. A locked input without its witness is both a different request
+   * and one the mint would refuse anyway. Dropping it made replay silently
+   * unavailable for exactly the customer-to-customer transfer case the design
+   * cares most about, while the comment claimed replay was always the cheaper
+   * route. Found in review.
+   */
+  it('keeps the witness in the record, so a replay can be byte-identical', async () => {
+    const mint = await fakeMint()
+    const witnessed = [{ ...sourceProofs(2)[0], witness: '{"signatures":["abc123"]}' }]
+
+    const failing = {
+      ...mint.transport,
+      async swap() {
+        throw new Error('response lost')
+      },
+    }
+
+    await expect(
+      receiveByOwnSwap({ pubkey: PUBKEY, mintUrl: MINT, proofs: witnessed }, failing),
+    ).rejects.toThrow()
+
+    const [held] = pendingSwapIntents(PUBKEY)
+    expect(held.inputs[0].witness).toBe('{"signatures":["abc123"]}')
+  })
+
+  /** An unlocked input carries no witness field at all, keeping the wire unchanged. */
+  it('records no witness field for a bearer input', async () => {
+    const mint = await fakeMint()
+    const failing = {
+      ...mint.transport,
+      async swap() {
+        throw new Error('response lost')
+      },
+    }
+
+    await expect(
+      receiveByOwnSwap({ pubkey: PUBKEY, mintUrl: MINT, proofs: sourceProofs(2) }, failing),
+    ).rejects.toThrow()
+
+    expect(pendingSwapIntents(PUBKEY)[0].inputs[0]).not.toHaveProperty('witness')
   })
 })
 

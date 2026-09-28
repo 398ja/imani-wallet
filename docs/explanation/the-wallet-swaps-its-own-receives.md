@@ -7,7 +7,24 @@ you receive) and imani-wallet#123 (a receive whose response is lost is
 unrecoverable).
 
 It is an explanation, not a how-to. It argues for a design and states what the
-design does not solve. No code has been written.
+design does not solve.
+
+## Status
+
+The mechanism is built and tested. It is **not yet wired in**, so neither bug is
+closed in a shipped build:
+
+| Piece | State |
+|---|---|
+| Mint and unit pinned before crediting | Live, on both crediting paths |
+| Wallet-side blinding, swap and unblinding | Built, verified against the real mint |
+| Swap intent persisted, lost response recovered | Built, verified against the real mint |
+| The receive orchestration | Built, nothing calls it yet |
+| A transport against the real mint | Not built |
+| The issuer re-signing call for vouchers | Not built, so a voucher receive is refused |
+
+Until the last two exist, the live receive is still the gateway endpoint and the
+custody exposure described below is unchanged.
 
 ## The shape of the problem
 
@@ -278,6 +295,25 @@ reason to re-sign bearer vouchers.
 - **The privacy leak.** The gateway learns each voucher output secret at the
   signing call and can watch spentness. Blind-signing the secret is not possible
   with BIP-340 as specified. Worth a follow-up, not a blocker.
+
+- **An unfinished receive does not survive losing the device.** The secrets and
+  blinding factors live in that browser's storage and nowhere else, so a wallet
+  restored from a seed on a new device cannot rebuild them. Restore is keyed on the
+  blinded message, and the blinded message cannot be rebuilt without the blinding
+  factor, so the mint cannot help either.
+
+  NUT-13 derives both from a seed, which would close this for plain ecash. It
+  cannot close it for vouchers: a voucher secret carries an issuer signature no
+  derivation produces. Using it for the plain path only is worth doing and is not
+  done here. Until then the exposure is bounded by how long a receive stays
+  unfinished, which is normally seconds.
+
+- **A keyset that charges an input fee.** Amounts are requested to equal the
+  inputs exactly, which NUT-02 refuses when a fee applies, so every receive would
+  fail on a fee-bearing keyset. The failure is safe rather than lossy: the mint
+  refuses before signing and the inputs stay spendable. Staging reports
+  `input_fee_ppk: 0` today, and the fee should be read from the keyset rather than
+  assumed to stay zero.
 
 Pinning the mint and unit was on this list when it was only a filed bug. It is
 now a requirement of this design and has its own section above.

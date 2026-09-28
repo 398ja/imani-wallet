@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A coupon is refused unless its proofs are at a trusted mint, in sat.** A coupon's value
+  is not in the coupon, it is in the proofs at a mint, and the issuer signature covers no mint
+  at all. So a copy of a genuine signed coupon backed by proofs from a mint nobody has heard of
+  verified perfectly and was credited as money. The wallet read the mint URL and the unit and
+  checked neither. Both crediting paths now refuse one they do not recognise. The trusted mint
+  can be set with `VITE_TRUSTED_MINT_URLS` (comma-separated), and otherwise falls back to the
+  mint the gateway names, so a wallet is protected without configuration. While that answer is
+  still outstanding a coupon is deferred rather than waved through, since otherwise delaying one
+  request would turn the check off.
+
+### Added
+
+- **Groundwork for the wallet to swap its own receives** (imani-gateway-customer#133,
+  imani-wallet#123). The gateway performs the receive swap today, which is why it keeps a
+  spendable copy of every coupon received and why a lost response leaves it holding the only
+  copy. The wallet-side blinding, the swap intent that makes a lost response recoverable, and
+  the receive orchestration are built and verified against the real mint. **Not yet wired in**,
+  so neither bug is closed by this release: a transport against the mint and the issuer
+  re-signing call a voucher needs are still outstanding, and a voucher receive is refused rather
+  than stripped of its identity. See `docs/explanation/the-wallet-swaps-its-own-receives.md`.
+
 - **A network blip while a send settles no longer reports it as unsent (#125).** One failed
   status read threw out of the wait, so a part the gateway had completed was shown as "Partly
   sent ... send the difference again", which pays it twice. A failed read now leaves the outcome

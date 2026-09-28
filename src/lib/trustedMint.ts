@@ -46,20 +46,67 @@ function normaliseMintUrl(url: string): string {
 }
 
 /**
- * The mint the gateway told this wallet to use, or empty.
+ * The gateway's config, when it has actually arrived.
  *
  * Read off `globalThis` rather than imported. `shared/gateway-config.js` is a
  * classic script that assigns `globalThis.GatewayConfig` and fires a fetch on
  * load, so importing it here would make a pure comparison function perform I/O
  * as a side effect of being imported, and would do it in every test that touches
  * this file.
- *
- * Absent in tests and before `/api/v1/config` resolves, which is why every
- * caller treats an empty result as "nothing configured" rather than an error.
  */
-function gatewayMintUrl(): string {
-  const config = (globalThis as { GatewayConfig?: { mintUrl?: string } }).GatewayConfig
-  return config?.mintUrl ?? ''
+interface GatewayConfigShape {
+  mintUrl?: string
+  /** Fires once, after `/api/v1/config` resolves. Our readiness signal. */
+  whenReady?(callback: () => void): void
+}
+
+function gatewayConfig(): GatewayConfigShape | undefined {
+  return (globalThis as { GatewayConfig?: GatewayConfigShape }).GatewayConfig
+}
+
+/**
+ * Whether the gateway's configuration has arrived yet.
+ *
+ * **This is a security distinction, not a convenience.** `/api/v1/config` is
+ * fetched asynchronously and `shared/gateway-config.js` is itself loaded lazily by
+ * the legacy bridge, so `GatewayConfig` is `undefined` for a while after start and
+ * its `mintUrl` is empty until the fetch resolves.
+ *
+ * Without this distinction an empty mint list reads as "this deployment configures
+ * no mint", which returns `unchecked` and waves every coupon through. That turns
+ * the gate off for anyone who can merely DELAY one request: a slow network, a 500
+ * the wallet does not retry, a service-worker race. Far cheaper than compromising
+ * the config it is meant to protect.
+ *
+ * So "not loaded yet" is reported separately, and callers treat it as a reason to
+ * wait rather than a reason to proceed.
+ *
+ * Readiness is taken from `whenReady`, which the config module invokes ONCE the
+ * fetch has resolved, rather than from a non-empty `mintUrl`. A deployment may
+ * legitimately report no mint, and inferring readiness from the value could not
+ * tell that apart from a fetch still in flight.
+ *
+ * **Absent is not the same as pending.** `shared/gateway-config.js` is loaded
+ * lazily by the legacy bridge, so on a path that never touches it `GatewayConfig`
+ * is undefined for ever rather than briefly. Treating that as "wait" would refuse
+ * every coupon permanently, so it reads as "this wallet has no gateway config to
+ * wait for" and only a PRESENT-but-unresolved config defers. See `checkMintAndUnit`.
+ */
+export function gatewayConfigLoaded(): boolean {
+  const config = gatewayConfig()
+  // Nothing to wait for: the script was never loaded on this path.
+  if (!config) return true
+  // Present but not the module we know how to ask. Nothing to wait for either.
+  if (typeof config.whenReady !== 'function') return true
+
+  // `whenReady` runs its callback SYNCHRONOUSLY when the config has already
+  // resolved, and defers it otherwise. So observing a synchronous call is exactly
+  // the question being asked, and it costs no state of our own.
+  let ready = false
+  config.whenReady(() => {
+    ready = true
+  })
+  return ready
 }
 
 /**
@@ -84,15 +131,23 @@ export function trustedMintUrls(): string[] {
   const fromEnv = configured.split(',')
   // The gateway tells the wallet which mint to use. It is the same fact, from a
   // source the wallet already trusts for it.
-  const fromGateway = [gatewayMintUrl()]
+  const fromGateway = [gatewayConfig()?.mintUrl ?? '']
   const all = [...fromEnv, ...fromGateway].map(normaliseMintUrl).filter((u) => u.length > 0)
   return [...new Set(all)]
 }
 
 /** Why a coupon's backing was not accepted. */
 export type MintVerdict =
-  /** Nothing names a trusted mint, so this build makes no claim about the mint. */
+  /**
+   * Nothing names a trusted mint AND the gateway's config has arrived, so this
+   * deployment genuinely configures none. This build makes no claim about the mint.
+   */
   | 'unchecked'
+  /**
+   * The gateway's config has not arrived, so the trusted set is not yet knowable.
+   * NOT a pass: a caller must wait and ask again rather than credit on this.
+   */
+  | 'not-ready'
   /** The proofs are at a mint this build trusts, in the unit it understands. */
   | 'trusted'
   /** The proofs are at some other mint. Their value is not ours to credit. */
@@ -115,7 +170,12 @@ export function checkMintAndUnit(parsed: ParsedVoucherToken): MintVerdict {
   if (parsed.unit.trim().toLowerCase() !== TOKEN_UNIT) return 'wrong-unit'
 
   const trusted = trustedMintUrls()
-  if (trusted.length === 0) return 'unchecked'
+  if (trusted.length === 0) {
+    // An explicitly configured list needs no gateway, so an empty one here means
+    // neither source has named a mint. Which of the two silences it is decides
+    // whether this is a deployment choice or a race.
+    return gatewayConfigLoaded() ? 'unchecked' : 'not-ready'
+  }
 
   // A token with no mint URL normalises to the empty string, which cannot be on
   // the list because `trustedMintUrls` filters empties out when building it. So
