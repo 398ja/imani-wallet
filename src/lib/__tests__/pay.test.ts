@@ -892,6 +892,67 @@ describe('sendVouchers and payRequest', () => {
     expect(transactions.map((t) => t.bundleId)).toEqual([result.id, result.id])
   })
 
+  // #125: one failed status read while the last part settles must not report that part as
+  // unsent. The gateway completed it; "send the difference again" would pay it twice.
+  it('counts a part delivered when a status read fails once on the way', async () => {
+    stubs.rows = trio()
+    let reads = 0
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async (params: Record<string, unknown>) => ({
+        send_id: `as_${String(params.bundlePartIndex)}`,
+        status: 'PENDING',
+      }),
+      getAtomicSendStatus: async () => {
+        reads += 1
+        if (reads === 3) throw new TypeError('Failed to fetch')
+        return { status: 'COMPLETED' }
+      },
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    wallet(trio())
+
+    const result = await sendVouchers({
+      payer: PAYER,
+      recipient: { pubkey: FRIEND },
+      merchant,
+      unit: 'EUR',
+      amount: 1000,
+    })
+
+    expect(result).toMatchObject({ requested: 1000, delivered: 1000, parts: 3 })
+    expect(result.shortfall).toBeUndefined()
+  })
+
+  // #125: a gateway that cannot be read at all leaves the outcome UNKNOWN. That is the
+  // "still going through" answer, which keeps the send in the ledger, never a failure.
+  it('says a send is still going through when its status cannot be read at all', async () => {
+    stubs.rows = [row()]
+    let sendId = ''
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async () => {
+        sendId = 'as_unreadable'
+        return { send_id: sendId, status: 'PENDING' }
+      },
+      getAtomicSendStatus: async () => {
+        throw new TypeError('Failed to fetch')
+      },
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    wallet([row()])
+    vi.useFakeTimers()
+    try {
+      const sending = sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 250 })
+      const outcome = expect(sending).rejects.toThrow(/still going through.*has NOT failed/s)
+      await vi.runAllTimersAsync()
+      await outcome
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(loadPendingSends(PAYER).map((p) => p.sendId)).toContain(sendId)
+  })
+
   it('throws when the first part fails, because nothing has moved', async () => {
     stubs.rows = trio()
     Object.assign(stubs.api, {
