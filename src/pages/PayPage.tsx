@@ -7,7 +7,13 @@ import { listVouchers } from '../lib/wallet'
 import { toMerchants, type Merchant } from '../lib/merchants'
 import { formatFace } from '../lib/format'
 import { identityLabel, useIdentity } from '../lib/identity'
-import { payRequest, SendOutcomeUnknownError, splitObstacle, type SendResult } from '../lib/pay'
+import {
+  payRequest,
+  SendOutcomeUnknownError,
+  splitObstacle,
+  withoutInFlight,
+  type SendResult,
+} from '../lib/pay'
 import type { NUT18VRequest } from '../lib/nap'
 import {
   Button,
@@ -59,10 +65,11 @@ export function PayPage({ pubkey }: { pubkey: string }) {
 
   useEffect(() => {
     listVouchers().then((rows) => {
-      setMerchants(toMerchants(rows))
+      // What can be spent, not all that is held: a coupon behind an unconfirmed send is out (#128).
+      setMerchants(toMerchants(withoutInFlight(rows, pubkey)))
       setLoadedAt(Date.now())
     })
-  }, [])
+  }, [pubkey])
 
   // Before the early returns, and so before `merchant` exists — hooks cannot be
   // called conditionally. It is the same fetch the merchant pages make, cached per

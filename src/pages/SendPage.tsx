@@ -26,7 +26,13 @@ import {
   useMerchantHandle,
   useMerchantLabel,
 } from '../lib/identity'
-import { SendOutcomeUnknownError, sendVouchers, splitObstacle, type SendResult } from '../lib/pay'
+import {
+  SendOutcomeUnknownError,
+  sendVouchers,
+  splitObstacle,
+  withoutInFlight,
+  type SendResult,
+} from '../lib/pay'
 
 /**
  * Send a voucher to someone — a friend, or a merchant redeeming it.
@@ -122,8 +128,9 @@ export function SendPage({ pubkey }: { pubkey: string }) {
   const [sent, setSent] = useState<SendResult | null>(null)
 
   useEffect(() => {
-    listVouchers().then((rows) => setMerchants(toMerchants(rows)))
-  }, [])
+    // What can be spent, not all that is held: a coupon behind an unconfirmed send is out (#128).
+    listVouchers().then((rows) => setMerchants(toMerchants(withoutInFlight(rows, pubkey))))
+  }, [pubkey])
 
   // Before the early returns — hooks cannot be called conditionally. The same
   // cached lookup every other screen makes, so asking here costs nothing extra.
@@ -473,7 +480,8 @@ export function SendPage({ pubkey }: { pubkey: string }) {
           <Button
             variant="ghost"
             className="w-full"
-            disabled={status.step === 'sending'}
+            // Back would clear the lock: after an unknown outcome the way out is Done, not Back.
+            disabled={status.step === 'sending' || status.step === 'unconfirmed'}
             onClick={() => {
               setConfirming(false)
               setStatus({ step: 'idle' })
@@ -481,6 +489,11 @@ export function SendPage({ pubkey }: { pubkey: string }) {
           >
             Back
           </Button>
+          {status.step === 'unconfirmed' && (
+            <Button variant="ghost" className="w-full" onClick={() => navigate('/')}>
+              Done
+            </Button>
+          )}
         </div>
 
         {status.step === 'sending' && (

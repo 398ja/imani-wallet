@@ -120,6 +120,9 @@ describe('the sender sees one payment in several coupons', () => {
     await send()
     const locked = await screen.findByRole('button', { name: 'Still going through' })
     expect((locked as HTMLButtonElement).disabled).toBe(true)
+    // Back would clear the lock, so it is locked too; Done leaves without paying.
+    expect((screen.getByRole('button', { name: 'Back' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Done' })).toBeTruthy()
     expect(screen.getByText(/has NOT failed/)).toBeTruthy()
   })
 

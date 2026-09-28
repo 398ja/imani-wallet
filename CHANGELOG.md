@@ -21,11 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     difference.
   - **Faster answers from a gateway that cannot confirm:** a status read refused with a 4xx
     stops the wait at once. A 429 is re-read no sooner than its `Retry-After`.
-- **A send whose outcome is unknown can no longer be paid twice (#128).** Its coupon was still
-  offered to the next send, and the Send/Pay button stayed live, so pressing it again paid the
-  same money a second time from a coupon the gateway had not yet refused. Coupons that are the
-  source of a send still in flight are now left out of every new send until the pending ledger
-  settles them. After an unknown outcome the button is locked and reads "Still going through".
+- **A send whose outcome is unknown can no longer be paid twice (#128).** Pressing Send or Pay
+  again drew on another coupon and paid the same person a second time. Now:
+  - a second send to the same person, or a second payment of the same request, is refused while
+    the first is unconfirmed, in the payment code itself and not only on the screen;
+  - coupons behind an unconfirmed send are left out of what the Send and Pay screens offer;
+  - after an unknown outcome the button reads "Still going through" and is locked, with Back
+    locked too (it would clear the lock) and Done as the way out.
+  A send unanswered for over a week stops holding anything back, the same limit reconciliation
+  already used (#127).
 
 ## [0.9.1] - 2026-09-28
 

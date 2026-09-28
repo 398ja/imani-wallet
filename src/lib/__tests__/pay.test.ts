@@ -1111,12 +1111,16 @@ describe('sendVouchers and payRequest', () => {
     expect(reads).toBe(1)
   })
 
+  const SOMEONE_ELSE = '9'.repeat(64)
+  const EIGHT_DAYS_MS = 8 * 24 * 60 * 60 * 1000
+
   /** Records a send still in flight whose source is the coupon `tokenId`, and clears it afterwards. */
-  function pendingSendHolding(tokenId: string) {
+  function pendingSendHolding(tokenId: string, over: Record<string, unknown> = {}) {
     const key = `imani-wallet:pending-sends:${PAYER}`
     localStorage.setItem(key, JSON.stringify([{
-      sendId: 'as_in_flight', tokenId, amount: 500, unit: 'EUR', decimals: 2,
-      merchantPubkey: ISSUER, recipientPubkey: FRIEND, sourceFaceValue: 500, at: Date.now(),
+      sendId: `as_in_flight_${tokenId.slice(0, 4)}`, tokenId, amount: 500, unit: 'EUR', decimals: 2,
+      merchantPubkey: ISSUER, recipientPubkey: SOMEONE_ELSE, sourceFaceValue: 500, at: Date.now(),
+      ...over,
     }]))
     onTestFinished(() => localStorage.removeItem(key))
   }
@@ -1133,10 +1137,7 @@ describe('sendVouchers and payRequest', () => {
 
     await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 500 })
     // And the other way round, so the result cannot come from the selector's own order.
-    localStorage.setItem(`imani-wallet:pending-sends:${PAYER}`, JSON.stringify([{
-      sendId: 'as_in_flight_2', tokenId: free.token_id, amount: 500, unit: 'EUR', decimals: 2,
-      merchantPubkey: ISSUER, recipientPubkey: FRIEND, sourceFaceValue: 500, at: Date.now(),
-    }]))
+    pendingSendHolding(free.token_id as string)
     await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 500 })
 
     expect(sent.map((s) => s.voucherId)).toEqual(['v-free', 'v-held'])
@@ -1152,8 +1153,60 @@ describe('sendVouchers and payRequest', () => {
 
     await expect(
       sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 500 }),
-    ).rejects.toThrow()
+    ).rejects.toThrow(/no EUR voucher from this merchant/)
     expect(sent).toEqual([])
+  })
+
+  // #128: a second send to the same person, while the first is unconfirmed, is refused outright.
+  // Moving it onto another coupon would still pay them twice; the screen's lock is easy to get
+  // past (Back, or leaving and coming back), so the refusal lives here.
+  it('refuses a second send to someone whose first send is still unconfirmed', async () => {
+    const inFlight = row({ token_id: '1'.repeat(32), voucher_id: 'v-held', face_value: 500, token_amount: 500 })
+    const free = row({ token_id: '2'.repeat(32), voucher_id: 'v-free', face_value: 500, token_amount: 500 })
+    stubs.rows = [inFlight, free]
+    pendingSendHolding(inFlight.token_id as string, { recipientPubkey: FRIEND })
+    const sent = gateway()
+    wallet([inFlight, free])
+
+    await expect(
+      sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 500 }),
+    ).rejects.toBeInstanceOf(SendOutcomeUnknownError)
+    expect(sent).toEqual([])
+  })
+
+  // The same for a payment request: a second payment of one request is refused while the first
+  // is unconfirmed, whichever coupon it would draw on.
+  it('refuses to pay a request again while its first payment is unconfirmed', async () => {
+    const inFlight = row({ token_id: '1'.repeat(32), voucher_id: 'v-held', face_value: 500, token_amount: 500 })
+    const free = row({ token_id: '2'.repeat(32), voucher_id: 'v-free', face_value: 500, token_amount: 500 })
+    stubs.rows = [inFlight, free]
+    pendingSendHolding(inFlight.token_id as string, { recipientPubkey: undefined, paymentRequestId: 'req-1' })
+    const sent = gateway()
+    wallet([inFlight, free])
+
+    await expect(
+      payRequest({
+        request: { paymentId: 'req-1', amount: 500, unit: 'EUR', issuerId: ISSUER } as unknown as NUT18VRequest,
+        raw: '',
+        merchant,
+        payer: PAYER,
+      }),
+    ).rejects.toBeInstanceOf(SendOutcomeUnknownError)
+    expect(sent).toEqual([])
+  })
+
+  // A send the wallet has waited on for over a week will not answer (#127): it no longer holds
+  // its coupon back, nor blocks a new send to the same person.
+  it('stops holding a coupon, or a recipient, for a send over a week old', async () => {
+    const stale = row({ token_id: '1'.repeat(32), voucher_id: 'v-stale', face_value: 500, token_amount: 500 })
+    stubs.rows = [stale]
+    pendingSendHolding(stale.token_id as string, { recipientPubkey: FRIEND, at: Date.now() - EIGHT_DAYS_MS })
+    const sent = gateway()
+    wallet([stale])
+
+    await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 500 })
+
+    expect(sent.map((s) => s.voucherId)).toEqual(['v-stale'])
   })
 
   it('throws when the first part fails, because nothing has moved', async () => {
