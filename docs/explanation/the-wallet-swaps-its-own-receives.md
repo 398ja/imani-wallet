@@ -112,7 +112,7 @@ matters.
 |---|---|---|---|
 | You buy a coupon | **No.** It is minted locked to you | Nobody | No |
 | Another customer sends you theirs | Yes, to re-lock to your key | The wallet | One signing call |
-| A bearer coupon | Yes, to make it yours | The wallet | One signing call if it is a voucher |
+| A bearer coupon | Yes, to make it yours | The wallet | **No.** See "Decisions taken" |
 
 The first row is the common path, and it loses the swap entirely. Nothing to
 lose, nothing to store, no gateway call. Both bugs are absent by construction.
@@ -177,6 +177,95 @@ The resolution is that the swap and the re-sign are the same transition seen
 from two sides, and the wallet must be the one holding the recovery material.
 This is why the wallet persisting its intent before the request is not optional.
 
+## The issuance warrant survives this unchanged
+
+A warrant attests that something outside the issuing service authorised a sale.
+It matters here because a receive re-locks a coupon, and anything that breaks
+the warrant would turn a verified coupon into an unverifiable one.
+
+It survives, and the reason is structural rather than lucky. The warrant's
+digest covers `issuerId`, `saleTotalMinor`, `faceDecimals`, `unit` and
+`saleNonce`. **It does not cover the lock key, the nonce or the voucher id.**
+So re-locking changes nothing the warrant committed to.
+
+Verification is a ceiling test: this coupon's face value must not exceed the
+warranted sale total. That test is already designed to survive a coupon being
+split, because a split lowers face value and a ceiling stays true when the
+number underneath it falls. A re-locked coupon is the same coupon at the same
+face value, so the ceiling holds for exactly the same reason.
+
+Two consequences follow, and both are requirements on the re-signing call:
+
+- **The warrant tag must be carried across verbatim.** It is one of the tags the
+  issuer signature covers, so the gateway re-signs it along with everything
+  else. Dropping it does not merely lose a nice-to-have. An absent warrant tag
+  means "this coupon predates warrants and the issuer said nothing", which is a
+  different and weaker claim than a warrant whose form is `none`. Silently
+  turning the second into the first is how a stripped warrant reads as a legacy
+  coupon.
+- **The re-signing call must not alter face value, unit or decimals.** Those are
+  what the warrant's digest binds. Changing any of them under a carried-over
+  warrant would produce a coupon whose warrant verifies against numbers it no
+  longer has.
+
+So the re-signing call changes the lock key and the nonce, and nothing else.
+That is a narrow enough contract to state as a test rather than a convention.
+
+## The wallet pins the mint and unit before crediting
+
+A received voucher is credited today without checking which mint issued the
+proofs or what unit they are in. `voucherToken.ts` reads the token's `m` and `u`
+and checks neither, and the `getMintUrl` hook is optional. So a copy of a signed
+voucher secret, backed by proofs from a mint nobody trusts, is credited as
+money.
+
+That is already a bug and is filed as such. This design promotes it to a
+requirement, for two reasons:
+
+- **The wallet now talks to the mint directly**, so the mint URL stops being
+  something the gateway resolved and becomes an input the wallet acts on. An
+  unchecked URL is no longer just a crediting error, it is where the wallet
+  sends its swap.
+- **The signature does not bind the mint.** The issuer signature covers the
+  voucher's terms, not which mint holds the value behind them, so no amount of
+  signature checking substitutes for this.
+
+So: before crediting, and before swapping, the wallet requires that the token's
+mint URL is the trusted mint and its unit is `sat`. Anything else is refused
+rather than credited at a lower confidence. This is a check the wallet can make
+alone, with no network call, which is what makes it worth doing at both points.
+
+## Decisions taken
+
+These were open when this note was first drafted and have since been settled.
+
+**A foreign issuer's voucher is not re-signed.** The gateway signs only vouchers
+it issued, which is what `OwnIssuanceVoucherResigner` already enforces. The
+consequence is deliberate: a coupon from another issuer can be held and redeemed
+at its own issuer, but it cannot be re-locked, so it cannot be transferred onward
+through us. The alternative is worse. Signing another issuer's voucher would mean
+asserting terms we have no authority over, and a gateway willing to do that is a
+gateway whose signature means nothing.
+
+**The transfer attestation in ADR 0014 does not change.** It records that a
+transfer happened, which is a claim about history. Re-locking changes who can
+spend, which is a claim about control. They answer different questions, the two
+already coexist, and collapsing them would make the attestation load-bearing for
+spending. Nothing to do here.
+
+**Bearer vouchers are not re-signed on receipt.** The swap still happens, because
+that is what burns the sender's copy, but the voucher keeps its original
+signature and its original bearer form. Re-signing would mean minting a fresh
+signed voucher on a bearer secret the gateway cannot tie to a named holder, which
+is the broadest version of the oracle this design is trying to close. Receiving a
+bearer voucher therefore needs no gateway call at all.
+
+That last decision interacts with a filed cashu-mint bug: the mint does not check
+unlocked vouchers' signatures. So today a bearer voucher's carried-over signature
+is not verified by the mint anyway, and the protection on this path is the swap
+and the wallet's own verification. That is a reason to fix the mint bug, not a
+reason to re-sign bearer vouchers.
+
 ## What is deliberately not solved here
 
 - **Numeric tags have several wire forms under one signature**
@@ -185,14 +274,13 @@ This is why the wallet persisting its intent before the request is not optional.
   worse by it, but the re-signing call should refuse a non-canonical rendering.
 - **The mint does not check unlocked vouchers' signatures** (cashu-mint, filed).
   Independent of this design, and the reason bearer vouchers are the weakest
-  case.
-- **A received voucher is credited without checking its mint and unit**
-  (imani-wallet, filed). The wallet should pin both before crediting. This
-  design makes it more urgent, because the wallet now talks to the mint
-  directly.
+  case. Worth fixing on its own merits, as noted under "Decisions taken".
 - **The privacy leak.** The gateway learns each voucher output secret at the
   signing call and can watch spentness. Blind-signing the secret is not possible
   with BIP-340 as specified. Worth a follow-up, not a blocker.
+
+Pinning the mint and unit was on this list when it was only a filed bug. It is
+now a requirement of this design and has its own section above.
 
 ## No migration
 
@@ -219,16 +307,5 @@ float logic leaves the receive path entirely rather than being fenced off.
 - **cashu-mint.** No change required by this design. The separate signature and
   mixing issues are filed independently.
 
-## Open questions
-
-1. Should the re-signing endpoint refuse a voucher whose issuer is not this
-   gateway? `OwnIssuanceVoucherResigner` already refuses, and the consequence is
-   that a foreign-issuer voucher cannot be re-locked, so it can be held but not
-   transferred onward.
-2. Does the transfer attestation in ADR 0014 change? It records that a transfer
-   happened. Re-locking is a different mechanism, and the two should be
-   reconciled rather than left to overlap.
-3. Should bearer vouchers be re-signed on receipt at all, or is a bearer voucher
-   that is swapped but keeps its original signature acceptable? The mint does not
-   check unlocked voucher signatures today, which makes this question less
-   theoretical than it should be.
+Only one of the three receive cases involves the gateway at all, and in that one
+it signs without ever being able to spend.
