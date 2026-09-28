@@ -36,6 +36,7 @@ vi.mock('../arrivalToast', () => ({
   stopBundleArrivals: () => {},
 }))
 vi.mock('../refusalToast', () => ({ announceRefusal: () => {} }))
+vi.mock('../unsavedReceipt', () => ({ announceUnsaved: () => {}, resumeUnsavedReceipts: () => {} }))
 vi.mock('../queuedToast', () => ({ announceQueued: () => {}, settleQueued: () => {} }))
 vi.mock('../merchant', () => ({ loadMerchant: () => store.merchant }))
 vi.mock('../attestation', () => ({
