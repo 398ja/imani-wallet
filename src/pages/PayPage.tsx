@@ -117,6 +117,8 @@ export function PayPage({ pubkey }: { pubkey: string }) {
     // reports: showing the asking price would send the customer away believing
     // the sale is settled when the merchant is still short.
     const partial = status.result.delivered < status.result.requested
+    // See SendPage: an unconfirmed part may already have arrived, so it is never offered again (#125).
+    const inFlight = status.result.inFlight ?? 0
     return (
       <div className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center gap-3 p-5 text-center">
         {partial ? (
@@ -125,7 +127,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
           <CheckCircle2 className="h-12 w-12 text-green-600" />
         )}
         <h1 className="text-xl font-semibold text-mono-900 dark:text-mono-50">
-          {partial ? 'Partly paid' : 'Paid'}
+          {inFlight > 0 ? 'Still going through' : partial ? 'Partly paid' : 'Paid'}
         </h1>
         <p className="text-sm text-mono-500">
           {formatFace(status.result.delivered, denom)}
@@ -133,7 +135,14 @@ export function PayPage({ pubkey }: { pubkey: string }) {
           {/* In the sentence, not a second line: see SendPage (#94). */}
           {!partial && status.result.parts > 1 ? ` as ${status.result.parts} vouchers` : ''}
         </p>
-        {partial && (
+        {partial && inFlight > 0 && (
+          <Alert>
+            {formatFace(inFlight, denom)} more is still going through and may already have
+            arrived. Do not pay it again — check your history in a moment.
+            {status.result.shortfall ? ` (${status.result.shortfall})` : ''}
+          </Alert>
+        )}
+        {partial && inFlight === 0 && (
           <Alert>
             {status.result.parts > 1 ? `${status.result.parts} vouchers went before the rest stopped. ` : ''}
             The rest was not paid and your remaining vouchers are untouched — the
