@@ -23,7 +23,14 @@ vi.mock('../config', () => ({
 vi.mock('../nap', () => ({ keyStore: { save } }))
 vi.mock('../nip98', () => ({ signedFetch }))
 vi.mock('../relay', () => ({ RELAY_URL: 'ws://localhost:27778', publish }))
+vi.mock('../merchant', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../merchant')>()),
+  saveMerchant: vi.fn(),
+}))
 vi.mock('../onboardingHandoff', () => ({ stashPendingBackup }))
+const confirmStallVisible = vi.fn(async () => true)
+const markStallActivation = vi.fn()
+vi.mock('../stallActivation', () => ({ confirmStallVisible, markStallActivation }))
 vi.mock('../profile', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../profile')>()),
   saveProfile,
@@ -138,5 +145,37 @@ describe('register', () => {
     await expect(register('alice', 'a-passphrase', vi.fn())).rejects.toThrow(
       'Domain not verified: imani.local',
     )
+  })
+
+  // #114: the session is minted with whatever the gateway can see at login.
+  it('waits for the stall to be readable, and flags the tab, before a merchant logs in', async () => {
+    signedFetch.mockResolvedValue(ok())
+    const order: string[] = []
+    confirmStallVisible.mockImplementation(async () => {
+      order.push('confirm')
+      return true
+    })
+    markStallActivation.mockImplementation(() => order.push('mark'))
+    const login = vi.fn(async () => {
+      order.push('login')
+    })
+
+    await register('alice', 'a-passphrase', login, {
+      active: true,
+      categories: [],
+      issuanceCurrency: 'XAF',
+      voucherValidityDays: 30,
+    })
+
+    expect(order).toEqual(['confirm', 'mark', 'login'])
+  })
+
+  it('does neither for a customer', async () => {
+    signedFetch.mockResolvedValue(ok())
+
+    await register('alice', 'a-passphrase', vi.fn(async () => undefined))
+
+    expect(confirmStallVisible).not.toHaveBeenCalled()
+    expect(markStallActivation).not.toHaveBeenCalled()
   })
 })
