@@ -124,7 +124,13 @@ its `rcv_` key and a re-submit under a new key answered `409 RECEIVE_ALREADY_SET
 (#110, #119); a 3-voucher payment between customers, checked on the toast, the bell and
 the Transactions list (#94, #106); and an 8-part payment back to the stall that issued
 it (#110). Customer A logs in with a key the suite generates, so it can sign the #119
-re-submit itself.
+re-submit itself. A pays B everything it holds, so the bundle is always every coupon
+whole (4 parts), and B's 8-part payback count is reported on `CONTEXT` as `payBackParts`
+for `run.sh` to match against the stall's escrows.
+
+Optional environment: `E2E_BASE` (the wallet URL) and `E2E_EXPECTED_BUNDLE` (the
+`index-*.js` the deploy should serve; T0+ fails on any other). The browser runs in the
+`en-GB` locale, because amounts are read off the screen.
 
 Its first runs found imani-wallet#114, #122, #123, imani-wallet-lib#103 and
 imani-gateway-core#112. Flakes it absorbs are on the test host: a crash-looping local
