@@ -34,6 +34,8 @@ const stubs = vi.hoisted(() => ({
   swapped: [] as string[],
   /** Every refusal the wallet announced to the stall. */
   announced: [] as unknown[],
+  /** Every settled-but-unsaved receive announced (#112), with its account. */
+  unsaved: [] as Array<{ pubkey: string; event: unknown }>,
 }))
 
 vi.mock('../merchant', () => ({
@@ -67,6 +69,10 @@ vi.mock('../attestation', () => ({
 vi.mock('../refusalToast', () => ({
   announceRefusal: (e: unknown) => stubs.announced.push(e),
 }))
+vi.mock('../unsavedReceipt', () => ({
+  announceUnsaved: (pubkey: string, event: unknown) => stubs.unsaved.push({ pubkey, event }),
+  resumeUnsavedReceipts: () => {},
+}))
 
 import { startDmPoll, stopDmPoll } from '../dmPoll'
 import { buildVoucherToken } from './voucherFixtures'
@@ -92,6 +98,7 @@ beforeEach(() => {
   stubs.merchant = { pubkey: MY_STALL, active: true }
   stubs.swapped = []
   stubs.announced = []
+  stubs.unsaved = []
   // The mint. Records what it was asked to swap and nothing else.
   ;(window as unknown as Record<string, unknown>).TokenRedemption = {
     redeem: async (token: string) => {
@@ -137,6 +144,17 @@ describe('a coupon from another stall, through the installed adapter', () => {
 
     expect(stubs.announced).toHaveLength(1)
     expect((stubs.announced[0] as { reason: string }).reason).toBe('another-stall')
+  })
+
+  it('announces a settled-but-unsaved receive to THIS account (#112)', () => {
+    const service = startDmPoll(MY_STALL) as unknown as {
+      emit: (name: string, payload: unknown) => void
+    }
+    service.emit('redemption:unsaved', { eventId: 'e-1', senderPubkey: 's', receiveId: 'r-1', reason: 'x' })
+
+    expect(stubs.unsaved).toHaveLength(1)
+    expect(stubs.unsaved[0]!.pubkey).toBe(MY_STALL)
+    expect((stubs.unsaved[0]!.event as { receiveId: string }).receiveId).toBe('r-1')
   })
 
   it('lets this stall’s own coupon through to the mint', async () => {

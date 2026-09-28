@@ -22,6 +22,7 @@ import {
 } from './arrivalToast'
 import { announceQueued, settleQueued, type QueuedBundleSeed } from './queuedToast'
 import { announceRefusal } from './refusalToast'
+import { announceUnsaved, resumeUnsavedReceipts } from './unsavedReceipt'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { bytesToHex } from '@noble/hashes/utils'
 
@@ -1401,6 +1402,9 @@ export function startDmPoll(pubkey: string): DmPollService {
   // the rest. Display state only; never throws.
   resumeBundleArrivals(pubkey)
 
+  // Settled-but-unsaved vouchers (#112) survive logout; the bell rows do not.
+  resumeUnsavedReceipts(pubkey)
+
   // Before the poller reads its processed set, not after: coupons abandoned by
   // a build that could not reassemble chunks are recoverable only if their
   // tombstones are gone by the time the first catch-up runs.
@@ -1472,6 +1476,8 @@ export function startDmPoll(pubkey: string): DmPollService {
   // money path. The guard is cheap and the failure it prevents is total.
   if (typeof service.on === 'function') {
     service.on('redemption:refused', announceRefusal)
+    // #112: a voucher the gateway settled but this wallet did not save.
+    service.on('redemption:unsaved', (event) => announceUnsaved(pubkey, event))
   }
 
   void service.start()

@@ -1,3 +1,4 @@
+import { isKeptAcrossLogout } from './unsavedReceipt'
 import { getSession, keyStore, resetSession } from './nap'
 import { stopDmPoll } from './dmPoll'
 import { stopIncomingNotifications } from './incomingNotifications'
@@ -115,7 +116,9 @@ export async function logout(
   // dm-poll's cursor is state we WANT reset — a stale "already processed" set is
   // exactly what silently drops the next account's coupons.
   for (const key of Object.keys(localStorage)) {
-    if (key.startsWith('imani-wallet:')) localStorage.removeItem(key)
+    // Except the settled-but-unsaved record (#112): its receive id exists
+    // nowhere else, and it is keyed by pubkey so only that account reads it.
+    if (key.startsWith('imani-wallet:') && !isKeptAcrossLogout(key)) localStorage.removeItem(key)
   }
 
   // And the coupons, the transaction history and the issued-coupon records.

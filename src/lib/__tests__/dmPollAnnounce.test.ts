@@ -30,6 +30,7 @@ vi.mock('../arrivalToast', () => ({
 // Third toast module on this path, and mocked for the same reason as the two
 // beside it: `sonner` touches the DOM at import and this suite runs headless.
 vi.mock('../refusalToast', () => ({ announceRefusal: vi.fn() }))
+vi.mock('../unsavedReceipt', () => ({ announceUnsaved: () => {}, resumeUnsavedReceipts: () => {} }))
 vi.mock('../queuedToast', () => ({
   announceQueued: () => {},
   settleQueued: () => {},

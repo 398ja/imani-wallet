@@ -52,6 +52,7 @@ vi.mock('../arrivalToast', () => ({
   stopBundleArrivals: () => {},
 }))
 vi.mock('../refusalToast', () => ({ announceRefusal: vi.fn() }))
+vi.mock('../unsavedReceipt', () => ({ announceUnsaved: () => {}, resumeUnsavedReceipts: () => {} }))
 vi.mock('../queuedToast', () => ({ announceQueued: () => {}, settleQueued: () => {} }))
 vi.mock('../paymentReceipt', () => ({ postPaymentReceipt: async () => {} }))
 vi.mock('../redemptionLedger', () => ({
