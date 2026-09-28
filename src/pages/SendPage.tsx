@@ -260,6 +260,8 @@ export function SendPage({ pubkey }: { pubkey: string }) {
     // A part the gateway accepted but could not confirm may already have arrived: the screen
     // says so, and never suggests sending it again (#125).
     const inFlight = sent.inFlight ?? 0
+    // The parts after an unconfirmed one were never tried: that money did not move.
+    const notSent = sent.requested - sent.delivered - inFlight
     return (
       <Screen>
         <PageHeader
@@ -299,6 +301,9 @@ export function SendPage({ pubkey }: { pubkey: string }) {
               <Alert>
                 {formatFace(inFlight, chosen)} more is still going through and may already have
                 arrived. Do not send it again — check your history in a moment.
+                {notSent > 0
+                  ? ` The last ${formatFace(notSent, chosen)} was not sent and those vouchers are untouched.`
+                  : ''}
                 {sent.shortfall ? ` (${sent.shortfall})` : ''}
               </Alert>
             ) : (

@@ -865,7 +865,11 @@ async function awaitAndSettle(
   let polled = false
   let unreadable: unknown
   let delayMs = POLL_INTERVAL_MS
+  // The whole wait is bounded in time, not only in reads: a 429 asking for longer than is left
+  // ends the wait with the outcome unknown, rather than holding the screen on "Sending".
+  const waitEndsAt = Date.now() + (POLL_ATTEMPTS + 1) * POLL_INTERVAL_MS
   for (let i = 0; i < POLL_ATTEMPTS && !TERMINAL.includes(String(status.status)); i += 1) {
+    if (Date.now() + delayMs > waitEndsAt) break
     await new Promise((resolve) => setTimeout(resolve, delayMs))
     const read = await readStatusOrKeepLast(api, pending.sendId, status)
     if (read.unreadable !== undefined && unreadable === undefined) {
