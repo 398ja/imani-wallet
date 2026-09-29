@@ -44,6 +44,11 @@ Two things have to land with that edit rather than after it:
   sent. The gateway answers a resent identical proposal with the identical signed
   successor, so a lost response is recoverable, but only from that proposal. A
   fresh one for the same burn is refused.
+  **Blocked on imani-gateway-customer#136.** The sender knows the predecessor
+  secret, so once the receiver's burn lands the sender can claim the one
+  re-signature for a key of their own and take the coupon. The fix is a design
+  choice, most likely re-locking to the recipient at send time, and must be made
+  before this path is wired.
   Switching the plain-ecash path over first is possible, and means two receive
   mechanisms live at once.
 
