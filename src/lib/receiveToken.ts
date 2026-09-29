@@ -80,6 +80,22 @@ export interface OwnSwapReceipt {
  * Any voucher-carrying proof condemns the whole token. A mixed token cannot be
  * partially received here: taking the plain proofs and leaving the voucher ones
  * would split one token across two mechanisms and leave the coupon in limbo.
+ *
+ * <h2>Why an EXACT kind match is enough</h2>
+ *
+ * The comparison is case-sensitive and does not trim, which looks brittle and is
+ * correct. It has to agree with cashu-lib's reader, and that reader uses
+ * `Kind.valueOf(kindStr)`, which is exact: `"p2pk_voucher"` and `"P2PK_VOUCHER "`
+ * both throw `Unknown secret kind`.
+ *
+ * So a secret this guard "misses" on a case or whitespace variation is a secret the
+ * MINT will not accept as a voucher either. There is no coupon to destroy, because
+ * there is no coupon. Probed rather than assumed: those two variants do evade the
+ * guard, and both are unparseable as vouchers anywhere in the stack.
+ *
+ * Normalising here would be worse than useless. It would make this reader accept a
+ * shape the rest of the system rejects, which is the disagreement that produced
+ * cashu-voucher#48.
  */
 function carriesVoucher(secrets: readonly string[]): boolean {
   return secrets.some((secret) => {
