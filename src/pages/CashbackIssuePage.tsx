@@ -17,7 +17,7 @@ import { getWallet, notifyWalletChanged } from '../lib/wallet'
  *
  * The counterpart to Sell, and the difference is who has to be present. Sell
  * needs the customer standing there with a wallet to scan; this needs nothing
- * but a pen. The merchant types an amount, reads six characters out loud, and
+ * but a pen. The merchant types an amount, reads ten characters out loud, and
  * the customer redeems them days later on a phone that does not exist yet.
  *
  * No recipient step, and therefore no scan step — the whole screen is one
@@ -230,9 +230,11 @@ async function record(
  * The code, and nothing competing with it.
  *
  * Sized and spaced to be read across a counter and copied down by hand, which
- * is the only thing this screen is for: wide tracking so the six characters
+ * is the only thing this screen is for: wide tracking so the ten characters
  * separate, monospace so `0` and `O` cannot trade places, and negative-tracked
- * display type everywhere else per the house scale.
+ * display type everywhere else per the house scale. Sized so `CB-XXXXX-XXXXX`
+ * still fits one line on a 360px phone, and allowed to break rather than
+ * overflow on anything narrower.
  */
 function IssuedCode({
   issued,
@@ -267,7 +269,7 @@ function IssuedCode({
           <div className="mb-3 rounded-full bg-green-600/10 p-3">
             <Check className="h-7 w-7 text-green-600" />
           </div>
-          <p className="select-all font-mono text-3xl font-semibold tracking-[0.2em] text-mono-900 dark:text-mono-50">
+          <p className="select-all break-all font-mono text-2xl font-semibold tracking-[0.15em] text-mono-900 dark:text-mono-50">
             {issued.claimCode}
           </p>
           <p className="mt-3 text-lg text-mono-900 dark:text-mono-50">

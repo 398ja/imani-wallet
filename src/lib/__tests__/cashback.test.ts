@@ -153,8 +153,8 @@ describe('typed claim codes', () => {
   })
 
   it('only strips CB when it is the prefix of a full-length entry', () => {
-    // `CB` is also two legitimate characters of a six-character code. Stripping
-    // it from a bare six would silently redeem someone else's coupon.
+    // `CB` can also be the first two characters of a code of either length.
+    // Stripping it from a bare code would silently redeem someone else's coupon.
     expect(normaliseTypedClaimCode('CB12ZZ')).toBe('CB12ZZ')
     expect(toCanonicalClaimCode('CB12ZZ')).toBe('CB-CB12-ZZ')
   })
