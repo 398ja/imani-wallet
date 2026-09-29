@@ -4,14 +4,9 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 
-import {
-  ReceiveNotPossible,
-  isVoucherSecretForTest,
-  receiveTokenByOwnSwap,
-  settleOwnSwap,
-} from '../receiveToken'
+import { ReceiveNotPossible, receiveTokenByOwnSwap, settleOwnSwap } from '../receiveToken'
 import { loadSwapIntents } from '../swapIntent'
-import { parseVoucherToken, tokenProofs } from '../voucherToken'
+import { isVoucherSecret, parseVoucherToken, tokenProofs } from '../voucherToken'
 
 /**
  * The join between a token string and a wallet-chosen swap.
@@ -223,7 +218,7 @@ describe('receiveTokenByOwnSwap', () => {
     // content that still ends in a bracket reaches its parser at all. Those are
     // exactly the cases where the two readers could disagree, and the ones that
     // matter: anything else is refused by both.
-    expect(isVoucherSecretForTest(voucher + suffix)).toBe(true)
+    expect(isVoucherSecret(voucher + suffix)).toBe(true)
   })
 
   /**
@@ -234,11 +229,11 @@ describe('receiveTokenByOwnSwap', () => {
    * while accepting costs the coupon if any reader anywhere disagrees.
    */
   it('refuses a bracketed secret that will not parse at all', () => {
-    expect(isVoucherSecretForTest('[this is not json at all]')).toBe(true)
+    expect(isVoucherSecret('[this is not json at all]')).toBe(true)
   })
 
   /** A plain bearer secret is still received normally, which is most traffic. */
   it('does not mistake an ordinary bearer secret for a voucher', () => {
-    expect(isVoucherSecretForTest('9a1b2c3d4e5f60718293a4b5c6d7e8f9')).toBe(false)
+    expect(isVoucherSecret('9a1b2c3d4e5f60718293a4b5c6d7e8f9')).toBe(false)
   })
 })

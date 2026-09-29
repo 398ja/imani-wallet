@@ -702,6 +702,35 @@ describe('a voucher is refused, not mangled', () => {
   })
 })
 
+describe('the shared voucher guard protects the swap too', () => {
+  /**
+   * The swap and the token-level receive used to have a guard each, with
+   * different algorithms: a prefix match here and a JSON parse there. So one
+   * refused secrets the other accepted, while both claimed to answer the same
+   * question.
+   *
+   * This pins the case the prefix match missed and the shared guard catches: a
+   * voucher secret with leading whitespace, which cashu-lib trims before reading
+   * and `startsWith('["VOUCHER"')` does not.
+   */
+  it('refuses a voucher secret the old prefix match would have let through', async () => {
+    const mint = await fakeMint()
+    const voucher = readFileSync(
+      'src/lib/__tests__/fixtures/witness-positive.token',
+      'utf8',
+    ).trim()
+    const leadingSpace = tokenProofs(voucher).map((proof) => ({
+      ...proof,
+      secret: ` ${proof.secret}`,
+    }))
+
+    await expect(
+      receiveByOwnSwap({ pubkey: PUBKEY, mintUrl: MINT, proofs: leadingSpace }, mint.transport),
+    ).rejects.toThrow(/voucher/i)
+    expect(mint.calls.swap).toBe(0)
+  })
+})
+
 describe('refusals', () => {
   it('refuses a receive with no proofs', async () => {
     const mint = await fakeMint()
