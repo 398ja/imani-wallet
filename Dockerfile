@@ -8,6 +8,7 @@
 #     --build-arg VITE_RELAY_URL=wss://relay.staging.398ja.xyz \
 #     --build-arg VITE_INTERNAL_RELAY_URL=ws://nostr-relay:7777 \
 #     --build-arg VITE_GOOGLE_CLIENT_ID=<oauth-client-id>.apps.googleusercontent.com \
+#     --build-arg VITE_TRUSTED_MINT_URLS=https://mint.staging.398ja.xyz \
 #     -t imani-wallet .
 #
 # The /build/{imani-wallet,nap} layout below reproduces the on-disk sibling shape
@@ -60,6 +61,15 @@ ENV VITE_INTERNAL_RELAY_URL=$VITE_INTERNAL_RELAY_URL
 # backup and restore buttons do not render at all.
 ARG VITE_GOOGLE_CLIENT_ID
 ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
+
+# The mints this build credits coupons from, comma-separated (src/lib/trustedMint.ts).
+# Not a secret: it is a URL the browser already talks to. It must be set per environment,
+# because the only other source is the gateway's config, and a wallet that has not received
+# that config, or is pointed at a gateway that names no mint, then trusts nothing in
+# particular and credits from anywhere (imani-wallet#133). Setting it here makes the
+# trusted mint a property of the build rather than of whatever the network said.
+ARG VITE_TRUSTED_MINT_URLS
+ENV VITE_TRUSTED_MINT_URLS=$VITE_TRUSTED_MINT_URLS
 
 COPY . .
 # `tsc -b && vite build`. The tsc half typechecks ./packages AND ../nap through
