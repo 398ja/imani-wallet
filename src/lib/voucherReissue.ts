@@ -32,7 +32,7 @@
  * prose to decide. See imani-gateway-customer#135.
  */
 
-import { signedFetch } from './nip98'
+import { signedFetch, type RequestSigner } from './nip98'
 
 const REISSUE_PATH = '/api/v1/wallet/vouchers/reissue'
 
@@ -106,13 +106,17 @@ function asRefusal(value: string | undefined): ReissueRefusal {
 export async function reissueVoucherSecret(
   predecessorSecret: string,
   proposedSecret: string,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; signer?: RequestSigner } = {},
 ): Promise<string> {
   const response = await signedFetch(
     REISSUE_PATH,
     'POST',
     { predecessor_secret: predecessorSecret, proposed_secret: proposedSecret },
-    undefined,
+    // Defaults to the session signer. Taken as an option for the reason
+    // `nip98Header` gives: a test, and registration, need to sign with a key that
+    // is not the session's, and a function that can only reach a global signer is
+    // a function whose one security-relevant input cannot be varied.
+    options.signer,
     options,
   )
 
