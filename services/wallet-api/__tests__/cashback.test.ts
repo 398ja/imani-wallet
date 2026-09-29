@@ -108,6 +108,11 @@ describe('looking a code up', () => {
     expect(parseLookupRequest({ code: 'CB-ABCD-EF' }).ok).toBe(true)
   })
 
+  // The ten-character shape the portal has issued since GP-02 is looked up the same way.
+  it('accepts a current ten-character code', () => {
+    expect(parseLookupRequest({ code: 'CB-AEQTJ-MYJHY' }).ok).toBe(true)
+  })
+
   it('accepts a lowercase one, because a person typed it off a receipt', () => {
     // The portal canonicalises. Refusing here would reject something that works.
     expect(parseLookupRequest({ code: 'cb-abcd-ef' }).ok).toBe(true)
