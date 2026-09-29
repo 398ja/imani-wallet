@@ -19,12 +19,29 @@ closed in a shipped build:
 | Mint and unit pinned before crediting | Live, on both crediting paths |
 | Wallet-side blinding, swap and unblinding | Built, verified against the real mint |
 | Swap intent persisted, lost response recovered | Built, verified against the real mint |
-| The receive orchestration | Built, nothing calls it yet |
-| A transport against the real mint | Not built |
-| The issuer re-signing call for vouchers | Not built, so a voucher receive is refused |
+| The receive orchestration | Built, verified against the real mint |
+| A transport against the real mint | Built, verified against the real mint |
+| Decode, check and sign a token string | Built, nothing calls it yet |
+| Recovering interrupted receives at start-up | Built, wired, no save behind it yet |
+| The issuer re-signing call for vouchers | Built in the gateway, not called from here |
 
-Until the last two exist, the live receive is still the gateway endpoint and the
+**The live receive is still the gateway endpoint.** Everything above exists and is
+tested; what remains is the last edit, replacing the `api.receive` call in
+`tokenRedemption.js`, and that is deliberately not done yet. Until it is, the
 custody exposure described below is unchanged.
+
+Two things have to land with that edit rather than after it:
+
+- **A save for recovered proofs.** The start-up sweep is wired and currently passes
+  a save that throws, because nothing creates the intents it reads. A save that
+  quietly dropped the proofs would look wired and lose money the first time it
+  fired.
+- **A voucher receive that works.** `receiveTokenByOwnSwap` refuses a voucher
+  outright, because a wallet-chosen swap generates random secrets and a voucher's
+  secret carries its whole identity. The gateway can now re-sign
+  (`POST /api/v1/wallet/vouchers/reissue`), and calling it from here is not built.
+  Switching the plain-ecash path over first is possible, and means two receive
+  mechanisms live at once.
 
 ## The shape of the problem
 
