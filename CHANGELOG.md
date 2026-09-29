@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The trusted-mint gate is actually on in deployed builds (#133).** The gate reads
+  `VITE_TRUSTED_MINT_URLS`, which nothing set, and otherwise falls back to the gateway's config,
+  which only loads through the legacy bridge. So a default build trusted no mint in particular,
+  answered `unchecked`, and credited coupons from any mint. The Dockerfile now takes
+  `VITE_TRUSTED_MINT_URLS` as a build argument, and imani-deploy passes the staging mint.
+  Verified in the built bundle: set, `trustedMintUrls` starts from
+  `"https://mint.staging.398ja.xyz"`, unset it starts from an empty string.
+
 - **A coupon is refused unless its proofs are at a trusted mint, in sat.** A coupon's value
   is not in the coupon, it is in the proofs at a mint, and the issuer signature covers no mint
   at all. So a copy of a genuine signed coupon backed by proofs from a mint nobody has heard of
