@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The trusted-mint gate is actually on in deployed builds (#133).** The gate reads
+  `VITE_TRUSTED_MINT_URLS`, which nothing set, and otherwise falls back to the gateway's config,
+  which only loads through the legacy bridge. So a default build trusted no mint in particular,
+  answered `unchecked`, and credited coupons from any mint. The Dockerfile now takes
+  `VITE_TRUSTED_MINT_URLS` as a build argument, and imani-deploy passes the staging mint.
+  Verified in the built bundle: set, `trustedMintUrls` starts from
+  `"https://mint.staging.398ja.xyz"`, unset it starts from an empty string.
+
+- **A coupon is refused unless its proofs are at a trusted mint, in sat.** A coupon's value
+  is not in the coupon, it is in the proofs at a mint, and the issuer signature covers no mint
+  at all. So a copy of a genuine signed coupon backed by proofs from a mint nobody has heard of
+  verified perfectly and was credited as money. The wallet read the mint URL and the unit and
+  checked neither. Both crediting paths now refuse one they do not recognise. The trusted mint
+  can be set with `VITE_TRUSTED_MINT_URLS` (comma-separated), and otherwise falls back to the
+  mint the gateway names, so a wallet is protected without configuration. While that answer is
+  still outstanding a coupon is deferred rather than waved through, since otherwise delaying one
+  request would turn the check off.
+
 - **A network blip while a send settles no longer reports it as unsent (#125).** One failed
   status read threw out of the wait, so a part the gateway had completed was shown as "Partly
   sent ... send the difference again", which pays it twice. A failed read now leaves the outcome
@@ -30,6 +48,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     locked too (it would clear the lock) and Done as the way out.
   A send unanswered for over a week stops holding anything back, the same limit reconciliation
   already used (#127).
+
+### Added
+
+- **Groundwork for the wallet to swap its own receives** (imani-gateway-customer#133,
+  imani-wallet#123). The gateway performs the receive swap today, which is why it keeps a
+  spendable copy of every coupon received and why a lost response leaves it holding the only
+  copy.
+
+  Built and verified against the real mint: the wallet-side blinding and swap, the intent
+  record that makes a lost response recoverable, a transport against the mint, the join from a
+  token string to a swap, a start-up sweep that finishes interrupted receives, and a client for
+  the gateway's voucher re-signing endpoint.
+
+  **Not yet wired in**, so neither bug is closed by this release. What remains is the
+  switch-over itself and a voucher receive, which needs two swaps because the gateway will only
+  re-sign once the predecessor is spent while the wallet needs the signature before it swaps.
+  A voucher is refused rather than stripped of its identity in the meantime. See
+  `docs/explanation/the-wallet-swaps-its-own-receives.md` for the current status table.
 
 ## [0.9.1] - 2026-09-28
 
