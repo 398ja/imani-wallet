@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs'
 
 import { ReceiveNotPossible, receiveTokenByOwnSwap, settleOwnSwap } from '../receiveToken'
 import { loadSwapIntents } from '../swapIntent'
+import { parseVoucherToken, tokenProofs } from '../voucherToken'
 
 /**
  * The join between a token string and a wallet-chosen swap.
@@ -25,6 +26,11 @@ const PUBKEY = 'a'.repeat(64)
 
 function fixture(name: string): string {
   return readFileSync(`src/lib/__tests__/fixtures/${name}`, 'utf8').trim()
+}
+
+/** The token's own mint, so a test can trust it without hardcoding a URL. */
+function mintUrlOf(token: string): string {
+  return parseVoucherToken(token).mintUrl
 }
 
 /** A transport that fails loudly, so any test reaching the mint says so. */
@@ -156,5 +162,36 @@ describe('receiveTokenByOwnSwap', () => {
     expect(failure).toBeInstanceOf(ReceiveNotPossible)
     expect((failure as ReceiveNotPossible).refusal).toBe('untrusted-mint')
     expect(reached.swap).toBe(0)
+  })
+
+  /**
+   * Both real voucher kinds are caught, matched against captured tokens.
+   *
+   * The guard compares the NUT-10 kind exactly, which looks brittle. It is not,
+   * and the reason is that it must agree with cashu-lib's `Kind.valueOf`, which is
+   * also exact. A secret whose kind is `p2pk_voucher` or `P2PK_VOUCHER ` evades
+   * this guard AND is rejected by the mint as an unknown kind, so there is no
+   * coupon to destroy.
+   *
+   * Pinned with real fixtures for both kinds, because the guard having two
+   * literals in it is precisely the kind of thing that gets half-updated.
+   */
+  it.each([
+    ['P2PK_VOUCHER', 'witness-positive.token'],
+    ['VOUCHER', 'control-unlocked.token'],
+  ])('refuses the %s kind, as captured from a real token', async (kind, file) => {
+    const { transport } = unreachableTransport()
+    // Trusted, so the mint gate cannot be what refuses this and mask the guard.
+    ;(globalThis as { GatewayConfig?: unknown }).GatewayConfig = {
+      mintUrl: mintUrlOf(fixture(file)),
+      whenReady: (callback: () => void) => callback(),
+    }
+    expect(tokenProofs(fixture(file))[0].secret.startsWith(`["${kind}"`)).toBe(true)
+
+    const failure = await receiveTokenByOwnSwap(fixture(file), PUBKEY, transport).catch(
+      (error: unknown) => error,
+    )
+
+    expect((failure as ReceiveNotPossible).refusal).toBe('voucher-unsupported')
   })
 })
