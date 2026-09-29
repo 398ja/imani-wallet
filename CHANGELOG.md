@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A cashback code can be redeemed again.** Since gateway-portal 0.4.0 a code is ten random
+  characters, `CB-XXXXX-XXXXX`, but the wallet only recognised the old six-character
+  `CB-XXXX-YY`. So the Redeem button stayed disabled for every code a shop issued. Both shapes are
+  now accepted, in any case and with or without dashes and the `CB` prefix, as the portal does.
+
 ### Added
 
 - **A live re-lock probe, `reissueProbe.test.ts` (`PROBE_REISSUE=1`).** It runs against the real
