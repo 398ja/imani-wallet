@@ -245,6 +245,16 @@ export interface SignedVoucherFields {
    * hashed. Verify over what was actually signed instead.
    */
   canonicalWire?: Uint8Array
+  /**
+   * False when a numeric tag arrived in a form that only became canonical because
+   * the canonicaliser normalised it.
+   *
+   * Such a voucher has two readings, one here and a different one in Java, so
+   * `verifyVoucher` refuses it however good the signature is. Set only on the
+   * locked kind, which is the only one whose numeric tags arrive on the wire.
+   * cashu-voucher#48.
+   */
+  canonicalNumbers?: boolean
 }
 
 export interface ParsedVoucherToken {
@@ -326,6 +336,69 @@ function voucherBlobHex(secret: string): string | null {
  * would mean the probe checked a different decode from the one the app uses —
  * which is precisely the substitution these probes exist to avoid.
  */
+/**
+ * Whether a NUT-10 secret would be read as a voucher by anything downstream.
+ *
+ * <h2>Why this lives here, and why it is not `JSON.parse`</h2>
+ *
+ * Two places need this answer: the swap refuses vouchers because it would destroy
+ * them, and the token-level receive refuses them before anything is spent. They
+ * had a copy each, with DIFFERENT algorithms, one a prefix match and one a JSON
+ * parse. A guard implemented twice is a guard that protects two different sets.
+ *
+ * The algorithm must match cashu-lib's reader, and that is the subtle part. It
+ * gates on `trimmed.startsWith("[") && trimmed.endsWith("]")` and then uses
+ * Jackson, which stops at the first complete value and IGNORES trailing content.
+ * `JSON.parse` rejects the whole string instead, so `["VOUCHER",{...}] ]` was a
+ * voucher to the mint and not to the wallet. A security reviewer proved that, and
+ * the consequence is the worst available: the swap succeeds, the right sats come
+ * back, and the coupon's face value, warrant and issuer signature are gone with no
+ * error anywhere.
+ *
+ * Errs towards yes. Refusing a plain token costs a fallback to the gateway
+ * receive; accepting a voucher costs the coupon.
+ */
+export function isVoucherSecret(secret: string): boolean {
+  const trimmed = secret.trim()
+  // The same gate cashu-lib applies before it parses at all. A secret failing this
+  // is a NUT-00 bearer string, which is genuinely not a voucher.
+  if (!trimmed.startsWith('[') || !trimmed.endsWith(']')) return false
+
+  const parsed = leadingJsonValue(trimmed)
+  if (parsed === undefined) {
+    // Bracketed and unparseable. cashu-lib falls back to a bearer secret and so
+    // could we, but the downside is not symmetric: if any reader anywhere sees a
+    // voucher here, the swap path destroys it.
+    return true
+  }
+
+  // The kind comparison is EXACT, matching cashu-lib's `Kind.valueOf`. A secret
+  // whose kind is `p2pk_voucher` is not a voucher anywhere in the stack, so there
+  // is no coupon to protect and normalising would make this reader accept a shape
+  // the rest of the system rejects.
+  return Array.isArray(parsed) && (parsed[0] === 'VOUCHER' || parsed[0] === 'P2PK_VOUCHER')
+}
+
+/**
+ * The first complete JSON value in `text`, ignoring anything after it.
+ *
+ * What Jackson's `readValue` does and what `JSON.parse` refuses to do, which is
+ * the whole reason this exists. Implemented by retrying shorter prefixes rather
+ * than by writing a parser, because a hand-written one would be a third reader
+ * with its own disagreements.
+ */
+function leadingJsonValue(text: string): unknown {
+  for (let end = text.length; end > 1; end--) {
+    if (text[end - 1] !== ']') continue
+    try {
+      return JSON.parse(text.slice(0, end)) as unknown
+    } catch {
+      // Not a complete value at this length; try a shorter prefix.
+    }
+  }
+  return undefined
+}
+
 export function proofSecrets(token: string): string[] {
   return tokenProofs(token).map((p) => p.secret)
 }
@@ -511,6 +584,7 @@ function lockedVoucherFrom(secret: string): SignedVoucherFields | null {
     issuerPublicKey: required('issuer_pubkey'),
     lockKey: data,
     canonicalWire: lockedCanonicalBytes(data, typeof nonce === 'string' ? nonce : '', rows),
+    canonicalNumbers: hasCanonicalNumericTags(rows),
   }
 }
 
@@ -543,6 +617,35 @@ function lockedCanonicalBytes(dataHex: string, nonce: string, rows: unknown[][])
   return new TextEncoder().encode(
     `["P2PK_VOUCHER","${dataHex}","${nonce}",[${rendered.join(',')}]]`,
   )
+}
+
+/**
+ * Is every numeric tag already written the way the canonicaliser would write it?
+ *
+ * Normalising before hashing is necessary, so the two implementations agree on the
+ * bytes. The side effect is that `"1000"`, `"01000"`, `"1000.0"` and `"1e3"` all
+ * hash identically, and therefore all satisfy one signature.
+ *
+ * That would be harmless if every reader agreed on the value, and they do not.
+ * `Number("1000.0")` here gives 1000, while Java's `Long.parseLong` REFUSES it and
+ * yields no face value at all. One signed voucher, two readings, and the holder
+ * picks. Dropping the Java face-value clamp is what that buys.
+ *
+ * So a voucher whose bytes only became canonical BECAUSE we normalised them is
+ * refused. Mirrors `VoucherCanonicalBytes.hasCanonicalNumericTags` on the Java
+ * side, and the two must stay in step. cashu-voucher#48.
+ */
+function hasCanonicalNumericTags(rows: unknown[][]): boolean {
+  const NUMERIC = ['face_value', 'expires_at', 'face_decimals', 'issuance_ratio']
+  return rows.every((row) => {
+    if (!NUMERIC.includes(String(row[0]))) return true
+    return row.slice(1).every((value) => {
+      const wire = String(value)
+      const parsed = Number(wire)
+      if (!Number.isFinite(parsed)) return false
+      return appendNumber(parsed, false) === wire
+    })
+  })
 }
 
 function readVoucherFields(blob: Record<string, unknown>): SignedVoucherFields {
@@ -806,6 +909,13 @@ export function verifyVoucher(v: SignedVoucherFields): VoucherVerification {
     // A locked voucher is verified over the bytes that ARRIVED, because its
     // tags are on the wire and their order is part of what was hashed.
     if (v.canonicalWire) {
+      // And its numbers must have arrived in canonical form. A signature over
+      // normalised bytes says nothing about which of several readings was meant,
+      // and this reader and the Java one disagree about exactly those forms. See
+      // `hasCanonicalNumericTags`.
+      if (v.canonicalNumbers === false) {
+        return { signatureValid: false, legacyCanonical: false }
+      }
       return {
         signatureValid: schnorr.verify(sig, sha256(v.canonicalWire), pub),
         legacyCanonical: false,

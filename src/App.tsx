@@ -16,6 +16,7 @@ import { reconcilePendingSends } from './lib/pay'
 import { reconcileRequests } from './lib/vreq'
 import { sweepBurnable } from './lib/burn'
 import { reconcileClaims } from './lib/claimReconcile'
+import { sweepInterruptedReceives } from './lib/receiveSweep'
 import { restoreIssued } from './lib/issuedRecords'
 import { restoreTx, backfillTx } from './lib/txRecords'
 import { restoreVouchers, backfillVouchers } from './lib/voucherRecords'
@@ -225,6 +226,33 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           .then(({ filed, unreadable }) => {
             if (filed > 0) console.info(`[app] re-filed ${filed} redemption(s) against their issuance`)
             if (unreadable > 0) console.info(`[app] ${unreadable} redemption(s) could not be matched: coupon not on this device`)
+          })
+          // Then finish any receive whose swap went through while the page was
+          // dying. The proofs exist at the mint and are spendable only by this
+          // wallet; without this they are money nobody can reach (#123).
+          //
+          // Runs LAST and never rejects, so a mint that is down delays nobody's
+          // balance and the rest of start-up is unaffected.
+          //
+          // The save is deliberately a REFUSAL for now, and that is the honest
+          // wiring rather than a placeholder. Nothing creates these intents yet:
+          // `receiveTokenByOwnSwap` exists and no call site uses it, so the
+          // pending list is always empty and this never runs. Supplying a save
+          // that quietly dropped the proofs would be a landmine for whoever
+          // switches the receive on, because it would look wired and lose money
+          // the first time it fired. Throwing logs the amount at ERROR instead.
+          .then(() =>
+            sweepInterruptedReceives(pubkey, (swap) => {
+              throw new Error(
+                `no save is wired for recovered receives yet (swap ${swap.swapId}); ` +
+                  'wire one before switching the wallet-side receive on',
+              )
+            }),
+          )
+          .then((recovered) => {
+            if (recovered > 0) {
+              console.info(`[app] recovered ${recovered} interrupted receive(s) from the mint`)
+            }
           })
       },
       (e) => live && setError(e as Error),
