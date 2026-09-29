@@ -28,6 +28,13 @@
  * often it is asked, and a client that retries them is wasting the user's time
  * while their coupon sits unreceived.
  *
+ * A lost RESPONSE is different, and safe to retry. Resending the identical
+ * predecessor and proposal returns the identical signed successor, because the
+ * gateway stores what each burn bought. So a caller that timed out must resend
+ * the SAME proposal, never invent a fresh one: a fresh proposal for a burn that
+ * already bought a successor is refused as `PREDECESSOR_ALREADY_CLAIMED`, and
+ * the coupon is then only recoverable from the proposal that won.
+ *
  * That distinction arrives as an HTTP status, so a caller does not have to parse
  * prose to decide. See imani-gateway-customer#135.
  */
