@@ -9,13 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A live re-lock probe, `reissueProbe.test.ts` (`PROBE_REISSUE=1`).** It runs against the real
+  staging gateway and mint with nothing faked. A coupon is issued locked to A. The gateway
+  refuses a re-signature before the burn (`PREDECESSOR_NOT_SPENT`) and refuses a stranger who
+  knows both secrets (`NOT_AUTHORISED_BY_HOLDER`). It re-signs for A once, returns the same
+  successor to an identical retry and refuses a second proposal (`PREDECESSOR_ALREADY_CLAIMED`).
+  The mint then refuses the successor without B's witness and accepts it with one. It passed on
+  staging on 2026-09-29.
+
 ### Changed
 
 - **`reissueVoucherSecret` signs as the coupon's holder (imani-gateway-customer#136).** It
   sends `lock_authorization`: a BIP-340 signature by the key the predecessor is locked to, over
   `sha256("imani/voucher-reissue/v1" || u32be(len) || predecessor || u32be(len) || proposed)`.
   The key is borrowed from the session signer for the one signature (IW-14), never passed in
-  or kept. Tests and callers with another key can pass a `lendKey` that lends it the same way.
+  or kept. A caller whose coupon is locked to another key, and the tests, pass a `lendKey`
+  that lends it the same way.
   The gateway refuses a re-signature without it, because knowing a coupon's secret is not
   holding it. `NOT_AUTHORISED_BY_HOLDER` is a known, permanent refusal. The gateway pins a
   signature made by this code, with a key whose y is odd and a non-ASCII proposal, so the two
