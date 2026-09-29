@@ -30,7 +30,7 @@ tested; what remains is the last edit, replacing the `api.receive` call in
 `tokenRedemption.js`, and that is deliberately not done yet. Until it is, the
 custody exposure described below is unchanged.
 
-Two things have to land with that edit rather than after it:
+Three things have to land with that edit rather than after it:
 
 - **A save for recovered proofs.** The start-up sweep is wired and currently passes
   a save that throws, because nothing creates the intents it reads. A save that
@@ -44,13 +44,13 @@ Two things have to land with that edit rather than after it:
   sent. The gateway answers a resent identical proposal with the identical signed
   successor, so a lost response is recoverable, but only from that proposal. A
   fresh one for the same burn is refused.
-  **Blocked on imani-gateway-customer#136.** The sender knows the predecessor
-  secret, so once the receiver's burn lands the sender can claim the one
-  re-signature for a key of their own and take the coupon. The fix is a design
-  choice, most likely re-locking to the recipient at send time, and must be made
-  before this path is wired.
-  Switching the plain-ecash path over first is possible, and means two receive
-  mechanisms live at once.
+- **A fix for the sender front-run, imani-gateway-customer#136.** The sender
+  knows the predecessor secret, so once the receiver's burn lands the sender can
+  claim the one re-signature for a key of their own and take the coupon. The
+  voucher receive must not be wired until that is decided.
+
+Switching the plain-ecash path over first is possible, and means two receive
+mechanisms live at once.
 
 ## The shape of the problem
 
