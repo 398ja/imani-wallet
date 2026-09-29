@@ -118,7 +118,7 @@ export function CashbackRedeemPage() {
       <Panel className="p-4">
         <Input
           label="Code"
-          placeholder="CB-XXXX-YY"
+          placeholder="CB-XXXXX-XXXXX"
           value={typed}
           // Uppercased on the way in so what is on screen matches what is on
           // the receipt. Everything else the customer might type — spaces, a

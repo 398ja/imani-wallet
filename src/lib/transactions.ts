@@ -139,7 +139,7 @@ export interface WalletTransaction {
    * a merchant can find out whether the customer ever typed the code in.
    */
   cashbackId?: string
-  /** The six-character code that was read out at the counter. */
+  /** The code that was read out at the counter: `CB-XXXXX-XXXXX`, or `CB-XXXX-YY` if issued before gateway-portal 0.4.0. */
   claimCode?: string
   /**
    * Last redemption status read back from the gateway: `Unclaimed`, `Claimed`,
