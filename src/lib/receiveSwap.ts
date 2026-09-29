@@ -1,4 +1,6 @@
 import { sha256 } from '@noble/hashes/sha2.js'
+
+import { isVoucherSecret } from './voucherToken'
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils'
 
 import {
@@ -28,10 +30,13 @@ import {
  * when a response is lost (imani-wallet#123).
  *
  * **Nothing calls this yet.** The live receive is still the gateway endpoint, so
- * neither bug is closed in a shipped build by this module alone. Two things are
- * outstanding: a `MintTransport` implementation against the real mint, and the
- * issuer re-signing call that a VOUCHER receive needs (see the refusal below).
- * Until both exist, this is the tested mechanism and not the behaviour.
+ * neither bug is closed in a shipped build by this module alone. What remains is
+ * the switch-over itself, replacing the `api.receive` call in
+ * `tokenRedemption.js`, and a voucher receive, which needs the two swaps that
+ * `voucherReissue.ts` provides the middle of. The transport and the token-level
+ * entry point exist, so this comment no longer lists them: see the status table in
+ * `docs/explanation/the-wallet-swaps-its-own-receives.md`, which is kept current
+ * because a comment listing "what is missing" goes stale the moment it is fixed.
  *
  * What it establishes: the wallet chooses the secrets and the blinding factors, so
  * the gateway is not in the path and there is nothing for it to hold.
@@ -62,22 +67,6 @@ import {
  *
  * See `docs/explanation/the-wallet-swaps-its-own-receives.md`.
  */
-
-/**
- * Is this a voucher secret rather than a plain bearer one?
- *
- * A plain ecash secret is opaque: the wallet may choose any value, which is what
- * makes a wallet-side swap possible at all. A VOUCHER or P2PK_VOUCHER secret is a
- * NUT-10 structure carrying the lock key, the issuer's signature and the warrant,
- * and the issuer signature covers those bytes. The wallet cannot produce one,
- * because it does not hold the issuer key.
- *
- * Matched on the declared kind, which is what the mint dispatches on, the same
- * way `witness.ts` decides whether a secret needs a signature.
- */
-function isVoucherSecret(secret: string): boolean {
-  return secret.startsWith('["VOUCHER"') || secret.startsWith('["P2PK_VOUCHER"')
-}
 
 /** A proof being received, with its witness when the coupon is locked. */
 export interface ReceivableProof extends SwapInputProof {

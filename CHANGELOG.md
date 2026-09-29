@@ -21,17 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still outstanding a coupon is deferred rather than waved through, since otherwise delaying one
   request would turn the check off.
 
-### Added
-
-- **Groundwork for the wallet to swap its own receives** (imani-gateway-customer#133,
-  imani-wallet#123). The gateway performs the receive swap today, which is why it keeps a
-  spendable copy of every coupon received and why a lost response leaves it holding the only
-  copy. The wallet-side blinding, the swap intent that makes a lost response recoverable, and
-  the receive orchestration are built and verified against the real mint. **Not yet wired in**,
-  so neither bug is closed by this release: a transport against the mint and the issuer
-  re-signing call a voucher needs are still outstanding, and a voucher receive is refused rather
-  than stripped of its identity. See `docs/explanation/the-wallet-swaps-its-own-receives.md`.
-
 - **A network blip while a send settles no longer reports it as unsent (#125).** One failed
   status read threw out of the wait, so a part the gateway had completed was shown as "Partly
   sent ... send the difference again", which pays it twice. A failed read now leaves the outcome
@@ -51,6 +40,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     locked too (it would clear the lock) and Done as the way out.
   A send unanswered for over a week stops holding anything back, the same limit reconciliation
   already used (#127).
+
+### Added
+
+- **Groundwork for the wallet to swap its own receives** (imani-gateway-customer#133,
+  imani-wallet#123). The gateway performs the receive swap today, which is why it keeps a
+  spendable copy of every coupon received and why a lost response leaves it holding the only
+  copy.
+
+  Built and verified against the real mint: the wallet-side blinding and swap, the intent
+  record that makes a lost response recoverable, a transport against the mint, the join from a
+  token string to a swap, a start-up sweep that finishes interrupted receives, and a client for
+  the gateway's voucher re-signing endpoint.
+
+  **Not yet wired in**, so neither bug is closed by this release. What remains is the
+  switch-over itself and a voucher receive, which needs two swaps because the gateway will only
+  re-sign once the predecessor is spent while the wallet needs the signature before it swaps.
+  A voucher is refused rather than stripped of its identity in the meantime. See
+  `docs/explanation/the-wallet-swaps-its-own-receives.md` for the current status table.
 
 ## [0.9.1] - 2026-09-28
 
