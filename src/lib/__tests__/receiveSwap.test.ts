@@ -66,7 +66,14 @@ async function fakeMint() {
       async activeKeysetId() {
         return KEYSET
       },
-      async swap(_mintUrl: string, request: { outputs: { amount: number; id: string; B_: string }[] }) {
+      // Typed as the real MintTransport takes it, inputs included, even though this fake only
+      // signs the outputs. A narrower type here made the tests call `swap` with `inputs` that
+      // the compiler rejected, which `vitest` never noticed and `tsc -b`, run by the image
+      // build, did.
+      async swap(
+        _mintUrl: string,
+        request: { inputs: unknown[]; outputs: { amount: number; id: string; B_: string }[] },
+      ) {
         calls.swap++
         return { signatures: sign(request.outputs) }
       },
