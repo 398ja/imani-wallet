@@ -212,6 +212,77 @@ describe('a receive whose response never arrives', () => {
     ).rejects.toThrow(/signature/)
     expect(pendingSwapIntents(PUBKEY)).toHaveLength(1)
   })
+
+  /**
+   * A retry RESUMES the first attempt. It must not blind fresh outputs.
+   *
+   * Found by a security reviewer, who proved the loss. The sequence was: the
+   * first swap succeeds at the mint and its response is lost, the user presses
+   * receive again, and the retry overwrote the intent with NEW blinding factors
+   * before asking. The second swap is refused as already spent, so the only copy
+   * of the `r` values for the outputs the mint ACTUALLY signed is gone.
+   *
+   * The sweep then made it permanent rather than obvious: restore against the new
+   * blinded messages returns nothing, which reads as "the mint never signed, so
+   * nothing was spent", and the record is deleted with an INFO log saying so.
+   * Money unreachable for ever, reported as fine.
+   *
+   * Asserted on the OUTPUTS SENT TO THE MINT rather than on a call count, because
+   * the outputs are the recovery material: the second request must ask about the
+   * same blinded messages the first one did, or the first attempt is stranded.
+   */
+  it('sends the first attempt’s blinded messages again on a retry', async () => {
+    const mint = await fakeMint()
+    const asked: string[][] = []
+    let failNext = true
+    const flaky = {
+      ...mint.transport,
+      async swap(mintUrl: string, request: Parameters<typeof mint.transport.swap>[1]) {
+        asked.push(request.outputs.map((output) => output.B_))
+        if (failNext) {
+          failNext = false
+          throw new Error('response lost, but the mint signed')
+        }
+        return mint.transport.swap(mintUrl, request)
+      },
+    }
+
+    await expect(
+      receiveByOwnSwap({ pubkey: PUBKEY, mintUrl: MINT, proofs: sourceProofs(2) }, flaky),
+    ).rejects.toThrow(/response lost/)
+
+    // The user tries again with the same coupon.
+    await receiveByOwnSwap({ pubkey: PUBKEY, mintUrl: MINT, proofs: sourceProofs(2) }, flaky)
+
+    expect(asked).toHaveLength(2)
+    expect(asked[1], 'a retry must ask about the outputs the first attempt may have got signed')
+      .toEqual(asked[0])
+  })
+
+  /** The blinding factors specifically, since they are what cannot be recomputed. */
+  it('does not discard the blinding factors the mint may already have signed against', async () => {
+    const mint = await fakeMint()
+    const dead = {
+      ...mint.transport,
+      async swap() {
+        throw new Error('response lost, but the mint signed')
+      },
+    }
+
+    await expect(
+      receiveByOwnSwap({ pubkey: PUBKEY, mintUrl: MINT, proofs: sourceProofs(2) }, dead),
+    ).rejects.toThrow()
+    const first = pendingSwapIntents(PUBKEY)[0].outputs.map((o) => `${o.B_}:${o.r}`)
+
+    await expect(
+      receiveByOwnSwap({ pubkey: PUBKEY, mintUrl: MINT, proofs: sourceProofs(2) }, dead),
+    ).rejects.toThrow()
+    const second = pendingSwapIntents(PUBKEY)[0].outputs.map((o) => `${o.B_}:${o.r}`)
+
+    expect(second, 'a retry that re-blinds strands whatever the mint already signed').toEqual(
+      first,
+    )
+  })
 })
 
 describe('recovering interrupted swaps', () => {

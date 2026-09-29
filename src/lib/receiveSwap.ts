@@ -197,12 +197,34 @@ export async function receiveByOwnSwap(
 
   // Before anything is written. A failure here has spent nothing and recorded
   // nothing, so it is an ordinary retryable error.
-  const keysetId = await transport.activeKeysetId(mintUrl)
+  const swapId = swapIdFor(proofs)
+
+  // A retry RESUMES the first attempt rather than starting a new one, and this is
+  // the difference between a recoverable interruption and permanent loss.
+  //
+  // The intent is keyed on the inputs, so a retry of the same coupon finds the
+  // record the first attempt wrote. Blinding fresh outputs here and overwriting
+  // would discard the only copy of the `r` values for the outputs the mint may
+  // ALREADY have signed. The second swap is then refused as "already spent", the
+  // next sweep restores against the NEW blinded messages, the mint returns nothing
+  // for them, and that reads as "never signed, nothing was spent" and deletes the
+  // record. The money becomes unreachable for ever, with an INFO log saying it was
+  // fine. Found by a security reviewer, who proved it with a test.
+  //
+  // Reusing the existing outputs also makes the retry a byte-identical request,
+  // which is what lets NUT-19 return the original response instead of refusing.
+  const existing = pendingSwapIntents(pubkey).find((intent) => intent.swapId === swapId)
+  if (existing) {
+    console.info('[receiveSwap] resuming an earlier attempt at this receive, not restarting it', {
+      swapId,
+    })
+  }
+
+  const keysetId = existing?.keysetId ?? (await transport.activeKeysetId(mintUrl))
   // The mint's ACTIVE keyset, deliberately, not the input's. Receiving into a
   // retired keyset produces proofs whose keys the mint may stop serving, which
   // is how a coupon becomes unspendable weeks after it was safely received.
-  const outputs = blindOutputs(splitIntoDenominations(total), keysetId)
-  const swapId = swapIdFor(proofs)
+  const outputs = existing?.outputs ?? blindOutputs(splitIntoDenominations(total), keysetId)
 
   // The line the design turns on. After this the wallet can always finish.
   rememberSwapIntent(pubkey, {

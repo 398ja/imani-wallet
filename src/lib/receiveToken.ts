@@ -81,35 +81,78 @@ export interface OwnSwapReceipt {
  * partially received here: taking the plain proofs and leaving the voucher ones
  * would split one token across two mechanisms and leave the coupon in limbo.
  *
- * <h2>Why an EXACT kind match is enough</h2>
+ * <h2>Why this mirrors cashu-lib's acceptance rather than using JSON.parse alone</h2>
  *
- * The comparison is case-sensitive and does not trim, which looks brittle and is
- * correct. It has to agree with cashu-lib's reader, and that reader uses
- * `Kind.valueOf(kindStr)`, which is exact: `"p2pk_voucher"` and `"P2PK_VOUCHER "`
- * both throw `Unknown secret kind`.
+ * The two readers must agree about what IS a voucher, and they nearly did not.
+ * cashu-lib gates on `trimmed.startsWith("[") && trimmed.endsWith("]")` and then
+ * hands the string to Jackson, which **stops at the first complete value and
+ * ignores trailing content**. `JSON.parse` does not: it rejects the whole string.
  *
- * So a secret this guard "misses" on a case or whitespace variation is a secret the
- * MINT will not accept as a voucher either. There is no coupon to destroy, because
- * there is no coupon. Probed rather than assumed: those two variants do evade the
- * guard, and both are unparseable as vouchers anywhere in the stack.
+ * So a secret like `["VOUCHER",{...}] ]`, with a stray bracket after the array, is
+ * a voucher to the mint and to the gateway, and was NOT a voucher to this guard.
+ * That is the exact silent destruction this module exists to prevent, and a
+ * security reviewer proved it. Divergence between two readers of the same bytes is
+ * the same class of bug as cashu-voucher#48.
  *
- * Normalising here would be worse than useless. It would make this reader accept a
- * shape the rest of the system rejects, which is the disagreement that produced
- * cashu-voucher#48.
+ * The fix is to read what cashu-lib reads: take the leading complete JSON value
+ * and ignore what follows. And to fail CLOSED on anything that looks structured
+ * and will not parse, because "I cannot read this" is not evidence that it is a
+ * bearer secret, and guessing bearer is the guess that loses the coupon.
+ *
+ * The kind comparison stays EXACT, which is correct for the opposite reason:
+ * cashu-lib's `Kind.valueOf` is exact too, so `p2pk_voucher` is not a voucher
+ * anywhere in the stack and there is no coupon to protect.
  */
 function carriesVoucher(secrets: readonly string[]): boolean {
-  return secrets.some((secret) => {
-    // A NUT-10 secret is a JSON array whose first element names the kind. Parsing
-    // is the honest test; a substring match on "VOUCHER" would also fire on a memo.
+  return secrets.some(isVoucherLike)
+}
+
+/**
+ * Whether one secret would be read as a voucher by anything downstream.
+ *
+ * Errs towards yes. Refusing a plain token costs a fallback to the gateway
+ * receive; accepting a voucher costs the coupon.
+ */
+export function isVoucherSecretForTest(secret: string): boolean {
+  return isVoucherLike(secret)
+}
+
+function isVoucherLike(secret: string): boolean {
+  const trimmed = secret.trim()
+  // The same gate cashu-lib applies before it tries to parse at all. A secret
+  // failing this is a NUT-00 bearer string, which is genuinely not a voucher.
+  if (!trimmed.startsWith('[') || !trimmed.endsWith(']')) return false
+
+  const parsed = leadingJsonValue(trimmed)
+  if (parsed === undefined) {
+    // Bracketed and unparseable. cashu-lib would fall back to a bearer secret and
+    // so could we, but the downside is not symmetric: if any reader anywhere
+    // disagrees and sees a voucher, this path destroys it. Refusing costs a
+    // fallback to the gateway receive, which is the cheaper mistake.
+    return true
+  }
+
+  return Array.isArray(parsed) && (parsed[0] === 'VOUCHER' || parsed[0] === 'P2PK_VOUCHER')
+}
+
+/**
+ * The first complete JSON value in `text`, ignoring anything after it.
+ *
+ * This is what Jackson's `readValue` does and what `JSON.parse` refuses to do,
+ * and that difference is the whole reason this function exists. Implemented by
+ * retrying shorter prefixes rather than by writing a parser, because a
+ * hand-written one would be a third reader with its own disagreements.
+ */
+function leadingJsonValue(text: string): unknown {
+  for (let end = text.length; end > 1; end--) {
+    if (text[end - 1] !== ']') continue
     try {
-      const parsed = JSON.parse(secret) as unknown
-      if (!Array.isArray(parsed) || typeof parsed[0] !== 'string') return false
-      return parsed[0] === 'VOUCHER' || parsed[0] === 'P2PK_VOUCHER'
+      return JSON.parse(text.slice(0, end)) as unknown
     } catch {
-      // A plain bearer secret is a random string, not JSON. Not a voucher.
-      return false
+      // Not a complete value at this length; try a shorter prefix.
     }
-  })
+  }
+  return undefined
 }
 
 /**

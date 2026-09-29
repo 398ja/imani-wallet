@@ -4,7 +4,12 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 
-import { ReceiveNotPossible, receiveTokenByOwnSwap, settleOwnSwap } from '../receiveToken'
+import {
+  ReceiveNotPossible,
+  isVoucherSecretForTest,
+  receiveTokenByOwnSwap,
+  settleOwnSwap,
+} from '../receiveToken'
 import { loadSwapIntents } from '../swapIntent'
 import { parseVoucherToken, tokenProofs } from '../voucherToken'
 
@@ -193,5 +198,47 @@ describe('receiveTokenByOwnSwap', () => {
     )
 
     expect((failure as ReceiveNotPossible).refusal).toBe('voucher-unsupported')
+  })
+
+  /**
+   * The parser-divergence hole, found by a security reviewer.
+   *
+   * cashu-lib gates on brackets and then uses Jackson, which stops at the first
+   * complete value and IGNORES trailing content. `JSON.parse` rejects the whole
+   * string instead. So a secret with a stray bracket after the array was a
+   * voucher to the mint and not a voucher to this guard, and this path would have
+   * swapped it into random secrets: right sats, coupon gone, no error.
+   *
+   * Two readers of the same bytes disagreeing is the same class of bug as
+   * cashu-voucher#48, and it is why the guard now reads what cashu-lib reads.
+   */
+  it.each([
+    ['a stray closing bracket', ' ]'],
+    ['a second array', '[1]]'],
+    ['whitespace then a bracket', '\n  ]'],
+  ])('refuses a voucher secret followed by %s, which Jackson accepts', (_name, suffix) => {
+    const voucher = tokenProofs(fixture('witness-positive.token'))[0].secret
+
+    // cashu-lib's gate is startsWith('[') && endsWith(']'), so only trailing
+    // content that still ends in a bracket reaches its parser at all. Those are
+    // exactly the cases where the two readers could disagree, and the ones that
+    // matter: anything else is refused by both.
+    expect(isVoucherSecretForTest(voucher + suffix)).toBe(true)
+  })
+
+  /**
+   * A bracketed secret nobody can parse is refused rather than assumed harmless.
+   *
+   * cashu-lib falls back to reading it as a bearer string, and so could this. The
+   * downside is not symmetric: refusing costs a fallback to the gateway receive,
+   * while accepting costs the coupon if any reader anywhere disagrees.
+   */
+  it('refuses a bracketed secret that will not parse at all', () => {
+    expect(isVoucherSecretForTest('[this is not json at all]')).toBe(true)
+  })
+
+  /** A plain bearer secret is still received normally, which is most traffic. */
+  it('does not mistake an ordinary bearer secret for a voucher', () => {
+    expect(isVoucherSecretForTest('9a1b2c3d4e5f60718293a4b5c6d7e8f9')).toBe(false)
   })
 })
