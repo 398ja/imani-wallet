@@ -39,13 +39,65 @@
  * prose to decide. See imani-gateway-customer#135.
  */
 
+import { schnorr } from '@noble/curves/secp256k1.js'
+import { sha256 } from '@noble/hashes/sha2.js'
+import { bytesToHex } from '@noble/hashes/utils'
+
+import { getSigner } from './nap'
 import { signedFetch, type RequestSigner } from './nip98'
 
 const REISSUE_PATH = '/api/v1/wallet/vouchers/reissue'
 
+/**
+ * Versioned domain tag. It keeps this signature apart from a NUT-11 spend witness,
+ * which the same key makes over `sha256(secret)`, so neither can stand in for the
+ * other.
+ */
+const LOCK_AUTHORIZATION_TAG = 'imani/voucher-reissue/v1'
+
+/**
+ * Lends the lock key for the length of one call and wipes it afterwards (IW-14),
+ * exactly as `WalletSigner.withPrivkey` does. Taken instead of a raw key so this
+ * module never holds, receives or keeps a copy the signer cannot account for.
+ */
+export type LockKeyLender = <T>(borrow: (key: Uint8Array) => T) => T
+
+/**
+ * `sha256(TAG || u32be(len) || predecessor || u32be(len) || proposed)`, secrets as
+ * UTF-8, which is the 32 bytes the holder signs. Naming both secrets binds the
+ * signature to this one coupon and this one proposal. The lengths make the boundary
+ * unambiguous whatever the secrets contain. Must match the gateway's
+ * `LockAuthorization` byte for byte.
+ */
+function reissueDigest(predecessor: string, proposed: string): Uint8Array {
+  const encoder = new TextEncoder()
+  const parts: Uint8Array[] = [encoder.encode(LOCK_AUTHORIZATION_TAG)]
+  for (const secret of [predecessor, proposed]) {
+    const bytes = encoder.encode(secret)
+    const length = new Uint8Array(4)
+    new DataView(length.buffer).setUint32(0, bytes.length, false)
+    parts.push(length, bytes)
+  }
+  const message = new Uint8Array(parts.reduce((total, part) => total + part.length, 0))
+  let offset = 0
+  for (const part of parts) {
+    message.set(part, offset)
+    offset += part.length
+  }
+  return sha256(message)
+}
+
+/** The holder's BIP-340 signature over {@link reissueDigest}, as hex. */
+function lockAuthorization(lendKey: LockKeyLender, predecessor: string, proposed: string): string {
+  const digest = reissueDigest(predecessor, proposed)
+  return bytesToHex(lendKey((key) => schnorr.sign(digest, key)))
+}
+
 /** Why the gateway would not sign, as it named it. */
 export type ReissueRefusal =
   | 'NOT_A_LOCKED_VOUCHER'
+  /** The request was not signed by the key the coupon is locked to (#136). */
+  | 'NOT_AUTHORISED_BY_HOLDER'
   | 'NOT_OUR_ISSUANCE'
   | 'PREDECESSOR_NOT_AUTHENTIC'
   | 'TERMS_CHANGED'
@@ -87,6 +139,7 @@ interface ReissueResponseBody {
 function asRefusal(value: string | undefined): ReissueRefusal {
   switch (value) {
     case 'NOT_A_LOCKED_VOUCHER':
+    case 'NOT_AUTHORISED_BY_HOLDER':
     case 'NOT_OUR_ISSUANCE':
     case 'PREDECESSOR_NOT_AUTHENTIC':
     case 'TERMS_CHANGED':
@@ -105,6 +158,16 @@ function asRefusal(value: string | undefined): ReissueRefusal {
  * Re-serialising either changes that string, and a predecessor whose string form
  * differs is one the mint reports as unknown, so the gateway refuses.
  *
+ * The request carries `lock_authorization`, a signature by the key the predecessor is
+ * locked to, which the gateway requires (imani-gateway-customer#136): knowing a
+ * coupon's secret is not holding it, because whoever handed the coupon over authored
+ * that secret. The caller is always the coupon's current holder, re-locking their own
+ * coupon, so the key is the wallet's own. It is borrowed from the session signer for
+ * the one signature and wiped afterwards. `lendKey` lends a different key the same
+ * way, for tests and for any caller whose coupon is locked to another key. A lender
+ * must stay synchronous: the key is wiped when `borrow` returns, so an async borrow
+ * would sign with a zeroed key.
+ *
  * @param predecessorSecret the secret of the proof being replaced, already spent
  * @param proposedSecret    the fresh secret, differing only in lock key and nonce
  * @returns the proposed secret carrying a valid issuer signature
@@ -113,12 +176,17 @@ function asRefusal(value: string | undefined): ReissueRefusal {
 export async function reissueVoucherSecret(
   predecessorSecret: string,
   proposedSecret: string,
-  options: { signal?: AbortSignal; signer?: RequestSigner } = {},
+  options: { lendKey?: LockKeyLender; signal?: AbortSignal; signer?: RequestSigner } = {},
 ): Promise<string> {
+  const lendKey: LockKeyLender = options.lendKey ?? ((borrow) => getSigner().withPrivkey(borrow))
   const response = await signedFetch(
     REISSUE_PATH,
     'POST',
-    { predecessor_secret: predecessorSecret, proposed_secret: proposedSecret },
+    {
+      predecessor_secret: predecessorSecret,
+      proposed_secret: proposedSecret,
+      lock_authorization: lockAuthorization(lendKey, predecessorSecret, proposedSecret),
+    },
     // Defaults to the session signer. Taken as an option for the reason
     // `nip98Header` gives: a test, and registration, need to sign with a key that
     // is not the session's, and a function that can only reach a global signer is
