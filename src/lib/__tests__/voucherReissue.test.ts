@@ -27,6 +27,9 @@ const SECRET = generateSecretKey()
 /** The key the predecessor is locked to, so the one whose signature the gateway wants. */
 const LOCK_KEY = generateSecretKey()
 const OTHER_KEY = generateSecretKey()
+const PREDECESSOR = '["P2PK_VOUCHER",{"nonce":"aa","data":"02ab","tags":[]}]'
+const PROPOSED = '["P2PK_VOUCHER",{"nonce":"bb","data":"02cd","tags":[]}]'
+const SIGNED = '["P2PK_VOUCHER",{"nonce":"bb","data":"02cd","tags":[["issuer_sig","ff"]]}]'
 
 /**
  * Lends `key` the way `WalletSigner.withPrivkey` does: a copy for the length of the
@@ -40,9 +43,6 @@ const lend = (key: Uint8Array) => <T>(borrow: (borrowed: Uint8Array) => T): T =>
     copy.fill(0)
   }
 }
-const PREDECESSOR = '["P2PK_VOUCHER",{"nonce":"aa","data":"02ab","tags":[]}]'
-const PROPOSED = '["P2PK_VOUCHER",{"nonce":"bb","data":"02cd","tags":[]}]'
-const SIGNED = '["P2PK_VOUCHER",{"nonce":"bb","data":"02cd","tags":[["issuer_sig","ff"]]}]'
 
 /**
  * A real signer over a throwaway key.

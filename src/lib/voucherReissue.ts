@@ -64,11 +64,12 @@ export type LockKeyLender = <T>(borrow: (key: Uint8Array) => T) => T
 
 /**
  * `sha256(TAG || u32be(len) || predecessor || u32be(len) || proposed)`, secrets as
- * UTF-8. Naming both secrets binds the signature to this one coupon and this one
- * proposal. The lengths make the boundary unambiguous whatever the secrets
- * contain. Must match the gateway's `LockAuthorization` byte for byte.
+ * UTF-8, which is the 32 bytes the holder signs. Naming both secrets binds the
+ * signature to this one coupon and this one proposal. The lengths make the boundary
+ * unambiguous whatever the secrets contain. Must match the gateway's
+ * `LockAuthorization` byte for byte.
  */
-function reissueMessage(predecessor: string, proposed: string): Uint8Array {
+function reissueDigest(predecessor: string, proposed: string): Uint8Array {
   const encoder = new TextEncoder()
   const parts: Uint8Array[] = [encoder.encode(LOCK_AUTHORIZATION_TAG)]
   for (const secret of [predecessor, proposed]) {
@@ -86,9 +87,9 @@ function reissueMessage(predecessor: string, proposed: string): Uint8Array {
   return sha256(message)
 }
 
-/** The holder's BIP-340 signature over {@link reissueMessage}, as hex. */
+/** The holder's BIP-340 signature over {@link reissueDigest}, as hex. */
 function lockAuthorization(lendKey: LockKeyLender, predecessor: string, proposed: string): string {
-  const digest = reissueMessage(predecessor, proposed)
+  const digest = reissueDigest(predecessor, proposed)
   return bytesToHex(lendKey((key) => schnorr.sign(digest, key)))
 }
 
@@ -162,7 +163,10 @@ function asRefusal(value: string | undefined): ReissueRefusal {
  * coupon's secret is not holding it, because whoever handed the coupon over authored
  * that secret. The caller is always the coupon's current holder, re-locking their own
  * coupon, so the key is the wallet's own. It is borrowed from the session signer for
- * the one signature and wiped afterwards. `lendKey` exists for tests.
+ * the one signature and wiped afterwards. `lendKey` lends a different key the same
+ * way, for tests and for any caller whose coupon is locked to another key. A lender
+ * must stay synchronous: the key is wiped when `borrow` returns, so an async borrow
+ * would sign with a zeroed key.
  *
  * @param predecessorSecret the secret of the proof being replaced, already spent
  * @param proposedSecret    the fresh secret, differing only in lock key and nonce
