@@ -148,7 +148,7 @@ describe('typed claim codes', () => {
     // Five characters is not "nearly right" — sending it would spend one of a
     // rate limit the customer shares with everyone behind their IP.
     expect(normaliseTypedClaimCode('A1B2C')).toBeNull()
-    expect(normaliseTypedClaimCode('A1B2C3D4E5')).toBeNull()
+    expect(normaliseTypedClaimCode('A1B2C3D4E5F')).toBeNull()
     expect(normaliseTypedClaimCode('')).toBeNull()
   })
 
@@ -157,6 +157,28 @@ describe('typed claim codes', () => {
     // it from a bare six would silently redeem someone else's coupon.
     expect(normaliseTypedClaimCode('CB12ZZ')).toBe('CB12ZZ')
     expect(toCanonicalClaimCode('CB12ZZ')).toBe('CB-CB12-ZZ')
+  })
+
+  it('accepts the ten-character codes the portal issues today, in every shape', () => {
+    // Since gateway-portal 0.4.0 (GP-02) a code is ten random characters, CB-XXXXX-XXXXX.
+    // The wallet only knew the old six, so the Redeem button stayed disabled for every
+    // code a shop could hand out.
+    for (const typed of ['CB-AEQTJ-MYJHY', 'cb-aeqtj-myjhy', 'CBAEQTJMYJHY', 'aeqtjmyjhy', ' CB AEQTJ MYJHY ']) {
+      expect(canonicaliseTypedClaimCode(typed)).toBe('CB-AEQTJ-MYJHY')
+    }
+  })
+
+  it('keeps CB as code characters in a bare ten-character entry', () => {
+    // A current code can itself start with C and B. Only a twelve-character entry
+    // carries the prefix.
+    expect(canonicaliseTypedClaimCode('CBQTJMYJHY')).toBe('CB-CBQTJ-MYJHY')
+  })
+
+  it('refuses lengths between and beyond the two code shapes', () => {
+    // Seven to nine characters is a half-typed current code, not a legacy one.
+    for (const typed of ['A1B2C3D', 'A1B2C3D4', 'A1B2C3D4E', 'A1B2C3D4E5F']) {
+      expect(canonicaliseTypedClaimCode(typed)).toBeNull()
+    }
   })
 })
 
@@ -182,6 +204,24 @@ describe('redeeming a code', () => {
     )
     // Banked, so nothing is left queued for replay.
     expect(store.get('imani:cashback:pending') ?? null).toBeNull()
+  })
+
+  it('looks up a current ten-character code, not just a legacy one', async () => {
+    // Every code the portal has issued since GP-02 has this shape. Refusing it here
+    // would answer "not found" without ever asking the gateway.
+    const seal = await sealed('cashuBcurrentcode')
+    const calls = stubFetch({
+      byCode: {
+        status: 200,
+        body: { claimUrl: `https://${ORIGIN}/c/${CLAIM_REF}#k=${seal.key}` },
+      },
+      ciphertext: { status: 200, body: { ciphertext: seal.ciphertext, iv: seal.iv } },
+    })
+
+    const result = await redeemCashbackCode('CB-AEQTJ-MYJHY')
+
+    expect(result).toMatchObject({ kind: 'ok' })
+    expect(calls.some((c) => c.includes('/by-code/CB-AEQTJ-MYJHY'))).toBe(true)
   })
 
   it('never fetches a claim URL on a host the gateway did not vouch for', async () => {
