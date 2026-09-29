@@ -27,6 +27,19 @@ const SECRET = generateSecretKey()
 /** The key the predecessor is locked to, so the one whose signature the gateway wants. */
 const LOCK_KEY = generateSecretKey()
 const OTHER_KEY = generateSecretKey()
+
+/**
+ * Lends `key` the way `WalletSigner.withPrivkey` does: a copy for the length of the
+ * call, wiped afterwards. Tests use it so they never touch the session signer.
+ */
+const lend = (key: Uint8Array) => <T>(borrow: (borrowed: Uint8Array) => T): T => {
+  const copy = key.slice()
+  try {
+    return borrow(copy)
+  } finally {
+    copy.fill(0)
+  }
+}
 const PREDECESSOR = '["P2PK_VOUCHER",{"nonce":"aa","data":"02ab","tags":[]}]'
 const PROPOSED = '["P2PK_VOUCHER",{"nonce":"bb","data":"02cd","tags":[]}]'
 const SIGNED = '["P2PK_VOUCHER",{"nonce":"bb","data":"02cd","tags":[["issuer_sig","ff"]]}]'
@@ -67,7 +80,7 @@ describe('reissueVoucherSecret', () => {
   it('returns the signed secret the gateway produced', async () => {
     respondWith(200, { signed_secret: SIGNED })
 
-    await expect(reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lockKey: LOCK_KEY })).resolves.toBe(SIGNED)
+    await expect(reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lendKey: lend(LOCK_KEY) })).resolves.toBe(SIGNED)
   })
 
   /**
@@ -81,7 +94,7 @@ describe('reissueVoucherSecret', () => {
   it('marks a not-yet-burnt predecessor as retryable', async () => {
     respondWith(409, { refusal: 'PREDECESSOR_NOT_SPENT' })
 
-    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lockKey: LOCK_KEY }).catch(
+    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lendKey: lend(LOCK_KEY) }).catch(
       (error: unknown) => error,
     )
 
@@ -100,7 +113,7 @@ describe('reissueVoucherSecret', () => {
   it('marks an already-claimed predecessor as permanent, despite being about state', async () => {
     respondWith(422, { refusal: 'PREDECESSOR_ALREADY_CLAIMED' })
 
-    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lockKey: LOCK_KEY }).catch(
+    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lendKey: lend(LOCK_KEY) }).catch(
       (error: unknown) => error,
     )
 
@@ -116,7 +129,7 @@ describe('reissueVoucherSecret', () => {
   it('names a refusal for not holding the coupon, and does not retry it', async () => {
     respondWith(422, { refusal: 'NOT_AUTHORISED_BY_HOLDER' })
 
-    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lockKey: LOCK_KEY }).catch(
+    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lendKey: lend(LOCK_KEY) }).catch(
       (error: unknown) => error,
     )
 
@@ -135,7 +148,7 @@ describe('reissueVoucherSecret', () => {
   it('reduces an unrecognised refusal to UNKNOWN', async () => {
     respondWith(422, { refusal: 'SOME_FUTURE_RULE' })
 
-    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lockKey: LOCK_KEY }).catch(
+    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lendKey: lend(LOCK_KEY) }).catch(
       (error: unknown) => error,
     )
 
@@ -150,7 +163,7 @@ describe('reissueVoucherSecret', () => {
   it('reports a missing route as permanent rather than retrying it', async () => {
     respondWith(404, {})
 
-    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lockKey: LOCK_KEY }).catch(
+    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lendKey: lend(LOCK_KEY) }).catch(
       (error: unknown) => error,
     )
 
@@ -170,7 +183,7 @@ describe('reissueVoucherSecret', () => {
       new Response('<html>502 Bad Gateway</html>', { status: 502 }),
     )
 
-    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lockKey: LOCK_KEY }).catch(
+    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lendKey: lend(LOCK_KEY) }).catch(
       (error: unknown) => error,
     )
 
@@ -188,7 +201,7 @@ describe('reissueVoucherSecret', () => {
   it('refuses a 200 that carries no signed secret', async () => {
     respondWith(200, { refusal: undefined })
 
-    await expect(reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lockKey: LOCK_KEY })).rejects.toBeInstanceOf(
+    await expect(reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lendKey: lend(LOCK_KEY) })).rejects.toBeInstanceOf(
       VoucherReissueRefused,
     )
   })
@@ -201,11 +214,14 @@ describe('reissueVoucherSecret', () => {
   it('sends both secrets under their snake_case names, unaltered', async () => {
     const fetchSpy = respondWith(200, { signed_secret: SIGNED })
 
-    await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lockKey: LOCK_KEY })
+    await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lendKey: lend(LOCK_KEY) })
 
     const body = JSON.parse(String(fetchSpy.mock.calls[0][1]?.body))
-    expect(body.predecessor_secret).toBe(PREDECESSOR)
-    expect(body.proposed_secret).toBe(PROPOSED)
+    expect(body).toEqual({
+      predecessor_secret: PREDECESSOR,
+      proposed_secret: PROPOSED,
+      lock_authorization: expect.stringMatching(/^[0-9a-f]{128}$/),
+    })
   })
 
   /**
@@ -222,7 +238,7 @@ describe('reissueVoucherSecret', () => {
   it('signs the documented message with the lock key, as the gateway verifies it', async () => {
     const fetchSpy = respondWith(200, { signed_secret: SIGNED })
 
-    await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lockKey: LOCK_KEY })
+    await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lendKey: lend(LOCK_KEY) })
 
     const body = JSON.parse(String(fetchSpy.mock.calls[0][1]?.body))
     expect(body.lock_authorization).toMatch(/^[0-9a-f]{128}$/)
@@ -239,7 +255,7 @@ describe('reissueVoucherSecret', () => {
   it('does not sign with a key other than the one it was given', async () => {
     const fetchSpy = respondWith(200, { signed_secret: SIGNED })
 
-    await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lockKey: LOCK_KEY })
+    await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lendKey: lend(LOCK_KEY) })
 
     const body = JSON.parse(String(fetchSpy.mock.calls[0][1]?.body))
     expect(
@@ -249,6 +265,33 @@ describe('reissueVoucherSecret', () => {
         schnorr.getPublicKey(OTHER_KEY),
       ),
     ).toBe(false)
+  })
+
+  /**
+   * The key is borrowed once, for the signature, and not kept (IW-14). The lender
+   * wipes its copy when the borrow returns, so code that signed after the borrow
+   * ended, or signed with a key it had kept, would sign with a zeroed key and the
+   * signature would not verify against the lock key.
+   */
+  it('signs inside a single borrow of the key, not with a key it kept', async () => {
+    const fetchSpy = respondWith(200, { signed_secret: SIGNED })
+    let borrows = 0
+    const counting = <T>(borrow: (key: Uint8Array) => T): T => {
+      borrows++
+      return lend(LOCK_KEY)(borrow)
+    }
+
+    await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lendKey: counting })
+
+    const body = JSON.parse(String(fetchSpy.mock.calls[0][1]?.body))
+    expect(borrows).toBe(1)
+    expect(
+      schnorr.verify(
+        hexToBytes(body.lock_authorization),
+        documentedMessage(PREDECESSOR, PROPOSED),
+        schnorr.getPublicKey(LOCK_KEY),
+      ),
+    ).toBe(true)
   })
 })
 
@@ -266,7 +309,7 @@ function documentedMessage(predecessor: string, proposed: string): Uint8Array {
     new DataView(length.buffer).setUint32(0, bytes.length, false)
     parts.push(length, bytes)
   }
-  const joined = new Uint8Array(parts.reduce((n, p) => n + p.length, 0))
+  const joined = new Uint8Array(parts.reduce((total, part) => total + part.length, 0))
   let offset = 0
   for (const part of parts) {
     joined.set(part, offset)
