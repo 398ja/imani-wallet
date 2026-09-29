@@ -181,4 +181,73 @@ swapLive('a receive through the real transport', () => {
     ).toEqual(['UNSPENT'])
     expect(loadSwapIntents(PUBKEY), 'and the record is settled').toEqual([])
   }, 90_000)
+
+  /**
+   * H1 from the security review, against the real mint rather than a fake.
+   *
+   * The losing sequence: the swap LANDS at the mint and its response is lost; the
+   * user presses receive again. Before the fix, the retry blinded fresh outputs and
+   * overwrote the record, so the `r` values for the outputs the mint had actually
+   * signed were gone. The retry was refused as already spent, and the sweep then
+   * restored against the NEW blinded messages, got nothing, read that as "never
+   * signed, nothing spent", and deleted the record. Money unreachable for ever.
+   *
+   * The unit test proves the retry reuses the same blinded messages. Only the real
+   * mint can prove the thing that matters: that after a lost response AND a
+   * refused retry, the sweep still gets the money back. A fake mint would answer
+   * whatever the fake was written to answer.
+   */
+  it('recovers the money after a lost response and a refused retry', async () => {
+    const transport = createMintTransport()
+    const keysetId = await transport.activeKeysetId(MINT)
+    const keys = await transport.keysetKeys(MINT, keysetId)
+    const source = await fundedProofs(keysetId, keys)
+
+    const losesTheResponse = {
+      ...transport,
+      async swap(mintUrl: string, request: Parameters<typeof transport.swap>[1]) {
+        await transport.swap(mintUrl, request)
+        throw new Error('the page navigated before the response arrived')
+      },
+    }
+
+    // Attempt 1: the mint signs, the wallet never hears.
+    await expect(
+      receiveByOwnSwap({ pubkey: PUBKEY, mintUrl: MINT, proofs: source }, losesTheResponse),
+    ).rejects.toThrow(/navigated/)
+    expect(await statesOf(source.map((p) => p.secret))).toEqual(['SPENT'])
+
+    // Attempt 2: the user presses receive again, through the REAL transport. The
+    // inputs are already spent, so whatever the mint answers, this attempt must not
+    // disturb the recovery material the first attempt wrote.
+    const retry = await receiveByOwnSwap(
+      { pubkey: PUBKEY, mintUrl: MINT, proofs: source },
+      transport,
+    ).catch((refused: unknown) => refused)
+
+    // Two acceptable outcomes, and each is asserted rather than one being waved
+    // through. What must NOT happen is the pre-fix outcome: no record and nothing
+    // recoverable.
+    let recoveredProofs: { amount: number; secret: string }[]
+    if (retry instanceof Error) {
+      // Refused as already spent. The record the first attempt wrote must survive
+      // and the sweep must turn it into money.
+      console.info('[probe] retry refused:', retry.message)
+      expect(loadSwapIntents(PUBKEY), 'a refused retry must leave the record').toHaveLength(1)
+      const recovered = await recoverInterruptedSwaps(PUBKEY, transport)
+      expect(recovered, 'the sweep must find what the first attempt got signed').toHaveLength(1)
+      recoveredProofs = recovered[0].proofs
+    } else {
+      // Answered by NUT-19 replay, which only works because the retry sent the SAME
+      // blinded messages. A re-blinded retry could not have been replayed.
+      console.info('[probe] retry completed by NUT-19 replay of the first request')
+      recoveredProofs = (retry as Awaited<ReturnType<typeof receiveByOwnSwap>>).proofs
+    }
+
+    expect(recoveredProofs.reduce((sum, p) => sum + p.amount, 0)).toBe(2)
+    expect(
+      await statesOf(recoveredProofs.map((p) => p.secret)),
+      'and it must be live money, not a record of money',
+    ).toEqual(['UNSPENT'])
+  }, 90_000)
 })
