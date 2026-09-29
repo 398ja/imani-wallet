@@ -4,6 +4,9 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest'
 
 import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure'
+import { schnorr } from '@noble/curves/secp256k1.js'
+import { sha256 } from '@noble/hashes/sha2.js'
+import { hexToBytes } from '@noble/hashes/utils'
 
 import { VoucherReissueRefused, reissueVoucherSecret } from '../voucherReissue'
 
@@ -21,6 +24,9 @@ import { VoucherReissueRefused, reissueVoucherSecret } from '../voucherReissue'
  */
 
 const SECRET = generateSecretKey()
+/** The key the predecessor is locked to, so the one whose signature the gateway wants. */
+const LOCK_KEY = generateSecretKey()
+const OTHER_KEY = generateSecretKey()
 const PREDECESSOR = '["P2PK_VOUCHER",{"nonce":"aa","data":"02ab","tags":[]}]'
 const PROPOSED = '["P2PK_VOUCHER",{"nonce":"bb","data":"02cd","tags":[]}]'
 const SIGNED = '["P2PK_VOUCHER",{"nonce":"bb","data":"02cd","tags":[["issuer_sig","ff"]]}]'
@@ -61,7 +67,7 @@ describe('reissueVoucherSecret', () => {
   it('returns the signed secret the gateway produced', async () => {
     respondWith(200, { signed_secret: SIGNED })
 
-    await expect(reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer })).resolves.toBe(SIGNED)
+    await expect(reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lockKey: LOCK_KEY })).resolves.toBe(SIGNED)
   })
 
   /**
@@ -75,7 +81,7 @@ describe('reissueVoucherSecret', () => {
   it('marks a not-yet-burnt predecessor as retryable', async () => {
     respondWith(409, { refusal: 'PREDECESSOR_NOT_SPENT' })
 
-    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer }).catch(
+    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lockKey: LOCK_KEY }).catch(
       (error: unknown) => error,
     )
 
@@ -94,11 +100,28 @@ describe('reissueVoucherSecret', () => {
   it('marks an already-claimed predecessor as permanent, despite being about state', async () => {
     respondWith(422, { refusal: 'PREDECESSOR_ALREADY_CLAIMED' })
 
-    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer }).catch(
+    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lockKey: LOCK_KEY }).catch(
       (error: unknown) => error,
     )
 
     expect((refused as VoucherReissueRefused).refusal).toBe('PREDECESSOR_ALREADY_CLAIMED')
+    expect((refused as VoucherReissueRefused).retryable).toBe(false)
+  })
+
+  /**
+   * A request not signed by the coupon's holder is named as such, not reduced to
+   * UNKNOWN, so the wallet can tell the user the coupon is not theirs to re-lock.
+   * Permanent: the signer will never hold the lock key however often it asks.
+   */
+  it('names a refusal for not holding the coupon, and does not retry it', async () => {
+    respondWith(422, { refusal: 'NOT_AUTHORISED_BY_HOLDER' })
+
+    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lockKey: LOCK_KEY }).catch(
+      (error: unknown) => error,
+    )
+
+    expect(refused).toBeInstanceOf(VoucherReissueRefused)
+    expect((refused as VoucherReissueRefused).refusal).toBe('NOT_AUTHORISED_BY_HOLDER')
     expect((refused as VoucherReissueRefused).retryable).toBe(false)
   })
 
@@ -112,7 +135,7 @@ describe('reissueVoucherSecret', () => {
   it('reduces an unrecognised refusal to UNKNOWN', async () => {
     respondWith(422, { refusal: 'SOME_FUTURE_RULE' })
 
-    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer }).catch(
+    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lockKey: LOCK_KEY }).catch(
       (error: unknown) => error,
     )
 
@@ -127,7 +150,7 @@ describe('reissueVoucherSecret', () => {
   it('reports a missing route as permanent rather than retrying it', async () => {
     respondWith(404, {})
 
-    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer }).catch(
+    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lockKey: LOCK_KEY }).catch(
       (error: unknown) => error,
     )
 
@@ -147,7 +170,7 @@ describe('reissueVoucherSecret', () => {
       new Response('<html>502 Bad Gateway</html>', { status: 502 }),
     )
 
-    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer }).catch(
+    const refused = await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lockKey: LOCK_KEY }).catch(
       (error: unknown) => error,
     )
 
@@ -165,7 +188,7 @@ describe('reissueVoucherSecret', () => {
   it('refuses a 200 that carries no signed secret', async () => {
     respondWith(200, { refusal: undefined })
 
-    await expect(reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer })).rejects.toBeInstanceOf(
+    await expect(reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lockKey: LOCK_KEY })).rejects.toBeInstanceOf(
       VoucherReissueRefused,
     )
   })
@@ -178,9 +201,76 @@ describe('reissueVoucherSecret', () => {
   it('sends both secrets under their snake_case names, unaltered', async () => {
     const fetchSpy = respondWith(200, { signed_secret: SIGNED })
 
-    await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer })
+    await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lockKey: LOCK_KEY })
 
     const body = JSON.parse(String(fetchSpy.mock.calls[0][1]?.body))
-    expect(body).toEqual({ predecessor_secret: PREDECESSOR, proposed_secret: PROPOSED })
+    expect(body.predecessor_secret).toBe(PREDECESSOR)
+    expect(body.proposed_secret).toBe(PROPOSED)
+  })
+
+  /**
+   * The holder's signature, which the gateway checks before anything else
+   * (imani-gateway-customer#136). Knowing a coupon's secret is not holding it:
+   * whoever handed it over authored that secret, so only a signature by the key
+   * the coupon is locked to proves the caller holds it.
+   *
+   * Verified here against an independent spelling of the documented message, not
+   * by calling the code under test, so a wrong tag, a wrong length encoding or the
+   * secrets in the wrong order all fail. The gateway's own tests use the same
+   * message, so a mismatch between the two sides shows up on one of them.
+   */
+  it('signs the documented message with the lock key, as the gateway verifies it', async () => {
+    const fetchSpy = respondWith(200, { signed_secret: SIGNED })
+
+    await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lockKey: LOCK_KEY })
+
+    const body = JSON.parse(String(fetchSpy.mock.calls[0][1]?.body))
+    expect(body.lock_authorization).toMatch(/^[0-9a-f]{128}$/)
+    expect(
+      schnorr.verify(
+        hexToBytes(body.lock_authorization),
+        documentedMessage(PREDECESSOR, PROPOSED),
+        schnorr.getPublicKey(LOCK_KEY),
+      ),
+    ).toBe(true)
+  })
+
+  /** A signature by any other key would be refused, so it must not be what is sent. */
+  it('does not sign with a key other than the one it was given', async () => {
+    const fetchSpy = respondWith(200, { signed_secret: SIGNED })
+
+    await reissueVoucherSecret(PREDECESSOR, PROPOSED, { signer, lockKey: LOCK_KEY })
+
+    const body = JSON.parse(String(fetchSpy.mock.calls[0][1]?.body))
+    expect(
+      schnorr.verify(
+        hexToBytes(body.lock_authorization),
+        documentedMessage(PREDECESSOR, PROPOSED),
+        schnorr.getPublicKey(OTHER_KEY),
+      ),
+    ).toBe(false)
   })
 })
+
+/**
+ * `sha256("imani/voucher-reissue/v1" || u32be(len) || predecessor || u32be(len) || proposed)`,
+ * secrets as UTF-8. Written out here rather than imported, so this test is a second
+ * opinion on the layout and not an echo of it.
+ */
+function documentedMessage(predecessor: string, proposed: string): Uint8Array {
+  const encoder = new TextEncoder()
+  const parts = [encoder.encode('imani/voucher-reissue/v1')]
+  for (const secret of [predecessor, proposed]) {
+    const bytes = encoder.encode(secret)
+    const length = new Uint8Array(4)
+    new DataView(length.buffer).setUint32(0, bytes.length, false)
+    parts.push(length, bytes)
+  }
+  const joined = new Uint8Array(parts.reduce((n, p) => n + p.length, 0))
+  let offset = 0
+  for (const part of parts) {
+    joined.set(part, offset)
+    offset += part.length
+  }
+  return sha256(joined)
+}
