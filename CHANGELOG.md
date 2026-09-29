@@ -11,13 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`reissueVoucherSecret` signs as the coupon's holder (imani-gateway-customer#136).** It now
-  requires the private key the predecessor is locked to, and sends `lock_authorization`: a
-  BIP-340 signature over
+- **`reissueVoucherSecret` signs as the coupon's holder (imani-gateway-customer#136).** It
+  sends `lock_authorization`: a BIP-340 signature by the key the predecessor is locked to, over
   `sha256("imani/voucher-reissue/v1" || u32be(len) || predecessor || u32be(len) || proposed)`.
+  The key is borrowed from the session signer for the one signature (IW-14), never passed in
+  or kept. Tests and callers with another key can pass a `lendKey` that lends it the same way.
   The gateway refuses a re-signature without it, because knowing a coupon's secret is not
   holding it. `NOT_AUTHORISED_BY_HOLDER` is a known, permanent refusal. The gateway pins a
-  signature made by this code, with an odd-parity key and a non-ASCII proposal, so the two
+  signature made by this code, with a key whose y is odd and a non-ASCII proposal, so the two
   languages cannot drift apart unnoticed.
 
 ## [0.10.0] - 2026-09-29
