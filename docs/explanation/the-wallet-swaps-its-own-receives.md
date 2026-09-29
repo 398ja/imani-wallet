@@ -40,6 +40,10 @@ Two things have to land with that edit rather than after it:
   outright, because a wallet-chosen swap generates random secrets and a voucher's
   secret carries its whole identity. The gateway can now re-sign
   (`POST /api/v1/wallet/vouchers/reissue`), and calling it from here is not built.
+  When it is, the proposal must be persisted with the intent BEFORE the request is
+  sent. The gateway answers a resent identical proposal with the identical signed
+  successor, so a lost response is recoverable, but only from that proposal. A
+  fresh one for the same burn is refused.
   Switching the plain-ecash path over first is possible, and means two receive
   mechanisms live at once.
 
