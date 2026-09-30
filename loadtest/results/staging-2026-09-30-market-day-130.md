@@ -5,7 +5,7 @@ The same k6 mix as [the small run earlier today](staging-2026-09-30-market-day-g
 ## Setup
 
 - `pool.mjs --size 140 --verify`: 30 grown to 140, 140/140 usable.
-- `stalls.mjs --count 10 --verify`: 7 enrolled (about 61 s for the ACL each), **10/10 issued a real coupon**.
+- `stalls.mjs --count 10 --verify`: **10/10 stalls issued a real coupon** before the run.
 - Signer: 0 invalid signatures, 373/s. Smoke test: 9/9.
 - `DAY_DURATION=20m CUSTOMER_PEAK=130 STALL_COUNT=10`, from a laptop to `https://wallet.staging.398ja.xyz`, 21:37:47 to 21:58:21 UTC.
 
@@ -31,13 +31,13 @@ The same k6 mix as [the small run earlier today](staging-2026-09-30-market-day-g
 
 - `up{job="gateway-core"}` = 0 from **21:38:10**, about 20 s into the ramp, until a manual restart at 22:01. The container reported `unhealthy` the whole time.
 - gateway-core did **not recover** after the load stopped.
-- gateway-customer, gateway-portal and the mint were healthy throughout: no 5xx, no 429, low CPU and heap. The failure was confined to gateway-core.
+- gateway-customer, gateway-portal and the mint stayed up throughout (`up` = 1, peak CPU 18%, 1% and 1%). gateway-customer recorded no 5xx or 429. The failure was confined to gateway-core.
 
 ## Root cause (imani-gateway-core#115, severity 1)
 
-1. **A relay lookup inside every auth decision.** Every NIP-98 request resolves the caller's ACL. `MerchantAclService.decide` reads `nap_acl` through a pooled JDBC connection, then asks the relay whether the key has a stall record, with a 5 s timeout.
-2. **130 new keys at once:** every lookup missed the 60 s cache. The relay did not answer in time, so each decision took **5.55 s**.
-3. **Resources ran out:** all 10 `ApiKeyPool` connections were checked out by stalled decisions (Postgres showed them `idle`, not busy), and 4 virtual-thread carriers served everything.
+1. **A relay lookup inside every auth decision.** Every NIP-98 request resolves the caller's ACL. `MerchantAclService.decide` reads `nap_acl` (the connection is returned straight away), then asks the relay whether the key has a stall record, with a 5 s timeout. This runs inside a Caffeine compute, which holds a monitor, so on JDK 21 virtual threads the wait pins its carrier.
+2. **130 new keys at once:** every lookup missed the 60 s cache. The relay did not answer in time, so each decision took **5.55 s**. Relay queries finished in batches of 3 or 4 every 5.5 s, which means all 4 carriers were pinned.
+3. **Resources ran out:** threads that had checked out an `ApiKeyPool` connection couldn't get a carrier to finish and return it. Hikari reported `active=10, idle=0`. The Postgres-side state was not captured before the restart. After 21:38:47 nothing progressed, even once the load stopped. Logs can't explain that part, so it needs a pinned-thread trace on a rerun.
 4. **Everything queued behind the pool:** 169 `acl_resolve_failed`, up to 124 threads waiting, the metrics scrape and the healthcheck included.
 5. **Fail-open to a customer role:** stalls lost `coupon:issue` as a side effect, so 0 coupons were minted.
 
