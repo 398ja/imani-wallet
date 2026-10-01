@@ -684,6 +684,21 @@ describe('second review of #111', () => {
     expect(v.token).toBeNull()
   })
 
+  /**
+   * #145: the voucher row names the redeem it came from, so the wallet's write
+   * hook stamps it with that redeem's ids even while another is in flight.
+   */
+  it('buildVoucher carries the redeem correlation id onto the row', () => {
+    // Arrange
+    const r = loadRedemption({ api: {}, localStorage: memoryStorage() })
+
+    // Act
+    const v = r.buildVoucher(TOKEN, { amount: 5, token: 'cashuBfresh' }, { correlation_id: 'corr-7' }, null, 5, null) as Record<string, unknown>
+
+    // Assert
+    expect(v.correlation_id).toBe('corr-7')
+  })
+
   /** C: every api.receive for one token, across all retry layers, is capped and gated. */
   it('C: api.receive for one token is capped across retries, and every call goes through the gate', async () => {
     const receive = vi.fn(async (): Promise<unknown> => { throw httpError(503, 'HTTP 503') })
