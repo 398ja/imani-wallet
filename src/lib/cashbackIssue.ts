@@ -10,7 +10,8 @@
  * Kept out of the page so the order can be tested without rendering it.
  */
 import { issuingStall, type Actor } from './actor'
-import { generateCashback, type IssuedCashback } from './cashback'
+import { CashbackGenerateError, generateCashback, type IssuedCashback } from './cashback'
+import { getSigner } from './nap'
 import { buildCashbackTransaction } from './transactions'
 import { getWallet, notifyWalletChanged } from './wallet'
 import { buildIssuanceWarrant } from './warrantSigner'
@@ -100,7 +101,16 @@ export async function issueCashback(
  *    answers with that code instead of minting a second one.
  *
  * The attempt is dropped once a code is issued, and when the amount, unit,
- * note or expiry changes, because then it is a different sale.
+ * note or expiry changes, because then it is a different sale. Also when the
+ * stall or the signing key changes: an account switch is a different issuer.
+ *
+ * Two cases are never kept for a retry:
+ *  - An attempt with NO warrant while there is an actor. That means the wallet
+ *    was locked, and reusing it after unlocking would mint the coupon
+ *    unwarranted, which the till refuses (the #144 symptom). The next press
+ *    signs afresh.
+ *  - An attempt the portal definitely refused (a 4xx envelope other than 409).
+ *    Nothing was minted under that key, so there is nothing to protect.
  */
 export function createCashbackIssuer() {
   let inFlight = false
@@ -116,17 +126,35 @@ export function createCashbackIssuer() {
           request.unit,
           request.memo || undefined,
           request.expiryDays,
+          request.actor ? issuingStall(request.actor) : null,
+          signerPubkey(),
         ])
         if (pending?.inputs !== inputs) {
           pending = { inputs, attempt: await prepareCashbackAttempt(request) }
         }
-        const issued = await issueCashback(request, pending.attempt)
-        pending = null
-        return issued
+        const attempt = pending.attempt
+        if (request.actor && attempt.warrant === undefined) pending = null
+        try {
+          const issued = await issueCashback(request, attempt)
+          pending = null
+          return issued
+        } catch (error) {
+          if (error instanceof CashbackGenerateError && error.definiteRefusal) pending = null
+          throw error
+        }
       } finally {
         inFlight = false
       }
     },
+  }
+}
+
+/** The unlocked key, or null while locked. Part of the attempt's identity. */
+function signerPubkey(): string | null {
+  try {
+    return getSigner().pubkey
+  } catch {
+    return null
   }
 }
 

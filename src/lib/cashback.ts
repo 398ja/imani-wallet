@@ -198,6 +198,40 @@ const ENVELOPE_MESSAGES: Record<string, string> = {
   IDEMPOTENCY_CONFLICT: IDEMPOTENCY_CONFLICT_MESSAGE,
 }
 
+const HTTP_CONFLICT = 409
+const HTTP_CLIENT_ERROR_MIN = 400
+const HTTP_SERVER_ERROR_MIN = 500
+
+/**
+ * The portal answered generate with an error. Carries the status so a caller
+ * can tell a refusal of THIS request from an answer that may hide a success.
+ */
+export class CashbackGenerateError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string | undefined,
+  ) {
+    super(message)
+    this.name = 'CashbackGenerateError'
+  }
+
+  /**
+   * A 4xx with an error envelope: the portal looked at this request and turned
+   * it down, so nothing was minted under its key. A 409 is NOT one, because it
+   * says the key is already taken, and a 5xx or a dropped connection may hide a
+   * request that landed. Those are retried with the same key and warrant.
+   */
+  get definiteRefusal(): boolean {
+    return (
+      this.code !== undefined &&
+      this.status >= HTTP_CLIENT_ERROR_MIN &&
+      this.status < HTTP_SERVER_ERROR_MIN &&
+      this.status !== HTTP_CONFLICT
+    )
+  }
+}
+
 /**
  * Mint a cashback voucher and get back the code to read out.
  *
@@ -243,11 +277,11 @@ export async function generateCashback(params: {
 
   if (!response.ok) {
     const text = await response.text().catch(() => '')
-    const known = ENVELOPE_MESSAGES[envelopeCode(text) ?? '']
-    if (known) throw new Error(known)
-    throw new Error(
-      failureDetailFrom(text, response.status, 'Could not create the cashback code'),
-    )
+    const code = envelopeCode(text)
+    const message =
+      ENVELOPE_MESSAGES[code ?? ''] ??
+      failureDetailFrom(text, response.status, 'Could not create the cashback code')
+    throw new CashbackGenerateError(message, response.status, code)
   }
 
   const body = (await response.json()) as GenerateResponse
