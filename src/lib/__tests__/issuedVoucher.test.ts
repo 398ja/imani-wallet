@@ -114,14 +114,28 @@ describe('the vouchers a stall has issued', () => {
     expect(issuedVouchers(rows, { now: NOW }).map((r) => r.id)).toEqual(['issued:v1'])
   })
 
-  it('leaves cashback out, which has no voucher to claim against', () => {
-    // A cashback is an issuance for reconciliation and not a voucher: there is
-    // no recipient wallet, so its "claimed" figure could only ever be zero.
+  /** A cashback with no voucher id (issued before #144) still has nowhere to link. */
+  it('leaves out a cashback with no voucher id', () => {
     const rows = [
       issued('v1', 1000),
-      { ...issued('c1', 500), type: 'cashback', id: 'cashback:c1' },
+      { ...issued('c1', 500), type: 'cashback', id: 'cashback:c1', voucherId: undefined },
     ]
     expect(issuedVouchers(rows, { now: NOW }).map((r) => r.voucherId)).toEqual(['v1'])
+  })
+
+  /** A cashback whose voucher id came back from the portal is a voucher like any other (#144). */
+  it('lists a cashback that carries its voucher id', () => {
+    // Arrange
+    const rows = [
+      issued('v1', 1000, { at: NOW - 2 * DAY }),
+      { ...issued('vc', 500), type: 'cashback', id: 'cashback:c1', cashbackId: 'c1' },
+    ]
+
+    // Act
+    const listed = issuedVouchers(rows, { now: NOW })
+
+    // Assert
+    expect(listed.map((r) => r.voucherId)).toEqual(['vc', 'v1'])
   })
 
   it('puts the newest first', () => {
@@ -144,6 +158,24 @@ describe('the vouchers a stall has issued', () => {
 
 describe('one issued voucher', () => {
   const opts = { now: NOW, stallPubkey: STALL }
+
+  /** The cashback's detail screen shows its warrant verifying against the stall key (#144). */
+  it('opens a cashback voucher and verifies its warrant against the stall', () => {
+    // Arrange
+    const cashback = {
+      ...issued('vc', 500, { issuanceWarrant: warrantFor(500) }),
+      type: 'cashback' as const,
+      id: 'cashback:c1',
+      cashbackId: 'c1',
+    }
+
+    // Act
+    const voucher = issuedVoucher([cashback], 'vc', opts)
+
+    // Assert
+    expect(voucher?.row.id).toBe('cashback:c1')
+    expect(voucher?.warrantVerdict).toEqual({ verdict: 'verified' })
+  })
 
   it('sums what has come back across several claims', () => {
     // A coupon is spent down, not used up: one issuance legitimately returns

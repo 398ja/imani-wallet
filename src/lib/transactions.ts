@@ -558,6 +558,11 @@ export function buildSentTransaction(input: {
 export function buildCashbackTransaction(input: {
   cashbackId: string
   claimCode: string
+  /**
+   * The voucher the code unlocks, from the portal's generate response. What
+   * puts the cashback on the Vouchers list and links it to its detail screen.
+   */
+  voucherId?: string
   amount: number
   unit: string
   decimals: number
@@ -589,6 +594,7 @@ export function buildCashbackTransaction(input: {
     decimals: input.decimals,
     cashbackId: input.cashbackId,
     claimCode: input.claimCode,
+    ...(input.voucherId ? { voucherId: input.voucherId } : {}),
     memo: input.memo || 'Cashback issued',
     expiresAt: input.expiresAt,
     // Deliberately no status. The gateway has just minted it, so `Unclaimed` is

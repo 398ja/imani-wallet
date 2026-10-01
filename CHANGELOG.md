@@ -16,6 +16,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own store to check each coupon is booked against its own voucher. On staging, 0.11.1 passed
   44 of 44 checks and 0.11.0 failed 7, including two refused honest payments. `E2E_BUNDLE_DIR`
   runs it against another build for a control run.
+- **Cashback vouchers on the Vouchers list (#144).** A cashback code now stores the
+  `voucherId` the portal returns and appears on `/merchant/coupons` beside Sell coupons, with
+  "Not claimed yet" or "Claimed". Opening the list asks `GET /portal/cashback/{id}/status` once,
+  and only for cashback rows that are still open. Its detail screen checks the warrant against
+  the stall key. A second device gets the row back through the existing NIP-60 history records.
+
+### Fixed
+
+- **A merchant could not take back a cashback coupon they issued (#144).** The wallet signed
+  the issuance warrant only after the code was minted, so the warrant never got into the
+  coupon's signed secret, and the till refused it as "Coupon not authorised". The warrant is
+  now signed first and sent as `issuanceWarrant` on `POST /portal/cashback/generate` (needs
+  imani-gateway-portal#52). The history row keeps that same string. If the portal refuses the
+  warrant, the merchant sees a message that says so, not a generic error. wallet-api's
+  `/v1/cashback/generate` now passes the caller's `issuanceWarrant` through unchanged. It
+  used to drop it. A terminal still sends a signed `none` and is still refused, which needs
+  the `delegated` form. Codes issued before this fix cannot be repaired.
 
 ## [0.11.1] - 2026-10-01
 

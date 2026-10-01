@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   AlertTriangle,
@@ -35,6 +35,7 @@ import { expiringSoon } from '../lib/stats'
 import { formatDate, formatFace } from '../lib/format'
 import { identityLabel, useIdentity } from '../lib/identity'
 import { issuedVoucher, issuedVouchers, type VoucherRecord } from '../lib/issuedVoucher'
+import { cashbackClaimLabel, refreshCashbackClaims } from '../lib/cashbackVouchers'
 import {
   describeRail,
   describeWarrant,
@@ -208,6 +209,16 @@ export function IssuedCouponsPage() {
 
   const { visible, page, pageCount, setPage } = usePagination(issued ?? [])
 
+  // Once per opening, not on every reload. The status write-back fires the
+  // wallet's change event, which reloads `state`, so without the ref one
+  // refresh would trigger the next. Only open cashback rows are asked.
+  const refreshed = useRef(false)
+  useEffect(() => {
+    if (state === null || refreshed.current) return
+    refreshed.current = true
+    void refreshCashbackClaims(state.transactions)
+  }, [state])
+
   // How many are being left out, so the switch says what turning it on buys.
   // Computed rather than inferred from the two list lengths, which would be
   // zero whenever the switch is already on and leave the label saying nothing.
@@ -215,7 +226,10 @@ export function IssuedCouponsPage() {
     state === null
       ? 0
       : state.transactions.filter(
-          (tx) => tx.type === 'issued' && tx.expiresAt !== undefined && tx.expiresAt <= state.loadedAt,
+          (tx) =>
+            (tx.type === 'issued' || (tx.type === 'cashback' && Boolean(tx.voucherId))) &&
+            tx.expiresAt !== undefined &&
+            tx.expiresAt <= state.loadedAt,
         ).length
 
   return (
@@ -256,7 +270,7 @@ export function IssuedCouponsPage() {
         <EmptyRow>
           {expiredCount > 0 && !includeExpired
             ? 'Nothing still valid. Turn on “Include expired” to see the ones that have run out.'
-            : 'None yet. Vouchers you sell show up here.'}
+            : 'None yet. Vouchers you sell and cashback you issue show up here.'}
         </EmptyRow>
       ) : (
         visible.map((tx) => <IssuedCouponRow key={tx.id} tx={tx} now={state?.loadedAt ?? 0} />)
@@ -393,6 +407,9 @@ function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
       <Panel className="mb-6 p-5">
         <p className="text-amount text-mono-900 dark:text-mono-50">{money(row.amount)}</p>
         <p className="truncate text-sm text-mono-500">{row.memo || 'Voucher issued'}</p>
+        {cashbackClaimLabel(row) ? (
+          <p className="text-sm text-mono-500">Cashback code · {cashbackClaimLabel(row)}</p>
+        ) : null}
 
         <ClaimedBar
           claimedMinor={claimedMinor}
@@ -747,6 +764,7 @@ function IssuedCouponRow({ tx, now }: { tx: WalletTransaction; now: number }) {
   // One fetch per customer, not per row: `merchantBranding` caches by pubkey,
   // and a merchant's list is mostly repeat customers.
   const customer = useIdentity(tx.counterparty)
+  const claimLabel = cashbackClaimLabel(tx)
 
   return (
     <Link
@@ -777,6 +795,8 @@ function IssuedCouponRow({ tx, now }: { tx: WalletTransaction; now: number }) {
               ? `Expired ${formatDate(tx.expiresAt)}`
               : `Expires ${formatDate(tx.expiresAt)}`}
           {tx.counterparty ? ` · ${identityLabel(tx.counterparty, customer)}` : ''}
+          {/* A cashback's claim state comes from the portal, which does know it. */}
+          {claimLabel ? ` · ${claimLabel}` : ''}
         </p>
       </div>
       <p className="shrink-0 text-right text-mono-900 dark:text-mono-50">

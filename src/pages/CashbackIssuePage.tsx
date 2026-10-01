@@ -3,14 +3,12 @@ import { useNavigate } from 'react-router-dom'
 import { Check, Copy } from 'lucide-react'
 
 import { Button, Screen, BackLink, PageHeader, Alert, Panel, Input } from '../components/ui'
-import { generateCashback, type IssuedCashback } from '../lib/cashback'
+import type { IssuedCashback } from '../lib/cashback'
+import { issueCashback } from '../lib/cashbackIssue'
 import { gatewayConfig, DEFAULT_CASHBACK_EXPIRY_DAYS } from '../lib/config'
 import { currencyDecimals, formatDate, formatFace, parseAmountToMinor } from '../lib/format'
 import type { MerchantProfile } from '../lib/merchant'
-import { issuingStall, ownerActor, type Actor } from '../lib/actor'
-import { buildIssuanceWarrant } from '../lib/warrantSigner'
-import { buildCashbackTransaction } from '../lib/transactions'
-import { getWallet, notifyWalletChanged } from '../lib/wallet'
+import { ownerActor, type Actor } from '../lib/actor'
 
 /**
  * Issue cashback: a coupon for someone who has not installed the app.
@@ -73,13 +71,16 @@ export function CashbackIssuePage({
     setBusy(true)
     setError(null)
     try {
-      const cashback = await generateCashback({
+      // Signs the warrant BEFORE minting, then records the same string. See
+      // `cashbackIssue.ts` for why the order matters.
+      const cashback = await issueCashback({
+        actor: actor ?? ownerActor(merchant.pubkey),
         amountMinor: minor,
         unit: merchant.issuanceCurrency,
+        decimals,
         memo: memo.trim() || undefined,
         expiryDays,
       })
-      await record(cashback, decimals, memo.trim(), actor ?? ownerActor(merchant.pubkey))
       setIssued(cashback)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -148,82 +149,6 @@ export function CashbackIssuePage({
       </Button>
     </Screen>
   )
-}
-
-/**
- * The merchant's own record of the code, written for the same reason every
- * other merchant row is: nothing else on this device holds it.
- *
- * Without it a cashback leaves no trace at all — the code goes onto a paper
- * receipt and the merchant has no way to find it again, let alone ask whether
- * it was ever redeemed. The row is what the transaction detail screen looks the
- * status up BY.
- *
- * Non-fatal but never silent, matching `issueAndDeliver`: the code has already
- * been minted and is about to go on screen, so throwing here would report a
- * live cashback as a failed one. A missing history entry beats a phantom
- * failure.
- */
-async function record(
-  issued: IssuedCashback,
-  decimals: number,
-  memo: string,
-  /**
-   * WHO is issuing, not a key to stamp.
-   *
-   * An earlier version took a bare `stallPubkey` and fabricated
-   * `{ kind: 'owner', stallPubkey }` to sign with. That was wrong on a
-   * terminal: it asserted owner-ness of a device whose key is NOT the stall's,
-   * bypassing the one guard in `buildIssuanceWarrant` that exists to catch
-   * exactly that. The signer's own mismatch check caught it and fell back to
-   * `none`, so the bug was fail-safe rather than dangerous - but it made a
-   * comment claim behaviour the code did not have, and relied on a defensive
-   * check instead of the deliberate one.
-   *
-   * The route only guards on `canTrade`, which is a PERMISSION rather than a
-   * device kind, so a terminal holding `coupon:issue` does reach this screen.
-   */
-  actor: Actor | null,
-): Promise<void> {
-  try {
-    const expiresAt = Date.parse(issued.expiresAt)
-
-    // Cashback is the ONE rail the receipt-time attestation cannot reach.
-    // There is no recipient to send a receipt back from - the whole point of
-    // this flow is reaching someone who has no wallet yet - so the merchant's
-    // own signature is the only evidence this sale will ever carry. That makes
-    // it more important here than on the Sell path, not less.
-    //
-    // A terminal gets a signed `none` from the signer's own guard, which is
-    // correct: its key is not the stall's, so anything it signed would not
-    // verify at reconciliation.
-    const warrant = actor
-      ? await buildIssuanceWarrant(actor, issued.amountMinor, decimals, issued.unit)
-      : undefined
-    const stallPubkey = actor ? issuingStall(actor) : undefined
-    await getWallet().addTransaction(
-      buildCashbackTransaction({
-        cashbackId: issued.cashbackId,
-        claimCode: issued.claimCode,
-        amount: issued.amountMinor,
-        unit: issued.unit,
-        decimals,
-        memo: memo || undefined,
-        // Epoch SECONDS, as the builder documents and as every other expiry on
-        // the wire is carried.
-        expiresAt: Number.isNaN(expiresAt) ? undefined : Math.floor(expiresAt / 1000),
-        at: Date.now(),
-        issuanceWarrant: warrant,
-        merchantId: stallPubkey,
-      }),
-    )
-    // The relay copy rides along with the write — `openWallet` wraps
-    // `addTransaction` — but a write made by this tab is not echoed back to it,
-    // so the history screen behind this one needs telling. Same as issue.ts.
-    notifyWalletChanged()
-  } catch (error) {
-    console.error('[cashback] issuance not recorded in history', error)
-  }
 }
 
 /**
