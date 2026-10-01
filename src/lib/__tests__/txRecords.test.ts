@@ -132,6 +132,29 @@ describe('toContent / toRow', () => {
     expect(after.claimCode).toBe('A1B2C3')
   })
 
+  /** A second device gets the cashback's voucher id and warrant back, so it lists and verifies it too (#144). */
+  it('restores a cashback voucher id and warrant on another device', () => {
+    // Arrange
+    const cashback = buildCashbackTransaction({
+      cashbackId: 'cb-78',
+      claimCode: 'A1B2C4',
+      voucherId: 'v-cb-78',
+      amount: 500,
+      unit: 'XAF',
+      decimals: 0,
+      at: 1786891362412,
+      issuanceWarrant: '{"form":"merchant"}',
+    })
+
+    // Act
+    const after = toTransaction(toRow(String(cashback.id), toContent(toTransaction(cashback))))
+
+    // Assert
+    expect(after.voucherId).toBe('v-cb-78')
+    expect(after.issuanceWarrant).toBe('{"form":"merchant"}')
+    expect(after.type).toBe('cashback')
+  })
+
   it('restores under the id the writer used, so a re-restore overwrites', () => {
     // Rows are keyed on their own id. If a restore invented one, logging in
     // twice would double the history instead of rewriting it.

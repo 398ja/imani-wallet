@@ -502,3 +502,27 @@ describe('a re-filed row keeps nothing of its stamp (#145 review)', () => {
     expect(check.allowed).toBe(false)
   })
 })
+
+describe('a cashback voucher is an issuance for the repair (#144)', () => {
+  /** A misfiled row is re-filed under the cashback voucher its coupon names, so the ceiling sees it. */
+  it('refiles under a cashback voucher id and refuses past the face', async () => {
+    // Arrange
+    store.rows = [
+      { ...issuedRow(SONG_VOUCHER), id: 'cashback:cb-1', type: 'cashback', cashbackId: 'cb-1' } as unknown as TransactionRow,
+    ]
+    const whole = coupon(SONG_VOUCHER, SONG_RATIO, 1371)
+    redeemed('tok-cb', whole, { voucherId: 'random-id-from-builder', amount: FACE, exact: exactOf(whole) })
+
+    // Act
+    const rows = await repairedTransactions()
+    const { check } = await checkPart({
+      voucherId: SONG_VOUCHER,
+      exact: exactOf(coupon(SONG_VOUCHER, SONG_RATIO, 1)),
+      signedFaceValue: FACE,
+    })
+
+    // Assert
+    expect(rows.find((tx) => tx.id === 'received:tok-cb')?.voucherId).toBe(SONG_VOUCHER)
+    expect(check.allowed).toBe(false)
+  })
+})

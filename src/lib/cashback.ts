@@ -153,6 +153,11 @@ export interface IssuedCashback {
   amountMinor: number
   unit: string
   expiresAt: string
+  /**
+   * The voucher the portal minted for this code, when it says. Older portals
+   * do not return it, and a row without it simply stays off the Vouchers list.
+   */
+  voucherId?: string
 }
 
 interface GenerateResponse {
@@ -161,6 +166,70 @@ interface GenerateResponse {
   amountMinor?: unknown
   unit?: unknown
   expiresAt?: unknown
+  voucherId?: unknown
+}
+
+/**
+ * What a merchant sees when the portal refuses the stall's warrant.
+ *
+ * Its own words because the fix is different from any other failure: retrying
+ * will not help, and the usual cause is a device whose key is not the stall's.
+ */
+export const WARRANT_REFUSED_MESSAGE =
+  'The gateway did not accept this device\u2019s authorisation for the cashback. ' +
+  'No code was created. Sign in on the stall\u2019s own device and try again.'
+
+/**
+ * What a merchant sees when the portal already holds this issue under the
+ * same key with a different body. The usual cause is a re-signed warrant on a
+ * retry. Nothing new was minted.
+ */
+export const IDEMPOTENCY_CONFLICT_MESSAGE =
+  'This cashback was already being created with different details, so no second code was made. ' +
+  'Check your history before creating it again.'
+
+/**
+ * The portal's `ErrorEnvelope.code` values this screen speaks for itself.
+ * Matched on the code, not the message text, so a different 400 that happens
+ * to mention a warrant keeps its own words.
+ */
+const ENVELOPE_MESSAGES: Record<string, string> = {
+  INVALID_WARRANT: WARRANT_REFUSED_MESSAGE,
+  IDEMPOTENCY_CONFLICT: IDEMPOTENCY_CONFLICT_MESSAGE,
+}
+
+const HTTP_CONFLICT = 409
+const HTTP_CLIENT_ERROR_MIN = 400
+const HTTP_SERVER_ERROR_MIN = 500
+
+/**
+ * The portal answered generate with an error. Carries the status so a caller
+ * can tell a refusal of THIS request from an answer that may hide a success.
+ */
+export class CashbackGenerateError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string | undefined,
+  ) {
+    super(message)
+    this.name = 'CashbackGenerateError'
+  }
+
+  /**
+   * A 4xx with an error envelope: the portal looked at this request and turned
+   * it down, so nothing was minted under its key. A 409 is NOT one, because it
+   * says the key is already taken, and a 5xx or a dropped connection may hide a
+   * request that landed. Those are retried with the same key and warrant.
+   */
+  get definiteRefusal(): boolean {
+    return (
+      this.code !== undefined &&
+      this.status >= HTTP_CLIENT_ERROR_MIN &&
+      this.status < HTTP_SERVER_ERROR_MIN &&
+      this.status !== HTTP_CONFLICT
+    )
+  }
 }
 
 /**
@@ -171,7 +240,9 @@ interface GenerateResponse {
  * pubkey the portal trusts. The issuer is never a body field — the endpoint is
  * `@PreAuthorize(MERCHANT_ONLY)` and stamps whoever the edge authenticated.
  *
- * `idempotencyKey` is generated here and not retried on: a double-tap must not
+ * `idempotencyKey` comes from the caller, with the warrant, so a retry of the
+ * same issue can resend both unchanged (#144). The portal compares the
+ * warrant's hash under a key, so a re-signed warrant gets a 409. A double-tap must not
  * mint two vouchers, and a network error whose request actually landed would
  * otherwise be indistinguishable from one that did not.
  *
@@ -185,17 +256,32 @@ export async function generateCashback(params: {
   unit: string
   memo?: string
   expiryDays: number
+  /**
+   * The stall's warrant for this sale, signed BEFORE this call. It goes into
+   * the voucher's signed secret, so it cannot be added once the code exists.
+   */
+  issuanceWarrant?: string
+  /** One per issue, reused on every retry of it. */
+  idempotencyKey: string
 }): Promise<IssuedCashback> {
   const response = await signedFetch('/api/v1/portal/cashback/generate', 'POST', {
     amountMinor: params.amountMinor,
     unit: params.unit,
     memo: params.memo,
-    idempotencyKey: crypto.randomUUID(),
+    idempotencyKey: params.idempotencyKey,
     expiryDays: params.expiryDays,
+    // Omitted when undefined, as on Sell: absent means "no warrant", which is a
+    // different claim from a signed `none`.
+    ...(params.issuanceWarrant === undefined ? {} : { issuanceWarrant: params.issuanceWarrant }),
   })
 
   if (!response.ok) {
-    throw new Error(await failureDetail(response, 'Could not create the cashback code'))
+    const text = await response.text().catch(() => '')
+    const code = envelopeCode(text)
+    const message =
+      ENVELOPE_MESSAGES[code ?? ''] ??
+      failureDetailFrom(text, response.status, 'Could not create the cashback code')
+    throw new CashbackGenerateError(message, response.status, code)
   }
 
   const body = (await response.json()) as GenerateResponse
@@ -208,6 +294,7 @@ export async function generateCashback(params: {
     amountMinor: Number(body.amountMinor ?? params.amountMinor),
     unit: typeof body.unit === 'string' ? body.unit : params.unit,
     expiresAt: typeof body.expiresAt === 'string' ? body.expiresAt : '',
+    ...(typeof body.voucherId === 'string' && body.voucherId ? { voucherId: body.voucherId } : {}),
   }
 }
 
@@ -351,8 +438,7 @@ export function useCashbackStatus(input: {
 }
 
 /** The server's `message`/`detail` if it sent one, else the bare status. */
-async function failureDetail(response: Response, fallback: string): Promise<string> {
-  const text = await response.text().catch(() => '')
+function failureDetailFrom(text: string, status: number, fallback: string): string {
   try {
     const body = JSON.parse(text) as { message?: string; detail?: string; error?: string }
     const message = body.message ?? body.detail ?? body.error
@@ -360,7 +446,17 @@ async function failureDetail(response: Response, fallback: string): Promise<stri
   } catch {
     // Not JSON — fall through to the raw text, truncated.
   }
-  return `${fallback} (${response.status}): ${text.slice(0, 200)}`
+  return `${fallback} (${status}): ${text.slice(0, 200)}`
+}
+
+/** The portal's `ErrorEnvelope.code`, or undefined if the body is not one. */
+function envelopeCode(text: string): string | undefined {
+  try {
+    const code = (JSON.parse(text) as { code?: unknown }).code
+    return typeof code === 'string' ? code : undefined
+  } catch {
+    return undefined
+  }
 }
 
 // ─── Redeeming (customer) ───────────────────────────────────────────────────

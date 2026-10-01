@@ -75,6 +75,11 @@ function voucherBlob(v: SignedVoucherFields): Uint8Array {
   if (v.merchantMetadata != null) {
     pairs.push(bytes(tstr('merchantMetadata'), tstr(v.merchantMetadata)))
   }
+  // Signed as the `issuance_warrant` tag, so a fixture that dropped it would
+  // build a token whose signature fails the moment a test sets one.
+  if (v.issuanceWarrant != null) {
+    pairs.push(bytes(tstr('issuanceWarrant'), tstr(v.issuanceWarrant)))
+  }
   return bytes(head(5, pairs.length), ...pairs)
 }
 
@@ -104,8 +109,13 @@ export function buildVoucherToken(
    * signing just produces a different, valid one.
    */
   tamper: Partial<SignedVoucherFields> = {},
+  /**
+   * The issuer's key. Random by default. Pass the stall's own key when a test
+   * needs a warrant inside the coupon to verify against the coupon's issuer.
+   */
+  issuerKey: Uint8Array = schnorr.utils.randomSecretKey(),
 ): BuiltVoucherToken {
-  const priv = schnorr.utils.randomSecretKey()
+  const priv = issuerKey
   const pub = bytesToHex(schnorr.getPublicKey(priv))
 
   const unsigned: SignedVoucherFields = {

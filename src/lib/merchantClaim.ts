@@ -90,7 +90,7 @@
 import { currencyDecimals } from './format'
 import { isClaim, sameUnit } from './issuedVoucher'
 import { repairedTransactions } from './redemptionLedger'
-import type { WalletTransaction } from './transactions'
+import { isVoucherIssuance, type WalletTransaction } from './transactions'
 import type { VoucherValidation } from './voucherToken'
 
 /** What `stampCorrelation` overwrites on the redemption row. */
@@ -167,7 +167,7 @@ export function boundedClaim(
 ): MerchantClaim | undefined {
   if (!claim) return undefined
 
-  const issued = rows.find((tx) => tx.type === 'issued' && tx.voucherId === claim.voucherId)
+  const issued = rows.find((tx) => isVoucherIssuance(tx) && tx.voucherId === claim.voucherId)
   if (!issued || !sameUnit(issued.unit, claim.unit) || !(issued.amount > 0)) return undefined
 
   const alreadyClaimed = rows

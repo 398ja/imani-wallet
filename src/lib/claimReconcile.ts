@@ -4,7 +4,7 @@ import { checkIssuer } from './issuerAllowlist'
 import { checkMintAndUnit } from './trustedMint'
 import { boundedClaim, type MerchantClaim } from './merchantClaim'
 import { redeemLockName } from './redemptionLedger'
-import { toTransaction, type WalletTransaction } from './transactions'
+import { isVoucherIssuance, toTransaction, type WalletTransaction } from './transactions'
 import { publishTx } from './txRecords'
 import { creditableFaceValue, exactFaceValue, parseVoucherToken, verifyVoucher } from './voucherToken'
 import { getWallet, listTransactions, listVouchers, notifyWalletChanged } from './wallet'
@@ -87,7 +87,7 @@ export async function reconcileClaims(stallPubkey: string): Promise<ReconcileRes
     // off the stored row by id.
     const rawById = new Map(raw.map((r) => [String((r as { id?: unknown }).id ?? ''), r as unknown as Record<string, unknown>]))
     const rows = raw.map(toTransaction)
-    const issuedIds = new Set(rows.filter((tx) => tx.type === 'issued' && tx.voucherId).map((tx) => tx.voucherId))
+    const issuedIds = new Set(rows.filter((tx) => isVoucherIssuance(tx) && tx.voucherId).map((tx) => tx.voucherId))
     if (issuedIds.size === 0) return result
 
     const candidates = rows

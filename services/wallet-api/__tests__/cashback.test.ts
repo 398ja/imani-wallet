@@ -90,6 +90,49 @@ describe('the body it tells a caller to sign', () => {
     expect(body({ memo: 'thanks' }).memo).toBe('thanks')
   })
 
+  /** The caller's warrant reaches the portal verbatim, or the coupon is refused at the till (#144). */
+  it('forwards the caller\u2019s issuanceWarrant byte for byte', () => {
+    // Arrange
+    const warrant = '{"form":"merchant","sale_total":500,"nonce":"n","sig":"s"}'
+
+    // Act
+    const sent = body({ issuanceWarrant: warrant })
+
+    // Assert
+    expect(sent.issuanceWarrant).toBe(warrant)
+    expect('issuanceWarrant' in body()).toBe(false)
+  })
+
+  /** A warrant that is not a string is refused here, not passed on as something else. */
+  it('refuses a non-string issuanceWarrant', () => {
+    // Arrange, Act
+    const r = parseGenerateRequest({
+      amountMinor: 500,
+      unit: 'EUR',
+      idempotencyKey: uuid,
+      issuanceWarrant: { form: 'merchant' },
+    })
+
+    // Assert
+    expect(r.ok).toBe(false)
+  })
+
+  /** Over 4096 characters is refused here, as the portal refuses it. Exactly 4096 passes. */
+  it('refuses a warrant longer than the portal accepts', () => {
+    // Arrange
+    const parse = (length: number) =>
+      parseGenerateRequest({ amountMinor: 500, unit: 'EUR', idempotencyKey: uuid, issuanceWarrant: 'w'.repeat(length) })
+
+    // Act
+    const atLimit = parse(4096)
+    const over = parse(4097)
+
+    // Assert
+    expect(atLimit.ok).toBe(true)
+    expect(over.ok).toBe(false)
+    if (!over.ok) expect(over.error.field).toBe('issuanceWarrant')
+  })
+
   it('is stable, so a signature over it stays valid', () => {
     const r = parseGenerateRequest({ amountMinor: 500, unit: 'EUR', idempotencyKey: uuid })
     if (!r.ok) throw new Error('setup failed')
