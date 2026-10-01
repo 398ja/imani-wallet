@@ -15,12 +15,20 @@ import { REFUSAL_MESSAGES } from './refusalToast'
  *
  * Display only. Nothing here touches the ledger: a refused coupon was never
  * swapped and is still the sender's.
+ *
+ * **Sender-written, so not trusted as a claim about the payment.** The bundle
+ * and request ids come from the DM, which anyone can send. So each refusal
+ * keeps who sent it, and the payment screen only states it as part of THIS
+ * payment (and tells staff to collect the rest) when that sender is the
+ * payment's own payer. See `RefusedCouponsNote`.
  */
 
 export interface RefusedCoupon {
   /** The gift wrap, which is what makes one delivery one record. */
   eventId: string
   voucherId: string
+  /** Who sent the refused coupon, as dm-poll reports it. */
+  senderPubkey?: string
   reason: RedemptionRefusedEvent['reason']
   bundleId?: string
   bundlePartCount?: number
@@ -55,6 +63,9 @@ export function recordRefusal(pubkey: string, event: RedemptionRefusedEvent | un
     store.put(pubkey, {
       eventId: event.eventId,
       voucherId: event.voucherId,
+      // The payload's payer first, as postPaymentReceipt orders it: the wrap's
+      // signer is the gateway on a relayed send.
+      senderPubkey: (event.payerPubkey ?? event.senderPubkey)?.toLowerCase(),
       reason: event.reason,
       bundleId: event.bundleId,
       bundlePartCount: event.bundlePartCount,

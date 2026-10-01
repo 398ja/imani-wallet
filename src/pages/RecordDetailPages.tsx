@@ -555,7 +555,15 @@ export function TransactionPage({
 
       {/* A coupon of this same payment turned away before the swap (#145). */}
       {!outgoing ? (
-        <RefusedCouponsNote pubkey={pubkey} bundleId={tx.bundleId} requestId={tx.paymentId} className="mb-6" />
+        // The row's counterparty is the payer of the coupon that DID land, so
+        // a refusal from the same sender is part of this same payment.
+        <RefusedCouponsNote
+          pubkey={pubkey}
+          bundleId={tx.bundleId}
+          requestId={tx.paymentId}
+          payer={tx.counterparty}
+          className="mb-6"
+        />
       ) : null}
 
       <ListSection title="Transaction">

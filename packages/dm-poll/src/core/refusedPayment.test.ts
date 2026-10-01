@@ -29,6 +29,7 @@ function cryptoAdapter(): CryptoAdapter {
     extractToken: vi.fn(() => 'cashuAeyJ0b2tlbiI6InRlc3QifQ'),
     parseTokenTransferMessage: vi.fn(() => ({
       voucherId: '19c4fed1',
+      senderPubkey: 'c'.repeat(64),
       bundleId: BUNDLE,
       bundlePartIndex: 1,
       bundlePartCount: 2,
@@ -75,7 +76,14 @@ describe('redemption:refused names its payment (#145)', () => {
 
     // Assert
     expect(refused).toHaveBeenCalledWith(
-      expect.objectContaining({ voucherId: '19c4fed1', bundleId: BUNDLE, bundlePartCount: 2, requestId: 'req-1' }),
+      expect.objectContaining({
+        voucherId: '19c4fed1',
+        bundleId: BUNDLE,
+        bundlePartCount: 2,
+        requestId: 'req-1',
+        // The payload's payer, not the gift wrap's signer (the gateway).
+        payerPubkey: 'c'.repeat(64),
+      }),
     );
   });
 });

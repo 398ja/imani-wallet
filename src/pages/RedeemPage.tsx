@@ -289,8 +289,15 @@ function RequestDisplay({
             </p>
           )}
 
-          {/* A coupon sent against this request was refused before the swap (#145). */}
-          <RefusedCouponsNote pubkey={pubkey} requestId={request.paymentId} className="mt-3 text-left" />
+          {/* A coupon naming this request was refused before the swap (#145).
+              Nobody has paid yet, so no payer is known to vouch for: shown
+              neutrally, and only while the request is still open. */}
+          <RefusedCouponsNote
+            pubkey={pubkey}
+            requestId={request.paymentId}
+            pending={request.status === 'pending'}
+            className="mt-3 text-left"
+          />
 
           {/* Only while pending: a QR for a paid or dead request is a trap — it
               still scans, and the customer would be paying a second time. */}

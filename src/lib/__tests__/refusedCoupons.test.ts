@@ -114,6 +114,21 @@ describe('saying it on the payment (#145)', () => {
 
   /** No refusals, no line. */
   it('says nothing when nothing was refused', () => {
-    expect(refusalSummary([])).toBeUndefined()
+    // Act
+    const line = refusalSummary([])
+
+    // Assert
+    expect(line).toBeUndefined()
+  })
+})
+
+describe('whose refusal it is (#145 review)', () => {
+  /** The payload's payer is kept, not the gift wrap's signer, which is the gateway on a relayed send. */
+  it("keeps the payload's payer over the wrap signer", () => {
+    // Arrange / Act
+    recordRefusal(STALL, refused({ senderPubkey: 'f'.repeat(64), payerPubkey: 'B'.repeat(64) }))
+
+    // Assert
+    expect(refusalsFor(STALL, { bundleId: BUNDLE })[0].senderPubkey).toBe('b'.repeat(64))
   })
 })

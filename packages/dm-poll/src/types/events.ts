@@ -130,6 +130,12 @@ export interface RedemptionRefusedEvent {
   bundlePartCount?: number;
   /** The payment request this coupon answered, when it named one. */
   requestId?: string;
+  /**
+   * The payer the payload names (`sender_pubkey`), as distinct from
+   * `senderPubkey`, the gift wrap's signer, which is the gateway on a relayed
+   * send. Sender-written like the ids above.
+   */
+  payerPubkey?: string;
 }
 
 /**
