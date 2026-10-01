@@ -9,8 +9,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 
-import { issueCashback } from '../cashbackIssue'
-import { WARRANT_REFUSED_MESSAGE } from '../cashback'
+import { createCashbackIssuer, issueCashback, prepareCashbackAttempt } from '../cashbackIssue'
+import { IDEMPOTENCY_CONFLICT_MESSAGE, WARRANT_REFUSED_MESSAGE } from '../cashback'
 import { parseIssuanceWarrant, verifyIssuanceWarrant } from '../issuanceWarrant'
 import { parseVoucherToken, verifyVoucher, creditableFaceValue } from '../voucherToken'
 import { buildVoucherToken } from './voucherFixtures'
@@ -134,11 +134,34 @@ describe('the warrant travels with the generate request', () => {
   it('names a refused warrant clearly', async () => {
     // Arrange
     calls.respond = () =>
-      new Response(JSON.stringify({ message: 'issuanceWarrant does not verify' }), { status: 400 })
+      new Response(
+        JSON.stringify({ code: 'INVALID_WARRANT', message: 'issuance_warrant does not authorise this sale', retryable: false }),
+        { status: 400 },
+      )
 
     // Act, Assert
     await expect(issue()).rejects.toThrow(WARRANT_REFUSED_MESSAGE)
     expect(calls.rows).toHaveLength(0)
+  })
+
+  /** The refusal is told by the portal's code, not by the word "warrant" in some other 400. */
+  it('does not call a different 400 a warrant refusal because it mentions warrants', async () => {
+    // Arrange
+    calls.respond = () =>
+      new Response(JSON.stringify({ code: 'INVALID_AMOUNT', message: 'amount exceeds the warrant' }), { status: 400 })
+
+    // Act, Assert
+    await expect(issue()).rejects.toThrow(/amount exceeds the warrant/)
+  })
+
+  /** A key reused with a different warrant reads in plain words. */
+  it('explains an idempotency conflict plainly', async () => {
+    // Arrange
+    calls.respond = () =>
+      new Response(JSON.stringify({ code: 'IDEMPOTENCY_CONFLICT', message: 'warrant digest differs' }), { status: 409 })
+
+    // Act, Assert
+    await expect(issue()).rejects.toThrow(IDEMPOTENCY_CONFLICT_MESSAGE)
   })
 
   /** A 400 about something else keeps its own message. */
@@ -148,6 +171,95 @@ describe('the warrant travels with the generate request', () => {
 
     // Act, Assert
     await expect(issue()).rejects.toThrow(/unit too long/)
+  })
+})
+
+describe('a retry of the same issue', () => {
+  const request = { actor: owner, amountMinor: 1500, unit: 'EUR', decimals: 2, expiryDays: 30 }
+
+  /**
+   * After a network error the retry must resend the same key AND warrant. The
+   * portal compares the warrant's hash, and a fresh nonce would get a 409.
+   */
+  it('resends the same idempotency key and warrant string', async () => {
+    // Arrange
+    const attempt = await prepareCashbackAttempt(request)
+    calls.respond = () => {
+      throw new TypeError('network down')
+    }
+    await expect(issueCashback(request, attempt)).rejects.toThrow()
+    calls.respond = null
+
+    // Act
+    await issueCashback(request, attempt)
+
+    // Assert
+    expect(calls.bodies[1].idempotencyKey).toBe(calls.bodies[0].idempotencyKey)
+    expect(calls.bodies[1].issuanceWarrant).toBe(calls.bodies[0].issuanceWarrant)
+    expect(calls.order.filter((step) => step === 'sign')).toHaveLength(1)
+  })
+
+  /** A new issue is a new sale: new key, new warrant nonce. */
+  it('gives a new issue a new key and a new warrant', async () => {
+    // Act
+    await issueCashback(request)
+    await issueCashback(request)
+
+    // Assert
+    expect(calls.bodies[1].idempotencyKey).not.toBe(calls.bodies[0].idempotencyKey)
+    expect(calls.bodies[1].issuanceWarrant).not.toBe(calls.bodies[0].issuanceWarrant)
+  })
+
+  /** A second press while the first is still in flight does nothing: one request, one code. */
+  it('ignores a second press while one is in flight', async () => {
+    // Arrange
+    const issuer = createCashbackIssuer()
+
+    // Act
+    const [first, second] = await Promise.all([issuer.submit(request), issuer.submit(request)])
+
+    // Assert
+    expect(calls.bodies).toHaveLength(1)
+    expect(first?.claimCode).toBe('CB-ABCDE-FGHIJ')
+    expect(second).toBeNull()
+  })
+
+  /** The issuer keeps the attempt after a failure, so pressing again is a retry of the same sale. */
+  it('retries with the same key and warrant after a failure', async () => {
+    // Arrange
+    const issuer = createCashbackIssuer()
+    calls.respond = () => {
+      throw new TypeError('network down')
+    }
+    await expect(issuer.submit(request)).rejects.toThrow()
+    calls.respond = null
+
+    // Act
+    await issuer.submit(request)
+
+    // Assert
+    expect(calls.bodies[1].idempotencyKey).toBe(calls.bodies[0].idempotencyKey)
+    expect(calls.bodies[1].issuanceWarrant).toBe(calls.bodies[0].issuanceWarrant)
+  })
+
+  /** Once a code is issued, the next press is a new sale. Editing the amount is too. */
+  it('starts a new key after success or after the inputs change', async () => {
+    // Arrange
+    const issuer = createCashbackIssuer()
+
+    // Act
+    await issuer.submit(request)
+    await issuer.submit(request)
+    calls.respond = () => {
+      throw new TypeError('network down')
+    }
+    await expect(issuer.submit(request)).rejects.toThrow()
+    calls.respond = null
+    await issuer.submit({ ...request, amountMinor: 1600 })
+
+    // Assert
+    const keys = calls.bodies.map((body) => body.idempotencyKey)
+    expect(new Set(keys).size).toBe(4)
   })
 })
 

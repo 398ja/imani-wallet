@@ -633,6 +633,19 @@ export function otherParty(
   return { pubkey: who, label: ownStall ? 'Customer' : tx.direction === 'in' ? 'From' : 'To' }
 }
 
+/**
+ * A row that put a voucher into the world: a Sell coupon or a cashback code.
+ *
+ * The ONE test for "this stall issued that voucher" (#144). Every reader that
+ * matches redemptions to issuance goes through it: the claimed figure, the
+ * redemption ceiling, the row repair and the claim sweep. When only `issued`
+ * counted, a cashback's redemptions were filed against nothing, so its
+ * ceiling under-counted split parts and a till could take more than its face.
+ */
+export function isVoucherIssuance(row: Pick<WalletTransaction, 'type'>): boolean {
+  return row.type === 'issued' || row.type === 'cashback'
+}
+
 /** Human label for the row type. */
 export function transactionLabel(tx: WalletTransaction): string {
   if (tx.type === 'payment') return 'Paid'

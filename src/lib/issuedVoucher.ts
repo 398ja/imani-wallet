@@ -52,7 +52,9 @@ import {
   type WarrantVerdict,
 } from './issuanceWarrant'
 import { saleFor, saleIsComplete } from './reconcileIssuance'
-import type { WalletTransaction } from './transactions'
+import { isVoucherIssuance, type WalletTransaction } from './transactions'
+
+export { isVoucherIssuance }
 
 /** How the customer paid for the voucher, as far as the record can say. */
 export type PaymentRail =
@@ -195,6 +197,11 @@ export function paymentRail(warrant: IssuanceWarrant): PaymentRail {
  * A cashback without a voucher id was issued before the portal returned one.
  * It stays off, for the routing reason below.
  *
+ * A cashback and a Sell row cannot share a voucher id, so neither can hide the
+ * other. Both ids are random UUIDs the gateway mints per voucher, and each
+ * issue mints its own. The list keys rows by row id anyway (`issued:<id>`,
+ * `cashback:<id>`), so even a collision would render both rows.
+ *
  * Expired vouchers are excluded by DEFAULT rather than absent: they are the
  * ones a customer is most likely to turn up holding, and a merchant deciding
  * whether to honour one needs to be able to find it. Default off because the
@@ -218,11 +225,6 @@ export function issuedVouchers(
     .filter((row) => isVoucherIssuance(row) && Boolean(row.voucherId))
     .filter((row) => includeExpired || !isExpired(row, now))
     .sort((a, b) => b.at - a.at)
-}
-
-/** A row that put a voucher into the world: a Sell coupon or a cashback code. */
-export function isVoucherIssuance(row: WalletTransaction): boolean {
-  return row.type === 'issued' || row.type === 'cashback'
 }
 
 /**

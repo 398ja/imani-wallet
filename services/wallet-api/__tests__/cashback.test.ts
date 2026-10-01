@@ -105,13 +105,32 @@ describe('the body it tells a caller to sign', () => {
 
   /** A warrant that is not a string is refused here, not passed on as something else. */
   it('refuses a non-string issuanceWarrant', () => {
+    // Arrange, Act
     const r = parseGenerateRequest({
       amountMinor: 500,
       unit: 'EUR',
       idempotencyKey: uuid,
       issuanceWarrant: { form: 'merchant' },
     })
+
+    // Assert
     expect(r.ok).toBe(false)
+  })
+
+  /** Over 4096 characters is refused here, as the portal refuses it. Exactly 4096 passes. */
+  it('refuses a warrant longer than the portal accepts', () => {
+    // Arrange
+    const parse = (length: number) =>
+      parseGenerateRequest({ amountMinor: 500, unit: 'EUR', idempotencyKey: uuid, issuanceWarrant: 'w'.repeat(length) })
+
+    // Act
+    const atLimit = parse(4096)
+    const over = parse(4097)
+
+    // Assert
+    expect(atLimit.ok).toBe(true)
+    expect(over.ok).toBe(false)
+    if (!over.ok) expect(over.error.field).toBe('issuanceWarrant')
   })
 
   it('is stable, so a signature over it stays valid', () => {
