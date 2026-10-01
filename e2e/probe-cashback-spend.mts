@@ -38,6 +38,7 @@ const SETTLE_WINDOW_MS = 5 * 60_000
 const PAYMENT_WAIT_POLLS = 120
 /** How long the claim notification has to reach the portal before the check gives up. */
 const CLAIM_STATUS_WINDOW_MS = 3 * 60_000
+const STORED_CLAIMED = /^200 status=Claimed$/
 const CLAIM_CODE = /\bCB-[A-Z0-9]{4,5}-[A-Z0-9]{2,5}\b/
 const PAYMENT_DONE = /^(Sent|Paid|Partly sent)$/m
 const FAILURE_WORDS = /failed|error|could not|NOT been delivered|never finished|refused/i
@@ -232,11 +233,24 @@ function couponFacts(row: StoredRow): { voucherId?: string; warranted: boolean }
   }
 }
 
-/** The portal's stored record for a cashback, read without reconciling it, as the till. */
-async function portalStoredRecord(till: Page, cashbackId: string): Promise<string> {
+/**
+ * The portal's stored status for a cashback, read without reconciling it, as the till.
+ * Parses the JSON rather than matching a slice of it: the body grew past any fixed cut once
+ * the response gained voucherId, and a cut-off "status" read as never Claimed.
+ */
+async function portalStoredStatus(till: Page, cashbackId: string): Promise<string> {
   return till.evaluate(async (id) => {
-    const r = await fetch(`/api/v1/portal/cashback/${id}`, { credentials: 'include' })
-    return `${r.status} ${(await r.text()).slice(0, 200)}`
+    try {
+      const r = await fetch(`/api/v1/portal/cashback/${id}`, { credentials: 'include' })
+      const body = await r.text()
+      try {
+        return `${r.status} status=${String(JSON.parse(body).status)}`
+      } catch {
+        return `${r.status} ${body.slice(0, 200)}`
+      }
+    } catch (e) {
+      return `fetch failed: ${String(e)}`
+    }
   }, cashbackId)
 }
 
@@ -307,11 +321,11 @@ async function checkClaimReachedPortal(till: Page, cashbackId: string): Promise<
   const deadline = Date.now() + CLAIM_STATUS_WINDOW_MS
   let last = ''
   while (Date.now() < deadline) {
-    last = await portalStoredRecord(till, cashbackId)
-    if (/"status"\s*:\s*"Claimed"/.test(last)) break
+    last = await portalStoredStatus(till, cashbackId)
+    if (STORED_CLAIMED.test(last)) break
     await till.waitForTimeout(POLL_MS)
   }
-  record('portal stored the claim without being asked (claim notification arrived)', /"status"\s*:\s*"Claimed"/.test(last), last)
+  record('portal stored the claim without being asked (claim notification arrived)', STORED_CLAIMED.test(last), last)
 }
 
 async function checkVouchersList(till: Page, voucherId: string): Promise<void> {
