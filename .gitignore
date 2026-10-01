@@ -56,3 +56,6 @@ perf/results/*.md
 # smoke run against a stub. A run worth keeping is committed by hand, as the
 # dated reports in loadtest/results/ already are.
 loadtest/results/market-day-summary.json
+
+# Screenshots a failed e2e/probe-concurrent-redeem.mts run leaves behind.
+e2e/.probe-concurrent-redeem/
