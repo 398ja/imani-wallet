@@ -169,6 +169,33 @@ failed 7 of 44: two refused honest payments ("already paid out 800 of 1000; refu
 further 600"), and rows stamped with the other customer's voucher. A failed run leaves a
 screenshot of each wallet in `E2E_SCREENSHOTS` (default `e2e/.probe-concurrent-redeem`).
 
+## `probe-cashback-spend.mts` — a cashback spent back at the stall that issued it
+
+A cashback coupon must be spendable at the merchant who issued it, and the merchant must learn
+it was claimed (imani-gateway-portal#52, #53; imani-wallet#144).
+
+```sh
+E2E_BASE=https://wallet.staging.398ja.xyz npx tsx e2e/probe-cashback-spend.mts
+```
+
+A till issues a EUR cashback code on `/sell/cashback`, and a customer redeems it on
+`/receive/cashback` and pays the whole balance back to the till. It checks:
+
+- the generate request carries an issuance warrant;
+- the response returns the voucher id;
+- the customer's coupon carries the warrant inside its signed secret;
+- the till books the payment against that voucher, with no "Coupon not authorised";
+- the portal's stored record (`GET /api/v1/portal/cashback/{id}`) turns Claimed on its own;
+- the till's Vouchers list shows the cashback.
+
+The claim check reads the stored record, not `/status`, because `/status` reconciles with the
+claim service on every read and so reads Claimed even when no notification arrived.
+`E2E_SKIP_CLAIM_STATUS=1` skips that check.
+
+On 2026-10-01, before the fix, staging failed 9 of 15 checks. It reproduced the original
+refusal ("carries no usable authorisation from the stall that issued it", toast "Coupon not
+authorised"). The stored record stayed Unclaimed, and the Vouchers list said "None yet."
+
 ## `purchase.e2e.ts` — the card purchase
 
 Written after a shopper's card was refused inside Stripe's hosted checkout

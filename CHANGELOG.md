@@ -9,13 +9,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-01
+
 ### Added
 
+- **A browser probe for #144** (`e2e/probe-cashback-spend.mts`). A till issues a cashback, a
+  customer redeems it and pays it back to that till. The probe checks the warrant is in the
+  coupon, the till books the payment, the portal stores the claim on its own, and the till's
+  Vouchers list shows the cashback. Before the fix, staging failed 9 of 15 checks.
 - **A browser probe for #145** (`e2e/probe-concurrent-redeem.mts`). Two customers pay one
   till at the same instant over live SSE, round after round, and the probe reads the till's
   own store to check each coupon is booked against its own voucher. On staging, 0.11.1 passed
   44 of 44 checks and 0.11.0 failed 7, including two refused honest payments. `E2E_BUNDLE_DIR`
   runs it against another build for a control run.
+- **Cashback vouchers on the Vouchers list (#144).** A cashback code now stores the
+  `voucherId` the portal returns and appears on `/merchant/coupons` beside Sell coupons, with
+  its claim state in plain words: "Not claimed yet", "Claimed", "Withdrawn", "Expired", "Needs
+  a check" or "Status unknown". Opening the list asks `GET /portal/cashback/{id}/status` once,
+  only for cashback rows that are still open and not past expiry, at most 3 at a time, and
+  gives up on one after 8 seconds. Its detail screen shows what was claimed and checks the
+  warrant against the stall key. A second device gets the row back through the existing NIP-60
+  history records.
+
+### Fixed
+
+- **A merchant could not take back a cashback coupon they issued (#144).** The wallet signed
+  the issuance warrant only after the code was minted, so the warrant never got into the
+  coupon's signed secret, and the till refused it as "Coupon not authorised". The warrant is
+  now signed first and sent as `issuanceWarrant` on `POST /portal/cashback/generate` (needs
+  imani-gateway-portal#52). The history row keeps that same string. If the portal refuses the
+  warrant (`INVALID_WARRANT`), the merchant sees a message that says so, not a generic error.
+  wallet-api's `/v1/cashback/generate` now passes the caller's `issuanceWarrant` through
+  unchanged, and refuses one over 4096 characters as the portal does. It used to drop it. A
+  terminal still sends a signed `none` and is still refused, which needs the `delegated` form.
+  Codes issued before this fix cannot be repaired.
+- **A cashback voucher had no redemption ceiling (#144).** Redemptions were matched to an
+  issuance only when the row was a Sell coupon. A cashback's redemptions were filed against
+  nothing, so its claimed figure stayed at zero and the over-redemption ceiling did not count
+  its earlier parts. A till could take more than a cashback's face. The claimed figure, the
+  ceiling, the row repair and the claim sweep now all ask one question,
+  `isVoucherIssuance`, which counts a cashback as an issuance.
+- **A retried cashback could mint a second code for one sale (#144).** After a network error,
+  a retry or a second press sent a fresh `idempotencyKey`, so the portal could mint a SECOND
+  cashback for the same sale. The issue screen now signs the warrant and picks the key once
+  per issue, and resends both unchanged on every retry. The portal's idempotency check now
+  stops the duplicate, so the till's warrant ceiling is no longer the only guard. Changing
+  the amount, note or expiry, or finishing an issue, starts a new key and a new warrant.
+  A second press while one is still in flight does nothing. If the portal answers
+  `IDEMPOTENCY_CONFLICT`, the merchant is told plainly that no second code was made.
+  A press made while the wallet was locked is never reused once it is unlocked, so that
+  retry is signed rather than minted unwarranted. Switching account or stall starts a new
+  key and warrant. A definite refusal (a 4xx other than 409) ends the attempt. A network
+  error, a 5xx or a 409 keeps it for the retry.
 
 ## [0.11.1] - 2026-10-01
 
