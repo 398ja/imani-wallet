@@ -179,8 +179,24 @@ export const WARRANT_REFUSED_MESSAGE =
   'The gateway did not accept this device\u2019s authorisation for the cashback. ' +
   'No code was created. Sign in on the stall\u2019s own device and try again.'
 
-/** HTTP 400, the portal's answer to a body it would not take. */
-const BAD_REQUEST = 400
+/**
+ * What a merchant sees when the portal already holds this issue under the
+ * same key with a different body. The usual cause is a re-signed warrant on a
+ * retry. Nothing new was minted.
+ */
+export const IDEMPOTENCY_CONFLICT_MESSAGE =
+  'This cashback was already being created with different details, so no second code was made. ' +
+  'Check your history before creating it again.'
+
+/**
+ * The portal's `ErrorEnvelope.code` values this screen speaks for itself.
+ * Matched on the code, not the message text, so a different 400 that happens
+ * to mention a warrant keeps its own words.
+ */
+const ENVELOPE_MESSAGES: Record<string, string> = {
+  INVALID_WARRANT: WARRANT_REFUSED_MESSAGE,
+  IDEMPOTENCY_CONFLICT: IDEMPOTENCY_CONFLICT_MESSAGE,
+}
 
 /**
  * Mint a cashback voucher and get back the code to read out.
@@ -190,7 +206,9 @@ const BAD_REQUEST = 400
  * pubkey the portal trusts. The issuer is never a body field — the endpoint is
  * `@PreAuthorize(MERCHANT_ONLY)` and stamps whoever the edge authenticated.
  *
- * `idempotencyKey` is generated here and not retried on: a double-tap must not
+ * `idempotencyKey` comes from the caller, with the warrant, so a retry of the
+ * same issue can resend both unchanged (#144). The portal compares the
+ * warrant's hash under a key, so a re-signed warrant gets a 409. A double-tap must not
  * mint two vouchers, and a network error whose request actually landed would
  * otherwise be indistinguishable from one that did not.
  *
@@ -209,12 +227,14 @@ export async function generateCashback(params: {
    * the voucher's signed secret, so it cannot be added once the code exists.
    */
   issuanceWarrant?: string
+  /** One per issue, reused on every retry of it. */
+  idempotencyKey: string
 }): Promise<IssuedCashback> {
   const response = await signedFetch('/api/v1/portal/cashback/generate', 'POST', {
     amountMinor: params.amountMinor,
     unit: params.unit,
     memo: params.memo,
-    idempotencyKey: crypto.randomUUID(),
+    idempotencyKey: params.idempotencyKey,
     expiryDays: params.expiryDays,
     // Omitted when undefined, as on Sell: absent means "no warrant", which is a
     // different claim from a signed `none`.
@@ -222,11 +242,12 @@ export async function generateCashback(params: {
   })
 
   if (!response.ok) {
-    const detail = await failureDetail(response, 'Could not create the cashback code')
-    if (response.status === BAD_REQUEST && /warrant/i.test(detail)) {
-      throw new Error(WARRANT_REFUSED_MESSAGE)
-    }
-    throw new Error(detail)
+    const text = await response.text().catch(() => '')
+    const known = ENVELOPE_MESSAGES[envelopeCode(text) ?? '']
+    if (known) throw new Error(known)
+    throw new Error(
+      failureDetailFrom(text, response.status, 'Could not create the cashback code'),
+    )
   }
 
   const body = (await response.json()) as GenerateResponse
@@ -383,8 +404,7 @@ export function useCashbackStatus(input: {
 }
 
 /** The server's `message`/`detail` if it sent one, else the bare status. */
-async function failureDetail(response: Response, fallback: string): Promise<string> {
-  const text = await response.text().catch(() => '')
+function failureDetailFrom(text: string, status: number, fallback: string): string {
   try {
     const body = JSON.parse(text) as { message?: string; detail?: string; error?: string }
     const message = body.message ?? body.detail ?? body.error
@@ -392,7 +412,17 @@ async function failureDetail(response: Response, fallback: string): Promise<stri
   } catch {
     // Not JSON — fall through to the raw text, truncated.
   }
-  return `${fallback} (${response.status}): ${text.slice(0, 200)}`
+  return `${fallback} (${status}): ${text.slice(0, 200)}`
+}
+
+/** The portal's `ErrorEnvelope.code`, or undefined if the body is not one. */
+function envelopeCode(text: string): string | undefined {
+  try {
+    const code = (JSON.parse(text) as { code?: unknown }).code
+    return typeof code === 'string' ? code : undefined
+  } catch {
+    return undefined
+  }
 }
 
 // ─── Redeeming (customer) ───────────────────────────────────────────────────

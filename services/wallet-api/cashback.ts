@@ -55,6 +55,13 @@ export const publicUrl = (claimRef: string) => `${portal(PUBLIC_PATH)}/${encodeU
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+/**
+ * The longest warrant the portal takes (`CashbackDtos.MAX_WARRANT_LENGTH`).
+ * Refused here too, so a caller hears it from this service in its own words
+ * rather than as the portal's 400 after a signed round trip.
+ */
+const MAX_WARRANT_LENGTH = 4096
+
 export interface GenerateInput {
   amountMinor: number
   unit: string
@@ -124,6 +131,9 @@ export function parseGenerateRequest(body: unknown): Parsed<GenerateInput> {
   const issuanceWarrant = b.issuanceWarrant
   if (issuanceWarrant !== undefined && typeof issuanceWarrant !== 'string') {
     return fail('issuanceWarrant', 'expected the warrant as a JSON string, exactly as signed')
+  }
+  if (typeof issuanceWarrant === 'string' && issuanceWarrant.length > MAX_WARRANT_LENGTH) {
+    return fail('issuanceWarrant', `expected at most ${MAX_WARRANT_LENGTH} characters`)
   }
 
   return {

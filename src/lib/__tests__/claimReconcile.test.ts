@@ -197,3 +197,31 @@ describe('candidateClaim', () => {
     expect(candidateClaim({ amount: 1 }, 'cashuA-not-a-voucher', STALL)).toBeUndefined()
   })
 })
+
+describe('a stall whose only issuance is a cashback (#144)', () => {
+  /** A cashback-only wallet is a stall, and its redemptions are filed against the cashback row. */
+  it('files a cashback redemption against the cashback row', async () => {
+    // Arrange
+    const { buildCashbackTransaction } = await import('../transactions')
+    store.txs = [
+      buildCashbackTransaction({
+        cashbackId: 'cb-1',
+        claimCode: 'CB-ABCDE-FGHIJ',
+        voucherId: VOUCHER_ID,
+        amount: 1000,
+        unit: 'XAF',
+        decimals: 0,
+        at: 1_700_000_000_000,
+      }) as unknown as Record<string, unknown>,
+    ]
+    preFix('t1', token(400), 400, 1_700_000_100_000)
+
+    // Act
+    const result = await reconcileClaims(STALL)
+
+    // Assert
+    expect(result.filed).toBe(1)
+    expect(record().row.type).toBe('cashback')
+    expect(record().claimedMinor).toBe(400)
+  })
+})

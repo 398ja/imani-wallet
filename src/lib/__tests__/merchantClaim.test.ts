@@ -80,7 +80,7 @@ const { _setReceivePacerForTests } = await import('../receivePacer')
 // pinned in receivePacer.test.ts.
 _setReceivePacerForTests({ acquire: async () => {}, reset: () => {} })
 const { installTokenIdFill } = await import('../legacyBridge')
-const { toTransaction, buildIssueTransaction } = await import('../transactions')
+const { toTransaction, buildIssueTransaction, buildCashbackTransaction } = await import('../transactions')
 const { issuedVoucher } = await import('../issuedVoucher')
 const { merchantClaimFor, boundedClaim } = await import('../merchantClaim')
 const { toContent, toRow } = await import('../txRecords')
@@ -609,5 +609,55 @@ describe('fractional-ratio parts through the till (review of 1a87c4f)', () => {
     expect(swaps).toBe(20)
     expect(redemptions().reduce((sum, r) => sum + Number(r.amount), 0)).toBe(10)
     expect(record().claimedMinor).toBe(10)
+  })
+})
+
+describe('a cashback voucher coming home to the stall that issued it (#144)', () => {
+  /** The stall's cashback, 1000 XAF, under the voucher id the portal returned. */
+  const cashback = () =>
+    buildCashbackTransaction({
+      cashbackId: 'cb-1',
+      claimCode: 'CB-ABCDE-FGHIJ',
+      voucherId: VOUCHER_ID,
+      amount: 1000,
+      unit: 'XAF',
+      decimals: 0,
+      at: 1_700_000_000_000,
+    }) as unknown as Record<string, unknown>
+
+  beforeEach(() => {
+    store.rows = [cashback()]
+  })
+
+  /** What was redeemed shows as claimed on the cashback voucher. */
+  it('counts what was redeemed as claimed', async () => {
+    // Act
+    await captured.redemptionAdapter!.redeem('cashuA-cb-part', { metadata: verified(400) })
+
+    // Assert
+    expect(record().row.type).toBe('cashback')
+    expect(record().claimedMinor).toBe(400)
+    expect(record().outstandingMinor).toBe(600)
+  })
+
+  /** A second part that would take the cashback past its face is refused. */
+  it('refuses a second part past the face', async () => {
+    // Arrange
+    await captured.redemptionAdapter!.redeem('cashuA-cb-first', { metadata: verified(700) })
+
+    // Act, Assert
+    await expect(refuseIfOverRedeemed(verified(700))).rejects.toThrow(/already paid out 700 of 1000/)
+  })
+
+  /** boundedClaim files against the cashback row and caps at its face. */
+  it('bounds a claim by the cashback row', () => {
+    // Arrange
+    const rows = store.rows.map((r) => toTransaction(r as unknown as TransactionRow))
+
+    // Act
+    const bounded = boundedClaim({ voucherId: VOUCHER_ID, amount: 1500, unit: 'XAF', decimals: 0 }, rows)
+
+    // Assert
+    expect(bounded?.amount).toBe(1000)
   })
 })

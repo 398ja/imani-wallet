@@ -116,11 +116,17 @@ describe('the vouchers a stall has issued', () => {
 
   /** A cashback with no voucher id (issued before #144) still has nowhere to link. */
   it('leaves out a cashback with no voucher id', () => {
+    // Arrange
     const rows = [
       issued('v1', 1000),
       { ...issued('c1', 500), type: 'cashback', id: 'cashback:c1', voucherId: undefined },
     ]
-    expect(issuedVouchers(rows, { now: NOW }).map((r) => r.voucherId)).toEqual(['v1'])
+
+    // Act
+    const listed = issuedVouchers(rows, { now: NOW })
+
+    // Assert
+    expect(listed.map((r) => r.voucherId)).toEqual(['v1'])
   })
 
   /** A cashback whose voucher id came back from the portal is a voucher like any other (#144). */
@@ -175,6 +181,19 @@ describe('one issued voucher', () => {
     // Assert
     expect(voucher?.row.id).toBe('cashback:c1')
     expect(voucher?.warrantVerdict).toEqual({ verdict: 'verified' })
+  })
+
+  /** A cashback is its own whole sale, so its detail does not read "part of a sale is missing". */
+  it('reads a cashback voucher as one complete sale', () => {
+    // Arrange
+    const cashback = { ...issued('vc', 500), type: 'cashback' as const, id: 'cashback:c1', cashbackId: 'c1' }
+
+    // Act
+    const voucher = issuedVoucher([cashback], 'vc', opts)
+
+    // Assert
+    expect(voucher?.sale.map((row) => row.id)).toEqual(['cashback:c1'])
+    expect(voucher?.saleComplete).toBe(true)
   })
 
   it('sums what has come back across several claims', () => {

@@ -1,5 +1,5 @@
 import { currencyDecimals } from './format'
-import type { WalletTransaction } from './transactions'
+import { isVoucherIssuance, type WalletTransaction } from './transactions'
 import { creditableFaceValue, exactFaceValue, parseVoucherToken } from './voucherToken'
 
 /**
@@ -51,7 +51,7 @@ export function repairRedemptionRows(
   rows: readonly WalletTransaction[],
   couponTokens: ReadonlyMap<string, string>,
 ): WalletTransaction[] {
-  const issued = new Set(rows.filter((tx) => tx.type === 'issued' && tx.voucherId).map((tx) => tx.voucherId))
+  const issued = new Set(rows.filter((tx) => isVoucherIssuance(tx) && tx.voucherId).map((tx) => tx.voucherId))
   const refiled = rows.map((tx) => refile(tx, couponTokens.get(tx.tokenId ?? ''), issued))
   return onePerRedemption(refiled)
 }

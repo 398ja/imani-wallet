@@ -5,9 +5,15 @@
  */
 import { describe, it, expect } from 'vitest'
 
-import { cashbackClaimLabel, refreshCashbackClaims } from '../cashbackVouchers'
+import {
+  cashbackClaimLabel,
+  refreshCashbackClaims,
+  STATUS_REFRESH_CONCURRENCY,
+} from '../cashbackVouchers'
 import type { CashbackStatusReading } from '../cashback'
 import type { WalletTransaction } from '../transactions'
+
+const NOW = 1_800_000_000_000
 
 function cashbackRow(id: string, over: Partial<WalletTransaction> = {}): WalletTransaction {
   return {
@@ -85,16 +91,98 @@ describe('refreshing cashback claims', () => {
     // Assert
     expect(writes).toBe(0)
   })
+
+  /** An expired row cannot be claimed any more, so it is not asked about. */
+  it('skips a row past its expiry', async () => {
+    // Arrange
+    const asked: string[] = []
+
+    // Act
+    await refreshCashbackClaims([cashbackRow('old', { expiresAt: NOW - 1 }), cashbackRow('live')], {
+      fetchStatus: async (id) => {
+        asked.push(id)
+        return null
+      },
+      recordStatus: async () => {},
+      now: NOW,
+    })
+
+    // Assert
+    expect(asked).toEqual(['live'])
+  })
+
+  /** A long list never fires more than the named number of requests at once. */
+  it('caps how many status requests run at once', async () => {
+    // Arrange
+    let inFlight = 0
+    let peak = 0
+    const rows = Array.from({ length: 10 }, (_, i) => cashbackRow(`c${i}`))
+
+    // Act
+    await refreshCashbackClaims(rows, {
+      fetchStatus: async () => {
+        inFlight += 1
+        peak = Math.max(peak, inFlight)
+        await new Promise((resolve) => setTimeout(resolve, 1))
+        inFlight -= 1
+        return null
+      },
+      recordStatus: async () => {},
+    })
+
+    // Assert
+    expect(peak).toBe(STATUS_REFRESH_CONCURRENCY)
+  })
+
+  /** A request that never answers is given up on, and the rest still run. */
+  it('gives up on a status request that hangs', async () => {
+    // Arrange
+    const asked: string[] = []
+
+    // Act
+    await refreshCashbackClaims([cashbackRow('hang'), cashbackRow('ok')], {
+      fetchStatus: (id) => {
+        asked.push(id)
+        return id === 'hang' ? new Promise(() => {}) : Promise.resolve(null)
+      },
+      recordStatus: async () => {},
+      timeoutMs: 5,
+    })
+
+    // Assert
+    expect(asked).toEqual(['hang', 'ok'])
+  })
 })
 
 describe('the label', () => {
   /** A Sell voucher has no claim state from the portal, so no label. */
   it('says nothing for a non-cashback row', () => {
-    expect(cashbackClaimLabel({ ...cashbackRow('x'), type: 'issued' })).toBeUndefined()
+    // Arrange
+    const sale = { ...cashbackRow('x'), type: 'issued' as const }
+
+    // Act, Assert
+    expect(cashbackClaimLabel(sale)).toBeUndefined()
   })
 
   /** An unchecked cashback says Not claimed yet rather than guessing. */
   it('reads Not claimed yet until the portal says otherwise', () => {
+    // Act, Assert
     expect(cashbackClaimLabel(cashbackRow('x'))).toBe('Not claimed yet')
+  })
+
+  /** Each portal status reads as plain English, never as the raw enum. */
+  it.each([
+    ['Unclaimed', 'Not claimed yet'],
+    ['Claimed', 'Claimed'],
+    ['Revoked', 'Withdrawn'],
+    ['Expired', 'Expired'],
+    ['ManualAttention', 'Needs a check'],
+    ['SomethingNew', 'Status unknown'],
+  ])('reads %s as %s', (status, label) => {
+    // Arrange
+    const row = cashbackRow('x', { cashbackStatus: status })
+
+    // Act, Assert
+    expect(cashbackClaimLabel(row)).toBe(label)
   })
 })

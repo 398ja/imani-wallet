@@ -34,7 +34,12 @@ import { entryKey, groupHistory } from '../lib/historyGroups'
 import { expiringSoon } from '../lib/stats'
 import { formatDate, formatFace } from '../lib/format'
 import { identityLabel, useIdentity } from '../lib/identity'
-import { issuedVoucher, issuedVouchers, type VoucherRecord } from '../lib/issuedVoucher'
+import {
+  isVoucherIssuance,
+  issuedVoucher,
+  issuedVouchers,
+  type VoucherRecord,
+} from '../lib/issuedVoucher'
 import { cashbackClaimLabel, refreshCashbackClaims } from '../lib/cashbackVouchers'
 import {
   describeRail,
@@ -227,7 +232,8 @@ export function IssuedCouponsPage() {
       ? 0
       : state.transactions.filter(
           (tx) =>
-            (tx.type === 'issued' || (tx.type === 'cashback' && Boolean(tx.voucherId))) &&
+            isVoucherIssuance(tx) &&
+            Boolean(tx.voucherId) &&
             tx.expiresAt !== undefined &&
             tx.expiresAt <= state.loadedAt,
         ).length

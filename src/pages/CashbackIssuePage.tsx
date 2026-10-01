@@ -4,7 +4,7 @@ import { Check, Copy } from 'lucide-react'
 
 import { Button, Screen, BackLink, PageHeader, Alert, Panel, Input } from '../components/ui'
 import type { IssuedCashback } from '../lib/cashback'
-import { issueCashback } from '../lib/cashbackIssue'
+import { createCashbackIssuer } from '../lib/cashbackIssue'
 import { gatewayConfig, DEFAULT_CASHBACK_EXPIRY_DAYS } from '../lib/config'
 import { currencyDecimals, formatDate, formatFace, parseAmountToMinor } from '../lib/format'
 import type { MerchantProfile } from '../lib/merchant'
@@ -42,6 +42,10 @@ export function CashbackIssuePage({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [issued, setIssued] = useState<IssuedCashback | null>(null)
+  // One issuer for the life of this screen: it ignores a press while one is in
+  // flight, and keeps the key and warrant across a failure so pressing again
+  // retries the same sale (#144). See `createCashbackIssuer`.
+  const [issuer] = useState(createCashbackIssuer)
   // Deployment policy, not a merchant choice, so it is read rather than picked.
   // Shown before the merchant commits, because "how long do they have?" is the
   // question a customer asks at the counter and the answer must not be a guess.
@@ -70,10 +74,13 @@ export function CashbackIssuePage({
     if (minor === null || busy) return
     setBusy(true)
     setError(null)
+    // Set only by the press that actually ran. A press the issuer dropped must
+    // not clear `busy` while the real one is still waiting on the portal.
+    let ran = true
     try {
       // Signs the warrant BEFORE minting, then records the same string. See
       // `cashbackIssue.ts` for why the order matters.
-      const cashback = await issueCashback({
+      const cashback = await issuer.submit({
         actor: actor ?? ownerActor(merchant.pubkey),
         amountMinor: minor,
         unit: merchant.issuanceCurrency,
@@ -81,11 +88,14 @@ export function CashbackIssuePage({
         memo: memo.trim() || undefined,
         expiryDays,
       })
-      setIssued(cashback)
+      // Null: a second press while the first was in flight. The first one
+      // owns the outcome, so this one changes nothing.
+      if (cashback) setIssued(cashback)
+      else ran = false
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
-      setBusy(false)
+      if (ran) setBusy(false)
     }
   }
 
