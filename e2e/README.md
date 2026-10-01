@@ -137,6 +137,38 @@ imani-gateway-core#112. Flakes it absorbs are on the test host: a crash-looping 
 container churns Docker bridges and Chromium aborts loads with `ERR_NETWORK_CHANGED`,
 so navigation and registration retry once, and each retry is reported.
 
+## `probe-concurrent-redeem.mts` — two coupons at one till at once (#145)
+
+A till must book each coupon against its own voucher, even when two customers pay it in
+the same instant. Before 0.11.1 two overlapping redeems could swap stamps, so one voucher
+carried two rows for one redemption and its owner's last honest payment was refused as
+"already spent".
+
+```sh
+E2E_BASE=https://wallet.staging.398ja.xyz E2E_ROUNDS=3 npx tsx e2e/probe-concurrent-redeem.mts
+```
+
+It registers a till and two customers. Each round, the till sells each customer a EUR 10
+coupon of its own voucher, then both customers pay part of it together, then the rest
+together. The till stays on its home screen, online, so both coupons arrive over live SSE,
+the only path that redeems without waiting. It checks that every payment lands and each
+customer ends at zero, that the till shows no refusal (toast or console), and, from the
+till's own IndexedDB, that every incoming row is stamped with the voucher its coupon was
+signed for and that each voucher has exactly its two redemptions.
+
+To prove the probe still catches the bug, run it against an old build. `E2E_BUNDLE_DIR`
+serves the app from a local `dist` while the API, relay and mint stay live:
+
+```sh
+git worktree add ../w0110 v0.11.0 && (cd ../w0110 && npm ci && npm run build)
+E2E_BUNDLE_DIR=../w0110/dist npx tsx e2e/probe-concurrent-redeem.mts
+```
+
+On 2026-10-01 against staging, 0.11.1 passed 44 of 44 checks over 3 rounds, and 0.11.0
+failed 7 of 44: two refused honest payments ("already paid out 800 of 1000; refusing a
+further 600"), and rows stamped with the other customer's voucher. A failed run leaves a
+screenshot of each wallet in `E2E_SCREENSHOTS` (default `e2e/.probe-concurrent-redeem`).
+
 ## `purchase.e2e.ts` — the card purchase
 
 Written after a shopper's card was refused inside Stripe's hosted checkout

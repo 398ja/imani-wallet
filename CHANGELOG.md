@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A browser probe for #145** (`e2e/probe-concurrent-redeem.mts`). Two customers pay one
+  till at the same instant over live SSE, round after round, and the probe reads the till's
+  own store to check each coupon is booked against its own voucher. On staging, 0.11.1 passed
+  44 of 44 checks and 0.11.0 failed 7, including two refused honest payments. `E2E_BUNDLE_DIR`
+  runs it against another build for a control run.
+
 ## [0.11.1] - 2026-10-01
 
 ### Fixed
