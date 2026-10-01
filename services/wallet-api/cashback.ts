@@ -61,6 +61,12 @@ export interface GenerateInput {
   memo?: string
   idempotencyKey: string
   expiryDays?: number
+  /**
+   * The stall's warrant, signed by the caller. This service holds no stall key
+   * (ADR 0001), so it can only carry one. Dropping it here would mint a coupon
+   * the issuing stall's own till refuses (#144).
+   */
+  issuanceWarrant?: string
 }
 
 export function parseGenerateRequest(body: unknown): Parsed<GenerateInput> {
@@ -113,9 +119,23 @@ export function parseGenerateRequest(body: unknown): Parsed<GenerateInput> {
     return fail('expiryDays', 'expected a whole number of days greater than zero')
   }
 
+  // Kept as the exact string the caller sent. It is signed JSON, and parsing
+  // and re-serialising it could reorder keys and break the signature.
+  const issuanceWarrant = b.issuanceWarrant
+  if (issuanceWarrant !== undefined && typeof issuanceWarrant !== 'string') {
+    return fail('issuanceWarrant', 'expected the warrant as a JSON string, exactly as signed')
+  }
+
   return {
     ok: true,
-    value: { amountMinor, unit, memo: memo || undefined, idempotencyKey, expiryDays },
+    value: {
+      amountMinor,
+      unit,
+      memo: memo || undefined,
+      idempotencyKey,
+      expiryDays,
+      ...(issuanceWarrant ? { issuanceWarrant } : {}),
+    },
   }
 }
 
@@ -135,6 +155,7 @@ export function generateBody(input: GenerateInput): string {
   }
   if (input.memo !== undefined) body.memo = input.memo
   if (input.expiryDays !== undefined) body.expiryDays = input.expiryDays
+  if (input.issuanceWarrant !== undefined) body.issuanceWarrant = input.issuanceWarrant
   return JSON.stringify(body)
 }
 

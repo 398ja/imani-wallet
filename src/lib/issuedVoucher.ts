@@ -181,13 +181,19 @@ export function paymentRail(warrant: IssuanceWarrant): PaymentRail {
 /**
  * Every voucher this history records issuing, newest first.
  *
- * `issued` only, not `cashback`. A cashback is an issuance for reconciliation —
- * `reconcileIssuance.isIssuance` counts both, because both take money at a
- * counter — and it is NOT one here, because there is no voucher: the customer
- * has no wallet, the code was read out loud, and its life is answered by the
- * gateway rather than by rows in this history. It has its own screen for
- * exactly that reason (`CashbackSection`), and mixing it in would put rows in
- * this list whose "claimed" figure could only ever be zero.
+ * `issued` rows, and `cashback` rows that carry a voucher id (#144). The portal
+ * returns the id of the voucher a cashback code unlocks, and once a customer
+ * claims it, that voucher is spent at this stall like any Sell coupon. So it
+ * belongs on the same list.
+ *
+ * Why the cashback row itself rather than a second `issued` row beside it:
+ * `reconcileIssuance.isIssuance` already counts both types as money taken at a
+ * counter, so a twin `issued` row would count the same sale twice. It would
+ * also be a second copy of the warrant and the expiry to keep in step, and a
+ * second relay record to restore. One row, read by both lists, cannot drift.
+ *
+ * A cashback without a voucher id was issued before the portal returned one.
+ * It stays off, for the routing reason below.
  *
  * Expired vouchers are excluded by DEFAULT rather than absent: they are the
  * ones a customer is most likely to turn up holding, and a merchant deciding
@@ -209,9 +215,14 @@ export function issuedVouchers(
   { now, includeExpired = false }: { now: number; includeExpired?: boolean },
 ): WalletTransaction[] {
   return rows
-    .filter((row) => row.type === 'issued' && Boolean(row.voucherId))
+    .filter((row) => isVoucherIssuance(row) && Boolean(row.voucherId))
     .filter((row) => includeExpired || !isExpired(row, now))
     .sort((a, b) => b.at - a.at)
+}
+
+/** A row that put a voucher into the world: a Sell coupon or a cashback code. */
+export function isVoucherIssuance(row: WalletTransaction): boolean {
+  return row.type === 'issued' || row.type === 'cashback'
 }
 
 /**
@@ -233,7 +244,7 @@ export function issuedVoucher(
 ): VoucherRecord | undefined {
   if (!voucherId) return undefined
 
-  const row = rows.find((tx) => tx.type === 'issued' && tx.voucherId === voucherId)
+  const row = rows.find((tx) => isVoucherIssuance(tx) && tx.voucherId === voucherId)
   if (!row) return undefined
 
   const claims = rows.filter((tx) => isClaim(tx, row)).sort((a, b) => b.at - a.at)

@@ -153,6 +153,11 @@ export interface IssuedCashback {
   amountMinor: number
   unit: string
   expiresAt: string
+  /**
+   * The voucher the portal minted for this code, when it says. Older portals
+   * do not return it, and a row without it simply stays off the Vouchers list.
+   */
+  voucherId?: string
 }
 
 interface GenerateResponse {
@@ -161,7 +166,21 @@ interface GenerateResponse {
   amountMinor?: unknown
   unit?: unknown
   expiresAt?: unknown
+  voucherId?: unknown
 }
+
+/**
+ * What a merchant sees when the portal refuses the stall's warrant.
+ *
+ * Its own words because the fix is different from any other failure: retrying
+ * will not help, and the usual cause is a device whose key is not the stall's.
+ */
+export const WARRANT_REFUSED_MESSAGE =
+  'The gateway did not accept this device\u2019s authorisation for the cashback. ' +
+  'No code was created. Sign in on the stall\u2019s own device and try again.'
+
+/** HTTP 400, the portal's answer to a body it would not take. */
+const BAD_REQUEST = 400
 
 /**
  * Mint a cashback voucher and get back the code to read out.
@@ -185,6 +204,11 @@ export async function generateCashback(params: {
   unit: string
   memo?: string
   expiryDays: number
+  /**
+   * The stall's warrant for this sale, signed BEFORE this call. It goes into
+   * the voucher's signed secret, so it cannot be added once the code exists.
+   */
+  issuanceWarrant?: string
 }): Promise<IssuedCashback> {
   const response = await signedFetch('/api/v1/portal/cashback/generate', 'POST', {
     amountMinor: params.amountMinor,
@@ -192,10 +216,17 @@ export async function generateCashback(params: {
     memo: params.memo,
     idempotencyKey: crypto.randomUUID(),
     expiryDays: params.expiryDays,
+    // Omitted when undefined, as on Sell: absent means "no warrant", which is a
+    // different claim from a signed `none`.
+    ...(params.issuanceWarrant === undefined ? {} : { issuanceWarrant: params.issuanceWarrant }),
   })
 
   if (!response.ok) {
-    throw new Error(await failureDetail(response, 'Could not create the cashback code'))
+    const detail = await failureDetail(response, 'Could not create the cashback code')
+    if (response.status === BAD_REQUEST && /warrant/i.test(detail)) {
+      throw new Error(WARRANT_REFUSED_MESSAGE)
+    }
+    throw new Error(detail)
   }
 
   const body = (await response.json()) as GenerateResponse
@@ -208,6 +239,7 @@ export async function generateCashback(params: {
     amountMinor: Number(body.amountMinor ?? params.amountMinor),
     unit: typeof body.unit === 'string' ? body.unit : params.unit,
     expiresAt: typeof body.expiresAt === 'string' ? body.expiresAt : '',
+    ...(typeof body.voucherId === 'string' && body.voucherId ? { voucherId: body.voucherId } : {}),
   }
 }
 
