@@ -37,8 +37,12 @@ import type { RefusalReason } from '@imani/dm-poll'
  * plainly rather than hedge.
  */
 
-/** What the stall is told, per reason. Keyed so a new reason must be handled. */
-const MESSAGES: Record<RefusalReason, { title: string; detail: string }> = {
+/**
+ * What the stall is told, per reason. Keyed so a new reason must be handled.
+ * Exported so the line left on the payment (`refusedCoupons.ts`) says the
+ * same thing the toast did.
+ */
+export const REFUSAL_MESSAGES: Record<RefusalReason, { title: string; detail: string }> = {
   /**
    * The likely case, and an innocent one: a customer at the wrong counter.
    *
@@ -88,7 +92,7 @@ export function announceRefusal(event: { reason?: RefusalReason } | undefined): 
     const reason = event?.reason
     if (!reason) return
 
-    const message = MESSAGES[reason]
+    const message = REFUSAL_MESSAGES[reason]
     if (!message) return
 
     toast.error(message.title, {

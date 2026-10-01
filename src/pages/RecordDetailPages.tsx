@@ -32,6 +32,7 @@ import {
   type ValidationStatus,
 } from '../lib/validationStatus'
 import { otherParty, toTransaction, transactionLabel, type WalletTransaction } from '../lib/transactions'
+import { RefusedCouponsNote } from '../components/ui/RefusedCouponsNote'
 import { useCashbackStatus } from '../lib/cashback'
 
 /**
@@ -550,6 +551,11 @@ export function TransactionPage({
         <Panel className="mb-6 p-5">
           <IdentityInline pubkey={party.pubkey} label={party.label} size="md" />
         </Panel>
+      ) : null}
+
+      {/* A coupon of this same payment turned away before the swap (#145). */}
+      {!outgoing ? (
+        <RefusedCouponsNote pubkey={pubkey} bundleId={tx.bundleId} requestId={tx.paymentId} className="mb-6" />
       ) : null}
 
       <ListSection title="Transaction">

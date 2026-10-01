@@ -385,6 +385,7 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
           const fingerprint = await this.config.cryptoAdapter.getTokenFingerprint(tokenDm.token);
           await this.config.storageAdapter.markTokenAsReceived(fingerprint).catch(() => {});
         }
+        const refusedMd = tokenDm.metadata ?? {};
         this.emit('redemption:refused', {
           eventId: tokenDm.eventId,
           senderPubkey: tokenDm.senderPubkey,
@@ -392,6 +393,10 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
           alreadyRedeemed: error.alreadyRedeemed,
           signedFaceValue: error.signedFaceValue,
           reason: error.reason,
+          // Which payment it belonged to, so the refusal can be shown on it.
+          bundleId: refusedMd.bundleId,
+          bundlePartCount: refusedMd.bundlePartCount,
+          requestId: (refusedMd as { requestId?: string }).requestId,
         });
         return null;
       }
