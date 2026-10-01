@@ -127,6 +127,8 @@ const redeem = vi.fn(async (_token: string, opts: { metadata?: Record<string, un
     face_unit: 'XAF',
     face_decimals: 0,
     issuer_id: STALL,
+    // As `buildVoucher` sets it (#145): the redeem this row came from.
+    correlation_id: opts.metadata?.correlation_id,
   }
   await window.walletStorageIntegration!.atomicallyWrite({ vouchers: [voucher], transactions: [] })
   return voucher
