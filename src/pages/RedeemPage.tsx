@@ -4,6 +4,7 @@ import { Check, Copy, Share2 } from 'lucide-react'
 import QRCode from 'qrcode'
 
 import { Button, Screen, BackLink, PageHeader, Alert, Panel, Input } from '../components/ui'
+import { RefusedCouponsNote } from '../components/ui/RefusedCouponsNote'
 import { currencyDecimals, formatFace, parseAmountToMinor, formatDate } from '../lib/format'
 import type { MerchantProfile } from '../lib/merchant'
 import type { Actor } from '../lib/actor'
@@ -287,6 +288,16 @@ function RequestDisplay({
               {formatFace(request.amount, { unit: request.unit, decimals })} received
             </p>
           )}
+
+          {/* A coupon naming this request was refused before the swap (#145).
+              Nobody has paid yet, so no payer is known to vouch for: shown
+              neutrally, and only while the request is still open. */}
+          <RefusedCouponsNote
+            pubkey={pubkey}
+            requestId={request.paymentId}
+            pending={request.status === 'pending'}
+            className="mt-3 text-left"
+          />
 
           {/* Only while pending: a QR for a paid or dead request is a trap — it
               still scans, and the customer would be paying a second time. */}

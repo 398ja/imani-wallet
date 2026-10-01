@@ -89,9 +89,9 @@
  */
 import { currencyDecimals } from './format'
 import { isClaim, sameUnit } from './issuedVoucher'
-import { toTransaction, type WalletTransaction } from './transactions'
+import { repairedTransactions } from './redemptionLedger'
+import type { WalletTransaction } from './transactions'
 import type { VoucherValidation } from './voucherToken'
-import { listTransactions } from './wallet'
 
 /** What `stampCorrelation` overwrites on the redemption row. */
 export interface MerchantClaim {
@@ -200,7 +200,9 @@ export async function claimToFile(
   const claim = merchantClaimFor(meta, stallPubkey, exact)
   if (!claim) return undefined
   try {
-    const rows = (await listTransactions()).map(toTransaction)
+    // The repaired rows, the same ones the ceiling reads (#145): a row another
+    // coupon's redeem stamped with this voucher must not eat its remainder.
+    const rows = await repairedTransactions()
     return boundedClaim(claim, rows)
   } catch (error) {
     console.warn('[merchantClaim] could not read history; filing no claim', error)

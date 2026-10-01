@@ -119,6 +119,23 @@ export interface RedemptionRefusedEvent {
    * to tell the user. See `RefusalReason`.
    */
   reason: RefusalReason;
+
+  /**
+   * The payment this coupon was part of, when the sender declared one, so the
+   * recipient can show the refusal ON that payment rather than only in a
+   * passing toast (#145). Sender-written and display only.
+   */
+  bundleId?: string;
+  /** How many coupons the sender said the payment was made of. Display only. */
+  bundlePartCount?: number;
+  /** The payment request this coupon answered, when it named one. */
+  requestId?: string;
+  /**
+   * The payer the payload names (`sender_pubkey`), as distinct from
+   * `senderPubkey`, the gift wrap's signer, which is the gateway on a relayed
+   * send. Sender-written like the ids above.
+   */
+  payerPubkey?: string;
 }
 
 /**

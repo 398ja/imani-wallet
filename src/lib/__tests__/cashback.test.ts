@@ -19,6 +19,7 @@ let redeemFails = false
 
 vi.mock('../legacyBridge', () => ({
   legacyApi: async () => ({}),
+  withCorrelation: async (_ids: unknown, run: (id: string) => unknown) => run('corr-test'),
 }))
 vi.mock('../wallet', () => ({
   notifyWalletChanged: () => {},

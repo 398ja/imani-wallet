@@ -28,7 +28,7 @@
 import { useEffect, useState } from 'react'
 
 import { gatewayConfig, cashbackEnabled } from './config'
-import { legacyApi } from './legacyBridge'
+import { legacyApi, withCorrelation } from './legacyBridge'
 import { signedFetch } from './nip98'
 import { notifyWalletChanged, recordCashbackStatus } from './wallet'
 
@@ -674,7 +674,12 @@ async function commitToken(token: string): Promise<void> {
   const redemption = window.TokenRedemption
   if (!redemption) throw new Error('TokenRedemption unavailable')
 
-  await redemption.redeem(token, { source: 'cashback' })
+  // Registered with the bridge and named on the row it writes (#145), so a
+  // DM redeem in flight at the same moment can never stamp its claim here.
+  // Nothing to stamp: a cashback is not a stall's own coupon coming home.
+  await withCorrelation({}, (correlationId) =>
+    redemption.redeem(token, { source: 'cashback', metadata: { correlation_id: correlationId } }),
+  )
 
   // Deliberately NOT attested (lib/attestation.ts). A code review flagged this
   // path as a gap in the ledger; it is a scope boundary rather than an
