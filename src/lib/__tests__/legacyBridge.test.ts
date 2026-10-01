@@ -67,6 +67,109 @@ describe('withCorrelation', () => {
 })
 
 /**
+ * Two redeems in flight at once must each stamp their OWN row (#145).
+ *
+ * SSE hands every gift wrap to `processGiftWrap` without waiting, and the Web
+ * Lock only serialises parts of the same voucher. On staging song's till
+ * received 206 sats of voucher 19c4fed1 and 1365 sats of another voucher 21 ms
+ * apart. With one shared slot the second redeem overwrote the first's stamp, so
+ * one row was filed under the wrong voucher and 19c4fed1 carried two rows for
+ * one redemption. Its next honest part was then refused as over-redeemed.
+ */
+describe('withCorrelation under concurrent redeems (#145)', () => {
+  let written: { vouchers?: unknown[]; transactions?: unknown[] }[]
+  const scope = globalThis as unknown as { window: Window }
+  const buildRow = new Function(
+    readFileSync('shared/tokenRedemption.js', 'utf8') + '; return _buildReceiveTransactionRow;',
+  )() as (v: Record<string, unknown>, m?: Record<string, unknown>) => Record<string, unknown> | null
+
+  beforeEach(() => {
+    written = []
+    scope.window = globalThis as unknown as Window
+    ;(globalThis as unknown as Record<string, unknown>)._buildReceiveTransactionRow = buildRow
+    window.walletStorageIntegration = {
+      init: vi.fn(),
+      atomicallyWrite: async (input) => {
+        written.push(input)
+      },
+    }
+    installTokenIdFill()
+  })
+
+  /** A deferred, so the test decides the order the two writes land in. */
+  const gate = () => {
+    let open!: () => void
+    const opened = new Promise<void>((resolve) => (open = resolve))
+    return { open, opened }
+  }
+
+  /**
+   * What tokenRedemption does inside one redeem: wait for the mint, then write
+   * the voucher it built. `correlation` is what `withCorrelation` hands the
+   * redeem to pass through, the way dmPoll passes it in the metadata.
+   */
+  const redeemWriting = (tokenId: string, waitFor: Promise<void>) => async (correlation: string) => {
+    await waitFor
+    await window.walletStorageIntegration!.atomicallyWrite({
+      vouchers: [{ token_id: tokenId, voucher_id: `gw-${tokenId}`, face_value: 1, face_unit: 'EUR', correlation_id: correlation }],
+      transactions: [],
+    })
+  }
+
+  const rowFor = (tokenId: string) =>
+    written
+      .flatMap((w) => (w.transactions ?? []) as Record<string, unknown>[])
+      .find((r) => r.tokenId === tokenId)
+
+  it('files each of two interleaved redeems under its own voucher', async () => {
+    // Arrange: 206 sats of 19c4fed1 starts first, 1365 sats of voucher B
+    // starts 21 ms later, and A's write lands while B is still in flight.
+    const a = gate()
+    const b = gate()
+    const first = withCorrelation(
+      { attestationNullifier: 'n-206', claim: { voucherId: '19c4fed1', amount: 15, unit: 'EUR', exact: 15.0255 } },
+      redeemWriting('tok-206', a.opened),
+    )
+    const second = withCorrelation(
+      { attestationNullifier: 'n-1365', claim: { voucherId: 'voucher-b', amount: 100, unit: 'EUR', exact: 100 } },
+      redeemWriting('tok-1365', b.opened),
+    )
+
+    // Act
+    a.open()
+    await first
+    b.open()
+    await second
+
+    // Assert
+    expect(rowFor('tok-206')).toMatchObject({ voucherId: '19c4fed1', amount: 15, attestationNullifier: 'n-206' })
+    expect(rowFor('tok-1365')).toMatchObject({ voucherId: 'voucher-b', amount: 100, attestationNullifier: 'n-1365' })
+  })
+
+  it('stamps nothing on a write that names no redeem while two are in flight', async () => {
+    // Arrange: a write with no correlation id (a path that does not pass one)
+    // cannot be told apart, so it must not borrow either redeem's claim.
+    const a = gate()
+    const first = withCorrelation({ claim: { voucherId: 'v1', amount: 5, unit: 'EUR' } }, redeemWriting('tok-1', a.opened))
+    const second = withCorrelation({ claim: { voucherId: 'v2', amount: 7, unit: 'EUR' } }, async () => {
+      await window.walletStorageIntegration!.atomicallyWrite({
+        vouchers: [{ token_id: 'tok-anon', voucher_id: 'gw-anon', face_value: 7, face_unit: 'EUR' }],
+        transactions: [],
+      })
+    })
+
+    // Act
+    await second
+    a.open()
+    await first
+
+    // Assert
+    expect(rowFor('tok-anon')?.voucherId).toBe('gw-anon')
+    expect(rowFor('tok-1')).toMatchObject({ voucherId: 'v1', amount: 5 })
+  })
+})
+
+/**
  * The merchant's "Checks" section, end to end through the REAL vendored builder.
  *
  * Reported: after sending a coupon, the redemption screen showed no validation

@@ -130,24 +130,40 @@ function loadScript(src: string): Promise<void> {
  * nothing on staging and left every arrival with `bundleId: null`, so a
  * merchant's till could not tell that two coupons were one €7 payment.
  *
- * One slot is enough: `DmPollService` awaits `redeemToken` inside a sequential
- * `for` loop at both of its call sites, so redeems never overlap.
+ * **Keyed per redeem, not one slot (#145).** Redeems DO overlap: SSE hands each
+ * gift wrap to `processGiftWrap` without awaiting the last, and the Web Lock in
+ * dmPoll serialises only parts of the same voucher. With one shared slot the
+ * second redeem overwrote the first's ids, so a row was filed under the other
+ * coupon's voucher with the other coupon's amount. On song's till that put a
+ * second row on voucher 19c4fed1 and its next honest part was refused.
+ *
+ * So each redeem gets an id (`withCorrelation` hands it to the redeem), dmPoll
+ * passes it in the metadata as `correlation_id`, and tokenRedemption's
+ * `buildVoucher` carries it onto the voucher row the write sees. A write is
+ * stamped only from the registration its own row names. A row that names none
+ * is stamped only when exactly one redeem is in flight, which is the sole case
+ * where there is no doubt whose it is.
  */
-let pending:
-  | {
-      bundleId?: string
-      requestId?: string
-      validation?: Record<string, unknown>
-      attestationNullifier?: string
-      attestedValue?: number
-      attestedUnit?: string
-      attestedIssuer?: string
-      transferId?: string
-      exactValue?: number
-      zeroCredit?: boolean
-      claim?: MerchantClaim
-    }
-  | undefined
+type Correlation = {
+  bundleId?: string
+  requestId?: string
+  validation?: Record<string, unknown>
+  attestationNullifier?: string
+  attestedValue?: number
+  attestedUnit?: string
+  attestedIssuer?: string
+  transferId?: string
+  exactValue?: number
+  zeroCredit?: boolean
+  claim?: MerchantClaim
+}
+
+/** Redeems in flight, by the id each was handed. */
+const inFlight = new Map<string, Correlation | undefined>()
+let nextCorrelation = 0
+
+/** The field a voucher row carries its redeem's correlation id in. */
+const CORRELATION_FIELD = 'correlation_id'
 
 /**
  * Run one redeem with the DM's bundle/request ids — and what the wallet checked
@@ -198,9 +214,11 @@ export async function withCorrelation<T>(
     /** See `merchantClaim.ts`. Present only on a verified coupon coming home. */
     claim?: MerchantClaim
   },
-  redeem: () => Promise<T>,
+  redeem: (correlationId: string) => Promise<T>,
 ): Promise<T> {
-  pending =
+  nextCorrelation += 1
+  const correlationId = `corr-${nextCorrelation}`
+  const hasIds =
     ids.bundleId ||
     ids.requestId ||
     ids.validation ||
@@ -209,20 +227,36 @@ export async function withCorrelation<T>(
     ids.exactValue !== undefined ||
     ids.zeroCredit ||
     ids.claim
-      ? ids
-      : undefined
+  // Registered even with nothing to stamp, so a row-less redeem still counts
+  // as in flight and an anonymous write beside it is never guessed at.
+  inFlight.set(correlationId, hasIds ? ids : undefined)
   try {
-    return await redeem()
+    return await redeem(correlationId)
   } finally {
     // Cleared even when the redeem throws: a failed receive must not stamp its
     // request id onto the next coupon that happens to arrive.
-    pending = undefined
+    inFlight.delete(correlationId)
   }
 }
 
+/**
+ * Whose ids a write carries: the registration its voucher row names, or, for a
+ * row naming none, the only redeem in flight. Two in flight and no name is
+ * ambiguous, and an unstamped row is safer than one filed under another
+ * coupon's voucher: `claimReconcile` re-files an unstamped row from its own
+ * token later.
+ */
+function correlationFor(vouchers: readonly unknown[]): Correlation | undefined {
+  for (const v of vouchers) {
+    const id = (v as Record<string, unknown> | null)?.[CORRELATION_FIELD]
+    if (typeof id === 'string' && inFlight.has(id)) return inFlight.get(id)
+  }
+  if (inFlight.size !== 1) return undefined
+  return inFlight.values().next().value
+}
+
 /** Fill in what the row's builder had no way to know. */
-function stampCorrelation(rows: unknown[]): unknown[] {
-  const ids = pending
+function stampCorrelation(rows: unknown[], ids: Correlation | undefined): unknown[] {
   if (!ids) return rows
   return rows.map((row) => {
     const t = row as Record<string, unknown>
@@ -303,7 +337,15 @@ export function installTokenIdFill(): void {
         ? input.transactions
         : vouchers.map((v) => buildRow(v, {})).filter(Boolean)
 
-    return write({ vouchers, transactions: transactions && stampCorrelation(transactions) })
+    // Read the id before dropping it: it names the redeem, not the coupon, and
+    // means nothing once this write has landed.
+    const ids = correlationFor(vouchers)
+    const stored = vouchers.map((row) => {
+      const rest = { ...(row as Record<string, unknown>) }
+      delete rest[CORRELATION_FIELD]
+      return rest
+    })
+    return write({ vouchers: stored, transactions: transactions && stampCorrelation(transactions, ids) })
   }
 }
 

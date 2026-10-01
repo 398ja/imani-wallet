@@ -591,10 +591,13 @@ describe('fractional-ratio parts through the till (review of 1a87c4f)', () => {
   it('refuses tiny parts past the genuine value, before the swap', async () => {
     // Face 10 at ratio 0.5: 20 one-sat parts are the whole genuine value. Each
     // rounds to 1 on its own, so per-part rounding would honour 24 of them.
+    // A fresh coupon per presentation: the mint swaps a token once, and the
+    // ledger counts one received token once (#145), so reusing one token here
+    // would test the dedupe rather than the cap.
     store.rows = [issuedFor(10)]
-    const { token, metadata } = presented(1, 0.5, 10)
     let refused = 0
     for (let i = 0; i < 24; i++) {
+      const { token, metadata } = presented(1, 0.5, 10)
       await captured.redemptionAdapter!.redeem(token, { metadata }).catch(() => {
         refused += 1
       })

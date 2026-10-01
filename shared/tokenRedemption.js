@@ -2149,7 +2149,11 @@ const TokenRedemption = {
             status: 'active',
             created_at: new Date().toISOString(),
             received_via: metadata?.received_via || 'manual',
-            sender_pubkey: metadata?.sender_pubkey || null
+            sender_pubkey: metadata?.sender_pubkey || null,
+            // imani-wallet #145: names the redeem this row came from, so the
+            // wallet's write hook stamps it with THIS redeem's ids when two
+            // redeems are in flight. Dropped by that hook before storage.
+            correlation_id: metadata?.correlation_id || undefined
         };
     },
 
@@ -2183,7 +2187,8 @@ const TokenRedemption = {
             status: 'active',
             created_at: baseVoucher.created_at || receivedAt,
             received_via: baseVoucher.received_via,
-            sender_pubkey: baseVoucher.sender_pubkey
+            sender_pubkey: baseVoucher.sender_pubkey,
+            correlation_id: baseVoucher.correlation_id
         };
     },
 

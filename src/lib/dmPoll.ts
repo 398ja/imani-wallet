@@ -22,6 +22,7 @@ import {
 } from './arrivalToast'
 import { announceQueued, settleQueued, type QueuedBundleSeed } from './queuedToast'
 import { announceRefusal } from './refusalToast'
+import { recordRefusal } from './refusedCoupons'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { bytesToHex } from '@noble/hashes/utils'
 
@@ -984,9 +985,10 @@ function redemptionAdapter(): RedemptionAdapter {
 
         // Retry a rate-limited redemption instead of losing the coupon.
         //
-        // The gateway limits /api/v1/wallet/receive to 10 requests a minute per
-        // pubkey, and dm-poll redeems in a tight sequential loop, so any wallet
-        // receiving more than ten coupons in a minute trips it. Without this the
+        // The gateway limits /api/v1/wallet/receive per pubkey: 10 a minute
+        // until imani-gateway-customer 0.19.2, 120 by default from then
+        // (`gateway.customer.ratelimit.receive`). At 10, any wallet receiving
+        // more than ten coupons in a minute trips it. Without this the
         // failure was silent and permanent: DmPollService logged, moved on, and
         // the coupon was never redeemed. Measured at 120 coupons: 320 rate-limit
         // errors and 50 coupons stored (#39).
@@ -1055,10 +1057,16 @@ function redemptionAdapter(): RedemptionAdapter {
             // figure and redemption ceiling see it (#90). See merchantClaim.ts.
             claim,
           },
-          () =>
+          (correlationId) =>
             redemption.redeem(token, {
               ...options,
-              metadata: toLegacyMetadata(meta, opts?.senderPubkey as string | undefined),
+              // The redeem's own correlation id rides in the metadata onto the
+              // voucher row, so this coupon's row is stamped with this coupon's
+              // ids even while another coupon is mid-redeem (#145).
+              metadata: {
+                ...toLegacyMetadata(meta, opts?.senderPubkey as string | undefined),
+                correlation_id: correlationId,
+              },
               // Spec-039 canonical source value. It is plumbed onto ctx.source and
               // gates the inspect-before-save precondition, so it must be a
               // recognised value rather than something descriptive.
@@ -1472,6 +1480,10 @@ export function startDmPoll(pubkey: string): DmPollService {
   // money path. The guard is cheap and the failure it prevents is total.
   if (typeof service.on === 'function') {
     service.on('redemption:refused', announceRefusal)
+    // And remember it against the payment it belonged to, so the payment's
+    // screen still says so after the toast has gone (#145).
+    const owner = currentPubkey
+    service.on('redemption:refused', (event) => recordRefusal(owner ?? '', event))
   }
 
   void service.start()
