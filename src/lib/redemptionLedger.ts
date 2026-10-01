@@ -7,7 +7,7 @@ import {
 
 import { listTransactions, listVouchers } from './wallet'
 import { toTransaction, type WalletTransaction } from './transactions'
-import { parseVoucherToken } from './voucherToken'
+import { repairRedemptionRows } from './redemptionRows'
 
 /**
  * How much has already been taken in against one voucher, and whether the next
@@ -136,105 +136,53 @@ export async function checkPart(input: {
 }
 
 /**
- * The rows for one voucher, in the shape the ceiling takes.
+ * Every row of this device, re-filed by `repairRedemptionRows` (#145).
+ *
+ * The one entry point for both money figures: the ceiling below and the
+ * claimed figure (`merchantClaim`, the merchant record screens). A row stamped
+ * with one voucher but carrying another voucher's coupon is filed under the
+ * coupon's voucher, and one received token counts once. See redemptionRows.ts
+ * for why that cannot loosen the bound.
  *
  * Direction comes through `toTransaction` rather than off the row, because the
- * stored rows disagree with themselves about it — a merchant's own `issued`
- * row would otherwise read as incoming and consume the whole ceiling.
- *
- * **Repairs what a race wrote (#145).** Before the bridge keyed its stamps per
- * redeem, two coupons redeemed at once could swap stamps: one coupon's row was
- * filed under the other's voucher with the other's claim, and the other's own
- * row was re-filed from its token later. That voucher then carried two rows
- * for one redemption, and its next honest part was refused. Those rows are
- * still on tills, so the ceiling reads past them:
- *
- *  - an incoming row whose own coupon (the swapped token, which keeps the
- *    signed voucher) names a DIFFERENT voucher is not a redemption of this
- *    one, and is dropped;
- *  - rows sharing a nullifier or a transfer id are one redemption (both hash
- *    the received token), and count once, at the larger amount.
- *
- * Neither can loosen the bound an attacker faces. Two genuine redemptions have
- * two received tokens, so two nullifiers and two transfer ids, and each row's
- * coupon names its own voucher. A row whose coupon is not on this device, or
- * does not parse, is kept as it stands: unknown is counted, never waved through.
+ * stored rows disagree with themselves about it: a merchant's own `issued` row
+ * would otherwise read as incoming and consume the whole ceiling.
  */
+export async function repairedTransactions(): Promise<WalletTransaction[]> {
+  const rows = (await listTransactions()).map(toTransaction)
+  return repairRedemptionRows(rows, await couponTokensOf(rows))
+}
+
+/** The rows for one voucher, repaired, in the shape the ceiling takes. */
 async function priorRedemptionsOf(
   voucherId: string,
   { excludeTransactionId }: { excludeTransactionId?: string } = {},
 ): Promise<PriorRedemption[]> {
   if (!voucherId) return []
 
-  const rows = (await listTransactions())
-    .map(toTransaction)
+  return (await repairedTransactions())
     .filter((tx) => tx.voucherId === voucherId && tx.id !== excludeTransactionId)
-  const couponVoucher = await couponVouchersOf(rows)
-  const genuine = rows.filter((tx) => {
-    if (tx.direction !== 'in' || !tx.tokenId) return true
-    const named = couponVoucher.get(tx.tokenId)
-    return named === undefined || named === voucherId
-  })
-
-  return onePerRedemption(genuine).map((tx) => ({
-    amount: tx.amount,
-    direction: tx.direction === 'in' ? 'in' : 'out',
-    ...(tx.exactValue === undefined ? {} : { exact: tx.exactValue }),
-  }))
+    .map((tx) => ({
+      amount: tx.amount,
+      direction: tx.direction === 'in' ? 'in' : 'out',
+      ...(tx.exactValue === undefined ? {} : { exact: tx.exactValue }),
+    }))
 }
 
 /**
- * The voucher each row's own coupon was signed for, by token id. Rows whose
- * coupon is missing or unreadable are absent from the map.
+ * Each incoming row's own coupon token, by token id. Rows whose coupon is not
+ * on this device are absent, and keep their stamp.
  */
-async function couponVouchersOf(rows: readonly WalletTransaction[]): Promise<Map<string, string>> {
-  const wanted = new Set(rows.map((tx) => tx.tokenId).filter((id): id is string => !!id))
-  const named = new Map<string, string>()
-  if (wanted.size === 0) return named
-  let coupons: Awaited<ReturnType<typeof listVouchers>>
+async function couponTokensOf(rows: readonly WalletTransaction[]): Promise<Map<string, string>> {
+  const wanted = new Set(rows.filter((tx) => tx.direction === 'in').map((tx) => tx.tokenId).filter((id): id is string => !!id))
+  const tokens = new Map<string, string>()
+  if (wanted.size === 0) return tokens
   try {
-    coupons = await listVouchers()
+    for (const coupon of await listVouchers()) {
+      if (coupon.token_id && coupon.token && wanted.has(coupon.token_id)) tokens.set(coupon.token_id, coupon.token)
+    }
   } catch {
-    // No coupons to read means nothing is dropped, which is the strict side.
-    return named
+    // No coupons to read means every row keeps its stamp, which is the strict side.
   }
-  for (const coupon of coupons) {
-    if (!coupon.token_id || !wanted.has(coupon.token_id) || !coupon.token) continue
-    try {
-      const id = parseVoucherToken(coupon.token).voucher.voucherId
-      if (id) named.set(coupon.token_id, id)
-    } catch {
-      // Not a voucher token: keep the row as it stands.
-    }
-  }
-  return named
-}
-
-/**
- * One row per redemption. Incoming rows carrying the same nullifier or transfer
- * id are the same received token, so only the largest is kept. Everything else
- * passes through.
- */
-function onePerRedemption(rows: readonly WalletTransaction[]): WalletTransaction[] {
-  const kept: WalletTransaction[] = []
-  const byKey = new Map<string, number>()
-  for (const tx of rows) {
-    const keys = tx.direction === 'in' ? redemptionKeys(tx) : []
-    const seen = keys.map((k) => byKey.get(k)).find((i) => i !== undefined)
-    if (seen === undefined) {
-      keys.forEach((k) => byKey.set(k, kept.length))
-      kept.push(tx)
-      continue
-    }
-    if (tx.amount > kept[seen].amount) kept[seen] = tx
-    keys.forEach((k) => byKey.set(k, seen))
-  }
-  return kept
-}
-
-function redemptionKeys(tx: WalletTransaction): string[] {
-  return [
-    tx.attestationNullifier ? `n:${tx.attestationNullifier}` : undefined,
-    tx.transferId ? `t:${tx.transferId}` : undefined,
-  ].filter((k): k is string => k !== undefined)
+  return tokens
 }

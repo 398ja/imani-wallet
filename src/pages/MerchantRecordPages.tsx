@@ -27,8 +27,9 @@ import {
   Switch,
 } from '../components/ui'
 import { present } from '../lib/detailRows'
-import { listTransactions, onWalletChanged } from '../lib/wallet'
-import { toTransaction, type WalletTransaction } from '../lib/transactions'
+import { onWalletChanged } from '../lib/wallet'
+import { repairedTransactions } from '../lib/redemptionLedger'
+import type { WalletTransaction } from '../lib/transactions'
 import { entryKey, groupHistory } from '../lib/historyGroups'
 import { expiringSoon } from '../lib/stats'
 import { formatDate, formatFace } from '../lib/format'
@@ -76,7 +77,9 @@ function useMerchantTransactions() {
 
   useEffect(() => {
     const load = async () => {
-      const rows = (await listTransactions()).map(toTransaction)
+      // Repaired (#145): the claimed figure must read the same rows the
+      // till's ceiling does, or the two disagree about what is left.
+      const rows = await repairedTransactions()
       setState({ transactions: rows.sort((a, b) => b.at - a.at), loadedAt: Date.now() })
     }
     load()
