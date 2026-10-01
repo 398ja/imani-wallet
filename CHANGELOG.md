@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-10-01
+
 ### Fixed
 
 - **A till no longer refuses the honest last coupon of a voucher after two coupons arrive together
@@ -43,8 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **The receive pacer's notes cite the new server default** (120 a minute from
-  imani-gateway-customer 0.19.2). The client keeps 8 calls a minute, which stays correct against a
-  gateway still on 10 and costs time against one on 120. Related: imani-gateway-core#114 (FLOOR
+  imani-gateway-customer 0.19.2). The client keeps 8 calls a minute, which is safe against any
+  gateway and costs time against one on 120. Related: imani-gateway-core#114 (FLOOR
   rounding on proportional sends) is unchanged.
 
 ## [0.11.0] - 2026-09-29
