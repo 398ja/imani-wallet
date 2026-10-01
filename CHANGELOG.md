@@ -51,6 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the amount, note or expiry, or finishing an issue, starts a new key and a new warrant.
   A second press while one is still in flight does nothing. If the portal answers
   `IDEMPOTENCY_CONFLICT`, the merchant is told plainly that no second code was made.
+  A press made while the wallet was locked is never reused once it is unlocked, so that
+  retry is signed rather than minted unwarranted. Switching account or stall starts a new
+  key and warrant. A definite refusal (a 4xx other than 409) ends the attempt. A network
+  error, a 5xx or a 409 keeps it for the retry.
 
 ## [0.11.1] - 2026-10-01
 

@@ -19,27 +19,35 @@ import type { Actor } from '../actor'
 const STALL_SK = 'a'.repeat(63) + '7'
 const STALL = bytesToHex(schnorr.getPublicKey(hexToBytes(STALL_SK)))
 const owner: Actor = { kind: 'owner', stallPubkey: STALL }
+const OTHER_SK = 'b'.repeat(63) + '9'
+const OTHER = bytesToHex(schnorr.getPublicKey(hexToBytes(OTHER_SK)))
+const otherOwner: Actor = { kind: 'owner', stallPubkey: OTHER }
 
 const calls = vi.hoisted(() => ({
   order: [] as string[],
   bodies: [] as Array<Record<string, unknown>>,
   rows: [] as Array<Record<string, unknown>>,
   respond: null as null | (() => Response),
+  /** The unlocked key, or null while the wallet is locked. */
+  signerKey: ('a'.repeat(63) + '7') as string | null,
 }))
 
 vi.mock('../nap', async () => {
   const { hexToBytes: h } = await import('@noble/hashes/utils')
   const { schnorr: s } = await import('@noble/curves/secp256k1.js')
   const { bytesToHex: b } = await import('@noble/hashes/utils')
-  const sk = 'a'.repeat(63) + '7'
   return {
-    getSigner: () => ({
-      pubkey: b(s.getPublicKey(h(sk))),
-      withPrivkey: <T,>(borrow: (key: Uint8Array) => T): T => {
-        calls.order.push('sign')
-        return borrow(h(sk))
-      },
-    }),
+    getSigner: () => {
+      const sk = calls.signerKey
+      if (!sk) throw new Error('The wallet is locked.')
+      return {
+        pubkey: b(s.getPublicKey(h(sk))),
+        withPrivkey: <T,>(borrow: (key: Uint8Array) => T): T => {
+          calls.order.push('sign')
+          return borrow(h(sk))
+        },
+      }
+    },
   }
 })
 
@@ -80,6 +88,7 @@ beforeEach(() => {
   calls.bodies.length = 0
   calls.rows.length = 0
   calls.respond = null
+  calls.signerKey = STALL_SK
 })
 
 const issue = () =>
@@ -260,6 +269,155 @@ describe('a retry of the same issue', () => {
     // Assert
     const keys = calls.bodies.map((body) => body.idempotencyKey)
     expect(new Set(keys).size).toBe(4)
+  })
+
+  /**
+   * A press while locked sends no warrant. That attempt must not be reused
+   * after unlocking, or the coupon is minted unwarranted and refused at the till.
+   */
+  it('signs a fresh warrant on the retry after the wallet is unlocked', async () => {
+    // Arrange
+    const issuer = createCashbackIssuer()
+    calls.signerKey = null
+    calls.respond = () => {
+      throw new TypeError('network down')
+    }
+    await expect(issuer.submit(request)).rejects.toThrow()
+    calls.signerKey = STALL_SK
+    calls.respond = null
+
+    // Act
+    await issuer.submit(request)
+
+    // Assert
+    expect(calls.bodies[0].issuanceWarrant).toBeUndefined()
+    const warrant = calls.bodies[1].issuanceWarrant as string
+    expect(verifyIssuanceWarrant(parseIssuanceWarrant(warrant), STALL, {
+      faceValueMinor: 1500,
+      unit: 'EUR',
+      faceDecimals: 2,
+    })).toEqual({ verdict: 'verified' })
+  })
+
+  /**
+   * An attempt with no warrant is never kept while there is an actor, even if
+   * the signer key reads the same both times (here, still locked on retry).
+   */
+  it('does not keep an unwarranted attempt for the next press', async () => {
+    // Arrange
+    const issuer = createCashbackIssuer()
+    calls.signerKey = null
+    calls.respond = () => {
+      throw new TypeError('network down')
+    }
+    await expect(issuer.submit(request)).rejects.toThrow()
+    calls.respond = null
+
+    // Act
+    await issuer.submit(request)
+
+    // Assert
+    expect(calls.bodies[1].idempotencyKey).not.toBe(calls.bodies[0].idempotencyKey)
+  })
+
+  /**
+   * The signing key is part of the attempt. A different key under the same
+   * stall (a restored session) gets a new key and warrant.
+   */
+  it('starts a new attempt when the signing key changes under the same stall', async () => {
+    // Arrange
+    const issuer = createCashbackIssuer()
+    calls.respond = () => {
+      throw new TypeError('network down')
+    }
+    await expect(issuer.submit(request)).rejects.toThrow()
+    calls.respond = null
+    calls.signerKey = OTHER_SK
+
+    // Act
+    await issuer.submit(request)
+
+    // Assert
+    expect(calls.bodies[1].idempotencyKey).not.toBe(calls.bodies[0].idempotencyKey)
+  })
+
+  /**
+   * A terminal signs with its own key, not the stall's. Re-paired to another
+   * stall, the signer is unchanged, so the stall must be part of the attempt.
+   */
+  it('starts a new attempt when the same terminal key issues for another stall', async () => {
+    // Arrange
+    const issuer = createCashbackIssuer()
+    const terminalFor = (stallPubkey: string) =>
+      ({ kind: 'terminal', stallPubkey, terminalPubkey: OTHER, role: 'issue-and-redeem' }) as Actor
+    calls.signerKey = OTHER_SK
+    calls.respond = () => {
+      throw new TypeError('network down')
+    }
+    await expect(issuer.submit({ ...request, actor: terminalFor(STALL) })).rejects.toThrow()
+    calls.respond = null
+
+    // Act
+    await issuer.submit({ ...request, actor: terminalFor(OTHER) })
+
+    // Assert
+    expect(calls.bodies[1].idempotencyKey).not.toBe(calls.bodies[0].idempotencyKey)
+  })
+
+  /** Signing in as another stall with the same amount is a different sale: new key and warrant. */
+  it('starts a new key and warrant after an account switch', async () => {
+    // Arrange
+    const issuer = createCashbackIssuer()
+    calls.respond = () => {
+      throw new TypeError('network down')
+    }
+    await expect(issuer.submit(request)).rejects.toThrow()
+    calls.respond = null
+    calls.signerKey = OTHER_SK
+
+    // Act
+    await issuer.submit({ ...request, actor: otherOwner })
+
+    // Assert
+    expect(calls.bodies[1].idempotencyKey).not.toBe(calls.bodies[0].idempotencyKey)
+    expect(calls.bodies[1].issuanceWarrant).not.toBe(calls.bodies[0].issuanceWarrant)
+    const warrant = parseIssuanceWarrant(calls.bodies[1].issuanceWarrant as string)
+    expect(verifyIssuanceWarrant(warrant, OTHER, { faceValueMinor: 1500, unit: 'EUR', faceDecimals: 2 }))
+      .toEqual({ verdict: 'verified' })
+  })
+
+  /** A definite refusal (a 4xx envelope) ends the attempt, so the next press signs afresh. */
+  it('drops the attempt after a definite 4xx refusal', async () => {
+    // Arrange
+    const issuer = createCashbackIssuer()
+    calls.respond = () =>
+      new Response(JSON.stringify({ code: 'INVALID_WARRANT', message: 'no' }), { status: 400 })
+    await expect(issuer.submit(request)).rejects.toThrow()
+    calls.respond = null
+
+    // Act
+    await issuer.submit(request)
+
+    // Assert
+    expect(calls.bodies[1].idempotencyKey).not.toBe(calls.bodies[0].idempotencyKey)
+  })
+
+  /** A 5xx or a 409 may mean the first request landed, so the attempt is kept for the retry. */
+  it.each([
+    [500, { code: 'INTERNAL', message: 'boom' }],
+    [409, { code: 'IDEMPOTENCY_CONFLICT', message: 'busy' }],
+  ])('keeps the attempt after a %i', async (status, envelope) => {
+    // Arrange
+    const issuer = createCashbackIssuer()
+    calls.respond = () => new Response(JSON.stringify(envelope), { status })
+    await expect(issuer.submit(request)).rejects.toThrow()
+    calls.respond = null
+
+    // Act
+    await issuer.submit(request)
+
+    // Assert
+    expect(calls.bodies[1].idempotencyKey).toBe(calls.bodies[0].idempotencyKey)
   })
 })
 
