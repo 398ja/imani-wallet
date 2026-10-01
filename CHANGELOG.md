@@ -17,29 +17,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   till redeemed 206 sats of voucher 19c4fed1 and 1365 sats of another voucher 21 ms apart. The
   second redeem's stamp landed on the first row, so 19c4fed1 carried two rows for one redemption
   (89.93 booked instead of 74.91), and the customer's last honest part (208 sats, 15.17) was
-  refused as "already spent". Each redeem now gets its own correlation id, carried on the voucher
-  row it writes, and a row that names none is stamped only when exactly one redeem is in flight.
-- **The redemption ceiling reads past rows the race already wrote (#145).** A row whose own coupon
-  names a different voucher no longer counts against this one, and rows sharing a nullifier or a
-  transfer id count once. A row whose coupon cannot be read is still counted, and two genuine
-  redemptions always have two nullifiers, so splitting genuine proofs is still capped at the
-  genuine total. No rounding tolerance was added: at 19c4fed1's real ratio the full 1371 sats are
-  exactly the face of 100, and the honest split fits with none.
+  refused as "already spent". Each redeem now gets a random correlation id, carried on the voucher
+  row it writes, and a row is stamped only by the redeem it names. The cashback receive registers
+  too, so it can never pick up a DM coupon's claim.
+- **The ledger files every row under the voucher its own coupon names (#145).** Rows the race
+  already wrote are re-filed, not dropped: a row stamped with one voucher but carrying another's
+  coupon counts in full against the coupon's voucher, valued from the coupon, so that voucher can
+  not be taken twice either. Copies of one received token count once; two different coupons never
+  merge, whatever their stamps share. A row whose coupon cannot be read keeps its stamp and still
+  counts. The redemption ceiling, the claim filed for a part and the merchant's claimed figure all
+  read these same rows, so song's 208 part is taken and filed at 16. No rounding tolerance was
+  added: at 19c4fed1's real ratio the full 1371 sats are exactly the face of 100.
 
 ### Added
 
 - **A refused coupon shows on its payment (#145).** "1 of 2 coupons refused: that coupon is already
-  spent", with "ask the customer to pay the rest", on the transaction and the payment-request
-  screens, for as long as the payment is shown rather than only in a ten-second toast. The
-  `redemption:refused` event now carries the bundle id, its declared part count and the request
-  id. The cashback refusal of #144 shows the same way.
+  spent", with "ask the customer to pay the rest", on the transaction screen for as long as it is
+  shown rather than only in a ten-second toast. The ids a refused coupon names are written by its
+  sender, so the instruction is given only when the refused coupon came from the payment's own
+  payer. Anything else naming the payment is shown neutrally ("a coupon naming this payment was
+  refused"), and only while a payment request is still open. The `redemption:refused` event now
+  carries the bundle id, its declared part count, the request id and the payload's payer. A
+  cashback coupon refused as unauthorised (#144) shows the same way when its DM names the payment.
 
 ### Changed
 
 - **The receive pacer's notes cite the new server default** (120 a minute from
   imani-gateway-customer 0.19.2). The client keeps 8 calls a minute, which stays correct against a
-  gateway still on 10. Related: imani-gateway-core#114 (FLOOR rounding on proportional sends) is
-  unchanged.
+  gateway still on 10 and costs time against one on 120. Related: imani-gateway-core#114 (FLOOR
+  rounding on proportional sends) is unchanged.
 
 ## [0.11.0] - 2026-09-29
 

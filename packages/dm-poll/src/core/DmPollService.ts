@@ -396,7 +396,10 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
           // Which payment it belonged to, so the refusal can be shown on it.
           bundleId: refusedMd.bundleId,
           bundlePartCount: refusedMd.bundlePartCount,
-          requestId: (refusedMd as { requestId?: string }).requestId,
+          requestId: refusedMd.requestId,
+          // Who PAID, from the payload: the wrap's signer is the gateway on a
+          // relayed send, so `senderPubkey` above cannot say whose coupon it was.
+          payerPubkey: refusedMd.senderPubkey,
         });
         return null;
       }

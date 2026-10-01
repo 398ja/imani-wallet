@@ -18,12 +18,12 @@
  *
  * **The server default is now 120 a minute** (imani-gateway-customer 0.19.2,
  * `gateway.customer.ratelimit.receive`, sized for 3 customers x 8 parts x
- * receive and burn x a retry = 96). 8 stays the client's figure on purpose: it
- * is correct against a gateway still on 10, it costs a bundle minutes only
- * when the budget really is 10, and a pacer that guessed the server's limit
- * would be wrong on every gateway that has not upgraded. Raise it only once no
- * deployed gateway is below the new figure. The 429 retry underneath still
- * honours whatever the server says. Every spender reserves before it calls:
+ * receive and burn x a retry = 96). 8 stays the client's figure on purpose,
+ * because it is correct against a gateway still on 10. The price is time on
+ * every gateway: against 0.19.2 a bundle waits for a window it did not need
+ * to, since 120 would allow it at once. Raise it once no deployed gateway is
+ * below the new figure. The 429 retry underneath still honours whatever the
+ * server says. Every spender reserves before it calls:
  *   - tokenRedemption: 1 per api.receive (`_receiveGate`, so every retry
  *     layer is paced), installed by dmPoll;
  *   - burn.ts: 1 per burn attempt (its receive).
