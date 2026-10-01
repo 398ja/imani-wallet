@@ -30,15 +30,18 @@ describe('withCorrelation', () => {
     installTokenIdFill()
   })
 
-  const write = (tokenId: string) =>
+  /** The write a redeem makes, naming that redeem on its voucher row as tokenRedemption does. */
+  const write = (tokenId: string, correlation?: string) =>
     window.walletStorageIntegration!.atomicallyWrite({
+      vouchers: correlation ? [{ token_id: tokenId, correlation_id: correlation }] : [],
       // The vendored builder writes `null`, not `undefined`.
       transactions: [{ id: `received:${tokenId}`, tokenId, bundleId: null }],
     })
 
+  /** The ids reach the row the redeem's own write names. */
   it('stamps a row whose token id is not the received token', async () => {
-    await withCorrelation({ bundleId: 'bundle-1', requestId: 'abe0b88b650a39cd' }, () =>
-      write('post-swap-token-id'),
+    await withCorrelation({ bundleId: 'bundle-1', requestId: 'abe0b88b650a39cd' }, (correlation) =>
+      write('post-swap-token-id', correlation),
     )
 
     expect(written[0].transactions).toEqual([
@@ -46,6 +49,20 @@ describe('withCorrelation', () => {
     ])
   })
 
+  /**
+   * Review of #145: a write that names no redeem is never stamped, even when
+   * only one redeem is in flight. "The only one in flight" is a guess, and the
+   * cashback path or a manual receive can write beside a DM redeem.
+   */
+  it('stamps nothing on a write that names no redeem, even with one in flight', async () => {
+    // Arrange / Act
+    await withCorrelation({ requestId: 'r1' }, () => write('anonymous'))
+
+    // Assert
+    expect((written[0].transactions as Record<string, unknown>[])[0].requestId).toBeUndefined()
+  })
+
+  /** A redeem's ids end with it. */
   it('does not leak ids onto a write outside the redeem', async () => {
     await withCorrelation({ requestId: 'r1' }, async () => {})
     await write('unrelated')
@@ -54,6 +71,7 @@ describe('withCorrelation', () => {
     expect((written[0].transactions as Record<string, unknown>[])[0].requestId).toBeUndefined()
   })
 
+  /** A failed redeem's ids are gone before the next write. */
   it('clears the slot when the redeem throws', async () => {
     await expect(
       withCorrelation({ requestId: 'r1' }, async () => {
@@ -227,7 +245,7 @@ describe('the Checks a redeemed coupon carries', () => {
    * a token_id. `token_id` is set here so the fill's own hashing path (which
    * needs a real cashu token) is not what this test is about.
    */
-  const redeem = () =>
+  const redeem = (correlation?: string) =>
     window.walletStorageIntegration!.atomicallyWrite({
       vouchers: [
         {
@@ -235,11 +253,13 @@ describe('the Checks a redeemed coupon carries', () => {
           voucher_id: 'vou-1',
           face_value: 1000,
           face_unit: 'XAF',
+          ...(correlation ? { correlation_id: correlation } : {}),
         },
       ],
       transactions: [],
     })
 
+  /** The verification result reaches the row that is rendered. */
   it('records what was verified, on the row the merchant actually reads', async () => {
     await withCorrelation({ validation }, redeem)
 
@@ -251,6 +271,7 @@ describe('the Checks a redeemed coupon carries', () => {
     ).toEqual(validation)
   })
 
+  /** No claim to check means no result on the row. */
   it('leaves plain ecash unmarked, because silence must not read as a pass', async () => {
     // No issuer claim to check: absent validation is the honest answer, and the
     // detail screen renders it as "Not checked".
@@ -260,10 +281,12 @@ describe('the Checks a redeemed coupon carries', () => {
     expect(rows[0].validation).toBeUndefined()
   })
 
+  /** A row that already carries a verdict keeps it. */
   it('does not overwrite a verification the builder already recorded', async () => {
     const own = { ...validation, signedFaceValue: 42 }
-    await withCorrelation({ validation }, () =>
+    await withCorrelation({ validation }, (correlation) =>
       window.walletStorageIntegration!.atomicallyWrite({
+        vouchers: [{ token_id: 'tok', correlation_id: correlation }],
         transactions: [{ id: 'received:tok', validation: own }],
       }),
     )
@@ -271,6 +294,7 @@ describe('the Checks a redeemed coupon carries', () => {
     expect((written[0].transactions as Record<string, unknown>[])[0].validation).toEqual(own)
   })
 
+  /** The next coupon starts clean. */
   it('does not leak one coupon\'s checks onto the next', async () => {
     await withCorrelation({ validation }, redeem)
     await redeem()
