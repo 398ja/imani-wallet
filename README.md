@@ -8,15 +8,17 @@ It lands in your wallet in seconds. Later you spend it back with that same
 merchant, in full or in part, and your change comes back as a smaller coupon.
 No bank account, no card reader, no app store sign-in with an email and password.
 
-> **New here?** Jump to the guide for your side of the counter:
+> **New here?** The guides live in the **imani-docs** repository, under
+> `wallet/`. Start with its index, `wallet/README.md`, or jump to the guide for
+> your side of the counter:
 >
-> - **[I'm a shopper](docs/customers.md)** — receive coupons and pay with them.
-> - **[I sell things](docs/merchants.md)** — issue coupons and take payment.
-> - **[I run more than one till](docs/terminals.md)** — set up, limit, and revoke terminals.
-> - **[I need to prove I honoured a coupon](docs/redemption-ledger-user-guide.md)** — your ledger ID, gaps, and audits.
-> - **[How it actually works](docs/how-it-works.md)** — the ideas behind it, in plain terms.
-> - **[The decentralised posture](docs/decentralised-posture.md)** — why there's no honeypot to raid.
-> - **[For developers](#for-developers)** — run and build the app.
+> - **I'm a shopper:** `wallet/customers.md`, to receive coupons and pay with them.
+> - **I sell things:** `wallet/merchants.md`, to issue coupons and take payment.
+> - **I run more than one till:** `wallet/terminals.md`, to set up, limit, and revoke terminals.
+> - **I need to prove I honoured a coupon:** `wallet/redemption-ledger-user-guide.md`, for your ledger ID, gaps, and audits.
+> - **How it actually works:** `wallet/how-it-works.md`, the ideas behind it, in plain terms.
+> - **The decentralised posture:** `wallet/decentralised-posture.md`, why there's no honeypot to raid.
+> - **[For developers](#for-developers)**: run and build the app.
 
 ---
 
@@ -71,7 +73,7 @@ flowchart LR
 4. **Change.** If the shopper paid less than the coupon was worth, the leftover
    returns as a new, smaller coupon.
 
-The [how-it-works guide](docs/how-it-works.md) explains what a coupon really is,
+The how-it-works guide (`imani-docs/wallet/how-it-works.md`) explains what a coupon really is,
 why it can't be forged, and why your key matters so much.
 
 ## What you need
@@ -103,7 +105,7 @@ flows to work. See `deploy/` for the compose override and nginx config.
 
 Card payments run against `stripe-mock` by default, so Settings → Payments works
 with no Stripe account and no key. See
-[running the card flows locally](docs/card-payments-locally.md) for where the
+running the card flows locally (`imani-docs/wallet/card-payments-locally.md`) for where the
 mock stops and how to switch to a real test key.
 
 ### Common tasks
@@ -132,13 +134,18 @@ npm run android    # build + sync the Capacitor Android project
 
 ### Deeper design notes
 
-Start with [`docs/how-it-works.md`](docs/how-it-works.md) for the concepts, and
-[`docs/decentralised-posture.md`](docs/decentralised-posture.md) for why the
-architecture is shaped the way it is.
+The guides and design notes live in the **imani-docs** repository, under
+`wallet/`. Start with `wallet/how-it-works.md` for the concepts, and
+`wallet/decentralised-posture.md` for why the architecture is shaped the way it
+is.
+
+Two kinds of document stay here, beside the code they govern: the architecture
+decision records in [`docs/adr/`](docs/adr/) and the research notes in
+[`docs/research/`](docs/research/).
 
 For the public redemption ledger — kind-7377 attestations, the pseudonymous
 ledger key, Pedersen commitments, and the hosted audit API in `services/` —
-see [`docs/redemption-ledger-technical-guide.md`](docs/redemption-ledger-technical-guide.md).
+see `imani-docs/wallet/redemption-ledger-technical-guide.md`.
 
 The original design record was retired once the code became the authority. It is
 still in git history (`docs/superpowers/specs/2026-08-11-farmer-coupon-wallet-design.md`,
