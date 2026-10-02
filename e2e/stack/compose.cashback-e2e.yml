@@ -116,6 +116,10 @@ services:
       GATEWAY_SECURITY_NIP98_PUBLIC_BASE_URL: "${E2E_PUBLIC_BASE:-http://localhost:5177}"
       GATEWAY_CUSTOMER_EDGE_SHARED_SECRET: "dev-edge-secret-local-only-32-plus-chars"
       GATEWAY_CUSTOMER_CORS_ALLOWED_ORIGINS: "${E2E_PUBLIC_BASE:-http://localhost:5177}"
+      # Every mint URL a token can carry must be https (gateway-api 0.14), and a
+      # token is stamped with the PUBLIC url. Point both at the TLS front.
+      GATEWAY_WALLET_MINT_PUBLIC_URL: "https://mint-tls:7443"
+      GATEWAY_CUSTOMER_WALLET_STATE_PUBLIC_MINT_URL: "https://mint-tls:7443"
       WALLET_MINT_ALLOWLIST: "mint-tls,127.0.0.1.mint,imani-mint-rest,localhost"
       JAVA_TOOL_OPTIONS: "-Djavax.net.ssl.trustStore=/etc/tls/truststore.jks -Djavax.net.ssl.trustStorePassword=changeit -Dwallet.mint.allowInternalAddresses=true"
       WALLET_PASSPHRASE: "test-wallet-passphrase-local-only-0123456789abcdef"
