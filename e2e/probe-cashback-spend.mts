@@ -266,7 +266,11 @@ function watchTill(till: Page): () => void {
 }
 
 async function openWallet(browser: Browser): Promise<{ browserContext: BrowserContext; page: Page }> {
-  const browserContext = await browser.newContext({ locale: BROWSER_LOCALE })
+  // A local stack fronts the claim host with a self-signed cert (e2e/stack/claim-tls).
+  const browserContext = await browser.newContext({
+    locale: BROWSER_LOCALE,
+    ignoreHTTPSErrors: process.env.E2E_IGNORE_HTTPS_ERRORS === '1',
+  })
   return { browserContext, page: await browserContext.newPage() }
 }
 
