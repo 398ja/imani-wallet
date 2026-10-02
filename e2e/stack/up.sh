@@ -50,7 +50,7 @@ MINT_HOST_IP=0.0.0.0 compose up -d hashicorp-vault
 MINT_HOST_IP=0.0.0.0 compose up -d imani-mint-rest
 mint_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' imani-mint-rest-test)"
 echo "mint is at $mint_ip"
-export MINT_HOST_IP="$mint_ip" MINT_URL="${MINT_URL:-http://127.0.0.1.mint:7777}"
+export MINT_HOST_IP="$mint_ip" MINT_URL="${MINT_URL:-https://mint-tls:7443}"
 
 compose up -d \
   imani-gateway-db bottin-db imani-vault-db imani-payment-db \

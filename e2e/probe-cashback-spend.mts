@@ -69,6 +69,13 @@ async function goto(page: Page, url: string): Promise<void> {
   for (let attempt = 1; ; attempt++) {
     try {
       await page.goto(url, { waitUntil: 'load', timeout: 60_000 })
+      // ERR_NETWORK_CHANGED can abort a module request without failing the
+      // navigation (the dev server serves ~hundreds of modules), leaving an empty
+      // #root. Treat that as the same host flake and reload.
+      const rendered = await page
+        .waitForFunction(() => (document.getElementById('root')?.childElementCount ?? 1) > 0, null, { timeout: 15_000 })
+        .then(() => true, () => false)
+      if (!rendered && attempt < 4) throw new Error('net::ERR_NETWORK_CHANGED (empty #root)')
       return
     } catch (e) {
       if (attempt === 4 || !/ERR_NETWORK_CHANGED|ERR_NETWORK_IO_SUSPENDED|net::ERR_ABORTED/.test(String(e))) throw e
@@ -353,6 +360,8 @@ async function main(): Promise<number> {
     const customer = await openWallet(browser)
     pages.push(till.page, customer.page)
     const stopWatching = watchTill(till.page)
+    customer.page.on('pageerror', (e) => console.log(`CUSTOMER_PAGEERROR ${e.message.slice(0, 300)}`))
+    till.page.on('pageerror', (e) => console.log(`TILL_PAGEERROR ${e.message.slice(0, 300)}`))
     await registerWithRetry(registerCustomer, customer.page)
     await registerWithRetry(registerMerchant, till.page)
     const tillPubkey = await pubkeyOf(till.page)
