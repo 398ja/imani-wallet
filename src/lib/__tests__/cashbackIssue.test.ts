@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 
+import { NEVER_EXPIRES } from '../merchant'
 import { createCashbackIssuer, issueCashback, prepareCashbackAttempt } from '../cashbackIssue'
 import { IDEMPOTENCY_CONFLICT_MESSAGE, WARRANT_REFUSED_MESSAGE } from '../cashback'
 import { parseIssuanceWarrant, verifyIssuanceWarrant } from '../issuanceWarrant'
@@ -92,7 +93,7 @@ beforeEach(() => {
 })
 
 const issue = () =>
-  issueCashback({ actor: owner, amountMinor: 1500, unit: 'EUR', decimals: 2, expiryDays: 30 })
+  issueCashback({ actor: owner, amountMinor: 1500, unit: 'EUR', decimals: 2, expiryDays: 30, voucherValidityDays: 90 })
 
 describe('the warrant travels with the generate request', () => {
   /** The POST body carries a merchant warrant that verifies against the stall. */
@@ -184,7 +185,7 @@ describe('the warrant travels with the generate request', () => {
 })
 
 describe('a retry of the same issue', () => {
-  const request = { actor: owner, amountMinor: 1500, unit: 'EUR', decimals: 2, expiryDays: 30 }
+  const request = { actor: owner, amountMinor: 1500, unit: 'EUR', decimals: 2, expiryDays: 30, voucherValidityDays: 90 }
 
   /**
    * After a network error the retry must resend the same key AND warrant. The
@@ -454,5 +455,48 @@ describe('the till accepts the coupon', () => {
     expect(parsed.voucher.issuanceWarrant).toBe(warrant)
     expect(signature.signatureValid).toBe(true)
     expect(verdict).toEqual({ verdict: 'verified' })
+  })
+})
+
+/**
+ * The coupon lives as long as a Sell coupon from the same stall
+ * (398ja/imani-gateway-portal#58). The claim window is a separate clock.
+ */
+describe('the stall\'s voucher validity travels with the generate request', () => {
+  const issueWith = (voucherValidityDays: number) =>
+    issueCashback({
+      actor: owner,
+      amountMinor: 1500,
+      unit: 'EUR',
+      decimals: 2,
+      expiryDays: 5,
+      voucherValidityDays,
+    })
+
+  it('sends the merchant validity as voucherValidityDays and keeps the claim window', async () => {
+    await issueWith(30)
+
+    expect(calls.bodies[0].voucherValidityDays).toBe(30)
+    expect(calls.bodies[0].expiryDays).toBe(5)
+  })
+
+  it('sends never-expires as 0, the same NEVER_EXPIRES the stall stores', async () => {
+    await issueWith(NEVER_EXPIRES)
+
+    // Present and 0, not omitted: an absent field is what an older wallet
+    // sends, and the portal then falls back to the gateway default.
+    expect(calls.bodies[0]).toHaveProperty('voucherValidityDays', 0)
+    expect(calls.bodies[0].expiryDays).toBe(5)
+  })
+
+  it('treats a change of validity as a different issue', async () => {
+    const issuer = createCashbackIssuer()
+    calls.respond = () => new Response('{}', { status: 503 })
+    await expect(issuer.submit({ actor: owner, amountMinor: 1500, unit: 'EUR', decimals: 2, expiryDays: 5, voucherValidityDays: 30 })).rejects.toThrow()
+    calls.respond = null
+    await issuer.submit({ actor: owner, amountMinor: 1500, unit: 'EUR', decimals: 2, expiryDays: 5, voucherValidityDays: 7 })
+
+    expect(calls.bodies[1].idempotencyKey).not.toBe(calls.bodies[0].idempotencyKey)
+    expect(calls.bodies[1].voucherValidityDays).toBe(7)
   })
 })

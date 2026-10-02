@@ -87,6 +87,9 @@ export function CashbackIssuePage({
         decimals,
         memo: memo.trim() || undefined,
         expiryDays,
+        // The coupon ages out on the stall's term, as a Sell coupon does
+        // (398ja/imani-gateway-portal#58). `expiryDays` above is only the claim window.
+        voucherValidityDays: merchant.voucherValidityDays,
       })
       // Null: a second press while the first was in flight. The first one
       // owns the outcome, so this one changes nothing.
