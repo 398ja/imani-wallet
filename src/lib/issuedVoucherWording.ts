@@ -160,3 +160,73 @@ export function describeAttestation(verdict: CashAttestationVerdict): EvidenceLi
       }
   }
 }
+
+/**
+ * What a cashback voucher is, in place of the payment rail (#155).
+ *
+ * A cashback is value this stall gave away, not something a customer bought,
+ * so "how it was paid for" and "did the customer sign that they paid" are
+ * questions with no answer here. Asking them anyway read as "Not collected",
+ * which looks like a missing receipt rather than a question that never applied.
+ */
+export function describeCashbackKind(): EvidenceLine {
+  return {
+    label: 'Cashback from this stall',
+    tone: 'neutral',
+    detail:
+      'Given back to a customer, not sold. No payment came in for it, so there is no payment method or customer receipt to show.',
+  }
+}
+
+/**
+ * Whether the customer has collected a cashback, as the portal last said.
+ *
+ * Read from the same stored portal status the transaction and the Vouchers list
+ * show. A missing status is "not claimed yet", never "claimed": absence is not
+ * approval. `formatDate` is passed in so this module stays free of locale code.
+ */
+export function describeCashbackClaim(
+  reading: { status?: string; claimedAt?: number; expired: boolean },
+  formatDate: (ms: number) => string,
+): EvidenceLine {
+  switch (reading.status) {
+    case 'Claimed':
+      return {
+        label:
+          reading.claimedAt !== undefined
+            ? `Claimed on ${formatDate(reading.claimedAt)}`
+            : 'Claimed',
+        tone: 'confirmed',
+        detail: 'The portal records the customer collecting this cashback.',
+      }
+    case 'Expired':
+      return {
+        label: 'Expired unclaimed',
+        tone: 'neutral',
+        detail: 'The customer did not collect it before it expired.',
+      }
+    case 'Revoked':
+      return { label: 'Withdrawn', tone: 'neutral', detail: 'Withdrawn before it was collected.' }
+    case 'ManualAttention':
+      return {
+        label: 'Needs a check',
+        tone: 'alarming',
+        detail: 'The portal flagged this cashback for a person to look at.',
+      }
+    case undefined:
+    case 'Unclaimed':
+      return reading.expired
+        ? {
+            label: 'Expired unclaimed',
+            tone: 'neutral',
+            detail: 'Past its expiry with no claim on record.',
+          }
+        : {
+            label: 'Not claimed yet',
+            tone: 'neutral',
+            detail: 'The customer has not collected it, as of the portal’s last answer.',
+          }
+    default:
+      return { label: 'Status unknown', tone: 'neutral' }
+  }
+}
