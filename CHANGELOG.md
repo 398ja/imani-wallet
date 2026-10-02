@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answered for reads "No claim on record", not "unclaimed", because nothing asks about it
   after expiry. Its transaction link says "The cashback this came from". Sell vouchers are
   unchanged.
+- **Cashback coupons now show what was checked (#156).** A coupon redeemed from a cashback
+  code skipped the issuer and signature check every other receive runs, so its detail screen
+  read "Issuer: Not checked". The check now runs on redeem and is recorded on the row, so a
+  genuine coupon reads "Signature verified" and a forged, unsigned or unrecognised-issuer one
+  reads as failed rather than unchecked. Recorded, not refused: the claim is one-shot, so
+  refusing would lose the value. Cashback still does not attest to the ledger. Cashback rows
+  saved before the fix are re-checked from their stored coupon when opened.
 
 ## [0.12.0] - 2026-10-01
 

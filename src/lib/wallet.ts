@@ -3,6 +3,7 @@ import type { VoucherRow, TransactionRow } from '@imani/wallet-storage'
 
 import { burnIfSelfIssued } from './burn'
 import { mayFileAttestation } from './cashAttestation'
+import { recheckCashbackRow } from './cashbackValidation'
 import { toTransaction, type WalletTransaction } from './transactions'
 import { publishTx } from './txRecords'
 import { publishVoucher, tombstoneVoucher } from './voucherRecords'
@@ -294,6 +295,22 @@ export async function getVoucherRow(tokenId: string): Promise<VoucherRow | null>
 /** One transaction by id. */
 export async function getTransactionRow(id: string): Promise<TransactionRow | null> {
   return (await getWallet().getTransaction(id)) ?? null
+}
+
+/**
+ * Re-check a cashback row saved before #156 and record what it found.
+ * Never throws; see `recheckCashbackRow`.
+ */
+export async function recheckCashbackRowOnOpen(id: string): Promise<void> {
+  if (!walletIsOpen()) return
+  const wrote = await recheckCashbackRow(id, {
+    getTransaction: async (txId) =>
+      ((await getWallet().getTransaction(txId)) as unknown as Record<string, unknown>) ?? null,
+    getVoucher: async (tokenId) => (await getWallet().getVoucher(tokenId)) ?? null,
+    updateTransaction: (txId, patch) =>
+      getWallet().updateTransaction(txId, patch as unknown as Partial<TransactionRow>),
+  })
+  if (wrote) notifyWalletChanged()
 }
 
 /**

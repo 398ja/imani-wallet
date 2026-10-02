@@ -28,6 +28,7 @@
 import { useEffect, useState } from 'react'
 
 import { gatewayConfig, cashbackEnabled } from './config'
+import { cashbackValidation } from './cashbackValidation'
 import { legacyApi, withCorrelation } from './legacyBridge'
 import { signedFetch } from './nip98'
 import { notifyWalletChanged, recordCashbackStatus } from './wallet'
@@ -763,7 +764,9 @@ export async function replayPendingCashback(): Promise<boolean> {
  * Delegates to the same coordinator every other receive path uses, and
  * `'cashback'` is a source it already knows: it skips the inspect-before-save
  * precondition that `scan`/`manual` require, because a cashback token was
- * minted by the gateway rather than pasted in by a person.
+ * minted by the gateway rather than pasted in by a person. Skipping the gate
+ * is not skipping the check: the coupon's issuer and signature are verified
+ * here and recorded on the row like any other receive (#156).
  */
 async function commitToken(token: string): Promise<void> {
   await legacyApi()
@@ -773,7 +776,11 @@ async function commitToken(token: string): Promise<void> {
   // Registered with the bridge and named on the row it writes (#145), so a
   // DM redeem in flight at the same moment can never stamp its claim here.
   // Nothing to stamp: a cashback is not a stall's own coupon coming home.
-  await withCorrelation({}, (correlationId) =>
+  // The same issuer + signature check every other receive records (#156).
+  // Recorded and never refused: the claim above was destructive, so refusing
+  // here would lose value. A failed check reads as failed on the row.
+  const validation = cashbackValidation(token)
+  await withCorrelation(validation ? { validation: { ...validation } } : {}, (correlationId) =>
     redemption.redeem(token, { source: 'cashback', metadata: { correlation_id: correlationId } }),
   )
 
