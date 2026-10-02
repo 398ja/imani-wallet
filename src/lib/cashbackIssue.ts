@@ -109,7 +109,8 @@ export async function issueCashback(
  *    answers with that code instead of minting a second one.
  *
  * The attempt is dropped once a code is issued, and when the amount, unit,
- * note or expiry changes, because then it is a different sale. Also when the
+ * note, claim window or voucher validity changes, because then it is a
+ * different sale. Also when the
  * stall or the signing key changes: an account switch is a different issuer.
  *
  * Two cases are never kept for a retry:
