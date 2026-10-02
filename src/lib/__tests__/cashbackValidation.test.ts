@@ -1,10 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+import { schnorr } from '@noble/curves/secp256k1.js'
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
+
 import { redeemCashbackCode } from '../cashback'
-import { recheckCashbackRow } from '../cashbackValidation'
+import { cashbackValidation, recheckCashbackRow } from '../cashbackValidation'
 import { clearConfigCache } from '../config'
+import { createDmCryptoAdapter } from '../dmCrypto'
+import { warrantSaleDigest } from '../issuanceWarrant'
 import { validationStatus } from '../validationStatus'
-import { buildVoucherToken } from './voucherFixtures'
+import { buildVoucherToken, dmEnvelope } from './voucherFixtures'
 
 /**
  * #156: a cashback coupon never ran the issuer + signature check, so its row
@@ -149,5 +154,105 @@ describe('re-checking a cashback row saved before #156', () => {
     expect(await recheckCashbackRow('x', dm.ports)).toBe(false)
     expect(checked.writes).toHaveLength(0)
     expect(dm.writes).toHaveLength(0)
+  })
+})
+
+describe('the cashback record is the DM record (#156)', () => {
+  const STALL_SK = hexToBytes('e'.repeat(63) + '5')
+  const STALL = bytesToHex(schnorr.getPublicKey(STALL_SK))
+
+  function warrantFor(total: number, unit = 'GBP', decimals = 2): string {
+    const nonce = 'a'.repeat(32)
+    return JSON.stringify({
+      form: 'merchant',
+      sale_total: total,
+      face_decimals: decimals,
+      unit,
+      nonce,
+      sig: bytesToHex(schnorr.sign(warrantSaleDigest(STALL, total, decimals, unit, nonce), STALL_SK)),
+    })
+  }
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('writes exactly what the DM path writes for the same coupon', () => {
+    vi.stubEnv('VITE_TRUSTED_MINT_URLS', 'http://mint.test')
+    const { token } = buildVoucherToken({ issuanceWarrant: warrantFor(1000) }, [1000, 782], {}, STALL_SK)
+    const dm = createDmCryptoAdapter().parseTokenTransferMessage(dmEnvelope(token)) as Record<string, unknown>
+
+    expect(dm.validation).toBeDefined()
+    expect(cashbackValidation(token)).toEqual(dm.validation)
+  })
+
+  it('reads verified when the signature and the warrant both hold', () => {
+    const { token } = buildVoucherToken({ issuanceWarrant: warrantFor(1000) }, [1000, 782], {}, STALL_SK)
+    const v = cashbackValidation(token)
+
+    expect(v).toMatchObject({ signatureValid: true, warrant: 'verified', warrantedSaleTotal: 1000 })
+    expect(validationStatus(v)).toBe('verified')
+  })
+
+  it('fails a genuine coupon that carries no warrant, as the DM path does', () => {
+    const v = cashbackValidation(buildVoucherToken().token)
+
+    expect(v).toMatchObject({ signatureValid: true, warrant: 'absent' })
+    expect(validationStatus(v)).toBe('failed')
+  })
+
+  it('records an issuer outside the allowlist as a failed signature', () => {
+    vi.stubEnv('VITE_VOUCHER_ISSUER_PUBKEYS', 'f'.repeat(64))
+    const v = cashbackValidation(buildVoucherToken({ issuanceWarrant: warrantFor(1000) }, [1000, 782], {}, STALL_SK).token)
+
+    expect(v).toMatchObject({ signatureValid: false })
+    expect(validationStatus(v)).toBe('failed')
+  })
+
+  it('passes an issuer that IS on the allowlist', () => {
+    vi.stubEnv('VITE_VOUCHER_ISSUER_PUBKEYS', STALL)
+    const v = cashbackValidation(buildVoucherToken({ issuanceWarrant: warrantFor(1000) }, [1000, 782], {}, STALL_SK).token)
+
+    expect(validationStatus(v)).toBe('verified')
+  })
+
+  it('records nothing for plain ecash, which makes no issuer claim', () => {
+    expect(cashbackValidation('cashuBnotavoucher')).toBeUndefined()
+  })
+
+  it('never throws, because it runs after the destructive claim', () => {
+    expect(() => cashbackValidation(undefined as unknown as string)).not.toThrow()
+  })
+})
+
+describe('the re-check on open leaves alone what it cannot help', () => {
+  function ports(row: Record<string, unknown> | null, voucher: { token?: string; source_transport?: string } | null) {
+    const updateTransaction = vi.fn(async () => undefined)
+    return {
+      updateTransaction,
+      ports: { getTransaction: async () => row, getVoucher: async () => voucher, updateTransaction },
+    }
+  }
+
+  it.each([
+    ['a missing row', null, { token: 'x', source_transport: 'cashback' }],
+    ['an outgoing row', { direction: 'out', tokenId: 't1' }, { token: 'x', source_transport: 'cashback' }],
+    ['a row with no token id', { direction: 'in' }, { token: 'x', source_transport: 'cashback' }],
+    ['a coupon since spent', { direction: 'in', tokenId: 't1' }, null],
+    ['plain ecash by cashback', { direction: 'in', tokenId: 't1' }, { token: 'cashuBnotavoucher', source_transport: 'cashback' }],
+  ])('%s', async (_name, row, voucher) => {
+    const p = ports(row as Record<string, unknown> | null, voucher)
+
+    expect(await recheckCashbackRow('x', p.ports)).toBe(false)
+    expect(p.updateTransaction).not.toHaveBeenCalled()
+  })
+
+  it('swallows a storage failure', async () => {
+    const p = ports({ direction: 'in', tokenId: 't1' }, null)
+    p.ports.getVoucher = async () => {
+      throw new Error('idb gone')
+    }
+
+    expect(await recheckCashbackRow('x', p.ports)).toBe(false)
   })
 })
