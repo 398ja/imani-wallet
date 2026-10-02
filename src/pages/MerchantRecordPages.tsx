@@ -496,7 +496,7 @@ export function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
         >
           <span className="shrink-0 text-sm text-mono-500">Transaction</span>
           <span className="flex min-w-0 items-center gap-1 text-right text-mono-900 dark:text-mono-50">
-            The sale this came from
+            {row.type === 'cashback' ? 'The cashback this came from' : 'The sale this came from'}
             <ChevronRight className="h-4 w-4 shrink-0 text-mono-400" />
           </span>
         </Link>
@@ -522,13 +522,15 @@ export function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
         understood when they have not.
       */}
       <ListSection title="What stands behind this">
-        {/* A cashback was given, not sold (#155): no rail, no customer
-            receipt. What it is, whether it was collected, and who signed. */}
+        {/* A cashback is not a Sell sale (#155): no rail, no customer
+            receipt. What it is, whether it was claimed, and who signed.
+            "Claimed", not "Collected": the word the list, the portal and the
+            issue use, and not a near-twin of the Sell "Not collected". */}
         {row.type === 'cashback' ? (
           <>
             <EvidenceRow label="What it is" line={describeCashbackKind()} />
             <EvidenceRow
-              label="Collected"
+              label="Claimed"
               line={describeCashbackClaim(
                 { status: row.cashbackStatus, claimedAt: row.claimedAt, expired },
                 formatDate,
