@@ -56,6 +56,11 @@ compose up -d \
   imani-gateway-db bottin-db imani-vault-db imani-payment-db \
   bottin-api nostr-relay phoenixd-mock blossom \
   imani-vault-jpa payment-adapter imani-mint-rest \
-  mint-tls account-app gateway-core gateway-customer cashback-claim merchant-service
+  mint-tls claim-tls account-app gateway-core gateway-customer cashback-claim merchant-service
 # --no-deps: gateway-customer's health reads OUT_OF_SERVICE when it works (see deploy/up.sh).
 compose up -d --no-deps gateway-portal
+
+# The seed merchant's stall lives on the relay; republish so probe-cashback.mts
+# (which signs as .seed-keys.json imani-terminals) holds coupon:issue.
+RELAY_URL=ws://localhost:27778 node "$WALLET/scripts/open-stall.mjs" >/dev/null 2>&1 || true
+echo "stack up. First cashback after a mint restart may fail once (key read race); probes retry setup."
