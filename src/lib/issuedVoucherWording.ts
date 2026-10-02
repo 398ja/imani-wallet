@@ -173,40 +173,45 @@ export function describeCashbackKind(): EvidenceLine {
   return {
     label: 'Cashback from this stall',
     tone: 'neutral',
+    // Says what the record cannot carry, not that no money moved: whether
+    // anything changed hands at the counter is not something this row saw.
     detail:
-      'Given back to a customer, not sold. No payment came in for it, so there is no payment method or customer receipt to show.',
+      'A cashback code this stall gave out, not a sale made through Sell. It has no payment method on record and can never carry a customer receipt, so neither is shown.',
   }
 }
 
 /**
- * Whether the customer has collected a cashback, as the portal last said.
+ * Whether the customer has claimed a cashback, as the portal last said.
  *
  * Read from the same stored portal status the transaction and the Vouchers list
- * show. A missing status is "not claimed yet", never "claimed": absence is not
- * approval. `formatDate` is passed in so this module stays free of locale code.
+ * show. A missing status is never "claimed": absence is not approval. Nor is it
+ * "unclaimed" once the code is past its expiry, because the status is only
+ * stored once the portal gives a final answer and nothing asks about a code
+ * past its expiry. A claim made before then may simply not have reached this
+ * device. `formatDate` is passed in so this module stays free of locale code.
  */
 export function describeCashbackClaim(
   reading: { status?: string; claimedAt?: number; expired: boolean },
   formatDate: (ms: number) => string,
 ): EvidenceLine {
   switch (reading.status) {
-    case 'Claimed':
+    case 'Claimed': {
+      // '' when the stored time does not parse, which would leave "Claimed on ".
+      const on = reading.claimedAt === undefined ? '' : formatDate(reading.claimedAt)
       return {
-        label:
-          reading.claimedAt !== undefined
-            ? `Claimed on ${formatDate(reading.claimedAt)}`
-            : 'Claimed',
+        label: on ? `Claimed on ${on}` : 'Claimed',
         tone: 'confirmed',
-        detail: 'The portal records the customer collecting this cashback.',
+        detail: 'The portal records the customer claiming this cashback.',
       }
+    }
     case 'Expired':
       return {
         label: 'Expired unclaimed',
         tone: 'neutral',
-        detail: 'The customer did not collect it before it expired.',
+        detail: 'The portal records that the customer did not claim it before it expired.',
       }
     case 'Revoked':
-      return { label: 'Withdrawn', tone: 'neutral', detail: 'Withdrawn before it was collected.' }
+      return { label: 'Withdrawn', tone: 'neutral', detail: 'Withdrawn before it was claimed.' }
     case 'ManualAttention':
       return {
         label: 'Needs a check',
@@ -217,16 +222,21 @@ export function describeCashbackClaim(
     case 'Unclaimed':
       return reading.expired
         ? {
-            label: 'Expired unclaimed',
+            label: 'No claim on record',
             tone: 'neutral',
-            detail: 'Past its expiry with no claim on record.',
+            detail:
+              'Past its expiry, and no claim reached this device. The portal may still have one: its transaction asks it.',
           }
         : {
             label: 'Not claimed yet',
             tone: 'neutral',
-            detail: 'The customer has not collected it, as of the portal’s last answer.',
+            detail: 'No claim has reached this device yet. The code is still open.',
           }
     default:
-      return { label: 'Status unknown', tone: 'neutral' }
+      return {
+        label: 'Status unknown',
+        tone: 'neutral',
+        detail: 'The portal sent a status this version does not know. It is not read as claimed.',
+      }
   }
 }

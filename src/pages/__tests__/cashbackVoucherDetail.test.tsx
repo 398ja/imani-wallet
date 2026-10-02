@@ -77,6 +77,10 @@ describe('cashback voucher detail (#155)', () => {
     expect(screen.getByText(`Claimed on ${formatDate(claimedAt)}`)).toBeTruthy()
     expect(screen.getByText('Cashback from this stall')).toBeTruthy()
     expect(screen.getByText('Signed by this stall')).toBeTruthy()
+    expect(screen.queryByText('Paid')).toBeNull()
+    expect(screen.queryByText('Customer receipt')).toBeNull()
+    expect(screen.getByText('The cashback this came from')).toBeTruthy()
+    expect(screen.queryByText('The sale this came from')).toBeNull()
   })
 
   it('shows an unclaimed cashback as not claimed yet, never as claimed', () => {
@@ -89,6 +93,16 @@ describe('cashback voucher detail (#155)', () => {
     expect(screen.getByText('Signed by this stall')).toBeTruthy()
   })
 
+  it('does not call an expired cashback unclaimed when the portal never said so', () => {
+    // The list stops asking once a code is past expiry, so a claim made just
+    // before then may never have been stored here.
+    renderDetail(cashback({ expiresAt: NOW - 1 }))
+
+    expect(screen.getByText('No claim on record')).toBeTruthy()
+    expect(screen.queryByText('Expired unclaimed')).toBeNull()
+    expect(screen.queryByText(/^Claimed on/)).toBeNull()
+  })
+
   it('still shows all three evidence lines on a Sell voucher', () => {
     renderDetail(row({}))
 
@@ -98,5 +112,6 @@ describe('cashback voucher detail (#155)', () => {
     expect(screen.getByText('Not collected')).toBeTruthy()
     expect(screen.getByText('Signed by this stall')).toBeTruthy()
     expect(screen.queryByText('Cashback from this stall')).toBeNull()
+    expect(screen.getByText('The sale this came from')).toBeTruthy()
   })
 })
