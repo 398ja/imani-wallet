@@ -10,7 +10,7 @@ import type { CryptoAdapter, GiftWrapEvent, UnwrappedDm, TokenMetadata } from '@
 import { checkIssuer } from './issuerAllowlist'
 import { checkMintAndUnit } from './trustedMint'
 import { getSigner } from './nap'
-import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
+import { buildValidationRecord } from './voucherValidationRecord'
 import { asChunk, looksLikeChunk, offerChunk } from './dmChunks'
 import {
   heldWrapDecision,
@@ -19,7 +19,6 @@ import {
   sealAuthorOf,
 } from './transferSignature'
 import {
-  creditableFaceValue,
   parseVoucherToken,
   verifyVoucher,
   type ParsedVoucherToken,
@@ -218,8 +217,14 @@ function verifiedVoucherFrom(token: string | undefined):
     return REJECTED
   }
 
-  const { faceValue, cappedAtFaceValue } = creditableFaceValue(parsed)
-  if (cappedAtFaceValue) {
+  // The record itself is built where cashback builds its own (#156), so the two
+  // receive paths cannot drift in what they write. Only the gates above are
+  // this path's.
+  const { faceValue, record, warrantRefusal } = buildValidationRecord(parsed, {
+    signatureValid,
+    legacyCanonical,
+  })
+  if (record.cappedAtFaceValue) {
     // Reached when tokenAmount * ratio exceeds what was issued, which on a
     // legacy voucher is what a rewritten ratio looks like.
     console.warn(
@@ -228,22 +233,7 @@ function verifiedVoucherFrom(token: string | undefined):
     )
   }
 
-  // Checked against the CREDITABLE value, not the signed face value. A warrant
-  // bounds what this coupon may be worth now, and `faceValue` is what we are
-  // about to credit - verifying against the signed face would let a clamped or
-  // split coupon pass a check its actual credit never faced.
-  const warrant = parseIssuanceWarrant(parsed.voucher.issuanceWarrant)
-  const warrantVerdict = verifyIssuanceWarrant(warrant, parsed.voucher.issuerId, {
-    faceValueMinor: faceValue,
-    // The coupon's OWN unit and decimals, from its signed tags. Passing the
-    // warrant's back to itself would let a warrant for XAF 2500 authorise a
-    // EUR 2500 coupon worth a hundred times more - the signature verifies and
-    // the ceiling passes, because both compare bare numbers.
-    unit: parsed.voucher.unit,
-    faceDecimals: parsed.voucher.faceDecimals,
-  })
-
-  if (warrantVerdict.verdict === 'failed') {
+  if (warrantRefusal !== undefined) {
     // Recorded, not refused. Refusing an unwarranted or badly-warranted coupon
     // is a policy decision nobody has taken, and taking it here would break
     // every coupon issued before this shipped. The merchant is shown the state
@@ -251,26 +241,11 @@ function verifiedVoucherFrom(token: string | undefined):
     console.warn(
       '[dmCrypto] issuance warrant refused for voucher:',
       parsed.voucher.voucherId,
-      warrantVerdict.reason,
+      warrantRefusal,
     )
   }
 
-  return {
-    parsed,
-    validation: {
-      faceValue,
-      record: {
-        signatureValid,
-        legacyCanonical,
-        signedFaceValue: parsed.voucher.faceValue,
-        cappedAtFaceValue,
-        warrant: warrantVerdict.verdict,
-        ...(warrant.state === 'present'
-          ? { warrantedSaleTotal: warrant.saleTotalMinor }
-          : {}),
-      },
-    },
-  }
+  return { parsed, validation: { faceValue, record } }
 }
 
 function asPayload(content: string): TokenTransferPayload | null {

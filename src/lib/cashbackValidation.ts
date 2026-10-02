@@ -19,9 +19,8 @@
  * Recording is still not attesting. See the comment in `commitToken`.
  */
 import { checkIssuer } from './issuerAllowlist'
-import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
+import { buildValidationRecord } from './voucherValidationRecord'
 import {
-  creditableFaceValue,
   isVoucherSecret,
   parseVoucherToken,
   proofSecrets,
@@ -33,11 +32,40 @@ import {
  * The validation record for a token, or undefined for plain ecash (which makes
  * no issuer claim, so there is nothing to check).
  *
+ * The same checks `dmCrypto.verifiedVoucherFrom` makes, minus mint and unit
+ * trust (see below), and the record is built by the same
+ * `buildValidationRecord`, so a cashback row and a DM row read identically.
+ *
  * An issuer key outside a configured allowlist is recorded as a failed
  * signature check. `VoucherValidation` has no separate issuer field, and the
  * other honest options (verified, unchecked) would both be lies.
+ *
+ * Mint and unit are not checked. In `dmCrypto` that check is a refusal gate
+ * with no field on the record, so there is nothing for it to write here, and
+ * the token was minted by this deployment's own gateway for this customer.
+ *
+ * Never throws. It runs after the destructive claim, so an exception here would
+ * strand the token in the replay stash; anything unexpected is recorded as a
+ * failed check rather than allowed to abort the redeem.
  */
 export function cashbackValidation(token: string): VoucherValidation | undefined {
+  try {
+    return check(token)
+  } catch (error) {
+    console.warn('[cashback] coupon check threw; recording it as failed', error)
+    return UNREADABLE
+  }
+}
+
+/** A coupon whose voucher could not be read. Fails, never reads as silence. */
+const UNREADABLE: VoucherValidation = {
+  signatureValid: false,
+  legacyCanonical: false,
+  signedFaceValue: 0,
+  cappedAtFaceValue: false,
+}
+
+function check(token: string): VoucherValidation | undefined {
   let parsed: ReturnType<typeof parseVoucherToken>
   try {
     parsed = parseVoucherToken(token)
@@ -53,7 +81,7 @@ export function cashbackValidation(token: string): VoucherValidation | undefined
     }
     if (!carriesVoucher) return undefined
     console.warn('[cashback] coupon carries a voucher that could not be read')
-    return { signatureValid: false, legacyCanonical: false, signedFaceValue: 0, cappedAtFaceValue: false }
+    return { ...UNREADABLE }
   }
 
   const verification = verifyVoucher(parsed.voucher)
@@ -63,26 +91,18 @@ export function cashbackValidation(token: string): VoucherValidation | undefined
     console.warn(
       '[cashback] coupon did not verify:',
       parsed.voucher.voucherId,
-      issuerKnown ? 'bad signature' : 'unrecognised issuer key',
+      verification.signatureValid ? 'unrecognised issuer key' : 'bad signature',
     )
   }
 
-  const { faceValue, cappedAtFaceValue } = creditableFaceValue(parsed)
-  const warrant = parseIssuanceWarrant(parsed.voucher.issuanceWarrant)
-  const warrantVerdict = verifyIssuanceWarrant(warrant, parsed.voucher.issuerId, {
-    faceValueMinor: faceValue,
-    unit: parsed.voucher.unit,
-    faceDecimals: parsed.voucher.faceDecimals,
-  })
-
-  return {
+  const { record, warrantRefusal } = buildValidationRecord(parsed, {
     signatureValid,
     legacyCanonical: verification.legacyCanonical,
-    signedFaceValue: parsed.voucher.faceValue,
-    cappedAtFaceValue,
-    warrant: warrantVerdict.verdict,
-    ...(warrant.state === 'present' ? { warrantedSaleTotal: warrant.saleTotalMinor } : {}),
+  })
+  if (warrantRefusal !== undefined) {
+    console.warn('[cashback] issuance warrant refused:', parsed.voucher.voucherId, warrantRefusal)
   }
+  return record
 }
 
 /** Storage, passed in so the re-check can be tested without IndexedDB. */
