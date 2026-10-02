@@ -45,6 +45,8 @@ import {
   describeRail,
   describeWarrant,
   describeAttestation,
+  describeCashbackKind,
+  describeCashbackClaim,
   type EvidenceLine,
   type EvidenceTone,
 } from '../lib/issuedVoucherWording'
@@ -378,7 +380,8 @@ export function IssuedCouponPage({ pubkey }: { pubkey: string }) {
   return <VoucherRecordDetail voucher={voucher} />
 }
 
-function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
+/** Exported for its page test; routed through `IssuedCouponPage`. */
+export function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
   const { row, expired, claimedMinor, outstandingMinor, claims } = voucher
   const money = (minor: number) => formatFace(minor, { unit: row.unit, decimals: row.decimals })
 
@@ -519,9 +522,27 @@ function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
         understood when they have not.
       */}
       <ListSection title="What stands behind this">
-        <EvidenceRow label="Paid" line={rail} />
-        <EvidenceRow label="Authorised" line={warrant} />
-        <EvidenceRow label="Customer receipt" line={attestation} />
+        {/* A cashback was given, not sold (#155): no rail, no customer
+            receipt. What it is, whether it was collected, and who signed. */}
+        {row.type === 'cashback' ? (
+          <>
+            <EvidenceRow label="What it is" line={describeCashbackKind()} />
+            <EvidenceRow
+              label="Collected"
+              line={describeCashbackClaim(
+                { status: row.cashbackStatus, claimedAt: row.claimedAt, expired },
+                formatDate,
+              )}
+            />
+            <EvidenceRow label="Authorised" line={warrant} />
+          </>
+        ) : (
+          <>
+            <EvidenceRow label="Paid" line={rail} />
+            <EvidenceRow label="Authorised" line={warrant} />
+            <EvidenceRow label="Customer receipt" line={attestation} />
+          </>
+        )}
       </ListSection>
 
       {/*

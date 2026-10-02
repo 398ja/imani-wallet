@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A cashback voucher's detail no longer reads like a sale** (#155). It showed "Paid: At the
+  counter" and "Customer receipt: Not collected", which are Sell questions with no answer for
+  value the stall gave away. It now shows what it is ("Cashback from this stall"), whether the
+  customer collected it from the same stored portal status the list uses ("Claimed on
+  <date>", "Not claimed yet", "Expired unclaimed"), and the authorisation line as before.
+  Sell vouchers are unchanged.
+
 ## [0.12.0] - 2026-10-01
 
 ### Added
