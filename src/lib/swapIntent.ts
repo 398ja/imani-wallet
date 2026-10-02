@@ -34,7 +34,7 @@ import type { BlindedOutput } from './walletSwap'
  * they are short-lived, and `forgetSwapIntent` removes each one as soon as its
  * proofs are saved.
  *
- * See `docs/explanation/the-wallet-swaps-its-own-receives.md`.
+ * See `imani-docs/wallet/explanation/the-wallet-swaps-its-own-receives.md`.
  */
 
 /**

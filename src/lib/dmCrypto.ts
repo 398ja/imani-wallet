@@ -200,7 +200,7 @@ function verifiedVoucherFrom(token: string | undefined):
   // receiving one and a stall taking one back. It is also a precondition of the
   // wallet swapping its own receives, because from that point the mint URL is
   // not a field we record but the address we send money to. See
-  // `docs/explanation/the-wallet-swaps-its-own-receives.md`.
+  // `imani-docs/wallet/explanation/the-wallet-swaps-its-own-receives.md`.
   const backing = checkMintAndUnit(parsed)
   // `not-ready` is refused too, not waved through. It means the gateway's config
   // has not arrived, so the trusted set is unknown. Treating unknown as permitted

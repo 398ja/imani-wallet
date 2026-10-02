@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The guides, explanations and design notes that lived in `docs/` have moved to
+  the **imani-docs** repository, under `wallet/`, with their history. The
+  architecture decision records (`docs/adr/`) and research notes
+  (`docs/research/`) stay here beside the code. References in the README, source
+  comments, ADRs and research notes now name the new paths. Earlier entries in
+  this changelog keep the paths that were true when they were written.
+
 ## [0.12.0] - 2026-10-01
 
 ### Added

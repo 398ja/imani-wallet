@@ -17,7 +17,7 @@ import type { ParsedVoucherToken } from './voucherToken'
  * wallet swaps its own receives, because the mint URL stops being a field we
  * record and becomes the address we send money to.
  *
- * See `docs/explanation/the-wallet-swaps-its-own-receives.md`.
+ * See `imani-docs/wallet/explanation/the-wallet-swaps-its-own-receives.md`.
  *
  * ## `voucher.unit` is deliberately not what this checks
  *

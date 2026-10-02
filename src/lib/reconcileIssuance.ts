@@ -24,7 +24,7 @@
  * So a clean reconciliation here means "every coupon I issued, I meant to
  * issue". A merchant who wants "and I was paid for each one" needs a till count,
  * and no amount of signing reaches that fact. See
- * `docs/cash-warrant-reconciliation.md`.
+ * `imani-docs/wallet/cash-warrant-reconciliation.md`.
  */
 import { parseCashAttestation, verifyCashAttestation } from './cashAttestation'
 import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'

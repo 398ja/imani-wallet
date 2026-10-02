@@ -35,7 +35,7 @@ import {
  * `tokenRedemption.js`, and a voucher receive, which needs the two swaps that
  * `voucherReissue.ts` provides the middle of. The transport and the token-level
  * entry point exist, so this comment no longer lists them: see the status table in
- * `docs/explanation/the-wallet-swaps-its-own-receives.md`, which is kept current
+ * `imani-docs/wallet/explanation/the-wallet-swaps-its-own-receives.md`, which is kept current
  * because a comment listing "what is missing" goes stale the moment it is fixed.
  *
  * What it establishes: the wallet chooses the secrets and the blinding factors, so
@@ -65,7 +65,7 @@ import {
  * failures that matter, which are exactly the ones a real mint will not produce
  * on request. `swapRecoveryProbe` covers the same flow against the live mint.
  *
- * See `docs/explanation/the-wallet-swaps-its-own-receives.md`.
+ * See `imani-docs/wallet/explanation/the-wallet-swaps-its-own-receives.md`.
  */
 
 /** A proof being received, with its witness when the coupon is locked. */
