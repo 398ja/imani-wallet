@@ -192,7 +192,18 @@ check('an amount of zero', zero.status === 400 && zero.body.field === 'amountMin
 console.log('\nWhat the portal says about a code')
 const unknown = await fetch(String(lookup.body.url).replace(/by-code\/.*$/, 'by-code/CB-ZZZZ-99'))
 const unknownBody = (await unknown.json().catch(() => ({}))) as { code?: string }
-check('an unknown code is 404 not_found', unknown.status === 404 && unknownBody.code === 'not_found', `HTTP ${unknown.status} ${JSON.stringify(unknownBody)}`)
+check('an unknown legacy-shaped code is 404 not_found', unknown.status === 404 && unknownBody.code === 'not_found', `HTTP ${unknown.status} ${JSON.stringify(unknownBody)}`)
+
+// #141: the shape the portal issues today, drawn only from its alphabet, so the
+// courier accepts it and the 404 is the portal's answer rather than ours.
+const currentLookup = await ask('/v1/cashback/lookup', { code: 'cb-zzzzz-99999' })
+check('the courier canonicalises a current-shaped code', currentLookup.status === 200 && String(currentLookup.body.url).endsWith('/by-code/CB-ZZZZZ-99999'), `HTTP ${currentLookup.status} ${String(currentLookup.body.url)}`)
+const unknownCurrent = await fetch(String(currentLookup.body.url))
+const unknownCurrentBody = (await unknownCurrent.json().catch(() => ({}))) as { code?: string }
+check('an unknown current-shaped code is 404 not_found', unknownCurrent.status === 404 && unknownCurrentBody.code === 'not_found', `HTTP ${unknownCurrent.status} ${JSON.stringify(unknownCurrentBody)}`)
+
+const junk = await ask('/v1/cashback/lookup', { code: 'CB-ZZZZO-99999' })
+check('the courier refuses a code with a character never issued, before the portal', junk.status === 400, `HTTP ${junk.status}`)
 
 // 410 carries `claimed` | `expired` | `revoked`, which is how a caller tells a
 // spent code from a lapsed one. Not reachable here without generating and

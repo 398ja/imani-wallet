@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A mistyped cashback code is caught before it is looked up** (#141). Current codes only
+  use `23456789ABCDEFGHJKMNPQRSTVWXYZ` and legacy ones are hex, so a full-length code with
+  0, 1, O, I, L or U (or a legacy one with a non-hex letter) now says which characters cannot
+  be in a code instead of spending a request against the gateway's per-IP limit. Legacy codes
+  with 0 and 1 still redeem. Nothing is guessed: confusables are refused, not remapped.
+  wallet-api's `/v1/cashback/lookup` runs the same reader (`src/lib/claimCode.ts`), returns the
+  canonical code in the by-code URL, and answers a non-code with a 400 without asking the portal.
+
 - **A cashback voucher's detail no longer reads like a sale** (#155). It showed "Paid: At the
   counter" and "Customer receipt: Not collected", which are Sell questions with no answer for
   value the stall gave away. It now shows what it is ("Cashback from this stall"), whether the

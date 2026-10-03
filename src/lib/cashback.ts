@@ -28,6 +28,7 @@
 import { useEffect, useState } from 'react'
 
 import { gatewayConfig, cashbackEnabled } from './config'
+import { CANONICAL_RE } from './claimCode'
 import { cashbackValidation } from './cashbackValidation'
 import { legacyApi, withCorrelation } from './legacyBridge'
 import { signedFetch } from './nip98'
@@ -67,18 +68,6 @@ export function useCashbackAvailable(): boolean {
   return available
 }
 
-/**
- * The characters that vary. `CB` and the dashes carry no information.
- *
- * Two shapes, mirroring the portal's `CashbackByCodeController.canonicaliseOrNull`.
- * Codes issued since gateway-portal 0.4.0 (GP-02) are ten random characters,
- * `CB-XXXXX-XXXXX`. Codes printed before it are six, `CB-XXXX-YY`, and still redeem.
- */
-const CURRENT_VARIABLE_RE = /^[A-Z0-9]{10}$/
-const LEGACY_VARIABLE_RE = /^[A-Z0-9]{6}$/
-/** What the gateway matches on, and the only shapes `by-code` accepts. */
-const CANONICAL_RE = /^CB-(?:[A-Z0-9]{5}-[A-Z0-9]{5}|[A-Z0-9]{4}-[A-Z0-9]{2})$/
-const CB_PREFIX = 'CB'
 /** base64url, 43 unpadded characters — exactly 32 bytes of AES-256 key. */
 const KEY_RE = /^k=([A-Za-z0-9_-]{43})$/
 const CLAIM_PATH_RE = /^\/c\/([A-Za-z0-9_-]{8,64})$/
@@ -99,51 +88,13 @@ const READ_TIMEOUT_MS = 15_000
 
 // ─── The code itself ────────────────────────────────────────────────────────
 
-/**
- * Whatever the customer typed, reduced to the characters that matter.
- *
- * Deliberately forgiving, because this is entered by hand from a paper receipt
- * by someone who just installed the app: case, spaces, missing dashes and a
- * missing `CB` prefix are all accepted. Returns null when what is left is not
- * ten or six alphanumerics. There is no partial credit.
- */
-export function normaliseTypedClaimCode(raw: string): string | null {
-  if (typeof raw !== 'string') return null
-
-  const alphanum = raw.toUpperCase().match(/[A-Z0-9]/g)?.join('') ?? ''
-  // `CB` is a constant prefix, so an entry two characters longer than a code
-  // means the customer typed it back. Stripping it only then is what lets both
-  // `CB-A1B2-C3` and `A1B2C3` resolve to the same code, while a bare code that
-  // happens to start with C and B keeps them.
-  const candidate = typedWithPrefix(alphanum) ? alphanum.slice(CB_PREFIX.length) : alphanum
-
-  return isVariablePart(candidate) ? candidate : null
-}
-
-function typedWithPrefix(alphanum: string): boolean {
-  return alphanum.startsWith(CB_PREFIX) && isVariablePart(alphanum.slice(CB_PREFIX.length))
-}
-
-function isVariablePart(candidate: string): boolean {
-  return CURRENT_VARIABLE_RE.test(candidate) || LEGACY_VARIABLE_RE.test(candidate)
-}
-
-/** The variable characters, punctuated the way the gateway stores them. */
-export function toCanonicalClaimCode(variable: string): string {
-  if (CURRENT_VARIABLE_RE.test(variable)) {
-    return `CB-${variable.slice(0, 5)}-${variable.slice(5)}`
-  }
-  if (LEGACY_VARIABLE_RE.test(variable)) {
-    return `CB-${variable.slice(0, 4)}-${variable.slice(4)}`
-  }
-  throw new Error('toCanonicalClaimCode: expected exactly 10 or 6 characters of [A-Z0-9]')
-}
-
-/** Typed input straight to `CB-XXXXX-XXXXX` or `CB-XXXX-YY`, or null if it was never a code. */
-export function canonicaliseTypedClaimCode(raw: string): string | null {
-  const variable = normaliseTypedClaimCode(raw)
-  return variable === null ? null : toCanonicalClaimCode(variable)
-}
+// Parsing lives in `./claimCode`, shared with wallet-api (#141).
+export {
+  canonicaliseTypedClaimCode,
+  normaliseTypedClaimCode,
+  toCanonicalClaimCode,
+  typedClaimCodeProblem,
+} from './claimCode'
 
 // ─── Issuing (merchant) ─────────────────────────────────────────────────────
 

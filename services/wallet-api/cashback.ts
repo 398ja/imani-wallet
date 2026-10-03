@@ -25,6 +25,8 @@
  * returns a plain URL to fetch, with no signature to make.
  */
 
+import { canonicaliseTypedClaimCode } from '../../src/lib/claimCode.js'
+
 type Parsed<T> = { ok: true; value: T } | { ok: false; error: { field: string; detail: string } }
 
 const fail = (field: string, detail: string): Parsed<never> => ({ ok: false, error: { field, detail } })
@@ -170,13 +172,16 @@ export function generateBody(input: GenerateInput): string {
 }
 
 /**
- * Codes a customer might type.
+ * Codes a customer might type, canonicalised here before the portal sees them.
  *
- * Deliberately permissive on case and separators, because this is read off a
- * receipt by a person: the portal's own by-code lookup canonicalises, and
- * refusing a lowercase code here would reject something that works.
+ * Permissive on case and separators, because a person read this off a receipt,
+ * but refusing anything that is not a current or legacy code (#141). Every
+ * caller of this service reaches the portal from one IP, and the portal
+ * throttles malformed codes per IP, so a junk lookup passed through would spend
+ * a request shared by everyone. Runs the wallet's own reader, so the two can
+ * never disagree about what a code is.
  */
-const CODE = /^[A-Za-z0-9][A-Za-z0-9-]{2,63}$/
+const MAX_TYPED_CODE_LENGTH = 64
 
 export function parseLookupRequest(body: unknown): Parsed<{ code: string }> {
   if (body === null || typeof body !== 'object' || Array.isArray(body)) {
@@ -184,10 +189,14 @@ export function parseLookupRequest(body: unknown): Parsed<{ code: string }> {
   }
   const b = body as Record<string, unknown>
 
-  const code = typeof b.code === 'string' ? b.code.trim() : ''
-  if (!code) return fail('code', 'required — the code printed on the receipt')
-  if (!CODE.test(code)) {
-    return fail('code', 'expected 3-64 characters: letters, digits or hyphens')
+  const typed = typeof b.code === 'string' ? b.code.trim() : ''
+  if (!typed) return fail('code', 'required — the code printed on the receipt')
+  const code = typed.length <= MAX_TYPED_CODE_LENGTH ? canonicaliseTypedClaimCode(typed) : null
+  if (code === null) {
+    return fail(
+      'code',
+      'expected a cashback code: CB-XXXXX-XXXXX using 23456789ABCDEFGHJKMNPQRSTVWXYZ, or a legacy CB-XXXX-YY in hex',
+    )
   }
 
   return { ok: true, value: { code } }
