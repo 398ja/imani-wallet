@@ -8,6 +8,7 @@ import { toMerchants, type Merchant } from '../lib/merchants'
 import { formatFace } from '../lib/format'
 import { identityLabel, useIdentity } from '../lib/identity'
 import {
+  passedOver,
   payRequest,
   SendOutcomeUnknownError,
   splitObstacle,
@@ -15,6 +16,7 @@ import {
   type SendResult,
 } from '../lib/pay'
 import type { NUT18VRequest } from '../lib/nap'
+import { passedOverNote } from '../lib/passedOverWording'
 import {
   Button,
   Centered,
@@ -118,6 +120,12 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   // what is payable — a coupon divisible on one and not the other would let the
   // user tap Pay only to be refused.
   const obstacle = group ? splitObstacle(group.vouchers, request.amount) : null
+  // #157: name a sooner-expiring voucher this payment leaves, and why, so the
+  // soonest-first rule does not look ignored. Whole holding, not just `group`.
+  const allVouchers = merchants.flatMap((m) => m.groups.flatMap((g) => g.vouchers))
+  const passedNote = passedOverNote(
+    passedOver(allVouchers, request.amount, { issuer: request.issuerId, unit: request.unit }),
+  )
   const payable = !expired && !!merchant && !!group && shortfall <= 0 && !obstacle
 
   if (status.step === 'done') {
@@ -225,6 +233,9 @@ export function PayPage({ pubkey }: { pubkey: string }) {
           cannot be divided below one sat's worth of face value. Surfaced here
           so the obstacle is visible before the tap, not thrown afterwards. */}
       {!expired && group && shortfall <= 0 && obstacle && <Alert>{obstacle}</Alert>}
+      {!expired && payable && passedNote && (
+        <p className="mb-2 text-sm text-mono-500">{passedNote}</p>
+      )}
       {(status.step === 'failed' || status.step === 'unconfirmed') && <Alert>{status.message}</Alert>}
 
       <Button

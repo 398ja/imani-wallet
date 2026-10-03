@@ -240,8 +240,16 @@ export function shortPubkey(pubkey: string): string {
 export function toEpochMs(value: number | string | undefined | null): number | undefined {
   if (value === undefined || value === null || value === '' || value === 0) return undefined
 
-  const ms =
-    typeof value === 'number' ? (value < 1e11 ? value * 1000 : value) : Date.parse(value)
+  // A numeric STRING ("1788220800") is still epoch seconds or ms, not an
+  // unparseable date. Same rule as wallet-core's copy (#157).
+  const numeric =
+    typeof value === 'number' ? value : /^\s*\d+(\.\d+)?\s*$/.test(value) ? Number(value) : NaN
+  if (Number.isFinite(numeric)) {
+    if (numeric <= 0) return undefined
+    return numeric < 1e11 ? numeric * 1000 : numeric
+  }
+  if (typeof value === 'number') return undefined
+  const ms = Date.parse(value)
   return Number.isFinite(ms) ? ms : undefined
 }
 
