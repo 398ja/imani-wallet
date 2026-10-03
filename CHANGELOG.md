@@ -22,8 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same request before anything is minted, and also refuses an owner sale whose warrant would
   be `none` (session key is not the stall's) or absent (wallet locked). Comments on
   `refuseIfUnwarranted` and `isWarranted` now describe this behaviour; `isWarranted` is noted
-  as not wired into any screen. Cashback issued from a terminal still sends `none` and is
-  not changed here.
+  as not wired into any screen. Cashback is closed the same way: `/sell/cashback` on a
+  terminal stops on arrival, and `prepareCashbackAttempt` / `issueCashback` refuse a terminal,
+  or an owner issue with a `none` or absent warrant, before anything is minted. (The cashback
+  claim records an unwarranted verdict without refusing, so the customer would otherwise hold
+  a code the issuing stall's till refuses.) A terminal's home screen no longer offers Sell and
+  says selling is not available yet, and the "Sell and redeem" role says so at enrolment.
 
 - **A cashback voucher's detail no longer reads like a sale** (#155). It showed "Paid: At the
   counter" and "Customer receipt: Not collected", which are Sell questions with no answer for

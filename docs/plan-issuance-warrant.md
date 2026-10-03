@@ -115,10 +115,12 @@ receive-time check (rows from before warrants were checked, cashback claims,
 which record the verdict without refusing).
 
 The consequence is that a terminal, which can only send a signed `none`, cannot
-sell a coupon anyone will accept. Sell therefore refuses on a terminal before
-anything is minted (`mayWarrantSale` / `assertSaleWarranted` in
-`warrantSigner.ts`), and also refuses an owner sale whose warrant would be
-`none` or absent, until the `delegated` form below is implemented.
+sell a coupon anyone will accept. Sell and cashback therefore refuse on a
+terminal before anything is minted (`mayWarrantSale` / `assertSaleWarranted` in
+`warrantSigner.ts`, used by `issue.ts` and `cashbackIssue.ts`), and also refuse
+an owner issue whose warrant would be `none` or absent, until the `delegated`
+form below is implemented. Cashback needs this even though its claim does not
+refuse: the issuing stall's till refuses the coupon when it is spent.
 
 Two states deliberately do **not** fail. `claimed` is a real external claim
 this build cannot check offline, and failing it would refuse every card-funded
