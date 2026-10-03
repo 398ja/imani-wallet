@@ -33,8 +33,13 @@ const CB_PREFIX = 'CB'
 const CURRENT_LENGTH = 10
 const LEGACY_LENGTH = 6
 
+/**
+ * NFKC first, so a code pasted or typed in full-width forms (`ＣＢ－ＡＥＱＴＪ`, as
+ * some phone keyboards produce) folds to the ASCII it looks like. That is a
+ * compatibility fold Unicode defines, not a guess about a confusable.
+ */
 function alphanumOf(raw: string): string {
-  return raw.toUpperCase().match(/[A-Z0-9]/g)?.join('') ?? ''
+  return raw.normalize('NFKC').toUpperCase().match(/[A-Z0-9]/g)?.join('') ?? ''
 }
 
 function isVariablePart(candidate: string): boolean {
@@ -91,15 +96,27 @@ export function typedClaimCodeProblem(raw: string): string | null {
 
   if (variable.length === CURRENT_LENGTH) {
     const found = EXCLUDED_CODE_CHARACTERS.filter((c) => variable.includes(c))
-    if (found.length > 0) {
-      return (
-        `Cashback codes never contain ${found.join(', ')}, so a character may have been misread. ` +
-        'Check the receipt and try again.'
-      )
-    }
+    // "Ten-character", not "cashback": older six-character codes DO hold 0 and 1.
+    if (found.length > 0) return misread(`A ten-character code never contains ${listOf(found)}`)
   }
   if (variable.length === LEGACY_LENGTH) {
-    return 'A six-character code only uses the digits 0 to 9 and the letters A to F. Check the receipt again.'
+    // Six characters is also where every current code passes on its way to ten,
+    // and most current codes hold letters past F. So only speak about a
+    // character that no code of either shape can hold: anything else may just
+    // be a longer code that is not finished yet.
+    const found = IN_NO_CODE.filter((c) => variable.includes(c))
+    if (found.length > 0) return misread(`Cashback codes never contain ${listOf(found)}`)
   }
   return null
+}
+
+/** Excluded from the current alphabet AND not hex, so impossible in every shape. */
+const IN_NO_CODE = EXCLUDED_CODE_CHARACTERS.filter((c) => !/[0-9A-F]/.test(c))
+
+function misread(rule: string): string {
+  return `${rule}, so a character may have been misread. Check the receipt and try again.`
+}
+
+function listOf(chars: readonly string[]): string {
+  return chars.length === 1 ? chars[0] : `${chars.slice(0, -1).join(', ')} or ${chars[chars.length - 1]}`
 }
