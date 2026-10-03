@@ -38,7 +38,30 @@ export type Expiry =
 /** Below this a number is seconds; at or above, milliseconds. */
 const MS_THRESHOLD = 1e11
 
-const NUMERIC = /^\s*\d+(\.\d+)?\s*$/
+/**
+ * The largest instant a JS Date can hold (8.64e15 ms, the year 275760). Past it
+ * `new Date(ms).toISOString()` THROWS, and `toVoucher` calls exactly that, so a
+ * value this large (nanoseconds, say) must be unreadable, not a date.
+ */
+const MAX_DATE_MS = 8.64e15
+
+/** A plain decimal number, optionally signed, fractional or with an exponent ("1.7e9"). */
+const NUMERIC = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i
+
+/**
+ * ISO-8601 calendar date, optionally with a time and a zone. A space is
+ * accepted for the `T` (what SQL and Java's `Timestamp#toString` print).
+ */
+const ISO = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)(Z|[+-]\d{2}:?\d{2})?)?$/i
+
+/**
+ * A long-form date as `Date#toString`, `toUTCString` and RFC 2822 print it:
+ * an English month name AND a four-digit year. Both, because V8's Date.parse
+ * reads almost anything with a number in it as a date in 2001 ("Section 5",
+ * "12/31", "version 3.2"), and a corrupt value must not become a real-looking
+ * expiry 25 years in the past.
+ */
+const LONG_FORM = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b.*\b\d{4}\b/i
 
 /** Milliseconds, 'none', or 'unreadable'. Full precision, for display callers. */
 function msOf(value: unknown): number | 'none' | 'unreadable' {
@@ -51,21 +74,37 @@ function msOf(value: unknown): number | 'none' | 'unreadable' {
     // '0' is how a 0 that went through a string column reads. Same sentinel.
     if (text === '' || text === '0') return 'none'
     if (NUMERIC.test(text)) n = Number(text)
-    // A signed or otherwise number-ish string is not a date, however lenient
-    // Date.parse is about it ("-5" reads as a day in 2001). Anything else
-    // (ISO, RFC 2822, Date#toString) goes to Date.parse, as format.ts's display
-    // callers always relied on.
-    else if (/^[+-]?[\d.e]+$/i.test(text)) return 'unreadable'
-    else return finiteMs(Date.parse(text))
+    else return finiteMs(parseDateString(text))
   } else return 'unreadable'
 
   if (!Number.isFinite(n) || n < 0) return 'unreadable'
   if (n === 0) return 'none'
-  return n < MS_THRESHOLD ? n * 1000 : n
+  return finiteMs(n < MS_THRESHOLD ? n * 1000 : n)
+}
+
+/**
+ * A date string, or NaN. Only shapes a producer actually writes reach
+ * Date.parse; everything else is unreadable rather than guessed at.
+ *
+ * An ISO date-time WITHOUT a zone is read as UTC. ECMAScript reads it as the
+ * device's LOCAL time (date-only as UTC, date-time as local, a long-standing
+ * trap), so the same stored value would name a different instant in Nairobi
+ * and in London. Every server here runs in UTC and every zoned value it emits
+ * says Z, so a missing zone is a serialiser that dropped it, not local time.
+ */
+function parseDateString(text: string): number {
+  const iso = ISO.exec(text)
+  if (iso) {
+    const [, date, time, zone] = iso
+    if (!time) return Date.parse(date) // date-only: UTC by the spec already
+    return Date.parse(`${date}T${time}${zone ?? 'Z'}`)
+  }
+  if (LONG_FORM.test(text)) return Date.parse(text)
+  return Number.NaN
 }
 
 function finiteMs(ms: number): number | 'unreadable' {
-  return Number.isFinite(ms) && ms > 0 ? ms : 'unreadable'
+  return Number.isFinite(ms) && ms > 0 && ms <= MAX_DATE_MS ? ms : 'unreadable'
 }
 
 /** Read an `expires_at` value of any shape. */

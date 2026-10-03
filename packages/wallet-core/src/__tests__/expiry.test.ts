@@ -41,6 +41,36 @@ describe('readExpiry', () => {
     expect(toEpochSeconds(`${SECONDS}.7`)).toBe(SECONDS)
   })
 
+  it.each([
+    ['exponent string', '1.7988888e9', 1_798_888_800],
+    ['exponent number', 1.7988888e9, 1_798_888_800],
+    ['seconds with a plus sign', `+${SECONDS}`, SECONDS],
+    ['tab and newline padding', `\t${SECONDS}\n`, SECONDS],
+    ['ISO with an offset', '2026-12-30T01:00:00+01:00', SECONDS],
+    ['ISO with a space for T', '2026-12-30 00:00:00Z', SECONDS],
+    ['date only (UTC by the spec)', '2026-12-30', SECONDS],
+    ['Date#toString', 'Wed Dec 30 2026 01:00:00 GMT+0100 (Central European Standard Time)', SECONDS],
+  ])('reads a %s', (_label, value, seconds) => {
+    expect(readExpiry(value)).toEqual({ kind: 'at', seconds })
+  })
+
+  it('reads a zone-less ISO date-time as UTC, not as the device local time', () => {
+    // ECMAScript would read these as LOCAL time: the same stored value would
+    // name a different instant on a phone in Nairobi than in London.
+    expect(toEpochSeconds('2026-12-30T00:00:00')).toBe(SECONDS)
+    expect(toEpochSeconds('2026-12-30 00:00:00')).toBe(SECONDS)
+    expect(toEpochSeconds('2026-12-30T00:00:00.000')).toBe(SECONDS)
+  })
+
+  it('reads a bare "2026" as 2026 epoch seconds, never as the year 2026 (Date.parse would)', () => {
+    expect(toEpochSeconds('2026')).toBe(2026)
+  })
+
+  it('puts the seconds/milliseconds boundary at 1e11', () => {
+    expect(toEpochMs(1e11 - 1)).toBe((1e11 - 1) * 1000) // seconds: year 5138
+    expect(toEpochMs(1e11)).toBe(1e11) // milliseconds: 1973
+  })
+
   it.each([undefined, null, '', '   ', 0, '0'])('reads %j as no expiry', (value) => {
     expect(readExpiry(value)).toEqual({ kind: 'none' })
   })
@@ -51,6 +81,15 @@ describe('readExpiry', () => {
     // Date.parse accepts "-5" as a year-2001 date. It is not one.
     '-5',
     -5,
+    // V8 reads every one of these as a date in 2001. None is an expiry.
+    '12/31',
+    'Section 5',
+    'version 3.2',
+    'May 5',
+    '1 2',
+    // Nanoseconds: past the largest Date, where toISOString throws.
+    1_798_588_800 * 1e9,
+    String(1_798_588_800 * 1e9),
     Number.NaN,
     Number.POSITIVE_INFINITY,
     { when: 'soon' },
