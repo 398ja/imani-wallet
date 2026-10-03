@@ -88,14 +88,16 @@ check('first receive carries a fresh token', typeof lost.token === 'string' && l
 const retry = await call('/api/v1/wallet/receive', 'POST', { token: voucher }, headers)
 check('a retry under the same key is a 200', retry.status === 200, String(retry.status))
 const retried = JSON.parse(retry.text)
-check('the retry re-delivers the identical fresh token', retried.token === lost.token,
-  retried.token == null ? 'token was null: the proofs are lost' : 'token differs')
+const sameToken = retried.token === lost.token
+check('the retry re-delivers the identical fresh token', sameToken,
+  sameToken ? '' : retried.token == null ? 'token was null: the proofs are lost' : 'token differs')
 check('the retry names the same receive', retried.receive_id === lost.receive_id)
 
-// The re-delivered token must be spendable: receiving it again swaps it at the mint.
+// The re-delivered token must be spendable: receiving it again swaps it at the mint. Its proofs
+// stay locked to the recipient (P2PK_VOUCHER), so the spend carries the recipient's witnesses.
 if (typeof retried.token === 'string') {
   const spend = await call('/api/v1/wallet/receive', 'POST', { token: retried.token },
-    { 'Idempotency-Key': `${key}-spend` })
+    { 'Idempotency-Key': `${key}-spend`, 'X-Cashu-Witnesses': witnessesFor(retried.token) })
   check('the re-delivered token is spendable', spend.status === 200, `${spend.status} ${spend.text.slice(0, 120)}`)
 }
 
@@ -105,6 +107,16 @@ check('the wallet can acknowledge the receive', ack.status === 200, String(ack.s
 const afterAck = await call('/api/v1/wallet/receive', 'POST', { token: voucher }, headers)
 check('a retry after the acknowledgement is still a 200', afterAck.status === 200, String(afterAck.status))
 check('a retry after the acknowledgement carries no token', JSON.parse(afterAck.text).token == null)
+
+// Holding the batches until the settle must not reopen the double credit (#58): six concurrent
+// receives of one token under one key still credit exactly once.
+const contested = await issueVoucher()
+const contestedHeaders = { 'Idempotency-Key': `probe-race-${Date.now()}`, 'X-Cashu-Witnesses': witnessesFor(contested) }
+const raced = await Promise.all(Array.from({ length: 6 }, () =>
+  call('/api/v1/wallet/receive', 'POST', { token: contested }, contestedHeaders)))
+const codes = raced.map(r => r.status).sort()
+check('six concurrent receives credit exactly once', codes.filter(c => c === 200).length === 1, JSON.stringify(codes))
+check('the other five are refused by the claim', codes.filter(c => c === 409).length === 5, JSON.stringify(codes))
 
 console.log(failures === 0 ? 'ALL PASS' : `${failures} FAILED`)
 process.exit(failures === 0 ? 0 : 1)
