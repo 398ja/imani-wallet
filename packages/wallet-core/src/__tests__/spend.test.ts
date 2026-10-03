@@ -431,6 +431,15 @@ describe('passedOver (#157)', () => {
     expect(notes.map((n) => [n.voucher.voucher_id, n.reason])).toEqual([['one-sat', 'split']])
   })
 
+  it('calls a sooner coupon worth less than the amount too small, not indivisible', () => {
+    const vouchers = [
+      coupon({ voucher_id: 'big', issuer_id: merchant, expires_at: later }),
+      coupon({ voucher_id: 'small', issuer_id: merchant, expires_at: soon, face_value: 200 }),
+    ]
+    const notes = passedOver(vouchers, 400, { issuer: merchant, unit: 'EUR' })
+    expect(notes.map((n) => [n.voucher.voucher_id, n.reason])).toEqual([['small', 'small']])
+  })
+
   it('says nothing when the soonest usable coupon is the one spent', () => {
     const vouchers = [
       coupon({ voucher_id: 'soon', issuer_id: merchant, expires_at: soon }),

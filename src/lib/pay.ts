@@ -841,11 +841,28 @@ async function initiateOnFirstFree(
       return { sendId, status: initiated.status, voucher: candidate, sourceRow }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      if (!message.includes('active send already exists')) throw error
-      lastRefusal = error instanceof Error ? error : new Error(message)
-      console.warn('[pay] coupon busy, trying the next one:', candidate.voucher_id)
+      if (message.includes('active send already exists')) {
+        lastRefusal = error instanceof Error ? error : new Error(message)
+        console.warn('[pay] coupon busy, trying the next one:', candidate.voucher_id)
+        continue
+      }
+      // A coupon whose stored expiry could not be read is offered FIRST, in
+      // case it is about to lapse (#157). If it already has, the gateway says
+      // so before anything moves, and that is a reason to try the next coupon,
+      // not to fail a payment another coupon can make.
+      if (/voucher has expired/i.test(message)) {
+        lastRefusal = error instanceof Error ? error : new Error(message)
+        console.warn('[pay] coupon refused as expired, trying the next one:', candidate.voucher_id)
+        continue
+      }
+      throw error
     }
   }
+
+  // Every candidate refused. If the last said "expired", say that: calling an
+  // expired coupon "tied up in an unfinished send" would send the customer
+  // looking for a send that does not exist.
+  if (lastRefusal && /voucher has expired/i.test(lastRefusal.message)) throw lastRefusal
 
   // A bundle part is offered exactly one coupon — the plan's arithmetic is tied
   // to that coupon's face value, so there is nothing to walk on to. Saying
