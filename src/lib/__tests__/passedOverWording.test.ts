@@ -10,9 +10,18 @@ describe('passedOverNote (#157)', () => {
     expect(passedOverNote([])).toBeNull()
   })
 
-  it('explains one issuer exclusion', () => {
-    expect(passedOverNote([{ voucher: v, reason: 'issuer' }])).toBe(
-      'A voucher that expires sooner is not used: this merchant only accepts vouchers they issued.',
+  it('explains one issuer exclusion, in the customer word for the payee', () => {
+    const note = passedOverNote([{ voucher: v, reason: 'issuer' }])
+    expect(note).toBe(
+      'A voucher that expires sooner is not used: this stall only accepts its own vouchers.',
+    )
+    // CONTEXT.md: "Merchant" must not cross into customer-facing text.
+    expect(note).not.toMatch(/merchant/i)
+  })
+
+  it('does not call a coupon that is merely too small "cannot be divided"', () => {
+    expect(passedOverNote([{ voucher: v, reason: 'small' }])).toBe(
+      'A voucher that expires sooner is not used: it is worth less than this amount on its own.',
     )
   })
 
@@ -23,8 +32,8 @@ describe('passedOverNote (#157)', () => {
       { voucher: v, reason: 'split' },
     ]
     expect(passedOverNote(notes)).toBe(
-      '3 vouchers that expire sooner are not used: cannot be divided to this amount, ' +
-        'or wrong currency for this request.',
+      '3 vouchers that expire sooner are not used: they cannot be divided to this amount, ' +
+        'or they are in another currency.',
     )
   })
 })

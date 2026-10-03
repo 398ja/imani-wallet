@@ -238,12 +238,12 @@ function expiryMs(voucher: Voucher): number {
 }
 
 /** Why a coupon that expires sooner than the one spent was not used. */
-export type PassedOverReason = 'issuer' | 'unit' | 'split'
+export type PassedOverReason = 'issuer' | 'unit' | 'split' | 'small'
 
 export type PassedOver = {
   voucher: Voucher
   reason: PassedOverReason
-  /** For 'split', checkSplittable's own sentence (or "too small on its own"). */
+  /** For 'split', checkSplittable's own sentence. */
   detail?: string
 }
 
@@ -291,11 +291,15 @@ export function passedOver(
     .map((voucher): PassedOver => {
       if (!sameIssuer(voucher.issuer_id, payee.issuer)) return { voucher, reason: 'issuer' }
       if (!sameUnit(voucher.face_unit, payee.unit)) return { voucher, reason: 'unit' }
+      // Worth less than the amount: it could only pay as part of a bundle, and
+      // one coupon that covers the amount is preferred over drawing several.
+      // Not "cannot be divided", which would be untrue of it.
+      if ((voucher.face_value ?? 0) < amount) return { voucher, reason: 'small' }
       const check = checkSplittable(voucher, amount)
       return {
         voucher,
         reason: 'split',
-        detail: check.ok ? 'It is too small to pay this on its own.' : check.reason,
+        detail: check.ok ? undefined : check.reason,
       }
     })
 }
