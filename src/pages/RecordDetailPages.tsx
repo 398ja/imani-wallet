@@ -18,7 +18,12 @@ import {
   ValidationBadge,
 } from '../components/ui'
 import { present } from '../lib/detailRows'
-import { getVoucherRow, getTransactionRow, onWalletChanged } from '../lib/wallet'
+import {
+  getVoucherRow,
+  getTransactionRow,
+  onWalletChanged,
+  recheckCashbackRowOnOpen,
+} from '../lib/wallet'
 import { issuanceRatioOf } from '../lib/merchants'
 import { formatFace, formatDate, formatSats } from '../lib/format'
 import { toCouponPass, TERMS, EMPTY_BRANDING } from '../lib/pass'
@@ -493,6 +498,9 @@ export function TransactionPage({
       setTx(found ? toTransaction(found) : null)
     }
     load()
+    // A cashback row saved before #156 carries no validation. Check it now;
+    // the write notifies, so `load` picks the result up.
+    void recheckCashbackRowOnOpen(id)
     return onWalletChanged(load)
   }, [id])
 
