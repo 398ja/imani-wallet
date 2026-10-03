@@ -107,6 +107,8 @@ beforeEach(async () => {
   toasts.length = 0
   signedFetch.mockReset()
   recordCashbackStatus.mockClear()
+  // A clean boot drain, so the loop starts at the normal cadence with no backoff.
+  serve([])
   startCashbackClaims(MERCHANT)
   // Let the boot tick finish, so it does not hold the in-flight guard.
   await new Promise((resolve) => setTimeout(resolve, 0))
@@ -311,16 +313,14 @@ describe('never throws', () => {
     warn.mockRestore()
   })
 
-  it.each([401, 429, 500, 503])('a transient refusal (%i) keeps polling', async (status) => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
-    signedFetch.mockResolvedValue(new Response(null, { status }))
+  it('a 401 during a lock cycle keeps polling at the normal cadence', async () => {
+    signedFetch.mockResolvedValue(new Response(null, { status: 401 }))
     await runCashbackClaimDrainTick()
     signedFetch.mockClear()
 
     await runCashbackClaimDrainTick()
 
     expect(signedFetch).toHaveBeenCalledTimes(1)
-    vi.restoreAllMocks()
   })
 
   it('does nothing when stopped', async () => {
@@ -330,5 +330,103 @@ describe('never throws', () => {
     await runCashbackClaimDrainTick()
 
     expect(signedFetch).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * An old portal answered the missing route with 500 (imani-gateway-portal#59 e2e),
+ * and a broken one may do so for hours. The loop must back off instead of asking
+ * every 10s, warn only when the backoff level changes, and snap back on success.
+ */
+describe('backoff on transient failure', () => {
+  const drainCalls = () => signedFetch.mock.calls.filter(([path]) => path.endsWith('/drain')).length
+
+  beforeEach(() => {
+    stopCashbackClaims()
+    vi.useFakeTimers({ now: 0, toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] })
+    // Jitter factor of exactly 1, so the schedule is deterministic.
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    signedFetch.mockReset()
+  })
+
+  afterEach(() => {
+    stopCashbackClaims()
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it.each([429, 500, 503])('%i x N backs off exponentially, capped at 5 minutes', async (status) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    signedFetch.mockResolvedValue(new Response(null, { status }))
+
+    startCashbackClaims(MERCHANT)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(drainCalls()).toBe(1)
+
+    // Delays 10, 20, 40, 80, 160, 300, 300 s: attempts at 0, 10, 30, 70, 150, 310, 610.
+    await vi.advanceTimersByTimeAsync(610_000)
+    expect(drainCalls()).toBe(7)
+
+    // At the cap, another 15 minutes is 3 more attempts, not 90.
+    await vi.advanceTimersByTimeAsync(900_000)
+    expect(drainCalls()).toBe(10)
+
+    // One warning per backoff level (10, 20, 40, 80, 160, 300 s), then silence at the cap.
+    expect(warn).toHaveBeenCalledTimes(6)
+  })
+
+  it('a network error backs off too', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    signedFetch.mockRejectedValue(new TypeError('Failed to fetch'))
+
+    startCashbackClaims(MERCHANT)
+    await vi.advanceTimersByTimeAsync(610_000)
+
+    expect(drainCalls()).toBe(7)
+  })
+
+  it('a success resets the backoff to the 10s cadence', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    signedFetch.mockResolvedValue(new Response(null, { status: 500 }))
+    startCashbackClaims(MERCHANT)
+    await vi.advanceTimersByTimeAsync(150_000) // attempts at 0, 10, 30, 70, 150
+    expect(drainCalls()).toBe(5)
+
+    signedFetch.mockReset()
+    serve([])
+    await vi.advanceTimersByTimeAsync(160_000) // next attempt at 310 succeeds
+    expect(drainCalls()).toBe(1)
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(drainCalls()).toBe(4)
+  })
+
+  it('a later failure after a success warns again from the first level', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    signedFetch.mockResolvedValue(new Response(null, { status: 500 }))
+    startCashbackClaims(MERCHANT)
+    await vi.advanceTimersByTimeAsync(30_000) // 3 failures, 3 levels
+    expect(warn).toHaveBeenCalledTimes(3)
+
+    serve([])
+    await vi.advanceTimersByTimeAsync(40_000) // success at 70
+    signedFetch.mockResolvedValue(new Response(null, { status: 500 }))
+    await vi.advanceTimersByTimeAsync(10_000) // fails at 80
+
+    expect(warn).toHaveBeenCalledTimes(4)
+    expect(warn.mock.calls[3][2]).toEqual({ reason: 500, retryInSeconds: 10 })
+  })
+
+  it('a visibility change does not bypass the backoff', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    signedFetch.mockResolvedValue(new Response(null, { status: 500 }))
+    startCashbackClaims(MERCHANT)
+    await vi.advanceTimersByTimeAsync(10_000) // 2 failures, next at 30
+    expect(drainCalls()).toBe(2)
+
+    document.dispatchEvent(new Event('visibilitychange'))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(drainCalls()).toBe(2)
   })
 })
