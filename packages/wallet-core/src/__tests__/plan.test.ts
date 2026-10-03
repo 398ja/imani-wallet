@@ -189,6 +189,11 @@ describe('narrowing', () => {
     expect(eligibleCoupons([coupon({ expires_at: seconds })], STALL, 'EUR', NOW)).toHaveLength(0)
   })
 
+  it('reads a numeric-STRING expiry as the date it names, not as "no expiry" (#157)', () => {
+    const lapsed = String(Math.floor(Date.parse('2025-01-01T00:00:00Z') / 1000))
+    expect(eligibleCoupons([coupon({ expires_at: lapsed })], STALL, 'EUR', NOW)).toHaveLength(0)
+  })
+
   it('keeps a coupon with no expiry', () => {
     expect(eligibleCoupons([coupon({ expires_at: undefined })], STALL, 'EUR', NOW)).toHaveLength(1)
   })

@@ -1,0 +1,170 @@
+/**
+ * #157: `expires_at` is stored in ONE format, epoch seconds, whichever door a
+ * coupon came in by, and rows stored before this are repaired once.
+ *
+ * Driven through the real `openWallet` and the real WalletStorage on
+ * fake-indexeddb. The save points are named by the writer each one uses:
+ *
+ * - `saveVoucher`: DM receive (dmPoll), the keep token after a send (pay.ts)
+ * - `addRestoredVoucher`: NIP-60 restore from the relay (voucherRecords.ts)
+ * - `atomicallyWrite`: imani-apps' tokenRedemption, which every claimed coupon
+ *   goes through (cashback redeem, receive by link/paste, Sell's own copy)
+ * - `clearAndReplaceAllVouchers`: import / restore-from-backup (shared/storage.js)
+ */
+import 'fake-indexeddb/auto'
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { WalletStorage, type VoucherRow } from '@imani/wallet-storage'
+
+import { addRestoredVoucher, getWallet, openWallet, wipeWallet } from '../wallet'
+import { migrateStoredExpiries, normaliseExpiry } from '../expiryStorage'
+
+vi.mock('../voucherRecords', () => ({
+  publishVoucher: vi.fn().mockResolvedValue(undefined),
+  tombstoneVoucher: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('../txRecords', () => ({ publishTx: vi.fn().mockResolvedValue(undefined) }))
+vi.mock('../burn', () => ({ burnIfSelfIssued: vi.fn().mockResolvedValue(false) }))
+
+const SECONDS = 1_798_588_800 // 2026-12-30T00:00:00Z
+
+/** The shapes producers have actually written, and what each must store as. */
+const FORMATS: Array<[string, unknown, unknown]> = [
+  ['seconds number (DM payload)', SECONDS, SECONDS],
+  ['milliseconds number', SECONDS * 1000, SECONDS],
+  ['seconds numeric string (pre-v0.6.1 /inspect)', String(SECONDS), SECONDS],
+  ['milliseconds numeric string', String(SECONDS * 1000), SECONDS],
+  ['ISO string (/inspect, create-voucher)', '2026-12-30T00:00:00Z', SECONDS],
+  ['ISO with millis', '2026-12-30T00:00:00.000Z', SECONDS],
+  ['null (no expiry)', null, null],
+  ['empty string', '', null],
+  ['zero', 0, null],
+]
+
+let seq = 0
+const token = () => `cashuB${'x'.repeat(16)}${(seq++).toString(16).padStart(8, '0')}`
+const row = (expires_at: unknown, extra: Partial<VoucherRow> = {}) =>
+  ({ token: token(), amount: 500, expires_at, ...extra }) as unknown as VoucherRow
+
+const stored = async (t: string) =>
+  (await getWallet().getAllVouchers()).find((r) => r.token === t)?.expires_at as unknown
+
+let user: string
+
+beforeEach(async () => {
+  user = `u${seq++}`
+  await openWallet(user)
+})
+
+afterEach(async () => {
+  vi.restoreAllMocks()
+  await wipeWallet(user)
+})
+
+describe('every save point stores epoch seconds', () => {
+  it.each(FORMATS)('saveVoucher: %s', async (_label, given, want) => {
+    const r = row(given)
+    await getWallet().saveVoucher(r)
+    expect(await stored(r.token!)).toBe(want)
+  })
+
+  it.each(FORMATS)('NIP-60 restore: %s', async (_label, given, want) => {
+    const r = row(given)
+    await addRestoredVoucher(r)
+    expect(await stored(r.token!)).toBe(want)
+  })
+
+  it.each(FORMATS)('atomicallyWrite (tokenRedemption, cashback redeem): %s', async (_l, given, want) => {
+    const r = row(given)
+    await getWallet().atomicallyWrite({ vouchers: [r] })
+    expect(await stored(r.token!)).toBe(want)
+  })
+
+  it.each(FORMATS)('import / restore from backup: %s', async (_label, given, want) => {
+    const r = { ...row(given), token_id: `id-${seq++}` } as VoucherRow
+    await getWallet().clearAndReplaceAllVouchers([r])
+    expect(await stored(r.token!)).toBe(want)
+  })
+
+  it('a partial write without expires_at does not erase the one held', async () => {
+    const saved = await getWallet().saveVoucher(row(String(SECONDS)))
+    await getWallet().saveVoucher({ token: saved.token, token_id: saved.token_id, status: 'spent' } as VoucherRow)
+    expect(await stored(saved.token!)).toBe(SECONDS)
+  })
+
+  it('keeps a corrupt expiry exactly as given, and says so', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = row('next tuesday')
+    await getWallet().saveVoucher(r)
+    expect(await stored(r.token!)).toBe('next tuesday')
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('[expiry]'), expect.anything())
+  })
+})
+
+describe('migrateStoredExpiries', () => {
+  /** Write rows the way an older build did: no normaliser on the store. */
+  async function seedLegacy(rows: VoucherRow[]): Promise<void> {
+    const legacy = new WalletStorage({ userId: user })
+    await legacy.init()
+    await legacy.atomicallyWrite({ vouchers: rows })
+    await legacy.close()
+  }
+
+  it.each(FORMATS)('repairs a stored %s', async (_label, given, want) => {
+    const r = row(given)
+    await seedLegacy([r])
+    await migrateStoredExpiries(getWallet())
+    expect(await stored(r.token!)).toBe(want)
+  })
+
+  it('is idempotent: a second run changes nothing', async () => {
+    const rows = FORMATS.map(([, given]) => row(given))
+    await seedLegacy(rows)
+
+    const first = await migrateStoredExpiries(getWallet())
+    const after = await getWallet().getAllVouchers()
+    const second = await migrateStoredExpiries(getWallet())
+
+    // Seconds and null were already canonical; the other seven were not.
+    expect(first.rewritten).toBe(7)
+    expect(second.rewritten).toBe(0)
+    expect(await getWallet().getAllVouchers()).toEqual(after)
+  })
+
+  it('keeps a corrupt value as it is, logs it, and never turns it into "no expiry"', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const corrupt = row('next tuesday', { voucher_id: 'v-corrupt' })
+    await seedLegacy([corrupt])
+
+    const result = await migrateStoredExpiries(getWallet())
+
+    expect(await stored(corrupt.token!)).toBe('next tuesday')
+    expect(result.unreadable).toBe(1)
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('[expiry]'),
+      expect.objectContaining({ voucher_id: 'v-corrupt', expires_at: 'next tuesday' }),
+    )
+  })
+
+  it('runs when the wallet opens, so a legacy row is canonical before anything reads it', async () => {
+    await wipeWallet(user)
+    user = `u${seq++}`
+    const r = row(String(SECONDS))
+    await seedLegacy([r])
+
+    await openWallet(user)
+
+    expect(await stored(r.token!)).toBe(SECONDS)
+  })
+})
+
+describe('normaliseExpiry', () => {
+  it('leaves every other field alone, and returns the same row when nothing changes', () => {
+    const r = row(SECONDS, { status: 'active', face_value: 500 })
+    expect(normaliseExpiry(r)).toBe(r)
+    expect(normaliseExpiry(row(String(SECONDS), { face_value: 500 }))).toMatchObject({
+      face_value: 500,
+      expires_at: SECONDS,
+    })
+  })
+})

@@ -18,43 +18,11 @@
 
 import type { Voucher } from '@imani/voucher-send'
 
-/**
- * Milliseconds since the epoch, from whatever shape an expiry arrived in.
- *
- * Copied from the app's `format.ts` rather than imported, because that module
- * is full of `Intl` formatting this package has no business owning — taking it
- * whole would drag currency display into a package about spend decisions.
- *
- * The leniency is not decoration. `expires_at` is typed `string` and is stored
- * as a NUMBER by the redemption path, in seconds or milliseconds depending on
- * who wrote it, so a parser that trusted the type would read every numeric
- * expiry as invalid and sort every coupon as "never expires".
- */
-export function toEpochMs(value: number | string | undefined | null): number | undefined {
-  if (value === undefined || value === null || value === '' || value === 0) return undefined
+import { readExpiry } from './expiry'
 
-  // A number that went through a string column or JSON text ("1788220800") is
-  // still a number. `Date.parse` reads it as NaN, which used to make it
-  // indistinguishable from "no expiry" (#157).
-  const numeric =
-    typeof value === 'number' ? value : /^\s*\d+(\.\d+)?\s*$/.test(value) ? Number(value) : NaN
-  if (Number.isFinite(numeric)) {
-    if (numeric <= 0) return undefined
-    return numeric < 1e11 ? numeric * 1000 : numeric
-  }
-  if (typeof value === 'number') return undefined
-  const ms = Date.parse(value)
-  return Number.isFinite(ms) ? ms : undefined
-}
-
-/**
- * Was an expiry given at all? Absent, null, '' and 0 are the gateway's ways of
- * saying "none yet" (see the app's `toVoucher`); anything else is a claim that
- * the coupon lapses, whether or not we can read when.
- */
-function hasExpiry(value: unknown): boolean {
-  return !(value === undefined || value === null || value === '' || value === 0 || value === '0')
-}
+// The one expiry parser lives in ./expiry (#157). Re-exported from here
+// because callers have long imported `toEpochMs` from the spend module.
+export { toEpochMs } from './expiry'
 
 /**
  * The smallest face amount a coupon can be divided into.
@@ -256,14 +224,16 @@ export function planParts(vouchers: Voucher[], amount: number): SendPlan {
  * every other timestamp here.
  */
 function expiryMs(voucher: Voucher): number {
-  const raw = voucher.expires_at as number | string | undefined
-  const ms = toEpochMs(raw)
-  if (ms !== undefined) return ms
+  const expiry = readExpiry(voucher.expires_at)
+  if (expiry.kind === 'at') return expiry.seconds * 1000
   // Genuinely absent: the coupon in least danger, last.
-  if (!hasExpiry(raw)) return Number.MAX_SAFE_INTEGER
-  // Present but unreadable (#157). It might lapse tomorrow, so it goes FIRST:
-  // spending it early can only use value that was at risk, while sorting it as
-  // "never expires" could strand it past a real expiry nobody could read.
+  if (expiry.kind === 'none') return Number.MAX_SAFE_INTEGER
+  // Corrupt, the last fallback (#157). Storage canonicalises every readable
+  // format to epoch seconds, so only a value no parser can read gets here. It
+  // might lapse tomorrow, so it goes FIRST: spending it early can only use
+  // value that was at risk, while sorting it as "never expires" could strand it
+  // past a real expiry nobody could read. If the gateway refuses it as expired,
+  // the payer walks on to the next candidate (`initiateOnFirstFree`).
   return Number.MIN_SAFE_INTEGER
 }
 

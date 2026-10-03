@@ -1,4 +1,5 @@
 import type { MerchantGroup } from '@imani/voucher-send'
+import { toEpochMs as sharedToEpochMs } from '@imani/wallet-core'
 
 /**
  * Render a face value in its own unit and decimals.
@@ -238,19 +239,10 @@ export function shortPubkey(pubkey: string): string {
  * and no other caller has a meaningful use for the epoch itself.
  */
 export function toEpochMs(value: number | string | undefined | null): number | undefined {
-  if (value === undefined || value === null || value === '' || value === 0) return undefined
-
-  // A numeric STRING ("1788220800") is still epoch seconds or ms, not an
-  // unparseable date. Same rule as wallet-core's copy (#157).
-  const numeric =
-    typeof value === 'number' ? value : /^\s*\d+(\.\d+)?\s*$/.test(value) ? Number(value) : NaN
-  if (Number.isFinite(numeric)) {
-    if (numeric <= 0) return undefined
-    return numeric < 1e11 ? numeric * 1000 : numeric
-  }
-  if (typeof value === 'number') return undefined
-  const ms = Date.parse(value)
-  return Number.isFinite(ms) ? ms : undefined
+  // One parser for the whole wallet, in wallet-core (#157). This used to be a
+  // copy of it, and the copies drifted: a numeric-string expiry parsed here and
+  // not there.
+  return sharedToEpochMs(value)
 }
 
 /**
