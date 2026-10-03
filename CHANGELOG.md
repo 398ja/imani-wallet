@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A terminal no longer reports a sale the customer's wallet refused** (#159). A terminal's
+  key is not the stall's, so its Sell sent a signed `none` warrant, and every wallet that
+  receives a coupon by DM refuses `none`, `absent` and `failed` warrants before the mint swap.
+  The customer's wallet showed "Coupon not authorised" with nothing added while the terminal
+  said "It is in their wallet now". Decision (Option B): every recipient keeps refusing, so a
+  customer is never left holding a coupon the issuing stall will refuse. Sell on a terminal
+  now stops on arrival, before a customer is scanned or payment taken, saying terminal sales
+  need the `delegated` warrant form, which is not supported yet. `issueAndDeliver` refuses the
+  same request before anything is minted, and also refuses an owner sale whose warrant would
+  be `none` (session key is not the stall's) or absent (wallet locked). Comments on
+  `refuseIfUnwarranted` and `isWarranted` now describe this behaviour; `isWarranted` is noted
+  as not wired into any screen. Cashback issued from a terminal still sends `none` and is
+  not changed here.
+
 - **A cashback voucher's detail no longer reads like a sale** (#155). It showed "Paid: At the
   counter" and "Customer receipt: Not collected", which are Sell questions with no answer for
   value the stall gave away. It now shows what it is ("Cashback from this stall"), whether the

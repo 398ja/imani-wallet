@@ -16,6 +16,7 @@ import { ScanRecipient } from '../components/ScanRecipient'
 import type { Actor } from '../lib/actor'
 import type { TerminalSession } from '../lib/terminalSession'
 import { issueAndDeliver, type IssueStage } from '../lib/issue'
+import { TERMINAL_SALE_UNSUPPORTED, mayWarrantSale } from '../lib/warrantSigner'
 import { identityLabel, useIdentity } from '../lib/identity'
 import { currencyDecimals, formatDate, formatFace, parseAmountToMinor } from '../lib/format'
 import { ValidityPicker } from '../components/ValidityPicker'
@@ -70,6 +71,28 @@ export function SellPage({
 }) {
   const navigate = useNavigate()
   const [customer, setCustomer] = useState<string | null>(null)
+
+  /*
+    A terminal cannot sign a warrant the customer's wallet accepts, so a sale
+    here would take the customer's money for a coupon their wallet refuses
+    (#159). Stopped on arrival, before a customer is scanned or an amount is
+    typed, so staff learn it before taking payment rather than after.
+    `issueAndDeliver` refuses the same request made around this screen.
+  */
+  if (actor && !mayWarrantSale(actor)) {
+    return (
+      <Screen>
+        <BackLink to="/" label="Back" />
+        <PageHeader title="Sell" />
+        <Alert>{TERMINAL_SALE_UNSUPPORTED}</Alert>
+        <div className="mt-4">
+          <Button variant="ghost" className="w-full" onClick={() => navigate('/')}>
+            Back
+          </Button>
+        </div>
+      </Screen>
+    )
+  }
 
   return (
     <Screen>

@@ -10,7 +10,13 @@ import { issuingStall, mayIssue, type Actor } from './actor'
 import { canIssueNow, sessionState, type TerminalSession } from './terminalSession'
 import { attributionFor } from './terminalAttribution'
 import { currencyDecimals } from './format'
-import { buildIssuanceWarrant } from './warrantSigner'
+import {
+  TERMINAL_SALE_UNSUPPORTED,
+  UnwarrantedSaleError,
+  assertSaleWarranted,
+  buildIssuanceWarrant,
+  mayWarrantSale,
+} from './warrantSigner'
 import { parseIssuanceWarrant } from './issuanceWarrant'
 import type { AttestedSale } from './cashAttestation'
 import { NEVER_EXPIRES } from './merchant'
@@ -341,6 +347,13 @@ async function createVouchers(
     params.currency,
   )
 
+  // The backstop on what was actually built, before the request leaves the
+  // device. `issueAndDeliver` has already refused a terminal; this catches an
+  // owner session whose key is not the stall's (`none`) or a locked wallet (no
+  // warrant). Every recipient refuses both (#159), so minting either would
+  // spend the stall's backing on a coupon the customer cannot take.
+  assertSaleWarranted(warrant)
+
   const response = await signedFetch(
     '/api/v1/portal/vouchers',
     'POST',
@@ -614,6 +627,22 @@ export async function issueAndDeliver(
     throw new Error(
       'This terminal is not set up to sell. Ask the stall owner to enrol it as a full till.',
     )
+  }
+
+  /**
+   * A terminal that MAY sell is still refused here, before anything is minted
+   * (#159).
+   *
+   * Its key is not the stall's, so its warrant can only be a signed `none`,
+   * and every wallet receiving a coupon by DM refuses that before the mint
+   * swap — the customer's included. Issuing anyway took the stall's backing,
+   * delivered a coupon the customer's wallet threw out as "Coupon not
+   * authorised", and showed staff "It is in their wallet now". Asked after the
+   * session checks above so a lapsed till still hears the recoverable thing
+   * first. Lifted when the `delegated` warrant form is supported.
+   */
+  if (!mayWarrantSale(params.actor)) {
+    throw new UnwarrantedSaleError(TERMINAL_SALE_UNSUPPORTED)
   }
 
   onStage?.('issuing')
