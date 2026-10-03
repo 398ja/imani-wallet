@@ -12,10 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **A mistyped cashback code is caught before it is looked up** (#141). Current codes only
-  use `23456789ABCDEFGHJKMNPQRSTVWXYZ` and legacy ones are hex, so a full-length code with
-  0, 1, O, I, L or U (or a legacy one with a non-hex letter) now says which characters cannot
-  be in a code instead of spending a request against the gateway's per-IP limit. Legacy codes
-  with 0 and 1 still redeem. Nothing is guessed: confusables are refused, not remapped.
+  use `23456789ABCDEFGHJKMNPQRSTVWXYZ` and legacy ones are hex, so a ten-character code with
+  0, 1, O, I, L or U now says which characters cannot be in it instead of spending a request
+  against the gateway's per-IP limit. At six characters the hint names only O, I, L or U,
+  because six is also where a current code passes on its way to ten. Legacy codes with 0 and
+  1 still redeem. Full-width input folds to ASCII. Nothing is guessed: confusables are refused,
+  not remapped.
   wallet-api's `/v1/cashback/lookup` runs the same reader (`src/lib/claimCode.ts`), returns the
   canonical code in the by-code URL, and answers a non-code with a 400 without asking the portal.
 

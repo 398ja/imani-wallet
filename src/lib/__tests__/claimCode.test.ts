@@ -49,6 +49,15 @@ describe('the code alphabet, per shape', () => {
     expect(canonicaliseTypedClaimCode('\tCb-a1b2-c3 ')).toBe('CB-A1B2-C3')
   })
 
+  it('folds full-width input, and refuses lookalikes from other scripts', () => {
+    expect(canonicaliseTypedClaimCode('ＣＢ－ＡＥＱＴＪ－ＭＹＪＨＹ')).toBe('CB-AEQTJ-MYJHY')
+    expect(canonicaliseTypedClaimCode('ｃｂ ０ａ１ｂ ０１')).toBe('CB-0A1B-01')
+    // A non-breaking hyphen or space is punctuation, like any other.
+    expect(canonicaliseTypedClaimCode('CB\u2011AEQTJ\u00a0MYJHY')).toBe('CB-AEQTJ-MYJHY')
+    // Cyrillic A is not Latin A. Refused, not guessed.
+    expect(canonicaliseTypedClaimCode('CB-\u0410EQTJ-MYJHY')).toBeNull()
+  })
+
   it('accepts every shape a current code gets written down in', () => {
     for (const typed of ['CB-AEQTJ-MYJHY', 'CBAEQTJMYJHY', 'AEQTJMYJHY', 'AEQTJ-MYJHY', 'cb aeqtj myjhy']) {
       expect(canonicaliseTypedClaimCode(typed)).toBe('CB-AEQTJ-MYJHY')
@@ -65,12 +74,21 @@ describe('the code alphabet, per shape', () => {
 describe('telling the customer why', () => {
   it('names the excluded characters in a full-length current code', () => {
     const problem = typedClaimCodeProblem('CB-AEQT0-MYJHI')
-    expect(problem).toMatch(/never contain 0, I/)
-    expect(problem).toMatch(/Check the receipt/)
+    expect(problem).toBe(
+      'A ten-character code never contains 0 or I, so a character may have been misread. Check the receipt and try again.',
+    )
   })
 
-  it('explains a legacy-length code with a non-hex character', () => {
-    expect(typedClaimCodeProblem('CB-ABCG-12')).toMatch(/0 to 9 and the letters A to F/)
+  it('names a character no code of either length can hold, at six', () => {
+    expect(typedClaimCodeProblem('CB-ABCO-12')).toMatch(/^Cashback codes never contain O,/)
+  })
+
+  it('stays quiet on the first six characters of a current code still being typed', () => {
+    // Six is a stop on the way to ten. Letters past F are normal in a current
+    // code, so a hex rule here would scold every customer halfway through.
+    for (const typed of ['AEQTJM', 'CB-AEQTJ-M', 'cb aeqtj m', 'CB-ABCG-12']) {
+      expect(typedClaimCodeProblem(typed)).toBeNull()
+    }
   })
 
   it('stays quiet while typing and once the code reads', () => {
