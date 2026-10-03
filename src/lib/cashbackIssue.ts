@@ -32,7 +32,14 @@ export interface CashbackRequest {
   unit: string
   decimals: number
   memo?: string
+  /** The claim window: how long the code stays claimable. Not the coupon's life. */
   expiryDays: number
+  /**
+   * The stall's voucher validity (`merchant.voucherValidityDays`): how long the
+   * coupon lives once claimed, the same term Sell gives it. `NEVER_EXPIRES` (0)
+   * is sent as 0 (398ja/imani-gateway-portal#58).
+   */
+  voucherValidityDays: number
 }
 
 /**
@@ -68,7 +75,7 @@ export async function issueCashback(
   request: CashbackRequest,
   attempt?: CashbackAttempt,
 ): Promise<IssuedCashback> {
-  const { actor, amountMinor, unit, decimals, memo, expiryDays } = request
+  const { actor, amountMinor, unit, decimals, memo, expiryDays, voucherValidityDays } = request
   const { idempotencyKey, warrant } = attempt ?? (await prepareCashbackAttempt(request))
 
   const issued = await generateCashback({
@@ -76,6 +83,7 @@ export async function issueCashback(
     unit,
     memo: memo || undefined,
     expiryDays,
+    voucherValidityDays,
     issuanceWarrant: warrant,
     idempotencyKey,
   })
@@ -101,7 +109,8 @@ export async function issueCashback(
  *    answers with that code instead of minting a second one.
  *
  * The attempt is dropped once a code is issued, and when the amount, unit,
- * note or expiry changes, because then it is a different sale. Also when the
+ * note, claim window or voucher validity changes, because then it is a
+ * different sale. Also when the
  * stall or the signing key changes: an account switch is a different issuer.
  *
  * Two cases are never kept for a retry:
@@ -126,6 +135,7 @@ export function createCashbackIssuer() {
           request.unit,
           request.memo || undefined,
           request.expiryDays,
+          request.voucherValidityDays,
           request.actor ? issuingStall(request.actor) : null,
           signerPubkey(),
         ])

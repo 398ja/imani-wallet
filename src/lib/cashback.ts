@@ -258,6 +258,12 @@ export async function generateCashback(params: {
   memo?: string
   expiryDays: number
   /**
+   * The coupon's own life in days, separate from the claim window above.
+   * Always sent, 0 included: 0 is never-expires, and an absent field is what
+   * the portal reads as an older wallet (398ja/imani-gateway-portal#58).
+   */
+  voucherValidityDays: number
+  /**
    * The stall's warrant for this sale, signed BEFORE this call. It goes into
    * the voucher's signed secret, so it cannot be added once the code exists.
    */
@@ -271,6 +277,7 @@ export async function generateCashback(params: {
     memo: params.memo,
     idempotencyKey: params.idempotencyKey,
     expiryDays: params.expiryDays,
+    voucherValidityDays: params.voucherValidityDays,
     // Omitted when undefined, as on Sell: absent means "no warrant", which is a
     // different claim from a signed `none`.
     ...(params.issuanceWarrant === undefined ? {} : { issuanceWarrant: params.issuanceWarrant }),
