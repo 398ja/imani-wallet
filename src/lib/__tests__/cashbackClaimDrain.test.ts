@@ -143,6 +143,22 @@ describe('the bell row', () => {
 
     expect(listNotifications(MERCHANT)[0]?.body).toBe('€5.00 cashback claimed')
   })
+
+  // Zero-decimal units must not read as hundredths: 5000 XAF is not "50.00".
+  it.each([
+    [{ amountMinor: 5000, unit: 'XAF', decimals: 0 }, /^FCFA\s?5[,.\u202f\u00a0]?000 cashback claimed$/],
+    [{ amountMinor: 5000, unit: 'XAF' }, /^FCFA\s?5[,.\u202f\u00a0]?000 cashback claimed$/],
+    [{ amountMinor: 2100, unit: 'SAT', decimals: 0 }, /^SAT\s?2[,.\u202f\u00a0]?100 cashback claimed$/],
+    [{ amountMinor: 2100, unit: 'sat' }, /^SAT\s?2[,.\u202f\u00a0]?100 cashback claimed$/],
+    [{ amountMinor: 5, unit: 'EUR', decimals: 2 }, /^€0\.05 cashback claimed$/],
+  ])('formats %o', async (amount, expected) => {
+    rows = {}
+    serve([{ ...NOTICE, decimals: undefined, ...amount }])
+
+    await runCashbackClaimDrainTick()
+
+    expect(listNotifications(MERCHANT)[0]?.body).toMatch(expected)
+  })
 })
 
 describe('push and drain together', () => {
@@ -280,6 +296,31 @@ describe('never throws', () => {
     await runCashbackClaimDrainTick()
 
     expect(signedFetch).not.toHaveBeenCalled()
+  })
+
+  it.each([404, 405, 410])('a portal without the route (%i) stops polling for the session', async (status) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    signedFetch.mockResolvedValue(new Response(null, { status }))
+    await runCashbackClaimDrainTick()
+    signedFetch.mockClear()
+
+    await runCashbackClaimDrainTick()
+
+    expect(signedFetch).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+
+  it.each([401, 429, 500, 503])('a transient refusal (%i) keeps polling', async (status) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    signedFetch.mockResolvedValue(new Response(null, { status }))
+    await runCashbackClaimDrainTick()
+    signedFetch.mockClear()
+
+    await runCashbackClaimDrainTick()
+
+    expect(signedFetch).toHaveBeenCalledTimes(1)
+    vi.restoreAllMocks()
   })
 
   it('does nothing when stopped', async () => {

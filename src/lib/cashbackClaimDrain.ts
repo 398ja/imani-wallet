@@ -40,6 +40,13 @@ const DRAIN_INTERVAL_MS = 10 * 1000
 const DRAIN_LIMIT = 50
 const LOG_PREFIX = '[cashback-claim-drain]'
 
+/**
+ * Answers that will not change within a session: not a stall (403), or a
+ * portal that has no such route (404/405/410). Everything else (401 during a
+ * lock cycle, 429, 5xx, the network) is retried on the normal 10s tick.
+ */
+const PERMANENT_REFUSALS = new Set([403, 404, 405, 410])
+
 /** The wire type the portal pushes with. */
 export const CASHBACK_CLAIMED = 'cashback_claimed'
 
@@ -187,7 +194,15 @@ export async function runCashbackClaimDrainTick(): Promise<void> {
       // claimed, so stop asking for the rest of this session rather than
       // polling the portal every ten seconds for the same answer. Starting it
       // again at the next login picks up a stall registered in between.
-      if (response.status === 403) {
+      //
+      // 404, 405 and 410 are just as permanent for this session: a portal
+      // without the route (deployed before imani-gateway-portal#59) answers
+      // the same way every tick, and a warning every ten seconds forever is
+      // noise in every merchant's console. The push still reaches the bell.
+      if (PERMANENT_REFUSALS.has(response.status)) {
+        if (response.status !== 403) {
+          console.warn(LOG_PREFIX, 'drain unavailable, stopping for this session', response.status)
+        }
         stopCashbackClaims()
         return
       }
