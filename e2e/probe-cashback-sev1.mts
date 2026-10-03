@@ -225,9 +225,15 @@ async function main(): Promise<number> {
     const expiresMs = expiresAt == null ? NaN : (expiresAt < 1e12 ? expiresAt * 1000 : expiresAt)
     const expectedMs = redeemedAt + VALIDITY_DAYS * DAY_MS
     const days = (expiresMs - redeemedAt) / DAY_MS
-    record(`#58 coupon expires_at = issue time + ${VALIDITY_DAYS} days (not the 90-day default)`,
-      Number.isFinite(expiresMs) && Math.abs(expiresMs - expectedMs) < EXPIRY_TOLERANCE_MS,
-      `expires_at=${expiresAt ?? 'none'} (${Number.isFinite(expiresMs) ? new Date(expiresMs).toISOString() : '-'}) = ${days.toFixed(2)} days after redeem`)
+    if (VALIDITY_DAYS === 0) {
+      // 0 is "never expires": the coupon must carry NO expires_at, not the 90-day default.
+      record('#58 coupon has no expiry (validity 0 = never expires)', expiresAt == null,
+        `expires_at=${expiresAt ?? 'none'}${Number.isFinite(expiresMs) ? ` = ${days.toFixed(2)} days after redeem` : ''}`)
+    } else {
+      record(`#58 coupon expires_at = issue time + ${VALIDITY_DAYS} days (not the 90-day default)`,
+        Number.isFinite(expiresMs) && Math.abs(expiresMs - expectedMs) < EXPIRY_TOLERANCE_MS,
+        `expires_at=${expiresAt ?? 'none'} (${Number.isFinite(expiresMs) ? new Date(expiresMs).toISOString() : '-'}) = ${days.toFixed(2)} days after redeem`)
+    }
 
     let log = ''
     try { log = customerLogSince(startedIso) } catch (e) { log = `UNREADABLE ${String(e).slice(0, 100)}` }
