@@ -847,9 +847,13 @@ async function initiateOnFirstFree(
         continue
       }
       // A coupon whose stored expiry could not be read is offered FIRST, in
-      // case it is about to lapse (#157). If it already has, the gateway says
-      // so before anything moves, and that is a reason to try the next coupon,
-      // not to fail a payment another coupon can make.
+      // case it is about to lapse (#157). If a gateway refuses it as expired
+      // at initiate, nothing has moved yet (no send row exists), so trying the
+      // next coupon is safe and cannot double-send: each candidate has its own
+      // idempotency key. Defensive only: gateway-core's initiate does not
+      // check voucher expiry today (the mint refuses at the async split), and
+      // such a coupon is now rare, since storage repairs an unreadable expiry
+      // from the one signed into the token (expiryStorage.ts).
       if (/voucher has expired/i.test(message)) {
         lastRefusal = error instanceof Error ? error : new Error(message)
         console.warn('[pay] coupon refused as expired, trying the next one:', candidate.voucher_id)

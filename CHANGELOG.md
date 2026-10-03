@@ -18,9 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the voucher closest to being lost went last. Every coupon is now STORED with its expiry in one
   format, epoch seconds, whichever way it arrived (DM, claim, cashback, restore, import), and
   rows stored before this are repaired when the wallet opens: idempotently, safely with two tabs
-  open. One parser replaces four copies that disagreed. A value nobody can read is kept as it
-  was and logged, never turned into "never expires"; as a last resort it is spent first, and if
-  the gateway refuses it as expired the payment moves on to the next voucher. When a
+  open. One parser replaces four copies that disagreed; it reads a zone-less ISO time as UTC and
+  no longer takes junk like "12/31" for a date. A stored value nobody can read is repaired from
+  the expiry signed into the voucher's own token; failing that it is kept as it was and logged,
+  never turned into "never expires", and as a last resort spent first. When a
   sooner-expiring voucher is left for a legitimate reason (another stall, another currency, too
   small, or it cannot be divided to the amount), the pay screen says so in one line and the
   `[pay]` log records which voucher and why.
