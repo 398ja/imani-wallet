@@ -20,11 +20,21 @@
  *   replaced at every re-enrolment. It is emphatically *not* the stall key, so
  *   a signature made with it would never verify against `issuerId`.
  *
- * A terminal therefore issues **unwarranted**, and this module says so with a
- * signed `none` rather than silently omitting the field. That distinction is
- * the point: absent means "this coupon predates warrants", `none` means "the
- * issuer states nothing outside the service authorised this". Collapsing them
- * is how a stripped warrant reads as a legacy coupon.
+ * A terminal therefore can only issue **unwarranted**, and this module says so
+ * with a signed `none` rather than silently omitting the field. That
+ * distinction is the point: absent means "this coupon predates warrants",
+ * `none` means "the issuer states nothing outside the service authorised this".
+ * Collapsing them is how a stripped warrant reads as a legacy coupon.
+ *
+ * **And a Sell never sends one (#159).** Every wallet that receives a coupon by
+ * DM refuses `none`, `absent` and `failed` before the mint swap
+ * (`refuseIfUnwarranted` in dmPoll.ts) — the customer's as well as the stall's.
+ * A `none` coupon sold at a terminal is therefore refused by the very customer
+ * who paid for it, while the terminal used to report "It is in their wallet
+ * now". `issue.ts` asks `mayWarrantSale` before anything is minted and refuses
+ * the sale with `TERMINAL_SALE_UNSUPPORTED`; `assertSaleWarranted` is the
+ * backstop on the warrant actually built. The `none` form stays in this
+ * module because cashback issuance still sends it (see `cashbackIssue.ts`).
  *
  * The honest fix for terminals is the `delegated` form — sign with the terminal
  * credential's lock key, which the stall delegated and can burn. That needs the
@@ -37,7 +47,7 @@ import { schnorr } from '@noble/curves/secp256k1.js'
 import { bytesToHex } from '@noble/hashes/utils'
 
 import { issuingStall, type Actor } from './actor'
-import { warrantSaleDigest } from './issuanceWarrant'
+import { parseIssuanceWarrant, warrantSaleDigest } from './issuanceWarrant'
 import { getSigner } from './nap'
 
 /**
@@ -80,9 +90,10 @@ export async function buildIssuanceWarrant(
     signer = getSigner()
   } catch {
     // Locked or not yet unlocked. No warrant at all, rather than a `none` we
-    // could not have signed the alternative to. The sale still proceeds:
-    // unwarranted issuance is the status quo and refusing it is a policy
-    // decision nobody has taken.
+    // could not have signed the alternative to. What the caller does with that
+    // is its own decision: Sell refuses it (`assertSaleWarranted`), because a
+    // customer's wallet refuses an absent warrant; cashback keeps its own
+    // retry rule for it (`cashbackIssue.ts`).
     return undefined
   }
 
@@ -90,7 +101,9 @@ export async function buildIssuanceWarrant(
   // these ever diverge - a session restored under a different key, an actor
   // built from a stale record - the warrant would be signed by something that
   // is not `issuerId` and every coupon from this sale would be refused at
-  // redemption. Better to issue unwarranted than to issue unredeemable.
+  // redemption. A signed `none` says so honestly, and Sell then refuses to
+  // send it at all (`assertSaleWarranted`): since #159 every recipient refuses
+  // `none`, so it is unredeemable either way.
   if (signer.pubkey !== stall) {
     console.warn(
       '[warrant] signer is not the issuing stall; issuing without a merchant warrant.',
@@ -119,4 +132,69 @@ export async function buildIssuanceWarrant(
     nonce,
     sig,
   })
+}
+
+/**
+ * Why a terminal cannot sell yet, in words staff can act on.
+ *
+ * Shown on the Sell screen before a customer is scanned or any money is taken,
+ * and thrown by `issueAndDeliver` for a request made around the screen.
+ */
+export const TERMINAL_SALE_UNSUPPORTED =
+  'Selling from a terminal is not supported yet. A coupon sold here would carry no ' +
+  'authorisation signed by the stall, and the customer\u2019s wallet refuses those, so ' +
+  'they would pay for a coupon they never receive. Terminal sales need the \u201cdelegated\u201d ' +
+  'warrant form, which this version does not support. Sell from the stall owner\u2019s own ' +
+  'device. Nothing has been issued; do not take payment for this sale.'
+
+/**
+ * A sale refused because no verifiable warrant could be signed for it.
+ *
+ * Its own type so a caller (and a test) can tell this refusal - which happens
+ * before anything is minted - from a failure partway through issuance.
+ */
+export class UnwarrantedSaleError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'UnwarrantedSaleError'
+  }
+}
+
+/**
+ * Whether this actor can sign a warrant a customer's wallet will accept.
+ *
+ * Only the owner: a terminal's key is not the stall's, and the `delegated`
+ * form that would let it sign is not implemented (see the module comment). A
+ * pure question about the actor, so the Sell screen can ask it before a
+ * customer is scanned and `issueAndDeliver` can ask the identical one before
+ * anything is minted.
+ */
+export function mayWarrantSale(actor: Actor): boolean {
+  return actor.kind === 'owner'
+}
+
+/**
+ * Refuses a sale whose warrant every recipient would refuse.
+ *
+ * Called on the warrant `buildIssuanceWarrant` actually returned, BEFORE the
+ * issuance request leaves the device. Anything other than a signed warrant -
+ * `none` (a terminal, or an owner session whose key is not the stall's) or no
+ * warrant at all (a locked wallet) - is refused by the customer's wallet in
+ * `refuseIfUnwarranted`, so issuing it would mint a coupon nobody can take.
+ */
+export function assertSaleWarranted(warrant: SignedWarrant): void {
+  const parsed = parseIssuanceWarrant(warrant)
+  if (parsed.state === 'present') return
+
+  if (parsed.state === 'absent-legacy') {
+    throw new UnwarrantedSaleError(
+      'Could not sign this sale: the wallet is locked. Unlock it and try again. ' +
+        'Nothing has been issued.',
+    )
+  }
+  throw new UnwarrantedSaleError(
+    'Could not sign this sale with the stall\u2019s key, and the customer\u2019s wallet ' +
+      'refuses a coupon the stall did not sign. Sign in again as the stall and try again. ' +
+      'Nothing has been issued.',
+  )
 }

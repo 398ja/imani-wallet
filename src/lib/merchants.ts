@@ -280,10 +280,25 @@ export function isSpent(row: Pick<VoucherRow, 'status'>): boolean {
  * an unparseable token is somebody else's error to report, and treating it as
  * unauthorised here would hide the real failure behind the wrong message.
  *
- * Used to FLAG a coupon on the send screen, not to withhold it. Refusing to let
- * a customer spend money already in their wallet punishes them for an issuer's
- * omission; the refusal that matters happens at the till, where the party who
- * would be defrauded is the one deciding. See `refuseIfUnwarranted`.
+ * Meant to FLAG a coupon on the send screen, not to withhold it. **No screen
+ * calls it yet**: it was written for that flag and the wiring never landed, so
+ * today nothing in the UI reads it.
+ *
+ * The refusal that matters happens on RECEIPT, in every wallet: since #159
+ * (Option B) `refuseIfUnwarranted` refuses an `absent`, `unwarranted` or
+ * `failed` coupon arriving by DM before the mint swap, whether the recipient
+ * is a customer or the issuing stall. So a coupon received by DM and checked
+ * never lands in a wallet unwarranted, and this flag does not exist to warn
+ * about those.
+ *
+ * What it still catches is a coupon that reached the wallet WITHOUT that
+ * check: one received before warrants were checked (its validation has no
+ * `warrant`, so the receive-time check was never asked), and one that arrived
+ * by another route, such as a cashback claim, which records the warrant
+ * verdict but does not refuse on it. The stall that issued such a coupon will
+ * refuse it on receipt, so a send screen calling this could warn the customer
+ * before they offer it. Flagged rather than withheld: blocking money already
+ * in a wallet would strand it with no way to show it to the stall and ask.
  */
 export function isWarranted(row: Pick<VoucherRow, 'token'>): boolean {
   if (!row.token) return true
