@@ -26,12 +26,17 @@ async function mint<T>(path: string, body?: unknown): Promise<{ status: number; 
   return { status: res.status, json: await res.json() as T }
 }
 
-/** A P2PK_VOUCHER secret, signed the way VoucherCanonicalBytes expects, by a key we chose. */
+/**
+ * A P2PK_VOUCHER secret naming a merchant as issuer. Signed (the way VoucherCanonicalBytes expects)
+ * by a key we chose, or, with UNSIGNED=1, carrying no signature at all: the stripped-signature
+ * bypass, which enforce must refuse too.
+ */
 function forgedVoucherSecret(holderKey: Uint8Array, attackerKey: Uint8Array): string {
   const holder = '02' + bytesToHex(schnorr.getPublicKey(holderKey))
   const nonce = bytesToHex(randomBytes(32))
   const rows = [['n_sigs', '1'], ['sigflag', 'SIG_INPUTS'], ['issuer', MERCHANT], ['unit', 'sat'],
     ['face_value', '1000000'], ['backing_strategy', 'FIXED'], ['voucher_id', crypto.randomUUID()]]
+  if (process.env.UNSIGNED === '1') return JSON.stringify(['P2PK_VOUCHER', { nonce, data: holder, tags: rows }])
   const NUMERIC = ['face_value', 'expires_at', 'face_decimals', 'issuance_ratio']
   const rendered = rows.map(([k, v]) => `["${k}",${NUMERIC.includes(k) ? v : `"${v}"`}]`).join(',')
   const canonical = new TextEncoder().encode(`["P2PK_VOUCHER","${holder}","${nonce}",[${rendered}]]`)
@@ -70,6 +75,6 @@ const swap = await mint<{ detail?: string; code?: number }>('/v1/swap', {
   inputs: [{ ...proof, witness }], outputs: [{ amount: AMOUNT, id: keysetId, B_: plain.B_.toHex(true) }] })
 const refused = swap.status !== 200
 console.log(`swap answered ${swap.status} ${JSON.stringify(swap.json).slice(0, 160)}`)
-const pass = EXPECT === 'refused' ? refused && /signature|issuer/i.test(JSON.stringify(swap.json)) : !refused
+const pass = EXPECT === "refused" ? refused && /signature|issuer|signed/i.test(JSON.stringify(swap.json)) : !refused
 console.log(`${pass ? 'PASS' : 'FAIL'}: a self-signed voucher swap was ${refused ? 'refused' : 'accepted'} (expected ${EXPECT})`)
 process.exit(pass ? 0 : 1)
