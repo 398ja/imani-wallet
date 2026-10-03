@@ -1,0 +1,293 @@
+/**
+ * @vitest-environment jsdom
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+/**
+ * imani-wallet#158: a cashback this stall issued was claimed. The portal says so
+ * twice, by Web Push and by a drainable notice (imani-gateway-portal#59), and the
+ * merchant must see ONE bell row, with the row on the Vouchers list stamped
+ * Claimed so no status fetch is needed.
+ *
+ * The inbox is real so the assertions are about what the bell would show.
+ */
+
+const MERCHANT = '35f7a28b6adc9a923686a4506a02cae0fcf634cb32f42675872a5bd07d67af47'
+const CASHBACK_ID = '11111111-2222-3333-4444-555555555555'
+const CLAIMED_AT_ISO = '2026-05-02T13:42:01Z'
+const CLAIMED_AT_MS = Date.parse(CLAIMED_AT_ISO)
+
+const signedFetch = vi.fn<(path: string, method: string, body?: unknown) => Promise<Response>>(
+  async () => new Response(null, { status: 200 }),
+)
+vi.mock('../nip98', () => ({
+  signedFetch: (...args: Parameters<typeof signedFetch>) => signedFetch(...args),
+}))
+
+/** The wallet store, as far as this flow touches it: one cashback row. */
+let rows: Record<string, Record<string, unknown>> = {}
+const recordCashbackStatus = vi.fn(async (id: string, reading: { status: string; claimedAt?: number }) => {
+  if (rows[id]) rows[id] = { ...rows[id], cashbackStatus: reading.status, claimedAt: reading.claimedAt }
+})
+let storeThrows = false
+vi.mock('../wallet', () => ({
+  walletIsOpen: () => true,
+  getTransactionRow: async (id: string) => {
+    if (storeThrows) throw new Error('indexeddb gone')
+    return rows[id] ?? null
+  },
+  recordCashbackStatus: (id: string, reading: { status: string; claimedAt?: number }) =>
+    recordCashbackStatus(id, reading),
+}))
+
+const toasts: Array<{ message: unknown; options?: Record<string, unknown> }> = []
+vi.mock('sonner', () => ({
+  toast: {
+    success: (message: unknown, options?: Record<string, unknown>) => {
+      toasts.push({ message, options })
+      return 'id'
+    },
+  },
+}))
+let wanted = true
+vi.mock('../notifications/wants', () => ({ wantsInApp: () => wanted }))
+
+const {
+  fileCashbackClaim,
+  fileCashbackClaimPush,
+  runCashbackClaimDrainTick,
+  startCashbackClaims,
+  stopCashbackClaims,
+} = await import('../cashbackClaimDrain')
+const { listNotifications, _resetInboxCacheForTests } = await import('../notifications/inbox')
+
+const NOTICE = { cashbackId: CASHBACK_ID, amountMinor: 500, unit: 'EUR', decimals: 2, claimedAt: CLAIMED_AT_ISO }
+
+/** The push exactly as the portal builds it (CashbackClaimNotifier.pushData). */
+const PUSH = {
+  title: 'Cashback claimed',
+  body: '5.00 EUR cashback claimed',
+  type: 'cashback_claimed',
+  data: {
+    type: 'cashback_claimed',
+    notificationId: `cashback-claimed:${CASHBACK_ID}`,
+    cashbackId: CASHBACK_ID,
+    amountMinor: 500,
+    unit: 'EUR',
+    decimals: 2,
+    claimedAt: CLAIMED_AT_MS,
+    url: '/merchant/transactions',
+  },
+}
+
+function serve(notices: unknown[], ackStatus = 200) {
+  signedFetch.mockImplementation(async (path: string) =>
+    path.endsWith('/drain')
+      ? new Response(JSON.stringify({ notices, moreAvailable: false }), { status: 200 })
+      : new Response(JSON.stringify({ acknowledged: notices.length }), { status: ackStatus }),
+  )
+}
+
+beforeEach(async () => {
+  localStorage.clear()
+  _resetInboxCacheForTests()
+  rows = {
+    [`cashback:${CASHBACK_ID}`]: {
+      id: `cashback:${CASHBACK_ID}`,
+      type: 'cashback',
+      cashbackId: CASHBACK_ID,
+      claimCode: 'CB-ABCDE-FGHIJ',
+      amount: 500,
+      unit: 'EUR',
+      decimals: 2,
+    },
+  }
+  storeThrows = false
+  wanted = true
+  toasts.length = 0
+  signedFetch.mockReset()
+  recordCashbackStatus.mockClear()
+  startCashbackClaims(MERCHANT)
+  // Let the boot tick finish, so it does not hold the in-flight guard.
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  signedFetch.mockClear()
+})
+
+afterEach(() => {
+  stopCashbackClaims()
+})
+
+describe('the bell row', () => {
+  it('names the amount in the wallet money format and the code', async () => {
+    serve([NOTICE])
+
+    await runCashbackClaimDrainTick()
+
+    const items = listNotifications(MERCHANT)
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({
+      id: `cashback-claimed:${CASHBACK_ID}`,
+      type: 'cashback_claimed',
+      title: 'Cashback claimed',
+      body: '€5.00 cashback claimed (CB-ABCDE-FGHIJ)',
+      url: '/merchant/transactions',
+      receivedAt: CLAIMED_AT_MS,
+    })
+  })
+
+  it('still names the amount when this device has no row for the cashback', async () => {
+    rows = {}
+    serve([NOTICE])
+
+    await runCashbackClaimDrainTick()
+
+    expect(listNotifications(MERCHANT)[0]?.body).toBe('€5.00 cashback claimed')
+  })
+})
+
+describe('push and drain together', () => {
+  it('push first, then drain: one row and one toast', async () => {
+    fileCashbackClaimPush(MERCHANT, PUSH)
+    await vi.waitFor(() => expect(listNotifications(MERCHANT)).toHaveLength(1))
+    serve([NOTICE])
+
+    await runCashbackClaimDrainTick()
+
+    expect(listNotifications(MERCHANT)).toHaveLength(1)
+    expect(listNotifications(MERCHANT)[0]?.body).toBe('€5.00 cashback claimed (CB-ABCDE-FGHIJ)')
+    expect(toasts).toHaveLength(1)
+  })
+
+  it('drain first, then push: one row', async () => {
+    serve([NOTICE])
+    await runCashbackClaimDrainTick()
+
+    await fileCashbackClaimPush(MERCHANT, PUSH)
+
+    expect(listNotifications(MERCHANT)).toHaveLength(1)
+    expect(toasts).toHaveLength(1)
+  })
+
+  it('a redelivered notice is still one row', async () => {
+    serve([NOTICE])
+    await runCashbackClaimDrainTick()
+    await runCashbackClaimDrainTick()
+
+    expect(listNotifications(MERCHANT)).toHaveLength(1)
+  })
+})
+
+describe('stamping the cashback row', () => {
+  it('drain stamps Claimed and claimedAt on the row', async () => {
+    serve([NOTICE])
+
+    await runCashbackClaimDrainTick()
+
+    expect(recordCashbackStatus).toHaveBeenCalledWith(`cashback:${CASHBACK_ID}`, {
+      status: 'Claimed',
+      claimedAt: CLAIMED_AT_MS,
+    })
+    expect(rows[`cashback:${CASHBACK_ID}`]).toMatchObject({ cashbackStatus: 'Claimed', claimedAt: CLAIMED_AT_MS })
+  })
+
+  it('push stamps it too, so a closed-then-opened app is right without the drain', async () => {
+    await fileCashbackClaimPush(MERCHANT, PUSH)
+
+    expect(rows[`cashback:${CASHBACK_ID}`]).toMatchObject({ cashbackStatus: 'Claimed', claimedAt: CLAIMED_AT_MS })
+  })
+
+  it('stamps even when the merchant turned the bell entry off', async () => {
+    wanted = false
+    serve([NOTICE])
+
+    await runCashbackClaimDrainTick()
+
+    expect(listNotifications(MERCHANT)).toHaveLength(0)
+    expect(rows[`cashback:${CASHBACK_ID}`]).toMatchObject({ cashbackStatus: 'Claimed' })
+  })
+
+  it('does not overwrite a row already stamped Claimed', async () => {
+    rows[`cashback:${CASHBACK_ID}`]!.cashbackStatus = 'Claimed'
+    rows[`cashback:${CASHBACK_ID}`]!.claimedAt = 1
+    serve([NOTICE])
+
+    await runCashbackClaimDrainTick()
+
+    expect(recordCashbackStatus).not.toHaveBeenCalled()
+  })
+})
+
+describe('the drain loop', () => {
+  it('acks every drained notice by cashback id', async () => {
+    serve([NOTICE, { ...NOTICE, cashbackId: 'bad' }])
+
+    await runCashbackClaimDrainTick()
+
+    const ack = signedFetch.mock.calls.find(([path]) => path.endsWith('/ack'))
+    expect(ack?.[0]).toBe('/api/v1/portal/cashback/claim-notices/ack')
+    expect(ack?.[2]).toEqual({ cashbackIds: [CASHBACK_ID, 'bad'] })
+  })
+
+  it('asks the portal drain with a limit', async () => {
+    serve([])
+
+    await runCashbackClaimDrainTick()
+
+    expect(signedFetch.mock.calls[0]).toEqual(['/api/v1/portal/cashback/claim-notices/drain', 'POST', { limit: 50 }])
+  })
+})
+
+describe('never throws', () => {
+  it('a network failure is swallowed', async () => {
+    signedFetch.mockRejectedValue(new Error('offline'))
+
+    await expect(runCashbackClaimDrainTick()).resolves.toBeUndefined()
+  })
+
+  it('a refused drain is swallowed and acks nothing', async () => {
+    signedFetch.mockResolvedValue(new Response(null, { status: 500 }))
+
+    await expect(runCashbackClaimDrainTick()).resolves.toBeUndefined()
+    expect(signedFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('an unreadable body is swallowed', async () => {
+    signedFetch.mockResolvedValue(new Response('not json', { status: 200 }))
+
+    await expect(runCashbackClaimDrainTick()).resolves.toBeUndefined()
+  })
+
+  it('a broken store still files the bell row', async () => {
+    storeThrows = true
+    serve([NOTICE])
+
+    await runCashbackClaimDrainTick()
+
+    expect(listNotifications(MERCHANT)[0]?.body).toBe('€5.00 cashback claimed')
+  })
+
+  it('a malformed push files nothing and does not throw', async () => {
+    await expect(fileCashbackClaimPush(MERCHANT, { type: 'cashback_claimed', data: { amountMinor: 'x' } })).resolves.toBe(false)
+    await expect(fileCashbackClaim(MERCHANT, { cashbackId: '' } as never)).resolves.toBe(false)
+    expect(listNotifications(MERCHANT)).toHaveLength(0)
+  })
+
+  it('a customer wallet (403) stops polling for the session', async () => {
+    signedFetch.mockResolvedValue(new Response(null, { status: 403 }))
+    await runCashbackClaimDrainTick()
+    signedFetch.mockClear()
+
+    await runCashbackClaimDrainTick()
+
+    expect(signedFetch).not.toHaveBeenCalled()
+  })
+
+  it('does nothing when stopped', async () => {
+    stopCashbackClaims()
+    serve([NOTICE])
+
+    await runCashbackClaimDrainTick()
+
+    expect(signedFetch).not.toHaveBeenCalled()
+  })
+})

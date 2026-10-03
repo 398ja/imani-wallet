@@ -29,6 +29,7 @@ const ROUTE_FOR_TYPE = {
   voucher_received: '/receive',
   voucher_claimed: '/merchant/transactions',
   voucher_expiring: '/',
+  cashback_claimed: '/merchant/transactions',
   generic: '/',
 }
 
@@ -36,6 +37,7 @@ const FALLBACK_TEXT = {
   voucher_received: { title: 'Coupon received', body: 'A coupon arrived in your wallet.' },
   voucher_claimed: { title: 'Coupon claimed', body: 'A coupon you sent was claimed.' },
   voucher_expiring: { title: 'Coupon expiring', body: 'A coupon in your wallet expires soon.' },
+  cashback_claimed: { title: 'Cashback claimed', body: 'A cashback code you issued was claimed.' },
   generic: { title: 'Imani', body: 'You have a new notification.' },
 }
 
@@ -81,7 +83,7 @@ function walletRoute(url) {
  *
  * Mirrors `isNotificationType` in render.ts, which was always an allow-list.
  */
-const KNOWN_TYPES = ['voucher_received', 'voucher_claimed', 'voucher_expiring']
+const KNOWN_TYPES = ['voucher_received', 'voucher_claimed', 'voucher_expiring', 'cashback_claimed']
 
 function toRenderable(payload) {
   const raw = payload || {}

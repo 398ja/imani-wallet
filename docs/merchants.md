@@ -105,6 +105,17 @@ the customer pays less than a whole coupon, they keep the change automatically.
   you can nudge customers to spend them.
 - **Stats** gives you the totals: issued, returned, and a simple day-by-day chart.
 
+### When a customer claims your cashback
+
+When a customer types in a cashback code you gave them, your till hears about it
+within seconds: a notification (if you allowed them) and a bell entry such as
+"€5.00 cashback claimed (CB-ABCDE-FGHIJ)". The cashback on your Vouchers list and
+its own screen switch to "Claimed" at the same moment, with no need to open it.
+
+If notifications are off in your browser, the bell still gets the entry the next
+time the app is open. Either way you get one entry per cashback, not two. The
+"a coupon you sent was claimed" switch in notification settings covers this too.
+
 ### What a voucher's own screen tells you
 
 Tap a voucher, or scan a customer's pass, and you get its record:

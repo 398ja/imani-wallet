@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The stall hears when a customer claims its cashback** (#158, with
+  imani-gateway-portal#59). The portal sends a `cashback_claimed` Web Push and keeps a
+  drainable notice; `src/lib/cashbackClaimDrain.ts` collects the notice
+  (`POST /api/v1/portal/cashback/claim-notices/drain` then `/ack`) on the receipt drain's
+  cadence (boot, every 10s while visible, on becoming visible) and never throws. Push and
+  drain both file through one function, keyed `cashback-claimed:<cashbackId>`, so a claim
+  that arrives both ways is one bell row and one toast: "€5.00 cashback claimed
+  (CB-…)", formatted with `formatFace`. The code comes from the stall's own row, never
+  from the portal. Filing also stamps the row `cashbackStatus = Claimed` and `claimedAt`, so
+  the Vouchers list and the voucher detail (#155) are right without a status fetch; the
+  stamp happens even when the bell entry is switched off. A customer wallet's drain gets
+  403 and stops for the session. `cashback_claimed` is a known notification type in the
+  app and the service worker, governed by the existing "coupon claimed" switch.
+- `e2e/probe-cashback-spend.mts` checks the till's bell entry and the stamped row after the
+  claim.
+
 ### Fixed
 
 - **A cashback voucher's detail no longer reads like a sale** (#155). It showed "Paid: At the

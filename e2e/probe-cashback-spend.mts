@@ -18,6 +18,9 @@
  *     and fixes the record as it goes, so it reads Claimed even when no notification ever came
  *     (it passed on a staging without #53). Set E2E_SKIP_CLAIM_STATUS=1 to skip it.
  *  7. The till's Vouchers list shows the cashback voucher.
+ *  8. The till's bell holds ONE "€5.00 cashback claimed (CB-…)" entry (imani-wallet#158,
+ *     imani-gateway-portal#59), from the push or the in-app drain, and its cashback row is
+ *     stamped Claimed without a status fetch. Skipped with E2E_SKIP_CLAIM_STATUS=1 too.
  *
  * Output: one JSON line per check, then CONTEXT and SUMMARY. Exit 1 on any failed check.
  *
@@ -39,6 +42,8 @@ const PAYMENT_WAIT_POLLS = 120
 /** How long the claim notification has to reach the portal before the check gives up. */
 const CLAIM_STATUS_WINDOW_MS = 3 * 60_000
 const STORED_CLAIMED = /^200 status=Claimed$/
+/** How long the merchant's bell has to show the claim (drain ticks every 10s). */
+const CLAIM_BELL_WINDOW_MS = 2 * 60_000
 const CLAIM_CODE = /\bCB-[A-Z0-9]{4,5}-[A-Z0-9]{2,5}\b/
 const PAYMENT_DONE = /^(Sent|Paid|Partly sent)$/m
 const FAILURE_WORDS = /failed|error|could not|NOT been delivered|never finished|refused/i
@@ -352,6 +357,43 @@ async function checkVouchersList(till: Page, voucherId: string): Promise<void> {
   record(`till's Vouchers list shows the €${CASHBACK_AMOUNT} cashback`, listsIt, oneLine(listed).slice(0, 600))
 }
 
+/** The till's bell rows, straight from the inbox's localStorage key (notifications/inbox.ts). */
+async function bellEntries(till: Page, pubkey: string): Promise<Array<{ id?: string; type?: string; body?: string }>> {
+  return till.evaluate((pk) => {
+    try {
+      const raw = localStorage.getItem(`imani-wallet:notifications:${pk}`)
+      const parsed: unknown = raw ? JSON.parse(raw) : []
+      return Array.isArray(parsed) ? (parsed as Array<{ id?: string; type?: string; body?: string }>) : []
+    } catch {
+      return []
+    }
+  }, pubkey)
+}
+
+async function checkClaimBell(till: Page, tillPubkey: string, cashbackId: string, code: string): Promise<void> {
+  if (process.env.E2E_SKIP_CLAIM_STATUS === '1') return
+  await goto(till, `${BASE}/`)
+  await unlockIfLocked(till)
+  const id = `cashback-claimed:${cashbackId}`
+  const deadline = Date.now() + CLAIM_BELL_WINDOW_MS
+  let matching: Array<{ id?: string; type?: string; body?: string }> = []
+  while (Date.now() < deadline) {
+    matching = (await bellEntries(till, tillPubkey)).filter((e) => e.id === id)
+    if (matching.length > 0) break
+    await till.waitForTimeout(POLL_MS)
+  }
+  const body = matching[0]?.body ?? ''
+  const expected = `€${CASHBACK_AMOUNT} cashback claimed`
+  record(`till's bell shows "${expected} (${code || 'CB-…'})"`,
+    matching.length === 1 && body.startsWith(expected) && (!code || body.includes(`(${code})`)),
+    matching.length === 0 ? `no bell entry ${id}` : `${matching.length} entr${matching.length === 1 ? 'y' : 'ies'}: ${body}`)
+  const store = await walletStore(till)
+  const row = store.transactions.find((t) => t.id === `cashback:${cashbackId}`)
+  record("till's cashback row is stamped Claimed without a status fetch",
+    !!row && text(row, 'cashbackStatus') === 'Claimed' && row.claimedAt !== undefined,
+    row ? `cashbackStatus=${String(row.cashbackStatus)} claimedAt=${String(row.claimedAt)}` : `no row cashback:${cashbackId}`)
+}
+
 async function main(): Promise<number> {
   const browser = await chromium.launch()
   const pages: Page[] = []
@@ -391,6 +433,7 @@ async function main(): Promise<number> {
 
     await checkSpendAtIssuer(till.page, customer.page, tillPubkey, voucherId)
     if (cashbackId) await checkClaimReachedPortal(till.page, cashbackId)
+    if (cashbackId) await checkClaimBell(till.page, tillPubkey, cashbackId, issued.code)
     await checkVouchersList(till.page, voucherId)
     stopWatching()
     const pageErrors = tillConsole.filter((l) => l.startsWith('[PAGEERROR]'))
