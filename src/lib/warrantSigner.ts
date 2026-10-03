@@ -26,15 +26,18 @@
  * `none` means "the issuer states nothing outside the service authorised this".
  * Collapsing them is how a stripped warrant reads as a legacy coupon.
  *
- * **And a Sell never sends one (#159).** Every wallet that receives a coupon by
+ * **And neither Sell nor cashback ever sends one (#159).** Every wallet that receives a coupon by
  * DM refuses `none`, `absent` and `failed` before the mint swap
  * (`refuseIfUnwarranted` in dmPoll.ts) — the customer's as well as the stall's.
  * A `none` coupon sold at a terminal is therefore refused by the very customer
  * who paid for it, while the terminal used to report "It is in their wallet
  * now". `issue.ts` asks `mayWarrantSale` before anything is minted and refuses
  * the sale with `TERMINAL_SALE_UNSUPPORTED`; `assertSaleWarranted` is the
- * backstop on the warrant actually built. The `none` form stays in this
- * module because cashback issuance still sends it (see `cashbackIssue.ts`).
+ * backstop on the warrant actually built. Cashback asks the same two
+ * questions in `cashbackIssue.ts`: its claim records the verdict without
+ * refusing, but the issuing stall's till refuses the coupon when it is spent.
+ * `none` is still produced here so a caller that skipped those checks would
+ * send an honest signed statement rather than nothing.
  *
  * The honest fix for terminals is the `delegated` form — sign with the terminal
  * credential's lock key, which the stall delegated and can burn. That needs the
@@ -91,9 +94,9 @@ export async function buildIssuanceWarrant(
   } catch {
     // Locked or not yet unlocked. No warrant at all, rather than a `none` we
     // could not have signed the alternative to. What the caller does with that
-    // is its own decision: Sell refuses it (`assertSaleWarranted`), because a
-    // customer's wallet refuses an absent warrant; cashback keeps its own
-    // retry rule for it (`cashbackIssue.ts`).
+    // is its own decision: Sell and cashback both refuse it
+    // (`assertSaleWarranted`), because an absent warrant is refused when the
+    // coupon is received.
     return undefined
   }
 
@@ -148,6 +151,17 @@ export const TERMINAL_SALE_UNSUPPORTED =
   'device. Nothing has been issued; do not take payment for this sale.'
 
 /**
+ * Why a terminal cannot issue cashback yet. The cashback twin of
+ * `TERMINAL_SALE_UNSUPPORTED`: the customer pays nothing here, but the coupon
+ * would be refused by the stall's own till when they came to spend it.
+ */
+export const TERMINAL_CASHBACK_UNSUPPORTED =
+  'Cashback from a terminal is not supported yet. Its coupon would carry no authorisation ' +
+  'signed by the stall, so your own till would refuse it when the customer came to spend it. ' +
+  'Terminal issuing needs the \u201cdelegated\u201d warrant form, which this version does not ' +
+  'support. Issue cashback from the stall owner\u2019s own device. Nothing has been issued.'
+
+/**
  * A sale refused because no verifiable warrant could be signed for it.
  *
  * Its own type so a caller (and a test) can tell this refusal - which happens
@@ -193,8 +207,8 @@ export function assertSaleWarranted(warrant: SignedWarrant): void {
     )
   }
   throw new UnwarrantedSaleError(
-    'Could not sign this sale with the stall\u2019s key, and the customer\u2019s wallet ' +
-      'refuses a coupon the stall did not sign. Sign in again as the stall and try again. ' +
+    'Could not sign this sale with the stall\u2019s key, and a coupon the stall did not ' +
+      'sign is refused when it is received. Sign in again as the stall and try again. ' +
       'Nothing has been issued.',
   )
 }

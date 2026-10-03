@@ -106,9 +106,11 @@ Same as on the owner's own till, minus whatever the role excludes:
 
 - **Redeem** — show the payment request QR, the customer scans and confirms, the
   screen goes to paid on its own.
-- **Sell** — only on a *Sell and redeem* terminal, and **not at all yet**: the
-  Sell screen on a terminal says selling from a terminal is not supported and
-  stops before a customer is scanned. See [Known gaps today](#known-gaps-today).
+- **Sell** — only on a *Sell and redeem* terminal, and **not at all yet**: a
+  terminal's home screen has no Sell button and says selling is not available
+  yet, and the Sell and cashback screens, if reached by typing the address,
+  stop before anything is scanned, typed or issued. See
+  [Known gaps today](#known-gaps-today).
 
 Two things happen quietly and are worth knowing:
 
@@ -218,7 +220,8 @@ By design, and not merely by hiding a button:
 | *This authority is not for this device* | The authority belongs to another terminal or another stall | Ask the owner to set it up again |
 | *This terminal is no longer in service* | It was revoked | Ask the owner to add it again if that was a mistake |
 | Sell is missing on a full till | It opened without reaching the mint, so it is on reduced authority | Get it a connection and open it again |
-| *Selling from a terminal is not supported yet* | No terminal can sell a coupon the customer's wallet will accept (see Known gaps) | Sell from the owner's own device. Do not take payment for the sale on the terminal |
+| *Selling from a terminal is not supported yet* / *not available yet* | No terminal can sell a coupon the customer's wallet will accept (see Known gaps) | Sell from the owner's own device. Do not take payment for the sale on the terminal |
+| *Cashback from a terminal is not supported yet* | The same gap, for cashback codes | Issue cashback from the owner's own device |
 | *Not trading while your subscription is inactive* | A lapsed subscription, not a revocation | Renew; terminals resume immediately |
 
 If a terminal has lost its authority it says so plainly and stops, rather than
@@ -251,6 +254,9 @@ till cannot be run end to end right now**.
    authorised" in the customer's wallet with nothing added. Sell on a terminal
    now stops on arrival, before anything is scanned, issued or paid, and the
    same request made around the screen is refused before anything is minted.
+   **Cashback is stopped the same way**: a cashback code from a terminal would
+   carry the same signed "none", and although the customer can claim it, your
+   own till would refuse it when they came to spend it.
    Terminal sales need the `delegated` warrant form, which signs with the key
    you locked the terminal's authority to; it is not supported yet. Until then,
    sell from your own device.

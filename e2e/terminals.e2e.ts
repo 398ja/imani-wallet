@@ -136,6 +136,8 @@ async function main() {
   const handle = await registerMerchant(page, BASE)
   check('registration completes and lands in the wallet', !page.url().includes('onboarding'), page.url())
   const home = await page.locator('body').innerText()
+  // The OWNER's device, freshly registered: it holds the stall key and can
+  // sign a merchant warrant, so Sell stays. Terminals lose it (#159), below.
   check(
     'the till shows Sell and Redeem',
     home.includes('Sell') && home.includes('Redeem'),
@@ -235,6 +237,9 @@ async function main() {
   check('renders', enrol.includes('Add a terminal') || enrol.includes('terminal'))
   check('asks for a name', enrol.includes('Name'))
   check('offers both roles', /Redemption only/i.test(enrol) && /Sell and redeem/i.test(enrol))
+  // #159: no terminal can sell until the delegated warrant form ships, so the
+  // role an owner picks must say so before they pick it.
+  check('says selling is not yet available on a terminal', /selling not yet available/i.test(enrol))
 
   const add = page.getByRole('button', { name: 'Add terminal' })
   check('will not enrol an empty form', await add.isDisabled())
@@ -311,6 +316,41 @@ async function main() {
     tillText.replace(/\s+/g, ' ').slice(0, 160),
   )
   check('and is NOT offered Sell', !/\bSell\b/.test(tillText), tillText.slice(0, 120))
+
+  // #159: a FULL till is not offered Sell either. Its key is not the stall's,
+  // so its coupons would be refused by the customer's wallet, and the sale is
+  // refused underneath as well. (Opened without the mint's answer it is on
+  // reduced authority anyway; this holds on a full session too.)
+  await beATerminal('issue-and-redeem')
+  await goto(page, `${BASE}/`)
+  await page.waitForTimeout(2500)
+  const fullTill = await page.locator('body').innerText()
+  check(
+    'a full till is not offered a Sell button',
+    (await page.getByRole('button', { name: /^Sell$/ }).count()) === 0,
+    fullTill.replace(/\s+/g, ' ').slice(0, 160),
+  )
+  check('and is offered Redeem', /Redeem/.test(fullTill))
+  await goto(page, `${BASE}/sell`)
+  await page.waitForTimeout(1500)
+  const fullTillSell = await page.locator('body').innerText()
+  check(
+    'typing /sell on a full till is stopped, not offered a scanner',
+    /not supported yet/i.test(fullTillSell) && !/in their wallet now/i.test(fullTillSell),
+    fullTillSell.replace(/\s+/g, ' ').slice(0, 160),
+  )
+  await goto(page, `${BASE}/sell/cashback`)
+  await page.waitForTimeout(1500)
+  const fullTillCashback = await page.locator('body').innerText()
+  check(
+    'typing /sell/cashback on a full till is stopped too',
+    /Cashback from a terminal is not supported yet/i.test(fullTillCashback),
+    fullTillCashback.replace(/\s+/g, ' ').slice(0, 160),
+  )
+
+  await beATerminal('redeem-only')
+  await goto(page, `${BASE}/`)
+  await page.waitForTimeout(2500)
 
   check(
     'the stall’s books are hidden from the menu',
