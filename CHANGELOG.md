@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads as failed rather than unchecked. Recorded, not refused: the claim is one-shot, so
   refusing would lose the value. Cashback still does not attest to the ledger. Cashback rows
   saved before the fix are re-checked from their stored coupon when opened.
+- A cashback coupon now lives as long as a Sell coupon from the same stall
+  (398ja/imani-gateway-portal#58). The generate request sends the stall's
+  `voucherValidityDays` (0 for never expires) next to the claim-window
+  `expiryDays`, which is unchanged. Needs a portal that reads the field; an
+  older portal ignores it and keeps its default.
 
 ## [0.12.0] - 2026-10-01
 
