@@ -29,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The cashback claim drain no longer hammers a failing portal** (#158, with
+  imani-gateway-portal#59). It still stops for the session on 403/404/405/410, but 429, 5xx
+  and network errors now back off exponentially from 10s to a 5-minute cap, with +/-20%
+  jitter, and a successful drain resets it. It warns once per backoff level instead of every
+  tick, and a tab becoming visible does not jump the queue. A portal older than #59 answered
+  the missing route with 500, so a wallet shipped first logged "drain refused 500" every 10s
+  forever. Ship the portal first; a wallet that ships first is now quiet either way.
+  `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 - **A cashback voucher's detail no longer reads like a sale** (#155). It showed "Paid: At the
   counter" and "Customer receipt: Not collected", which are Sell questions with no answer for
   value the stall gave away. It now shows what it is ("Cashback from this stall"), whether the

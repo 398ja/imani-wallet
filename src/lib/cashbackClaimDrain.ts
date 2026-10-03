@@ -40,10 +40,16 @@ const DRAIN_INTERVAL_MS = 10 * 1000
 const DRAIN_LIMIT = 50
 const LOG_PREFIX = '[cashback-claim-drain]'
 
+/** Ceiling for the backoff after repeated transient failures. */
+const MAX_BACKOFF_MS = 5 * 60 * 1000
+
 /**
  * Answers that will not change within a session: not a stall (403), or a
- * portal that has no such route (404/405/410). Everything else (401 during a
- * lock cycle, 429, 5xx, the network) is retried on the normal 10s tick.
+ * portal that has no such route (404/405/410). A 401 during a lock cycle is
+ * retried on the normal 10s tick. 429, 5xx and network errors back off
+ * exponentially from 10s to {@link MAX_BACKOFF_MS} and snap back on success:
+ * an older portal answered the missing route with 500 (portal#59 e2e), and
+ * asking it every 10s meant an ERROR on its side and a warning on ours forever.
  */
 const PERMANENT_REFUSALS = new Set([403, 404, 405, 410])
 
@@ -76,6 +82,34 @@ interface DrainResponse {
 let drainTimerId: ReturnType<typeof setInterval> | null = null
 let drainInFlight = false
 let activePubkey: string | null = null
+/** Consecutive transient failures; 0 is the normal cadence. */
+let failureCount = 0
+/** The un-jittered delay last warned about, so a warning marks a level change only. */
+let warnedDelayMs = 0
+/** Epoch ms before which ticks are skipped. */
+let nextAttemptAt = 0
+
+function backoffDelayMs(failures: number): number {
+  return Math.min(DRAIN_INTERVAL_MS * 2 ** (failures - 1), MAX_BACKOFF_MS)
+}
+
+/** Record a transient failure: push the next attempt out, warn on a new level only. */
+function noteTransientFailure(reason: unknown): void {
+  failureCount += 1
+  const delay = backoffDelayMs(failureCount)
+  // +/-20% jitter so a portal restart is not met by every till in lockstep.
+  nextAttemptAt = Date.now() + Math.round(delay * (0.8 + 0.4 * Math.random()))
+  if (delay !== warnedDelayMs) {
+    warnedDelayMs = delay
+    console.warn(LOG_PREFIX, 'drain failed, backing off', { reason, retryInSeconds: delay / 1000 })
+  }
+}
+
+function resetBackoff(): void {
+  failureCount = 0
+  warnedDelayMs = 0
+  nextAttemptAt = 0
+}
 
 /** The id both routes collapse onto. Matches the portal's `notificationId`. */
 export function cashbackClaimNotificationId(cashbackId: string): string {
@@ -184,6 +218,7 @@ export async function fileCashbackClaimPush(pubkey: string, payload: PushPayload
 /** One drain pass. Never throws. */
 export async function runCashbackClaimDrainTick(): Promise<void> {
   if (drainInFlight || activePubkey === null) return
+  if (Date.now() < nextAttemptAt) return
   drainInFlight = true
   const pubkey = activePubkey
 
@@ -206,14 +241,13 @@ export async function runCashbackClaimDrainTick(): Promise<void> {
         stopCashbackClaims()
         return
       }
-      // 401 during a lock cycle is routine; anything else is worth a line.
-      if (response.status !== 401) {
-        console.warn(LOG_PREFIX, 'drain refused', response.status)
-      }
+      // 401 during a lock cycle is routine and keeps the normal cadence.
+      if (response.status !== 401) noteTransientFailure(response.status)
       return
     }
 
     const body = (await response.json()) as DrainResponse
+    resetBackoff()
     const notices = Array.isArray(body.notices) ? body.notices : []
     if (notices.length === 0) return
 
@@ -238,7 +272,7 @@ export async function runCashbackClaimDrainTick(): Promise<void> {
       console.log(LOG_PREFIX, 'more notices queued, continuing on the next tick')
     }
   } catch (error) {
-    console.warn(LOG_PREFIX, 'drain tick failed', error)
+    noteTransientFailure(error)
   } finally {
     drainInFlight = false
   }
@@ -280,4 +314,5 @@ export function stopCashbackClaims(): void {
   }
   activePubkey = null
   drainInFlight = false
+  resetBackoff()
 }
