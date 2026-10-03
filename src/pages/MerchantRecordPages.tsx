@@ -45,6 +45,8 @@ import {
   describeRail,
   describeWarrant,
   describeAttestation,
+  describeCashbackKind,
+  describeCashbackClaim,
   type EvidenceLine,
   type EvidenceTone,
 } from '../lib/issuedVoucherWording'
@@ -378,7 +380,8 @@ export function IssuedCouponPage({ pubkey }: { pubkey: string }) {
   return <VoucherRecordDetail voucher={voucher} />
 }
 
-function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
+/** Exported for its page test; routed through `IssuedCouponPage`. */
+export function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
   const { row, expired, claimedMinor, outstandingMinor, claims } = voucher
   const money = (minor: number) => formatFace(minor, { unit: row.unit, decimals: row.decimals })
 
@@ -493,7 +496,7 @@ function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
         >
           <span className="shrink-0 text-sm text-mono-500">Transaction</span>
           <span className="flex min-w-0 items-center gap-1 text-right text-mono-900 dark:text-mono-50">
-            The sale this came from
+            {row.type === 'cashback' ? 'The cashback this came from' : 'The sale this came from'}
             <ChevronRight className="h-4 w-4 shrink-0 text-mono-400" />
           </span>
         </Link>
@@ -519,9 +522,29 @@ function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
         understood when they have not.
       */}
       <ListSection title="What stands behind this">
-        <EvidenceRow label="Paid" line={rail} />
-        <EvidenceRow label="Authorised" line={warrant} />
-        <EvidenceRow label="Customer receipt" line={attestation} />
+        {/* A cashback is not a Sell sale (#155): no rail, no customer
+            receipt. What it is, whether it was claimed, and who signed.
+            "Claimed", not "Collected": the word the list, the portal and the
+            issue use, and not a near-twin of the Sell "Not collected". */}
+        {row.type === 'cashback' ? (
+          <>
+            <EvidenceRow label="What it is" line={describeCashbackKind()} />
+            <EvidenceRow
+              label="Claimed"
+              line={describeCashbackClaim(
+                { status: row.cashbackStatus, claimedAt: row.claimedAt, expired },
+                formatDate,
+              )}
+            />
+            <EvidenceRow label="Authorised" line={warrant} />
+          </>
+        ) : (
+          <>
+            <EvidenceRow label="Paid" line={rail} />
+            <EvidenceRow label="Authorised" line={warrant} />
+            <EvidenceRow label="Customer receipt" line={attestation} />
+          </>
+        )}
       </ListSection>
 
       {/*

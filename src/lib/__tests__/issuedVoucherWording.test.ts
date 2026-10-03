@@ -15,8 +15,14 @@ import {
   describeRail,
   describeWarrant,
   describeAttestation,
+  describeCashbackKind,
+  describeCashbackClaim,
   type EvidenceLine,
 } from '../issuedVoucherWording'
+
+const DATE = (ms: number) => `day ${ms}`
+const claimLine = (status: string | undefined, expired = false, claimedAt?: number) =>
+  describeCashbackClaim({ status, expired, claimedAt }, DATE)
 
 /** Every line the three describers can produce, for the rules that hold across all of them. */
 const EVERY_LINE: EvidenceLine[] = [
@@ -32,6 +38,16 @@ const EVERY_LINE: EvidenceLine[] = [
   describeAttestation({ verdict: 'attested' }),
   describeAttestation({ verdict: 'none' }),
   describeAttestation({ verdict: 'invalid', reason: 'names a different stall' }),
+  describeCashbackKind(),
+  claimLine('Claimed', false, 1),
+  claimLine('Claimed'),
+  claimLine('Unclaimed'),
+  claimLine(undefined),
+  claimLine(undefined, true),
+  claimLine('Expired', true),
+  claimLine('Revoked'),
+  claimLine('ManualAttention'),
+  claimLine('SomethingNew'),
 ]
 
 describe('every line of evidence', () => {
@@ -122,5 +138,52 @@ describe('the payment rail', () => {
     const line = describeRail({ kind: 'counter' })
     expect(line.label).toBe('At the counter')
     expect(`${line.label} ${line.detail}`.toLowerCase()).not.toMatch(/\bcash\b/)
+  })
+})
+
+describe('a cashback claim', () => {
+  it('reads claimed, with its date, only when the portal said Claimed', () => {
+    const line = claimLine('Claimed', false, 42)
+    expect(line.label).toBe('Claimed on day 42')
+    expect(line.tone).toBe('confirmed')
+  })
+
+  it('drops the date rather than printing "Claimed on " when it does not format', () => {
+    expect(describeCashbackClaim({ status: 'Claimed', claimedAt: 1, expired: false }, () => '').label).toBe(
+      'Claimed',
+    )
+  })
+
+  it.each([
+    ['no status', undefined, false],
+    ['no status, past expiry', undefined, true],
+    ['Unclaimed', 'Unclaimed', false],
+    ['Expired', 'Expired', true],
+    ['Revoked', 'Revoked', false],
+    ['ManualAttention', 'ManualAttention', false],
+    ['a status this build does not know', 'SomethingNew', false],
+  ])('never reads %s as claimed (absence is never approval)', (_name, status, expired) => {
+    const line = claimLine(status, expired)
+    expect(line.tone).not.toBe('confirmed')
+    expect(line.label).not.toMatch(/^Claimed/)
+  })
+
+  it('does not say "unclaimed" past expiry when the portal never answered', () => {
+    // Nothing asks about a code past its expiry and only final answers are
+    // stored, so a claim made just before expiry may not have reached here.
+    const line = claimLine(undefined, true)
+    expect(line.label).toBe('No claim on record')
+    expect(`${line.label} ${line.detail}`).not.toMatch(/unclaimed|did not claim/i)
+  })
+
+  it('says unclaimed past expiry when the portal itself said Expired', () => {
+    expect(claimLine('Expired', true).label).toBe('Expired unclaimed')
+  })
+
+  it('never borrows the Sell receipt wording', () => {
+    for (const line of [describeCashbackKind(), claimLine(undefined), claimLine('Claimed', false, 1)]) {
+      expect(line.label).not.toBe('Not collected')
+      expect(line.label).not.toBe('At the counter')
+    }
   })
 })
