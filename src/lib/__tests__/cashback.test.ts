@@ -156,8 +156,9 @@ describe('typed claim codes', () => {
   it('only strips CB when it is the prefix of a full-length entry', () => {
     // `CB` can also be the first two characters of a code of either length.
     // Stripping it from a bare code would silently redeem someone else's coupon.
-    expect(normaliseTypedClaimCode('CB12ZZ')).toBe('CB12ZZ')
-    expect(toCanonicalClaimCode('CB12ZZ')).toBe('CB-CB12-ZZ')
+    // (Hex, because legacy codes are hex: #141.)
+    expect(normaliseTypedClaimCode('CB12FF')).toBe('CB12FF')
+    expect(toCanonicalClaimCode('CB12FF')).toBe('CB-CB12-FF')
   })
 
   it('accepts the ten-character codes the portal issues today, in every shape', () => {

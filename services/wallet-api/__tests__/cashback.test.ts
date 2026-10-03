@@ -156,9 +156,27 @@ describe('looking a code up', () => {
     expect(parseLookupRequest({ code: 'CB-AEQTJ-MYJHY' }).ok).toBe(true)
   })
 
-  it('accepts a lowercase one, because a person typed it off a receipt', () => {
-    // The portal canonicalises. Refusing here would reject something that works.
-    expect(parseLookupRequest({ code: 'cb-abcd-ef' }).ok).toBe(true)
+  it('canonicalises a lowercase, spaced one, because a person typed it off a receipt', () => {
+    expect(parseLookupRequest({ code: 'cb-abcd-ef' })).toEqual({ ok: true, value: { code: 'CB-ABCD-EF' } })
+    expect(parseLookupRequest({ code: '  aeqtj myjhy ' })).toEqual({ ok: true, value: { code: 'CB-AEQTJ-MYJHY' } })
+  })
+
+  it('accepts a legacy hex code containing 0 and 1', () => {
+    expect(parseLookupRequest({ code: 'CB-0A1B-01' })).toEqual({ ok: true, value: { code: 'CB-0A1B-01' } })
+  })
+
+  it('refuses a current-shaped code with a character the portal never issues (#141)', () => {
+    for (const code of ['CB-AEQT0-MYJHY', 'CB-AEQT1-MYJHY', 'CB-AEQTO-MYJHY', 'CB-AEQTI-MYJHY', 'CB-AEQTL-MYJHY', 'CB-AEQTU-MYJHY']) {
+      const r = parseLookupRequest({ code })
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.error.field).toBe('code')
+    }
+  })
+
+  it('refuses a legacy-shaped code that is not hex, and wrong lengths', () => {
+    for (const code of ['CB-ZZZZ-99', 'CB-ABCD-E', 'CB-AEQTJ-MYJH', 'a'.repeat(65)]) {
+      expect(parseLookupRequest({ code }).ok).toBe(false)
+    }
   })
 
   it('requires a code', () => {

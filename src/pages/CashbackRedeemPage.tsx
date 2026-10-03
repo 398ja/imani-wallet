@@ -5,6 +5,7 @@ import { Check } from 'lucide-react'
 import { Button, Screen, BackLink, PageHeader, Alert, Panel, Input } from '../components/ui'
 import {
   canonicaliseTypedClaimCode,
+  typedClaimCodeProblem,
   redeemCashbackCode,
   replayPendingCashback,
   type RedeemResult,
@@ -45,6 +46,9 @@ export function CashbackRedeemPage() {
   }, [])
 
   const canonical = canonicaliseTypedClaimCode(typed)
+  // A full-length entry with a character no code can hold (#141). Said here so
+  // the customer fixes it before a lookup is spent on it.
+  const problem = typedClaimCodeProblem(typed)
 
   const submit = async () => {
     if (canonical === null || busy) return
@@ -140,6 +144,11 @@ export function CashbackRedeemPage() {
         {canonical !== null && canonical !== typed.trim() && (
           <p className="mt-2 text-sm text-mono-500">
             Reading this as <span className="font-mono">{canonical}</span>
+          </p>
+        )}
+        {problem !== null && (
+          <p className="mt-2 text-sm text-mono-500" role="status">
+            {problem}
           </p>
         )}
       </Panel>

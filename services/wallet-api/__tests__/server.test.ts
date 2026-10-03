@@ -1996,3 +1996,57 @@ describe('preparing a part', () => {
     })
   })
 })
+
+/**
+ * #141. Every caller of this service reaches the portal from one IP, so a junk
+ * code must be refused here, before anything is sent to the portal.
+ */
+describe('looking up a cashback code', () => {
+  const portalCalls: string[] = []
+  beforeEach(() => {
+    portalCalls.length = 0
+    guards.clear()
+    setGatewayFetch((async (url: string | URL | Request) => {
+      portalCalls.push(String(url))
+      return new Response('{}', { status: 200 })
+    }) as unknown as typeof fetch)
+  })
+  afterAll(() => resetGatewayFetch())
+
+  async function lookup(code: unknown) {
+    const { signer } = makeSigner()
+    const body = JSON.stringify({ code })
+    const res = await fetch(`${base}/v1/cashback/lookup`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: await nip98Header('/v1/cashback/lookup', 'POST', body, signer),
+      },
+      body,
+    })
+    return { status: res.status, body: await jsonOf(res) }
+  }
+
+  it.each(['CB-AEQT0-MYJHY', 'CB-AEQTO-MYJHY', 'CB-ZZZZ-99', 'not a code', 'AEQTJMYJH'])(
+    'refuses %s with a 400 and never calls the portal',
+    async (code) => {
+      const r = await lookup(code)
+      expect(r.status).toBe(400)
+      expect(r.body.field).toBe('code')
+      expect(portalCalls).toEqual([])
+    },
+  )
+
+  it('canonicalises what was typed into the by-code URL', async () => {
+    const r = await lookup('  cb aeqtj-myjhy ')
+    expect(r.status).toBe(200)
+    expect(r.body.url).toMatch(/\/by-code\/CB-AEQTJ-MYJHY$/)
+    expect(portalCalls).toEqual([])
+  })
+
+  it('keeps legacy hex codes with 0 and 1 working', async () => {
+    const r = await lookup('cb-0a1b-01')
+    expect(r.status).toBe(200)
+    expect(r.body.url).toMatch(/\/by-code\/CB-0A1B-01$/)
+  })
+})
