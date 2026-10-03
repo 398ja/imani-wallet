@@ -1,0 +1,216 @@
+# Third override for the imani-test stack, layered after imani-deploy's
+# docker-compose.test.yml and deploy/compose.override.yml. Used by
+# e2e/stack/up.sh for the cashback sev-1 e2e runs (imani-wallet#155, #156,
+# imani-gateway-portal#58).
+#
+# Pins every cashback-path service to the CURRENT staging images, because the
+# local `acl-local` tags predate the issuance warrant (#52), claim notify (#53)
+# and gateway-customer 0.19 (NUT-20 quotes, which need cashu-mint 0.41).
+# Any service can be swapped for a locally built image through its env var,
+# which is how a fix branch is tested: GATEWAY_PORTAL_IMAGE=imani-gateway-portal:fix58.
+services:
+  imani-mint-rest:
+    image: ${MINT_REST_IMAGE:-docker.398ja.xyz/staging/cashu-mint-rest:latest}
+    environment:
+      CASHU_MINT_CORS_ALLOWED_ORIGINS: "${CASHU_MINT_CORS_ALLOWED_ORIGINS:-http://localhost:5177}"
+      CASHU_MINT_VOUCHER_IDENTITY_SALT: "${CASHU_MINT_VOUCHER_IDENTITY_SALT:-test-voucher-identity-salt-local-only}"
+      CASHU_MINT_ISSUANCE_RATE_LIMIT_TRUSTED_PROXIES: "172.16.0.0/12"
+      # cashu-vault 0.15 refuses unauthenticated callers; same values as the vault below.
+      VAULT_USERNAME: "vault-admin"
+      VAULT_PASSWORD: "test-vault-password-local-only"
+      VAULT_API_TOKEN: "test-vault-api-token-local-only-0123456789abcdef"
+      # cashu-mint 0.41 locks voucher quotes to a pubkey (NUT-20) and refuses with
+      # 20009 "no durable quote storage" unless JPA quote storage is on.
+      CASHU_MINT_JPA_ENABLED: "true"
+      VAULT_HASHI_ENABLED: "true"
+      VAULT_HASHI_URI: http://hashicorp-vault-cashback-e2e:8200
+      VAULT_HASHI_AUTH_TOKEN: dev-root-token
+      VAULT_HASHI_ENGINE_MOUNT: cashu
+      MINT_DB_URL: jdbc:postgresql://imani-mint-db:5432/cashu_mint
+      MINT_DB_USER: postgres
+      MINT_DB_PASSWORD: postgres
+    depends_on:
+      imani-mint-db:
+        condition: service_healthy
+
+  # A fresh vault database of our own. The shared vault-db-data-test volume holds
+  # an old v1 keyset (00e3372e…) marked active, so the 0.41 mint cannot seed its
+  # v2 preload keyset (idx_keyset_unit_mint_active_unq) and every mint fails
+  # 12001 "keyset not known". The old volume is left untouched.
+  imani-vault-db:
+    volumes:
+      - vault-db-data-cashback-e2e:/var/lib/postgresql/data
+
+  imani-mint-db:
+    image: postgres:16
+    container_name: imani-mint-db-test
+    environment:
+      POSTGRES_DB: cashu_mint
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - mint-db-data-test:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d cashu_mint"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    networks:
+      - imani-internal
+
+  # NOTE: once this image has booted, imani_vault is at Flyway V13 and the old
+  # imani-vault-jpa:libfix (V8) can no longer start against the volume.
+  imani-vault-jpa:
+    image: ${VAULT_JPA_IMAGE:-docker.398ja.xyz/staging/cashu-vault-jpa:latest}
+    environment:
+      VAULT_API_TOKEN: "test-vault-api-token-local-only-0123456789abcdef"
+      # On an EMPTY database baseline-on-migrate marks V1 (the schema) as applied
+      # and V2 then fails on missing tables.
+      SPRING_FLYWAY_BASELINE_ON_MIGRATE: "false"
+      VAULT_HASHI_ENABLED: "true"
+      VAULT_HASHI_URI: http://hashicorp-vault-cashback-e2e:8200
+      VAULT_HASHI_AUTH_TOKEN: dev-root-token
+      VAULT_HASHI_ENGINE_MOUNT: cashu
+      SPRING_APPLICATION_JSON: >-
+        {"cashu":{"vault":{"security":{"users":[{"username":"vault-admin","password":"test-vault-password-local-only","roles":["ADMIN"]}]}}}}
+
+  gateway-core:
+    image: ${GATEWAY_CORE_IMAGE:-docker.398ja.xyz/staging/gateway-core:latest}
+    environment:
+      # nap-spring 0.9.0 answers an empty 500 for any handler under
+      # nap.protected-path-prefixes (/internal/v1/merchants) with no @Requires* or
+      # @PublicEndpoint. MerchantPermissionsController has none, so the portal's
+      # coupon:issue lookup 500s and every merchant is refused 403. Seen on
+      # staging/gateway-core:latest (v0.17.3); off here so cashback can run.
+      NAP_REQUIREANNOTATIONONPROTECTEDPATHS: "false"
+      # Browser calls arrive through the Vite proxy with Origin http://localhost:5177;
+      # deny-by-default CORS answers 403 "Invalid CORS request" on /api/v1/auth/init.
+      GATEWAY_CORE_CORS_ADDITIONAL_ORIGINS: "${E2E_PUBLIC_BASE:-http://localhost:5177}"
+      # The wallet only redeems claim links on an https host it is told to trust.
+      GATEWAY_BOTTIN_CASHBACK_ORIGINS: "localhost:28443"
+      # SEC-02: NIP-98 events are bound to the origin the browser signed, which is
+      # the Vite dev server for every service. SEC-04: edge secret >= 32 chars; run
+      # Vite with PORTAL_EDGE_SECRET set to the same value.
+      GATEWAY_SECURITY_NIP98_PUBLIC_BASE_URL: "${E2E_PUBLIC_BASE:-http://localhost:5177}"
+      GATEWAY_CORE_EDGE_SHARED_SECRET: "dev-edge-secret-local-only-32-plus-chars"
+
+  account-app:
+    image: ${GATEWAY_CORE_IMAGE:-docker.398ja.xyz/staging/gateway-core:latest}
+    environment:
+      GATEWAY_API_KEY_MASTER_KEY: "${ACCOUNT_MASTER_KEY:-test-master-key-do-not-use-in-prod}"
+      # SEC-02: NIP-98 events are bound to the origin the browser signed, which is
+      # the Vite dev server for every service. SEC-04: edge secret >= 32 chars; run
+      # Vite with PORTAL_EDGE_SECRET set to the same value.
+      GATEWAY_SECURITY_NIP98_PUBLIC_BASE_URL: "${E2E_PUBLIC_BASE:-http://localhost:5177}"
+      GATEWAY_CORE_EDGE_SHARED_SECRET: "dev-edge-secret-local-only-32-plus-chars"
+
+  gateway-customer:
+    image: ${GATEWAY_CUSTOMER_IMAGE:-docker.398ja.xyz/staging/gateway-customer:latest}
+    volumes:
+      - ${E2E_STACK_DIR:?run via e2e/stack/up.sh}/tls/truststore.jks:/etc/tls/truststore.jks:ro
+    environment:
+      # v0.18.0 refuses to boot without a >= 32 char passphrase for the sealed float.
+      # SEC-02: NIP-98 events are bound to the origin the browser signed, which is
+      # the Vite dev server for every service. SEC-04: edge secret >= 32 chars; run
+      # Vite with PORTAL_EDGE_SECRET set to the same value.
+      GATEWAY_SECURITY_NIP98_PUBLIC_BASE_URL: "${E2E_PUBLIC_BASE:-http://localhost:5177}"
+      GATEWAY_CUSTOMER_EDGE_SHARED_SECRET: "dev-edge-secret-local-only-32-plus-chars"
+      GATEWAY_CUSTOMER_CORS_ALLOWED_ORIGINS: "${E2E_PUBLIC_BASE:-http://localhost:5177}"
+      # Every mint URL a token can carry must be https (gateway-api 0.14), and a
+      # token is stamped with the PUBLIC url. Point both at the TLS front.
+      GATEWAY_WALLET_MINT_PUBLIC_URL: "https://mint-tls:7443"
+      GATEWAY_CUSTOMER_WALLET_STATE_PUBLIC_MINT_URL: "https://mint-tls:7443"
+      WALLET_MINT_ALLOWLIST: "mint-tls,127.0.0.1.mint,imani-mint-rest,localhost"
+      JAVA_TOOL_OPTIONS: "-Djavax.net.ssl.trustStore=/etc/tls/truststore.jks -Djavax.net.ssl.trustStorePassword=changeit -Dwallet.mint.allowInternalAddresses=true"
+      WALLET_PASSPHRASE: "test-wallet-passphrase-local-only-0123456789abcdef"
+
+  gateway-portal:
+    image: ${GATEWAY_PORTAL_IMAGE:-docker.398ja.xyz/staging/gateway-portal:latest}
+    environment:
+      # imani-gateway-portal#53: the bearer cashback-claim presents on claim-notify.
+      # SEC-02: NIP-98 events are bound to the origin the browser signed, which is
+      # the Vite dev server for every service. SEC-04: edge secret >= 32 chars; run
+      # Vite with PORTAL_EDGE_SECRET set to the same value.
+      GATEWAY_SECURITY_NIP98_PUBLIC_BASE_URL: "${E2E_PUBLIC_BASE:-http://localhost:5177}"
+      GATEWAY_PORTAL_EDGE_SHARED_SECRET: "dev-edge-secret-local-only-32-plus-chars"
+      GATEWAY_PORTAL_INTERNAL_API_TOKEN: "test-claim-notify-token-local-only"
+      GATEWAY_PORTAL_MINT_URL: "https://mint-tls:7443"
+
+  cashback-claim:
+    image: ${CASHBACK_CLAIM_IMAGE:-docker.398ja.xyz/staging/imani-cashback-claim:latest}
+    environment:
+      # imani-deploy#87: the outbox drainer starts only when the portal URL is set.
+      GATEWAY_PORTAL_BASE_URL: "http://gateway-portal:8084"
+      GATEWAY_PORTAL_API_TOKEN: "test-claim-notify-token-local-only"
+      CASHBACK_CLAIM_PUBLIC_HOST: "https://localhost:28443"
+
+  # cashu-mint 0.41 requires a signed webhook TIMESTAMP; the old local
+  # payment-adapter:webhook-local omits it, so every voucher quote stays unpaid
+  # (mint_task voucher_funding_required, 90015). Staging adapter + mock instead.
+  payment-adapter:
+    image: ${PAYMENT_ADAPTER_IMAGE:-docker.398ja.xyz/staging/payment-adapter-rest:latest}
+    environment:
+      PURCHASE_API_TOKEN: "test-purchase-api-token-local-only-0123456789"
+
+  phoenixd-mock:
+    image: ${PHOENIXD_MOCK_IMAGE:-docker.398ja.xyz/staging/phoenixd-mock:latest}
+
+  merchant-service:
+    image: ${MERCHANT_IMAGE:-docker.398ja.xyz/staging/imani-merchant:latest}
+    environment:
+      # SEC-02: NIP-98 events are bound to the origin the browser signed, which is
+      # the Vite dev server for every service. SEC-04: edge secret >= 32 chars; run
+      # Vite with PORTAL_EDGE_SECRET set to the same value.
+      GATEWAY_SECURITY_NIP98_PUBLIC_BASE_URL: "${E2E_PUBLIC_BASE:-http://localhost:5177}"
+      MERCHANT_EDGE_SHARED_SECRET: "dev-edge-secret-local-only-32-plus-chars"
+
+  # gateway-api 0.14 (gateway-customer 0.19) refuses a non-https mintUrl on
+  # createVoucher (API-05), and the portal passes its gateway.portal.mint-url
+  # verbatim, so cashback fails VALIDATION_001 against the plain-http test mint.
+  # A TLS terminator with a self-signed cert, trusted by gateway-customer only.
+  # Regenerate tls/ with the openssl/keytool lines in e2e/stack/README.md.
+  # cashu-vault 0.15 keeps private keys only in HashiCorp Vault (t_key.vault_path);
+  # with VAULT_HASHI_ENABLED=false every mint dies "PrivateKey.fromString: s is
+  # marked non-null but is null". Dev-mode vault, keys loaded by e2e/stack/seed-hashi.sh.
+  # Addressed by container name, never the `hashicorp-vault` alias: the unrelated
+  # cashu-mint stack attaches ITS vault to imani-test_imani-internal under that
+  # same alias, so DNS round-robins between two vaults and key reads randomly
+  # come back empty ("PrivateKey.fromString: s is marked non-null but is null").
+  hashicorp-vault:
+    image: hashicorp/vault:1.18
+    container_name: hashicorp-vault-cashback-e2e
+    command: ["server", "-dev"]
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: dev-root-token
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    cap_add: [IPC_LOCK]
+    networks:
+      - imani-internal
+
+  # https front for cashback-claim, reachable from the host browser (self-signed;
+  # run probes with E2E_IGNORE_HTTPS_ERRORS=1).
+  claim-tls:
+    image: nginx:alpine
+    container_name: claim-tls-test
+    ports:
+      - "28443:28443"
+    volumes:
+      - ${E2E_STACK_DIR:?run via e2e/stack/up.sh}/tls/claim-tls.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${E2E_STACK_DIR:?run via e2e/stack/up.sh}/tls/claim.crt:/etc/tls/claim.crt:ro
+      - ${E2E_STACK_DIR:?run via e2e/stack/up.sh}/tls/claim.key:/etc/tls/claim.key:ro
+    networks:
+      - imani-internal
+
+  mint-tls:
+    image: nginx:alpine
+    container_name: mint-tls-test
+    volumes:
+      - ${E2E_STACK_DIR:?run via e2e/stack/up.sh}/tls/mint-tls.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${E2E_STACK_DIR:?run via e2e/stack/up.sh}/tls/mint.crt:/etc/tls/mint.crt:ro
+      - ${E2E_STACK_DIR:?run via e2e/stack/up.sh}/tls/mint.key:/etc/tls/mint.key:ro
+    networks:
+      - imani-internal
+
+volumes:
+  mint-db-data-test:
+  vault-db-data-cashback-e2e:
