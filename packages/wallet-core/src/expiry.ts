@@ -51,10 +51,12 @@ function msOf(value: unknown): number | 'none' | 'unreadable' {
     // '0' is how a 0 that went through a string column reads. Same sentinel.
     if (text === '' || text === '0') return 'none'
     if (NUMERIC.test(text)) n = Number(text)
-    // Only date-shaped strings go to Date.parse: it is lenient enough to read
-    // "-5" or "12" as a date in 2001, which no producer meant.
-    else if (/^\d{4}-\d{2}-\d{2}/.test(text)) return finiteMs(Date.parse(text))
-    else return 'unreadable'
+    // A signed or otherwise number-ish string is not a date, however lenient
+    // Date.parse is about it ("-5" reads as a day in 2001). Anything else
+    // (ISO, RFC 2822, Date#toString) goes to Date.parse, as format.ts's display
+    // callers always relied on.
+    else if (/^[+-]?[\d.e]+$/i.test(text)) return 'unreadable'
+    else return finiteMs(Date.parse(text))
   } else return 'unreadable'
 
   if (!Number.isFinite(n) || n < 0) return 'unreadable'

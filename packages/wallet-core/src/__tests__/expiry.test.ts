@@ -21,6 +21,7 @@ describe('readExpiry', () => {
     ['padded numeric string', ` ${SECONDS} `],
     ['ISO instant (/inspect today, gateway create-voucher)', '2026-12-30T00:00:00Z'],
     ['ISO with millis (toVoucher, Date#toISOString)', '2026-12-30T00:00:00.000Z'],
+    ['RFC 2822 (Date#toUTCString)', 'Wed, 30 Dec 2026 00:00:00 GMT'],
     ['Date object', new Date(MS)],
   ])('reads a %s as the instant it names', (_label, value) => {
     expect(readExpiry(value)).toEqual({ kind: 'at', seconds: SECONDS })
