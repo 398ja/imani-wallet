@@ -12,13 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **A voucher whose expiry was stored as a numeric string is no longer spent last** (#157).
-  `expires_at` reaches the wallet as an ISO string, a number in seconds or milliseconds, or a
-  numeric string. The last one read as "unparseable", and unparseable read as "never expires",
-  so the voucher closest to being lost went last. All four formats now parse. Only a genuinely
-  absent expiry (missing, null, empty, 0) counts as never expiring. An expiry that is present but
-  unreadable is now spent FIRST, so it can never be stranded past a real date nobody could read.
-  When a sooner-expiring voucher is left for a legitimate reason (another issuer, another
-  currency, or it cannot be divided to the amount), the pay screen says so in one line and the
+  `expires_at` reached the wallet as an ISO string, a number in seconds or milliseconds, or a
+  numeric string of seconds (what gateway-core's `/inspect` returned before v0.6.1, stored verbatim
+  and carried to new devices by NIP-60 restore). The numeric string read as "never expires", so
+  the voucher closest to being lost went last. Every coupon is now STORED with its expiry in one
+  format, epoch seconds, whichever way it arrived (DM, claim, cashback, restore, import), and
+  rows stored before this are repaired when the wallet opens: idempotently, safely with two tabs
+  open. One parser replaces four copies that disagreed. A value nobody can read is kept as it
+  was and logged, never turned into "never expires"; as a last resort it is spent first, and if
+  the gateway refuses it as expired the payment moves on to the next voucher. When a
+  sooner-expiring voucher is left for a legitimate reason (another stall, another currency, too
+  small, or it cannot be divided to the amount), the pay screen says so in one line and the
   `[pay]` log records which voucher and why.
 
 ## [0.14.2] - 2026-10-05
