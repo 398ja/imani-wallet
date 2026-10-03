@@ -201,4 +201,12 @@ export interface WalletStorageConfig {
   channelName?: string;
   /** Inject a custom now() for tests. */
   now?: () => number;
+  /**
+   * Applied to every voucher row before it is written, by EVERY voucher writer
+   * (`saveVoucher`, `atomicallyWrite`, `clearAndReplaceAllVouchers`). The one
+   * place a stored shape can be enforced, because the callers are not all ours:
+   * imani-apps' tokenRedemption writes through `atomicallyWrite` directly.
+   * The wallet uses it to store `expires_at` as epoch seconds (#157).
+   */
+  normaliseVoucher?: (row: VoucherRow) => VoucherRow;
 }

@@ -1,6 +1,7 @@
 import { VoucherGrouper } from '@imani/voucher-send'
 import type { Voucher, MerchantGroup } from '@imani/voucher-send'
 import type { VoucherRow } from '@imani/wallet-storage'
+import { readExpiry } from '@imani/wallet-core'
 
 import { toEpochMs } from './format'
 import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
@@ -77,7 +78,7 @@ export function toVoucher(row: VoucherRow): Voucher {
     expires_at:
       expiresMs !== undefined
         ? new Date(expiresMs).toISOString()
-        : [undefined, null, '', 0].includes(row.expires_at as string | number | null | undefined)
+        : readExpiry(row.expires_at).kind === 'none'
           ? undefined
           : String(row.expires_at),
     created_at: row.created_at,
