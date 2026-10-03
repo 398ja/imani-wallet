@@ -18,6 +18,7 @@ import { WalletStorage, type VoucherRow } from '@imani/wallet-storage'
 
 import { addRestoredVoucher, getWallet, openWallet, wipeWallet } from '../wallet'
 import { migrateStoredExpiries, normaliseExpiry } from '../expiryStorage'
+import { buildVoucherToken } from './voucherFixtures'
 
 vi.mock('../voucherRecords', () => ({
   publishVoucher: vi.fn().mockResolvedValue(undefined),
@@ -129,6 +130,25 @@ describe('migrateStoredExpiries', () => {
     expect(first.rewritten).toBe(7)
     expect(second.rewritten).toBe(0)
     expect(await getWallet().getAllVouchers()).toEqual(after)
+  })
+
+  it('takes no readwrite pass when nothing needs repair', async () => {
+    await getWallet().saveVoucher(row(SECONDS))
+    const spy = vi.spyOn(getWallet(), 'rewriteVouchers')
+    const result = await migrateStoredExpiries(getWallet())
+    expect(result.rewritten).toBe(0)
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('repairs an unreadable stored expiry from the expiry signed into the token', async () => {
+    const { token } = buildVoucherToken({ expiresAt: SECONDS })
+    const r = { token, amount: 500, expires_at: 'next tuesday' } as unknown as VoucherRow
+    await seedLegacy([r])
+
+    const result = await migrateStoredExpiries(getWallet())
+
+    expect(await stored(token)).toBe(SECONDS)
+    expect(result).toEqual({ rewritten: 1, unreadable: 0 })
   })
 
   it('keeps a corrupt value as it is, logs it, and never turns it into "no expiry"', async () => {

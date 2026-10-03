@@ -30,6 +30,9 @@ export interface Merchant {
   voucherCount: number
 }
 
+/** What `toVoucher` puts in `expires_at` for a stored expiry nobody can read (#157). */
+export const UNREADABLE_EXPIRY = 'unreadable'
+
 /**
  * Bridge wallet-storage's VoucherRow to voucher-send's Voucher.
  *
@@ -72,15 +75,20 @@ export function toVoucher(row: VoucherRow): Voucher {
     issuance_ratio: issuanceRatioOf(row),
     issuer_id: row.issuer_id,
     status: row.status,
-    // An expiry that is present but unreadable is passed through raw rather
-    // than erased: erased, it read as "never expires" and was spent last
-    // (#157). wallet-core's `expiryMs` spends such a coupon first instead.
+    // An expiry that is present but unreadable is not erased: erased, it read
+    // as "never expires" and was spent last (#157). wallet-core's `expiryMs`
+    // spends such a coupon first instead. It is passed as a fixed marker, NOT
+    // the raw value: VoucherGrouper's expiry filter is `new Date(expires_at)`,
+    // and V8 reads raw junk like "Section 5" as a date in 2001, which would
+    // drop the coupon from the list while `couponsFor` still counted it. The
+    // marker has no digit, so `new Date` is NaN there and the coupon stays.
+    // The raw value is logged where it is stored (expiryStorage.ts).
     expires_at:
       expiresMs !== undefined
         ? new Date(expiresMs).toISOString()
         : readExpiry(row.expires_at).kind === 'none'
           ? undefined
-          : String(row.expires_at),
+          : UNREADABLE_EXPIRY,
     created_at: row.created_at,
   } as Voucher
 }

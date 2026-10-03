@@ -120,7 +120,14 @@ describe('toMerchants', () => {
    */
   it('keeps an unparseable expiry rather than erasing it to "no expiry"', () => {
     const coupon = row({ expires_at: 'not a date' as unknown as number })
-    expect(toVoucher(coupon).expires_at).toBe('not a date')
+    expect(toVoucher(coupon).expires_at).toBe('unreadable')
+    expect(toMerchants([coupon])).toHaveLength(1)
+  })
+
+  it('keeps listing a coupon whose corrupt expiry V8 would read as a 2001 date', () => {
+    // new Date('Section 5') is 2001-05-01 in V8. Passed raw, VoucherGrouper
+    // dropped the coupon as expired while couponsFor still counted it.
+    const coupon = row({ expires_at: 'Section 5' as unknown as number })
     expect(toMerchants([coupon])).toHaveLength(1)
   })
 
