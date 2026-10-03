@@ -18,6 +18,7 @@
 
 import { Capacitor } from '@capacitor/core'
 
+import { CASHBACK_CLAIMED, fileCashbackClaimPush } from '../cashbackClaimDrain'
 import { recordNotification } from './inbox'
 import { toRenderable } from './render'
 import type { PushPayload } from './types'
@@ -51,6 +52,13 @@ function hash(input: string): string {
 }
 
 function record(pubkey: string, payload: PushPayload): void {
+  // A claimed cashback gets the wallet's own wording ("€5.00 cashback claimed
+  // (CB-…)") and stamps the row, through the same filer the drain uses, so the
+  // push and the drain are one bell row (#158). Never throws.
+  if (payload.type === CASHBACK_CLAIMED || payload.data?.type === CASHBACK_CLAIMED) {
+    void fileCashbackClaimPush(pubkey, payload)
+    return
+  }
   const renderable = toRenderable(payload)
   recordNotification(pubkey, {
     id: typeof payload.data?.notificationId === 'string' ? payload.data.notificationId : deriveId(payload),

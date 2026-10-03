@@ -94,6 +94,9 @@ export const NOTIFICATION_TYPES = [
   'voucher_received',
   'voucher_claimed',
   'voucher_expiring',
+  // imani-gateway-portal#59: a cashback this stall issued was claimed. Sent by
+  // the portal through gateway-core, not by `PushNotificationService.notify*`.
+  'cashback_claimed',
 ] as const
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number]
@@ -179,6 +182,10 @@ export const PREFERENCE_FOR_TYPE: Record<NotificationType, keyof NotificationPre
   voucher_received: 'couponReceived',
   voucher_claimed: 'couponClaimed',
   voucher_expiring: 'couponExpiring',
+  // The same switch as any other coupon of yours being claimed: a cashback code
+  // IS a coupon this stall handed out. A separate flag would need a server-side
+  // preference too, for an event the merchant has no reason to want apart.
+  cashback_claimed: 'couponClaimed',
 }
 
 /**

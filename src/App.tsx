@@ -10,6 +10,7 @@ import { openWallet, onWalletChanged } from './lib/wallet'
 import { startDmPoll } from './lib/dmPoll'
 import { startIncomingNotifications } from './lib/incomingNotifications'
 import { startPaymentReceipts, stopPaymentReceipts } from './lib/paymentReceiptDrain'
+import { startCashbackClaims, stopCashbackClaims } from './lib/cashbackClaimDrain'
 import { startPushListener, stopPushListener } from './lib/notifications/listener'
 import { resyncPushSubscription } from './lib/notifications/manager'
 import { reconcilePendingSends } from './lib/pay'
@@ -155,6 +156,15 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         // ways is still one line in the bell.
         startPaymentReceipts(pubkey)
 
+        // And the stall's side of a cashback: "€5.00 cashback claimed (CB-…)"
+        // when a customer redeems a code this stall issued (#158). The portal
+        // pushes it too; this drain reaches a browser that refuses
+        // notifications and picks up claims the portal's reconcile repaired
+        // without a push. Deduped on the cashback id against the push, and it
+        // stamps the row Claimed so the Vouchers list needs no status fetch.
+        // Started for every account: a customer's drain is a quiet 403.
+        startCashbackClaims(pubkey)
+
         // Finish any send this wallet stopped waiting for. The 20s poll in
         // pay.ts is not a verdict — a saga can complete minutes later — and
         // until this ran, one that did left the customer holding a coupon whose
@@ -275,6 +285,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
       // sign with the previous account's session and file the next account's
       // claims into the wrong inbox.
       stopPaymentReceipts()
+      stopCashbackClaims()
     }
   }, [pubkey])
 
