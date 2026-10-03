@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A voucher whose expiry was stored as a numeric string is no longer spent last** (#157).
+  `expires_at` reaches the wallet as an ISO string, a number in seconds or milliseconds, or a
+  numeric string. The last one read as "unparseable", and unparseable read as "never expires",
+  so the voucher closest to being lost went last. All four formats now parse. Only a genuinely
+  absent expiry (missing, null, empty, 0) counts as never expiring. An expiry that is present but
+  unreadable is now spent FIRST, so it can never be stranded past a real date nobody could read.
+  When a sooner-expiring voucher is left for a legitimate reason (another issuer, another
+  currency, or it cannot be divided to the amount), the pay screen says so in one line and the
+  `[pay]` log records which voucher and why.
+
 ## [0.14.2] - 2026-10-05
 
 ### Fixed

@@ -3,7 +3,7 @@ import type { TransactionRow, VoucherRow } from '@imani/wallet-storage'
 
 import { getWallet, listVouchers, notifyWalletChanged } from './wallet'
 import { legacyApi } from './legacyBridge'
-import { couponsFor, issuerKey, toVoucher, type Merchant } from './merchants'
+import { couponsFor, issuerKey, toMerchants, toVoucher, type Merchant } from './merchants'
 import { merchantStatus } from './merchant'
 import { getSigner } from './nap'
 import { spentTokenIds, withoutSpent } from './spentCoupons'
@@ -29,11 +29,12 @@ export {
   selectVouchers,
   planParts,
   splitObstacle,
+  passedOver,
   type SplitCheck,
   type SendPart,
   type SendPlan,
 } from '@imani/wallet-core'
-import { planParts, selectVouchers, splitObstacle } from '@imani/wallet-core'
+import { passedOver, planParts, selectVouchers, splitObstacle } from '@imani/wallet-core'
 
 /**
  * Paying a merchant's voucher payment request.
@@ -1049,6 +1050,8 @@ export async function payRequest({
     ? mine.filter((v) => (v.face_unit ?? '').toUpperCase() === request.unit!.toUpperCase())
     : mine
 
+  await logPassedOver(payer, request)
+
   return deliver(
     {
       api,
@@ -1069,6 +1072,35 @@ export async function payRequest({
     request.amount,
     request.unit,
   )
+}
+
+/**
+ * Record in the `[pay]` log any sooner-expiring voucher this payment leaves,
+ * and why (#157). The pay screen says the same in one line; the log keeps the
+ * ids and raw expiries a support check needs. Never blocks a payment.
+ */
+async function logPassedOver(payer: string, request: NUT18VRequest): Promise<void> {
+  try {
+    // The pay screen's holding: live, unspent, not behind an unconfirmed send.
+    const holding = toMerchants(withoutInFlight(await listVouchers(), payer)).flatMap((m) =>
+      m.groups.flatMap((g) => g.vouchers),
+    )
+    const notes = passedOver(holding, request.amount, {
+      issuer: request.issuerId,
+      unit: request.unit,
+    })
+    for (const note of notes) {
+      console.info(
+        '[pay] sooner-expiring voucher passed over:',
+        note.voucher.voucher_id,
+        note.voucher.expires_at,
+        note.reason,
+        note.detail ?? '',
+      )
+    }
+  } catch (error) {
+    console.warn('[pay] could not explain voucher order', error)
+  }
 }
 
 /**

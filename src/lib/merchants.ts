@@ -71,7 +71,15 @@ export function toVoucher(row: VoucherRow): Voucher {
     issuance_ratio: issuanceRatioOf(row),
     issuer_id: row.issuer_id,
     status: row.status,
-    expires_at: expiresMs === undefined ? undefined : new Date(expiresMs).toISOString(),
+    // An expiry that is present but unreadable is passed through raw rather
+    // than erased: erased, it read as "never expires" and was spent last
+    // (#157). wallet-core's `expiryMs` spends such a coupon first instead.
+    expires_at:
+      expiresMs !== undefined
+        ? new Date(expiresMs).toISOString()
+        : [undefined, null, '', 0].includes(row.expires_at as string | number | null | undefined)
+          ? undefined
+          : String(row.expires_at),
     created_at: row.created_at,
   } as Voucher
 }

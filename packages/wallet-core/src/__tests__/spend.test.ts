@@ -19,6 +19,8 @@ import {
   planParts,
   selectVouchers,
   splitObstacle,
+  passedOver,
+  toEpochMs,
 } from '../index'
 
 /** A €5.00 coupon, the only denomination this stack issues. */
@@ -332,5 +334,113 @@ describe('planParts', () => {
 
     expect(plan.remaining).toBe(10)
     expect(plan.parts.map((p) => p.voucher.voucher_id)).toEqual(['v-whole'])
+  })
+})
+
+/**
+ * #157: a sooner-expiring coupon was left while a later one was spent.
+ *
+ * `expires_at` arrives as an ISO string (inspect, toVoucher), a number in
+ * seconds or milliseconds (dmPoll, issue.ts), or a numeric STRING (a number
+ * that went through JSON or a string column). The numeric string read as
+ * unparseable, and unparseable read as "never expires", so it sorted last.
+ */
+describe('expiry formats (#157)', () => {
+  const day = 86_400_000
+  const soon = Date.UTC(2026, 9, 10)
+  const later = soon + 30 * day
+
+  it.each([
+    ['ISO string', new Date(soon).toISOString()],
+    ['seconds number', soon / 1000],
+    ['milliseconds number', soon],
+    ['seconds string', String(soon / 1000)],
+    ['milliseconds string', String(soon)],
+  ])('reads %s as the instant it names', (_label, value) => {
+    expect(toEpochMs(value as string | number)).toBe(soon)
+  })
+
+  it('spends soonest first across mixed formats', () => {
+    const vouchers = [
+      coupon({ voucher_id: 'a-iso-later', expires_at: new Date(later).toISOString() }),
+      coupon({ voucher_id: 'b-sec-string-soon', expires_at: String(soon / 1000) }),
+      coupon({ voucher_id: 'c-ms-mid', expires_at: (soon + day) as unknown as string }),
+      coupon({ voucher_id: 'd-none' }),
+    ]
+    expect(selectVouchers(vouchers, 400).map((v) => v.voucher_id)).toEqual([
+      'b-sec-string-soon',
+      'c-ms-mid',
+      'a-iso-later',
+      'd-none',
+    ])
+    expect(planParts(vouchers, 900).parts.map((p) => p.voucher.voucher_id)).toEqual([
+      'b-sec-string-soon',
+      'c-ms-mid',
+    ])
+  })
+
+  it.each([undefined, null, '', 0])('treats %s as no expiry, sorted last', (value) => {
+    const none = coupon({ voucher_id: 'a-none', expires_at: value as unknown as string })
+    const dated = coupon({ voucher_id: 'z-dated', expires_at: new Date(later).toISOString() })
+    expect(selectVouchers([none, dated], 400)[0].voucher_id).toBe('z-dated')
+  })
+
+  /**
+   * Present but unreadable is NOT "never expires". It might lapse tomorrow, so
+   * it is spent first: spending it early can only use value that might have
+   * been lost, while sorting it last could strand it past a real expiry.
+   */
+  it('spends a present-but-unparseable expiry first, not last', () => {
+    const odd = coupon({ voucher_id: 'z-odd', expires_at: 'next tuesday' })
+    const dated = coupon({ voucher_id: 'a-dated', expires_at: new Date(soon).toISOString() })
+    expect(selectVouchers([dated, odd], 400)[0].voucher_id).toBe('z-odd')
+    expect(planParts([dated, odd], 400).parts[0].voucher.voucher_id).toBe('z-odd')
+  })
+})
+
+describe('passedOver (#157)', () => {
+  const merchant = 'a'.repeat(64)
+  const other = 'b'.repeat(64)
+  const soon = '2026-10-10T00:00:00Z'
+  const later = '2026-12-30T00:00:00Z'
+
+  it('names a sooner coupon from another issuer', () => {
+    const vouchers = [
+      coupon({ voucher_id: 'cashback', issuer_id: merchant, expires_at: later }),
+      coupon({ voucher_id: 'other', issuer_id: other, expires_at: soon }),
+    ]
+    const notes = passedOver(vouchers, 400, { issuer: merchant.toUpperCase(), unit: 'EUR' })
+    expect(notes.map((n) => [n.voucher.voucher_id, n.reason])).toEqual([['other', 'issuer']])
+  })
+
+  it('names a sooner coupon in another unit', () => {
+    const vouchers = [
+      coupon({ voucher_id: 'eur', issuer_id: merchant, expires_at: later }),
+      xaf({ voucher_id: 'xaf', issuer_id: merchant, expires_at: soon }),
+    ]
+    const notes = passedOver(vouchers, 400, { issuer: merchant, unit: 'eur' })
+    expect(notes.map((n) => n.reason)).toEqual(['unit'])
+  })
+
+  it('names a sooner coupon that cannot be split to the amount', () => {
+    const vouchers = [
+      coupon({ voucher_id: 'big', issuer_id: merchant, expires_at: later }),
+      coupon({ voucher_id: 'one-sat', issuer_id: merchant, expires_at: soon, token_amount: 1 }),
+    ]
+    const notes = passedOver(vouchers, 400, { issuer: merchant, unit: 'EUR' })
+    expect(notes.map((n) => [n.voucher.voucher_id, n.reason])).toEqual([['one-sat', 'split']])
+  })
+
+  it('says nothing when the soonest usable coupon is the one spent', () => {
+    const vouchers = [
+      coupon({ voucher_id: 'soon', issuer_id: merchant, expires_at: soon }),
+      coupon({ voucher_id: 'other-later', issuer_id: other, expires_at: later }),
+    ]
+    expect(passedOver(vouchers, 400, { issuer: merchant, unit: 'EUR' })).toEqual([])
+  })
+
+  it('says nothing when nothing can pay (the obstacle says that)', () => {
+    const vouchers = [coupon({ voucher_id: 'other', issuer_id: other, expires_at: soon })]
+    expect(passedOver(vouchers, 400, { issuer: merchant, unit: 'EUR' })).toEqual([])
   })
 })

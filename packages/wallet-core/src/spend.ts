@@ -18,8 +18,6 @@
 
 import type { Voucher } from '@imani/voucher-send'
 
-
-
 /**
  * Milliseconds since the epoch, from whatever shape an expiry arrived in.
  *
@@ -35,9 +33,27 @@ import type { Voucher } from '@imani/voucher-send'
 export function toEpochMs(value: number | string | undefined | null): number | undefined {
   if (value === undefined || value === null || value === '' || value === 0) return undefined
 
-  const ms =
-    typeof value === 'number' ? (value < 1e11 ? value * 1000 : value) : Date.parse(value)
+  // A number that went through a string column or JSON text ("1788220800") is
+  // still a number. `Date.parse` reads it as NaN, which used to make it
+  // indistinguishable from "no expiry" (#157).
+  const numeric =
+    typeof value === 'number' ? value : /^\s*\d+(\.\d+)?\s*$/.test(value) ? Number(value) : NaN
+  if (Number.isFinite(numeric)) {
+    if (numeric <= 0) return undefined
+    return numeric < 1e11 ? numeric * 1000 : numeric
+  }
+  if (typeof value === 'number') return undefined
+  const ms = Date.parse(value)
   return Number.isFinite(ms) ? ms : undefined
+}
+
+/**
+ * Was an expiry given at all? Absent, null, '' and 0 are the gateway's ways of
+ * saying "none yet" (see the app's `toVoucher`); anything else is a claim that
+ * the coupon lapses, whether or not we can read when.
+ */
+function hasExpiry(value: unknown): boolean {
+  return !(value === undefined || value === null || value === '' || value === 0 || value === '0')
 }
 
 /**
@@ -81,7 +97,10 @@ export function checkSplittable(voucher: Voucher, amount: number): SplitCheck {
 
   // Below here a split is required.
   if (sats <= 0) {
-    return { ok: false, reason: 'This voucher has no sats backing, so it cannot be split.' }
+    return {
+      ok: false,
+      reason: 'This voucher has no sats backing, so it cannot be split.',
+    }
   }
   if (sats <= 1) {
     return {
@@ -92,7 +111,10 @@ export function checkSplittable(voucher: Voucher, amount: number): SplitCheck {
 
   const step = minSplitStep(voucher)
   if (amount < step) {
-    return { ok: false, reason: `The smallest amount this voucher can be split into is ${step}.` }
+    return {
+      ok: false,
+      reason: `The smallest amount this voucher can be split into is ${step}.`,
+    }
   }
   if (face - amount < step) {
     return {
@@ -234,7 +256,78 @@ export function planParts(vouchers: Voucher[], amount: number): SendPlan {
  * every other timestamp here.
  */
 function expiryMs(voucher: Voucher): number {
-  return toEpochMs(voucher.expires_at as number | string | undefined) ?? Number.MAX_SAFE_INTEGER
+  const raw = voucher.expires_at as number | string | undefined
+  const ms = toEpochMs(raw)
+  if (ms !== undefined) return ms
+  // Genuinely absent: the coupon in least danger, last.
+  if (!hasExpiry(raw)) return Number.MAX_SAFE_INTEGER
+  // Present but unreadable (#157). It might lapse tomorrow, so it goes FIRST:
+  // spending it early can only use value that was at risk, while sorting it as
+  // "never expires" could strand it past a real expiry nobody could read.
+  return Number.MIN_SAFE_INTEGER
+}
+
+/** Why a coupon that expires sooner than the one spent was not used. */
+export type PassedOverReason = 'issuer' | 'unit' | 'split'
+
+export type PassedOver = {
+  voucher: Voucher
+  reason: PassedOverReason
+  /** For 'split', checkSplittable's own sentence (or "too small on its own"). */
+  detail?: string
+}
+
+const sameIssuer = (a: string | undefined, b: string) => (a ?? '').toLowerCase() === b.toLowerCase()
+const sameUnit = (a: string | undefined, b: string) => (a ?? '').toUpperCase() === b.toUpperCase()
+
+/**
+ * Coupons that expire sooner than what this payment will spend, and why each
+ * was left (#157).
+ *
+ * The spend rule is "soonest-expiring first, within what the payee accepts".
+ * When a sooner coupon is outside that (another issuer, another unit) or cannot
+ * be divided to the amount, leaving it is correct, but from the outside it
+ * looks exactly like the wallet ignoring its own rule. This names them so the
+ * pay screen and the `[pay]` log can say so.
+ *
+ * `vouchers` is the WHOLE holding, not the payee's coupons: the reasons only
+ * exist relative to what was filtered out. Returns [] when nothing can pay,
+ * because the obstacle message already speaks for that case.
+ */
+export function passedOver(
+  vouchers: Voucher[],
+  amount: number,
+  payee: { issuer: string; unit: string },
+): PassedOver[] {
+  const live = vouchers.filter((v) => v.token && isUnspent(v) && (v.face_value ?? 0) > 0)
+  const eligible = live.filter(
+    (v) => sameIssuer(v.issuer_id, payee.issuer) && sameUnit(v.face_unit, payee.unit),
+  )
+
+  const single = selectVouchers(eligible, amount)
+  let spent: Voucher[]
+  if (single.length > 0) spent = [single[0]]
+  else {
+    const plan = planParts(eligible, amount)
+    if (plan.remaining > 0) return []
+    spent = plan.parts.map((p) => p.voucher)
+  }
+  const latestSpent = Math.max(...spent.map(expiryMs))
+  const used = new Set(spent)
+
+  return live
+    .filter((v) => !used.has(v) && expiryMs(v) < latestSpent)
+    .sort((a, b) => expiryMs(a) - expiryMs(b))
+    .map((voucher): PassedOver => {
+      if (!sameIssuer(voucher.issuer_id, payee.issuer)) return { voucher, reason: 'issuer' }
+      if (!sameUnit(voucher.face_unit, payee.unit)) return { voucher, reason: 'unit' }
+      const check = checkSplittable(voucher, amount)
+      return {
+        voucher,
+        reason: 'split',
+        detail: check.ok ? 'It is too small to pay this on its own.' : check.reason,
+      }
+    })
 }
 
 /**
