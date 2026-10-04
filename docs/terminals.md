@@ -75,7 +75,10 @@ phone**:
 6. Choose **Lock when idle**: how long the terminal may sit untouched before
    it asks for its passphrase again. Ten minutes unless you change it, or
    **Never**.
-7. Finish on the terminal itself. It shows your stall's name and a six-digit
+7. Your phone then shows a **setup code**. Scan it with the terminal (or type
+   it in). The terminal only accepts the authority your setup code names, so
+   someone who photographed the terminal's own code cannot slip in theirs.
+8. Finish on the terminal itself. It shows your stall's name and a six-digit
    **check code**: they must match what your phone shows. Then set a
    **passphrase** of at least 8 characters there.
 
@@ -84,9 +87,15 @@ flowchart LR
     A[Terminal shows its code] --> B[Owner scans it]
     B --> C[Owner names it and picks a role]
     C --> D[Add terminal]
-    D --> E[Passphrase set on the device]
-    E --> F[Terminal trades for the stall]
+    D --> E[Terminal scans the owner's setup code]
+    E --> F[Passphrase set on the device]
+    F --> G[Terminal trades for the stall]
 ```
+
+Until the next version can open the till, a device set up as a terminal offers
+**Remove this terminal from this device** on its first screen. That erases the
+terminal's key and passphrase from the device only. It does not take the
+terminal out of service: revoke it from your list for that.
 
 The terminal now appears in your list, and it logs itself in from then on.
 
@@ -252,7 +261,8 @@ till cannot be run end to end right now**. The plan to close them is
 1. **A terminal is set up, but cannot yet open its till.** On the device,
    choose **Set this device up as a terminal** on the first screen. It shows a
    code. On your phone, **Add terminal** creates the terminal's authority,
-   checks it, and sends it to that code. The device then shows your stall's
+   checks it, sends it to that code, and shows a setup code for the device to
+   scan, which names the one authority it may accept. The device then shows your stall's
    name and a six-digit check code: confirm both match your phone, and set a
    passphrase of at least 8 characters. Your list then shows the terminal as in
    service. Opening the till on the device with that passphrase arrives in the

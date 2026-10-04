@@ -799,6 +799,55 @@ function TerminalSetupGate() {
   return <TerminalSetupPage />
 }
 
+/**
+ * What an enrolled terminal shows until phase 3 can open its till, with a way out (#160 review).
+ *
+ * Without the way out the device had no unlock and no log out, so recovering it meant clearing
+ * site data by hand. "Remove this terminal from this device" erases the terminal key and record
+ * locally. It does not revoke the credential, and says so: only the owner can, from their list.
+ */
+function EnrolledTerminalNotice() {
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const remove = async () => {
+    setBusy(true)
+    const { removeTerminalFromDevice } = await import('./lib/terminalEnrol')
+    await removeTerminalFromDevice().catch(() => undefined)
+    window.location.replace('/onboarding')
+  }
+  return (
+    <Centered>
+      <p>
+        This device is set up as a terminal. Opening the till with its passphrase arrives in the
+        next version of the app.
+      </p>
+      {confirming ? (
+        <div className="mt-6 space-y-3 text-sm">
+          <p>
+            This erases the terminal&apos;s key and passphrase from this device. It does not take
+            the terminal out of service: ask the owner to revoke it from their list.
+          </p>
+          <button
+            type="button"
+            className="pressable w-full rounded-xl bg-red-600 p-3 font-medium text-white"
+            disabled={busy}
+            onClick={() => void remove()}
+          >
+            {busy ? 'Removing…' : 'Remove it from this device'}
+          </button>
+          <button type="button" className="w-full p-2 underline" onClick={() => setConfirming(false)}>
+            Keep it
+          </button>
+        </div>
+      ) : (
+        <button type="button" className="mt-6 text-sm underline" onClick={() => setConfirming(true)}>
+          Remove this terminal from this device
+        </button>
+      )}
+    </Centered>
+  )
+}
+
 /** Entry's answer for a device enrolled as a terminal (#160). Not a route. */
 const TERMINAL_TARGET = 'terminal'
 
@@ -820,14 +869,7 @@ function Entry() {
   // #160: a terminal is not a customer, so it must not reach /login, where its
   // key would open a NAP session as one (spec 2.3). Phase 3 routes this to
   // /terminal/unlock; until then the device says what it is and stops.
-  if (target === TERMINAL_TARGET) {
-    return (
-      <Centered>
-        This device is set up as a terminal. Opening the till with its passphrase arrives in the
-        next version of the app.
-      </Centered>
-    )
-  }
+  if (target === TERMINAL_TARGET) return <EnrolledTerminalNotice />
   return <Navigate to={target} replace />
 }
 

@@ -4,6 +4,7 @@ import { getPublicKey } from 'nostr-tools'
 import { parseTerminalMetadata, type TerminalMetadata } from './terminalCredential'
 import { checkCode } from './terminalMint'
 import { parseVoucherToken, tokenProofs, verifyVoucher } from './voucherToken'
+import { checkIssuer } from './issuerAllowlist'
 import { spendingKeys, xOnly } from './witness'
 
 /**
@@ -27,8 +28,17 @@ import { spendingKeys, xOnly } from './witness'
  *
  * `K` is public by design: anyone watching the screen can DM it a credential for their own
  * stall. So an offer is accepted only if the credential's own signed bytes name the stall that
- * sealed the DM as issuer and stall, are locked to `K`, and verify. And the operator then
- * confirms the stall's name and the check code against the owner's screen (spec 4.2).
+ * sealed the DM as issuer and stall, are locked to `K`, and verify.
+ *
+ * ## Which offer: the one the owner's setup code names (#160 review)
+ *
+ * That is not enough on its own. `verifyVoucher` checks the signature against a key carried
+ * inside the token, so anyone can self-sign a credential for their own stall with any
+ * `voucher_id`, and grind the six-digit check code offline in milliseconds. So the device
+ * does not choose among offers. The owner's screen shows a setup code naming the stall and
+ * the credential (`setupCode`), the operator scans it on the device, and only the offer
+ * sealed by THAT stall for THAT voucher is accepted. An onlooker cannot seal as the stall.
+ * The check code stays, as the operator's confirmation that both screens agree.
  */
 
 export const CREDENTIAL_DM_TYPE = 'imani-terminal-credential/1'
@@ -36,6 +46,39 @@ export const ENROLLED_DM_TYPE = 'imani-terminal-enrolled/1'
 
 /** A credential DM older than this is refused by the device (decision 4: 24 hours). */
 export const OFFER_TTL_SECONDS = 24 * 3600
+
+/**
+ * How far in the future a credential DM's `created_at` may be. Clocks drift a little; a DM
+ * dated further ahead would otherwise never go stale (#160 review).
+ */
+export const OFFER_FUTURE_SKEW_SECONDS = 5 * 60
+
+/** The owner's setup code: what the device scans to know which offer is its own. */
+const SETUP_CODE_PREFIX = 'imani-terminal:1:'
+
+/** Which offer the device will accept: from this stall, for this credential. */
+export interface ExpectedOffer {
+  stallPubkey: string
+  voucherId: string
+}
+
+/** `imani-terminal:1:<stall hex>:<voucher id>`, shown as a QR and as text on the owner's screen. */
+export function setupCode(stallPubkey: string, voucherId: string): string {
+  return `${SETUP_CODE_PREFIX}${stallPubkey.toLowerCase()}:${voucherId}`
+}
+
+/** The stall and credential a setup code names, or null when it is not one. */
+export function parseSetupCode(text: string): ExpectedOffer | null {
+  const t = text.trim()
+  if (!t.toLowerCase().startsWith(SETUP_CODE_PREFIX)) return null
+  const rest = t.slice(SETUP_CODE_PREFIX.length)
+  const colon = rest.indexOf(':')
+  if (colon < 0) return null
+  const stall = rest.slice(0, colon).toLowerCase()
+  const voucherId = rest.slice(colon + 1)
+  if (!HEX64.test(stall) || !/^[0-9A-Za-z-]{1,128}$/.test(voucherId)) return null
+  return { stallPubkey: stall, voucherId }
+}
 
 /** The idle lock's default, in minutes (decision 2). `0` means off. */
 export const DEFAULT_IDLE_LOCK_MINUTES = 10
@@ -152,6 +195,9 @@ export interface CredentialOffer {
 export type OfferRefusal =
   | 'not-a-credential-dm'
   | 'stale'
+  | 'from-the-future'
+  | 'not-the-expected-offer'
+  | 'unknown-issuer'
   | 'sealed-by-another'
   | 'unreadable'
   | 'not-locked-to-this-device'
@@ -169,6 +215,8 @@ export function offerFromRumor(
   sealer: string,
   devicePubkey: string,
   nowSeconds: number = Math.floor(Date.now() / 1000),
+  /** The offer the owner's setup code names. Without it no offer is accepted. */
+  expected?: ExpectedOffer,
 ): CredentialOffer | OfferRefusal {
   let m: Record<string, unknown>
   try {
@@ -180,10 +228,21 @@ export function offerFromRumor(
     return 'not-a-credential-dm'
   }
   if (nowSeconds - rumor.created_at > OFFER_TTL_SECONDS) return 'stale'
+  // Dated ahead of the clock: such a DM would never go stale. A few minutes of drift is fine.
+  if (rumor.created_at - nowSeconds > OFFER_FUTURE_SKEW_SECONDS) return 'from-the-future'
 
   const stall = sealer.toLowerCase()
   if (typeof m.stall_pubkey !== 'string' || m.stall_pubkey.toLowerCase() !== stall) {
     return 'sealed-by-another'
+  }
+  // Only the offer the setup code names: sealed by that stall, for that credential. This is
+  // what stops an onlooker who reads the device's code from offering their own stall.
+  if (
+    !expected ||
+    expected.stallPubkey.toLowerCase() !== stall ||
+    expected.voucherId !== m.voucher_id
+  ) {
+    return 'not-the-expected-offer'
   }
 
   let parsed: ReturnType<typeof parseVoucherToken>
@@ -209,6 +268,9 @@ export function offerFromRumor(
     return 'wrong-issuer'
   }
   if (!verifyVoucher(voucher).signatureValid) return 'bad-signature'
+  // A build told which signing keys to trust refuses any other (ADR 0006). Unset means
+  // unchecked, as everywhere else in the wallet.
+  if (checkIssuer(parsed) === 'unknown-issuer') return 'unknown-issuer'
 
   const idle = Number(m.idle_lock_minutes)
   return {

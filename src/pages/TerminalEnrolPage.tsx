@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import QRCode from 'qrcode'
 import { Check, Clock } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, Panel, Button, Input, Alert } from '../components/ui'
@@ -30,6 +31,7 @@ import {
   DEFAULT_IDLE_LOCK_MINUTES,
   IDLE_LOCK_CHOICES,
   sendCredential,
+  setupCode,
   type WrapPublisher,
 } from '../lib/terminalDelivery'
 import { ownerPublisher } from '../lib/terminalDeliveryNet'
@@ -97,7 +99,24 @@ export function TerminalEnrolPage({
   const [role, setRole] = useState<TerminalRole | null>(null)
   const [terminalPubkey, setTerminalPubkey] = useState<string | null>(null)
   const [licence, setLicence] = useState<LicenceStatus | null>(null)
-  const [issued, setIssued] = useState<{ name: string; code: string; sent: boolean } | null>(null)
+  const [issued, setIssued] = useState<
+    { name: string; code: string; sent: boolean; setup: string } | null
+  >(null)
+  const [setupQr, setSetupQr] = useState<string | null>(null)
+
+  // The setup code the device scans, as a QR (#160 review). It names this stall and this
+  // credential, so the device accepts only the offer this phone sent.
+  useEffect(() => {
+    if (!issued) return
+    let cancelled = false
+    void QRCode.toDataURL(issued.setup, { width: 512, margin: 1 }).then(
+      (url) => !cancelled && setSetupQr(url),
+      () => !cancelled && setSetupQr(null),
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [issued])
   // Decision 2 on #160: the owner chooses the idle lock, 10 minutes by default,
   // and may switch it off. It travels to the device in the credential DM.
   const [idleLock, setIdleLock] = useState<number>(DEFAULT_IDLE_LOCK_MINUTES)
@@ -219,6 +238,7 @@ export function TerminalEnrolPage({
         name: credential.name,
         code: formatCheckCode(checkCode(minted.voucherId, stallPubkey, credential.lockedTo)),
         sent,
+        setup: setupCode(stallPubkey, minted.voucherId),
       })
     } catch (e) {
       // Shared with resumeMinting: only a definitive 4xx forgets the row (#160 round 2).
@@ -251,7 +271,8 @@ export function TerminalEnrolPage({
               </p>
               <p className="mt-2">
                 {issued.sent
-                  ? 'Finish on that device: it shows the same check code, and asks for a passphrase. '
+                  ? 'Finish on that device: scan the setup code below with it, check it shows the ' +
+                    'same check code, and set a passphrase. '
                   : 'It could not be sent to the device. Cancel it from your terminal list and add the device again. '}
                 It cannot take payments until then. Its row says{' '}
                 <span className="font-medium">Waiting for the device</span> and is cancelled
@@ -260,6 +281,22 @@ export function TerminalEnrolPage({
             </div>
           </div>
         </Panel>
+        {issued.sent ? (
+          <Panel className="mb-6 p-4">
+            <p className="mb-3 text-sm text-mono-500">
+              Setup code. The device only accepts the authority this code names, so nobody else
+              can slip in their own.
+            </p>
+            {setupQr ? (
+              <div className="mb-3 flex justify-center">
+                <img src={setupQr} alt="Terminal setup code" className="w-full max-w-xs rounded-2xl bg-white p-4" />
+              </div>
+            ) : null}
+            <p className="break-all text-center font-mono text-xs text-mono-500" data-testid="setup-code">
+              {issued.setup}
+            </p>
+          </Panel>
+        ) : null}
         <Button onClick={() => navigate('/settings/terminals')}>Done</Button>
       </Screen>
     )

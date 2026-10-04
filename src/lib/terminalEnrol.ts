@@ -7,6 +7,7 @@ import {
   unwrapSealed,
   wrapMessage,
   type CredentialOffer,
+  type ExpectedOffer,
   type OfferRefusal,
 } from './terminalDelivery'
 
@@ -91,6 +92,8 @@ export const MIN_PASSPHRASE_LENGTH = 8
 export function offersFor(
   wraps: readonly Event[],
   nowSeconds: number = Math.floor(Date.now() / 1000),
+  /** The offer the owner's setup code names. Without it every offer is refused. */
+  expected?: ExpectedOffer,
 ): Array<CredentialOffer | OfferRefusal> {
   if (!pending) return []
   const key = hexToBytes(pending.privkeyHex)
@@ -98,7 +101,7 @@ export function offersFor(
     return wraps.flatMap((wrap) => {
       const opened = unwrapSealed(wrap, key)
       if (!opened) return []
-      const offer = offerFromRumor(opened.rumor, opened.sealer, pending!.pubkey, nowSeconds)
+      const offer = offerFromRumor(opened.rumor, opened.sealer, pending!.pubkey, nowSeconds, expected)
       return offer === 'not-a-credential-dm' ? [] : [offer]
     })
   } finally {
@@ -437,4 +440,18 @@ export function forgetTerminal(): void {
   } catch {
     // Nothing to do: the caller is clearing state that may not exist.
   }
+}
+
+/**
+ * Take this device out of terminal service, locally (#160 review).
+ *
+ * The escape hatch for a device enrolled in phase 2, before phase 3 can open its till: it
+ * erases the encrypted terminal key and the terminal record, so the device can be set up
+ * again or used as an ordinary wallet. It does NOT revoke the credential at the mint. Only
+ * the owner can do that, from their terminal list, and the screen says so.
+ */
+export async function removeTerminalFromDevice(): Promise<void> {
+  await keyStore.clear()
+  forgetTerminal()
+  forgetPendingKey()
 }

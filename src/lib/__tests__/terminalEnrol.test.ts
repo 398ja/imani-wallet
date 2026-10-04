@@ -27,8 +27,13 @@ vi.mock('../nap', () => ({
       saved.push({ privkeyHex, passphrase })
     },
     hasKey: async () => walletKeyHeld,
+    clear: async () => {
+      cleared += 1
+    },
   },
 }))
+/** How many times the key store was erased. */
+let cleared = 0
 
 const {
   beginEnrolment,
@@ -37,6 +42,7 @@ const {
   forgetPendingKey,
   forgetTerminal,
   offersFor,
+  removeTerminalFromDevice,
   storedTerminal,
   MIN_PASSPHRASE_LENGTH,
 } = await import('../terminalEnrol')
@@ -360,7 +366,7 @@ describe('#160 phase 2: the credential arrives by DM, opened on the device', () 
   // caller never needed the key to do it.
   it('reads an offer addressed to the pending key', () => {
     const code = beginEnrolment()
-    const [offer] = offersFor([dmFor(code.terminalPubkey)])
+    const [offer] = offersFor([dmFor(code.terminalPubkey)], undefined, { stallPubkey: stall, voucherId })
 
     expect(typeof offer).toBe('object')
     if (typeof offer !== 'object') return
@@ -386,7 +392,7 @@ describe('#160 phase 2: the credential arrives by DM, opened on the device', () 
     )
     const sealedByIntruder = dmFor(code.terminalPubkey, generateSecretKey())
 
-    expect(offersFor([forOther, sealedByIntruder])).toEqual([
+    expect(offersFor([forOther, sealedByIntruder], undefined, { stallPubkey: stall, voucherId })).toEqual([
       'not-locked-to-this-device',
       'sealed-by-another',
     ])
@@ -402,7 +408,7 @@ describe('#160 phase 2: the credential arrives by DM, opened on the device', () 
     const spy = vi.spyOn(console, 'log').mockImplementation((...a) => void logs.push(a.join(' ')))
     const warn = vi.spyOn(console, 'warn').mockImplementation((...a) => void logs.push(a.join(' ')))
     const code = beginEnrolment()
-    const [offer] = offersFor([dmFor(code.terminalPubkey)])
+    const [offer] = offersFor([dmFor(code.terminalPubkey)], undefined, { stallPubkey: stall, voucherId })
     if (typeof offer !== 'object') throw new Error('no offer')
     // Before completion: nothing in storage at all.
     expect(localStorage.length).toBe(0)
@@ -468,5 +474,32 @@ describe('#160 phase 2: the credential arrives by DM, opened on the device', () 
       },
     })
     expect(storedTerminal()).not.toBeNull()
+  })
+})
+
+describe('#160 review: an enrolled device has a way out before phase 3', () => {
+  // A device set up in phase 2 cannot open its till yet, and had no unlock
+  // and no log out: getting it back meant clearing site data by hand.
+  // "Remove this terminal from this device" erases the encrypted key and the
+  // record, so the device reads as fresh again. It does not touch the mint:
+  // only the owner can revoke.
+  it('erases the terminal key and record from this device', async () => {
+    cleared = 0
+    localStorage.setItem(
+      'imani-wallet:terminal',
+      JSON.stringify({
+        stallPubkey: 'a'.repeat(64),
+        role: TERMINAL_ROLES.REDEEM_ONLY,
+        terminalPubkey: 'b'.repeat(64),
+        permissions: [],
+        enrolledAt: 1,
+        token: 'cashuB-x',
+      }),
+    )
+
+    await removeTerminalFromDevice()
+
+    expect(cleared).toBe(1)
+    expect(storedTerminal()).toBeNull()
   })
 })

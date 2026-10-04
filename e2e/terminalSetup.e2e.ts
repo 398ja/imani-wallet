@@ -77,6 +77,13 @@ async function main() {
     process.exit(1)
   }
 
+  // The device accepts only the offer the owner's setup code names (#160 review), so the
+  // operator enters A's setup code on B, as the camera would read it.
+  const setup = (await owner.getByTestId('setup-code').innerText().catch(() => '')).trim()
+  check('A shows a setup code naming its stall', /^imani-terminal:1:[0-9a-f]{64}:/.test(setup), setup)
+  await device.getByLabel('Or enter the setup code').fill(setup)
+  await device.getByRole('button', { name: 'Continue' }).click()
+
   console.log('\nB receives it')
   await device.getByText('Check this is your stall').waitFor({ timeout: 60_000 }).catch(() => {})
   const bOffer = await text(device)

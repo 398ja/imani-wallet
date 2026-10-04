@@ -14,7 +14,9 @@ import {
   enrolledMessageJson,
   enrolledNotices,
   offerFromRumor,
+  parseSetupCode,
   sendCredential,
+  setupCode,
   unwrapSealed,
   wrapMessage,
 } from '../terminalDelivery'
@@ -50,8 +52,11 @@ const message = (token = credential(), stall = STALL) =>
 function received(wrapKey: Uint8Array, content: string, now?: number) {
   const opened = unwrapSealed(wrapMessage(wrapKey, DEVICE, content), DEVICE_KEY)
   if (!opened) throw new Error('did not open')
-  return offerFromRumor(opened.rumor, opened.sealer, DEVICE, now)
+  return offerFromRumor(opened.rumor, opened.sealer, DEVICE, now, EXPECTED)
 }
+
+/** What the owner's setup code names: this stall, this credential. */
+const EXPECTED = { stallPubkey: STALL, voucherId: VOUCHER_ID }
 
 describe('the credential DM', () => {
   // The stall seals a credential locked to this device: the device reads it,
@@ -183,5 +188,66 @@ describe('the enrolled DM', () => {
       ),
     ).toBeNull()
     expect(bytesToHex(DEVICE_KEY)).toHaveLength(64)
+  })
+})
+
+describe('#160 review: the device accepts only the offer the setup code names', () => {
+  // The hijack the review found. Someone who reads the device's public code
+  // self-signs a credential for THEIR stall (verifyVoucher checks the key
+  // inside the token, so it passes), grinds a voucher id until the six-digit
+  // check code matches, and seals it with their own key. Before the fix the
+  // device accepted it and, being newest, showed it. Now the device accepts
+  // only the stall and credential the owner's setup code names.
+  it('refuses a well-formed offer from a stall the setup code does not name', () => {
+    const intruderKey = generateSecretKey()
+    const intruder = getPublicKey(intruderKey)
+    const theirs = credentialMessageJson({
+      voucherId: VOUCHER_ID,
+      token: buildLockedCredentialToken({ stallKey: intruderKey, devicePubkey: DEVICE, voucherId: VOUCHER_ID }),
+      stallPubkey: intruder,
+      name: 'Front counter',
+      idleLockMinutes: 10,
+    })
+
+    expect(received(intruderKey, theirs)).toBe('not-the-expected-offer')
+  })
+
+  // The right stall, but a different credential than the one the owner's
+  // screen names (an older one, say): also refused.
+  it('refuses another credential from the right stall', () => {
+    const other = credentialMessageJson({
+      voucherId: 'aaaaaaaa-6cea-4a7d-b681-9d5d62cc9dd9',
+      token: credential({ voucherId: 'aaaaaaaa-6cea-4a7d-b681-9d5d62cc9dd9' }),
+      stallPubkey: STALL,
+      name: 'Front counter',
+      idleLockMinutes: 10,
+    })
+
+    expect(received(STALL_KEY, other)).toBe('not-the-expected-offer')
+  })
+
+  // With no setup code scanned, nothing is accepted at all.
+  it('accepts nothing before a setup code is scanned', () => {
+    const opened = unwrapSealed(wrapMessage(STALL_KEY, DEVICE, message()), DEVICE_KEY)!
+
+    expect(offerFromRumor(opened.rumor, opened.sealer, DEVICE)).toBe('not-the-expected-offer')
+  })
+
+  // A DM dated beyond a few minutes ahead would never go stale, so it is
+  // refused. A little drift is allowed.
+  it('refuses a DM dated in the future, beyond a small skew', () => {
+    const now = Math.floor(Date.now() / 1000)
+
+    expect(received(STALL_KEY, message(), now - 2 * 3600)).toBe('from-the-future')
+    expect(typeof received(STALL_KEY, message(), now - 60)).toBe('object')
+  })
+
+  // The setup code round-trips, and anything else is not one.
+  it('reads the setup code the owner shows', () => {
+    const code = setupCode(STALL.toUpperCase(), VOUCHER_ID)
+
+    expect(parseSetupCode(code)).toEqual({ stallPubkey: STALL, voucherId: VOUCHER_ID })
+    expect(parseSetupCode(`nostr:${STALL}`)).toBeNull()
+    expect(parseSetupCode('imani-terminal:1:nothex:abc')).toBeNull()
   })
 })

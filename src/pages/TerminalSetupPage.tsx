@@ -13,11 +13,15 @@ import {
 } from '../lib/terminalEnrol'
 import {
   enrolledMessageJson,
+  parseSetupCode,
   type CredentialOffer,
+  type ExpectedOffer,
   type OfferRefusal,
   type WrapPublisher,
 } from '../lib/terminalDelivery'
 import { devicePublisher, giftWraps } from '../lib/terminalDeliveryNet'
+import { signedFetch, type RequestSigner } from '../lib/nip98'
+import { ScanRecipient } from '../components/ScanRecipient'
 import { formatCheckCode } from '../lib/terminalMint'
 import { refreshProfile, profileName } from '../lib/profile'
 import { TERMINAL_ROLE_LABELS, grantFor } from '../lib/terminalRole'
@@ -28,8 +32,11 @@ import type { Event } from 'nostr-tools'
  *
  * 1. Show the device's public key as a QR and as text. It lives in memory only, so a reload
  *    starts over with a new code: a photographed code from yesterday names nothing.
- * 2. Poll for a credential DM addressed to that key, opened and checked inside
- *    `terminalEnrol.offersFor`, so the private half never leaves that module.
+ * 2. Scan the owner's setup code (`imani-terminal:1:<stall>:<voucher id>`), which names the
+ *    stall and the credential this device is to accept (#160 review). Then poll for a
+ *    credential DM addressed to that key, opened and checked inside `terminalEnrol.offersFor`,
+ *    so the private half never leaves that module. Only the DM sealed by that stall for that
+ *    credential is accepted; the device never picks among offers.
  * 3. Show the stall's public name and the check code, and ask the operator to confirm both
  *    match the owner's screen. `K` is public, so anyone can DM it a credential for THEIR
  *    stall; the code is what tells the operator which stall this is.
@@ -45,6 +52,10 @@ const POLL_MS = 4_000
 /** Plain words for each refusal, because the operator has a queue and no logs. */
 const REFUSAL_COPY: Record<Exclude<OfferRefusal, 'not-a-credential-dm'>, string> = {
   stale: 'An authority arrived that is more than a day old. Ask the owner to add this device again.',
+  'from-the-future': 'An authority arrived dated in the future. It was ignored. Check this device’s clock.',
+  'not-the-expected-offer':
+    'An authority arrived that is not the one the owner’s setup code names. It was ignored.',
+  'unknown-issuer': 'An authority arrived signed by a service this app does not trust. It was ignored.',
   'sealed-by-another': 'An authority arrived that was not sent by the stall it names. It was ignored.',
   unreadable: 'An authority arrived that could not be read. It was ignored.',
   'not-locked-to-this-device': 'An authority arrived for a different device. It was ignored.',
@@ -59,6 +70,21 @@ export interface TerminalSetupDeps {
   stallName?: (stallPubkey: string) => Promise<string | null>
   /** Where the enrolled DM goes, given the terminal's own NIP-98 signer. */
   publisherFor?: (announcer: EnrolmentAnnouncer) => WrapPublisher
+  /**
+   * Tells the gateway the credential arrived, so it counts as in service and stops waiting
+   * (gateway-customer#187). Best effort: the enrolled DM is what the owner's list reads.
+   */
+  confirmAtGateway?: (voucherId: string, signer: RequestSigner) => Promise<void>
+}
+
+/** `POST /api/v1/wallet/terminal-credentials/{id}/confirm`, NIP-98 signed by the terminal. */
+async function confirmWithGateway(voucherId: string, signer: RequestSigner): Promise<void> {
+  await signedFetch(
+    `/api/v1/wallet/terminal-credentials/${encodeURIComponent(voucherId)}/confirm`,
+    'POST',
+    undefined,
+    signer,
+  ).catch(() => undefined)
 }
 
 /**
@@ -75,6 +101,7 @@ export function TerminalSetupPage({
   fetchWraps = giftWraps,
   stallName = publicStallName,
   publisherFor = (a) => devicePublisher(a.signer),
+  confirmAtGateway = confirmWithGateway,
 }: TerminalSetupDeps = {}) {
   const navigate = useNavigate()
   // Minted once, in memory, on first render. Lazy so a re-render shows the same code.
@@ -93,31 +120,44 @@ export function TerminalSetupPage({
   // Offers the operator said did not match. Ignored for the rest of this setup,
   // so the poller does not put the same wrong stall back on screen.
   const [rejected, setRejected] = useState<ReadonlySet<string>>(() => new Set())
+  // The stall and credential the owner's setup code names. Nothing is accepted until the
+  // operator has scanned it, so the device never chooses among offers (#160 review).
+  const [expected, setExpected] = useState<ExpectedOffer | null>(null)
+  const [codeError, setCodeError] = useState<string | null>(null)
 
   useEffect(() => {
     void QRCode.toDataURL(code.uri, { width: 512, margin: 1 }).then(setQr, () => setQr(null))
   }, [code.uri])
 
-  // Look for the credential until one checks out. The newest acceptable offer
-  // wins; refusals are shown so the operator knows something arrived.
+  // Look for the ONE credential the setup code names. There is no "newest wins": an offer
+  // from anyone else is refused, and refusals are shown so the operator knows something
+  // arrived.
   const poll = useCallback(async () => {
+    if (!expected) return false
     const wraps = await fetchWraps(code.terminalPubkey, startedAt)
-    const results = offersFor(wraps)
-    const accepted = results
-      .filter((r): r is CredentialOffer => typeof r !== 'string' && !rejected.has(r.voucherId))
-      .sort((a, b) => b.sentAt - a.sentAt)[0]
+    const results = offersFor(wraps, undefined, expected)
+    const accepted = results.find(
+      (r): r is CredentialOffer => typeof r !== 'string' && !rejected.has(r.voucherId),
+    )
     if (accepted) {
       setOffer(accepted)
       setRefusal(null)
       return true
     }
-    const refused = results.find((r): r is Exclude<OfferRefusal, 'not-a-credential-dm'> => typeof r === 'string')
+    // Someone else's offer is not news worth interrupting the operator with once the right
+    // one is expected; it is reported only when nothing else explains the wait.
+    const refused =
+      results.find(
+        (r): r is Exclude<OfferRefusal, 'not-a-credential-dm'> =>
+          typeof r === 'string' && r !== 'not-the-expected-offer',
+      ) ??
+      results.find((r): r is Exclude<OfferRefusal, 'not-a-credential-dm'> => typeof r === 'string')
     if (refused) setRefusal(REFUSAL_COPY[refused])
     return false
-  }, [fetchWraps, code.terminalPubkey, startedAt, rejected])
+  }, [fetchWraps, code.terminalPubkey, startedAt, rejected, expected])
 
   useEffect(() => {
-    if (offer) return
+    if (offer || !expected) return
     let stopped = false
     const tick = async () => {
       try {
@@ -132,7 +172,7 @@ export function TerminalSetupPage({
       stopped = true
       clearInterval(timer)
     }
-  }, [offer, poll])
+  }, [offer, poll, expected])
 
   useEffect(() => {
     if (!offer) return
@@ -183,7 +223,11 @@ export function TerminalSetupPage({
               offer.stallPubkey,
               enrolledMessageJson(offer.voucherId, code.terminalPubkey),
             )
-            await publisherFor(tools).publish(wrap)
+            await Promise.all([
+              publisherFor(tools).publish(wrap),
+              // The gateway's pending count frees the slot, and lets the credential issue.
+              confirmAtGateway(offer.voucherId, tools.signer).catch(() => undefined),
+            ])
           },
         },
       )
@@ -305,9 +349,33 @@ export function TerminalSetupPage({
       <p className="mb-6 text-center text-sm text-mono-500">
         This code is not a secret. Keep this screen open until setup finishes.
       </p>
-      <p className="mb-6 text-center text-sm text-mono-500" role="status">
-        Waiting for the owner…
-      </p>
+      {expected ? (
+        <p className="mb-6 text-center text-sm text-mono-500" role="status">
+          Waiting for the owner…
+        </p>
+      ) : (
+        <div className="mb-6">
+          <p className="mb-3 text-center text-sm text-mono-500">
+            When the owner&apos;s phone shows a setup code, scan it here. This device only accepts
+            the authority that code names.
+          </p>
+          <ScanRecipient
+            manualLabel="Or enter the setup code"
+            onFound={() => undefined}
+            onText={(text) => {
+              const parsed = parseSetupCode(text)
+              if (!parsed) {
+                setCodeError('That is not a terminal setup code. Scan the code on the owner’s phone.')
+                return false
+              }
+              setCodeError(null)
+              setExpected(parsed)
+              return true
+            }}
+          />
+          {codeError ? <Alert>{codeError}</Alert> : null}
+        </div>
+      )}
       {refusal ? <Alert>{refusal}</Alert> : null}
       <p className="mt-6 text-center text-sm text-mono-500">
         <Link to="/onboarding" className="underline">

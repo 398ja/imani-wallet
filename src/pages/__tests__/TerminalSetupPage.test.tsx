@@ -26,11 +26,24 @@ vi.mock('../../lib/nap', () => ({
   },
 }))
 vi.mock('qrcode', () => ({ default: { toDataURL: async () => 'data:image/png;base64,' } }))
+// The camera is not under test: the stub hands the typed text straight to the page.
+vi.mock('../../components/ScanRecipient', () => ({
+  ScanRecipient: ({ onText }: { onText?: (t: string) => boolean }) => (
+    <input aria-label="setup code" onChange={(e) => onText?.(e.target.value)} />
+  ),
+}))
 
+const confirmed: string[] = []
 const { TerminalSetupPage } = await import('../TerminalSetupPage')
 const { forgetPendingKey, forgetTerminal, storedTerminal } = await import('../../lib/terminalEnrol')
 const { credentialMessageJson, unwrapSealed, wrapMessage } = await import('../../lib/terminalDelivery')
 const { checkCode, formatCheckCode } = await import('../../lib/terminalMint')
+const { setupCode } = await import('../../lib/terminalDelivery')
+
+/** The operator scans the owner's setup code for this stall and credential. */
+function scanSetupCode(stall = STALL, voucherId = VOUCHER_ID) {
+  fireEvent.change(screen.getByLabelText('setup code'), { target: { value: setupCode(stall, voucherId) } })
+}
 const { buildLockedCredentialToken } = await import('../../lib/__tests__/voucherFixtures')
 
 const STALL_KEY = generateSecretKey()
@@ -48,6 +61,7 @@ function renderPage() {
         fetchWraps={async (pubkey) => mailbox.filter((e) => e.tags.some((t) => t[1] === pubkey))}
         stallName={async () => 'Test Stall'}
         publisherFor={() => ({ publish: async (w) => (published.push(w), true) })}
+        confirmAtGateway={async (id) => void confirmed.push(id)}
       />
     </MemoryRouter>,
   )
@@ -103,6 +117,7 @@ describe('the whole setup, owner and device', () => {
   it('receives, confirms, sets a passphrase, stores and announces', { timeout: 20_000 }, async () => {
     renderPage()
     const device = shownCode()
+    scanSetupCode()
     ownerSends(device)
 
     expect(await screen.findByText('Test Stall', {}, { timeout: 8000 })).toBeTruthy()
@@ -128,6 +143,7 @@ describe('the whole setup, owner and device', () => {
   // Real NIP-44 and Schnorr work on every poll: given room under a loaded suite.
   it('refuses a passphrase under 8 characters', { timeout: 20_000 }, async () => {
     renderPage()
+    scanSetupCode()
     ownerSends(shownCode())
     await screen.findByText('Test Stall', {}, { timeout: 8000 })
     fireEvent.click(screen.getByRole('button', { name: 'They match' }))
@@ -144,6 +160,7 @@ describe('the whole setup, owner and device', () => {
   // stored: the device goes back to waiting for the right one.
   it('stores nothing when the operator says the codes do not match', { timeout: 15_000 }, async () => {
     renderPage()
+    scanSetupCode()
     ownerSends(shownCode())
     await screen.findByText('Test Stall', {}, { timeout: 8000 })
 
@@ -162,10 +179,82 @@ describe('the whole setup, owner and device', () => {
   // Real NIP-44 and Schnorr work on every poll: given room under a loaded suite.
   it('refuses a credential sealed by another key, and says so', { timeout: 20_000 }, async () => {
     renderPage()
+    scanSetupCode()
     ownerSends(shownCode(), generateSecretKey())
 
     expect(await screen.findByText(/not sent by the stall it names/, {}, { timeout: 8000 })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'They match' })).toBeNull()
     expect(storedTerminal()).toBeNull()
+  })
+})
+
+describe('#160 review: the operator binds setup to the owner\'s screen', () => {
+  // The hijack: an onlooker who read the device's code sends their own,
+  // well-formed offer, sealed by their own key. Before the fix the device
+  // showed the newest acceptable offer, which could be theirs. Now the device
+  // waits for the owner's setup code and shows only the offer it names, so the
+  // intruder's offer is never on screen even when it arrives first.
+  it('never shows an intruder\'s offer, and shows the owner\'s', { timeout: 20_000 }, async () => {
+    renderPage()
+    const device = shownCode()
+    const intruderKey = generateSecretKey()
+    const intruder = getPublicKey(intruderKey)
+    mailbox.push(
+      wrapMessage(
+        intruderKey,
+        device,
+        credentialMessageJson({
+          voucherId: 'bbbbbbbb-6cea-4a7d-b681-9d5d62cc9dd9',
+          token: buildLockedCredentialToken({
+            stallKey: intruderKey,
+            devicePubkey: device,
+            voucherId: 'bbbbbbbb-6cea-4a7d-b681-9d5d62cc9dd9',
+          }),
+          stallPubkey: intruder,
+          name: 'Front counter',
+          idleLockMinutes: 10,
+        }),
+      ),
+    )
+    scanSetupCode()
+    ownerSends(device)
+
+    expect(await screen.findByText('Test Stall', {}, { timeout: 8000 })).toBeTruthy()
+    expect(screen.getByText(formatCheckCode(checkCode(VOUCHER_ID, STALL, device)))).toBeTruthy()
+  })
+
+  // Nothing is offered before the setup code is scanned, whatever arrives.
+  it('offers nothing before the setup code is scanned', { timeout: 15_000 }, async () => {
+    renderPage()
+    ownerSends(shownCode())
+    await new Promise((r) => setTimeout(r, 4500))
+
+    expect(screen.queryByText('Check this is your stall')).toBeNull()
+    expect(screen.getByText(/scan it here/)).toBeTruthy()
+  })
+
+  // Something that is not a setup code is refused in words.
+  it('refuses text that is not a setup code', () => {
+    renderPage()
+    fireEvent.change(screen.getByLabelText('setup code'), { target: { value: `nostr:${STALL}` } })
+
+    expect(screen.getByText(/not a terminal setup code/)).toBeTruthy()
+  })
+
+  // On finishing, the device tells the gateway the credential arrived, so its
+  // pending count frees the slot and the credential may issue.
+  it('confirms the credential at the gateway', { timeout: 20_000 }, async () => {
+    confirmed.length = 0
+    renderPage()
+    scanSetupCode()
+    ownerSends(shownCode())
+    await screen.findByText('Test Stall', {}, { timeout: 8000 })
+    fireEvent.click(screen.getByRole('button', { name: 'They match' }))
+    fireEvent.change(screen.getByLabelText('Passphrase'), { target: { value: 'counter-pass' } })
+    fireEvent.change(screen.getByLabelText('Repeat passphrase'), { target: { value: 'counter-pass' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Finish setup' }))
+
+    await screen.findByText(/This terminal is set up/)
+    expect(confirmed).toEqual([VOUCHER_ID])
   })
 })

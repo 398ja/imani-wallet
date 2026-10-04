@@ -588,3 +588,17 @@ describe('#160 phase 2: the credential goes to the device', () => {
     expect([...select.options].map((o) => o.textContent)).toContain('Never')
   })
 })
+
+describe('#160 review: the owner shows the setup code the device scans', () => {
+  // The device accepts only the offer the owner's setup code names, so the
+  // owner's screen must show that code: this stall and this credential.
+  it('shows a setup code naming this stall and the minted credential', async () => {
+    await fillEverything()
+    fireEvent.click(addButton())
+
+    await screen.findByText(/Sent to Front counter/)
+    expect(screen.getByTestId('setup-code').textContent).toBe(
+      `imani-terminal:1:${STALL}:5f8a487d-6cea-4a7d-b681-9d5d62cc9dd9`,
+    )
+  })
+})
