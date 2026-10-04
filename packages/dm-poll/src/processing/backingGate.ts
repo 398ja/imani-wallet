@@ -7,7 +7,7 @@
  * call site asks it the same question before anything is swapped.
  */
 
-import type { RedemptionAdapter } from '../adapters/RedemptionAdapter';
+import type { HoldReason, RedemptionAdapter } from '../adapters/RedemptionAdapter';
 import { RedemptionRefusedError } from '../errors';
 
 /**
@@ -25,9 +25,33 @@ export class BackingDeferredError extends Error {
 }
 
 /**
+ * A redemption the recipient will not make under its CURRENT configuration, but
+ * might after a change: the token's mint is not on its list, or it knows no
+ * trusted mint at all (imani-wallet#133 review, HIGH-2).
+ *
+ * Never terminal. `DmPollService` leaves the delivery unconsumed, marks nothing
+ * received, keeps it out of the failed tracker (whose cooldown would hide it from
+ * the catch-up that should release it), and emits `redemption:held` so the wallet
+ * can show the coupon as waiting to be verified.
+ */
+export class BackingHeldError extends Error {
+  readonly code = 'RECEIVE_HELD';
+
+  constructor(
+    readonly reason: HoldReason,
+    readonly detail: string,
+    readonly voucherId: string,
+  ) {
+    super(`redemption held (${reason}): ${detail}`);
+    this.name = 'BackingHeldError';
+  }
+}
+
+/**
  * Throw unless the adapter accepts this token's backing.
  *
  * - refuse -> `RedemptionRefusedError` (terminal: never retried, nothing swapped).
+ * - hold -> `BackingHeldError` (kept, surfaced, offered again on a later poll).
  * - defer, or an adapter that throws -> `BackingDeferredError` (retried later).
  *
  * An adapter that throws is deferred rather than accepted: a gate that fails open
@@ -43,7 +67,14 @@ export function assertBackingAccepted(adapter: RedemptionAdapter, token: string,
     );
   }
 
-  if (verdict.outcome === 'accept') return;
-  if (verdict.outcome === 'defer') throw new BackingDeferredError(verdict.detail);
-  throw new RedemptionRefusedError(verdict.detail, voucherId, 0, 0, verdict.reason);
+  switch (verdict.outcome) {
+    case 'accept':
+      return;
+    case 'defer':
+      throw new BackingDeferredError(verdict.detail);
+    case 'hold':
+      throw new BackingHeldError(verdict.reason, verdict.detail, voucherId);
+    case 'refuse':
+      throw new RedemptionRefusedError(verdict.detail, voucherId, 0, 0, verdict.reason);
+  }
 }

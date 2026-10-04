@@ -9,11 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (breaking)
 
+- **`BackingVerdict` gains `hold`** (imani-wallet#133 review). A token whose mint the wallet
+  does not list, or a wallet that knows no trusted mint at all, is now HELD rather than
+  refused: nothing is swapped, nothing is marked received, the delivery is left unconsumed
+  and kept out of the failed tracker, and `redemption:held` is emitted (with the token,
+  so a wallet can show it as waiting). A held delivery redeemed later emits
+  `redemption:released`. `untrusted-mint` moves from `RefusalReason` to the new
+  `HoldReason` (`untrusted-mint` | `no-trusted-mint`); `refuse` now carries only
+  `wrong-unit` or `undecodable`. `BackingHeldError` and `BackingDeferredError` are exported.
+- New `DmPollService.reofferEvents(eventIds, since)`, which offers specific deliveries again
+  however old (a held one older than `recentDmsSince` was otherwise never offered again),
+  and `hasProcessed(eventId)`.
 - **`RedemptionAdapter.checkBacking(token)` is required** (imani-wallet#131), and the
   optional `getMintUrl` hook, which nothing ever called, is removed. Both redemption call
   sites (`DmPollService.redeemToken` and `TokenRedeemer.redeem`) ask it before `redeem`.
-  `refuse` throws `RedemptionRefusedError` with the new reasons `untrusted-mint`,
-  `wrong-unit` or `undecodable` (terminal, nothing swapped). `defer`, or a check that
+  `refuse` throws `RedemptionRefusedError` with the new reasons `wrong-unit` or
+  `undecodable` (terminal, nothing swapped). `defer`, or a check that
   throws, raises a `RECEIVE_DEFERRED` error, so the delivery is left for a later poll and
   never redeemed on a guess. `BackingVerdict` is exported. `isRedemptionAdapter` now
   requires `checkBacking`.

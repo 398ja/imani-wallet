@@ -174,3 +174,70 @@ describe('the backing gate on TokenRedeemer', () => {
     expect(adapter.redeem).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('a held token is kept, surfaced and offered again (#133 review, HIGH-2)', () => {
+  /**
+   * A mint mismatch between two services' settings must never drop a coupon.
+   * `hold` redeems nothing, leaves the delivery unconsumed, does NOT mark the
+   * token received, and tells the wallet so it can show the coupon as waiting.
+   */
+  it('keeps the delivery, marks nothing received, and emits redemption:held', async () => {
+    const adapter = adapterSaying({ outcome: 'hold', reason: 'untrusted-mint', detail: 'mint not listed' });
+    const { svc, refused, storage } = serviceWith(adapter);
+    const held = vi.fn();
+    svc.on('redemption:held', held);
+
+    await svc.processGiftWrap(wrap('wrap-held'));
+
+    expect(adapter.redeem).not.toHaveBeenCalled();
+    expect(refused).not.toHaveBeenCalled();
+    expect(storage.markTokenAsReceived).not.toHaveBeenCalled();
+    expect(held).toHaveBeenCalledWith(
+      expect.objectContaining({ eventId: 'wrap-held', reason: 'untrusted-mint', voucherId: 'v-131', token: TOKEN }),
+    );
+  });
+
+  /**
+   * Once the configuration names the mint, the very same delivery is redeemed on
+   * the next offer, and the wallet is told it is no longer held.
+   */
+  it('redeems the same delivery once the mint is trusted, and says it was released', async () => {
+    const adapter = adapterSaying({ outcome: 'hold', reason: 'no-trusted-mint', detail: 'no mint known' });
+    const { svc, succeeded } = serviceWith(adapter);
+    const released = vi.fn();
+    svc.on('redemption:released', released);
+
+    await svc.processGiftWrap(wrap('wrap-later'));
+    adapter.checkBacking.mockReturnValue({ outcome: 'accept' });
+    await svc.processGiftWrap(wrap('wrap-later'));
+
+    expect(adapter.redeem).toHaveBeenCalledTimes(1);
+    expect(succeeded).toHaveBeenCalledTimes(1);
+    expect(released).toHaveBeenCalledWith(expect.objectContaining({ eventId: 'wrap-later' }));
+  });
+
+  /**
+   * A held delivery is not a failure: it must not enter the failed tracker,
+   * whose one-hour cooldown would hide it from the very catch-up that should
+   * release it after a config change.
+   */
+  it('does not record a held delivery as failed', async () => {
+    const adapter = adapterSaying({ outcome: 'hold', reason: 'untrusted-mint', detail: 'mint not listed' });
+    const { svc } = serviceWith(adapter);
+
+    await svc.processGiftWrap(wrap('wrap-not-failed'));
+
+    expect(svc.getFailedEvents()).toEqual([]);
+  });
+
+  /** TokenRedeemer, the second call site, also leaves a held token unredeemed. */
+  it('does not redeem a held token on TokenRedeemer either', async () => {
+    const adapter = adapterSaying({ outcome: 'hold', reason: 'untrusted-mint', detail: 'mint not listed' });
+    const redeemer = new TokenRedeemer({ redemptionAdapter: adapter, getTokenFingerprint: (t: string) => `fp-${t}` });
+
+    const result = await redeemer.redeem({ eventId: 'e', senderPubkey: 'f', token: TOKEN, metadata: {}, createdAt: 1 } as never);
+
+    expect(result.success).toBe(false);
+    expect(adapter.redeem).not.toHaveBeenCalled();
+  });
+});

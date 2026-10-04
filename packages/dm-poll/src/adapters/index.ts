@@ -15,7 +15,7 @@ export type { StorageAdapter } from './StorageAdapter';
 export { isStorageAdapter } from './StorageAdapter';
 
 // RedemptionAdapter - Optional
-export type { BackingVerdict, RedemptionAdapter, RedemptionOptions } from './RedemptionAdapter';
+export type { BackingVerdict, HoldReason, RedemptionAdapter, RedemptionOptions } from './RedemptionAdapter';
 export { isRedemptionAdapter } from './RedemptionAdapter';
 
 // UiAdapter - Optional

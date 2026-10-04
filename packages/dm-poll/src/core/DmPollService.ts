@@ -1,5 +1,5 @@
 import { RedemptionRefusedError } from '../errors';
-import { assertBackingAccepted } from '../processing/backingGate';
+import { assertBackingAccepted, BackingHeldError } from '../processing/backingGate';
 /**
  * DmPollService - Main service for NIP-17 DM polling and token redemption
  */
@@ -35,6 +35,14 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
   private failedTracker: FailedEventTracker;
   private inFlightEvents: Set<string> = new Set();
   private inFlightFingerprints: Set<string> = new Set();
+  /**
+   * Deliveries held by the backing gate this session (imani-wallet#133 review).
+   * Kept only to say `redemption:released` when one of them is later redeemed, so
+   * the wallet can stop showing it as waiting. The delivery itself is never
+   * consumed while held, so losing this set (a reload) loses nothing but that one
+   * notification; the wallet's own list is reconciled on success anyway.
+   */
+  private heldEvents: Set<string> = new Set();
   private subscription: SubscriptionHandle | null = null;
   private pollInterval: ReturnType<typeof setInterval> | null = null;
   private running = false;
@@ -277,6 +285,13 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
 
       return tokenDm;
     } catch (error) {
+      // Held by the backing gate: not a failure, and not processed. Left out of the
+      // failed tracker on purpose, because its one-hour cooldown would hide the
+      // delivery from the very catch-up that should release it after a config
+      // change (imani-wallet#133 review).
+      if (error instanceof BackingHeldError) {
+        return null;
+      }
       console.error('[DmPollService] Error processing gift wrap:', error);
       const errorMessage = error instanceof Error ? error.message : String(error);
       await this.failedTracker.track(event.id, event, errorMessage);
@@ -326,6 +341,12 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
         await this.config.storageAdapter.saveVoucher(voucher);
       }
 
+      // It was held earlier in this session and has now gone through, so the
+      // wallet can stop showing it as waiting to be verified.
+      if (this.heldEvents.delete(tokenDm.eventId)) {
+        this.emit('redemption:released', { eventId: tokenDm.eventId });
+      }
+
       // Get sender profile for notification.
       //
       // Gated on there BEING a notification to decorate. The profile is only
@@ -373,6 +394,34 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
 
       return voucher;
     } catch (error) {
+      // Held, not refused (imani-wallet#133 review, HIGH-2). Nothing was swapped
+      // and nothing is marked received; the delivery stays unconsumed so a later
+      // poll offers it again once the configuration names its mint. Rethrown so
+      // processGiftWrap skips eventTracker.add, which it then swallows quietly.
+      if (error instanceof BackingHeldError) {
+        console.warn(
+          '[DmPollService] Redemption held until its mint is trusted:',
+          tokenDm.eventId.substring(0, 8),
+          error.reason,
+        );
+        this.heldEvents.add(tokenDm.eventId);
+        const heldMd = tokenDm.metadata ?? {};
+        this.emit('redemption:held', {
+          eventId: tokenDm.eventId,
+          senderPubkey: tokenDm.senderPubkey,
+          voucherId: error.voucherId,
+          reason: error.reason,
+          detail: error.detail,
+          token: tokenDm.token,
+          createdAt: tokenDm.createdAt,
+          faceValue: heldMd.faceValue,
+          faceUnit: heldMd.faceUnit,
+          faceDecimals: heldMd.faceDecimals,
+          payerPubkey: heldMd.senderPubkey,
+        });
+        throw error;
+      }
+
       // Detect "already redeemed" errors — treat as idempotent success, not failure.
       // This handles cases where SSE re-delivers events, localStorage lost dedup state
       // (e.g., alpha browsers with unreliable storage), or page reloaded mid-redemption.
@@ -776,6 +825,45 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
   }
 
   // ==================== UNCLAIMED TOKEN METHODS ====================
+
+  /**
+   * Offer specific deliveries again, however old (imani-wallet#133 review).
+   *
+   * A delivery the backing gate HELD is never consumed, but the routine catch-up
+   * only looks back `recentDmsSince`, so one held longer than that would stop
+   * being offered at all. The wallet keeps the ids it is holding and calls this
+   * when its trusted mints change, so a coupon held for a month is still released
+   * the moment the configuration names its mint.
+   *
+   * @param eventIds - the gift wraps to offer again
+   * @param since - epoch seconds to look back to (the oldest held delivery)
+   * @returns how many of them were redeemed
+   */
+  async reofferEvents(eventIds: readonly string[], since: number): Promise<number> {
+    const wanted = new Set(eventIds.filter((id) => !this.eventTracker.has(id)));
+    if (wanted.size === 0) return 0;
+
+    let redeemed = 0;
+    try {
+      const events = await queryAllEvents(
+        this.config.nostrdbAdapter,
+        { kinds: [1059], pTags: [this.config.recipientPubkey], since: Math.max(0, Math.floor(since)) },
+        { log: (m) => console.warn(`[DmPollService] ${m}`) },
+      );
+      for (const event of events) {
+        if (!wanted.has(event.id)) continue;
+        if (await this.processGiftWrap(event)) redeemed++;
+      }
+    } catch (error) {
+      console.error('[DmPollService] Failed to re-offer held deliveries:', error);
+    }
+    return redeemed;
+  }
+
+  /** Whether a delivery has been consumed, so a wallet can prune what it still shows as held. */
+  hasProcessed(eventId: string): boolean {
+    return this.eventTracker.has(eventId);
+  }
 
   /**
    * Get unclaimed tokens by comparing gift wraps against processed events

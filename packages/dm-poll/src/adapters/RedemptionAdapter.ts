@@ -41,10 +41,17 @@ export interface RedemptionOptions {
 /**
  * What `checkBacking` says about where a token's value is.
  *
- * - `accept`: the proofs are at a mint the wallet trusts, in its unit (or the
- *   deployment genuinely names no mint and the wallet has chosen to credit anyway).
- * - `refuse`: the proofs are at a mint the wallet does not trust, or in a unit it
- *   cannot read. Permanent: the token's bytes will not change. Nothing is swapped.
+ * - `accept`: the proofs are at a mint the wallet trusts, in its unit.
+ * - `refuse`: the token can never be credited here, whatever the configuration:
+ *   its proofs are in a unit the wallet cannot read, or it cannot be read at all.
+ *   Terminal. Nothing is swapped and the delivery is consumed.
+ * - `hold`: the wallet will not credit this token NOW, but a configuration change
+ *   could change that: its mint is not on the trusted list, or no trusted mint is
+ *   known at all (imani-wallet#133 review). Nothing is swapped, the delivery is
+ *   NOT consumed, nothing is marked received, and `redemption:held` is emitted so
+ *   the wallet can show the coupon as waiting. A later poll offers it again.
+ *   Deliberately not a refusal: a mismatch between two services' mint settings
+ *   used to refuse, and so drop, every coupon it touched.
  * - `defer`: the wallet cannot tell yet (its trusted-mint list has not loaded).
  *   Nothing is swapped and the delivery is NOT consumed, so a later poll retries it.
  */
@@ -52,10 +59,18 @@ export type BackingVerdict =
   | { readonly outcome: 'accept' }
   | {
       readonly outcome: 'refuse';
-      readonly reason: Extract<RefusalReason, 'untrusted-mint' | 'wrong-unit' | 'undecodable'>;
+      readonly reason: Extract<RefusalReason, 'wrong-unit' | 'undecodable'>;
       readonly detail: string;
     }
+  | { readonly outcome: 'hold'; readonly reason: HoldReason; readonly detail: string }
   | { readonly outcome: 'defer'; readonly detail: string };
+
+/** Why a token was held rather than credited. Each one is a different thing to tell a user. */
+export type HoldReason =
+  /** The token's mint is not one the wallet trusts. A config change may add it. */
+  | 'untrusted-mint'
+  /** The wallet knows no trusted mint from any source, so it can verify nothing. */
+  | 'no-trusted-mint';
 
 /**
  * Adapter for token redemption operations

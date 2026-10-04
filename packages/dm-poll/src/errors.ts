@@ -79,12 +79,6 @@ export type RefusalReason =
    * distinguishes them; the refusal does not need to.
    */
   | 'unwarranted'
-  /**
-   * The token's proofs are at a mint the wallet does not trust (imani-wallet#131).
-   * The coupon may be a perfect copy of a genuine signed voucher: the issuer
-   * signature covers no mint, so only the backing tells it apart.
-   */
-  | 'untrusted-mint'
   /** The token's proofs are not in the unit the wallet credits (sat). */
   | 'wrong-unit'
   /** The token could not be read well enough to say where its value is. */

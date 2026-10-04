@@ -97,6 +97,8 @@ export type {
   RedemptionErrorEvent,
   RedemptionRefusedEvent,
   RedemptionUnsavedEvent,
+  RedemptionHeldEvent,
+  RedemptionReleasedEvent,
   SubscriptionStateEvent,
   DmPollEvents,
 
@@ -115,6 +117,7 @@ export type {
   CryptoAdapter,
   StorageAdapter,
   BackingVerdict,
+  HoldReason,
   RedemptionAdapter,
   RedemptionOptions,
   UiAdapter,
@@ -145,6 +148,7 @@ export {
   AdapterError,
 } from './errors';
 export type { RefusalReason } from './errors';
+export { BackingDeferredError, BackingHeldError } from './processing/backingGate';
 
 // Spec 038 — unified receive pipeline surfaces
 export {
