@@ -169,8 +169,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   revocation existed: add it again*. `TerminalRecord.revocationSecret`, which was never written,
   is replaced by `token`, `voucherId` and `waitingUntil`.
 
-### Fixed
-
 - **A coupon held for over a week can still be released (#175 review).** Re-offering held
   coupons looked back from when the message was written, but relays filter on the gift
   wrap's own timestamp, which NIP-59 backdates by up to two days, so such a wrap was never
