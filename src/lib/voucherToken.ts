@@ -276,9 +276,9 @@ export interface ParsedVoucherToken {
    *
    * Per proof, because each proof carries its own bound, and each locked proof's
    * own issuer signature is verified (a proof that does not verify under proof
-   * 0's issuer key counts 0). A locked proof with no tag counts 0: the mint
-   * signs any blinded output, so its sats may be a same-secret twin's (see
-   * `creditableSatsOf`). An unlocked voucher counts its whole amount, as before.
+   * 0's issuer key counts 0). A locked proof with no tag (pre-#141) counts its
+   * whole amount, bounded by face and the ledger: the accepted legacy residual
+   * (see `creditableSatsOf`). An unlocked voucher counts its whole amount, as before.
    * A proof whose tag is present but unreadable counts 0: reading it as absent
    * would let a holder downgrade a bound by mangling it.
    *
@@ -613,11 +613,13 @@ export function satBoundOf(secret: string): SatBound {
  *   proof with the same voucher_id and lock (forged, or signed by some other
  *   key) would otherwise be credited in full.
  * - A verified locked proof with a canonical `max_sats`: `min(amount, max_sats)`.
- * - A verified locked proof with NO `max_sats`: 0. Its funded amount is signed
- *   nowhere, and the mint signs any blinded output, so its sats may belong to a
- *   same-secret twin funded today: the twin-secret attack. Every locked output
- *   issued since #141 carries a bound from birth, so only pre-#141 locked
- *   vouchers read as untagged.
+ * - A verified locked proof with NO `max_sats` (pre-#141): its amount, the
+ *   pre-#141 rule, bounded with the rest by the face value and the shared ledger.
+ *   Its funded amount is signed nowhere, and the mint signs any blinded output,
+ *   so its sats may be a same-secret twin's: that is the ACCEPTED LEGACY
+ *   RESIDUAL. Crediting 0 instead stranded every voucher sold before #141
+ *   (round 3: 141 on staging). Every locked output issued since #141 carries a
+ *   bound from birth, so only pre-#141 locked vouchers read as untagged.
  * - A malformed `max_sats`: 0. Reading it as absent would be a downgrade.
  */
 function creditableSatsOf(amount: number, secret: string, first: SignedVoucherFields): number {
@@ -630,7 +632,8 @@ function creditableSatsOf(amount: number, secret: string, first: SignedVoucherFi
     return 0
   }
   const bound = satBoundOf(secret)
-  if (bound.kind !== 'present') return 0
+  if (bound.kind === 'absent') return amount
+  if (bound.kind === 'malformed') return 0
   return Math.min(amount, bound.sats)
 }
 

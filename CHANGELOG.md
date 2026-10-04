@@ -75,6 +75,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shared by every proof). **Consumers must act:** a pre-#141 locked voucher (a licence or
   terminal credential issued before this change) now has a creditable value of 0 at the till and
   wallet-api `/redeem`; it still verifies, so licence and credential checks are unaffected.
+  **Superseded for untagged proofs by round 3 below.**
+- **An untagged locked voucher proof keeps the pre-#141 crediting** (imani-gateway-customer#141,
+  round 3). Crediting it 0 stranded real customer money: staging holds 141 locked vouchers sold
+  before #141, all untagged. It now credits its sats, bounded by its signed face value and, across
+  redeemers, by the shared ledger, exactly as before #141. A same-secret twin of a pre-#141 proof is
+  therefore the **accepted legacy residual**, bounded by face and ledger; the gateway caps its
+  re-signed and split successors at the voucher's recorded issued sats. Tagged proofs keep the strict
+  `min(sats, max_sats)`, a malformed `max_sats` still credits 0, and every locked proof's own issuer
+  signature is still verified under proof 0's issuer key (a forged later proof credits 0).
 
 ### Fixed
 

@@ -73,13 +73,13 @@ describe('verifying a real coupon', () => {
     expect(v.voucher?.signedFaceValue).toBe(400)
   })
 
-  // The live credential is a pre-#141 LOCKED voucher with no max_sats. The mint
-  // signs any blinded output, so its sats could be a same-secret twin's
-  // (imani-gateway-customer#141): it still verifies, and is credited nothing.
-  it('credits a pre-#141 untagged locked coupon nothing, though it verifies', () => {
+  // The live credential is a pre-#141 LOCKED voucher with no max_sats. Round 3
+  // (imani-gateway-customer#141): it keeps the pre-#141 rule, crediting its
+  // sats bounded by face, rather than 0, which stranded real customer money.
+  it('credits a pre-#141 untagged locked coupon under the legacy rule', () => {
     const v = verify()
     expect(v.ok).toBe(true)
-    expect(v.voucher?.signedFaceValue).toBe(0)
+    expect(v.voucher?.signedFaceValue).toBeGreaterThan(0)
   })
 
   it('REFUSES a coupon issued by another stall', () => {

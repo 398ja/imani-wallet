@@ -155,28 +155,38 @@ describe('split parts in one token', () => {
 })
 
 describe('a locked voucher with no max_sats', () => {
-  // The twin-secret attack: the mint signs any blinded output, so an untagged
-  // locked proof's sats may be a same-secret twin funded today. Its funded
-  // amount is signed nowhere, so it is credited nothing; it still verifies.
-  it('credits 0 sats however many it carries', () => {
+  // Round 3: pre-#141 locked vouchers are untagged (141 on staging), and
+  // crediting them 0 stranded real customer money. An untagged locked proof
+  // keeps the PRE-#141 rule: its sats, bounded by its signed face (and across
+  // redeemers by the shared ledger). Its twin is the accepted legacy residual.
+  it('credits its sats, as before #141', () => {
     const parsed = parseVoucherToken(cashuB([{ amount: 1024, secret: signedSecret(nonce(1)) }]))
 
-    expect(parsed.creditableSats).toBe(0)
-    expect(creditableFaceValue(parsed).faceValue).toBe(0)
-    expect(exactFaceValue(parsed)).toBe(0)
+    expect(parsed.creditableSats).toBe(1024)
+    expect(creditableFaceValue(parsed).faceValue).toBe(Math.round(1024 * RATIO))
+    expect(exactFaceValue(parsed)).toBe(1024 * RATIO)
     expect(verifyVoucher(parsed.voucher).signatureValid).toBe(true)
   })
 
-  // An untagged twin riding alongside a bounded proof adds nothing.
-  it('adds nothing next to a bounded proof', () => {
+  // The legacy residual stays bounded by face: a twin funded past the face
+  // credits the face, never more.
+  it('is still clamped to its signed face', () => {
+    const parsed = parseVoucherToken(cashuB([{ amount: 30000, secret: signedSecret(nonce(1)) }]))
+
+    expect(creditableFaceValue(parsed)).toEqual({ faceValue: FACE, cappedAtFaceValue: true })
+  })
+
+  // Next to a bounded proof, the bounded proof keeps its strict bound and the
+  // untagged one its legacy sats: each proof is read by its own rule.
+  it('keeps each proof on its own rule next to a bounded proof', () => {
     const parsed = parseVoucherToken(
       cashuB([
-        { amount: 4, secret: signedSecret(nonce(1), '4') },
-        { amount: 1024, secret: signedSecret(nonce(2)) },
+        { amount: 1024, secret: signedSecret(nonce(1), '4') },
+        { amount: 8, secret: signedSecret(nonce(2)) },
       ]),
     )
 
-    expect(parsed.creditableSats).toBe(4)
+    expect(parsed.creditableSats).toBe(4 + 8)
   })
 
   // A hand-built ParsedVoucherToken with no creditableSats means "no bound known".

@@ -36,14 +36,12 @@ const parsed = parseVoucherToken(token)
 const stall = parsed.voucher.issuerId
 
 /**
- * A row carrying the gateway's attested value for this coupon. The captured
- * token is a pre-#141 LOCKED voucher with no `max_sats`, so on its own it is
- * credited 0 (imani-gateway-customer#141: its sats could be a same-secret
- * twin's) and would never be a candidate. These tests are about the MINT gate,
- * which runs before any value is computed, so the control gives it a value the
- * attested way and the refusals below stay refusals for the mint alone.
+ * The row the claim is built from. The captured token is a pre-#141 LOCKED
+ * voucher with no `max_sats`, which keeps the pre-#141 crediting (its sats,
+ * bounded by face) after round 3 of imani-gateway-customer#141. These tests
+ * are about the MINT gate, which runs before any value is computed.
  */
-const attestedRow = { amount: 0, attestedValue: 1, attestedUnit: parsed.voucher.unit }
+const attestedRow = { amount: 0 }
 
 describe('crediting a coupon depends on where its value is', () => {
   /**
