@@ -66,16 +66,19 @@ ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
 # Not a secret: it is a URL the browser already talks to. Set per environment, as
 # the PUBLIC mint URL tokens carry in `m` (e.g. https://mint.staging.398ja.xyz).
 #
-# Since #133 the wallet also learns the mint from /api/v1/config at start-up, before
-# its first receive, so an image without this is still gated. Setting it means the
-# gate needs no network answer at all, which is why an unset value is announced
-# loudly here rather than failing the build: imani-deploy's beta build does not pass
-# it yet, and failing would break that pipeline for a defence-in-depth setting.
+# REQUIRED (#133 review, HIGH-1). This image is always a production bundle, and a
+# production bundle that names no mint relies on /api/v1/config alone, which on
+# beta and prod named none: the gate then had nothing to compare against. The
+# wallet now holds coupons in that state rather than crediting them, so an image
+# built without this would credit nothing until the gateway's env is fixed. The
+# build fails instead (scripts/check-trusted-mint-build.sh). A throwaway local
+# image may pass ALLOW_UNTRUSTED_MINT_BUILD=true, which is announced and must
+# never be deployed.
 ARG VITE_TRUSTED_MINT_URLS
 ENV VITE_TRUSTED_MINT_URLS=$VITE_TRUSTED_MINT_URLS
-RUN if [ -z "$VITE_TRUSTED_MINT_URLS" ]; then \
-      echo "WARNING: VITE_TRUSTED_MINT_URLS is unset. The trusted-mint gate will rely on /api/v1/config alone (imani-wallet#133)." >&2; \
-    fi
+ARG ALLOW_UNTRUSTED_MINT_BUILD=false
+COPY scripts/check-trusted-mint-build.sh /tmp/check-trusted-mint-build.sh
+RUN ALLOW_UNTRUSTED_MINT_BUILD="$ALLOW_UNTRUSTED_MINT_BUILD" sh /tmp/check-trusted-mint-build.sh
 
 COPY . .
 # `tsc -b && vite build`. The tsc half typechecks ./packages AND ../nap through
