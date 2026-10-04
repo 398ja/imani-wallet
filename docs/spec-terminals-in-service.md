@@ -1,7 +1,8 @@
 # Spec: putting a terminal into service
 
 **Issue:** [imani-wallet#160](https://github.com/398ja/imani-wallet/issues/160).
-**Status:** Proposed. Nothing here is built yet.
+**Status:** Accepted. The product owner's decisions on the open questions are
+recorded in section 9 (2026-10-04). Built phase by phase, see section 8.
 **Repos:** imani-wallet, imani-gateway-customer, imani-gateway-core,
 imani-gateway-portal, cashu-voucher.
 **Builds on:** [ADR 0005](adr/0005-terminals-are-authorised-by-locked-vouchers.md)
@@ -40,6 +41,17 @@ the security fixes the wiring would otherwise expose (section 4.5).
 4. When the device confirms (section 2.2 step 6), the row becomes **In
    service**. Only then is "can trade for your stall" said anywhere.
 5. A waiting row can be **Cancelled**, which is a revocation (section 2.6).
+6. A waiting row that is not confirmed within **24 hours** expires: the owner's
+   wallet cancels it (spends the credential with the stall key, section 4.3) the
+   next time it opens, and the device refuses a credential DM older than 24
+   hours. A stall may have **at most 2 waiting rows** at a time. **Add terminal**
+   is refused while two are waiting, with *"Two terminals are already waiting
+   for their device. Finish or cancel one first."* Waiting rows do **not** count
+   against the free terminal (decision 4), so a botched setup never blocks a
+   retry.
+7. The owner chooses the **idle lock** on the same form: on by default at 10
+   minutes, adjustable, and it can be switched off (decision 2). It travels to
+   the device in the credential DM (section 5.1).
 
 ### 2.2 A fresh device becomes a terminal
 
@@ -54,8 +66,8 @@ the security fixes the wiring would otherwise expose (section 4.5).
 4. The device polls for a credential DM addressed to its key (section 5.2).
 5. On receipt it shows the stall's public name and the check code, and asks the
    operator to confirm they match the owner's screen.
-6. The operator sets a passphrase (required, minimum length per open question
-   2). `completeEnrolment` verifies and stores. The device sends a signed
+6. The operator sets a passphrase (required, **at least 8 characters**,
+   decision 2). `completeEnrolment` verifies and stores. The device sends a signed
    "enrolled" DM back to the stall and lands on the till.
 
 ### 2.3 Login and unlock
@@ -70,6 +82,12 @@ follow-up shows NAP would log it in as one). The app then runs the terminal
 login: the credential is re-verified from the token's own bytes, the mint is
 asked whether it is still unspent, and a 12-hour local session opens FULL or
 REDUCED exactly as `loginTerminal` already decides (`wallet:src/lib/terminalLogin.ts:98`).
+
+On top of the 12-hour session, an unlocked till locks itself after the owner's
+**idle lock** period with no touch or key press (default 10 minutes, or off,
+decision 2). Locking drops the in-memory signer and returns to
+`/terminal/unlock`. It does not end the 12-hour session's mint check: unlocking
+again within the session needs only the passphrase.
 
 ### 2.4 The till
 
@@ -120,6 +138,21 @@ still unlocked can keep showing payment requests until its 12-hour session
 ends. That is harmless by construction: the money goes to the stall (ADR 0005).
 
 Decommissioning from the device is unchanged (`wallet:src/lib/terminalDecommission.ts:81`).
+
+### 2.7 Expiry and re-issue
+
+A credential is minted for **365 days** (decision 1,
+`wallet:scripts/mint-terminal-credential.mjs:115`). The owner's roster reads the
+expiry from the token's own signed bytes and warns **30 days** and again **7
+days** before it: a badge on the row and a notice on the Terminals screen,
+*"Front counter stops on 12 March. Renew it."* **Renew** is one tap: the wallet
+mints a fresh 365-day credential locked to the **same** device key `K` (taken
+from the row), DMs it to the device, and revokes the old one only after the
+device confirms the new one with the enrolled DM. The device accepts a re-issue
+at its next unlock without a new setup or passphrase, provided it is locked to
+its own `K`, issued by its own stall and has the same role or a smaller one. A
+re-issue that changes the role is not a renewal: the owner adds the device
+again.
 
 ## 3. Why "Add terminal" mints nothing and reaches no device today
 
@@ -249,7 +282,10 @@ the mint is asked (ADR 0006 ordering):
 | Threat | Mitigation |
 |---|---|
 | Stolen device, locked | `K` is passphrase-encrypted at rest. Owner revokes without the device. Sell refused within 60 s |
-| Stolen device, unlocked mid-shift | As above. Redeem-only damage is nil (money goes to the stall). Close the stall if Sell must stop sooner |
+| Stolen device, unlocked mid-shift | The idle lock (default 10 minutes) re-locks an unattended till. Otherwise as above. Redeem-only damage is nil (money goes to the stall). Close the stall if Sell must stop sooner |
+| Weak passphrase on a shared till | At least 8 characters, refused before `completeEnrolment` |
+| Owner hoards unconfirmed credentials | At most 2 waiting rows, each cancelled after 24 hours |
+| Modified terminal sells through a licence lapse | The portal refuses terminal Sell for a stall without a current licence beyond its free terminal (section 5.4), from cached state with a 72-hour grace |
 | Replayed enrolment code | `K` is public by design. The pending key lives in memory only, so an old code from a reloaded device yields an inert credential. Waiting rows can be cancelled |
 | Replayed or forwarded credential DM | Inert without `K`. `completeEnrolment` refuses a credential not locked to the pending key (`wallet:src/lib/terminalEnrol.ts:179`) and runs once |
 | Wrong-stall credential (hijack) | Stall name plus check code confirmed by the operator (section 4.2) |
@@ -271,7 +307,12 @@ the mint is asked (ADR 0006 ordering):
   `GET /api/v1/wallet/vouchers/{id}` until `ISSUED` with a token. Move the
   curve check (`:168-182`) into `checkEnrolment`.
 - **Credential DM** (kind-14 rumor, gift-wrapped to `K`, sealed by the stall):
-  `{"type":"imani-terminal-credential/1","voucher_id","token","stall_pubkey","name"}`.
+  `{"type":"imani-terminal-credential/1","voucher_id","token","stall_pubkey","name","idle_lock_minutes"}`.
+  `idle_lock_minutes` is a whole number, `0` meaning off, default `10`. The
+  rumor's `created_at` bounds the 24-hour waiting window on the device side.
+- **Waiting rows:** at most 2 per stall, counted from the roster, expired and
+  cancelled after 24 hours. Not counted by the free-terminal allowance.
+- **Renewal** (section 2.7): the same credential DM, with `"renews":"<old voucher_id>"`.
 - **Enrolled DM** (gift-wrapped to the stall, sealed by `K`):
   `{"type":"imani-terminal-enrolled/1","voucher_id","terminal_pubkey"}`. The
   owner's DM poll marks the matching roster row **In service** and ignores one
@@ -295,7 +336,9 @@ the mint is asked (ADR 0006 ordering):
 - `TerminalCredentialVerifier`: add the NUT-07 step on the stored token, and
   return the role, so callers other than issuance can use it.
 - **New** `GET /internal/v1/terminal-credentials/{voucherId}?caller=<hex>`,
-  service-credential only: `200 {"stall","role","lock_key","live":true|false|null}`
+  service-credential only: `200 {"stall","role","lock_key","live":true|false|null,"free":true|false}`
+  (`free`: this is the stall's earliest-issued live terminal credential, used by
+  the portal's licence check, decision 3)
   or `404`. The one verifier the other gateways call, so there is one
   definition of a valid credential.
 
@@ -325,6 +368,17 @@ the mint is asked (ADR 0006 ordering):
   with cashu-voucher's new `verifyDelegated` and checks the embedded
   credential's voucher id equals the one that authenticated the request. Nonce
   single use through `issuance_warrant_use` (portal#54).
+- **Licence enforcement (decision 3).** Terminal Sell and cashback are refused
+  with 402 `TERMINAL_UNLICENSED` when the credential is not the stall's free
+  terminal and the stall has no current licence. The internal verifier
+  (section 5.2) reports `free: true` for the stall's earliest-issued live
+  terminal credential, so the portal never counts terminals itself. The
+  licence check reads only the portal's **own cached licence state**
+  (`stall_licence_state`: stall, `licensed_until`, `refreshed_at`), refreshed in
+  the background and never called live on a Sell. A stall stays licensed for
+  **72 hours** after `licensed_until` (grace), and a failed refresh never moves
+  a stall from licensed to unlicensed, so an outage cannot stop a stall mid-day.
+  An owner's own Sell is never licence-checked.
 
 ### 5.5 cashu-voucher
 
@@ -339,16 +393,19 @@ the mint is asked (ADR 0006 ordering):
 
 ## 6. Data model and migrations
 
-**No gateway migrations.** ADR 0005's property, no row per terminal, holds.
-gateway-customer already stores the credential as an issued voucher. Portal
-reuses `issuance_warrant_use` (`portal:.../db/migration/portal/V9__issuance_warrant_use.sql`).
+**No gateway migrations for terminals.** ADR 0005's property, no row per
+terminal, holds. gateway-customer already stores the credential as an issued
+voucher. Portal reuses `issuance_warrant_use` (`portal:.../db/migration/portal/V9__issuance_warrant_use.sql`).
+The one new table is portal's per-stall licence cache for decision 3
+(`stall_licence_state`, phase 5), which is per stall, not per terminal. Its
+Flyway number is chosen against portal's open PRs when phase 5 lands.
 
 Wallet `localStorage`, read with the existing validate-don't-cast style:
 
 | Key | Change |
 |---|---|
-| `imani-wallet:terminal` (device) | Keep `stallPubkey, role, terminalPubkey, name, enrolledAt` as display hints. `token` and **new** `voucherId` are the authority. Drop `permissions`, `merchantMetadata`, `issuerId`: login derives them from the token. A record without `token` reads as not enrolled |
-| `imani-wallet:terminals:<stall>` (owner) | Replace `revocationSecret` with `token` and `voucherId`. Add `status: 'waiting' \| 'in-service' \| 'revoked'`. Existing rows have no token and cannot be revoked. They are shown as *Set up before revocation existed: add it again* and do not count against the allowance |
+| `imani-wallet:terminal` (device) | Keep `stallPubkey, role, terminalPubkey, name, enrolledAt, idleLockMinutes` as display hints. `token` and **new** `voucherId` are the authority. Drop `permissions`, `merchantMetadata`, `issuerId`: login derives them from the token. A record without `token` reads as not enrolled |
+| `imani-wallet:terminals:<stall>` (owner) | Replace `revocationSecret` with `token` and `voucherId`. Add `status: 'waiting' \| 'in-service' \| 'revoked'`, `idleLockMinutes` and `expiresAt` (display only, re-read from the token). Existing rows have no token and cannot be revoked. They are shown as *Set up before revocation existed: add it again* and do not count against the allowance |
 | key store `imani-wallet-key` | Unchanged slot. Holds `K` on a terminal device, guarded by `hasKey()` |
 
 Roster sync across the owner's devices (phase 6): one NIP-44 self-encrypted
@@ -395,7 +452,8 @@ labelled unit-level shortcut.
 
 - gateway-customer: stall co-key on terminal credentials. Refuse credential
   minting through a terminal credential. Wallet: mint from `TerminalEnrolPage`,
-  check kind, lock and metadata, store token in the roster.
+  check kind, lock and metadata, store token in the roster. Waiting rows:
+  at most 2, cancelled after 24 hours, not counted against the free terminal.
 - **AC:** the decoded secret is `P2PK_VOUCHER`, `data` = `K`, `pubkeys` =
   `[S]`, metadata intact. A *Sell and redeem* credential presented to
   `POST /api/v1/wallet/vouchers` with `terminal: true` metadata gets 403.
@@ -405,7 +463,9 @@ labelled unit-level shortcut.
 ### Phase 2: the device receives its authority (wallet)
 
 - `/terminal/setup` entry, code screen, DM poll on `K`, stall name and check
-  code, passphrase, `completeEnrolment`, enrolled DM, owner row → In service.
+  code, passphrase (at least 8 characters), `completeEnrolment`, enrolled DM,
+  owner row → In service. The idle-lock setting travels in the credential DM
+  and is stored on the device record.
 - **AC:** the private key never appears in DOM, storage before completion,
   network payloads or logs (extends `terminalEnrol.test.ts`). A credential for
   another key, or sealed by another stall than confirmed, is refused and
@@ -417,7 +477,8 @@ labelled unit-level shortcut.
 
 - `Entry` routes to `/terminal/unlock`. Unlock without NAP. `TerminalApp`
   shell and menu. `useTerminalIdentity` gets the mint client. Login derives
-  from token bytes. Redeem polls `/api/v1/atomic/fulfilment/{id}`.
+  from token bytes. Redeem polls `/api/v1/atomic/fulfilment/{id}`. Idle lock
+  enforced (section 2.3).
 - **AC:** with the mint reachable a live credential opens FULL. With it
   blocked, REDUCED. No call to `/api/v1/auth/*` from a terminal. Menu shows
   only the items in section 2.4.
@@ -439,6 +500,7 @@ labelled unit-level shortcut.
 - Depends on portal#54. `verifyDelegated` on both sides. Internal verifier
   endpoint. Core permissions with credential. Portal filter, per-method rule,
   `issuingStall` from credential, `delegated` accepted for terminals only.
+  Portal licence cache and `TERMINAL_UNLICENSED` (decision 3).
   Wallet builds `delegated` and lifts `mayWarrantSale` and the gates at
   `wallet:src/lib/issue.ts:644` and `wallet:src/lib/cashbackIssue.ts:85`.
 - **AC:** C's wallet accepts a coupon B sold, verdict `verified`. A replayed
@@ -450,27 +512,31 @@ labelled unit-level shortcut.
 
 ### Phase 6: roster sync and docs (wallet, imani-docs)
 
-- Encrypted roster event. Update `docs/terminals.md` (Adding a terminal,
+- Encrypted roster event. Expiry warnings at 30 and 7 days and one-tap
+  renewal (section 2.7). Update `docs/terminals.md` (Adding a terminal,
   Known gaps, Common questions) and imani-docs
   `warrants/merchant/how-to-sell-on-a-terminal.md`.
 - **AC:** a terminal added on phone A appears on phone A' after restore from
   backup and can be revoked from A'.
 - **E2E:** restore A into a fresh context, revoke B from there, B refused.
 
-## 9. Open questions for the product owner
+## 9. Decisions
 
-1. **Credential lifetime and renewal.** The script mints for 365 days. When a
-   credential expires the terminal stops. Is a year right, and should the owner
-   be warned beforehand and offered one-tap re-issue to the same device?
-2. **Passphrase and idle lock.** Minimum passphrase length for a shared till,
-   and should the till lock when idle (say 10 minutes) in addition to the
-   12-hour session? Stronger against an unattended device, more friction at a
-   queue.
-3. **Server-side licence enforcement.** The subscription gate and the lapse
-   notice are client-side. A modified terminal could sell through a lapse.
-   Should the portal also refuse terminal Sell for a stall without a current
-   licence beyond its free terminal, accepting a network dependency on the
-   licence check?
-4. **Do waiting rows count against the free terminal?** Counting them stops an
-   owner hoarding unconfirmed credentials. Not counting them means a botched
-   setup never blocks the owner from trying again.
+The product owner decided the open questions on 2026-10-04. Each is folded into
+the sections named.
+
+1. **Credential lifetime: 365 days, with warnings and one-tap renewal.** The
+   owner is warned 30 days and 7 days before a credential expires, and offered
+   a one-tap re-issue to the same device key. Sections 2.7, 5.1, phase 6.
+2. **Passphrase at least 8 characters, and an owner-configurable idle lock.**
+   The idle lock defaults to 10 minutes and can be switched off. It applies on
+   top of the 12-hour session. Sections 2.1, 2.2, 2.3, 4.5, 5.1, phases 2 and 3.
+3. **The portal enforces the licence for terminal Sell.** It refuses terminal
+   Sell (and cashback) for a stall with no current licence beyond its free
+   terminal. The check reads the portal's own cached licence state, never a
+   live call, with a 72-hour grace after a lapse, so an outage never stops a
+   stall mid-day. Sections 4.5, 5.4, 6, phase 5.
+4. **Waiting credentials do not count against the free terminal.** Instead a
+   waiting credential expires after 24 hours (the owner's wallet cancels it),
+   and a stall may have at most 2 waiting at a time. Sections 2.1, 4.5, 5.1,
+   phase 1.
