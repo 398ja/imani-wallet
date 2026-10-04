@@ -24,10 +24,11 @@ import {
   IssuanceFailed,
   issueAsStall,
   purchaseIdempotencyKey,
-  processorWarrant,
+  DEFAULT_EXPIRES_IN_DAYS,
   type IssuedCoupon,
   type StallCredential,
 } from './issuer'
+import { checkDelegation, delegatedWarrant } from './delegatedWarrant'
 import { deliver, type Recipient } from './delivery'
 
 /** One coupon a stall owes because a card payment cleared. */
@@ -50,7 +51,10 @@ export interface Obligation {
   recipient: Recipient
   /** How many times issuance has already been tried. */
   attempts: number
-  /** The processor's record of the payment, for the coupon's warrant. */
+  /**
+   * The processor's record of the payment. Carried inside the coupon's signed
+   * warrant as `ref` so the stall can reconcile it; not evidence.
+   */
   processorReference?: string | null
 }
 
@@ -116,6 +120,16 @@ export async function discharge(
     return { kind: 'manual' }
   }
 
+  // The till refuses any coupon this service cannot warrant (#152), so a
+  // credential without a live delegation from the stall must not mint at all.
+  // BLOCKED rather than owed: retrying cannot help until the stall signs a new
+  // delegation, which needs a person, and nothing was minted.
+  const expiresInDays = DEFAULT_EXPIRES_IN_DAYS
+  const delegation = checkDelegation(credential, ports.now() + expiresInDays * 86_400_000)
+  if (!delegation.ok) {
+    return { kind: 'blocked', reason: delegation.reason }
+  }
+
   let coupon: IssuedCoupon
   try {
     coupon = await issueAsStall(baseUrl, credential, {
@@ -123,18 +137,22 @@ export async function discharge(
       faceUnit: obligation.faceUnit,
       faceDecimals: obligation.faceDecimals,
       memo: obligation.memo,
-      expiresInDays: 365,
+      expiresInDays,
       // The purchase's own id, so every attempt at this debt (including one
       // after a lapsed claim) mints under one key (imani-wallet#96).
       idempotencyKey: purchaseIdempotencyKey(obligation.id),
-      // A card purchase is warranted by the processor that took the money,
-      // so the stall can reconcile it against its own account.
-      issuanceWarrant: processorWarrant({
+      // Signed as the stall's delegate, with the stall's own delegation inside,
+      // so the till verifies it offline (#152). The processor reference rides
+      // along inside the signed bytes for reconciliation.
+      issuanceWarrant: delegatedWarrant({
         eventId: obligation.id,
+        issuerId: credential.stallPubkey.toLowerCase(),
         saleTotalMinor: obligation.faceValue,
         faceDecimals: obligation.faceDecimals,
         unit: obligation.faceUnit,
         reference: obligation.processorReference ?? null,
+        lockKeyHex: credential.lockKeyHex,
+        delegation: delegation.event,
       }),
     })
   } catch (error) {

@@ -104,10 +104,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `claimed` before the mint swap with the same "Coupon not authorised" reason as `absent`,
   `unwarranted` and `failed`. The validation badge shows it as failed, and `isWarranted` no
   longer counts it. Merchant-signed coupons are unaffected.
-- Known cost: card-purchase coupons from `services/purchase-issuer` carry a `processor`
-  warrant, so they are refused too until that service signs a verifiable form (`delegated`,
-  with the stall's terminal credential). Staging has no such coupons (0 card purchases, 0
-  proofs with a processor warrant) and production does not run purchase-issuer.
+- Card-purchase coupons are NOT refused: see the next entry, which ships with this one.
+- **The till verifies a `delegated` issuance warrant, and card purchases sign one** (#152).
+  A stall signs one kind-30078 delegation event with its own key naming a delegate pubkey
+  (`p`), scope `coupon:issue` and a NIP-40 `expiration`; the delegate signs the same sale
+  digest a `merchant` warrant signs. The event travels inside the warrant, so verification
+  stays offline. `verifyIssuanceWarrant` checks the delegation is signed by the coupon's
+  issuer, is scoped `coupon:issue` and unexpired, and that the warrant signature is the
+  delegate's (`src/lib/issuerDelegation.ts`). `services/purchase-issuer` now signs a
+  `delegated` warrant with each stall's terminal-credential lock key and keeps the Stripe
+  reference as `ref` inside the signed bytes, so the coupon still reads as "paid by card".
+- **purchase-issuer mints nothing for a stall without a delegation** the till will accept,
+  including one that would lapse before the 365-day coupon does. Such a purchase is
+  reported BLOCKED (nothing minted) for the stall to sign a delegation; attach it with
+  `npx tsx services/purchase-issuer/attachDelegation.ts <stall> <event.json>`, which
+  refuses a delegation the till would refuse.
 
 ### Fixed
 

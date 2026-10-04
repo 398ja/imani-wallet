@@ -95,6 +95,13 @@ export interface StallCredential {
    * gateway checks a NIP-98 signature from the key the credential names.
    */
   lockKeyHex: string
+  /**
+   * The stall's signed delegation of `coupon:issue` to `lockKeyHex`'s public
+   * key, as kind-30078 event JSON (imani-wallet#152). Without it this service
+   * cannot sign a warrant the till accepts, so it mints nothing.
+   * See `delegatedWarrant.ts`.
+   */
+  delegation?: string
 }
 
 export interface IssuePlan {
@@ -112,38 +119,9 @@ export interface IssuePlan {
   idempotencyKey?: string
   /**
    * The issuance warrant JSON, carried verbatim into the coupon's signed
-   * bytes. See `processorWarrant`.
+   * bytes. See `delegatedWarrant.ts`.
    */
   issuanceWarrant?: string
-}
-
-/**
- * A `processor` issuance warrant for a card purchase (imani-wallet#96).
- *
- * A claim, not a proof: this service reads the processor, so it could assert
- * a charge that does not exist. What it buys is falsifiability outside the
- * trust boundary: the stall reads `ref` on its own Stripe dashboard and a
- * forged coupon resolves to "no such charge" at reconciliation. The wallet
- * shows it as "paid by card" (`issuedVoucher.paymentRail`).
- *
- * The nonce is DERIVED from the purchase, not random, so every attempt at
- * one purchase sends a byte-identical body under the same idempotency key.
- */
-export function processorWarrant(input: {
-  eventId: string
-  saleTotalMinor: number
-  faceDecimals: number
-  unit: string
-  reference: string | null
-}): string {
-  return JSON.stringify({
-    form: 'processor',
-    sale_total: input.saleTotalMinor,
-    face_decimals: input.faceDecimals,
-    unit: input.unit,
-    nonce: bytesToHex(sha256(new TextEncoder().encode(`imani-purchase-warrant-v1:${input.eventId}`))).slice(0, 32),
-    ...(input.reference ? { ref: input.reference } : {}),
-  })
 }
 
 /** The key a purchase mints under. One purchase, one key, forever. */
