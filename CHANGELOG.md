@@ -97,6 +97,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Test: a Java-signed `max_sats` 1 proof next to an unsigned `max_sats` 64 proof credits 1 sat**
   (imani-gateway-customer#141, round 5 review LOW-3). Pins, with real Java-signed bytes, that an
   unsigned later proof credits 0, and that one with no `issuer_sig` at all is refused. No code change.
+- **An unsigned `processor` issuance warrant is refused on receipt** (#152). It names a
+  payment record but carries no signature, and nothing on the device can check the record, so
+  it was the issuing service's word alone, read as `claimed` and accepted. Any merchant session
+  could have the portal mint one (imani-gateway-portal#54). `refuseIfUnwarranted` now refuses
+  `claimed` before the mint swap with the same "Coupon not authorised" reason as `absent`,
+  `unwarranted` and `failed`. The validation badge shows it as failed, and `isWarranted` no
+  longer counts it. Merchant-signed coupons are unaffected.
+- Known cost: card-purchase coupons from `services/purchase-issuer` carry a `processor`
+  warrant, so they are refused too until that service signs a verifiable form (`delegated`,
+  with the stall's terminal credential). Staging has no such coupons (0 card purchases, 0
+  proofs with a processor warrant) and production does not run purchase-issuer.
 
 ### Fixed
 

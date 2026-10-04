@@ -63,12 +63,12 @@ describe('an unwarranted coupon FAILS', () => {
       .toBe(validationStatus(record({ warrant: 'failed' })))
   })
 
-  it('a processor claim does not read as verification', () => {
-    // `claimed` must not fail the coupon AND must not be confused with
-    // `verified` anywhere. The record keeps them as distinct values so UI
-    // cannot collapse them by accident.
+  it('an unsigned processor claim fails the coupon', () => {
+    // `claimed` is the issuing service's word alone (#152), refused on receipt,
+    // so the badge must not show it green. The record still keeps it distinct
+    // from `verified` so nothing can collapse the two.
     const claimed = record({ warrant: 'claimed' })
-    expect(validationStatus(claimed)).toBe('verified')
+    expect(validationStatus(claimed)).toBe('failed')
     expect(claimed.warrant).not.toBe('verified')
   })
 

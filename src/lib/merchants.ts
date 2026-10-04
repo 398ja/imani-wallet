@@ -310,7 +310,9 @@ export function isWarranted(row: Pick<VoucherRow, 'token'>): boolean {
       unit: parsed.voucher.unit,
       faceDecimals: parsed.voucher.faceDecimals,
     })
-    return verdict.verdict === 'verified' || verdict.verdict === 'claimed'
+    // `claimed` is an unsigned processor warrant, which every wallet now
+    // refuses on receipt (#152), so it is not warranted here either.
+    return verdict.verdict === 'verified'
   } catch {
     return true
   }
