@@ -14,6 +14,11 @@ import {
   recordTerminal,
   revocationBitesAt,
   revokeTerminal,
+  waitingTerminals,
+  expiredWaiting,
+  isRevocable,
+  MAX_WAITING,
+  WAITING_TTL_MS,
   type TerminalRecord,
 } from '../terminalRoster'
 import { TERMINAL_ROLES } from '../terminalRole'
@@ -38,7 +43,8 @@ function terminal(over: Partial<TerminalRecord> = {}): TerminalRecord {
     name: 'Door',
     role: TERMINAL_ROLES.REDEEM_ONLY,
     enrolledAt: 1_000_000,
-    revocationSecret: 'secret-for-door',
+    token: 'cashuB-door',
+    voucherId: 'cred-door',
     ...over,
   }
 }
@@ -247,5 +253,51 @@ describe('there is no pause', () => {
     recordTerminal(STALL, terminal({ name: 'Door (re-enrolled)' }))
     expect(isRevoked(STALL, DOOR)).toBe(false)
     expect(enrolledCount(STALL)).toBe(1)
+  })
+})
+
+describe('#160 decision 4: waiting rows', () => {
+  // A row that never reached its device does not use up the free terminal, so
+  // a botched setup never blocks the owner from trying again.
+  it('does not count a waiting row against the allowance', () => {
+    recordTerminal(STALL, terminal({ status: 'waiting' }))
+    recordTerminal(STALL, terminal({ terminalPubkey: COUNTER, status: 'in-service' }))
+
+    expect(enrolledCount(STALL)).toBe(1)
+    expect(waitingTerminals(STALL).map((t) => t.terminalPubkey)).toEqual([DOOR])
+  })
+
+  // Waiting rows live 24 hours. One past its time is due for cancelling; one
+  // inside it is not.
+  it('finds waiting rows past their 24 hours, and only those', () => {
+    recordTerminal(STALL, terminal({ status: 'waiting', enrolledAt: 0, waitingUntil: 10 * HOUR }))
+    recordTerminal(
+      STALL,
+      terminal({ terminalPubkey: COUNTER, status: 'waiting', enrolledAt: 0, waitingUntil: 30 * HOUR }),
+    )
+
+    expect(expiredWaiting(STALL, 20 * HOUR).map((t) => t.terminalPubkey)).toEqual([DOOR])
+    expect(WAITING_TTL_MS).toBe(24 * HOUR)
+    expect(MAX_WAITING).toBe(2)
+  })
+
+  // A row written before the token existed is not revocable, so the screen can
+  // say so instead of pretending.
+  it('knows which rows hold what revoking needs', () => {
+    expect(isRevocable(terminal())).toBe(true)
+    expect(isRevocable(terminal({ token: undefined }))).toBe(false)
+  })
+
+  // The token and voucher id survive a round trip through storage, and a
+  // non-string token reads as absent rather than being trusted.
+  it('stores the credential token and reads back only strings', () => {
+    recordTerminal(STALL, terminal())
+    expect(allTerminals(STALL)[0].token).toBe('cashuB-door')
+
+    localStorage.setItem(
+      `imani-wallet:terminals:${STALL}`,
+      JSON.stringify([{ ...terminal(), token: 42 }]),
+    )
+    expect(allTerminals(STALL)[0].token).toBeUndefined()
   })
 })

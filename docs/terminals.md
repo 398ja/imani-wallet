@@ -150,7 +150,12 @@ Two things to hold on to:
 
 - **You can revoke a device you cannot reach.** Lost, stolen, drowned, or
   smashed, it makes no difference: you hold what is needed to withdraw its
-  authority, and the device is not consulted.
+  authority, and the device is not consulted. Revoking spends the terminal's
+  authority at the mint with your stall's key. If that does not get through,
+  the terminal stays on your list as in service and the screen says so: tap
+  **Revoke** again when you have a connection. A terminal set up before this
+  existed says *Set up before revocation existed*: add the device again to
+  replace it.
 - **Revocation bites within 12 hours,** when the terminal's session next
   expires. The screen tells you this before you confirm, because the real
   question you are answering is *"is twelve hours good enough, or do I close the
@@ -239,13 +244,16 @@ and are tested, but four seams between them are not yet wired, so **a second
 till cannot be run end to end right now**. The plan to close them is
 [the terminals-in-service spec](spec-terminals-in-service.md).
 
-1. **Adding a terminal does not yet create its authority.** The enrolment screen
-   records the terminal in your list as **Waiting for the device**, and says so,
-   but the credential behind it is still minted by hand with
-   `scripts/mint-terminal-credential.mjs`. A terminal added from the screen
-   alone cannot log in. The screen refuses a code that is not a real device key,
-   and setup on a device refuses to run while that device still holds a wallet
-   (log out first, keeping the backup key).
+1. **The device cannot yet receive its authority.** **Add terminal** now
+   creates the terminal's authority from your phone, checks it, and shows a
+   check code, and the terminal appears in your list as **Waiting for the
+   device**. The device side, where the operator confirms the code and sets a
+   passphrase, is not built yet, so a terminal added from the screen cannot log
+   in. A waiting terminal is cancelled automatically after 24 hours, and at most
+   two can wait at once. Waiting terminals do not use up your free terminal.
+   The screen refuses a code that is not a real device key, and setup on a
+   device refuses to run while that device still holds a wallet (log out first,
+   keeping the backup key).
 2. **The device side has no screen yet.** The logic that makes a terminal's key
    and shows it as a QR exists, but no page displays it.
 3. **Login does not ask whether the authority is still live.** Every terminal

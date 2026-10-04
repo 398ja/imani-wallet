@@ -2,6 +2,7 @@ import { secp256k1 } from '@noble/curves/secp256k1.js'
 
 import { grantFor, type TerminalRole } from './terminalRole'
 import { mayEnrol, type EnrolDecision } from './terminalAllowance'
+import { MAX_WAITING } from './terminalRoster'
 import type { LicenceStatus } from './licenceStatus'
 import type { TerminalCredential } from './actor'
 
@@ -61,6 +62,8 @@ export const ENROLMENT_REFUSAL = {
   SELF: 'self',
   /** No subscription, and the free allowance is used. */
   NOT_ALLOWED: 'not-allowed',
+  /** Two terminals already wait for their device (decision 4 on #160). */
+  TOO_MANY_WAITING: 'too-many-waiting',
   OFFLINE: 'offline',
 } as const
 
@@ -95,8 +98,13 @@ export interface EnrolmentContext {
   stallPubkey: string
   /** What the licence check currently believes. */
   licence: LicenceStatus
-  /** Terminals already enrolled, excluding the owner's own device. */
+  /**
+   * Terminals in service, excluding the owner's own device. Waiting rows are
+   * not counted: they do not use up the free terminal (decision 4 on #160).
+   */
   enrolledCount: number
+  /** Terminals still waiting for their device. At most `MAX_WAITING`. */
+  waitingCount?: number
   /** Whether the device can reach the network. Enrolment needs it. */
   online: boolean
 }
@@ -165,6 +173,18 @@ export function checkEnrolment(
       ready: false,
       reason: ENROLMENT_REFUSAL.SELF,
       message: 'This is your own device. It already trades for your stall and needs no setup.',
+    }
+  }
+
+  // Decision 4 on #160: waiting rows are free, so they are capped instead. Two
+  // at a time is enough to retry a botched setup, and not enough to stock a
+  // drawer with unconfirmed authorities to the stall.
+  if ((context.waitingCount ?? 0) >= MAX_WAITING) {
+    return {
+      ready: false,
+      reason: ENROLMENT_REFUSAL.TOO_MANY_WAITING,
+      message:
+        'Two terminals are already waiting for their device. Finish or cancel one first.',
     }
   }
 

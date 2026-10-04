@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Tablet, TriangleAlert } from 'lucide-react'
 
-import { Screen, BackLink, PageHeader, Panel, ListSection, Button, EmptyRow } from '../components/ui'
+import { Screen, BackLink, PageHeader, Panel, ListSection, Button, EmptyRow, Alert } from '../components/ui'
 import { Link } from 'react-router-dom'
 import { licenceStatus, type LicenceStatus } from '../lib/licenceStatus'
 import { mayServe } from '../lib/lapseService'
@@ -10,10 +10,18 @@ import { TERMINAL_ROLE_LABELS } from '../lib/terminalRole'
 import {
   REVOCATION_DELAY_NOTE,
   allTerminals,
+  isRevocable,
   revocationBitesAt,
-  revokeTerminal,
   type TerminalRecord,
 } from '../lib/terminalRoster'
+import { cancelExpiredWaiting, revokeTerminalAtMint } from '../lib/terminalRevoke'
+import type { CredentialMintApi } from '../lib/credentialRevocation'
+import { legacyApi } from '../lib/legacyBridge'
+
+/** The owner's spend client, the one `burn.ts` and decommissioning use. */
+async function ownerSpendApi(): Promise<CredentialMintApi> {
+  return (await legacyApi()) as unknown as CredentialMintApi
+}
 
 /**
  * The terminals this stall has out, and taking one back.
@@ -46,7 +54,14 @@ import {
  * and the empty state says so, so the absence reads as a design rather than as
  * a missing button.
  */
-export function TerminalsPage({ stallPubkey }: { stallPubkey: string }) {
+export function TerminalsPage({
+  stallPubkey,
+  spendApi = ownerSpendApi,
+}: {
+  stallPubkey: string
+  /** Injected by tests. Spends a credential with the stall's key. */
+  spendApi?: () => Promise<CredentialMintApi>
+}) {
   // Read lazily rather than in an effect. The roster is local storage, so it is
   // available on the first render — going through an effect would paint an
   // empty list for a frame and, worse, imply this screen needs to fetch
@@ -81,6 +96,54 @@ export function TerminalsPage({ stallPubkey }: { stallPubkey: string }) {
 
   const refresh = useCallback(() => setTerminals(allTerminals(stallPubkey)), [stallPubkey])
 
+  /** Which row is being revoked right now, and what went wrong last time. */
+  const [revoking, setRevoking] = useState<string | null>(null)
+  const [revokeError, setRevokeError] = useState<{ terminal: string; message: string } | null>(null)
+
+  /**
+   * Spend the credential, then mark the row (#160 phase 1, spec 2.6).
+   *
+   * The row changes only if the spend landed. Otherwise it stays live and the
+   * screen says the revocation did not reach the mint, with Revoke to retry.
+   */
+  const revoke = useCallback(
+    async (terminalPubkey: string) => {
+      setRevoking(terminalPubkey)
+      setRevokeError(null)
+      try {
+        const out = await revokeTerminalAtMint(stallPubkey, terminalPubkey, await spendApi())
+        if (!out.revoked) setRevokeError({ terminal: terminalPubkey, message: out.message })
+      } catch {
+        setRevokeError({
+          terminal: terminalPubkey,
+          message: 'The revocation did not reach the mint, so the terminal is still in service.',
+        })
+      } finally {
+        setRevoking(null)
+        setConfirming(null)
+        refresh()
+      }
+    },
+    [stallPubkey, spendApi, refresh],
+  )
+
+  // Waiting rows past their 24 hours are cancelled when this screen opens
+  // (decision 4 on #160). Best effort: one that does not land stays waiting and
+  // is tried again next time, and nothing here blocks the list from showing.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const n = await cancelExpiredWaiting(stallPubkey, await spendApi())
+        if (n > 0 && !cancelled) refresh()
+      } catch {
+        // Offline, or the wallet is locked. The rows stay waiting.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [stallPubkey, spendApi, refresh])
   const live = terminals.filter((t) => t.revokedAt === undefined)
   const retired = terminals.filter((t) => t.revokedAt !== undefined)
 
@@ -106,13 +169,11 @@ export function TerminalsPage({ stallPubkey }: { stallPubkey: string }) {
               // rather than briefly accusing a healthy subscription.
               stopped={licence ? !mayServe(licence, terminals, terminal.terminalPubkey).serving : undefined}
               confirming={confirming === terminal.terminalPubkey}
+              busy={revoking === terminal.terminalPubkey}
+              error={revokeError?.terminal === terminal.terminalPubkey ? revokeError.message : null}
               onAskRevoke={() => setConfirming(terminal.terminalPubkey)}
               onCancel={() => setConfirming(null)}
-              onRevoke={() => {
-                revokeTerminal(stallPubkey, terminal.terminalPubkey)
-                setConfirming(null)
-                refresh()
-              }}
+              onRevoke={() => void revoke(terminal.terminalPubkey)}
             />
           ))}
         </ListSection>
@@ -148,6 +209,8 @@ function TerminalRow({
   terminal,
   stopped,
   confirming = false,
+  busy = false,
+  error = null,
   onAskRevoke,
   onCancel,
   onRevoke,
@@ -156,11 +219,20 @@ function TerminalRow({
   /** Enrolled and unrevoked, but a lapse has stopped it. Undefined = unknown. */
   stopped?: boolean
   confirming?: boolean
+  /** The spend is in flight. */
+  busy?: boolean
+  /** Why the last revoke did not land, if it did not. */
+  error?: string | null
   onAskRevoke?: () => void
   onCancel?: () => void
   onRevoke?: () => void
 }) {
   const revoked = terminal.revokedAt !== undefined
+  const waiting = terminal.status === 'waiting' && !revoked
+  // Rows set up by hand before #160 hold no credential, so they cannot be
+  // revoked from here. Offering Revoke would mark a row while the device kept
+  // its authority, which is the lie this whole change removes.
+  const revocable = isRevocable(terminal)
   const label = TERMINAL_ROLE_LABELS[terminal.role]
   const bitesAt = revocationBitesAt(terminal)
 
@@ -187,7 +259,7 @@ function TerminalRow({
                 : 'Never used'}
           </p>
         </div>
-        {!revoked && onAskRevoke && !confirming ? (
+        {!revoked && revocable && onAskRevoke && !confirming ? (
           // `size="sm"`: a secondary action beside a name, not the point of the
           // row. Red on the outline rather than a filled red button — the
           // filled one is reserved for the confirmed tap, so the two cannot be
@@ -196,12 +268,26 @@ function TerminalRow({
             variant="outline"
             size="sm"
             onClick={onAskRevoke}
+            disabled={busy}
             className="!text-red-600 dark:!text-red-400"
           >
-            Revoke
+            {/* A waiting row is cancelled, which is the same spend (spec 2.1). */}
+            {waiting ? 'Cancel' : 'Revoke'}
           </Button>
         ) : null}
       </div>
+
+      {!revoked && !revocable ? (
+        <p className="mt-2 text-sm text-mono-500">
+          Set up before revocation existed: add it again to be able to revoke it.
+        </p>
+      ) : null}
+
+      {error ? (
+        <div className="mt-2">
+          <Alert>{error}</Alert>
+        </div>
+      ) : null}
 
       {revoked && bitesAt !== null ? (
         <p className="mt-2 text-sm text-mono-500">
@@ -251,9 +337,10 @@ function TerminalRow({
             <Button
               onClick={onRevoke}
               size="sm"
+              disabled={busy}
               className="!bg-red-600 !text-white hover:!bg-red-700"
             >
-              Revoke {terminal.name}
+              {busy ? 'Revoking…' : `${waiting ? 'Cancel' : 'Revoke'} ${terminal.name}`}
             </Button>
           </div>
         </div>

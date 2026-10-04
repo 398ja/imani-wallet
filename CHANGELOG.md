@@ -137,6 +137,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `npx tsx services/purchase-issuer/attachDelegation.ts <stall> <event.json>`, which
   refuses a delegation the till would refuse.
 
+### Added
+
+- **Adding a terminal mints its credential from the owner's phone** (#160, phase 1). **Add
+  terminal** now makes one NIP-98 call, signed by the stall, to `POST /api/v1/wallet/vouchers`
+  (the body `scripts/mint-terminal-credential.mjs` sends, 365 days). It then waits for the token
+  and checks it from its own bytes (`terminalMint.credentialDefect`):
+  - it is a `P2PK_VOUCHER` locked to the scanned key;
+  - the stall is in `pubkeys`, so the owner can revoke it;
+  - it was issued by the stall, with a valid signature;
+  - the signed metadata matches.
+
+  A credential that fails any check is spent at once and nothing is recorded. A good one is
+  kept on the owner's roster row (`token`, `voucherId`), and the screen shows a six-digit check
+  code (`checkCode`, spec 4.2). Needs imani-gateway-customer#187, which mints the stall
+  co-key.
+- **Waiting rows are bounded, not counted** (#160 decision 4). Waiting rows do not use up the
+  free terminal. They are capped at 2 (`TOO_MANY_WAITING`, "Two terminals are already waiting
+  for their device") and expire after 24 hours. The Terminals screen cancels expired rows by
+  spending their credential.
+
+### Fixed
+
+- **Revoking a terminal spends its credential** (#160, phase 1, G10). Revoke (and **Cancel**
+  on a waiting row) used to mark a local row and nothing else, so the terminal kept its
+  authority. `revokeTerminalAtMint` now spends the credential with the stall's key and marks the
+  row only when the spend landed or the mint says it is already spent. Otherwise the row stays
+  in service and the screen says the revocation did not reach the mint. `witness.ts` now signs
+  for a secret whose NUT-11 `pubkeys` tag holds the wallet's key (`spendingKeys`, `n_sigs` 1
+  only). Rows set up by hand before this have no token, offer no Revoke, and say *Set up before
+  revocation existed: add it again*. `TerminalRecord.revocationSecret`, which was never written,
+  is replaced by `token`, `voucherId` and `waitingUntil`.
+
 ### Fixed
 
 - **A coupon held for over a week can still be released (#175 review).** Re-offering held

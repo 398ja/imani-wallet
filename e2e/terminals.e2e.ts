@@ -162,6 +162,13 @@ async function main() {
   console.log(`   registered @${handle}, stall ${STALL.slice(0, 12)}…`)
 
   console.log('\nThe terminals screen renders from a real roster')
+  /**
+   * Seeded rows, as an owner's phone holds them. `Front counter` carries a
+   * token (a placeholder, which no mint will take), so Revoke is offered. `Old
+   * till` predates #160 and holds none, so it cannot be revoked from here and
+   * says so. The real, successful revocation is clicked in the phase 1 block
+   * below, against a credential this run actually mints.
+   */
   await seedAndOpen('/settings/terminals', [
     {
       terminalPubkey: 'c'.repeat(64),
@@ -169,6 +176,13 @@ async function main() {
       role: 'redeem-only',
       enrolledAt: 1_000_000,
       lastUsedAt: 1_700_000_000_000,
+      token: 'cashuB-seeded-placeholder',
+    },
+    {
+      terminalPubkey: 'e'.repeat(64),
+      name: 'Old till',
+      role: 'redeem-only',
+      enrolledAt: 950_000,
     },
     {
       terminalPubkey: 'd'.repeat(64),
@@ -185,11 +199,12 @@ async function main() {
   check('separates them into sections', body.includes('No longer in service'))
   check('names the role', body.toLowerCase().includes('redemption only'))
   check('offers a way to add another', body.includes('Add a terminal'))
+  check('a row set up before revocation existed says so', /Set up before revocation existed/.test(body))
   check('no uncaught errors', pageErrors.length === 0, pageErrors.join('; '))
 
   console.log('\nRevocation, clicked for real')
   const revoke = page.getByRole('button', { name: 'Revoke' })
-  check('a live terminal offers Revoke', (await revoke.count()) === 1)
+  check('only the row holding a credential offers Revoke', (await revoke.count()) === 1)
   await revoke.first().click()
 
   const confirming = await page.locator('body').innerText()
@@ -197,32 +212,25 @@ async function main() {
   check('and says what to do if that is too long', /close your stall/.test(confirming))
   check('offers a way out', confirming.includes('Keep it'))
 
-  // Nothing may have happened yet: the first tap must not revoke.
-  const stillLive = await page.evaluate(
-    (stall) =>
-      JSON.parse(localStorage.getItem(`imani-wallet:terminals:${stall}`)!).find(
-        (t: { name: string }) => t.name === 'Front counter',
-      ).revokedAt,
-    STALL,
-  )
-  check('the first tap does not revoke', stillLive === undefined)
+  const revokedAt = () =>
+    page.evaluate(
+      (stall) =>
+        JSON.parse(localStorage.getItem(`imani-wallet:terminals:${stall}`)!).find(
+          (t: { name: string }) => t.name === 'Front counter',
+        ).revokedAt,
+      STALL,
+    )
+  check('the first tap does not revoke', (await revokedAt()) === undefined)
 
+  // #160 phase 1: confirming spends the credential at the mint, and the row is
+  // marked only if that landed. This placeholder cannot be spent, so the row
+  // must stay in service and the screen must say the revocation did not land.
   await page.getByRole('button', { name: /Revoke Front counter/ }).click()
-  await page.waitForTimeout(300)
-
-  const afterRevoke = await page.evaluate(
-    (stall) =>
-      JSON.parse(localStorage.getItem(`imani-wallet:terminals:${stall}`)!).find(
-        (t: { name: string }) => t.name === 'Front counter',
-      ),
-    STALL,
-  )
-  check('confirming revokes it', afterRevoke.revokedAt !== undefined)
-  check('and does not erase it', afterRevoke.name === 'Front counter')
-
-  const afterText = await page.locator('body').innerText()
-  check('the list updates with no reload', afterText.includes('No terminals yet'))
-  check('nothing anywhere offers a pause', !/pause|suspend/i.test(afterText))
+  await page.waitForTimeout(1500)
+  const afterRevoke = await page.locator('body').innerText()
+  check('a spend that did not land leaves the row in service', (await revokedAt()) === undefined)
+  check('and says so', /cannot be revoked from here|did not reach the mint/.test(afterRevoke), afterRevoke.slice(0, 200))
+  check('nothing anywhere offers a pause', !/pause|suspend/i.test(afterRevoke))
 
   console.log('\nThe enrolment screen')
   await seedAndOpen('/settings/terminals/add', [])
@@ -271,16 +279,74 @@ async function main() {
   await page.getByRole('button', { name: 'Rescan' }).click()
   // A real x-only key, generated here so no fixture key is reused.
   const { getPublicKey, generateSecretKey } = await import('nostr-tools')
-  await enterKey(getPublicKey(generateSecretKey()))
+  const devicePubkey = getPublicKey(generateSecretKey())
+  await enterKey(devicePubkey)
+
+  // #160 phase 1: Add makes exactly one minting call, to the owner's gateway.
+  const mintCalls: string[] = []
+  const onRequest = (r: { method(): string; url(): string }) => {
+    if (r.method() === 'POST' && /\/api\/v1\/wallet\/vouchers$/.test(r.url())) mintCalls.push(r.url())
+  }
+  page.on('request', onRequest)
   await add.click()
-  await page.waitForTimeout(800)
+  await page
+    .getByRole('heading', { name: /Waiting for the device/ })
+    .waitFor({ state: 'visible', timeout: 90_000 })
+    .catch(() => {})
+  page.off('request', onRequest)
   const added = await page.locator('body').innerText()
-  check('the screen says Waiting for the device', /Waiting for the device/.test(added), added.slice(0, 200))
+  check(
+    'the screen says Waiting for the device',
+    /Waiting for the device/.test(added),
+    // Say what the screen DID show: the refusal is the useful part.
+    added.replace(/\s+/g, ' ').slice(-300),
+  )
   check('and never says it can trade', !/can now trade|can trade for your stall/i.test(added))
+  check('phase 1: exactly one minting call on Add', mintCalls.length === 1, `saw ${mintCalls.length}`)
+  check('phase 1: a check code is shown', /\d{3} \d{3}/.test(added))
+
+  // The token on the owner's row decodes as the spec requires: P2PK_VOUCHER,
+  // data = 02||K, pubkeys = [02||S], the signed metadata intact.
+  const row = await page.evaluate(
+    ([stall, device]) => {
+      const rows = JSON.parse(localStorage.getItem(`imani-wallet:terminals:${stall}`) ?? '[]')
+      return rows.find((r: { terminalPubkey: string }) => r.terminalPubkey === device) ?? null
+    },
+    [STALL, devicePubkey] as const,
+  )
+  if (row?.token) {
+    const { tokenProofs, parseVoucherToken } = await import('../src/lib/voucherToken')
+    const secret = JSON.parse(tokenProofs(row.token)[0].secret)
+    const pubkeys = (secret[1].tags as string[][]).find((t) => t[0] === 'pubkeys')?.slice(1) ?? []
+    const meta = JSON.parse(String(parseVoucherToken(row.token).voucher.merchantMetadata))
+    check('phase 1: the credential is a P2PK_VOUCHER', secret[0] === 'P2PK_VOUCHER')
+    check('phase 1: locked to the device', secret[1].data === `02${devicePubkey}`)
+    check('phase 1: the stall is co-spender', pubkeys.includes(`02${STALL}`), JSON.stringify(pubkeys))
+    check('phase 1: metadata intact', meta.lock_key === devicePubkey && meta.stall_pubkey === STALL)
+  } else {
+    check('phase 1: the roster row holds the credential token', false, added.slice(0, 200))
+  }
+
   await goto(page, `${BASE}/settings/terminals`)
   await page.waitForTimeout(1200)
   const roster = await page.locator('body').innerText()
   check('the roster row reads Waiting for the device', /Waiting for the device/.test(roster))
+
+  // Cancelling the waiting row spends the credential: NUT-07 then says SPENT.
+  if (row?.token) {
+    await page.getByRole('button', { name: 'Cancel' }).first().click()
+    await page.getByRole('button', { name: /^Cancel Front counter/ }).click()
+    await page.getByText('No longer in service').waitFor({ timeout: 60_000 }).catch(() => {})
+    const state = await page.evaluate(async (token) => {
+      const r = await fetch('/api/v1/wallet/token/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      })
+      return r.ok ? ((await r.json()) as { state?: string; valid?: boolean }) : { state: `http ${r.status}` }
+    }, row.token)
+    check('phase 1: cancelling spends it (NUT-07 SPENT)', state.state === 'SPENT' || state.valid === false, JSON.stringify(state))
+  }
   check('no uncaught errors adding a terminal', pageErrors.length === 0, pageErrors.join('; '))
 
   console.log('\nWhat an unsubscribed stall sees when it runs two tills')
@@ -401,6 +467,7 @@ async function main() {
       name: 'Front counter',
       role: 'redeem-only',
       enrolledAt: 1_000_000,
+      token: 'cashuB-seeded-placeholder',
     },
   ])
   await page.getByRole('button', { name: 'Revoke' }).first().click()
@@ -417,6 +484,7 @@ async function main() {
       name: 'Front counter',
       role: 'redeem-only',
       enrolledAt: 1_000_000,
+      token: 'cashuB-seeded-placeholder',
     },
   ])
   await page.getByRole('button', { name: 'Revoke' }).first().click()

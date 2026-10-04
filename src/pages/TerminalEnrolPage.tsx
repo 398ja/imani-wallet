@@ -7,7 +7,22 @@ import { ScanRecipient } from '../components/ScanRecipient'
 import { ALL_TERMINAL_ROLES, TERMINAL_ROLE_LABELS, type TerminalRole } from '../lib/terminalRole'
 import { checkEnrolment, prepareEnrolment } from '../lib/terminalIssue'
 import { licenceStatus } from '../lib/licenceStatus'
-import { enrolledCount, recordTerminal } from '../lib/terminalRoster'
+import {
+  WAITING_TTL_MS,
+  enrolledCount,
+  recordTerminal,
+  waitingTerminals,
+} from '../lib/terminalRoster'
+import {
+  checkCode,
+  formatCheckCode,
+  mintTerminalCredential,
+  ownerTransport,
+  type MintTransport,
+} from '../lib/terminalMint'
+import { revokeCredential, type CredentialMintApi } from '../lib/credentialRevocation'
+import { legacyApi } from '../lib/legacyBridge'
+import { parseVoucherToken } from '../lib/voucherToken'
 import { useOnline } from '../lib/useOnline'
 import type { LicenceStatus } from '../lib/licenceStatus'
 
@@ -37,7 +52,22 @@ import type { LicenceStatus } from '../lib/licenceStatus'
  * stall sitting in a drawer. So an offline owner is told plainly, up front,
  * rather than after filling in the form.
  */
-export function TerminalEnrolPage({ stallPubkey }: { stallPubkey: string }) {
+/** The owner's spend client, the one `burn.ts` and decommissioning use. */
+async function ownerSpendApi(): Promise<CredentialMintApi> {
+  return (await legacyApi()) as unknown as CredentialMintApi
+}
+
+export function TerminalEnrolPage({
+  stallPubkey,
+  transport = ownerTransport,
+  spendApi = ownerSpendApi,
+}: {
+  stallPubkey: string
+  /** Injected by tests. The owner's NIP-98 signer otherwise. */
+  transport?: MintTransport
+  /** Injected by tests. Spends a credential that came back wrong. */
+  spendApi?: () => Promise<CredentialMintApi>
+}) {
   const navigate = useNavigate()
   const online = useOnline()
 
@@ -47,7 +77,9 @@ export function TerminalEnrolPage({ stallPubkey }: { stallPubkey: string }) {
   const [role, setRole] = useState<TerminalRole | null>(null)
   const [terminalPubkey, setTerminalPubkey] = useState<string | null>(null)
   const [licence, setLicence] = useState<LicenceStatus | null>(null)
-  const [issued, setIssued] = useState<string | null>(null)
+  const [issued, setIssued] = useState<{ name: string; code: string } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
 
   // The gate is consulted with the real check, not a cached flag, so an owner
   // whose subscription lapsed while this screen was open is refused here rather
@@ -68,39 +100,65 @@ export function TerminalEnrolPage({ stallPubkey }: { stallPubkey: string }) {
   }, [stallPubkey])
 
   const request = { name, role, terminalPubkey: terminalPubkey ?? '' }
-  const check = licence
-    ? checkEnrolment(request, {
+  const context = licence
+    ? {
         stallPubkey,
         licence,
         enrolledCount: enrolledCount(stallPubkey),
+        waitingCount: waitingTerminals(stallPubkey).length,
         online,
-      })
+      }
     : null
+  const check = context ? checkEnrolment(request, context) : null
 
-  const enrol = () => {
-    if (!licence) return
-    const credential = prepareEnrolment(request, {
-      stallPubkey,
-      licence,
-      enrolledCount: enrolledCount(stallPubkey),
-      online,
-    })
-
-    // Recorded on the OWNER's device at the moment authority is created, with
-    // what is needed to revoke it later. Ticket 06's third criterion depends on
-    // this happening HERE: if the secret were only kept by the terminal, a lost
-    // device could never be revoked, which is the case that matters most.
-    recordTerminal(stallPubkey, {
-      terminalPubkey: credential.lockedTo,
-      name: credential.name,
-      role: credential.role,
-      enrolledAt: Date.now(),
-      // Waiting, not in service: nothing has reached the device, and it cannot
-      // trade until it has (#160). The row says so rather than implying a till.
-      status: 'waiting',
-    })
-
-    setIssued(credential.name)
+  /**
+   * Mint the credential from this phone, check it, and keep it (#160 phase 1).
+   *
+   * One request to the gateway, signed by the stall's own key, then a check of
+   * the token's own bytes. A credential that came back wrong is spent at once
+   * and nothing is recorded. Only a credential that is right reaches the roster,
+   * with its token, which is what revoking it later spends.
+   */
+  const enrol = async () => {
+    if (!context || busy) return
+    const credential = prepareEnrolment(request, context)
+    setBusy(true)
+    setFailure(null)
+    try {
+      const minted = await mintTerminalCredential(
+        credential,
+        async (token) => {
+          const metadata = parseVoucherToken(token).voucher.merchantMetadata
+          const out = await revokeCredential(token, metadata, await spendApi())
+          return out.revoked || out.reason === 'already-revoked'
+        },
+        transport,
+      )
+      const now = Date.now()
+      // Recorded on the OWNER's device, with the token revocation spends. If
+      // the token were only kept by the terminal, a lost device could never be
+      // revoked, which is the case that matters most.
+      recordTerminal(stallPubkey, {
+        terminalPubkey: credential.lockedTo,
+        name: credential.name,
+        role: credential.role,
+        enrolledAt: now,
+        // Waiting, not in service: the device has not confirmed it, and it
+        // cannot trade until it has (#160). Cancelled after 24 hours.
+        status: 'waiting',
+        token: minted.token,
+        voucherId: minted.voucherId,
+        waitingUntil: now + WAITING_TTL_MS,
+      })
+      setIssued({
+        name: credential.name,
+        code: formatCheckCode(checkCode(minted.voucherId, stallPubkey, credential.lockedTo)),
+      })
+    } catch (e) {
+      setFailure(e instanceof Error ? e.message : 'Could not set up the terminal.')
+    } finally {
+      setBusy(false)
+    }
   }
 
   if (issued) {
@@ -111,16 +169,25 @@ export function TerminalEnrolPage({ stallPubkey }: { stallPubkey: string }) {
             say the terminal "can now trade for your stall" when no call had
             been made and nothing had reached the device. It is on the owner's
             list, waiting for its device, and that is all. */}
-        <PageHeader title="Waiting for the device" subtitle={`${issued} is on your terminal list`} />
+        <PageHeader
+          title="Waiting for the device"
+          subtitle={`${issued.name}'s authority is ready`}
+        />
         <Panel className="mb-6 p-4">
           <div className="flex items-start gap-3">
             <Clock className="h-6 w-6 shrink-0 text-amber-600" aria-hidden />
-            <p className="text-sm text-mono-500">
-              It cannot take payments yet. It needs to be finished on that device,
-              with a passphrase set there, and that step is not available in this
-              version. Its row says <span className="font-medium">Waiting for the device</span>{' '}
-              until then.
-            </p>
+            <div className="text-sm text-mono-500">
+              <p>
+                Check code <span className="font-mono font-medium text-mono-900 dark:text-mono-50">{issued.code}</span>.
+                The device will show the same code when it receives its authority.
+              </p>
+              <p className="mt-2">
+                It cannot take payments yet. It needs to be finished on that device,
+                with a passphrase set there, and that step is not available in this
+                version. Its row says <span className="font-medium">Waiting for the device</span>{' '}
+                until then, and is cancelled automatically after 24 hours.
+              </p>
+            </div>
           </div>
         </Panel>
         <Button onClick={() => navigate('/settings/terminals')}>Done</Button>
@@ -201,9 +268,10 @@ export function TerminalEnrolPage({ stallPubkey }: { stallPubkey: string }) {
       {check && !check.ready && (name || role || terminalPubkey) ? (
         <Alert>{check.message}</Alert>
       ) : null}
+      {failure ? <Alert>{failure}</Alert> : null}
 
-      <Button onClick={enrol} disabled={!check?.ready}>
-        Add terminal
+      <Button onClick={() => void enrol()} disabled={!check?.ready || busy}>
+        {busy ? 'Setting up…' : 'Add terminal'}
       </Button>
     </Screen>
   )

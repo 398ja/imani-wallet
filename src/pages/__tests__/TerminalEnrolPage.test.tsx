@@ -19,9 +19,49 @@ import { MemoryRouter } from 'react-router-dom'
  * run, since they are the part the wiring could get wrong.
  */
 
-const STALL = 'a'.repeat(64)
+import { schnorr } from '@noble/curves/secp256k1.js'
+import { bytesToHex } from '@noble/hashes/utils'
+import { buildLockedCredentialToken } from '../../lib/__tests__/voucherFixtures'
+
+/** The stall holds a real key, so the fake gateway can sign the credential it returns. */
+const STALL_KEY = schnorr.utils.randomSecretKey()
+const STALL = bytesToHex(schnorr.getPublicKey(STALL_KEY))
 /** A real point on the curve. Off-curve codes are refused since #160 phase 0. */
-const DEVICE = 'd'.repeat(64)
+const DEVICE = bytesToHex(schnorr.getPublicKey(schnorr.utils.randomSecretKey()))
+
+/**
+ * The gateway, faked at the network edge only. It mints what it is asked for,
+ * signed by the stall, the way gateway-customer does since #160 phase 1, unless
+ * a test makes it mint the wrong device.
+ */
+let mintWrongDevice = false
+const posts: unknown[] = []
+const fakeTransport = {
+  post: async (_path: string, body: unknown) => {
+    posts.push(body)
+    return new Response(JSON.stringify({ voucher_id: '5f8a487d-6cea-4a7d-b681-9d5d62cc9dd9' }), {
+      status: 201,
+    })
+  },
+  get: async () => {
+    const meta = (posts.at(-1) as { merchant_metadata: { role: string } }).merchant_metadata
+    const token = buildLockedCredentialToken({
+      stallKey: STALL_KEY,
+      devicePubkey: mintWrongDevice ? bytesToHex(schnorr.getPublicKey(schnorr.utils.randomSecretKey())) : DEVICE,
+      role: meta.role,
+    })
+    return new Response(JSON.stringify({ status: 'ISSUED', token }), { status: 200 })
+  },
+  sleep: async () => {},
+}
+const spends: string[] = []
+const fakeSpend = async () => ({
+  validateToken: async () => ({ state: 'UNSPENT' }),
+  receive: async (token: string) => {
+    spends.push(token)
+    return {}
+  },
+})
 
 /** When set, the stub scanner returns 64 hex characters that are not a key. */
 let offCurve = false
@@ -58,7 +98,7 @@ const { TERMINAL_ROLES } = await import('../../lib/terminalRole')
 function renderPage() {
   return render(
     <MemoryRouter>
-      <TerminalEnrolPage stallPubkey={STALL} />
+      <TerminalEnrolPage stallPubkey={STALL} transport={fakeTransport} spendApi={fakeSpend} />
     </MemoryRouter>,
   )
 }
@@ -78,6 +118,9 @@ beforeEach(() => {
   localStorage.clear()
   granted = true
   offCurve = false
+  mintWrongDevice = false
+  posts.length = 0
+  spends.length = 0
   vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
 })
 afterEach(() => {
@@ -217,6 +260,7 @@ describe('enrolling', () => {
     await fillEverything()
     fireEvent.click(addButton())
 
+    await waitFor(() => expect(allTerminals(STALL)).toHaveLength(1))
     const [row] = allTerminals(STALL)
     expect(row.terminalPubkey).toBe(DEVICE)
     expect(row.name).toBe('Front counter')
@@ -234,6 +278,7 @@ describe('enrolling', () => {
     fireEvent.click(screen.getByRole('button', { name: 'scan' }))
     fireEvent.click(addButton())
 
+    await waitFor(() => expect(allTerminals(STALL)).toHaveLength(1))
     expect(allTerminals(STALL)[0].role).toBe(TERMINAL_ROLES.ISSUE_AND_REDEEM)
   })
 
@@ -243,7 +288,7 @@ describe('enrolling', () => {
     await fillEverything()
     fireEvent.click(addButton())
 
-    expect(screen.getByRole('heading', { name: /Waiting for the device/ })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: /Waiting for the device/ })).toBeTruthy()
     expect(screen.getByText(/passphrase/)).toBeTruthy()
   })
 
@@ -254,6 +299,7 @@ describe('enrolling', () => {
     await fillEverything()
     fireEvent.click(addButton())
 
+    await screen.findByRole('heading', { name: /Waiting for the device/ })
     expect(document.body.textContent).not.toMatch(/can now trade|can trade for your stall/i)
     expect(document.body.textContent).toMatch(/cannot take payments yet/)
   })
@@ -264,7 +310,79 @@ describe('enrolling', () => {
     await fillEverything()
     fireEvent.click(addButton())
 
+    await waitFor(() => expect(allTerminals(STALL)).toHaveLength(1))
     expect(allTerminals(STALL)[0].status).toBe('waiting')
+  })
+
+  // #160 phase 1 (G1): Add used to build the credential and throw it away. It
+  // must now make exactly one minting call and keep the token, which is what
+  // revoking the terminal later spends.
+  it('mints once and keeps the credential token on the owner\'s row', async () => {
+    await fillEverything()
+    fireEvent.click(addButton())
+
+    await waitFor(() => expect(allTerminals(STALL)).toHaveLength(1))
+    expect(posts).toHaveLength(1)
+    const [row] = allTerminals(STALL)
+    expect(row.token).toMatch(/^cashuB/)
+    expect(row.voucherId).toBe('5f8a487d-6cea-4a7d-b681-9d5d62cc9dd9')
+    expect(row.waitingUntil).toBeGreaterThan(Date.now())
+  })
+
+  // The owner reads the same check code the device will show (spec 2.1).
+  it('shows a six-digit check code', async () => {
+    await fillEverything()
+    fireEvent.click(addButton())
+
+    expect(await screen.findByText(/^\d{3} \d{3}$/)).toBeTruthy()
+  })
+
+  // A credential that came back locked to another device is spent at once
+  // and nothing is recorded, so no unusable or foreign authority sits on the
+  // owner's list.
+  it('records nothing and cancels a credential that came back wrong', async () => {
+    mintWrongDevice = true
+    await fillEverything()
+    fireEvent.click(addButton())
+
+    expect(await screen.findByText(/different device/)).toBeTruthy()
+    expect(allTerminals(STALL)).toEqual([])
+    expect(spends).toHaveLength(1)
+  })
+
+  // Decision 4: two waiting rows is the limit. A third Add is refused in
+  // words, before any mint.
+  it('refuses a third terminal while two are waiting', async () => {
+    for (const k of ['2', '3']) {
+      recordTerminal(STALL, {
+        terminalPubkey: k.repeat(64),
+        name: `Waiting ${k}`,
+        role: TERMINAL_ROLES.REDEEM_ONLY,
+        enrolledAt: Date.now(),
+        status: 'waiting',
+      })
+    }
+    await fillEverything()
+
+    expect(addButton().disabled).toBe(true)
+    expect(screen.getByText(/Two terminals are already waiting/)).toBeTruthy()
+    expect(posts).toEqual([])
+  })
+
+  // Decision 4: a waiting row does not use the free terminal, so an owner with
+  // no subscription and one botched setup can still add the device again.
+  it('does not count a waiting row against the free terminal', async () => {
+    granted = false
+    recordTerminal(STALL, {
+      terminalPubkey: '2'.repeat(64),
+      name: 'Botched',
+      role: TERMINAL_ROLES.REDEEM_ONLY,
+      enrolledAt: Date.now(),
+      status: 'waiting',
+    })
+    await fillEverything()
+
+    expect(addButton().disabled).toBe(false)
   })
 })
 

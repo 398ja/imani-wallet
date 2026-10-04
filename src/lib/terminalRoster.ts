@@ -11,10 +11,10 @@ import { roleOf, type TerminalRole } from './terminalRole'
  * ## Revocation must work with the device gone
  *
  * The lost, stolen and dead-battery cases are the only ones that really matter,
- * so nothing here asks the terminal for anything. The owner keeps what is
- * needed to spend each terminal's proof (`revocationSecret`), which is why
- * revoking a device at the bottom of a river is the same operation as revoking
- * one on the counter.
+ * so nothing here asks the terminal for anything. The owner keeps each
+ * terminal's credential `token`, which carries the stall as a co-spender
+ * (#160, spec 4.3), so revoking a device at the bottom of a river is the same
+ * operation as revoking one on the counter: the stall spends the credential.
  *
  * ## Revoking withdraws authority; it never erases
  *
@@ -56,12 +56,17 @@ export interface TerminalRecord {
   /** Epoch ms of the last movement this terminal handled, if any. */
   lastUsedAt?: number
   /**
-   * What the owner needs to spend this terminal's proof.
+   * The credential itself (#160). The stall is its co-spender, so this is what
+   * revoking spends. Kept at enrolment so revocation never needs the device.
    *
-   * Retained at enrolment so revocation never needs the device — the third
-   * acceptance criterion, and the reason revocation is safe at all.
+   * Absent on rows set up before revocation existed: those were minted by hand,
+   * locked to the device alone, and cannot be revoked from here.
    */
-  revocationSecret?: string
+  token?: string
+  /** The credential's voucher id, which the device's enrolled DM names. */
+  voucherId?: string
+  /** Epoch ms after which a still-waiting row is cancelled (decision 4: 24 hours). */
+  waitingUntil?: number
   /** Set when revoked. Present means retired; the record itself stays. */
   revokedAt?: number
   /**
@@ -102,8 +107,9 @@ function read(stallPubkey: string): TerminalRecord[] {
           role,
           enrolledAt: typeof row.enrolledAt === 'number' ? row.enrolledAt : 0,
           lastUsedAt: typeof row.lastUsedAt === 'number' ? row.lastUsedAt : undefined,
-          revocationSecret:
-            typeof row.revocationSecret === 'string' ? row.revocationSecret : undefined,
+          token: typeof row.token === 'string' ? row.token : undefined,
+          voucherId: typeof row.voucherId === 'string' ? row.voucherId : undefined,
+          waitingUntil: typeof row.waitingUntil === 'number' ? row.waitingUntil : undefined,
           revokedAt: typeof row.revokedAt === 'number' ? row.revokedAt : undefined,
           status: statusOf(row.status),
         },
@@ -147,7 +153,35 @@ export function liveTerminals(stallPubkey: string): TerminalRecord[] {
  * trades, and counting them would make revocation a punishment.
  */
 export function enrolledCount(stallPubkey: string): number {
-  return liveTerminals(stallPubkey).length
+  // Waiting rows do NOT count against the free terminal (decision 4 on #160):
+  // a botched setup must never block the owner from trying again. They are
+  // bounded instead, by `MAX_WAITING` and the 24-hour expiry.
+  return liveTerminals(stallPubkey).filter((t) => t.status !== 'waiting').length
+}
+
+/** At most this many terminals may wait for their device at once (decision 4). */
+export const MAX_WAITING = 2
+
+/** How long a waiting row lives before it is cancelled (decision 4). */
+export const WAITING_TTL_MS = 24 * 3600 * 1000
+
+/** Unrevoked rows still waiting for their device, oldest first. */
+export function waitingTerminals(stallPubkey: string): TerminalRecord[] {
+  return liveTerminals(stallPubkey)
+    .filter((t) => t.status === 'waiting')
+    .sort((a, b) => a.enrolledAt - b.enrolledAt)
+}
+
+/** Waiting rows past their 24 hours, which the owner's wallet must cancel. */
+export function expiredWaiting(stallPubkey: string, now: number = Date.now()): TerminalRecord[] {
+  return waitingTerminals(stallPubkey).filter(
+    (t) => (t.waitingUntil ?? t.enrolledAt + WAITING_TTL_MS) <= now,
+  )
+}
+
+/** Whether a row holds what revoking needs. Rows set up by hand before #160 do not. */
+export function isRevocable(record: TerminalRecord): boolean {
+  return typeof record.token === 'string' && record.token.length > 0
 }
 
 /** Record a terminal the owner has just enrolled. */
@@ -177,8 +211,11 @@ export type RevokeOutcome =
  * six months ago can still be attributed to the till that handled it.
  *
  * Takes no argument about the device and makes no call to it. That is the point
- * — the owner holds `revocationSecret` from enrolment, so a device that is
+ * — the owner holds the credential `token` from enrolment, so a device that is
  * lost, stolen, flat or destroyed is revoked exactly like one on the counter.
+ *
+ * This only MARKS the row. Since #160 a caller marks it only after the spend at
+ * the mint landed (`revokeTerminalAtMint`).
  *
  * Idempotent in the direction that matters: revoking twice reports
  * `already-revoked` rather than moving the timestamp, so an owner who taps

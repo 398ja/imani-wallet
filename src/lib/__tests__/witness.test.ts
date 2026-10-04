@@ -149,6 +149,48 @@ describe('witness', () => {
     })
   })
 
+  describe('#160: a co-spender in the pubkeys tag', () => {
+    /** A terminal credential: locked to the device in `data`, the stall in `pubkeys`. */
+    const coLocked = (data: string, pubkeys: string[], nSigs = '1') =>
+      JSON.stringify([
+        'P2PK_VOUCHER',
+        {
+          nonce: 'cc',
+          data,
+          tags: [['n_sigs', nSigs], ['pubkeys', ...pubkeys], ['voucher_id', 'cred']],
+        },
+      ])
+
+    // The owner's wallet holds the stall key, which is in `pubkeys`, not
+    // `data`. It must sign, or the owner could never revoke a lost device.
+    it('signs a secret whose pubkeys tag holds this wallet\'s key', () => {
+      const credential = coLocked(OTHER_PUBKEY_COMPRESSED, [HOLDER_PUBKEY_COMPRESSED])
+
+      const witnesses = buildWitnesses([credential])
+
+      expect(Object.keys(witnesses)).toEqual([credential])
+      expect(mintWouldAccept(credential, witnesses[credential][0], HOLDER_PUBKEY_COMPRESSED)).toBe(
+        true,
+      )
+    })
+
+    // With n_sigs 2, one signature from this wallet cannot spend it, so it
+    // must not pretend to.
+    it('does not sign when one signature cannot satisfy n_sigs', () => {
+      const credential = coLocked(OTHER_PUBKEY_COMPRESSED, [HOLDER_PUBKEY_COMPRESSED], '2')
+
+      expect(buildWitnesses([credential])).toEqual({})
+    })
+
+    // The device and stall are both someone else: nothing to sign.
+    it('skips a co-locked secret holding neither of our keys', () => {
+      const third = `02${bytesToHex(schnorr.getPublicKey(hexToBytes('03'.padStart(64, '0'))))}`
+      const credential = coLocked(OTHER_PUBKEY_COMPRESSED, [third])
+
+      expect(buildWitnesses([credential])).toEqual({})
+    })
+  })
+
   describe('the header', () => {
     it('is omitted entirely when there is nothing to sign', () => {
       expect(witnessHeader([bearerSecret])).toBeNull()
