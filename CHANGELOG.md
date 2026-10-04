@@ -50,6 +50,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A coupon that arrived before the trusted list loaded is no longer lost.** It used to be
   refused at unwrap, which marked its delivery as handled for good. It is now deferred at
   redemption and offered again.
+- **A re-signed voucher proof is credited for at most the sats burnt for it**
+  (imani-gateway-customer#141). A successor's sats come from the swap that mints it, and the
+  mint cannot see which blinded output carries a voucher secret, so a holder could burn a 1-sat
+  proof, have a full-face successor signed, fund it with sats bought today and be credited up to
+  the face. The gateway now signs a `max_sats` tag into every re-signed or split proof, summing to
+  at most the burn. `parseVoucherToken` reads it per proof into `creditableSats` (each proof's
+  amount clamped to its own bound), and `creditableFaceValue` and `exactFaceValue` credit
+  `min(face_value, creditableSats × issuance_ratio)`. Every redeemer built on them follows: the
+  till's DM validation and over-redemption guard, redemption rows, reconcile, the sender's receipt
+  figure and wallet-api `/redeem`. A voucher with no `max_sats` is credited exactly as before. A
+  `max_sats` that is present but not a canonical positive decimal credits 0, because reading it as
+  absent would let a holder strip a bound by mangling it. The tag is a plain string tag, so the
+  existing canonical bytes already cover it; a Java-signed fixture pins that the two agree.
 
 ### Fixed
 
