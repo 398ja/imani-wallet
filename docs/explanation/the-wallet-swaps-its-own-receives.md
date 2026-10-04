@@ -281,20 +281,35 @@ alone, with no network call, which is what makes it worth doing at both points.
 How that is enforced now (imani-wallet#131, #133):
 
 - **The trusted list is known before the first receive.** It is the build's
-  `VITE_TRUSTED_MINT_URLS` plus the `mint_url` the gateway serves on
-  `/api/v1/config` (its PUBLIC mint URL, the same one stamped in `m`). The app
-  fetches that config at start-up and the coupon poller waits for it. Until it
-  has arrived the list is *unknown*, which is never read as "no mint".
+  `VITE_TRUSTED_MINT_URLS` (required: the image build fails without it), plus
+  `token_mint_urls` on `/api/v1/config` (the PUBLIC URL customer-wallet stamps in
+  `m`, served from the same setting), plus that response's `mint_url` (the
+  client-mint setting, accepted but never relied on alone). The app fetches the
+  config at start-up and the coupon poller waits for it. Until it has arrived the
+  list is *unknown*, which is never read as "no mint".
+- **No trusted mint is not a pass.** When every source has answered and none
+  names a mint, nothing is credited. This used to be `unchecked`, and accepted,
+  which on beta and prod (where no mint was configured) let every coupon from
+  every mint through. A dev build may opt out with `VITE_ALLOW_ANY_MINT_IN_DEV`,
+  which a production build ignores.
 - **Redemption cannot skip the check.** `RedemptionAdapter.checkBacking` is
   required, and dm-poll asks it before every `redeem`, for vouchers and plain
-  ecash alike. A rogue mint or a foreign unit is refused before the swap; an
-  unknown list defers the delivery to a later poll.
+  ecash alike. A foreign unit or an unreadable token is refused before the swap.
+  An unlisted mint, or no mint known at all, is HELD: nothing is swapped, the
+  delivery is not consumed, the coupon is shown as "waiting to be verified", and
+  it is redeemed as soon as the configuration names its mint. A hold is never
+  terminal, because the list is assembled from two services' settings and a
+  mismatch between them would otherwise have dropped genuine coupons for good.
+  An unknown list defers the delivery to a later poll.
+- **Deferral heals itself.** A failed or empty config is re-asked on a backoff
+  (5 seconds doubling to 5 minutes). When the answer changes, the poller runs a
+  catch-up and re-offers every held delivery by id, however old.
+- **Cashback is gated too.** The cashback commit asks the same gate before it
+  swaps. A held cashback token stays in the device's stash (now a list) and is
+  banked by a later visit once its mint is confirmed.
 - **The own-swap path fails closed.** `receiveTokenByOwnSwap` swaps only at a mint
-  that is positively trusted. An unknown list or a deployment that names no mint
-  is refused, because the only mint on offer is the one the token itself names.
-  The crediting paths still accept a gateway that has answered and named no mint
-  (`unchecked`), because there the coupon is already held and refusing would
-  strand it.
+  that is positively trusted. Every other verdict is refused, because the only
+  mint on offer is the one the token itself names.
 
 ## Decisions taken
 
