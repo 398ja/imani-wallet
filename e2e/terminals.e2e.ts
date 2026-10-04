@@ -335,7 +335,10 @@ async function main() {
    * Until #160 phase 0 the app compared that record's device key with itself,
    * so the owner's browser became the terminal. It now compares the
    * credential's lock with the key that unlocked the session, which is the
-   * owner's, so the record is refused. That refusal is the acceptance check.
+   * owner's, so the record is not about this session. Since the #160 review it
+   * is ignored rather than refused: the owner keeps their own home screen and
+   * is not locked out by a record for another device. No terminal-only screen
+   * (NotTrading, decommissioning) appearing is the acceptance check.
    *
    * The role-gating checks that used to follow (ticket 07 and 08: no Sell on a
    * redeem-only till, dashboard hidden, decommission offered) need a session
@@ -350,8 +353,8 @@ async function main() {
   await page.waitForTimeout(2500)
   const injected = await page.locator('body').innerText()
   check(
-    'a record naming another device is refused, not treated as a terminal',
-    /not for this device/.test(injected),
+    'a record naming another device is ignored, not treated as a terminal or a refusal',
+    !/not for this device|no longer in service|out of service/i.test(injected),
     injected.replace(/\s+/g, ' ').slice(0, 160),
   )
   check('no uncaught errors with an injected record', pageErrors.length === 0, pageErrors.join('; '))

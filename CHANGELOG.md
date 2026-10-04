@@ -183,10 +183,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The terminal lock check compares with the unlocked key** (#160, phase 0, G9).
   `useTerminalIdentity` took the device key from the record it was checking, so the lock
   check compared the record with itself. It now takes `devicePubkey` from the session's
-  unlocked key and refuses, before asking the mint, a record whose credential is locked to
-  another device. Consequence: `beATerminal()` in `e2e/terminals.e2e.ts` no longer turns the
-  owner's browser into a terminal, so the e2e now checks that refusal; its role-gating checks
-  return with phase 3's terminal unlock.
+  unlocked key. A record naming another device grants no terminal authority and the mint is
+  not asked. Consequence: `beATerminal()` in `e2e/terminals.e2e.ts` no longer turns the
+  owner's browser into a terminal; its role-gating checks return with phase 3's terminal
+  unlock.
+- **A terminal record for another device no longer locks the owner out** (#160 review). Such a
+  record is ignored, exactly as a missing one is, so the owner's home screen stays their own
+  instead of showing *This authority is not for this device*. Nothing is granted: no terminal
+  actor is produced and `canTrade` is gated by the gateway.
 
 ### Changed
 

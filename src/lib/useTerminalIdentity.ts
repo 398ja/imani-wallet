@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { storedTerminal } from './terminalEnrol'
-import { LOGIN_MESSAGE, LOGIN_REFUSAL, loginTerminal, type LoginOutcome } from './terminalLogin'
+import { loginTerminal, type LoginOutcome } from './terminalLogin'
 import { credentialState, unspentForLogin } from './credentialRevocation'
 import type { TerminalActor } from './actor'
 import type { TerminalSession } from './terminalSession'
@@ -107,20 +107,21 @@ export function useTerminalIdentity(options: TerminalIdentityOptions): TerminalI
     const { token, merchantMetadata, issuerId, terminalPubkey } = stored
 
     // No unlocked key, or a record written for a different device: either way
-    // this device cannot show that it holds the key the record names, so it is
-    // not that terminal. Refused here, before the mint is asked anything.
+    // this session does not hold the key the record names, so the record is
+    // not about this session. It is ignored, exactly as a missing record is,
+    // and this device behaves as the owner's (#160 review, LOW). Refusing here
+    // used to render NotTrading on the owner's own home screen whenever a
+    // foreign record sat in storage, locking them out. Nothing is granted by
+    // ignoring it: no actor is produced, and `canTrade` is gated server-side.
+    //
+    // A record that DOES name this session's key still goes through
+    // `loginTerminal`, which compares the credential's signed `lock_key` with
+    // the unlocked key, so an edited record cannot borrow another credential.
     if (!devicePubkey || terminalPubkey.toLowerCase() !== devicePubkey.toLowerCase()) {
-      // Deferred a tick, so the refusal is not a state update inside the effect
+      // Deferred a tick, so the update is not a state change inside the effect
       // body (the lint's set-state-in-effect rule), matching the async path.
-      const refused = setTimeout(() =>
-        setIdentity({
-          actor: null,
-          session: null,
-          refusal: LOGIN_MESSAGE[LOGIN_REFUSAL.NOT_OURS],
-          ready: true,
-        }),
-      )
-      return () => clearTimeout(refused)
+      const ignored = setTimeout(() => setIdentity(OWNER))
+      return () => clearTimeout(ignored)
     }
 
     let cancelled = false

@@ -224,6 +224,10 @@ By design, and not merely by hiding a button:
 | *Cashback from a terminal is not supported yet* | The same gap, for cashback codes | Issue cashback from the owner's own device |
 | *Not trading while your subscription is inactive* | A lapsed subscription, not a revocation | Renew; terminals resume immediately |
 
+A terminal record left in a browser for a *different* device (for example a
+set-up that was abandoned) is ignored. The owner's own phone keeps its normal
+home screen rather than showing *This authority is not for this device*.
+
 If a terminal has lost its authority it says so plainly and stops, rather than
 failing repeatedly in front of a queue. Stop serving on it and use another
 device.

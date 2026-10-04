@@ -136,11 +136,14 @@ describe('a real terminal', () => {
     expect(result.current.session!.kind).toBe(SESSION_KIND.REDUCED)
   })
 
-  it('is refused when its record was edited to name another device', async () => {
+  it('is refused when its record was edited to claim this session’s key', async () => {
     // The credential is locked to a key; editing the record around it changes
     // nothing, because login re-derives everything from the signed metadata.
-    enrol({ terminalPubkey: 'f'.repeat(64) })
-    const { result } = renderHook(() => useTerminalIdentity({ devicePubkey: DEVICE, ...mint('UNSPENT') }))
+    // Here the record was rewritten to name the key this session holds, but the
+    // credential inside it is still locked to DEVICE, so login refuses it.
+    const other = 'e'.repeat(64)
+    enrol({ terminalPubkey: other })
+    const { result } = renderHook(() => useTerminalIdentity({ devicePubkey: other, ...mint('UNSPENT') }))
 
     await waitFor(() => expect(result.current.ready).toBe(true))
     expect(result.current.actor).toBeNull()
@@ -168,10 +171,9 @@ describe('a real terminal', () => {
 describe('#160 phase 0 (G9): the device key comes from the unlocked signer', () => {
   // The record and the credential both name DEVICE, but the key that unlocked
   // this session is someone else's. The record cannot vouch for itself: this
-  // device does not hold the key the credential is locked to, so it is not
-  // that terminal. Before the fix the hook compared the record with itself and
-  // admitted it.
-  it('refuses a record naming a device whose key this session does not hold', async () => {
+  // session does not hold the key the credential is locked to, so it is not
+  // that terminal. It gets no terminal authority, and the mint is not asked.
+  it('grants no terminal authority to a session that does not hold the record’s key', async () => {
     enrol()
     const api = mint('UNSPENT')
     const { result } = renderHook(() =>
@@ -180,14 +182,14 @@ describe('#160 phase 0 (G9): the device key comes from the unlocked signer', () 
 
     await waitFor(() => expect(result.current.ready).toBe(true))
     expect(result.current.actor).toBeNull()
-    expect(result.current.refusal).toMatch(/not for this device/)
-    // Refused locally, before the mint was asked anything.
+    expect(result.current.session).toBeNull()
+    // Decided locally, before the mint was asked anything.
     expect(api.validateToken).not.toHaveBeenCalled()
   })
 
   // No unlocked key at all is the same answer: nothing shows this device
-  // holds the credential's key.
-  it('refuses when no unlocked key is supplied', async () => {
+  // holds the credential's key, so it is not a terminal.
+  it('grants no terminal authority when no unlocked key is supplied', async () => {
     enrol()
     const { result } = renderHook(() =>
       useTerminalIdentity({ devicePubkey: null, ...mint('UNSPENT') }),
@@ -195,6 +197,39 @@ describe('#160 phase 0 (G9): the device key comes from the unlocked signer', () 
 
     await waitFor(() => expect(result.current.ready).toBe(true))
     expect(result.current.actor).toBeNull()
-    expect(result.current.refusal).toMatch(/not for this device/)
+    expect(result.current.session).toBeNull()
+  })
+})
+
+describe('#160 review (LOW): a record for another device does not lock the owner out', () => {
+  // The owner is logged in with the stall key, and storage holds a terminal
+  // record written for some other device (left over from a test, a shared
+  // browser, or a set-up that was abandoned). That record is not about this
+  // session, so it must be ignored exactly as a missing record is. Before the
+  // fix the hook returned a "not for this device" refusal, and the owner's home
+  // screen rendered NotTrading for their own stall.
+  it('treats the owner as the owner, with no refusal', async () => {
+    enrol()
+    const { result } = renderHook(() =>
+      useTerminalIdentity({ devicePubkey: STALL, ...mint('UNSPENT') }),
+    )
+
+    // Give the deferred update a chance to land before asserting on it.
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(result.current.ready).toBe(true)
+    expect(result.current.actor).toBeNull()
+    expect(result.current.refusal).toBeNull()
+  })
+
+  // Same for a session with no unlocked key yet: a foreign record must not
+  // put a refusal on screen.
+  it('shows no refusal when no key is unlocked', async () => {
+    enrol()
+    const { result } = renderHook(() =>
+      useTerminalIdentity({ devicePubkey: null, ...mint('UNSPENT') }),
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(result.current.refusal).toBeNull()
   })
 })
