@@ -37,8 +37,8 @@ voucher's signed bytes. The till verifies both signatures offline
 
 Short rolling delegations (30 days was the review's suggestion) need a signed
 issue time on the voucher first. Until then, a 30-day delegation would make
-every card coupon die at the till after 30 days. That follow-up is tracked
-in cashu-voucher.
+every card coupon die at the till after 30 days. That follow-up is
+cashu-voucher#53.
 
 ## Replay
 
@@ -50,7 +50,8 @@ after the warrant is signed, so purchase-issuer cannot sign over it.
 gateway-customer therefore spends each delegated warrant's `(issuer, nonce)`
 on voucher create, as the portal does for Sell. A copied warrant gets
 `409 WARRANT_ALREADY_USED`, while an identical retry of one purchase (same
-Idempotency-Key, same body) passes.
+Idempotency-Key, same body) passes (imani-gateway-customer#190). Deploy that
+before relying on delegated warrants in production.
 
 ## Operating it
 

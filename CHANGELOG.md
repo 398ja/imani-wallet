@@ -124,13 +124,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `issuedVoucher` and `reconcileIssuances` check the delegation was in force then
   (`created_at <= issued_at < expiration`), so past sales no longer turn "failed" the day a
   delegation lapses. The till still checks against its own clock: a voucher carries no signed
-  issue time. See `docs/explanation/delegated-issuance-warrant.md`.
+  issue time. See `docs/explanation/delegated-issuance-warrant.md` and cashu-voucher#53.
 - **purchase-issuer requires a delegation to outlive the coupon by 7 days** (#176 review), so a
   till clock running ahead or a slightly later gateway expiry cannot kill a coupon at the
   counter in its last days.
 - A copied delegated warrant is refused where it is minted: gateway-customer spends each
-  delegated warrant's `(issuer, nonce)` on voucher create (imani-gateway-customer PR, linked
-  from #176).
+  delegated warrant's `(issuer, nonce)` on voucher create (imani-gateway-customer#190). Binding
+  the signature to one coupon was not possible: the gateway picks the voucher id after signing.
 - **purchase-issuer mints nothing for a stall without a delegation** the till will accept,
   including one that would lapse before the 365-day coupon does. Such a purchase is
   reported BLOCKED (nothing minted) for the stall to sign a delegation; attach it with
