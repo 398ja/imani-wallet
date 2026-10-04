@@ -30,7 +30,7 @@ import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
 import { secp256k1 } from '@noble/curves/secp256k1.js'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -193,6 +193,9 @@ async function main() {
   const ready = await waitForToken(stall, created.voucher_id)
 
   const out = join(HERE, '..', 'src', 'lib', '__tests__', 'fixtures', arg('--out', 'live-terminal-credential.token'))
+  // `--out probe-out/<name>` is how the throwaway probe arms stay out of the
+  // tracked fixtures (see fixtures/README.md). The directory is gitignored.
+  mkdirSync(dirname(out), { recursive: true })
   writeFileSync(out, ready.token.trim() + '\n')
   console.log(`wrote ${out}`)
 
