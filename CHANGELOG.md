@@ -159,7 +159,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limit and the 24 hours at mint time (409 `TERMINAL_PENDING_LIMIT`), and Cancel tells it the
   slot is free (`POST /api/v1/wallet/terminal-credentials/{id}/cancel`).
 
-### Fixed (#160 review)
+### Fixed
 
 - **Re-adding a device already on the list no longer orphans its first credential** (BLOCKER).
   `recordTerminal` replaced the row for the same key, so a second Add minted a new credential
@@ -180,8 +180,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A minted credential must name exactly the stall as co-spender.** `credentialDefect` used
   `includes`, so a third key in `pubkeys` passed. It now requires `pubkeys` to be exactly
   `[stall]`, `n_sigs` 1, and no `refund` or `locktime` tag.
-
-### Fixed
 
 - **Revoking a terminal spends its credential** (#160, phase 1, G10). Revoke (and **Cancel**
   on a waiting row) used to mark a local row and nothing else, so the terminal kept its
