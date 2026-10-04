@@ -114,6 +114,7 @@ export type {
   NostrdbAdapter,
   CryptoAdapter,
   StorageAdapter,
+  BackingVerdict,
   RedemptionAdapter,
   RedemptionOptions,
   UiAdapter,

@@ -7,6 +7,7 @@
 import type { Voucher } from '../types/voucher';
 import type { TokenMetadata } from '../types/dm';
 import type { Nip60WalletAdapter } from './Nip60WalletAdapter';
+import type { RefusalReason } from '../errors';
 
 /**
  * Options for token redemption
@@ -38,9 +39,42 @@ export interface RedemptionOptions {
 }
 
 /**
+ * What `checkBacking` says about where a token's value is.
+ *
+ * - `accept`: the proofs are at a mint the wallet trusts, in its unit (or the
+ *   deployment genuinely names no mint and the wallet has chosen to credit anyway).
+ * - `refuse`: the proofs are at a mint the wallet does not trust, or in a unit it
+ *   cannot read. Permanent: the token's bytes will not change. Nothing is swapped.
+ * - `defer`: the wallet cannot tell yet (its trusted-mint list has not loaded).
+ *   Nothing is swapped and the delivery is NOT consumed, so a later poll retries it.
+ */
+export type BackingVerdict =
+  | { readonly outcome: 'accept' }
+  | {
+      readonly outcome: 'refuse';
+      readonly reason: Extract<RefusalReason, 'untrusted-mint' | 'wrong-unit' | 'undecodable'>;
+      readonly detail: string;
+    }
+  | { readonly outcome: 'defer'; readonly detail: string };
+
+/**
  * Adapter for token redemption operations
  */
 export interface RedemptionAdapter {
+  /**
+   * Is this token's value at a mint the wallet trusts, in a unit it understands?
+   *
+   * REQUIRED, and asked by dm-poll itself before every `redeem`, so no redemption
+   * path can skip it. It replaces an optional `getMintUrl` hook that nothing ever
+   * called, which left the mint and unit of a received token unchecked: a copy of
+   * a genuine signed voucher backed by proofs at a rogue mint was swapped and
+   * credited like the real thing (imani-wallet#131).
+   *
+   * Must not perform the swap and should not throw; an exception is treated as
+   * `defer`, never as `accept`.
+   */
+  checkBacking(token: string): BackingVerdict;
+
   /**
    * Redeem a Cashu token
    *
@@ -58,14 +92,6 @@ export interface RedemptionAdapter {
    * @returns true if token appears valid and redeemable
    */
   canRedeem?(token: string): Promise<boolean>;
-
-  /**
-   * Get mint URL from token
-   *
-   * @param token - Cashu token string
-   * @returns Mint URL if extractable
-   */
-  getMintUrl?(token: string): string | null;
 }
 
 /**
@@ -74,5 +100,5 @@ export interface RedemptionAdapter {
 export function isRedemptionAdapter(obj: unknown): obj is RedemptionAdapter {
   if (!obj || typeof obj !== 'object') return false;
   const adapter = obj as RedemptionAdapter;
-  return typeof adapter.redeem === 'function';
+  return typeof adapter.redeem === 'function' && typeof adapter.checkBacking === 'function';
 }

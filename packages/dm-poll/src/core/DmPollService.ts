@@ -1,4 +1,5 @@
 import { RedemptionRefusedError } from '../errors';
+import { assertBackingAccepted } from '../processing/backingGate';
 /**
  * DmPollService - Main service for NIP-17 DM polling and token redemption
  */
@@ -297,6 +298,12 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
     }
 
     try {
+      // Where is the value? Asked before the swap, by dm-poll itself, so no
+      // adapter can forget to (imani-wallet#131). A refusal lands in the
+      // RedemptionRefusedError branch below: terminal, nothing swapped. A
+      // deferral carries RECEIVE_DEFERRED and is retried on a later poll.
+      assertBackingAccepted(this.config.redemptionAdapter, tokenDm.token, tokenDm.metadata?.voucherId ?? '');
+
       const voucher = await this.config.redemptionAdapter.redeem(tokenDm.token, {
         metadata: tokenDm.metadata,
         nip60Wallet: this.config.nip60Wallet ?? undefined,

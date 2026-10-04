@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- **`RedemptionAdapter.checkBacking(token)` is required** (imani-wallet#131), and the
+  optional `getMintUrl` hook, which nothing ever called, is removed. Both redemption call
+  sites (`DmPollService.redeemToken` and `TokenRedeemer.redeem`) ask it before `redeem`.
+  `refuse` throws `RedemptionRefusedError` with the new reasons `untrusted-mint`,
+  `wrong-unit` or `undecodable` (terminal, nothing swapped). `defer`, or a check that
+  throws, raises a `RECEIVE_DEFERRED` error, so the delivery is left for a later poll and
+  never redeemed on a guess. `BackingVerdict` is exported. `isRedemptionAdapter` now
+  requires `checkBacking`.
+
 ### Added
 
 - **`UnwrappedDm.hold`** and the **`held_until_paired`** outcome

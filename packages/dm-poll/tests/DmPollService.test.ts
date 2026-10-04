@@ -28,6 +28,9 @@ function createMockCryptoAdapter(): CryptoAdapter {
 
 function createMockRedemptionAdapter(): RedemptionAdapter {
   return {
+    // Accepts every token: these tests are about dedup and races, not the mint gate
+    // (that is src/core/backingGate.test.ts).
+    checkBacking: vi.fn(() => ({ outcome: 'accept' as const })),
     redeem: vi.fn(async () => ({
       voucher_id: 'v-' + Date.now(),
       token: 'cashuAeyJ0b2tlbiI6InRlc3QifQ',
