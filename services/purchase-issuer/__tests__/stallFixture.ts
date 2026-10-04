@@ -20,17 +20,30 @@ export const LOCK_PUB = getPublicKey(hexToBytes(LOCK))
 /** Far enough ahead to outlive a 365-day coupon minted at any test clock. */
 export const DELEGATION_EXPIRES_AT = 4_000_000_000
 
-/** The stall's signed delegation of `coupon:issue` to `delegate`, as JSON. */
+/**
+ * The stall's signed delegation of `coupon:issue` to `delegate`, as JSON.
+ *
+ * `d` replaces the record's `d` tag (null drops it); `extraD` adds a second.
+ */
 export function delegationJson(
-  over: { stallSk?: string; delegate?: string; scope?: string; expiresAt?: number } = {},
+  over: {
+    stallSk?: string
+    delegate?: string
+    scope?: string
+    expiresAt?: number
+    d?: string | null
+    extraD?: string
+  } = {},
 ): string {
+  const d = over.d === undefined ? 'imani:issuer-delegation' : over.d
   return JSON.stringify(
     finalizeEvent(
       {
         kind: 30078,
         created_at: 1_700_000_000,
         tags: [
-          ['d', 'imani:issuer-delegation'],
+          ...(d === null ? [] : [['d', d]]),
+          ...(over.extraD ? [['d', over.extraD]] : []),
           ['p', over.delegate ?? LOCK_PUB],
           ['scope', over.scope ?? 'coupon:issue'],
           ['expiration', String(over.expiresAt ?? DELEGATION_EXPIRES_AT)],

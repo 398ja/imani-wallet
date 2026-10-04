@@ -9,14 +9,15 @@
  * 1. **The stall's delegation.** A kind-30078 event the stall signed with its
  *    own key, naming this service's lock key for that stall (`p`), scope
  *    `coupon:issue`, and an expiry (`src/lib/issuerDelegation.ts`).
- * 2. **The delegate's signature** over the SAME sale digest a `merchant`
- *    warrant signs (`warrantSaleDigest` in `src/lib/issuanceWarrant.ts`), made
- *    with the terminal credential's lock key this service already holds per
- *    stall (`vault.ts`) and already signs NIP-98 with (`issuer.ts`).
+ * 2. **The delegate's signature** over the sale digest's fields plus the
+ *    processor reference (`delegatedSaleDigest` in
+ *    `src/lib/issuanceWarrant.ts`), made with the terminal credential's lock
+ *    key this service already holds per stall (`vault.ts`) and already signs
+ *    NIP-98 with (`issuer.ts`).
  *
- * The processor reference stays, as `ref`, inside the signed bytes: it is no
+ * The processor reference stays, as `ref`, and the delegate signs it: it is no
  * longer evidence, it is what lets the stall reconcile the coupon against its
- * own Stripe dashboard.
+ * own Stripe dashboard, so an edit to it must fail verification.
  *
  * ## Why the digest and checks are restated here
  *
@@ -36,21 +37,41 @@ import type { StallCredential } from './issuer'
 /** Mirrors `FIELD_SEPARATOR` in `src/lib/issuanceWarrant.ts`. */
 const FIELD_SEPARATOR = '\u001f'
 
-/** Mirrors `DELEGATION_KIND` and `DELEGATION_SCOPE` in `src/lib/issuerDelegation.ts`. */
+/**
+ * Mirrors `DELEGATION_KIND`, `DELEGATION_SCOPE` and `DELEGATION_D_TAG` in
+ * `src/lib/issuerDelegation.ts`.
+ */
 export const DELEGATION_KIND = 30078
 export const DELEGATION_SCOPE = 'coupon:issue'
+export const DELEGATION_D_TAG = 'imani:issuer-delegation'
 
-/** Mirrors `warrantSaleDigest` in `src/lib/issuanceWarrant.ts`. */
+/**
+ * How much longer than the coupon a delegation must last.
+ *
+ * The till checks a delegation against its OWN clock, because a coupon carries
+ * no signed issue time, and a till's clock can run ahead. The gateway also
+ * stamps the coupon's expiry slightly after this service asks for it. A week
+ * covers both, so a coupon never dies at the counter in its last days.
+ */
+export const DELEGATION_SKEW_MARGIN_MS = 7 * 86_400_000
+
+/** Mirrors `delegatedSaleDigest` in `src/lib/issuanceWarrant.ts`. */
 export function saleDigest(
   issuerId: string,
   saleTotalMinor: number,
   faceDecimals: number,
   unit: string,
   saleNonce: string,
+  reference: string | null,
 ): Uint8Array {
-  const preimage = [issuerId, String(saleTotalMinor), String(faceDecimals), unit, saleNonce].join(
-    FIELD_SEPARATOR,
-  )
+  const preimage = [
+    issuerId,
+    String(saleTotalMinor),
+    String(faceDecimals),
+    unit,
+    saleNonce,
+    reference ?? '',
+  ].join(FIELD_SEPARATOR)
   return sha256(new TextEncoder().encode(preimage))
 }
 
@@ -78,6 +99,12 @@ export type DelegationCheck = { ok: true; event: Event } | { ok: false; reason: 
  * sold in January unspendable in April. Refusing to mint under it now leaves
  * the debt for the stall to issue by hand, which is recoverable; minting a
  * coupon that dies early is not.
+ *
+ * It must outlive the coupon by `DELEGATION_SKEW_MARGIN_MS`, not merely reach
+ * its last day. This stays a whole-coupon-lifetime requirement, rather than
+ * "valid when issued", because the till has no signed issue time to judge the
+ * delegation at (see `verifyIssuerDelegation`). Shorter rolling delegations
+ * need the voucher to carry one first.
  */
 export function checkDelegation(
   credential: StallCredential,
@@ -108,6 +135,10 @@ export function checkDelegation(
   if (!signed) return refuse('the stored delegation signature does not verify')
 
   const tag = (name: string) => event.tags.filter((t) => t[0] === name).map((t) => t[1])
+  const dTags = tag('d')
+  if (dTags.length !== 1 || dTags[0] !== DELEGATION_D_TAG) {
+    return refuse(`the stored delegation is not the ${DELEGATION_D_TAG} record`)
+  }
   const scopes = tag('scope')
   if (scopes.length !== 1 || scopes[0] !== DELEGATION_SCOPE) {
     return refuse(`the stored delegation is not scoped ${DELEGATION_SCOPE}`)
@@ -122,8 +153,10 @@ export function checkDelegation(
   if (expirations.length !== 1 || !Number.isSafeInteger(expiresAt)) {
     return refuse('the stored delegation carries no single expiry')
   }
-  if (expiresAt * 1000 < couponExpiresAtMs) {
-    return refuse('the stored delegation expires before the coupon would; the stall must renew it')
+  if (expiresAt * 1000 < couponExpiresAtMs + DELEGATION_SKEW_MARGIN_MS) {
+    return refuse(
+      'the stored delegation does not outlive the coupon by a week; the stall must renew it',
+    )
   }
   return { ok: true, event }
 }
@@ -146,7 +179,14 @@ export function delegatedWarrant(input: {
   delegation: Event
 }): string {
   const nonce = purchaseNonce(input.eventId)
-  const digest = saleDigest(input.issuerId, input.saleTotalMinor, input.faceDecimals, input.unit, nonce)
+  const digest = saleDigest(
+    input.issuerId,
+    input.saleTotalMinor,
+    input.faceDecimals,
+    input.unit,
+    nonce,
+    input.reference,
+  )
   const sig = bytesToHex(schnorr.sign(digest, hexToBytes(input.lockKeyHex), new Uint8Array(32)))
   return JSON.stringify({
     form: 'delegated',

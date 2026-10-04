@@ -170,3 +170,46 @@ describe('keeping the delegation in the vault', () => {
     expect((await new CredentialVault(KEY, store).get(STALL))?.delegation).toBeUndefined()
   })
 })
+
+describe('review fixes to what this service signs and accepts (#176 review)', () => {
+  // The Stripe reference is inside the delegate's signature: rewriting it on
+  // the minted warrant makes the till refuse the coupon.
+  it('signs the processor reference, so an edited ref fails at the till', async () => {
+    const { warrant } = await mintedWarrant()
+    const edited = JSON.stringify({ ...JSON.parse(warrant!), ref: 'pi_3PzSomeoneElse' })
+    expect(
+      verifyIssuanceWarrant(parseIssuanceWarrant(edited), STALL, {
+        faceValueMinor: 2500,
+        unit: 'GBP',
+        faceDecimals: 2,
+      }).verdict,
+    ).toBe('failed')
+  })
+
+  // A stall-signed kind-30078 from another app (a different d tag) is not a
+  // delegation, so the vault will not accept it and nothing is minted under it.
+  it('refuses a delegation whose d tag is not the issuer-delegation record', () => {
+    const foreign = delegationJson({ d: 'some-other-app:settings' })
+    expect(checkDelegation(delegatedCredential({ delegation: foreign }), NOW).ok).toBe(false)
+  })
+
+  // Missing or duplicated d tags are refused for the same reason.
+  it('refuses a delegation with no d tag or two of them', () => {
+    const none = delegationJson({ d: null })
+    const two = delegationJson({ extraD: 'other' })
+    expect(checkDelegation(delegatedCredential({ delegation: none }), NOW).ok).toBe(false)
+    expect(checkDelegation(delegatedCredential({ delegation: two }), NOW).ok).toBe(false)
+  })
+
+  // The till checks the delegation against its own clock, which may run ahead,
+  // and the gateway stamps the coupon's expiry a little after we ask. So a
+  // delegation that ends on the coupon's last day is not enough: it must
+  // outlive the coupon by a week.
+  it('blocks a delegation that outlives the coupon by less than the skew margin', () => {
+    const couponEnds = NOW + 365 * 86_400_000
+    const tight = delegationJson({ expiresAt: Math.floor(couponEnds / 1000) + 86_400 })
+    const roomy = delegationJson({ expiresAt: Math.floor(couponEnds / 1000) + 8 * 86_400 })
+    expect(checkDelegation(delegatedCredential({ delegation: tight }), couponEnds).ok).toBe(false)
+    expect(checkDelegation(delegatedCredential({ delegation: roomy }), couponEnds).ok).toBe(true)
+  })
+})
