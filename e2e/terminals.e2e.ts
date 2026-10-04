@@ -245,6 +245,13 @@ async function main() {
   check('will not enrol an empty form', await add.isDisabled())
   check('no uncaught errors', pageErrors.length === 0, pageErrors.join('; '))
 
+  console.log('\nThe label fix, in a real browser')
+  // The Input defect this work fixed: clicking a label must focus its field.
+  // jsdom cannot show this; a real browser can.
+  await page.getByText('Name', { exact: true }).click()
+  const focused = await page.evaluate(() => document.activeElement?.tagName)
+  check('clicking the label focuses the input', focused === 'INPUT', `focused ${focused}`)
+
   console.log('\n#160 phase 0: an off-curve key is refused, a real one says Waiting')
   // Typed into the manual field, which is the same path a scan takes
   // (`resolveRecipient` then `onFound`). 'c' x 64 is 64 hex characters that
@@ -275,13 +282,6 @@ async function main() {
   const roster = await page.locator('body').innerText()
   check('the roster row reads Waiting for the device', /Waiting for the device/.test(roster))
   check('no uncaught errors adding a terminal', pageErrors.length === 0, pageErrors.join('; '))
-
-  console.log('\nThe label fix, in a real browser')
-  // The Input defect this work fixed: clicking a label must focus its field.
-  // jsdom cannot show this; a real browser can.
-  await page.getByText('Name', { exact: true }).click()
-  const focused = await page.evaluate(() => document.activeElement?.tagName)
-  check('clicking the label focuses the input', focused === 'INPUT', `focused ${focused}`)
 
   console.log('\nWhat an unsubscribed stall sees when it runs two tills')
   /**
