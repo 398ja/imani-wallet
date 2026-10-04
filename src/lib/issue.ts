@@ -476,9 +476,33 @@ async function waitForToken(voucherId: string): Promise<IssuedVoucher> {
   }
 
   throw new Error(
-    `The voucher never finished minting (status ${last.status ?? 'unknown'}, ` +
-      `payment ${last.payment_state ?? 'unknown'}). It has NOT been delivered.`,
+    `The voucher is still being finished (status ${last.status ?? 'unknown'}, ` +
+      `payment ${last.payment_state ?? 'unknown'}). If the payment went through, the gateway ` +
+      `sends it to the customer by itself within a few minutes. Do not sell it again.`,
   )
+}
+
+/**
+ * Tell the gateway who this coupon is for, before polling for its token.
+ *
+ * If the gateway crashes mid-sale, it finishes the coupon minutes later, long
+ * after this screen has stopped polling (imani-gateway-customer#168). With the
+ * customer's key registered here it then sends the coupon to them itself, as
+ * the same token DM `deliver` sends. A read of the token by this screen still
+ * counts as the delivery, so the customer is not sent it twice by design; if
+ * both happen anyway, it is the same token and the receive dedupes it.
+ *
+ * Best effort: a gateway that predates the endpoint answers 404 and the sale
+ * goes on exactly as before. A failure here must never fail the sale.
+ */
+async function registerRecipient(voucherId: string, recipientPubkey: string): Promise<void> {
+  try {
+    await signedFetch(`/api/v1/wallet/vouchers/${voucherId}/recipient`, 'PUT', {
+      recipient_pubkey: recipientPubkey,
+    })
+  } catch {
+    // Nothing to do: the live poll below still delivers in the ordinary case.
+  }
 }
 
 /**
@@ -681,7 +705,9 @@ export async function issueAndDeliver(
       // (PENDING) coupons still need polling for their token.
       const minted = isMinted(part)
         ? fromCreatedItem(part, params.currency)
-        : await waitForToken(part.voucher_id)
+        : await registerRecipient(part.voucher_id, params.recipientPubkey).then(() =>
+            waitForToken(part.voucher_id),
+          )
       // Nothing to wait for when none was asked for: polling a coupon that never
       // expires spends the whole 15s grace period to confirm a field that is
       // correctly absent, on every sale.

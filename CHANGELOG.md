@@ -153,6 +153,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again on a backoff (5 seconds, doubling to 5 minutes). When it answers, the poller catches
   up and re-offers every held coupon by id, including ones older than the 7-day poll window.
   A config without a NIP-05 domain no longer stops the mint from being read.
+- **A sale finished after a gateway crash reaches the customer** (imani-gateway-customer#168).
+  Sell now tells the gateway who a quote-backed coupon is for
+  (`PUT /api/v1/wallet/vouchers/{id}/recipient`) before it polls for the token. If the gateway
+  crashes mid-sale and finishes the coupon minutes later, after this screen has stopped polling,
+  the gateway sends it to that customer itself. Best effort: an older gateway answers 404 and the
+  sale goes on as before. When the poll runs out, the merchant now reads that the gateway will
+  finish and send the coupon, and not to sell it again, instead of "It has NOT been delivered".
 
 ### Changed
 
