@@ -9,6 +9,7 @@ import { MerchantHomePage } from '../MerchantHomePage'
 import { TERMINAL_ROLES, grantFor, type TerminalRole } from '../../lib/terminalRole'
 import { SESSION_KIND, canIssueNow, canRedeemNow, openSession } from '../../lib/terminalSession'
 import type { OwnerActor, TerminalActor } from '../../lib/actor'
+import { mayWarrantSale } from '../../lib/warrantSigner'
 
 /**
  * The till, as each kind of device sees it.
@@ -65,13 +66,17 @@ describe('a stall on its own device sees no change', () => {
 })
 
 describe('a terminal shows only what its role permits', () => {
-  it('gives a full till both buttons', () => {
+  it('gives a full till Redeem, and says Sell is not available yet (#159)', () => {
+    // A terminal cannot sign a warrant the customer's wallet accepts, so
+    // `issueAndDeliver` refuses its sale. Offering the button would be a
+    // refusal in front of the customer; the line says it is not broken.
     show({
       actor: terminal(),
       session: openSession(terminal(), SESSION_KIND.FULL, Date.now()),
     })
-    expect(sell()).toBeTruthy()
+    expect(sell()).toBeNull()
     expect(redeem()).toBeTruthy()
+    expect(screen.getByText(/Selling from a terminal is not available yet/)).toBeTruthy()
   })
 
   it('gives a redemption-only terminal no Sell', () => {
@@ -167,8 +172,9 @@ describe('the screen and the enforcement point never disagree', () => {
         show({ actor, session })
         const offered = sell() !== null
 
-        // The enforcement point's own answer, asked directly.
-        const allowed = canIssueNow(actor, session)
+        // The enforcement point's own answer, asked directly: `issueAndDeliver`
+        // asks both of these (#159).
+        const allowed = canIssueNow(actor, session) && mayWarrantSale(actor)
 
         expect(offered, `${role} on a ${label} session`).toBe(allowed)
       }

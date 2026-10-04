@@ -14,7 +14,13 @@ import { CashbackGenerateError, generateCashback, type IssuedCashback } from './
 import { getSigner } from './nap'
 import { buildCashbackTransaction } from './transactions'
 import { getWallet, notifyWalletChanged } from './wallet'
-import { buildIssuanceWarrant } from './warrantSigner'
+import {
+  TERMINAL_CASHBACK_UNSUPPORTED,
+  UnwarrantedSaleError,
+  assertSaleWarranted,
+  buildIssuanceWarrant,
+  mayWarrantSale,
+} from './warrantSigner'
 
 const MS_PER_SECOND = 1000
 
@@ -23,9 +29,10 @@ export interface CashbackRequest {
    * WHO is issuing. Null only when the session names no stall, in which case
    * no warrant can be signed and none is sent.
    *
-   * A terminal gets a signed `none` from the signer's own guard, because its
-   * key is not the stall's. The portal accepts that and the till still refuses
-   * the coupon. Fixing that needs the `delegated` form and is separate.
+   * A terminal is refused before anything is signed or minted (#159): its key
+   * is not the stall's, so the most it could send is a signed `none`, and the
+   * issuing stall's till refuses that coupon when the customer spends it.
+   * Fixing that needs the `delegated` form and is separate.
    */
   actor: Actor | null
   amountMinor: number
@@ -52,13 +59,30 @@ export interface CashbackAttempt {
   warrant: string | undefined
 }
 
-/** Sign the warrant and pick the key for one issue. Call once per issue. */
+/**
+ * Sign the warrant and pick the key for one issue. Call once per issue.
+ *
+ * Refuses, before anything is minted, an issue whose coupon the stall's own
+ * till would refuse (#159): a terminal, whose key is not the stall's, and an
+ * owner whose warrant came back `none` (session key is not the stall's) or
+ * absent (wallet locked). The cashback claim records an unwarranted verdict
+ * without refusing, so without this the customer would hold a code worth
+ * nothing at the only stall that could honour it.
+ */
 export async function prepareCashbackAttempt(request: CashbackRequest): Promise<CashbackAttempt> {
   const { actor, amountMinor, decimals, unit } = request
+  refuseUnwarrantableIssuer(actor)
+  const warrant = actor ? await buildIssuanceWarrant(actor, amountMinor, decimals, unit) : undefined
+  if (actor) assertSaleWarranted(warrant)
   return {
     idempotencyKey: crypto.randomUUID(),
-    warrant: actor ? await buildIssuanceWarrant(actor, amountMinor, decimals, unit) : undefined,
+    warrant,
   }
+}
+
+/** A terminal cannot sign a warrant the stall's till accepts. See above. */
+function refuseUnwarrantableIssuer(actor: Actor | null): void {
+  if (actor && !mayWarrantSale(actor)) throw new UnwarrantedSaleError(TERMINAL_CASHBACK_UNSUPPORTED)
 }
 
 /**
@@ -77,6 +101,10 @@ export async function issueCashback(
 ): Promise<IssuedCashback> {
   const { actor, amountMinor, unit, decimals, memo, expiryDays, voucherValidityDays } = request
   const { idempotencyKey, warrant } = attempt ?? (await prepareCashbackAttempt(request))
+  // Again on the attempt actually used, so a caller-supplied attempt cannot
+  // carry a terminal or an unwarranted issue past the checks above.
+  refuseUnwarrantableIssuer(actor)
+  if (actor) assertSaleWarranted(warrant)
 
   const issued = await generateCashback({
     amountMinor,
@@ -143,6 +171,8 @@ export function createCashbackIssuer() {
           pending = { inputs, attempt: await prepareCashbackAttempt(request) }
         }
         const attempt = pending.attempt
+        // Unreachable since #159 (`prepareCashbackAttempt` refuses an actor
+        // with no warrant), kept as the cheap guard it always was.
         if (request.actor && attempt.warrant === undefined) pending = null
         try {
           const issued = await issueCashback(request, attempt)

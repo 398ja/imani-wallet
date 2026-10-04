@@ -9,6 +9,7 @@ import { gatewayConfig, DEFAULT_CASHBACK_EXPIRY_DAYS } from '../lib/config'
 import { currencyDecimals, formatDate, formatFace, parseAmountToMinor } from '../lib/format'
 import type { MerchantProfile } from '../lib/merchant'
 import { ownerActor, type Actor } from '../lib/actor'
+import { TERMINAL_CASHBACK_UNSUPPORTED, mayWarrantSale } from '../lib/warrantSigner'
 
 /**
  * Issue cashback: a coupon for someone who has not installed the app.
@@ -100,6 +101,27 @@ export function CashbackIssuePage({
     } finally {
       if (ran) setBusy(false)
     }
+  }
+
+  /*
+    A terminal cannot sign a warrant the stall's till accepts, so its cashback
+    coupon would be refused when the customer came to spend it (#159). Stopped
+    on arrival, before an amount is typed or a code is minted; `cashbackIssue`
+    refuses the same request made around this screen.
+  */
+  if (actor && !mayWarrantSale(actor)) {
+    return (
+      <Screen>
+        <BackLink to="/" label="Back" />
+        <PageHeader title="Cashback" />
+        <Alert>{TERMINAL_CASHBACK_UNSUPPORTED}</Alert>
+        <div className="mt-4">
+          <Button variant="ghost" className="w-full" onClick={() => navigate('/')}>
+            Back
+          </Button>
+        </div>
+      </Screen>
+    )
   }
 
   if (issued !== null) {

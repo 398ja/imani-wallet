@@ -174,7 +174,7 @@ original argument.
 | Rail | Stall warrant | Customer evidence |
 |---|---|---|
 | Sell, owner device | yes | receipt-time attestation, automatic |
-| Sell, terminal | signed `none` (key is not the stall's) | receipt-time attestation, automatic |
+| Sell, terminal | none possible (key is not the stall's); **refused before minting since #159**, as every wallet refuses a signed `none` | n/a, no sale is made |
 | **Cashback** | **was: nothing** | **impossible, forever** |
 
 **Cashback was the real gap, and it was worse than a missing prompt.** It minted
