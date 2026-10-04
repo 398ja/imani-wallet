@@ -151,10 +151,15 @@ export function TerminalsPage({
     let stopped = false
     const tick = async () => {
       try {
-        if ((await collect(stallPubkey)) > 0 && !stopped) refresh()
+        await collect(stallPubkey)
       } catch {
         // Offline or locked. Try again on the next tick.
       }
+      // Re-read the roster whatever the count said. Under StrictMode the first
+      // effect's poll can promote the row after it was torn down, and the
+      // second then reports nothing changed: trusting the count left the row
+      // showing Waiting for good.
+      if (!stopped) refresh()
     }
     void tick()
     const timer = setInterval(() => void tick(), ENROLLED_POLL_MS)

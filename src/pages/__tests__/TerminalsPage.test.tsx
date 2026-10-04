@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { StrictMode } from 'react'
 
 /**
  * Only the licence CHECK is stubbed. `lapseService` — which decides which
@@ -431,6 +432,26 @@ describe('#160 phase 2: the row turns In service when the device confirms', () =
     })
     expect(screen.getByText(/Never used/)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Revoke' })).toBeTruthy()
+  })
+
+  // The app runs under React StrictMode, which mounts every effect twice. The
+  // first poll can promote the row after its effect was torn down, and the
+  // second then finds nothing left to change. The list must still show the
+  // row In service, because it re-reads the roster rather than trusting the count.
+  it('turns In service under StrictMode, when the poll that promoted it was torn down', async () => {
+    enrol({ status: 'waiting', waitingUntil: Date.now() + 3_600_000 })
+    confirmations = [{ terminalPubkey: DOOR, voucherId: 'cred-door' }]
+    render(
+      <StrictMode>
+        <MemoryRouter>
+          <TerminalsPage stallPubkey={STALL} spendApi={async () => fakeMint} collect={collect} />
+        </MemoryRouter>
+      </StrictMode>,
+    )
+
+    await waitFor(() => expect(screen.queryByText(/Waiting for the device/)).toBeNull(), {
+      timeout: 8000,
+    })
   })
 
   // A confirmation naming another credential of the same device does not
