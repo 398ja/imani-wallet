@@ -422,14 +422,17 @@ describe('voucher metadata comes from the token, not the envelope', () => {
   })
 
   /**
-   * #131 at receive: a genuine signed voucher whose proofs are at a mint the wallet
-   * does not trust yields no token, so it is never offered to the mint.
+   * #131/#133 review (HIGH-2): a voucher at a mint the wallet does not list is
+   * HANDED OVER here, not dropped. Returning no token marks the delivery processed
+   * for good, so a mere mismatch between two services' mint settings would lose
+   * every coupon. The redemption gate holds it instead: nothing is swapped, the
+   * delivery stays unconsumed, and the wallet shows it as waiting to be verified.
    */
-  it('gives GiftWrapProcessor no token for a voucher at an untrusted mint', () => {
+  it('hands over a voucher at an unlisted mint, for the redemption gate to hold', () => {
     vi.stubEnv('VITE_TRUSTED_MINT_URLS', 'https://mint.staging.398ja.xyz')
     try {
       const { token } = buildVoucherToken() // stamped `http://mint.test`
-      expect(crypto.extractToken(dmEnvelope(token))).toBeNull()
+      expect(crypto.extractToken(dmEnvelope(token))).toBe(token)
     } finally {
       vi.unstubAllEnvs()
     }

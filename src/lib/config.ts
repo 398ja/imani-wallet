@@ -46,6 +46,31 @@ export interface GatewayConfig {
   mintUrl: string
 }
 
+/**
+ * The two mint settings the trusted-mint gate reads from `/api/v1/config` (#133).
+ *
+ * Parsed on their OWN, by {@link gatewayMintConfig}, rather than as part of
+ * {@link GatewayConfig}: that parser throws when the gateway names no NIP-05
+ * domain, and a missing domain must not leave the gate unable to learn the mint
+ * (which deferred every coupon for ever).
+ */
+export interface GatewayMintConfig {
+  /**
+   * `mint_url`: gateway-core's `gateway.bottin.mint-url`, the mint the browser
+   * talks to for client-side minting. Usually the public mint, but it is a
+   * DIFFERENT setting from the one tokens are stamped with, so it is not the
+   * source of truth for `m` on its own.
+   */
+  mintUrl: string
+  /**
+   * `token_mint_urls`: the mint URL(s) customer-wallet stamps into each token's
+   * `m` (`GATEWAY_WALLET_MINT_PUBLIC_URL`), served by gateway-core from the same
+   * setting. The one the gate actually needs. Empty from a gateway that predates
+   * the field.
+   */
+  tokenMintUrls: string[]
+}
+
 /** What a cashback code is worth when the gateway names no term of its own. */
 export const DEFAULT_CASHBACK_EXPIRY_DAYS = 5
 
@@ -56,6 +81,7 @@ interface RawConfig {
   cashback_origins?: unknown
   cashback_expiry_days?: unknown
   mint_url?: unknown
+  token_mint_urls?: unknown
 }
 
 function str(value: unknown): string | undefined {
@@ -67,14 +93,33 @@ function str(value: unknown): string | undefined {
  * the app is open — and both the registration form and the profile editor read
  * it, so caching the promise keeps a request off the second caller.
  */
-let pending: Promise<GatewayConfig> | undefined
+let pending: Promise<RawConfig> | undefined
 
-async function fetchConfig(): Promise<GatewayConfig> {
+async function fetchRaw(): Promise<RawConfig> {
   const response = await fetch('/api/v1/config', { credentials: 'include' })
   if (!response.ok) throw new Error(`Could not read the gateway configuration (${response.status}).`)
 
-  const raw = (await response.json()) as RawConfig
+  const raw: unknown = await response.json()
+  if (!raw || typeof raw !== 'object') throw new Error('The gateway configuration is not an object.')
+  return raw as RawConfig
+}
 
+/** The mint settings alone, which need nothing else from the config to be read. */
+function parseMints(raw: RawConfig): GatewayMintConfig {
+  return {
+    mintUrl: str(raw.mint_url) ?? '',
+    // Anything that is not a list of strings collapses to [], the same answer as
+    // an absent field; the gate normalises and filters each entry itself.
+    tokenMintUrls: Array.isArray(raw.token_mint_urls)
+      ? raw.token_mint_urls.flatMap((u) => {
+          const url = str(u)
+          return url ? [url] : []
+        })
+      : [],
+  }
+}
+
+function parseConfig(raw: RawConfig): GatewayConfig {
   // `default_domain` is the documented fallback: both fields are populated on
   // this stack, but only nip05_domain is named for this purpose.
   const domain = str(raw.nip05_domain) ?? str(raw.default_domain)
@@ -96,7 +141,7 @@ async function fetchConfig(): Promise<GatewayConfig> {
         })
       : [],
     cashbackExpiryDays: positiveInt(raw.cashback_expiry_days) ?? DEFAULT_CASHBACK_EXPIRY_DAYS,
-    mintUrl: str(raw.mint_url) ?? '',
+    mintUrl: parseMints(raw).mintUrl,
   }
 }
 
@@ -110,9 +155,9 @@ export function cashbackEnabled(config: GatewayConfig): boolean {
   return config.cashbackOrigins.length > 0
 }
 
-export function gatewayConfig(): Promise<GatewayConfig> {
+function rawConfig(): Promise<RawConfig> {
   if (!pending) {
-    pending = fetchConfig().catch((e: unknown) => {
+    pending = fetchRaw().catch((e: unknown) => {
       // Do not cache a failure — a transient network error at startup would
       // otherwise disable registration for the rest of the session.
       pending = undefined
@@ -120,6 +165,23 @@ export function gatewayConfig(): Promise<GatewayConfig> {
     })
   }
   return pending
+}
+
+export function gatewayConfig(): Promise<GatewayConfig> {
+  return rawConfig().then(parseConfig)
+}
+
+/**
+ * The mint settings, for the trusted-mint gate (#133). Rejects only when the
+ * config cannot be fetched at all; a config with no NIP-05 domain still answers.
+ *
+ * `fresh` drops the cached answer first. The gate passes it when re-asking a
+ * gateway that named no mint, so a configuration fixed on the server releases
+ * held coupons without a reload.
+ */
+export function gatewayMintConfig(options: { fresh?: boolean } = {}): Promise<GatewayMintConfig> {
+  if (options.fresh) pending = undefined
+  return rawConfig().then(parseMints)
 }
 
 /** Exported for tests, which must not share a cache between cases. */

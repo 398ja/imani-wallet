@@ -26,6 +26,7 @@ import { handleLabel } from './lib/format'
 import { reauthenticate } from './lib/reauth'
 import { useSessionReauth } from './lib/useSessionReauth'
 import { ReauthDialog } from './components/ui/ReauthDialog'
+import { HeldCouponsNotice } from './components/ui/HeldCouponsNotice'
 import {
   canTrade,
   loadMerchant,
@@ -352,6 +353,8 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
   return (
     <>
       <Header profile={profile} merchant={trading} terminal={terminal.actor !== null} onLogout={onLogout} />
+      {/* Coupons the trusted-mint gate is holding, so a wait is never mistaken for a loss (#133). */}
+      <HeldCouponsNotice pubkey={pubkey} className="mt-2" />
       <Routes>
         {/*
           The role split. A merchant gets a different home and the two money

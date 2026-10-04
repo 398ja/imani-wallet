@@ -129,10 +129,10 @@ export async function receiveTokenByOwnSwap(
 
   const verdict = checkMintAndUnit(backing)
   if (verdict !== 'trusted') {
-    // `unchecked` is a refusal HERE, unlike on the crediting paths: with no mint
-    // to compare against, the only mint on offer is the one the token names.
-    const refusal: ReceiveRefusal = verdict === 'unchecked' ? 'no-trusted-mint' : verdict
-    throw new ReceiveNotPossible(refusal, `refusing to swap at ${backing.mintUrl || 'an unnamed mint'}: ${refusal}`)
+    // Every non-trusted verdict is a refusal here, `no-trusted-mint` included:
+    // with no mint to compare against, the only mint on offer is the one the
+    // token names, which is exactly the one an attacker chooses.
+    throw new ReceiveNotPossible(verdict, `refusing to swap at ${backing.mintUrl || 'an unnamed mint'}: ${verdict}`)
   }
 
   const secrets = proofs.map((proof) => proof.secret)

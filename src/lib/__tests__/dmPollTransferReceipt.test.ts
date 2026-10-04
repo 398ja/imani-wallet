@@ -51,6 +51,8 @@ vi.mock('../arrivalToast', () => ({
   resumeBundleArrivals: () => {},
   stopBundleArrivals: () => {},
 }))
+// sonner touches the DOM at import; the held-coupon toast is its own module for that reason (#133 review).
+vi.mock('../heldToast', () => ({ announceHeld: () => {} }))
 vi.mock('../refusalToast', () => ({ announceRefusal: vi.fn() }))
 vi.mock('../queuedToast', () => ({ announceQueued: () => {}, settleQueued: () => {} }))
 vi.mock('../paymentReceipt', () => ({ postPaymentReceipt: async () => {} }))

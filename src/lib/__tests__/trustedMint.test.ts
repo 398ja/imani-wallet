@@ -271,16 +271,16 @@ describe('readTokenBacking', () => {
 
 describe('when the gateway has answered and names no mint', () => {
   /**
-   * The one case `unchecked` still describes: the gateway's config ARRIVED and
-   * genuinely named no mint, and the build names none either. A deployment
-   * choice, not a race, so the gate makes no claim. Only the crediting paths
-   * accept this; the own-swap receive refuses it (see receiveToken.test.ts).
+   * The gateway's config ARRIVED and named no mint, and the build names none
+   * either. This used to be `unchecked`, a pass for crediting; since the #133
+   * review it is `no-trusted-mint`, which no path treats as a pass (see
+   * trustedMintFailClosed.test.ts).
    */
-  it('makes no claim', async () => {
+  it('reports that no trusted mint is known', async () => {
     vi.stubEnv('VITE_TRUSTED_MINT_URLS', '')
     await gatewayAnswers('')
     expect(trustedMintUrls()).toEqual([])
-    expect(checkMintAndUnit(parseVoucherToken(fixture('control-unlocked.token')))).toBe('unchecked')
+    expect(checkMintAndUnit(parseVoucherToken(fixture('control-unlocked.token')))).toBe('no-trusted-mint')
   })
 
   /**

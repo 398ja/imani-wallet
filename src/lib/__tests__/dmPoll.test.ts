@@ -2,11 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { nostrdbAdapter, startDmPoll, stopDmPoll } from '../dmPoll'
 import { checkMintAndUnit } from '../trustedMint'
+import { recordHeld } from '../heldCoupons'
 import { gatewayAnswers, resetGate } from './trustedMintKit'
 
 const fake = vi.hoisted(() => ({
   fetchRecentDms: vi.fn(async () => []),
   start: vi.fn(async () => {}),
+  reofferEvents: vi.fn(async () => 0),
+  hasProcessed: vi.fn(() => false),
 }))
 vi.mock('@imani/dm-poll', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
@@ -326,5 +329,73 @@ describe('profile lookup never blocks a coupon receipt', () => {
       }),
     )
     await expect(nostrdbAdapter().getProfile('a'.repeat(64))).resolves.toBeNull()
+  })
+})
+
+/**
+ * #133 review, MEDIUM-2: a deferral heals itself. When the config fetch fails at
+ * start-up, the trusted-mint loader retries on a backoff; the moment it succeeds
+ * the poller runs a catch-up AND re-offers every delivery it is holding, however
+ * old, with no reload and no user action.
+ */
+describe('startDmPoll — held and deferred coupons are offered again when the mints arrive', () => {
+  const target = { addEventListener: () => {}, removeEventListener: () => {} }
+  const ME = '7'.repeat(64)
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.stubGlobal('document', { ...target, visibilityState: 'visible' })
+    const store = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+      clear: () => store.clear(),
+    })
+    vi.stubGlobal('window', { ...target, dispatchEvent: () => true })
+    vi.stubEnv('VITE_TRUSTED_MINT_URLS', '')
+    resetGate()
+    fake.start.mockReset().mockImplementation(async () => {})
+    fake.fetchRecentDms.mockClear()
+    fake.reofferEvents.mockClear()
+  })
+
+  afterEach(() => {
+    stopDmPoll()
+    vi.useRealTimers()
+    vi.unstubAllEnvs()
+    resetGate()
+  })
+
+  it('catches up and re-offers held deliveries once the gateway answers', async () => {
+    recordHeld(ME, {
+      eventId: 'held-long-ago',
+      senderPubkey: 'b'.repeat(64),
+      voucherId: 'v',
+      reason: 'no-trusted-mint',
+      detail: '',
+      token: 'cashuB',
+      createdAt: 1_000,
+    })
+    let reachable = false
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        if (!reachable) throw new TypeError('network down')
+        return Response.json({ nip05_domain: 'imani.test', token_mint_urls: ['https://mint.staging.398ja.xyz'] })
+      }),
+    )
+
+    startDmPoll(ME)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fake.start).toHaveBeenCalledTimes(1)
+    fake.fetchRecentDms.mockClear()
+    fake.reofferEvents.mockClear()
+
+    reachable = true
+    await vi.advanceTimersByTimeAsync(5_000)
+
+    expect(fake.fetchRecentDms).toHaveBeenCalled()
+    expect(fake.reofferEvents).toHaveBeenCalledWith(['held-long-ago'], 1_000 - 60)
   })
 })

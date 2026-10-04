@@ -57,15 +57,15 @@ describe('crediting a coupon depends on where its value is', () => {
   })
 
   /**
-   * The crediting path's documented direction, kept on purpose. A deployment whose
-   * gateway has ANSWERED and named no mint is exactly as exposed as before this
-   * gate, and no worse; refusing would strand a coupon already held. Only reachable
-   * when the gateway really says so: an unloaded list is `not-ready` (next test).
+   * Reversed by the #133 review (HIGH-1). A deployment whose gateway answered and
+   * named no mint used to be accepted here, which on beta and prod meant every
+   * coupon from every mint was claimed. With no trusted mint known the sweep now
+   * skips the coupon; the next pass claims it once a mint is configured.
    */
-  it('accepts the coupon when the gateway has answered and names no mint', async () => {
+  it('skips the coupon when the gateway has answered and names no mint', async () => {
     vi.stubEnv('VITE_TRUSTED_MINT_URLS', '')
     await gatewayAnswers('')
-    expect(candidateClaim({ amount: 0 }, token, stall)).toBeDefined()
+    expect(candidateClaim({ amount: 0 }, token, stall)).toBeUndefined()
   })
 
   /**
@@ -83,28 +83,32 @@ describe('the redemption gate dm-poll asks before every redeem (#131)', () => {
    * The finding in full: a copy of a genuine signed voucher backed by proofs at a
    * rogue mint. The signature verifies; only the backing gives it away. Built with
    * a fresh issuer key so it is a real, valid voucher in every checkable way.
+   *
+   * HELD rather than refused since the #133 review (HIGH-2): nothing is swapped
+   * either way, and a hold keeps the delivery in case the mint is ours after all
+   * (a configuration mismatch looks exactly like this).
    */
-  it('refuses a genuine-looking voucher whose proofs are at a rogue mint', async () => {
+  it('holds a genuine-looking voucher whose proofs are at a rogue mint', async () => {
     await gatewayAnswers('https://mint.staging.398ja.xyz')
     const { token: voucherAtFixtureMint } = buildVoucherToken()
     // The fixture builder stamps `http://mint.test`, which is not the trusted mint.
-    expect(checkTokenBacking(voucherAtFixtureMint)).toMatchObject({ outcome: 'refuse', reason: 'untrusted-mint' })
+    expect(checkTokenBacking(voucherAtFixtureMint)).toMatchObject({ outcome: 'hold', reason: 'untrusted-mint' })
   })
 
-  /** Plain ecash from a rogue mint is refused too: forging a coupon is not required. */
-  it('refuses plain ecash from a rogue mint', async () => {
+  /** Plain ecash from a rogue mint is held too: forging a coupon is not required. */
+  it('holds plain ecash from a rogue mint', async () => {
     await gatewayAnswers('https://mint.staging.398ja.xyz')
     expect(checkTokenBacking(buildPlainToken('https://rogue-mint.example.test'))).toMatchObject({
-      outcome: 'refuse',
+      outcome: 'hold',
       reason: 'untrusted-mint',
     })
   })
 
   /** A legacy V3 token is read too, so the old format is not a way round the gate. */
-  it('refuses a legacy cashuA token from a rogue mint', async () => {
+  it('holds a legacy cashuA token from a rogue mint', async () => {
     await gatewayAnswers('https://mint.staging.398ja.xyz')
     expect(checkTokenBacking(buildLegacyToken('https://rogue-mint.example.test'))).toMatchObject({
-      outcome: 'refuse',
+      outcome: 'hold',
       reason: 'untrusted-mint',
     })
   })

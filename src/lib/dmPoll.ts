@@ -23,6 +23,8 @@ import {
 import { announceQueued, settleQueued, type QueuedBundleSeed } from './queuedToast'
 import { announceRefusal } from './refusalToast'
 import { recordRefusal } from './refusedCoupons'
+import { heldCoupons, recordHeld, releaseHeld } from './heldCoupons'
+import { announceHeld } from './heldToast'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { bytesToHex } from '@noble/hashes/utils'
 
@@ -49,7 +51,7 @@ import { legacyApi, withCorrelation } from './legacyBridge'
 import { claimToFile } from './merchantClaim'
 import { withWebLock } from './webLock'
 import { CALLS_PER_RECEIVE, receivePacer } from './receivePacer'
-import { checkTokenBacking, loadTrustedMints } from './trustedMint'
+import { checkTokenBacking, loadTrustedMints, onTrustedMintsChange } from './trustedMint'
 
 /**
  * Gateway REST, same-origin: `/api/v1/...` reaches customer-wallet through the
@@ -1363,6 +1365,40 @@ function catchUp(): void {
 }
 
 /**
+ * The trusted mints changed: the gateway answered after a failure, or named a
+ * mint it did not name before (#133 review, MEDIUM-2). Every deferred delivery is
+ * offered again by a catch-up, and every HELD one by id, however old, since a
+ * coupon held longer than the poll window would otherwise never be offered again.
+ */
+function onMintsChanged(): void {
+  catchUp()
+  void reofferHeld()
+}
+
+async function reofferHeld(): Promise<void> {
+  const polling = service
+  const owner = currentPubkey
+  if (!polling || !owner) return
+  const held = heldCoupons(owner)
+  // Anything the poller has since consumed (redeemed, or refused for a reason no
+  // configuration can change) is no longer waiting.
+  for (const coupon of held) {
+    if (typeof polling.hasProcessed === 'function' && polling.hasProcessed(coupon.eventId)) {
+      releaseHeld(owner, coupon.eventId)
+    }
+  }
+  const waiting = heldCoupons(owner)
+  if (waiting.length === 0 || typeof polling.reofferEvents !== 'function') return
+  const since = Math.min(...waiting.map((c) => c.createdAt)) - 60
+  await polling.reofferEvents(
+    waiting.map((c) => c.eventId),
+    since,
+  )
+}
+
+let stopMintListener: (() => void) | undefined
+
+/**
  * Acknowledge escrows an earlier redemption left HELD (#110). Never throws.
  *
  * `_acknowledgeEscrow` used to promise "retry on next startup" to an escrow
@@ -1507,7 +1543,20 @@ export function startDmPoll(pubkey: string): DmPollService {
     // screen still says so after the toast has gone (#145).
     const owner = currentPubkey
     service.on('redemption:refused', (event) => recordRefusal(owner ?? '', event))
+    // Held, not refused (#133 review): kept visible as "waiting to be verified",
+    // announced once, and forgotten when the delivery is finally redeemed.
+    service.on('redemption:held', (event) => {
+      if (recordHeld(owner ?? '', event)) announceHeld(event)
+    })
+    service.on('redemption:released', (event) => releaseHeld(owner ?? '', event?.eventId))
+    service.on('redemption:success', (event) => releaseHeld(owner ?? '', event?.eventId))
   }
+
+  // Re-offer held and deferred coupons whenever the trusted mints change. The
+  // loader retries on its own backoff, so this is what makes a deferral heal
+  // without a reload or a manual retry (#133 review, MEDIUM-2).
+  stopMintListener?.()
+  stopMintListener = onTrustedMintsChange(onMintsChanged)
 
   // The trusted-mint list FIRST, then the poller (#133). Its first catch-up
   // redeems at once, and every redeem asks `checkTokenBacking`; before the list
@@ -1518,7 +1567,13 @@ export function startDmPoll(pubkey: string): DmPollService {
   const starting = service
   void loadTrustedMints().then(() => {
     // Not if the poller was stopped, or replaced by an account switch, meanwhile.
-    if (service === starting) void starting.start()
+    if (service === starting) {
+      // Then the coupons held in an earlier session, however old, in case the
+      // configuration was fixed while the app was closed.
+      void starting.start().then(() => {
+        if (service === starting) void reofferHeld()
+      })
+    }
   })
   // Startup half of the ack retry (#110). The legacy API client is signed in
   // by now, so the per-account ledger resolves to this account.
@@ -1550,6 +1605,8 @@ function onVisible(): void {
  */
 export function stopDmPoll(): void {
   onSseOpen = undefined
+  stopMintListener?.()
+  stopMintListener = undefined
   document.removeEventListener('visibilitychange', onVisible)
   window.removeEventListener('online', catchUp)
   void service?.stop()
