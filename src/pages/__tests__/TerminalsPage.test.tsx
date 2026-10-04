@@ -53,6 +53,13 @@ const TOKEN = readFileSync(
   'utf8',
 ).trim()
 
+/** Phase 2: what the device has confirmed, as `collectEnrolled` would find it. */
+let confirmations: Array<{ terminalPubkey: string; voucherId: string }> = []
+const collect = async (stall: string) => {
+  const { markInService } = await import('../../lib/terminalRoster')
+  return confirmations.filter((c) => markInService(stall, c.terminalPubkey, c.voucherId)).length
+}
+
 /** The owner's spend client, faked: UNSPENT until spent, and spending works unless told not to. */
 let spendFails = false
 const spent: string[] = []
@@ -68,7 +75,7 @@ const fakeMint = {
 function renderPage() {
   return render(
     <MemoryRouter>
-      <TerminalsPage stallPubkey={STALL} spendApi={async () => fakeMint} />
+      <TerminalsPage stallPubkey={STALL} spendApi={async () => fakeMint} collect={collect} />
     </MemoryRouter>,
   )
 }
@@ -89,6 +96,7 @@ beforeEach(() => {
   localStorage.clear()
   spendFails = false
   spent.length = 0
+  confirmations = []
   fakeMint.receive.mockClear()
 })
 afterEach(cleanup)
@@ -405,5 +413,33 @@ describe('#160 review: rows left behind by earlier versions and lost answers', (
     // settled and is no longer an unknown credential.
     await waitFor(() => expect(screen.queryByText(/Still being set up/)).toBeNull())
     expect(resumeTransport.get).toHaveBeenCalled()
+  })
+})
+
+describe('#160 phase 2: the row turns In service when the device confirms', () => {
+  // The owner adds a terminal; the row waits. When the device's enrolled DM
+  // arrives the row turns In service, with no reload.
+  it('promotes a waiting row when its device confirms, without a reload', async () => {
+    enrol({ status: 'waiting', waitingUntil: Date.now() + 3_600_000 })
+    renderPage()
+    expect(screen.getByText(/Waiting for the device/)).toBeTruthy()
+
+    confirmations = [{ terminalPubkey: DOOR, voucherId: 'cred-door' }]
+
+    await waitFor(() => expect(screen.queryByText(/Waiting for the device/)).toBeNull(), {
+      timeout: 8000,
+    })
+    expect(screen.getByText(/Never used/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Revoke' })).toBeTruthy()
+  })
+
+  // A confirmation naming another credential of the same device does not
+  // promote this row: it might be an old one the owner already cancelled.
+  it('ignores a confirmation for a different credential', async () => {
+    const { markInService, allTerminals: rows } = await import('../../lib/terminalRoster')
+    enrol({ status: 'waiting', waitingUntil: Date.now() + 3_600_000 })
+
+    expect(markInService(STALL, DOOR, 'some-older-credential')).toBe(false)
+    expect(rows(STALL)[0].status).toBe('waiting')
   })
 })

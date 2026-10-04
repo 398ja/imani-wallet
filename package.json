@@ -21,6 +21,7 @@
     "perf:verify-snapshot": "tsx perf/bin/verify-snapshot.ts",
     "perf:verify-fixture-boot": "tsx perf/bin/verify-fixture-boot.ts",
     "e2e": "tsx e2e/terminals.e2e.ts",
+    "e2e:terminal-setup": "tsx e2e/terminalSetup.e2e.ts",
     "e2e:purchase": "tsx e2e/purchase.e2e.ts",
     "e2e:notifications": "tsx e2e/notifications.e2e.ts",
     "e2e:sw-push": "tsx e2e/service-worker-push.e2e.mts",

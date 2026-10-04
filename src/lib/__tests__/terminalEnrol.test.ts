@@ -30,8 +30,21 @@ vi.mock('../nap', () => ({
   },
 }))
 
-const { beginEnrolment, completeEnrolment, enrolledActor, forgetPendingKey, forgetTerminal, storedTerminal } =
-  await import('../terminalEnrol')
+const {
+  beginEnrolment,
+  completeEnrolment,
+  enrolledActor,
+  forgetPendingKey,
+  forgetTerminal,
+  offersFor,
+  storedTerminal,
+  MIN_PASSPHRASE_LENGTH,
+} = await import('../terminalEnrol')
+const { credentialMessageJson, enrolledMessageJson, unwrapSealed, wrapMessage } = await import(
+  '../terminalDelivery'
+)
+const { buildLockedCredentialToken } = await import('./voucherFixtures')
+const { generateSecretKey, getPublicKey } = await import('nostr-tools')
 const { TERMINAL_ROLES, grantFor } = await import('../terminalRole')
 type TerminalRole = (typeof TERMINAL_ROLES)[keyof typeof TERMINAL_ROLES]
 
@@ -300,5 +313,160 @@ describe('#160 phase 0: setup never destroys a wallet', () => {
     walletKeyHeld = false
     await completeEnrolment(credentialFor(code.terminalPubkey), PASSPHRASE)
     expect(saved).toHaveLength(1)
+  })
+})
+
+describe('#160 decision 2: the passphrase is at least 8 characters', () => {
+  // A shared till's passphrase is the only thing between a picked-up tablet
+  // and the stall's till. Seven characters is refused, before anything is stored.
+  it('refuses a passphrase shorter than 8 characters, and stores nothing', async () => {
+    const code = beginEnrolment()
+    await expect(completeEnrolment(credentialFor(code.terminalPubkey), 'seven77')).rejects.toThrow(
+      /at least 8 characters/,
+    )
+    expect(saved).toEqual([])
+    expect(storedTerminal()).toBeNull()
+    expect(MIN_PASSPHRASE_LENGTH).toBe(8)
+  })
+
+  // Exactly 8 is enough.
+  it('accepts exactly 8 characters', async () => {
+    const code = beginEnrolment()
+    await completeEnrolment(credentialFor(code.terminalPubkey), 'eight888')
+    expect(saved).toHaveLength(1)
+  })
+})
+
+describe('#160 phase 2: the credential arrives by DM, opened on the device', () => {
+  const stallKey = generateSecretKey()
+  const stall = getPublicKey(stallKey)
+  const voucherId = '5f8a487d-6cea-4a7d-b681-9d5d62cc9dd9'
+
+  /** The owner's DM, sealed by the stall, carrying a real credential for `device`. */
+  const dmFor = (device: string, sealKey = stallKey) =>
+    wrapMessage(
+      sealKey,
+      device,
+      credentialMessageJson({
+        voucherId,
+        token: buildLockedCredentialToken({ stallKey, devicePubkey: device, voucherId }),
+        stallPubkey: stall,
+        name: 'Front counter',
+        idleLockMinutes: 15,
+      }),
+    )
+
+  // The pending key opens the DM inside the module and reads the offer. The
+  // caller never needed the key to do it.
+  it('reads an offer addressed to the pending key', () => {
+    const code = beginEnrolment()
+    const [offer] = offersFor([dmFor(code.terminalPubkey)])
+
+    expect(typeof offer).toBe('object')
+    if (typeof offer !== 'object') return
+    expect(offer.stallPubkey).toBe(stall)
+    expect(offer.idleLockMinutes).toBe(15)
+  })
+
+  // A credential for another device, or sealed by another stall than it
+  // names, is refused, and nothing is stored (spec AC).
+  it('refuses a credential for another key, or sealed by another stall, and stores nothing', () => {
+    const code = beginEnrolment()
+    const elsewhere = getPublicKey(generateSecretKey())
+    const forOther = wrapMessage(
+      stallKey,
+      code.terminalPubkey,
+      credentialMessageJson({
+        voucherId,
+        token: buildLockedCredentialToken({ stallKey, devicePubkey: elsewhere, voucherId }),
+        stallPubkey: stall,
+        name: 'x',
+        idleLockMinutes: 10,
+      }),
+    )
+    const sealedByIntruder = dmFor(code.terminalPubkey, generateSecretKey())
+
+    expect(offersFor([forOther, sealedByIntruder])).toEqual([
+      'not-locked-to-this-device',
+      'sealed-by-another',
+    ])
+    expect(saved).toEqual([])
+    expect(storedTerminal()).toBeNull()
+  })
+
+  // The spec's AC: the private key never appears in DOM, storage before
+  // completion, network payloads or logs. Here: nothing an offer, a stored
+  // record, a published wrap or a console line carries contains it.
+  it('never lets the private key reach an offer, a payload, storage or a log', async () => {
+    const logs: string[] = []
+    const spy = vi.spyOn(console, 'log').mockImplementation((...a) => void logs.push(a.join(' ')))
+    const warn = vi.spyOn(console, 'warn').mockImplementation((...a) => void logs.push(a.join(' ')))
+    const code = beginEnrolment()
+    const [offer] = offersFor([dmFor(code.terminalPubkey)])
+    if (typeof offer !== 'object') throw new Error('no offer')
+    // Before completion: nothing in storage at all.
+    expect(localStorage.length).toBe(0)
+
+    const published: unknown[] = []
+    // The role is the verified offer's signed metadata, not a stored record.
+    // nosemgrep: imani-role-from-local-storage
+    await completeEnrolment(
+      {
+        stallPubkey: stall,
+        role: offer.metadata.role,
+        lockedTo: offer.metadata.lock_key,
+        permissions: grantFor(offer.metadata.role, stall),
+      },
+      PASSPHRASE,
+      offer.name,
+      { token: offer.token, merchantMetadata: offer.merchantMetadata, issuerId: offer.issuerId },
+      {
+        voucherId: offer.voucherId,
+        idleLockMinutes: offer.idleLockMinutes,
+        announce: async (tools) => {
+          published.push(tools.wrap(stall, enrolledMessageJson(offer.voucherId, code.terminalPubkey)))
+          published.push(
+            await tools.signer.signEvent({ kind: 27235, created_at: 0, tags: [], content: '' }),
+          )
+        },
+      },
+    )
+    spy.mockRestore()
+    warn.mockRestore()
+
+    const secret = saved[0].privkeyHex
+    expect(JSON.stringify(offer)).not.toContain(secret)
+    expect(JSON.stringify(published)).not.toContain(secret)
+    expect(JSON.stringify({ ...localStorage })).not.toContain(secret)
+    expect(logs.join('\n')).not.toContain(secret)
+    expect(storedTerminal()?.voucherId).toBe(voucherId)
+    expect(storedTerminal()?.idleLockMinutes).toBe(15)
+  })
+
+  // The enrolled DM is sealed by the device key and opens for the stall, so the
+  // owner can believe it came from this device.
+  it('announces enrolment to the stall, sealed by the device', async () => {
+    const code = beginEnrolment()
+    let wrap: ReturnType<typeof wrapMessage> | undefined
+    await completeEnrolment(credentialFor(code.terminalPubkey), PASSPHRASE, 'Door', undefined, {
+      voucherId,
+      announce: async (tools) => {
+        wrap = tools.wrap(stall, enrolledMessageJson(voucherId, code.terminalPubkey))
+      },
+    })
+
+    const opened = unwrapSealed(wrap!, stallKey)
+    expect(opened?.sealer).toBe(code.terminalPubkey)
+  })
+
+  // A failed announce does not undo the enrolment: the device is set up.
+  it('stays enrolled when telling the stall fails', async () => {
+    const code = beginEnrolment()
+    await completeEnrolment(credentialFor(code.terminalPubkey), PASSPHRASE, 'Door', undefined, {
+      announce: async () => {
+        throw new Error('offline')
+      },
+    })
+    expect(storedTerminal()).not.toBeNull()
   })
 })

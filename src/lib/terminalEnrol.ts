@@ -1,5 +1,14 @@
-import { generateSecretKey, getPublicKey } from 'nostr-tools'
-import { bytesToHex } from '@noble/hashes/utils'
+import { finalizeEvent, generateSecretKey, getPublicKey, type Event } from 'nostr-tools'
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
+
+import type { RequestSigner } from './nip98'
+import {
+  offerFromRumor,
+  unwrapSealed,
+  wrapMessage,
+  type CredentialOffer,
+  type OfferRefusal,
+} from './terminalDelivery'
 
 import { keyStore } from './nap'
 import { roleOf, type TerminalRole } from './terminalRole'
@@ -64,6 +73,48 @@ function mintKey(): { privkeyHex: string; pubkey: string } {
 /** For tests, and for starting over after a completed enrolment. */
 export function forgetPendingKey(): void {
   pending = undefined
+}
+
+/** The minimum passphrase length for a terminal (decision 2 on #160). */
+export const MIN_PASSPHRASE_LENGTH = 8
+
+/**
+ * Credentials sent to this device's pending key, checked (#160 phase 2).
+ *
+ * Unwrapped HERE, with the pending key, so the private half never leaves this module, which
+ * is the promise at the top of the file. Each wrap is opened, its seal verified, and the
+ * credential inside read from its own signed bytes (`offerFromRumor`). Refusals are returned
+ * too, so a screen can say "a credential arrived for another device" rather than nothing.
+ *
+ * @param wraps gift wraps addressed to the pending key, as the gateway or relay returned them
+ */
+export function offersFor(
+  wraps: readonly Event[],
+  nowSeconds: number = Math.floor(Date.now() / 1000),
+): Array<CredentialOffer | OfferRefusal> {
+  if (!pending) return []
+  const key = hexToBytes(pending.privkeyHex)
+  try {
+    return wraps.flatMap((wrap) => {
+      const opened = unwrapSealed(wrap, key)
+      if (!opened) return []
+      const offer = offerFromRumor(opened.rumor, opened.sealer, pending!.pubkey, nowSeconds)
+      return offer === 'not-a-credential-dm' ? [] : [offer]
+    })
+  } finally {
+    key.fill(0)
+  }
+}
+
+/**
+ * What `completeEnrolment` lends a caller, after storing and before the key is forgotten.
+ *
+ * Capabilities, not the key: wrap a message as this terminal, and sign a NIP-98 request as it.
+ * Both are exactly what sending the enrolled DM needs, and neither returns the private half.
+ */
+export interface EnrolmentAnnouncer {
+  wrap(recipient: string, content: string): Event
+  signer: RequestSigner
 }
 
 /**
@@ -133,6 +184,13 @@ export interface StoredTerminal {
    * credential.
    */
   issuerId?: string
+  /** The credential's voucher id (#160 phase 2), which the enrolled DM names. */
+  voucherId?: string
+  /**
+   * Minutes of no touch before the till locks itself (decision 2). `0` is off. Phase 3
+   * enforces it. A display hint like the rest: the owner chose it, and nothing here grants.
+   */
+  idleLockMinutes?: number
 }
 
 /**
@@ -164,6 +222,17 @@ export async function completeEnrolment(
    * holds would be a description rather than the thing itself.
    */
   voucher?: { token: string; merchantMetadata: string; issuerId: string },
+  /**
+   * #160 phase 2. `voucherId` and `idleLockMinutes` are stored with the record, and
+   * `announce` runs once the record is stored and before the pending key is forgotten, so
+   * the device can tell its stall it is in service. A failed announce does not undo the
+   * enrolment: the device is set up either way, and the owner can see it at next use.
+   */
+  options: {
+    voucherId?: string
+    idleLockMinutes?: number
+    announce?: (tools: EnrolmentAnnouncer) => Promise<void>
+  } = {},
 ): Promise<TerminalActor> {
   if (!pending) {
     throw new Error('Start enrolment on this device before scanning a code.')
@@ -184,6 +253,12 @@ export async function completeEnrolment(
     // Refused rather than defaulted. A blank passphrase is a key at rest in
     // clear, and the terminal would open for trade for whoever picked it up.
     throw new Error('A passphrase is needed to protect this terminal.')
+  }
+  if (passphrase.length < MIN_PASSPHRASE_LENGTH) {
+    // Decision 2 on #160: at least 8 characters on a shared till.
+    throw new Error(
+      `Use a passphrase of at least ${MIN_PASSPHRASE_LENGTH} characters to protect this terminal.`,
+    )
   }
 
   // Verified BEFORE anything is written, and against this device's own key, so
@@ -211,8 +286,40 @@ export async function completeEnrolment(
           issuerId: voucher.issuerId,
         }
       : {}),
+    ...(options.voucherId ? { voucherId: options.voucherId } : {}),
+    ...(options.idleLockMinutes !== undefined ? { idleLockMinutes: options.idleLockMinutes } : {}),
   }
   localStorage.setItem(ENROLMENT_KEY, JSON.stringify(stored))
+
+  if (options.announce) {
+    const held = pending
+    const announcer: EnrolmentAnnouncer = {
+      wrap: (recipient, content) => {
+        const key = hexToBytes(held.privkeyHex)
+        try {
+          return wrapMessage(key, recipient, content)
+        } finally {
+          key.fill(0)
+        }
+      },
+      signer: {
+        signEvent: async (template) => {
+          const key = hexToBytes(held.privkeyHex)
+          try {
+            return finalizeEvent(template, key)
+          } finally {
+            key.fill(0)
+          }
+        },
+      },
+    }
+    try {
+      await options.announce(announcer)
+    } catch {
+      // The device is enrolled. Telling the stall is a courtesy that can fail
+      // on a bad connection, and must not turn a stored enrolment into an error.
+    }
+  }
 
   // The pending key has been persisted; a further enrolment starts fresh.
   forgetPendingKey()
@@ -255,6 +362,11 @@ export function storedTerminal(): StoredTerminal | null {
       merchantMetadata:
         typeof parsed.merchantMetadata === 'string' ? parsed.merchantMetadata : undefined,
       issuerId: typeof parsed.issuerId === 'string' ? parsed.issuerId : undefined,
+      voucherId: typeof parsed.voucherId === 'string' ? parsed.voucherId : undefined,
+      idleLockMinutes:
+        typeof parsed.idleLockMinutes === 'number' && parsed.idleLockMinutes >= 0
+          ? parsed.idleLockMinutes
+          : undefined,
     }
   } catch {
     return null

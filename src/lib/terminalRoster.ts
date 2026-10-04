@@ -67,6 +67,8 @@ export interface TerminalRecord {
   voucherId?: string
   /** Epoch ms after which a still-waiting row is cancelled (decision 4: 24 hours). */
   waitingUntil?: number
+  /** Minutes of no touch before the till locks (decision 2). `0` is off. Sent to the device. */
+  idleLockMinutes?: number
   /** Set when revoked. Present means retired; the record itself stays. */
   revokedAt?: number
   /**
@@ -128,6 +130,7 @@ function read(stallPubkey: string): TerminalRecord[] {
           token: typeof row.token === 'string' ? row.token : undefined,
           voucherId: typeof row.voucherId === 'string' ? row.voucherId : undefined,
           waitingUntil: typeof row.waitingUntil === 'number' ? row.waitingUntil : undefined,
+          idleLockMinutes: typeof row.idleLockMinutes === 'number' ? row.idleLockMinutes : undefined,
           revokedAt: typeof row.revokedAt === 'number' ? row.revokedAt : undefined,
           status: statusOf(row.status),
           mintKey: typeof row.mintKey === 'string' ? row.mintKey : undefined,
@@ -293,6 +296,29 @@ export function updateTerminal(
   const index = rows.findIndex((t) => t.terminalPubkey.toLowerCase() === key)
   if (index < 0) return false
   rows[index] = change(rows[index])
+  write(stallPubkey, rows)
+  return true
+}
+
+/**
+ * The device confirmed it holds its credential (#160 phase 2): the row is in service.
+ *
+ * Matched on BOTH the device key and the voucher id the enrolled DM names, so a stale
+ * notice for an earlier credential of the same device does not promote a newer waiting row.
+ * A revoked row stays revoked. Returns whether a row changed.
+ */
+export function markInService(stallPubkey: string, terminalPubkey: string, voucherId: string): boolean {
+  const rows = read(stallPubkey)
+  const row = rows.find(
+    (t) =>
+      t.terminalPubkey.toLowerCase() === terminalPubkey.toLowerCase() &&
+      t.voucherId === voucherId &&
+      t.revokedAt === undefined &&
+      t.status === 'waiting',
+  )
+  if (!row) return false
+  row.status = 'in-service'
+  row.waitingUntil = undefined
   write(stallPubkey, rows)
   return true
 }

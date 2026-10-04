@@ -114,6 +114,17 @@ export function OnboardingPage({ onUnlock }: { onUnlock: (privkeyHex: string) =>
               Restore
             </Link>
           </p>
+
+          {/* #160 phase 2: the way in for a stall's extra device. A terminal has
+              no account, so it does not register or log in. */}
+          <p className="text-center text-sm text-mono-500">
+            <Link
+              to="/terminal/setup"
+              className="pressable underline hover:text-mono-900 dark:hover:text-mono-50"
+            >
+              Set this device up as a terminal
+            </Link>
+          </p>
         </div>
       )}
 

@@ -26,8 +26,19 @@ import { revokeCredential, type CredentialMintApi } from '../lib/credentialRevoc
 import { settleMintFailure } from '../lib/terminalRevoke'
 import { legacyApi } from '../lib/legacyBridge'
 import { parseVoucherToken } from '../lib/voucherToken'
+import {
+  DEFAULT_IDLE_LOCK_MINUTES,
+  IDLE_LOCK_CHOICES,
+  sendCredential,
+  type WrapPublisher,
+} from '../lib/terminalDelivery'
+import { ownerPublisher } from '../lib/terminalDeliveryNet'
+import { getSigner } from '../lib/nap'
 import { useOnline } from '../lib/useOnline'
 import type { LicenceStatus } from '../lib/licenceStatus'
+
+/** The stall's key, lent for one wrap, as `signer.withPrivkey` lends it everywhere else. */
+const stallSeal = <T,>(borrow: (key: Uint8Array) => T): T => getSigner().withPrivkey(borrow)
 
 /**
  * Putting a device on the counter: name it, choose what it may do, scan it.
@@ -64,12 +75,18 @@ export function TerminalEnrolPage({
   stallPubkey,
   transport = ownerTransport,
   spendApi = ownerSpendApi,
+  publisher = ownerPublisher,
+  seal = stallSeal,
 }: {
   stallPubkey: string
   /** Injected by tests. The owner's NIP-98 signer otherwise. */
   transport?: MintTransport
   /** Injected by tests. Spends a credential that came back wrong. */
   spendApi?: () => Promise<CredentialMintApi>
+  /** Injected by tests. Relay plus gateway mirror otherwise. */
+  publisher?: WrapPublisher
+  /** Injected by tests. Lends the stall's key for sealing the credential DM. */
+  seal?: <T>(borrow: (key: Uint8Array) => T) => T
 }) {
   const navigate = useNavigate()
   const online = useOnline()
@@ -80,7 +97,10 @@ export function TerminalEnrolPage({
   const [role, setRole] = useState<TerminalRole | null>(null)
   const [terminalPubkey, setTerminalPubkey] = useState<string | null>(null)
   const [licence, setLicence] = useState<LicenceStatus | null>(null)
-  const [issued, setIssued] = useState<{ name: string; code: string } | null>(null)
+  const [issued, setIssued] = useState<{ name: string; code: string; sent: boolean } | null>(null)
+  // Decision 2 on #160: the owner chooses the idle lock, 10 minutes by default,
+  // and may switch it off. It travels to the device in the credential DM.
+  const [idleLock, setIdleLock] = useState<number>(DEFAULT_IDLE_LOCK_MINUTES)
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
 
@@ -178,10 +198,27 @@ export function TerminalEnrolPage({
         enrolledAt: now,
         waitingUntil: now + WAITING_TTL_MS,
         mintKey: undefined,
+        idleLockMinutes: idleLock,
       }))
+      // Phase 2: hand it to the device by NIP-17 DM, sealed by the stall. A DM
+      // that did not land leaves the row waiting, and the screen says so: the
+      // owner can cancel it and add the device again.
+      const sent = await sendCredential(
+        {
+          voucherId: minted.voucherId,
+          token: minted.token,
+          stallPubkey,
+          name: credential.name,
+          idleLockMinutes: idleLock,
+        },
+        credential.lockedTo,
+        seal,
+        publisher,
+      ).catch(() => false)
       setIssued({
         name: credential.name,
         code: formatCheckCode(checkCode(minted.voucherId, stallPubkey, credential.lockedTo)),
+        sent,
       })
     } catch (e) {
       // Shared with resumeMinting: only a definitive 4xx forgets the row (#160 round 2).
@@ -202,7 +239,7 @@ export function TerminalEnrolPage({
             list, waiting for its device, and that is all. */}
         <PageHeader
           title="Waiting for the device"
-          subtitle={`${issued.name}'s authority is ready`}
+          subtitle={issued.sent ? `Sent to ${issued.name}` : `${issued.name}'s authority is ready`}
         />
         <Panel className="mb-6 p-4">
           <div className="flex items-start gap-3">
@@ -213,10 +250,12 @@ export function TerminalEnrolPage({
                 The device will show the same code when it receives its authority.
               </p>
               <p className="mt-2">
-                It cannot take payments yet. It needs to be finished on that device,
-                with a passphrase set there, and that step is not available in this
-                version. Its row says <span className="font-medium">Waiting for the device</span>{' '}
-                until then, and is cancelled automatically after 24 hours.
+                {issued.sent
+                  ? 'Finish on that device: it shows the same check code, and asks for a passphrase. '
+                  : 'It could not be sent to the device. Cancel it from your terminal list and add the device again. '}
+                It cannot take payments until then. Its row says{' '}
+                <span className="font-medium">Waiting for the device</span> and is cancelled
+                automatically after 24 hours.
               </p>
             </div>
           </div>
@@ -260,6 +299,32 @@ export function TerminalEnrolPage({
         </div>
 
         <RolePicker value={role} onChange={setRole} />
+
+        {/* Decision 2 on #160. On top of the 12-hour session: an unattended till
+            locks itself after this long with no touch. */}
+        <div>
+          <label
+            htmlFor="idle-lock"
+            className="mb-2 block text-sm font-medium text-mono-700 dark:text-mono-300"
+          >
+            Lock when idle
+          </label>
+          <select
+            id="idle-lock"
+            value={idleLock}
+            onChange={(e) => setIdleLock(Number(e.target.value))}
+            className="w-full rounded-xl border border-mono-200 bg-transparent p-3 text-mono-900 dark:border-mono-800 dark:text-mono-50"
+          >
+            {IDLE_LOCK_CHOICES.map((m) => (
+              <option key={m} value={m}>
+                {m === 0 ? 'Never' : `After ${m} minutes`}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1.5 text-xs text-mono-500">
+            The terminal asks for its passphrase again after this long untouched.
+          </p>
+        </div>
 
         <div>
           <span className="mb-2 block text-sm font-medium text-mono-700 dark:text-mono-300">

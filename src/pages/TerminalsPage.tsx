@@ -21,8 +21,12 @@ import {
   revokeTerminalAtMint,
 } from '../lib/terminalRevoke'
 import { ownerTransport, type MintTransport } from '../lib/terminalMint'
+import { collectEnrolled } from '../lib/terminalDeliveryNet'
 import type { CredentialMintApi } from '../lib/credentialRevocation'
 import { legacyApi } from '../lib/legacyBridge'
+
+/** How often the list looks for a device's "I have it" while something is waiting. */
+const ENROLLED_POLL_MS = 5_000
 
 /** The owner's spend client, the one `burn.ts` and decommissioning use. */
 async function ownerSpendApi(): Promise<CredentialMintApi> {
@@ -64,12 +68,15 @@ export function TerminalsPage({
   stallPubkey,
   spendApi = ownerSpendApi,
   transport = ownerTransport,
+  collect = collectEnrolled,
 }: {
   stallPubkey: string
   /** Injected by tests. Spends a credential with the stall's key. */
   spendApi?: () => Promise<CredentialMintApi>
   /** Injected by tests. The owner's NIP-98 signer otherwise. */
   transport?: MintTransport
+  /** Injected by tests. Promotes waiting rows whose device confirmed. */
+  collect?: (stallPubkey: string) => Promise<number>
 }) {
   // Read lazily rather than in an effect. The roster is local storage, so it is
   // available on the first render — going through an effect would paint an
@@ -135,6 +142,27 @@ export function TerminalsPage({
     },
     [stallPubkey, spendApi, refresh],
   )
+
+  // Phase 2: while a row waits, look for its device's enrolled DM, so the row
+  // turns In service without a reload (spec 2.1 step 4).
+  const hasWaiting = terminals.some((t) => t.status === 'waiting' && t.revokedAt === undefined)
+  useEffect(() => {
+    if (!hasWaiting) return
+    let stopped = false
+    const tick = async () => {
+      try {
+        if ((await collect(stallPubkey)) > 0 && !stopped) refresh()
+      } catch {
+        // Offline or locked. Try again on the next tick.
+      }
+    }
+    void tick()
+    const timer = setInterval(() => void tick(), ENROLLED_POLL_MS)
+    return () => {
+      stopped = true
+      clearInterval(timer)
+    }
+  }, [hasWaiting, stallPubkey, collect, refresh])
 
   // Waiting rows past their 24 hours are cancelled when this screen opens
   // (decision 4 on #160). Best effort: one that does not land stays waiting and

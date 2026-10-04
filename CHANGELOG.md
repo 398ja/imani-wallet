@@ -139,6 +139,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A fresh device can become a terminal** (#160, phase 2).
+  - **Setup.** The logged-out screen offers **Set this device up as a terminal** (`/terminal/setup`), only on a device holding no key. The device shows its public key as a QR and as text, and polls the gateway and relay for a credential DM to it.
+  - **Checks.** `terminalEnrol.offersFor` opens each DM with the pending key, inside the module. Every offer must pass `terminalDelivery.offerFromRumor`:
+    - the seal is verified, and the rumor's author must equal the seal's;
+    - the sender must be the stall the credential names;
+    - the credential, from its own signed bytes, is locked to this device and issued by that stall, with a valid signature;
+    - the DM is under 24 hours old.
+  - **Confirmation.** The device shows the stall's public name and the same check code as the owner. The operator confirms, and a credential they reject is never offered again.
+  - **Finishing.** The operator sets a passphrase of at least 8 characters (decision 2). `completeEnrolment` stores the credential, `voucherId` and idle lock, then sends a NIP-17 **enrolled** DM to the stall, sealed by the device key.
+- **The owner's phone sends the credential to the device** (#160, phase 2). After minting, **Add terminal** gift-wraps a `imani-terminal-credential/1` DM to the scanned key, sealed by the stall. It is published to the relay and mirrored to the gateway, the way transfer signatures are. The form gains **Lock when idle**: 10 minutes by default, or Never, 5, 15, 30 or 60 (decision 2). The choice travels in the DM.
+- **Owner side.** The Terminals screen polls for enrolled DMs while a row waits. `markInService` promotes the row whose device key AND voucher id match a notice sealed by that device, with no reload.
+- `Entry` no longer sends a device enrolled as a terminal to `/login`, where its key would open a customer session. It says the till opens in the next version (phase 3).
+
 - **Adding a terminal mints its credential from the owner's phone** (#160, phase 1). **Add
   terminal** now makes one NIP-98 call, signed by the stall, to `POST /api/v1/wallet/vouchers`
   (the body `scripts/mint-terminal-credential.mjs` sends, 365 days). It then waits for the token

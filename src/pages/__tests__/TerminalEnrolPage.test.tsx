@@ -55,6 +55,8 @@ const fakeTransport = {
   sleep: async () => {},
 }
 const spends: string[] = []
+/** Credential DMs the owner's phone published (phase 2). */
+const sentDms: Array<import('nostr-tools').Event> = []
 const fakeSpend = async () => ({
   validateToken: async () => ({ state: 'UNSPENT' }),
   receive: async (token: string) => {
@@ -98,7 +100,13 @@ const { TERMINAL_ROLES } = await import('../../lib/terminalRole')
 function renderPage() {
   return render(
     <MemoryRouter>
-      <TerminalEnrolPage stallPubkey={STALL} transport={fakeTransport} spendApi={fakeSpend} />
+      <TerminalEnrolPage
+        stallPubkey={STALL}
+        transport={fakeTransport}
+        spendApi={fakeSpend}
+        publisher={{ publish: async (w) => (sentDms.push(w), true) }}
+        seal={(borrow) => borrow(STALL_KEY)}
+      />
     </MemoryRouter>,
   )
 }
@@ -121,6 +129,7 @@ beforeEach(() => {
   mintWrongDevice = false
   posts.length = 0
   spends.length = 0
+  sentDms.length = 0
   vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
 })
 afterEach(() => {
@@ -301,7 +310,7 @@ describe('enrolling', () => {
 
     await screen.findByRole('heading', { name: /Waiting for the device/ })
     expect(document.body.textContent).not.toMatch(/can now trade|can trade for your stall/i)
-    expect(document.body.textContent).toMatch(/cannot take payments yet/)
+    expect(document.body.textContent).toMatch(/cannot take payments until then/)
   })
 
   // The owner's list says the same thing as the screen: the row is waiting,
@@ -549,5 +558,33 @@ describe('#160 review: a mint whose answer is lost is not orphaned', () => {
 
     await waitFor(() => expect(screen.getByText(/Two terminals are already waiting/)).toBeTruthy())
     expect(allTerminals(STALL)).toEqual([])
+  })
+})
+
+describe('#160 phase 2: the credential goes to the device', () => {
+  // After minting, the owner's phone DMs the credential to the scanned key,
+  // sealed by the stall, with the idle lock the owner chose (decision 2).
+  it('sends the credential to the device, sealed by the stall, with the chosen idle lock', async () => {
+    const { unwrapSealed } = await import('../../lib/terminalDelivery')
+    await fillEverything()
+    fireEvent.change(screen.getByLabelText('Lock when idle'), { target: { value: '30' } })
+    fireEvent.click(addButton())
+
+    expect(await screen.findByText(/Sent to Front counter/)).toBeTruthy()
+    expect(sentDms).toHaveLength(1)
+    expect(sentDms[0].tags).toEqual([['p', DEVICE]])
+    expect(allTerminals(STALL)[0].idleLockMinutes).toBe(30)
+    // The DM is addressed to the device, so the stall's key cannot open it; its
+    // content is checked end to end in terminalDelivery.test.ts.
+    expect(unwrapSealed(sentDms[0], STALL_KEY)).toBeNull()
+  })
+
+  // Decision 2: the idle lock defaults to 10 minutes and can be switched off.
+  it('defaults the idle lock to 10 minutes, and offers Never', async () => {
+    await fillEverything()
+    const select = screen.getByLabelText('Lock when idle') as HTMLSelectElement
+
+    expect(select.value).toBe('10')
+    expect([...select.options].map((o) => o.textContent)).toContain('Never')
   })
 })
