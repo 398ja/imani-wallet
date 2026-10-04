@@ -4,11 +4,15 @@
 # wait past the recovery grace, and check the customer's relay inbox.
 #
 #   IMAGE=imani-gateway-customer:<tag> OUT=<dir> e2e/stack/crash-mid-sale.sh
+#
+# STACK_UP defaults to e2e/stack/up.sh in this checkout (DEPLOY points that at imani-deploy).
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WALLET="$(cd "$HERE/../.." && pwd)"
-STACK_UP="${STACK_UP:-/home/eric/IdeaProjects/.wt/wallet-e2e/e2e/stack/up.sh}"
+# The stack launcher next to this script, unless STACK_UP names another checkout's.
+STACK_UP="${STACK_UP:-$HERE/up.sh}"
+[ -x "$STACK_UP" ] || { echo "STACK_UP is not an executable stack launcher: $STACK_UP" >&2; exit 2; }
 OUT="${OUT:?set OUT to an output directory}"
 IMAGE="${IMAGE:?set IMAGE to the gateway-customer image}"
 WAIT_AFTER_RESTART="${WAIT_AFTER_RESTART:-480}"

@@ -157,9 +157,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Sell now tells the gateway who a quote-backed coupon is for
   (`PUT /api/v1/wallet/vouchers/{id}/recipient`) before it polls for the token. If the gateway
   crashes mid-sale and finishes the coupon minutes later, after this screen has stopped polling,
-  the gateway sends it to that customer itself. Best effort: an older gateway answers 404 and the
-  sale goes on as before. When the poll runs out, the merchant now reads that the gateway will
-  finish and send the coupon, and not to sell it again, instead of "It has NOT been delivered".
+  the gateway sends it to that customer itself. Best effort and bounded: the registration is
+  abandoned after 5 seconds, so a gateway that never answers cannot stall the sale, and an older
+  gateway's 404 lets the sale go on as before. A failed registration is logged with
+  `console.warn` (voucher prefix and status only, no key or token).
+- **The timeout message tells the truth about who delivers.** When the poll runs out and the
+  gateway accepted the registration, the merchant reads that the gateway will finish and send the
+  coupon, and not to sell it again. When the registration failed, the gateway does not know the
+  customer, so the merchant is told to check the voucher in a few minutes and forward it
+  themselves, instead of being promised a delivery that will not happen.
+- `e2e/stack/crash-mid-sale.sh` uses the `up.sh` next to it unless `STACK_UP` says otherwise,
+  rather than a path on one developer's machine.
 
 ### Changed
 

@@ -14,7 +14,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
  * the sale.
  */
 
-const calls: Array<{ path: string; method: string; body?: Record<string, unknown> }> = []
+const calls: Array<{
+  path: string
+  method: string
+  body?: Record<string, unknown>
+  signal?: AbortSignal
+}> = []
 
 /** When true, the gateway predates #168 and the registration answers 404. */
 let registrationMissing = false
@@ -22,10 +27,18 @@ let registrationMissing = false
 let registrationThrows = false
 /** When true, the coupon never finishes minting within the poll budget. */
 let neverMinted = false
+/** When true, the registration never answers until its signal aborts, as a stalled connection does. */
+let registrationHangs = false
 
 vi.mock('../nip98', () => ({
-  signedFetch: async (path: string, method: string, body?: Record<string, unknown>) => {
-    calls.push({ path, method, body })
+  signedFetch: async (
+    path: string,
+    method: string,
+    body?: Record<string, unknown>,
+    _signer?: unknown,
+    options: { signal?: AbortSignal } = {},
+  ) => {
+    calls.push({ path, method, body, signal: options.signal })
 
     if (path === '/api/v1/portal/vouchers') {
       // Quote-backed: no token yet, so the flow must poll.
@@ -40,6 +53,14 @@ vi.mock('../nip98', () => ({
 
     if (path === '/api/v1/wallet/vouchers/v168/recipient') {
       if (registrationThrows) throw new Error('network down')
+      if (registrationHangs) {
+        // Never answers by itself; only an abort ends it, as fetch rejects on abort.
+        return new Promise((_, reject) => {
+          options.signal?.addEventListener('abort', () =>
+            reject(new DOMException('The operation timed out.', 'TimeoutError')),
+          )
+        })
+      }
       return registrationMissing
         ? { ok: false, status: 404, json: async () => ({}), text: async () => 'not found' }
         : { ok: true, status: 204, json: async () => ({}), text: async () => '' }
@@ -107,6 +128,8 @@ beforeEach(() => {
   registrationMissing = false
   registrationThrows = false
   neverMinted = false
+  registrationHangs = false
+  vi.restoreAllMocks()
 })
 
 describe('registering the customer of a quote-backed sale (gateway-customer#168)', () => {
@@ -119,6 +142,7 @@ describe('registering the customer of a quote-backed sale (gateway-customer#168)
         path: '/api/v1/wallet/vouchers/v168/recipient',
         method: 'PUT',
         body: { recipient_pubkey: CUSTOMER },
+        signal: expect.any(AbortSignal),
       },
     ])
   })
@@ -153,9 +177,9 @@ describe('registering the customer of a quote-backed sale (gateway-customer#168)
     expect(result.vouchers).toHaveLength(1)
   })
 
-  // When polling runs out, the merchant is told the gateway will finish and send the coupon,
-  // not that it was lost, so they do not sell it a second time.
-  it('tells the merchant the gateway will finish a coupon that outlives the poll', async () => {
+  // MEDIUM-2: when the gateway accepted the registration and polling runs out, the merchant is told
+  // the gateway will finish and send the coupon, not that it was lost, so they do not sell it again.
+  it('tells the merchant the gateway will send it when the registration was accepted', async () => {
     neverMinted = true
     vi.useFakeTimers()
     try {
@@ -163,6 +187,62 @@ describe('registering the customer of a quote-backed sale (gateway-customer#168)
       const assertion = expect(run).rejects.toThrow(/sends it to the customer by itself/)
       await vi.runAllTimersAsync()
       await assertion
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // MEDIUM-2: when the registration failed (here a 404 from an older gateway), the gateway does
+  // not know the customer, so the merchant must not be promised a delivery that will not happen.
+  // They are told to check before selling again and to forward it themselves.
+  it('does not promise the gateway will send it when the registration failed', async () => {
+    neverMinted = true
+    registrationMissing = true
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.useFakeTimers()
+    try {
+      const run = issueAndDeliver(params)
+      const assertion = expect(run).rejects.toThrow(
+        /could not be told who the customer is.*forward it to the customer yourself/,
+      )
+      await vi.runAllTimersAsync()
+      await assertion
+      await expect(run).rejects.not.toThrow(/sends it to the customer by itself/)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // MEDIUM-2: a failed registration is logged as a warning naming the voucher only by a prefix and
+  // the HTTP status, with no customer key and no token in it.
+  it('warns, without secrets, when the registration fails', async () => {
+    registrationMissing = true
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await issueAndDeliver(params)
+
+    expect(warn).toHaveBeenCalledTimes(1)
+    const logged = JSON.stringify(warn.mock.calls[0])
+    expect(logged).toContain('404')
+    expect(logged).not.toContain(CUSTOMER)
+    expect(logged).not.toContain('cashu-v168')
+  })
+
+  // MEDIUM-3: the registration carries a deadline, so a gateway that never answers it cannot hold
+  // the sale. After 5 s it is abandoned and the coupon is still polled and delivered.
+  it('gives up on a registration that hangs and still delivers', async () => {
+    registrationHangs = true
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.useFakeTimers()
+    try {
+      const run = issueAndDeliver(params)
+      await vi.advanceTimersByTimeAsync(5_000)
+      await vi.runAllTimersAsync()
+      const result = await run
+
+      expect(result.vouchers).toHaveLength(1)
+      expect(calls.filter((c) => c.path === '/api/v1/dm/tokens/send')).toHaveLength(1)
+      expect(registrations()[0].signal).toBeInstanceOf(AbortSignal)
     } finally {
       vi.useRealTimers()
     }
