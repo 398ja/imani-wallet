@@ -15,7 +15,12 @@ import { schnorr } from '@noble/curves/secp256k1.js'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 import { finalizeEvent } from 'nostr-tools/pure'
 
-import { parseIssuanceWarrant, verifyIssuanceWarrant, warrantSaleDigest } from '../issuanceWarrant'
+import {
+  delegatedSaleDigest,
+  parseIssuanceWarrant,
+  verifyIssuanceWarrant,
+  warrantSaleDigest,
+} from '../issuanceWarrant'
 import {
   DELEGATION_KIND,
   DELEGATION_SCOPE,
@@ -36,6 +41,7 @@ const SALE_TOTAL = 2500
 const DECIMALS = 2
 const UNIT = 'GBP'
 const NONCE = '0f1e2d3c4b5a69788796a5b4c3d2e1f0'
+const REF = 'pi_3PzCard'
 
 function coupon(faceValueMinor = SALE_TOTAL) {
   return { faceValueMinor, unit: UNIT, faceDecimals: DECIMALS }
@@ -56,10 +62,13 @@ function delegation(
   return finalizeEvent(template, hexToBytes(over.signerSk ?? STALL_SK))
 }
 
-/** The delegate's signature over the sale digest, the same bytes `merchant` signs. */
+/** The delegate's signature over the sale digest plus the processor reference. */
 function delegateSig(saleTotal = SALE_TOTAL, issuer = STALL, sk = DELEGATE_SK): string {
   return bytesToHex(
-    schnorr.sign(warrantSaleDigest(issuer, saleTotal, DECIMALS, UNIT, NONCE), hexToBytes(sk)),
+    schnorr.sign(
+      delegatedSaleDigest(issuer, saleTotal, DECIMALS, UNIT, NONCE, REF),
+      hexToBytes(sk),
+    ),
   )
 }
 
@@ -72,7 +81,7 @@ function warrantJson(over: Record<string, unknown> = {}): string {
     nonce: NONCE,
     sig: delegateSig(),
     delegation: delegation(),
-    ref: 'pi_3PzCard',
+    ref: REF,
     ...over,
   })
 }
@@ -210,5 +219,112 @@ describe('the delegation statement on its own', () => {
     expect(verifyIssuerDelegation(d, STALL, NOW_MS).ok).toBe(true)
     const forged = { ...d, sig: 'ff'.repeat(64) }
     expect(verifyIssuerDelegation(forged, STALL, NOW_MS).ok).toBe(false)
+  })
+})
+
+describe('the processor reference is part of what the delegate signed (#176 review)', () => {
+  // Someone rewrites the Stripe reference on a genuine card coupon so the
+  // stall's ledger points at a different payment. The delegate signed the
+  // original reference, so the edited warrant no longer verifies.
+  it('refuses a warrant whose ref was changed after signing', () => {
+    const json = warrantJson({ ref: 'pi_3PzSomeoneElse' })
+    expect(verify(json).verdict).toBe('failed')
+  })
+
+  // Dropping the reference is an edit too: the delegate signed one, and a
+  // warrant without it is not the warrant that was signed.
+  it('refuses a warrant whose ref was removed after signing', () => {
+    const json = warrantJson({ ref: undefined })
+    expect(verify(json).verdict).toBe('failed')
+  })
+
+  // The delegate signing the plain sale digest (the `merchant` bytes, which do
+  // not cover the reference) is not a delegated warrant either.
+  it('refuses a delegate signature over the merchant digest', () => {
+    const merchantBytes = bytesToHex(
+      schnorr.sign(
+        warrantSaleDigest(STALL, SALE_TOTAL, DECIMALS, UNIT, NONCE),
+        hexToBytes(DELEGATE_SK),
+      ),
+    )
+    expect(verify(warrantJson({ sig: merchantBytes })).verdict).toBe('failed')
+  })
+})
+
+describe('the delegation must be the stall issuer-delegation record (#176 review)', () => {
+  /** A stall-signed delegation whose `d` tags are replaced by `dTags`. */
+  function withDTags(dTags: string[][]) {
+    const template = issuerDelegationTemplate({
+      delegatePubkey: DELEGATE,
+      expiresAt: IN_A_YEAR_S,
+      createdAt: Math.floor(NOW_MS / 1000) - 60,
+    })
+    template.tags = [...dTags, ...template.tags.filter((t) => t[0] !== 'd')]
+    return finalizeEvent(template, hexToBytes(STALL_SK))
+  }
+
+  // Another app's kind-30078 record, signed by the same stall key, that happens
+  // to carry p, scope and expiration tags. It was never meant as a delegation.
+  it('refuses a stall-signed event with a foreign d tag', () => {
+    const json = warrantJson({ delegation: withDTags([['d', 'some-other-app:settings']]) })
+    expect(verify(json).verdict).toBe('failed')
+  })
+
+  // No d tag at all is not the addressable delegation record either.
+  it('refuses a stall-signed event with no d tag', () => {
+    expect(verify(warrantJson({ delegation: withDTags([]) })).verdict).toBe('failed')
+  })
+
+  // Two d tags leave "which record is this" to whichever one a reader picks.
+  it('refuses a delegation carrying two d tags', () => {
+    const json = warrantJson({
+      delegation: withDTags([['d', 'imani:issuer-delegation'], ['d', 'other']]),
+    })
+    expect(verify(json).verdict).toBe('failed')
+  })
+})
+
+describe('judging a past sale by when it was issued (#176 review)', () => {
+  const EXPIRES_S = Math.floor(NOW_MS / 1000) + 30 * 86_400
+  const LATER_MS = (EXPIRES_S + 90 * 86_400) * 1000
+  const short = () => delegation({ expiresAt: EXPIRES_S })
+
+  // The stall's own ledger looks back at a card sale made while the delegation
+  // was live. Months later the delegation has lapsed, but the sale was
+  // authorised when it happened, so the ledger still reads it as verified.
+  it('verifies a sale issued inside the delegation window after it lapses', () => {
+    const verdict = verifyIssuanceWarrant(parseIssuanceWarrant(warrantJson({ delegation: short() })), STALL, coupon(), {
+      now: LATER_MS,
+      issuedAt: NOW_MS,
+    })
+    expect(verdict).toEqual({ verdict: 'verified' })
+  })
+
+  // A sale recorded after the delegation lapsed was never authorised by it.
+  it('refuses a sale issued after the delegation expired', () => {
+    const verdict = verifyIssuanceWarrant(parseIssuanceWarrant(warrantJson({ delegation: short() })), STALL, coupon(), {
+      now: LATER_MS,
+      issuedAt: (EXPIRES_S + 1) * 1000,
+    })
+    expect(verdict.verdict).toBe('failed')
+  })
+
+  // A sale recorded before the stall had signed the delegation was not
+  // authorised by it either: the delegation did not exist yet.
+  it('refuses a sale issued before the delegation was created', () => {
+    const verdict = verifyIssuanceWarrant(parseIssuanceWarrant(warrantJson({ delegation: short() })), STALL, coupon(), {
+      now: NOW_MS,
+      issuedAt: NOW_MS - 2 * 86_400_000,
+    })
+    expect(verdict.verdict).toBe('failed')
+  })
+
+  // With no recorded issue time (the till, holding a coupon that carries no
+  // signed issue time) the check stays at the current clock, as before.
+  it('still checks against now when no issue time is known', () => {
+    const verdict = verifyIssuanceWarrant(parseIssuanceWarrant(warrantJson({ delegation: short() })), STALL, coupon(), {
+      now: LATER_MS,
+    })
+    expect(verdict.verdict).toBe('failed')
   })
 })

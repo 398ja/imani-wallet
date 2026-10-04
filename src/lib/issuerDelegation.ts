@@ -101,7 +101,22 @@ export type DelegationVerdict =
   | { ok: false; reason: string }
 
 /**
- * Does this event delegate `coupon:issue` for `issuerId`, as of `nowMs`?
+ * When a delegation must have been in force.
+ *
+ * - A number: the current clock, epoch ms. The delegation must not have
+ *   expired yet. This is what a till can check, because a coupon carries no
+ *   signed issue time (cashu-voucher's secret has none).
+ * - `{ issuedAt }`: the moment the coupon was issued, epoch ms, for a caller
+ *   that recorded it (the stall's own issuance ledger). The delegation must
+ *   have existed and not yet expired then: `created_at <= issuedAt <
+ *   expiration`. A sale made inside the window stays authorised after the
+ *   delegation lapses, which is what stops a past card sale flipping to
+ *   "failed" in the stall's ledger the day the delegation runs out.
+ */
+export type DelegationMoment = number | { issuedAt: number }
+
+/**
+ * Does this event delegate `coupon:issue` for `issuerId`, at `when`?
  *
  * Every check refuses rather than defaults. The order is cheapest-first, but
  * all of them must hold: a delegation that is genuinely signed by the stall but
@@ -110,7 +125,7 @@ export type DelegationVerdict =
 export function verifyIssuerDelegation(
   raw: unknown,
   issuerId: string,
-  nowMs: number,
+  when: DelegationMoment,
 ): DelegationVerdict {
   const refuse = (reason: string): DelegationVerdict => ({ ok: false, reason })
 
@@ -139,6 +154,14 @@ export function verifyIssuerDelegation(
 
   // Exactly one of each. Two `p` tags would leave "which key was delegated"
   // to whichever one a reader happened to pick.
+  //
+  // The `d` tag first: kind 30078 is generic app data, and another app sharing
+  // the stall's key could sign a record that happens to carry `p`, `scope` and
+  // `expiration`. Only the stall's issuer-delegation record delegates.
+  const dTags = tag('d')
+  if (dTags.length !== 1 || dTags[0] !== DELEGATION_D_TAG) {
+    return refuse(`delegation is not the ${DELEGATION_D_TAG} record`)
+  }
   const scopes = tag('scope')
   if (scopes.length !== 1 || scopes[0] !== DELEGATION_SCOPE) {
     return refuse(`delegation scope is not ${DELEGATION_SCOPE}`)
@@ -152,7 +175,16 @@ export function verifyIssuerDelegation(
   if (expirations.length !== 1 || !Number.isSafeInteger(expiresAt)) {
     return refuse('delegation must carry exactly one expiry')
   }
-  if (expiresAt * 1000 <= nowMs) return refuse('delegation has expired')
+  if (typeof when === 'number') {
+    if (expiresAt * 1000 <= when) return refuse('delegation has expired')
+  } else {
+    if (!Number.isSafeInteger(event.created_at) || event.created_at * 1000 > when.issuedAt) {
+      return refuse('the coupon was issued before the delegation was signed')
+    }
+    if (expiresAt * 1000 <= when.issuedAt) {
+      return refuse('the coupon was issued after the delegation expired')
+    }
+  }
 
   return { ok: true, delegatePubkey: delegates[0], expiresAt }
 }

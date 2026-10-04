@@ -110,8 +110,10 @@ export type IssuanceWarrant =
           /** The stall's kind-30078 delegation event, as it arrived. */
           delegation: unknown
           /**
-           * Informational: the card processor's record of the payment, inside
-           * the signed bytes so reconciliation can match it. Not evidence.
+           * Informational: the card processor's record of the payment. Signed
+           * by the delegate (`delegatedSaleDigest`), so an edited reference
+           * fails verification, and reconciliation can trust it. Not evidence
+           * that the payment happened.
            */
           reference?: string
         }
@@ -149,6 +151,39 @@ export function warrantSaleDigest(
     String(faceDecimals),
     unit,
     saleNonce,
+  ].join(FIELD_SEPARATOR)
+  return sha256(new TextEncoder().encode(preimage))
+}
+
+/**
+ * The digest a `delegated` warrant signs: the sale digest's fields plus the
+ * processor reference.
+ *
+ * The reference is what lets a stall match a card coupon to its own payment
+ * dashboard, so it must be the delegate's word and not anyone's later edit.
+ * `warrantSaleDigest` does not cover it, and a `merchant` warrant has no
+ * reference to cover, so the delegated form signs its own preimage: the same
+ * five fields, then the reference (empty when there is none). The sixth field
+ * also keeps these bytes apart from any `merchant` digest.
+ *
+ * Mirrored by `saleDigest` in `services/purchase-issuer/delegatedWarrant.ts`;
+ * that service's tests verify what it signs with this verifier.
+ */
+export function delegatedSaleDigest(
+  issuerId: string,
+  saleTotalMinor: number,
+  faceDecimals: number,
+  unit: string,
+  saleNonce: string,
+  reference: string | undefined,
+): Uint8Array {
+  const preimage = [
+    issuerId,
+    String(saleTotalMinor),
+    String(faceDecimals),
+    unit,
+    saleNonce,
+    reference ?? '',
   ].join(FIELD_SEPARATOR)
   return sha256(new TextEncoder().encode(preimage))
 }
@@ -294,20 +329,27 @@ export type WarrantVerdict =
  * `delegated` is two checks and BOTH must hold (`issuerDelegation.ts`):
  *
  * 1. The delegation is the stall's: signed by `issuerId`, scope
- *    `coupon:issue`, not expired as of `now`.
- * 2. The warrant's signature is the DELEGATE's, over the same sale digest a
- *    `merchant` warrant signs.
+ *    `coupon:issue`, and in force (see `issuedAt` below).
+ * 2. The warrant's signature is the DELEGATE's, over the sale digest plus the
+ *    processor reference (`delegatedSaleDigest`).
  *
  * Only the second would accept a key the attacker made for themselves; only
  * the first would accept any sale by a genuine delegate's stolen delegation.
  *
  * `now` is a parameter so a test can pin the clock; callers omit it.
+ *
+ * `issuedAt` is when the coupon was issued, in epoch ms, for callers that know
+ * it: the stall's own issuance ledger, which recorded the sale. A delegation
+ * is then judged at that moment (`created_at <= issuedAt < expiration`), so a
+ * card sale made while the delegation was live stays verified after it lapses.
+ * Without it the delegation must be unexpired NOW, which is all a till holding
+ * a coupon can check: the voucher carries no signed issue time.
  */
 export function verifyIssuanceWarrant(
   warrant: IssuanceWarrant,
   issuerId: string,
   coupon: CouponUnderWarrant,
-  { now = Date.now() }: { now?: number } = {},
+  { now = Date.now(), issuedAt }: { now?: number; issuedAt?: number } = {},
 ): WarrantVerdict {
   const { faceValueMinor: couponFaceMinor } = coupon
   switch (warrant.state) {
@@ -358,20 +400,34 @@ export function verifyIssuanceWarrant(
   // stall delegated to, but only once the delegation itself has held.
   let signerPubkey = issuerId
   if (warrant.form === 'delegated') {
-    const delegation = verifyIssuerDelegation(warrant.delegation, issuerId, now)
+    const delegation = verifyIssuerDelegation(
+      warrant.delegation,
+      issuerId,
+      issuedAt === undefined ? now : { issuedAt },
+    )
     if (!delegation.ok) {
       return { verdict: 'failed', reason: `warrant delegation refused: ${delegation.reason}` }
     }
     signerPubkey = delegation.delegatePubkey
   }
 
-  const digest = warrantSaleDigest(
-    issuerId,
-    warrant.saleTotalMinor,
-    warrant.faceDecimals,
-    warrant.unit,
-    warrant.saleNonce,
-  )
+  const digest =
+    warrant.form === 'delegated'
+      ? delegatedSaleDigest(
+          issuerId,
+          warrant.saleTotalMinor,
+          warrant.faceDecimals,
+          warrant.unit,
+          warrant.saleNonce,
+          warrant.reference,
+        )
+      : warrantSaleDigest(
+          issuerId,
+          warrant.saleTotalMinor,
+          warrant.faceDecimals,
+          warrant.unit,
+          warrant.saleNonce,
+        )
 
   try {
     const ok = schnorr.verify(hexToBytes(warrant.signature), digest, hexToBytes(signerPubkey))

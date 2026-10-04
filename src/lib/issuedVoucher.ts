@@ -260,11 +260,16 @@ export function issuedVoucher(
   )
 
   const warrant = parseIssuanceWarrant(row.issuanceWarrant)
-  const warrantVerdict = verifyIssuanceWarrant(warrant, stallPubkey, {
-    faceValueMinor: row.amount,
-    unit: row.unit,
-    faceDecimals: row.decimals,
-  })
+  // Judged at the moment the sale was recorded, not today: a card sale made
+  // under a live delegation stays authorised in the stall's ledger after the
+  // delegation lapses (#176 review). A row with no recorded time (0) falls
+  // back to the current clock.
+  const warrantVerdict = verifyIssuanceWarrant(
+    warrant,
+    stallPubkey,
+    { faceValueMinor: row.amount, unit: row.unit, faceDecimals: row.decimals },
+    row.at > 0 ? { issuedAt: row.at } : {},
+  )
 
   const attestation = parseCashAttestation(row.cashAttestation)
   // Checked against the SALE the warrant describes rather than against this
