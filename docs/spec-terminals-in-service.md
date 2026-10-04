@@ -48,7 +48,12 @@ the security fixes the wiring would otherwise expose (section 4.5).
    is refused while two are waiting, with *"Two terminals are already waiting
    for their device. Finish or cancel one first."* Waiting rows do **not** count
    against the free terminal (decision 4), so a botched setup never blocks a
-   retry.
+   retry. gateway-customer enforces the same limit and the 24 hours when the
+   credential is minted (section 5.2), so a second phone or a cleared browser
+   cannot get round it; the wallet's own count is a hint shown before the form.
+   **Add terminal** also refuses a device key that already holds a live
+   credential on the roster: replacing that row would drop the only handle that
+   can revoke the first credential.
 7. The owner chooses the **idle lock** on the same form: on by default at 10
    minutes, adjustable, and it can be switched off (decision 2). It travels to
    the device in the credential DM (section 5.1).
@@ -64,11 +69,15 @@ the security fixes the wiring would otherwise expose (section 4.5).
    *"This code is not a secret. Keep this screen open until setup finishes."*
    The key lives only in memory, so a reload starts over with a new code.
 4. The device polls for a credential DM addressed to its key (section 5.2).
-5. On receipt it shows the stall's public name and the check code, and asks the
-   operator to confirm they match the owner's screen.
+5. The operator scans the **setup code** the owner's screen now shows
+   (section 4.2). The device accepts only the credential DM that code names.
+   On receipt it shows the stall's public name and the check code, and asks
+   the operator to confirm they match the owner's screen.
 6. The operator sets a passphrase (required, **at least 8 characters**,
    decision 2). `completeEnrolment` verifies and stores. The device sends a signed
-   "enrolled" DM back to the stall and lands on the till.
+   "enrolled" DM back to the stall, confirms the credential with
+   gateway-customer (`POST /api/v1/wallet/terminal-credentials/{id}/confirm`),
+   and lands on the till.
 
 ### 2.3 Login and unlock
 
@@ -132,7 +141,7 @@ row is marked revoked only when the spend lands or the mint reports it already
 spent. Otherwise the screen says it did not land and offers a retry.
 
 The device is never consulted, so a lost, stolen or dead device is revoked the
-same way. Effect: Sell is refused within the verifier cache window (60 s), and
+same way. Effect: Sell is refused within the verifier cache window (30 s), and
 the device is refused at its next unlock. A revoked redeem-only terminal that is
 still unlocked can keep showing payment requests until its 12-hour session
 ends. That is harmless by construction: the money goes to the stall (ADR 0005).
@@ -172,7 +181,7 @@ again.
 | G12 | Redeem on a terminal can never see the payment arrive | `wallet:src/pages/RedeemPage.tsx:229` |
 | G13 | The gateway's revocation check reads a status that is hard-coded `ISSUED` | `customer:.../voucher/TerminalCredentialVerifier.java:115`, `customer:.../voucher/VoucherResponseBuilder.java:166` |
 | G14 | Portal Sell refuses any caller acting for another stall | `portal:.../controller/PortalVoucherController.java:684,727-751` |
-| G15 | No `delegated` warrant can be built or verified | `wallet:src/lib/issuanceWarrant.ts:314`, `wallet:src/lib/warrantSigner.ts:186`, `portal:.../warrant/PortalIssuanceWarrant.java:222` |
+| G15 | No `terminal` warrant can be built or verified (there is no form for a terminal's own signature) | `wallet:src/lib/issuanceWarrant.ts:314`, `wallet:src/lib/warrantSigner.ts:186`, `portal:.../warrant/PortalIssuanceWarrant.java:222` |
 
 ## 4. Trust model
 
@@ -228,8 +237,25 @@ outside the module sees `K`'s private half.
 DM it a credential for *their* stall. The device therefore shows the stall's
 public name and a check code, and the operator confirms it matches the owner's
 screen. Check code = first 6 decimal digits of
-`sha256(voucher_id ‖ stall_pubkey ‖ K)`. The gateway chooses `voucher_id`, so
-matching it costs an attacker about 10^6 mints, not an offline grind.
+`sha256(voucher_id ‖ stall_pubkey ‖ K)`.
+
+**The check code is not a grinding bound on its own.** The device checks the
+credential's signature against a key carried inside the token
+(`verifyVoucher`), so an onlooker can self-sign a credential for their own
+stall with any `voucher_id` they like, and matching six digits offline takes
+milliseconds. (An earlier draft said it cost "about 10^6 mints"; that holds
+only if the gateway chose every `voucher_id`, which a self-signed fake does
+not need.) What binds the device to the right stall is the **setup code**:
+after **Add terminal** the owner's screen shows
+`imani-terminal:1:<stall_pubkey>:<voucher_id>` as a QR and text, the operator
+scans it on the device, and the device accepts only a credential DM **sealed
+by that stall** for **that voucher**. Nobody but the stall can seal as the
+stall, so an onlooker's offer is refused (`not-the-expected-offer`) however
+its check code reads, and the device never chooses among offers. The check
+code stays as the operator's confirmation that both screens show the same
+credential. The device also refuses a DM dated more than 5 minutes ahead,
+which would otherwise never go stale, and, where the build sets
+`VITE_VOUCHER_ISSUER_PUBKEYS`, a credential signed by an unknown key.
 
 ### 4.3 Revocation, and the one change to the lock
 
@@ -254,7 +280,7 @@ Propagation: revocation is a spent proof, and every check reads NUT-07.
 | Check | Where | Bites |
 |---|---|---|
 | Terminal unlock | wallet, `credentialState` (`wallet:src/lib/credentialRevocation.ts:70`) via public `/api/v1/wallet/token/validate` | next unlock, at most 12 h |
-| Sell, cashback | gateway-customer verifier, NUT-07 on the stored token (`customer:.../service/ParallelProofStateService.java:78`), cached 60 s, positive answers only | 60 s |
+| Sell, cashback | gateway-customer verifier, NUT-07 on the stored token (via `WalletPort.validateToken`), cached 30 s, positive answers only. Shipped in phase 1 | 30 s |
 | Redeem | none needed: the money goes to the stall | n/a |
 
 ### 4.4 Per-request verification
@@ -275,20 +301,22 @@ the mint is asked (ADR 0006 ordering):
 2. `lock_key == NIP-98 signer`;
 3. `issuer_id == stall_pubkey`;
 4. role permits the action;
-5. **new:** NUT-07 says UNSPENT. Unknown fails closed for issuance.
+5. NUT-07 says UNSPENT. Unknown fails closed for issuance. (Shipped in
+   phase 1, with a check before it that a V27 waiting credential has been
+   confirmed.)
 
 ### 4.5 Threats
 
 | Threat | Mitigation |
 |---|---|
-| Stolen device, locked | `K` is passphrase-encrypted at rest. Owner revokes without the device. Sell refused within 60 s |
+| Stolen device, locked | `K` is passphrase-encrypted at rest. Owner revokes without the device. Sell refused within 30 s |
 | Stolen device, unlocked mid-shift | The idle lock (default 10 minutes) re-locks an unattended till. Otherwise as above. Redeem-only damage is nil (money goes to the stall). Close the stall if Sell must stop sooner |
 | Weak passphrase on a shared till | At least 8 characters, refused before `completeEnrolment` |
-| Owner hoards unconfirmed credentials | At most 2 waiting rows, each cancelled after 24 hours |
+| Owner hoards unconfirmed credentials | At most 2 waiting per stall and a 24-hour lapse, enforced by gateway-customer at mint time (409 `TERMINAL_PENDING_LIMIT`), not only by one phone's roster. An unconfirmed credential may not issue |
 | Modified terminal sells through a licence lapse | The portal refuses terminal Sell for a stall without a current licence beyond its free terminal (section 5.4), from cached state with a 72-hour grace |
 | Replayed enrolment code | `K` is public by design. The pending key lives in memory only, so an old code from a reloaded device yields an inert credential. Waiting rows can be cancelled |
 | Replayed or forwarded credential DM | Inert without `K`. `completeEnrolment` refuses a credential not locked to the pending key (`wallet:src/lib/terminalEnrol.ts:179`) and runs once |
-| Wrong-stall credential (hijack) | Stall name plus check code confirmed by the operator (section 4.2) |
+| Wrong-stall credential (hijack) | The device accepts only the offer the owner's setup code names, sealed by that stall; the operator then confirms stall name and check code (section 4.2) |
 | Edited `localStorage` raises the role | Login derives role, stall and lock from the **token's signed bytes** (`verifyVoucher` plus `issuerAllowlist`), never from stored fields. Closes IW-15 (`wallet:src/lib/terminalEnrol.ts:269-281`) |
 | Edited record names another device | The device key comes from the unlocked signer and must equal `lock_key`. Closes G9 |
 | Terminal mints another terminal | **New refusal:** gateway-customer refuses `merchant_metadata.terminal` or a licence marker when the issuer was resolved from a terminal credential (`customer:.../rest/controller/VoucherController.java:277`). Without it, today's code would let a *Sell and redeem* terminal mint terminal credentials for its stall |
@@ -310,8 +338,15 @@ the mint is asked (ADR 0006 ordering):
   `{"type":"imani-terminal-credential/1","voucher_id","token","stall_pubkey","name","idle_lock_minutes"}`.
   `idle_lock_minutes` is a whole number, `0` meaning off, default `10`. The
   rumor's `created_at` bounds the 24-hour waiting window on the device side.
-- **Waiting rows:** at most 2 per stall, counted from the roster, expired and
-  cancelled after 24 hours. Not counted by the free-terminal allowance.
+- **Waiting rows:** at most 2 per stall, expired and cancelled after 24 hours.
+  Not counted by the free-terminal allowance. The roster's count is a UX hint;
+  gateway-customer is the bound (section 5.2). A `minting` row, with the
+  request's `Idempotency-Key`, is written before the mint request and gains the
+  voucher id when the gateway names it, so a lost answer or a failed cancel is
+  finished or cleared on the next open rather than orphaning a live
+  credential. Cancel also calls `POST /api/v1/wallet/terminal-credentials/{id}/cancel`.
+- **Setup code** (section 4.2): `imani-terminal:1:<stall_pubkey>:<voucher_id>`,
+  shown by the owner after Add, scanned by the device.
 - **Renewal** (section 2.7): the same credential DM, with `"renews":"<old voucher_id>"`.
 - **Enrolled DM** (gift-wrapped to the stall, sealed by `K`):
   `{"type":"imani-terminal-enrolled/1","voucher_id","terminal_pubkey"}`. The
@@ -319,8 +354,17 @@ the mint is asked (ADR 0006 ordering):
   whose seal is not that row's `K`.
 - **Terminal requests:** `signedFetch` with the terminal signer and the
   credential header. No cookie.
-- **Delegated warrant** (phase 5), wire form:
-  `{"form":"delegated","sale_total","face_decimals","unit","nonce","signature","credential"}`.
+- **Terminal warrant** (phase 5), wire form:
+  `{"form":"terminal","sale_total","face_decimals","unit","nonce","signature","credential"}`.
+  Named `terminal`, not `delegated`: `delegated` is already the shipped
+  card-purchase form (a stall-signed `imani:issuer-delegation` event, scope
+  `coupon:issue`, liveness by NIP-40 expiry), whose nonce gc#190's
+  `DelegatedWarrantLedger` spends once. A terminal's evidence is different (a
+  gateway-attested credential, `voucher:issue:<stall>`, liveness by NUT-07,
+  never `coupon:issue`), and the portal splits an oversized Sell into parts
+  under one warrant, so sharing the name would get part 2 refused with 409.
+  Older customer wallets refuse an unknown form, as they refuse `delegated`
+  today, so the new name costs nothing there.
   `signature` is BIP-340 by `K` over the existing `warrantSaleDigest`
   (`issuerId` = the stall). `credential` is the credential's signed voucher
   fields (secret only, never the proof's `C`, so it is not spendable).
@@ -333,8 +377,21 @@ the mint is asked (ADR 0006 ordering):
 - `VoucherController.resolveIssuer` (`:277`): refuse credential-shaped metadata
   (`terminal`, licence marker) when the issuer came from a terminal credential.
   403 `TERMINAL_CANNOT_DELEGATE`.
-- `TerminalCredentialVerifier`: add the NUT-07 step on the stored token, and
-  return the role, so callers other than issuance can use it.
+- `VoucherController`: a terminal credential whose `stall_pubkey` is not the
+  resolved issuer is refused, 400 `TERMINAL_STALL_NOT_ISSUER`, rather than
+  minted without a co-key.
+- `TerminalCredentialVerifier`: the NUT-07 step on the stored token
+  (**shipped in phase 1**, pulled forward by the review): `UNSPENT` admits,
+  `SPENT`, `PENDING` or an unreachable mint refuses issuance, positive answers
+  cached 30 s. Phase 4 adds returning the role, so callers other than issuance
+  can use it.
+- **Waiting credentials (decision 4), phase 1, migration V27**
+  (`terminal_credential_pending`): an owner's terminal-credential mint
+  reserves one of the stall's 2 slots under a per-stall advisory lock, or gets
+  409 `TERMINAL_PENDING_LIMIT`. `POST /api/v1/wallet/terminal-credentials/{id}/confirm`
+  (device or stall; 410 `TERMINAL_CREDENTIAL_EXPIRED` after 24 hours) and
+  `/cancel` (stall). An unconfirmed credential may not issue. One row per
+  waiting credential, not per terminal, and it carries no authority.
 - **New** `GET /internal/v1/terminal-credentials/{voucherId}?caller=<hex>`,
   service-credential only: `200 {"stall","role","lock_key","live":true|false|null,"free":true|false}`
   (`free`: this is the stall's earliest-issued live terminal credential, used by
@@ -363,11 +420,13 @@ the mint is asked (ADR 0006 ordering):
 - `issuingStall` (`:684`) returns the stall from `voucher:issue:<stall>` for a
   terminal. `DelegatedIssuanceUnsupportedException` goes away. A terminal
   without `voucher:issue:` gets 403.
-- Warrant: Sell and cashback accept `delegated` only from a terminal caller, and
-  `merchant` only from the owner. `PortalIssuanceWarrant` verifies `delegated`
-  with cashu-voucher's new `verifyDelegated` and checks the embedded
+- Warrant: Sell and cashback accept `terminal` only from a terminal caller, and
+  `merchant` only from the owner. `PortalIssuanceWarrant` verifies `terminal`
+  with cashu-voucher's new `verifyTerminal` and checks the embedded
   credential's voucher id equals the one that authenticated the request. Nonce
-  single use through `issuance_warrant_use` (portal#54).
+  single use through `issuance_warrant_use` (portal#54), keyed so every part of
+  one split Sell shares it. The `terminal` form is added to
+  `IssuanceWarrantGate.ALL_FORMS` and `WarrantObservability`.
 - **Licence enforcement (decision 3).** Terminal Sell and cashback are refused
   with 402 `TERMINAL_UNLICENSED` when the credential is not the stall's free
   terminal and the stall has no current licence. The internal verifier
@@ -382,20 +441,23 @@ the mint is asked (ADR 0006 ordering):
 
 ### 5.5 cashu-voucher
 
-- `IssuanceWarrant.verifyDelegated(issuerId, credentialFields, signature, …)`:
+- `IssuanceWarrant.verifyTerminal(issuerId, credentialFields, signature, …)`
+  and a new `Form.TERMINAL` (the existing `Form.DELEGATED` stays the
+  card-purchase form):
   the credential's issuer signature verifies, its `issuer_id == issuerId`, its
   metadata is a terminal with an issuing role, and `signature` verifies against
   `lock_key`. The procedure is already specified offline
-  (`core:docs/issuance-authorisation-warrant.md:253,382`). The enum exists
-  (`cashu-voucher:.../domain/IssuanceWarrant.java:126`). The wallet's
-  `verifyIssuanceWarrant` mirrors it in place of the refusal at
-  `wallet:src/lib/issuanceWarrant.ts:314`.
+  (`core:docs/issuance-authorisation-warrant.md:253,382`), there under the
+  name `delegated`, which this spec does not reuse (section 5.1). The wallet's
+  `verifyIssuanceWarrant` gains a `terminal` member that mirrors it.
 
 ## 6. Data model and migrations
 
-**No gateway migrations for terminals.** ADR 0005's property, no row per
-terminal, holds. gateway-customer already stores the credential as an issued
-voucher. Portal reuses `issuance_warrant_use` (`portal:.../db/migration/portal/V9__issuance_warrant_use.sql`).
+**One gateway-customer migration, V27** (`terminal_credential_pending`, phase
+1, decision 4). It bounds credentials *waiting* for their device and records
+when each was confirmed; it is not a per-terminal record of authority, which
+still lives only in the credential. Otherwise ADR 0005's property holds:
+gateway-customer stores the credential as an issued voucher. Portal reuses `issuance_warrant_use` (`portal:.../db/migration/portal/V9__issuance_warrant_use.sql`).
 The one new table is portal's per-stall licence cache for decision 3
 (`stall_licence_state`, phase 5), which is per stall, not per terminal. Its
 Flyway number is chosen against portal's open PRs when phase 5 lands.
@@ -416,14 +478,15 @@ of the owner's own phone, which is the case revocation exists for.
 ## 7. Issuance warrants on a terminal
 
 A terminal's Sell must carry a warrant the customer's wallet verifies, or it is
-refused on receipt (#159). **The terminal key `K` signs, as a `delegated`
-warrant. The owner does not.**
+refused on receipt (#159). **The terminal key `K` signs, as a `terminal`
+warrant. The owner does not.** (Not `delegated`: that name is the shipped
+card-purchase form, section 5.1.)
 
 The owner cannot sign per sale: the digest covers sale total and nonce, which
 only exist at the counter, and a blanket owner signature made in advance is a
 bearer authority to mint, which is what this design refuses. What the owner
 signed in advance is the credential, through the gateway: "this stall lets `K`
-issue". The `delegated` form chains the two, offline: the credential proves the
+issue". The `terminal` form chains the two, offline: the credential proves the
 stall delegated to `K`, and `K`'s signature proves this sale. Liveness is
 checked online at issuance by the portal, so a coupon cannot be minted on a
 revoked credential, and coupons sold before a revocation stay valid, as they
@@ -460,6 +523,12 @@ labelled unit-level shortcut.
 - **E2E:** one API call observed on Add. The token from the roster decodes as
   above. Cancelling the waiting row spends it (NUT-07 `SPENT`).
 
+**Review additions to phase 1 (2026-10-04).** gateway-customer: NUT-07
+liveness on terminal issuance, the server-side waiting limit (V27), and
+refusing a credential whose stall is not its issuer. Wallet: refuse re-adding
+a live device key, the `minting` row and resume, exact co-key set, and phase 0
+token-less waiting rows not counted and removable.
+
 ### Phase 2: the device receives its authority (wallet)
 
 - `/terminal/setup` entry, code screen, DM poll on `K`, stall name and check
@@ -488,6 +557,9 @@ labelled unit-level shortcut.
 
 ### Phase 4: revocation that bites (wallet, customer)
 
+(The gateway's NUT-07 check for issuance already shipped in phase 1. Phase 4
+keeps the unlock-time refusal and returning the role.)
+
 - Owner revoke spends with the stall key (witness for `pubkeys`). Verifier
   NUT-07. Roster marks only on success.
 - **AC:** revoke with B offline, then B is refused at next unlock with
@@ -497,15 +569,16 @@ labelled unit-level shortcut.
 
 ### Phase 5: terminal Sell and cashback (cashu-voucher, customer, core, portal, wallet)
 
-- Depends on portal#54. `verifyDelegated` on both sides. Internal verifier
+- Depends on portal#54. `verifyTerminal` on both sides. Internal verifier
   endpoint. Core permissions with credential. Portal filter, per-method rule,
-  `issuingStall` from credential, `delegated` accepted for terminals only.
+  `issuingStall` from credential, `terminal` accepted for terminals only.
   Portal licence cache and `TERMINAL_UNLICENSED` (decision 3).
-  Wallet builds `delegated` and lifts `mayWarrantSale` and the gates at
+  Wallet builds `terminal` and lifts `mayWarrantSale` and the gates at
   `wallet:src/lib/issue.ts:644` and `wallet:src/lib/cashbackIssue.ts:85`.
 - **AC:** C's wallet accepts a coupon B sold, verdict `verified`. A replayed
-  warrant nonce gets 409. B's credential gets 403 on dashboard, campaigns,
-  policies and SSE. Revoked B gets 403 on Sell within 60 s. A REDUCED B is
+  warrant nonce gets 409. A Sell split into two parts under one `terminal`
+  warrant mints both parts. B's credential gets 403 on dashboard, campaigns,
+  policies and SSE. Revoked B gets 403 on Sell within 30 s. A REDUCED B is
   refused before minting.
 - **E2E:** B sells to C, C holds it. A sees the coupon attributed to B. A
   revokes, B's next Sell is refused.
