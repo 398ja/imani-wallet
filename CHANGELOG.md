@@ -53,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A coupon held for over a week can still be released (#175 review).** Re-offering held
+  coupons looked back from when the message was written, but relays filter on the gift
+  wrap's own timestamp, which NIP-59 backdates by up to two days, so such a wrap was never
+  found. `reofferEvents` now reaches back a further `GIFT_WRAP_BACKDATE_SECONDS` (2 days + 1 h).
 - **A coupon at an unlisted mint is held, never dropped (#133 review).** A refusal used to be
   terminal, so a mismatch between the two services' mint settings (a migration, or an
   internal URL configured for client-side minting) would have discarded every genuine coupon

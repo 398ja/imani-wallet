@@ -1485,7 +1485,10 @@ export function startDmPoll(pubkey: string): DmPollService {
     // Wider than the 24h default. NIP-59 randomises a gift wrap's created_at
     // into the past to frustrate timing analysis, so a coupon sent minutes ago
     // can carry a timestamp from two days back and fall outside a 24h `since`
-    // window — present on the relay, invisible to the wallet.
+    // window — present on the relay, invisible to the wallet. This window is
+    // measured on WRAP time, so it needs no allowance; dm-poll's
+    // `reofferEvents`, which starts from a rumor time, adds
+    // GIFT_WRAP_BACKDATE_SECONDS itself (#175 review).
     recentDmsSince: 7 * 24 * 60 * 60,
     /**
      * The processed set must be able to cover the FETCH WINDOW above.

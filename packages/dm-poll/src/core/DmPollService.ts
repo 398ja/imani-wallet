@@ -21,7 +21,7 @@ import type {
   ReplayResult,
   FailedEvent,
 } from '../types';
-import { DEFAULT_CONFIG } from '../types/config';
+import { DEFAULT_CONFIG, GIFT_WRAP_BACKDATE_SECONDS } from '../types/config';
 
 /**
  * DM Polling Service
@@ -835,8 +835,16 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
    * when its trusted mints change, so a coupon held for a month is still released
    * the moment the configuration names its mint.
    *
+   * `since` is a RUMOR time (when the oldest held message was written), but the
+   * relay filters on the gift wrap's own `created_at`, which NIP-59 backdates by
+   * up to two days. So the query reaches back `GIFT_WRAP_BACKDATE_SECONDS`
+   * further; without that a backdated wrap was filtered out and its coupon,
+   * once held past the poll window, could never be released (#175 review).
+   * The ids are not sent as a filter because the gateway's query honours `ids`
+   * only on its relay fallback, not on its local cache.
+   *
    * @param eventIds - the gift wraps to offer again
-   * @param since - epoch seconds to look back to (the oldest held delivery)
+   * @param since - epoch seconds: the oldest held delivery's rumor time
    * @returns how many of them were redeemed
    */
   async reofferEvents(eventIds: readonly string[], since: number): Promise<number> {
@@ -847,7 +855,11 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
     try {
       const events = await queryAllEvents(
         this.config.nostrdbAdapter,
-        { kinds: [1059], pTags: [this.config.recipientPubkey], since: Math.max(0, Math.floor(since)) },
+        {
+          kinds: [1059],
+          pTags: [this.config.recipientPubkey],
+          since: Math.max(0, Math.floor(since) - GIFT_WRAP_BACKDATE_SECONDS),
+        },
         { log: (m) => console.warn(`[DmPollService] ${m}`) },
       );
       for (const event of events) {

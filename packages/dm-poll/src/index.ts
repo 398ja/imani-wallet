@@ -109,7 +109,7 @@ export type {
   ReplayResult,
 } from './types';
 
-export { DEFAULT_CONFIG } from './types/config';
+export { DEFAULT_CONFIG, GIFT_WRAP_BACKDATE_SECONDS } from './types/config';
 
 // Adapters (re-exported for convenience)
 export type {
