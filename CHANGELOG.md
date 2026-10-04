@@ -63,6 +63,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `max_sats` that is present but not a canonical positive decimal credits 0, because reading it as
   absent would let a holder strip a bound by mangling it. The tag is a plain string tag, so the
   existing canonical bytes already cover it; a Java-signed fixture pins that the two agree.
+- **An untagged locked voucher proof, or one whose own issuer signature does not verify, is
+  credited 0** (imani-gateway-customer#141, security review of #176). The mint signs any blinded
+  output, so the holder of a locked proof can mint a twin with the same secret funded with any
+  plain sats; without a signed `max_sats` its sats say nothing about what the issuer funded.
+  Every locked output the gateway issues now carries `max_sats` from birth
+  (imani-wallet-lib#135), so only pre-#141 locked vouchers are untagged. And callers verified
+  only proof 0's signature, so a self-minted later proof with the same `voucher_id` and lock was
+  credited its full amount: `creditableSats` now verifies every locked proof's signature under
+  proof 0's issuer key. Unlocked `VOUCHER` tokens keep crediting their sats (their signed blob is
+  shared by every proof). **Consumers must act:** a pre-#141 locked voucher (a licence or
+  terminal credential issued before this change) now has a creditable value of 0 at the till and
+  wallet-api `/redeem`; it still verifies, so licence and credential checks are unaffected.
 
 ### Fixed
 

@@ -35,6 +35,16 @@ const token = readFileSync('src/lib/__tests__/fixtures/witness-positive.token', 
 const parsed = parseVoucherToken(token)
 const stall = parsed.voucher.issuerId
 
+/**
+ * A row carrying the gateway's attested value for this coupon. The captured
+ * token is a pre-#141 LOCKED voucher with no `max_sats`, so on its own it is
+ * credited 0 (imani-gateway-customer#141: its sats could be a same-secret
+ * twin's) and would never be a candidate. These tests are about the MINT gate,
+ * which runs before any value is computed, so the control gives it a value the
+ * attested way and the refusals below stay refusals for the mint alone.
+ */
+const attestedRow = { amount: 0, attestedValue: 1, attestedUnit: parsed.voucher.unit }
+
 describe('crediting a coupon depends on where its value is', () => {
   /**
    * The control. With the coupon's own mint trusted, this token is claimable,
@@ -43,7 +53,7 @@ describe('crediting a coupon depends on where its value is', () => {
    */
   it('accepts the coupon when its mint is trusted', () => {
     vi.stubEnv('VITE_TRUSTED_MINT_URLS', parsed.mintUrl)
-    expect(candidateClaim({ amount: 0 }, token, stall)).toBeDefined()
+    expect(candidateClaim(attestedRow, token, stall)).toBeDefined()
   })
 
   /**
@@ -53,7 +63,7 @@ describe('crediting a coupon depends on where its value is', () => {
    */
   it('refuses the same coupon when its mint is not trusted', () => {
     vi.stubEnv('VITE_TRUSTED_MINT_URLS', 'https://mint.example.test')
-    expect(candidateClaim({ amount: 0 }, token, stall)).toBeUndefined()
+    expect(candidateClaim(attestedRow, token, stall)).toBeUndefined()
   })
 
   /**
@@ -65,7 +75,7 @@ describe('crediting a coupon depends on where its value is', () => {
   it('skips the coupon when the gateway has answered and names no mint', async () => {
     vi.stubEnv('VITE_TRUSTED_MINT_URLS', '')
     await gatewayAnswers('')
-    expect(candidateClaim({ amount: 0 }, token, stall)).toBeUndefined()
+    expect(candidateClaim(attestedRow, token, stall)).toBeUndefined()
   })
 
   /**
@@ -74,7 +84,7 @@ describe('crediting a coupon depends on where its value is', () => {
    */
   it('refuses the coupon before the gateway config has been loaded', () => {
     vi.stubEnv('VITE_TRUSTED_MINT_URLS', '')
-    expect(candidateClaim({ amount: 0 }, token, stall)).toBeUndefined()
+    expect(candidateClaim(attestedRow, token, stall)).toBeUndefined()
   })
 })
 

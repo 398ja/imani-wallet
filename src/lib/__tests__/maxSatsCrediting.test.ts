@@ -154,30 +154,110 @@ describe('split parts in one token', () => {
   })
 })
 
-describe('a voucher with no max_sats', () => {
-  // Backward compatibility: every voucher issued before the tag is credited as before.
-  it('is credited exactly as before', () => {
+describe('a locked voucher with no max_sats', () => {
+  // The twin-secret attack: the mint signs any blinded output, so an untagged
+  // locked proof's sats may be a same-secret twin funded today. Its funded
+  // amount is signed nowhere, so it is credited nothing; it still verifies.
+  it('credits 0 sats however many it carries', () => {
     const parsed = parseVoucherToken(cashuB([{ amount: 1024, secret: signedSecret(nonce(1)) }]))
 
-    expect(parsed.creditableSats).toBe(1024)
-    expect(creditableFaceValue(parsed).faceValue).toBe(Math.round(1024 * RATIO))
-    expect(exactFaceValue(parsed)).toBe(1024 * RATIO)
+    expect(parsed.creditableSats).toBe(0)
+    expect(creditableFaceValue(parsed).faceValue).toBe(0)
+    expect(exactFaceValue(parsed)).toBe(0)
     expect(verifyVoucher(parsed.voucher).signatureValid).toBe(true)
   })
 
-  // The face clamp still holds when there is no bound.
-  it('is still clamped to its signed face', () => {
-    const parsed = parseVoucherToken(cashuB([{ amount: 30000, secret: signedSecret(nonce(1)) }]))
+  // An untagged twin riding alongside a bounded proof adds nothing.
+  it('adds nothing next to a bounded proof', () => {
+    const parsed = parseVoucherToken(
+      cashuB([
+        { amount: 4, secret: signedSecret(nonce(1), '4') },
+        { amount: 1024, secret: signedSecret(nonce(2)) },
+      ]),
+    )
 
-    expect(creditableFaceValue(parsed)).toEqual({ faceValue: FACE, cappedAtFaceValue: true })
+    expect(parsed.creditableSats).toBe(4)
   })
 
   // A hand-built ParsedVoucherToken with no creditableSats means "no bound known".
   it('built by hand without creditableSats falls back to tokenAmount', () => {
-    const parsed = parseVoucherToken(cashuB([{ amount: 100, secret: signedSecret(nonce(1)) }]))
+    const parsed = parseVoucherToken(cashuB([{ amount: 100, secret: signedSecret(nonce(1), '100') }]))
     const withoutBound = { ...parsed, creditableSats: undefined }
 
     expect(creditableFaceValue(withoutBound).faceValue).toBe(50)
+  })
+})
+
+describe('a bounded voucher funded past its face', () => {
+  // The face clamp still holds on top of the bound.
+  it('is still clamped to its signed face', () => {
+    const parsed = parseVoucherToken(cashuB([{ amount: 30000, secret: signedSecret(nonce(1), '30000') }]))
+
+    expect(creditableFaceValue(parsed)).toEqual({ faceValue: FACE, cappedAtFaceValue: true })
+  })
+})
+
+describe('a forged later proof', () => {
+  /**
+   * Callers verify proof 0's signature only. A later proof with the same
+   * voucher_id and lock but a signature the issuer never made (self-minted,
+   * untagged or carrying any bound it likes) must credit 0, not its amount.
+   */
+  function forged(nonceHex: string, maxSats?: string): string {
+    const genuine = JSON.parse(signedSecret(nonceHex, maxSats)) as [string, { tags: string[][] }]
+    genuine[1].tags = genuine[1].tags.map((t) => (t[0] === 'issuer_sig' ? ['issuer_sig', '00'.repeat(64)] : t))
+    return JSON.stringify(genuine)
+  }
+
+  // Untagged and forged: the review's MEDIUM finding.
+  it('credits 0 when untagged', () => {
+    const parsed = parseVoucherToken(
+      cashuB([
+        { amount: 1, secret: signedSecret(nonce(1), '1') },
+        { amount: 1024, secret: forged(nonce(2)) },
+      ]),
+    )
+
+    expect(verifyVoucher(parsed.voucher).signatureValid).toBe(true)
+    expect(parsed.creditableSats).toBe(1)
+    expect(creditableFaceValue(parsed).faceValue).toBe(Math.round(1 * RATIO))
+  })
+
+  // Forged with a generous bound it wrote itself.
+  it('credits 0 when it carries a bound of its own', () => {
+    const parsed = parseVoucherToken(
+      cashuB([
+        { amount: 1, secret: signedSecret(nonce(1), '1') },
+        { amount: 1024, secret: forged(nonce(2), '1024') },
+      ]),
+    )
+
+    expect(parsed.creditableSats).toBe(1)
+  })
+
+  // Validly signed, but by a different key than proof 0's issuer.
+  it('credits 0 when signed by another key', () => {
+    const otherPriv = schnorr.utils.randomSecretKey()
+    const otherPub = bytesToHex(schnorr.getPublicKey(otherPriv))
+    const theirs = JSON.parse(signedSecret(nonce(2), '1024')) as [string, { tags: string[][] }]
+    const tags = theirs[1].tags.filter((t) => t[0] !== 'issuer_sig' && t[0] !== 'issuer_pubkey')
+    const rendered = tags
+      .map(([key, ...values]) =>
+        `["${key}"${values.map((v) => ',' + (['face_value', 'issuance_ratio'].includes(key) ? v : `"${v}"`)).join('')}]`,
+      )
+      .join(',')
+    const canonical = new TextEncoder().encode(`["P2PK_VOUCHER","${LOCK_KEY}","${nonce(2)}",[${rendered}]]`)
+    const sig = bytesToHex(schnorr.sign(sha256(canonical), otherPriv))
+    theirs[1].tags = [...tags, ['issuer_sig', sig], ['issuer_pubkey', otherPub]]
+
+    const parsed = parseVoucherToken(
+      cashuB([
+        { amount: 1, secret: signedSecret(nonce(1), '1') },
+        { amount: 1024, secret: JSON.stringify(theirs) },
+      ]),
+    )
+
+    expect(parsed.creditableSats).toBe(1)
   })
 })
 
