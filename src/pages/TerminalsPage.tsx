@@ -177,7 +177,14 @@ function TerminalRow({
                 rather than showing a blank where a date should be — "never
                 used" is the useful answer when an owner is deciding which of
                 two devices they have forgotten about. */}
-            {label.name} · {terminal.lastUsedAt ? `Last used ${formatDate(terminal.lastUsedAt)}` : 'Never used'}
+            {label.name} ·{' '}
+            {/* A waiting row has never reached its device, so "Never used"
+                would read as a till that is ready and idle (#160). */}
+            {terminal.status === 'waiting' && !revoked
+              ? 'Waiting for the device'
+              : terminal.lastUsedAt
+                ? `Last used ${formatDate(terminal.lastUsedAt)}`
+                : 'Never used'}
           </p>
         </div>
         {!revoked && onAskRevoke && !confirming ? (

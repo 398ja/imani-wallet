@@ -22,7 +22,11 @@ import type { VoucherRow } from '@imani/wallet-storage'
 
 const saved: Array<{ privkeyHex: string; passphrase: string }> = []
 vi.mock('../nap', () => ({
-  keyStore: { save: async (k: string, p: string) => void saved.push({ privkeyHex: k, passphrase: p }) },
+  keyStore: {
+    save: async (k: string, p: string) => void saved.push({ privkeyHex: k, passphrase: p }),
+    // An empty device: the only kind setup may complete on (#160 phase 0).
+    hasKey: async () => false,
+  },
 }))
 
 const { checkEnrolment, prepareEnrolment, ENROLMENT_REFUSAL } = await import('../terminalIssue')
@@ -39,7 +43,13 @@ const ISSUER = parsed.voucher.issuerPublicKey
 const EXPIRES_AT = parsed.voucher.expiresAt!
 /** The licence is locked to this key, so it is the stall for these tests. */
 const STALL = '4728fd8ad6a2f5c8930f4065347907e22186fba6c73bd04e145dfd780b98e451'
-const TERMINAL = 'c'.repeat(64)
+/**
+ * A key that is a real point on the curve. `'c'.repeat(64)` used to stand in
+ * here, and is not one: phase 0 of #160 refuses such keys, as it should.
+ */
+const TERMINAL = 'd'.repeat(64)
+/** 64 hex characters that are nobody's key: no point on secp256k1 has this x. */
+const OFF_CURVE = 'c'.repeat(64)
 /** Somebody else's stall, for the cross-stall attack below. */
 const OTHER_STALL = 'b'.repeat(64)
 const DAY = 86_400
@@ -291,5 +301,37 @@ describe('the whole handshake', () => {
       /not a valid authority/,
     )
     expect(saved).toEqual([])
+  })
+})
+
+describe('#160 phase 0: a code that is nobody\'s key', () => {
+  // A 64-character code that is not a point on the curve is a key no device
+  // holds. The gateway would quietly mint an UNLOCKED credential for it, a
+  // bearer authority to the stall, so the owner is refused before any mint.
+  it('refuses an off-curve key before anything is issued', async () => {
+    const check = checkEnrolment(
+      request({ terminalPubkey: OFF_CURVE }),
+      context({ licence: await subscribed() }),
+    )
+    expect(check.ready).toBe(false)
+    if (!check.ready) {
+      expect(check.reason).toBe(ENROLMENT_REFUSAL.NOT_A_KEY)
+      expect(check.message).toMatch(/not a terminal code/)
+    }
+  })
+
+  // And `prepareEnrolment`, which is what a mint call would be built from,
+  // cannot be reached with one either.
+  it('cannot prepare a credential for an off-curve key', async () => {
+    const licence = await subscribed()
+    expect(() =>
+      prepareEnrolment(request({ terminalPubkey: OFF_CURVE }), context({ licence })),
+    ).toThrow(/not a terminal code/)
+  })
+
+  // The control: a real key passes, so the check is not refusing everything.
+  it('accepts a key that is a real point', async () => {
+    const check = checkEnrolment(request(), context({ licence: await subscribed() }))
+    expect(check.ready).toBe(true)
   })
 })
