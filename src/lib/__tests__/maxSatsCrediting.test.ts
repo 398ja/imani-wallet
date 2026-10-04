@@ -355,4 +355,36 @@ describe('a max_sats secret signed by the Java issuer', () => {
     expect(tampered).not.toBe(fixture.bound1)
     expect(verifyVoucher(parsed.voucher).signatureValid).toBe(false)
   })
+
+  // Round 5 (LOW-3): the Java-signed bound1 proof next to Java's bound64 with
+  // its issuer signature zeroed. Same voucher, same issuer, but the issuer
+  // never signed that second proof, so it credits 0 and the token is worth
+  // 1 sat, not 1 + 64. (With the issuer_sig tag removed entirely the token is
+  // refused outright, which is stricter still.)
+  it('credits 1 sat for bound1 plus an unsigned bound64', () => {
+    const unsigned = JSON.parse(fixture.bound64) as [string, { tags: string[][] }]
+    unsigned[1].tags = unsigned[1].tags.map((t) =>
+      t[0] === 'issuer_sig' ? ['issuer_sig', '00'.repeat(64)] : t,
+    )
+    const stripped = JSON.parse(fixture.bound64) as [string, { tags: string[][] }]
+    stripped[1].tags = stripped[1].tags.filter((t) => t[0] !== 'issuer_sig')
+
+    const parsed = parseVoucherToken(
+      cashuB([
+        { amount: 1024, secret: fixture.bound1 },
+        { amount: 1024, secret: JSON.stringify(unsigned) },
+      ]),
+    )
+
+    expect(verifyVoucher(parsed.voucher).signatureValid).toBe(true)
+    expect(parsed.creditableSats).toBe(1)
+    expect(() =>
+      parseVoucherToken(
+        cashuB([
+          { amount: 1024, secret: fixture.bound1 },
+          { amount: 1024, secret: JSON.stringify(stripped) },
+        ]),
+      ),
+    ).toThrow(/missing issuer_sig/)
+  })
 })

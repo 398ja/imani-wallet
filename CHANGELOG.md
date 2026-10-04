@@ -94,6 +94,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is still the safest choice:** the exposure it accepts is a few vouchers, each bounded by its own
   signed face and the shared ledger, while crediting 0 would strand those holders' money for no
   measurable gain, and a redeemer has no issuance record to bound them more tightly. No code change.
+- **Test: a Java-signed `max_sats` 1 proof next to an unsigned `max_sats` 64 proof credits 1 sat**
+  (imani-gateway-customer#141, round 5 review LOW-3). Pins, with real Java-signed bytes, that an
+  unsigned later proof credits 0, and that one with no `issuer_sig` at all is refused. No code change.
 
 ### Fixed
 
