@@ -781,9 +781,24 @@ function exactOf(token: string | undefined): number | undefined {
  * refusal one line later, after `redeem()`, would already have taken the money
  * at the mint and left the customer with neither the coupon nor the goods.
  *
+ * **Every recipient refuses, not only the issuing stall (#159, Option B).**
+ * Unlike `refuseIfAnotherStalls`, this has no merchant guard, deliberately: a
+ * customer's wallet receiving a coupon by DM refuses it exactly as the issuing
+ * stall's till would. The alternative — refusing only at the till and letting
+ * customers hold these — was rejected because it lets a customer pay for a
+ * coupon the stall that issued it will then refuse to honour. Refusing on
+ * receipt keeps the coupon the sender's (it reclaims at their next login)
+ * rather than the customer's useless asset.
+ *
+ * The cost is that a sale that cannot produce a verifiable warrant cannot be
+ * delivered to anyone. A terminal is the case that matters: its key is not
+ * the stall's, so it can only send `none`. Sell therefore refuses on a
+ * terminal before anything is minted (`mayWarrantSale` in warrantSigner.ts),
+ * until the `delegated` warrant form is supported.
+ *
  * All three unauthorised states are refused together — no warrant, a warrant
  * signed as `none`, and a warrant that was present and did not hold. They are
- * different claims and the merchant-facing copy says so, but at the till they
+ * different claims and the merchant-facing copy says so, but on receipt they
  * have one answer: nobody outside the service that minted this says the stall
  * it names issued it.
  *

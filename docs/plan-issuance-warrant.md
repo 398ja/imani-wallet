@@ -99,11 +99,28 @@ a forgery showed red, an absence showed green. The scheme was opt-out for
 exactly the party it was written to catch.
 
 Now all three unauthorised states fail validation and are refused at redemption
-before the mint swap (`refuseIfUnwarranted`), and the send screen flags them
-(`isWarranted`). Sending is flagged rather than blocked: refusing to let a
-customer spend money already in their wallet punishes them for an issuer's
-omission, and the refusal that matters belongs where the defrauded party is the
-one deciding.
+before the mint swap (`refuseIfUnwarranted`).
+
+**Every recipient refuses, not only the issuing stall (#159, Option B).** An
+earlier draft of this section said the refusal belonged at the till and that
+customers would merely be warned on the send screen (`isWarranted`). The code
+never matched that: `refuseIfUnwarranted` runs in the redemption adapter of
+every wallet receiving a coupon by DM, with no merchant guard, so a customer's
+wallet refuses `absent`, `unwarranted` and `failed` coupons too. #159 kept that
+behaviour deliberately: refusing on receipt never lets a customer pay for a
+coupon the issuing stall will then refuse at its till, whereas refusing only at
+the till (Option A) would deliver exactly those coupons. `isWarranted` is not
+wired into any screen; it remains for coupons that reached a wallet without the
+receive-time check (rows from before warrants were checked, cashback claims,
+which record the verdict without refusing).
+
+The consequence is that a terminal, which can only send a signed `none`, cannot
+sell a coupon anyone will accept. Sell and cashback therefore refuse on a
+terminal before anything is minted (`mayWarrantSale` / `assertSaleWarranted` in
+`warrantSigner.ts`, used by `issue.ts` and `cashbackIssue.ts`), and also refuse
+an owner issue whose warrant would be `none` or absent, until the `delegated`
+form below is implemented. Cashback needs this even though its claim does not
+refuse: the issuing stall's till refuses the coupon when it is spent.
 
 Two states deliberately do **not** fail. `claimed` is a real external claim
 this build cannot check offline, and failing it would refuse every card-funded
