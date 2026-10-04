@@ -63,13 +63,19 @@ ARG VITE_GOOGLE_CLIENT_ID
 ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
 
 # The mints this build credits coupons from, comma-separated (src/lib/trustedMint.ts).
-# Not a secret: it is a URL the browser already talks to. It must be set per environment,
-# because the only other source is the gateway's config, and a wallet that has not received
-# that config, or is pointed at a gateway that names no mint, then trusts nothing in
-# particular and credits from anywhere (imani-wallet#133). Setting it here makes the
-# trusted mint a property of the build rather than of whatever the network said.
+# Not a secret: it is a URL the browser already talks to. Set per environment, as
+# the PUBLIC mint URL tokens carry in `m` (e.g. https://mint.staging.398ja.xyz).
+#
+# Since #133 the wallet also learns the mint from /api/v1/config at start-up, before
+# its first receive, so an image without this is still gated. Setting it means the
+# gate needs no network answer at all, which is why an unset value is announced
+# loudly here rather than failing the build: imani-deploy's beta build does not pass
+# it yet, and failing would break that pipeline for a defence-in-depth setting.
 ARG VITE_TRUSTED_MINT_URLS
 ENV VITE_TRUSTED_MINT_URLS=$VITE_TRUSTED_MINT_URLS
+RUN if [ -z "$VITE_TRUSTED_MINT_URLS" ]; then \
+      echo "WARNING: VITE_TRUSTED_MINT_URLS is unset. The trusted-mint gate will rely on /api/v1/config alone (imani-wallet#133)." >&2; \
+    fi
 
 COPY . .
 # `tsc -b && vite build`. The tsc half typechecks ./packages AND ../nap through

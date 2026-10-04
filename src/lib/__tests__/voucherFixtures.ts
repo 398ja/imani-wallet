@@ -165,6 +165,51 @@ export function buildVoucherToken(
   return { token: `cashuB${base64Url(root)}`, voucher }
 }
 
+/**
+ * A plain ecash TokenV4: bearer secrets, no voucher, at whatever mint and unit
+ * the test names.
+ *
+ * The mint gate is about where the PROOFS are, which is a question every token
+ * answers, voucher or not. A rogue mint does not need to forge a coupon to be
+ * credited, so the gate has to be tested on ordinary ecash too.
+ */
+export function buildPlainToken(mintUrl: string, unit = 'sat', amounts: number[] = [8, 2]): string {
+  const proofs = amounts.map((amount, i) =>
+    bytes(
+      head(5, 3),
+      tstr('a'),
+      uint(amount),
+      tstr('s'),
+      tstr(`plain-bearer-secret-${i}`),
+      tstr('c'),
+      // A compressed point's worth of bytes. The gate never reads it.
+      bytes(head(2, 33), ...new Uint8Array(33).fill(2)),
+    ),
+  )
+  const entry = bytes(
+    head(5, 2),
+    tstr('i'),
+    bytes(head(2, 8), ...new Uint8Array(8).fill(1)),
+    tstr('p'),
+    head(4, proofs.length),
+    ...proofs,
+  )
+  const root = bytes(head(5, 3), tstr('m'), tstr(mintUrl), tstr('u'), tstr(unit), tstr('t'), head(4, 1), entry)
+  return `cashuB${base64Url(root)}`
+}
+
+/**
+ * A legacy TokenV3 (`cashuA`, base64url JSON). Its unit is optional and, absent,
+ * means sat, which is the case `withUnit: undefined` builds.
+ */
+export function buildLegacyToken(mintUrl: string, withUnit?: string): string {
+  const json = JSON.stringify({
+    token: [{ mint: mintUrl, proofs: [{ amount: 8, id: '00ad268c4d1f5826', secret: 'legacy-secret', C: '02'.repeat(33) }] }],
+    ...(withUnit === undefined ? {} : { unit: withUnit }),
+  })
+  return `cashuA${base64Url(new TextEncoder().encode(json))}`
+}
+
 /** The JSON envelope the gateway sends, around whatever token you hand it. */
 export function dmEnvelope(token: string, claims: Record<string, unknown> = {}): string {
   return JSON.stringify({ type: 'cashu_token_transfer', token, ...claims })

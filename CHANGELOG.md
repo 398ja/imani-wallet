@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **The trusted-mint gate is on by default, in every build (#133).** The 0.10.0 fix set
+  `VITE_TRUSTED_MINT_URLS` for staging, but the gate's other source was a script only the
+  legacy bridge loaded, and its absence read as "this deployment names no mint". So a local
+  or beta build, or any path that had not touched the bridge, answered `unchecked` and
+  credited coupons from any mint. Now the wallet asks `/api/v1/config` for the gateway's mint
+  (`mint_url`, the public URL stamped in every token) at start-up, and the coupon poller waits
+  for that answer before its first receive. Until it arrives the list is unknown, which is
+  never read as "no mint": a coupon that arrives meanwhile is held back and received on a
+  later poll, not waved through and not dropped.
+- **A received coupon is refused unless its value is at the trusted mint, in sat (#131).**
+  dm-poll now asks the wallet where a token's value is before every redemption
+  (`RedemptionAdapter.checkBacking`, which replaces an optional `getMintUrl` hook nothing
+  called), and the wallet's answer reads plain ecash and legacy `cashuA` tokens as well as
+  vouchers. A rogue mint, a foreign unit or an unreadable token is refused before the mint
+  swap, and the stall is told why ("Coupon not backed by this market"). Mint URLs are compared
+  as URLs: scheme and host case, a default port and a trailing slash do not matter, while a
+  different host, port, scheme or path does. The vouchers' face currency (EUR, XAF, GBP) is
+  not what is checked: their proofs are always sat.
+- **The wallet-side receive refuses unless the mint is positively trusted (#133).** It swaps
+  at the token's own mint, so an attacker naming their mint would be paid. It now fails
+  closed: an unknown trusted list, or a deployment that names no mint, is refused rather than
+  swapped. The crediting paths keep accepting a gateway that has answered and named no mint,
+  because there the coupon is already held and refusing would strand it. This path is not
+  switched on yet (#123).
+- **A coupon that arrived before the trusted list loaded is no longer lost.** It used to be
+  refused at unwrap, which marked its delivery as handled for good. It is now deferred at
+  redemption and offered again.
+- The Docker build warns when `VITE_TRUSTED_MINT_URLS` is unset. The gate no longer depends
+  on it, but naming the mint in the build means it needs no network answer at all.
+
 ## [0.13.0] - 2026-10-04
 
 ### Fixed

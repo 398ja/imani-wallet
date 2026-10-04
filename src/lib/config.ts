@@ -35,6 +35,15 @@ export interface GatewayConfig {
    * would take the feature down for no safety gain.
    */
   cashbackExpiryDays: number
+  /**
+   * The mint this deployment's coupons are backed at, as stamped into each token's
+   * `m` field (the gateway's PUBLIC mint URL), or '' when the gateway names none.
+   *
+   * The trusted-mint gate's gateway source (`trustedMint.loadTrustedMints`, #133).
+   * '' is a real answer, "this deployment names no mint", and is distinct from the
+   * config not having arrived, which the gate tracks itself.
+   */
+  mintUrl: string
 }
 
 /** What a cashback code is worth when the gateway names no term of its own. */
@@ -46,6 +55,7 @@ interface RawConfig {
   blossom_server_url?: unknown
   cashback_origins?: unknown
   cashback_expiry_days?: unknown
+  mint_url?: unknown
 }
 
 function str(value: unknown): string | undefined {
@@ -86,6 +96,7 @@ async function fetchConfig(): Promise<GatewayConfig> {
         })
       : [],
     cashbackExpiryDays: positiveInt(raw.cashback_expiry_days) ?? DEFAULT_CASHBACK_EXPIRY_DAYS,
+    mintUrl: str(raw.mint_url) ?? '',
   }
 }
 

@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { nostrdbAdapter, startDmPoll, stopDmPoll } from '../dmPoll'
+import { checkMintAndUnit } from '../trustedMint'
+import { gatewayAnswers, resetGate } from './trustedMintKit'
 
-const fake = vi.hoisted(() => ({ fetchRecentDms: vi.fn(async () => []) }))
+const fake = vi.hoisted(() => ({
+  fetchRecentDms: vi.fn(async () => []),
+  start: vi.fn(async () => {}),
+}))
 vi.mock('@imani/dm-poll', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
-  createDmPollService: () => ({ ...fake, start: async () => {}, stop: () => {} }),
+  createDmPollService: () => ({ ...fake, stop: () => {} }),
 }))
 
 /**
@@ -155,28 +160,128 @@ describe('startDmPoll — catch-up after a gap', () => {
   afterEach(() => {
     stopDmPoll()
     fake.fetchRecentDms.mockClear()
+    resetGate()
   })
 
-  it('re-queries when the SSE stream reconnects', () => {
+  /** A reconnect re-runs the catch-up the SSE gap may have missed. */
+  it('re-queries when the SSE stream reconnects', async () => {
+    await gatewayAnswers('https://mint.staging.398ja.xyz')
     startDmPoll('b'.repeat(64))
     fake.fetchRecentDms.mockClear()
     subscribe().source.onopen!()
-    expect(fake.fetchRecentDms).toHaveBeenCalled()
+    await vi.waitFor(() => expect(fake.fetchRecentDms).toHaveBeenCalled())
   })
 
-  it('re-queries when the app comes back to the foreground', () => {
+  /** Returning to the foreground re-runs the catch-up a frozen WebView missed. */
+  it('re-queries when the app comes back to the foreground', async () => {
+    await gatewayAnswers('https://mint.staging.398ja.xyz')
     startDmPoll('c'.repeat(64))
     fake.fetchRecentDms.mockClear()
     fire('visibilitychange')
-    expect(fake.fetchRecentDms).toHaveBeenCalled()
+    await vi.waitFor(() => expect(fake.fetchRecentDms).toHaveBeenCalled())
   })
 
-  it('stops listening once the poller is stopped', () => {
+  /** A stopped poller does not keep querying on visibility changes. */
+  it('stops listening once the poller is stopped', async () => {
     startDmPoll('d'.repeat(64))
     stopDmPoll()
     fake.fetchRecentDms.mockClear()
     fire('visibilitychange')
+    await new Promise((resolve) => setTimeout(resolve, 0))
     expect(fake.fetchRecentDms).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * #133: the trusted-mint list is loaded BEFORE the poller's first catch-up.
+ *
+ * That catch-up redeems at once, and every redeem asks the mint gate. Started
+ * first, it would meet an unknown list and defer the whole backlog; worse, before
+ * this fix the unknown list read as "no mint configured" and passed everything.
+ */
+describe('startDmPoll — the trusted mint is known before the first receive', () => {
+  const target = { addEventListener: () => {}, removeEventListener: () => {} }
+
+  beforeEach(() => {
+    vi.stubGlobal('document', { ...target, visibilityState: 'visible' })
+    vi.stubGlobal('window', target)
+    vi.stubEnv('VITE_TRUSTED_MINT_URLS', '')
+    resetGate()
+    fake.start.mockClear()
+  })
+
+  afterEach(() => {
+    stopDmPoll()
+    vi.unstubAllEnvs()
+    resetGate()
+  })
+
+  /**
+   * The order is the point: when `start()` runs, the gate already knows the
+   * gateway's mint, so a rogue token in the first catch-up is refused rather than
+   * deferred or passed.
+   */
+  it('fetches /api/v1/config and learns the mint before starting the poller', async () => {
+    let release!: () => void
+    const configAnswered = new Promise<void>((resolve) => (release = resolve))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        expect(url).toBe('/api/v1/config')
+        await configAnswered
+        return Response.json({ nip05_domain: 'imani.test', mint_url: 'https://mint.staging.398ja.xyz' })
+      }),
+    )
+    const verdictAtStart: string[] = []
+    fake.start.mockImplementation(async () => {
+      verdictAtStart.push(checkMintAndUnit({ mintUrl: 'https://rogue.example.test', unit: 'sat' }))
+    })
+
+    startDmPoll('e'.repeat(64))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(fake.start).not.toHaveBeenCalled()
+
+    release()
+    await vi.waitFor(() => expect(fake.start).toHaveBeenCalledTimes(1))
+    expect(verdictAtStart).toEqual(['untrusted-mint'])
+  })
+
+  /**
+   * A gateway that cannot be reached must not keep coupons from arriving for ever.
+   * The poller still starts; the gate defers until a later catch-up loads the list.
+   */
+  it('still starts the poller when the config cannot be fetched', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('network down')
+      }),
+    )
+
+    startDmPoll('f'.repeat(64))
+
+    await vi.waitFor(() => expect(fake.start).toHaveBeenCalledTimes(1))
+    expect(checkMintAndUnit({ mintUrl: 'https://rogue.example.test', unit: 'sat' })).toBe('not-ready')
+  })
+
+  /** A poller stopped (logout) while the config was in flight is not started afterwards. */
+  it('does not start a poller that was stopped while the config was loading', async () => {
+    let release!: () => void
+    const configAnswered = new Promise<void>((resolve) => (release = resolve))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        await configAnswered
+        return Response.json({ nip05_domain: 'imani.test', mint_url: 'https://mint.staging.398ja.xyz' })
+      }),
+    )
+
+    startDmPoll('9'.repeat(64))
+    stopDmPoll()
+    release()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    expect(fake.start).not.toHaveBeenCalled()
   })
 })
 

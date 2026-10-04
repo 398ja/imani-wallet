@@ -71,6 +71,25 @@ export const REFUSAL_MESSAGES: Record<RefusalReason, { title: string; detail: st
     title: 'That coupon is already spent',
     detail: 'It has paid out everything it was issued for. Nothing was taken.',
   },
+  /**
+   * The coupon may look perfect: the issuer signature covers no mint, so a copy
+   * backed by someone else's money verifies like the real one (#131). Worded so
+   * the stall does not accuse the customer, who may simply have been given it.
+   */
+  'untrusted-mint': {
+    title: 'Coupon not backed by this market',
+    detail:
+      'Its value is held somewhere this wallet does not recognise. Nothing was taken. ' +
+      'Ask the customer where they got it.',
+  },
+  'wrong-unit': {
+    title: 'Coupon in a form this wallet cannot take',
+    detail: 'Its value is in a unit this wallet does not handle. Nothing was taken.',
+  },
+  undecodable: {
+    title: 'Coupon could not be read',
+    detail: 'The coupon arrived damaged or in a form this wallet does not understand. Nothing was taken.',
+  },
 }
 
 /**

@@ -256,13 +256,13 @@ That is a narrow enough contract to state as a test rather than a convention.
 
 ## The wallet pins the mint and unit before crediting
 
-A received voucher is credited today without checking which mint issued the
-proofs or what unit they are in. `voucherToken.ts` reads the token's `m` and `u`
-and checks neither, and the `getMintUrl` hook is optional. So a copy of a signed
-voucher secret, backed by proofs from a mint nobody trusts, is credited as
-money.
+When this note was drafted, a received voucher was credited without checking which
+mint issued the proofs or what unit they were in. `voucherToken.ts` read the
+token's `m` and `u` and checked neither, and the `getMintUrl` hook was optional.
+So a copy of a signed voucher secret, backed by proofs from a mint nobody trusts,
+was credited as money.
 
-That is already a bug and is filed as such. This design promotes it to a
+That was already a bug and was filed as such. This design promotes it to a
 requirement, for two reasons:
 
 - **The wallet now talks to the mint directly**, so the mint URL stops being
@@ -277,6 +277,24 @@ So: before crediting, and before swapping, the wallet requires that the token's
 mint URL is the trusted mint and its unit is `sat`. Anything else is refused
 rather than credited at a lower confidence. This is a check the wallet can make
 alone, with no network call, which is what makes it worth doing at both points.
+
+How that is enforced now (imani-wallet#131, #133):
+
+- **The trusted list is known before the first receive.** It is the build's
+  `VITE_TRUSTED_MINT_URLS` plus the `mint_url` the gateway serves on
+  `/api/v1/config` (its PUBLIC mint URL, the same one stamped in `m`). The app
+  fetches that config at start-up and the coupon poller waits for it. Until it
+  has arrived the list is *unknown*, which is never read as "no mint".
+- **Redemption cannot skip the check.** `RedemptionAdapter.checkBacking` is
+  required, and dm-poll asks it before every `redeem`, for vouchers and plain
+  ecash alike. A rogue mint or a foreign unit is refused before the swap; an
+  unknown list defers the delivery to a later poll.
+- **The own-swap path fails closed.** `receiveTokenByOwnSwap` swaps only at a mint
+  that is positively trusted. An unknown list or a deployment that names no mint
+  is refused, because the only mint on offer is the one the token itself names.
+  The crediting paths still accept a gateway that has answered and named no mint
+  (`unchecked`), because there the coupon is already held and refusing would
+  strand it.
 
 ## Decisions taken
 

@@ -201,12 +201,14 @@ function verifiedVoucherFrom(token: string | undefined):
   // not a field we record but the address we send money to. See
   // `docs/explanation/the-wallet-swaps-its-own-receives.md`.
   const backing = checkMintAndUnit(parsed)
-  // `not-ready` is refused too, not waved through. It means the gateway's config
-  // has not arrived, so the trusted set is unknown. Treating unknown as permitted
-  // would let anyone who can merely DELAY /api/v1/config disable this check.
-  // Refusing is safe here: the caller retries a DM, so a coupon refused during
-  // start-up is received moments later rather than lost.
-  if (backing === 'untrusted-mint' || backing === 'wrong-unit' || backing === 'not-ready') {
+  // `not-ready` is deliberately NOT refused here, and that is a correction. A
+  // REJECTED voucher makes `extractToken` return null, and dm-poll marks a wrap
+  // with no token PROCESSED, so it is never offered again: a coupon that arrived
+  // before the trusted-mint list had loaded was dropped for good, not retried.
+  // "Cannot tell yet" is answered at redemption instead, where the adapter's
+  // `checkBacking` DEFERS it and the wrap stays unconsumed for the next poll
+  // (imani-wallet#131/#133). Nothing is swapped either way.
+  if (backing === 'untrusted-mint' || backing === 'wrong-unit') {
     console.warn(
       '[dmCrypto] rejecting voucher whose proofs are not at a trusted mint in sat:',
       parsed.voucher.voucherId,

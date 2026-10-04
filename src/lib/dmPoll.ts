@@ -49,6 +49,7 @@ import { legacyApi, withCorrelation } from './legacyBridge'
 import { claimToFile } from './merchantClaim'
 import { withWebLock } from './webLock'
 import { CALLS_PER_RECEIVE, receivePacer } from './receivePacer'
+import { checkTokenBacking, loadTrustedMints } from './trustedMint'
 
 /**
  * Gateway REST, same-origin: `/api/v1/...` reaches customer-wallet through the
@@ -934,6 +935,9 @@ export function refuseIfAnotherStalls(
  */
 function redemptionAdapter(): RedemptionAdapter {
   return {
+    // Where the value is, asked by dm-poll before every redeem (#131). Plain ecash
+    // and vouchers alike: a rogue mint does not need to forge a coupon to be paid.
+    checkBacking: checkTokenBacking,
     async redeem(token: string, options?: RedemptionOptions) {
       // Loads the legacy layer and re-supplies NIP-98 credentials, which
       // api.receive signs with. Re-supplied on every redeem so a lock/reunlock
@@ -1350,7 +1354,11 @@ let onSseOpen: (() => void) | undefined
  * a redundant catch-up costs one query and no writes.
  */
 function catchUp(): void {
-  void service?.fetchRecentDms()
+  // The trusted-mint list first, in case the start-up load failed: a coupon
+  // deferred for want of it is offered again by this very query (#133). Free once
+  // the list has loaded.
+  const polling = service
+  void loadTrustedMints().then(() => polling?.fetchRecentDms())
   void flushUnacknowledgedEscrows()
 }
 
@@ -1501,7 +1509,17 @@ export function startDmPoll(pubkey: string): DmPollService {
     service.on('redemption:refused', (event) => recordRefusal(owner ?? '', event))
   }
 
-  void service.start()
+  // The trusted-mint list FIRST, then the poller (#133). Its first catch-up
+  // redeems at once, and every redeem asks `checkTokenBacking`; before the list
+  // has loaded that answer is "defer", so starting first would park the whole
+  // backlog until the next catch-up. `loadTrustedMints` never rejects, and a
+  // gateway that cannot be reached leaves the list unknown, which still defers
+  // rather than waving anything through. `catchUp` retries the load.
+  const starting = service
+  void loadTrustedMints().then(() => {
+    // Not if the poller was stopped, or replaced by an account switch, meanwhile.
+    if (service === starting) void starting.start()
+  })
   // Startup half of the ack retry (#110). The legacy API client is signed in
   // by now, so the per-account ledger resolves to this account.
   void flushUnacknowledgedEscrows()

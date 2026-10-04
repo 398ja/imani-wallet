@@ -1,4 +1,7 @@
-import type { ParsedVoucherToken } from './voucherToken'
+import type { BackingVerdict } from '@imani/dm-poll'
+
+import { gatewayConfig } from './config'
+import { decodeCbor, type ParsedVoucherToken } from './voucherToken'
 
 /**
  * Which mint, and which unit, this build will credit a coupon from.
@@ -12,23 +15,43 @@ import type { ParsedVoucherToken } from './voucherToken'
  * one. `verifyVoucher` cannot catch that, because there is nothing wrong with
  * the signature.
  *
- * Until this module the wallet read the token's mint URL and unit and then
- * checked neither. That was already a bug. It becomes a sharper one now the
- * wallet swaps its own receives, because the mint URL stops being a field we
- * record and becomes the address we send money to.
- *
+ * It matters more once the wallet swaps its own receives, because the mint URL
+ * stops being a field we record and becomes the address we send money to.
  * See `docs/explanation/the-wallet-swaps-its-own-receives.md`.
+ *
+ * ## Where the trusted list comes from (#133)
+ *
+ * Two sources, combined:
+ *
+ * 1. `VITE_TRUSTED_MINT_URLS`, baked in at build time. The Dockerfile refuses to
+ *    build without it, so every deployed image carries its mint.
+ * 2. The `mint_url` the gateway serves on `GET /api/v1/config`, read ONCE by
+ *    {@link loadTrustedMints}, which the app awaits before the coupon poller
+ *    starts. A local or dev build, which has no build argument, is protected by
+ *    this one.
+ *
+ * This used to read `globalThis.GatewayConfig`, a classic script that only the
+ * legacy bridge ever loaded. On a path that had not touched the bridge the
+ * script was simply absent, the absence read as "this deployment names no
+ * mint", and the gate answered `unchecked` for every coupon. Nothing here reads
+ * that global any more: the config is fetched through `lib/config.ts`, the same
+ * module the rest of the React app uses, at a moment the app controls.
+ *
+ * ## `unknown` is not `none`
+ *
+ * Until the config has been read, the trusted set is UNKNOWN, and that is a
+ * different answer from "the gateway named no mint". A failed or slow fetch
+ * leaves it unknown, never empty. Callers refuse or defer on `not-ready`; only a
+ * gateway that answered and genuinely named nothing produces `unchecked`, and
+ * only the crediting paths accept that. See {@link MintVerdict}.
  *
  * ## `voucher.unit` is deliberately not what this checks
  *
- * This reads like an off-by-one field, so it is worth stating. Measured on the
- * captured fixtures, EVERY token's `u` is `sat`, while `voucher.unit` ranges
- * over currencies: `live-licence.token` is a GBP coupon. The two are different
- * facts. `u` is what the proofs are denominated in; `voucher.unit` is what the
- * face value is denominated in.
- *
- * So a rule over `voucher.unit` would refuse every foreign-currency coupon we
- * issue. `trustedMint.test.ts` pins the distinction against the real tokens.
+ * Measured on the captured fixtures, EVERY token's `u` is `sat`, while
+ * `voucher.unit` ranges over currencies: `live-licence.token` is a GBP coupon.
+ * `u` is what the proofs are denominated in; `voucher.unit` is what the face
+ * value is denominated in. A rule over `voucher.unit` would refuse every
+ * foreign-currency coupon we issue. `trustedMint.test.ts` pins the distinction.
  */
 
 /**
@@ -40,112 +63,116 @@ import type { ParsedVoucherToken } from './voucherToken'
  */
 export const TOKEN_UNIT = 'sat'
 
-/** A mint URL with the incidental differences removed, for comparison. */
-function normaliseMintUrl(url: string): string {
-  return url.trim().toLowerCase().replace(/\/+$/, '')
+/**
+ * A mint URL with the incidental differences removed, for comparison.
+ *
+ * Parsed as a URL, so the scheme and host are lower-cased, a default port is
+ * dropped and a trailing slash is ignored, while the PATH keeps its case: a mint
+ * mounted at `/Cashu` is not the one at `/cashu`. Anything that does not parse
+ * as an http(s) URL normalises to the empty string, which is never trusted.
+ *
+ * Exported for the other gates that need to say "same mint" (#131).
+ */
+export function normaliseMintUrl(url: string): string {
+  let parsed: URL
+  try {
+    parsed = new URL(url.trim())
+  } catch {
+    return ''
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return ''
+  // `URL` already lower-cases the scheme and host and drops a default port.
+  const path = parsed.pathname.replace(/\/+$/, '')
+  return `${parsed.protocol}//${parsed.host}${path}`
+}
+
+/** What `/api/v1/config` said, or `undefined` while it has not answered. */
+let gatewayMint: string | undefined
+let loading: Promise<void> | undefined
+
+/**
+ * Learn the gateway's mint. Awaited at start-up, before any coupon is received.
+ *
+ * Never rejects: a gateway that cannot be reached leaves the set UNKNOWN, and
+ * the gates refuse on that, so there is nothing for a caller to handle. A second
+ * call after a failure tries again; a second call after a success is free.
+ */
+export function loadTrustedMints(): Promise<void> {
+  if (gatewayMint !== undefined) return Promise.resolve()
+  loading ??= gatewayConfig()
+    .then(({ mintUrl }) => {
+      gatewayMint = mintUrl
+    })
+    .catch((error: unknown) => {
+      console.warn('[trustedMint] gateway config unavailable, the trusted mint is still unknown:', error)
+    })
+    .finally(() => {
+      loading = undefined
+    })
+  return loading
+}
+
+/** Forget what the gateway said. For tests, and nothing else. */
+export function resetTrustedMints(): void {
+  gatewayMint = undefined
+  loading = undefined
 }
 
 /**
- * The gateway's config, when it has actually arrived.
- *
- * Read off `globalThis` rather than imported. `shared/gateway-config.js` is a
- * classic script that assigns `globalThis.GatewayConfig` and fires a fetch on
- * load, so importing it here would make a pure comparison function perform I/O
- * as a side effect of being imported, and would do it in every test that touches
- * this file.
+ * Whether the gate can answer yet: the gateway's config has arrived, or the
+ * build names a mint of its own and needs no gateway to be sure.
  */
-interface GatewayConfigShape {
-  mintUrl?: string
-  /** Fires once, after `/api/v1/config` resolves. Our readiness signal. */
-  whenReady?(callback: () => void): void
+export function trustedMintsKnown(): boolean {
+  return gatewayMint !== undefined || buildMints().length > 0
 }
 
-function gatewayConfig(): GatewayConfigShape | undefined {
-  return (globalThis as { GatewayConfig?: GatewayConfigShape }).GatewayConfig
-}
-
-/**
- * Whether the gateway's configuration has arrived yet.
- *
- * **This is a security distinction, not a convenience.** `/api/v1/config` is
- * fetched asynchronously and `shared/gateway-config.js` is itself loaded lazily by
- * the legacy bridge, so `GatewayConfig` is `undefined` for a while after start and
- * its `mintUrl` is empty until the fetch resolves.
- *
- * Without this distinction an empty mint list reads as "this deployment configures
- * no mint", which returns `unchecked` and waves every coupon through. That turns
- * the gate off for anyone who can merely DELAY one request: a slow network, a 500
- * the wallet does not retry, a service-worker race. Far cheaper than compromising
- * the config it is meant to protect.
- *
- * So "not loaded yet" is reported separately, and callers treat it as a reason to
- * wait rather than a reason to proceed.
- *
- * Readiness is taken from `whenReady`, which the config module invokes ONCE the
- * fetch has resolved, rather than from a non-empty `mintUrl`. A deployment may
- * legitimately report no mint, and inferring readiness from the value could not
- * tell that apart from a fetch still in flight.
- *
- * **Absent is not the same as pending.** `shared/gateway-config.js` is loaded
- * lazily by the legacy bridge, so on a path that never touches it `GatewayConfig`
- * is undefined for ever rather than briefly. Treating that as "wait" would refuse
- * every coupon permanently, so it reads as "this wallet has no gateway config to
- * wait for" and only a PRESENT-but-unresolved config defers. See `checkMintAndUnit`.
- */
-export function gatewayConfigLoaded(): boolean {
-  const config = gatewayConfig()
-  // Nothing to wait for: the script was never loaded on this path.
-  if (!config) return true
-  // Present but not the module we know how to ask. Nothing to wait for either.
-  if (typeof config.whenReady !== 'function') return true
-
-  // `whenReady` runs its callback SYNCHRONOUSLY when the config has already
-  // resolved, and defers it otherwise. So observing a synchronous call is exactly
-  // the question being asked, and it costs no state of our own.
-  let ready = false
-  config.whenReady(() => {
-    ready = true
-  })
-  return ready
+/** The build's own list, normalised, with empty and unparseable entries dropped. */
+function buildMints(): string[] {
+  const configured = (import.meta.env.VITE_TRUSTED_MINT_URLS as string | undefined) ?? ''
+  return configured
+    .split(',')
+    .map(normaliseMintUrl)
+    .filter((u) => u.length > 0)
 }
 
 /**
  * The mints this build will credit from, normalised, or an empty array when
- * nothing names one.
+ * nothing names one (yet).
  *
  * Read through a FUNCTION rather than a module constant, for the reason
  * `allowedIssuerKeys` gives: a constant is fixed at import, which makes the one
  * security-critical input the one input a test cannot vary.
  *
- * A LIST, not a single value, for the reason that shaped `issuerAllowlist`: a
- * mint migration spans two mints at once, and an either/or would force a flag
- * day.
+ * A LIST, not a single value, because a mint migration spans two mints at once.
  *
- * The gateway's configured mint is included as a fallback. Without it this check
- * would be unset on every existing wallet the moment it ships, and an unset
- * check is not a check. With it, a wallet that has been told which mint to use
- * by its own gateway is protected without anybody configuring anything.
+ * ## Public and internal mint URLs
+ *
+ * The gateway calls its mint on an internal address (`http://imani-mint-rest:7777`)
+ * but stamps tokens with the PUBLIC one (`GATEWAY_WALLET_MINT_PUBLIC_URL`, e.g.
+ * `https://mint.staging.398ja.xyz`), and `/api/v1/config` serves that public URL
+ * as `mint_url`. So the token's `m` and this list agree on the public URL, and an
+ * internal address is never trusted unless a build names it explicitly, which a
+ * browser could not reach anyway.
  */
 export function trustedMintUrls(): string[] {
-  const configured = (import.meta.env.VITE_TRUSTED_MINT_URLS as string | undefined) ?? ''
-  const fromEnv = configured.split(',')
-  // The gateway tells the wallet which mint to use. It is the same fact, from a
-  // source the wallet already trusts for it.
-  const fromGateway = [gatewayConfig()?.mintUrl ?? '']
-  const all = [...fromEnv, ...fromGateway].map(normaliseMintUrl).filter((u) => u.length > 0)
+  const fromGateway = normaliseMintUrl(gatewayMint ?? '')
+  const all = fromGateway ? [...buildMints(), fromGateway] : buildMints()
   return [...new Set(all)]
 }
 
-/** Why a coupon's backing was not accepted. */
+/** Why a token's backing was or was not accepted. */
 export type MintVerdict =
   /**
-   * Nothing names a trusted mint AND the gateway's config has arrived, so this
-   * deployment genuinely configures none. This build makes no claim about the mint.
+   * The gateway HAS answered and names no mint, and the build names none either.
+   * This deployment genuinely configures no mint, so this build makes no claim.
+   * Accepted only where refusing would strand money already held; see
+   * `checkTokenBacking` and `receiveTokenByOwnSwap`.
    */
   | 'unchecked'
   /**
-   * The gateway's config has not arrived, so the trusted set is not yet knowable.
-   * NOT a pass: a caller must wait and ask again rather than credit on this.
+   * The trusted set is not yet known: the gateway's config has not arrived (or
+   * could not be fetched) and the build names no mint. NOT a pass: wait and ask
+   * again rather than credit on this.
    */
   | 'not-ready'
   /** The proofs are at a mint this build trusts, in the unit it understands. */
@@ -155,10 +182,13 @@ export type MintVerdict =
   /** The proofs are not denominated in sat, so their amounts mean nothing here. */
   | 'wrong-unit'
 
+/** The two facts the gate reads off a token. */
+export type TokenBacking = Pick<ParsedVoucherToken, 'mintUrl' | 'unit'>
+
 /**
  * Are this token's proofs at a mint we trust, in a unit we understand?
  *
- * Takes the PARSED token, so the caller pays for the decode once, and this stays
+ * Takes the parsed fields, so the caller pays for the decode once, and this stays
  * free of I/O. Says nothing about the signature: `verifyVoucher` answers that,
  * and both must hold.
  *
@@ -166,21 +196,89 @@ export type MintVerdict =
  * needs no configuration to be meaningful, so there is no reason for it to lapse
  * along with the mint list.
  */
-export function checkMintAndUnit(parsed: ParsedVoucherToken): MintVerdict {
-  if (parsed.unit.trim().toLowerCase() !== TOKEN_UNIT) return 'wrong-unit'
+export function checkMintAndUnit(backing: TokenBacking): MintVerdict {
+  if (backing.unit.trim().toLowerCase() !== TOKEN_UNIT) return 'wrong-unit'
 
   const trusted = trustedMintUrls()
-  if (trusted.length === 0) {
-    // An explicitly configured list needs no gateway, so an empty one here means
-    // neither source has named a mint. Which of the two silences it is decides
-    // whether this is a deployment choice or a race.
-    return gatewayConfigLoaded() ? 'unchecked' : 'not-ready'
+  if (trusted.length === 0) return trustedMintsKnown() ? 'unchecked' : 'not-ready'
+
+  // A token with no (or an unparseable) mint URL normalises to the empty string,
+  // which `trustedMintUrls` never contains, so it lands on `untrusted-mint`.
+  return trusted.includes(normaliseMintUrl(backing.mintUrl)) ? 'trusted' : 'untrusted-mint'
+}
+
+/**
+ * The mint and unit any Cashu token string names, voucher or plain ecash, V4 or V3.
+ *
+ * `parseVoucherToken` only reads vouchers, so plain ecash had no reader at all,
+ * and a gate that cannot read a token cannot refuse it. Throws on anything it
+ * cannot decode; a caller must treat that as a refusal, never as a pass.
+ *
+ * A V3 token may omit its unit, which by NUT-00 means sat. A V4 token must name it.
+ */
+export function readTokenBacking(token: string): TokenBacking {
+  const trimmed = token.trim()
+  if (trimmed.startsWith('cashuB')) {
+    const root = decodeCbor(base64UrlToBytes(trimmed.slice(6))) as Record<string, unknown>
+    return { mintUrl: stringOr(root.m, ''), unit: stringOr(root.u, '') }
+  }
+  if (trimmed.startsWith('cashuA')) {
+    const json = new TextDecoder().decode(base64UrlToBytes(trimmed.slice(6)))
+    const root = JSON.parse(json) as { token?: Array<{ mint?: unknown }>; unit?: unknown }
+    const mints = new Set((root.token ?? []).map((entry) => stringOr(entry.mint, '')))
+    // A V3 token can span mints. One whose entries disagree has no single answer,
+    // so it reads as no mint at all and is refused.
+    const mintUrl = mints.size === 1 ? [...mints][0] : ''
+    return { mintUrl, unit: root.unit === undefined ? TOKEN_UNIT : stringOr(root.unit, '') }
+  }
+  throw new Error('not a Cashu token (cashuA or cashuB)')
+}
+
+/**
+ * The redemption gate dm-poll asks before every redeem (`RedemptionAdapter.checkBacking`, #131).
+ *
+ * Reads ANY token, voucher or plain ecash, so a rogue mint cannot slip past by not
+ * being a voucher. Maps the verdict onto what the poller does with it:
+ *
+ * - `trusted` -> accept.
+ * - `untrusted-mint`, `wrong-unit`, or a token it cannot read -> refuse, before any
+ *   swap. Terminal: the token's bytes will not change.
+ * - `not-ready` -> defer. The delivery is left unconsumed and offered again on a
+ *   later poll, by which time the trusted list has loaded. Never a pass.
+ * - `unchecked` -> accept. This is the CREDITING path's documented choice, kept
+ *   deliberately: the gateway answered and named no mint, and refusing here would
+ *   strand a coupon the customer already holds. It is no worse than before the
+ *   gate existed. The own-swap path, which chooses where to SEND money, refuses
+ *   it instead (`receiveTokenByOwnSwap`).
+ */
+export function checkTokenBacking(token: string): BackingVerdict {
+  let backing: TokenBacking
+  try {
+    backing = readTokenBacking(token)
+  } catch (error) {
+    return { outcome: 'refuse', reason: 'undecodable', detail: `token could not be read: ${String(error)}` }
   }
 
-  // A token with no mint URL normalises to the empty string, which cannot be on
-  // the list because `trustedMintUrls` filters empties out when building it. So
-  // "declines to say where its value is" already lands on `untrusted-mint` here,
-  // and an explicit guard for it would be unreachable. Pinned by the
-  // no-mint-URL test, which fails if that filter is ever dropped.
-  return trusted.includes(normaliseMintUrl(parsed.mintUrl)) ? 'trusted' : 'untrusted-mint'
+  const verdict = checkMintAndUnit(backing)
+  switch (verdict) {
+    case 'trusted':
+    case 'unchecked':
+      return { outcome: 'accept' }
+    case 'not-ready':
+      return { outcome: 'defer', detail: 'the trusted mint list has not loaded yet' }
+    case 'untrusted-mint':
+      return { outcome: 'refuse', reason: verdict, detail: `proofs are at an untrusted mint: ${backing.mintUrl || '(none named)'}` }
+    case 'wrong-unit':
+      return { outcome: 'refuse', reason: verdict, detail: `proofs are in ${backing.unit || '(no unit)'}, not ${TOKEN_UNIT}` }
+  }
+}
+
+function stringOr(value: unknown, fallback: string): string {
+  return typeof value === 'string' ? value : fallback
+}
+
+function base64UrlToBytes(s: string): Uint8Array {
+  const padded = s.replace(/-/g, '+').replace(/_/g, '/')
+  const bin = atob(padded + '='.repeat((4 - (padded.length % 4)) % 4))
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0))
 }
