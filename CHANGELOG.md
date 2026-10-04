@@ -77,13 +77,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wallet-api `/redeem`; it still verifies, so licence and credential checks are unaffected.
   **Superseded for untagged proofs by round 3 below.**
 - **An untagged locked voucher proof keeps the pre-#141 crediting** (imani-gateway-customer#141,
-  round 3). Crediting it 0 stranded real customer money: staging holds 141 locked vouchers sold
-  before #141, all untagged. It now credits its sats, bounded by its signed face value and, across
+  round 3). Crediting it 0 stranded real customer money held in pre-#141 locked vouchers. It now
+  credits its sats, bounded by its signed face value and, across
   redeemers, by the shared ledger, exactly as before #141. A same-secret twin of a pre-#141 proof is
   therefore the **accepted legacy residual**, bounded by face and ledger; the gateway caps its
   re-signed and split successors at the voucher's recorded issued sats. Tagged proofs keep the strict
   `min(sats, max_sats)`, a malformed `max_sats` still credits 0, and every locked proof's own issuer
   signature is still verified under proof 0's issuer key (a forged later proof credits 0).
+- **Round 4: the count behind the legacy rule, corrected** (imani-gateway-customer#141). Round 3
+  justified this rule with "141 locked vouchers on staging, face about 1.13M". That figure counted
+  the mint's NUT-20 quote `pubkey`, which every voucher quote carries since 2026-09-30, not the
+  P2PK voucher lock. Read-only staging counts on 2026-10-04: since the gateway's 05:50Z restart, 2
+  of 25 issuances were P2PK-locked (21 sats each); 0 of 2,316 stored purchase tokens are locked; the
+  only stored locked successor is one 2026-09-29 test. Earlier locked issuances are not countable
+  (sealed rows, no older logs) and, at that rate, are a handful. **The rule is unchanged, because it
+  is still the safest choice:** the exposure it accepts is a few vouchers, each bounded by its own
+  signed face and the shared ledger, while crediting 0 would strand those holders' money for no
+  measurable gain, and a redeemer has no issuance record to bound them more tightly. No code change.
 
 ### Fixed
 

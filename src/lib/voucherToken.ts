@@ -617,9 +617,10 @@ export function satBoundOf(secret: string): SatBound {
  *   pre-#141 rule, bounded with the rest by the face value and the shared ledger.
  *   Its funded amount is signed nowhere, and the mint signs any blinded output,
  *   so its sats may be a same-secret twin's: that is the ACCEPTED LEGACY
- *   RESIDUAL. Crediting 0 instead stranded every voucher sold before #141
- *   (round 3: 141 on staging). Every locked output issued since #141 carries a
- *   bound from birth, so only pre-#141 locked vouchers read as untagged.
+ *   RESIDUAL. Crediting 0 instead stranded every locked voucher sold before
+ *   #141 (round 4 count on staging: a handful, 2 known, each bounded by its
+ *   own signed face). Every locked output issued since #141 carries a bound
+ *   from birth, so only pre-#141 locked vouchers read as untagged.
  * - A malformed `max_sats`: 0. Reading it as absent would be a downgrade.
  */
 function creditableSatsOf(amount: number, secret: string, first: SignedVoucherFields): number {
