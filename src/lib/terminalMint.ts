@@ -70,7 +70,11 @@ export function credentialRequestBody(credential: PreparedCredential): Record<st
     issuer_id: credential.stallPubkey,
     memo: 'Imani terminal credential',
     expires_in_days: CREDENTIAL_LIFETIME_DAYS,
+    // Not IW-15: `credential` is the owner's own in-memory form (prepareEnrolment), never a
+    // stored record, and the gateway signs exactly this metadata into the token, which the
+    // owner then re-checks from the token's bytes (credentialDefect).
     merchant_metadata: JSON.parse(
+      // nosemgrep: imani-role-from-local-storage
       terminalMetadataJson({
         stallPubkey: credential.stallPubkey,
         role: credential.role,
