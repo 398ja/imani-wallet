@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-04
+
 ### Fixed
 
 - **A terminal no longer reports a sale the customer's wallet refused** (#159). A terminal's
