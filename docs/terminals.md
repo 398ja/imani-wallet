@@ -232,7 +232,8 @@ device.
 
 Being straight about it: the rules, the screens, and the enforcement all exist
 and are tested, but four seams between them are not yet wired, so **a second
-till cannot be run end to end right now**.
+till cannot be run end to end right now**. The plan to close them is
+[the terminals-in-service spec](spec-terminals-in-service.md).
 
 1. **Adding a terminal does not yet create its authority.** The enrolment screen
    records the terminal in your list, but the credential behind it is still
