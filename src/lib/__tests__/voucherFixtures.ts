@@ -225,6 +225,8 @@ export interface LockedCredentialOptions {
   role?: string
   /** Extra co-spenders in `pubkeys`. Defaults to the stall, as the gateway mints since #160. */
   pubkeys?: string[]
+  /** Extra signed NUT-11 tags, such as `refund` or `locktime`. */
+  extraTags?: string[][]
   voucherId?: string
   /** Overrides the signed metadata entirely. */
   metadata?: string
@@ -267,6 +269,7 @@ export function buildLockedCredentialToken(o: LockedCredentialOptions): string {
     ['issuance_ratio', '1'],
     ['face_decimals', '0'],
     ['merchant_metadata', metadata],
+    ...(o.extraTags ?? []),
   ]
   const kind = o.kind ?? 'P2PK_VOUCHER'
   const esc = (v: string) => JSON.stringify(v).slice(1, -1)

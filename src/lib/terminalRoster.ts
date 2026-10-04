@@ -77,12 +77,30 @@ export interface TerminalRecord {
    * before this field existed, which read as they always did.
    */
   status?: TerminalStatus
+  /**
+   * The Idempotency-Key the mint request was sent with (#160 review). Set on a
+   * `minting` row before the request leaves this phone, so a request whose
+   * answer was lost can be sent again and the gateway replays the credential it
+   * already minted instead of minting a second one.
+   */
+  mintKey?: string
+  /**
+   * Why a minted credential was refused, on a `minting` row whose cancelling
+   * spend has not landed yet. Kept so the next open retries the spend.
+   */
+  defect?: string
 }
 
-export type TerminalStatus = 'waiting' | 'in-service'
+/**
+ * `minting`: the owner asked the gateway for a credential and this phone has
+ * not yet checked what came back. Written BEFORE the request (#160 review), so
+ * a credential minted while the answer was lost, or one that came back wrong
+ * and could not be cancelled, is never left unknown to the roster.
+ */
+export type TerminalStatus = 'minting' | 'waiting' | 'in-service'
 
 function statusOf(value: unknown): TerminalStatus | undefined {
-  return value === 'waiting' || value === 'in-service' ? value : undefined
+  return value === 'minting' || value === 'waiting' || value === 'in-service' ? value : undefined
 }
 
 const ROSTER_KEY = (stallPubkey: string) => `imani-wallet:terminals:${stallPubkey}`
@@ -112,6 +130,8 @@ function read(stallPubkey: string): TerminalRecord[] {
           waitingUntil: typeof row.waitingUntil === 'number' ? row.waitingUntil : undefined,
           revokedAt: typeof row.revokedAt === 'number' ? row.revokedAt : undefined,
           status: statusOf(row.status),
+          mintKey: typeof row.mintKey === 'string' ? row.mintKey : undefined,
+          defect: typeof row.defect === 'string' ? row.defect : undefined,
         },
       ]
     })
@@ -155,8 +175,10 @@ export function liveTerminals(stallPubkey: string): TerminalRecord[] {
 export function enrolledCount(stallPubkey: string): number {
   // Waiting rows do NOT count against the free terminal (decision 4 on #160):
   // a botched setup must never block the owner from trying again. They are
-  // bounded instead, by `MAX_WAITING` and the 24-hour expiry.
-  return liveTerminals(stallPubkey).filter((t) => t.status !== 'waiting').length
+  // bounded instead, by `MAX_WAITING` and the 24-hour expiry. A row still
+  // minting is a waiting row that has not been checked yet.
+  return liveTerminals(stallPubkey).filter((t) => t.status !== 'waiting' && t.status !== 'minting')
+    .length
 }
 
 /** At most this many terminals may wait for their device at once (decision 4). */
@@ -165,17 +187,63 @@ export const MAX_WAITING = 2
 /** How long a waiting row lives before it is cancelled (decision 4). */
 export const WAITING_TTL_MS = 24 * 3600 * 1000
 
-/** Unrevoked rows still waiting for their device, oldest first. */
+/**
+ * Unrevoked rows still waiting for their device, oldest first.
+ *
+ * Counted against `MAX_WAITING`. A row still `minting` counts too, because it
+ * becomes a waiting row the moment its credential is checked. A phase 0
+ * waiting row with no token does NOT count (#160 review): nothing was minted
+ * for it, it cannot be cancelled at the mint, and counting it would block Add
+ * forever. `unmintedWaiting` finds those so the owner can remove them.
+ */
 export function waitingTerminals(stallPubkey: string): TerminalRecord[] {
   return liveTerminals(stallPubkey)
-    .filter((t) => t.status === 'waiting')
+    .filter((t) => t.status === 'minting' || (t.status === 'waiting' && isRevocable(t)))
     .sort((a, b) => a.enrolledAt - b.enrolledAt)
+}
+
+/**
+ * Waiting rows written before anything was minted (phase 0 of #160).
+ *
+ * They hold no token, so no credential exists for them and retiring them is a
+ * local act with nothing to spend.
+ */
+export function unmintedWaiting(stallPubkey: string): TerminalRecord[] {
+  return liveTerminals(stallPubkey).filter((t) => t.status === 'waiting' && !isRevocable(t))
+}
+
+/** Rows whose credential request has not been settled yet, oldest first. */
+export function mintingTerminals(stallPubkey: string): TerminalRecord[] {
+  return liveTerminals(stallPubkey)
+    .filter((t) => t.status === 'minting')
+    .sort((a, b) => a.enrolledAt - b.enrolledAt)
+}
+
+/**
+ * Whether this device key already has a credential the owner must not lose.
+ *
+ * True for an unrevoked row that holds a token (waiting or in service), or one
+ * still minting. Re-adding such a key would replace the row, and with it the
+ * only revocation handle for a credential that may be in service (#160 review,
+ * BLOCKER). `checkEnrolment` refuses it, and `recordTerminal` will not do it.
+ */
+export function holdsLiveCredential(stallPubkey: string, terminalPubkey: string): boolean {
+  const key = terminalPubkey.toLowerCase()
+  return read(stallPubkey).some(
+    (t) =>
+      t.terminalPubkey.toLowerCase() === key &&
+      t.revokedAt === undefined &&
+      (isRevocable(t) || t.status === 'minting'),
+  )
 }
 
 /** Waiting rows past their 24 hours, which the owner's wallet must cancel. */
 export function expiredWaiting(stallPubkey: string, now: number = Date.now()): TerminalRecord[] {
+  // Only rows holding a token: a `minting` row is settled by `resumeMinting`
+  // first, and is cancelled here once it has become a waiting row.
   return waitingTerminals(stallPubkey).filter(
-    (t) => (t.waitingUntil ?? t.enrolledAt + WAITING_TTL_MS) <= now,
+    (t) =>
+      t.status === 'waiting' && (t.waitingUntil ?? t.enrolledAt + WAITING_TTL_MS) <= now,
   )
 }
 
@@ -184,10 +252,62 @@ export function isRevocable(record: TerminalRecord): boolean {
   return typeof record.token === 'string' && record.token.length > 0
 }
 
-/** Record a terminal the owner has just enrolled. */
+/** Thrown rather than silently dropping a live credential's revocation handle. */
+export class LiveCredentialError extends Error {
+  constructor() {
+    super('That device already has a live authority on your list. Cancel or revoke it first.')
+    this.name = 'LiveCredentialError'
+  }
+}
+
+/**
+ * Record a terminal the owner has just enrolled.
+ *
+ * Replaces a row for the same key only when that row holds nothing to revoke:
+ * a revoked row, or one set up before revocation existed. A live row with a
+ * token is the only way to revoke its credential, so replacing it would leave
+ * that credential live and unrevocable (#160 review, BLOCKER). That case
+ * throws `LiveCredentialError` and changes nothing.
+ */
 export function recordTerminal(stallPubkey: string, record: TerminalRecord): void {
-  const rows = read(stallPubkey).filter((t) => t.terminalPubkey !== record.terminalPubkey)
+  if (holdsLiveCredential(stallPubkey, record.terminalPubkey)) throw new LiveCredentialError()
+  const key = record.terminalPubkey.toLowerCase()
+  const rows = read(stallPubkey).filter((t) => t.terminalPubkey.toLowerCase() !== key)
   write(stallPubkey, [...rows, record])
+}
+
+/**
+ * Change one row in place, keyed by device key. Used to move a row through
+ * `minting` → `waiting` without the replace guard above, which exists to stop
+ * a DIFFERENT credential overwriting it.
+ *
+ * @returns false when there is no such row
+ */
+export function updateTerminal(
+  stallPubkey: string,
+  terminalPubkey: string,
+  change: (row: TerminalRecord) => TerminalRecord,
+): boolean {
+  const key = terminalPubkey.toLowerCase()
+  const rows = read(stallPubkey)
+  const index = rows.findIndex((t) => t.terminalPubkey.toLowerCase() === key)
+  if (index < 0) return false
+  rows[index] = change(rows[index])
+  write(stallPubkey, rows)
+  return true
+}
+
+/**
+ * Remove a row that never became a terminal: a request the gateway refused, or
+ * a credential that came back wrong and has been spent. Nothing ever traded
+ * under it, so there is no history to keep.
+ */
+export function forgetTerminal(stallPubkey: string, terminalPubkey: string): void {
+  const key = terminalPubkey.toLowerCase()
+  write(
+    stallPubkey,
+    read(stallPubkey).filter((t) => t.terminalPubkey.toLowerCase() !== key),
+  )
 }
 
 /** Note that a terminal handled something, for the "last used" column. */

@@ -367,3 +367,43 @@ describe('what a lapse shows the owner', () => {
     expect(container.textContent).not.toMatch(/paused|suspended/i)
   })
 })
+
+describe('#160 review: rows left behind by earlier versions and lost answers', () => {
+  // A phase 0 waiting row holds no token: nothing was minted for it, so it
+  // cannot be cancelled at the mint and used to sit on the list for ever,
+  // blocking Add once two existed. It now offers Remove, which takes it off.
+  it('lets the owner remove a waiting row that was never minted', async () => {
+    enrol({ status: 'waiting', token: undefined, voucherId: undefined })
+    renderPage()
+
+    expect(screen.getByText(/Nothing was ever sent to this device/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+
+    await waitFor(() => expect(screen.queryByText('Door')).toBeNull())
+    expect(fakeMint.receive).not.toHaveBeenCalled()
+  })
+
+  // A request whose answer was lost is finished when the list opens: the
+  // credential is fetched by its voucher id, checked, and the row becomes an
+  // ordinary waiting row with Cancel.
+  it('finishes a credential request whose answer was lost', async () => {
+    enrol({ status: 'minting', token: undefined, mintKey: 'k-1', voucherId: 'cred-door' })
+    const resumeTransport = {
+      post: vi.fn(async () => new Response('{}', { status: 500 })),
+      get: vi.fn(async () => new Response(JSON.stringify({ status: 'ISSUED', token: TOKEN }), { status: 200 })),
+      sleep: async () => {},
+    }
+    render(
+      <MemoryRouter>
+        <TerminalsPage stallPubkey={STALL} spendApi={async () => fakeMint} transport={resumeTransport} />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText(/Still being set up/)).toBeTruthy()
+    // The live fixture is locked to its own device and stall, not to DOOR and
+    // STALL, so the check refuses it and spends it. Either way the row is
+    // settled and is no longer an unknown credential.
+    await waitFor(() => expect(screen.queryByText(/Still being set up/)).toBeNull())
+    expect(resumeTransport.get).toHaveBeenCalled()
+  })
+})

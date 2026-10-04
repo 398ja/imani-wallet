@@ -14,7 +14,13 @@ import {
   revocationBitesAt,
   type TerminalRecord,
 } from '../lib/terminalRoster'
-import { cancelExpiredWaiting, revokeTerminalAtMint } from '../lib/terminalRevoke'
+import {
+  cancelExpiredWaiting,
+  removeUnmintedWaiting,
+  resumeMinting,
+  revokeTerminalAtMint,
+} from '../lib/terminalRevoke'
+import { ownerTransport, type MintTransport } from '../lib/terminalMint'
 import type { CredentialMintApi } from '../lib/credentialRevocation'
 import { legacyApi } from '../lib/legacyBridge'
 
@@ -57,10 +63,13 @@ async function ownerSpendApi(): Promise<CredentialMintApi> {
 export function TerminalsPage({
   stallPubkey,
   spendApi = ownerSpendApi,
+  transport = ownerTransport,
 }: {
   stallPubkey: string
   /** Injected by tests. Spends a credential with the stall's key. */
   spendApi?: () => Promise<CredentialMintApi>
+  /** Injected by tests. The owner's NIP-98 signer otherwise. */
+  transport?: MintTransport
 }) {
   // Read lazily rather than in an effect. The roster is local storage, so it is
   // available on the first render — going through an effect would paint an
@@ -134,8 +143,13 @@ export function TerminalsPage({
     let cancelled = false
     void (async () => {
       try {
-        const n = await cancelExpiredWaiting(stallPubkey, await spendApi())
-        if (n > 0 && !cancelled) refresh()
+        const api = await spendApi()
+        // Settle any credential request that did not finish (#160 review)
+        // before expiring waiting rows, so a request that is resumed now and
+        // turns out to be past its 24 hours is cancelled in the same pass.
+        const resumed = await resumeMinting(stallPubkey, api, transport)
+        const n = await cancelExpiredWaiting(stallPubkey, api)
+        if ((n > 0 || resumed.completed > 0 || resumed.cleared > 0) && !cancelled) refresh()
       } catch {
         // Offline, or the wallet is locked. The rows stay waiting.
       }
@@ -143,7 +157,7 @@ export function TerminalsPage({
     return () => {
       cancelled = true
     }
-  }, [stallPubkey, spendApi, refresh])
+  }, [stallPubkey, spendApi, transport, refresh])
   const live = terminals.filter((t) => t.revokedAt === undefined)
   const retired = terminals.filter((t) => t.revokedAt !== undefined)
 
@@ -174,6 +188,10 @@ export function TerminalsPage({
               onAskRevoke={() => setConfirming(terminal.terminalPubkey)}
               onCancel={() => setConfirming(null)}
               onRevoke={() => void revoke(terminal.terminalPubkey)}
+              onRemove={() => {
+                removeUnmintedWaiting(stallPubkey, terminal.terminalPubkey)
+                refresh()
+              }}
             />
           ))}
         </ListSection>
@@ -214,6 +232,7 @@ function TerminalRow({
   onAskRevoke,
   onCancel,
   onRevoke,
+  onRemove,
 }: {
   terminal: TerminalRecord
   /** Enrolled and unrevoked, but a lapse has stopped it. Undefined = unknown. */
@@ -226,13 +245,19 @@ function TerminalRow({
   onAskRevoke?: () => void
   onCancel?: () => void
   onRevoke?: () => void
+  /** Removes a phase 0 waiting row, which has nothing minted behind it. */
+  onRemove?: () => void
 }) {
   const revoked = terminal.revokedAt !== undefined
   const waiting = terminal.status === 'waiting' && !revoked
+  const minting = terminal.status === 'minting' && !revoked
   // Rows set up by hand before #160 hold no credential, so they cannot be
   // revoked from here. Offering Revoke would mark a row while the device kept
   // its authority, which is the lie this whole change removes.
-  const revocable = isRevocable(terminal)
+  const revocable = isRevocable(terminal) && !minting
+  // Phase 0 wrote waiting rows without minting anything. They have no token,
+  // nothing to cancel at the mint, and can simply be removed (#160 review).
+  const unminted = waiting && !isRevocable(terminal)
   const label = TERMINAL_ROLE_LABELS[terminal.role]
   const bitesAt = revocationBitesAt(terminal)
 
@@ -252,7 +277,9 @@ function TerminalRow({
             {label.name} ·{' '}
             {/* A waiting row has never reached its device, so "Never used"
                 would read as a till that is ready and idle (#160). */}
-            {terminal.status === 'waiting' && !revoked
+            {minting
+              ? 'Still being set up'
+              : terminal.status === 'waiting' && !revoked
               ? 'Waiting for the device'
               : terminal.lastUsedAt
                 ? `Last used ${formatDate(terminal.lastUsedAt)}`
@@ -277,7 +304,26 @@ function TerminalRow({
         ) : null}
       </div>
 
-      {!revoked && !revocable ? (
+      {minting ? (
+        <p className="mt-2 text-sm text-mono-500">
+          {terminal.defect
+            ? 'Its authority came back wrong and could not be cancelled yet. It is cancelled ' +
+              'the next time you open this screen with a connection.'
+            : 'The gateway has not confirmed it yet. It is finished, or cleared, the next time ' +
+              'you open this screen with a connection.'}
+        </p>
+      ) : unminted ? (
+        <div className="mt-2 flex items-center gap-3">
+          <p className="min-w-0 flex-1 text-sm text-mono-500">
+            Nothing was ever sent to this device, so there is nothing to cancel.
+          </p>
+          {onRemove ? (
+            <Button variant="outline" size="sm" onClick={onRemove}>
+              Remove
+            </Button>
+          ) : null}
+        </div>
+      ) : !revoked && !revocable ? (
         <p className="mt-2 text-sm text-mono-500">
           Set up before revocation existed: add it again to be able to revoke it.
         </p>

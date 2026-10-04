@@ -113,6 +113,39 @@ describe('the credential is checked from its own bytes', () => {
     expect(credentialDefect(t, prepared)).toBe('no-stall-co-key')
   })
 
+  // #160 review (LOW): the co-spenders must be EXACTLY the stall. A third key
+  // in `pubkeys` could also spend, and so revoke or steal, the credential.
+  // Before the fix `includes(stall)` let it through.
+  it('refuses a credential with a spending key besides the stall', () => {
+    const t = buildLockedCredentialToken({
+      stallKey: STALL_KEY,
+      devicePubkey: DEVICE,
+      pubkeys: [STALL, OTHER],
+    })
+    expect(credentialDefect(t, prepared)).toBe('no-stall-co-key')
+  })
+
+  // The same rule for a duplicated stall entry: one key, once.
+  it('refuses the stall listed twice', () => {
+    const t = buildLockedCredentialToken({
+      stallKey: STALL_KEY,
+      devicePubkey: DEVICE,
+      pubkeys: [STALL, STALL],
+    })
+    expect(credentialDefect(t, prepared)).toBe('no-stall-co-key')
+  })
+
+  // A refund or locktime path is another way to spend it, which the owner
+  // never asked for.
+  it('refuses a credential with a refund path', () => {
+    const t = buildLockedCredentialToken({
+      stallKey: STALL_KEY,
+      devicePubkey: DEVICE,
+      extraTags: [['refund', `02${OTHER}`]],
+    })
+    expect(credentialDefect(t, prepared)).toBe('no-stall-co-key')
+  })
+
   // A different role than asked for is a different terminal. A redeem-only
   // device must not be handed a till.
   it('refuses a credential whose signed metadata grants another role', () => {

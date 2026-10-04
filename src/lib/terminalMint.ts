@@ -34,14 +34,15 @@ const TOKEN_POLL_MS = 2_000
 
 /** What this module needs of the network. Injected so tests need none. */
 export interface MintTransport {
-  post(path: string, body: unknown): Promise<Response>
+  /** `headers` carries the `Idempotency-Key`, so a re-sent request replays rather than re-mints. */
+  post(path: string, body: unknown, headers?: Record<string, string>): Promise<Response>
   get(path: string): Promise<Response>
   sleep(ms: number): Promise<void>
 }
 
 /** The owner's own NIP-98 signer, which is what makes the gateway resolve the issuer as the stall. */
 export const ownerTransport: MintTransport = {
-  post: (path, body) => signedFetch(path, 'POST', body),
+  post: (path, body, headers) => signedFetch(path, 'POST', body, undefined, { headers }),
   get: (path) => signedFetch(path, 'GET'),
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }
@@ -122,9 +123,12 @@ export function credentialDefect(token: string, expected: PreparedCredential): C
   if (!secret.startsWith('["P2PK_VOUCHER"')) return 'not-locked'
 
   const keys = spendingKeys(secret).map((k) => xOnly(k).toLowerCase())
-  // `data` is first. It must be the device, and the stall must be the co-spender.
+  // `data` is first. It must be the device.
   if (keys[0] !== expected.lockedTo) return 'wrong-lock'
-  if (!keys.slice(1).includes(expected.stallPubkey)) return 'no-stall-co-key'
+  // And the co-spenders must be EXACTLY the stall (#160 review): a third key
+  // in `pubkeys` could spend the credential too, and refund or locktime tags
+  // would add spending paths the owner never agreed to.
+  if (!exactlyTheStall(secret, expected.stallPubkey)) return 'no-stall-co-key'
 
   const voucher = parsed.voucher
   if (voucher.issuerId.toLowerCase() !== expected.stallPubkey) return 'wrong-issuer'
@@ -143,6 +147,32 @@ export function credentialDefect(token: string, expected: PreparedCredential): C
   return null
 }
 
+/** NUT-11 tags that add a spending path beyond `data` and `pubkeys`. */
+const EXTRA_PATH_TAGS = ['refund', 'locktime', 'n_sigs_refund']
+
+/**
+ * The secret's NUT-11 `pubkeys` tag is exactly `[stall]`, `n_sigs` is 1 (or
+ * absent), and there is no refund or locktime path.
+ */
+function exactlyTheStall(secret: string, stall: string): boolean {
+  try {
+    const body = (JSON.parse(secret) as [string, { tags?: unknown }])[1]
+    const tags = Array.isArray(body?.tags) ? (body.tags as unknown[]) : []
+    const rows = tags.filter((t): t is unknown[] => Array.isArray(t))
+    if (rows.some((t) => EXTRA_PATH_TAGS.includes(String(t[0])))) return false
+    const nSigs = rows.filter((t) => t[0] === 'n_sigs')
+    if (nSigs.length > 1 || (nSigs.length === 1 && String(nSigs[0][1]) !== '1')) return false
+    const pubkeys = rows.filter((t) => t[0] === 'pubkeys')
+    if (pubkeys.length !== 1) return false
+    const listed = pubkeys[0].slice(1)
+    return (
+      listed.length === 1 && typeof listed[0] === 'string' && xOnly(listed[0]).toLowerCase() === stall
+    )
+  } catch {
+    return false
+  }
+}
+
 /** What the owner is told, per defect. Plain, and says nothing was left live where true. */
 const DEFECT_MESSAGE: Record<CredentialDefect, string> = {
   unreadable: 'The terminal’s authority came back unreadable.',
@@ -158,10 +188,26 @@ export class CredentialMintError extends Error {
   constructor(
     message: string,
     readonly defect?: CredentialDefect,
+    /** The gateway's HTTP status when it refused the request outright. */
+    readonly status?: number,
+    /** A defective credential whose cancelling spend did not land, so it must be kept. */
+    readonly unspentToken?: string,
   ) {
     super(message)
     this.name = 'CredentialMintError'
   }
+}
+
+/** What the caller learns while a mint is in flight, so it can persist each step. */
+export interface MintProgress {
+  /**
+   * Sent with the request as `Idempotency-Key`. The caller persists it BEFORE
+   * calling, so a request whose answer was lost can be sent again and the
+   * gateway replays the same credential rather than minting a second one.
+   */
+  idempotencyKey?: string
+  /** Called as soon as the gateway names the voucher, before the token is polled for. */
+  onAccepted?: (voucherId: string) => void
 }
 
 /**
@@ -175,14 +221,35 @@ export async function mintTerminalCredential(
   credential: PreparedCredential,
   spendAtOnce: (token: string) => Promise<boolean>,
   transport: MintTransport = ownerTransport,
+  progress: MintProgress = {},
 ): Promise<MintedCredential> {
-  const created = await transport.post('/api/v1/wallet/vouchers', credentialRequestBody(credential))
+  const created = await transport.post(
+    '/api/v1/wallet/vouchers',
+    credentialRequestBody(credential),
+    progress.idempotencyKey ? { 'Idempotency-Key': progress.idempotencyKey } : undefined,
+  )
   if (!created.ok) {
-    throw new CredentialMintError(await refusal(created))
+    throw new CredentialMintError(await refusal(created), undefined, created.status)
   }
   const { voucher_id: voucherId } = (await created.json()) as { voucher_id?: string }
   if (!voucherId) throw new CredentialMintError('The gateway minted nothing.')
+  progress.onAccepted?.(voucherId)
 
+  return checkMinted(credential, voucherId, spendAtOnce, transport)
+}
+
+/**
+ * Fetch a credential the gateway has accepted, check it, and spend it if it is wrong.
+ *
+ * Split out so a mint whose answer arrived but whose token did not can be resumed later
+ * from the voucher id alone (`resumeMinting`).
+ */
+export async function checkMinted(
+  credential: PreparedCredential,
+  voucherId: string,
+  spendAtOnce: (token: string) => Promise<boolean>,
+  transport: MintTransport = ownerTransport,
+): Promise<MintedCredential> {
   const token = await waitForToken(voucherId, transport)
 
   const defect = credentialDefect(token, credential)
@@ -192,9 +259,12 @@ export async function mintTerminalCredential(
       `${DEFECT_MESSAGE[defect]} ${
         spent
           ? 'It has been cancelled, and nothing was set up.'
-          : 'It could not be cancelled yet. Try again when you have a connection.'
+          : 'It could not be cancelled yet. It stays on your list and is cancelled the next ' +
+            'time you open Terminals with a connection.'
       }`,
       defect,
+      undefined,
+      spent ? undefined : token,
     )
   }
 
@@ -215,7 +285,8 @@ async function waitForToken(voucherId: string, transport: MintTransport): Promis
     await transport.sleep(TOKEN_POLL_MS)
   }
   throw new CredentialMintError(
-    `The terminal’s authority was not ready in time (status ${status}). Try again.`,
+    `The terminal’s authority was not ready in time (status ${status}). It stays on your list ` +
+      'and is picked up the next time you open Terminals.',
   )
 }
 
@@ -234,8 +305,13 @@ async function refusal(response: Response): Promise<string> {
  * THIS stall's credential and not one an onlooker sent to its public key (spec 4.2).
  *
  * `sha256(utf8(voucherId + stallPubkey + terminalPubkey))`, all lowercase hex or UUID text,
- * read as a big-endian integer, mod 10^6, zero-padded to six digits. The gateway chooses
- * `voucherId`, so matching a code costs an attacker about 10^6 mints, not an offline grind.
+ * read as a big-endian integer, mod 10^6, zero-padded to six digits.
+ *
+ * The code alone is NOT a grinding bound: an attacker can self-sign a fake credential with a
+ * `voucherId` of their choosing, so matching six digits offline takes milliseconds (#160
+ * review). What stops a hijack is that the device also requires the offer to come from the
+ * stall its setup code names (phase 2). The code then confirms the operator is looking at the
+ * same credential as the owner, not that nobody else could produce those digits.
  */
 export function checkCode(voucherId: string, stallPubkey: string, terminalPubkey: string): string {
   const digest = sha256(

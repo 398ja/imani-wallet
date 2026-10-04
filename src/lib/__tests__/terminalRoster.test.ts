@@ -17,6 +17,10 @@ import {
   waitingTerminals,
   expiredWaiting,
   isRevocable,
+  holdsLiveCredential,
+  LiveCredentialError,
+  unmintedWaiting,
+  mintingTerminals,
   MAX_WAITING,
   WAITING_TTL_MS,
   type TerminalRecord,
@@ -78,13 +82,39 @@ describe('the list of what is out', () => {
   })
 
   it('does not duplicate a terminal that is re-recorded', () => {
-    // Re-enrolling a replacement device under the same key is one terminal, not
-    // two rows the owner has to work out the difference between.
-    recordTerminal(STALL, terminal())
+    // Re-enrolling a device whose old row holds nothing to revoke (set up
+    // before revocation existed) is one terminal, not two rows the owner has
+    // to work out the difference between.
+    recordTerminal(STALL, terminal({ token: undefined }))
     recordTerminal(STALL, terminal({ name: 'Door (replaced)' }))
 
     expect(liveTerminals(STALL)).toHaveLength(1)
     expect(liveTerminals(STALL)[0].name).toBe('Door (replaced)')
+  })
+
+  // BLOCKER from the #160 review. A live row's token is the only way to revoke
+  // its credential. Recording a second credential for the same device used to
+  // replace that row, leaving the first credential live and unrevocable. Now
+  // it throws and the first row is unchanged.
+  it('refuses to replace a row whose credential is still live', () => {
+    recordTerminal(STALL, terminal({ status: 'waiting' }))
+
+    expect(() => recordTerminal(STALL, terminal({ token: 'cashuB-second' }))).toThrow(
+      LiveCredentialError,
+    )
+    expect(allTerminals(STALL)).toHaveLength(1)
+    expect(allTerminals(STALL)[0].token).toBe('cashuB-door')
+    expect(holdsLiveCredential(STALL, DOOR.toUpperCase())).toBe(true)
+  })
+
+  // A revoked row has nothing left to revoke, so a fresh credential for the
+  // same device may take its place.
+  it('lets a revoked device be recorded again', () => {
+    recordTerminal(STALL, terminal({ revokedAt: 5 }))
+
+    expect(holdsLiveCredential(STALL, DOOR)).toBe(false)
+    recordTerminal(STALL, terminal({ token: 'cashuB-second' }))
+    expect(allTerminals(STALL)[0].token).toBe('cashuB-second')
   })
 
   it('drops a row whose role it cannot state', () => {
@@ -299,5 +329,30 @@ describe('#160 decision 4: waiting rows', () => {
       JSON.stringify([{ ...terminal(), token: 42 }]),
     )
     expect(allTerminals(STALL)[0].token).toBeUndefined()
+  })
+})
+
+describe('#160 review: phase 0 waiting rows do not block Add', () => {
+  // Phase 0 recorded waiting rows without minting anything, so they hold no
+  // token. Under phase 1 two of them used to fill the waiting limit forever:
+  // they could not be cancelled and never expired. They are not counted now,
+  // and are listed separately so the owner can remove them.
+  it('does not count a token-less waiting row', () => {
+    recordTerminal(STALL, terminal({ status: 'waiting', token: undefined }))
+    recordTerminal(STALL, terminal({ terminalPubkey: COUNTER, status: 'waiting', token: undefined }))
+
+    expect(waitingTerminals(STALL)).toEqual([])
+    expect(unmintedWaiting(STALL).map((t) => t.terminalPubkey).sort()).toEqual([DOOR, COUNTER].sort())
+  })
+
+  // A row still being minted counts as waiting: it becomes one the moment its
+  // credential is checked, and two of them must still hold the limit.
+  it('counts a minting row as waiting, and not against the allowance', () => {
+    recordTerminal(STALL, terminal({ status: 'minting', token: undefined, mintKey: 'k' }))
+
+    expect(waitingTerminals(STALL)).toHaveLength(1)
+    expect(mintingTerminals(STALL)).toHaveLength(1)
+    expect(enrolledCount(STALL)).toBe(0)
+    expect(holdsLiveCredential(STALL, DOOR)).toBe(true)
   })
 })

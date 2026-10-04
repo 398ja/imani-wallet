@@ -1,11 +1,25 @@
 import { revokeCredential, type CredentialMintApi } from './credentialRevocation'
 import {
+  WAITING_TTL_MS,
   allTerminals,
   expiredWaiting,
+  forgetTerminal,
   isRevocable,
+  mintingTerminals,
   revokeTerminal,
+  unmintedWaiting,
+  updateTerminal,
   type TerminalRecord,
 } from './terminalRoster'
+import {
+  CredentialMintError,
+  checkMinted,
+  mintTerminalCredential,
+  ownerTransport,
+  type MintTransport,
+} from './terminalMint'
+import { grantFor } from './terminalRole'
+import { signedFetch } from './nip98'
 import { parseVoucherToken } from './voucherToken'
 
 /**
@@ -75,7 +89,138 @@ export async function revokeTerminalAtMint(
   }
 
   const marked = revokeTerminal(stallPubkey, terminalPubkey, at)
+  // Tell the gateway a waiting credential is gone, so its count of pending
+  // credentials for this stall frees the slot now rather than after 24 hours
+  // (gateway-customer#187). Best effort: the spend is what revokes.
+  if (marked.revoked && row.status === 'waiting' && row.voucherId) {
+    await releasePending(row.voucherId)
+  }
   return marked.revoked ? { revoked: true, record: marked.record } : refused(marked.reason)
+}
+
+/**
+ * `POST /api/v1/wallet/terminal-credentials/{id}/cancel`, signed by the stall.
+ * Never throws: the gateway's pending count also expires on its own after 24 hours.
+ */
+export let releasePending = async (voucherId: string): Promise<void> => {
+  try {
+    await signedFetch(
+      `/api/v1/wallet/terminal-credentials/${encodeURIComponent(voucherId)}/cancel`,
+      'POST',
+    )
+  } catch {
+    // Offline. The gateway's own 24-hour expiry frees the slot.
+  }
+}
+
+/** Swapped by tests, which have no gateway. */
+export function setReleasePending(fn: typeof releasePending): void {
+  releasePending = fn
+}
+
+/**
+ * Remove a phase 0 waiting row (#160 review).
+ *
+ * Phase 0 recorded a waiting row without minting anything, so the row holds no
+ * token, cannot be cancelled at the mint, and has nothing to revoke. It is
+ * removed locally. Refuses any row that holds a token or is not waiting.
+ */
+export function removeUnmintedWaiting(stallPubkey: string, terminalPubkey: string): boolean {
+  const row = unmintedWaiting(stallPubkey).find((t) => t.terminalPubkey === terminalPubkey)
+  if (!row) return false
+  forgetTerminal(stallPubkey, terminalPubkey)
+  return true
+}
+
+/** What `resumeMinting` did with each unsettled row. */
+export interface ResumeOutcome {
+  /** Rows that now hold a checked credential and wait for their device. */
+  completed: number
+  /** Rows removed because nothing live was left behind them. */
+  cleared: number
+  /** Rows left as they were, to try again next time. */
+  pending: number
+}
+
+/**
+ * Finish or clean up every credential request that did not settle (#160 review).
+ *
+ * The enrol screen writes a `minting` row before it asks the gateway for a
+ * credential. A row still `minting` when the owner next opens Terminals is one
+ * whose answer, or token, never arrived, or whose wrong credential could not be
+ * cancelled. Each is settled here:
+ *
+ * - a defective credential still held: spend it again; on success the row goes;
+ * - a voucher id known: fetch and check the token, then the row waits for its
+ *   device, or the wrong credential is spent and the row goes;
+ * - only the Idempotency-Key known: send the same request again, so the gateway
+ *   replays what it minted (or mints it now), then check as above;
+ * - the gateway refuses outright: nothing was minted, the row goes.
+ *
+ * Anything that cannot reach the network leaves the row for next time.
+ */
+export async function resumeMinting(
+  stallPubkey: string,
+  api: CredentialMintApi,
+  transport: MintTransport = ownerTransport,
+  now: number = Date.now(),
+): Promise<ResumeOutcome> {
+  const out: ResumeOutcome = { completed: 0, cleared: 0, pending: 0 }
+  const spendAtOnce = async (token: string) => {
+    const metadata = parseVoucherToken(token).voucher.merchantMetadata
+    const spent = await revokeCredential(token, metadata, api)
+    return spent.revoked || spent.reason === 'already-revoked'
+  }
+
+  for (const row of mintingTerminals(stallPubkey)) {
+    try {
+      if (row.token && row.defect) {
+        if (await spendAtOnce(row.token)) {
+          forgetTerminal(stallPubkey, row.terminalPubkey)
+          out.cleared += 1
+        } else {
+          out.pending += 1
+        }
+        continue
+      }
+
+      const credential = {
+        name: row.name,
+        stallPubkey: stallPubkey.toLowerCase(),
+        role: row.role,
+        lockedTo: row.terminalPubkey.toLowerCase(),
+        permissions: grantFor(row.role, stallPubkey.toLowerCase()),
+      }
+      const minted = row.voucherId
+        ? await checkMinted(credential, row.voucherId, spendAtOnce, transport)
+        : await mintTerminalCredential(credential, spendAtOnce, transport, {
+            idempotencyKey: row.mintKey,
+            onAccepted: (voucherId) =>
+              updateTerminal(stallPubkey, row.terminalPubkey, (r) => ({ ...r, voucherId })),
+          })
+      updateTerminal(stallPubkey, row.terminalPubkey, (r) => ({
+        ...r,
+        status: 'waiting',
+        token: minted.token,
+        voucherId: minted.voucherId,
+        waitingUntil: r.waitingUntil ?? now + WAITING_TTL_MS,
+        mintKey: undefined,
+      }))
+      out.completed += 1
+    } catch (e) {
+      if (e instanceof CredentialMintError && e.unspentToken) {
+        const token = e.unspentToken
+        updateTerminal(stallPubkey, row.terminalPubkey, (r) => ({ ...r, token, defect: e.defect }))
+        out.pending += 1
+      } else if (e instanceof CredentialMintError && (e.status !== undefined || e.defect)) {
+        forgetTerminal(stallPubkey, row.terminalPubkey)
+        out.cleared += 1
+      } else {
+        out.pending += 1
+      }
+    }
+  }
+  return out
 }
 
 /**

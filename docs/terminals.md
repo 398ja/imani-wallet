@@ -251,9 +251,20 @@ till cannot be run end to end right now**. The plan to close them is
    passphrase, is not built yet, so a terminal added from the screen cannot log
    in. A waiting terminal is cancelled automatically after 24 hours, and at most
    two can wait at once. Waiting terminals do not use up your free terminal.
-   The screen refuses a code that is not a real device key, and setup on a
-   device refuses to run while that device still holds a wallet (log out first,
-   keeping the backup key).
+   The gateway enforces the two-waiting limit and the 24 hours too, so a second
+   phone or a cleared browser cannot get round them. The screen refuses a code
+   that is not a real device key, and a device that is already on your list
+   with a live authority: cancel or revoke that one first, so its authority is
+   never left without a way to revoke it. Setup on a device refuses to run
+   while that device still holds a wallet (log out first, keeping the backup
+   key).
+
+   If your connection drops while a terminal is being added, the row says
+   **Still being set up**. The next time you open Terminals with a connection,
+   it is finished (it becomes **Waiting for the device**) or cleared if nothing
+   was created. A waiting row added by an older version of the app, before
+   anything was sent to the device, shows **Remove**: nothing was ever created
+   for it, so removing it is all there is to do.
 2. **The device side has no screen yet.** The logic that makes a terminal's key
    and shows it as a QR exists, but no page displays it.
 3. **Login does not ask whether the authority is still live.** Every terminal

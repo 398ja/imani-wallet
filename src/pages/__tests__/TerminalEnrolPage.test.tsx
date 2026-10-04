@@ -353,6 +353,7 @@ describe('enrolling', () => {
   // Decision 4: two waiting rows is the limit. A third Add is refused in
   // words, before any mint.
   it('refuses a third terminal while two are waiting', async () => {
+    // Waiting rows that were really minted, so each holds a token.
     for (const k of ['2', '3']) {
       recordTerminal(STALL, {
         terminalPubkey: k.repeat(64),
@@ -360,6 +361,8 @@ describe('enrolling', () => {
         role: TERMINAL_ROLES.REDEEM_ONLY,
         enrolledAt: Date.now(),
         status: 'waiting',
+        token: `cashuB-waiting-${k}`,
+        voucherId: `v-${k}`,
       })
     }
     await fillEverything()
@@ -414,6 +417,137 @@ describe('#160 phase 0: a code that is nobody\'s key', () => {
 
     expect(addButton().disabled).toBe(true)
     expect(screen.getByText(/not a terminal code/)).toBeTruthy()
+    expect(allTerminals(STALL)).toEqual([])
+  })
+})
+
+describe('#160 review: re-adding a device already on the list', () => {
+  // BLOCKER from the review. The owner adds a device, then scans the same
+  // device again (a retry, or the code still on its screen). Before the fix a
+  // second credential was minted and the roster row holding the FIRST one's
+  // token was replaced, so the first credential stayed live with no way to
+  // revoke it. Now the second Add is refused before anything is minted, and
+  // the first row, token and all, is untouched.
+  it('refuses, mints nothing, and keeps the first credential revocable', async () => {
+    await fillEverything()
+    fireEvent.click(addButton())
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Waiting for the device' })).toBeTruthy())
+    const first = allTerminals(STALL)[0]
+    expect(first.token).toBeTruthy()
+    cleanup()
+
+    await fillEverything()
+
+    expect(addButton().disabled).toBe(true)
+    expect(screen.getByText(/already on your list with a live authority/)).toBeTruthy()
+    expect(posts).toHaveLength(1)
+    expect(allTerminals(STALL)).toHaveLength(1)
+    expect(allTerminals(STALL)[0].token).toBe(first.token)
+  })
+
+  // A device whose earlier credential was revoked has nothing live left, so it
+  // can be added again: that is how a terminal comes back.
+  it('allows a device whose earlier credential was revoked', async () => {
+    recordTerminal(STALL, {
+      terminalPubkey: DEVICE,
+      name: 'Old',
+      role: TERMINAL_ROLES.REDEEM_ONLY,
+      enrolledAt: 1,
+      token: 'cashuB-old',
+      revokedAt: 2,
+    })
+    await fillEverything()
+
+    expect(addButton().disabled).toBe(false)
+  })
+})
+
+describe('#160 review: a mint whose answer is lost is not orphaned', () => {
+  // The gateway accepted the request and named the voucher, but the token
+  // never arrived before the poll gave up. Before the fix nothing was recorded,
+  // so a credential that may be live was unknown to the roster. Now a row is
+  // written before the request, keeps the voucher id, and stays `minting` so
+  // the next open of Terminals can finish or clean it up.
+  it('keeps a minting row with the voucher id when the token never arrives', async () => {
+    const slow = {
+      ...fakeTransport,
+      get: async () => new Response(JSON.stringify({ status: 'PENDING' }), { status: 200 }),
+    }
+    // Each poll moves the clock a minute on, so the 60-second wait gives up.
+    let clock = 1_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => (clock += 60_000))
+    render(
+      <MemoryRouter>
+        <TerminalEnrolPage stallPubkey={STALL} transport={slow} spendApi={fakeSpend} />
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add terminal' })).toBeTruthy())
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Front counter' } })
+    fireEvent.click(screen.getByRole('button', { name: /Redemption only/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
+    fireEvent.click(addButton())
+
+    await waitFor(() => expect(screen.getByText(/not ready in time/)).toBeTruthy())
+    const [row] = allTerminals(STALL)
+    expect(row.status).toBe('minting')
+    expect(row.voucherId).toBe('5f8a487d-6cea-4a7d-b681-9d5d62cc9dd9')
+    expect(row.mintKey).toBeTruthy()
+  })
+
+  // The request carries an Idempotency-Key, and the same key is on the row,
+  // so a resumed request replays the credential instead of minting another.
+  it('sends the Idempotency-Key it recorded', async () => {
+    const headers: Array<Record<string, string> | undefined> = []
+    const keyed = {
+      ...fakeTransport,
+      post: async (path: string, body: unknown, h?: Record<string, string>) => {
+        headers.push(h)
+        return fakeTransport.post(path, body)
+      },
+    }
+    render(
+      <MemoryRouter>
+        <TerminalEnrolPage stallPubkey={STALL} transport={keyed} spendApi={fakeSpend} />
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add terminal' })).toBeTruthy())
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Front counter' } })
+    fireEvent.click(screen.getByRole('button', { name: /Redemption only/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
+    fireEvent.click(addButton())
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Waiting for the device' })).toBeTruthy())
+    expect(headers[0]?.['Idempotency-Key']).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
+  // The gateway refused (for example its own two-waiting limit, 409). Nothing
+  // was minted, so no row is left behind and the owner reads the reason.
+  it('leaves no row when the gateway refuses', async () => {
+    const refusing = {
+      ...fakeTransport,
+      post: async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'TERMINAL_PENDING_LIMIT',
+              message: 'Two terminals are already waiting for their device. Finish or cancel one first.',
+            },
+          }),
+          { status: 409 },
+        ),
+    }
+    render(
+      <MemoryRouter>
+        <TerminalEnrolPage stallPubkey={STALL} transport={refusing} spendApi={fakeSpend} />
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add terminal' })).toBeTruthy())
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Front counter' } })
+    fireEvent.click(screen.getByRole('button', { name: /Redemption only/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
+    fireEvent.click(addButton())
+
+    await waitFor(() => expect(screen.getByText(/Two terminals are already waiting/)).toBeTruthy())
     expect(allTerminals(STALL)).toEqual([])
   })
 })

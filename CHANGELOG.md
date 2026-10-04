@@ -155,7 +155,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Waiting rows are bounded, not counted** (#160 decision 4). Waiting rows do not use up the
   free terminal. They are capped at 2 (`TOO_MANY_WAITING`, "Two terminals are already waiting
   for their device") and expire after 24 hours. The Terminals screen cancels expired rows by
-  spending their credential.
+  spending their credential. The client check is a hint: gateway-customer#187 enforces the same
+  limit and the 24 hours at mint time (409 `TERMINAL_PENDING_LIMIT`), and Cancel tells it the
+  slot is free (`POST /api/v1/wallet/terminal-credentials/{id}/cancel`).
+
+### Fixed (#160 review)
+
+- **Re-adding a device already on the list no longer orphans its first credential** (BLOCKER).
+  `recordTerminal` replaced the row for the same key, so a second Add minted a new credential
+  and dropped the token of the first, which stayed live and could no longer be revoked.
+  `checkEnrolment` now refuses a key with a live credential (`ALREADY_LIVE`, "already on your
+  list with a live authority. Cancel or revoke it there first"), and `recordTerminal` throws
+  `LiveCredentialError` rather than replace such a row. A revoked device can still be added
+  again.
+- **A credential whose answer was lost is no longer orphaned.** A `minting` row, with the
+  request's `Idempotency-Key`, is written before the mint request. The voucher id is added as
+  soon as the gateway names it. If the token poll times out, or a wrong credential's cancelling
+  spend fails, the row stays. The next open of Terminals (`resumeMinting`) fetches and checks the
+  token, re-sends the request with the same key so the gateway replays rather than re-mints,
+  retries the spend, or clears the row when the gateway refused. Rows read *Still being set up*
+  meanwhile.
+- **Phase 0 waiting rows no longer block Add.** They hold no token, so they are not counted
+  against the two-waiting limit, and the list offers **Remove** for them (nothing was minted).
+- **A minted credential must name exactly the stall as co-spender.** `credentialDefect` used
+  `includes`, so a third key in `pubkeys` passed. It now requires `pubkeys` to be exactly
+  `[stall]`, `n_sigs` 1, and no `refund` or `locktime` tag.
 
 ### Fixed
 
