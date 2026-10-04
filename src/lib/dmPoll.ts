@@ -796,8 +796,9 @@ function exactOf(token: string | undefined): number | undefined {
  * The cost is that a sale that cannot produce a verifiable warrant cannot be
  * delivered to anyone. A terminal is the case that matters: its key is not
  * the stall's, so it can only send `none`. Sell therefore refuses on a
- * terminal before anything is minted (`mayWarrantSale` in warrantSigner.ts),
- * until the `delegated` warrant form is supported.
+ * terminal before anything is minted (`mayWarrantSale` in warrantSigner.ts).
+ * The `delegated` form is verified since #152 (`issuerDelegation.ts`) and the
+ * card purchase issuer signs with it; terminals at the counter do not yet.
  *
  * All four unauthorised states are refused together — no warrant, a warrant
  * signed as `none`, a warrant that was present and did not hold, and an
@@ -861,9 +862,8 @@ export function refuseIfUnwarranted(meta: Record<string, unknown> | undefined): 
     // An unsigned `processor` warrant (#152). It names a payment record but
     // carries no signature, and nothing on this device can check the record,
     // so it is the issuing service's word alone: the trust a warrant exists to
-    // remove. Any merchant session could mint one. Refused until a processor
-    // warrant carries something verifiable here (the card path's planned form
-    // is `delegated`, signed by the stall's burnable terminal credential).
+    // remove. Any merchant session could mint one. The card path signs a
+    // `delegated` warrant instead, which verifies (`issuerDelegation.ts`).
     validation.warrant !== 'claimed'
   ) {
     return

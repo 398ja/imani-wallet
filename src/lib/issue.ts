@@ -639,7 +639,8 @@ export async function issueAndDeliver(
    * delivered a coupon the customer's wallet threw out as "Coupon not
    * authorised", and showed staff "It is in their wallet now". Asked after the
    * session checks above so a lapsed till still hears the recoverable thing
-   * first. Lifted when the `delegated` warrant form is supported.
+   * first. Lifted when terminal enrolment also collects the owner's
+   * `delegated` warrant delegation (the verifier supports it since #152).
    */
   if (!mayWarrantSale(params.actor)) {
     throw new UnwarrantedSaleError(TERMINAL_SALE_UNSUPPORTED)
