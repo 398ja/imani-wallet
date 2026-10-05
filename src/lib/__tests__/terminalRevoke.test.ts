@@ -220,3 +220,77 @@ describe('cancelling a waiting credential frees the gateway slot', () => {
     expect(release).toHaveBeenCalledWith(VOUCHER)
   })
 })
+
+describe('#160 round 2: an ambiguous answer keeps the minting row', () => {
+  // A 502, 504 or 500 can come back after the gateway already minted the
+  // credential. Forgetting the row and its Idempotency-Key would leave a live
+  // credential nobody knows about, so the row stays and is resumed later.
+  it.each([500, 502, 504, 408, 429])('keeps the row on HTTP %i', async (status) => {
+    recordTerminal(STALL, row())
+    const t = transport(good(), {
+      post: vi.fn(async () => new Response('{}', { status })),
+    })
+
+    const out = await resumeMinting(STALL, spendApi(), t)
+
+    expect(out.pending).toBe(1)
+    const [r] = allTerminals(STALL)
+    expect(r.status).toBe('minting')
+    expect(r.mintKey).toBe('key-1')
+  })
+
+  // A network failure (fetch throws) is just as ambiguous.
+  it('keeps the row when the network fails', async () => {
+    recordTerminal(STALL, row())
+    const t = transport(good(), {
+      post: vi.fn(async () => {
+        throw new TypeError('Failed to fetch')
+      }),
+    })
+
+    const out = await resumeMinting(STALL, spendApi(), t)
+
+    expect(out.pending).toBe(1)
+    expect(allTerminals(STALL)[0].mintKey).toBe('key-1')
+  })
+
+  // Only a definitive 4xx means nothing was minted, so only that forgets the row.
+  it.each([400, 403, 409])('forgets the row on a definitive HTTP %i', async (status) => {
+    recordTerminal(STALL, row())
+    const t = transport(good(), {
+      post: vi.fn(async () => new Response('{}', { status })),
+    })
+
+    expect((await resumeMinting(STALL, spendApi(), t)).cleared).toBe(1)
+    expect(allTerminals(STALL)).toEqual([])
+  })
+})
+
+describe('#160 round 2: a wrong credential that was spent gives its slot back', () => {
+  // The gateway counts the wrong credential as waiting until it is cancelled.
+  // Once the owner's wallet has spent it, it tells the gateway, so the slot is
+  // free now rather than after 24 hours.
+  it('releases the slot when the retried spend lands', async () => {
+    const release = vi.fn(async () => {})
+    setReleasePending(release)
+    const bad = buildLockedCredentialToken({ stallKey: STALL_KEY, devicePubkey: OTHER })
+    recordTerminal(STALL, row({ token: bad, defect: 'wrong-lock', voucherId: VOUCHER }))
+
+    await resumeMinting(STALL, spendApi(), transport(null))
+
+    expect(release).toHaveBeenCalledWith(VOUCHER)
+  })
+
+  // The same when the wrong credential is found on resume and spent at once.
+  it('releases the slot when a wrong token found on resume is spent', async () => {
+    const release = vi.fn(async () => {})
+    setReleasePending(release)
+    const bad = buildLockedCredentialToken({ stallKey: STALL_KEY, devicePubkey: OTHER })
+    recordTerminal(STALL, row({ voucherId: VOUCHER }))
+
+    const out = await resumeMinting(STALL, spendApi(), transport(bad))
+
+    expect(out.cleared).toBe(1)
+    expect(release).toHaveBeenCalledWith(VOUCHER)
+  })
+})

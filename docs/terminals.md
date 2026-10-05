@@ -264,7 +264,18 @@ till cannot be run end to end right now**. The plan to close them is
    it is finished (it becomes **Waiting for the device**) or cleared if nothing
    was created. A waiting row added by an older version of the app, before
    anything was sent to the device, shows **Remove**: nothing was ever created
-   for it, so removing it is all there is to do.
+   for it, so removing it is all there is to do. Only a clear refusal from the
+   gateway clears the row. A server error, a timeout or a dropped connection
+   leaves it **Still being set up**, because the authority may already exist.
+
+   **Every terminal authority must be confirmed before it can sell.** The
+   gateway refuses Sell for an authority that neither its device nor your stall
+   has confirmed, and lapses it after 24 hours. The app does this for you. If you
+   mint one yourself, `scripts/mint-terminal-credential.mjs` confirms it as the
+   stall. The card-purchase issuer (`services/purchase-issuer`) confirms each
+   credential it holds, as its device, the first time it reads it. Anything else
+   that mints a terminal credential must call
+   `POST /api/v1/wallet/terminal-credentials/{id}/confirm` itself.
 2. **The device side has no screen yet.** The logic that makes a terminal's key
    and shows it as a QR exists, but no page displays it.
 3. **Login does not ask whether the authority is still live.** Every terminal

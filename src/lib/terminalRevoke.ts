@@ -132,6 +132,55 @@ export function removeUnmintedWaiting(stallPubkey: string, terminalPubkey: strin
   return true
 }
 
+/**
+ * Whether an HTTP status is the gateway refusing for good (#160 round 2).
+ *
+ * Only a 4xx says "nothing was minted and asking again will not change that". A 5xx, a
+ * proxy 502/504, 408 (timeout) and 429 (slow down) say nothing about whether the gateway
+ * minted before it failed, so they are not definitive.
+ */
+export function isDefinitiveRefusal(status: number | undefined): boolean {
+  return status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429
+}
+
+/**
+ * What a `minting` row becomes when its mint did not finish cleanly. Shared by the enrol
+ * screen and `resumeMinting`, so the two cannot drift.
+ *
+ * - A wrong credential whose spend did not land: keep the token and defect, retry the spend.
+ * - A wrong credential that was spent: the row goes, and the gateway slot is released.
+ * - A definitive 4xx refusal: nothing was minted, so the row goes.
+ * - Anything else (5xx, timeout, network): it may have been minted, so the row stays
+ *   `minting` with its Idempotency-Key and is resumed later.
+ */
+export async function settleMintFailure(
+  stallPubkey: string,
+  terminalPubkey: string,
+  error: unknown,
+): Promise<'kept' | 'cleared' | 'pending'> {
+  if (error instanceof CredentialMintError && error.unspentToken) {
+    const token = error.unspentToken
+    updateTerminal(stallPubkey, terminalPubkey, (r) => ({ ...r, token, defect: error.defect }))
+    return 'kept'
+  }
+  if (error instanceof CredentialMintError && error.defect) {
+    await forgetSpentDefect(stallPubkey, terminalPubkey)
+    return 'cleared'
+  }
+  if (error instanceof CredentialMintError && isDefinitiveRefusal(error.status)) {
+    forgetTerminal(stallPubkey, terminalPubkey)
+    return 'cleared'
+  }
+  return 'pending'
+}
+
+/** A wrong credential was spent: drop its row, and give its gateway slot back at once. */
+async function forgetSpentDefect(stallPubkey: string, terminalPubkey: string): Promise<void> {
+  const voucherId = allTerminals(stallPubkey).find((t) => t.terminalPubkey === terminalPubkey)?.voucherId
+  forgetTerminal(stallPubkey, terminalPubkey)
+  if (voucherId) await releasePending(voucherId)
+}
+
 /** What `resumeMinting` did with each unsettled row. */
 export interface ResumeOutcome {
   /** Rows that now hold a checked credential and wait for their device. */
@@ -155,7 +204,8 @@ export interface ResumeOutcome {
  *   device, or the wrong credential is spent and the row goes;
  * - only the Idempotency-Key known: send the same request again, so the gateway
  *   replays what it minted (or mints it now), then check as above;
- * - the gateway refuses outright: nothing was minted, the row goes.
+ * - the gateway refuses with a definitive 4xx: nothing was minted, the row goes. A 5xx,
+ *   408, 429 or no answer leaves the row, because the gateway may have minted.
  *
  * Anything that cannot reach the network leaves the row for next time.
  */
@@ -176,7 +226,7 @@ export async function resumeMinting(
     try {
       if (row.token && row.defect) {
         if (await spendAtOnce(row.token)) {
-          forgetTerminal(stallPubkey, row.terminalPubkey)
+          await forgetSpentDefect(stallPubkey, row.terminalPubkey)
           out.cleared += 1
         } else {
           out.pending += 1
@@ -208,16 +258,9 @@ export async function resumeMinting(
       }))
       out.completed += 1
     } catch (e) {
-      if (e instanceof CredentialMintError && e.unspentToken) {
-        const token = e.unspentToken
-        updateTerminal(stallPubkey, row.terminalPubkey, (r) => ({ ...r, token, defect: e.defect }))
-        out.pending += 1
-      } else if (e instanceof CredentialMintError && (e.status !== undefined || e.defect)) {
-        forgetTerminal(stallPubkey, row.terminalPubkey)
-        out.cleared += 1
-      } else {
-        out.pending += 1
-      }
+      const settled = await settleMintFailure(stallPubkey, row.terminalPubkey, e)
+      if (settled === 'cleared') out.cleared += 1
+      else out.pending += 1
     }
   }
   return out

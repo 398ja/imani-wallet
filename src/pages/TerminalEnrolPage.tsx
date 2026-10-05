@@ -10,14 +10,12 @@ import { licenceStatus } from '../lib/licenceStatus'
 import {
   WAITING_TTL_MS,
   enrolledCount,
-  forgetTerminal,
   holdsLiveCredential,
   recordTerminal,
   updateTerminal,
   waitingTerminals,
 } from '../lib/terminalRoster'
 import {
-  CredentialMintError,
   checkCode,
   formatCheckCode,
   mintTerminalCredential,
@@ -25,6 +23,7 @@ import {
   type MintTransport,
 } from '../lib/terminalMint'
 import { revokeCredential, type CredentialMintApi } from '../lib/credentialRevocation'
+import { settleMintFailure } from '../lib/terminalRevoke'
 import { legacyApi } from '../lib/legacyBridge'
 import { parseVoucherToken } from '../lib/voucherToken'
 import { useOnline } from '../lib/useOnline'
@@ -185,7 +184,8 @@ export function TerminalEnrolPage({
         code: formatCheckCode(checkCode(minted.voucherId, stallPubkey, credential.lockedTo)),
       })
     } catch (e) {
-      settleFailedMint(stallPubkey, credential.lockedTo, e)
+      // Shared with resumeMinting: only a definitive 4xx forgets the row (#160 round 2).
+      await settleMintFailure(stallPubkey, credential.lockedTo, e)
       setFailure(e instanceof Error ? e.message : 'Could not set up the terminal.')
     } finally {
       setBusy(false)
@@ -306,31 +306,6 @@ export function TerminalEnrolPage({
       </Button>
     </Screen>
   )
-}
-
-/**
- * What the `minting` row becomes when the mint did not finish cleanly.
- *
- * - The gateway refused outright (any HTTP status), or the credential came back
- *   wrong and was spent: nothing is live, so the row is removed.
- * - The credential came back wrong and the spend did not land: the row keeps
- *   the token and the defect, so the next open retries the spend.
- * - Anything else (the request or the token poll did not answer): it may have
- *   been minted, so the row stays `minting` and is resumed on the next open.
- */
-function settleFailedMint(stallPubkey: string, terminalPubkey: string, error: unknown): void {
-  if (error instanceof CredentialMintError && error.unspentToken) {
-    const token = error.unspentToken
-    updateTerminal(stallPubkey, terminalPubkey, (row) => ({
-      ...row,
-      token,
-      defect: error.defect,
-    }))
-    return
-  }
-  if (error instanceof CredentialMintError && (error.status !== undefined || error.defect)) {
-    forgetTerminal(stallPubkey, terminalPubkey)
-  }
 }
 
 /**

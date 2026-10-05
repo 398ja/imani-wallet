@@ -161,6 +161,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A server error while adding a terminal no longer forgets a credential that may exist**
+  (#160 round 2). Any HTTP status used to clear the `minting` row and its Idempotency-Key, so a
+  proxy 504 after the gateway minted left an unknown credential holding a pending slot. Now only
+  a definitive 4xx (not 408 or 429) clears it (`isDefinitiveRefusal`). A 5xx, timeout or network
+  error keeps the row, and `resumeMinting` re-sends the same key. The enrol screen and
+  `resumeMinting` share one `settleMintFailure`.
+- **A wrong credential that was spent gives its gateway slot back** (#160 round 2). The
+  defect-spent paths now call `/cancel`, so the slot is free at once rather than after 24 hours.
+- **Credentials minted outside the app are confirmed** (#160 round 2). Since gateway-customer
+  V27 an unconfirmed credential cannot sell. `scripts/mint-terminal-credential.mjs` now confirms
+  what it mints, as the stall, and fails on anything but 204. `services/purchase-issuer` sells
+  with `X-Imani-Terminal-Credential`, so it is affected too: it confirms each credential once,
+  as its device, before first use, and retries until the gateway says yes.
+
 - **Re-adding a device already on the list no longer orphans its first credential** (BLOCKER).
   `recordTerminal` replaced the row for the same key, so a second Add minted a new credential
   and dropped the token of the first, which stayed live and could no longer be revoked.
