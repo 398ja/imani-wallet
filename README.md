@@ -140,6 +140,10 @@ For the public redemption ledger — kind-7377 attestations, the pseudonymous
 ledger key, Pedersen commitments, and the hosted audit API in `services/` —
 see [`docs/redemption-ledger-technical-guide.md`](docs/redemption-ledger-technical-guide.md).
 
+For how a terminal is put into service end to end (enrolment, delivery, login,
+revocation, and the work still to build), see
+[`docs/spec-terminals-in-service.md`](docs/spec-terminals-in-service.md).
+
 The original design record was retired once the code became the authority. It is
 still in git history (`docs/superpowers/specs/2026-08-11-farmer-coupon-wallet-design.md`,
 last present at `e38ba27`) if the reasoning behind a specific decision is needed.
