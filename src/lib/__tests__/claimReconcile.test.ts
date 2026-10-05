@@ -85,6 +85,9 @@ beforeEach(() => {
   store.txs = [issued()]
   store.vouchers = []
   store.published = []
+  // The fixtures' mint. The sweep refuses a coupon while the trusted list is
+  // unknown (#133), so these tests name it as a deployed build does.
+  vi.stubEnv('VITE_TRUSTED_MINT_URLS', 'http://mint.test')
 })
 
 describe('reconcileClaims (#95)', () => {

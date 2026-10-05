@@ -23,6 +23,8 @@ import {
 import { announceQueued, settleQueued, type QueuedBundleSeed } from './queuedToast'
 import { announceRefusal } from './refusalToast'
 import { recordRefusal } from './refusedCoupons'
+import { heldCoupons, recordHeld, releaseHeld } from './heldCoupons'
+import { announceHeld } from './heldToast'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { bytesToHex } from '@noble/hashes/utils'
 
@@ -49,6 +51,7 @@ import { legacyApi, withCorrelation } from './legacyBridge'
 import { claimToFile } from './merchantClaim'
 import { withWebLock } from './webLock'
 import { CALLS_PER_RECEIVE, receivePacer } from './receivePacer'
+import { checkTokenBacking, loadTrustedMints, onTrustedMintsChange } from './trustedMint'
 
 /**
  * Gateway REST, same-origin: `/api/v1/...` reaches customer-wallet through the
@@ -934,6 +937,9 @@ export function refuseIfAnotherStalls(
  */
 function redemptionAdapter(): RedemptionAdapter {
   return {
+    // Where the value is, asked by dm-poll before every redeem (#131). Plain ecash
+    // and vouchers alike: a rogue mint does not need to forge a coupon to be paid.
+    checkBacking: checkTokenBacking,
     async redeem(token: string, options?: RedemptionOptions) {
       // Loads the legacy layer and re-supplies NIP-98 credentials, which
       // api.receive signs with. Re-supplied on every redeem so a lock/reunlock
@@ -1350,9 +1356,47 @@ let onSseOpen: (() => void) | undefined
  * a redundant catch-up costs one query and no writes.
  */
 function catchUp(): void {
-  void service?.fetchRecentDms()
+  // The trusted-mint list first, in case the start-up load failed: a coupon
+  // deferred for want of it is offered again by this very query (#133). Free once
+  // the list has loaded.
+  const polling = service
+  void loadTrustedMints().then(() => polling?.fetchRecentDms())
   void flushUnacknowledgedEscrows()
 }
+
+/**
+ * The trusted mints changed: the gateway answered after a failure, or named a
+ * mint it did not name before (#133 review, MEDIUM-2). Every deferred delivery is
+ * offered again by a catch-up, and every HELD one by id, however old, since a
+ * coupon held longer than the poll window would otherwise never be offered again.
+ */
+function onMintsChanged(): void {
+  catchUp()
+  void reofferHeld()
+}
+
+async function reofferHeld(): Promise<void> {
+  const polling = service
+  const owner = currentPubkey
+  if (!polling || !owner) return
+  const held = heldCoupons(owner)
+  // Anything the poller has since consumed (redeemed, or refused for a reason no
+  // configuration can change) is no longer waiting.
+  for (const coupon of held) {
+    if (typeof polling.hasProcessed === 'function' && polling.hasProcessed(coupon.eventId)) {
+      releaseHeld(owner, coupon.eventId)
+    }
+  }
+  const waiting = heldCoupons(owner)
+  if (waiting.length === 0 || typeof polling.reofferEvents !== 'function') return
+  const since = Math.min(...waiting.map((c) => c.createdAt)) - 60
+  await polling.reofferEvents(
+    waiting.map((c) => c.eventId),
+    since,
+  )
+}
+
+let stopMintListener: (() => void) | undefined
 
 /**
  * Acknowledge escrows an earlier redemption left HELD (#110). Never throws.
@@ -1441,7 +1485,10 @@ export function startDmPoll(pubkey: string): DmPollService {
     // Wider than the 24h default. NIP-59 randomises a gift wrap's created_at
     // into the past to frustrate timing analysis, so a coupon sent minutes ago
     // can carry a timestamp from two days back and fall outside a 24h `since`
-    // window — present on the relay, invisible to the wallet.
+    // window — present on the relay, invisible to the wallet. This window is
+    // measured on WRAP time, so it needs no allowance; dm-poll's
+    // `reofferEvents`, which starts from a rumor time, adds
+    // GIFT_WRAP_BACKDATE_SECONDS itself (#175 review).
     recentDmsSince: 7 * 24 * 60 * 60,
     /**
      * The processed set must be able to cover the FETCH WINDOW above.
@@ -1499,9 +1546,38 @@ export function startDmPoll(pubkey: string): DmPollService {
     // screen still says so after the toast has gone (#145).
     const owner = currentPubkey
     service.on('redemption:refused', (event) => recordRefusal(owner ?? '', event))
+    // Held, not refused (#133 review): kept visible as "waiting to be verified",
+    // announced once, and forgotten when the delivery is finally redeemed.
+    service.on('redemption:held', (event) => {
+      if (recordHeld(owner ?? '', event)) announceHeld(event)
+    })
+    service.on('redemption:released', (event) => releaseHeld(owner ?? '', event?.eventId))
+    service.on('redemption:success', (event) => releaseHeld(owner ?? '', event?.eventId))
   }
 
-  void service.start()
+  // Re-offer held and deferred coupons whenever the trusted mints change. The
+  // loader retries on its own backoff, so this is what makes a deferral heal
+  // without a reload or a manual retry (#133 review, MEDIUM-2).
+  stopMintListener?.()
+  stopMintListener = onTrustedMintsChange(onMintsChanged)
+
+  // The trusted-mint list FIRST, then the poller (#133). Its first catch-up
+  // redeems at once, and every redeem asks `checkTokenBacking`; before the list
+  // has loaded that answer is "defer", so starting first would park the whole
+  // backlog until the next catch-up. `loadTrustedMints` never rejects, and a
+  // gateway that cannot be reached leaves the list unknown, which still defers
+  // rather than waving anything through. `catchUp` retries the load.
+  const starting = service
+  void loadTrustedMints().then(() => {
+    // Not if the poller was stopped, or replaced by an account switch, meanwhile.
+    if (service === starting) {
+      // Then the coupons held in an earlier session, however old, in case the
+      // configuration was fixed while the app was closed.
+      void starting.start().then(() => {
+        if (service === starting) void reofferHeld()
+      })
+    }
+  })
   // Startup half of the ack retry (#110). The legacy API client is signed in
   // by now, so the per-account ledger resolves to this account.
   void flushUnacknowledgedEscrows()
@@ -1532,6 +1608,8 @@ function onVisible(): void {
  */
 export function stopDmPoll(): void {
   onSseOpen = undefined
+  stopMintListener?.()
+  stopMintListener = undefined
   document.removeEventListener('visibilitychange', onVisible)
   window.removeEventListener('online', catchUp)
   void service?.stop()

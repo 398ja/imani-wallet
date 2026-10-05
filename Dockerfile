@@ -63,13 +63,22 @@ ARG VITE_GOOGLE_CLIENT_ID
 ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
 
 # The mints this build credits coupons from, comma-separated (src/lib/trustedMint.ts).
-# Not a secret: it is a URL the browser already talks to. It must be set per environment,
-# because the only other source is the gateway's config, and a wallet that has not received
-# that config, or is pointed at a gateway that names no mint, then trusts nothing in
-# particular and credits from anywhere (imani-wallet#133). Setting it here makes the
-# trusted mint a property of the build rather than of whatever the network said.
+# Not a secret: it is a URL the browser already talks to. Set per environment, as
+# the PUBLIC mint URL tokens carry in `m` (e.g. https://mint.staging.398ja.xyz).
+#
+# REQUIRED (#133 review, HIGH-1). This image is always a production bundle, and a
+# production bundle that names no mint relies on /api/v1/config alone, which on
+# beta and prod named none: the gate then had nothing to compare against. The
+# wallet now holds coupons in that state rather than crediting them, so an image
+# built without this would credit nothing until the gateway's env is fixed. The
+# build fails instead (scripts/check-trusted-mint-build.sh). A throwaway local
+# image may pass ALLOW_UNTRUSTED_MINT_BUILD=true, which is announced and must
+# never be deployed.
 ARG VITE_TRUSTED_MINT_URLS
 ENV VITE_TRUSTED_MINT_URLS=$VITE_TRUSTED_MINT_URLS
+ARG ALLOW_UNTRUSTED_MINT_BUILD=false
+COPY scripts/check-trusted-mint-build.sh /tmp/check-trusted-mint-build.sh
+RUN ALLOW_UNTRUSTED_MINT_BUILD="$ALLOW_UNTRUSTED_MINT_BUILD" sh /tmp/check-trusted-mint-build.sh
 
 COPY . .
 # `tsc -b && vite build`. The tsc half typechecks ./packages AND ../nap through

@@ -29,6 +29,8 @@ vi.mock('../arrivalToast', () => ({
 // the whole suite before a single test runs.
 // Third toast module on this path, and mocked for the same reason as the two
 // beside it: `sonner` touches the DOM at import and this suite runs headless.
+// sonner touches the DOM at import; the held-coupon toast is its own module for that reason (#133 review).
+vi.mock('../heldToast', () => ({ announceHeld: () => {} }))
 vi.mock('../refusalToast', () => ({ announceRefusal: vi.fn() }))
 vi.mock('../queuedToast', () => ({
   announceQueued: () => {},

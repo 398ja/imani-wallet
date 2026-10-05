@@ -79,6 +79,10 @@ export type RefusalReason =
    * distinguishes them; the refusal does not need to.
    */
   | 'unwarranted'
+  /** The token's proofs are not in the unit the wallet credits (sat). */
+  | 'wrong-unit'
+  /** The token could not be read well enough to say where its value is. */
+  | 'undecodable'
 
 /**
  * The recipient refused a redemption on policy grounds, before any swap.

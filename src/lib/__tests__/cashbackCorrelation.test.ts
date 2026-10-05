@@ -24,6 +24,12 @@ vi.mock('../legacyBridge', async (orig) => ({
 
 const { installTokenIdFill, withCorrelation } = await import('../legacyBridge')
 const { replayPendingCashback } = await import('../cashback')
+const { buildPlainToken } = await import('./voucherFixtures')
+const { gatewayAnswers, resetGate } = await import('./trustedMintKit')
+
+/** A real cashback token at the mint the gate trusts, so the gated commit reaches the swap (#133 review). */
+const MINT = 'https://mint.staging.398ja.xyz'
+const CASHBACK_TOKEN = buildPlainToken(MINT)
 
 /** Lets the test choose when each redeem's write lands. */
 const gate = () => {
@@ -41,14 +47,17 @@ const writeVoucher = (tokenId: string, correlation: unknown) =>
 
 const rowFor = (tokenId: string) => written.rows.find((r) => r.tokenId === tokenId)
 
-beforeEach(() => {
+beforeEach(async () => {
   written.rows = []
-  const store = new Map<string, string>([['imani:cashback:pending', 'cashuBcashback']])
+  // The legacy single-token stash an older build wrote, which is still read.
+  const store = new Map<string, string>([['imani:cashback:pending', CASHBACK_TOKEN]])
   vi.stubGlobal('localStorage', {
     getItem: (k: string) => store.get(k) ?? null,
     setItem: (k: string, v: string) => void store.set(k, v),
     removeItem: (k: string) => void store.delete(k),
   })
+  resetGate()
+  await gatewayAnswers(MINT, [MINT])
 })
 
 describe('a cashback redeem beside a DM redeem (#145 review)', () => {

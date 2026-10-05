@@ -97,6 +97,8 @@ export type {
   RedemptionErrorEvent,
   RedemptionRefusedEvent,
   RedemptionUnsavedEvent,
+  RedemptionHeldEvent,
+  RedemptionReleasedEvent,
   SubscriptionStateEvent,
   DmPollEvents,
 
@@ -107,13 +109,15 @@ export type {
   ReplayResult,
 } from './types';
 
-export { DEFAULT_CONFIG } from './types/config';
+export { DEFAULT_CONFIG, GIFT_WRAP_BACKDATE_SECONDS } from './types/config';
 
 // Adapters (re-exported for convenience)
 export type {
   NostrdbAdapter,
   CryptoAdapter,
   StorageAdapter,
+  BackingVerdict,
+  HoldReason,
   RedemptionAdapter,
   RedemptionOptions,
   UiAdapter,
@@ -144,6 +148,7 @@ export {
   AdapterError,
 } from './errors';
 export type { RefusalReason } from './errors';
+export { BackingDeferredError, BackingHeldError } from './processing/backingGate';
 
 // Spec 038 — unified receive pipeline surfaces
 export {

@@ -19,7 +19,7 @@ import { TokenRedeemer } from '../src/processing/TokenRedeemer';
 describe('TokenRedeemer redemption options', () => {
   function redeemerWith(redeem: ReturnType<typeof vi.fn>) {
     return new TokenRedeemer({
-      redemptionAdapter: { redeem },
+      redemptionAdapter: { redeem, checkBacking: () => ({ outcome: 'accept' }) },
       getTokenFingerprint: (token: string) => `fp-${token}`,
       cryptoAdapter: {} as never,
     } as never);

@@ -421,6 +421,52 @@ describe('voucher metadata comes from the token, not the envelope', () => {
     expect(crypto.extractToken(dmEnvelope('cashuBnotavoucher'))).toBe('cashuBnotavoucher')
   })
 
+  /**
+   * #131/#133 review (HIGH-2): a voucher at a mint the wallet does not list is
+   * HANDED OVER here, not dropped. Returning no token marks the delivery processed
+   * for good, so a mere mismatch between two services' mint settings would lose
+   * every coupon. The redemption gate holds it instead: nothing is swapped, the
+   * delivery stays unconsumed, and the wallet shows it as waiting to be verified.
+   */
+  it('hands over a voucher at an unlisted mint, for the redemption gate to hold', () => {
+    vi.stubEnv('VITE_TRUSTED_MINT_URLS', 'https://mint.staging.398ja.xyz')
+    try {
+      const { token } = buildVoucherToken() // stamped `http://mint.test`
+      expect(crypto.extractToken(dmEnvelope(token))).toBe(token)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  /**
+   * And the same voucher at the trusted mint is handed over: the refusal above
+   * is the mint, not anything else about the fixture.
+   */
+  it('hands over the same voucher when its mint is trusted', () => {
+    vi.stubEnv('VITE_TRUSTED_MINT_URLS', 'http://mint.test/')
+    try {
+      const { token } = buildVoucherToken()
+      expect(crypto.extractToken(dmEnvelope(token))).toBe(token)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  /**
+   * A voucher that arrives before the trusted list has loaded must not be refused
+   * HERE: no token marks the delivery processed for good, which lost the coupon.
+   * It is handed over, and the redemption gate defers it until the list is known.
+   */
+  it('hands over a voucher while the trusted list is still unknown, for the redemption gate to defer', () => {
+    vi.stubEnv('VITE_TRUSTED_MINT_URLS', '')
+    try {
+      const { token } = buildVoucherToken()
+      expect(crypto.extractToken(dmEnvelope(token))).toBe(token)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('clamps a value inflated past the signed face value', () => {
     // A rewritten ratio on a legacy voucher looks exactly like this: proofs are
     // genuine, the derived value exceeds what was ever issued.
