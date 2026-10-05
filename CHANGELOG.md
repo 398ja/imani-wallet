@@ -97,6 +97,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Test: a Java-signed `max_sats` 1 proof next to an unsigned `max_sats` 64 proof credits 1 sat**
   (imani-gateway-customer#141, round 5 review LOW-3). Pins, with real Java-signed bytes, that an
   unsigned later proof credits 0, and that one with no `issuer_sig` at all is refused. No code change.
+- **An unsigned `processor` issuance warrant is refused on receipt** (#152). It names a
+  payment record but carries no signature, and nothing on the device can check the record, so
+  it was the issuing service's word alone, read as `claimed` and accepted. Any merchant session
+  could have the portal mint one (imani-gateway-portal#54). `refuseIfUnwarranted` now refuses
+  `claimed` before the mint swap with the same "Coupon not authorised" reason as `absent`,
+  `unwarranted` and `failed`. The validation badge shows it as failed, and `isWarranted` no
+  longer counts it. Merchant-signed coupons are unaffected.
+- Card-purchase coupons are NOT refused: see the next entry, which ships with this one.
+- **The till verifies a `delegated` issuance warrant, and card purchases sign one** (#152).
+  A stall signs one kind-30078 delegation event with its own key naming a delegate pubkey
+  (`p`), scope `coupon:issue` and a NIP-40 `expiration`; the delegate signs the same sale
+  digest a `merchant` warrant signs. The event travels inside the warrant, so verification
+  stays offline. `verifyIssuanceWarrant` checks the delegation is signed by the coupon's
+  issuer, is scoped `coupon:issue` and unexpired, and that the warrant signature is the
+  delegate's (`src/lib/issuerDelegation.ts`). `services/purchase-issuer` now signs a
+  `delegated` warrant with each stall's terminal-credential lock key and keeps the Stripe
+  reference as `ref` inside the signed bytes, so the coupon still reads as "paid by card".
+- **The delegate signs the Stripe reference** (#176 review). The delegated digest is the sale
+  digest's fields plus `ref` (`delegatedSaleDigest`), so an edited or removed `ref` fails
+  verification rather than pointing the stall's reconciliation at another payment.
+- **A delegation must be the stall's `imani:issuer-delegation` record** (#176 review): exactly
+  one `d` tag with that value, at the till and in purchase-issuer's pre-mint check. Another
+  app's kind-30078 record signed by the same key no longer delegates.
+- **The stall's own ledger judges a card sale at the time it was recorded** (#176 review).
+  `issuedVoucher` and `reconcileIssuances` check the delegation was in force then
+  (`created_at <= issued_at < expiration`), so past sales no longer turn "failed" the day a
+  delegation lapses. The till still checks against its own clock: a voucher carries no signed
+  issue time. See `docs/explanation/delegated-issuance-warrant.md` and cashu-voucher#53.
+- **purchase-issuer requires a delegation to outlive the coupon by 7 days** (#176 review), so a
+  till clock running ahead or a slightly later gateway expiry cannot kill a coupon at the
+  counter in its last days.
+- A copied delegated warrant is refused where it is minted: gateway-customer spends each
+  delegated warrant's `(issuer, nonce)` on voucher create (imani-gateway-customer#190). Binding
+  the signature to one coupon was not possible: the gateway picks the voucher id after signing.
+- **purchase-issuer mints nothing for a stall without a delegation** the till will accept,
+  including one that would lapse before the 365-day coupon does. Such a purchase is
+  reported BLOCKED (nothing minted) for the stall to sign a delegation; attach it with
+  `npx tsx services/purchase-issuer/attachDelegation.ts <stall> <event.json>`, which
+  refuses a delegation the till would refuse.
 
 ### Fixed
 

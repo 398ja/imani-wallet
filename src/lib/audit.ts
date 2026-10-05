@@ -131,7 +131,7 @@ const HEX64 = /^[0-9a-f]{64}$/i
  * passes an in-memory object, and then it is total. Stripping the symbol costs
  * one object copy and removes the class of bug rather than the one instance.
  */
-function stripCachedVerdict(event: Event): Event {
+export function stripCachedVerdict(event: Event): Event {
   const copy = { ...event } as Record<string | symbol, unknown>
   for (const s of Object.getOwnPropertySymbols(copy)) delete copy[s]
   return copy as unknown as Event

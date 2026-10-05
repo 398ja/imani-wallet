@@ -8,6 +8,7 @@ import { PurchasesApi, ReportLostError, type OwedPurchase } from '../purchasesAp
 import { haltReason, loop, resetForTest, server } from '../server'
 import { runPass, type WorkerDeps } from '../worker'
 import type { Ports } from '../discharge'
+import { STALL, delegatedCredential } from './stallFixture'
 
 /**
  * imani-wallet#96: one payment, one coupon, whatever happens to the worker.
@@ -22,10 +23,8 @@ import type { Ports } from '../discharge'
  *    caller, returning the ORIGINAL voucher for a replayed key.
  */
 
-const LOCK = '11'.repeat(32)
 /** Node's own fetch, for probing the real health server; captured before any stub. */
 const nativeFetch = globalThis.fetch
-const STALL = 'b'.repeat(64)
 const PAYMENTS = 'http://payments.test'
 const GATEWAY = 'http://gateway.test'
 
@@ -130,7 +129,8 @@ function world({ leaseMs = 600_000 } = {}) {
   }) as typeof fetch
 
   const ports: Ports = {
-    credentialFor: async () => ({ stallPubkey: STALL, credentialId: 'c1', lockKeyHex: LOCK }),
+    // A real stall's delegation: since #152 nothing mints without one.
+    credentialFor: async () => delegatedCredential({ credentialId: 'c1' }),
     tokenFor: async () => '',
     now: () => clock,
     sleep: async () => {},
@@ -308,7 +308,11 @@ describe('an ambiguous mint (#96 review)', () => {
 })
 
 describe('the issuance warrant (#96)', () => {
-  it('marks a card purchase as processor-warranted, readable by the wallet, and stable across attempts', async () => {
+  // A card purchase now carries a delegated warrant the till verifies (#152),
+  // with the processor reference inside it, and two attempts at one purchase
+  // still send byte-identical bodies so the idempotency key replays the same
+  // request.
+  it('marks a card purchase as delegated-warranted, verified by the wallet, and stable across attempts', async () => {
     const { parseIssuanceWarrant, verifyIssuanceWarrant } = await import('../../../src/lib/issuanceWarrant')
     const bodies: Record<string, unknown>[] = []
     const w = world({ leaseMs: 1 })
@@ -338,10 +342,10 @@ describe('the issuance warrant (#96)', () => {
     expect(bodies[0]).toEqual(bodies[1])
 
     const warrant = parseIssuanceWarrant(bodies[0].issuance_warrant as string)
-    expect(warrant).toMatchObject({ state: 'present', form: 'processor', reference: 'pi_evt_1', saleTotalMinor: 2500 })
+    expect(warrant).toMatchObject({ state: 'present', form: 'delegated', reference: 'pi_evt_1', saleTotalMinor: 2500 })
     expect(
       verifyIssuanceWarrant(warrant, STALL, { faceValueMinor: 2500, unit: 'GBP', faceDecimals: 2 }),
-    ).toEqual({ verdict: 'claimed', reference: 'pi_evt_1' })
+    ).toEqual({ verdict: 'verified' })
   })
 })
 
