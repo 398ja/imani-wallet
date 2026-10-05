@@ -458,7 +458,7 @@ export function fromCreatedItem(item: IssuedVoucher, currency: string): IssuedVo
  * POLL ON `token` PRESENCE, not on `expires_at`: that field stays null for 5-10s
  * after the voucher already reports ISSUED, so it is not a readiness signal.
  */
-async function waitForToken(voucherId: string): Promise<IssuedVoucher> {
+async function waitForToken(voucherId: string, registered: boolean): Promise<IssuedVoucher> {
   let last: IssuedVoucher = { voucher_id: voucherId }
 
   for (let i = 0; i < POLL_ATTEMPTS; i += 1) {
@@ -475,10 +475,73 @@ async function waitForToken(voucherId: string): Promise<IssuedVoucher> {
     await sleep(POLL_INTERVAL_MS)
   }
 
+  const state =
+    `The voucher is still being finished (status ${last.status ?? 'unknown'}, ` +
+    `payment ${last.payment_state ?? 'unknown'}).`
+  // Only promise what will happen. The gateway sends it on by itself only if it knows the
+  // customer, which it does only when the registration above was accepted (MEDIUM-2).
   throw new Error(
-    `The voucher never finished minting (status ${last.status ?? 'unknown'}, ` +
-      `payment ${last.payment_state ?? 'unknown'}). It has NOT been delivered.`,
+    registered
+      ? `${state} If the payment went through, the gateway sends it to the customer by itself ` +
+          `within a few minutes. Do not sell it again.`
+      : `${state} The gateway could not be told who the customer is, so it will not send it on ` +
+          `by itself. Do not sell it again: check the voucher ${voucherId.slice(0, 8)} in a few ` +
+          `minutes and forward it to the customer yourself.`,
   )
+}
+
+/** How long the registration may take before the sale goes on without it (MEDIUM-3). */
+export const REGISTER_TIMEOUT_MS = 5_000
+
+/**
+ * Tell the gateway who this coupon is for, before polling for its token.
+ *
+ * If the gateway crashes mid-sale, it finishes the coupon minutes later, long
+ * after this screen has stopped polling (imani-gateway-customer#168). With the
+ * customer's key registered here it then sends the coupon to them itself, as
+ * the same token DM `deliver` sends, unless this screen forwards it first. If
+ * both happen it is the same token, and the receive dedupes it.
+ *
+ * Best effort, and bounded: a gateway that predates the endpoint answers 404,
+ * and one that never answers is abandoned after REGISTER_TIMEOUT_MS, so the
+ * sale goes on either way. A failure here must never fail or stall the sale.
+ *
+ * Returns whether the gateway accepted it, so the timeout message promises a
+ * server delivery only when there will be one (MEDIUM-2). A failure is
+ * warned with the voucher prefix and the status only: no customer key, no
+ * token.
+ */
+async function registerRecipient(voucherId: string, recipientPubkey: string): Promise<boolean> {
+  const controller = new AbortController()
+  // A plain timer rather than AbortSignal.timeout, so it follows the same clock
+  // as the poll loop (and tests can drive it).
+  const timer = setTimeout(
+    () => controller.abort(new DOMException('registration timed out', 'TimeoutError')),
+    REGISTER_TIMEOUT_MS,
+  )
+  try {
+    const response = await signedFetch(
+      `/api/v1/wallet/vouchers/${voucherId}/recipient`,
+      'PUT',
+      { recipient_pubkey: recipientPubkey },
+      undefined,
+      { signal: controller.signal },
+    )
+    if (response.ok) return true
+    console.warn('[issue] could not register the customer with the gateway', {
+      voucher: voucherId.slice(0, 8),
+      status: response.status,
+    })
+    return false
+  } catch (error) {
+    console.warn('[issue] could not register the customer with the gateway', {
+      voucher: voucherId.slice(0, 8),
+      error: error instanceof Error ? error.name : 'unknown',
+    })
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /**
@@ -681,7 +744,9 @@ export async function issueAndDeliver(
       // (PENDING) coupons still need polling for their token.
       const minted = isMinted(part)
         ? fromCreatedItem(part, params.currency)
-        : await waitForToken(part.voucher_id)
+        : await registerRecipient(part.voucher_id, params.recipientPubkey).then((registered) =>
+            waitForToken(part.voucher_id, registered),
+          )
       // Nothing to wait for when none was asked for: polling a coupon that never
       // expires spends the whole 15s grace period to confirm a field that is
       // correctly absent, on every sale.

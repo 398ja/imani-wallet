@@ -153,6 +153,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again on a backoff (5 seconds, doubling to 5 minutes). When it answers, the poller catches
   up and re-offers every held coupon by id, including ones older than the 7-day poll window.
   A config without a NIP-05 domain no longer stops the mint from being read.
+- **A sale finished after a gateway crash reaches the customer** (imani-gateway-customer#168).
+  Sell now tells the gateway who a quote-backed coupon is for
+  (`PUT /api/v1/wallet/vouchers/{id}/recipient`) before it polls for the token. If the gateway
+  crashes mid-sale and finishes the coupon minutes later, after this screen has stopped polling,
+  the gateway sends it to that customer itself. Best effort and bounded: the registration is
+  abandoned after 5 seconds, so a gateway that never answers cannot stall the sale, and an older
+  gateway's 404 lets the sale go on as before. A failed registration is logged with
+  `console.warn` (voucher prefix and status only, no key or token).
+- **The timeout message tells the truth about who delivers.** When the poll runs out and the
+  gateway accepted the registration, the merchant reads that the gateway will finish and send the
+  coupon, and not to sell it again. When the registration failed, the gateway does not know the
+  customer, so the merchant is told to check the voucher in a few minutes and forward it
+  themselves, instead of being promised a delivery that will not happen.
+- `e2e/stack/crash-mid-sale.sh` uses the `up.sh` next to it unless `STACK_UP` says otherwise,
+  rather than a path on one developer's machine.
 
 ### Changed
 

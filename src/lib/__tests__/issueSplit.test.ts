@@ -258,7 +258,10 @@ describe('a sale the gateway split into several coupons', () => {
 
     const result = await issueAndDeliver(params)
 
+    // Only the quote-backed part is registered for gateway delivery (gateway-customer#168) and
+    // then polled; a part that came back minted is neither.
     expect(calls.filter((c) => c.startsWith('/api/v1/wallet/vouchers/'))).toEqual([
+      '/api/v1/wallet/vouchers/v2/recipient',
       '/api/v1/wallet/vouchers/v2',
     ])
     expect(result.vouchers.map((v) => v.token)).toEqual(PARTS.map((id) => `cashu-${id}`))
