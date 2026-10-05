@@ -45,7 +45,8 @@ function blindedOutput(amount: number, keysetId: string) {
 const sk = secp256k1.utils.randomSecretKey()
 const pk = bytesToHex(schnorr.getPublicKey(sk))
 
-const OUT = 'witness-positive.token'
+// Gitignored probe-out/, never the tracked fixture the unit tests read.
+const OUT = 'probe-out/witness-positive.token'
 execFileSync('node', [
   'scripts/mint-terminal-credential.mjs', '--stall-name', 'imani-terminals',
   '--device', pk, '--name', 'Witness positive', '--out', OUT,
