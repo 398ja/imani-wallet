@@ -288,7 +288,10 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
    * the lapse notice that terminals ticket 07 built — until this line existed
    * those were correct code no user could reach.
    */
-  const terminal = useTerminalIdentity()
+  // `pubkey` is the key that unlocked this session: the device's own key on a
+  // terminal. Passed in so the credential's lock is compared with the key this
+  // device actually holds, not with the record being checked (#160, G9).
+  const terminal = useTerminalIdentity({ devicePubkey: pubkey })
 
   // Every arriving coupon is a candidate payment for an open request, and the
   // merchant is rarely on the screen that shows it — the till, the home screen

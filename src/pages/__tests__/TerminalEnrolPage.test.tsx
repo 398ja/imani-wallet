@@ -20,11 +20,15 @@ import { MemoryRouter } from 'react-router-dom'
  */
 
 const STALL = 'a'.repeat(64)
-const DEVICE = 'c'.repeat(64)
+/** A real point on the curve. Off-curve codes are refused since #160 phase 0. */
+const DEVICE = 'd'.repeat(64)
+
+/** When set, the stub scanner returns 64 hex characters that are not a key. */
+let offCurve = false
 
 vi.mock('../../components/ScanRecipient', () => ({
   ScanRecipient: ({ onFound }: { onFound: (k: string) => void }) => (
-    <button onClick={() => onFound(DEVICE)}>scan</button>
+    <button onClick={() => onFound(offCurve ? 'c'.repeat(64) : DEVICE)}>scan</button>
   ),
 }))
 
@@ -73,6 +77,7 @@ const addButton = () => screen.getByRole('button', { name: 'Add terminal' }) as 
 beforeEach(() => {
   localStorage.clear()
   granted = true
+  offCurve = false
   vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
 })
 afterEach(() => {
@@ -238,8 +243,28 @@ describe('enrolling', () => {
     await fillEverything()
     fireEvent.click(addButton())
 
-    expect(screen.getByText(/Terminal added/)).toBeTruthy()
+    expect(screen.getByRole('heading', { name: /Waiting for the device/ })).toBeTruthy()
     expect(screen.getByText(/passphrase/)).toBeTruthy()
+  })
+
+  // #160 phase 0: nothing has reached the device and no credential exists, so
+  // the screen must never claim the terminal can trade. It used to say
+  // "<name> can now trade for your stall" after making no call at all.
+  it('never claims the terminal can trade', async () => {
+    await fillEverything()
+    fireEvent.click(addButton())
+
+    expect(document.body.textContent).not.toMatch(/can now trade|can trade for your stall/i)
+    expect(document.body.textContent).toMatch(/cannot take payments yet/)
+  })
+
+  // The owner's list says the same thing as the screen: the row is waiting,
+  // not a till that is ready and has simply never been used.
+  it('records the row as waiting for its device', async () => {
+    await fillEverything()
+    fireEvent.click(addButton())
+
+    expect(allTerminals(STALL)[0].status).toBe('waiting')
   })
 })
 
@@ -257,6 +282,20 @@ describe('a wrong scan can be corrected', () => {
     // again, so a stale key cannot be issued to.
     expect(addButton().disabled).toBe(true)
     expect(screen.getByRole('button', { name: 'scan' })).toBeTruthy()
+    expect(allTerminals(STALL)).toEqual([])
+  })
+})
+
+describe('#160 phase 0: a code that is nobody\'s key', () => {
+  // The owner types (or scans) 64 hex characters that are not a point on the
+  // curve. No device holds such a key, and the gateway would mint an unlocked
+  // credential for it, so the form refuses in words and records nothing.
+  it('refuses an off-curve key and records nothing', async () => {
+    offCurve = true
+    await fillEverything()
+
+    expect(addButton().disabled).toBe(true)
+    expect(screen.getByText(/not a terminal code/)).toBeTruthy()
     expect(allTerminals(STALL)).toEqual([])
   })
 })
