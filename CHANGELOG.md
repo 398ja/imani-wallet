@@ -139,6 +139,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A fresh device can become a terminal** (#160, phase 2).
+  - **Setup.** The logged-out screen offers **Set this device up as a terminal** (`/terminal/setup`), only on a device holding no key. The device shows its public key as a QR and as text, and polls the gateway and relay for a credential DM to it.
+  - **Checks.** `terminalEnrol.offersFor` opens each DM with the pending key, inside the module. Every offer must pass `terminalDelivery.offerFromRumor`:
+    - the seal is verified, and the rumor's author must equal the seal's;
+    - the sender must be the stall the credential names;
+    - the credential, from its own signed bytes, is locked to this device and issued by that stall, with a valid signature;
+    - the DM is under 24 hours old.
+  - **Confirmation.** The device shows the stall's public name and the same check code as the owner. The operator confirms, and a credential they reject is never offered again.
+  - **Finishing.** The operator sets a passphrase of at least 8 characters (decision 2). `completeEnrolment` stores the credential, `voucherId` and idle lock, then sends a NIP-17 **enrolled** DM to the stall, sealed by the device key.
+- **The owner's phone sends the credential to the device** (#160, phase 2). After minting, **Add terminal** gift-wraps a `imani-terminal-credential/1` DM to the scanned key, sealed by the stall. It is published to the relay and mirrored to the gateway, the way transfer signatures are. The form gains **Lock when idle**: 10 minutes by default, or Never, 5, 15, 30 or 60 (decision 2). The choice travels in the DM.
+- **Owner side.** The Terminals screen polls for enrolled DMs while a row waits. `markInService` promotes the row whose device key AND voucher id match a notice sealed by that device, with no reload.
+- `Entry` no longer sends a device enrolled as a terminal to `/login`, where its key would open a customer session. It says the till opens in the next version (phase 3), and offers **Remove this terminal from this device** (`removeTerminalFromDevice`), which erases the terminal key and record locally. It does not revoke; the screen says only the owner can.
+- **The device accepts only the offer the owner's setup code names** (#160 review, MEDIUM). `verifyVoucher` checks the signature against a key inside the token, so a self-signed credential for an onlooker's own stall passed, and its `voucher_id` could be ground offline until the six-digit check code matched; the page then picked the newest offer. Now the owner's screen shows a setup code, `imani-terminal:1:<stall>:<voucher id>` (QR and text), the operator scans it on the device, and `offerFromRumor` refuses any offer not sealed by that stall for that credential (`not-the-expected-offer`). Nothing is offered before the code is scanned, and the device never picks among offers. Also refused: a DM dated more than 5 minutes ahead (`from-the-future`), and, when `VITE_VOUCHER_ISSUER_PUBKEYS` is set, a credential signed by an unknown key (`unknown-issuer`).
+- On finishing, the device also calls `POST /api/v1/wallet/terminal-credentials/{id}/confirm` (gateway-customer#187), so the gateway's pending count frees the slot and the credential may issue.
+
 - **Adding a terminal mints its credential from the owner's phone** (#160, phase 1). **Add
   terminal** now makes one NIP-98 call, signed by the stall, to `POST /api/v1/wallet/vouchers`
   (the body `scripts/mint-terminal-credential.mjs` sends, 365 days). It then waits for the token
@@ -160,6 +175,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   slot is free (`POST /api/v1/wallet/terminal-credentials/{id}/cancel`).
 
 ### Fixed
+
+- **The owner's app confirms a terminal at the gateway** (#160 round 2, MEDIUM). The device's
+  `/confirm` ignored every error, and the owner never confirmed. So a lost confirm left the list
+  saying *In service* while gateway-customer refused Sell (410 after 24 hours). Now, when the
+  owner's app sees the enrolled DM, `confirmEnrolled` (`terminalConfirm.ts`) confirms as the
+  stall, retrying with backoff from 30 s, doubling, and capped at 1 h. The device still tries,
+  best effort. The roster keeps `gatewayState` (`unconfirmed`, `confirmed`, `lapsed`), and the
+  list shows it.
+- **A credential finished by `resumeMinting` gets its setup code and DM** (#160 round 2).
+  Waiting rows show their setup code on the list. `deliverWaiting` sends the credential DM to
+  any waiting row not yet `delivered`, including rows `resumeMinting` completed.
+- **Remove from device clears what logout clears** (#160 round 2). `removeTerminalFromDevice`
+  now also sweeps every `imani-wallet:*` key (`sweepAppStorage`, shared with logout), the resume
+  cache, and the terminal's wallet database. It reports what it cleared. A `keyStore` failure no
+  longer skips the rest, and the screen says so instead of navigating away.
 
 - **A server error while adding a terminal no longer forgets a credential that may exist**
   (#160 round 2). Any HTTP status used to clear the `minting` row and its Idempotency-Key, so a

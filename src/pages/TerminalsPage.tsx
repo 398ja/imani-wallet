@@ -10,6 +10,7 @@ import { TERMINAL_ROLE_LABELS } from '../lib/terminalRole'
 import {
   REVOCATION_DELAY_NOTE,
   allTerminals,
+  hasUnconfirmed,
   isRevocable,
   revocationBitesAt,
   type TerminalRecord,
@@ -21,8 +22,19 @@ import {
   revokeTerminalAtMint,
 } from '../lib/terminalRevoke'
 import { ownerTransport, type MintTransport } from '../lib/terminalMint'
+import { collectEnrolled, ownerPublisher } from '../lib/terminalDeliveryNet'
+import { confirmEnrolled, deliverWaiting, stallConfirm, type ConfirmCall } from '../lib/terminalConfirm'
+import { setupCode } from '../lib/terminalDelivery'
+import { getSigner } from '../lib/nap'
 import type { CredentialMintApi } from '../lib/credentialRevocation'
 import { legacyApi } from '../lib/legacyBridge'
+
+/** How often the list looks for a device's "I have it" while something is waiting. */
+const ENROLLED_POLL_MS = 5_000
+
+/** Sends a credential DM to every waiting device that has not had one, sealed by the stall. */
+const ownerDeliver = (stallPubkey: string) =>
+  deliverWaiting(stallPubkey, (borrow) => getSigner().withPrivkey(borrow), ownerPublisher)
 
 /** The owner's spend client, the one `burn.ts` and decommissioning use. */
 async function ownerSpendApi(): Promise<CredentialMintApi> {
@@ -64,12 +76,21 @@ export function TerminalsPage({
   stallPubkey,
   spendApi = ownerSpendApi,
   transport = ownerTransport,
+  collect = collectEnrolled,
+  confirm = stallConfirm,
+  deliver = ownerDeliver,
 }: {
   stallPubkey: string
   /** Injected by tests. Spends a credential with the stall's key. */
   spendApi?: () => Promise<CredentialMintApi>
   /** Injected by tests. The owner's NIP-98 signer otherwise. */
   transport?: MintTransport
+  /** Injected by tests. Promotes waiting rows whose device confirmed. */
+  collect?: (stallPubkey: string) => Promise<number>
+  /** Injected by tests. The stall's `/confirm` call (#160 round 2). */
+  confirm?: ConfirmCall
+  /** Injected by tests. Sends the credential DM to waiting devices that never got one. */
+  deliver?: (stallPubkey: string) => Promise<number>
 }) {
   // Read lazily rather than in an effect. The roster is local storage, so it is
   // available on the first render — going through an effect would paint an
@@ -136,6 +157,43 @@ export function TerminalsPage({
     [stallPubkey, spendApi, refresh],
   )
 
+  // Phase 2: while a row waits, look for its device's enrolled DM, so the row
+  // turns In service without a reload (spec 2.1 step 4).
+  // Round 2: and while a row is in service by the device's word but not yet confirmed at the
+  // gateway, confirm it as the stall, with backoff, so a lost device confirm cannot leave a
+  // till the list calls in service and the gateway refuses.
+  const hasWaiting = terminals.some((t) => t.status === 'waiting' && t.revokedAt === undefined)
+  const needsConfirm = hasUnconfirmed(stallPubkey) || terminals.some((t) => t.gatewayState === 'unconfirmed')
+  useEffect(() => {
+    if (!hasWaiting && !needsConfirm) return
+    let stopped = false
+    const tick = async () => {
+      try {
+        await collect(stallPubkey)
+      } catch {
+        // Offline or locked. Try again on the next tick.
+      }
+      // Show the promotion now, not after the confirm below answers.
+      if (!stopped) refresh()
+      try {
+        await confirmEnrolled(stallPubkey, confirm)
+      } catch {
+        // Retried on the next tick, after its backoff.
+      }
+      // Re-read the roster whatever the count said. Under StrictMode the first
+      // effect's poll can promote the row after it was torn down, and the
+      // second then reports nothing changed: trusting the count left the row
+      // showing Waiting for good.
+      if (!stopped) refresh()
+    }
+    void tick()
+    const timer = setInterval(() => void tick(), ENROLLED_POLL_MS)
+    return () => {
+      stopped = true
+      clearInterval(timer)
+    }
+  }, [hasWaiting, needsConfirm, stallPubkey, collect, confirm, refresh])
+
   // Waiting rows past their 24 hours are cancelled when this screen opens
   // (decision 4 on #160). Best effort: one that does not land stays waiting and
   // is tried again next time, and nothing here blocks the list from showing.
@@ -149,7 +207,10 @@ export function TerminalsPage({
         // turns out to be past its 24 hours is cancelled in the same pass.
         const resumed = await resumeMinting(stallPubkey, api, transport)
         const n = await cancelExpiredWaiting(stallPubkey, api)
-        if ((n > 0 || resumed.completed > 0 || resumed.cleared > 0) && !cancelled) refresh()
+        // A row resumeMinting finished, or whose DM did not land, gets its DM now, the same
+        // one the enrol screen sends (#160 round 2). Its setup code is on the row below.
+        const sent = await deliver(stallPubkey).catch(() => 0)
+        if ((n > 0 || sent > 0 || resumed.completed > 0 || resumed.cleared > 0) && !cancelled) refresh()
       } catch {
         // Offline, or the wallet is locked. The rows stay waiting.
       }
@@ -157,7 +218,7 @@ export function TerminalsPage({
     return () => {
       cancelled = true
     }
-  }, [stallPubkey, spendApi, transport, refresh])
+  }, [stallPubkey, spendApi, transport, deliver, refresh])
   const live = terminals.filter((t) => t.revokedAt === undefined)
   const retired = terminals.filter((t) => t.revokedAt !== undefined)
 
@@ -192,6 +253,11 @@ export function TerminalsPage({
                 removeUnmintedWaiting(stallPubkey, terminal.terminalPubkey)
                 refresh()
               }}
+              setup={
+                terminal.status === 'waiting' && terminal.voucherId && terminal.token
+                  ? setupCode(stallPubkey, terminal.voucherId)
+                  : undefined
+              }
             />
           ))}
         </ListSection>
@@ -233,8 +299,11 @@ function TerminalRow({
   onCancel,
   onRevoke,
   onRemove,
+  setup,
 }: {
   terminal: TerminalRecord
+  /** The setup code for a waiting row, so it can be finished after the enrol screen closed. */
+  setup?: string
   /** Enrolled and unrevoked, but a lapse has stopped it. Undefined = unknown. */
   stopped?: boolean
   confirming?: boolean
@@ -277,10 +346,16 @@ function TerminalRow({
             {label.name} ·{' '}
             {/* A waiting row has never reached its device, so "Never used"
                 would read as a till that is ready and idle (#160). */}
+            {/* Round 2: the gateway's answer, not just the device's word. A till the
+                gateway has not confirmed cannot sell, so it must not read as ready. */}
             {minting
               ? 'Still being set up'
               : terminal.status === 'waiting' && !revoked
               ? 'Waiting for the device'
+              : !revoked && terminal.gatewayState === 'unconfirmed'
+              ? 'Confirming with the gateway'
+              : !revoked && terminal.gatewayState === 'lapsed'
+              ? 'Lapsed before it was confirmed'
               : terminal.lastUsedAt
                 ? `Last used ${formatDate(terminal.lastUsedAt)}`
                 : 'Never used'}
@@ -327,6 +402,22 @@ function TerminalRow({
         <p className="mt-2 text-sm text-mono-500">
           Set up before revocation existed: add it again to be able to revoke it.
         </p>
+      ) : null}
+
+      {!revoked && terminal.gatewayState === 'lapsed' ? (
+        <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">
+          The gateway never confirmed this terminal within 24 hours, so it cannot sell. Revoke it
+          and add the device again.
+        </p>
+      ) : null}
+
+      {waiting && setup ? (
+        <details className="mt-2 text-sm text-mono-500">
+          <summary className="cursor-pointer">Show the setup code</summary>
+          <p className="mt-2 break-all font-mono text-xs" data-testid="row-setup-code">
+            {setup}
+          </p>
+        </details>
       ) : null}
 
       {error ? (

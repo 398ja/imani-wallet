@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { StrictMode } from 'react'
 
 /**
  * Only the licence CHECK is stubbed. `lapseService` — which decides which
@@ -53,6 +54,13 @@ const TOKEN = readFileSync(
   'utf8',
 ).trim()
 
+/** Phase 2: what the device has confirmed, as `collectEnrolled` would find it. */
+let confirmations: Array<{ terminalPubkey: string; voucherId: string }> = []
+const collect = async (stall: string) => {
+  const { markInService } = await import('../../lib/terminalRoster')
+  return confirmations.filter((c) => markInService(stall, c.terminalPubkey, c.voucherId)).length
+}
+
 /** The owner's spend client, faked: UNSPENT until spent, and spending works unless told not to. */
 let spendFails = false
 const spent: string[] = []
@@ -68,7 +76,15 @@ const fakeMint = {
 function renderPage() {
   return render(
     <MemoryRouter>
-      <TerminalsPage stallPubkey={STALL} spendApi={async () => fakeMint} />
+      {/* The gateway confirms at once and there is no DM to send: the
+          round 2 tests below inject their own. */}
+      <TerminalsPage
+        stallPubkey={STALL}
+        spendApi={async () => fakeMint}
+        collect={collect}
+        confirm={async () => 204}
+        deliver={async () => 0}
+      />
     </MemoryRouter>,
   )
 }
@@ -89,6 +105,7 @@ beforeEach(() => {
   localStorage.clear()
   spendFails = false
   spent.length = 0
+  confirmations = []
   fakeMint.receive.mockClear()
 })
 afterEach(cleanup)
@@ -405,5 +422,120 @@ describe('#160 review: rows left behind by earlier versions and lost answers', (
     // settled and is no longer an unknown credential.
     await waitFor(() => expect(screen.queryByText(/Still being set up/)).toBeNull())
     expect(resumeTransport.get).toHaveBeenCalled()
+  })
+})
+
+describe('#160 phase 2: the row turns In service when the device confirms', () => {
+  // The owner adds a terminal; the row waits. When the device's enrolled DM
+  // arrives the row turns In service, with no reload.
+  it('promotes a waiting row when its device confirms, without a reload', async () => {
+    enrol({ status: 'waiting', waitingUntil: Date.now() + 3_600_000 })
+    renderPage()
+    expect(screen.getByText(/Waiting for the device/)).toBeTruthy()
+
+    confirmations = [{ terminalPubkey: DOOR, voucherId: 'cred-door' }]
+
+    await waitFor(() => expect(screen.queryByText(/Waiting for the device/)).toBeNull(), {
+      timeout: 8000,
+    })
+    expect(screen.getByText(/Never used/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Revoke' })).toBeTruthy()
+  })
+
+  // The app runs under React StrictMode, which mounts every effect twice. The
+  // first poll can promote the row after its effect was torn down, and the
+  // second then finds nothing left to change. The list must still show the
+  // row In service, because it re-reads the roster rather than trusting the count.
+  it('turns In service under StrictMode, when the poll that promoted it was torn down', async () => {
+    enrol({ status: 'waiting', waitingUntil: Date.now() + 3_600_000 })
+    confirmations = [{ terminalPubkey: DOOR, voucherId: 'cred-door' }]
+    render(
+      <StrictMode>
+        <MemoryRouter>
+          <TerminalsPage
+            stallPubkey={STALL}
+            spendApi={async () => fakeMint}
+            collect={collect}
+            confirm={async () => 204}
+            deliver={async () => 0}
+          />
+        </MemoryRouter>
+      </StrictMode>,
+    )
+
+    await waitFor(() => expect(screen.queryByText(/Waiting for the device/)).toBeNull(), {
+      timeout: 8000,
+    })
+  })
+
+  // A confirmation naming another credential of the same device does not
+  // promote this row: it might be an old one the owner already cancelled.
+  it('ignores a confirmation for a different credential', async () => {
+    const { markInService, allTerminals: rows } = await import('../../lib/terminalRoster')
+    enrol({ status: 'waiting', waitingUntil: Date.now() + 3_600_000 })
+
+    expect(markInService(STALL, DOOR, 'some-older-credential')).toBe(false)
+    expect(rows(STALL)[0].status).toBe('waiting')
+  })
+})
+
+describe('#160 round 2: the list shows what the gateway says', () => {
+  function renderWith(confirm: (id: string) => Promise<number | null>, deliver = async () => 0) {
+    return render(
+      <MemoryRouter>
+        <TerminalsPage
+          stallPubkey={STALL}
+          spendApi={async () => fakeMint}
+          collect={collect}
+          confirm={confirm}
+          deliver={deliver}
+        />
+      </MemoryRouter>,
+    )
+  }
+
+  // The device's own confirm was lost. Its enrolled DM arrives, the owner's
+  // app confirms as the stall, and only then does the row stop saying it is
+  // being confirmed. It never reads as a ready till while the gateway refuses.
+  it('confirms a device whose own confirm was lost, then shows it confirmed', async () => {
+    enrol({ status: 'waiting', waitingUntil: Date.now() + 60_000 })
+    confirmations = [{ terminalPubkey: DOOR, voucherId: 'cred-door' }]
+    let release!: () => void
+    const answered = new Promise<void>((r) => (release = r))
+    const confirm = vi.fn(async () => {
+      await answered
+      return 204
+    })
+
+    renderWith(confirm)
+
+    expect(await screen.findByText(/Confirming with the gateway/)).toBeTruthy()
+    release()
+    await waitFor(() => expect(screen.queryByText(/Confirming with the gateway/)).toBeNull())
+    expect(confirm).toHaveBeenCalledWith('cred-door')
+    expect(screen.getByText(/Never used/)).toBeTruthy()
+  })
+
+  // 410 from the gateway: lapsed. The row says it cannot sell.
+  it('shows a lapsed terminal as unable to sell', async () => {
+    enrol({ status: 'in-service', gatewayState: 'unconfirmed' })
+
+    renderWith(async () => 410)
+
+    expect(await screen.findByText(/Lapsed before it was confirmed/)).toBeTruthy()
+    expect(screen.getByText(/cannot sell\. Revoke it/)).toBeTruthy()
+  })
+
+  // A waiting row carries its setup code on the list, so a row finished by
+  // resumeMinting (or one whose enrol screen was closed early) can still be
+  // set up. And the list sends any DM that never went out.
+  it('offers the setup code on a waiting row and sends its DM', async () => {
+    enrol({ status: 'waiting', waitingUntil: Date.now() + 60_000 })
+    const deliver = vi.fn(async () => 1)
+
+    renderWith(async () => 204, deliver)
+
+    expect((await screen.findByTestId('row-setup-code')).textContent).toContain('cred-door')
+    await waitFor(() => expect(deliver).toHaveBeenCalledWith(STALL))
   })
 })
