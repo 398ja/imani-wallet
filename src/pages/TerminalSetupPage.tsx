@@ -20,7 +20,8 @@ import {
   type WrapPublisher,
 } from '../lib/terminalDelivery'
 import { devicePublisher, giftWraps } from '../lib/terminalDeliveryNet'
-import { signedFetch, type RequestSigner } from '../lib/nip98'
+import { type RequestSigner } from '../lib/nip98'
+import { deviceConfirm } from '../lib/terminalConfirm'
 import { ScanRecipient } from '../components/ScanRecipient'
 import { formatCheckCode } from '../lib/terminalMint'
 import { refreshProfile, profileName } from '../lib/profile'
@@ -77,16 +78,6 @@ export interface TerminalSetupDeps {
   confirmAtGateway?: (voucherId: string, signer: RequestSigner) => Promise<void>
 }
 
-/** `POST /api/v1/wallet/terminal-credentials/{id}/confirm`, NIP-98 signed by the terminal. */
-async function confirmWithGateway(voucherId: string, signer: RequestSigner): Promise<void> {
-  await signedFetch(
-    `/api/v1/wallet/terminal-credentials/${encodeURIComponent(voucherId)}/confirm`,
-    'POST',
-    undefined,
-    signer,
-  ).catch(() => undefined)
-}
-
 /**
  * The stall's public name: its kind-0 display name or handle, from the public relay (ADR 0012).
  * Null when it has published neither, and the screen then says so rather than inventing one.
@@ -101,7 +92,7 @@ export function TerminalSetupPage({
   fetchWraps = giftWraps,
   stallName = publicStallName,
   publisherFor = (a) => devicePublisher(a.signer),
-  confirmAtGateway = confirmWithGateway,
+  confirmAtGateway = deviceConfirm,
 }: TerminalSetupDeps = {}) {
   const navigate = useNavigate()
   // Minted once, in memory, on first render. Lazy so a re-render shows the same code.
