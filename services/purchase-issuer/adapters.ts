@@ -122,3 +122,44 @@ export async function tokenFor(
   // error: a coupon mid-mint is the expected state for the first second or so.
   return typeof record.token === 'string' ? record.token : ''
 }
+
+/** Where a terminal credential is put in service (gateway-customer#187, V27). */
+export const CONFIRM_PATH = (voucherId: string) =>
+  `/api/v1/wallet/terminal-credentials/${encodeURIComponent(voucherId)}/confirm`
+
+/**
+ * Put a stall credential in service at the gateway (imani-wallet#160 round 2).
+ *
+ * Since gateway-customer V27, every terminal credential minted after the migration must be
+ * confirmed by its device or its stall before it may issue. The credentials this service
+ * holds are terminal credentials it presents in `X-Imani-Terminal-Credential`, so an
+ * unconfirmed one is refused on every sale. This confirms as the device (the lock key).
+ *
+ * 204 means in service; it is idempotent, so a credential already confirmed (or minted before
+ * V27) is fine to confirm again. Returns false on any other answer, and never throws: issuance
+ * itself then fails loudly and the debt stays owed.
+ */
+export async function confirmCredential(
+  gatewayUrl: string,
+  credential: StallCredential,
+  fetchImpl: typeof fetch = fetch,
+): Promise<boolean> {
+  const url = `${gatewayUrl.replace(/\/$/, '')}${CONFIRM_PATH(credential.credentialId)}`
+  try {
+    const response = await fetchImpl(url, {
+      method: 'POST',
+      headers: { Authorization: authorization('POST', url, '', credential.lockKeyHex) },
+    })
+    if (response.status === 204 || response.status === 200) return true
+    console.warn(
+      JSON.stringify({
+        event: 'credential_confirm_refused',
+        stall: credential.stallPubkey.slice(0, 16),
+        status: response.status,
+      }),
+    )
+    return false
+  } catch {
+    return false
+  }
+}

@@ -142,11 +142,16 @@ export async function signedFetch(
   method: string,
   payload?: unknown,
   signer?: RequestSigner,
-  /** Passed to `fetch`, so a caller that gives up can cancel the request. */
-  options: { signal?: AbortSignal } = {},
+  /**
+   * `signal` is passed to `fetch`, so a caller that gives up can cancel the request.
+   * `headers` are extra, unsigned request headers such as `Idempotency-Key`. They
+   * cannot replace `Authorization` or `Content-Type`.
+   */
+  options: { signal?: AbortSignal; headers?: Record<string, string> } = {},
 ): Promise<Response> {
   const body = payload === undefined ? undefined : JSON.stringify(payload)
   const headers: Record<string, string> = {
+    ...(options.headers ?? {}),
     Authorization: await nip98Header(path, method, body, signer ?? getSigner()),
   }
   if (body !== undefined) headers['Content-Type'] = 'application/json'

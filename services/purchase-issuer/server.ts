@@ -39,7 +39,7 @@
 
 import { createServer } from 'node:http'
 
-import { tokenFor, FileCredentialStore } from './adapters'
+import { confirmCredential, tokenFor, FileCredentialStore } from './adapters'
 import { readConfig, ConfigError, type IssuerConfig } from './config'
 import type { Ports } from './discharge'
 import { PurchasesApi, ReportLostError } from './purchasesApi'
@@ -47,13 +47,25 @@ import { CredentialVault } from './vault'
 import { runPass, type WorkerDeps } from './worker'
 
 /** Build the real ports from config. Exported so a test can see the wiring. */
-export function portsFor(config: IssuerConfig): Ports {
+export function portsFor(config: IssuerConfig, fetchImpl: typeof fetch = fetch): Ports {
   const vault = new CredentialVault(
     config.vaultKeyHex,
     new FileCredentialStore(config.credentialsPath),
   )
+  // Credential ids confirmed by this process. A credential is confirmed before its first use
+  // (gateway-customer V27: an unconfirmed credential may not issue), and only retried while
+  // the gateway has not said yes.
+  const confirmed = new Set<string>()
   return {
-    credentialFor: (stallPubkey) => vault.get(stallPubkey),
+    credentialFor: async (stallPubkey) => {
+      const credential = await vault.get(stallPubkey)
+      if (credential && !confirmed.has(credential.credentialId)) {
+        if (await confirmCredential(config.gatewayUrl, credential, fetchImpl)) {
+          confirmed.add(credential.credentialId)
+        }
+      }
+      return credential
+    },
     tokenFor: (credential, voucherId) => tokenFor(config.gatewayUrl, credential, voucherId),
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),

@@ -214,3 +214,105 @@ export function buildLegacyToken(mintUrl: string, withUnit?: string): string {
 export function dmEnvelope(token: string, claims: Record<string, unknown> = {}): string {
   return JSON.stringify({ type: 'cashu_token_transfer', token, ...claims })
 }
+
+// ---- locked (P2PK_VOUCHER) tokens, #160 ----
+
+export interface LockedCredentialOptions {
+  /** The issuing stall's secret key. Its x-only pubkey is the issuer and stall. */
+  stallKey: Uint8Array
+  /** The device's x-only public key, the lock in `data`. */
+  devicePubkey: string
+  role?: string
+  /** Extra co-spenders in `pubkeys`. Defaults to the stall, as the gateway mints since #160. */
+  pubkeys?: string[]
+  /** Extra signed NUT-11 tags, such as `refund` or `locktime`. */
+  extraTags?: string[][]
+  voucherId?: string
+  /** Overrides the signed metadata entirely. */
+  metadata?: string
+  /** `P2PK_VOUCHER` unless set, for the unlocked-fallback case. */
+  kind?: 'P2PK_VOUCHER' | 'VOUCHER'
+  /** Applied after signing, to forge a signature mismatch. */
+  tamperMetadata?: string
+}
+
+/**
+ * A terminal credential exactly as gateway-customer mints one: a one-proof TokenV4 whose
+ * secret is `["P2PK_VOUCHER", {nonce, data: 02‖K, tags}]`, signed by the stall over the
+ * same canonical bytes `lockedCanonicalBytes` rebuilds, with `pubkeys` = [02‖S].
+ */
+export function buildLockedCredentialToken(o: LockedCredentialOptions): string {
+  const stall = bytesToHex(schnorr.getPublicKey(o.stallKey))
+  const metadata =
+    o.metadata ??
+    JSON.stringify({
+      terminal: true,
+      stall_pubkey: stall,
+      role: o.role ?? 'redeem-only',
+      lock_key: o.devicePubkey,
+      name: 'Front counter',
+    })
+  const coKeys = (o.pubkeys ?? [stall]).map((k) => (k.length === 64 ? `02${k}` : k))
+  const data = `02${o.devicePubkey}`
+  const nonce = 'ab'.repeat(32)
+  const tags: string[][] = [
+    ['n_sigs', '1'],
+    ['sigflag', 'SIG_INPUTS'],
+    ...(coKeys.length ? [['pubkeys', ...coKeys]] : []),
+    ['voucher_id', o.voucherId ?? '5f8a487d-6cea-4a7d-b681-9d5d62cc9dd9'],
+    ['issuer', stall],
+    ['unit', 'sat'],
+    ['face_value', '1'],
+    ['expires_at', '1820071167'],
+    ['memo', 'Imani terminal credential'],
+    ['backing_strategy', 'PROPORTIONAL'],
+    ['issuance_ratio', '1'],
+    ['face_decimals', '0'],
+    ['merchant_metadata', metadata],
+    ...(o.extraTags ?? []),
+  ]
+  const kind = o.kind ?? 'P2PK_VOUCHER'
+  const esc = (v: string) => JSON.stringify(v).slice(1, -1)
+  const NUMERIC = ['face_value', 'expires_at', 'face_decimals', 'issuance_ratio']
+  const rendered = tags
+    .map(
+      ([k, ...vs]) =>
+        `["${esc(k)}"${vs.map((v) => ',' + (NUMERIC.includes(k) ? v : `"${esc(v)}"`)).join('')}]`,
+    )
+    .join(',')
+  const canonical = new TextEncoder().encode(`["${kind}","${data}","${nonce}",[${rendered}]]`)
+  const sig = bytesToHex(schnorr.sign(sha256(canonical), o.stallKey))
+
+  const signedTags = [
+    ...tags.map(([k, ...vs]) =>
+      k === 'merchant_metadata' && o.tamperMetadata ? [k, o.tamperMetadata] : [k, ...vs],
+    ),
+    ['issuer_sig', sig],
+    ['issuer_pubkey', stall],
+  ]
+  const secret = JSON.stringify([kind, { nonce, data, tags: signedTags }])
+
+  const proof = bytes(
+    head(5, 4),
+    tstr('a'),
+    uint(1),
+    tstr('s'),
+    tstr(secret),
+    tstr('c'),
+    tstr('02' + 'c'.repeat(64)),
+    tstr('i'),
+    tstr('00ad268c4d1f5826'),
+  )
+  const entry = bytes(head(5, 2), tstr('i'), tstr('00ad268c4d1f5826'), tstr('p'), head(4, 1), proof)
+  const root = bytes(
+    head(5, 3),
+    tstr('m'),
+    tstr('http://mint.test'),
+    tstr('u'),
+    tstr('sat'),
+    tstr('t'),
+    head(4, 1),
+    entry,
+  )
+  return `cashuB${base64Url(root)}`
+}

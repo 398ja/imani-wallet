@@ -24,6 +24,8 @@ vi.mock('../../lib/licenceStatus', async (importOriginal) => {
 })
 
 const { TerminalsPage } = await import('../TerminalsPage')
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { recordTerminal, revokeTerminal, isRevoked, REVOCATION_DELAY_HOURS } from '../../lib/terminalRoster'
 import { TERMINAL_ROLES } from '../../lib/terminalRole'
 
@@ -42,10 +44,31 @@ import { TERMINAL_ROLES } from '../../lib/terminalRole'
 const STALL = 'a'.repeat(64)
 const DOOR = 'c'.repeat(64)
 
+/**
+ * A real gateway-minted credential, so revoking runs `revokeCredential`'s own
+ * "is this a terminal credential" check for real. Only the mint is faked.
+ */
+const TOKEN = readFileSync(
+  join(__dirname, '../../lib/__tests__/fixtures/live-terminal-credential.token'),
+  'utf8',
+).trim()
+
+/** The owner's spend client, faked: UNSPENT until spent, and spending works unless told not to. */
+let spendFails = false
+const spent: string[] = []
+const fakeMint = {
+  validateToken: vi.fn(async (token: string) => ({ state: spent.includes(token) ? 'SPENT' : 'UNSPENT' })),
+  receive: vi.fn(async (token: string) => {
+    if (spendFails) throw new Error('offline')
+    spent.push(token)
+    return {}
+  }),
+}
+
 function renderPage() {
   return render(
     <MemoryRouter>
-      <TerminalsPage stallPubkey={STALL} />
+      <TerminalsPage stallPubkey={STALL} spendApi={async () => fakeMint} />
     </MemoryRouter>,
   )
 }
@@ -56,12 +79,18 @@ function enrol(over: Parameters<typeof recordTerminal>[1] | Record<string, unkno
     name: 'Door',
     role: TERMINAL_ROLES.REDEEM_ONLY,
     enrolledAt: 1_000_000,
-    revocationSecret: 'secret',
+    token: TOKEN,
+    voucherId: 'cred-door',
     ...(over as object),
   } as Parameters<typeof recordTerminal>[1])
 }
 
-beforeEach(() => localStorage.clear())
+beforeEach(() => {
+  localStorage.clear()
+  spendFails = false
+  spent.length = 0
+  fakeMint.receive.mockClear()
+})
 afterEach(cleanup)
 
 describe('what the list shows', () => {
@@ -125,16 +154,82 @@ describe('the delay is stated before the decision, not after', () => {
     expect(screen.queryByText(/close your stall/)).toBeNull()
   })
 
-  it('revokes on confirmation and updates the list without a reload', () => {
+  it('revokes on confirmation and updates the list without a reload', async () => {
     enrol()
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Revoke' }))
     fireEvent.click(screen.getByRole('button', { name: /Revoke Door/ }))
 
-    expect(isRevoked(STALL, DOOR)).toBe(true)
+    await waitFor(() => expect(isRevoked(STALL, DOOR)).toBe(true))
     expect(screen.getByText('No longer in service')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Revoke' })).toBeNull()
+  })
+
+  // #160 phase 1 (G10): Revoke used to mark a local row and nothing else, so a
+  // "revoked" terminal kept its authority. It must now spend the credential at
+  // the mint, with the stall's key, before the row says revoked.
+  it('spends the credential at the mint before marking the row', async () => {
+    enrol()
+    renderPage()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke' }))
+    fireEvent.click(screen.getByRole('button', { name: /Revoke Door/ }))
+
+    await waitFor(() => expect(isRevoked(STALL, DOOR)).toBe(true))
+    expect(fakeMint.receive).toHaveBeenCalledWith(TOKEN)
+  })
+
+  // A revocation that did not land must not be shown as one: the owner of a
+  // stolen till who believes it is dead, and is wrong, is worse off than one
+  // who knows. The row stays in service, the screen says so, and Revoke is
+  // offered again.
+  it('leaves the row in service and says so when the spend does not land', async () => {
+    spendFails = true
+    enrol()
+    renderPage()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke' }))
+    fireEvent.click(screen.getByRole('button', { name: /Revoke Door/ }))
+
+    await waitFor(() => expect(screen.getByText(/did not reach the mint/)).toBeTruthy())
+    expect(isRevoked(STALL, DOOR)).toBe(false)
+    expect(screen.getByRole('button', { name: 'Revoke' })).toBeTruthy()
+  })
+
+  // A row set up by hand before #160 holds no credential, so nothing can be
+  // spent. Offering Revoke would mark the row while the device kept its
+  // authority. It says how to replace it instead.
+  it('offers no Revoke for a row set up before revocation existed', () => {
+    enrol({ token: undefined, voucherId: undefined })
+    renderPage()
+
+    expect(screen.queryByRole('button', { name: 'Revoke' })).toBeNull()
+    expect(screen.getByText(/Set up before revocation existed/)).toBeTruthy()
+  })
+
+  // A waiting row is cancelled, not revoked (spec 2.1), and Cancel is the
+  // same spend.
+  it('offers Cancel on a waiting row, and cancelling spends it', async () => {
+    enrol({ status: 'waiting', waitingUntil: Date.now() + 3_600_000 })
+    renderPage()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    fireEvent.click(screen.getByRole('button', { name: /Cancel Door/ }))
+
+    await waitFor(() => expect(isRevoked(STALL, DOOR)).toBe(true))
+    expect(fakeMint.receive).toHaveBeenCalledWith(TOKEN)
+  })
+
+  // Decision 4: a waiting row nobody confirmed within 24 hours is cancelled
+  // when the owner next opens the list, so an unconfirmed authority to the
+  // stall is never left in a drawer.
+  it('cancels a waiting row past its 24 hours when the list opens', async () => {
+    enrol({ status: 'waiting', enrolledAt: 1_000, waitingUntil: 2_000 })
+    renderPage()
+
+    await waitFor(() => expect(isRevoked(STALL, DOOR)).toBe(true))
+    expect(fakeMint.receive).toHaveBeenCalledWith(TOKEN)
   })
 })
 
@@ -270,5 +365,45 @@ describe('what a lapse shows the owner', () => {
 
     await waitFor(() => expect(screen.getByText(/subscription is inactive/)).toBeTruthy())
     expect(container.textContent).not.toMatch(/paused|suspended/i)
+  })
+})
+
+describe('#160 review: rows left behind by earlier versions and lost answers', () => {
+  // A phase 0 waiting row holds no token: nothing was minted for it, so it
+  // cannot be cancelled at the mint and used to sit on the list for ever,
+  // blocking Add once two existed. It now offers Remove, which takes it off.
+  it('lets the owner remove a waiting row that was never minted', async () => {
+    enrol({ status: 'waiting', token: undefined, voucherId: undefined })
+    renderPage()
+
+    expect(screen.getByText(/Nothing was ever sent to this device/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+
+    await waitFor(() => expect(screen.queryByText('Door')).toBeNull())
+    expect(fakeMint.receive).not.toHaveBeenCalled()
+  })
+
+  // A request whose answer was lost is finished when the list opens: the
+  // credential is fetched by its voucher id, checked, and the row becomes an
+  // ordinary waiting row with Cancel.
+  it('finishes a credential request whose answer was lost', async () => {
+    enrol({ status: 'minting', token: undefined, mintKey: 'k-1', voucherId: 'cred-door' })
+    const resumeTransport = {
+      post: vi.fn(async () => new Response('{}', { status: 500 })),
+      get: vi.fn(async () => new Response(JSON.stringify({ status: 'ISSUED', token: TOKEN }), { status: 200 })),
+      sleep: async () => {},
+    }
+    render(
+      <MemoryRouter>
+        <TerminalsPage stallPubkey={STALL} spendApi={async () => fakeMint} transport={resumeTransport} />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText(/Still being set up/)).toBeTruthy()
+    // The live fixture is locked to its own device and stall, not to DOOR and
+    // STALL, so the check refuses it and spends it. Either way the row is
+    // settled and is no longer an unknown credential.
+    await waitFor(() => expect(screen.queryByText(/Still being set up/)).toBeNull())
+    expect(resumeTransport.get).toHaveBeenCalled()
   })
 })
