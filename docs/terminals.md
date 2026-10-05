@@ -150,7 +150,12 @@ Two things to hold on to:
 
 - **You can revoke a device you cannot reach.** Lost, stolen, drowned, or
   smashed, it makes no difference: you hold what is needed to withdraw its
-  authority, and the device is not consulted.
+  authority, and the device is not consulted. Revoking spends the terminal's
+  authority at the mint with your stall's key. If that does not get through,
+  the terminal stays on your list as in service and the screen says so: tap
+  **Revoke** again when you have a connection. A terminal set up before this
+  existed says *Set up before revocation existed*: add the device again to
+  replace it.
 - **Revocation bites within 12 hours,** when the terminal's session next
   expires. The screen tells you this before you confirm, because the real
   question you are answering is *"is twelve hours good enough, or do I close the
@@ -239,13 +244,38 @@ and are tested, but four seams between them are not yet wired, so **a second
 till cannot be run end to end right now**. The plan to close them is
 [the terminals-in-service spec](spec-terminals-in-service.md).
 
-1. **Adding a terminal does not yet create its authority.** The enrolment screen
-   records the terminal in your list as **Waiting for the device**, and says so,
-   but the credential behind it is still minted by hand with
-   `scripts/mint-terminal-credential.mjs`. A terminal added from the screen
-   alone cannot log in. The screen refuses a code that is not a real device key,
-   and setup on a device refuses to run while that device still holds a wallet
-   (log out first, keeping the backup key).
+1. **The device cannot yet receive its authority.** **Add terminal** now
+   creates the terminal's authority from your phone, checks it, and shows a
+   check code, and the terminal appears in your list as **Waiting for the
+   device**. The device side, where the operator confirms the code and sets a
+   passphrase, is not built yet, so a terminal added from the screen cannot log
+   in. A waiting terminal is cancelled automatically after 24 hours, and at most
+   two can wait at once. Waiting terminals do not use up your free terminal.
+   The gateway enforces the two-waiting limit and the 24 hours too, so a second
+   phone or a cleared browser cannot get round them. The screen refuses a code
+   that is not a real device key, and a device that is already on your list
+   with a live authority: cancel or revoke that one first, so its authority is
+   never left without a way to revoke it. Setup on a device refuses to run
+   while that device still holds a wallet (log out first, keeping the backup
+   key).
+
+   If your connection drops while a terminal is being added, the row says
+   **Still being set up**. The next time you open Terminals with a connection,
+   it is finished (it becomes **Waiting for the device**) or cleared if nothing
+   was created. A waiting row added by an older version of the app, before
+   anything was sent to the device, shows **Remove**: nothing was ever created
+   for it, so removing it is all there is to do. Only a clear refusal from the
+   gateway clears the row. A server error, a timeout or a dropped connection
+   leaves it **Still being set up**, because the authority may already exist.
+
+   **Every terminal authority must be confirmed before it can sell.** The
+   gateway refuses Sell for an authority that neither its device nor your stall
+   has confirmed, and lapses it after 24 hours. The app does this for you. If you
+   mint one yourself, `scripts/mint-terminal-credential.mjs` confirms it as the
+   stall. The card-purchase issuer (`services/purchase-issuer`) confirms each
+   credential it holds, as its device, the first time it reads it. Anything else
+   that mints a terminal credential must call
+   `POST /api/v1/wallet/terminal-credentials/{id}/confirm` itself.
 2. **The device side has no screen yet.** The logic that makes a terminal's key
    and shows it as a QR exists, but no page displays it.
 3. **Login does not ask whether the authority is still live.** Every terminal

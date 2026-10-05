@@ -137,7 +137,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `npx tsx services/purchase-issuer/attachDelegation.ts <stall> <event.json>`, which
   refuses a delegation the till would refuse.
 
+### Added
+
+- **Adding a terminal mints its credential from the owner's phone** (#160, phase 1). **Add
+  terminal** now makes one NIP-98 call, signed by the stall, to `POST /api/v1/wallet/vouchers`
+  (the body `scripts/mint-terminal-credential.mjs` sends, 365 days). It then waits for the token
+  and checks it from its own bytes (`terminalMint.credentialDefect`):
+  - it is a `P2PK_VOUCHER` locked to the scanned key;
+  - the stall is in `pubkeys`, so the owner can revoke it;
+  - it was issued by the stall, with a valid signature;
+  - the signed metadata matches.
+
+  A credential that fails any check is spent at once and nothing is recorded. A good one is
+  kept on the owner's roster row (`token`, `voucherId`), and the screen shows a six-digit check
+  code (`checkCode`, spec 4.2). Needs imani-gateway-customer#187, which mints the stall
+  co-key.
+- **Waiting rows are bounded, not counted** (#160 decision 4). Waiting rows do not use up the
+  free terminal. They are capped at 2 (`TOO_MANY_WAITING`, "Two terminals are already waiting
+  for their device") and expire after 24 hours. The Terminals screen cancels expired rows by
+  spending their credential. The client check is a hint: gateway-customer#187 enforces the same
+  limit and the 24 hours at mint time (409 `TERMINAL_PENDING_LIMIT`), and Cancel tells it the
+  slot is free (`POST /api/v1/wallet/terminal-credentials/{id}/cancel`).
+
 ### Fixed
+
+- **A server error while adding a terminal no longer forgets a credential that may exist**
+  (#160 round 2). Any HTTP status used to clear the `minting` row and its Idempotency-Key, so a
+  proxy 504 after the gateway minted left an unknown credential holding a pending slot. Now only
+  a definitive 4xx (not 408 or 429) clears it (`isDefinitiveRefusal`). A 5xx, timeout or network
+  error keeps the row, and `resumeMinting` re-sends the same key. The enrol screen and
+  `resumeMinting` share one `settleMintFailure`.
+- **A wrong credential that was spent gives its gateway slot back** (#160 round 2). The
+  defect-spent paths now call `/cancel`, so the slot is free at once rather than after 24 hours.
+- **Credentials minted outside the app are confirmed** (#160 round 2). Since gateway-customer
+  V27 an unconfirmed credential cannot sell. `scripts/mint-terminal-credential.mjs` now confirms
+  what it mints, as the stall, and fails on anything but 204. `services/purchase-issuer` sells
+  with `X-Imani-Terminal-Credential`, so it is affected too: it confirms each credential once,
+  as its device, before first use, and retries until the gateway says yes.
+
+- **Re-adding a device already on the list no longer orphans its first credential** (BLOCKER).
+  `recordTerminal` replaced the row for the same key, so a second Add minted a new credential
+  and dropped the token of the first, which stayed live and could no longer be revoked.
+  `checkEnrolment` now refuses a key with a live credential (`ALREADY_LIVE`, "already on your
+  list with a live authority. Cancel or revoke it there first"), and `recordTerminal` throws
+  `LiveCredentialError` rather than replace such a row. A revoked device can still be added
+  again.
+- **A credential whose answer was lost is no longer orphaned.** A `minting` row, with the
+  request's `Idempotency-Key`, is written before the mint request. The voucher id is added as
+  soon as the gateway names it. If the token poll times out, or a wrong credential's cancelling
+  spend fails, the row stays. The next open of Terminals (`resumeMinting`) fetches and checks the
+  token, re-sends the request with the same key so the gateway replays rather than re-mints,
+  retries the spend, or clears the row when the gateway refused. Rows read *Still being set up*
+  meanwhile.
+- **Phase 0 waiting rows no longer block Add.** They hold no token, so they are not counted
+  against the two-waiting limit, and the list offers **Remove** for them (nothing was minted).
+- **A minted credential must name exactly the stall as co-spender.** `credentialDefect` used
+  `includes`, so a third key in `pubkeys` passed. It now requires `pubkeys` to be exactly
+  `[stall]`, `n_sigs` 1, and no `refund` or `locktime` tag.
+
+- **Revoking a terminal spends its credential** (#160, phase 1, G10). Revoke (and **Cancel**
+  on a waiting row) used to mark a local row and nothing else, so the terminal kept its
+  authority. `revokeTerminalAtMint` now spends the credential with the stall's key and marks the
+  row only when the spend landed or the mint says it is already spent. Otherwise the row stays
+  in service and the screen says the revocation did not reach the mint. `witness.ts` now signs
+  for a secret whose NUT-11 `pubkeys` tag holds the wallet's key (`spendingKeys`, `n_sigs` 1
+  only). Rows set up by hand before this have no token, offer no Revoke, and say *Set up before
+  revocation existed: add it again*. `TerminalRecord.revocationSecret`, which was never written,
+  is replaced by `token`, `voucherId` and `waitingUntil`.
 
 - **A coupon held for over a week can still be released (#175 review).** Re-offering held
   coupons looked back from when the message was written, but relays filter on the gift

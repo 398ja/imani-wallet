@@ -2,6 +2,7 @@ import { secp256k1 } from '@noble/curves/secp256k1.js'
 
 import { grantFor, type TerminalRole } from './terminalRole'
 import { mayEnrol, type EnrolDecision } from './terminalAllowance'
+import { MAX_WAITING } from './terminalRoster'
 import type { LicenceStatus } from './licenceStatus'
 import type { TerminalCredential } from './actor'
 
@@ -61,6 +62,14 @@ export const ENROLMENT_REFUSAL = {
   SELF: 'self',
   /** No subscription, and the free allowance is used. */
   NOT_ALLOWED: 'not-allowed',
+  /** Two terminals already wait for their device (decision 4 on #160). */
+  TOO_MANY_WAITING: 'too-many-waiting',
+  /**
+   * This device key already has a live credential on the roster (#160 review,
+   * BLOCKER). Minting another would replace its row and drop the only way to
+   * revoke the first.
+   */
+  ALREADY_LIVE: 'already-live',
   OFFLINE: 'offline',
 } as const
 
@@ -95,8 +104,22 @@ export interface EnrolmentContext {
   stallPubkey: string
   /** What the licence check currently believes. */
   licence: LicenceStatus
-  /** Terminals already enrolled, excluding the owner's own device. */
+  /**
+   * Terminals in service, excluding the owner's own device. Waiting rows are
+   * not counted: they do not use up the free terminal (decision 4 on #160).
+   */
   enrolledCount: number
+  /**
+   * Terminals still waiting for their device. At most `MAX_WAITING`.
+   *
+   * A hint only: this phone's roster cannot see another phone or tab. The
+   * gateway enforces the same limit when the credential is minted (409
+   * `TERMINAL_PENDING_LIMIT`, gateway-customer#187), so this check exists to
+   * say so before the owner fills in the form.
+   */
+  waitingCount?: number
+  /** Whether the scanned key already holds a live credential on this roster. */
+  alreadyLive?: boolean
   /** Whether the device can reach the network. Enrolment needs it. */
   online: boolean
 }
@@ -165,6 +188,31 @@ export function checkEnrolment(
       ready: false,
       reason: ENROLMENT_REFUSAL.SELF,
       message: 'This is your own device. It already trades for your stall and needs no setup.',
+    }
+  }
+
+  // Re-adding a key that is already out would mint a second credential and
+  // replace the row holding the first one's token, leaving it live and
+  // unrevocable (#160 review). The owner cancels or revokes it first.
+  if (context.alreadyLive) {
+    return {
+      ready: false,
+      reason: ENROLMENT_REFUSAL.ALREADY_LIVE,
+      message:
+        'This device is already on your list with a live authority. Cancel or revoke it ' +
+        'there first, then add it again.',
+    }
+  }
+
+  // Decision 4 on #160: waiting rows are free, so they are capped instead. Two
+  // at a time is enough to retry a botched setup, and not enough to stock a
+  // drawer with unconfirmed authorities to the stall.
+  if ((context.waitingCount ?? 0) >= MAX_WAITING) {
+    return {
+      ready: false,
+      reason: ENROLMENT_REFUSAL.TOO_MANY_WAITING,
+      message:
+        'Two terminals are already waiting for their device. Finish or cancel one first.',
     }
   }
 
