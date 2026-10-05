@@ -145,10 +145,18 @@ export async function confirmCredential(
   fetchImpl: typeof fetch = fetch,
 ): Promise<boolean> {
   const url = `${gatewayUrl.replace(/\/$/, '')}${CONFIRM_PATH(credential.credentialId)}`
+  // The same request the wallet sends: an empty JSON object, signed in the `payload` tag. The
+  // gateway reads nothing from it. An empty body signed as sha256('') passes the filter too, but
+  // one shape for every caller of this endpoint is one shape to test (imani-wallet 0.14.2).
+  const body = '{}'
   try {
     const response = await fetchImpl(url, {
       method: 'POST',
-      headers: { Authorization: authorization('POST', url, '', credential.lockKeyHex) },
+      headers: {
+        Authorization: authorization('POST', url, body, credential.lockKeyHex),
+        'Content-Type': 'application/json',
+      },
+      body,
     })
     if (response.status === 204 || response.status === 200) return true
     console.warn(

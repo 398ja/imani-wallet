@@ -20,6 +20,7 @@ import {
 } from './terminalMint'
 import { grantFor } from './terminalRole'
 import { signedFetch } from './nip98'
+import { EMPTY_JSON_BODY } from './terminalConfirm'
 import { parseVoucherToken } from './voucherToken'
 
 /**
@@ -107,6 +108,8 @@ export let releasePending = async (voucherId: string): Promise<void> => {
     await signedFetch(
       `/api/v1/wallet/terminal-credentials/${encodeURIComponent(voucherId)}/cancel`,
       'POST',
+      // A body, so the signature carries the `payload` tag the gateway requires on a POST.
+      EMPTY_JSON_BODY,
     )
   } catch {
     // Offline. The gateway's own 24-hour expiry frees the slot.

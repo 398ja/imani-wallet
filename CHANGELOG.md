@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-10-05
+
+### Fixed
+
+- **A new terminal can be put in service again.** 0.14.1 sent the terminal credential
+  confirm and cancel calls (`POST /api/v1/wallet/terminal-credentials/{id}/confirm` and
+  `/cancel`) with no body, so their NIP-98 signature carried no `payload` tag, and the
+  gateway's filter refuses every POST without one (401 "NIP-98 payload tag required for
+  POST"). On staging every terminal enrolled after gateway-customer V27 stayed unconfirmed
+  and could never sell. The stall confirm, the device confirm and the cancel now send `{}`
+  as JSON, signed in the `payload` tag. purchase-issuer's credential confirm now sends the
+  same shape. It was not broken: it already signed the hash of its empty body.
+- New tests run the real wallet signer against a port of the gateway's NIP-98 checks for
+  each of these calls, so a missing or wrong `payload` tag now fails `npm test`.
+
 ## [0.14.1] - 2026-10-05
 
 ### Fixed

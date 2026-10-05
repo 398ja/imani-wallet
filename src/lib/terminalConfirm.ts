@@ -1,4 +1,4 @@
-import { signedFetch } from './nip98'
+import { signedFetch, type RequestSigner } from './nip98'
 import {
   awaitingGatewayConfirm,
   liveTerminals,
@@ -28,16 +28,35 @@ export function confirmBackoff(attempts: number): number {
 /** `POST .../confirm` as the stall. Returns the HTTP status, or null when nothing came back. */
 export type ConfirmCall = (voucherId: string) => Promise<number | null>
 
+/** The gateway path both the device and the stall confirm on. */
+export const confirmPath = (voucherId: string) =>
+  `/api/v1/wallet/terminal-credentials/${encodeURIComponent(voucherId)}/confirm`
+
+/**
+ * The body confirm and cancel send: an empty JSON object.
+ *
+ * The gateway reads nothing from it. It is there because imani-security's NIP-98 filter
+ * refuses every POST whose signature has no `payload` tag, and `signedFetch` only adds that tag
+ * over a body. 0.14.1 sent none, and staging refused every confirm with 401 "NIP-98 payload tag
+ * required for POST", so no terminal enrolled after V27 could sell.
+ */
+export const EMPTY_JSON_BODY = {}
+
 export const stallConfirm: ConfirmCall = async (voucherId) => {
   try {
-    const r = await signedFetch(
-      `/api/v1/wallet/terminal-credentials/${encodeURIComponent(voucherId)}/confirm`,
-      'POST',
-    )
+    const r = await signedFetch(confirmPath(voucherId), 'POST', EMPTY_JSON_BODY)
     return r.status
   } catch {
     return null
   }
+}
+
+/**
+ * `POST .../confirm` as the device, NIP-98 signed by the terminal's own key during setup.
+ * Best effort: never throws, because the enrolled DM is what the owner's list reads.
+ */
+export async function deviceConfirm(voucherId: string, signer: RequestSigner): Promise<void> {
+  await signedFetch(confirmPath(voucherId), 'POST', EMPTY_JSON_BODY, signer).catch(() => undefined)
 }
 
 /** What one status means. Null: not definitive, try again later. */
