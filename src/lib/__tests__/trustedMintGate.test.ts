@@ -35,6 +35,14 @@ const token = readFileSync('src/lib/__tests__/fixtures/witness-positive.token', 
 const parsed = parseVoucherToken(token)
 const stall = parsed.voucher.issuerId
 
+/**
+ * The row the claim is built from. The captured token is a pre-#141 LOCKED
+ * voucher with no `max_sats`, which keeps the pre-#141 crediting (its sats,
+ * bounded by face) after round 3 of imani-gateway-customer#141. These tests
+ * are about the MINT gate, which runs before any value is computed.
+ */
+const attestedRow = { amount: 0 }
+
 describe('crediting a coupon depends on where its value is', () => {
   /**
    * The control. With the coupon's own mint trusted, this token is claimable,
@@ -43,7 +51,7 @@ describe('crediting a coupon depends on where its value is', () => {
    */
   it('accepts the coupon when its mint is trusted', () => {
     vi.stubEnv('VITE_TRUSTED_MINT_URLS', parsed.mintUrl)
-    expect(candidateClaim({ amount: 0 }, token, stall)).toBeDefined()
+    expect(candidateClaim(attestedRow, token, stall)).toBeDefined()
   })
 
   /**
@@ -53,7 +61,7 @@ describe('crediting a coupon depends on where its value is', () => {
    */
   it('refuses the same coupon when its mint is not trusted', () => {
     vi.stubEnv('VITE_TRUSTED_MINT_URLS', 'https://mint.example.test')
-    expect(candidateClaim({ amount: 0 }, token, stall)).toBeUndefined()
+    expect(candidateClaim(attestedRow, token, stall)).toBeUndefined()
   })
 
   /**
@@ -65,7 +73,7 @@ describe('crediting a coupon depends on where its value is', () => {
   it('skips the coupon when the gateway has answered and names no mint', async () => {
     vi.stubEnv('VITE_TRUSTED_MINT_URLS', '')
     await gatewayAnswers('')
-    expect(candidateClaim({ amount: 0 }, token, stall)).toBeUndefined()
+    expect(candidateClaim(attestedRow, token, stall)).toBeUndefined()
   })
 
   /**
@@ -74,7 +82,7 @@ describe('crediting a coupon depends on where its value is', () => {
    */
   it('refuses the coupon before the gateway config has been loaded', () => {
     vi.stubEnv('VITE_TRUSTED_MINT_URLS', '')
-    expect(candidateClaim({ amount: 0 }, token, stall)).toBeUndefined()
+    expect(candidateClaim(attestedRow, token, stall)).toBeUndefined()
   })
 })
 
