@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-10-05
+
+### Fixed
+
+- **The wallet image builds again.** 0.14.0's Dockerfile runs
+  `scripts/check-trusted-mint-build.sh` (#133), but `.dockerignore` excluded `scripts/`, so
+  every `docker build` of the SPA image failed at that `COPY`. The script is now let into the
+  build context. No app change: 0.14.0's code, buildable.
+
 ## [0.14.0] - 2026-10-05
 
 ### Security

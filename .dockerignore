@@ -32,6 +32,9 @@ graphify-out
 # a container that serves static assets.
 docs
 scripts
+# Except the build-time trusted-mint check the Dockerfile copies in and runs
+# (#133). Ignoring it fails every image build at that COPY.
+!scripts/check-trusted-mint-build.sh
 deploy/compose.override.yml
 deploy/blossom.yml
 deploy/strfry.conf
