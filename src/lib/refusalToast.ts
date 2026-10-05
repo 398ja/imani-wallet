@@ -71,6 +71,14 @@ export const REFUSAL_MESSAGES: Record<RefusalReason, { title: string; detail: st
     title: 'That coupon is already spent',
     detail: 'It has paid out everything it was issued for. Nothing was taken.',
   },
+  'wrong-unit': {
+    title: 'Coupon in a form this wallet cannot take',
+    detail: 'Its value is in a unit this wallet does not handle. Nothing was taken.',
+  },
+  undecodable: {
+    title: 'Coupon could not be read',
+    detail: 'The coupon arrived damaged or in a form this wallet does not understand. Nothing was taken.',
+  },
 }
 
 /**

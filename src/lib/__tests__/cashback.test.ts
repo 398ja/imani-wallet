@@ -6,8 +6,11 @@ import {
   toCanonicalClaimCode,
   redeemCashbackCode,
   replayPendingCashback,
+  pendingCashbackCount,
 } from '../cashback'
 import { clearConfigCache } from '../config'
+import { resetGate } from './trustedMintKit'
+import { buildPlainToken } from './voucherFixtures'
 
 /**
  * The legacy redemption coordinator, which is where the money actually moves.
@@ -30,6 +33,15 @@ vi.mock('../nip98', () => ({
 }))
 
 const ORIGIN = 'cashback.example.test'
+/**
+ * The mint the portal stamps into cashback tokens, served as `token_mint_urls`.
+ * The commit is gated on it (#133 review), so every token below is a real plain
+ * token at this mint rather than an opaque string the gate could not read.
+ */
+const CASHBACK_MINT = 'https://mint.staging.398ja.xyz'
+const REAL_TOKEN = buildPlainToken(CASHBACK_MINT, 'sat', [8, 2])
+const CURRENT_TOKEN = buildPlainToken(CASHBACK_MINT, 'sat', [16])
+const STRANDED_TOKEN = buildPlainToken(CASHBACK_MINT, 'sat', [32])
 const CLAIM_REF = 'abcd1234efgh5678'
 /** 43 base64url characters — the 32-byte AES-256 key the claim URL carries. */
 const KEY = 'A'.repeat(43)
@@ -48,6 +60,7 @@ const fakeLocalStorage = {
 }
 
 beforeEach(() => {
+  resetGate()
   redeemed.length = 0
   redeemFails = false
   clearConfigCache()
@@ -66,6 +79,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  resetGate()
 })
 
 /**
@@ -111,7 +125,10 @@ function stubFetch(routes: {
     calls.push(url)
 
     if (url.startsWith('/api/v1/config')) {
-      return json(200, routes.config ?? { default_domain: 'x.test', cashback_origins: [ORIGIN] })
+      return json(
+        200,
+        routes.config ?? { default_domain: 'x.test', cashback_origins: [ORIGIN], token_mint_urls: [CASHBACK_MINT] },
+      )
     }
     if (url.includes('/cashback/by-code/')) {
       const r = routes.byCode ?? { status: 404 }
@@ -185,7 +202,7 @@ describe('typed claim codes', () => {
 
 describe('redeeming a code', () => {
   it('claims, decrypts, and banks the token', async () => {
-    const seal = await sealed('cashuBrealtoken')
+    const seal = await sealed(REAL_TOKEN)
     const calls = stubFetch({
       byCode: {
         status: 200,
@@ -197,7 +214,7 @@ describe('redeeming a code', () => {
     const result = await redeemCashbackCode('CB-A1B2-C3')
 
     expect(result).toEqual({ kind: 'ok', amountMinor: 500, unit: 'EUR', memo: 'thanks' })
-    expect(redeemed).toEqual(['cashuBrealtoken'])
+    expect(redeemed).toEqual([REAL_TOKEN])
     // The read-only metadata must be fetched BEFORE the destructive claim, or a
     // success screen for a coupon that committed offline has no amount to show.
     expect(calls.findIndex((c) => c.includes('/public/'))).toBeLessThan(
@@ -210,7 +227,7 @@ describe('redeeming a code', () => {
   it('looks up a current ten-character code, not just a legacy one', async () => {
     // Every code the portal has issued since GP-02 has this shape. Refusing it here
     // would answer "not found" without ever asking the gateway.
-    const seal = await sealed('cashuBcurrentcode')
+    const seal = await sealed(CURRENT_TOKEN)
     const calls = stubFetch({
       byCode: {
         status: 200,
@@ -257,7 +274,7 @@ describe('redeeming a code', () => {
     // This is the money case. The claim is already spent by the time the swap
     // runs, so dropping the token here loses the coupon permanently — the
     // holding store answers 410 for the rest of time.
-    const seal = await sealed('cashuBstranded')
+    const seal = await sealed(STRANDED_TOKEN)
     stubFetch({
       byCode: {
         status: 200,
@@ -268,12 +285,12 @@ describe('redeeming a code', () => {
     redeemFails = true
 
     expect(await redeemCashbackCode('CB-A1B2-C3')).toMatchObject({ kind: 'unreachable' })
-    expect(store.get('imani:cashback:pending') ?? null).toBe('cashuBstranded')
+    expect(pendingCashbackCount()).toBe(1)
 
     // ...and the next visit to the screen recovers it.
     redeemFails = false
     expect(await replayPendingCashback()).toBe(true)
-    expect(redeemed).toEqual(['cashuBstranded'])
+    expect(redeemed).toEqual([STRANDED_TOKEN])
     expect(store.get('imani:cashback:pending') ?? null).toBeNull()
   })
 
@@ -313,4 +330,100 @@ describe('redeeming a code', () => {
     expect(await redeemCashbackCode('nonsense')).toEqual({ kind: 'not_found' })
     expect(calls.some((c) => c.includes('by-code'))).toBe(false)
   })
+})
+
+/**
+ * #133 review, MEDIUM-1: the cashback commit swapped and credited with no
+ * backing check. These run the real trusted-mint gate, fed by the same
+ * `/api/v1/config` stub the redemption uses.
+ */
+describe('the cashback commit is gated on where the value is', () => {
+  const MINT = 'https://mint.staging.398ja.xyz'
+  const trustedConfig = { default_domain: 'x.test', cashback_origins: [ORIGIN], token_mint_urls: [MINT] }
+
+  async function claimable(token: string) {
+    const seal = await sealed(token)
+    stubFetch({
+      config: trustedConfig,
+      byCode: { status: 200, body: { claimUrl: `https://${ORIGIN}/c/${CLAIM_REF}#k=${seal.key}` } },
+      ciphertext: { status: 200, body: { ciphertext: seal.ciphertext, iv: seal.iv } },
+    })
+  }
+
+
+  /** The control: a cashback token at the trusted mint is banked as before. */
+  it('banks a cashback token whose proofs are at the trusted mint', async () => {
+    const token = buildPlainToken(MINT)
+    await claimable(token)
+
+    expect(await redeemCashbackCode('CB-A1B2-C3')).toMatchObject({ kind: 'ok' })
+    expect(redeemed).toEqual([token])
+  })
+
+  /**
+   * A token at a mint the wallet does not trust is NOT swapped. The claim is
+   * already spent, so the token is kept in the stash and the customer is told it
+   * is waiting to be verified, rather than losing it or banking rogue proofs.
+   */
+  it('does not swap a cashback token at an untrusted mint, and keeps it', async () => {
+    const token = buildPlainToken('https://rogue-mint.example.test')
+    await claimable(token)
+
+    expect(await redeemCashbackCode('CB-A1B2-C3')).toEqual({ kind: 'held', reason: 'untrusted-mint' })
+    expect(redeemed).toEqual([])
+    expect(pendingCashbackCount()).toBe(1)
+  })
+
+  /** The replay path is gated too: a stashed rogue token is never swapped on a later visit. */
+  it('does not swap a stashed token at an untrusted mint on replay', async () => {
+    const token = buildPlainToken('https://rogue-mint.example.test')
+    store.set('imani:cashback:pending', token)
+    stubFetch({ config: trustedConfig })
+
+    expect(await replayPendingCashback()).toBe(false)
+    expect(redeemed).toEqual([])
+    expect(pendingCashbackCount()).toBe(1)
+  })
+
+  /**
+   * When no trusted mint is known at all the token is held as well, and banked
+   * by a later visit once the gateway names the mint.
+   */
+  it('holds while no mint is known, and banks on a later visit once one is', async () => {
+    const token = buildPlainToken(MINT)
+    stubFetch({ config: { default_domain: 'x.test', cashback_origins: [ORIGIN] }, ...(await claimRoute(token)) })
+
+    expect(await redeemCashbackCode('CB-A1B2-C3')).toEqual({ kind: 'held', reason: 'no-trusted-mint' })
+    expect(redeemed).toEqual([])
+
+    resetGate()
+    stubFetch({ config: trustedConfig })
+    expect(await replayPendingCashback()).toBe(true)
+    expect(redeemed).toEqual([token])
+    expect(pendingCashbackCount()).toBe(0)
+  })
+
+  /**
+   * Two claims held one after the other are both kept. The stash used to be one
+   * slot, so a second claim would have overwritten, and lost, the first.
+   */
+  it('keeps every held claim, not just the last', async () => {
+    const first = buildPlainToken('https://rogue-mint.example.test', 'sat', [4])
+    const second = buildPlainToken('https://rogue-mint.example.test', 'sat', [16])
+    await claimable(first)
+    await redeemCashbackCode('CB-A1B2-C3')
+    resetGate()
+    await claimable(second)
+    await redeemCashbackCode('CB-A1B2-C3')
+
+    expect(pendingCashbackCount()).toBe(2)
+  })
+
+  async function claimRoute(token: string) {
+    const seal = await sealed(token)
+    return {
+      byCode: { status: 200, body: { claimUrl: `https://${ORIGIN}/c/${CLAIM_REF}#k=${seal.key}` } },
+      ciphertext: { status: 200, body: { ciphertext: seal.ciphertext, iv: seal.iv } },
+    }
+  }
 })

@@ -31,6 +31,7 @@ import { gatewayConfig, cashbackEnabled } from './config'
 import { cashbackValidation } from './cashbackValidation'
 import { legacyApi, withCorrelation } from './legacyBridge'
 import { signedFetch } from './nip98'
+import { checkTokenBacking, loadTrustedMints } from './trustedMint'
 import { notifyWalletChanged, recordCashbackStatus } from './wallet'
 
 /**
@@ -483,6 +484,18 @@ export type RedeemFailure =
   | { kind: 'unreachable'; reason: string }
   /** Reached everything, but what came back could not be trusted or opened. */
   | { kind: 'invalid'; reason: string }
+  /**
+   * Claimed and kept, but NOT swapped: the trusted-mint gate is holding it
+   * (#133 review, MEDIUM-1). Its mint is not one this wallet lists, or no mint is
+   * known yet. The token stays stashed on this device and is banked by a later
+   * visit once the mint is confirmed. Nothing was lost.
+   */
+  | { kind: 'held'; reason: 'untrusted-mint' | 'no-trusted-mint' | 'not-ready' }
+  /**
+   * Claimed, and the token can never be credited (a foreign unit, or unreadable).
+   * Kept on the device all the same, never swapped and never silently dropped.
+   */
+  | { kind: 'refused'; reason: string }
 
 export type RedeemResult =
   | { kind: 'ok'; amountMinor: number | null; unit: string | null; memo: string | null }
@@ -713,16 +726,37 @@ async function fetchPublicMetadata(
  * will answer 410 for the rest of time. This lands on the phone of someone who
  * installed the app ten minutes ago, on whatever connection a market has.
  *
- * ponytail: one localStorage slot, not a queue. Redeeming is a foreground act
- * the customer is watching, so two claims cannot overlap, and the replay only
- * has to survive as far as the next time they open the screen. A queue is the
- * upgrade if cashback ever redeems in the background.
+ * A LIST, not one slot (#133 review, MEDIUM-1). It used to be a single slot on
+ * the grounds that a claim is committed seconds after it is stashed. Since the
+ * commit is gated on the token's mint, a stashed token can now wait for days
+ * until the mint is confirmed, and a second claim in that time would have
+ * overwritten, and so lost, the first. The legacy single-token value is still
+ * read, so a token stashed by an older build is not stranded.
  */
 const PENDING_KEY = 'imani:cashback:pending'
 
-function stashToken(token: string): void {
+function readStash(): string[] {
+  let raw: string | null
   try {
-    localStorage.setItem(PENDING_KEY, token)
+    raw = localStorage.getItem(PENDING_KEY)
+  } catch {
+    return []
+  }
+  if (!raw) return []
+  // An older build stored the bare token string.
+  if (raw.startsWith('cashu')) return [raw]
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((t): t is string => typeof t === 'string' && t.length > 0) : []
+  } catch {
+    return []
+  }
+}
+
+function writeStash(tokens: readonly string[]): void {
+  try {
+    if (tokens.length === 0) localStorage.removeItem(PENDING_KEY)
+    else localStorage.setItem(PENDING_KEY, JSON.stringify(tokens))
   } catch {
     // A full or disabled store must not abort a redemption that is otherwise
     // fine — it only means a crash in the next few seconds would cost the
@@ -730,40 +764,58 @@ function stashToken(token: string): void {
   }
 }
 
-function clearStashedToken(): void {
-  try {
-    localStorage.removeItem(PENDING_KEY)
-  } catch {
-    // Nothing to do; a stale entry only costs one no-op replay attempt.
-  }
+function stashToken(token: string): void {
+  const tokens = readStash()
+  if (!tokens.includes(token)) writeStash([...tokens, token])
+}
+
+function clearStashedToken(token: string): void {
+  writeStash(readStash().filter((t) => t !== token))
+}
+
+/** How many claimed cashback tokens are on this device waiting to be banked. */
+export function pendingCashbackCount(): number {
+  return readStash().length
 }
 
 /**
- * Bank a token that was claimed but never swapped, if one is waiting.
+ * Bank every token that was claimed but never swapped.
  *
  * Safe to call on every visit to the redeem screen: `TokenRedemption.redeem`
  * dedupes by fingerprint, so replaying one that actually landed is a no-op.
+ * A token the trusted-mint gate still holds is kept, not swapped (#133 review).
  * Returns true when something was recovered, so the screen can say so.
  */
 export async function replayPendingCashback(): Promise<boolean> {
-  let token: string | null = null
-  try {
-    token = localStorage.getItem(PENDING_KEY)
-  } catch {
-    return false
-  }
-  if (!token) return false
+  const tokens = readStash()
+  if (tokens.length === 0) return false
+  // Learn the trusted mints first: until they are known the gate defers, and a
+  // token is kept rather than swapped.
+  await loadTrustedMints()
 
-  try {
-    await commitToken(token)
-    clearStashedToken()
-    return true
-  } catch {
-    // Keep it. The next visit tries again — this is the whole point of the
-    // stash, and dropping it here would be the loss it exists to prevent.
-    return false
+  let recovered = false
+  for (const token of tokens) {
+    try {
+      const outcome = await commitToken(token)
+      if (outcome.kind === 'banked') {
+        clearStashedToken(token)
+        recovered = true
+      }
+      // Held or refused: kept. Nothing is ever dropped from the stash except by
+      // banking it, because the claim that produced it cannot be repeated.
+    } catch {
+      // Keep it. The next visit tries again — this is the whole point of the
+      // stash, and dropping it here would be the loss it exists to prevent.
+    }
   }
+  return recovered
 }
+
+/** What `commitToken` did with a token. */
+type CommitOutcome =
+  | { kind: 'banked' }
+  | { kind: 'held'; reason: 'untrusted-mint' | 'no-trusted-mint' | 'not-ready' }
+  | { kind: 'refused'; reason: string }
 
 /**
  * Swap the token at the mint and write it into the wallet.
@@ -774,8 +826,31 @@ export async function replayPendingCashback(): Promise<boolean> {
  * minted by the gateway rather than pasted in by a person. Skipping the gate
  * is not skipping the check: the coupon's issuer and signature are verified
  * here and recorded on the row like any other receive (#156).
+ *
+ * And the BACKING is checked before anything is swapped (#133 review,
+ * MEDIUM-1): this path used to swap and credit whatever mint the token named.
+ * The token is the portal's, which stamps customer-wallet's PUBLIC mint URL
+ * into `m` (`gateway.wallet.public-mint-url`, verified on staging), so a genuine
+ * cashback token is at a mint the gate trusts. One that is not is HELD: never
+ * swapped, kept in the stash, and banked by a later visit once its mint is
+ * confirmed. The claim was destructive, so the one thing this must never do is
+ * drop the token.
  */
-async function commitToken(token: string): Promise<void> {
+async function commitToken(token: string): Promise<CommitOutcome> {
+  const backing = checkTokenBacking(token)
+  switch (backing.outcome) {
+    case 'accept':
+      break
+    case 'hold':
+      console.warn('[cashback] holding a claimed token, not swapping it:', backing.detail)
+      return { kind: 'held', reason: backing.reason }
+    case 'defer':
+      return { kind: 'held', reason: 'not-ready' }
+    case 'refuse':
+      console.error('[cashback] a claimed token can never be credited here, kept on the device:', backing.detail)
+      return { kind: 'refused', reason: backing.reason }
+  }
+
   await legacyApi()
   const redemption = window.TokenRedemption
   if (!redemption) throw new Error('TokenRedemption unavailable')
@@ -805,6 +880,7 @@ async function commitToken(token: string): Promise<void> {
   // The legacy layer writes straight to IndexedDB, and this tab does not hear
   // its own BroadcastChannel post.
   notifyWalletChanged()
+  return { kind: 'banked' }
 }
 
 /**
@@ -882,15 +958,21 @@ async function redeemParsedClaim(parsed: ParsedClaimUrl): Promise<RedeemResult> 
   // From here the claim is spent. Persist before swapping so a crash is
   // recoverable, and only forget it once the mint has actually taken it.
   stashToken(claimed.token)
+  // The trusted mints, before the gate is asked: until they are known it can
+  // only defer, and a token is then kept rather than swapped.
+  await loadTrustedMints()
+  let outcome: CommitOutcome
   try {
-    await commitToken(claimed.token)
+    outcome = await commitToken(claimed.token)
   } catch (e) {
     return {
       kind: 'unreachable',
       reason: e instanceof Error && e.name === 'AbortError' ? 'timeout' : 'commit_failed',
     }
   }
-  clearStashedToken()
+  if (outcome.kind === 'held') return { kind: 'held', reason: outcome.reason }
+  if (outcome.kind === 'refused') return { kind: 'refused', reason: outcome.reason }
+  clearStashedToken(claimed.token)
 
   return { kind: 'ok', ...metadata }
 }

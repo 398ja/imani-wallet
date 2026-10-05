@@ -147,6 +147,18 @@ export interface ResolvedDmPollConfig extends Required<Omit<DmPollConfig,
 }
 
 /**
+ * How far into the past NIP-59 may push a gift wrap's `created_at`: two days,
+ * plus an hour of clock skew.
+ *
+ * A wrap's timestamp is randomised backwards to frustrate timing analysis, and
+ * relays filter on the WRAP's timestamp, never on the rumor's. So any `since`
+ * derived from when a message was written must reach back this much further, or
+ * the wrap that carries it is filtered out. Shared by every lookback that starts
+ * from a rumor time (`reofferEvents`) and by wallets sizing `recentDmsSince`.
+ */
+export const GIFT_WRAP_BACKDATE_SECONDS = 2 * 86400 + 3600;
+
+/**
  * Default configuration values
  */
 export const DEFAULT_CONFIG: Omit<ResolvedDmPollConfig,

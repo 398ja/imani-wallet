@@ -12,12 +12,16 @@
  * refusing costs nothing. After it, the proofs are ours and a mistake is a wrong
  * balance somebody has to reconcile.
  *
- * - **An untrusted mint or a foreign unit.** Proofs at a mint we do not trust are
- *   not ours to credit, and amounts in another unit do not mean what the wallet
- *   would read them as. Checked before anything is spent.
- * - **A gateway config that has not arrived.** Deferred, NOT passed. The trusted
- *   set is not yet knowable, and treating "we cannot tell" as "fine" is how an
- *   untrusted mint gets credited during start-up.
+ * - **Anything but a mint we positively trust.** This path takes the token's OWN
+ *   mint URL and sends money there, so the mint is not a field we record but the
+ *   address we act on. An attacker-supplied token naming a mint they control
+ *   would be swapped at that mint, and the wallet would hold proofs nobody
+ *   trusts while believing them good (#133). So it FAILS CLOSED: an untrusted
+ *   mint, a foreign unit, a trusted set that is not yet known, and a deployment
+ *   that names no mint at all are all refused. The crediting paths are allowed
+ *   to accept `unchecked`, because there the money is already held and refusing
+ *   would strand it; here nothing has moved yet, and refusing costs only a
+ *   fallback to the gateway receive.
  * - **A voucher.** Deliberate, and the subtlest refusal here, so it has its own
  *   section below.
  *
@@ -37,8 +41,8 @@
  * refused loudly and the caller falls back to the gateway receive it uses today.
  */
 
-import { isVoucherSecret, parseVoucherToken, tokenProofs } from './voucherToken'
-import { checkMintAndUnit } from './trustedMint'
+import { isVoucherSecret, tokenProofs } from './voucherToken'
+import { checkMintAndUnit, readTokenBacking, type TokenBacking } from './trustedMint'
 import { buildWitnesses } from './witness'
 import { receiveByOwnSwap, settleReceive, type MintTransport, type ReceivableProof } from './receiveSwap'
 import type { UnblindedProof } from './walletSwap'
@@ -47,6 +51,8 @@ import type { UnblindedProof } from './walletSwap'
 export type ReceiveRefusal =
   /** The gateway's config has not arrived, so the mint cannot be checked yet. Retry. */
   | 'not-ready'
+  /** This deployment names no trusted mint, so there is nowhere this path may swap. */
+  | 'no-trusted-mint'
   /** The proofs are at a mint this build does not trust. */
   | 'untrusted-mint'
   /** The proofs are not denominated in the unit this wallet understands. */
@@ -106,10 +112,13 @@ export async function receiveTokenByOwnSwap(
   pubkey: string,
   transport: MintTransport,
 ): Promise<OwnSwapReceipt> {
-  let parsed: ReturnType<typeof parseVoucherToken>
+  // `readTokenBacking`, not `parseVoucherToken`: the latter reads only vouchers,
+  // and plain ecash, the one thing this path may receive, made it throw. The gate
+  // below then never saw the tokens it exists to judge.
+  let backing: TokenBacking
   let proofs: ReturnType<typeof tokenProofs>
   try {
-    parsed = parseVoucherToken(token)
+    backing = readTokenBacking(token)
     proofs = tokenProofs(token)
   } catch (cannotDecode) {
     throw new ReceiveNotPossible(
@@ -118,12 +127,12 @@ export async function receiveTokenByOwnSwap(
     )
   }
 
-  const verdict = checkMintAndUnit(parsed)
-  if (verdict !== 'trusted' && verdict !== 'unchecked') {
-    throw new ReceiveNotPossible(
-      verdict === 'not-ready' ? 'not-ready' : verdict,
-      `refusing to receive: ${verdict}`,
-    )
+  const verdict = checkMintAndUnit(backing)
+  if (verdict !== 'trusted') {
+    // Every non-trusted verdict is a refusal here, `no-trusted-mint` included:
+    // with no mint to compare against, the only mint on offer is the one the
+    // token names, which is exactly the one an attacker chooses.
+    throw new ReceiveNotPossible(verdict, `refusing to swap at ${backing.mintUrl || 'an unnamed mint'}: ${verdict}`)
   }
 
   const secrets = proofs.map((proof) => proof.secret)
@@ -145,11 +154,11 @@ export async function receiveTokenByOwnSwap(
   })
 
   const result = await receiveByOwnSwap(
-    { pubkey, mintUrl: parsed.mintUrl, proofs: receivable },
+    { pubkey, mintUrl: backing.mintUrl, proofs: receivable },
     transport,
   )
 
-  return { swapId: result.swapId, proofs: result.proofs, mintUrl: parsed.mintUrl }
+  return { swapId: result.swapId, proofs: result.proofs, mintUrl: backing.mintUrl }
 }
 
 /** Drop the recovery record for a receive whose proofs are now saved. */

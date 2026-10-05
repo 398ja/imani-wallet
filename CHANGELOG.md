@@ -9,6 +9,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **No trusted mint known is no longer a pass (#133 review).** When the build names no mint
+  and `/api/v1/config` names none either, which was the case on beta and prod, the gate used
+  to answer `unchecked` and credit coupons from any mint. It now holds them instead (see
+  below), the own-swap receive and the stall's claim sweep refuse, and the image build fails
+  unless `VITE_TRUSTED_MINT_URLS` is set (`scripts/check-trusted-mint-build.sh`;
+  `ALLOW_UNTRUSTED_MINT_BUILD=true` for a throwaway local image only). A dev build can opt
+  out with `VITE_ALLOW_ANY_MINT_IN_DEV=true`, which is logged every time it is used and
+  ignored in a production build.
+- **The trusted mint is the one tokens are stamped with.** The wallet reads `token_mint_urls`
+  from `/api/v1/config`, the PUBLIC mint URL customer-wallet stamps in `m`
+  (imani-gateway-core serves it from the same setting). `mint_url`, gateway-core's
+  client-mint setting, is still accepted but no longer the only source.
+- **The cashback commit checks the token's mint before it swaps.** It used to swap and credit
+  whatever mint the token named. A cashback token at a mint the wallet does not list is kept
+  on the device, not swapped, and banked on a later visit once the mint is confirmed. The
+  device's cashback stash is now a list, so a second held claim cannot overwrite the first.
+- **Mint URLs carrying userinfo, a query or a fragment are never trusted**, even when empty,
+  so two different strings cannot name "the same" mint.
+
+- **The trusted-mint gate is on by default, in every build (#133).** The gate's other source
+  used to be a script only the legacy bridge loaded, and its absence read as "this deployment
+  names no mint", so many builds credited coupons from any mint. The wallet now asks
+  `/api/v1/config` at start-up, and the coupon poller waits for that answer before its first
+  receive. Until it arrives the list is unknown, which is never read as "no mint": a coupon
+  that arrives meanwhile is deferred and received on a later poll.
+- **The wallet checks where a received coupon's value is before every redemption (#131).**
+  dm-poll asks `RedemptionAdapter.checkBacking` (which replaces an optional `getMintUrl` hook
+  nothing called), and the wallet's answer reads plain ecash and legacy `cashuA` tokens as
+  well as vouchers. A foreign unit or an unreadable token is refused before the mint swap; an
+  unlisted mint is held (above). Mint URLs are compared as URLs: scheme and host case, a
+  default port and a trailing slash do not matter, while a different host, port, scheme or
+  path does. The vouchers' face currency (EUR, XAF, GBP) is not what is checked: their proofs
+  are always sat.
+- **The wallet-side receive swaps only at a positively trusted mint (#133).** It swaps at the
+  token's own mint, so an attacker naming their mint would be paid. Any other verdict is
+  refused. This path is not switched on yet (#123).
+- **A coupon that arrived before the trusted list loaded is no longer lost.** It used to be
+  refused at unwrap, which marked its delivery as handled for good. It is now deferred at
+  redemption and offered again.
+
+### Fixed
+
+- **A coupon held for over a week can still be released (#175 review).** Re-offering held
+  coupons looked back from when the message was written, but relays filter on the gift
+  wrap's own timestamp, which NIP-59 backdates by up to two days, so such a wrap was never
+  found. `reofferEvents` now reaches back a further `GIFT_WRAP_BACKDATE_SECONDS` (2 days + 1 h).
+- **A coupon at an unlisted mint is held, never dropped (#133 review).** A refusal used to be
+  terminal, so a mismatch between the two services' mint settings (a migration, or an
+  internal URL configured for client-side minting) would have discarded every genuine coupon
+  it touched. Now nothing is swapped, the delivery is not consumed, and the wallet shows
+  "N coupons are waiting to be verified" until the configuration names the mint, when they
+  arrive on their own. Only a foreign unit or an unreadable token is still refused.
+- **Waiting for the trusted mint heals itself.** A failed or empty `/api/v1/config` is asked
+  again on a backoff (5 seconds, doubling to 5 minutes). When it answers, the poller catches
+  up and re-offers every held coupon by id, including ones older than the 7-day poll window.
+  A config without a NIP-05 domain no longer stops the mint from being read.
+
+### Changed
+
+- `@imani/dm-poll`: `BackingVerdict` gains `hold` (with `HoldReason`), and the service emits
+  `redemption:held` and `redemption:released`. `untrusted-mint` moves from `RefusalReason` to
+  `HoldReason`. New `DmPollService.reofferEvents(ids, since)` and `hasProcessed(id)`.
+
 ## [0.13.0] - 2026-10-04
 
 ### Fixed

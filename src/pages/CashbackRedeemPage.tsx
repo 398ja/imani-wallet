@@ -194,5 +194,17 @@ function failureMessage(result: RedeemResult): string {
       return 'Something was wrong with this code. Ask the shop to issue a new one.'
     case 'disabled':
       return 'Cashback is not available on this network.'
+    case 'held':
+      // The claim is spent and the token is safely on this phone, but it was not
+      // added: its mint has not been confirmed (#133 review). Kept, never lost.
+      return (
+        'Your cashback is saved on this phone and waiting to be verified. Nothing was lost: ' +
+        'it is added automatically the next time you open this screen once it is confirmed.'
+      )
+    case 'refused':
+      return (
+        'Your cashback is saved on this phone but could not be added to this wallet. ' +
+        'Nothing was lost. Show this message to the shop.'
+      )
   }
 }

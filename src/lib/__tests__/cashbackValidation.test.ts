@@ -9,6 +9,7 @@ import { clearConfigCache } from '../config'
 import { createDmCryptoAdapter } from '../dmCrypto'
 import { warrantSaleDigest } from '../issuanceWarrant'
 import { validationStatus } from '../validationStatus'
+import { resetGate } from './trustedMintKit'
 import { buildVoucherToken, dmEnvelope } from './voucherFixtures'
 
 /**
@@ -41,6 +42,7 @@ const store = new Map<string, string>()
 beforeEach(() => {
   registered.length = 0
   clearConfigCache()
+  resetGate()
   store.clear()
   vi.stubGlobal('localStorage', {
     getItem: (k: string) => store.get(k) ?? null,
@@ -52,6 +54,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  resetGate()
 })
 
 function b64url(bytes: Uint8Array): string {
@@ -70,7 +73,11 @@ async function serve(token: string) {
   const buf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(token))
   vi.stubGlobal('fetch', async (input: string) => {
     const url = String(input)
-    if (url.startsWith('/api/v1/config')) return json(200, { default_domain: 'x.test', cashback_origins: [ORIGIN] })
+    // `http://mint.test` is the mint the voucher fixture stamps. Served as the
+    // token mint so the backing gate on the commit (#133 review) lets these
+    // through to the signature recording this suite is about.
+    if (url.startsWith('/api/v1/config'))
+      return json(200, { default_domain: 'x.test', cashback_origins: [ORIGIN], token_mint_urls: ['http://mint.test'] })
     if (url.includes('/cashback/by-code/'))
       return json(200, { claimUrl: `https://${ORIGIN}/c/${CLAIM_REF}#k=${b64url(keyBytes)}` })
     if (url.includes('/cashback/public/')) return json(200, { amountMinor: 500, unit: 'EUR' })

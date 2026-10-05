@@ -12,12 +12,18 @@ import '../shared/nut18v.js'
 
 import App from './App.tsx'
 import { initNative, hideSplash } from './lib/native'
+import { loadTrustedMints } from './lib/trustedMint'
 import './index.css'
 
 const queryClient = new QueryClient()
 
 // Android back button, status bar. No-op in a browser.
 initNative()
+
+// Ask the gateway which mint is ours before anything can receive a coupon (#133).
+// Started here so it is usually done by the time login finishes; `startDmPoll`
+// awaits the same promise before the poller's first catch-up. Never rejects.
+void loadTrustedMints()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
