@@ -263,6 +263,29 @@ export interface ParsedVoucherToken {
   memo?: string
   /** Summed proof amounts, in sats. */
   tokenAmount: number
+  /**
+   * The sats this token may be CREDITED for: each proof's amount, clamped to
+   * its own signed `max_sats` (imani-gateway-customer#141). Never more than
+   * `tokenAmount`.
+   *
+   * A re-signed or split voucher proof gets its sats from the swap that mints
+   * it, and the mint cannot see which blinded output carries a voucher secret,
+   * so a holder can fund a full-face successor with sats bought today. The
+   * gateway therefore signs a `max_sats` into every successor, summing to at
+   * most what was burnt, and this is where a redeemer honours it.
+   *
+   * Per proof, because each proof carries its own bound, and each locked proof's
+   * own issuer signature is verified (a proof that does not verify under proof
+   * 0's issuer key counts 0). A locked proof with no tag (pre-#141) counts its
+   * whole amount, bounded by face and the ledger: the accepted legacy residual
+   * (see `creditableSatsOf`). An unlocked voucher counts its whole amount, as before.
+   * A proof whose tag is present but unreadable counts 0: reading it as absent
+   * would let a holder downgrade a bound by mangling it.
+   *
+   * Optional so a hand-built `ParsedVoucherToken` keeps compiling and means
+   * "no bound known", exactly as an untagged token does.
+   */
+  creditableSats?: number
   proofCount: number
   voucher: SignedVoucherFields
 }
@@ -519,9 +542,111 @@ export function parseVoucherToken(token: string): ParsedVoucherToken {
     unit: String(root.u ?? ''),
     memo: typeof root.d === 'string' ? root.d : undefined,
     tokenAmount: proofs.reduce((sum, p) => sum + Number(p.a ?? 0), 0),
+    creditableSats: proofs.reduce(
+      (sum, p) => sum + creditableSatsOf(Number(p.a ?? 0), String(p.s), voucher),
+      0,
+    ),
     proofCount: proofs.length,
     voucher,
   }
+}
+
+/** The `max_sats` tag key (imani-gateway-customer#141). */
+export const MAX_SATS_TAG = 'max_sats'
+
+/**
+ * The one spelling of a `max_sats` value: a positive decimal, no sign, no
+ * leading zero, no exponent, at most 16 digits.
+ *
+ * The tag is NOT one of the canonicaliser's numeric tags, so it is hashed as
+ * the string it is, and `"1"` and `"01"` are different signed bytes. Accepting
+ * only this form, exactly as the gateway's `SatBound` does, means the Java and
+ * TS readers can never read one signed bound as two numbers (cashu-voucher#48).
+ */
+const CANONICAL_MAX_SATS = /^[1-9][0-9]{0,15}$/
+
+/** What a proof's secret says about its sat bound. */
+export type SatBound =
+  | { kind: 'absent' }
+  | { kind: 'present'; sats: number }
+  | { kind: 'malformed' }
+
+/**
+ * Reads a proof secret's `max_sats` tag.
+ *
+ * Only the locked kind carries tags on the wire. An unlocked `VOUCHER` keeps
+ * its fields in a CBOR blob with an empty tag array, and the gateway never
+ * signs a bound into one, so it reads as absent.
+ */
+export function satBoundOf(secret: string): SatBound {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(secret)
+  } catch {
+    return { kind: 'absent' }
+  }
+  if (!Array.isArray(parsed) || parsed[0] !== 'P2PK_VOUCHER') return { kind: 'absent' }
+  const tags = (parsed[1] as { tags?: unknown } | undefined)?.tags
+  if (!Array.isArray(tags)) return { kind: 'absent' }
+  const rows = tags.filter((t): t is unknown[] => Array.isArray(t) && t[0] === MAX_SATS_TAG)
+  if (rows.length === 0) return { kind: 'absent' }
+  // Two bounds, or one bound with two values, are two claims. Neither is trusted.
+  if (rows.length > 1 || rows[0].length !== 2 || typeof rows[0][1] !== 'string') {
+    return { kind: 'malformed' }
+  }
+  const wire = rows[0][1]
+  return CANONICAL_MAX_SATS.test(wire)
+    ? { kind: 'present', sats: Number(wire) }
+    : { kind: 'malformed' }
+}
+
+/**
+ * One proof's creditable sats (imani-gateway-customer#141).
+ *
+ * - An unlocked `VOUCHER` proof: its amount. Every proof of the token was
+ *   already required to carry proof 0's exact signed blob, so proof 0's
+ *   signature covers it. The blob is shared by every output, so it cannot carry
+ *   a per-output bound: that is the known residual, bounded by the face value
+ *   and the shared ledger.
+ * - A locked `P2PK_VOUCHER` proof: 0 unless its OWN issuer signature verifies
+ *   under proof 0's issuer key. Callers verify proof 0 only, so a self-made later
+ *   proof with the same voucher_id and lock (forged, or signed by some other
+ *   key) would otherwise be credited in full.
+ * - A verified locked proof with a canonical `max_sats`: `min(amount, max_sats)`.
+ * - A verified locked proof with NO `max_sats` (pre-#141): its amount, the
+ *   pre-#141 rule, bounded with the rest by the face value and the shared ledger.
+ *   Its funded amount is signed nowhere, and the mint signs any blinded output,
+ *   so its sats may be a same-secret twin's: that is the ACCEPTED LEGACY
+ *   RESIDUAL. Crediting 0 instead stranded every locked voucher sold before
+ *   #141 (round 4 count on staging: a handful, 2 known, each bounded by its
+ *   own signed face). Every locked output issued since #141 carries a bound
+ *   from birth, so only pre-#141 locked vouchers read as untagged.
+ * - A malformed `max_sats`: 0. Reading it as absent would be a downgrade.
+ */
+function creditableSatsOf(amount: number, secret: string, first: SignedVoucherFields): number {
+  const locked = lockedVoucherFrom(secret)
+  if (locked === null) return amount
+  if (
+    locked.issuerPublicKey.toLowerCase() !== first.issuerPublicKey.toLowerCase() ||
+    !verifyVoucher(locked).signatureValid
+  ) {
+    return 0
+  }
+  const bound = satBoundOf(secret)
+  if (bound.kind === 'absent') return amount
+  if (bound.kind === 'malformed') return 0
+  return Math.min(amount, bound.sats)
+}
+
+/**
+ * The sats to credit: the token's amount, clamped to its per-proof bounds.
+ *
+ * `min` rather than `creditableSats` alone, so a caller that overrides
+ * `tokenAmount` with a smaller figure (`signedPartOf` in `pay.ts` does) still
+ * gets the smaller one.
+ */
+function creditedSats(parsed: ParsedVoucherToken): number {
+  return Math.min(parsed.tokenAmount, parsed.creditableSats ?? parsed.tokenAmount)
 }
 
 /**
@@ -859,17 +984,22 @@ export interface VoucherValidation {
 /**
  * The value to credit for a token, and the evidence behind it.
  *
- * `currentFace = tokenAmount * issuanceRatio` is how a partially-spent voucher
+ * `currentFace = sats * issuanceRatio` is how a partially-spent voucher
  * reports what is left, but the ratio is unsigned on legacy vouchers, so it is
  * clamped to the signed face value. That clamp is the only bound that holds
  * against a rewritten ratio, and it needs no network.
+ *
+ * `sats` is each proof's amount clamped to its signed `max_sats`
+ * (`creditableSats`, imani-gateway-customer#141), so a re-signed proof funded
+ * with more sats than were burnt for it is credited for the burn and no more.
+ * A token with no `max_sats` is credited exactly as before.
  */
 export function creditableFaceValue(parsed: ParsedVoucherToken): {
   faceValue: number
   cappedAtFaceValue: boolean
 } {
-  const { voucher, tokenAmount } = parsed
-  const derived = Math.round(tokenAmount * voucher.issuanceRatio)
+  const { voucher } = parsed
+  const derived = Math.round(creditedSats(parsed) * voucher.issuanceRatio)
   if (voucher.faceValue > 0 && derived > voucher.faceValue) {
     return { faceValue: voucher.faceValue, cappedAtFaceValue: true }
   }
@@ -886,8 +1016,8 @@ export function creditableFaceValue(parsed: ParsedVoucherToken): {
  * ledger rounds the running total instead.
  */
 export function exactFaceValue(parsed: ParsedVoucherToken): number {
-  const { voucher, tokenAmount } = parsed
-  const exact = tokenAmount * voucher.issuanceRatio
+  const { voucher } = parsed
+  const exact = creditedSats(parsed) * voucher.issuanceRatio
   if (voucher.faceValue > 0 && exact > voucher.faceValue) return voucher.faceValue
   return exact
 }

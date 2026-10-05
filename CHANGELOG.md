@@ -50,6 +50,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A coupon that arrived before the trusted list loaded is no longer lost.** It used to be
   refused at unwrap, which marked its delivery as handled for good. It is now deferred at
   redemption and offered again.
+- **A re-signed voucher proof is credited for at most the sats burnt for it**
+  (imani-gateway-customer#141). A successor's sats come from the swap that mints it, and the
+  mint cannot see which blinded output carries a voucher secret, so a holder could burn a 1-sat
+  proof, have a full-face successor signed, fund it with sats bought today and be credited up to
+  the face. The gateway now signs a `max_sats` tag into every re-signed or split proof, summing to
+  at most the burn. `parseVoucherToken` reads it per proof into `creditableSats` (each proof's
+  amount clamped to its own bound), and `creditableFaceValue` and `exactFaceValue` credit
+  `min(face_value, creditableSats × issuance_ratio)`. Every redeemer built on them follows: the
+  till's DM validation and over-redemption guard, redemption rows, reconcile, the sender's receipt
+  figure and wallet-api `/redeem`. A voucher with no `max_sats` is credited exactly as before. A
+  `max_sats` that is present but not a canonical positive decimal credits 0, because reading it as
+  absent would let a holder strip a bound by mangling it. The tag is a plain string tag, so the
+  existing canonical bytes already cover it; a Java-signed fixture pins that the two agree.
+- **An untagged locked voucher proof, or one whose own issuer signature does not verify, is
+  credited 0** (imani-gateway-customer#141, security review of #176). The mint signs any blinded
+  output, so the holder of a locked proof can mint a twin with the same secret funded with any
+  plain sats; without a signed `max_sats` its sats say nothing about what the issuer funded.
+  Every locked output the gateway issues now carries `max_sats` from birth
+  (imani-wallet-lib#135), so only pre-#141 locked vouchers are untagged. And callers verified
+  only proof 0's signature, so a self-minted later proof with the same `voucher_id` and lock was
+  credited its full amount: `creditableSats` now verifies every locked proof's signature under
+  proof 0's issuer key. Unlocked `VOUCHER` tokens keep crediting their sats (their signed blob is
+  shared by every proof). **Consumers must act:** a pre-#141 locked voucher (a licence or
+  terminal credential issued before this change) now has a creditable value of 0 at the till and
+  wallet-api `/redeem`; it still verifies, so licence and credential checks are unaffected.
+  **Superseded for untagged proofs by round 3 below.**
+- **An untagged locked voucher proof keeps the pre-#141 crediting** (imani-gateway-customer#141,
+  round 3). Crediting it 0 stranded real customer money held in pre-#141 locked vouchers. It now
+  credits its sats, bounded by its signed face value and, across
+  redeemers, by the shared ledger, exactly as before #141. A same-secret twin of a pre-#141 proof is
+  therefore the **accepted legacy residual**, bounded by face and ledger; the gateway caps its
+  re-signed and split successors at the voucher's recorded issued sats. Tagged proofs keep the strict
+  `min(sats, max_sats)`, a malformed `max_sats` still credits 0, and every locked proof's own issuer
+  signature is still verified under proof 0's issuer key (a forged later proof credits 0).
+- **Round 4: the count behind the legacy rule, corrected** (imani-gateway-customer#141). Round 3
+  justified this rule with "141 locked vouchers on staging, face about 1.13M". That figure counted
+  the mint's NUT-20 quote `pubkey`, which every voucher quote carries since 2026-09-30, not the
+  P2PK voucher lock. Read-only staging counts on 2026-10-04: since the gateway's 05:50Z restart, 2
+  of 25 issuances were P2PK-locked (21 sats each); 0 of 2,316 stored purchase tokens are locked; the
+  only stored locked successor is one 2026-09-29 test. Earlier locked issuances are not countable
+  (sealed rows, no older logs) and, at that rate, are a handful. **The rule is unchanged, because it
+  is still the safest choice:** the exposure it accepts is a few vouchers, each bounded by its own
+  signed face and the shared ledger, while crediting 0 would strand those holders' money for no
+  measurable gain, and a redeemer has no issuance record to bound them more tightly. No code change.
+- **Test: a Java-signed `max_sats` 1 proof next to an unsigned `max_sats` 64 proof credits 1 sat**
+  (imani-gateway-customer#141, round 5 review LOW-3). Pins, with real Java-signed bytes, that an
+  unsigned later proof credits 0, and that one with no `issuer_sig` at all is refused. No code change.
 
 ### Fixed
 
