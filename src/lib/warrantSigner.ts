@@ -40,9 +40,10 @@
  * send an honest signed statement rather than nothing.
  *
  * The honest fix for terminals is the `delegated` form — sign with the terminal
- * credential's lock key, which the stall delegated and can burn. That needs the
- * verifier to also check the credential was minted by `issuerId`, which
- * `issuanceWarrant.ts` does not yet do and refuses rather than half-checks. So
+ * credential's lock key, which the stall delegated and can burn. The verifier
+ * supports it since #152 (`issuerDelegation.ts`), and the card purchase issuer
+ * uses it. A counter terminal does not yet: it would need the owner to sign a
+ * delegation for its key at enrolment, which `terminalEnrol.ts` does not do. So
  * it is not attempted here: a warrant nobody can verify is worse than a
  * documented absence, because it reads as assurance.
  */

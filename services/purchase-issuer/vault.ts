@@ -47,6 +47,14 @@ interface SealedCredential {
   iv: string
   /** base64, ciphertext with the GCM tag appended. */
   sealed: string
+  /**
+   * The stall's signed delegation event JSON (imani-wallet#152). PUBLIC, so
+   * stored in the clear and outside the GCM tag on purpose: it authenticates
+   * itself (the stall's signature), and `checkDelegation` refuses one that is
+   * not signed by this record's stall or does not name this record's lock key.
+   * Editing it on disk can only make minting stop, never mint as someone else.
+   */
+  delegation?: string
 }
 
 /**
@@ -125,6 +133,7 @@ export class CredentialVault {
       credentialId: credential.credentialId,
       iv: iv.toString('base64'),
       sealed: sealed.toString('base64'),
+      ...(credential.delegation ? { delegation: credential.delegation } : {}),
     })
     await this.store.write(without)
     this.cache = null
@@ -148,6 +157,28 @@ export class CredentialVault {
     const records = await this.store.read()
     await this.store.write(records.filter((r) => r.stallPubkey !== stallPubkey))
     this.cache = null
+  }
+
+  /**
+   * Store the stall's signed delegation beside its credential (imani-wallet#152).
+   *
+   * Refused, and nothing written, unless the delegation is one the till will
+   * accept for a coupon minted now: signed by this stall, scope `coupon:issue`,
+   * naming this credential's lock key, outliving `minimumUntilMs`. Storing one
+   * that fails would only move the refusal to the next card sale.
+   */
+  async attachDelegation(
+    stallPubkey: string,
+    delegation: string,
+    minimumUntilMs: number,
+    check: (credential: StallCredential, untilMs: number) => { ok: true } | { ok: false; reason: string },
+  ): Promise<void> {
+    const current = await this.get(stallPubkey)
+    if (current === null) throw new Error('no credential is held for this stall; enrol it first')
+    const candidate = { ...current, delegation }
+    const verdict = check(candidate, minimumUntilMs)
+    if (!verdict.ok) throw new Error(`delegation refused: ${verdict.reason}`)
+    await this.put(candidate)
   }
 
   private async load(): Promise<Map<string, StallCredential>> {
@@ -177,6 +208,7 @@ export class CredentialVault {
           stallPubkey: record.stallPubkey,
           credentialId: record.credentialId,
           lockKeyHex,
+          ...(typeof record.delegation === 'string' ? { delegation: record.delegation } : {}),
         })
       } catch {
         // One unreadable record must not deny every other stall its issuer.

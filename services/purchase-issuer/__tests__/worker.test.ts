@@ -7,6 +7,7 @@ import { CredentialVault, type CredentialStore } from '../vault'
 import { runPass, type WorkerDeps } from '../worker'
 import type { PurchasesApi, OwedPurchase } from '../purchasesApi'
 import type { Ports } from '../discharge'
+import { delegatedCredential } from './stallFixture'
 
 const KEY = 'a'.repeat(64)
 const LOCK = '11'.repeat(32)
@@ -128,11 +129,8 @@ function deps(over: Partial<WorkerDeps> = {}): WorkerDeps & { api: PurchasesApi 
     reportFailure: vi.fn().mockResolvedValue(undefined),
   } as unknown as PurchasesApi
   const ports: Ports = {
-    credentialFor: async () => ({
-      stallPubkey: 'b'.repeat(64),
-      credentialId: 'c1',
-      lockKeyHex: LOCK,
-    }),
+    // A real stall's delegation: since #152 nothing mints without one.
+    credentialFor: async () => delegatedCredential({ credentialId: 'c1' }),
     tokenFor: async () => '',
     now: () => Date.now(),
     sleep: async () => {},

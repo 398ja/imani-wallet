@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { discharge, type Obligation, type Ports } from '../discharge'
 import { CREDENTIAL_HEADER, IssuanceFailed, issueBody } from '../issuer'
+import { STALL, delegatedCredential } from './stallFixture'
 
 /**
  * What happens when issuing a paid-for coupon goes wrong.
@@ -18,16 +19,13 @@ import { CREDENTIAL_HEADER, IssuanceFailed, issueBody } from '../issuer'
  *   second coupon for one payment.
  */
 
-const CREDENTIAL = {
-  stallPubkey: 'b'.repeat(64),
-  credentialId: 'cred-1',
-  lockKeyHex: '11'.repeat(32),
-}
+// A real stall and its real delegation: since #152 nothing mints without one.
+const CREDENTIAL = delegatedCredential()
 
 const OBLIGATION: Obligation = {
   id: 'evt_1',
   paymentRequestId: '0123456789abcdef0123456789abcdef',
-  stallPubkey: 'b'.repeat(64),
+  stallPubkey: STALL,
   faceValue: 2500,
   faceUnit: 'GBP',
   faceDecimals: 2,

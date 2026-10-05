@@ -102,11 +102,16 @@ export function reconcileIssuances(
     // point of re-checking rather than re-reading. A stored warrant that no
     // longer covers the row beside it means one of the two was altered after
     // the fact, and that is exactly the tampering an audit is looking for.
-    const verdict = verifyIssuanceWarrant(warrant, stallPubkey, {
-      faceValueMinor: row.amount,
-      unit: row.unit,
-      faceDecimals: row.decimals,
-    })
+    //
+    // A delegated warrant is judged at the moment the row was recorded, not
+    // today, so a past card sale does not turn "failed" the day its delegation
+    // lapses (#176 review).
+    const verdict = verifyIssuanceWarrant(
+      warrant,
+      stallPubkey,
+      { faceValueMinor: row.amount, unit: row.unit, faceDecimals: row.decimals },
+      row.at > 0 ? { issuedAt: row.at } : {},
+    )
 
     // Checked against the SALE the warrant describes, not against the row,
     // because one payment covers a whole sale however many coupons it became.

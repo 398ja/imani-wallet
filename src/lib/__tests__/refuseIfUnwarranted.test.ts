@@ -39,6 +39,12 @@ describe('all three unauthorised states are refused', () => {
     expect(() => refuseIfUnwarranted(meta('failed'))).toThrow(/no usable authorisation/)
   })
 
+  // An unsigned processor claim (#152): nothing on this device can check it,
+  // so it is the issuing service's word alone and is refused like the others.
+  it('refuses an unsigned processor claim', () => {
+    expect(() => refuseIfUnwarranted(meta('claimed'))).toThrow(/no usable authorisation/)
+  })
+
   it('omitting a warrant is no safer than forging one', () => {
     // The property that made the earlier policy wrong. Both must refuse, or the
     // scheme is opt-out for the party it was written to catch.
@@ -59,13 +65,6 @@ describe('all three unauthorised states are refused', () => {
 describe('what must NOT be refused', () => {
   it('accepts a verified warrant', () => {
     expect(() => refuseIfUnwarranted(meta('verified'))).not.toThrow()
-  })
-
-  it('accepts a processor claim', () => {
-    // A real external claim this build cannot check offline. Refusing it would
-    // reject every card-funded coupon over a check that was never possible
-    // here, and it is reconciled against the processor out of band.
-    expect(() => refuseIfUnwarranted(meta('claimed'))).not.toThrow()
   })
 
   it('accepts a row whose validation predates the warrant field', () => {
