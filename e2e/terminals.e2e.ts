@@ -252,6 +252,37 @@ async function main() {
   const focused = await page.evaluate(() => document.activeElement?.tagName)
   check('clicking the label focuses the input', focused === 'INPUT', `focused ${focused}`)
 
+  console.log('\n#160 phase 0: an off-curve key is refused, a real one says Waiting')
+  // Typed into the manual field, which is the same path a scan takes
+  // (`resolveRecipient` then `onFound`). 'c' x 64 is 64 hex characters that
+  // are no point on secp256k1, so nobody's key.
+  await page.getByLabel('Name').fill('Front counter')
+  await page.getByRole('button', { name: /Redemption only/ }).click()
+  const enterKey = async (hex: string) => {
+    await page.getByLabel("Or enter the device's key").fill(hex)
+    await page.getByRole('button', { name: 'Continue' }).click()
+    await page.waitForTimeout(800)
+  }
+  await enterKey('c'.repeat(64))
+  const offCurve = await page.locator('body').innerText()
+  check('an off-curve key is refused in words', /not a terminal code/.test(offCurve), offCurve.slice(0, 200))
+  check('and cannot be added', await add.isDisabled())
+
+  await page.getByRole('button', { name: 'Rescan' }).click()
+  // A real x-only key, generated here so no fixture key is reused.
+  const { getPublicKey, generateSecretKey } = await import('nostr-tools')
+  await enterKey(getPublicKey(generateSecretKey()))
+  await add.click()
+  await page.waitForTimeout(800)
+  const added = await page.locator('body').innerText()
+  check('the screen says Waiting for the device', /Waiting for the device/.test(added), added.slice(0, 200))
+  check('and never says it can trade', !/can now trade|can trade for your stall/i.test(added))
+  await goto(page, `${BASE}/settings/terminals`)
+  await page.waitForTimeout(1200)
+  const roster = await page.locator('body').innerText()
+  check('the roster row reads Waiting for the device', /Waiting for the device/.test(roster))
+  check('no uncaught errors adding a terminal', pageErrors.length === 0, pageErrors.join('; '))
+
   console.log('\nWhat an unsubscribed stall sees when it runs two tills')
   /**
    * Subscriptions ticket 08, on the real screen.
@@ -298,80 +329,35 @@ async function main() {
   check('and the oldest keeps serving', lapse.includes('Oldest till'))
   check('no uncaught errors', pageErrors.length === 0, pageErrors.join('; '))
 
-  console.log('\nTicket 07: what a terminal is allowed to see')
+  console.log('\n#160 phase 0 (G9): an injected terminal record is not a terminal')
   /**
-   * Role gating, in the shipped app rather than in a mounted component.
+   * `beATerminal()` writes a real credential's record into the OWNER's session.
+   * Until #160 phase 0 the app compared that record's device key with itself,
+   * so the owner's browser became the terminal. It now compares the
+   * credential's lock with the key that unlocked the session, which is the
+   * owner's, so the record is not about this session. Since the #160 review it
+   * is ignored rather than refused: the owner keeps their own home screen and
+   * is not locked out by a record for another device. No terminal-only screen
+   * (NotTrading, decommissioning) appearing is the acceptance check.
    *
-   * These were unreachable until ticket 10 wired the login, and the wiring is
-   * exactly the part a component test cannot check.
+   * The role-gating checks that used to follow (ticket 07 and 08: no Sell on a
+   * redeem-only till, dashboard hidden, decommission offered) need a session
+   * unlocked by the terminal's OWN key. That arrives with phase 3's
+   * `/terminal/unlock`, which restores them here with no injected state. Until
+   * then they are covered by the component suites: SellPageTerminal,
+   * CashbackIssuePageTerminal, SecurityPageTerminal, BackupPageTerminal and
+   * MerchantHomePage.
    */
   await beATerminal('redeem-only')
   await goto(page, `${BASE}/`)
   await page.waitForTimeout(2500)
-
-  const tillText = await page.locator('body').innerText()
+  const injected = await page.locator('body').innerText()
   check(
-    'a redemption-only terminal is offered Redeem',
-    /Redeem/.test(tillText),
-    tillText.replace(/\s+/g, ' ').slice(0, 160),
+    'a record naming another device is ignored, not treated as a terminal or a refusal',
+    !/not for this device|no longer in service|out of service/i.test(injected),
+    injected.replace(/\s+/g, ' ').slice(0, 160),
   )
-  check('and is NOT offered Sell', !/\bSell\b/.test(tillText), tillText.slice(0, 120))
-
-  // #159: a FULL till is not offered Sell either. Its key is not the stall's,
-  // so its coupons would be refused by the customer's wallet, and the sale is
-  // refused underneath as well. (Opened without the mint's answer it is on
-  // reduced authority anyway; this holds on a full session too.)
-  await beATerminal('issue-and-redeem')
-  await goto(page, `${BASE}/`)
-  await page.waitForTimeout(2500)
-  const fullTill = await page.locator('body').innerText()
-  check(
-    'a full till is not offered a Sell button',
-    (await page.getByRole('button', { name: /^Sell$/ }).count()) === 0,
-    fullTill.replace(/\s+/g, ' ').slice(0, 160),
-  )
-  check('and is offered Redeem', /Redeem/.test(fullTill))
-  await goto(page, `${BASE}/sell`)
-  await page.waitForTimeout(1500)
-  const fullTillSell = await page.locator('body').innerText()
-  check(
-    'typing /sell on a full till is stopped, not offered a scanner',
-    /not supported yet/i.test(fullTillSell) && !/in their wallet now/i.test(fullTillSell),
-    fullTillSell.replace(/\s+/g, ' ').slice(0, 160),
-  )
-  await goto(page, `${BASE}/sell/cashback`)
-  await page.waitForTimeout(1500)
-  const fullTillCashback = await page.locator('body').innerText()
-  check(
-    'typing /sell/cashback on a full till is stopped too',
-    /Cashback from a terminal is not supported yet/i.test(fullTillCashback),
-    fullTillCashback.replace(/\s+/g, ' ').slice(0, 160),
-  )
-
-  await beATerminal('redeem-only')
-  await goto(page, `${BASE}/`)
-  await page.waitForTimeout(2500)
-
-  check(
-    'the stall’s books are hidden from the menu',
-    !/Dashboard/.test(tillText) && !/Transactions/.test(tillText),
-  )
-
-  // The control, not the courtesy: typing the URL must not work either.
-  await goto(page, `${BASE}/merchant/dashboard`)
-  await page.waitForTimeout(2000)
-  const dash = await page.locator('body').innerText()
-  check('typing the dashboard URL does not reach it', !/Turnover|Takings|Dashboard/i.test(dash))
-  check('no uncaught errors as a terminal', pageErrors.length === 0, pageErrors.join('; '))
-
-  console.log('\nTicket 08: decommissioning is offered, logout is not')
-  await goto(page, `${BASE}/settings/security`)
-  await page.waitForTimeout(1500)
-  const security = await page.locator('body').innerText()
-
-  check('a terminal is offered decommissioning', /Take this terminal out of service/.test(security))
-  check('a terminal is not offered log out', !/Log out/.test(security))
-  check('and is never told about a backup key', !/backup key/i.test(security), security.slice(0, 200))
+  check('no uncaught errors with an injected record', pageErrors.length === 0, pageErrors.join('; '))
 
   console.log('\nThe owner is unaffected by all of it')
   await beTheOwner()

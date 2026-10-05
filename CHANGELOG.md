@@ -168,6 +168,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   themselves, instead of being promised a delivery that will not happen.
 - `e2e/stack/crash-mid-sale.sh` uses the `up.sh` next to it unless `STACK_UP` says otherwise,
   rather than a path on one developer's machine.
+- **Adding a terminal no longer claims it can trade** (#160, phase 0). The screen said
+  "<name> can now trade for your stall" when no credential had been minted and nothing had
+  reached the device. It now says **Waiting for the device**, that the terminal cannot take
+  payments yet, and the owner's list shows the row as *Waiting for the device* rather than
+  *Never used*. Rows gain an optional `status` (`waiting`, `in-service`); older rows read as
+  before.
+- **A code that is nobody's key is refused** (#160, phase 0). `checkEnrolment` now refuses 64
+  hex characters that are not a point on secp256k1 (`NOT_A_KEY`), before anything could be
+  minted. The gateway issues an unlocked, bearer credential for such a key.
+- **Terminal setup never overwrites a wallet key** (#160, phase 0). `completeEnrolment` refuses
+  while the key store already holds a key, so a person's wallet key in the single key slot
+  stays loadable. They log out first, where they see the backup warning.
+- **The terminal lock check compares with the unlocked key** (#160, phase 0, G9).
+  `useTerminalIdentity` took the device key from the record it was checking, so the lock
+  check compared the record with itself. It now takes `devicePubkey` from the session's
+  unlocked key. A record naming another device grants no terminal authority and the mint is
+  not asked. Consequence: `beATerminal()` in `e2e/terminals.e2e.ts` no longer turns the
+  owner's browser into a terminal; its role-gating checks return with phase 3's terminal
+  unlock.
+- **A terminal record for another device no longer locks the owner out** (#160 review). Such a
+  record is ignored, exactly as a missing one is, so the owner's home screen stays their own
+  instead of showing *This authority is not for this device*. Nothing is granted: no terminal
+  actor is produced and `canTrade` is gated by the gateway.
 
 ### Changed
 

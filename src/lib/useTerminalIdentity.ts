@@ -45,7 +45,24 @@ export interface TerminalIdentityDeps {
   validateToken: (token: string) => Promise<{ valid?: boolean; state?: string } | null>
 }
 
-export function useTerminalIdentity(deps?: TerminalIdentityDeps): TerminalIdentity {
+/**
+ * Who this device is, and how to reach the mint.
+ *
+ * `devicePubkey` is the key of the signer that unlocked this session, #160
+ * phase 0 (G9). It used to be read out of the very record being checked, so
+ * "is this credential locked to this device?" compared the record with itself
+ * and could not fail. Supplied by the caller from the unlocked key, the lock
+ * check is a real comparison again.
+ */
+export interface TerminalIdentityOptions extends Partial<TerminalIdentityDeps> {
+  devicePubkey: string | null
+}
+
+export function useTerminalIdentity(options: TerminalIdentityOptions): TerminalIdentity {
+  const { devicePubkey, ...rest } = options
+  const deps: TerminalIdentityDeps | undefined = rest.validateToken
+    ? { validateToken: rest.validateToken }
+    : undefined
   /**
    * The mint client, held in a ref rather than depended on.
    *
@@ -72,7 +89,7 @@ export function useTerminalIdentity(deps?: TerminalIdentityDeps): TerminalIdenti
   // rendering is unsafe under concurrent React, and the lint says so.
   useEffect(() => {
     mint.current = deps
-  }, [deps])
+  })
 
   useEffect(() => {
     const stored = storedTerminal()
@@ -88,6 +105,24 @@ export function useTerminalIdentity(deps?: TerminalIdentityDeps): TerminalIdenti
     // Captured here rather than read inside the async closure, where
     // TypeScript can no longer see the guard above.
     const { token, merchantMetadata, issuerId, terminalPubkey } = stored
+
+    // No unlocked key, or a record written for a different device: either way
+    // this session does not hold the key the record names, so the record is
+    // not about this session. It is ignored, exactly as a missing record is,
+    // and this device behaves as the owner's (#160 review, LOW). Refusing here
+    // used to render NotTrading on the owner's own home screen whenever a
+    // foreign record sat in storage, locking them out. Nothing is granted by
+    // ignoring it: no actor is produced, and `canTrade` is gated server-side.
+    //
+    // A record that DOES name this session's key still goes through
+    // `loginTerminal`, which compares the credential's signed `lock_key` with
+    // the unlocked key, so an edited record cannot borrow another credential.
+    if (!devicePubkey || terminalPubkey.toLowerCase() !== devicePubkey.toLowerCase()) {
+      // Deferred a tick, so the update is not a state change inside the effect
+      // body (the lint's set-state-in-effect rule), matching the async path.
+      const ignored = setTimeout(() => setIdentity(OWNER))
+      return () => clearTimeout(ignored)
+    }
 
     let cancelled = false
 
@@ -107,7 +142,9 @@ export function useTerminalIdentity(deps?: TerminalIdentityDeps): TerminalIdenti
       const outcome: LoginOutcome = loginTerminal({
         merchantMetadata,
         issuerId,
-        devicePubkey: terminalPubkey,
+        // The unlocked signer's key, never the record's (G9). The credential's
+        // signed `lock_key` must equal it.
+        devicePubkey,
         unspent,
       })
 
@@ -121,9 +158,9 @@ export function useTerminalIdentity(deps?: TerminalIdentityDeps): TerminalIdenti
     return () => {
       cancelled = true
     }
-    // Empty: one login per device, at launch. Re-running on a changed client
+    // One login per device key, at launch. Re-running on a changed client
     // would re-verify a credential that has not changed.
-  }, [])
+  }, [devicePubkey])
 
   return identity
 }

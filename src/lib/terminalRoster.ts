@@ -64,6 +64,20 @@ export interface TerminalRecord {
   revocationSecret?: string
   /** Set when revoked. Present means retired; the record itself stays. */
   revokedAt?: number
+  /**
+   * Where setup stands, #160.
+   *
+   * `waiting`: added on this phone, not yet confirmed by the device, so it
+   * cannot trade and the list must not say it can. Absent on rows written
+   * before this field existed, which read as they always did.
+   */
+  status?: TerminalStatus
+}
+
+export type TerminalStatus = 'waiting' | 'in-service'
+
+function statusOf(value: unknown): TerminalStatus | undefined {
+  return value === 'waiting' || value === 'in-service' ? value : undefined
 }
 
 const ROSTER_KEY = (stallPubkey: string) => `imani-wallet:terminals:${stallPubkey}`
@@ -91,6 +105,7 @@ function read(stallPubkey: string): TerminalRecord[] {
           revocationSecret:
             typeof row.revocationSecret === 'string' ? row.revocationSecret : undefined,
           revokedAt: typeof row.revokedAt === 'number' ? row.revokedAt : undefined,
+          status: statusOf(row.status),
         },
       ]
     })

@@ -224,6 +224,10 @@ By design, and not merely by hiding a button:
 | *Cashback from a terminal is not supported yet* | The same gap, for cashback codes | Issue cashback from the owner's own device |
 | *Not trading while your subscription is inactive* | A lapsed subscription, not a revocation | Renew; terminals resume immediately |
 
+A terminal record left in a browser for a *different* device (for example a
+set-up that was abandoned) is ignored. The owner's own phone keeps its normal
+home screen rather than showing *This authority is not for this device*.
+
 If a terminal has lost its authority it says so plainly and stops, rather than
 failing repeatedly in front of a queue. Stop serving on it and use another
 device.
@@ -236,9 +240,12 @@ till cannot be run end to end right now**. The plan to close them is
 [the terminals-in-service spec](spec-terminals-in-service.md).
 
 1. **Adding a terminal does not yet create its authority.** The enrolment screen
-   records the terminal in your list, but the credential behind it is still
-   minted by hand with `scripts/mint-terminal-credential.mjs`. A terminal added
-   from the screen alone cannot log in.
+   records the terminal in your list as **Waiting for the device**, and says so,
+   but the credential behind it is still minted by hand with
+   `scripts/mint-terminal-credential.mjs`. A terminal added from the screen
+   alone cannot log in. The screen refuses a code that is not a real device key,
+   and setup on a device refuses to run while that device still holds a wallet
+   (log out first, keeping the backup key).
 2. **The device side has no screen yet.** The logic that makes a terminal's key
    and shows it as a QR exists, but no page displays it.
 3. **Login does not ask whether the authority is still live.** Every terminal

@@ -168,6 +168,18 @@ export async function completeEnrolment(
   if (!pending) {
     throw new Error('Start enrolment on this device before scanning a code.')
   }
+  // #160 phase 0 (G11). The key store has ONE slot, and `keyStore.save` below
+  // overwrites it. On a device that already holds a person's wallet key, that
+  // write would destroy the key to their money with nothing to show for it but
+  // a terminal. One account per device: setup refuses, and the person logs out
+  // first, where they are shown the backup warning. Checked before anything
+  // else that could write, and before the credential is even looked at.
+  if (await keyStore.hasKey()) {
+    throw new Error(
+      'This device already holds a wallet. Log out of it first, keeping its backup key, ' +
+        'then set the device up as a terminal.',
+    )
+  }
   if (!passphrase) {
     // Refused rather than defaulted. A blank passphrase is a key at rest in
     // clear, and the terminal would open for trade for whoever picked it up.

@@ -1,3 +1,5 @@
+import { secp256k1 } from '@noble/curves/secp256k1.js'
+
 import { grantFor, type TerminalRole } from './terminalRole'
 import { mayEnrol, type EnrolDecision } from './terminalAllowance'
 import type { LicenceStatus } from './licenceStatus'
@@ -47,6 +49,14 @@ export const ENROLMENT_REFUSAL = {
   NO_NAME: 'no-name',
   NO_ROLE: 'no-role',
   NO_TERMINAL: 'no-terminal',
+  /**
+   * 64 hex characters that are not an x-only point on secp256k1 (#160 phase 0).
+   *
+   * Nobody holds the private half of such a "key", and the gateway's lock code
+   * falls back to issuing an UNLOCKED voucher when handed one: a bearer
+   * authority to the stall that anyone holding the token could use.
+   */
+  NOT_A_KEY: 'not-a-key',
   /** The stall's own device cannot be enrolled as one of its own terminals. */
   SELF: 'self',
   /** No subscription, and the free allowance is used. */
@@ -61,6 +71,24 @@ export type EnrolmentCheck =
   | { ready: false; reason: EnrolmentRefusal; message: string }
 
 const PUBKEY = /^[0-9a-f]{64}$/
+
+/**
+ * Whether `hex` is an x-only public key somebody could actually hold.
+ *
+ * Lifted from `scripts/mint-terminal-credential.mjs`, which already refused
+ * these for the same reason: an off-curve key is nobody's key, and the gateway
+ * quietly issues an unlocked voucher for one. Prefixing `02` is how BIP-340
+ * reads an x-only key as a point.
+ */
+export function isOnCurve(hex: string): boolean {
+  if (!PUBKEY.test(hex)) return false
+  try {
+    secp256k1.Point.fromHex('02' + hex)
+    return true
+  } catch {
+    return false
+  }
+}
 
 export interface EnrolmentContext {
   /** The owner's stall. Taken from the session, never from the form. */
@@ -112,6 +140,19 @@ export function checkEnrolment(
       ready: false,
       reason: ENROLMENT_REFUSAL.NO_TERMINAL,
       message: 'Scan the code showing on the terminal.',
+    }
+  }
+
+  // Checked here, before minting, not discovered afterwards in a token that
+  // turned out to be unlocked. The words are the owner's: they scanned a code,
+  // they did not choose a curve point.
+  if (!isOnCurve(request.terminalPubkey.toLowerCase())) {
+    return {
+      ready: false,
+      reason: ENROLMENT_REFUSAL.NOT_A_KEY,
+      message:
+        'That is not a terminal code. Scan the code on the terminal again, or start setup ' +
+        'on that device once more.',
     }
   }
 

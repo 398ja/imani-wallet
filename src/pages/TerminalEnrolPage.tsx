@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Check } from 'lucide-react'
+import { Check, Clock } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, Panel, Button, Input, Alert } from '../components/ui'
 import { ScanRecipient } from '../components/ScanRecipient'
@@ -95,6 +95,9 @@ export function TerminalEnrolPage({ stallPubkey }: { stallPubkey: string }) {
       name: credential.name,
       role: credential.role,
       enrolledAt: Date.now(),
+      // Waiting, not in service: nothing has reached the device, and it cannot
+      // trade until it has (#160). The row says so rather than implying a till.
+      status: 'waiting',
     })
 
     setIssued(credential.name)
@@ -104,14 +107,19 @@ export function TerminalEnrolPage({ stallPubkey }: { stallPubkey: string }) {
     return (
       <Screen>
         <BackLink to="/settings/terminals" label="Terminals" />
-        <PageHeader title="Terminal added" subtitle={`${issued} can now trade for your stall`} />
+        {/* What is true, and nothing more (#160 phase 0). This screen used to
+            say the terminal "can now trade for your stall" when no call had
+            been made and nothing had reached the device. It is on the owner's
+            list, waiting for its device, and that is all. */}
+        <PageHeader title="Waiting for the device" subtitle={`${issued} is on your terminal list`} />
         <Panel className="mb-6 p-4">
           <div className="flex items-start gap-3">
-            <Check className="h-6 w-6 shrink-0 text-green-600" aria-hidden />
+            <Clock className="h-6 w-6 shrink-0 text-amber-600" aria-hidden />
             <p className="text-sm text-mono-500">
-              Finish on the other device by entering a passphrase there. You can
-              revoke this terminal at any time from your terminal list, even if
-              the device is lost.
+              It cannot take payments yet. It needs to be finished on that device,
+              with a passphrase set there, and that step is not available in this
+              version. Its row says <span className="font-medium">Waiting for the device</span>{' '}
+              until then.
             </p>
           </div>
         </Panel>

@@ -18,12 +18,15 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
  */
 
 const saved: Array<{ privkeyHex: string; passphrase: string }> = []
+/** Whether the key store's one slot already holds somebody's key. */
+let walletKeyHeld = false
 
 vi.mock('../nap', () => ({
   keyStore: {
     save: async (privkeyHex: string, passphrase: string) => {
       saved.push({ privkeyHex, passphrase })
     },
+    hasKey: async () => walletKeyHeld,
   },
 }))
 
@@ -63,6 +66,7 @@ function credentialFor(
 
 beforeEach(() => {
   saved.length = 0
+  walletKeyHeld = false
   forgetPendingKey()
   forgetTerminal()
   localStorage.clear()
@@ -265,5 +269,36 @@ describe('IW-16: the device lock is a real comparison', () => {
 
   it('refuses when no device key is supplied', () => {
     expect(enrolledActor('')).toBeNull()
+  })
+})
+
+describe('#160 phase 0: setup never destroys a wallet', () => {
+  // A phone that already holds a person's wallet key is set up as a terminal.
+  // The key store has one slot, so finishing setup would overwrite the key to
+  // their money. Setup must refuse, and leave that key exactly where it was.
+  it('refuses on a device that already holds a wallet key, and leaves the key loadable', async () => {
+    walletKeyHeld = true
+    const code = beginEnrolment()
+
+    await expect(completeEnrolment(credentialFor(code.terminalPubkey), PASSPHRASE)).rejects.toThrow(
+      /already holds a wallet/,
+    )
+
+    // Nothing was written over the slot, and no terminal record was created.
+    expect(saved).toEqual([])
+    expect(storedTerminal()).toBeNull()
+  })
+
+  // The refusal is about the key slot, not about this attempt: once the person
+  // has logged out (the slot is empty), the same pending code still completes,
+  // so they need not start the code exchange again.
+  it('completes once the device holds no wallet key', async () => {
+    walletKeyHeld = true
+    const code = beginEnrolment()
+    await expect(completeEnrolment(credentialFor(code.terminalPubkey), PASSPHRASE)).rejects.toThrow()
+
+    walletKeyHeld = false
+    await completeEnrolment(credentialFor(code.terminalPubkey), PASSPHRASE)
+    expect(saved).toHaveLength(1)
   })
 })
