@@ -234,6 +234,8 @@ export function TerminalEnrolPage({
         seal,
         publisher,
       ).catch(() => false)
+      // Remembered, so the Terminals list re-sends a DM that did not land (#160 round 2).
+      updateTerminal(stallPubkey, credential.lockedTo, (row) => ({ ...row, delivered: sent }))
       setIssued({
         name: credential.name,
         code: formatCheckCode(checkCode(minted.voucherId, stallPubkey, credential.lockedTo)),

@@ -176,6 +176,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The owner's app confirms a terminal at the gateway** (#160 round 2, MEDIUM). The device's
+  `/confirm` ignored every error, and the owner never confirmed. So a lost confirm left the list
+  saying *In service* while gateway-customer refused Sell (410 after 24 hours). Now, when the
+  owner's app sees the enrolled DM, `confirmEnrolled` (`terminalConfirm.ts`) confirms as the
+  stall, retrying with backoff from 30 s, doubling, and capped at 1 h. The device still tries,
+  best effort. The roster keeps `gatewayState` (`unconfirmed`, `confirmed`, `lapsed`), and the
+  list shows it.
+- **A credential finished by `resumeMinting` gets its setup code and DM** (#160 round 2).
+  Waiting rows show their setup code on the list. `deliverWaiting` sends the credential DM to
+  any waiting row not yet `delivered`, including rows `resumeMinting` completed.
+- **Remove from device clears what logout clears** (#160 round 2). `removeTerminalFromDevice`
+  now also sweeps every `imani-wallet:*` key (`sweepAppStorage`, shared with logout), the resume
+  cache, and the terminal's wallet database. It reports what it cleared. A `keyStore` failure no
+  longer skips the rest, and the screen says so instead of navigating away.
+
 - **A server error while adding a terminal no longer forgets a credential that may exist**
   (#160 round 2). Any HTTP status used to clear the `minting` row and its Idempotency-Key, so a
   proxy 504 after the gateway minted left an unknown credential holding a pending slot. Now only

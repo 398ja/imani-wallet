@@ -12,6 +12,9 @@ import {
 } from './terminalDelivery'
 
 import { keyStore } from './nap'
+import { sweepAppStorage } from './appStorage'
+import { forgetResume } from './resume'
+import { wipeWallet } from './wallet'
 import { roleOf, type TerminalRole } from './terminalRole'
 import { terminalActor, type TerminalActor, type TerminalCredential } from './actor'
 
@@ -447,11 +450,55 @@ export function forgetTerminal(): void {
  *
  * The escape hatch for a device enrolled in phase 2, before phase 3 can open its till: it
  * erases the encrypted terminal key and the terminal record, so the device can be set up
- * again or used as an ordinary wallet. It does NOT revoke the credential at the mint. Only
+ * again or used as an ordinary wallet. Since #160 round 2 it clears everything logout clears
+ * (see `RemovedFromDevice`). It does NOT revoke the credential at the mint. Only
  * the owner can do that, from their terminal list, and the screen says so.
  */
-export async function removeTerminalFromDevice(): Promise<void> {
-  await keyStore.clear()
+export async function removeTerminalFromDevice(): Promise<RemovedFromDevice> {
+  // Read before the sweep erases it: the terminal's own IndexedDB store is named by its key.
+  const terminalPubkey = storedTerminalPubkey()
+  // Every step runs even if an earlier one fails, so a keyStore fault cannot leave the record
+  // (or anything else) behind. The fault is reported afterwards.
+  let keyError: unknown
+  try {
+    await keyStore.clear()
+  } catch (e) {
+    keyError = e
+  }
+  // The same state logout clears (#160 round 2): every `imani-wallet:*` entry (the terminal
+  // record included), the tab's resume cache, and any wallet database under this device's
+  // key. Phase 3 adds terminal state, and this keeps it covered without a second list.
+  const storage = sweepAppStorage()
   forgetTerminal()
   forgetPendingKey()
+  forgetResume()
+  if (terminalPubkey) await wipeWallet(terminalPubkey).catch(() => undefined)
+  if (keyError !== undefined) {
+    throw keyError instanceof Error ? keyError : new Error('Could not erase the terminal key.')
+  }
+  return { keyStore: true, pendingKey: true, resume: true, storage, walletDb: terminalPubkey }
+}
+
+/** What `removeTerminalFromDevice` cleared, for its test and its caller. */
+export interface RemovedFromDevice {
+  /** The encrypted key at rest (`keyStore`, IndexedDB). */
+  keyStore: true
+  /** The in-memory pending enrolment key. */
+  pendingKey: true
+  /** The tab's resume cache (sessionStorage and its IndexedDB wrap key). */
+  resume: true
+  /** Every `imani-wallet:*` localStorage key removed, including the terminal record. */
+  storage: string[]
+  /** The terminal key whose wallet database was deleted, if one was enrolled. */
+  walletDb: string | null
+}
+
+function storedTerminalPubkey(): string | null {
+  try {
+    const raw = localStorage.getItem(ENROLMENT_KEY)
+    const pk = raw ? (JSON.parse(raw) as { terminalPubkey?: unknown }).terminalPubkey : null
+    return typeof pk === 'string' && /^[0-9a-f]{64}$/i.test(pk) ? pk.toLowerCase() : null
+  } catch {
+    return null
+  }
 }

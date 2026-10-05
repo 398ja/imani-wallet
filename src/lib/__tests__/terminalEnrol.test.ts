@@ -29,11 +29,27 @@ vi.mock('../nap', () => ({
     hasKey: async () => walletKeyHeld,
     clear: async () => {
       cleared += 1
+      if (clearFails) throw new Error('idb refused')
     },
   },
 }))
 /** How many times the key store was erased. */
 let cleared = 0
+/** Set to make the key store's clear() fail. */
+let clearFails = false
+/** Wallet databases deleted, and resume caches dropped (#160 round 2). */
+const wiped: string[] = []
+let resumeForgotten = 0
+vi.mock('../wallet', () => ({
+  wipeWallet: async (id: string) => {
+    wiped.push(id)
+  },
+}))
+vi.mock('../resume', () => ({
+  forgetResume: () => {
+    resumeForgotten += 1
+  },
+}))
 
 const {
   beginEnrolment,
@@ -501,5 +517,54 @@ describe('#160 review: an enrolled device has a way out before phase 3', () => {
 
     expect(cleared).toBe(1)
     expect(storedTerminal()).toBeNull()
+  })
+})
+
+describe('#160 round 2: removing a terminal clears what logout clears', () => {
+  // Taking a terminal off a device must leave it as clean as logging out does,
+  // or phase 3's extra terminal state would survive it. This lists every piece
+  // that is cleared: the key at rest, the pending key, the resume cache, every
+  // imani-wallet:* localStorage entry, and the wallet database under the
+  // terminal's key. Anything outside the app's prefix is left alone.
+  it('clears the key, the record, every app entry, the resume cache and the wallet db', async () => {
+    cleared = 0
+    resumeForgotten = 0
+    wiped.length = 0
+    clearFails = false
+    localStorage.clear()
+    const device = 'b'.repeat(64)
+    localStorage.setItem(
+      'imani-wallet:terminal',
+      JSON.stringify({ stallPubkey: 'a'.repeat(64), role: TERMINAL_ROLES.REDEEM_ONLY, terminalPubkey: device }),
+    )
+    localStorage.setItem('imani-wallet:terminal-session', 'x')
+    localStorage.setItem(`imani-wallet:profile:${device}`, 'x')
+    localStorage.setItem('someone-else', 'kept')
+
+    const removed = await removeTerminalFromDevice()
+
+    expect(removed.storage.sort()).toEqual(
+      ['imani-wallet:terminal', 'imani-wallet:terminal-session', `imani-wallet:profile:${device}`].sort(),
+    )
+    expect(removed.walletDb).toBe(device)
+    expect(cleared).toBe(1)
+    expect(resumeForgotten).toBe(1)
+    expect(wiped).toEqual([device])
+    expect(Object.keys(localStorage)).toEqual(['someone-else'])
+    expect(storedTerminal()).toBeNull()
+  })
+
+  // A key store that will not clear used to be swallowed, and the record was
+  // then skipped. Now every other step still runs, and the failure is thrown
+  // so the screen can say the key may still be there.
+  it('still clears everything else when the key store fails, then reports it', async () => {
+    clearFails = true
+    localStorage.clear()
+    localStorage.setItem('imani-wallet:terminal', JSON.stringify({ terminalPubkey: 'b'.repeat(64) }))
+
+    await expect(removeTerminalFromDevice()).rejects.toThrow('idb refused')
+
+    expect(localStorage.getItem('imani-wallet:terminal')).toBeNull()
+    clearFails = false
   })
 })

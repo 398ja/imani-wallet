@@ -809,10 +809,19 @@ function TerminalSetupGate() {
 function EnrolledTerminalNotice() {
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [failed, setFailed] = useState(false)
   const remove = async () => {
     setBusy(true)
     const { removeTerminalFromDevice } = await import('./lib/terminalEnrol')
-    await removeTerminalFromDevice().catch(() => undefined)
+    try {
+      await removeTerminalFromDevice()
+    } catch {
+      // Everything else was cleared, but the key at rest may not have been. Say so rather
+      // than navigate as if the device were clean (#160 round 2).
+      setBusy(false)
+      setFailed(true)
+      return
+    }
     window.location.replace('/onboarding')
   }
   return (
@@ -835,6 +844,11 @@ function EnrolledTerminalNotice() {
           >
             {busy ? 'Removing…' : 'Remove it from this device'}
           </button>
+          {failed ? (
+            <p role="alert" className="text-red-600">
+              The terminal key could not be erased from this device. Try again.
+            </p>
+          ) : null}
           <button type="button" className="w-full p-2 underline" onClick={() => setConfirming(false)}>
             Keep it
           </button>

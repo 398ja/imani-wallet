@@ -93,9 +93,11 @@ flowchart LR
 ```
 
 Until the next version can open the till, a device set up as a terminal offers
-**Remove this terminal from this device** on its first screen. That erases the
-terminal's key and passphrase from the device only. It does not take the
-terminal out of service: revoke it from your list for that.
+**Remove this terminal from this device** on its first screen. That erases
+everything logging out erases: the terminal's key and passphrase, its record,
+every other piece of app data in the browser, and its local database. It does
+not take the terminal out of service: revoke it from your list for that. If the
+key cannot be erased, the screen says so instead of moving on.
 
 The terminal now appears in your list, and it logs itself in from then on.
 
@@ -143,6 +145,19 @@ particular sale. That attribution is private to you.
 
 **Settings → Terminals** shows every device you have out: its name, its role,
 and when it was last used. A terminal that has never traded says *Never used*.
+
+A terminal is only ready once the gateway has confirmed it. When the device
+says it has its authority, your app also confirms it with the gateway, as your
+stall, and keeps trying (waiting longer each time) if the gateway cannot be
+reached. Until the gateway answers, the row says *Confirming with the gateway*.
+If the gateway refuses because more than 24 hours have passed, the row says
+*Lapsed before it was confirmed*: that terminal can never sell, so revoke it and
+add the device again.
+
+A row still *Waiting for the device* has **Show the setup code**, so you can
+finish setting it up after closing the screen you added it from. If its
+authority was never sent to the device (for example, the connection dropped),
+the list sends it the next time you open it.
 
 The list is your own record, held on your device. It needs no connection, which
 matters at the moment you most need it: discovering a device is missing should

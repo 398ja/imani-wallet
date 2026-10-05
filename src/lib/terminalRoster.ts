@@ -91,6 +91,29 @@ export interface TerminalRecord {
    * spend has not landed yet. Kept so the next open retries the spend.
    */
   defect?: string
+  /**
+   * Whether the credential DM reached the relay or the gateway mirror (#160 round 2). False or
+   * absent on a waiting row means it still has to be sent: the enrol screen's send failed, or
+   * `resumeMinting` finished the row and nothing was sent at all.
+   */
+  delivered?: boolean
+  /**
+   * What gateway-customer says about the credential (#160 round 2, V27). Only a `confirmed`
+   * credential may sell; `lapsed` was never confirmed within 24 hours and never will be.
+   * Absent until the owner's app has asked.
+   */
+  gatewayState?: GatewayState
+  /** Failed confirm attempts so far, for the backoff. */
+  confirmAttempts?: number
+  /** Epoch ms before which the next confirm attempt is not made. */
+  nextConfirmAt?: number
+}
+
+/** The credential's standing at gateway-customer, as the owner's app last learned it. */
+export type GatewayState = 'unconfirmed' | 'confirmed' | 'lapsed'
+
+function gatewayStateOf(value: unknown): GatewayState | undefined {
+  return value === 'unconfirmed' || value === 'confirmed' || value === 'lapsed' ? value : undefined
 }
 
 /**
@@ -135,6 +158,10 @@ function read(stallPubkey: string): TerminalRecord[] {
           status: statusOf(row.status),
           mintKey: typeof row.mintKey === 'string' ? row.mintKey : undefined,
           defect: typeof row.defect === 'string' ? row.defect : undefined,
+          delivered: typeof row.delivered === 'boolean' ? row.delivered : undefined,
+          gatewayState: gatewayStateOf(row.gatewayState),
+          confirmAttempts: typeof row.confirmAttempts === 'number' ? row.confirmAttempts : undefined,
+          nextConfirmAt: typeof row.nextConfirmAt === 'number' ? row.nextConfirmAt : undefined,
         },
       ]
     })
@@ -319,8 +346,31 @@ export function markInService(stallPubkey: string, terminalPubkey: string, vouch
   if (!row) return false
   row.status = 'in-service'
   row.waitingUntil = undefined
+  // The device says it has it; the gateway has not said so yet (#160 round 2).
+  row.gatewayState = row.gatewayState ?? 'unconfirmed'
   write(stallPubkey, rows)
   return true
+}
+
+/**
+ * Rows the owner's app must still confirm at the gateway (#160 round 2): in service by the
+ * device's word, not yet confirmed or lapsed there, and due for another try.
+ */
+export function awaitingGatewayConfirm(stallPubkey: string, now: number = Date.now()): TerminalRecord[] {
+  return liveTerminals(stallPubkey).filter(
+    (t) =>
+      t.status === 'in-service' &&
+      t.voucherId !== undefined &&
+      t.gatewayState === 'unconfirmed' &&
+      (t.nextConfirmAt ?? 0) <= now,
+  )
+}
+
+/** Whether any row is still waiting on the gateway's confirm, whenever it is due. */
+export function hasUnconfirmed(stallPubkey: string): boolean {
+  return liveTerminals(stallPubkey).some(
+    (t) => t.status === 'in-service' && t.voucherId !== undefined && t.gatewayState === 'unconfirmed',
+  )
 }
 
 /**
