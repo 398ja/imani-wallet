@@ -4,6 +4,7 @@ import { stopIncomingNotifications } from './incomingNotifications'
 import { disableNotifications } from './notifications/manager'
 import { forgetResume } from './resume'
 import { wipeWallet } from './wallet'
+import { sweepAppStorage } from './appStorage'
 
 /**
  * Log out: end the session and erase the key from this browser.
@@ -114,9 +115,7 @@ export async function logout(
   // and the stall are on the relay, the sales are on the relay encrypted, and
   // dm-poll's cursor is state we WANT reset — a stale "already processed" set is
   // exactly what silently drops the next account's coupons.
-  for (const key of Object.keys(localStorage)) {
-    if (key.startsWith('imani-wallet:')) localStorage.removeItem(key)
-  }
+  sweepAppStorage()
 
   // And the coupons, the transaction history and the issued-coupon records.
   // Recoverable: sales come back from the relay via restoreIssued(), and held

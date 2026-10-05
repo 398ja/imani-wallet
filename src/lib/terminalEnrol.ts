@@ -1,7 +1,20 @@
-import { generateSecretKey, getPublicKey } from 'nostr-tools'
-import { bytesToHex } from '@noble/hashes/utils'
+import { finalizeEvent, generateSecretKey, getPublicKey, type Event } from 'nostr-tools'
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
+
+import type { RequestSigner } from './nip98'
+import {
+  offerFromRumor,
+  unwrapSealed,
+  wrapMessage,
+  type CredentialOffer,
+  type ExpectedOffer,
+  type OfferRefusal,
+} from './terminalDelivery'
 
 import { keyStore } from './nap'
+import { sweepAppStorage } from './appStorage'
+import { forgetResume } from './resume'
+import { wipeWallet } from './wallet'
 import { roleOf, type TerminalRole } from './terminalRole'
 import { terminalActor, type TerminalActor, type TerminalCredential } from './actor'
 
@@ -64,6 +77,50 @@ function mintKey(): { privkeyHex: string; pubkey: string } {
 /** For tests, and for starting over after a completed enrolment. */
 export function forgetPendingKey(): void {
   pending = undefined
+}
+
+/** The minimum passphrase length for a terminal (decision 2 on #160). */
+export const MIN_PASSPHRASE_LENGTH = 8
+
+/**
+ * Credentials sent to this device's pending key, checked (#160 phase 2).
+ *
+ * Unwrapped HERE, with the pending key, so the private half never leaves this module, which
+ * is the promise at the top of the file. Each wrap is opened, its seal verified, and the
+ * credential inside read from its own signed bytes (`offerFromRumor`). Refusals are returned
+ * too, so a screen can say "a credential arrived for another device" rather than nothing.
+ *
+ * @param wraps gift wraps addressed to the pending key, as the gateway or relay returned them
+ */
+export function offersFor(
+  wraps: readonly Event[],
+  nowSeconds: number = Math.floor(Date.now() / 1000),
+  /** The offer the owner's setup code names. Without it every offer is refused. */
+  expected?: ExpectedOffer,
+): Array<CredentialOffer | OfferRefusal> {
+  if (!pending) return []
+  const key = hexToBytes(pending.privkeyHex)
+  try {
+    return wraps.flatMap((wrap) => {
+      const opened = unwrapSealed(wrap, key)
+      if (!opened) return []
+      const offer = offerFromRumor(opened.rumor, opened.sealer, pending!.pubkey, nowSeconds, expected)
+      return offer === 'not-a-credential-dm' ? [] : [offer]
+    })
+  } finally {
+    key.fill(0)
+  }
+}
+
+/**
+ * What `completeEnrolment` lends a caller, after storing and before the key is forgotten.
+ *
+ * Capabilities, not the key: wrap a message as this terminal, and sign a NIP-98 request as it.
+ * Both are exactly what sending the enrolled DM needs, and neither returns the private half.
+ */
+export interface EnrolmentAnnouncer {
+  wrap(recipient: string, content: string): Event
+  signer: RequestSigner
 }
 
 /**
@@ -133,6 +190,13 @@ export interface StoredTerminal {
    * credential.
    */
   issuerId?: string
+  /** The credential's voucher id (#160 phase 2), which the enrolled DM names. */
+  voucherId?: string
+  /**
+   * Minutes of no touch before the till locks itself (decision 2). `0` is off. Phase 3
+   * enforces it. A display hint like the rest: the owner chose it, and nothing here grants.
+   */
+  idleLockMinutes?: number
 }
 
 /**
@@ -164,6 +228,17 @@ export async function completeEnrolment(
    * holds would be a description rather than the thing itself.
    */
   voucher?: { token: string; merchantMetadata: string; issuerId: string },
+  /**
+   * #160 phase 2. `voucherId` and `idleLockMinutes` are stored with the record, and
+   * `announce` runs once the record is stored and before the pending key is forgotten, so
+   * the device can tell its stall it is in service. A failed announce does not undo the
+   * enrolment: the device is set up either way, and the owner can see it at next use.
+   */
+  options: {
+    voucherId?: string
+    idleLockMinutes?: number
+    announce?: (tools: EnrolmentAnnouncer) => Promise<void>
+  } = {},
 ): Promise<TerminalActor> {
   if (!pending) {
     throw new Error('Start enrolment on this device before scanning a code.')
@@ -184,6 +259,12 @@ export async function completeEnrolment(
     // Refused rather than defaulted. A blank passphrase is a key at rest in
     // clear, and the terminal would open for trade for whoever picked it up.
     throw new Error('A passphrase is needed to protect this terminal.')
+  }
+  if (passphrase.length < MIN_PASSPHRASE_LENGTH) {
+    // Decision 2 on #160: at least 8 characters on a shared till.
+    throw new Error(
+      `Use a passphrase of at least ${MIN_PASSPHRASE_LENGTH} characters to protect this terminal.`,
+    )
   }
 
   // Verified BEFORE anything is written, and against this device's own key, so
@@ -211,8 +292,40 @@ export async function completeEnrolment(
           issuerId: voucher.issuerId,
         }
       : {}),
+    ...(options.voucherId ? { voucherId: options.voucherId } : {}),
+    ...(options.idleLockMinutes !== undefined ? { idleLockMinutes: options.idleLockMinutes } : {}),
   }
   localStorage.setItem(ENROLMENT_KEY, JSON.stringify(stored))
+
+  if (options.announce) {
+    const held = pending
+    const announcer: EnrolmentAnnouncer = {
+      wrap: (recipient, content) => {
+        const key = hexToBytes(held.privkeyHex)
+        try {
+          return wrapMessage(key, recipient, content)
+        } finally {
+          key.fill(0)
+        }
+      },
+      signer: {
+        signEvent: async (template) => {
+          const key = hexToBytes(held.privkeyHex)
+          try {
+            return finalizeEvent(template, key)
+          } finally {
+            key.fill(0)
+          }
+        },
+      },
+    }
+    try {
+      await options.announce(announcer)
+    } catch {
+      // The device is enrolled. Telling the stall is a courtesy that can fail
+      // on a bad connection, and must not turn a stored enrolment into an error.
+    }
+  }
 
   // The pending key has been persisted; a further enrolment starts fresh.
   forgetPendingKey()
@@ -255,6 +368,11 @@ export function storedTerminal(): StoredTerminal | null {
       merchantMetadata:
         typeof parsed.merchantMetadata === 'string' ? parsed.merchantMetadata : undefined,
       issuerId: typeof parsed.issuerId === 'string' ? parsed.issuerId : undefined,
+      voucherId: typeof parsed.voucherId === 'string' ? parsed.voucherId : undefined,
+      idleLockMinutes:
+        typeof parsed.idleLockMinutes === 'number' && parsed.idleLockMinutes >= 0
+          ? parsed.idleLockMinutes
+          : undefined,
     }
   } catch {
     return null
@@ -324,5 +442,63 @@ export function forgetTerminal(): void {
     localStorage.removeItem(ENROLMENT_KEY)
   } catch {
     // Nothing to do: the caller is clearing state that may not exist.
+  }
+}
+
+/**
+ * Take this device out of terminal service, locally (#160 review).
+ *
+ * The escape hatch for a device enrolled in phase 2, before phase 3 can open its till: it
+ * erases the encrypted terminal key and the terminal record, so the device can be set up
+ * again or used as an ordinary wallet. Since #160 round 2 it clears everything logout clears
+ * (see `RemovedFromDevice`). It does NOT revoke the credential at the mint. Only
+ * the owner can do that, from their terminal list, and the screen says so.
+ */
+export async function removeTerminalFromDevice(): Promise<RemovedFromDevice> {
+  // Read before the sweep erases it: the terminal's own IndexedDB store is named by its key.
+  const terminalPubkey = storedTerminalPubkey()
+  // Every step runs even if an earlier one fails, so a keyStore fault cannot leave the record
+  // (or anything else) behind. The fault is reported afterwards.
+  let keyError: unknown
+  try {
+    await keyStore.clear()
+  } catch (e) {
+    keyError = e
+  }
+  // The same state logout clears (#160 round 2): every `imani-wallet:*` entry (the terminal
+  // record included), the tab's resume cache, and any wallet database under this device's
+  // key. Phase 3 adds terminal state, and this keeps it covered without a second list.
+  const storage = sweepAppStorage()
+  forgetTerminal()
+  forgetPendingKey()
+  forgetResume()
+  if (terminalPubkey) await wipeWallet(terminalPubkey).catch(() => undefined)
+  if (keyError !== undefined) {
+    throw keyError instanceof Error ? keyError : new Error('Could not erase the terminal key.')
+  }
+  return { keyStore: true, pendingKey: true, resume: true, storage, walletDb: terminalPubkey }
+}
+
+/** What `removeTerminalFromDevice` cleared, for its test and its caller. */
+export interface RemovedFromDevice {
+  /** The encrypted key at rest (`keyStore`, IndexedDB). */
+  keyStore: true
+  /** The in-memory pending enrolment key. */
+  pendingKey: true
+  /** The tab's resume cache (sessionStorage and its IndexedDB wrap key). */
+  resume: true
+  /** Every `imani-wallet:*` localStorage key removed, including the terminal record. */
+  storage: string[]
+  /** The terminal key whose wallet database was deleted, if one was enrolled. */
+  walletDb: string | null
+}
+
+function storedTerminalPubkey(): string | null {
+  try {
+    const raw = localStorage.getItem(ENROLMENT_KEY)
+    const pk = raw ? (JSON.parse(raw) as { terminalPubkey?: unknown }).terminalPubkey : null
+    return typeof pk === 'string' && /^[0-9a-f]{64}$/i.test(pk) ? pk.toLowerCase() : null
+  } catch {
+    return null
   }
 }

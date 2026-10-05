@@ -72,16 +72,32 @@ phone**:
    not enrol anything — if you scanned the wrong device of two on the counter,
    tap **Rescan**.
 5. Tap **Add terminal**.
-6. Finish on the terminal itself by setting a **passphrase** there.
+6. Choose **Lock when idle**: how long the terminal may sit untouched before
+   it asks for its passphrase again. Ten minutes unless you change it, or
+   **Never**.
+7. Your phone then shows a **setup code**. Scan it with the terminal (or type
+   it in). The terminal only accepts the authority your setup code names, so
+   someone who photographed the terminal's own code cannot slip in theirs.
+8. Finish on the terminal itself. It shows your stall's name and a six-digit
+   **check code**: they must match what your phone shows. Then set a
+   **passphrase** of at least 8 characters there.
 
 ```mermaid
 flowchart LR
     A[Terminal shows its code] --> B[Owner scans it]
     B --> C[Owner names it and picks a role]
     C --> D[Add terminal]
-    D --> E[Passphrase set on the device]
-    E --> F[Terminal trades for the stall]
+    D --> E[Terminal scans the owner's setup code]
+    E --> F[Passphrase set on the device]
+    F --> G[Terminal trades for the stall]
 ```
+
+Until the next version can open the till, a device set up as a terminal offers
+**Remove this terminal from this device** on its first screen. That erases
+everything logging out erases: the terminal's key and passphrase, its record,
+every other piece of app data in the browser, and its local database. It does
+not take the terminal out of service: revoke it from your list for that. If the
+key cannot be erased, the screen says so instead of moving on.
 
 The terminal now appears in your list, and it logs itself in from then on.
 
@@ -129,6 +145,19 @@ particular sale. That attribution is private to you.
 
 **Settings → Terminals** shows every device you have out: its name, its role,
 and when it was last used. A terminal that has never traded says *Never used*.
+
+A terminal is only ready once the gateway has confirmed it. When the device
+says it has its authority, your app also confirms it with the gateway, as your
+stall, and keeps trying (waiting longer each time) if the gateway cannot be
+reached. Until the gateway answers, the row says *Confirming with the gateway*.
+If the gateway refuses because more than 24 hours have passed, the row says
+*Lapsed before it was confirmed*: that terminal can never sell, so revoke it and
+add the device again.
+
+A row still *Waiting for the device* has **Show the setup code**, so you can
+finish setting it up after closing the screen you added it from. If its
+authority was never sent to the device (for example, the connection dropped),
+the list sends it the next time you open it.
 
 The list is your own record, held on your device. It needs no connection, which
 matters at the moment you most need it: discovering a device is missing should
@@ -240,24 +269,27 @@ device.
 ## Known gaps today
 
 Being straight about it: the rules, the screens, and the enforcement all exist
-and are tested, but four seams between them are not yet wired, so **a second
+and are tested, but three seams between them are not yet wired, so **a second
 till cannot be run end to end right now**. The plan to close them is
 [the terminals-in-service spec](spec-terminals-in-service.md).
 
-1. **The device cannot yet receive its authority.** **Add terminal** now
-   creates the terminal's authority from your phone, checks it, and shows a
-   check code, and the terminal appears in your list as **Waiting for the
-   device**. The device side, where the operator confirms the code and sets a
-   passphrase, is not built yet, so a terminal added from the screen cannot log
-   in. A waiting terminal is cancelled automatically after 24 hours, and at most
-   two can wait at once. Waiting terminals do not use up your free terminal.
-   The gateway enforces the two-waiting limit and the 24 hours too, so a second
-   phone or a cleared browser cannot get round them. The screen refuses a code
-   that is not a real device key, and a device that is already on your list
-   with a live authority: cancel or revoke that one first, so its authority is
-   never left without a way to revoke it. Setup on a device refuses to run
-   while that device still holds a wallet (log out first, keeping the backup
-   key).
+1. **A terminal is set up, but cannot yet open its till.** On the device,
+   choose **Set this device up as a terminal** on the first screen. It shows a
+   code. On your phone, **Add terminal** creates the terminal's authority,
+   checks it, sends it to that code, and shows a setup code for the device to
+   scan, which names the one authority it may accept. The device then shows your stall's
+   name and a six-digit check code: confirm both match your phone, and set a
+   passphrase of at least 8 characters. Your list then shows the terminal as in
+   service. Opening the till on the device with that passphrase arrives in the
+   next version. A terminal still waiting for its device is cancelled
+   automatically after 24 hours, at most two can wait at once, and waiting
+   terminals do not use up your free terminal. The gateway enforces the
+   two-waiting limit and the 24 hours too, so a second phone or a cleared
+   browser cannot get round them. The screen refuses a code that is not a real
+   device key, and a device that is already on your list with a live
+   authority: cancel or revoke that one first, so its authority is never left
+   without a way to revoke it. Setup refuses to run on a device that still
+   holds a wallet (log out first, keeping the backup key).
 
    If your connection drops while a terminal is being added, the row says
    **Still being set up**. The next time you open Terminals with a connection,
@@ -276,13 +308,11 @@ till cannot be run end to end right now**. The plan to close them is
    credential it holds, as its device, the first time it reads it. Anything else
    that mints a terminal credential must call
    `POST /api/v1/wallet/terminal-credentials/{id}/confirm` itself.
-2. **The device side has no screen yet.** The logic that makes a terminal's key
-   and shows it as a QR exists, but no page displays it.
-3. **Login does not ask whether the authority is still live.** Every terminal
+2. **Login does not ask whether the authority is still live.** Every terminal
    therefore opens on reduced authority (redeem, never sell), and revocation
    does not bite at login. This fails safe rather than open — a revoked terminal
    still cannot sell — but no full till can currently sell either.
-4. **A terminal cannot sell a coupon a customer will accept, so it does not
+3. **A terminal cannot sell a coupon a customer will accept, so it does not
    sell at all** (#159). Every coupon carries the stall's own signed
    authorisation for the sale (an issuance warrant). A terminal's key is not the
    stall's key, so the most it can send is a signed "none". Every wallet that

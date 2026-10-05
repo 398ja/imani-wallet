@@ -39,6 +39,8 @@ import { Centered, Fatal } from './components/ui'
 import { Header } from './components/ui/Header'
 import { LoginPage } from './pages/LoginPage'
 import { OnboardingPage } from './pages/OnboardingPage'
+import { TerminalSetupPage } from './pages/TerminalSetupPage'
+import { storedTerminal } from './lib/terminalEnrol'
 import { WelcomePage } from './pages/WelcomePage'
 import { MerchantsPage } from './pages/MerchantsPage'
 import { MerchantHomePage } from './pages/MerchantHomePage'
@@ -728,6 +730,10 @@ function PublicRoutes({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<
     <Routes>
       <Route path="/login" element={<LoginPage onUnlock={onUnlock} />} />
       <Route path="/onboarding" element={<OnboardingPage onUnlock={onUnlock} />} />
+      {/* #160 phase 2: a fresh device becomes a terminal. Public, because the
+          device has no key and no session yet. `completeEnrolment` refuses on a
+          device that already holds one, so this cannot overwrite a wallet. */}
+      <Route path="/terminal/setup" element={<TerminalSetupGate />} />
       <Route path="/restore" element={<RestorePage onUnlock={onUnlock} />} />
       {/* A bearer claim link, which is opened by people who have no wallet yet
           BY DESIGN. It cannot fall through to `Entry` with everything else:
@@ -768,6 +774,97 @@ function PublicRoutes({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<
   )
 }
 
+/**
+ * `/terminal/setup`, only on a device with no key (spec 2.2 step 2).
+ *
+ * One account per device. A device holding a key is sent to log in, where the person can log
+ * out (and see the backup warning) before setting it up as a terminal.
+ */
+function TerminalSetupGate() {
+  const [hasKey, setHasKey] = useState<boolean | null>(null)
+  useEffect(() => {
+    import('./lib/nap').then(({ hasStoredKey }) =>
+      hasStoredKey().then(setHasKey, () => setHasKey(false)),
+    )
+  }, [])
+  if (hasKey === null) return <Centered>Checking…</Centered>
+  if (hasKey) {
+    return (
+      <Centered>
+        This device already holds a wallet. Log in and log out of it first, keeping its backup
+        key, then set the device up as a terminal.
+      </Centered>
+    )
+  }
+  return <TerminalSetupPage />
+}
+
+/**
+ * What an enrolled terminal shows until phase 3 can open its till, with a way out (#160 review).
+ *
+ * Without the way out the device had no unlock and no log out, so recovering it meant clearing
+ * site data by hand. "Remove this terminal from this device" erases the terminal key and record
+ * locally. It does not revoke the credential, and says so: only the owner can, from their list.
+ */
+function EnrolledTerminalNotice() {
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const remove = async () => {
+    setBusy(true)
+    const { removeTerminalFromDevice } = await import('./lib/terminalEnrol')
+    try {
+      await removeTerminalFromDevice()
+    } catch {
+      // Everything else was cleared, but the key at rest may not have been. Say so rather
+      // than navigate as if the device were clean (#160 round 2).
+      setBusy(false)
+      setFailed(true)
+      return
+    }
+    window.location.replace('/onboarding')
+  }
+  return (
+    <Centered>
+      <p>
+        This device is set up as a terminal. Opening the till with its passphrase arrives in the
+        next version of the app.
+      </p>
+      {confirming ? (
+        <div className="mt-6 space-y-3 text-sm">
+          <p>
+            This erases the terminal&apos;s key and passphrase from this device. It does not take
+            the terminal out of service: ask the owner to revoke it from their list.
+          </p>
+          <button
+            type="button"
+            className="pressable w-full rounded-xl bg-red-600 p-3 font-medium text-white"
+            disabled={busy}
+            onClick={() => void remove()}
+          >
+            {busy ? 'Removing…' : 'Remove it from this device'}
+          </button>
+          {failed ? (
+            <p role="alert" className="text-red-600">
+              The terminal key could not be erased from this device. Try again.
+            </p>
+          ) : null}
+          <button type="button" className="w-full p-2 underline" onClick={() => setConfirming(false)}>
+            Keep it
+          </button>
+        </div>
+      ) : (
+        <button type="button" className="mt-6 text-sm underline" onClick={() => setConfirming(true)}>
+          Remove this terminal from this device
+        </button>
+      )}
+    </Centered>
+  )
+}
+
+/** Entry's answer for a device enrolled as a terminal (#160). Not a route. */
+const TERMINAL_TARGET = 'terminal'
+
 /** Unlock if this browser holds a key, otherwise sign up. */
 function Entry() {
   const [target, setTarget] = useState<string | null>(null)
@@ -776,13 +873,17 @@ function Entry() {
     // hasStoredKey is async (IndexedDB), so this cannot be decided in a render.
     import('./lib/nap').then(({ hasStoredKey }) =>
       hasStoredKey().then(
-        (has) => setTarget(has ? '/login' : '/onboarding'),
+        (has) => setTarget(has ? (storedTerminal()?.token ? TERMINAL_TARGET : '/login') : '/onboarding'),
         () => setTarget('/onboarding'),
       ),
     )
   }, [])
 
   if (!target) return <Centered>Checking…</Centered>
+  // #160: a terminal is not a customer, so it must not reach /login, where its
+  // key would open a NAP session as one (spec 2.3). Phase 3 routes this to
+  // /terminal/unlock; until then the device says what it is and stops.
+  if (target === TERMINAL_TARGET) return <EnrolledTerminalNotice />
   return <Navigate to={target} replace />
 }
 
