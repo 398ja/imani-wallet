@@ -148,6 +148,7 @@ beforeEach(() => {
   forgetTerminal()
   localStorage.clear()
 })
+afterEach(() => vi.unstubAllEnvs())
 
 describe('the key never leaves the device', () => {
   it('shows a PUBLIC key, and nothing that could reconstruct the private one', () => {
