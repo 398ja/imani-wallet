@@ -46,6 +46,12 @@ export const LOGIN_REFUSAL = {
   NOT_OURS: 'not-ours',
   /** The mint says the credential has been spent — the owner revoked it. */
   REVOKED: 'revoked',
+  /**
+   * The credential's signer is not a key this build trusts, or the build names none
+   * (`VITE_VOUCHER_ISSUER_PUBKEYS`). Fails closed (#160 review, IW-15): the signature is checked
+   * against a key the token carries, so without the allowlist anyone can sign one.
+   */
+  UNTRUSTED_ISSUER: 'untrusted-issuer',
 } as const
 
 export type LoginRefusal = (typeof LOGIN_REFUSAL)[keyof typeof LOGIN_REFUSAL]
@@ -59,6 +65,8 @@ export const LOGIN_MESSAGE: Record<LoginRefusal, string> = {
     'This authority is not for this device. Ask the stall owner to set it up again.',
   [LOGIN_REFUSAL.REVOKED]:
     'This terminal is no longer in service. Ask the stall owner to set it up again.',
+  [LOGIN_REFUSAL.UNTRUSTED_ISSUER]:
+    'This app cannot confirm who issued this terminal’s authority. Ask the stall owner to set it up again.',
 }
 
 export type LoginOutcome =
@@ -160,39 +168,54 @@ export interface CredentialFacts {
  * - the token is one `P2PK_VOUCHER` proof whose lock (`data`) is the metadata's `lock_key`, so
  *   the metadata cannot name a different device than the mint enforces;
  * - the voucher's signature verifies over its canonical bytes (`verifyVoucher`), so the metadata
- *   is the issuer's and was not altered;
- * - where the build names its trusted signing keys, the signer is one of them (ADR 0006).
+ *   is the signer's and was not altered;
+ * - the signer is one of the keys this build trusts (`VITE_VOUCHER_ISSUER_PUBKEYS`, ADR 0006).
+ *   **Required, not opt-in** (#160 review, IW-15): `verifyVoucher` checks the signature against
+ *   the `issuer_pubkey` the token itself carries, so a signature alone proves nothing about who
+ *   signed. With no allowlist, a credential re-signed with any key would open an issuing till for
+ *   any stall. So a build that names no keys admits no terminal at all.
  *
  * Null on anything else, which `loginTerminal` reads as an unreadable credential.
  */
 export function credentialFromToken(token: string): CredentialFacts | null {
+  const read = readCredential(token)
+  return 'facts' in read ? read.facts : null
+}
+
+/** `credentialFromToken`, saying which check refused it. */
+function readCredential(token: string): { facts: CredentialFacts } | { refusal: LoginRefusal } {
+  const unreadable = { refusal: LOGIN_REFUSAL.UNREADABLE }
   try {
     const proofs = tokenProofs(token)
-    if (proofs.length !== 1) return null
+    if (proofs.length !== 1) return unreadable
     const secret = proofs[0].secret
-    if (!secret.startsWith('["P2PK_VOUCHER"')) return null
+    if (!secret.startsWith('["P2PK_VOUCHER"')) return unreadable
 
     const parsed = parseVoucherToken(token)
     const voucher = parsed.voucher
     const metadata = parseTerminalMetadata(voucher.merchantMetadata)
-    if (!metadata) return null
+    if (!metadata) return unreadable
 
     // The key the MINT enforces must be the key the metadata names. Otherwise a credential
     // could claim one device in its metadata while being spendable by another.
     const lock = lockedToPubkey(secret)
-    if (!lock || xOnly(lock).toLowerCase() !== metadata.lock_key) return null
+    if (!lock || xOnly(lock).toLowerCase() !== metadata.lock_key) return unreadable
 
-    if (!verifyVoucher(voucher).signatureValid) return null
-    if (checkIssuer(parsed) === 'unknown-issuer') return null
+    if (!verifyVoucher(voucher).signatureValid) return unreadable
+    // 'allowed' only. 'unchecked' (no allowlist in this build) is a refusal for a terminal
+    // credential, unlike for a customer's coupon: see the function comment.
+    if (checkIssuer(parsed) !== 'allowed') return { refusal: LOGIN_REFUSAL.UNTRUSTED_ISSUER }
 
     return {
-      merchantMetadata: String(voucher.merchantMetadata),
-      issuerId: voucher.issuerId,
-      voucherId: voucher.voucherId,
-      ...(typeof voucher.expiresAt === 'number' ? { expiresAt: voucher.expiresAt } : {}),
+      facts: {
+        merchantMetadata: String(voucher.merchantMetadata),
+        issuerId: voucher.issuerId,
+        voucherId: voucher.voucherId,
+        ...(typeof voucher.expiresAt === 'number' ? { expiresAt: voucher.expiresAt } : {}),
+      },
     }
   } catch {
-    return null
+    return unreadable
   }
 }
 
@@ -214,8 +237,9 @@ export function loginFromToken({
   unspent: boolean | null
   openedAt?: number
 }): LoginOutcome {
-  const facts = credentialFromToken(token)
-  if (!facts) return refuse(LOGIN_REFUSAL.UNREADABLE)
+  const read = readCredential(token)
+  if (!('facts' in read)) return refuse(read.refusal)
+  const { facts } = read
   return loginTerminal({
     merchantMetadata: facts.merchantMetadata,
     issuerId: facts.issuerId,

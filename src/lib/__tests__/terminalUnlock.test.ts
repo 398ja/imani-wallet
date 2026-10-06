@@ -62,12 +62,18 @@ const mint = (state: string | Error) => ({
   }),
 })
 
+// The build names the key that signs terminal credentials, as every deploy must now: a terminal
+// credential whose signer is not on VITE_VOUCHER_ISSUER_PUBKEYS is refused (#160 review, IW-15).
 beforeEach(() => {
+  vi.stubEnv('VITE_VOUCHER_ISSUER_PUBKEYS', STALL)
   localStorage.clear()
   forgetTerminalSession()
   vi.mocked(nap.installTerminalSigner).mockClear()
 })
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllEnvs()
+})
 
 describe('unlocking without NAP', () => {
   // The spec's AC: a terminal makes no call to /api/v1/auth/*. Every fetch the unlock makes is
