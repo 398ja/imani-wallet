@@ -4,6 +4,7 @@ import type { VoucherRow, TransactionRow } from '@imani/wallet-storage'
 import { burnIfSelfIssued } from './burn'
 import { mayFileAttestation } from './cashAttestation'
 import { recheckCashbackRow } from './cashbackValidation'
+import { migrateStoredExpiries, normaliseExpiry } from './expiryStorage'
 import { toTransaction, type WalletTransaction } from './transactions'
 import { publishTx } from './txRecords'
 import { publishVoucher, tombstoneVoucher } from './voucherRecords'
@@ -46,17 +47,28 @@ export function openWallet(userId: string): Promise<WalletStorage> {
   raw = undefined
   currentUserId = userId
   // WalletStorage composes the user-scoped DB name itself (imani-wallet-{userId}).
-  const ws = new WalletStorage({ userId })
+  // `normaliseVoucher` keeps `expires_at` in one stored format at every writer (#157).
+  const ws = new WalletStorage({ userId, normaliseVoucher: normaliseExpiry })
   const rawWriters = backUpWrites(ws)
-  opening = ws.init().then(() => {
-    // Guard against an interleaved switch: a slower init for an identity we have
-    // since moved on from must not install itself over the newer one.
-    if (currentUserId === userId) {
-      storage = ws
-      raw = rawWriters
-    }
-    return ws
-  })
+  opening = ws
+    .init()
+    // Repair rows stored before the format was enforced, before anything reads
+    // them. Idempotent and safe across tabs (see expiryStorage.ts). A failure is
+    // logged and the wallet still opens: the readers parse every legacy format.
+    .then(() =>
+      migrateStoredExpiries(ws).catch((error) =>
+        console.warn('[expiry] stored expiry repair failed; will retry on next open', error),
+      ),
+    )
+    .then(() => {
+      // Guard against an interleaved switch: a slower init for an identity we have
+      // since moved on from must not install itself over the newer one.
+      if (currentUserId === userId) {
+        storage = ws
+        raw = rawWriters
+      }
+      return ws
+    })
   return opening
 }
 

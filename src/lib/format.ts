@@ -1,4 +1,5 @@
 import type { MerchantGroup } from '@imani/voucher-send'
+import { toEpochMs as sharedToEpochMs } from '@imani/wallet-core'
 
 /**
  * Render a face value in its own unit and decimals.
@@ -230,19 +231,18 @@ export function shortPubkey(pubkey: string): string {
  * (`shared/tokenRedemption.js` `_persistRedeemed`) stores the ISO string
  * `/inspect` returned. Reading only the declared type made `expires_at * 1000`
  * NaN, so a coupon with a real expiry sorted as expired and disappeared.
- * The magnitude test is the same one `toTransaction` uses — below 1e11 can only
- * be seconds.
+ * Delegates to wallet-core's parser, which tells seconds from milliseconds at
+ * 1e12 (see expiry.ts for why not 1e11).
  *
  * Absent, null, '' and 0 all collapse to undefined: for an expiry they mean "no
  * expiry" (the gateway populates the field asynchronously — see `toVoucher`),
  * and no other caller has a meaningful use for the epoch itself.
  */
 export function toEpochMs(value: number | string | undefined | null): number | undefined {
-  if (value === undefined || value === null || value === '' || value === 0) return undefined
-
-  const ms =
-    typeof value === 'number' ? (value < 1e11 ? value * 1000 : value) : Date.parse(value)
-  return Number.isFinite(ms) ? ms : undefined
+  // One parser for the whole wallet, in wallet-core (#157). This used to be a
+  // copy of it, and the copies drifted: a numeric-string expiry parsed here and
+  // not there.
+  return sharedToEpochMs(value)
 }
 
 /**
@@ -267,4 +267,3 @@ export function formatDate(value: number | string | undefined | null): string {
     minute: '2-digit',
   }).format(new Date(ms))
 }
-

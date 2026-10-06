@@ -9,6 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A voucher whose expiry was stored as a numeric string is no longer spent last** (#157).
+  `expires_at` reached the wallet as an ISO string, a number in seconds or milliseconds, or a
+  numeric string of seconds (what gateway-core's `/inspect` returned before v0.6.1, stored verbatim
+  and carried to new devices by NIP-60 restore). The numeric string read as "never expires", so
+  the voucher closest to being lost went last. Every coupon is now STORED with its expiry in one
+  format, epoch seconds, whichever way it arrived (DM, claim, cashback, restore, import), and
+  rows stored before this are repaired when the wallet opens: idempotently, safely with two tabs
+  open. One parser replaces four copies that disagreed; it reads a zone-less ISO time as UTC and
+  no longer takes junk like "12/31" for a date. A stored value nobody can read is repaired from
+  the expiry signed into the voucher's own token; failing that it is kept as it was and logged,
+  never turned into "never expires", and as a last resort spent first. When a
+  sooner-expiring voucher is left for a legitimate reason (another stall, another currency, too
+  small, or it cannot be divided to the amount), the pay screen says so in one line and the
+  `[pay]` log records which voucher and why.
+- **A far-future expiry is never stored as a past one** (#157 review). A "practically never"
+  date such as 31 Dec 9999 is 253402300799 in seconds, which the old seconds/milliseconds
+  boundary (1e11) read as milliseconds in 1978. The repair would then have stored a live
+  coupon as long expired. The boundary is now 1e12, and converting to whole seconds rounds up,
+  so storing can only keep an expiry where it was, never move it earlier.
+- **Storing an expiry is now a fixed point** (#157 review). A value of 1e15 or more (for example
+  1.7e15) was stored as 1.7e12 seconds, which the next read took for milliseconds in 2023, so
+  the repair that runs on every open would have written a past date over a live coupon. Any
+  value whose whole seconds would reach 1e12 is now unreadable, and is repaired from the
+  expiry signed into the voucher's token.
+- **The expiry signed into the token wins over the stored copy** (#157 review). The stored
+  `expires_at` is only a cache; a readable but wrong copy no longer hides a live coupon as
+  expired or changes its place in the spend order. The stored value is used only when the token
+  carries no signed expiry.
+- **Values no producer writes are unreadable rather than guessed** (#157 review): a fraction
+  below 1e9 such as `'0.5'`, and a day that does not exist such as `'2026-02-30'`, which used to
+  roll over into March.
+- **An ISO date-time with no zone is now read as UTC** (#157), not as the device's local time,
+  so the same stored value names the same instant in Nairobi and in London.
+- **The pay screen's "sooner voucher not used" note matches what is spent** (#157 review): it
+  compares issuers the way the wallet groups them (an npub keeps its case) and leaves out
+  vouchers this wallet has already spent on another device, as the payment itself does.
+
 ## [0.14.2] - 2026-10-05
 
 ### Fixed

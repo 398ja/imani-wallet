@@ -799,6 +799,40 @@ describe('sendVouchers and payRequest', () => {
     warn.mockRestore()
   })
 
+  it('walks past a voucher the gateway refuses as expired (#157)', async () => {
+    // A coupon whose stored expiry nobody can read is spent FIRST, in case it
+    // is about to lapse. If it already has, the gateway says so, and that must
+    // cost one refused attempt, not the payment: the next coupon pays.
+    const odd = row({ token_id: 'o'.repeat(32), voucher_id: 'v-odd', face_value: 600, expires_at: 'garbled' as never })
+    const good = row({ token_id: 'g'.repeat(32), voucher_id: 'v-good', face_value: 600 })
+    stubs.rows = [odd, good]
+    const tried: string[] = []
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async (params: Record<string, unknown>) => {
+        tried.push(String(params.voucherId))
+        if (params.voucherId === 'v-odd') throw new Error('Voucher has expired')
+        return { send_id: 'as_3', status: 'COMPLETED' }
+      },
+      getAtomicSendStatus: async () => ({ status: 'COMPLETED' }),
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    const { transactions } = wallet([odd, good])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await sendVouchers({
+      payer: PAYER,
+      recipient: { pubkey: FRIEND },
+      merchant,
+      unit: 'EUR',
+      amount: 250,
+    })
+
+    expect(tried).toEqual(['v-odd', 'v-good'])
+    expect(transactions[0].voucherId).toBe('v-good')
+    warn.mockRestore()
+  })
+
   /** Three coupons no one of which covers 1000 — the reason bundles exist. */
   const trio = () => [
     row({ token_id: '1'.repeat(32), voucher_id: 'v-1', face_value: 400, token_amount: 400 }),
