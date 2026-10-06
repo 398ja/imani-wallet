@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
 /**
@@ -40,7 +40,7 @@ vi.mock('../../lib/profile', async (importOriginal) => ({
 // The Redeem screen itself is covered in RedeemPageTerminal.test.tsx; here only its route.
 vi.mock('../RedeemPage', () => ({ RedeemPage: () => <p>redeem-screen</p> }))
 
-const { TerminalApp } = await import('../TerminalApp')
+const { TerminalApp, TerminalUnlockPage } = await import('../TerminalApp')
 const { TERMINAL_ROLES, grantFor } = await import('../../lib/terminalRole')
 const { SESSION_KIND, openSession } = await import('../../lib/terminalSession')
 import type { TerminalActor } from '../../lib/actor'
@@ -160,5 +160,57 @@ describe('the routes a terminal has', () => {
     at('/settings/security')
     expect(await screen.findByRole('button', { name: 'Take this terminal out of service' })).toBeTruthy()
     expect(screen.queryByText(/Log out/)).toBeNull()
+  })
+})
+
+describe('a refused device is never stranded (#160 review, MEDIUM)', () => {
+  /** The unlock screen alone, with an unlock that refuses and a local removal we can watch. */
+  async function refusedWith(reason: string, message: string) {
+    const removed = vi.fn(async () => undefined)
+    const reload = vi.fn()
+    render(
+      <MemoryRouter>
+        <TerminalUnlockPage
+          name="Front counter"
+          terminalPubkey={DEVICE}
+          stallName="Test Stall"
+          onUnlocked={() => {}}
+          unlock={async () => ({ unlocked: false, reason: reason as never, message })}
+          removeFromDevice={removed}
+          reload={reload}
+        />
+      </MemoryRouter>,
+    )
+    fireEvent.change(screen.getByLabelText('Passphrase'), { target: { value: 'eight888' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Open the till' }))
+    return { removed, reload }
+  }
+
+  // A credential that cannot be read, or is not this device's, can never be handed back: the
+  // device holds nothing the mint would spend. Decommission fails and erases nothing, so before
+  // the review the device was stuck on this screen for good. It now offers to remove the terminal
+  // from this device, which clears everything logout clears, and says the owner must still revoke
+  // it.
+  it.each([
+    ['unreadable', 'This terminal’s authority cannot be read. Ask the stall owner to set it up again.'],
+    ['not-ours', 'This authority is not for this device. Ask the stall owner to set it up again.'],
+    ['untrusted-issuer', 'This app cannot confirm who issued this terminal’s authority.'],
+  ])('offers a local removal for a %s credential, and it clears the device', async (reason, message) => {
+    const { removed, reload } = await refusedWith(reason, message)
+
+    const remove = await screen.findByRole('button', { name: 'Remove this terminal from this device' })
+    expect(screen.getByText(/stall owner should still revoke it/i)).toBeTruthy()
+    fireEvent.click(remove)
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove it' }))
+
+    await waitFor(() => expect(removed).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1))
+  })
+
+  // A revoked credential is already spent, so the normal decommission works and is what is shown.
+  it('keeps Take out of service for a revoked credential', async () => {
+    await refusedWith('revoked', 'This terminal is no longer in service. Ask the stall owner to set it up again.')
+
+    expect(await screen.findByRole('button', { name: 'Take this terminal out of service' })).toBeTruthy()
   })
 })
