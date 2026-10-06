@@ -57,18 +57,21 @@ function signedExpiry(row: VoucherRow): number | undefined {
 
 /**
  * What `expires_at` should be stored as for this row, and whether the value
- * given is beyond repair. Readable values become epoch seconds; an unreadable
- * one is replaced by the token's signed expiry when there is one, and
- * otherwise kept exactly as it was.
+ * given is beyond repair.
+ *
+ * The expiry SIGNED into the token wins whenever the token carries one (#169
+ * review): the stored value is only a cache, and a readable but wrong cache (a
+ * date earlier than the signed one) would otherwise hide a live coupon as
+ * expired. Without a signed expiry, a readable stored value becomes epoch
+ * seconds and an unreadable one is kept exactly as it was.
  */
 function canonicalFor(row: VoucherRow): { value: unknown; unreadable: boolean } {
+  const signed = signedExpiry(row)
+  if (signed !== undefined) return { value: signed, unreadable: false }
   if (readExpiry(row.expires_at).kind !== 'unreadable') {
     return { value: canonicalExpiresAt(row.expires_at), unreadable: false }
   }
-  const signed = signedExpiry(row)
-  return signed === undefined
-    ? { value: row.expires_at, unreadable: true }
-    : { value: signed, unreadable: false }
+  return { value: row.expires_at, unreadable: true }
 }
 
 /**

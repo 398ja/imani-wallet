@@ -19,6 +19,10 @@ import { WalletStorage, type VoucherRow } from '@imani/wallet-storage'
 import { addRestoredVoucher, getWallet, openWallet, wipeWallet } from '../wallet'
 import { migrateStoredExpiries, normaliseExpiry } from '../expiryStorage'
 import { buildVoucherToken } from './voucherFixtures'
+import { couponsFor, toVoucher } from '../merchants'
+import { selectVouchers } from '@imani/wallet-core'
+import { schnorr } from '@noble/curves/secp256k1.js'
+import { bytesToHex } from '@noble/hashes/utils'
 
 vi.mock('../voucherRecords', () => ({
   publishVoucher: vi.fn().mockResolvedValue(undefined),
@@ -203,5 +207,57 @@ describe('normaliseExpiry', () => {
       face_value: 500,
       expires_at: SECONDS,
     })
+  })
+})
+
+// Review of PR #169 (LOW-3): the expiry the issuer SIGNED into the token is the
+// authority, and the stored copy is only a cache of it. A stored value that is
+// readable but wrong (say, a day in the past) used to win and hide a live coupon
+// as expired. Now the signed tag wins whenever the token carries one.
+describe('the signed expiry wins over a stored one (#169 review)', () => {
+  const PAST = 1_600_000_000 // 2020-09-13, long gone
+  const LATER = SECONDS + 86_400 // a day after SECONDS
+
+  async function seedLegacy(rows: VoucherRow[]): Promise<void> {
+    const legacy = new WalletStorage({ userId: user })
+    await legacy.init()
+    await legacy.atomicallyWrite({ vouchers: rows })
+    await legacy.close()
+  }
+
+  // Writing a row whose stored expiry disagrees with its token stores the signed one.
+  it('stores the signed expiry when a writer hands in a different readable one', () => {
+    const { token } = buildVoucherToken({ expiresAt: SECONDS })
+    const r = { token, amount: 500, expires_at: PAST } as unknown as VoucherRow
+    expect(normaliseExpiry(r).expires_at).toBe(SECONDS)
+  })
+
+  // A row stored before this, with an earlier (past) expiry than its token says,
+  // is repaired on open, stays live, and is ordered by the SIGNED date: it
+  // comes after a coupon that genuinely expires sooner.
+  it('keeps a coupon live and orders it by the signed date when the stored one is earlier', async () => {
+    const merchantKey = schnorr.utils.randomSecretKey()
+    const issuer = bytesToHex(schnorr.getPublicKey(merchantKey))
+    const wronglyStored = buildVoucherToken({ expiresAt: LATER, voucherId: 'v-signed-later' }, [500], {}, merchantKey)
+    const sooner = buildVoucherToken({ expiresAt: SECONDS, voucherId: 'v-sooner' }, [500], {}, merchantKey)
+    const base = { amount: 500, face_value: 500, face_unit: 'GBP', face_decimals: 2, token_amount: 500, status: 'active', issuer_id: issuer }
+    await seedLegacy([
+      { ...base, token: wronglyStored.token, voucher_id: 'v-signed-later', expires_at: PAST },
+      { ...base, token: sooner.token, voucher_id: 'v-sooner', expires_at: SECONDS },
+    ] as unknown as VoucherRow[])
+
+    await migrateStoredExpiries(getWallet())
+
+    expect(await stored(wronglyStored.token)).toBe(LATER)
+    const live = couponsFor(await getWallet().getAllVouchers(), issuer)
+    expect(live.map((r) => r.voucher_id).sort()).toEqual(['v-signed-later', 'v-sooner'])
+    const order = selectVouchers(live.map(toVoucher), 500).map((v) => v.voucher_id)
+    expect(order).toEqual(['v-sooner', 'v-signed-later'])
+  })
+
+  // A token with no signed expiry leaves the stored value in charge, as before.
+  it('falls back to the stored value when the token carries no signed expiry', () => {
+    const r = row(String(SECONDS))
+    expect(normaliseExpiry(r).expires_at).toBe(SECONDS)
   })
 })
