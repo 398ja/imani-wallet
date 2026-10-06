@@ -87,7 +87,10 @@ function ownerSends(device: string, sealKey = STALL_KEY) {
   )
 }
 
+// The build names the key that signs terminal credentials, as every deploy must now: a terminal
+// credential whose signer is not on VITE_VOUCHER_ISSUER_PUBKEYS is refused (#160 review, IW-15).
 beforeEach(() => {
+  vi.stubEnv('VITE_VOUCHER_ISSUER_PUBKEYS', STALL)
   localStorage.clear()
   saved.length = 0
   published.length = 0
@@ -95,7 +98,10 @@ beforeEach(() => {
   forgetPendingKey()
   forgetTerminal()
 })
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.unstubAllEnvs()
+})
 
 describe('showing the code', () => {
   // The device shows its public key and says plainly that it is not a secret.

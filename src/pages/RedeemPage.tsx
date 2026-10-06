@@ -129,7 +129,6 @@ function RequestForm({
     setError(null)
     setBusy(true)
     try {
-      const requester: Actor = actor ?? { kind: 'owner', stallPubkey: issuerPubkey }
       const created = createRequest({
         amount: minor,
         unit: merchant.issuanceCurrency,
@@ -137,7 +136,7 @@ function RequestForm({
         // signed in. On this device they are the same key; on a terminal they
         // are not, and the difference is money arriving somewhere nobody can
         // decrypt it.
-        actor: requester,
+        actor: actor ?? { kind: 'owner', stallPubkey: issuerPubkey },
         description: memo,
       })
       // A terminal registers the terms BEFORE the code is on screen (#160 review, BLOCKER):
@@ -146,7 +145,8 @@ function RequestForm({
       if (register) {
         const held = await register({
           paymentId: created.paymentId,
-          issuerId: issuingStall(requester),
+          // The stall the request names: the terminal's stall, never the device.
+          issuerId: actor ? issuingStall(actor) : issuerPubkey,
           amount: created.amount,
           unit: created.unit,
         })

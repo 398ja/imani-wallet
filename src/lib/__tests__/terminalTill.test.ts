@@ -90,12 +90,10 @@ describe('the fulfilment check (spec 2.5)', () => {
   // how much arrived cannot be checked, so it is not trusted. It used to be enough to omit the
   // issuer for any issuer to pass.
   it('does not count an answer that leaves out the facts', () => {
-    const { issuerId: _i, ...noIssuer } = PAID
-    const { recipientPubkey: _r, ...noRecipient } = PAID
-    const { amount: _a, ...noAmount } = PAID
-    expect(paidForStall(noIssuer, STALL, REQUEST)).toBe(false)
-    expect(paidForStall(noRecipient, STALL, REQUEST)).toBe(false)
-    expect(paidForStall(noAmount, STALL, REQUEST)).toBe(false)
+    const without = (key: keyof typeof PAID) => Object.fromEntries(Object.entries(PAID).filter(([k]) => k !== key))
+    expect(paidForStall(without('issuerId') as never, STALL, REQUEST)).toBe(false)
+    expect(paidForStall(without('recipientPubkey') as never, STALL, REQUEST)).toBe(false)
+    expect(paidForStall(without('amount') as never, STALL, REQUEST)).toBe(false)
   })
 
   // The till registers its request's terms with gateway-core before it shows the QR code, so
