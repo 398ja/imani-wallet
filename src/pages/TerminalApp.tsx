@@ -14,7 +14,13 @@ import {
 } from '../lib/terminalUnlock'
 import { canIssueNow, canRedeemNow, sessionState, type TerminalSession } from '../lib/terminalSession'
 import { mayWarrantSale } from '../lib/warrantSigner'
-import { fulfilmentOf, idleLockMs, startIdleLock, terminalMintApi } from '../lib/terminalTill'
+import {
+  fulfilmentOf,
+  idleLockMs,
+  registerRequestTerms,
+  startIdleLock,
+  terminalMintApi,
+} from '../lib/terminalTill'
 import { decommissionTerminal, DECOMMISSION_COPY } from '../lib/terminalDecommission'
 import type { TerminalActor } from '../lib/actor'
 import { RedeemPage } from './RedeemPage'
@@ -58,6 +64,8 @@ export function TerminalApp() {
   // One check function for the life of the till, so the Redeem screen's poll is not restarted on
   // every render. It signs with whichever terminal signer is installed when it runs.
   const fulfilment = useMemo(() => fulfilmentOf(), [])
+  // The request's terms go to gateway-core before its code is shown (#160 review, BLOCKER).
+  const register = useMemo(() => registerRequestTerms(), [])
 
   useEffect(() => {
     if (!record) return
@@ -125,6 +133,7 @@ export function TerminalApp() {
               merchant={stall}
               actor={till.actor}
               fulfilment={fulfilment}
+              register={register}
             />
           ) : (
             // The request's currency comes from the stall's public record. Wait for it rather

@@ -52,10 +52,30 @@ beforeEach(() => {
 })
 afterEach(() => cleanup())
 
-async function ask(fulfilment: (id: string) => Promise<unknown>) {
+/** gateway-core's answer for this screen's request (450 pence of the stall's coupons) paid in full. */
+const PAID = { fulfilled: true, sendId: 's1', issuerId: STALL, recipientPubkey: STALL, amount: 450, unit: 'GBP' }
+
+/** Registration that always succeeds, recording what was registered. */
+function registering(log: unknown[] = []) {
+  return async (terms: unknown) => {
+    log.push(terms)
+    return true
+  }
+}
+
+async function ask(
+  fulfilment: (id: string) => Promise<unknown>,
+  register: (terms: unknown) => Promise<boolean> = registering(),
+) {
   render(
     <MemoryRouter>
-      <RedeemPage pubkey={DEVICE} merchant={merchant} actor={till} fulfilment={fulfilment as never} />
+      <RedeemPage
+        pubkey={DEVICE}
+        merchant={merchant}
+        actor={till}
+        fulfilment={fulfilment as never}
+        register={register as never}
+      />
     </MemoryRouter>,
   )
   fireEvent.change(screen.getByLabelText(/Amount/), { target: { value: '4.50' } })
@@ -70,7 +90,7 @@ describe('a terminal learns it was paid from gateway-core', () => {
     let paid = false
     await ask(async (id) => {
       asked.push(id)
-      return paid ? { fulfilled: true, sendId: 's1', issuerId: STALL } : { fulfilled: false }
+      return paid ? PAID : { fulfilled: false }
     })
     expect(await screen.findByText('Waiting for payment')).toBeTruthy()
 
@@ -82,9 +102,43 @@ describe('a terminal learns it was paid from gateway-core', () => {
 
   // A send answered with another stall's voucher did not pay this stall: still waiting.
   it('stays waiting when the answer names another stall', async () => {
-    await ask(async () => ({ fulfilled: true, issuerId: 'b'.repeat(64) }))
+    await ask(async () => ({ ...PAID, issuerId: 'b'.repeat(64) }))
     await new Promise((r) => setTimeout(r, 50))
     expect(screen.getByText('Waiting for payment')).toBeTruthy()
     expect(screen.queryByText('Paid')).toBeNull()
+  })
+
+  // #160 review (BLOCKER). The customer reads the id off the QR code and sends 1 penny to
+  // themself tagged with it. Even an answer that says "fulfilled" does not make the till say
+  // Paid when the money went elsewhere, or was less than asked.
+  it('stays waiting when the money went to the customer, or fell short', async () => {
+    await ask(async () => ({ ...PAID, recipientPubkey: DEVICE.replace(/c/g, 'd'), amount: 1 }))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(screen.queryByText('Paid')).toBeNull()
+    cleanup()
+
+    await ask(async () => ({ ...PAID, amount: 1 }))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(screen.queryByText('Paid')).toBeNull()
+  })
+})
+
+describe('a terminal registers its request before showing it (#160 review, BLOCKER)', () => {
+  // The terms go to gateway-core before the QR code is on screen, because once it is a customer
+  // can read the id and race to register their own terms first.
+  it('registers the stall, the amount and the unit, then shows the code', async () => {
+    const registered: unknown[] = []
+    await ask(async () => ({ fulfilled: false }), registering(registered))
+
+    expect(await screen.findByText('Waiting for payment')).toBeTruthy()
+    expect(registered).toEqual([{ paymentId: 'pr-0123456789abcdef', issuerId: STALL, amount: 450, unit: 'GBP' }])
+  })
+
+  // A request gateway-core would not hold could never be confirmed, so the till does not show it.
+  it('does not show a request it could not register', async () => {
+    await ask(async () => ({ fulfilled: false }), async () => false)
+
+    expect(await screen.findByText(/could not be set up/i)).toBeTruthy()
+    expect(screen.queryByText('Waiting for payment')).toBeNull()
   })
 })

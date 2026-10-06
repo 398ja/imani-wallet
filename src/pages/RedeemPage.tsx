@@ -7,7 +7,7 @@ import { Button, Screen, BackLink, PageHeader, Alert, Panel, Input } from '../co
 import { RefusedCouponsNote } from '../components/ui/RefusedCouponsNote'
 import { currencyDecimals, formatFace, parseAmountToMinor, formatDate } from '../lib/format'
 import type { MerchantProfile } from '../lib/merchant'
-import type { Actor } from '../lib/actor'
+import { issuingStall, type Actor } from '../lib/actor'
 import {
   createRequest,
   expireRequests,
@@ -18,7 +18,7 @@ import {
   type VoucherPaymentRequest,
 } from '../lib/vreq'
 import { onWalletChanged } from '../lib/wallet'
-import { paidForStall, type FulfilmentCheck } from '../lib/terminalTill'
+import { paidForStall, type FulfilmentCheck, type RequestRegistration } from '../lib/terminalTill'
 
 /** How often a terminal asks gateway-core whether its request was paid. */
 export const FULFILMENT_POLL_MS = 3_000
@@ -42,6 +42,7 @@ export function RedeemPage({
   merchant,
   actor,
   fulfilment,
+  register,
 }: {
   pubkey: string
   merchant: MerchantProfile
@@ -61,6 +62,12 @@ export function RedeemPage({
    * wallet as before.
    */
   fulfilment?: FulfilmentCheck
+  /**
+   * Registers the request's terms with gateway-core before the code is shown (#160 review,
+   * BLOCKER). Given with `fulfilment` on a terminal: gateway-core measures payments against these
+   * terms, first registration wins, so they must be in before a customer can read the id.
+   */
+  register?: RequestRegistration
 }) {
   const navigate = useNavigate()
   const [request, setRequest] = useState<VoucherPaymentRequest | null>(null)
@@ -75,6 +82,7 @@ export function RedeemPage({
           merchant={merchant}
           issuerPubkey={pubkey}
           actor={actor}
+          register={register}
           onCreated={setRequest}
         />
       ) : (
@@ -96,16 +104,19 @@ function RequestForm({
   merchant,
   issuerPubkey,
   actor,
+  register,
   onCreated,
 }: {
   merchant: MerchantProfile
   issuerPubkey: string
   actor?: Actor
+  register?: RequestRegistration
   onCreated: (request: VoucherPaymentRequest) => void
 }) {
   const [amount, setAmount] = useState('')
   const [memo, setMemo] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
 
   // ISO decimals, which is what the sats backing needs — see currencyDecimals.
   // The gateway labels every coupon 2-decimal regardless; that mismatch is its
@@ -113,10 +124,12 @@ function RequestForm({
   const decimals = currencyDecimals(merchant.issuanceCurrency)
   const minor = parseAmountToMinor(amount, decimals)
 
-  const submit = () => {
+  const submit = async () => {
     if (minor === null) return
     setError(null)
+    setBusy(true)
     try {
+      const requester: Actor = actor ?? { kind: 'owner', stallPubkey: issuerPubkey }
       const created = createRequest({
         amount: minor,
         unit: merchant.issuanceCurrency,
@@ -124,9 +137,24 @@ function RequestForm({
         // signed in. On this device they are the same key; on a terminal they
         // are not, and the difference is money arriving somewhere nobody can
         // decrypt it.
-        actor: actor ?? { kind: 'owner', stallPubkey: issuerPubkey },
+        actor: requester,
         description: memo,
       })
+      // A terminal registers the terms BEFORE the code is on screen (#160 review, BLOCKER):
+      // gateway-core keeps the first registration, and once the id is visible a customer could
+      // register their own. A request it will not hold could never be confirmed, so it is not shown.
+      if (register) {
+        const held = await register({
+          paymentId: created.paymentId,
+          issuerId: issuingStall(requester),
+          amount: created.amount,
+          unit: created.unit,
+        })
+        if (!held) {
+          setError('This payment request could not be set up. Check the connection and try again.')
+          return
+        }
+      }
       // Persisted before it is shown: a request the merchant is looking at but
       // that was never stored cannot be matched against an incoming payment
       // after a reload.
@@ -135,6 +163,8 @@ function RequestForm({
       onCreated(created)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -154,7 +184,7 @@ function RequestForm({
         value={memo}
         onChange={(e) => setMemo(e.target.value)}
       />
-      <Button size="lg" className="w-full" disabled={minor === null} onClick={submit}>
+      <Button size="lg" className="w-full" disabled={minor === null || busy} onClick={() => void submit()}>
         Show payment code
       </Button>
       {error && <Alert>{error}</Alert>}
@@ -226,9 +256,10 @@ function RequestDisplay({
         return
       }
       const answer = await fulfilment(request.paymentId)
-      if (!live || !paidForStall(answer, stallPubkey)) return
-      // Recorded so the request list agrees with the screen after a reload. The amount is the
-      // request's: gateway-core says that a send answered it, not how much it carried.
+      // Checked against THIS request: the money must have reached the stall, in the stall's own
+      // coupons, in this unit, and at least this amount (#160 review, BLOCKER).
+      if (!live || !paidForStall(answer, stallPubkey, request)) return
+      // Recorded so the request list agrees with the screen after a reload.
       const paid = { ...request, status: 'fulfilled' as const }
       saveRequests(pubkey, loadRequests(pubkey).map((r) => (r.paymentId === request.paymentId ? paid : r)))
       onChange(paid)

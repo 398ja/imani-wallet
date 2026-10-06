@@ -3,7 +3,14 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { fulfilmentOf, idleLockMs, paidForStall, startIdleLock, terminalMintApi } from '../terminalTill'
+import {
+  fulfilmentOf,
+  idleLockMs,
+  paidForStall,
+  registerRequestTerms,
+  startIdleLock,
+  terminalMintApi,
+} from '../terminalTill'
 
 /** The terminal's own clients and its idle lock (#160 phase 3). */
 
@@ -14,33 +21,112 @@ afterEach(() => {
 })
 
 describe('the fulfilment check (spec 2.5)', () => {
+  /** What the till asked for: 500 cents of the stall's money. */
+  const REQUEST = { amount: 500, unit: 'EUR' }
+  /** gateway-core's answer for a request paid exactly. */
+  const PAID = {
+    fulfilled: true,
+    sendId: 's1',
+    issuerId: STALL,
+    recipientPubkey: STALL,
+    amount: 500,
+    unit: 'EUR',
+  }
+
   // The terminal asks gateway-core whether its request was paid, signed by the terminal key, at
-  // the path the core controller serves.
+  // the path the core controller serves, and keeps every fact the answer was measured on.
   it('asks gateway-core about the request id, with a NIP-98 GET', async () => {
     const calls: Array<[string, string]> = []
     const check = fulfilmentOf(undefined, (async (path: string, method: string) => {
       calls.push([path, method])
-      return new Response(JSON.stringify({ fulfilled: true, sendId: 's1', issuerId: STALL }))
+      return new Response(JSON.stringify(PAID))
     }) as never)
 
     const answer = await check('0123456789abcdef0123')
 
     expect(calls).toEqual([['/api/v1/atomic/fulfilment/0123456789abcdef0123', 'GET']])
-    expect(answer).toEqual({ fulfilled: true, sendId: 's1', issuerId: STALL })
-    expect(paidForStall(answer, STALL)).toBe(true)
+    expect(answer).toEqual(PAID)
+    expect(paidForStall(answer, STALL, REQUEST)).toBe(true)
   })
 
   // Never paid on an error path: a failed call is "still waiting".
   it('reads a failure as still waiting', async () => {
     const check = fulfilmentOf(undefined, (async () => new Response('', { status: 503 })) as never)
     expect(await check('0123456789abcdef0123')).toBeNull()
-    expect(paidForStall(null, STALL)).toBe(false)
+    expect(paidForStall(null, STALL, REQUEST)).toBe(false)
   })
 
   // A voucher from another stall did not pay this stall.
   it('does not count a payment in another stall’s voucher', () => {
-    expect(paidForStall({ fulfilled: true, issuerId: 'b'.repeat(64) }, STALL)).toBe(false)
-    expect(paidForStall({ fulfilled: false }, STALL)).toBe(false)
+    expect(paidForStall({ ...PAID, issuerId: 'b'.repeat(64) }, STALL, REQUEST)).toBe(false)
+    expect(paidForStall({ ...PAID, fulfilled: false }, STALL, REQUEST)).toBe(false)
+  })
+
+  // #160 review (BLOCKER). The customer reads the request id off the QR code and sends 1 sat to
+  // themself tagged with it. Whatever gateway-core says, the till checks the facts it reports:
+  // the money went to the customer, not the stall, so the till is still waiting.
+  it('does not count a payment that went to someone other than the stall', () => {
+    expect(paidForStall({ ...PAID, recipientPubkey: 'c'.repeat(64) }, STALL, REQUEST)).toBe(false)
+  })
+
+  // #160 review (BLOCKER). The same customer, aiming better: the money reached the stall, but
+  // 1 cent of it. Paid means at least what the till asked for.
+  it('does not count a payment smaller than the request', () => {
+    expect(paidForStall({ ...PAID, amount: 1 }, STALL, REQUEST)).toBe(false)
+    expect(paidForStall({ ...PAID, amount: 499 }, STALL, REQUEST)).toBe(false)
+    expect(paidForStall({ ...PAID, amount: 600 }, STALL, REQUEST)).toBe(true)
+  })
+
+  // 500 of some other currency is not 500 euro cents.
+  it('does not count a payment in another unit', () => {
+    expect(paidForStall({ ...PAID, unit: 'XAF' }, STALL, REQUEST)).toBe(false)
+  })
+
+  // #160 review: a "paid" answer that does not say whose coupons paid it, who received them or
+  // how much arrived cannot be checked, so it is not trusted. It used to be enough to omit the
+  // issuer for any issuer to pass.
+  it('does not count an answer that leaves out the facts', () => {
+    const { issuerId: _i, ...noIssuer } = PAID
+    const { recipientPubkey: _r, ...noRecipient } = PAID
+    const { amount: _a, ...noAmount } = PAID
+    expect(paidForStall(noIssuer, STALL, REQUEST)).toBe(false)
+    expect(paidForStall(noRecipient, STALL, REQUEST)).toBe(false)
+    expect(paidForStall(noAmount, STALL, REQUEST)).toBe(false)
+  })
+
+  // The till registers its request's terms with gateway-core before it shows the QR code, so
+  // the gateway measures payments against the till's terms and a customer who reads the id off
+  // the screen cannot register different ones first.
+  it('registers the request’s terms with a NIP-98 PUT', async () => {
+    const calls: Array<[string, string, unknown]> = []
+    const register = registerRequestTerms(undefined, (async (path: string, method: string, body: unknown) => {
+      calls.push([path, method, body])
+      return new Response(null, { status: 201 })
+    }) as never)
+
+    await expect(
+      register({ paymentId: '0123456789abcdef0123', issuerId: STALL, amount: 500, unit: 'EUR' }),
+    ).resolves.toBe(true)
+
+    expect(calls).toEqual([
+      [
+        '/api/v1/atomic/fulfilment/0123456789abcdef0123',
+        'PUT',
+        { recipientPubkey: STALL, issuerId: STALL, amount: 500, unit: 'EUR' },
+      ],
+    ])
+  })
+
+  // A conflict means somebody else registered this id first: the request cannot be confirmed,
+  // so the till must not show it. Any other failure is the same answer.
+  it('reports a request it could not register', async () => {
+    const conflict = registerRequestTerms(undefined, (async () => new Response(null, { status: 409 })) as never)
+    const down = registerRequestTerms(undefined, (async () => {
+      throw new Error('offline')
+    }) as never)
+    const terms = { paymentId: '0123456789abcdef0123', issuerId: STALL, amount: 500, unit: 'EUR' }
+    await expect(conflict(terms)).resolves.toBe(false)
+    await expect(down(terms)).resolves.toBe(false)
   })
 })
 
