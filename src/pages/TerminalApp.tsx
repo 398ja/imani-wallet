@@ -32,6 +32,8 @@ import {
 import { decommissionTerminal, DECOMMISSION_COPY } from '../lib/terminalDecommission'
 import type { TerminalActor } from '../lib/actor'
 import { RedeemPage } from './RedeemPage'
+import { SellPage } from './SellPage'
+import { CashbackIssuePage } from './CashbackIssuePage'
 import { NotTrading } from './MerchantHomePage'
 import { LAPSE } from '../lib/terminalSession'
 
@@ -154,6 +156,30 @@ export function TerminalApp() {
         }
       />
       <Route path="/settings" element={<TerminalSettings />} />
+      {/* Sell and cashback (#160 phase 5): only for a selling role in a live FULL session, the
+          same question `issueAndDeliver` asks before minting. A redeem-only or REDUCED till
+          lands on the till instead. The terminal warrant is signed with K and the credential
+          this till unlocked with, and every request names that credential. */}
+      <Route
+        path="/sell"
+        element={
+          stall && mayWarrantSale(till.actor, till.session) ? (
+            <SellPage pubkey={till.devicePubkey} merchant={stall} actor={till.actor} session={till.session} />
+          ) : (
+            <SellUnavailable till={till} stall={stall} />
+          )
+        }
+      />
+      <Route
+        path="/sell/cashback"
+        element={
+          stall && mayWarrantSale(till.actor, till.session) ? (
+            <CashbackIssuePage merchant={stall} actor={till.actor} session={till.session} />
+          ) : (
+            <SellUnavailable till={till} stall={stall} />
+          )
+        }
+      />
       <Route
         path="/settings/security"
         element={
@@ -162,12 +188,19 @@ export function TerminalApp() {
           </TerminalSecurity>
         }
       />
-      {/* No /sell: a terminal cannot sell until the terminal warrant ships (phase 5), and a
-          redeem-only or REDUCED terminal never can. Every other path, including the owner's
-          dashboard, vouchers, backup and terminals, lands on the till. */}
+      {/* Every other path, including the owner's dashboard, vouchers, backup and terminals,
+          lands on the till. */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )
+}
+
+/** /sell on a till that may not sell now: back to the till, or wait for the stall's record. */
+function SellUnavailable({ till, stall }: { till: Till; stall: MerchantProfile | null }) {
+  // The stall's record carries the currency. Wait for it rather than bouncing to the till, so a
+  // selling till that reaches /sell before the record arrives stays here.
+  if (!stall && mayWarrantSale(till.actor, till.session)) return <Centered>Reading the stall…</Centered>
+  return <Navigate to="/" replace />
 }
 
 /** The stall's public name from its profile, or null. Never throws. */
@@ -306,10 +339,10 @@ function TerminalHome({
   const lapse = sessionState(till.session)
   if (!lapse.live) return <NotTrading message={lapse.message} reason={lapse.reason} />
 
-  // Sell needs the role, a FULL session and a warrant the customer's wallet accepts. The last is
-  // the terminal warrant form, phase 5; until then a role that may sell is told so in one line.
+  // Sell needs the role and a FULL session; the warrant is the terminal form (phase 5). A role
+  // that may sell but is in a REDUCED session is told so in one line.
   const roleMayIssue = canIssueNow(till.actor, till.session)
-  const mayIssue = roleMayIssue && mayWarrantSale(till.actor)
+  const mayIssue = roleMayIssue && mayWarrantSale(till.actor, till.session) && stall !== null
   const mayRedeem = canRedeemNow(till.actor, till.session) && stall !== null
 
   return (
@@ -335,9 +368,10 @@ function TerminalHome({
             </Button>
           ) : null}
         </div>
-        {roleMayIssue && !mayIssue && (
+        {till.session.kind === 'reduced' && (
           <p className="mt-4 text-center text-sm text-mono-500">
-            Selling from a terminal is not available yet. Sell from the stall owner’s own device.
+            Selling needs the network. This till opened without it, so it redeems only until you
+            lock it and open it again.
           </p>
         )}
         <div className="mt-10 flex justify-center gap-6 text-sm text-mono-500">
@@ -481,4 +515,3 @@ function DecommissionButton({ devicePubkey }: { devicePubkey: string }) {
     </div>
   )
 }
-

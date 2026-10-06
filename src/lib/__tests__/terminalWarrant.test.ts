@@ -1,0 +1,321 @@
+/**
+ * The customer's wallet checks a till's `terminal` warrant offline (#160 phase 5, spec 5.1/5.5).
+ *
+ * `verifyTerminalWarrant` mirrors cashu-voucher 0.16.0's `IssuanceWarrant.verifyTerminal`. The
+ * portal runs the Java when the till sells and the customer's wallet runs this when the coupon
+ * arrives, so every refusal there must be a refusal here. Each test below is one forgery or one
+ * shape the Java refuses, written as plainly as we could.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { schnorr } from '@noble/curves/secp256k1.js'
+import { sha256 } from '@noble/hashes/sha256'
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
+
+import {
+  TERMINAL_REFUSAL,
+  hasControlCharacter,
+  parseCredentialSecret,
+  verifyTerminalWarrant,
+  type TerminalSale,
+} from '../terminalWarrant'
+import { parseIssuanceWarrant, verifyIssuanceWarrant, warrantSaleDigest } from '../issuanceWarrant'
+
+// Keys: the gateway's credential-minting service, the stall, and the till's own K.
+const SERVICE_SK = '11'.repeat(32)
+const SERVICE = bytesToHex(schnorr.getPublicKey(hexToBytes(SERVICE_SK)))
+const STALL_SK = '22'.repeat(32)
+const STALL = bytesToHex(schnorr.getPublicKey(hexToBytes(STALL_SK)))
+const TILL_SK = '33'.repeat(32)
+const TILL = bytesToHex(schnorr.getPublicKey(hexToBytes(TILL_SK)))
+const STRANGER_SK = '44'.repeat(32)
+const STRANGER = bytesToHex(schnorr.getPublicKey(hexToBytes(STRANGER_SK)))
+
+const UNIT = 'EUR'
+const DECIMALS = 2
+const NONCE = '0f1e2d3c4b5a69788796a5b4c3d2e1f0'
+const SALE_TOTAL = 2500
+const EXPIRES_AT = 4_000_000_000
+
+interface CredentialShape {
+  issuer?: string
+  expiresAt?: string | null
+  lock?: string
+  metadata?: Record<string, unknown> | string
+  signer?: string
+}
+
+/**
+ * A terminal credential secret, signed by `signer` (the service by default), in the exact wire
+ * shape cashu-lib writes: P2PK lock tags, then voucher tags, then the two signature tags.
+ */
+function credential(over: CredentialShape = {}): string {
+  const lock = over.lock ?? TILL
+  const metadata =
+    typeof over.metadata === 'string'
+      ? over.metadata
+      : JSON.stringify(
+          over.metadata ?? { terminal: true, stall_pubkey: STALL, role: 'issue-and-redeem', lock_key: TILL, name: 'Front' },
+        )
+  const tags: string[][] = [
+    ['n_sigs', '1'],
+    ['sigflag', 'SIG_ALL'],
+    ['pubkeys', '02' + STALL],
+    ['voucher_id', '6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f'],
+    ['issuer', over.issuer ?? STALL],
+    ['unit', 'sat'],
+    ['face_value', '1'],
+  ]
+  if (over.expiresAt !== null) tags.push(['expires_at', over.expiresAt ?? String(EXPIRES_AT)])
+  tags.push(['merchant_metadata', metadata])
+  const body = { nonce: '9a8b7c6d5e4f30211203f4e5d6c7b8a9', data: '02' + lock, tags }
+  const signed = parseCredentialSecret(JSON.stringify(['P2PK_VOUCHER', body]))!.signed
+  const signerSk = over.signer ?? SERVICE_SK
+  const sig = bytesToHex(schnorr.sign(sha256(signed), hexToBytes(signerSk)))
+  const pub = bytesToHex(schnorr.getPublicKey(hexToBytes(signerSk)))
+  body.tags = [...tags, ['issuer_sig', sig], ['issuer_pubkey', pub]]
+  return JSON.stringify(['P2PK_VOUCHER', body])
+}
+
+function saleSignature(signerSk = TILL_SK, total = SALE_TOTAL, nonce = NONCE): string {
+  return bytesToHex(schnorr.sign(warrantSaleDigest(STALL, total, DECIMALS, UNIT, nonce), hexToBytes(signerSk)))
+}
+
+/** The genuine sale. A test changes exactly one field. */
+function sale(over: Partial<TerminalSale> = {}): TerminalSale {
+  return {
+    issuerId: STALL,
+    credential: credential(),
+    trustedServiceKeys: [SERVICE],
+    saleTotalMinor: SALE_TOTAL,
+    faceDecimals: DECIMALS,
+    unit: UNIT,
+    saleNonce: NONCE,
+    signatureHex: saleSignature(),
+    couponFaceMinor: SALE_TOTAL,
+    expiryCheck: 'skip-offline',
+    ...over,
+  }
+}
+
+function refusal(over: Partial<TerminalSale>) {
+  const verdict = verifyTerminalWarrant(sale(over))
+  return verdict.valid ? 'VALID' : verdict.refusal
+}
+
+beforeEach(() => {
+  vi.spyOn(console, 'warn').mockImplementation(() => {})
+})
+
+describe('the golden credential cashu-voucher 0.16.0 froze', () => {
+  // Copied byte for byte from IssuanceWarrantTerminalTest.GOLDEN_CREDENTIAL_WIRE. The Java
+  // test asserts this string re-serialises to itself and its service signature verifies. If
+  // our canonical bytes differ from the Java's by one character, this signature fails here.
+  const GOLDEN =
+    '["P2PK_VOUCHER",{"nonce":"9a8b7c6d5e4f30211203f4e5d6c7b8a9",' +
+    '"data":"02531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",' +
+    '"tags":[["n_sigs","1"],["sigflag","SIG_ALL"],' +
+    '["pubkeys","024d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766"],' +
+    '["voucher_id","6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f"],' +
+    '["issuer","4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766"],' +
+    '["unit","sat"],["face_value","1"],["expires_at","4000000000"],' +
+    '["merchant_metadata","{\\"terminal\\":true,' +
+    '\\"stall_pubkey\\":\\"4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766\\",' +
+    '\\"role\\":\\"issue-and-redeem\\",' +
+    '\\"lock_key\\":\\"531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337\\",' +
+    '\\"name\\":\\"Pizza till \uD83C\uDF55\\"}"],' +
+    '["issuer_sig","e83f6f38db9679b773c9d6c6fc01cecbcecd6411c43d35569854094c44ef06cf' +
+    '85da8aad04444bcdea87132097e535fc9a45dc48faee439b101c4efef0f62b82"],' +
+    '["issuer_pubkey","1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f"]]}]'
+  // The Java test's fixed keys: 0x01.. service, 0x02.. stall, 0x03.. till.
+  const G_STALL = '4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766'
+  const G_SERVICE = '1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f'
+  const G_TILL_SK = '03'.repeat(32)
+
+  it('parses byte-exact, and a sale its till signs verifies against the Java-signed credential', () => {
+    expect(parseCredentialSecret(GOLDEN)).not.toBeNull()
+    const signature = bytesToHex(
+      schnorr.sign(warrantSaleDigest(G_STALL, 2500, 2, 'EUR', NONCE), hexToBytes(G_TILL_SK)),
+    )
+    const verdict = verifyTerminalWarrant({
+      ...sale(),
+      issuerId: G_STALL,
+      credential: GOLDEN,
+      trustedServiceKeys: [G_SERVICE],
+      signatureHex: signature,
+    })
+    expect(verdict).toEqual({ valid: true })
+  })
+})
+
+describe('a genuine terminal sale verifies', () => {
+  it('verifies, and a split part under the total still verifies', () => {
+    expect(refusal({})).toBe('VALID')
+    expect(refusal({ couponFaceMinor: 1000 })).toBe('VALID')
+  })
+
+  it('reads as `verified` through the customer-side parser and verifier', () => {
+    // The whole round trip a customer's wallet runs on a coupon from a till.
+    const json = JSON.stringify({
+      form: 'terminal',
+      sale_total: SALE_TOTAL,
+      face_decimals: DECIMALS,
+      unit: UNIT,
+      nonce: NONCE,
+      signature: saleSignature(),
+      credential: credential(),
+    })
+    const warrant = parseIssuanceWarrant(json)
+    expect(warrant.state).toBe('present')
+    expect(
+      verifyIssuanceWarrant(warrant, STALL, { faceValueMinor: SALE_TOTAL, unit: UNIT, faceDecimals: DECIMALS }, {
+        trustedServiceKeys: [SERVICE],
+      }),
+    ).toEqual({ verdict: 'verified' })
+  })
+
+  it('skips the credential expiry offline: a coupon sold before the till expired stays valid', () => {
+    // ExpiryCheck.skipOffline. The credential expired long ago, the coupon is still good.
+    expect(refusal({ credential: credential({ expiresAt: '1000' }) })).toBe('VALID')
+  })
+})
+
+describe('malformed sale inputs (MALFORMED_SALE)', () => {
+  it('refuses an issuer that is not lowercase hex64', () => {
+    expect(refusal({ issuerId: STALL.toUpperCase() })).toBe(TERMINAL_REFUSAL.MALFORMED_SALE)
+    expect(refusal({ issuerId: STALL.slice(1) })).toBe(TERMINAL_REFUSAL.MALFORMED_SALE)
+  })
+
+  it('refuses US, other C0, DEL and C1 controls in unit or nonce', () => {
+    // US is the digest's separator: a nonce carrying one could smuggle in an extra field.
+    for (const bad of ['n\u001fx', 'n\u0000', 'n\u007f', 'n\u0085', 'n\u009f']) {
+      expect(refusal({ saleNonce: bad })).toBe(TERMINAL_REFUSAL.MALFORMED_SALE)
+      expect(refusal({ unit: bad })).toBe(TERMINAL_REFUSAL.MALFORMED_SALE)
+    }
+  })
+
+  it('refuses a lone surrogate, which Java and TextEncoder encode differently', () => {
+    expect(refusal({ saleNonce: 'n1\uD800' })).toBe(TERMINAL_REFUSAL.MALFORMED_SALE)
+    expect(refusal({ saleNonce: 'n1\uDC00x' })).toBe(TERMINAL_REFUSAL.MALFORMED_SALE)
+    // A properly paired surrogate (an emoji) is fine.
+    expect(hasControlCharacter('n1\uD83C\uDF55')).toBe(false)
+  })
+
+  it('refuses out-of-range amounts and decimals', () => {
+    expect(refusal({ saleTotalMinor: -1 })).toBe(TERMINAL_REFUSAL.MALFORMED_SALE)
+    expect(refusal({ saleTotalMinor: 2 ** 53 })).toBe(TERMINAL_REFUSAL.MALFORMED_SALE)
+    expect(refusal({ couponFaceMinor: -1 })).toBe(TERMINAL_REFUSAL.MALFORMED_SALE)
+    expect(refusal({ faceDecimals: -1 })).toBe(TERMINAL_REFUSAL.MALFORMED_SALE)
+    expect(refusal({ faceDecimals: 19 })).toBe(TERMINAL_REFUSAL.MALFORMED_SALE)
+  })
+})
+
+describe('each forgery the Java refuses, refused here', () => {
+  it('a coupon worth more than the sale (COUPON_ABOVE_SALE)', () => {
+    expect(refusal({ couponFaceMinor: SALE_TOTAL + 1 })).toBe(TERMINAL_REFUSAL.COUPON_ABOVE_SALE)
+  })
+
+  it('a credential minted by a key we do not trust, or with no trusted keys at all', () => {
+    // Anyone can mint themselves a credential under their own key: the allow-list is what stops it.
+    expect(refusal({ credential: credential({ signer: STRANGER_SK }) })).toBe(TERMINAL_REFUSAL.UNTRUSTED_SERVICE_KEY)
+    expect(refusal({ trustedServiceKeys: [] })).toBe(TERMINAL_REFUSAL.UNTRUSTED_SERVICE_KEY)
+  })
+
+  it('a credential whose signed fields were edited (BAD_CREDENTIAL_SIGNATURE)', () => {
+    const edited = credential().replace('"face_value","1"', '"face_value","2"')
+    expect(refusal({ credential: edited })).toBe(TERMINAL_REFUSAL.BAD_CREDENTIAL_SIGNATURE)
+  })
+
+  it('no legacy window: expires_at rewritten from 1000 to 1000.5 does not verify', () => {
+    // Strict canonical verification. Under the legacy truncation both hash alike, and Java would
+    // then read the expiry as absent. The credential is refused before anything reads it.
+    const signed = credential({ expiresAt: '1000' })
+    expect(refusal({ credential: signed.replace('"expires_at","1000"', '"expires_at","1000.5"') })).toBe(
+      TERMINAL_REFUSAL.BAD_CREDENTIAL_SIGNATURE,
+    )
+  })
+
+  it('a credential not in canonical wire form: padding or reordered keys', () => {
+    expect(refusal({ credential: credential().replace('{"nonce"', '{ "nonce"') })).toBe(
+      TERMINAL_REFUSAL.BAD_CREDENTIAL_SIGNATURE,
+    )
+  })
+
+  it('a number rewritten into another spelling of itself ("1000" to "1000.0" or "1e3")', () => {
+    // These normalise to the very bytes the service signed, so the signature alone would hold.
+    // The Java parses neither as a long, so it reads them differently: refused before that matters.
+    const signed = credential({ expiresAt: '1000' })
+    for (const spelling of ['1000.0', '1e3', '01000']) {
+      expect(refusal({ credential: signed.replace('"expires_at","1000"', `"expires_at","${spelling}"`) })).toBe(
+        TERMINAL_REFUSAL.BAD_CREDENTIAL_SIGNATURE,
+      )
+    }
+  })
+
+  it('a credential with no expiry, or one that is not a canonical integer (MALFORMED_CREDENTIAL)', () => {
+    expect(refusal({ credential: credential({ expiresAt: null }) })).toBe(TERMINAL_REFUSAL.MALFORMED_CREDENTIAL)
+    // Signed as-is by the service (so the signature holds), but not an integer we can read.
+    expect(refusal({ credential: credential({ expiresAt: '1000.5' }) })).toBe(TERMINAL_REFUSAL.MALFORMED_CREDENTIAL)
+    // Too long to be an epoch at all: refused, whichever check sees it first.
+    expect(refusal({ credential: credential({ expiresAt: '99999999999999999999' }) })).not.toBe('VALID')
+  })
+
+  it('a till of another stall (WRONG_STALL)', () => {
+    expect(refusal({ credential: credential({ issuer: STRANGER }) })).toBe(TERMINAL_REFUSAL.WRONG_STALL)
+  })
+
+  it('the expiry boundary: refused only when now > expires_at', () => {
+    // expires_at is the last valid second, as at the mint.
+    expect(refusal({ expiryCheck: { at: EXPIRES_AT } })).toBe('VALID')
+    expect(refusal({ expiryCheck: { at: EXPIRES_AT + 1 } })).toBe(TERMINAL_REFUSAL.CREDENTIAL_EXPIRED)
+  })
+
+  it('metadata that is not a selling terminal of this stall (NOT_A_SELLING_TERMINAL)', () => {
+    const base = { terminal: true, stall_pubkey: STALL, role: 'issue-and-redeem', lock_key: TILL }
+    for (const metadata of [
+      { ...base, role: 'redeem-only' },
+      { ...base, terminal: 'yes' },
+      { ...base, stall_pubkey: STRANGER },
+      { ...base, lock_key: 'zz' },
+    ]) {
+      expect(refusal({ credential: credential({ metadata }) })).toBe(TERMINAL_REFUSAL.NOT_A_SELLING_TERMINAL)
+    }
+    // Duplicate keys, which JSON.parse would resolve (last wins) and Java refuses.
+    const dup = `{"terminal":true,"stall_pubkey":"${STALL}","role":"redeem-only","role":"issue-and-redeem","lock_key":"${TILL}"}`
+    expect(refusal({ credential: credential({ metadata: dup }) })).toBe(TERMINAL_REFUSAL.NOT_A_SELLING_TERMINAL)
+  })
+
+  it("a lock_key that is the stall's own key (LOCK_IS_STALL)", () => {
+    const metadata = { terminal: true, stall_pubkey: STALL, role: 'issue-and-redeem', lock_key: STALL }
+    expect(
+      refusal({ credential: credential({ metadata, lock: STALL }), signatureHex: saleSignature(STALL_SK) }),
+    ).toBe(TERMINAL_REFUSAL.LOCK_IS_STALL)
+  })
+
+  it('a mint lock that is not lock_key (LOCK_MISMATCH)', () => {
+    expect(refusal({ credential: credential({ lock: STRANGER }) })).toBe(TERMINAL_REFUSAL.LOCK_MISMATCH)
+  })
+
+  it("a sale signed by anyone but K, or for another total (BAD_SALE_SIGNATURE)", () => {
+    expect(refusal({ signatureHex: saleSignature(STRANGER_SK) })).toBe(TERMINAL_REFUSAL.BAD_SALE_SIGNATURE)
+    expect(refusal({ signatureHex: saleSignature(TILL_SK, 100) })).toBe(TERMINAL_REFUSAL.BAD_SALE_SIGNATURE)
+    expect(refusal({ signatureHex: 'zz' })).toBe(TERMINAL_REFUSAL.BAD_SALE_SIGNATURE)
+  })
+})
+
+describe('the customer side refuses a broken terminal warrant', () => {
+  it('a terminal warrant with no credential is unreadable, not absent', () => {
+    const json = JSON.stringify({ form: 'terminal', sale_total: 1, face_decimals: 2, unit: 'EUR', nonce: 'n', signature: 'aa' })
+    expect(parseIssuanceWarrant(json)).toEqual({ state: 'invalid', reason: 'terminal warrant carries no credential' })
+  })
+
+  it('a build that trusts no service key refuses every terminal warrant', () => {
+    const json = JSON.stringify({
+      form: 'terminal', sale_total: SALE_TOTAL, face_decimals: DECIMALS, unit: UNIT, nonce: NONCE,
+      signature: saleSignature(), credential: credential(),
+    })
+    const verdict = verifyIssuanceWarrant(parseIssuanceWarrant(json), STALL, {
+      faceValueMinor: SALE_TOTAL, unit: UNIT, faceDecimals: DECIMALS,
+    }, { trustedServiceKeys: [] })
+    expect(verdict.verdict).toBe('failed')
+  })
+})

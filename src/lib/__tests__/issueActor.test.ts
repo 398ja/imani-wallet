@@ -71,6 +71,7 @@ const { NEVER_EXPIRES } = await import('../merchant')
 const { TERMINAL_ROLES, grantFor } = await import('../terminalRole')
 const { openSession, SESSION_KIND } = await import('../terminalSession')
 const { UnwarrantedSaleError } = await import('../warrantSigner')
+const { setRequestCredential } = await import('../terminalRequestCredential')
 
 /**
  * A live, full-authority session.
@@ -97,6 +98,7 @@ beforeEach(() => {
   calls.length = 0
   bodies.length = 0
   signerState.pubkey = STALL
+  setRequestCredential(null)
 })
 
 describe('a terminal that may not sell', () => {
@@ -317,19 +319,22 @@ describe('a sale the customer’s wallet would refuse is never made (#159)', () 
       DEVICE,
     )!
 
-  it('refuses a full till with a live session, before anything is minted', async () => {
+  it('refuses a full till holding no credential, before anything is minted', async () => {
+    // A FULL selling till may sell (#160 phase 5), but only with the credential it unlocked with
+    // in hand: without it the warrant could only be a signed `none`, which every wallet refuses.
     const actor = till()
+    signerState.pubkey = DEVICE
 
     const run = issueAndDeliver({ ...params, actor, session: live(actor) })
 
     await expect(run).rejects.toBeInstanceOf(UnwarrantedSaleError)
-    await expect(run).rejects.toThrow(/delegated/)
     expect(calls).toEqual([])
     expect(bodies).toEqual([])
   })
 
   it('never reports a stage, so the screen never shows progress or success', async () => {
     const actor = till()
+    signerState.pubkey = DEVICE
     const stages: string[] = []
 
     await issueAndDeliver({ ...params, actor, session: live(actor) }, (s) => stages.push(s)).catch(
@@ -337,6 +342,35 @@ describe('a sale the customer’s wallet would refuse is never made (#159)', () 
     )
 
     expect(stages).toEqual([])
+  })
+
+  it('sends a full till’s sale with a terminal warrant, under its own key K (#160 phase 5)', async () => {
+    const actor = till()
+    signerState.pubkey = DEVICE
+    setRequestCredential({ voucherId: 'cred-1', stallPubkey: STALL, secret: '["P2PK_VOUCHER",{}]' })
+
+    await issueAndDeliver({ ...params, actor, session: live(actor) })
+
+    const mint = bodies.find((b) => 'face_value_minor' in b)
+    const warrant = JSON.parse(String(mint!.issuance_warrant))
+    // The spec's wire form, with the credential's secret and never its proof.
+    expect(Object.keys(warrant)).toEqual([
+      'form', 'sale_total', 'face_decimals', 'unit', 'nonce', 'signature', 'credential',
+    ])
+    expect(warrant.form).toBe('terminal')
+    expect(warrant.credential).toBe('["P2PK_VOUCHER",{}]')
+  })
+
+  it('refuses a REDUCED till before anything is minted, even with its credential', async () => {
+    // A REDUCED session never heard from the mint, so the credential may already be revoked.
+    const actor = till()
+    signerState.pubkey = DEVICE
+    setRequestCredential({ voucherId: 'cred-1', stallPubkey: STALL, secret: 's' })
+
+    const run = issueAndDeliver({ ...params, actor, session: openSession(actor, SESSION_KIND.REDUCED) })
+
+    await expect(run).rejects.toThrow(/until it reaches the network/)
+    expect(calls).toEqual([])
   })
 
   it('refuses an owner session whose key is not the stall, which could only sign `none`', async () => {

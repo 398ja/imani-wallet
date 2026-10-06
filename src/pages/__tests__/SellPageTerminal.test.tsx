@@ -96,17 +96,25 @@ beforeEach(() => {
 
 afterEach(cleanup)
 
-describe('a full till reaching Sell', () => {
-  it('is stopped on arrival, naming the delegated form it would need', () => {
+describe('a full till reaching Sell (#160 phase 5)', () => {
+  it('gets the scanner, because it signs the terminal warrant form', () => {
     show({ actor: till, session: openSession(till, SESSION_KIND.FULL, Date.now()) })
 
-    const alert = screen.getByRole('alert')
-    expect(alert.textContent).toMatch(/not supported yet/)
-    expect(alert.textContent).toMatch(/delegated/)
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByText('fake-scan')).toBeTruthy()
+  })
+})
+
+describe('a REDUCED till reaching Sell', () => {
+  it('is stopped on arrival, before a customer is scanned', () => {
+    // A REDUCED session never heard from the mint, so it does not sell.
+    show({ actor: till, session: openSession(till, SESSION_KIND.REDUCED, Date.now()) })
+
+    expect(screen.getByRole('alert').textContent).toMatch(/cannot sell right now/)
   })
 
   it('offers no scanner and no amount, so no sale can be started or paid for', () => {
-    show({ actor: till, session: openSession(till, SESSION_KIND.FULL, Date.now()) })
+    show({ actor: till, session: openSession(till, SESSION_KIND.REDUCED, Date.now()) })
 
     expect(screen.queryByText('fake-scan')).toBeNull()
     expect(screen.queryByRole('button', { name: /Send voucher/ })).toBeNull()
@@ -114,7 +122,7 @@ describe('a full till reaching Sell', () => {
   })
 
   it('never shows the success copy', () => {
-    show({ actor: till, session: openSession(till, SESSION_KIND.FULL, Date.now()) })
+    show({ actor: till, session: openSession(till, SESSION_KIND.REDUCED, Date.now()) })
 
     expect(screen.queryByText(SUCCESS)).toBeNull()
   })

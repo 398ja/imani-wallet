@@ -11,6 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A terminal sells (#160 phase 5).** A *Sell and redeem* till in a FULL session now has Sell
+  and cashback (`/sell`, `/sell/cashback` in `TerminalApp`). It signs the new `terminal` issuance
+  warrant: `{"form":"terminal","sale_total","face_decimals","unit","nonce","signature","credential"}`,
+  where `signature` is BIP-340 by the till's own key `K` over `warrantSaleDigest` with
+  `issuerId` = the stall, and `credential` is the terminal credential's signed NUT-10 secret
+  (never the proof's `C`). Every request from an unlocked till carries
+  `X-Imani-Terminal-Credential: <voucherId>`, read from the token's signed bytes. A REDUCED
+  till, a redemption-only till, or a till that has lost its credential is refused before
+  anything is minted. Needs gateway-portal, gateway-customer and gateway-core phase 5 deployed:
+  until then the portal refuses a terminal's Sell, and nothing is minted.
+- **The customer's wallet verifies `terminal` warrants offline** (`terminalWarrant.ts`), a
+  mirror of cashu-voucher 0.16.0's `IssuanceWarrant.verifyTerminal`: lowercase hex64
+  `issuerId`; no C0 (US included), DEL, C1 controls or lone surrogates in `unit` and `nonce`;
+  `sale_total` within 0..2^53-1 and `face_decimals` 0..18; a credential signed by a trusted
+  service key (`VITE_VOUCHER_ISSUER_PUBKEYS`) under strict canonical verification with no
+  legacy window; the credential's issuer is the stall, its metadata a selling terminal whose
+  `lock_key` is not the stall and is the mint lock; and `K`'s sale signature. The credential's
+  expiry is skipped offline (`ExpiryCheck.skipOffline`, boundary `now > expires_at`), so a
+  coupon sold before the till expired stays `verified`. Pinned against the Java's frozen golden
+  credential.
+- **e2e: terminal Sell.** `E2E_PHASE=5 npm run e2e:terminal-setup` adds a sell-and-redeem till
+  that sells to C (C's verdict `verified`, A sees the sale attributed), a replayed nonce (409),
+  403 on dashboard, campaigns, policies and SSE, a REDUCED till refused before minting, and a
+  revoked till's Sell (403). The server-side checks print PENDING until `E2E_P5_DEPLOYED=1`.
+
 - **Revocation reaches the owner's list from the mint (#160 phase 4).** Opening Settings →
   Terminals asks the mint (NUT-07, read-only) about every live row with a token, and marks
   revoked any whose credential is already spent: a device that took itself out of service, or
@@ -40,6 +65,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The idle lock (decision 2).** An untouched till locks after the owner's chosen minutes (10
   by default, `0` is never), and Lock does the same. Locking drops the signer and keeps the
   12-hour session, so unlocking again within it needs only the passphrase.
+
+### Fixed
+
+- **The legacy-canonical signature window refuses fractional `face_value`, `expires_at` and
+  `face_decimals` (#194).** Mirrors cashu-voucher#54. Under the legacy truncation, `expires_at`
+  rewritten from `1808069579` to `1808069579.5` hashed to the signed bytes, and Java then read
+  the expiry as absent. Only `issuance_ratio` was ever fractional on a genuine pre-fix voucher.
+
+### Changed
+
+- The *Sell and redeem* role reads "A full till: sells and honours your coupons", and a REDUCED
+  till says why it cannot sell.
 
 ### Security
 

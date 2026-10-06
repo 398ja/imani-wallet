@@ -34,6 +34,7 @@ vi.mock('../../lib/config', async (importOriginal) => ({
 
 const { CashbackIssuePage } = await import('../CashbackIssuePage')
 const { TERMINAL_ROLES, grantFor } = await import('../../lib/terminalRole')
+const { SESSION_KIND, openSession } = await import('../../lib/terminalSession')
 import type { TerminalActor } from '../../lib/actor'
 import type { MerchantProfile } from '../../lib/merchant'
 
@@ -55,10 +56,11 @@ const till: TerminalActor = {
   permissions: grantFor(TERMINAL_ROLES.ISSUE_AND_REDEEM, STALL),
 }
 
-function show(actor?: TerminalActor) {
+function show(actor?: TerminalActor, kind: 'full' | 'reduced' | null = null) {
+  const session = actor && kind ? openSession(actor, kind, Date.now()) : null
   return render(
     <MemoryRouter>
-      <CashbackIssuePage merchant={merchant} actor={actor} />
+      <CashbackIssuePage merchant={merchant} actor={actor} session={session} />
     </MemoryRouter>,
   )
 }
@@ -70,12 +72,11 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('a terminal reaching /sell/cashback', () => {
-  it('is stopped on arrival, naming the delegated form it would need', () => {
-    show(till)
+  it('without a FULL session is stopped on arrival', () => {
+    show(till, SESSION_KIND.REDUCED)
 
     const alert = screen.getByRole('alert')
-    expect(alert.textContent).toMatch(/Cashback from a terminal is not supported yet/)
-    expect(alert.textContent).toMatch(/delegated/)
+    expect(alert.textContent).toMatch(/cannot issue cashback right now/)
   })
 
   it('offers no amount field, so no code can be minted', () => {
@@ -83,6 +84,13 @@ describe('a terminal reaching /sell/cashback', () => {
 
     expect(screen.queryByPlaceholderText('0.00')).toBeNull()
     expect(submitted.calls).toBe(0)
+  })
+
+  it('in a FULL session gets the amount field (#160 phase 5)', () => {
+    show(till, SESSION_KIND.FULL)
+
+    expect(screen.getByPlaceholderText('0.00')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })
 
