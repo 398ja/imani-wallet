@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import QRCode from 'qrcode'
 
 import { Screen, PageHeader, Panel, Button, Input, Alert } from '../components/ui'
@@ -94,7 +94,6 @@ export function TerminalSetupPage({
   publisherFor = (a) => devicePublisher(a.signer),
   confirmAtGateway = deviceConfirm,
 }: TerminalSetupDeps = {}) {
-  const navigate = useNavigate()
   // Minted once, in memory, on first render. Lazy so a re-render shows the same code.
   const [code] = useState<EnrolmentCode>(() => beginEnrolment())
   const [startedAt] = useState(() => Math.floor(Date.now() / 1000))
