@@ -79,6 +79,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   credential it verified. `enrolledActor` and its `nosemgrep` are gone, so Semgrep reports 4
   findings, down from 5.
 
+### Documentation
+
+- **Spec 5.3 (terminals in service): `live: false` yields `[]`.** A not-live credential gets no
+  permissions at all, not even redeem, and the stall must be an active merchant; ACL or
+  gateway-customer failures fail closed. Matches gateway-core#130 after its review (imani-wallet#160).
+
 ## [0.14.3] - 2026-10-06
 
 ### Fixed
