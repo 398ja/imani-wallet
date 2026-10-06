@@ -40,6 +40,7 @@ const { unlockTerminal, forgetTerminalSession, heldTerminalSession, lockTerminal
   await import('../terminalUnlock')
 const { SESSION_KIND, SESSION_HOURS } = await import('../terminalSession')
 const { TERMINAL_ROLES } = await import('../terminalRole')
+const { isTerminalDevice } = await import('../terminalEnrol')
 
 function enrol(role: string = TERMINAL_ROLES.ISSUE_AND_REDEEM, over: Record<string, unknown> = {}) {
   localStorage.setItem(
@@ -213,5 +214,37 @@ describe('the idle lock keeps the twelve-hour session', () => {
       now: t0 + SESSION_HOURS * 3600 * 1000 + 1,
     })
     expect(later.unlocked).toBe(false)
+  })
+})
+
+describe('a terminal record without a token (#160 review, LOW)', () => {
+  // Spec 2.3: a terminal is never a customer. A record whose token is gone (an old enrolment, a
+  // partial wipe) used to read as "not enrolled", so Entry sent the device to /login and its
+  // terminal key opened a NAP customer session. The record still names the device, so the device
+  // is still treated as a terminal, and unlocking it is refused with nothing installed.
+  it('is still a terminal device, so Entry never sends it to /login', () => {
+    enrol(TERMINAL_ROLES.REDEEM_ONLY, { token: undefined })
+    expect(isTerminalDevice()).toBe(true)
+  })
+
+  it('refuses to unlock it, and installs nothing', async () => {
+    enrol(TERMINAL_ROLES.REDEEM_ONLY, { token: undefined })
+    const api = mint('UNSPENT')
+
+    const out = await unlockTerminal('pass', { loadKey: async () => DEVICE_HEX, mint: api })
+
+    expect(out.unlocked).toBe(false)
+    if (!out.unlocked) expect(out.reason).toBe('unreadable')
+    expect(nap.installTerminalSigner).not.toHaveBeenCalled()
+    expect(api.validateToken).not.toHaveBeenCalled()
+  })
+
+  // Someone's own wallet key beside such a record is a person, not that terminal: the screen
+  // offers the wallet, as for any stale record.
+  it('tells a wallet key apart from the terminal it names', async () => {
+    enrol(TERMINAL_ROLES.REDEEM_ONLY, { token: undefined })
+    const out = await unlockTerminal('pass', { loadKey: async () => bytesToHex(generateSecretKey()), mint: mint('UNSPENT') })
+    expect(out.unlocked).toBe(false)
+    if (!out.unlocked) expect(out.reason).toBe('not-a-terminal-key')
   })
 })

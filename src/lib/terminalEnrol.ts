@@ -375,6 +375,20 @@ export function storedTerminal(): StoredTerminal | null {
   }
 }
 
+/**
+ * Whether this device was enrolled as a terminal, token or not (#160 review, LOW).
+ *
+ * `storedTerminal()` reads a record without a token as not enrolled, which is right for its
+ * question ("what authority does this device hold?") and wrong for routing: Entry used it, sent
+ * such a device to /login, and its terminal key opened a NAP session as a customer, which spec
+ * 2.3 forbids. Any record that names a device key makes this a terminal device. It is then
+ * routed to the till's unlock screen, which refuses the missing credential and offers to remove
+ * the terminal from the device.
+ */
+export function isTerminalDevice(): boolean {
+  return storedTerminalPubkey() !== null
+}
+
 /** Erase the terminal record. The wipe half of decommissioning (ticket 08). */
 export function forgetTerminal(): void {
   try {
@@ -432,7 +446,7 @@ export interface RemovedFromDevice {
   walletDb: string | null
 }
 
-function storedTerminalPubkey(): string | null {
+export function storedTerminalPubkey(): string | null {
   try {
     const raw = localStorage.getItem(ENROLMENT_KEY)
     const pk = raw ? (JSON.parse(raw) as { terminalPubkey?: unknown }).terminalPubkey : null

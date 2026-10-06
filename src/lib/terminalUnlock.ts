@@ -2,7 +2,7 @@ import { getPublicKey } from 'nostr-tools'
 import { hexToBytes } from '@noble/hashes/utils'
 
 import { installTerminalSigner, keyStore, lockTerminalSigner } from './nap'
-import { storedTerminal } from './terminalEnrol'
+import { storedTerminal, storedTerminalPubkey } from './terminalEnrol'
 import { LOGIN_MESSAGE, LOGIN_REFUSAL, loginFromToken, type LoginRefusal } from './terminalLogin'
 import { credentialState, unspentForLogin, type CredentialMintApi } from './credentialRevocation'
 import { sessionState, type TerminalSession } from './terminalSession'
@@ -63,8 +63,11 @@ export async function unlockTerminal(
     now = Date.now(),
   }: Partial<UnlockDeps> = {},
 ): Promise<UnlockOutcome> {
-  const stored = storedTerminal()
-  if (!stored) {
+  // The device key comes from the raw record, so a record whose token is gone is still a terminal
+  // (#160 review, LOW): it is refused below as unreadable, never treated as "not enrolled", which
+  // used to send the device to /login as a customer.
+  const terminalPubkey = storedTerminalPubkey()
+  if (!terminalPubkey) {
     return { unlocked: false, reason: LOGIN_REFUSAL.NOT_ENROLLED, message: LOGIN_MESSAGE[LOGIN_REFUSAL.NOT_ENROLLED] }
   }
 
@@ -80,8 +83,15 @@ export async function unlockTerminal(
   // beside a stale or planted terminal record, not a terminal (spec 2.2, one account per device).
   // Nothing is installed and the mint is not asked, and the screen offers the wallet rather than
   // "Take out of service", whose wipe would erase that person's key.
-  if (devicePubkey !== stored.terminalPubkey.toLowerCase()) {
+  if (devicePubkey !== terminalPubkey) {
     return { unlocked: false, reason: 'not-a-terminal-key', message: NOT_A_TERMINAL_KEY }
+  }
+
+  // The terminal's own key, but no credential to read: nothing is installed and the mint is not
+  // asked. The unlock screen offers to remove the terminal from this device.
+  const stored = storedTerminal()
+  if (!stored) {
+    return { unlocked: false, reason: LOGIN_REFUSAL.UNREADABLE, message: LOGIN_MESSAGE[LOGIN_REFUSAL.UNREADABLE] }
   }
 
   // Within the twelve hours and for the same key, the idle lock's re-unlock needs no mint call.

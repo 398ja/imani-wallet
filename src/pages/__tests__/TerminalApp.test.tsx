@@ -214,3 +214,16 @@ describe('a refused device is never stranded (#160 review, MEDIUM)', () => {
     expect(await screen.findByRole('button', { name: 'Take this terminal out of service' })).toBeTruthy()
   })
 })
+
+describe('a terminal record without a token (#160 review, LOW)', () => {
+  // The record still names this device, so it is still a terminal: the unlock screen, never the
+  // onboarding or customer screens.
+  it('still shows the unlock screen', async () => {
+    localStorage.setItem(
+      'imani-wallet:terminal',
+      JSON.stringify({ stallPubkey: STALL, role: TERMINAL_ROLES.REDEEM_ONLY, terminalPubkey: DEVICE, enrolledAt: 1 }),
+    )
+    at('/')
+    expect(await screen.findByRole('button', { name: 'Open the till' })).toBeTruthy()
+  })
+})
