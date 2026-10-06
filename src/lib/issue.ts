@@ -1,4 +1,5 @@
 import { nip19 } from 'nostr-tools'
+import { toEpochSeconds as sharedToEpochSeconds } from '@imani/wallet-core'
 
 import { gatewayConfig } from './config'
 import { resolveNip05 } from './identity'
@@ -293,14 +294,9 @@ export type IssueStage = 'issuing' | 'minting' | 'delivering'
  * `@JsonProperty("expires_at") Long` in seconds.
  */
 export function toEpochSeconds(value: number | string | undefined | null): number | undefined {
-  if (value === undefined || value === null || value === '') return undefined
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value) || value <= 0) return undefined
-    // Below 1e11 can only be seconds — the same magnitude test `toEpochMs` uses.
-    return Math.floor(value < 1e11 ? value : value / 1000)
-  }
-  const ms = Date.parse(String(value))
-  return Number.isNaN(ms) ? undefined : Math.floor(ms / 1000)
+  // The wallet's one expiry parser (#157). This copy used `Date.parse` on any
+  // string, so a numeric-string expiry was dropped from the DM it sent.
+  return sharedToEpochSeconds(value)
 }
 
 /** Surface the gateway's own error message; they are specific and actionable. */

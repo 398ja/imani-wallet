@@ -3,7 +3,7 @@ import type { TransactionRow, VoucherRow } from '@imani/wallet-storage'
 
 import { getWallet, listVouchers, notifyWalletChanged } from './wallet'
 import { legacyApi } from './legacyBridge'
-import { couponsFor, issuerKey, toVoucher, type Merchant } from './merchants'
+import { couponsFor, issuerKey, toMerchants, toVoucher, type Merchant } from './merchants'
 import { merchantStatus } from './merchant'
 import { getSigner } from './nap'
 import { spentTokenIds, withoutSpent } from './spentCoupons'
@@ -29,11 +29,12 @@ export {
   selectVouchers,
   planParts,
   splitObstacle,
+  passedOver,
   type SplitCheck,
   type SendPart,
   type SendPlan,
 } from '@imani/wallet-core'
-import { planParts, selectVouchers, splitObstacle } from '@imani/wallet-core'
+import { passedOver, planParts, selectVouchers, splitObstacle } from '@imani/wallet-core'
 
 /**
  * Paying a merchant's voucher payment request.
@@ -759,7 +760,7 @@ async function spendableFrom(merchantPubkey: string, payer: string): Promise<{
   let spendableRows = rows
   try {
     const signer = getSigner()
-    spendableRows = withoutSpent(rows, await spentTokenIds(signer.pubkey))
+    spendableRows = await withoutTombstoned(rows, signer.pubkey)
   } catch (error) {
     // A locked wallet has no pubkey to scope the read by. Not an error worth
     // failing a send over — the caller is mid-payment and the local filters
@@ -774,6 +775,21 @@ async function spendableFrom(merchantPubkey: string, payer: string): Promise<{
     return voucher
   })
   return { mine, rowOf }
+}
+
+/**
+ * Drop every coupon this wallet has tombstoned on the relay (#45).
+ *
+ * The one filter `payRequest` spends through and the Pay screen describes
+ * through (#169 review), so the screen's "a sooner voucher is not used" note
+ * never names a coupon already spent on another device. Only ever subtracts:
+ * an unreachable relay leaves the rows unchanged.
+ */
+export async function withoutTombstoned<T extends { token_id?: string }>(
+  rows: T[],
+  pubkey: string,
+): Promise<T[]> {
+  return withoutSpent(rows, await spentTokenIds(pubkey))
 }
 
 /**
@@ -840,11 +856,32 @@ async function initiateOnFirstFree(
       return { sendId, status: initiated.status, voucher: candidate, sourceRow }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      if (!message.includes('active send already exists')) throw error
-      lastRefusal = error instanceof Error ? error : new Error(message)
-      console.warn('[pay] coupon busy, trying the next one:', candidate.voucher_id)
+      if (message.includes('active send already exists')) {
+        lastRefusal = error instanceof Error ? error : new Error(message)
+        console.warn('[pay] coupon busy, trying the next one:', candidate.voucher_id)
+        continue
+      }
+      // A coupon whose stored expiry could not be read is offered FIRST, in
+      // case it is about to lapse (#157). If a gateway refuses it as expired
+      // at initiate, nothing has moved yet (no send row exists), so trying the
+      // next coupon is safe and cannot double-send: each candidate has its own
+      // idempotency key. Defensive only: gateway-core's initiate does not
+      // check voucher expiry today (the mint refuses at the async split), and
+      // such a coupon is now rare, since storage repairs an unreadable expiry
+      // from the one signed into the token (expiryStorage.ts).
+      if (/voucher has expired/i.test(message)) {
+        lastRefusal = error instanceof Error ? error : new Error(message)
+        console.warn('[pay] coupon refused as expired, trying the next one:', candidate.voucher_id)
+        continue
+      }
+      throw error
     }
   }
+
+  // Every candidate refused. If the last said "expired", say that: calling an
+  // expired coupon "tied up in an unfinished send" would send the customer
+  // looking for a send that does not exist.
+  if (lastRefusal && /voucher has expired/i.test(lastRefusal.message)) throw lastRefusal
 
   // A bundle part is offered exactly one coupon — the plan's arithmetic is tied
   // to that coupon's face value, so there is nothing to walk on to. Saying
@@ -1049,6 +1086,8 @@ export async function payRequest({
     ? mine.filter((v) => (v.face_unit ?? '').toUpperCase() === request.unit!.toUpperCase())
     : mine
 
+  await logPassedOver(payer, request)
+
   return deliver(
     {
       api,
@@ -1069,6 +1108,35 @@ export async function payRequest({
     request.amount,
     request.unit,
   )
+}
+
+/**
+ * Record in the `[pay]` log any sooner-expiring voucher this payment leaves,
+ * and why (#157). The pay screen says the same in one line; the log keeps the
+ * ids and raw expiries a support check needs. Never blocks a payment.
+ */
+async function logPassedOver(payer: string, request: NUT18VRequest): Promise<void> {
+  try {
+    // The pay screen's holding: live, unspent, not behind an unconfirmed send.
+    const holding = toMerchants(withoutInFlight(await listVouchers(), payer)).flatMap((m) =>
+      m.groups.flatMap((g) => g.vouchers),
+    )
+    const notes = passedOver(holding, request.amount, {
+      issuer: request.issuerId,
+      unit: request.unit,
+    })
+    for (const note of notes) {
+      console.info(
+        '[pay] sooner-expiring voucher passed over:',
+        note.voucher.voucher_id,
+        note.voucher.expires_at,
+        note.reason,
+        note.detail ?? '',
+      )
+    }
+  } catch (error) {
+    console.warn('[pay] could not explain voucher order', error)
+  }
 }
 
 /**

@@ -1,6 +1,7 @@
 import { VoucherGrouper } from '@imani/voucher-send'
 import type { Voucher, MerchantGroup } from '@imani/voucher-send'
 import type { VoucherRow } from '@imani/wallet-storage'
+import { issuerKey as coreIssuerKey, readExpiry } from '@imani/wallet-core'
 
 import { toEpochMs } from './format'
 import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
@@ -28,6 +29,9 @@ export interface Merchant {
   /** Total coupons held, across all groups. */
   voucherCount: number
 }
+
+/** What `toVoucher` puts in `expires_at` for a stored expiry nobody can read (#157). */
+export const UNREADABLE_EXPIRY = 'unreadable'
 
 /**
  * Bridge wallet-storage's VoucherRow to voucher-send's Voucher.
@@ -71,7 +75,20 @@ export function toVoucher(row: VoucherRow): Voucher {
     issuance_ratio: issuanceRatioOf(row),
     issuer_id: row.issuer_id,
     status: row.status,
-    expires_at: expiresMs === undefined ? undefined : new Date(expiresMs).toISOString(),
+    // An expiry that is present but unreadable is not erased: erased, it read
+    // as "never expires" and was spent last (#157). wallet-core's `expiryMs`
+    // spends such a coupon first instead. It is passed as a fixed marker, NOT
+    // the raw value: VoucherGrouper's expiry filter is `new Date(expires_at)`,
+    // and V8 reads raw junk like "Section 5" as a date in 2001, which would
+    // drop the coupon from the list while `couponsFor` still counted it. The
+    // marker has no digit, so `new Date` is NaN there and the coupon stays.
+    // The raw value is logged where it is stored (expiryStorage.ts).
+    expires_at:
+      expiresMs !== undefined
+        ? new Date(expiresMs).toISOString()
+        : readExpiry(row.expires_at).kind === 'none'
+          ? undefined
+          : UNREADABLE_EXPIRY,
     created_at: row.created_at,
   } as Voucher
 }
@@ -339,12 +356,7 @@ export function spendable(rows: VoucherRow[]): VoucherRow[] {
  * balance and a count, and then that merchant's own page reported 0 coupons and an
  * empty list. Real money, unreachable.
  */
-export function issuerKey(issuerId: string | undefined | null): string {
-  const id = issuerId || 'unknown'
-  // npub stays as-is: the grouper says it would decode to hex but does not.
-  if (id.startsWith('npub1')) return id
-  return /^[0-9a-f]{64}$/i.test(id) ? id.toLowerCase() : id
-}
+export const issuerKey = coreIssuerKey
 
 /**
  * A merchant's coupons as STORED ROWS, newest first.

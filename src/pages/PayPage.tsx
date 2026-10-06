@@ -4,17 +4,20 @@ import { AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { getDecimals } from '@imani/money'
 
 import { listVouchers } from '../lib/wallet'
-import { toMerchants, type Merchant } from '../lib/merchants'
+import { issuerKey, toMerchants, type Merchant } from '../lib/merchants'
 import { formatFace } from '../lib/format'
 import { identityLabel, useIdentity } from '../lib/identity'
 import {
+  passedOver,
   payRequest,
   SendOutcomeUnknownError,
   splitObstacle,
   withoutInFlight,
+  withoutTombstoned,
   type SendResult,
 } from '../lib/pay'
 import type { NUT18VRequest } from '../lib/nap'
+import { passedOverNote } from '../lib/passedOverWording'
 import {
   Button,
   Centered,
@@ -64,11 +67,23 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   }, [raw])
 
   useEffect(() => {
-    listVouchers().then((rows) => {
-      // What can be spent, not all that is held: a coupon behind an unconfirmed send is out (#128).
-      setMerchants(toMerchants(withoutInFlight(rows, pubkey)))
-      setLoadedAt(Date.now())
-    })
+    listVouchers()
+      .then(async (rows) => {
+        // What can be spent, not all that is held: a coupon behind an unconfirmed send is out (#128),
+        // and so is one this wallet has tombstoned, the same filter payRequest spends through
+        // (#169 review). Otherwise the passed-over note can name a coupon already spent elsewhere.
+        const unsent = withoutInFlight(rows, pubkey)
+        try {
+          return await withoutTombstoned(unsent, pubkey)
+        } catch (error) {
+          console.warn('[pay] could not check tombstones; showing the holding unchanged', error)
+          return unsent
+        }
+      })
+      .then((rows) => {
+        setMerchants(toMerchants(rows))
+        setLoadedAt(Date.now())
+      })
   }, [pubkey])
 
   // Before the early returns, and so before `merchant` exists — hooks cannot be
@@ -81,9 +96,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
 
   if (merchants === null) return <Centered>Checking your vouchers…</Centered>
 
-  const merchant = merchants.find(
-    (f) => f.pubkey.toLowerCase() === request.issuerId.toLowerCase(),
-  )
+  const merchant = merchants.find((f) => issuerKey(f.pubkey) === issuerKey(request.issuerId))
   const group = merchant?.groups.find((g) => g.unit.toUpperCase() === request.unit.toUpperCase())
   const available = group?.totalFaceValue ?? 0
   // How to read `request.amount`, which is MINOR UNITS.
@@ -118,6 +131,12 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   // what is payable — a coupon divisible on one and not the other would let the
   // user tap Pay only to be refused.
   const obstacle = group ? splitObstacle(group.vouchers, request.amount) : null
+  // #157: name a sooner-expiring voucher this payment leaves, and why, so the
+  // soonest-first rule does not look ignored. Whole holding, not just `group`.
+  const allVouchers = merchants.flatMap((m) => m.groups.flatMap((g) => g.vouchers))
+  const passedNote = passedOverNote(
+    passedOver(allVouchers, request.amount, { issuer: request.issuerId, unit: request.unit }),
+  )
   const payable = !expired && !!merchant && !!group && shortfall <= 0 && !obstacle
 
   if (status.step === 'done') {
@@ -225,6 +244,9 @@ export function PayPage({ pubkey }: { pubkey: string }) {
           cannot be divided below one sat's worth of face value. Surfaced here
           so the obstacle is visible before the tap, not thrown afterwards. */}
       {!expired && group && shortfall <= 0 && obstacle && <Alert>{obstacle}</Alert>}
+      {!expired && payable && passedNote && (
+        <p className="mb-2 text-sm text-mono-500">{passedNote}</p>
+      )}
       {(status.step === 'failed' || status.step === 'unconfirmed') && <Alert>{status.message}</Alert>}
 
       <Button
