@@ -59,7 +59,13 @@ export function terminalMintApi(fetchImpl: Fetch = (i, init) => fetch(i, init)):
 export interface Fulfilment {
   fulfilled: boolean
   sendId?: string
+  /** Whose coupons paid it: the registered issuer. */
   issuerId?: string
+  /** Who received the counted value: the registered recipient. */
+  recipientPubkey?: string
+  /** Total verified value received, in minor units of `unit`. */
+  amount?: number
+  unit?: string
 }
 
 /** Asks whether a payment request was paid. Injected into the Redeem screen. */
@@ -92,6 +98,9 @@ export function fulfilmentOf(
         fulfilled: body.fulfilled === true,
         ...(typeof body.sendId === 'string' ? { sendId: body.sendId } : {}),
         ...(typeof body.issuerId === 'string' ? { issuerId: body.issuerId } : {}),
+        ...(typeof body.recipientPubkey === 'string' ? { recipientPubkey: body.recipientPubkey } : {}),
+        ...(typeof body.amount === 'number' ? { amount: body.amount } : {}),
+        ...(typeof body.unit === 'string' ? { unit: body.unit } : {}),
       }
     } catch {
       return null
@@ -99,15 +108,73 @@ export function fulfilmentOf(
   }
 }
 
+/** What a till asks for, registered with gateway-core before the QR code is shown. */
+export interface RequestTerms {
+  paymentId: string
+  /** The stall: who must receive the payment, and whose coupons pay it. */
+  issuerId: string
+  /** Minor units. */
+  amount: number
+  unit: string
+}
+
+/** Registers a request's terms. Resolves true only when gateway-core holds THESE terms. */
+export type RequestRegistration = (terms: RequestTerms) => Promise<boolean>
+
 /**
- * Whether a fulfilment answers a request this terminal made for its stall.
+ * `PUT /api/v1/atomic/fulfilment/{paymentRequestId}`, NIP-98 signed by the terminal key (#160
+ * review, BLOCKER).
  *
- * A paid answer must name the stall as issuer when it names one at all: gateway-core reports who
- * issued the voucher that was sent, and a voucher from another stall did not pay this stall.
+ * gateway-core measures payments against these terms, not against anything the payer says, and
+ * the first registration wins. So the till registers BEFORE it shows the QR code: once the id is
+ * on screen a customer can read it, and must find the terms already taken. A 409 (someone got
+ * there first with different terms) or any failure resolves false, and the screen does not show a
+ * request it could never confirm.
  */
-export function paidForStall(answer: Fulfilment | null, stallPubkey: string): boolean {
+export function registerRequestTerms(
+  signer?: RequestSigner,
+  fetchSigned: typeof signedFetch = signedFetch,
+): RequestRegistration {
+  return async ({ paymentId, issuerId, amount, unit }) => {
+    try {
+      const res = await fetchSigned(
+        `/api/v1/atomic/fulfilment/${encodeURIComponent(paymentId)}`,
+        'PUT',
+        { recipientPubkey: issuerId, issuerId, amount, unit },
+        signer,
+      )
+      return res.status === 200 || res.status === 201
+    } catch {
+      return false
+    }
+  }
+}
+
+/**
+ * Whether a fulfilment answers a request this terminal made for its stall (#160 review, BLOCKER).
+ *
+ * gateway-core now measures what really arrived, but the till checks the facts it reports anyway,
+ * so a gateway that answered on the old rule (any send carrying the id) still cannot make it show
+ * Paid. Every fact must be present and match:
+ *
+ * - the value went to the STALL, not to whoever sent it (a customer tagging a 1-sat send to
+ *   themself with the id read off the QR code);
+ * - it was the stall's own coupons;
+ * - it is in the request's unit and at least the request's amount.
+ *
+ * A missing fact is a refusal: an answer that cannot be checked is not trusted.
+ */
+export function paidForStall(
+  answer: Fulfilment | null,
+  stallPubkey: string,
+  request: { amount: number; unit: string },
+): boolean {
   if (!answer?.fulfilled) return false
-  return answer.issuerId === undefined || answer.issuerId.toLowerCase() === stallPubkey.toLowerCase()
+  const stall = stallPubkey.toLowerCase()
+  if (answer.issuerId?.toLowerCase() !== stall) return false
+  if (answer.recipientPubkey?.toLowerCase() !== stall) return false
+  if (answer.unit?.toUpperCase() !== request.unit.toUpperCase()) return false
+  return typeof answer.amount === 'number' && answer.amount >= request.amount
 }
 
 /**
