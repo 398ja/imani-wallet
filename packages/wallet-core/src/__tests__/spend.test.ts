@@ -385,6 +385,22 @@ describe('expiry formats (#157)', () => {
     expect(selectVouchers([none, dated], 400)[0].voucher_id).toBe('z-dated')
   })
 
+  // A coupon dated 9999-12-31, stored in seconds (253402300799), is the one in
+  // least danger short of "never expires". It must be spent after a coupon
+  // expiring next month, not before it as if it had lapsed in 1978, and before
+  // a coupon with no expiry at all.
+  it('spends a 9999-12-31 coupon stored in seconds after a real near expiry', () => {
+    const nines = coupon({ voucher_id: 'a-nines', expires_at: 253_402_300_799 as unknown as string })
+    const near = coupon({ voucher_id: 'b-near', expires_at: String(soon / 1000) })
+    const none = coupon({ voucher_id: 'c-none' })
+    expect(selectVouchers([nines, none, near], 400).map((v) => v.voucher_id)).toEqual([
+      'b-near',
+      'a-nines',
+      'c-none',
+    ])
+    expect(planParts([nines, none, near], 400).parts[0].voucher.voucher_id).toBe('b-near')
+  })
+
   /**
    * Present but unreadable is NOT "never expires". It might lapse tomorrow, so
    * it is spent first: spending it early can only use value that might have

@@ -166,6 +166,23 @@ describe('migrateStoredExpiries', () => {
     )
   })
 
+  // A coupon stored with a 9999-12-31 "practically never" expiry, in seconds or
+  // milliseconds, must still be live after the repair has run on two opens. A
+  // repair that re-read the stored seconds as milliseconds would date it to
+  // 1978 and hide a live coupon as expired.
+  it('never moves a far-future expiry into the past, however many times it runs', async () => {
+    const NINES = 253_402_300_799 // 9999-12-31T23:59:59Z
+    const asSeconds = row(NINES)
+    const asMillis = row(NINES * 1000)
+    await seedLegacy([asSeconds, asMillis])
+
+    await migrateStoredExpiries(getWallet())
+    await migrateStoredExpiries(getWallet())
+
+    expect(await stored(asSeconds.token!)).toBe(NINES)
+    expect(await stored(asMillis.token!)).toBe(NINES)
+  })
+
   it('runs when the wallet opens, so a legacy row is canonical before anything reads it', async () => {
     await wipeWallet(user)
     user = `u${seq++}`

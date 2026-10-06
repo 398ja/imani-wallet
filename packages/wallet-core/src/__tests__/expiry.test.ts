@@ -36,9 +36,13 @@ describe('readExpiry', () => {
     expect(toEpochSeconds(SECONDS)).toBe(SECONDS)
   })
 
-  it('floors a fractional value to whole seconds', () => {
-    expect(toEpochSeconds(MS + 999)).toBe(SECONDS)
-    expect(toEpochSeconds(`${SECONDS}.7`)).toBe(SECONDS)
+  // A fraction of a second rounds UP to the next whole second, so the stored
+  // expiry is never earlier than the one the issuer gave.
+  it('rounds a fractional value up to whole seconds', () => {
+    expect(toEpochSeconds(MS)).toBe(SECONDS)
+    expect(toEpochSeconds(MS + 1)).toBe(SECONDS + 1)
+    expect(toEpochSeconds(MS + 999)).toBe(SECONDS + 1)
+    expect(toEpochSeconds(`${SECONDS}.7`)).toBe(SECONDS + 1)
   })
 
   it.each([
@@ -66,9 +70,11 @@ describe('readExpiry', () => {
     expect(toEpochSeconds('2026')).toBe(2026)
   })
 
-  it('puts the seconds/milliseconds boundary at 1e11', () => {
-    expect(toEpochMs(1e11 - 1)).toBe((1e11 - 1) * 1000) // seconds: year 5138
-    expect(toEpochMs(1e11)).toBe(1e11) // milliseconds: 1973
+  // The boundary sits at 1e12: below it a number is seconds (up to the year
+  // 33658), at or above it milliseconds (September 2001 onwards).
+  it('puts the seconds/milliseconds boundary at 1e12', () => {
+    expect(toEpochMs(1e12 - 1)).toBe((1e12 - 1) * 1000) // seconds: year 33658
+    expect(toEpochMs(1e12)).toBe(1e12) // milliseconds: 2001
   })
 
   it.each([undefined, null, '', '   ', 0, '0'])('reads %j as no expiry', (value) => {
@@ -124,5 +130,51 @@ describe('canonicalExpiresAt', () => {
       const once = canonicalExpiresAt(value)
       expect(canonicalExpiresAt(once)).toBe(once)
     }
+  })
+
+  // A "never really expires" date such as 9999-12-31 is 253402300799 in
+  // seconds, which is above 1e11. It must stay in the year 9999 when stored and
+  // when stored again, never collapse to a date in the 1970s that hides a live
+  // coupon as expired.
+  it.each([
+    ['9999-12-31 in seconds', NINES_SECONDS],
+    ['9999-12-31 in milliseconds', NINES_SECONDS * 1000],
+    ['9999-12-31 as a seconds string', String(NINES_SECONDS)],
+    ['9999-12-31 as an ISO string', '9999-12-31T23:59:59Z'],
+  ])('keeps a far-future %s in the far future, twice over', (_label, value) => {
+    const once = canonicalExpiresAt(value)
+    const twice = canonicalExpiresAt(once)
+    expect(twice).toBe(once)
+    expect(toEpochMs(once)).toBe(NINES_SECONDS * 1000)
+  })
+
+  // Storing must never move an expiry earlier, not even by the milliseconds a
+  // whole-second value drops: an earlier expiry can only make a live coupon look
+  // lapsed, while a later one is still refused by the mint at its real time.
+  it('never stores an expiry earlier than the one given', () => {
+    for (const ms of [MS + 1, MS + 999, Date.UTC(2027, 0, 1, 12, 0, 0, 500)]) {
+      const stored = canonicalExpiresAt(ms)
+      expect(toEpochMs(stored)).toBeGreaterThanOrEqual(ms)
+      expect(canonicalExpiresAt(stored)).toBe(stored)
+    }
+  })
+})
+
+const NINES_SECONDS = 253_402_300_799 // 9999-12-31T23:59:59Z
+
+describe('readExpiry, ambiguous magnitudes', () => {
+  // Between 1e11 and 1e12 a number is either milliseconds in 1973-2001, before
+  // any coupon existed, or seconds after the year 5138. Reading it as seconds
+  // is the reading that cannot wrongly expire a live coupon.
+  it('reads a seconds value above 1e11 as far future, not as a 1970s date', () => {
+    expect(toEpochMs(NINES_SECONDS)).toBe(NINES_SECONDS * 1000)
+    expect(toEpochMs(String(NINES_SECONDS))).toBe(NINES_SECONDS * 1000)
+  })
+
+  // Real millisecond expiries (2001 onwards) are at or above 1e12 and must
+  // still read as milliseconds.
+  it('still reads real millisecond expiries as milliseconds', () => {
+    expect(toEpochMs(1e12)).toBe(1e12)
+    expect(toEpochMs(MS)).toBe(MS)
   })
 })

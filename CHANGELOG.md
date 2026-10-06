@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sooner-expiring voucher is left for a legitimate reason (another stall, another currency, too
   small, or it cannot be divided to the amount), the pay screen says so in one line and the
   `[pay]` log records which voucher and why.
+- **A far-future expiry is never stored as a past one** (#157 review). A "practically never"
+  date such as 31 Dec 9999 is 253402300799 in seconds, which the old seconds/milliseconds
+  boundary (1e11) read as milliseconds in 1978. The repair would then have stored a live
+  coupon as long expired. The boundary is now 1e12, and converting to whole seconds rounds up,
+  so storing can only keep an expiry where it was, never move it earlier.
 
 ## [0.14.2] - 2026-10-05
 
