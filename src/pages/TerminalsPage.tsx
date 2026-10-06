@@ -17,6 +17,7 @@ import {
 } from '../lib/terminalRoster'
 import {
   cancelExpiredWaiting,
+  markSpentElsewhere,
   removeUnmintedWaiting,
   resumeMinting,
   revokeTerminalAtMint,
@@ -207,10 +208,13 @@ export function TerminalsPage({
         // turns out to be past its 24 hours is cancelled in the same pass.
         const resumed = await resumeMinting(stallPubkey, api, transport)
         const n = await cancelExpiredWaiting(stallPubkey, api)
+        // A credential spent somewhere else (the device took itself out of service, or another
+        // of the owner's phones revoked it) reads as revoked here too (#160 phase 4).
+        const elsewhere = await markSpentElsewhere(stallPubkey, api).catch(() => 0)
         // A row resumeMinting finished, or whose DM did not land, gets its DM now, the same
         // one the enrol screen sends (#160 round 2). Its setup code is on the row below.
         const sent = await deliver(stallPubkey).catch(() => 0)
-        if ((n > 0 || sent > 0 || resumed.completed > 0 || resumed.cleared > 0) && !cancelled) refresh()
+        if ((n > 0 || elsewhere > 0 || sent > 0 || resumed.completed > 0 || resumed.cleared > 0) && !cancelled) refresh()
       } catch {
         // Offline, or the wallet is locked. The rows stay waiting.
       }

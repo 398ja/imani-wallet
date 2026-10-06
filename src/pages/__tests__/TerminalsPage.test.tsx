@@ -248,6 +248,19 @@ describe('the delay is stated before the decision, not after', () => {
     await waitFor(() => expect(isRevoked(STALL, DOOR)).toBe(true))
     expect(fakeMint.receive).toHaveBeenCalledWith(TOKEN)
   })
+
+  // #160 phase 4: the device took itself out of service (or another of the owner's phones
+  // revoked it), so its credential is already spent. Opening the list asks the mint, marks the
+  // row revoked and shows it, without spending anything.
+  it('shows a terminal revoked elsewhere as revoked when the list opens', async () => {
+    enrol({ status: 'in-service' })
+    spent.push(TOKEN)
+    renderPage()
+
+    await waitFor(() => expect(isRevoked(STALL, DOOR)).toBe(true))
+    expect(await screen.findByText(/Revoked/)).toBeTruthy()
+    expect(fakeMint.receive).not.toHaveBeenCalled()
+  })
 })
 
 describe('revoking withdraws authority without erasing', () => {

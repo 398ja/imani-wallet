@@ -7,6 +7,7 @@ import { bytesToHex } from '@noble/hashes/utils'
 
 import {
   cancelExpiredWaiting,
+  markSpentElsewhere,
   removeUnmintedWaiting,
   resumeMinting,
   setReleasePending,
@@ -292,5 +293,42 @@ describe('#160 round 2: a wrong credential that was spent gives its slot back', 
 
     expect(out.cleared).toBe(1)
     expect(release).toHaveBeenCalledWith(VOUCHER)
+  })
+})
+
+describe('#160 phase 4: a credential spent elsewhere reads as revoked here', () => {
+  const inService = (over: Partial<TerminalRecord> = {}) =>
+    row({ status: 'in-service', token: good(), voucherId: VOUCHER, mintKey: undefined, ...over })
+  const mintSays = (state: string | Error) => ({
+    validateToken: vi.fn(async () => {
+      if (state instanceof Error) throw state
+      return { state }
+    }),
+  })
+
+  // The device took itself out of service, or another of the owner's phones revoked it: the mint
+  // says SPENT, so this phone's row reads revoked rather than In service.
+  it('marks a row revoked when the mint says its credential is spent', async () => {
+    recordTerminal(STALL, inService())
+    expect(await markSpentElsewhere(STALL, mintSays('SPENT'), 5_000)).toBe(1)
+    expect(allTerminals(STALL)[0].revokedAt).toBe(5_000)
+  })
+
+  // Unspent, or a mint that cannot be reached, leaves the row alone: marking a live till revoked
+  // would hide the one handle that can still revoke it.
+  it('leaves the row alone when the credential is live or the mint is unreachable', async () => {
+    recordTerminal(STALL, inService())
+    expect(await markSpentElsewhere(STALL, mintSays('UNSPENT'))).toBe(0)
+    expect(await markSpentElsewhere(STALL, mintSays(new Error('offline')))).toBe(0)
+    expect(allTerminals(STALL)[0].revokedAt).toBeUndefined()
+  })
+
+  // Read-only: asking about a row never spends it, and a row being minted is not asked about.
+  it('never spends, and skips rows still being minted', async () => {
+    recordTerminal(STALL, row())
+    const api = { ...mintSays('SPENT'), receive: vi.fn() }
+    expect(await markSpentElsewhere(STALL, api)).toBe(0)
+    expect(api.validateToken).not.toHaveBeenCalled()
+    expect(api.receive).not.toHaveBeenCalled()
   })
 })
