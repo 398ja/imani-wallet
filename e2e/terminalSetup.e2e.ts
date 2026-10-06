@@ -211,28 +211,47 @@ async function main() {
   await device.getByLabel(/Amount/).waitFor({ timeout: 30_000 })
   await device.getByLabel(/Amount/).fill('3.00')
   await device.getByRole('button', { name: 'Show payment code' }).click()
-  await device.getByText('Waiting for payment').waitFor({ timeout: 15_000 })
-  const request = await device.evaluate(() => {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i)!
-      if (!key.startsWith('imani-wallet:payment-requests:')) continue
-      const rows = JSON.parse(localStorage.getItem(key) ?? '[]') as Array<{ requestString: string }>
-      if (rows[0]) return rows[0].requestString
-    }
-    return ''
-  })
-  check('B shows a payment request', request.startsWith('vreqA'), request.slice(0, 16))
-
-  const paid = await customerPays(customer, request)
-  check('C pays it', /Paid|Sent/.test(paid), paid.slice(0, 300))
-  const bPaid = await device
-    .getByText('Paid', { exact: true })
-    .waitFor({ timeout: 120_000 })
+  // #160 review (BLOCKER): the till registers the request's terms with gateway-core before it
+  // shows the code (core#131). Against a gateway without that endpoint the till must refuse to
+  // show a code it could never confirm, rather than show one a customer could fake Paid on.
+  const shown = await device
+    .getByText('Waiting for payment')
+    .waitFor({ timeout: 15_000 })
     .then(
       () => true,
       () => false,
     )
-  check('B shows Paid, learned from gateway-core', bPaid, (await text(device)).slice(0, 200))
+  if (!shown) {
+    const refusedToShow = /could not be set up/i.test(await text(device))
+    check(
+      'B refuses to show a request gateway-core will not register (gateway without core#131)',
+      refusedToShow,
+      (await text(device)).slice(0, 200),
+    )
+    console.log('  (gateway-core here has no registration endpoint: the Paid half needs core#131 deployed)')
+  } else {
+    const request = await device.evaluate(() => {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i)!
+        if (!key.startsWith('imani-wallet:payment-requests:')) continue
+        const rows = JSON.parse(localStorage.getItem(key) ?? '[]') as Array<{ requestString: string }>
+        if (rows[0]) return rows[0].requestString
+      }
+      return ''
+    })
+    check('B shows a payment request', request.startsWith('vreqA'), request.slice(0, 16))
+
+    const paid = await customerPays(customer, request)
+    check('C pays it', /Paid|Sent/.test(paid), paid.slice(0, 300))
+    const bPaid = await device
+      .getByText('Paid', { exact: true })
+      .waitFor({ timeout: 120_000 })
+      .then(
+        () => true,
+        () => false,
+      )
+    check('B shows Paid, learned from gateway-core', bPaid, (await text(device)).slice(0, 200))
+  }
 
   return finish(browser, errors)
 }
