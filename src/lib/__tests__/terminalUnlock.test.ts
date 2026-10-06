@@ -163,6 +163,21 @@ describe('the stored record cannot raise the role (IW-15)', () => {
   })
 })
 
+describe('a wallet key beside a terminal record is not a terminal', () => {
+  // The record names another device, and the passphrase opened this device's own key: a person's
+  // wallet beside a stale or planted record. Not admitted, nothing installed, the mint not asked,
+  // and the reason is one the screen answers with "Open the wallet", never with a wipe.
+  it('refuses without asking the mint or installing a signer', async () => {
+    enrol(TERMINAL_ROLES.REDEEM_ONLY, { terminalPubkey: getPublicKey(generateSecretKey()) })
+    const api = mint('UNSPENT')
+    const out = await unlockTerminal(PASSPHRASE, { mint: api })
+    expect(out.unlocked).toBe(false)
+    if (!out.unlocked) expect(out.reason).toBe('not-a-terminal-key')
+    expect(api.validateToken).not.toHaveBeenCalled()
+    expect(nap.installTerminalSigner).not.toHaveBeenCalled()
+  })
+})
+
 describe('the idle lock keeps the twelve-hour session', () => {
   // Locking drops the signer. Unlocking again within the session needs only the passphrase: the
   // mint is not asked a second time.
