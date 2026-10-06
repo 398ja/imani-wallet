@@ -30,6 +30,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   boundary (1e11) read as milliseconds in 1978. The repair would then have stored a live
   coupon as long expired. The boundary is now 1e12, and converting to whole seconds rounds up,
   so storing can only keep an expiry where it was, never move it earlier.
+- **Storing an expiry is now a fixed point** (#157 review). A value of 1e15 or more (for example
+  1.7e15) was stored as 1.7e12 seconds, which the next read took for milliseconds in 2023, so
+  the repair that runs on every open would have written a past date over a live coupon. Any
+  value whose whole seconds would reach 1e12 is now unreadable, and is repaired from the
+  expiry signed into the voucher's token.
+- **The expiry signed into the token wins over the stored copy** (#157 review). The stored
+  `expires_at` is only a cache; a readable but wrong copy no longer hides a live coupon as
+  expired or changes its place in the spend order. The stored value is used only when the token
+  carries no signed expiry.
+- **Values no producer writes are unreadable rather than guessed** (#157 review): a fraction
+  below 1e9 such as `'0.5'`, and a day that does not exist such as `'2026-02-30'`, which used to
+  roll over into March.
+- **An ISO date-time with no zone is now read as UTC** (#157), not as the device's local time,
+  so the same stored value names the same instant in Nairobi and in London.
+- **The pay screen's "sooner voucher not used" note matches what is spent** (#157 review): it
+  compares issuers the way the wallet groups them (an npub keeps its case) and leaves out
+  vouchers this wallet has already spent on another device, as the payment itself does.
 
 ## [0.14.2] - 2026-10-05
 
