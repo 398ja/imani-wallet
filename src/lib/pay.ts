@@ -760,7 +760,7 @@ async function spendableFrom(merchantPubkey: string, payer: string): Promise<{
   let spendableRows = rows
   try {
     const signer = getSigner()
-    spendableRows = withoutSpent(rows, await spentTokenIds(signer.pubkey))
+    spendableRows = await withoutTombstoned(rows, signer.pubkey)
   } catch (error) {
     // A locked wallet has no pubkey to scope the read by. Not an error worth
     // failing a send over — the caller is mid-payment and the local filters
@@ -775,6 +775,21 @@ async function spendableFrom(merchantPubkey: string, payer: string): Promise<{
     return voucher
   })
   return { mine, rowOf }
+}
+
+/**
+ * Drop every coupon this wallet has tombstoned on the relay (#45).
+ *
+ * The one filter `payRequest` spends through and the Pay screen describes
+ * through (#169 review), so the screen's "a sooner voucher is not used" note
+ * never names a coupon already spent on another device. Only ever subtracts:
+ * an unreachable relay leaves the rows unchanged.
+ */
+export async function withoutTombstoned<T extends { token_id?: string }>(
+  rows: T[],
+  pubkey: string,
+): Promise<T[]> {
+  return withoutSpent(rows, await spentTokenIds(pubkey))
 }
 
 /**

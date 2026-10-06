@@ -1,7 +1,7 @@
 import { VoucherGrouper } from '@imani/voucher-send'
 import type { Voucher, MerchantGroup } from '@imani/voucher-send'
 import type { VoucherRow } from '@imani/wallet-storage'
-import { readExpiry } from '@imani/wallet-core'
+import { issuerKey as coreIssuerKey, readExpiry } from '@imani/wallet-core'
 
 import { toEpochMs } from './format'
 import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
@@ -356,12 +356,7 @@ export function spendable(rows: VoucherRow[]): VoucherRow[] {
  * balance and a count, and then that merchant's own page reported 0 coupons and an
  * empty list. Real money, unreachable.
  */
-export function issuerKey(issuerId: string | undefined | null): string {
-  const id = issuerId || 'unknown'
-  // npub stays as-is: the grouper says it would decode to hex but does not.
-  if (id.startsWith('npub1')) return id
-  return /^[0-9a-f]{64}$/i.test(id) ? id.toLowerCase() : id
-}
+export const issuerKey = coreIssuerKey
 
 /**
  * A merchant's coupons as STORED ROWS, newest first.

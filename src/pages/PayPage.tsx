@@ -4,7 +4,7 @@ import { AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { getDecimals } from '@imani/money'
 
 import { listVouchers } from '../lib/wallet'
-import { toMerchants, type Merchant } from '../lib/merchants'
+import { issuerKey, toMerchants, type Merchant } from '../lib/merchants'
 import { formatFace } from '../lib/format'
 import { identityLabel, useIdentity } from '../lib/identity'
 import {
@@ -13,6 +13,7 @@ import {
   SendOutcomeUnknownError,
   splitObstacle,
   withoutInFlight,
+  withoutTombstoned,
   type SendResult,
 } from '../lib/pay'
 import type { NUT18VRequest } from '../lib/nap'
@@ -66,11 +67,23 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   }, [raw])
 
   useEffect(() => {
-    listVouchers().then((rows) => {
-      // What can be spent, not all that is held: a coupon behind an unconfirmed send is out (#128).
-      setMerchants(toMerchants(withoutInFlight(rows, pubkey)))
-      setLoadedAt(Date.now())
-    })
+    listVouchers()
+      .then(async (rows) => {
+        // What can be spent, not all that is held: a coupon behind an unconfirmed send is out (#128),
+        // and so is one this wallet has tombstoned, the same filter payRequest spends through
+        // (#169 review). Otherwise the passed-over note can name a coupon already spent elsewhere.
+        const unsent = withoutInFlight(rows, pubkey)
+        try {
+          return await withoutTombstoned(unsent, pubkey)
+        } catch (error) {
+          console.warn('[pay] could not check tombstones; showing the holding unchanged', error)
+          return unsent
+        }
+      })
+      .then((rows) => {
+        setMerchants(toMerchants(rows))
+        setLoadedAt(Date.now())
+      })
   }, [pubkey])
 
   // Before the early returns, and so before `merchant` exists — hooks cannot be
@@ -83,9 +96,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
 
   if (merchants === null) return <Centered>Checking your vouchers…</Centered>
 
-  const merchant = merchants.find(
-    (f) => f.pubkey.toLowerCase() === request.issuerId.toLowerCase(),
-  )
+  const merchant = merchants.find((f) => issuerKey(f.pubkey) === issuerKey(request.issuerId))
   const group = merchant?.groups.find((g) => g.unit.toUpperCase() === request.unit.toUpperCase())
   const available = group?.totalFaceValue ?? 0
   // How to read `request.amount`, which is MINOR UNITS.
