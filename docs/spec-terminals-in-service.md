@@ -796,9 +796,15 @@ either order. Phase 5's e2e AC (*verdict `verified`*) is met at the end of 5b.
 - `GET /internal/v1/merchants/{pubkey}/permissions` gains optional
   `credential=<voucherId>` (`core:.../controller/MerchantPermissionsController.java:77`).
   With it, core asks gateway-customer's verifier and returns
-  `["terminal", "voucher:redeem:<stall>"]`, plus `"voucher:issue:<stall>"` when
-  the role allows and `live == true`. Never `coupon:issue`. A suspended stall
-  (`MerchantAclService`) yields `[]`.
+  `["terminal", "voucher:redeem:<stall>"]` when `live == true`, plus
+  `"voucher:issue:<stall>"` when the role allows. Never `coupon:issue`.
+- `[]` (200) when the credential is `live: false` (revoked, unconfirmed,
+  cancelled, expired, self-minted, or the mint cannot vouch): a not-live answer
+  carries only what the metadata claims, so not even redeem is granted. Also
+  `[]` when the credential is unknown or locked to another key, when the stall
+  is suspended or is not an active merchant (`MerchantAclService` roles lack
+  `merchant`), and when gateway-customer or the ACL store cannot answer
+  (fail closed). Amended after the core#130 review.
 
 ### 5.4 imani-gateway-portal
 
