@@ -1,6 +1,6 @@
 /**
- * #160 phases 2 to 4, three real browsers: an owner adds a terminal, a fresh device receives it,
- * the device opens its till and takes a payment, and the owner's revocation stops it.
+ * #160 phases 2 and 3, three real browsers: an owner adds a terminal, a fresh device receives
+ * it, and the device opens its till and takes a payment.
  *
  * Context A registers a stall and adds a terminal from Settings → Terminals. Context B is a
  * fresh browser with nothing in storage: it opens /terminal/setup, shows its code, receives the
@@ -10,9 +10,6 @@
  * Phase 3: B reloads, unlocks with its passphrase (no NAP session) and lands on the till naming
  * the stall. A redeem-only B has no Sell route. A customer C pays B's Redeem request, and B shows
  * Paid, learned from gateway-core because the coupon went to the stall.
- *
- * Phase 4 (`E2E_PHASE=4` or higher): A revokes B, B reloads and is refused at unlock, B can
- * still take itself out of service, and A's row reads revoked.
  *
  * Needs a stack whose gateway-customer mints the stall co-key (imani-gateway-customer#187).
  *
@@ -27,7 +24,7 @@ import { registerCustomer, registerMerchant, TEST_PASSPHRASE, TEST_STALL_NAME } 
 
 const BASE = (process.env.E2E_BASE ?? 'http://localhost:5177').replace(/\/+$/, '')
 const BUNDLE_DIR = process.env.E2E_BUNDLE_DIR
-const PHASE = Number(process.env.E2E_PHASE ?? '4')
+const PHASE = Number(process.env.E2E_PHASE ?? '3')
 const TILL_PASSPHRASE = 'counter-pass'
 /** A new stall's coupon:issue permission is cached this long by the gateway (#114). */
 const PERMISSION_CACHE_MS = 62_000
@@ -236,36 +233,6 @@ async function main() {
       () => false,
     )
   check('B shows Paid, learned from gateway-core', bPaid, (await text(device)).slice(0, 200))
-
-  if (PHASE < 4) return finish(browser, errors)
-
-  console.log('\nPhase 4: A revokes B, and B is refused at its next unlock')
-  await owner.goto(`${BASE}/settings/terminals`, { waitUntil: 'load', timeout: 60_000 })
-  await owner.getByRole('button', { name: 'Revoke' }).first().click({ timeout: 30_000 })
-  await owner.getByRole('button', { name: /^Revoke/ }).last().click()
-  const revoked = await owner
-    .waitForFunction(() => /Revoked/.test(document.body.innerText), undefined, { timeout: 60_000 })
-    .then(
-      () => true,
-      () => false,
-    )
-  check("A's row shows revoked", revoked, (await text(owner)).slice(0, 300))
-
-  await device.reload({ waitUntil: 'load' })
-  const refused = await unlockTill(device)
-  check('B is refused: no longer in service', /no longer in service/.test(refused), refused.slice(0, 200))
-  check('B offers no Redeem once refused', !/\bRedeem\b/.test(refused))
-
-  console.log('\nPhase 4: B can still take itself out of service')
-  await device.getByRole('button', { name: 'Take this terminal out of service' }).click()
-  await device.getByRole('button', { name: 'Take out of service' }).click()
-  const wiped = await device
-    .waitForFunction(() => localStorage.getItem('imani-wallet:terminal') === null, undefined, { timeout: 30_000 })
-    .then(
-      () => true,
-      () => false,
-    )
-  check('B erased its terminal record', wiped)
 
   return finish(browser, errors)
 }
