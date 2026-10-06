@@ -14,7 +14,8 @@
  * Phase 4 (`E2E_PHASE=4`, the default): A revokes B, B reloads and is refused at unlock, B can
  * still take itself out of service, and A's row reads revoked.
  *
- * Phase 5 (`E2E_PHASE>=5`, run between phases 3 and 4): a sell-and-redeem till B3 sells to C,
+ * Phase 5 (`E2E_PHASE>=5`, run after phase 4, once B and B2 are revoked, so the stall's one free
+ * terminal is available again without a licence): a sell-and-redeem till B3 sells to C,
  * C's coupon verdict is `verified`, A sees the sale attributed, a replayed warrant nonce gets 409,
  * B3 gets 403 on dashboard, campaigns, policies and SSE, a REDUCED B3 is refused before minting,
  * and once A revokes B3 its next Sell gets 403. These need the portal, gateway-customer and
@@ -283,8 +284,6 @@ async function main() {
 
   if (PHASE < 4) return finish(browser, errors)
 
-  if (PHASE >= 5) await phase5(browser, owner, customer, customerPubkey, errors)
-
   console.log('\nPhase 4: A revokes B, and B is refused at its next unlock')
   await owner.goto(`${BASE}/settings/terminals`, { waitUntil: 'load', timeout: 60_000 })
   await owner.getByRole('button', { name: 'Revoke' }).first().click({ timeout: 30_000 })
@@ -355,6 +354,8 @@ async function main() {
       )
     check("A's row for B2 reads revoked, learned from the mint", doorRevoked, (await text(owner)).slice(0, 400))
   }
+
+  if (PHASE >= 5) await phase5(browser, owner, customer, customerPubkey, errors)
 
   return finish(browser, errors)
 }
@@ -454,8 +455,8 @@ async function phase5(browser: Browser, owner: Page, customer: Page, customerPub
 
     console.log('\nPhase 5: a REDUCED B3 is refused before minting')
     // The mint is unreachable at unlock, so the till opens REDUCED. A reload is how a till next
-    // asks the mint; the route below is what makes it unreachable.
-    await till.route('**/v1/checkstate', (r) => r.abort())
+    // asks the mint (`terminalMintApi.validateToken`); the route below makes that call fail.
+    await till.route('**/api/v1/wallet/token/validate', (r) => r.abort())
     await till.reload({ waitUntil: 'load' })
     const reduced = await unlockTill(till)
     check('a REDUCED B3 offers no Sell', !/\bSell\b/.test(reduced.replace(/Selling/g, '')), reduced.slice(0, 200))
@@ -466,7 +467,7 @@ async function phase5(browser: Browser, owner: Page, customer: Page, customerPub
     await visit('/sell')
     await till.getByTestId('terminal-name').waitFor({ timeout: 15_000 }).catch(() => {})
     check('a REDUCED B3 typing /sell lands on the till, and nothing is minted', !till.url().endsWith('/sell') && minted.length === 0, till.url())
-    await till.unroute('**/v1/checkstate')
+    await till.unroute('**/api/v1/wallet/token/validate')
 
     console.log('\nPhase 5: A revokes B3, and its next Sell gets 403')
     await owner.goto(`${BASE}/settings/terminals`, { waitUntil: 'load', timeout: 60_000 })
@@ -491,29 +492,34 @@ interface TillKey {
   error?: string
 }
 
-/** B3's K (decrypted from its key store with the passphrase) and its credential, from storage. */
+/**
+ * B3's K (decrypted from its key store with the passphrase) and its credential, from storage.
+ *
+ * Passed to the page as source text: tsx compiles a function argument with `__name` helpers
+ * that do not exist in the page, so a closure here would throw before it ran.
+ */
 async function tillKey(till: Page): Promise<TillKey> {
-  return till.evaluate(async (passphrase) => {
+  const source = `(async () => {
     const out = { sk: '', voucherId: '', secret: '', stall: '', error: '' }
     try {
-      const b64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0))
-      const env = JSON.parse(localStorage.getItem('imani-wallet-key') ?? 'null')
-      const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, ['deriveKey'])
+      const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0))
+      const env = JSON.parse(localStorage.getItem('imani-wallet-key') || 'null')
+      const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(${JSON.stringify(TILL_PASSPHRASE)}), 'PBKDF2', false, ['deriveKey'])
       const key = await crypto.subtle.deriveKey(
         { name: 'PBKDF2', salt: b64(env.kdf.salt), iterations: env.kdf.iterations, hash: env.kdf.hash },
-        material, { name: 'AES-GCM', length: 256 }, false, ['decrypt'],
-      )
+        material, { name: 'AES-GCM', length: 256 }, false, ['decrypt'])
       const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64(env.iv) }, key, b64(env.ciphertext))
       out.sk = new TextDecoder().decode(plain)
-      const record = JSON.parse(localStorage.getItem('imani-wallet:terminal') ?? '{}')
-      out.voucherId = record.voucherId ?? ''
-      out.stall = record.stallPubkey ?? ''
-      // The credential's secret is taken from B3's own Sell request below, where it matters.
+      const record = JSON.parse(localStorage.getItem('imani-wallet:terminal') || '{}')
+      out.voucherId = record.voucherId || ''
+      out.stall = record.stallPubkey || ''
     } catch (e) {
       out.error = String(e)
     }
     return out
-  }, TILL_PASSPHRASE)
+  })()`
+  // The credential's secret is taken from B3's own Sell request, where it matters.
+  return (await till.evaluate(source)) as TillKey
 }
 
 /** A request signed with NIP-98 by B3's K and naming its credential, as its signedFetch does. */
@@ -566,32 +572,35 @@ async function tillSells(till: Page, customerPubkey: string, amount: string): Pr
  * The wallet writes `validation.warrant` on every received row (voucherValidationRecord.ts).
  */
 async function couponVerdict(customer: Page, nonce: string): Promise<string> {
-  for (let i = 0; i < 24; i++) {
-    await customer.goto(`${BASE}/`, { waitUntil: 'load' })
-    const verdict = await customer.evaluate(async (wanted) => {
-      const dbs = (await indexedDB.databases()).filter((d) => d.name?.startsWith('imani-wallet-'))
-      for (const info of dbs) {
-        const db = await new Promise<IDBDatabase>((ok, ko) => {
-          const r = indexedDB.open(info.name!)
+  // Source text, for the same tsx reason as `tillKey`.
+  const source = `(async () => {
+    const wanted = ${JSON.stringify(nonce)}
+    const dbs = (await indexedDB.databases()).filter((d) => (d.name || '').startsWith('imani-wallet-'))
+    for (const info of dbs) {
+      const db = await new Promise((ok, ko) => {
+        const r = indexedDB.open(info.name)
+        r.onsuccess = () => ok(r.result)
+        r.onerror = () => ko(r.error)
+      })
+      for (const store of Array.from(db.objectStoreNames)) {
+        const rows = await new Promise((ok) => {
+          const r = db.transaction(store).objectStore(store).getAll()
           r.onsuccess = () => ok(r.result)
-          r.onerror = () => ko(r.error)
+          r.onerror = () => ok([])
         })
-        for (const store of Array.from(db.objectStoreNames)) {
-          const rows = await new Promise<unknown[]>((ok) => {
-            const r = db.transaction(store).objectStore(store).getAll()
-            r.onsuccess = () => ok(r.result as unknown[])
-            r.onerror = () => ok([])
-          })
-          for (const row of rows) {
-            const s = JSON.stringify(row)
-            if (!s.includes(wanted)) continue
-            const m = s.match(/"warrant":"(\w+)"/)
-            if (m) return m[1]
-          }
+        for (const row of rows) {
+          const s = JSON.stringify(row)
+          if (!s.includes(wanted)) continue
+          const m = s.match(/"warrant":"(\\w+)"/)
+          if (m) return m[1]
         }
       }
-      return ''
-    }, nonce)
+    }
+    return ''
+  })()`
+  for (let i = 0; i < 24; i++) {
+    await customer.goto(`${BASE}/`, { waitUntil: 'load' })
+    const verdict = (await customer.evaluate(source)) as string
     if (verdict) return verdict
     await customer.waitForTimeout(5_000)
   }
@@ -615,6 +624,11 @@ async function setUpDevice(
   await owner.getByRole('button', { name: role }).click()
   await owner.getByLabel("Or enter the device's key").fill(key)
   await owner.getByRole('button', { name: 'Continue' }).click()
+  // Add stays disabled when enrolment is refused (allowance, licence, a live row): say why.
+  if (!(await owner.getByRole('button', { name: 'Add terminal' }).isEnabled({ timeout: 15_000 }).catch(() => false))) {
+    console.log(`  (Add terminal is disabled: ${(await text(owner)).slice(0, 300)})`)
+    return false
+  }
   await owner.getByRole('button', { name: 'Add terminal' }).click()
   const setup = owner.getByTestId('setup-code')
   if (!(await setup.waitFor({ timeout: 90_000 }).then(() => true, () => false))) return false
