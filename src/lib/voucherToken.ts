@@ -721,7 +721,7 @@ function lockedVoucherFrom(secret: string): SignedVoucherFields | null {
  * the signature), rendering the four numeric tags bare and everything else
  * quoted.
  */
-function lockedCanonicalBytes(dataHex: string, nonce: string, rows: unknown[][]): Uint8Array {
+export function lockedCanonicalBytes(dataHex: string, nonce: string, rows: unknown[][]): Uint8Array {
   const NUMERIC = ['face_value', 'expires_at', 'face_decimals', 'issuance_ratio']
   const AFTER_SIGNING = ['issuer_sig', 'issuer_pubkey']
 
@@ -760,7 +760,7 @@ function lockedCanonicalBytes(dataHex: string, nonce: string, rows: unknown[][])
  * refused. Mirrors `VoucherCanonicalBytes.hasCanonicalNumericTags` on the Java
  * side, and the two must stay in step. cashu-voucher#48.
  */
-function hasCanonicalNumericTags(rows: unknown[][]): boolean {
+export function hasCanonicalNumericTags(rows: unknown[][]): boolean {
   const NUMERIC = ['face_value', 'expires_at', 'face_decimals', 'issuance_ratio']
   return rows.every((row) => {
     if (!NUMERIC.includes(String(row[0]))) return true
@@ -1054,7 +1054,15 @@ export function verifyVoucher(v: SignedVoucherFields): VoucherVerification {
     if (schnorr.verify(sig, sha256(voucherCanonicalBytes(v, false)), pub)) {
       return { signatureValid: true, legacyCanonical: false }
     }
-    if (schnorr.verify(sig, sha256(voucherCanonicalBytes(v, true)), pub)) {
+    // The legacy form truncates every number, but only `issuance_ratio` was ever fractional on a
+    // genuine pre-fix voucher. A fraction in face_value, expires_at or face_decimals is a rewrite
+    // chosen to truncate back to the signed integer (expires_at 1000 -> 1000.5, which Java's
+    // Long.parseLong then reads as no expiry at all), so it gets no legacy window (#194, mirroring
+    // cashu-voucher#54's `integralTagsAreIntegers`).
+    const integral = [v.faceValue, v.expiresAt, v.faceDecimals].every(
+      (n) => n === undefined || Number.isInteger(n),
+    )
+    if (integral && schnorr.verify(sig, sha256(voucherCanonicalBytes(v, true)), pub)) {
       return { signatureValid: true, legacyCanonical: true }
     }
     return { signatureValid: false, legacyCanonical: false }

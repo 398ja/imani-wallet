@@ -148,6 +148,26 @@ describe('verifyVoucher', () => {
   it('returns not-verified rather than throwing on malformed input', () => {
     expect(verifyVoucher({ ...STAGING, issuerSignature: 'nonsense' }).signatureValid).toBe(false)
   })
+
+  /*
+    #194, mirroring cashu-voucher#54. The legacy form truncates every number before hashing, so
+    on this real legacy voucher an expiry rewritten from 1808069579 to 1808069579.5 hashes to the
+    very bytes the issuer signed. Java's Long.parseLong then reads that expiry as ABSENT, so an
+    expired coupon would pass an offline check as one that never expires. Only the ratio was
+    ever fractional on a genuine voucher, so a fraction anywhere else gets no legacy window.
+  */
+  it('refuses an expiry rewritten to a fraction under the legacy window (#194)', () => {
+    expect(verifyVoucher({ ...STAGING, expiresAt: 1808069579.5 })).toEqual({
+      signatureValid: false,
+      legacyCanonical: false,
+    })
+  })
+
+  it('refuses a fractional face value or face_decimals under the legacy window (#194)', () => {
+    // 1000.9 truncates to the signed 1000; 2.5 truncates to the signed 2.
+    expect(verifyVoucher({ ...STAGING, faceValue: 1000.9 }).signatureValid).toBe(false)
+    expect(verifyVoucher({ ...STAGING, faceDecimals: 2.5 }).signatureValid).toBe(false)
+  })
 })
 
 describe('javaDoubleToString', () => {
