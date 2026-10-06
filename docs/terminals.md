@@ -108,6 +108,12 @@ anything stored beside it. A session lasts **up to 12 hours**, which is one
 trading day: a terminal re-authenticates when it opens in the morning and never
 in the middle of a shift.
 
+The authority must also be **signed by a key this app was built to trust**
+(`VITE_VOUCHER_ISSUER_PUBKEYS`, the gateway's voucher issuing key). A build that
+names none opens no terminal at all, and says it *cannot confirm who issued this
+terminal's authority*. This is deliberate: the signature is checked against a key
+the authority itself carries, so without the list anyone could sign one.
+
 If the mint cannot be reached when it opens, the terminal still opens, but on
 **reduced authority**: it can redeem, never sell. Redemption must never wait for
 a network, and selling creates value, so selling waits for a check that
@@ -116,9 +122,16 @@ succeeded.
 If you revoked it, it does not open: it says it is **no longer in service** and
 offers only **Take this terminal out of service**.
 
+If its authority cannot be read, is not for this device, or was signed by a key
+the app does not trust, it does not open either, and that authority can never be
+handed back from the device. It offers **Remove this terminal from this device**
+instead, which erases everything the terminal kept on the device (as logging out
+does). It does not revoke anything: revoke it from your terminal list too.
+
 **Lock when idle.** After the time you chose when adding it (ten minutes unless
 you changed it), an untouched till locks itself and asks for the passphrase
-again. Staff can also tap **Lock**. Unlocking again within the 12 hours needs
+again. The time is signed into the terminal's authority, so editing the device
+cannot switch it off. (Terminals added before this read it from the device.) Staff can also tap **Lock**. Unlocking again within the 12 hours needs
 only the passphrase. Reloading the page locks it too.
 
 What a terminal shows:
@@ -139,7 +152,11 @@ Same as on the owner's own till, minus whatever the role excludes:
 - **Redeem** — show the payment request QR, the customer scans and confirms, the
   screen goes to paid on its own. The customer's coupon goes to your stall, not
   to the terminal, so the terminal learns it was paid by asking the gateway, a
-  few seconds after the customer confirms. Your own phone receives the coupon
+  few seconds after the customer confirms. It says **Paid** only when the
+  gateway confirms your stall received at least the amount asked, in your own
+  coupons, swapped at the mint. Before showing the QR the terminal tells the
+  gateway what it is asking for, so a customer who reads the code cannot change
+  the terms; if the gateway cannot be told, the terminal does not show the code. Your own phone receives the coupon
   the next time it is open.
 - **Sell** — only on a *Sell and redeem* terminal, and **not at all yet**: a
   terminal's home screen has no Sell button and says selling is not available

@@ -94,7 +94,16 @@ REDUCED exactly as `loginTerminal` already decides (`wallet:src/lib/terminalLogi
 
 On top of the 12-hour session, an unlocked till locks itself after the owner's
 **idle lock** period with no touch or key press (default 10 minutes, or off,
-decision 2). Locking drops the in-memory signer and returns to
+decision 2). Since the #160 review the period is signed into the credential's
+metadata (`idle_lock_minutes`) and the till reads it from there. A credential
+minted earlier carries none, and the device record's value (delivered in the
+stall-sealed DM) is used. Editing it buys only a till that stays open longer on a
+device the editor already holds unlocked, which is the threat the 12-hour session
+bounds.
+
+A terminal record **without a token** is still a terminal: `Entry` routes it to
+`/terminal/unlock` (`isTerminalDevice`), unlock refuses it as unreadable, and it
+is offered local removal. It never reaches `/login`. Locking drops the in-memory signer and returns to
 `/terminal/unlock`. It does not end the 12-hour session's mint check: unlocking
 again within the session needs only the passphrase.
 
@@ -318,6 +327,10 @@ the mint is asked (ADR 0006 ordering):
 | Replayed or forwarded credential DM | Inert without `K`. `completeEnrolment` refuses a credential not locked to the pending key (`wallet:src/lib/terminalEnrol.ts:179`) and runs once |
 | Wrong-stall credential (hijack) | The device accepts only the offer the owner's setup code names, sealed by that stall; the operator then confirms stall name and check code (section 4.2) |
 | Edited `localStorage` raises the role | Login derives role, stall and lock from the **token's signed bytes** (`verifyVoucher` plus `issuerAllowlist`), never from stored fields. Closes IW-15 (`wallet:src/lib/terminalEnrol.ts:269-281`) |
+| Self-signed credential | `verifyVoucher` checks the signature against the `issuer_pubkey` the token carries, so it proves only that the bytes are intact. The signer must be on `VITE_VOUCHER_ISSUER_PUBKEYS`, and **an empty list admits no terminal** (#160 review). Fail closed: unlike a customer's coupon, a terminal credential is authority, not money, and the mint does not catch a forgery (next row) |
+| Forged credential and NUT-07 | **Measured 2026-10-06:** the mint answers `UNSPENT` for a proof it never signed. NUT-07 looks `Y = hash_to_curve(secret)` up in the spent set and never checks `C`, so a forged proof with a fresh nonce reads UNSPENT on the local stack (`/api/v1/wallet/token/validate`) and on staging (`mint.staging.398ja.xyz/v1/checkstate`). The mint check is therefore a **revocation** check only, never an authenticity check: authenticity rests entirely on the signer allowlist above |
+| Customer fakes "Paid" on Redeem | Until the #160 review, any completed send carrying the request id was Paid, and the payer sets that id. The till now registers the request's terms with gateway-core before showing the code (first registration wins), gateway-core counts only value that reached the registered recipient, of its issuer and unit, swapped at the mint and signed by a trusted issuer key (core#131), and the till re-checks recipient, issuer, unit and amount in the answer |
+| Refused device stranded | An unreadable, foreign or untrusted credential can never be handed back, so decommission fails. The unlock screen offers a local removal that clears everything logout clears, and tells the operator the owner must still revoke it |
 | Edited record names another device | The device key comes from the unlocked signer and must equal `lock_key`. Closes G9 |
 | Terminal mints another terminal | **New refusal:** gateway-customer refuses `merchant_metadata.terminal` or a licence marker when the issuer was resolved from a terminal credential (`customer:.../rest/controller/VoucherController.java:277`). Without it, today's code would let a *Sell and redeem* terminal mint terminal credentials for its stall |
 | Terminal reaches owner surfaces | It never holds `coupon:issue`. Only `POST /api/v1/portal/vouchers` and cashback issue accept `voucher:issue:<stall>` |

@@ -31,6 +31,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **A customer could fake "Paid" on a terminal's Redeem (#160 review, BLOCKER).** The till
+  showed Paid for any fulfilment gateway-core reported, which was any completed send carrying
+  the request id, and the payer sets that id. Reading it off the QR code and sending 1 sat to
+  yourself was enough. The till now registers the request's terms with gateway-core before it
+  shows the code (`PUT /api/v1/atomic/fulfilment/{id}`, first registration wins), and Paid
+  needs the answer to name the stall as recipient and as issuer, in the request's unit, for at
+  least the request's amount. An answer missing any of these, or a request gateway-core would
+  not register, is never Paid. Needs imani-gateway-core#131.
+- **A terminal credential needs a signer this build trusts (#160 review, IW-15).** The
+  signature is checked against the `issuer_pubkey` the token carries, and an unset
+  `VITE_VOUCHER_ISSUER_PUBKEYS` meant "unchecked". No deploy set it, so a credential re-signed
+  with any key opened an issuing till for any stall. A terminal credential is now refused
+  unless its signer is on the list, and an empty list refuses every one ("cannot confirm who
+  issued this terminal's authority"). Customer coupons keep the old rule. **Deploy:** set
+  `VITE_VOUCHER_ISSUER_PUBKEYS` to the gateway's voucher issuing key (imani-deploy PR), or no
+  terminal opens.
+- **A refused terminal is no longer stranded (#160 review).** A credential that cannot be read,
+  is not this device's, or has an untrusted signer can never be handed back, so Take out of
+  service failed and erased nothing. Those refusals now offer **Remove this terminal from this
+  device**, which clears everything logout clears and says the owner should still revoke it.
+- **A terminal record without its token stays a terminal (#160 review).** It used to read as not
+  enrolled, so the device went to `/login` and its terminal key opened a customer session
+  (spec 2.3). It now reaches the unlock screen, is refused, and is offered removal.
+- **The idle lock is signed (#160 review).** The owner's idle lock is signed into the
+  credential (`idle_lock_minutes`), and the till prefers it to the editable device record.
+  Credentials minted before this fall back to the record.
 - **The device record can no longer raise a terminal's role (IW-15).** Login read the stall,
   role and lock from `merchantMetadata`, `issuerId` and `permissions` stored beside the token,
   which anyone holding the device could edit: a redeem-only till could be edited into an
