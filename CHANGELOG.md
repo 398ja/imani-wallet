@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.3] - 2026-10-06
+
 ### Fixed
 
 - **A voucher whose expiry was stored as a numeric string is no longer spent last** (#157).
