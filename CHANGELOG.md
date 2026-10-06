@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A terminal opens its till (#160 phase 3).** A device set up as a terminal now lands on
+  `/terminal/unlock`, where its passphrase opens the till. Unlocking never opens a NAP
+  session, so a terminal makes no call to `/api/v1/auth/*` and is never signed in as a
+  customer. The mint's NUT-07 answer decides the session: `UNSPENT` opens FULL, unreachable
+  opens REDUCED (redeem only), `SPENT` refuses with "no longer in service" (G8: before this,
+  every terminal opened REDUCED because nothing asked the mint).
+- **The till is its own app.** `TerminalApp` sits beside `AuthedApp` and starts no DM poll,
+  wallet sync or push. It offers the till (terminal and stall name), Redeem, Settings →
+  Security → Take out of service, and Lock. Every other path, the owner's dashboard included,
+  lands on the till; a locked till sends every path to the unlock screen.
+- **Redeem on a terminal says Paid (G12).** The customer's coupon goes to the stall, so a
+  terminal's own wallet never sees it. On a terminal the Redeem screen asks gateway-core
+  (`GET /api/v1/atomic/fulfilment/{id}`, NIP-98 signed by the terminal key) every 3 s, and
+  only an answer naming this stall counts. The dev proxy routes that path to gateway-core.
+- **The idle lock (decision 2).** An untouched till locks after the owner's chosen minutes (10
+  by default, `0` is never), and Lock does the same. Locking drops the signer and keeps the
+  12-hour session, so unlocking again within it needs only the passphrase.
+
+### Security
+
+- **The device record can no longer raise a terminal's role (IW-15).** Login read the stall,
+  role and lock from `merchantMetadata`, `issuerId` and `permissions` stored beside the token,
+  which anyone holding the device could edit: a redeem-only till could be edited into an
+  issuing one. Login now reads them from the token's own bytes, after checking its single
+  `P2PK_VOUCHER` lock equals the metadata's `lock_key`, its signature, and (where the build
+  names them) its signing key. The record keeps only the token as authority, a record without
+  one reads as not enrolled, and `completeEnrolment` refuses a token that does not match the
+  credential it verified. `enrolledActor` and its `nosemgrep` are gone, so Semgrep reports 4
+  findings, down from 5.
+
 ## [0.14.3] - 2026-10-06
 
 ### Fixed

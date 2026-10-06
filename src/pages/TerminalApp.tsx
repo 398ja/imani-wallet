@@ -4,9 +4,9 @@ import { Lock, QrCode, Send, Settings } from 'lucide-react'
 
 import { Alert, Button, Centered, Input, PageHeader, Panel, Screen, ListSection, BackLink } from '../components/ui'
 import { fetchMerchantRecord, type MerchantProfile } from '../lib/merchant'
-import { storedTerminal } from '../lib/terminalEnrol'
+import { profileName, refreshProfile } from '../lib/profile'
+import { forgetTerminal, storedTerminal } from '../lib/terminalEnrol'
 import {
-  forgetTerminalSession,
   lockTerminal,
   openTill,
   unlockTerminal,
@@ -52,6 +52,8 @@ export function TerminalApp() {
   const [till, setTill] = useState<Till | null>(() => openTill())
   const record = useMemo(() => storedTerminal(), [])
   const [stall, setStall] = useState<MerchantProfile | null>(null)
+  // The stall's public name, from its kind-0 profile, as the setup screen showed it.
+  const [stallName, setStallName] = useState<string | null>(null)
   const navigate = useNavigate()
   // One check function for the life of the till, so the Redeem screen's poll is not restarted on
   // every render. It signs with whichever terminal signer is installed when it runs.
@@ -61,6 +63,7 @@ export function TerminalApp() {
     if (!record) return
     let live = true
     void fetchMerchantRecord(record.stallPubkey).then((m) => live && setStall(m))
+    void publicStallName(record.stallPubkey).then((n) => live && setStallName(n))
     return () => {
       live = false
     }
@@ -89,7 +92,7 @@ export function TerminalApp() {
             <TerminalUnlockPage
               name={record.name}
               terminalPubkey={record.terminalPubkey}
-              stallName={stall ? stallDisplayName(stall) : null}
+              stallName={stallName}
               onUnlocked={(t) => {
                 setTill(t)
                 navigate('/', { replace: true })
@@ -107,7 +110,9 @@ export function TerminalApp() {
     <Routes>
       <Route
         path="/"
-        element={<TerminalHome till={till} stall={stall} terminalName={record.name} onLock={lock} />}
+        element={
+          <TerminalHome till={till} stall={stall} stallName={stallName} terminalName={record.name} onLock={lock} />
+        }
       />
       <Route
         path="/redeem"
@@ -145,10 +150,11 @@ export function TerminalApp() {
   )
 }
 
-function stallDisplayName(stall: MerchantProfile): string | null {
-  const named = stall as unknown as { name?: unknown; displayName?: unknown }
-  const value = typeof named.displayName === 'string' ? named.displayName : named.name
-  return typeof value === 'string' && value.trim() ? value.trim() : null
+/** The stall's public name from its profile, or null. Never throws. */
+async function publicStallName(stallPubkey: string): Promise<string | null> {
+  const profile = await refreshProfile(stallPubkey).catch(() => null)
+  if (!profile || (!profile.displayName && !profile.nip05)) return null
+  return profileName(profile)
 }
 
 /**
@@ -175,6 +181,7 @@ export function TerminalUnlockPage({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [refused, setRefused] = useState<string | null>(null)
+  const [notTerminal, setNotTerminal] = useState(false)
 
   const submit = async () => {
     setBusy(true)
@@ -187,7 +194,10 @@ export function TerminalUnlockPage({
         return
       }
       if (out.reason === 'wrong-passphrase') setError(out.message)
-      else setRefused(out.message)
+      else if (out.reason === 'not-a-terminal-key') {
+        setError(out.message)
+        setNotTerminal(true)
+      } else setRefused(out.message)
     } finally {
       setBusy(false)
     }
@@ -232,6 +242,19 @@ export function TerminalUnlockPage({
         </Button>
       </div>
       {error && <Alert>{error}</Alert>}
+      {notTerminal && (
+        // Only the stale terminal RECORD is forgotten: the key, the person's wallet, is kept.
+        <Button
+          variant="outline"
+          className="w-full"
+          onClick={() => {
+            forgetTerminal()
+            window.location.replace('/login')
+          }}
+        >
+          Open the wallet
+        </Button>
+      )}
     </div>
   )
 }
@@ -239,11 +262,13 @@ export function TerminalUnlockPage({
 function TerminalHome({
   till,
   stall,
+  stallName,
   terminalName,
   onLock,
 }: {
   till: Till
   stall: MerchantProfile | null
+  stallName: string | null
   terminalName?: string
   onLock: () => void
 }) {
@@ -265,7 +290,7 @@ function TerminalHome({
             {terminalName ?? 'Terminal'}
           </p>
           <p className="text-sm text-mono-500" data-testid="stall-name">
-            {stall ? (stallDisplayName(stall) ?? 'Your stall') : 'Reading the stall…'}
+            {stallName ?? (stall ? 'Your stall' : 'Reading the stall…')}
           </p>
         </div>
         <div className={`grid gap-3 ${mayIssue && mayRedeem ? 'grid-cols-2' : 'grid-cols-1'}`}>
@@ -351,7 +376,8 @@ function DecommissionButton({ devicePubkey }: { devicePubkey: string }) {
             disabled={busy}
             onClick={() => {
               setBusy(true)
-              forgetTerminalSession()
+              // The signer stays installed: handing a live credential back needs the witness the
+              // terminal key signs. On success the document reloads, which drops it.
               void decommissionTerminal(terminalMintApi(), devicePubkey).then((out) => {
                 if (!out.done) {
                   setError(out.message)

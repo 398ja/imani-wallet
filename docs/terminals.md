@@ -92,36 +92,55 @@ flowchart LR
     F --> G[Terminal trades for the stall]
 ```
 
-Until the next version can open the till, a device set up as a terminal offers
-**Remove this terminal from this device** on its first screen. That erases
-everything logging out erases: the terminal's key and passphrase, its record,
-every other piece of app data in the browser, and its local database. It does
-not take the terminal out of service: revoke it from your list for that. If the
-key cannot be erased, the screen says so instead of moving on.
-
-The terminal now appears in your list, and it logs itself in from then on.
+The terminal now appears in your list as in service, and the device offers
+**Open the till**.
 
 ## Opening a terminal for trade
 
 Staff open the terminal with its **passphrase**. That is what stops a stolen
-tablet from simply being switched on and used.
+tablet from simply being switched on and used. A terminal never signs in as an
+account: it has no balance, no inbox and no login, only its authority for your
+stall.
 
-Each time it opens, the terminal checks that its authority is still live. A
-session lasts **up to 12 hours**, which is one trading day: a terminal
-re-authenticates when it opens in the morning and never in the middle of a
-shift.
+Each time it opens, the terminal checks with the mint that its authority is
+still live, and reads its stall and role from the authority itself, never from
+anything stored beside it. A session lasts **up to 12 hours**, which is one
+trading day: a terminal re-authenticates when it opens in the morning and never
+in the middle of a shift.
 
 If the mint cannot be reached when it opens, the terminal still opens, but on
 **reduced authority**: it can redeem, never sell. Redemption must never wait for
 a network, and selling creates value, so selling waits for a check that
 succeeded.
 
+If you revoked it, it does not open: it says it is **no longer in service** and
+offers only **Take this terminal out of service**.
+
+**Lock when idle.** After the time you chose when adding it (ten minutes unless
+you changed it), an untouched till locks itself and asks for the passphrase
+again. Staff can also tap **Lock**. Unlocking again within the 12 hours needs
+only the passphrase. Reloading the page locks it too.
+
+What a terminal shows:
+
+| Screen | Redemption only | Sell and redeem |
+| --- | --- | --- |
+| Till: its name and your stall's | yes | yes |
+| Redeem | yes | yes |
+| Sell | no | not yet, see [Known gaps today](#known-gaps-today) |
+| Settings → Security → Take out of service | yes | yes |
+| Lock | yes | yes |
+| Your dashboard, coupons, records, backup, terminals | no | no |
+
 ## Serving customers from a terminal
 
 Same as on the owner's own till, minus whatever the role excludes:
 
 - **Redeem** — show the payment request QR, the customer scans and confirms, the
-  screen goes to paid on its own.
+  screen goes to paid on its own. The customer's coupon goes to your stall, not
+  to the terminal, so the terminal learns it was paid by asking the gateway, a
+  few seconds after the customer confirms. Your own phone receives the coupon
+  the next time it is open.
 - **Sell** — only on a *Sell and redeem* terminal, and **not at all yet**: a
   terminal's home screen has no Sell button and says selling is not available
   yet, and the Sell and cashback screens, if reached by typing the address,
@@ -268,20 +287,18 @@ device.
 
 ## Known gaps today
 
-Being straight about it: the rules, the screens, and the enforcement all exist
-and are tested, but three seams between them are not yet wired, so **a second
-till cannot be run end to end right now**. The plan to close them is
+Being straight about it: a terminal can now be set up, opened and used to
+**redeem** end to end. It cannot yet **sell**. The plan to close that is
 [the terminals-in-service spec](spec-terminals-in-service.md).
 
-1. **A terminal is set up, but cannot yet open its till.** On the device,
+1. **Setting a terminal up.** On the device,
    choose **Set this device up as a terminal** on the first screen. It shows a
    code. On your phone, **Add terminal** creates the terminal's authority,
    checks it, sends it to that code, and shows a setup code for the device to
    scan, which names the one authority it may accept. The device then shows your stall's
    name and a six-digit check code: confirm both match your phone, and set a
    passphrase of at least 8 characters. Your list then shows the terminal as in
-   service. Opening the till on the device with that passphrase arrives in the
-   next version. A terminal still waiting for its device is cancelled
+   service, and the device opens its till with that passphrase. A terminal still waiting for its device is cancelled
    automatically after 24 hours, at most two can wait at once, and waiting
    terminals do not use up your free terminal. The gateway enforces the
    two-waiting limit and the 24 hours too, so a second phone or a cleared
@@ -308,11 +325,7 @@ till cannot be run end to end right now**. The plan to close them is
    credential it holds, as its device, the first time it reads it. Anything else
    that mints a terminal credential must call
    `POST /api/v1/wallet/terminal-credentials/{id}/confirm` itself.
-2. **Login does not ask whether the authority is still live.** Every terminal
-   therefore opens on reduced authority (redeem, never sell), and revocation
-   does not bite at login. This fails safe rather than open — a revoked terminal
-   still cannot sell — but no full till can currently sell either.
-3. **A terminal cannot sell a coupon a customer will accept, so it does not
+2. **A terminal cannot sell a coupon a customer will accept, so it does not
    sell at all** (#159). Every coupon carries the stall's own signed
    authorisation for the sale (an issuance warrant). A terminal's key is not the
    stall's key, so the most it can send is a signed "none". Every wallet that

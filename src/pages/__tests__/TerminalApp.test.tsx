@@ -33,6 +33,10 @@ vi.mock('../../lib/merchant', async (importOriginal) => ({
     issuanceCurrency: 'GBP',
   }),
 }))
+vi.mock('../../lib/profile', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/profile')>()),
+  refreshProfile: async (pubkey: string) => ({ pubkey, displayName: 'Test Stall' }),
+}))
 // The Redeem screen itself is covered in RedeemPageTerminal.test.tsx; here only its route.
 vi.mock('../RedeemPage', () => ({ RedeemPage: () => <p>redeem-screen</p> }))
 

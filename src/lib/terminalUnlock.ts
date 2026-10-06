@@ -30,9 +30,11 @@ import type { TerminalActor } from './actor'
 
 export type UnlockOutcome =
   | { unlocked: true; devicePubkey: string; actor: TerminalActor; session: TerminalSession }
-  | { unlocked: false; reason: LoginRefusal | 'wrong-passphrase'; message: string }
+  | { unlocked: false; reason: LoginRefusal | 'wrong-passphrase' | 'not-a-terminal-key'; message: string }
 
 export const WRONG_PASSPHRASE = 'That passphrase does not open this terminal.'
+export const NOT_A_TERMINAL_KEY =
+  'That passphrase opens a wallet, not this terminal. Open the wallet instead.'
 
 /** The session the last unlock opened. In memory only: see the module comment. */
 let held: { devicePubkey: string; actor: TerminalActor; session: TerminalSession } | null = null
@@ -73,6 +75,14 @@ export async function unlockTerminal(
     return { unlocked: false, reason: 'wrong-passphrase', message: WRONG_PASSPHRASE }
   }
   const devicePubkey = getPublicKey(hexToBytes(privkeyHex))
+
+  // The key the passphrase opened is not the device the record names: this is a person's wallet
+  // beside a stale or planted terminal record, not a terminal (spec 2.2, one account per device).
+  // Nothing is installed and the mint is not asked, and the screen offers the wallet rather than
+  // "Take out of service", whose wipe would erase that person's key.
+  if (devicePubkey !== stored.terminalPubkey.toLowerCase()) {
+    return { unlocked: false, reason: 'not-a-terminal-key', message: NOT_A_TERMINAL_KEY }
+  }
 
   // Within the twelve hours and for the same key, the idle lock's re-unlock needs no mint call.
   if (held && held.devicePubkey === devicePubkey && sessionState(held.session, { now }).live) {

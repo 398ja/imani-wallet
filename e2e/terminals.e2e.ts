@@ -77,46 +77,6 @@ async function seedAndOpen(path: string, terminals: unknown[]) {
 }
 
 
-/**
- * Make the running app believe this device is an enrolled terminal.
- *
- * Writes the record `completeEnrolment` writes, using the REAL
- * gateway-minted credential. The key and shape are the app's own, so a change
- * to either fails here — which is the point of doing it in the browser rather
- * than against a mock.
- */
-async function beATerminal(role: 'redeem-only' | 'issue-and-redeem') {
-  const fs = await import('node:fs')
-  const file =
-    role === 'redeem-only'
-      ? 'src/lib/__tests__/fixtures/live-terminal-credential.token'
-      : 'src/lib/__tests__/fixtures/live-terminal-till.token'
-  const token = fs.readFileSync(file, 'utf8').trim()
-
-  // Parsed with the app's own reader rather than restated here.
-  const { parseVoucherToken } = await import('../src/lib/voucherToken')
-  const parsed = parseVoucherToken(token)
-  const metadata = JSON.parse(String(parsed.voucher.merchantMetadata))
-
-  await goto(page, BASE)
-  await page.evaluate(
-    ([record]) => localStorage.setItem('imani-wallet:terminal', JSON.stringify(record)),
-    [
-      {
-        stallPubkey: metadata.stall_pubkey,
-        role: metadata.role,
-        terminalPubkey: metadata.lock_key,
-        permissions: [],
-        name: metadata.name,
-        enrolledAt: 1_000_000,
-        token,
-        merchantMetadata: parsed.voucher.merchantMetadata,
-        issuerId: parsed.voucher.issuerId,
-      },
-    ] as const,
-  )
-}
-
 /** Back to the stall's own device. */
 async function beTheOwner() {
   await goto(page, BASE)
@@ -395,35 +355,11 @@ async function main() {
   check('and the oldest keeps serving', lapse.includes('Oldest till'))
   check('no uncaught errors', pageErrors.length === 0, pageErrors.join('; '))
 
-  console.log('\n#160 phase 0 (G9): an injected terminal record is not a terminal')
-  /**
-   * `beATerminal()` writes a real credential's record into the OWNER's session.
-   * Until #160 phase 0 the app compared that record's device key with itself,
-   * so the owner's browser became the terminal. It now compares the
-   * credential's lock with the key that unlocked the session, which is the
-   * owner's, so the record is not about this session. Since the #160 review it
-   * is ignored rather than refused: the owner keeps their own home screen and
-   * is not locked out by a record for another device. No terminal-only screen
-   * (NotTrading, decommissioning) appearing is the acceptance check.
-   *
-   * The role-gating checks that used to follow (ticket 07 and 08: no Sell on a
-   * redeem-only till, dashboard hidden, decommission offered) need a session
-   * unlocked by the terminal's OWN key. That arrives with phase 3's
-   * `/terminal/unlock`, which restores them here with no injected state. Until
-   * then they are covered by the component suites: SellPageTerminal,
-   * CashbackIssuePageTerminal, SecurityPageTerminal, BackupPageTerminal and
-   * MerchantHomePage.
-   */
-  await beATerminal('redeem-only')
-  await goto(page, `${BASE}/`)
-  await page.waitForTimeout(2500)
-  const injected = await page.locator('body').innerText()
-  check(
-    'a record naming another device is ignored, not treated as a terminal or a refusal',
-    !/not for this device|no longer in service|out of service/i.test(injected),
-    injected.replace(/\s+/g, ' ').slice(0, 160),
-  )
-  check('no uncaught errors with an injected record', pageErrors.length === 0, pageErrors.join('; '))
+  // `beATerminal()` is retired (#160 phase 3, spec 8). It injected a terminal record into the
+  // owner's browser; the real two-browser flow in `terminalSetup.e2e.ts` now sets a device up,
+  // opens its till, redeems and is revoked with no injected state. The injected-record case it
+  // covered (an owner's key beside a record for another device) is a unit test:
+  // `terminalUnlock.test.ts`, "a wallet key beside a terminal record is not a terminal".
 
   console.log('\nThe owner is unaffected by all of it')
   await beTheOwner()
