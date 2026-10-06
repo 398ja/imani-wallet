@@ -17,6 +17,8 @@ import { forgetResume } from './resume'
 import { wipeWallet } from './wallet'
 import { roleOf, type TerminalRole } from './terminalRole'
 import { terminalActor, type TerminalActor, type TerminalCredential } from './actor'
+import { credentialFromToken } from './terminalLogin'
+import { parseTerminalMetadata } from './terminalCredential'
 
 /**
  * Setting a device up as a terminal, from the device's side.
@@ -155,46 +157,37 @@ export function beginEnrolment(): EnrolmentCode {
   }
 }
 
-/** A terminal that has completed enrolment, as stored on the device. */
+/**
+ * A terminal that has completed enrolment, as stored on the device.
+ *
+ * Since #160 phase 3 the `token` is the only authority here (spec section 6). Login reads the
+ * stall, role and lock from the token's own signed bytes (`credentialFromToken`), so a record
+ * edited to claim another role or stall changes nothing. The other fields are display hints.
+ * `permissions`, `merchantMetadata` and `issuerId` are gone: they were read back as authority,
+ * and anyone holding the device could edit them (IW-15). A record without a `token` reads as not
+ * enrolled.
+ */
 export interface StoredTerminal {
-  /** The stall this terminal acts for. */
+  /** The stall this terminal acts for. A display hint: login reads it from the token. */
   stallPubkey: string
+  /** A display hint: login reads the role from the token. */
   role: TerminalRole
   /** This device's own public key. The private half is in the key store. */
   terminalPubkey: string
-  permissions: readonly string[]
   /** What the owner named it, for the device to show its operator. */
   name?: string
   enrolledAt: number
   /**
-   * The credential voucher itself, ticket 10.
+   * The credential voucher itself, and the only authority on this record.
    *
-   * Kept because the credential IS the authority: login re-derives permissions
-   * from its signed metadata rather than trusting the fields above, and
-   * revocation is the act of spending this token. Without it the device would
-   * hold a description of its authority and not the authority.
-   *
-   * Optional so a device enrolled before ticket 10 still reads back as
-   * enrolled rather than as corrupt — it simply cannot do the credential-based
-   * login until it is enrolled again.
+   * Login re-derives everything from its signed bytes, and revocation is the act of spending it.
    */
-  token?: string
-  /** The voucher's `merchant_metadata`, which login re-verifies. */
-  merchantMetadata?: string
-  /**
-   * The voucher's `issuerId` — the STALL.
-   *
-   * Not `issuerPublicKey`, which is the gateway's signing key and identical on
-   * every voucher it mints. Minting one for real is what surfaced the
-   * difference; checking the stall against the wrong one refuses every genuine
-   * credential.
-   */
-  issuerId?: string
+  token: string
   /** The credential's voucher id (#160 phase 2), which the enrolled DM names. */
   voucherId?: string
   /**
-   * Minutes of no touch before the till locks itself (decision 2). `0` is off. Phase 3
-   * enforces it. A display hint like the rest: the owner chose it, and nothing here grants.
+   * Minutes of no touch before the till locks itself (decision 2). `0` is off, missing is the
+   * default. A display hint like the rest: the owner chose it, and nothing here grants.
    */
   idleLockMinutes?: number
 }
@@ -221,13 +214,11 @@ export async function completeEnrolment(
   passphrase: string,
   name?: string,
   /**
-   * The credential voucher, ticket 10.
-   *
-   * Optional so ticket 04's stand-in enrolment still works, but a terminal
-   * enrolled without it cannot do credential-based login — the authority it
-   * holds would be a description rather than the thing itself.
+   * The credential voucher, ticket 10. Required since #160 phase 3: the token is the only
+   * authority a terminal holds, and login reads it from the token's signed bytes. A record
+   * without one would read as not enrolled, so storing one is refused rather than written.
    */
-  voucher?: { token: string; merchantMetadata: string; issuerId: string },
+  voucher?: { token: string },
   /**
    * #160 phase 2. `voucherId` and `idleLockMinutes` are stored with the record, and
    * `announce` runs once the record is stored and before the pending key is forgotten, so
@@ -273,6 +264,22 @@ export async function completeEnrolment(
   if (!actor) {
     throw new Error('That code is not a valid authority for this terminal.')
   }
+  // And the token must say the same thing, from its own signed bytes, because the token is what
+  // login will read (#160 phase 3). A token for another stall, role or device is refused here
+  // rather than stored and refused at every unlock.
+  const facts = voucher?.token ? credentialFromToken(voucher.token) : null
+  const signed = facts ? parseTerminalMetadata(facts.merchantMetadata) : null
+  if (
+    !facts ||
+    !signed ||
+    signed.lock_key !== actor.terminalPubkey ||
+    signed.stall_pubkey !== actor.stallPubkey ||
+    facts.issuerId.toLowerCase() !== actor.stallPubkey ||
+    signed.role !== actor.role
+  ) {
+    throw new Error('That code is not a valid authority for this terminal.')
+  }
+  const token = voucher!.token
 
   // Only now is the key worth keeping — `registration.ts`'s comment, and the
   // same reason.
@@ -282,16 +289,9 @@ export async function completeEnrolment(
     stallPubkey: actor.stallPubkey,
     role: actor.role,
     terminalPubkey: actor.terminalPubkey,
-    permissions: [...actor.permissions],
     name: name?.trim() || undefined,
     enrolledAt: Date.now(),
-    ...(voucher
-      ? {
-          token: voucher.token,
-          merchantMetadata: voucher.merchantMetadata,
-          issuerId: voucher.issuerId,
-        }
-      : {}),
+    token,
     ...(options.voucherId ? { voucherId: options.voucherId } : {}),
     ...(options.idleLockMinutes !== undefined ? { idleLockMinutes: options.idleLockMinutes } : {}),
   }
@@ -352,22 +352,18 @@ export function storedTerminal(): StoredTerminal | null {
     if (typeof parsed.stallPubkey !== 'string' || typeof parsed.terminalPubkey !== 'string') {
       return null
     }
-    if (!Array.isArray(parsed.permissions)) return null
+    // A record without a token reads as not enrolled (#160 phase 3, spec 6): the token is the
+    // only authority, and a record that has none describes an authority it does not hold.
+    // Validated rather than cast: a number where the token belongs is no credential.
+    if (typeof parsed.token !== 'string' || !parsed.token) return null
 
     return {
       stallPubkey: parsed.stallPubkey,
       role,
       terminalPubkey: parsed.terminalPubkey,
-      permissions: parsed.permissions.filter((p): p is string => typeof p === 'string'),
       name: typeof parsed.name === 'string' ? parsed.name : undefined,
       enrolledAt: typeof parsed.enrolledAt === 'number' ? parsed.enrolledAt : 0,
-      // Validated like everything else here rather than cast: a record edited
-      // to carry a number where the token belongs must read as "no credential"
-      // and send the device back to enrolment, not into a login that throws.
-      token: typeof parsed.token === 'string' ? parsed.token : undefined,
-      merchantMetadata:
-        typeof parsed.merchantMetadata === 'string' ? parsed.merchantMetadata : undefined,
-      issuerId: typeof parsed.issuerId === 'string' ? parsed.issuerId : undefined,
+      token: parsed.token,
       voucherId: typeof parsed.voucherId === 'string' ? parsed.voucherId : undefined,
       idleLockMinutes:
         typeof parsed.idleLockMinutes === 'number' && parsed.idleLockMinutes >= 0
@@ -377,63 +373,6 @@ export function storedTerminal(): StoredTerminal | null {
   } catch {
     return null
   }
-}
-
-/**
- * The actor this device logs in as, re-verified from what was stored.
- *
- * NOT simply the stored record cast to an actor. The record is on disk, where anything could
- * have edited it, so it goes back through `terminalActor` - which re-checks that the permissions
- * match the role for that stall. A device whose storage was tampered with to add issuance is
- * refused here, at launch, rather than discovering it at the API.
- *
- * ## IW-16: the device key is an argument now
- *
- * This took no parameters and passed `stored.terminalPubkey` as BOTH the credential's `lockedTo`
- * and the supposed device key. `terminalActor` then evaluates `lockedTo !== device`, which was
- * `x !== x` - unreachable for any non-empty value. The comment beside it asserted "if that is
- * not this device's key, the check fails", a guarantee the function could not provide, because
- * it had no access to a device key at all. An always-true check that reads as load-bearing is
- * worse than no check: it stops anyone looking.
- *
- * ## IW-15: and the record is still not authenticated
- *
- * `storedTerminal()` validates types and that the role is in the catalog; nothing authenticates
- * the record as a whole. `terminalActor` re-derives permissions from the role via `grantFor`,
- * so a record that inflates `permissions` alone is caught - and one that changes `role` is not,
- * because the permissions are then re-derived consistently from the attacker's chosen role.
- * Anyone with a moment on an unlocked terminal edits `localStorage` and a redeem-only till
- * becomes an issuing one.
- *
- * The real fix is to derive the actor from the signed credential voucher (`credentialActor`,
- * which checks the lock against the device key and the issuer against the named stall) and
- * delete this path. Requiring the caller to supply a device key from the unlocked keystore is
- * the step that makes the check able to fail at all.
- *
- * @param devicePubkey this device's key, from the unlocked signer - never read back out of the
- *   record being checked
- */
-export function enrolledActor(devicePubkey: string): TerminalActor | null {
-  const stored = storedTerminal()
-  if (!stored) return null
-  if (!devicePubkey) return null
-
-  // Known and documented (IW-15): the role still comes from the unauthenticated record, and the
-  // credential-derived path is the real fix. What changed in Phase 2 is that the device key is
-  // now an independent argument, so the lock check can fail. The rule stays on so a NEW call
-  // site cannot be added without this conversation.
-  // nosemgrep: imani-role-from-local-storage
-  return terminalActor(
-    {
-      stallPubkey: stored.stallPubkey,
-      role: stored.role,
-      // The record names the device it was written for. It is compared against a key the caller
-      // supplied, so the two sides are now independent and the comparison can fail.
-      lockedTo: stored.terminalPubkey,
-      permissions: stored.permissions,
-    },
-    devicePubkey,
-  )
 }
 
 /** Erase the terminal record. The wipe half of decommissioning (ticket 08). */

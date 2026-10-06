@@ -10,6 +10,8 @@ import { useTerminalIdentity } from '../useTerminalIdentity'
 import { parseVoucherToken } from '../voucherToken'
 import { SESSION_KIND } from '../terminalSession'
 import { TERMINAL_ROLES } from '../terminalRole'
+import { generateSecretKey } from 'nostr-tools'
+import { buildLockedCredentialToken } from './voucherFixtures'
 
 /**
  * The hook that finally makes ticket 07's gating reachable.
@@ -165,6 +167,43 @@ describe('a real terminal', () => {
     await waitFor(() => expect(result.current.ready).toBe(true))
     expect(result.current.actor!.role).toBe(TERMINAL_ROLES.REDEEM_ONLY)
     expect(result.current.actor!.permissions).not.toContain(`voucher:issue:${STALL}`)
+  })
+})
+
+describe('#160 phase 3: login reads the token, never the fields stored beside it', () => {
+  // IW-15. The record's `merchantMetadata` used to be what login verified, and anyone holding the
+  // device can edit it. Here it is replaced with metadata claiming the issuing role, keeping the
+  // real token. The terminal must still log in as the redeem-only till its signed token says.
+  it('ignores metadata and issuer edited into the record', async () => {
+    const forged = JSON.stringify({
+      ...JSON.parse(String(parsed.voucher.merchantMetadata)),
+      role: TERMINAL_ROLES.ISSUE_AND_REDEEM,
+    })
+    enrol({ role: TERMINAL_ROLES.ISSUE_AND_REDEEM, merchantMetadata: forged })
+    const { result } = renderHook(() => useTerminalIdentity({ devicePubkey: DEVICE, ...mint('UNSPENT') }))
+
+    await waitFor(() => expect(result.current.ready).toBe(true))
+    expect(result.current.actor!.role).toBe(TERMINAL_ROLES.REDEEM_ONLY)
+    expect(result.current.actor!.permissions).not.toContain(`voucher:issue:${STALL}`)
+  })
+
+  // The record still claims a terminal, but its token's metadata was edited after signing, to
+  // claim the issuing role. The signature no longer verifies, so login refuses it as unreadable
+  // rather than trusting the edit or falling back to the stored fields.
+  it('refuses a token whose signed metadata was edited', async () => {
+    const real = JSON.parse(String(parsed.voucher.merchantMetadata)) as Record<string, unknown>
+    const forged = buildLockedCredentialToken({
+      stallKey: generateSecretKey(),
+      devicePubkey: DEVICE,
+      metadata: JSON.stringify(real),
+      tamperMetadata: JSON.stringify({ ...real, role: TERMINAL_ROLES.ISSUE_AND_REDEEM }),
+    })
+    enrol({ token: forged })
+    const { result } = renderHook(() => useTerminalIdentity({ devicePubkey: DEVICE, ...mint('UNSPENT') }))
+
+    await waitFor(() => expect(result.current.ready).toBe(true))
+    expect(result.current.actor).toBeNull()
+    expect(result.current.refusal).not.toBeNull()
   })
 })
 

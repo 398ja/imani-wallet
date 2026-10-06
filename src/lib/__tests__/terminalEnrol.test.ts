@@ -54,7 +54,6 @@ vi.mock('../resume', () => ({
 const {
   beginEnrolment,
   completeEnrolment,
-  enrolledActor,
   forgetPendingKey,
   forgetTerminal,
   offersFor,
@@ -70,7 +69,11 @@ const { generateSecretKey, getPublicKey } = await import('nostr-tools')
 const { TERMINAL_ROLES, grantFor } = await import('../terminalRole')
 type TerminalRole = (typeof TERMINAL_ROLES)[keyof typeof TERMINAL_ROLES]
 
-const STALL = 'a'.repeat(64)
+const { loginFromToken } = await import('../terminalLogin')
+
+/** A real stall key, because the credential token the device stores is signed by it. */
+const STALL_KEY = generateSecretKey()
+const STALL = getPublicKey(STALL_KEY)
 
 /**
  * A device key that is NOT the enrolled terminal's (IW-16).
@@ -99,6 +102,36 @@ function credentialFor(
   }
 }
 
+/** The signed credential token for a credential, as the owner's gateway would mint it. */
+function tokenFor(credential: { lockedTo: string; role: TerminalRole }) {
+  return buildLockedCredentialToken({
+    stallKey: STALL_KEY,
+    devicePubkey: credential.lockedTo,
+    role: credential.role,
+  })
+}
+
+/** Finish enrolment with the token that matches the credential. */
+function complete(
+  credential: ReturnType<typeof credentialFor>,
+  passphrase: string,
+  name?: string,
+  options?: Parameters<typeof completeEnrolment>[4],
+) {
+  return completeEnrolment(credential, passphrase, name, { token: tokenFor(credential) }, options)
+}
+
+/**
+ * Who this device logs in as, read from the stored token alone (#160 phase 3). Replaces
+ * `enrolledActor`, which read the role from the record and is gone.
+ */
+function enrolledActor(devicePubkey: string) {
+  const stored = storedTerminal()
+  if (!stored || !devicePubkey) return null
+  const out = loginFromToken({ token: stored.token, devicePubkey, unspent: true })
+  return out.admitted ? out.actor : null
+}
+
 beforeEach(() => {
   saved.length = 0
   walletKeyHeld = false
@@ -123,7 +156,7 @@ describe('the key never leaves the device', () => {
 
   it('hands the private key to the key store and to nothing else', async () => {
     const code = beginEnrolment()
-    await completeEnrolment(credentialFor(code.terminalPubkey), PASSPHRASE)
+    await complete(credentialFor(code.terminalPubkey), PASSPHRASE)
 
     expect(saved).toHaveLength(1)
     const secret = saved[0].privkeyHex
@@ -137,7 +170,7 @@ describe('the key never leaves the device', () => {
 
   it('shows a code that is not the key it protects', async () => {
     const code = beginEnrolment()
-    await completeEnrolment(credentialFor(code.terminalPubkey), PASSPHRASE)
+    await complete(credentialFor(code.terminalPubkey), PASSPHRASE)
 
     // Public and private halves are different values — a guard against a
     // refactor that "simplified" one into the other.
@@ -148,7 +181,7 @@ describe('the key never leaves the device', () => {
 describe('the passphrase', () => {
   it('protects the key at rest', async () => {
     const code = beginEnrolment()
-    await completeEnrolment(credentialFor(code.terminalPubkey), PASSPHRASE)
+    await complete(credentialFor(code.terminalPubkey), PASSPHRASE)
 
     expect(saved[0].passphrase).toBe(PASSPHRASE)
   })
@@ -157,7 +190,7 @@ describe('the passphrase', () => {
     // A blank passphrase is a key at rest in clear, and a terminal that trades
     // for whoever switches it on.
     const code = beginEnrolment()
-    await expect(completeEnrolment(credentialFor(code.terminalPubkey), '')).rejects.toThrow(
+    await expect(complete(credentialFor(code.terminalPubkey), '')).rejects.toThrow(
       /passphrase/i,
     )
     expect(saved).toEqual([])
@@ -179,7 +212,7 @@ describe('nothing is stored until enrolment completes', () => {
     // Locked to a DIFFERENT device: the case that makes a photographed
     // credential worthless.
     const notOurs = { ...credentialFor(code.terminalPubkey), lockedTo: 'f'.repeat(64) }
-    await expect(completeEnrolment(notOurs, PASSPHRASE)).rejects.toThrow(/not a valid authority/)
+    await expect(complete(notOurs, PASSPHRASE)).rejects.toThrow(/not a valid authority/)
 
     // No key saved, no record written, no session possible.
     expect(saved).toEqual([])
@@ -194,13 +227,13 @@ describe('nothing is stored until enrolment completes', () => {
       permissions: grantFor(TERMINAL_ROLES.ISSUE_AND_REDEEM, OTHER_STALL),
     }
 
-    await expect(completeEnrolment(crossed, PASSPHRASE)).rejects.toThrow()
+    await expect(complete(crossed, PASSPHRASE)).rejects.toThrow()
     expect(saved).toEqual([])
     expect(storedTerminal()).toBeNull()
   })
 
   it('refuses to complete an enrolment that was never begun', async () => {
-    await expect(completeEnrolment(credentialFor('c'.repeat(64)), PASSPHRASE)).rejects.toThrow(
+    await expect(complete(credentialFor('c'.repeat(64)), PASSPHRASE)).rejects.toThrow(
       /Start enrolment/,
     )
     expect(saved).toEqual([])
@@ -210,7 +243,7 @@ describe('nothing is stored until enrolment completes', () => {
 describe('logging itself in afterwards', () => {
   it('reuses what the owner returned, with no person present', async () => {
     const code = beginEnrolment()
-    await completeEnrolment(credentialFor(code.terminalPubkey), PASSPHRASE, 'Door')
+    await complete(credentialFor(code.terminalPubkey), PASSPHRASE, 'Door')
 
     // A fresh read, as at next launch.
     const actor = enrolledActor(code.terminalPubkey)
@@ -222,14 +255,14 @@ describe('logging itself in afterwards', () => {
 
   it('acts for the STALL, never for itself', async () => {
     const code = beginEnrolment()
-    await completeEnrolment(credentialFor(code.terminalPubkey), PASSPHRASE)
+    await complete(credentialFor(code.terminalPubkey), PASSPHRASE)
 
     expect(enrolledActor(code.terminalPubkey)!.stallPubkey).not.toBe(code.terminalPubkey)
   })
 
   it('keeps the role it was enrolled with', async () => {
     const code = beginEnrolment()
-    await completeEnrolment(
+    await complete(
       credentialFor(code.terminalPubkey, TERMINAL_ROLES.REDEEM_ONLY),
       PASSPHRASE,
     )
@@ -237,27 +270,79 @@ describe('logging itself in afterwards', () => {
     expect(enrolledActor(code.terminalPubkey)!.role).toBe(TERMINAL_ROLES.REDEEM_ONLY)
   })
 
-  it('refuses a record whose permissions were tampered with on disk', async () => {
+  it('ignores a role and permissions edited into the record on disk (IW-15)', async () => {
     /**
-     * The stored record lives where anything could edit it, so it is re-verified
-     * at launch rather than trusted. A device whose storage was edited to add
-     * issuance is refused HERE, not at the API.
+     * The stored record lives where anything could edit it. Before #160 phase 3 the role came
+     * from the record, so editing `role` turned a redeem-only till into an issuing one. Now the
+     * role is read from the token's signed bytes, so the edit changes nothing.
      */
     const code = beginEnrolment()
-    await completeEnrolment(
+    await complete(
       credentialFor(code.terminalPubkey, TERMINAL_ROLES.REDEEM_ONLY),
       PASSPHRASE,
     )
 
     const tampered = {
       ...storedTerminal()!,
+      role: TERMINAL_ROLES.ISSUE_AND_REDEEM,
       permissions: grantFor(TERMINAL_ROLES.ISSUE_AND_REDEEM, STALL),
     }
     localStorage.setItem('imani-wallet:terminal', JSON.stringify(tampered))
 
-    // This device's own key, so the refusal is about the tampered permissions and not about the
-    // lock. Passing a foreign key here would make the test pass for the wrong reason.
-    expect(enrolledActor(code.terminalPubkey)).toBeNull()
+    // This device's own key, so the answer is about the edit and not about the lock.
+    const actor = enrolledActor(code.terminalPubkey)!
+    expect(actor.role).toBe(TERMINAL_ROLES.REDEEM_ONLY)
+    expect(actor.permissions).not.toContain(`voucher:issue:${STALL}`)
+  })
+
+  it('stores no permissions, metadata or issuer beside the token', async () => {
+    // Spec section 6: those fields were read back as authority. The token is the only one now.
+    const code = beginEnrolment()
+    await complete(credentialFor(code.terminalPubkey), PASSPHRASE)
+    const raw = JSON.parse(localStorage.getItem('imani-wallet:terminal')!) as Record<string, unknown>
+    expect(raw).not.toHaveProperty('permissions')
+    expect(raw).not.toHaveProperty('merchantMetadata')
+    expect(raw).not.toHaveProperty('issuerId')
+    expect(typeof raw.token).toBe('string')
+  })
+
+  it('reads a record without a token as not enrolled', () => {
+    // A phase 0 record, or one whose token was removed, describes an authority it does not hold.
+    localStorage.setItem(
+      'imani-wallet:terminal',
+      JSON.stringify({
+        stallPubkey: STALL,
+        role: TERMINAL_ROLES.REDEEM_ONLY,
+        terminalPubkey: DEVICE_KEY,
+        permissions: [`voucher:redeem:${STALL}`],
+        enrolledAt: 1,
+      }),
+    )
+    expect(storedTerminal()).toBeNull()
+  })
+
+  it('refuses, and stores nothing, when the token says something else than the credential', async () => {
+    // The token is what login reads, so a token for another role, stall or device is refused at
+    // enrolment rather than stored and refused at every unlock.
+    const code = beginEnrolment()
+    const credential = credentialFor(code.terminalPubkey, TERMINAL_ROLES.ISSUE_AND_REDEEM)
+    const redeemOnly = buildLockedCredentialToken({
+      stallKey: STALL_KEY,
+      devicePubkey: code.terminalPubkey,
+      role: TERMINAL_ROLES.REDEEM_ONLY,
+    })
+    const otherDevice = buildLockedCredentialToken({
+      stallKey: STALL_KEY,
+      devicePubkey: getPublicKey(generateSecretKey()),
+    })
+    for (const token of [redeemOnly, otherDevice, 'cashuBnot-a-token']) {
+      await expect(completeEnrolment(credential, PASSPHRASE, 'x', { token })).rejects.toThrow(
+        /not a valid authority/,
+      )
+    }
+    await expect(completeEnrolment(credential, PASSPHRASE)).rejects.toThrow(/not a valid authority/)
+    expect(saved).toEqual([])
+    expect(storedTerminal()).toBeNull()
   })
 
   it('reads an unusable record as not enrolled, rather than throwing', () => {
@@ -281,7 +366,7 @@ describe('retrying', () => {
 
   it('starts fresh once an enrolment has completed', async () => {
     const first = beginEnrolment()
-    await completeEnrolment(credentialFor(first.terminalPubkey), PASSPHRASE)
+    await complete(credentialFor(first.terminalPubkey), PASSPHRASE)
 
     // A second enrolment is a new terminal identity, not the old one reused.
     const second = beginEnrolment()
@@ -296,7 +381,7 @@ describe('IW-16: the device lock is a real comparison', () => {
     // could not fail. The record's claim about which device it belonged to was being checked
     // against the record's own claim.
     const code = beginEnrolment()
-    await completeEnrolment(credentialFor(code.terminalPubkey), PASSPHRASE)
+    await complete(credentialFor(code.terminalPubkey), PASSPHRASE)
 
     expect(enrolledActor(code.terminalPubkey)).not.toBeNull()
     expect(enrolledActor('f'.repeat(64))).toBeNull()
@@ -315,7 +400,7 @@ describe('#160 phase 0: setup never destroys a wallet', () => {
     walletKeyHeld = true
     const code = beginEnrolment()
 
-    await expect(completeEnrolment(credentialFor(code.terminalPubkey), PASSPHRASE)).rejects.toThrow(
+    await expect(complete(credentialFor(code.terminalPubkey), PASSPHRASE)).rejects.toThrow(
       /already holds a wallet/,
     )
 
@@ -330,10 +415,10 @@ describe('#160 phase 0: setup never destroys a wallet', () => {
   it('completes once the device holds no wallet key', async () => {
     walletKeyHeld = true
     const code = beginEnrolment()
-    await expect(completeEnrolment(credentialFor(code.terminalPubkey), PASSPHRASE)).rejects.toThrow()
+    await expect(complete(credentialFor(code.terminalPubkey), PASSPHRASE)).rejects.toThrow()
 
     walletKeyHeld = false
-    await completeEnrolment(credentialFor(code.terminalPubkey), PASSPHRASE)
+    await complete(credentialFor(code.terminalPubkey), PASSPHRASE)
     expect(saved).toHaveLength(1)
   })
 })
@@ -343,7 +428,7 @@ describe('#160 decision 2: the passphrase is at least 8 characters', () => {
   // and the stall's till. Seven characters is refused, before anything is stored.
   it('refuses a passphrase shorter than 8 characters, and stores nothing', async () => {
     const code = beginEnrolment()
-    await expect(completeEnrolment(credentialFor(code.terminalPubkey), 'seven77')).rejects.toThrow(
+    await expect(complete(credentialFor(code.terminalPubkey), 'seven77')).rejects.toThrow(
       /at least 8 characters/,
     )
     expect(saved).toEqual([])
@@ -354,7 +439,7 @@ describe('#160 decision 2: the passphrase is at least 8 characters', () => {
   // Exactly 8 is enough.
   it('accepts exactly 8 characters', async () => {
     const code = beginEnrolment()
-    await completeEnrolment(credentialFor(code.terminalPubkey), 'eight888')
+    await complete(credentialFor(code.terminalPubkey), 'eight888')
     expect(saved).toHaveLength(1)
   })
 })
@@ -441,7 +526,7 @@ describe('#160 phase 2: the credential arrives by DM, opened on the device', () 
       },
       PASSPHRASE,
       offer.name,
-      { token: offer.token, merchantMetadata: offer.merchantMetadata, issuerId: offer.issuerId },
+      { token: offer.token },
       {
         voucherId: offer.voucherId,
         idleLockMinutes: offer.idleLockMinutes,
@@ -470,7 +555,7 @@ describe('#160 phase 2: the credential arrives by DM, opened on the device', () 
   it('announces enrolment to the stall, sealed by the device', async () => {
     const code = beginEnrolment()
     let wrap: ReturnType<typeof wrapMessage> | undefined
-    await completeEnrolment(credentialFor(code.terminalPubkey), PASSPHRASE, 'Door', undefined, {
+    await complete(credentialFor(code.terminalPubkey), PASSPHRASE, 'Door', {
       voucherId,
       announce: async (tools) => {
         wrap = tools.wrap(stall, enrolledMessageJson(voucherId, code.terminalPubkey))
@@ -484,7 +569,7 @@ describe('#160 phase 2: the credential arrives by DM, opened on the device', () 
   // A failed announce does not undo the enrolment: the device is set up.
   it('stays enrolled when telling the stall fails', async () => {
     const code = beginEnrolment()
-    await completeEnrolment(credentialFor(code.terminalPubkey), PASSPHRASE, 'Door', undefined, {
+    await complete(credentialFor(code.terminalPubkey), PASSPHRASE, 'Door', {
       announce: async () => {
         throw new Error('offline')
       },
