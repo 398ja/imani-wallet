@@ -5,13 +5,15 @@ import { Lock, QrCode, Send, Settings } from 'lucide-react'
 import { Alert, Button, Centered, Input, PageHeader, Panel, Screen, ListSection, BackLink } from '../components/ui'
 import { fetchMerchantRecord, type MerchantProfile } from '../lib/merchant'
 import { profileName, refreshProfile } from '../lib/profile'
-import { forgetTerminal, storedTerminal } from '../lib/terminalEnrol'
+import { forgetTerminal, removeTerminalFromDevice, storedTerminal } from '../lib/terminalEnrol'
 import {
+  forgetTerminalSession,
   lockTerminal,
   openTill,
   unlockTerminal,
   type UnlockOutcome,
 } from '../lib/terminalUnlock'
+import { LOGIN_REFUSAL } from '../lib/terminalLogin'
 import { canIssueNow, canRedeemNow, sessionState, type TerminalSession } from '../lib/terminalSession'
 import { mayWarrantSale } from '../lib/warrantSigner'
 import {
@@ -179,6 +181,8 @@ export function TerminalUnlockPage({
   stallName,
   onUnlocked,
   unlock = unlockTerminal,
+  removeFromDevice = removeTerminalFromDevice,
+  reload = () => window.location.replace('/'),
 }: {
   name?: string
   /** The record's device key, for the wallet wipe when a refused device is taken out of service. */
@@ -186,11 +190,14 @@ export function TerminalUnlockPage({
   stallName: string | null
   onUnlocked: (till: Till) => void
   unlock?: (passphrase: string) => Promise<UnlockOutcome>
+  /** Clears all local terminal authority, as logout does. Injected for tests. */
+  removeFromDevice?: () => Promise<unknown>
+  reload?: () => void
 }) {
   const [passphrase, setPassphrase] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [refused, setRefused] = useState<string | null>(null)
+  const [refused, setRefused] = useState<{ reason: string; message: string } | null>(null)
   const [notTerminal, setNotTerminal] = useState(false)
 
   const submit = async () => {
@@ -207,22 +214,27 @@ export function TerminalUnlockPage({
       else if (out.reason === 'not-a-terminal-key') {
         setError(out.message)
         setNotTerminal(true)
-      } else setRefused(out.message)
+      } else setRefused({ reason: out.reason, message: out.message })
     } finally {
       setBusy(false)
     }
   }
 
   if (refused) {
-    // Revoked, or a credential that is not this device's. The till says so and offers nothing:
-    // retrying the passphrase cannot change the mint's answer.
-    // Taking it out of service still works (phase 4): a revoked credential is already spent, so
-    // nothing needs signing, and the device erases itself.
+    // Refused: retrying the passphrase cannot change the answer, so the till offers only a way
+    // out. A REVOKED credential is already spent, so the normal decommission works (phase 4).
+    // Any other refusal (unreadable, not this device's, an untrusted signer) is a credential the
+    // mint would never spend for this device, so decommission would fail and erase nothing, and
+    // the device would be stuck here for good (#160 review, MEDIUM). Those get a local removal.
     return (
       <>
-        <NotTrading message={refused} reason={LAPSE.REVOKED} />
+        <NotTrading message={refused.message} reason={LAPSE.REVOKED} />
         <div className="mx-auto max-w-sm px-6 pb-6">
-          <DecommissionButton devicePubkey={terminalPubkey} />
+          {refused.reason === LOGIN_REFUSAL.REVOKED ? (
+            <DecommissionButton devicePubkey={terminalPubkey} />
+          ) : (
+            <RemoveFromDeviceButton remove={removeFromDevice} reload={reload} />
+          )}
         </div>
       </>
     )
@@ -355,6 +367,59 @@ function TerminalSecurity({ children }: { children: React.ReactNode }) {
       <PageHeader title="Security" />
       <Panel className="p-4">{children}</Panel>
     </Screen>
+  )
+}
+
+/**
+ * Remove a refused terminal from this device, locally (#160 review, MEDIUM).
+ *
+ * For a credential this device cannot hand back. It clears everything logout clears (the key at
+ * rest, the terminal record, every `imani-wallet:*` entry, the resume cache, the device's wallet
+ * database) through `removeTerminalFromDevice`, and drops the in-memory session. It does not
+ * revoke anything at the mint, and says so: only the owner can, from their terminal list.
+ */
+function RemoveFromDeviceButton({ remove, reload }: { remove: () => Promise<unknown>; reload: () => void }) {
+  const [asking, setAsking] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  return (
+    <div>
+      <p className="mb-3 text-sm text-mono-500">
+        This device cannot hand this authority back. Removing the terminal erases it from this
+        device only. The stall owner should still revoke it from their terminal list.
+      </p>
+      {error ? <Alert>{error}</Alert> : null}
+      {asking ? (
+        <div className="mt-3 space-y-2">
+          <p className="text-sm">This erases the terminal from this device. It cannot be undone from here.</p>
+          <Button variant="outline" size="sm" onClick={() => setAsking(false)} disabled={busy}>
+            Keep it
+          </Button>
+          <Button
+            size="sm"
+            className="!bg-red-600 !text-white"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true)
+              forgetTerminalSession()
+              void remove().then(
+                () => reload(),
+                () => {
+                  setError('Could not erase everything. Try again.')
+                  setBusy(false)
+                },
+              )
+            }}
+          >
+            {busy ? 'Removing…' : 'Remove it'}
+          </Button>
+        </div>
+      ) : (
+        <Button variant="outline" className="w-full !text-red-600" onClick={() => setAsking(true)}>
+          Remove this terminal from this device
+        </Button>
+      )}
+    </div>
   )
 }
 
