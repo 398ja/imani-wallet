@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { storedTerminal } from './terminalEnrol'
-import { loginTerminal, type LoginOutcome } from './terminalLogin'
+import { loginFromToken, type LoginOutcome } from './terminalLogin'
 import { credentialState, unspentForLogin } from './credentialRevocation'
 import type { TerminalActor } from './actor'
 import type { TerminalSession } from './terminalSession'
@@ -100,11 +100,13 @@ export function useTerminalIdentity(options: TerminalIdentityOptions): TerminalI
     // Returns rather than setting state: the lazy initialiser has ALREADY
     // resolved this case to OWNER, so setting it again would be a cascading
     // render that changes nothing.
-    if (!stored?.token || !stored.merchantMetadata || !stored.issuerId) return
+    if (!stored?.token) return
 
     // Captured here rather than read inside the async closure, where
-    // TypeScript can no longer see the guard above.
-    const { token, merchantMetadata, issuerId, terminalPubkey } = stored
+    // TypeScript can no longer see the guard above. Only the token is authority: the stall,
+    // role and lock are read from its signed bytes by `loginFromToken` (#160 phase 3, IW-15).
+    // `terminalPubkey` is a hint that decides only whether this record is about this session.
+    const { token, terminalPubkey } = stored
 
     // No unlocked key, or a record written for a different device: either way
     // this session does not hold the key the record names, so the record is
@@ -139,9 +141,8 @@ export function useTerminalIdentity(options: TerminalIdentityOptions): TerminalI
 
       if (cancelled) return
 
-      const outcome: LoginOutcome = loginTerminal({
-        merchantMetadata,
-        issuerId,
+      const outcome: LoginOutcome = loginFromToken({
+        token,
         // The unlocked signer's key, never the record's (G9). The credential's
         // signed `lock_key` must equal it.
         devicePubkey,

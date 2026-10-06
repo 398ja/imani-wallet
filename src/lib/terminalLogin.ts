@@ -1,6 +1,9 @@
 import { credentialActor, parseTerminalMetadata } from './terminalCredential'
 import { openSession, SESSION_KIND, type TerminalSession } from './terminalSession'
 import type { TerminalActor } from './actor'
+import { parseVoucherToken, tokenProofs, verifyVoucher } from './voucherToken'
+import { checkIssuer } from './issuerAllowlist'
+import { lockedToPubkey, xOnly } from './witness'
 
 /**
  * Terminal login: turn a stored credential back into a session.
@@ -134,4 +137,90 @@ export function loginTerminal({
 
 function refuse(reason: LoginRefusal): LoginOutcome {
   return { admitted: false, reason, message: LOGIN_MESSAGE[reason] }
+}
+
+/** What a stored credential token says about itself, once its bytes check out. */
+export interface CredentialFacts {
+  /** The voucher's signed `merchant_metadata`, as `loginTerminal` takes it. */
+  merchantMetadata: string
+  /** The voucher's signed `issuerId`: the stall. */
+  issuerId: string
+  voucherId: string
+  /** Unix seconds, from the signed voucher. Undefined when the voucher carries none. */
+  expiresAt?: number
+}
+
+/**
+ * Read a terminal credential from its own token bytes (#160 phase 3, spec 4.5, IW-15).
+ *
+ * The device record used to carry `merchantMetadata` and `issuerId` beside the token, and login
+ * trusted them. Both are editable by anyone holding the device, so a redeem-only record could be
+ * edited into an issuing one. Here they come from the token, and only after:
+ *
+ * - the token is one `P2PK_VOUCHER` proof whose lock (`data`) is the metadata's `lock_key`, so
+ *   the metadata cannot name a different device than the mint enforces;
+ * - the voucher's signature verifies over its canonical bytes (`verifyVoucher`), so the metadata
+ *   is the issuer's and was not altered;
+ * - where the build names its trusted signing keys, the signer is one of them (ADR 0006).
+ *
+ * Null on anything else, which `loginTerminal` reads as an unreadable credential.
+ */
+export function credentialFromToken(token: string): CredentialFacts | null {
+  try {
+    const proofs = tokenProofs(token)
+    if (proofs.length !== 1) return null
+    const secret = proofs[0].secret
+    if (!secret.startsWith('["P2PK_VOUCHER"')) return null
+
+    const parsed = parseVoucherToken(token)
+    const voucher = parsed.voucher
+    const metadata = parseTerminalMetadata(voucher.merchantMetadata)
+    if (!metadata) return null
+
+    // The key the MINT enforces must be the key the metadata names. Otherwise a credential
+    // could claim one device in its metadata while being spendable by another.
+    const lock = lockedToPubkey(secret)
+    if (!lock || xOnly(lock).toLowerCase() !== metadata.lock_key) return null
+
+    if (!verifyVoucher(voucher).signatureValid) return null
+    if (checkIssuer(parsed) === 'unknown-issuer') return null
+
+    return {
+      merchantMetadata: String(voucher.merchantMetadata),
+      issuerId: voucher.issuerId,
+      voucherId: voucher.voucherId,
+      ...(typeof voucher.expiresAt === 'number' ? { expiresAt: voucher.expiresAt } : {}),
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Log a terminal in from the token it holds, never from fields stored beside it.
+ *
+ * The same decision as `loginTerminal`, with its inputs read from the signed token. An
+ * unreadable token is refused as UNREADABLE before the mint answer is considered, so an edited
+ * token is never admitted on a REDUCED session either.
+ */
+export function loginFromToken({
+  token,
+  devicePubkey,
+  unspent,
+  openedAt,
+}: {
+  token: string
+  devicePubkey: string
+  unspent: boolean | null
+  openedAt?: number
+}): LoginOutcome {
+  const facts = credentialFromToken(token)
+  if (!facts) return refuse(LOGIN_REFUSAL.UNREADABLE)
+  return loginTerminal({
+    merchantMetadata: facts.merchantMetadata,
+    issuerId: facts.issuerId,
+    devicePubkey,
+    unspent,
+    ...(openedAt !== undefined ? { openedAt } : {}),
+  })
 }

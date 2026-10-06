@@ -1,6 +1,7 @@
 import { storedTerminal } from './terminalEnrol'
 import { revokeCredential, type CredentialMintApi } from './credentialRevocation'
 import { logout } from './logout'
+import { credentialFromToken } from './terminalLogin'
 
 /**
  * Taking a terminal out of service, from the device itself.
@@ -94,7 +95,9 @@ export async function decommissionTerminal(
 ): Promise<DecommissionOutcome> {
   const stored = storedTerminal()
 
-  if (!stored?.token || !stored.merchantMetadata) {
+  // The metadata comes from the token's own signed bytes, not from the record (#160 phase 3).
+  const facts = stored?.token ? credentialFromToken(stored.token) : null
+  if (!stored?.token || !facts) {
     // Not a terminal, or one enrolled before credentials were stored. Either
     // way there is no authority to hand back, and wiping here would be a
     // logout wearing a terminal's words.
@@ -105,7 +108,7 @@ export async function decommissionTerminal(
     }
   }
 
-  const revoked = await revokeCredential(stored.token, stored.merchantMetadata, api)
+  const revoked = await revokeCredential(stored.token, facts.merchantMetadata, api)
 
   // `already-revoked` counts as success: the owner has revoked it remotely and
   // the device is finishing the job. Refusing here would strand a device that

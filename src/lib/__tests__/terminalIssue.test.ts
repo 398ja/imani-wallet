@@ -34,8 +34,9 @@ const { TERMINAL_ROLES } = await import('../terminalRole')
 const { licenceStatus, forgetVerification } = await import('../licenceStatus')
 const { forgetLicenceParses } = await import('../licences')
 const { parseVoucherToken } = await import('../voucherToken')
-const { beginEnrolment, completeEnrolment, forgetPendingKey, forgetTerminal, enrolledActor } =
+const { beginEnrolment, completeEnrolment, forgetPendingKey, forgetTerminal } =
   await import('../terminalEnrol')
+const { terminalActor } = await import('../actor')
 
 const TOKEN = readFileSync(join(__dirname, 'fixtures/live-licence.token'), 'utf8').trim()
 const parsed = parseVoucherToken(TOKEN)
@@ -275,9 +276,10 @@ describe('the whole handshake', () => {
       context({ licence: await subscribed() }),
     )
 
-    await completeEnrolment(credential, 'a passphrase', credential.name)
-
-    const actor = enrolledActor(code.terminalPubkey)
+    // The device's own check, the one `completeEnrolment` runs before storing. Storing also
+    // needs the minted token, which only the gateway can sign for this stall (#160 phase 3), so
+    // the handshake is asserted at the check that decides it.
+    const actor = terminalActor(credential, code.terminalPubkey)
     expect(actor).not.toBeNull()
     expect(actor!.stallPubkey).toBe(STALL)
     expect(actor!.terminalPubkey).toBe(code.terminalPubkey)

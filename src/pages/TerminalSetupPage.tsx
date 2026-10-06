@@ -205,7 +205,7 @@ export function TerminalSetupPage({
         },
         passphrase,
         offer.name,
-        { token: offer.token, merchantMetadata: offer.merchantMetadata, issuerId: offer.issuerId },
+        { token: offer.token },
         {
           voucherId: offer.voucherId,
           idleLockMinutes: offer.idleLockMinutes,
@@ -237,11 +237,10 @@ export function TerminalSetupPage({
         <Panel className="mb-6 p-4">
           <p className="text-sm text-mono-500">
             Its authority and passphrase are stored on this device, and the owner&apos;s list
-            shows it as in service. Opening the till from here, with this passphrase, arrives in
-            the next version of the app.
+            shows it as in service. Open the till with this passphrase.
           </p>
         </Panel>
-        <Button onClick={() => navigate('/', { replace: true })}>Done</Button>
+        <Button onClick={() => window.location.replace('/terminal/unlock')}>Open the till</Button>
       </Screen>
     )
   }
