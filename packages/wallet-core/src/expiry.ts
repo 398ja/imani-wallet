@@ -21,8 +21,17 @@
  * The numeric string is the #157 bug: `Date.parse("1798588800")` is NaN, which
  * read as "never expires" and spent the coupon closest to lapsing LAST.
  *
- * Seconds and milliseconds are told apart by magnitude: below 1e11 is seconds
- * (1e11 s is the year 5138; 1e11 ms is March 1973, before any coupon existed).
+ * Seconds and milliseconds are told apart by magnitude: below 1e12 is seconds
+ * (1e12 s is the year 33658; 1e12 ms is September 2001, before any coupon
+ * existed). Not 1e11, the boundary the older copies used: a far-future
+ * "practically never" expiry such as 9999-12-31 is 253402300799 in SECONDS,
+ * above 1e11, so it read as milliseconds in 1978. Stored as seconds and read
+ * back, it would then collapse to a date in the past and hide a live coupon as
+ * expired. Between 1e11 and 1e12 the seconds reading is the only safe one:
+ * the milliseconds reading names 1973-2001, which no coupon can carry.
+ *
+ * Converting to whole seconds rounds UP, so storing never moves an expiry
+ * earlier, not even by the milliseconds a fraction drops.
  *
  * Three outcomes, never two. A value that is present but unreadable is NOT
  * "no expiry": it is kept as it was and reported, so nothing erases a real
@@ -36,7 +45,7 @@ export type Expiry =
   | { kind: 'unreadable'; raw: unknown }
 
 /** Below this a number is seconds; at or above, milliseconds. */
-const MS_THRESHOLD = 1e11
+const MS_THRESHOLD = 1e12
 
 /**
  * The largest instant a JS Date can hold (8.64e15 ms, the year 275760). Past it
@@ -112,7 +121,8 @@ export function readExpiry(value: unknown): Expiry {
   const ms = msOf(value)
   if (ms === 'none') return { kind: 'none' }
   if (ms === 'unreadable') return { kind: 'unreadable', raw: value }
-  return { kind: 'at', seconds: Math.floor(ms / 1000) }
+  // Up, never down: a stored expiry must not be earlier than the one given.
+  return { kind: 'at', seconds: Math.ceil(ms / 1000) }
 }
 
 /** Epoch milliseconds, or undefined for no expiry AND for unreadable. */

@@ -219,9 +219,9 @@ export function planParts(vouchers: Voucher[], amount: number): SendPlan {
  * the primary key on both send paths is what turned it into the money bug it
  * always looked like.
  *
- * `toEpochMs` is the wallet's one answer to this question — it takes ISO,
- * seconds or milliseconds, and applies the same 1e11 magnitude test used for
- * every other timestamp here.
+ * `readExpiry` (./expiry) is the wallet's one answer to this question: it takes
+ * ISO, seconds or milliseconds, and tells the last two apart at 1e12, so a
+ * far-future expiry in seconds is never mistaken for a 1970s one.
  */
 function expiryMs(voucher: Voucher): number {
   const expiry = readExpiry(voucher.expires_at)

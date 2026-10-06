@@ -231,8 +231,8 @@ export function shortPubkey(pubkey: string): string {
  * (`shared/tokenRedemption.js` `_persistRedeemed`) stores the ISO string
  * `/inspect` returned. Reading only the declared type made `expires_at * 1000`
  * NaN, so a coupon with a real expiry sorted as expired and disappeared.
- * The magnitude test is the same one `toTransaction` uses — below 1e11 can only
- * be seconds.
+ * Delegates to wallet-core's parser, which tells seconds from milliseconds at
+ * 1e12 (see expiry.ts for why not 1e11).
  *
  * Absent, null, '' and 0 all collapse to undefined: for an expiry they mean "no
  * expiry" (the gateway populates the field asynchronously — see `toVoucher`),
@@ -267,4 +267,3 @@ export function formatDate(value: number | string | undefined | null): string {
     minute: '2-digit',
   }).format(new Date(ms))
 }
-
