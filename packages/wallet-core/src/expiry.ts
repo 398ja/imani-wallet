@@ -48,11 +48,25 @@ export type Expiry =
 const MS_THRESHOLD = 1e12
 
 /**
- * The largest instant a JS Date can hold (8.64e15 ms, the year 275760). Past it
- * `new Date(ms).toISOString()` THROWS, and `toVoucher` calls exactly that, so a
- * value this large (nanoseconds, say) must be unreadable, not a date.
+ * The largest readable instant, in milliseconds: the last whole second whose
+ * stored SECONDS value is still below MS_THRESHOLD, 999999999999 s (year 33658).
+ *
+ * Not the JS Date limit (8.64e15). Storing must be a fixed point: whatever is
+ * stored has to read back as the same instant. A value at or above 1e15 ms
+ * stores as at least 1e12 seconds, and 1e12 reads back as MILLISECONDS, i.e.
+ * 2001-2023, so the migration that runs on every open would write a past date
+ * over a live coupon (#169 review). Nothing issues expiries this far out, so
+ * such a value is unreadable, and unreadable falls back to the signed tag.
+ * This also stays well under the Date limit, past which `toISOString()` throws.
  */
-const MAX_DATE_MS = 8.64e15
+const MAX_DATE_MS = (MS_THRESHOLD - 1) * 1000
+
+/**
+ * Below this, a number of seconds is before 2001-09-09. A FRACTION there is
+ * not an expiry any producer writes (they write whole seconds, or milliseconds),
+ * so '0.5' is unreadable, not rounded up into a date in 1970.
+ */
+const MIN_FRACTIONAL = 1e9
 
 /** A plain decimal number, optionally signed, fractional or with an exponent ("1.7e9"). */
 const NUMERIC = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i
@@ -88,6 +102,7 @@ function msOf(value: unknown): number | 'none' | 'unreadable' {
 
   if (!Number.isFinite(n) || n < 0) return 'unreadable'
   if (n === 0) return 'none'
+  if (n < MIN_FRACTIONAL && !Number.isInteger(n)) return 'unreadable'
   return finiteMs(n < MS_THRESHOLD ? n * 1000 : n)
 }
 
@@ -105,11 +120,27 @@ function parseDateString(text: string): number {
   const iso = ISO.exec(text)
   if (iso) {
     const [, date, time, zone] = iso
+    // Date.parse rolls '2026-02-30' over into 2 March. A day that does not
+    // exist is a corrupt value, not a date three days later.
+    if (!realCalendarDate(date) || (time && !realClockTime(time))) return Number.NaN
     if (!time) return Date.parse(date) // date-only: UTC by the spec already
     return Date.parse(`${date}T${time}${zone ?? 'Z'}`)
   }
   if (LONG_FORM.test(text)) return Date.parse(text)
   return Number.NaN
+}
+
+/** True when YYYY-MM-DD names a day that exists (no 30 February, no month 13). */
+function realCalendarDate(date: string): boolean {
+  const [y, m, d] = date.split('-').map(Number)
+  const at = new Date(Date.UTC(y, m - 1, d))
+  return at.getUTCFullYear() === y && at.getUTCMonth() === m - 1 && at.getUTCDate() === d
+}
+
+/** True when HH:MM[:SS] is a real clock time (no 24:30, no minute 61). */
+function realClockTime(time: string): boolean {
+  const [h, m, s = 0] = time.split(':').map(Number)
+  return h < 24 && m < 60 && s < 60
 }
 
 function finiteMs(ms: number): number | 'unreadable' {
