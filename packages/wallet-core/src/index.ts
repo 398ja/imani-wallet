@@ -17,6 +17,7 @@ export {
   planParts,
   splitObstacle,
   passedOver,
+  issuerKey,
   type PassedOver,
   type PassedOverReason,
   type SplitCheck,

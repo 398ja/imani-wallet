@@ -247,7 +247,22 @@ export type PassedOver = {
   detail?: string
 }
 
-const sameIssuer = (a: string | undefined, b: string) => (a ?? '').toLowerCase() === b.toLowerCase()
+/**
+ * The issuer id the way `VoucherGrouper` derives it: a missing id is the
+ * 'unknown' stall, a 64-char hex key is lower-cased, and anything else (an
+ * npub, which is case-sensitive bech32) is kept as it is.
+ *
+ * Lives here so the app's grouping (`merchants.ts`) and `passedOver` compare
+ * issuers with one rule (#169 review). A bare toLowerCase folded npubs and
+ * matched an empty payee id to every issuer-less coupon.
+ */
+export function issuerKey(issuerId: string | undefined | null): string {
+  const id = issuerId || 'unknown'
+  if (id.startsWith('npub1')) return id
+  return /^[0-9a-f]{64}$/i.test(id) ? id.toLowerCase() : id
+}
+
+const sameIssuer = (a: string | undefined, b: string) => issuerKey(a) === issuerKey(b)
 const sameUnit = (a: string | undefined, b: string) => (a ?? '').toUpperCase() === b.toUpperCase()
 
 /**

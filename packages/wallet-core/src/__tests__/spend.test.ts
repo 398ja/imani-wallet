@@ -21,6 +21,7 @@ import {
   splitObstacle,
   passedOver,
   toEpochMs,
+  issuerKey,
 } from '../index'
 
 /** A €5.00 coupon, the only denomination this stack issues. */
@@ -467,5 +468,43 @@ describe('passedOver (#157)', () => {
   it('says nothing when nothing can pay (the obstacle says that)', () => {
     const vouchers = [coupon({ voucher_id: 'other', issuer_id: other, expires_at: soon })]
     expect(passedOver(vouchers, 400, { issuer: merchant, unit: 'EUR' })).toEqual([])
+  })
+})
+
+// Review of PR #169 (LOW-4): passedOver must compare issuers the way the wallet
+// groups them (`issuerKey`), not with a bare toLowerCase. Otherwise the pay
+// screen and the grouping disagree about which stall a coupon belongs to.
+describe('passedOver issuer comparison (#169 review)', () => {
+  const hex = 'ab'.repeat(32)
+  const npub = 'npub1' + 'q'.repeat(58)
+  const soon = '2026-10-10T00:00:00Z'
+  const later = '2026-12-30T00:00:00Z'
+
+  // An npub is case-sensitive bech32 and is kept as-is by issuerKey. Two npubs
+  // differing only in case are NOT the same stall, so a sooner coupon under the
+  // upper-cased one is passed over for 'issuer', not spent.
+  it('does not fold the case of an npub issuer', () => {
+    const vouchers = [
+      coupon({ voucher_id: 'mine', issuer_id: npub, expires_at: later }),
+      coupon({ voucher_id: 'look-alike', issuer_id: npub.toUpperCase(), expires_at: soon }),
+    ]
+    const notes = passedOver(vouchers, 400, { issuer: npub, unit: 'EUR' })
+    expect(notes.map((n) => [n.voucher.voucher_id, n.reason])).toEqual([['look-alike', 'issuer']])
+  })
+
+  // A coupon with no issuer belongs to the 'unknown' stall in the grouping, so
+  // a payee called 'unknown' (what the grouper names it) matches it, and an
+  // empty payee id does not silently match every issuer-less coupon.
+  it('maps a missing issuer to "unknown", as the grouping does', () => {
+    expect(issuerKey(undefined)).toBe('unknown')
+    expect(issuerKey('')).toBe('unknown')
+    expect(issuerKey(hex.toUpperCase())).toBe(hex)
+    expect(issuerKey(npub)).toBe(npub)
+  })
+
+  // Hex keys still match whatever their case.
+  it('still matches a hex issuer in any case', () => {
+    const vouchers = [coupon({ voucher_id: 'soon', issuer_id: hex.toUpperCase(), expires_at: soon })]
+    expect(passedOver(vouchers, 400, { issuer: hex, unit: 'EUR' })).toEqual([])
   })
 })
