@@ -221,11 +221,16 @@ Two things to hold on to:
   **Revoke** again when you have a connection. A terminal set up before this
   existed says *Set up before revocation existed*: add the device again to
   replace it.
-- **Revocation bites within 12 hours,** when the terminal's session next
-  expires. The screen tells you this before you confirm, because the real
-  question you are answering is *"is twelve hours good enough, or do I close the
-  stall as well?"*. If the device is in the wrong hands and twelve hours is too
-  long, close your stall too.
+- **When it bites.** The terminal is refused the next time it opens its till,
+  with *"no longer in service"*: after a reload, or at the latest when its
+  12-hour session ends. A till that is open and unlocked when you revoke keeps
+  redeeming until then, which costs you nothing because the money goes to your
+  stall, not to the terminal. The screen tells you the 12 hours before you
+  confirm, because the real question you are answering is *"is twelve hours
+  good enough, or do I close the stall as well?"*. If the device is in the
+  wrong hands and twelve hours is too long, close your stall too.
+- **A refused terminal can still be cleaned up.** It offers **Take this
+  terminal out of service**, which erases it from the device.
 
 **There is no pause.** No suspend, no disable, no toggle that could be read as
 either. To bring a terminal back you add it again from the device, which is
@@ -243,7 +248,10 @@ both. If handing back the authority fails, **nothing is erased** and the screen
 says so, so you can retry or ask the owner to revoke it from their list.
 
 Every sale that terminal made stays with the stall. The device stops trading
-immediately, and only the stall owner can bring it back.
+immediately, and only the stall owner can bring it back. Your list shows it as
+**Revoked** the next time you open **Settings → Terminals** with a connection:
+the list asks the mint about each terminal, so it also catches one revoked from
+another of your phones.
 
 > This is not the customer logout. There are no coupons held on a terminal, no
 > backup key to write down, and no way to recover the device by itself.
