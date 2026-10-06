@@ -18,6 +18,10 @@ import {
   type VoucherPaymentRequest,
 } from '../lib/vreq'
 import { onWalletChanged } from '../lib/wallet'
+import { paidForStall, type FulfilmentCheck } from '../lib/terminalTill'
+
+/** How often a terminal asks gateway-core whether its request was paid. */
+export const FULFILMENT_POLL_MS = 3_000
 
 /**
  * Redeem: take a customer's coupons as payment.
@@ -37,6 +41,7 @@ export function RedeemPage({
   pubkey,
   merchant,
   actor,
+  fulfilment,
 }: {
   pubkey: string
   merchant: MerchantProfile
@@ -49,6 +54,13 @@ export function RedeemPage({
    * nobody can decrypt it.
    */
   actor?: Actor
+  /**
+   * How a terminal learns it was paid (#160 phase 3, G12). The request names the STALL, so the
+   * customer's coupon goes to the stall's key and a terminal's own wallet never sees it. On a
+   * terminal this asks gateway-core instead; absent on the owner's device, which watches its own
+   * wallet as before.
+   */
+  fulfilment?: FulfilmentCheck
 }) {
   const navigate = useNavigate()
   const [request, setRequest] = useState<VoucherPaymentRequest | null>(null)
@@ -68,6 +80,8 @@ export function RedeemPage({
       ) : (
         <RequestDisplay
           pubkey={pubkey}
+          stallPubkey={actor?.stallPubkey ?? pubkey}
+          fulfilment={fulfilment}
           request={request}
           onChange={setRequest}
           onNew={() => setRequest(null)}
@@ -169,12 +183,16 @@ const STATUS_LABEL: Record<VoucherPaymentRequest['status'], string> = {
 
 function RequestDisplay({
   pubkey,
+  stallPubkey,
+  fulfilment,
   request,
   onChange,
   onNew,
   onDone,
 }: {
   pubkey: string
+  stallPubkey: string
+  fulfilment?: FulfilmentCheck
   request: VoucherPaymentRequest
   onChange: (request: VoucherPaymentRequest) => void
   onNew: () => void
@@ -195,8 +213,36 @@ function RequestDisplay({
     QRCode.toDataURL(request.clickableUri, { width: 320, margin: 1 }).then(setQr, () => setQr(null))
   }, [request.clickableUri])
 
+  // A terminal: ask gateway-core, on a timer, until the request is paid or expires (spec 2.5).
+  // Its own wallet never receives the coupon, so there is nothing local to watch.
   useEffect(() => {
-    if (request.status !== 'pending') return
+    if (!fulfilment || request.status !== 'pending') return
+    let live = true
+    const check = async () => {
+      if (request.expiresAt * 1000 <= Date.now()) {
+        const expired = { ...request, status: 'expired' as const }
+        saveRequests(pubkey, loadRequests(pubkey).map((r) => (r.paymentId === request.paymentId ? expired : r)))
+        if (live) onChange(expired)
+        return
+      }
+      const answer = await fulfilment(request.paymentId)
+      if (!live || !paidForStall(answer, stallPubkey)) return
+      // Recorded so the request list agrees with the screen after a reload. The amount is the
+      // request's: gateway-core says that a send answered it, not how much it carried.
+      const paid = { ...request, status: 'fulfilled' as const }
+      saveRequests(pubkey, loadRequests(pubkey).map((r) => (r.paymentId === request.paymentId ? paid : r)))
+      onChange(paid)
+    }
+    void check()
+    const timer = setInterval(() => void check(), FULFILMENT_POLL_MS)
+    return () => {
+      live = false
+      clearInterval(timer)
+    }
+  }, [fulfilment, request, pubkey, stallPubkey, onChange])
+
+  useEffect(() => {
+    if (fulfilment || request.status !== 'pending') return
 
     let live = true
 
@@ -239,7 +285,7 @@ function RequestDisplay({
       unsubscribe()
       clearInterval(timer)
     }
-  }, [request, pubkey, onChange])
+  }, [fulfilment, request, pubkey, onChange])
 
   const copy = async () => {
     try {

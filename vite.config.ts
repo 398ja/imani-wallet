@@ -205,6 +205,10 @@ export const proxy = {
   // always talked to that tier. Must be listed BEFORE '/api' to win the prefix
   // match. changeOrigin stays false for the same NIP-98 reason.
   '/api/v1/atomic-send': { target: 'http://localhost:28081', changeOrigin: false },
+  // #160 phase 3: a terminal's Redeem asks gateway-core whether its payment request was paid
+  // (`GET /api/v1/atomic/fulfilment/{id}`, NIP-98). Only that path, so atomic-purchase and voucher
+  // inspect keep their existing dev routing. changeOrigin false for the same NIP-98 reason.
+  '/api/v1/atomic/fulfilment': { target: 'http://localhost:28081', changeOrigin: false },
   // Account registration and runtime config also live on account-app. Without
   // these two they fall into the '/api' rule below and hit customer-wallet,
   // which 404s them — and a 404 on /api/v1/nip05 reads as "the endpoint does not

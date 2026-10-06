@@ -150,7 +150,7 @@ export function MerchantHomePage({
  * holding the device: it will not serve, and the owner is the answer. Two
  * screens would drift, and the one seen less often would drift further.
  */
-function NotTrading({ message, reason }: { message: string; reason: LapseReason }) {
+export function NotTrading({ message, reason }: { message: string; reason: LapseReason }) {
   return (
     <Screen>
       <div className="flex min-h-[calc(100svh-9rem)] flex-col justify-center">

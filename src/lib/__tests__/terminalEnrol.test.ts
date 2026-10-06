@@ -104,6 +104,9 @@ function credentialFor(
 
 /** The signed credential token for a credential, as the owner's gateway would mint it. */
 function tokenFor(credential: { lockedTo: string; role: TerminalRole }) {
+  // Not IW-15: this BUILDS a signed test token from a test credential; nothing is read from
+  // storage.
+  // nosemgrep: imani-role-from-local-storage
   return buildLockedCredentialToken({
     stallKey: STALL_KEY,
     devicePubkey: credential.lockedTo,
