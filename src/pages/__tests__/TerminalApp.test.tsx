@@ -39,6 +39,10 @@ vi.mock('../../lib/profile', async (importOriginal) => ({
 }))
 // The Redeem screen itself is covered in RedeemPageTerminal.test.tsx; here only its route.
 vi.mock('../RedeemPage', () => ({ RedeemPage: () => <p>redeem-screen</p> }))
+// Sell and cashback are covered in SellPageTerminal and CashbackIssuePageTerminal; here only
+// which tills reach their routes.
+vi.mock('../SellPage', () => ({ SellPage: () => <p>sell-screen</p> }))
+vi.mock('../CashbackIssuePage', () => ({ CashbackIssuePage: () => <p>cashback-screen</p> }))
 
 const { TerminalApp, TerminalUnlockPage } = await import('../TerminalApp')
 const { TERMINAL_ROLES, grantFor } = await import('../../lib/terminalRole')
@@ -105,27 +109,47 @@ describe('the till, per role', () => {
     expect(screen.queryByRole('button', { name: /Sell/ })).toBeNull()
   })
 
-  // A sell-and-redeem till on a FULL session is told selling arrives with phase 5, not offered a
-  // Sell that every customer wallet would refuse.
-  it('sell-and-redeem, FULL: Redeem, and a line saying Sell is not available yet', async () => {
+  // A sell-and-redeem till on a FULL session signs the terminal warrant (phase 5), so it sells.
+  it('sell-and-redeem, FULL: Sell and Redeem', async () => {
     enrol(TERMINAL_ROLES.ISSUE_AND_REDEEM)
     unlockedAs(TERMINAL_ROLES.ISSUE_AND_REDEEM)
     at('/')
-    expect(await screen.findByText(/Selling from a terminal is not available yet/)).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /Sell/ })).toBeNull()
+    expect(await screen.findByRole('button', { name: /Sell/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Redeem/ })).toBeTruthy()
   })
 
-  // REDUCED (mint unreachable at unlock): redemption only, and no line about selling.
+  // REDUCED (mint unreachable at unlock): redemption only, and a line saying why.
   it('sell-and-redeem, REDUCED: Redeem only', async () => {
     enrol(TERMINAL_ROLES.ISSUE_AND_REDEEM)
     unlockedAs(TERMINAL_ROLES.ISSUE_AND_REDEEM, SESSION_KIND.REDUCED)
     at('/')
     expect(await screen.findByRole('button', { name: /Redeem/ })).toBeTruthy()
-    expect(screen.queryByText(/Selling from a terminal/)).toBeNull()
+    expect(screen.queryByRole('button', { name: /Sell/ })).toBeNull()
+    expect(screen.getByText(/Selling needs the network/)).toBeTruthy()
   })
 })
 
 describe('the routes a terminal has', () => {
+  // Phase 5: a selling till in a FULL session reaches /sell and /sell/cashback.
+  it.each([
+    ['/sell', 'sell-screen'],
+    ['/sell/cashback', 'cashback-screen'],
+  ])('a FULL selling till reaches %s', async (path, screenText) => {
+    enrol(TERMINAL_ROLES.ISSUE_AND_REDEEM)
+    unlockedAs(TERMINAL_ROLES.ISSUE_AND_REDEEM)
+    at(path)
+    expect(await screen.findByText(screenText)).toBeTruthy()
+  })
+
+  // A REDUCED selling till is refused before it could mint: /sell lands on the till.
+  it.each(['/sell', '/sell/cashback'])('a REDUCED selling till typing %s lands on the till', async (path) => {
+    enrol(TERMINAL_ROLES.ISSUE_AND_REDEEM)
+    unlockedAs(TERMINAL_ROLES.ISSUE_AND_REDEEM, SESSION_KIND.REDUCED)
+    at(path)
+    expect(await screen.findByTestId('terminal-name')).toBeTruthy()
+    expect(screen.queryByText(/sell-screen|cashback-screen/)).toBeNull()
+  })
+
   // A redeem-only terminal has no Sell route: typing it lands on the till.
   it('has no /sell: it lands on the till', async () => {
     enrol(TERMINAL_ROLES.REDEEM_ONLY)

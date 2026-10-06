@@ -77,12 +77,9 @@ export const TERMINAL_ROLE_LABELS: Record<TerminalRole, { name: string; hint: st
   },
   [TERMINAL_ROLES.ISSUE_AND_REDEEM]: {
     name: 'Sell and redeem',
-    // Selling is not available on any terminal until the `delegated` warrant
-    // form ships (#159). Said here because this is where an owner chooses
-    // the role, and choosing it expecting a till that sells would be a
-    // surprise at the counter. Noun phrase, no terminal punctuation, and no
-    // "delegate" (see the vocabulary test).
-    hint: 'A full till: honours today, selling not yet available',
+    // Sells under the `terminal` warrant form since #160 phase 5. Noun phrase, no terminal
+    // punctuation, and no "delegate" (see the vocabulary test).
+    hint: 'A full till: sells and honours your coupons',
   },
 }
 

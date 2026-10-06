@@ -66,17 +66,16 @@ describe('a stall on its own device sees no change', () => {
 })
 
 describe('a terminal shows only what its role permits', () => {
-  it('gives a full till Redeem, and says Sell is not available yet (#159)', () => {
-    // A terminal cannot sign a warrant the customer's wallet accepts, so
-    // `issueAndDeliver` refuses its sale. Offering the button would be a
-    // refusal in front of the customer; the line says it is not broken.
+  it('gives a full till both Sell and Redeem (#160 phase 5)', () => {
+    // A selling till in a FULL session signs the `terminal` warrant form, which the customer's
+    // wallet verifies, so Sell is offered again.
     show({
       actor: terminal(),
       session: openSession(terminal(), SESSION_KIND.FULL, Date.now()),
     })
-    expect(sell()).toBeNull()
+    expect(sell()).toBeTruthy()
     expect(redeem()).toBeTruthy()
-    expect(screen.getByText(/Selling from a terminal is not available yet/)).toBeTruthy()
+    expect(screen.queryByText(/not available yet/)).toBeNull()
   })
 
   it('gives a redemption-only terminal no Sell', () => {
@@ -174,7 +173,7 @@ describe('the screen and the enforcement point never disagree', () => {
 
         // The enforcement point's own answer, asked directly: `issueAndDeliver`
         // asks both of these (#159).
-        const allowed = canIssueNow(actor, session) && mayWarrantSale(actor)
+        const allowed = canIssueNow(actor, session) && mayWarrantSale(actor, session)
 
         expect(offered, `${role} on a ${label} session`).toBe(allowed)
       }
