@@ -74,6 +74,13 @@ describe('the request', () => {
     expect(CREDENTIAL_LIFETIME_DAYS).toBe(365)
   })
 
+  // #160 review (LOW). The owner's idle lock is signed into the credential's metadata, so the
+  // device can read it from the token rather than from its own editable record.
+  it('signs the owner’s idle lock into the credential', () => {
+    const body = credentialRequestBody({ ...prepared, idleLockMinutes: 0 })
+    expect(body.merchant_metadata).toMatchObject({ idle_lock_minutes: 0 })
+  })
+
   // Exactly one call creates the credential: the spec's E2E criterion is "one
   // API call observed on Add".
   it('makes exactly one minting call', async () => {

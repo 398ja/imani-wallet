@@ -16,6 +16,7 @@ import { canIssueNow, canRedeemNow, sessionState, type TerminalSession } from '.
 import { mayWarrantSale } from '../lib/warrantSigner'
 import {
   fulfilmentOf,
+  idleLockMinutesFor,
   idleLockMs,
   registerRequestTerms,
   startIdleLock,
@@ -86,7 +87,7 @@ export function TerminalApp() {
   }, [navigate])
   useEffect(() => {
     if (!till) return
-    return startIdleLock(idleLockMs(record?.idleLockMinutes), lock)
+    return startIdleLock(idleLockMs(record ? idleLockMinutesFor(record) : undefined), lock)
   }, [till, record, lock])
 
   if (!record) return <Navigate to="/onboarding" replace />
