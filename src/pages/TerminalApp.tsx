@@ -5,7 +5,12 @@ import { Lock, QrCode, Send, Settings } from 'lucide-react'
 import { Alert, Button, Centered, Input, PageHeader, Panel, Screen, ListSection, BackLink } from '../components/ui'
 import { fetchMerchantRecord, type MerchantProfile } from '../lib/merchant'
 import { profileName, refreshProfile } from '../lib/profile'
-import { forgetTerminal, removeTerminalFromDevice, storedTerminal } from '../lib/terminalEnrol'
+import {
+  forgetTerminal,
+  removeTerminalFromDevice,
+  storedTerminal,
+  storedTerminalPubkey,
+} from '../lib/terminalEnrol'
 import {
   forgetTerminalSession,
   lockTerminal,
@@ -92,17 +97,20 @@ export function TerminalApp() {
     return startIdleLock(idleLockMs(record ? idleLockMinutesFor(record) : undefined), lock)
   }, [till, record, lock])
 
-  if (!record) return <Navigate to="/onboarding" replace />
+  // A record whose token is gone is still a terminal (#160 review, LOW): it gets the unlock screen,
+  // which refuses it and offers to remove the terminal, never the customer's routes.
+  const devicePubkey = record?.terminalPubkey ?? storedTerminalPubkey()
+  if (!devicePubkey) return <Navigate to="/onboarding" replace />
 
-  if (!till) {
+  if (!till || !record) {
     return (
       <Routes>
         <Route
           path="/terminal/unlock"
           element={
             <TerminalUnlockPage
-              name={record.name}
-              terminalPubkey={record.terminalPubkey}
+              name={record?.name}
+              terminalPubkey={devicePubkey}
               stallName={stallName}
               onUnlocked={(t) => {
                 setTill(t)

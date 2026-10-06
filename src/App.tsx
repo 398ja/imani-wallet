@@ -41,7 +41,7 @@ import { LoginPage } from './pages/LoginPage'
 import { OnboardingPage } from './pages/OnboardingPage'
 import { TerminalSetupPage } from './pages/TerminalSetupPage'
 import { TerminalApp } from './pages/TerminalApp'
-import { storedTerminal } from './lib/terminalEnrol'
+import { isTerminalDevice } from './lib/terminalEnrol'
 import { WelcomePage } from './pages/WelcomePage'
 import { MerchantsPage } from './pages/MerchantsPage'
 import { MerchantHomePage } from './pages/MerchantHomePage'
@@ -811,7 +811,9 @@ function Entry() {
     // hasStoredKey is async (IndexedDB), so this cannot be decided in a render.
     import('./lib/nap').then(({ hasStoredKey }) =>
       hasStoredKey().then(
-        (has) => setTarget(has ? (storedTerminal()?.token ? TERMINAL_TARGET : '/login') : '/onboarding'),
+        // Any terminal record, token or not (#160 review, LOW): a terminal key must never reach
+        // /login, where it would open a NAP session as a customer (spec 2.3).
+        (has) => setTarget(has ? (isTerminalDevice() ? TERMINAL_TARGET : '/login') : '/onboarding'),
         () => setTarget('/onboarding'),
       ),
     )
@@ -930,7 +932,7 @@ export default function App() {
   }, [callbacks])
 
   // Read once per page load. Enrolment, removal and decommissioning all reload the document.
-  const [terminalDevice] = useState(() => storedTerminal() !== null)
+  const [terminalDevice] = useState(() => isTerminalDevice())
 
   if (resuming && !session) {
     return (
