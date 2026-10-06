@@ -253,6 +253,8 @@ export type PreparedCredential = TerminalCredential & {
   role: TerminalRole
   lockedTo: string
   permissions: readonly string[]
+  /** The owner's idle lock, signed into the credential (#160 review). */
+  idleLockMinutes?: number
 }
 
 /**

@@ -5,12 +5,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   fulfilmentOf,
+  idleLockMinutesFor,
   idleLockMs,
   paidForStall,
   registerRequestTerms,
   startIdleLock,
   terminalMintApi,
 } from '../terminalTill'
+import { terminalMetadataJson } from '../terminalCredential'
+import { buildLockedCredentialToken } from './voucherFixtures'
+import { generateSecretKey, getPublicKey } from 'nostr-tools'
 
 /** The terminal's own clients and its idle lock (#160 phase 3). */
 
@@ -145,6 +149,34 @@ describe('the mint client', () => {
 })
 
 describe('the idle lock (decision 2)', () => {
+  /** A real-shaped credential whose signed metadata carries `idle` (or nothing). */
+  const credential = (idle?: number) => {
+    const stallKey = generateSecretKey()
+    const device = getPublicKey(generateSecretKey())
+    return buildLockedCredentialToken({
+      stallKey,
+      devicePubkey: device,
+      metadata: terminalMetadataJson({
+        stallPubkey: getPublicKey(stallKey),
+        role: 'redeem-only',
+        lockKey: device,
+        name: 'Front counter',
+        ...(idle !== undefined ? { idleLockMinutes: idle } : {}),
+      }),
+    })
+  }
+
+  // #160 review (LOW). The owner's 5 minutes is signed into the credential. The person holding
+  // the till edits the record on disk to "off": the signed value still wins.
+  it('takes the signed idle lock over the device record', () => {
+    expect(idleLockMinutesFor({ token: credential(5), idleLockMinutes: 0 })).toBe(5)
+  })
+
+  // A credential minted before the review carries no idle lock, so the record's (delivered in the
+  // stall-sealed DM) is the only one there is.
+  it('falls back to the record for a credential that carries none', () => {
+    expect(idleLockMinutesFor({ token: credential(), idleLockMinutes: 15 })).toBe(15)
+  })
   // 0 is off, missing is the 10-minute default, and an unreadable value is the default too, so a
   // bad setting cannot leave a till open all day.
   it('reads the owner’s setting', () => {

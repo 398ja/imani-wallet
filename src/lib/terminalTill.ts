@@ -2,6 +2,8 @@ import { signedFetch, type RequestSigner } from './nip98'
 import type { CredentialMintApi } from './credentialRevocation'
 import { witnessHeaderForToken } from './witness'
 import { DEFAULT_IDLE_LOCK_MINUTES } from './terminalDelivery'
+import { parseTerminalMetadata } from './terminalCredential'
+import { parseVoucherToken } from './voucherToken'
 
 /**
  * What a terminal needs at the till that the owner's wallet does not (#160 phase 3).
@@ -175,6 +177,26 @@ export function paidForStall(
   if (answer.recipientPubkey?.toLowerCase() !== stall) return false
   if (answer.unit?.toUpperCase() !== request.unit.toUpperCase()) return false
   return typeof answer.amount === 'number' && answer.amount >= request.amount
+}
+
+/**
+ * Which idle lock applies: the one signed into the credential, else the device record's.
+ *
+ * #160 review (LOW). The record on disk is editable by whoever holds the device, so a lock read
+ * from it could be switched off by the person it is meant to protect against. Credentials minted
+ * since the review carry `idle_lock_minutes` in their signed metadata, and that value wins. An
+ * older credential has none, and the record's value is used: that is the value the owner chose,
+ * delivered in the stall-sealed DM, and the only thing an edit to it buys is a till that stays
+ * open longer on a device the editor is already holding unlocked (spec 2.3, decision 2).
+ */
+export function idleLockMinutesFor(record: { token: string; idleLockMinutes?: number }): number | undefined {
+  try {
+    const metadata = parseTerminalMetadata(parseVoucherToken(record.token).voucher.merchantMetadata)
+    if (metadata?.idle_lock_minutes !== undefined) return metadata.idle_lock_minutes
+  } catch {
+    // An unreadable token never got past unlock; fall through to the record.
+  }
+  return record.idleLockMinutes
 }
 
 /**
