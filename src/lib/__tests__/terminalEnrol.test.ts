@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 /**
  * The device side of enrolment.
@@ -74,6 +74,9 @@ const { loginFromToken } = await import('../terminalLogin')
 /** A real stall key, because the credential token the device stores is signed by it. */
 const STALL_KEY = generateSecretKey()
 const STALL = getPublicKey(STALL_KEY)
+/** The stall in the phase 2 block, which signs its own credentials. */
+const PHASE2_STALL_KEY = generateSecretKey()
+const PHASE2_STALL = getPublicKey(PHASE2_STALL_KEY)
 
 /**
  * A device key that is NOT the enrolled terminal's (IW-16).
@@ -135,7 +138,10 @@ function enrolledActor(devicePubkey: string) {
   return out.admitted ? out.actor : null
 }
 
+// The build names the key that signs terminal credentials, as every deploy must now: a terminal
+// credential whose signer is not on VITE_VOUCHER_ISSUER_PUBKEYS is refused (#160 review, IW-15).
 beforeEach(() => {
+  vi.stubEnv('VITE_VOUCHER_ISSUER_PUBKEYS', [STALL, PHASE2_STALL].join(','))
   saved.length = 0
   walletKeyHeld = false
   forgetPendingKey()
@@ -448,8 +454,8 @@ describe('#160 decision 2: the passphrase is at least 8 characters', () => {
 })
 
 describe('#160 phase 2: the credential arrives by DM, opened on the device', () => {
-  const stallKey = generateSecretKey()
-  const stall = getPublicKey(stallKey)
+  const stallKey = PHASE2_STALL_KEY
+  const stall = PHASE2_STALL
   const voucherId = '5f8a487d-6cea-4a7d-b681-9d5d62cc9dd9'
 
   /** The owner's DM, sealed by the stall, carrying a real credential for `device`. */
