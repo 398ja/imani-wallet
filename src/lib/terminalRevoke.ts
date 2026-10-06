@@ -317,7 +317,12 @@ export async function markSpentElsewhere(
   for (const row of allTerminals(stallPubkey)) {
     if (row.revokedAt !== undefined || !isRevocable(row) || row.status === 'minting') continue
     if ((await credentialState(row.token!, api)) !== CREDENTIAL_STATE.REVOKED) continue
-    if (revokeTerminal(stallPubkey, row.terminalPubkey, now).revoked) marked += 1
+    if (!revokeTerminal(stallPubkey, row.terminalPubkey, now).revoked) continue
+    marked += 1
+    // A waiting row still holds one of the stall's pending slots at the gateway. Give it back,
+    // as revoking it from this phone does (#160 review), rather than leave the owner blocked
+    // from adding a terminal until the gateway's own 24-hour expiry.
+    if (row.status === 'waiting' && row.voucherId) await releasePending(row.voucherId)
   }
   return marked
 }

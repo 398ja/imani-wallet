@@ -331,4 +331,20 @@ describe('#160 phase 4: a credential spent elsewhere reads as revoked here', () 
     expect(api.validateToken).not.toHaveBeenCalled()
     expect(api.receive).not.toHaveBeenCalled()
   })
+
+  // #160 review (LOW). A WAITING row whose credential was spent elsewhere (cancelled from another
+  // phone) still holds one of the stall's two pending slots at the gateway. Marking it revoked
+  // here must also give that slot back, exactly as revoking it from this phone does, or the owner
+  // cannot add a terminal for up to 24 hours. An in-service row has no slot to give back.
+  it('gives the gateway its pending slot back for a waiting row, and only for one', async () => {
+    const released: string[] = []
+    setReleasePending(async (id) => {
+      released.push(id)
+    })
+    recordTerminal(STALL, inService({ status: 'waiting', voucherId: 'waiting-1' }))
+    recordTerminal(STALL, inService({ terminalPubkey: OTHER, voucherId: 'live-1' }))
+
+    expect(await markSpentElsewhere(STALL, mintSays('SPENT'))).toBe(2)
+    expect(released).toEqual(['waiting-1'])
+  })
 })
