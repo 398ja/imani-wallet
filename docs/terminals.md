@@ -30,7 +30,7 @@ A terminal is a device you authorise to act for your stall in a **fixed role**.
 | Role | What it can do |
 | --- | --- |
 | **Redemption only** | Honours your coupons. Cannot sell. |
-| **Sell and redeem** | A full till: sells coupons and honours them. **Selling is switched off on every terminal for now**; see [Known gaps today](#known-gaps-today). |
+| **Sell and redeem** | A full till: sells coupons and honours them. |
 
 The device makes its own key, which it never shows anyone, and you hand it back
 an authority locked to that key. It is not a copy of your account. It has no
@@ -140,7 +140,7 @@ What a terminal shows:
 | --- | --- | --- |
 | Till: its name and your stall's | yes | yes |
 | Redeem | yes | yes |
-| Sell | no | not yet, see [Known gaps today](#known-gaps-today) |
+| Sell, and cashback under it | no | yes, once it opened with a connection |
 | Settings → Security → Take out of service | yes | yes |
 | Lock | yes | yes |
 | Your dashboard, coupons, records, backup, terminals | no | no |
@@ -158,11 +158,19 @@ Same as on the owner's own till, minus whatever the role excludes:
   gateway what it is asking for, so a customer who reads the code cannot change
   the terms; if the gateway cannot be told, the terminal does not show the code. Your own phone receives the coupon
   the next time it is open.
-- **Sell** — only on a *Sell and redeem* terminal, and **not at all yet**: a
-  terminal's home screen has no Sell button and says selling is not available
-  yet, and the Sell and cashback screens, if reached by typing the address,
-  stop before anything is scanned, typed or issued. See
-  [Known gaps today](#known-gaps-today).
+- **Sell** — only on a *Sell and redeem* terminal, and only when it opened with a
+  connection (a full session). Scan the customer, type the amount, send. The
+  coupon is signed for your stall by the terminal itself: its own key signs the
+  sale, and the coupon carries the terminal's authority, which your stall's
+  issuing service signed. The customer's wallet checks both, offline, and shows
+  the coupon as authorised by your stall. **Cashback** works the same way, from
+  **Give cashback instead** on the Sell screen.
+
+  The gateway checks the terminal's authority on every Sell: a revoked terminal
+  is refused within about a minute, even with its till still open, and the same
+  sale cannot be sent twice. A terminal that opened without a connection
+  (reduced authority) has no Sell button, and typing the address takes it back
+  to the till, before anything is scanned or issued.
 
 Two things happen quietly and are worth knowing:
 
@@ -259,7 +267,11 @@ another of your phones.
 ## Subscriptions, and what a lapse does
 
 - **One extra till is free.** Your own phone is counted, never converted, so
-  the first terminal you enrol is the free one.
+  the first *Sell and redeem* terminal you enrol is the free one.
+- **A Redeem-only terminal never takes the free slot.** Adding one first does
+  not use up your free till. Until subscriptions are available
+  (imani-wallet#197), only your stall's earliest *Sell and redeem* terminal can
+  sell.
 - **More than that needs a subscription**, sold per stall rather than per
   device: one licence, however many terminals.
 - **A lapse suspends, it never revokes.** Terminals stop serving and are marked
@@ -297,9 +309,9 @@ By design, and not merely by hiding a button:
 | *This terminal's authority cannot be read* | The stored authority is damaged | Ask the owner to set it up again |
 | *This authority is not for this device* | The authority belongs to another terminal or another stall | Ask the owner to set it up again |
 | *This terminal is no longer in service* | It was revoked | Ask the owner to add it again if that was a mistake |
-| Sell is missing on a full till | It opened without reaching the mint, so it is on reduced authority | Get it a connection and open it again |
-| *Selling from a terminal is not supported yet* / *not available yet* | No terminal can sell a coupon the customer's wallet will accept (see Known gaps) | Sell from the owner's own device. Do not take payment for the sale on the terminal |
-| *Cashback from a terminal is not supported yet* | The same gap, for cashback codes | Issue cashback from the owner's own device |
+| Sell is missing on a full till / *Selling needs the network* | It opened without reaching the mint, so it is on reduced authority | Get it a connection, lock it and open it again |
+| *This terminal cannot sell right now* / *cannot issue cashback right now* | Reduced authority, or a redemption-only role | Lock and open it again with a connection, or ask the owner |
+| *This terminal is locked or has lost its authority* | The till locked during the sale | Open it again and retry. Nothing was issued |
 | *Not trading while your subscription is inactive* | A lapsed subscription, not a revocation | Renew; terminals resume immediately |
 
 A terminal record left in a browser for a *different* device (for example a
@@ -312,8 +324,8 @@ device.
 
 ## Known gaps today
 
-Being straight about it: a terminal can now be set up, opened and used to
-**redeem** end to end. It cannot yet **sell**. The plan to close that is
+Being straight about it: a terminal can be set up, opened, used to **redeem**
+and, with the *Sell and redeem* role, to **sell**. The plan is
 [the terminals-in-service spec](spec-terminals-in-service.md).
 
 1. **Setting a terminal up.** On the device,
@@ -350,22 +362,16 @@ Being straight about it: a terminal can now be set up, opened and used to
    credential it holds, as its device, the first time it reads it. Anything else
    that mints a terminal credential must call
    `POST /api/v1/wallet/terminal-credentials/{id}/confirm` itself.
-2. **A terminal cannot sell a coupon a customer will accept, so it does not
-   sell at all** (#159). Every coupon carries the stall's own signed
-   authorisation for the sale (an issuance warrant). A terminal's key is not the
-   stall's key, so the most it can send is a signed "none". Every wallet that
-   receives a coupon refuses one without the stall's authorisation — the
-   customer's as well as yours — so a terminal sale used to take the customer's
-   money, show "It is in their wallet now" on the terminal, and show "Coupon not
-   authorised" in the customer's wallet with nothing added. Sell on a terminal
-   now stops on arrival, before anything is scanned, issued or paid, and the
-   same request made around the screen is refused before anything is minted.
-   **Cashback is stopped the same way**: a cashback code from a terminal would
-   carry the same signed "none", and although the customer can claim it, your
-   own till would refuse it when they came to spend it.
-   Terminal sales need the `delegated` warrant form, which signs with the key
-   you locked the terminal's authority to; it is not supported yet. Until then,
-   sell from your own device.
+2. **Terminal Sell needs the gateway's phase 5 to be live** (#160). A terminal
+   signs its sales with the `terminal` warrant form: its own key signs the sale
+   total, and the warrant carries the terminal's authority (the signed voucher
+   fields only, never anything spendable). The customer's wallet verifies it
+   offline against the gateway's published issuing key. Until gateway-portal,
+   gateway-customer and gateway-core with terminal Sell are deployed, the
+   gateway refuses a terminal's Sell with 403, and nothing is minted.
+3. **A coupon sold by a till keeps its authorisation after the till expires or
+   is revoked.** That is on purpose: it was sold while the till was in service,
+   and the customer paid for it. Expiry and revocation stop new sales only.
 
 Everything else described above is built and running: role gating, the lapse
 notice, the dashboard guard, decommissioning, attribution on records, and
@@ -402,8 +408,11 @@ record, kept on your side.
 **Does a terminal work with a bad connection?**
 Redeeming, yes. Selling needs a check that succeeded, so a terminal that opened
 without reaching the network redeems only. Adding a terminal always needs a
-connection. (Selling on a terminal is switched off for now in any case; see
-[Known gaps today](#known-gaps-today).)
+connection.
+
+**Does a coupon sold on a terminal look different to the customer?**
+No. It names your stall, and their wallet shows it as authorised by your stall.
+Which till sold it is on your records only.
 
 **Why does my customer's wallet refuse a coupon instead of keeping it?**
 Because a coupon your stall did not authorise is one your own till would refuse

@@ -12,11 +12,10 @@ import { canIssueNow, sessionState, type TerminalSession } from './terminalSessi
 import { attributionFor } from './terminalAttribution'
 import { currencyDecimals } from './format'
 import {
-  TERMINAL_SALE_UNSUPPORTED,
   UnwarrantedSaleError,
   assertSaleWarranted,
   buildIssuanceWarrant,
-  mayWarrantSale,
+  holdsWarrantCredential,
 } from './warrantSigner'
 import { parseIssuanceWarrant } from './issuanceWarrant'
 import type { AttestedSale } from './cashAttestation'
@@ -689,20 +688,18 @@ export async function issueAndDeliver(
   }
 
   /**
-   * A terminal that MAY sell is still refused here, before anything is minted
-   * (#159).
-   *
-   * Its key is not the stall's, so its warrant can only be a signed `none`,
-   * and every wallet receiving a coupon by DM refuses that before the mint
-   * swap — the customer's included. Issuing anyway took the stall's backing,
-   * delivered a coupon the customer's wallet threw out as "Coupon not
-   * authorised", and showed staff "It is in their wallet now". Asked after the
-   * session checks above so a lapsed till still hears the recoverable thing
-   * first. Lifted when terminal enrolment also collects the owner's
-   * `delegated` warrant delegation (the verifier supports it since #152).
+   * Whether this actor can sign a warrant the customer's wallet accepts (#159, lifted for
+   * terminals in #160 phase 5). A terminal signs the `terminal` form, only in a FULL session,
+   * and `mayWarrantSale` is exactly `canIssueNow` for a terminal (and true for the owner), so
+   * the check above already is the Sell screen's question; asking it twice was dead code (#196
+   * review). What remains is the one thing `canIssueNow` cannot see: that the till still holds
+   * its credential right now.
    */
-  if (!mayWarrantSale(params.actor)) {
-    throw new UnwarrantedSaleError(TERMINAL_SALE_UNSUPPORTED)
+  if (!holdsWarrantCredential(params.actor)) {
+    throw new UnwarrantedSaleError(
+      'This terminal is locked or has lost its authority. Lock it and open it again, then ' +
+        'retry. Nothing has been issued; do not take payment for this sale.',
+    )
   }
 
   onStage?.('issuing')

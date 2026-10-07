@@ -335,24 +335,27 @@ describe('a retry of the same issue', () => {
   })
 
   /**
-   * A terminal's key is not the stall's (#159). Its cashback would carry a
-   * signed `none` and be refused at the till, so it is refused before
+   * A terminal issues cashback only in a live FULL session with a selling role (#160 phase 5).
+   * Without one (no session, or a REDUCED one that never reached the mint) it is refused before
    * anything is signed or minted, for any stall.
    */
-  it('refuses a terminal before signing or minting', async () => {
+  it('refuses a terminal outside a FULL session before signing or minting', async () => {
     // Arrange
     const issuer = createCashbackIssuer()
     const terminalFor = (stallPubkey: string) =>
       ({ kind: 'terminal', stallPubkey, terminalPubkey: OTHER, role: 'issue-and-redeem' }) as Actor
+    const reduced = { kind: 'reduced', openedAt: Date.now(), expiresAt: Date.now() + 3600_000 } as never
     calls.signerKey = OTHER_SK
 
     // Act
     const first = await issuer.submit({ ...request, actor: terminalFor(STALL) }).catch((e: Error) => e)
-    const second = await issuer.submit({ ...request, actor: terminalFor(OTHER) }).catch((e: Error) => e)
+    const second = await issuer
+      .submit({ ...request, actor: terminalFor(OTHER), session: reduced })
+      .catch((e: Error) => e)
 
     // Assert
-    expect(String(first)).toMatch(/Cashback from a terminal is not supported yet/)
-    expect(String(second)).toMatch(/delegated/)
+    expect(String(first)).toMatch(/cannot issue cashback right now/)
+    expect(String(second)).toMatch(/full session/)
     expect(calls.order).toEqual([])
   })
 

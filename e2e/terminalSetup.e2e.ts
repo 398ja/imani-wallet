@@ -14,6 +14,14 @@
  * Phase 4 (`E2E_PHASE=4`, the default): A revokes B, B reloads and is refused at unlock, B can
  * still take itself out of service, and A's row reads revoked.
  *
+ * Phase 5 (`E2E_PHASE>=5`, run after phase 4, once B and B2 are revoked, so the stall's one free
+ * terminal is available again without a licence): a sell-and-redeem till B3 sells to C,
+ * C's coupon verdict is `verified`, A sees the sale attributed, a replayed warrant nonce gets 409,
+ * B3 gets 403 on dashboard, campaigns, policies and SSE, a REDUCED B3 is refused before minting,
+ * and once A revokes B3 its next Sell gets 403. These need the portal, gateway-customer and
+ * gateway-core Phase 5 PRs deployed: until `E2E_P5_DEPLOYED=1` their checks print PENDING and do
+ * not fail the run.
+ *
  * Needs a stack whose gateway-customer mints the stall co-key (imani-gateway-customer#187).
  *
  * Run against a local dev server:   E2E_BASE=http://localhost:5177 tsx e2e/terminalSetup.e2e.ts
@@ -23,19 +31,36 @@
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright'
 import { readFile } from 'node:fs/promises'
 import { extname, join, normalize } from 'node:path'
+import { schnorr } from '@noble/curves/secp256k1.js'
+import { sha256 } from '@noble/hashes/sha256'
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
+import { finalizeEvent, nip98 } from 'nostr-tools'
 import { registerCustomer, registerMerchant, TEST_PASSPHRASE, TEST_STALL_NAME } from './register.mts'
 
 const BASE = (process.env.E2E_BASE ?? 'http://localhost:5177').replace(/\/+$/, '')
 const BUNDLE_DIR = process.env.E2E_BUNDLE_DIR
 const PHASE = Number(process.env.E2E_PHASE ?? '4')
+/** Phase 5's server half (portal, gateway-customer, gateway-core) is deployed where E2E_BASE points. */
+const P5_DEPLOYED = process.env.E2E_P5_DEPLOYED === '1'
 const TILL_PASSPHRASE = 'counter-pass'
 /** A new stall's coupon:issue permission is cached this long by the gateway (#114). */
 const PERMISSION_CACHE_MS = 62_000
 const failures: string[] = []
+const pendingDeploy: string[] = []
 
 function check(name: string, ok: boolean, detail = '') {
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${ok || !detail ? '' : ` — ${detail}`}`)
   if (!ok) failures.push(name)
+}
+
+/**
+ * A check that needs the Phase 5 server PRs. Before they are deployed it is reported, not
+ * failed: PENDING with what it saw, so the run still shows which half already holds.
+ */
+function checkDeployed(name: string, ok: boolean, detail = '') {
+  if (P5_DEPLOYED || ok) return check(name, ok, detail)
+  console.log(`  PENDING  ${name} (needs the phase 5 deploys)${detail ? ` — ${detail}` : ''}`)
+  pendingDeploy.push(name)
 }
 
 async function text(page: Page): Promise<string> {
@@ -330,11 +355,265 @@ async function main() {
     check("A's row for B2 reads revoked, learned from the mint", doorRevoked, (await text(owner)).slice(0, 400))
   }
 
+  if (PHASE >= 5) await phase5(browser, owner, customer, customerPubkey, errors)
+
   return finish(browser, errors)
 }
 
-/** A adds a redeem-only terminal named `name`, and `device` (a fresh browser) sets itself up. */
-async function setUpDevice(owner: Page, device: Page, name: string): Promise<boolean> {
+/**
+ * Phase 5: a sell-and-redeem till sells (#160, spec section 8 phase 5).
+ *
+ * A fresh device B3 is enrolled as Sell and redeem, sells C a coupon through its own /sell, and
+ * C's wallet records the coupon's warrant verdict as `verified`. The server-side refusals (403
+ * on owner endpoints, 409 on a replayed nonce, 403 once revoked) are probed with B3's own key K
+ * and credential header, exactly as its signedFetch sends them.
+ */
+async function phase5(browser: Browser, owner: Page, customer: Page, customerPubkey: string, errors: string[]) {
+  console.log('\nPhase 5: a sell-and-redeem till B3 is set up and opens a FULL till')
+  const till = await (await context(browser)).newPage()
+  till.on('pageerror', (e) => errors.push(`B3: ${e.message}`))
+  const ready = await setUpDevice(owner, till, 'Sales counter', /Sell and redeem/)
+  check('B3 is set up as a sell-and-redeem till', ready)
+  if (!ready) return
+  const home = await unlockTill(till)
+  check('B3 offers Sell and Redeem', /\bSell\b/.test(home) && /Redeem/.test(home), home.slice(0, 200))
+
+  // B3's key and credential, read the way the app reads them: K from its encrypted key store with
+  // the passphrase, the voucher id and secret from the stored token. Used only to probe the
+  // gateway the way B3's own signedFetch does.
+  const k = await tillKey(till)
+  check("the harness opened B3's key with its passphrase", /^[0-9a-f]{64}$/.test(k.sk), k.sk ? '' : k.error)
+
+  console.log('\nPhase 5: B3 sells C a coupon, and C reads it as verified')
+  const visit = (p: string) =>
+    till.evaluate((path) => {
+      window.history.pushState({}, '', path)
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    }, p)
+  const outbound: Array<{ path: string; header: string | null; warrant: string | null }> = []
+  till.on('request', (r) => {
+    const path = new URL(r.url()).pathname
+    if (!path.startsWith('/api/v1/portal/')) return
+    const body = r.postData() ?? ''
+    let warrant: string | null = null
+    try {
+      warrant = (JSON.parse(body) as { issuance_warrant?: string }).issuance_warrant ?? null
+    } catch {
+      /* not JSON */
+    }
+    outbound.push({ path, header: r.headers()['x-imani-terminal-credential'] ?? null, warrant })
+  })
+  await visit('/sell')
+  const sold = await tillSells(till, customerPubkey, '4.00')
+  const sellRequest = outbound.find((o) => o.path === '/api/v1/portal/vouchers' && o.warrant)
+  check('B3 names its credential on the Sell request', sellRequest?.header === k.voucherId, sellRequest?.header ?? 'none')
+  const sentWarrant = sellRequest?.warrant ? (JSON.parse(sellRequest.warrant) as Record<string, unknown>) : null
+  // The credential B3 put in its warrant: its own signed secret, naming the voucher it unlocked
+  // with. Kept for the probes below, which sign fresh warrants with the same credential.
+  k.secret = typeof sentWarrant?.credential === 'string' ? sentWarrant.credential : ''
+  check(
+    'B3 sends a terminal warrant carrying its credential secret',
+    sentWarrant?.form === 'terminal' &&
+      k.secret.startsWith('["P2PK_VOUCHER"') &&
+      k.secret.includes(`["voucher_id","${k.voucherId}"]`) &&
+      !/cashuB|"C":/.test(sellRequest?.warrant ?? ''),
+    String(sentWarrant?.form),
+  )
+  checkDeployed('the gateway mints B3\'s sale ("It is in their wallet now")', /It is in their wallet now/.test(sold), sold.slice(0, 200))
+  const verdict = /It is in their wallet now/.test(sold) ? await couponVerdict(customer, sentWarrant?.nonce as string) : 'not sold'
+  checkDeployed("C's coupon from B3 has warrant verdict `verified`", verdict === 'verified', verdict)
+
+  console.log("\nPhase 5: A sees B3's sale attributed")
+  // The stall's history row for the sale names the till that sold it (terminals ticket 09). A
+  // reads it from its own encrypted history, restored from the relay.
+  const attributed = /It is in their wallet now/.test(sold)
+    ? await owner
+        .goto(`${BASE}/merchant/coupons`, { waitUntil: 'load' })
+        .then(() => owner.waitForFunction(() => /Sales counter/.test(document.body.innerText), undefined, { timeout: 120_000 }))
+        .then(() => true, () => false)
+    : false
+  checkDeployed('A sees the sale attributed to "Sales counter"', attributed)
+
+  if (k.sk) {
+    console.log('\nPhase 5: the gateway refuses what a till may not do')
+    // The same warrant, replayed under a new request: the nonce is spent, so 409.
+    if (sellRequest?.warrant) {
+      const replay = await asTill(k, 'POST', '/api/v1/portal/vouchers', {
+        face_value_minor: 400, currency: 'GBP', quantity: 1, issuance_warrant: sellRequest.warrant,
+      })
+      checkDeployed('a replayed warrant nonce gets 409', replay === 409, String(replay))
+    }
+    for (const [method, path] of [
+      ['GET', '/api/v1/portal/dashboard'],
+      ['GET', '/api/v1/portal/campaigns'],
+      ['GET', '/api/v1/policies'],
+      ['GET', '/api/v1/portal/events'],
+    ] as const) {
+      const status = await asTill(k, method, path)
+      checkDeployed(`B3 gets 403 on ${path}`, status === 403, String(status))
+    }
+
+    console.log('\nPhase 5: a REDUCED B3 is refused before minting')
+    // The mint is unreachable at unlock, so the till opens REDUCED. A reload is how a till next
+    // asks the mint (`terminalMintApi.validateToken`); the route below makes that call fail.
+    await till.route('**/api/v1/wallet/token/validate', (r) => r.abort())
+    await till.reload({ waitUntil: 'load' })
+    const reduced = await unlockTill(till)
+    check('a REDUCED B3 offers no Sell', !/\bSell\b/.test(reduced.replace(/Selling/g, '')), reduced.slice(0, 200))
+    const minted: string[] = []
+    till.on('request', (r) => {
+      if (new URL(r.url()).pathname === '/api/v1/portal/vouchers' && r.method() === 'POST') minted.push(r.url())
+    })
+    await visit('/sell')
+    await till.getByTestId('terminal-name').waitFor({ timeout: 15_000 }).catch(() => {})
+    check('a REDUCED B3 typing /sell lands on the till, and nothing is minted', !till.url().endsWith('/sell') && minted.length === 0, till.url())
+    await till.unroute('**/api/v1/wallet/token/validate')
+
+    console.log('\nPhase 5: A revokes B3, and its next Sell gets 403')
+    await owner.goto(`${BASE}/settings/terminals`, { waitUntil: 'load', timeout: 60_000 })
+    const row = owner.locator('li, [role="listitem"], div').filter({ hasText: 'Sales counter' }).last()
+    await row.getByRole('button', { name: 'Revoke' }).click({ timeout: 30_000 }).catch(() => {})
+    await owner.getByRole('button', { name: /^Revoke/ }).last().click().catch(() => {})
+    // The portal caches a credential's grants for 60 s, and a revocation reaches the verifier
+    // within 30 s (spec phase 5 AC).
+    await owner.waitForTimeout(95_000)
+    const revoked = await asTill(k, 'POST', '/api/v1/portal/vouchers', {
+      face_value_minor: 100, currency: 'GBP', quantity: 1, issuance_warrant: await freshWarrant(k, 100, 'GBP'),
+    })
+    checkDeployed('a revoked B3 gets 403 on Sell', revoked === 403, String(revoked))
+  }
+}
+
+interface TillKey {
+  sk: string
+  voucherId: string
+  secret: string
+  stall: string
+  error?: string
+}
+
+/**
+ * B3's K (decrypted from its key store with the passphrase) and its credential, from storage.
+ *
+ * Passed to the page as source text: tsx compiles a function argument with `__name` helpers
+ * that do not exist in the page, so a closure here would throw before it ran.
+ */
+async function tillKey(till: Page): Promise<TillKey> {
+  const source = `(async () => {
+    const out = { sk: '', voucherId: '', secret: '', stall: '', error: '' }
+    try {
+      const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0))
+      const env = JSON.parse(localStorage.getItem('imani-wallet-key') || 'null')
+      const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(${JSON.stringify(TILL_PASSPHRASE)}), 'PBKDF2', false, ['deriveKey'])
+      const key = await crypto.subtle.deriveKey(
+        { name: 'PBKDF2', salt: b64(env.kdf.salt), iterations: env.kdf.iterations, hash: env.kdf.hash },
+        material, { name: 'AES-GCM', length: 256 }, false, ['decrypt'])
+      const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64(env.iv) }, key, b64(env.ciphertext))
+      out.sk = new TextDecoder().decode(plain)
+      const record = JSON.parse(localStorage.getItem('imani-wallet:terminal') || '{}')
+      out.voucherId = record.voucherId || ''
+      out.stall = record.stallPubkey || ''
+    } catch (e) {
+      out.error = String(e)
+    }
+    return out
+  })()`
+  // The credential's secret is taken from B3's own Sell request, where it matters.
+  return (await till.evaluate(source)) as TillKey
+}
+
+/** A request signed with NIP-98 by B3's K and naming its credential, as its signedFetch does. */
+async function asTill(k: TillKey, method: string, path: string, body?: unknown): Promise<number> {
+  const url = `${BASE}${path}`
+  const payload = body === undefined ? undefined : JSON.stringify(body)
+  const auth = await nip98.getToken(url, method.toLowerCase(), (e) => finalizeEvent(e, hexToBytes(k.sk)), true, body as Record<string, unknown>)
+  const res = await fetch(url, {
+    method,
+    headers: {
+      Authorization: auth,
+      'X-Imani-Terminal-Credential': k.voucherId,
+      ...(payload ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: payload,
+    signal: AbortSignal.timeout(20_000),
+  }).catch(() => null)
+  return res?.status ?? 0
+}
+
+/** A new `terminal` warrant from K, for a probe that must not be refused as a replay. */
+async function freshWarrant(k: TillKey, total: number, unit: string): Promise<string> {
+  const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)))
+  const digest = sha256(new TextEncoder().encode([k.stall, String(total), '2', unit, nonce].join('\u001f')))
+  return JSON.stringify({
+    form: 'terminal', sale_total: total, face_decimals: 2, unit, nonce,
+    signature: bytesToHex(schnorr.sign(digest, hexToBytes(k.sk))), credential: k.secret,
+  })
+}
+
+/** The till sells `amount` to a customer from its own Sell screen. */
+async function tillSells(till: Page, customerPubkey: string, amount: string): Promise<string> {
+  const recipient = till.locator('input[placeholder="name"]')
+  if (!(await recipient.waitFor({ timeout: 30_000 }).then(() => true, () => false))) return text(till)
+  await recipient.fill(customerPubkey)
+  await till.getByRole('button', { name: /^Continue$/ }).click()
+  await till.locator('input[placeholder="0.00"]').waitFor({ timeout: 30_000 })
+  await till.locator('input[placeholder="0.00"]').fill(amount)
+  await till.getByRole('button', { name: /Send voucher/i }).click()
+  for (let i = 0; i < 60; i++) {
+    await till.waitForTimeout(3_000)
+    const t = await text(till)
+    if (/It is in their wallet now|failed|could not|refused|Nothing has been issued/i.test(t)) return t
+  }
+  return text(till)
+}
+
+/**
+ * The warrant verdict C's wallet recorded on the coupon carrying `nonce`, from its own history.
+ * The wallet writes `validation.warrant` on every received row (voucherValidationRecord.ts).
+ */
+async function couponVerdict(customer: Page, nonce: string): Promise<string> {
+  // Source text, for the same tsx reason as `tillKey`.
+  const source = `(async () => {
+    const wanted = ${JSON.stringify(nonce)}
+    const dbs = (await indexedDB.databases()).filter((d) => (d.name || '').startsWith('imani-wallet-'))
+    for (const info of dbs) {
+      const db = await new Promise((ok, ko) => {
+        const r = indexedDB.open(info.name)
+        r.onsuccess = () => ok(r.result)
+        r.onerror = () => ko(r.error)
+      })
+      for (const store of Array.from(db.objectStoreNames)) {
+        const rows = await new Promise((ok) => {
+          const r = db.transaction(store).objectStore(store).getAll()
+          r.onsuccess = () => ok(r.result)
+          r.onerror = () => ok([])
+        })
+        for (const row of rows) {
+          const s = JSON.stringify(row)
+          if (!s.includes(wanted)) continue
+          const m = s.match(/"warrant":"(\\w+)"/)
+          if (m) return m[1]
+        }
+      }
+    }
+    return ''
+  })()`
+  for (let i = 0; i < 24; i++) {
+    await customer.goto(`${BASE}/`, { waitUntil: 'load' })
+    const verdict = (await customer.evaluate(source)) as string
+    if (verdict) return verdict
+    await customer.waitForTimeout(5_000)
+  }
+  return 'not received'
+}
+
+/** A adds a terminal named `name`, and `device` (a fresh browser) sets itself up. */
+async function setUpDevice(
+  owner: Page,
+  device: Page,
+  name: string,
+  role: RegExp = /Redemption only/,
+): Promise<boolean> {
   await device.goto(`${BASE}/terminal/setup`, { waitUntil: 'load' })
   const code = device.getByTestId('terminal-code')
   if (!(await code.waitFor({ timeout: 30_000 }).then(() => true, () => false))) return false
@@ -342,9 +621,14 @@ async function setUpDevice(owner: Page, device: Page, name: string): Promise<boo
   await owner.goto(`${BASE}/settings/terminals/add`, { waitUntil: 'load', timeout: 60_000 })
   await owner.getByRole('button', { name: 'Add terminal' }).waitFor({ timeout: 30_000 })
   await owner.getByLabel('Name').fill(name)
-  await owner.getByRole('button', { name: /Redemption only/ }).click()
+  await owner.getByRole('button', { name: role }).click()
   await owner.getByLabel("Or enter the device's key").fill(key)
   await owner.getByRole('button', { name: 'Continue' }).click()
+  // Add stays disabled when enrolment is refused (allowance, licence, a live row): say why.
+  if (!(await owner.getByRole('button', { name: 'Add terminal' }).isEnabled({ timeout: 15_000 }).catch(() => false))) {
+    console.log(`  (Add terminal is disabled: ${(await text(owner)).slice(0, 300)})`)
+    return false
+  }
   await owner.getByRole('button', { name: 'Add terminal' }).click()
   const setup = owner.getByTestId('setup-code')
   if (!(await setup.waitFor({ timeout: 90_000 }).then(() => true, () => false))) return false
@@ -425,6 +709,9 @@ async function customerPays(customer: Page, request: string): Promise<string> {
 async function finish(browser: Browser, errors: string[]) {
   check('no uncaught errors', errors.length === 0, errors.join('; '))
   await browser.close()
+  if (pendingDeploy.length > 0) {
+    console.log(`\n${pendingDeploy.length} PENDING DEPLOY (set E2E_P5_DEPLOYED=1 once portal, gateway-customer and gateway-core phase 5 are live): ${pendingDeploy.join(', ')}`)
+  }
   console.log(failures.length === 0 ? '\nAll checks passed.\n' : `\n${failures.length} FAILED: ${failures.join(', ')}\n`)
   process.exit(failures.length === 0 ? 0 : 1)
 }

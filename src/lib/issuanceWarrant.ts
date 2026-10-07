@@ -31,6 +31,7 @@ import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 
 import { verifyIssuerDelegation } from './issuerDelegation'
+import { trustedCredentialServiceKeys, verifyTerminalWarrant } from './terminalWarrant'
 
 /**
  * Separates fields in the digest preimage. Mirrors `IssuanceWarrant.java`.
@@ -43,7 +44,7 @@ import { verifyIssuerDelegation } from './issuerDelegation'
 const FIELD_SEPARATOR = '\u001f'
 
 /** The forms a warrant can take, matching `IssuanceWarrant.Form` on the wire. */
-export type WarrantForm = 'merchant' | 'processor' | 'delegated' | 'none'
+export type WarrantForm = 'merchant' | 'processor' | 'delegated' | 'terminal' | 'none'
 
 /**
  * A warrant as read from a coupon.
@@ -116,6 +117,19 @@ export type IssuanceWarrant =
            * that the payment happened.
            */
           reference?: string
+        }
+      | {
+          /**
+           * Signed by a till's own key `K`, carrying the terminal credential the stall's
+           * issuing service minted to `K` (#160 phase 5, `terminalWarrant.ts`). Not
+           * `delegated`, which stays the card-purchase form.
+           */
+          form: 'terminal'
+          signature: string
+          /** The credential's signed NUT-10 secret, exactly as it arrived. Never the proof's C. */
+          credential: string
+          reference?: undefined
+          delegation?: undefined
         }
       | {
           /** A processor references an external record instead of signing. */
@@ -215,7 +229,7 @@ export function parseIssuanceWarrant(raw: string | undefined | null): IssuanceWa
   // An unknown form is REFUSED, never defaulted. Treating it as `none` would
   // report "the issuer signed that nothing authorised this", a claim nobody
   // made, about a shape this build cannot read.
-  if (form !== 'merchant' && form !== 'processor' && form !== 'delegated') {
+  if (form !== 'merchant' && form !== 'processor' && form !== 'delegated' && form !== 'terminal') {
     return { state: 'invalid', reason: `unknown warrant form: ${String(form)}` }
   }
 
@@ -255,9 +269,17 @@ export function parseIssuanceWarrant(raw: string | undefined | null): IssuanceWa
   // warrant, it is an unreadable one: the signature IS the evidence. A
   // processor warrant legitimately has none, because it references an external
   // record instead.
-  const signature = typeof obj.sig === 'string' ? obj.sig : undefined
-  if ((form === 'merchant' || form === 'delegated') && !signature) {
+  //
+  // A `terminal` warrant spells it `signature` (spec 5.1); the older forms keep `sig`.
+  const signatureField = form === 'terminal' ? obj.signature : obj.sig
+  const signature = typeof signatureField === 'string' ? signatureField : undefined
+  if ((form === 'merchant' || form === 'delegated' || form === 'terminal') && !signature) {
     return { state: 'invalid', reason: `${form} warrant carries no signature` }
+  }
+
+  // A terminal warrant without its credential is a signature by a key nobody vouched for.
+  if (form === 'terminal' && (typeof obj.credential !== 'string' || obj.credential.length === 0)) {
+    return { state: 'invalid', reason: 'terminal warrant carries no credential' }
   }
 
   // A delegated warrant without the stall's delegation is a signature by a
@@ -276,6 +298,9 @@ export function parseIssuanceWarrant(raw: string | undefined | null): IssuanceWa
   // compiler could not see and a later edit could quietly remove.
   if (form === 'processor') {
     return { ...common, form, reference }
+  }
+  if (form === 'terminal') {
+    return { ...common, form, signature: signature as string, credential: obj.credential as string }
   }
   if (form === 'delegated') {
     return {
@@ -349,7 +374,20 @@ export function verifyIssuanceWarrant(
   warrant: IssuanceWarrant,
   issuerId: string,
   coupon: CouponUnderWarrant,
-  { now = Date.now(), issuedAt }: { now?: number; issuedAt?: number } = {},
+  {
+    now = Date.now(),
+    issuedAt,
+    trustedServiceKeys,
+  }: {
+    now?: number
+    issuedAt?: number
+    /**
+     * The service keys that mint terminal credentials. Defaults to the build's
+     * `VITE_VOUCHER_ISSUER_PUBKEYS`; a build that names none refuses every `terminal`
+     * warrant, because without it anyone could mint themselves a credential.
+     */
+    trustedServiceKeys?: readonly string[]
+  } = {},
 ): WarrantVerdict {
   const { faceValueMinor: couponFaceMinor } = coupon
   switch (warrant.state) {
@@ -394,6 +432,27 @@ export function verifyIssuanceWarrant(
 
   if (warrant.form === 'processor') {
     return { verdict: 'claimed', reference: warrant.reference }
+  }
+
+  if (warrant.form === 'terminal') {
+    // Offline, of a coupon already sold: the credential's expiry instant is skipped
+    // (`ExpiryCheck.skipOffline`), because a coupon sold before the till expired stays valid.
+    // The portal checked expiry, and liveness, when it issued.
+    const result = verifyTerminalWarrant({
+      issuerId,
+      credential: warrant.credential,
+      trustedServiceKeys: trustedServiceKeys ?? trustedCredentialServiceKeys(),
+      saleTotalMinor: warrant.saleTotalMinor,
+      faceDecimals: warrant.faceDecimals,
+      unit: warrant.unit,
+      saleNonce: warrant.saleNonce,
+      signatureHex: warrant.signature,
+      couponFaceMinor,
+      expiryCheck: 'skip-offline',
+    })
+    return result.valid
+      ? { verdict: 'verified' }
+      : { verdict: 'failed', reason: `terminal warrant refused: ${result.refusal}` }
   }
 
   // Whose signature the digest must carry: the stall's own, or the key the

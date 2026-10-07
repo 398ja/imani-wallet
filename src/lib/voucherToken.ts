@@ -28,8 +28,17 @@ import type { WarrantVerdict } from './issuanceWarrant'
 
 const BREAK = Symbol('cbor-break')
 
+/**
+ * The keys of each decoded CBOR map whose value arrived as a FLOAT (major type 7), even an
+ * integral one. JS has one number type, so 1000.0 and 1000 read the same; Java's
+ * `Long.parseLong` does not, and the legacy window must refuse a float where an integer was
+ * signed (#194). Kept beside the object rather than in it, so every other reader is unchanged.
+ */
+const FLOAT_KEYS = new WeakMap<object, Set<string>>()
+
 class CborReader {
   private i = 0
+  private lastWasFloat = false
   // Written out rather than a `constructor(private readonly b)` parameter
   // property: that syntax is not erasable, and the wallet API typechecks under
   // `erasableSyntaxOnly` because Node strips types rather than compiling them.
@@ -93,7 +102,10 @@ class CborReader {
       if (ai === 21) return true
       if (ai === 22) return null
       if (ai === 23) return undefined
-      if (ai >= 25 && ai <= 27) return this.float(ai)
+      if (ai >= 25 && ai <= 27) {
+        this.lastWasFloat = true
+        return this.float(ai)
+      }
       return this.arg(ai)
     }
 
@@ -118,15 +130,23 @@ class CborReader {
       }
       case 5: {
         const out: Record<string, unknown> = {}
+        const floats = new Set<string>()
+        const entry = (key: unknown): void => {
+          this.lastWasFloat = false
+          out[String(key)] = this.read()
+          if (this.lastWasFloat) floats.add(String(key))
+          this.lastWasFloat = false
+        }
         if (n === null) {
           for (;;) {
             const key = this.read()
             if (key === BREAK) break
-            out[String(key)] = this.read()
+            entry(key)
           }
-          return out
+        } else {
+          for (let k = 0; k < n; k++) entry(this.read())
         }
-        for (let k = 0; k < n; k++) out[String(this.read())] = this.read()
+        if (floats.size > 0) FLOAT_KEYS.set(out, floats)
         return out
       }
       case 6:
@@ -255,6 +275,12 @@ export interface SignedVoucherFields {
    * cashu-voucher#48.
    */
   canonicalNumbers?: boolean
+  /**
+   * True when face_value, expires_at or face_decimals arrived in the CBOR blob as a FLOAT, even an
+   * integral one like 1000.0. JS reads 1000.0 as 1000; Java's `Long.parseLong` reads
+   * `"1000.0"` as no number at all, so such a voucher gets no legacy window (#194).
+   */
+  integralAsFloat?: boolean
 }
 
 export interface ParsedVoucherToken {
@@ -721,7 +747,7 @@ function lockedVoucherFrom(secret: string): SignedVoucherFields | null {
  * the signature), rendering the four numeric tags bare and everything else
  * quoted.
  */
-function lockedCanonicalBytes(dataHex: string, nonce: string, rows: unknown[][]): Uint8Array {
+export function lockedCanonicalBytes(dataHex: string, nonce: string, rows: unknown[][]): Uint8Array {
   const NUMERIC = ['face_value', 'expires_at', 'face_decimals', 'issuance_ratio']
   const AFTER_SIGNING = ['issuer_sig', 'issuer_pubkey']
 
@@ -760,7 +786,7 @@ function lockedCanonicalBytes(dataHex: string, nonce: string, rows: unknown[][])
  * refused. Mirrors `VoucherCanonicalBytes.hasCanonicalNumericTags` on the Java
  * side, and the two must stay in step. cashu-voucher#48.
  */
-function hasCanonicalNumericTags(rows: unknown[][]): boolean {
+export function hasCanonicalNumericTags(rows: unknown[][]): boolean {
   const NUMERIC = ['face_value', 'expires_at', 'face_decimals', 'issuance_ratio']
   return rows.every((row) => {
     if (!NUMERIC.includes(String(row[0]))) return true
@@ -771,6 +797,11 @@ function hasCanonicalNumericTags(rows: unknown[][]): boolean {
       return appendNumber(parsed, false) === wire
     })
   })
+}
+
+/** Whether `key` of a decoded CBOR map arrived as a float, integral or not (#194). */
+export function cborFieldIsFloat(map: object, key: string): boolean {
+  return FLOAT_KEYS.get(map)?.has(key) ?? false
 }
 
 function readVoucherFields(blob: Record<string, unknown>): SignedVoucherFields {
@@ -801,6 +832,11 @@ function readVoucherFields(blob: Record<string, unknown>): SignedVoucherFields {
     nonce: required('nonce'),
     issuerSignature: required('issuerSignature'),
     issuerPublicKey: required('issuerPublicKey'),
+    // A float where an integer belongs, even 1000.0: Java's Long.parseLong refuses it (#194).
+    // So is any non-number there (a string "1000"): Java reads only a CBOR integer as a long.
+    integralAsFloat: ['faceValue', 'expiresAt', 'faceDecimals'].some(
+      (k) => blob[k] != null && (typeof blob[k] !== 'number' || cborFieldIsFloat(blob, k)),
+    ),
   }
 }
 
@@ -1054,7 +1090,18 @@ export function verifyVoucher(v: SignedVoucherFields): VoucherVerification {
     if (schnorr.verify(sig, sha256(voucherCanonicalBytes(v, false)), pub)) {
       return { signatureValid: true, legacyCanonical: false }
     }
-    if (schnorr.verify(sig, sha256(voucherCanonicalBytes(v, true)), pub)) {
+    // The legacy form truncates every number, but only `issuance_ratio` was ever fractional on a
+    // genuine pre-fix voucher. A fraction in face_value, expires_at or face_decimals is a rewrite
+    // chosen to truncate back to the signed integer (expires_at 1000 -> 1000.5, which Java's
+    // Long.parseLong then reads as no expiry at all), so it gets no legacy window (#194, mirroring
+    // cashu-voucher#54's `integralTagsAreIntegers`).
+    //
+    // "Integer" means what Long.parseLong means: an integral FLOAT (1000.0) is not one either,
+    // even though JS cannot tell it from 1000 once decoded, so the CBOR reader reports it.
+    const integral =
+      v.integralAsFloat !== true &&
+      [v.faceValue, v.expiresAt, v.faceDecimals].every((n) => n === undefined || Number.isInteger(n))
+    if (integral && schnorr.verify(sig, sha256(voucherCanonicalBytes(v, true)), pub)) {
       return { signatureValid: true, legacyCanonical: true }
     }
     return { signatureValid: false, legacyCanonical: false }
