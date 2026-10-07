@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 /**
  * The `terminal` issuance warrant (#160 phase 5, spec 5.1 and 5.5).
  *
@@ -11,12 +12,12 @@
  *
  *     {"form":"terminal","sale_total","face_decimals","unit","nonce","signature","credential"}
  *
- * `verifyTerminalWarrant` is a line-by-line mirror of cashu-voucher 0.16.0's
+ * `verifyTerminalWarrant` is a line-by-line mirror of cashu-voucher 0.16.1's
  * `IssuanceWarrant.verifyTerminal`. The portal runs the Java at issuance and a customer's wallet
  * runs this when the coupon arrives, so the two must refuse exactly the same things. Each check
  * names the Java refusal it mirrors.
  */
-import { schnorr } from '@noble/curves/secp256k1.js'
+import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha256'
 import { hexToBytes } from '@noble/hashes/utils'
 
@@ -88,7 +89,11 @@ const ISSUE_AND_REDEEM = 'issue-and-redeem'
  * `terminal` warrant is refused rather than trusted.
  */
 export function trustedCredentialServiceKeys(): string[] {
-  const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env
+  // `import.meta.env` spelled out, so Vite inlines it and Vitest's stubEnv reaches it. A cast
+  // around `import.meta` hid it from Vitest, so tests always saw "none" and could not tell the
+  // default allow-list from an empty one (#196 review: that mutant survived). Under tsx (the
+  // Node services) `import.meta.env` is undefined, and the answer is "none".
+  const env = import.meta.env as Record<string, string | undefined> | undefined
   return (env?.VITE_VOUCHER_ISSUER_PUBKEYS ?? '')
     .split(',')
     .map((k) => k.trim().toLowerCase())
@@ -107,6 +112,25 @@ export function hasControlCharacter(value: string): boolean {
   for (let i = 0; i < value.length; i++) {
     const c = value.charCodeAt(i)
     if (c < 0x20 || (c >= 0x7f && c <= 0x9f)) return true
+  }
+  return hasLoneSurrogate(value)
+}
+
+/** The parts of a credential secret this check reads, or null if it is not a credential. */
+interface CredentialSecret {
+  data: string
+  rows: string[][]
+  /** The bytes the service signed: the secret minus `issuer_sig` and `issuer_pubkey`. */
+  signed: Uint8Array
+}
+
+/** `data`: a compressed key, lowercase, prefix 02 or 03, exactly as the gateway writes it. */
+const COMPRESSED_LOWER_HEX = /^0[23][0-9a-f]{64}$/
+
+/** An unpaired UTF-16 surrogate: Java hashes it as `?`, `TextEncoder` as U+FFFD. */
+function hasLoneSurrogate(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const c = value.charCodeAt(i)
     if (c >= 0xd800 && c <= 0xdbff) {
       const next = i + 1 < value.length ? value.charCodeAt(i + 1) : -1
       if (next < 0xdc00 || next > 0xdfff) return true
@@ -118,18 +142,75 @@ export function hasControlCharacter(value: string): boolean {
   return false
 }
 
-/** The parts of a credential secret this check reads, or null if it is not a credential. */
-interface CredentialSecret {
-  data: string
-  rows: string[][]
-  /** The bytes the service signed: the secret minus `issuer_sig` and `issuer_pubkey`. */
-  signed: Uint8Array
+function isPoint(compressedHex: string): boolean {
+  try {
+    secp256k1.Point.fromHex(compressedHex)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Java's `Long.parseLong(s.trim())`, or null. */
+function javaLong(raw: string): bigint | null {
+  const t = raw.trim()
+  if (!/^[+-]?[0-9]+$/.test(t)) return null
+  const n = BigInt(t)
+  return n > JAVA_LONG_MAX || n < -JAVA_LONG_MAX - 1n ? null : n
 }
 
 /**
- * Parses a credential the way `IssuanceWarrant.parseCredential` does: a `P2PK_VOUCHER` whose
- * text is byte-for-byte its own canonical serialisation, so padding, extra elements and
- * duplicate keys (which `JSON.parse` would silently resolve, last wins) are all refused.
+ * cashu-lib's `P2PKVoucherSecret.validate`, which the Java runs on every parse: each key in
+ * `pubkeys` and `refund` a compressed point, no key twice in one pathway (compared on the
+ * x-coordinate, so `02||x` and `03||x` collide), `n_sigs` and `n_sigs_refund` in 1..keys,
+ * a known `sigflag`, a non-negative `locktime`, and no `locktime` without refund keys.
+ *
+ * In particular `data` equal to a `pubkeys` key is refused here, as in the Java, before any
+ * verdict (a lock_key that is the stall's own key arrives exactly that way).
+ */
+function nut11Valid(data: string, rows: string[][]): boolean {
+  const values = (key: string) => rows.find((r) => r[0] === key)?.slice(1) ?? []
+  const first = (key: string) => rows.find((r) => r[0] === key)?.[1]
+  const keyOk = (k: string) => {
+    const n = k.trim().toLowerCase()
+    return /^[0-9a-f]{66}$/.test(n) && (n.startsWith('02') || n.startsWith('03')) && isPoint(n)
+  }
+  const xOnly = (k: string) => k.trim().toLowerCase().slice(2)
+  const distinct = (keys: string[]) => new Set(keys.map(xOnly)).size === keys.length
+  const threshold = (key: string, count: number) => {
+    const raw = first(key)
+    if (raw === undefined) return true
+    const n = javaLong(raw)
+    return n !== null && n >= 1n && n <= BigInt(count)
+  }
+  const pubkeys = values('pubkeys')
+  const refund = values('refund')
+  if (!pubkeys.every(keyOk) || !refund.every(keyOk)) return false
+  const main = [data, ...pubkeys]
+  if (!distinct(main) || !distinct(refund)) return false
+  if (!threshold('n_sigs', main.length)) return false
+  if (refund.length > 0 && !threshold('n_sigs_refund', refund.length)) return false
+  const sigflag = first('sigflag')
+  if (sigflag !== undefined && sigflag !== 'SIG_INPUTS' && sigflag !== 'SIG_ALL') return false
+  const locktime = first('locktime')
+  if (locktime !== undefined) {
+    const n = javaLong(locktime)
+    if (n === null || n < 0n || refund.length === 0) return false
+  }
+  return true
+}
+
+/**
+ * Parses a credential the way `IssuanceWarrant.parseCredential` (cashu-voucher 0.16.1) does,
+ * refusing everything the Java refuses at parse time:
+ *
+ * - any text that is not byte-for-byte its own canonical serialisation, so padding, extra
+ *   elements and duplicate keys (which `JSON.parse` would silently resolve, last wins);
+ * - a repeated tag row, whichever tag (NUT-11's "a tag appears more than once"), because a
+ *   verifier reading the first row and one reading the last would see two credentials;
+ * - `data` that is not a lowercase compressed key with prefix 02 or 03, or that is not a point
+ *   on secp256k1 (cashu-lib's `P2PKPublicKeys.requireValid`);
+ * - a lone surrogate in the nonce or any tag.
  */
 export function parseCredentialSecret(wire: string): CredentialSecret | null {
   let parsed: unknown
@@ -145,12 +226,19 @@ export function parseCredentialSecret(wire: string): CredentialSecret | null {
   if (keys.length !== 3 || keys[0] !== 'nonce' || keys[1] !== 'data' || keys[2] !== 'tags') return null
   const { nonce, data, tags } = body
   if (typeof nonce !== 'string' || typeof data !== 'string' || !Array.isArray(tags)) return null
-  // Every tag value is a string on the wire, as cashu-lib writes it.
+  // Every tag value is a string on the wire, as cashu-lib writes it, and each tag appears once.
   const rows: string[][] = []
+  const seen = new Set<string>()
   for (const t of tags) {
     if (!Array.isArray(t) || t.length < 1 || !t.every((v) => typeof v === 'string')) return null
+    if (seen.has(t[0])) return null
+    seen.add(t[0])
+    if (t.some((v) => hasLoneSurrogate(v))) return null
     rows.push(t as string[])
   }
+  if (hasLoneSurrogate(nonce)) return null
+  if (!COMPRESSED_LOWER_HEX.test(data) || !isPoint(data)) return null
+  if (!nut11Valid(data, rows)) return null
   // One credential, one wire form. Re-serialising what we read must give back the input.
   if (JSON.stringify(['P2PK_VOUCHER', { nonce, data, tags: rows }]) !== wire) return null
 
@@ -238,7 +326,8 @@ function terminalLockKey(metadataJson: string | undefined, issuerId: string): st
   if (m.terminal !== true) return null
   if (typeof m.stall_pubkey !== 'string' || m.stall_pubkey.toLowerCase() !== issuerId.toLowerCase()) return null
   if (m.role !== ISSUE_AND_REDEEM) return null
-  if (typeof m.lock_key !== 'string' || !HEX64.test(m.lock_key)) return null
+  // Lowercase only, as the gateway writes it and as the Java (0.16.1) requires.
+  if (typeof m.lock_key !== 'string' || !LOWER_HEX64.test(m.lock_key)) return null
   return m.lock_key
 }
 
@@ -312,7 +401,7 @@ export function verifyTerminalWarrant(sale: TerminalSale): TerminalVerdict {
   if (lockKey.toLowerCase() === issuerId) return refused(TERMINAL_REFUSAL.LOCK_IS_STALL)
 
   // 7. The mint lock is `lock_key`.
-  if (!/^[0-9a-fA-F]{66}$/.test(credential.data) || credential.data.slice(2).toLowerCase() !== lockKey.toLowerCase()) {
+  if (credential.data.slice(2) !== lockKey) {
     return refused(TERMINAL_REFUSAL.LOCK_MISMATCH)
   }
 

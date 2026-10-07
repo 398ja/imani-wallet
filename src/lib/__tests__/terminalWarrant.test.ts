@@ -1,7 +1,7 @@
 /**
  * The customer's wallet checks a till's `terminal` warrant offline (#160 phase 5, spec 5.1/5.5).
  *
- * `verifyTerminalWarrant` mirrors cashu-voucher 0.16.0's `IssuanceWarrant.verifyTerminal`. The
+ * `verifyTerminalWarrant` mirrors cashu-voucher 0.16.1's `IssuanceWarrant.verifyTerminal`. The
  * portal runs the Java when the till sells and the customer's wallet runs this when the coupon
  * arrives, so every refusal there must be a refusal here. Each test below is one forgery or one
  * shape the Java refuses, written as plainly as we could.
@@ -19,6 +19,7 @@ import {
   type TerminalSale,
 } from '../terminalWarrant'
 import { parseIssuanceWarrant, verifyIssuanceWarrant, warrantSaleDigest } from '../issuanceWarrant'
+import { lockedCanonicalBytes } from '../voucherToken'
 
 // Keys: the gateway's credential-minting service, the stall, and the till's own K.
 const SERVICE_SK = '11'.repeat(32)
@@ -42,6 +43,8 @@ interface CredentialShape {
   lock?: string
   metadata?: Record<string, unknown> | string
   signer?: string
+  /** The stall co-key row; null leaves it out, as the Java fixture does. */
+  pubkeys?: string | null
 }
 
 /**
@@ -59,7 +62,7 @@ function credential(over: CredentialShape = {}): string {
   const tags: string[][] = [
     ['n_sigs', '1'],
     ['sigflag', 'SIG_ALL'],
-    ['pubkeys', '02' + STALL],
+    ...(over.pubkeys === null ? [] : [['pubkeys', over.pubkeys ?? '02' + STALL]]),
     ['voucher_id', '6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f'],
     ['issuer', over.issuer ?? STALL],
     ['unit', 'sat'],
@@ -68,7 +71,7 @@ function credential(over: CredentialShape = {}): string {
   if (over.expiresAt !== null) tags.push(['expires_at', over.expiresAt ?? String(EXPIRES_AT)])
   tags.push(['merchant_metadata', metadata])
   const body = { nonce: '9a8b7c6d5e4f30211203f4e5d6c7b8a9', data: '02' + lock, tags }
-  const signed = parseCredentialSecret(JSON.stringify(['P2PK_VOUCHER', body]))!.signed
+  const signed = lockedCanonicalBytes(body.data, body.nonce, tags)
   const signerSk = over.signer ?? SERVICE_SK
   const sig = bytesToHex(schnorr.sign(sha256(signed), hexToBytes(signerSk)))
   const pub = bytesToHex(schnorr.getPublicKey(hexToBytes(signerSk)))
@@ -287,7 +290,7 @@ describe('each forgery the Java refuses, refused here', () => {
   it("a lock_key that is the stall's own key (LOCK_IS_STALL)", () => {
     const metadata = { terminal: true, stall_pubkey: STALL, role: 'issue-and-redeem', lock_key: STALL }
     expect(
-      refusal({ credential: credential({ metadata, lock: STALL }), signatureHex: saleSignature(STALL_SK) }),
+      refusal({ credential: credential({ metadata, lock: STALL, pubkeys: null }), signatureHex: saleSignature(STALL_SK) }),
     ).toBe(TERMINAL_REFUSAL.LOCK_IS_STALL)
   })
 
@@ -317,5 +320,119 @@ describe('the customer side refuses a broken terminal warrant', () => {
       faceValueMinor: SALE_TOTAL, unit: UNIT, faceDecimals: DECIMALS,
     }, { trustedServiceKeys: [] })
     expect(verdict.verdict).toBe('failed')
+  })
+})
+
+/**
+ * cashu-voucher 0.16.1 parity: the wallet and the Java accept exactly the same credentials, and
+ * both take the strict reading. The #196 review fuzz found each of these accepted on one side and
+ * refused on the other.
+ */
+describe('one credential, one reading (0.16.1 parity)', () => {
+  /** The genuine credential with its wire text rewritten by `edit`, re-signed by the service. */
+  function withTags(edit: (tags: string[][]) => string[][], over: { data?: string } = {}): string {
+    const [, body] = JSON.parse(credential()) as [string, { nonce: string; data: string; tags: string[][] }]
+    const unsigned = body.tags.filter((t) => t[0] !== 'issuer_sig' && t[0] !== 'issuer_pubkey')
+    const tags = edit(unsigned)
+    const data = over.data ?? body.data
+    const sig = bytesToHex(schnorr.sign(sha256(lockedCanonicalBytes(data, body.nonce, tags)), hexToBytes(SERVICE_SK)))
+    return JSON.stringify(['P2PK_VOUCHER', { nonce: body.nonce, data, tags: [...tags, ['issuer_sig', sig], ['issuer_pubkey', SERVICE]] }])
+  }
+
+  // Two rows of one tag are two readings: one verifier takes the first, another the last. The
+  // Java's parser (NUT-11) refuses any repeated tag, so the wallet must too, for every tag.
+  it('refuses a repeated tag row, whichever tag and wherever it sits', () => {
+    const rogue = bytesToHex(schnorr.getPublicKey(hexToBytes(STRANGER_SK)))
+    const extra: string[][] = [
+      ['issuer', STRANGER],
+      ['merchant_metadata', JSON.stringify({ terminal: true, stall_pubkey: STALL, role: 'redeem-only', lock_key: TILL })],
+      ['expires_at', '1'],
+      ['voucher_id', 'x'],
+      ['unit', 'sat'],
+      ['memo', 'a'],
+    ]
+    for (const row of extra) {
+      const tagsFirst = withTags((t) => [row, ...t, ...(row[0] === 'memo' ? [row] : [])])
+      const tagsLast = withTags((t) => [...t, row, ...(row[0] === 'memo' ? [row] : [])])
+      expect(parseCredentialSecret(tagsFirst), row[0]).toBeNull()
+      expect(parseCredentialSecret(tagsLast), row[0]).toBeNull()
+    }
+    // The signature rows, appended after signing as an attacker would.
+    const wire = credential()
+    for (const row of [['issuer_pubkey', rogue], ['issuer_sig', '00'.repeat(64)]]) {
+      const appended = wire.replace(/\]\]\}\]$/, '],' + JSON.stringify(row) + ']}]')
+      expect(appended).not.toBe(wire)
+      expect(parseCredentialSecret(appended), row[0]).toBeNull()
+      expect(refusal({ credential: appended })).toBe(TERMINAL_REFUSAL.BAD_CREDENTIAL_SIGNATURE)
+    }
+  })
+
+  // `data` is the till's mint lock, written by the gateway as a lowercase compressed key. An
+  // uppercase spelling, or a 04/05 prefix, is not one the Java parses, so it is not one here.
+  it('refuses data that is not lowercase hex with a 02 or 03 prefix', () => {
+    for (const data of ['04' + TILL, '05' + TILL, ('02' + TILL).toUpperCase(), '02' + TILL.slice(0, 10).toUpperCase() + TILL.slice(10)]) {
+      expect(parseCredentialSecret(withTags((t) => t, { data })), data).toBeNull()
+    }
+    expect(parseCredentialSecret(withTags((t) => t, { data: '03' + TILL }))).not.toBeNull()
+  })
+
+  // An uppercase lock_key is a second spelling of the same key. Both sides take only lowercase.
+  it('refuses an uppercase lock_key', () => {
+    const metadata = { terminal: true, stall_pubkey: STALL, role: 'issue-and-redeem', lock_key: TILL.toUpperCase() }
+    expect(refusal({ credential: credential({ metadata }) })).toBe(TERMINAL_REFUSAL.NOT_A_SELLING_TERMINAL)
+  })
+
+  // A lone surrogate hashes as '?' in Java and as U+FFFD here, so the same credential would have
+  // two digests. Refused at parse, in a tag value or (escaped) inside the metadata JSON.
+  it('refuses a lone surrogate anywhere in a signed tag', () => {
+    expect(parseCredentialSecret(withTags((t) => [...t, ['memo', 'a\ud800b']]))).toBeNull()
+    expect(parseCredentialSecret(withTags((t) => [...t, ['memo', 'a\udc00']]))).toBeNull()
+    // Raw in the metadata text (the wire escapes it as \\ud800, which JSON.parse turns back).
+    const metadata = JSON.stringify({ terminal: true, stall_pubkey: STALL, role: 'issue-and-redeem', lock_key: TILL }).replace('}', ',"name":"a\ud800b"}')
+    expect(parseCredentialSecret(credential({ metadata }))).toBeNull()
+    // A paired surrogate (an emoji) is well-formed and still fine.
+    const emoji = { terminal: true, stall_pubkey: STALL, role: 'issue-and-redeem', lock_key: TILL, name: 'Pizza \u{1F355}' }
+    expect(refusal({ credential: credential({ metadata: emoji }) })).toBe('VALID')
+  })
+
+  // A `data` that repeats the stall co-key is a duplicate in NUT-11's main pathway, which the
+  // Java refuses at parse. Here too, so it never reaches LOCK_MISMATCH on one side only.
+  it('refuses data that repeats a pubkeys key, as NUT-11 does', () => {
+    expect(parseCredentialSecret(credential({ lock: STALL }))).toBeNull()
+  })
+})
+
+/**
+ * The customer's offline check (`verifyIssuanceWarrant`). Each test below fails if one line of
+ * that call is changed: the review's mutation run left them alive.
+ */
+describe('the customer-side call into verifyTerminalWarrant', () => {
+  const coupon = { faceValueMinor: SALE_TOTAL, unit: UNIT, faceDecimals: DECIMALS }
+  const json = (cred: string) =>
+    JSON.stringify({ form: 'terminal', sale_total: SALE_TOTAL, face_decimals: DECIMALS, unit: UNIT, nonce: NONCE, signature: saleSignature(), credential: cred })
+
+  // Offline, a coupon sold before the till's credential expired stays good, today and forever.
+  // Checking the expiry "as of now" instead would turn every old coupon from a till into a
+  // failure the day the till's year runs out.
+  it('skips the credential expiry: a coupon from a till whose credential has since expired verifies', () => {
+    const expired = credential({ expiresAt: '1000' })
+    expect(
+      verifyIssuanceWarrant(parseIssuanceWarrant(json(expired)), STALL, coupon, {
+        trustedServiceKeys: [SERVICE],
+        now: 2_000_000_000_000,
+      }),
+    ).toEqual({ verdict: 'verified' })
+  })
+
+  // With no keys passed, the build's own VITE_VOUCHER_ISSUER_PUBKEYS is the allow-list. A build
+  // that names the service key verifies; dropping the default would refuse every till's coupon.
+  it('uses the build’s trusted service keys when none are passed', () => {
+    vi.stubEnv('VITE_VOUCHER_ISSUER_PUBKEYS', SERVICE)
+    try {
+      const verdict = verifyIssuanceWarrant(parseIssuanceWarrant(json(credential())), STALL, coupon)
+      expect(verdict).toEqual({ verdict: 'verified' })
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 })
