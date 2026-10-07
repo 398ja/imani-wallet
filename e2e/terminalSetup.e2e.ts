@@ -17,8 +17,8 @@
  * Phase 5 (`E2E_PHASE>=5`, run after phase 4, once B and B2 are revoked, so the stall's one free
  * terminal is available again without a licence): a sell-and-redeem till B3 sells to C,
  * C's coupon verdict is `verified`, A sees the sale attributed, a replayed warrant nonce gets 409,
- * B3 gets 403 on dashboard, campaigns, policies and SSE, a REDUCED B3 is refused before minting,
- * and once A revokes B3 its next Sell gets 403. These need the portal, gateway-customer and
+ * B3 is refused on dashboard, campaigns, policies and SSE (401 at the edge or 403 at the portal),
+ * a REDUCED B3 is refused before minting, and once A revokes B3 its next Sell gets 403. These need the portal, gateway-customer and
  * gateway-core Phase 5 PRs deployed: until `E2E_P5_DEPLOYED=1` their checks print PENDING and do
  * not fail the run.
  *
@@ -449,8 +449,16 @@ async function phase5(browser: Browser, owner: Page, customer: Page, customerPub
       ['GET', '/api/v1/policies'],
       ['GET', '/api/v1/portal/events'],
     ] as const) {
-      const status = await asTill(k, method, path)
-      checkDeployed(`B3 gets 403 on ${path}`, status === 403, String(status))
+      // Refused at either lock: the edge answers 401 "No session cookie" before the portal sees
+      // it (only Sell and cashback issue pass the edge without a session, imani-deploy#139), and
+      // the portal answers 403 if it ever does. Anything else, a 2xx above all, is a failure.
+      const { status, body } = await asTillResponse(k, method, path)
+      const refusedAtEdge = status === 401 && /No session cookie/.test(body)
+      checkDeployed(
+        `B3 is refused on ${path} (403 at the portal or 401 at the edge)`,
+        status === 403 || refusedAtEdge,
+        `${status} ${body.slice(0, 120)}`,
+      )
     }
 
     console.log('\nPhase 5: a REDUCED B3 is refused before minting')
@@ -524,6 +532,16 @@ async function tillKey(till: Page): Promise<TillKey> {
 
 /** A request signed with NIP-98 by B3's K and naming its credential, as its signedFetch does. */
 async function asTill(k: TillKey, method: string, path: string, body?: unknown): Promise<number> {
+  return (await asTillResponse(k, method, path, body)).status
+}
+
+/** As {@link asTill}, with the response body, to tell the edge's refusal from the portal's. */
+async function asTillResponse(
+  k: TillKey,
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<{ status: number; body: string }> {
   const url = `${BASE}${path}`
   const payload = body === undefined ? undefined : JSON.stringify(body)
   const auth = await nip98.getToken(url, method.toLowerCase(), (e) => finalizeEvent(e, hexToBytes(k.sk)), true, body as Record<string, unknown>)
@@ -537,7 +555,7 @@ async function asTill(k: TillKey, method: string, path: string, body?: unknown):
     body: payload,
     signal: AbortSignal.timeout(20_000),
   }).catch(() => null)
-  return res?.status ?? 0
+  return { status: res?.status ?? 0, body: res ? await res.text().catch(() => '') : '' }
 }
 
 /** A new `terminal` warrant from K, for a probe that must not be refused as a replay. */
