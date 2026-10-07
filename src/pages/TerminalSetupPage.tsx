@@ -24,7 +24,7 @@ import { type RequestSigner } from '../lib/nip98'
 import { deviceConfirm } from '../lib/terminalConfirm'
 import { ScanRecipient } from '../components/ScanRecipient'
 import { formatCheckCode } from '../lib/terminalMint'
-import { refreshProfile, profileName } from '../lib/profile'
+import { refreshProfile, profileName, type Profile } from '../lib/profile'
 import { TERMINAL_ROLE_LABELS, grantFor } from '../lib/terminalRole'
 import type { Event } from 'nostr-tools'
 
@@ -67,8 +67,11 @@ const REFUSAL_COPY: Record<Exclude<OfferRefusal, 'not-a-credential-dm'>, string>
 export interface TerminalSetupDeps {
   /** Gift wraps addressed to `pubkey`. Relay plus gateway otherwise. */
   fetchWraps?: (pubkey: string, sinceSeconds: number) => Promise<Event[]>
-  /** The stall's public name, from its public records. */
-  stallName?: (stallPubkey: string) => Promise<string | null>
+  /**
+   * The stall's public name, from its public records. `onLater` gets a name that arrives after the
+   * first answer (a slower store, round 4), so the screen can correct "no public name".
+   */
+  stallName?: (stallPubkey: string, onLater?: (name: string) => void) => Promise<string | null>
   /** Where the enrolled DM goes, given the terminal's own NIP-98 signer. */
   publisherFor?: (announcer: EnrolmentAnnouncer) => WrapPublisher
   /**
@@ -82,10 +85,13 @@ export interface TerminalSetupDeps {
  * The stall's public name: its kind-0 display name or handle, from the public relay (ADR 0012).
  * Null when it has published neither, and the screen then says so rather than inventing one.
  */
-async function publicStallName(stallPubkey: string): Promise<string | null> {
-  const profile = await refreshProfile(stallPubkey).catch(() => null)
-  if (!profile || (!profile.displayName && !profile.nip05)) return null
-  return profileName(profile)
+async function publicStallName(stallPubkey: string, onLater?: (name: string) => void): Promise<string | null> {
+  const named = (p: Profile | null) => (!p || (!p.displayName && !p.nip05) ? null : profileName(p))
+  const profile = await refreshProfile(stallPubkey, (later) => {
+    const n = named(later)
+    if (n) onLater?.(n)
+  }).catch(() => null)
+  return named(profile)
 }
 
 export function TerminalSetupPage({
@@ -167,10 +173,14 @@ export function TerminalSetupPage({
   useEffect(() => {
     if (!offer) return
     let cancelled = false
-    void stallName(offer.stallPubkey)
+    // A name that arrives late (the slower of the gateway and the relay) replaces "no public
+    // name"; it never replaces a name already shown with nothing.
+    void stallName(offer.stallPubkey, (n) => {
+      if (!cancelled) setName(n)
+    })
       .catch(() => null)
       .then((n) => {
-        if (!cancelled) setName(n)
+        if (!cancelled) setName((shown) => n ?? shown)
       })
     return () => {
       cancelled = true
