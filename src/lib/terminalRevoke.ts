@@ -1,4 +1,4 @@
-import { revokeCredential, type CredentialMintApi } from './credentialRevocation'
+import { CREDENTIAL_STATE, credentialState, revokeCredential, type CredentialMintApi } from './credentialRevocation'
 import {
   WAITING_TTL_MS,
   allTerminals,
@@ -293,4 +293,36 @@ export async function cancelExpiredWaiting(
 
 function refused(reason: keyof typeof REVOKE_MESSAGES): MintRevokeOutcome {
   return { revoked: false, reason, message: REVOKE_MESSAGES[reason] }
+}
+
+/**
+ * Mark rows revoked whose credential the mint already reports spent (#160 phase 4, spec 2.6).
+ *
+ * A credential can be spent without this phone: the device took itself out of service, or the
+ * owner revoked it from another phone. The mint is the authority on that, so the Terminals screen
+ * asks it about every live row with a token, and a `SPENT` answer marks the row revoked. Only a
+ * definite `SPENT` does: an unreachable mint leaves the row exactly as it was, because marking a
+ * live till as revoked would hide the one handle that can still revoke it.
+ *
+ * Read-only at the mint: this never spends.
+ *
+ * @returns how many rows were marked
+ */
+export async function markSpentElsewhere(
+  stallPubkey: string,
+  api: Pick<CredentialMintApi, 'validateToken'>,
+  now: number = Date.now(),
+): Promise<number> {
+  let marked = 0
+  for (const row of allTerminals(stallPubkey)) {
+    if (row.revokedAt !== undefined || !isRevocable(row) || row.status === 'minting') continue
+    if ((await credentialState(row.token!, api)) !== CREDENTIAL_STATE.REVOKED) continue
+    if (!revokeTerminal(stallPubkey, row.terminalPubkey, now).revoked) continue
+    marked += 1
+    // A waiting row still holds one of the stall's pending slots at the gateway. Give it back,
+    // as revoking it from this phone does (#160 review), rather than leave the owner blocked
+    // from adding a terminal until the gateway's own 24-hour expiry.
+    if (row.status === 'waiting' && row.voucherId) await releasePending(row.voucherId)
+  }
+  return marked
 }

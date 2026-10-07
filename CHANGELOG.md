@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Revocation reaches the owner's list from the mint (#160 phase 4).** Opening Settings →
+  Terminals asks the mint (NUT-07, read-only) about every live row with a token, and marks
+  revoked any whose credential is already spent: a device that took itself out of service, or
+  one revoked from another of the owner's phones. Only a definite `SPENT` marks a row; an
+  unreachable mint leaves it in service, so the one handle that can revoke it is never hidden.
+  A **waiting** row marked this way also gives the gateway its pending slot back (`/cancel`), as
+  revoking it from this phone does, so the owner is not blocked from adding a terminal for 24
+  hours (#160 review).
+- **The e2e covers revocation end to end.** `npm run e2e:terminal-setup` now has A revoke B,
+  then B is refused at unlock with "no longer in service", B takes itself out of service, and a
+  second device that hands itself back reads Revoked on A's list.
+
 - **A terminal opens its till (#160 phase 3).** A device set up as a terminal now lands on
   `/terminal/unlock`, where its passphrase opens the till. Unlocking never opens a NAP
   session, so a terminal makes no call to `/api/v1/auth/*` and is never signed in as a
