@@ -29,7 +29,7 @@
  *                                     E2E_BUNDLE_DIR=dist tsx e2e/terminalSetup.e2e.ts
  */
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright'
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { extname, join, normalize } from 'node:path'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha256'
@@ -45,6 +45,14 @@ const P5_DEPLOYED = process.env.E2E_P5_DEPLOYED === '1'
 const TILL_PASSPHRASE = 'counter-pass'
 /** A new stall's coupon:issue permission is cached this long by the gateway (#114). */
 const PERMISSION_CACHE_MS = 62_000
+/**
+ * Where the run leaves screenshots and a Playwright trace per browser (round 4: the r3 run left no
+ * artifacts, so whether the owner's Revoke landed could only be read from the edge's access log).
+ */
+const ARTIFACTS = process.env.E2E_ARTIFACTS ?? ''
+/** A local gate fronts its mint with a throwaway CA (imani-deploy scripts/local-terminal-gate). */
+const IGNORE_HTTPS_ERRORS = process.env.E2E_IGNORE_HTTPS_ERRORS === '1'
+const contexts: Array<{ name: string; ctx: BrowserContext }> = []
 const failures: string[] = []
 const pendingDeploy: string[] = []
 
@@ -73,8 +81,14 @@ const CONTENT_TYPES: Record<string, string> = {
 }
 
 /** Serves the app from a local build while the API, relay and mint stay those of E2E_BASE. */
-async function context(browser: Browser): Promise<BrowserContext> {
-  const ctx = await browser.newContext({ locale: 'en-GB', serviceWorkers: BUNDLE_DIR ? 'block' : 'allow' })
+async function context(browser: Browser, name = `ctx${contexts.length}`): Promise<BrowserContext> {
+  const ctx = await browser.newContext({
+    locale: 'en-GB',
+    serviceWorkers: BUNDLE_DIR ? 'block' : 'allow',
+    ignoreHTTPSErrors: IGNORE_HTTPS_ERRORS,
+  })
+  if (ARTIFACTS) await ctx.tracing.start({ screenshots: true, snapshots: true })
+  contexts.push({ name, ctx })
   if (BUNDLE_DIR) {
     const root = normalize(BUNDLE_DIR)
     const shell = join(root, 'index.html')
@@ -92,6 +106,13 @@ async function context(browser: Browser): Promise<BrowserContext> {
   return ctx
 }
 
+/** A full-page screenshot under E2E_ARTIFACTS, named for the step. No-op without it. */
+async function snap(page: Page, step: string): Promise<void> {
+  if (!ARTIFACTS) return
+  await mkdir(ARTIFACTS, { recursive: true })
+  await page.screenshot({ path: join(ARTIFACTS, `${step}.png`), fullPage: true }).catch(() => {})
+}
+
 /** Unlocks the till on B, after a reload. Returns the screen. */
 async function unlockTill(device: Page): Promise<string> {
   await device.goto(`${BASE}/`, { waitUntil: 'load' })
@@ -105,9 +126,11 @@ async function unlockTill(device: Page): Promise<string> {
 }
 
 async function main() {
-  const browser: Browser = await chromium.launch()
-  const owner = await (await context(browser)).newPage()
-  const device = await (await context(browser)).newPage()
+  // E2E_CHROMIUM_ARGS: the local gate's relay and mint are on loopback ports, which Chromium's Local
+  // Network Access checks block from a page (staging's are public https/wss, so it never needed this).
+  const browser: Browser = await chromium.launch({ args: (process.env.E2E_CHROMIUM_ARGS ?? '').split(' ').filter(Boolean) })
+  const owner = await (await context(browser, 'A-owner')).newPage()
+  const device = await (await context(browser, 'B-device')).newPage()
   const errors: string[] = []
   const authCalls: string[] = []
   owner.on('pageerror', (e) => errors.push(`A: ${e.message}`))
@@ -222,7 +245,7 @@ async function main() {
   console.log('\nPhase 3: a customer C pays B\'s Redeem request')
   // The owner sells C a coupon first, so C has something of this stall's to pay with. The
   // stall's coupon:issue permission is cached by the gateway for a minute after registration.
-  const customer = await (await context(browser)).newPage()
+  const customer = await (await context(browser, 'C-customer')).newPage()
   customer.on('pageerror', (e) => errors.push(`C: ${e.message}`))
   const customerPubkey = await registerCustomer(customer, BASE)
   check('C is registered', /^[0-9a-f]{64}$/.test(customerPubkey), customerPubkey)
@@ -315,7 +338,7 @@ async function main() {
   console.log('\nPhase 4: a device that hands itself back shows revoked on the owner\'s list')
   // A second device, set up and then taken out of service FROM THE DEVICE while still live. The
   // credential is spent by the device's own key, and A's list learns it from the mint.
-  const second = await (await context(browser)).newPage()
+  const second = await (await context(browser, 'B2-door')).newPage()
   second.on('pageerror', (e) => errors.push(`B2: ${e.message}`))
   const secondReady = await setUpDevice(owner, second, 'Door')
   check('a second device B2 is set up', secondReady)
@@ -370,7 +393,7 @@ async function main() {
  */
 async function phase5(browser: Browser, owner: Page, customer: Page, customerPubkey: string, errors: string[]) {
   console.log('\nPhase 5: a sell-and-redeem till B3 is set up and opens a FULL till')
-  const till = await (await context(browser)).newPage()
+  const till = await (await context(browser, 'B3-till')).newPage()
   till.on('pageerror', (e) => errors.push(`B3: ${e.message}`))
   const ready = await setUpDevice(owner, till, 'Sales counter', /Sell and redeem/)
   check('B3 is set up as a sell-and-redeem till', ready)
@@ -390,7 +413,7 @@ async function phase5(browser: Browser, owner: Page, customer: Page, customerPub
       window.history.pushState({}, '', path)
       window.dispatchEvent(new PopStateEvent('popstate'))
     }, p)
-  const outbound: Array<{ path: string; header: string | null; warrant: string | null }> = []
+  const outbound: Array<{ path: string; header: string | null; warrant: string | null; body: string }> = []
   till.on('request', (r) => {
     const path = new URL(r.url()).pathname
     if (!path.startsWith('/api/v1/portal/')) return
@@ -401,10 +424,11 @@ async function phase5(browser: Browser, owner: Page, customer: Page, customerPub
     } catch {
       /* not JSON */
     }
-    outbound.push({ path, header: r.headers()['x-imani-terminal-credential'] ?? null, warrant })
+    outbound.push({ path, header: r.headers()['x-imani-terminal-credential'] ?? null, warrant, body })
   })
   await visit('/sell')
   const sold = await tillSells(till, customerPubkey, '4.00')
+  await snap(till, 'p5-b3-sell-result')
   const sellRequest = outbound.find((o) => o.path === '/api/v1/portal/vouchers' && o.warrant)
   check('B3 names its credential on the Sell request', sellRequest?.header === k.voucherId, sellRequest?.header ?? 'none')
   const sentWarrant = sellRequest?.warrant ? (JSON.parse(sellRequest.warrant) as Record<string, unknown>) : null
@@ -436,11 +460,11 @@ async function phase5(browser: Browser, owner: Page, customer: Page, customerPub
 
   if (k.sk) {
     console.log('\nPhase 5: the gateway refuses what a till may not do')
-    // The same warrant, replayed under a new request: the nonce is spent, so 409.
+    // The SAME sale replayed: B3's exact Sell body, warrant and all, under a fresh NIP-98 signature.
+    // The nonce is already spent, so 409. (Round 3 rebuilt the body as GBP 4.00 against B3's EUR
+    // warrant, so the portal refused the denomination with 400 before it ever read the nonce.)
     if (sellRequest?.warrant) {
-      const replay = await asTill(k, 'POST', '/api/v1/portal/vouchers', {
-        face_value_minor: 400, currency: 'GBP', quantity: 1, issuance_warrant: sellRequest.warrant,
-      })
+      const replay = await asTill(k, 'POST', '/api/v1/portal/vouchers', JSON.parse(sellRequest.body) as unknown)
       checkDeployed('a replayed warrant nonce gets 409', replay === 409, String(replay))
     }
     for (const [method, path] of [
@@ -478,18 +502,61 @@ async function phase5(browser: Browser, owner: Page, customer: Page, customerPub
     await till.unroute('**/api/v1/wallet/token/validate')
 
     console.log('\nPhase 5: A revokes B3, and its next Sell gets 403')
+    // The owner's Revoke must actually land: round 3 picked the deepest div naming "Sales counter"
+    // (the name's own <div>, which holds no button), swallowed both click failures, and probed a
+    // till nobody had revoked. Now the row is the element that holds BOTH the name and its Revoke,
+    // every step must succeed, and the revocation is read back from A's roster (revokedAt), which
+    // the screen only writes once the mint took the spend (terminalRevoke.ts).
     await owner.goto(`${BASE}/settings/terminals`, { waitUntil: 'load', timeout: 60_000 })
-    const row = owner.locator('li, [role="listitem"], div').filter({ hasText: 'Sales counter' }).last()
-    await row.getByRole('button', { name: 'Revoke' }).click({ timeout: 30_000 }).catch(() => {})
-    await owner.getByRole('button', { name: /^Revoke/ }).last().click().catch(() => {})
-    // The portal caches a credential's grants for 60 s, and a revocation reaches the verifier
-    // within 30 s (spec phase 5 AC).
-    await owner.waitForTimeout(95_000)
+    const row = owner
+      .locator('div')
+      .filter({ has: owner.getByText('Sales counter', { exact: true }) })
+      .filter({ has: owner.getByRole('button', { name: 'Revoke', exact: true }) })
+      .last()
+    const asked = await row
+      .getByRole('button', { name: 'Revoke', exact: true })
+      .click({ timeout: 30_000 })
+      .then(() => true, () => false)
+    const confirmed =
+      asked &&
+      (await owner
+        .getByRole('button', { name: 'Revoke Sales counter', exact: true })
+        .click({ timeout: 30_000 })
+        .then(() => true, () => false))
+    const revokedAt = confirmed ? await rosterRevokedAt(owner, 'Sales counter') : null
+    await snap(owner, 'p5-a-revoked-b3')
+    check("A's Revoke of B3 landed (spent at the mint, roster reads revoked)", revokedAt !== null,
+      `asked=${asked} confirmed=${confirmed} ${(await text(owner)).slice(0, 300)}`)
+    // The spec's AC: a revoked till gets 403 on Sell within 30 s. gateway-customer caches an UNSPENT
+    // answer for 30 s and the portal caches no grant (TerminalPermissionResolver.ISSUE_TTL = 0), so
+    // probe from 31 s after the revocation landed, not after a padded wait.
+    const since = Date.now() - (revokedAt ?? Date.now())
+    if (since < 31_000) await owner.waitForTimeout(31_000 - since)
     const revoked = await asTill(k, 'POST', '/api/v1/portal/vouchers', {
-      face_value_minor: 100, currency: 'GBP', quantity: 1, issuance_warrant: await freshWarrant(k, 100, 'GBP'),
+      face_value_minor: 100, currency: 'EUR', quantity: 1, issuance_warrant: await freshWarrant(k, 100, 'EUR'),
     })
-    checkDeployed('a revoked B3 gets 403 on Sell', revoked === 403, String(revoked))
+    checkDeployed('a revoked B3 gets 403 on Sell (31 s after the revocation)', revoked === 403, String(revoked))
   }
+}
+
+/** When A's roster recorded the named terminal as revoked (epoch ms), or null within 60 s. */
+async function rosterRevokedAt(owner: Page, name: string): Promise<number | null> {
+  const source = `(() => {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (!key || !key.startsWith('imani-wallet:terminals:')) continue
+      const rows = JSON.parse(localStorage.getItem(key) || '[]')
+      const row = rows.find((r) => r.name === ${JSON.stringify(name)} && typeof r.revokedAt === 'number')
+      if (row) return row.revokedAt
+    }
+    return null
+  })()`
+  for (let i = 0; i < 60; i++) {
+    const at = (await owner.evaluate(source)) as number | null
+    if (at !== null) return at
+    await owner.waitForTimeout(1_000)
+  }
+  return null
 }
 
 interface TillKey {
@@ -726,6 +793,13 @@ async function customerPays(customer: Page, request: string): Promise<string> {
 
 async function finish(browser: Browser, errors: string[]) {
   check('no uncaught errors', errors.length === 0, errors.join('; '))
+  if (ARTIFACTS) {
+    await mkdir(ARTIFACTS, { recursive: true })
+    for (const { name, ctx } of contexts) {
+      await ctx.tracing.stop({ path: join(ARTIFACTS, `trace-${name}.zip`) }).catch(() => {})
+    }
+    console.log(`  (screenshots and traces in ${ARTIFACTS}; open a trace with: npx playwright show-trace <zip>)`)
+  }
   await browser.close()
   if (pendingDeploy.length > 0) {
     console.log(`\n${pendingDeploy.length} PENDING DEPLOY (set E2E_P5_DEPLOYED=1 once portal, gateway-customer and gateway-core phase 5 are live): ${pendingDeploy.join(', ')}`)
