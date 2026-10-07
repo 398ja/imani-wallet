@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The wallet and cashu-voucher accept exactly the same terminal credentials (#196 review).**
+  A parity fuzz against cashu-voucher found 16 verdict differences. `parseCredentialSecret` now
+  refuses what the Java parser refuses: a repeated tag row (any tag); `data` that is not lowercase
+  hex with a `02`/`03` prefix on secp256k1; a lone surrogate in the nonce or any tag; and anything
+  NUT-11 calls malformed (bad or duplicate `pubkeys`/`refund` keys, `data` repeating a `pubkeys`
+  key, `n_sigs` out of range, an unknown `sigflag`, a `locktime` with no refund keys).
+  `lock_key` must be lowercase. The Java side of the same fix is cashu-voucher#56 (0.16.1,
+  unreleased): one value per row, lowercase `lock_key`. The wallet does not depend on 0.16.1. It
+  is a standalone mirror, and only the parity harness runs the snapshot.
+- **#194: an integral float such as 1000.0 gets no legacy window.** The CBOR reader now records
+  which fields arrived as floats, and `verifyVoucher` refuses the legacy form when `faceValue`,
+  `expiresAt` or `faceDecimals` is one (or is not a number at all). Java's `Long.parseLong` refuses
+  `"1000.0"`, and JS could not tell 1000.0 from 1000.
+- **`trustedCredentialServiceKeys` reads `import.meta.env` directly**, so Vitest's `stubEnv` reaches
+  it and a test can tell the build's allow-list from an empty one. Production was already inlined
+  by Vite. Under tsx the list is still empty.
+
+### Changed
+
+- `issueAndDeliver` no longer calls `mayWarrantSale` after `canIssueNow`. For a terminal they are
+  the same check, so the second call was dead code. `holdsWarrantCredential` stays.
+- Documented in `terminalUnlock.ts`: a till revoked mid-day re-unlocks within its twelve-hour
+  session without a mint check. The portal's revocation check at every issuance is what stops it
+  selling, and the session length bounds the rest.
+
+### Tests
+
+- Tests that kill mutants the review found surviving: the offline `skip-offline` expiry, the
+  default trusted keys, `lockTerminal` clearing the request credential, and the `/sell` and
+  `/sell/cashback` route gates. The REDUCED and redeem-only route tests now wait for the stall
+  record first. Before that, every till was redirected whether or not the gate existed.
+
 ### Added
 
 - **A terminal sells (#160 phase 5).** A *Sell and redeem* till in a FULL session now has Sell
@@ -22,7 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   anything is minted. Needs gateway-portal, gateway-customer and gateway-core phase 5 deployed:
   until then the portal refuses a terminal's Sell, and nothing is minted.
 - **The customer's wallet verifies `terminal` warrants offline** (`terminalWarrant.ts`), a
-  mirror of cashu-voucher 0.16.0's `IssuanceWarrant.verifyTerminal`: lowercase hex64
+  mirror of cashu-voucher's `IssuanceWarrant.verifyTerminal` (0.16.0, tightened to 0.16.1 below): lowercase hex64
   `issuerId`; no C0 (US included), DEL, C1 controls or lone surrogates in `unit` and `nonce`;
   `sale_total` within 0..2^53-1 and `face_decimals` 0..18; a credential signed by a trusted
   service key (`VITE_VOUCHER_ISSUER_PUBKEYS`) under strict canonical verification with no
