@@ -2,8 +2,9 @@
  * @vitest-environment jsdom
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { useEffect } from 'react'
+import { MemoryRouter, useNavigate, type NavigateFunction } from 'react-router-dom'
 
 /**
  * The till a terminal runs (#160 phase 3, spec 2.4).
@@ -70,9 +71,20 @@ function unlockedAs(
   state.till = { devicePubkey: DEVICE, actor, session: openSession(actor, kind) }
 }
 
+// Lets a test move to another route inside the same mounted app, after the stall has loaded.
+let navigateTo: NavigateFunction | null = null
+function CaptureNavigate() {
+  const navigate = useNavigate()
+  useEffect(() => {
+    navigateTo = navigate
+  }, [navigate])
+  return null
+}
+
 function at(path: string) {
   render(
     <MemoryRouter initialEntries={[path]}>
+      <CaptureNavigate />
       <TerminalApp />
     </MemoryRouter>,
   )
@@ -142,10 +154,27 @@ describe('the routes a terminal has', () => {
   })
 
   // A REDUCED selling till is refused before it could mint: /sell lands on the till.
+  //
+  // The stall record is read first, so the route's own gate is what refuses. Before the record
+  // arrives, every till lands on the till regardless, which made this test pass with the gate
+  // deleted (#196 review mutation run).
   it.each(['/sell', '/sell/cashback'])('a REDUCED selling till typing %s lands on the till', async (path) => {
     enrol(TERMINAL_ROLES.ISSUE_AND_REDEEM)
     unlockedAs(TERMINAL_ROLES.ISSUE_AND_REDEEM, SESSION_KIND.REDUCED)
-    at(path)
+    at('/')
+    expect(await screen.findByText('Test Stall')).toBeTruthy()
+    act(() => navigateTo!(path))
+    expect(await screen.findByTestId('terminal-name')).toBeTruthy()
+    expect(screen.queryByText(/sell-screen|cashback-screen/)).toBeNull()
+  })
+
+  // The same, for a redeem-only till with the stall record loaded.
+  it.each(['/sell', '/sell/cashback'])('a redeem-only till typing %s lands on the till', async (path) => {
+    enrol(TERMINAL_ROLES.REDEEM_ONLY)
+    unlockedAs(TERMINAL_ROLES.REDEEM_ONLY)
+    at('/')
+    expect(await screen.findByText('Test Stall')).toBeTruthy()
+    act(() => navigateTo!(path))
     expect(await screen.findByTestId('terminal-name')).toBeTruthy()
     expect(screen.queryByText(/sell-screen|cashback-screen/)).toBeNull()
   })
