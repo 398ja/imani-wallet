@@ -858,7 +858,10 @@ Wallet `localStorage`, read with the existing validate-don't-cast style:
 Roster sync across the owner's devices (phase 6): one NIP-44 self-encrypted
 kind-30078, `d=imani:terminals`, replaceable, the same pattern as
 `wallet:src/lib/voucherRecords.ts:57-68`. It makes revocation survive the loss
-of the owner's own phone, which is the case revocation exists for.
+of the owner's own phone, which is the case revocation exists for. Each row
+also carries the credential's `voucher_id`, attestation `nonce` and `T`, so
+the stall's wallet can run the home-coming roster check (section 9, decision
+5, question 2).
 
 ## 7. Issuance warrants on a terminal
 
@@ -981,11 +984,15 @@ keeps the unlock-time refusal and returning the role.)
 ### Phase 6: roster sync and docs (wallet, imani-docs)
 
 - Encrypted roster event. Expiry warnings at 30 and 7 days and one-tap
-  renewal (section 2.7). Update `docs/terminals.md` (Adding a terminal,
+  renewal (section 2.7). Roster rows carry `voucher_id`, attestation `nonce`
+  and `T`, and a coupon from a `terminal` warrant that comes home to the
+  stall alerts if its credential `voucher_id` is not on the roster (section
+  9, decision 5, question 2). Update `docs/terminals.md` (Adding a terminal,
   Known gaps, Common questions) and imani-docs
   `warrants/merchant/how-to-sell-on-a-terminal.md`.
 - **AC:** a terminal added on phone A appears on phone A' after restore from
-  backup and can be revoked from A'.
+  backup and can be revoked from A'. A coupon coming home from a credential
+  not on the roster raises the alert.
 - **E2E:** restore A into a fresh context, revoke B from there, B refused.
 
 ## 9. Decisions
@@ -1086,7 +1093,7 @@ this hole, because the stall signs them.
 - Terminal Sell reaches customers one release later than the phase 5 PRs.
 - A lost device plus a compromised service can keep selling `verified`
   coupons offline until `T`. Detection is the stall's home-coming roster
-  check (open question 2).
+  check (question 2, decided by the owner on 2026-10-07).
 - About 8 to 10 developer days (section 4.6.7).
 
 **Rejected.**
@@ -1107,13 +1114,13 @@ this hole, because the stall signs them.
   rotation the owner cannot know which trusted key will sign. Transplanting
   between trusted keys still needs `K`, so the gain is small.
 
-**Open questions for the owner.** Questions 1 and 2 carry the design
-reviewer's recommendations as proposed answers, **pending owner
-confirmation**.
+**Questions for the owner.** Questions 1 and 2 were **decided by the owner,
+2026-10-07**, adopting the design reviewer's recommendations.
 
 1. Should the attestation also bind the credential's `name`, so a modified
-   service cannot rename a till that customers see? **Proposed answer: no,
-   plus a `credentialDefect` check (pending owner confirmation).** Customers
+   service cannot rename a till that customers see? **Decided: no, plus a
+   full-metadata `credentialDefect` check (decided by the owner,
+   2026-10-07).** Customers
    are not shown `name` today: the till reads its own record and the roster
    its own row. Free-text Unicode in a Java/TypeScript digest would bring back
    the canonicalisation risk 0.16.1 just fixed. Instead the owner's
@@ -1121,8 +1128,9 @@ confirmation**.
    which covers `name` and `idle_lock_minutes`. Revisit in `v: "2"` if a
    customer screen ever shows the till's name.
 2. Should the owner's wallet publish its attestations (or their nonces) in the
-   encrypted roster event (phase 6)? **Proposed answer: yes, plus a
-   home-coming roster check (pending owner confirmation).** Store
+   encrypted roster event (phase 6)? **Decided: yes, the attestation nonces
+   are published in the phase 6 roster event, plus a home-coming roster check
+   (decided by the owner, 2026-10-07).** Store
    `voucher_id`, `nonce` and `T` per row in the phase 6 roster. When a coupon
    from a `terminal` warrant comes home to the stall, the stall's wallet
    checks that the warrant's credential `voucher_id` is on its roster, and
