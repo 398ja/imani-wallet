@@ -84,6 +84,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Spec 5.3 (terminals in service): `live: false` yields `[]`.** A not-live credential gets no
   permissions at all, not even redeem, and the stall must be an active merchant; ACL or
   gateway-customer failures fail closed. Matches gateway-core#130 after its review (imani-wallet#160).
+- **Spec 5.3, 5.4 and 9.1 after the gateway-portal#80 review.** Core relays gateway-customer's
+  `free` as `terminal:free`, and answers 503 (not `[]`) when gateway-customer or the ACL store is
+  down. The portal replaces (not adds to) the request's authorities, caches only refusals so a
+  revoked till is refused within 30 s, and never calls gateway-customer. New section 9.1 records
+  the owner's phase 5 decisions: one nonce ledger without a `form` column (option b), and `free`
+  computed by gateway-customer from the voucher list (option a).
 
 ## [0.14.3] - 2026-10-06
 

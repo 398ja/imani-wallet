@@ -797,21 +797,30 @@ either order. Phase 5's e2e AC (*verdict `verified`*) is met at the end of 5b.
   `credential=<voucherId>` (`core:.../controller/MerchantPermissionsController.java:77`).
   With it, core asks gateway-customer's verifier and returns
   `["terminal", "voucher:redeem:<stall>"]` when `live == true`, plus
-  `"voucher:issue:<stall>"` when the role allows. Never `coupon:issue`.
+  `"voucher:issue:<stall>"` when the role allows, plus `"terminal:free"` when
+  gateway-customer reports `free: true` (section 5.4 reads it, so the portal
+  never calls gateway-customer itself). Never `coupon:issue`.
 - `[]` (200) when the credential is `live: false` (revoked, unconfirmed,
   cancelled, expired, self-minted, or the mint cannot vouch): a not-live answer
   carries only what the metadata claims, so not even redeem is granted. Also
   `[]` when the credential is unknown or locked to another key, when the stall
   is suspended or is not an active merchant (`MerchantAclService` roles lack
-  `merchant`), and when gateway-customer or the ACL store cannot answer
-  (fail closed). Amended after the core#130 review.
+  `merchant`). Amended after the core#130 review.
+- **503** `TERMINAL_AUTH_UNAVAILABLE` (with `[]`) when gateway-customer or the
+  ACL store cannot answer. Fail closed, but distinguishable from a refusal, so
+  the portal neither grants nor caches it. Amended after the portal#80 review.
 
 ### 5.4 imani-gateway-portal
 
 - A `TerminalCredentialAuthFilter` after `Nip98AuthFilter`
   (`portal:.../config/PortalSecurityConfiguration.java:286`): with the header
-  present and a NIP-98 principal, fetch the permissions above (cached 60 s,
-  answers only, as `:161` does) and add them as authorities.
+  present and a NIP-98 principal, fetch the permissions above and **replace**
+  the request's authorities with them (never merged with the device key's own,
+  and `coupon:issue` is dropped if it ever appears). Only refusals (`[]`) are
+  cached; a grant is never cached, so the revocation bound is gateway-customer's
+  30 s liveness cache alone (phase 5 AC). Core's 503 is 503 to the till and is
+  not cached. Amended after the portal#80 review: "add them as authorities"
+  would have let a device that is also an owner keep `coupon:issue`.
 - `POST /api/v1/portal/vouchers` and cashback issue: method-level
   `MERCHANT_ONLY or hasAuthority('terminal')`, overriding the class rule
   (`portal:.../controller/PortalVoucherController.java:93`) for these two only.
@@ -829,7 +838,8 @@ either order. Phase 5's e2e AC (*verdict `verified`*) is met at the end of 5b.
   with 402 `TERMINAL_UNLICENSED` when the credential is not the stall's free
   terminal and the stall has no current licence. The internal verifier
   (section 5.2) reports `free: true` for the stall's earliest-issued live
-  terminal credential, so the portal never counts terminals itself. The
+  terminal credential, and core relays it as `terminal:free` (section 5.3), so
+  the portal never counts terminals and never calls gateway-customer. The
   licence check reads only the portal's **own cached licence state**
   (`stall_licence_state`: stall, `licensed_until`, `refreshed_at`), refreshed in
   the background and never called live on a Sell. A stall stays licensed for
@@ -1159,3 +1169,23 @@ this hole, because the stall signs them.
    0.17.0?~~ **Resolved, moot:** 0.16.1 was released on 2026-10-07. 5a builds
    on it, imani-bom#92 is retargeted to 0.16.1 before release, 0.17.0 is a
    clean minor on top, and imani-bom 0.2.11 carries 0.17.0 (section 4.6.7).
+
+### 9.1 Phase 5 decisions (ADR, owner, 2026-10-06)
+
+5. **Portal nonce scope: one ledger, PK `(issuer_pubkey, nonce)`, no `form`
+   column (option b).** `terminal` and `merchant` warrants share
+   `issuance_warrant_use`. Nonces are 32 random bytes, so two honest warrants
+   never collide; a nonce reused across forms (or across Sell and cashback) is
+   409 `WARRANT_ALREADY_USED`, which is the intended single-use rule. No
+   migration; V15 holds only `stall_licence_state`. Rejected: (a) adding `form`
+   to the PK, which made "neither 409s the other" structural at the cost of a
+   migration and of letting one nonce be spent twice under two forms. Pinned
+   by portal tests: different nonces both mint, and an owner nonce reused by a
+   till is 409.
+6. **Free terminal source: gateway-customer computes `free` (option a).**
+   `free` is the stall's earliest-issued live terminal credential, from the
+   stall's voucher list (`walletPort.listVouchers` filtered by
+   `merchant_metadata.terminal`), so credentials issued before V27 count. The
+   `terminal_credential_pending` rows are not used. Rejected: counting from the
+   pending rows, which miss pre-V27 credentials. gateway-core relays the answer
+   as `terminal:free` (section 5.3) and the portal reads it from there.
