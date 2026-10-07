@@ -2,7 +2,8 @@
 
 **Issue:** [imani-wallet#160](https://github.com/398ja/imani-wallet/issues/160).
 **Status:** Accepted. The product owner's decisions on the open questions are
-recorded in section 9 (2026-10-04). Built phase by phase, see section 8.
+recorded in section 9 (2026-10-04, and decision 5 on 2026-10-07). Built phase
+by phase, see section 8.
 **Repos:** imani-wallet, imani-gateway-customer, imani-gateway-core,
 imani-gateway-portal, cashu-voucher.
 **Builds on:** [ADR 0005](adr/0005-terminals-are-authorised-by-locked-vouchers.md)
@@ -324,6 +325,274 @@ the mint is asked (ADR 0006 ordering):
 | Off-curve `K` mints an unlocked bearer credential | Refused before minting, and the minted secret is checked for kind and lock. If either fails the owner spends it at once and reports failure |
 | Setup destroys a person's wallet key | Refused while `keyStore.hasKey()` (G11) |
 | Mint unreachable | REDUCED session: redeem only. Unchanged |
+| Issuing service mints a till for any stall | Today a `terminal` warrant verifies on gateway-customer's signature alone, so whoever holds that key can mint a credential for any stall under their own `K` and the coupons read `verified` (imani-wallet#196 review, HIGH). Closed by the owner attestation, section 4.6 |
+
+### 4.6 The owner attests each terminal (decision 5)
+
+**The problem.** A terminal credential is signed by one key, gateway-customer's
+issuing key. `verifyTerminal` (cashu-voucher 0.16.x) and its wallet mirror
+`verifyTerminalWarrant` (imani-wallet#196) accept a `terminal` warrant when
+that key signed a credential naming the stall, a selling role and `lock_key`
+`K`, and `K` signed the sale. The stall itself signs nothing. So the one key
+issuance warrants exist to distrust can mint a credential for any stall under
+a `K` it holds, sign sales with `K`, and every customer wallet shows the
+coupons as `verified`. A `merchant` warrant does not have this hole: it is
+signed by the stall key (`wallet:src/lib/warrantSigner.ts`). A `delegated`
+warrant does not either: the stall signs the delegation
+(`wallet:src/lib/issuerDelegation.ts`). `terminal` is the only form where the
+stall's consent is the service's word alone.
+
+**The fix.** At enrolment, the owner's wallet signs an **owner attestation**
+with the stall key, the key that signs `merchant` warrants. The attestation
+says: *this stall lets `K` act as `role` until `T`*. Every verifier of a
+`terminal` warrant then checks two independent signatures: the service's over
+the credential, and the stall's over the attestation.
+
+#### 4.6.1 Where the signature lives: in the credential's signed metadata (option A)
+
+Two placements were considered:
+
+- **Option A: inside the credential.** A stall-signed attestation in
+  `merchant_metadata`, so it sits under gateway-customer's signature.
+- **Option B: beside the credential.** A separate stall-signed artefact,
+  carried in the credential DM, kept in the device record and sent as a new
+  `attestation` field in the `terminal` warrant.
+
+| | A: in `merchant_metadata` | B: separate artefact in the warrant |
+|---|---|---|
+| Transport | None new. It travels inside the token through every existing path: the DM, the device record (`token` is the only authority, phase 3), `credentialFromToken`, the warrant's `credential` field and the portal's `parseCredential` | New field in the credential DM, in `StoredTerminal`, in the warrant, and in the renewal DM. Each is a place where the token and its attestation can be paired wrongly |
+| Can it name `voucher_id`? | No. The owner signs before the mint, and gateway-customer picks the id (`customer:.../adapter/VoucherAdapter.java:592`) | Yes, signed after the mint |
+| Replay onto another credential | Possible by the issuing service only, for the **same** `K`, role, stall and expiry. That grants nothing new (section 4.6.4) | Not possible |
+| Revocation | Unchanged: spend the credential (section 4.3). The attestation dies with it, because no verifier accepts an attestation without a live credential at issuance | Unchanged |
+| Renewal (phase 6) | Each renewal is a new mint, so the owner signs a new attestation. Nothing extra to deliver | The renewal DM must carry the new attestation too |
+| Canonical form | The signature covers a fixed digest of named fields (section 4.6.2), never JSON text. Gateway-customer re-serialises the metadata object, so key order and spacing cannot matter | The same digest, plus a second size budget in a warrant that is already capped at 4096 characters (`portal:.../warrant/IssuanceWarrantGate.java:33`, `customer:.../voucher/DelegatedWarrantLedger.java:44`) |
+| Old verifiers | They ignore an unknown metadata key, so a 0.16.x verifier still accepts the credential, and still on the service's word alone. That is why the cutover is coordinated (section 4.6.5) | They ignore an unknown warrant field. Same situation |
+
+**Decision: option A.** Its one weakness is that it cannot name `voucher_id`.
+That buys nothing here (section 4.6.4), and in exchange the attestation can
+never be separated from its credential. It also gives the device itself a way
+to refuse a credential the stall never signed (section 4.6.3).
+
+**Wire form.** One new key in the credential's `merchant_metadata`. All values
+are strings, so Java and TypeScript read the same characters and no JSON
+number is involved:
+
+```json
+{
+  "terminal": true,
+  "stall_pubkey": "<S>",
+  "role": "issue-and-redeem",
+  "lock_key": "<K>",
+  "name": "Front counter",
+  "idle_lock_minutes": 10,
+  "owner_attestation": {
+    "v": "1",
+    "expires_at": "1823212800",
+    "nonce": "<64 lowercase hex>",
+    "sig": "<128 lowercase hex>"
+  }
+}
+```
+
+The value must be an object with exactly these four keys. Any other key, a
+repeated key or a non-string value is refused. `v` is the literal `"1"`.
+`expires_at` is a canonical decimal epoch-seconds integer (`0|[1-9][0-9]{0,18}`).
+`nonce` is 32 random bytes the owner chooses.
+
+#### 4.6.2 What the owner signs
+
+`sig` is BIP-340 by the stall key `S` over:
+
+```
+attestationDigest = sha256(utf8(join(US,
+    "imani-terminal-attestation", v, S, K, role, expires_at, nonce)))
+```
+
+`US` is U+001F, the separator `warrantSaleDigest` already uses. `S` and `K`
+are lowercase x-only hex. `role` is the catalog string. The domain string
+comes first, so an attestation digest can never equal a sale digest, whose
+preimage starts with a 64-hex stall key. A signature made for one can
+therefore never verify as the other.
+
+The digest covers `K`, `role` and `S` as **read back from the same
+metadata**, never a separate copy. A verifier rebuilds it from `lock_key`,
+`role` and `stall_pubkey`, so the attestation cannot disagree with the
+credential it sits in. `name` and `idle_lock_minutes` are not covered. They
+are display and device settings, not authority.
+
+**Expiry.** The owner picks `T` = the credential's expiry (decision 1,
+365 days). Gateway-customer **uses `T` as the credential's `expires_at`** for
+a terminal credential, instead of computing it from `expires_in_days`. Every
+verifier requires `credential.expires_at <= attestation.expires_at`. The
+service therefore cannot extend a till beyond what the owner signed.
+
+**Signing at enrolment.** `credentialRequestBody`
+(`wallet:src/lib/terminalMint.ts`) builds the attestation with the same signer
+`buildIssuanceWarrant` uses for a `merchant` warrant (`getSigner()`, asserted
+equal to the stall). The `minting` roster row persists the attestation
+alongside its `Idempotency-Key`, so a resumed mint (`resumeMinting`,
+`wallet:src/lib/terminalRevoke.ts`) sends the identical body and the gateway's
+idempotent replay matches. A fresh signature would carry a fresh nonce, and
+the replay would be refused as a different request.
+
+#### 4.6.3 What each verifier checks
+
+All of them add the same step, **owner attestation**, to the checks they
+already run.
+
+1. `owner_attestation` is present and well-formed (section 4.6.1).
+2. `sig` verifies, BIP-340, over `attestationDigest` built from
+   `stall_pubkey`, `lock_key` and `role` in the same metadata, against
+   **`issuerId`**. `issuerId` is the coupon's `issuer`, which `WRONG_STALL`
+   already requires to equal the credential's `issuer` and `stall_pubkey`.
+3. `credential.expires_at <= attestation.expires_at`.
+
+| Verifier | Where | When | Expiry instant |
+|---|---|---|---|
+| cashu-voucher `IssuanceWarrant.verifyTerminal` | after `LOCK_MISMATCH`, before the sale signature | every `TerminalSale` | `ExpiryCheck` as today (the credential's `expires_at`, now bounded by `T`) |
+| cashu-voucher `IssuanceWarrant.verifyOwnerAttestation(credential, issuerId)` | new, public, used by the two gateways below | n/a | none, it checks the signature only |
+| Portal (`PortalIssuanceWarrant.terminalRefusal`) | through `verifyTerminal` | issuance of every terminal Sell and cashback | `ExpiryCheck.at(now)` |
+| Customer wallet, offline (`verifyTerminalWarrant`) | the line-by-line mirror | coupon receipt and every re-check | `skip-offline`, unchanged: a coupon sold before expiry stays valid |
+| gateway-customer at mint (`VoucherController`) | `verifyOwnerAttestation` against the **resolved** issuer, pre-mint | `POST /api/v1/wallet/vouchers` with terminal metadata | n/a. Also sets `expires_at := T` |
+| gateway-customer verifier (`TerminalCredentialVerifier`, internal endpoint) | the same | each lookup. Reports `attested`. An unattested credential is never `live` for issuance | n/a |
+| The terminal itself (`credentialFromToken`) | the same, at unlock and on a renewal. A **missing** attestation opens the till for Redeem only (section 4.6.5). A **present but invalid** one refuses the credential outright: the stall never signed it | login | n/a |
+| The owner (`credentialDefect`) | the attestation came back byte-for-byte as sent | after every mint | n/a |
+
+New cashu-voucher refusals: `OWNER_ATTESTATION_MISSING` (absent or malformed),
+`BAD_OWNER_ATTESTATION` (the signature does not verify against `issuerId`) and
+`ATTESTATION_EXCEEDED` (the credential outlives `T`). Each has a wallet
+`TERMINAL_REFUSAL` with the same name. The portal's exhaustive `terminalTag`
+switch must then name them, so a 0.17.0 upgrade cannot compile without
+handling them. They map to a new metric label, `owner_attestation`.
+
+**Is the gateway's signature still needed? Yes, but for a different job.**
+After this change, `verified` means *the stall signed this till, and the till
+signed this sale*. The service's signature no longer carries that claim. It
+stays a required check because it does four other jobs:
+
+1. **It ties the credential to something revocable.** Revocation is a NUT-07
+   spend of a proof the service minted (section 4.3). The mint answers
+   `UNSPENT` for a proof it never signed (section 4.5, *Forged credential and
+   NUT-07*), so liveness means something only for a credential the service
+   actually issued and registered (V28). Without the service signature, the
+   owner's attestation would be an irrevocable bearer grant to `K` until `T`.
+2. **It pins what the attestation does not cover.** That is the P2PK lock
+   (`data` = `K`, `pubkeys` = `[S]`, so the stall can revoke it), `issuer`, and
+   the canonical secret bytes the portal and the wallet both parse.
+3. **It scopes the deployment.** `trustedServiceKeys` and
+   `VITE_VOUCHER_ISSUER_PUBKEYS` decide which issuing service's tills a build
+   accepts at all.
+4. **Two keys must now fall, not one.** Forging a selling till takes the
+   stall's key **and** the service key. The stall's key alone already lets an
+   attacker sign `merchant` warrants, so a stolen stall key gains nothing
+   here. The service key alone now gains nothing either.
+
+#### 4.6.4 Replay, revocation and renewal
+
+- **Replay.** The attestation does not name `voucher_id`, so only the issuing
+  service (the one party that sees it before minting) could put it on a
+  second credential. That credential would be for the same `K`, role, stall
+  and expiry the owner already signed, so it grants nothing new. It cannot be
+  used without `K`. The residual case is a compromised service plus a stolen,
+  revoked device. The service could mint a live twin the owner does not know
+  about. But a compromised service also answers liveness for the portal, and
+  an offline customer never checks liveness (`skip-offline`), so binding the
+  id would not close that case either. It stays bounded by `T`. Against an
+  honest service, gateway-customer records `nonce` in V28 with a unique
+  constraint, so one attestation backs at most one credential.
+- **Revocation.** Unchanged (section 4.3). No separate revocation of the
+  attestation exists, or is needed: the portal refuses issuance on a spent
+  credential, and coupons sold before the revocation stay valid, as today.
+- **Renewal (phase 6).** A renewal is a new mint with a new attestation (new
+  `T`, new nonce, same `K`). The device accepts a renewal only when the new
+  credential's attestation verifies against its own stall. The roster offers
+  **Renew** on a credential without an attestation as well as near expiry,
+  which is how the migration below is carried out.
+
+#### 4.6.5 Migration: refuse and renew
+
+Existing credentials carry no attestation. There are few, they are on
+staging, and terminals are not live in production. **Recommendation: refuse
+and renew, with no grace period.** A grace period would be exactly the
+interval in which `verified` still rests on the service key alone, which is
+the hole this section closes.
+
+- From cashu-voucher 0.17.0 on, every verifier refuses an unattested
+  credential for **Sell and cashback**. The portal answers 403 with metric
+  label `owner_attestation`, and customer wallets get `failed`, so the coupon
+  is refused before the swap.
+- **Redeem keeps working.** A redeem-only or unattested till still unlocks.
+  Redeem needs no warrant, and the money goes to the stall (ADR 0005). The
+  till shows *"Ask the owner to renew this terminal to sell"*. The owner's
+  roster shows the row as **Renew to keep selling**. Until phase 6's one-tap
+  Renew ships, the owner adds the device again.
+- Gateway-customer stops minting unattested terminal credentials (400
+  `TERMINAL_ATTESTATION_INVALID`, pre-mint, listed in `mintNotStarted`). Its
+  internal endpoint reports `attested`, and an unattested credential is never
+  the stall's `free` terminal.
+
+**Version.** cashu-voucher **0.17.0**, a minor bump. Credentials that 0.16.x
+accepted are now refused, and `TerminalRefusal` gains members, which breaks
+any exhaustive `switch`. Wire impact:
+
+| Component | Change | Compatible with the old peer? |
+|---|---|---|
+| Credential (metadata) | additive key | Yes, on the wire. A 0.16.x verifier ignores the key and still accepts on the service key alone, so every verifier moves to 0.17.0 together |
+| `terminal` warrant | unchanged | Yes |
+| gateway-customer | validates at mint, sets `expires_at := T`, records `nonce`, reports `attested` | An old wallet that mints without an attestation gets 400. Acceptable: no owner app in production mints terminals |
+| gateway-core | grants `voucher:issue:<stall>` only when `attested` | A new core with an old customer reads a missing `attested` as false (fail closed) |
+| Portal | 0.17.0 `verifyTerminal` | Refuses unattested credentials |
+| Customer wallet | mirror | An older wallet (before #196) refuses the `terminal` form outright, which is safe. A #196 wallet without the mirror would accept on the service key alone. That is why #196 must not reach customers as it stands (section 4.6.6) |
+
+#### 4.6.6 The open phase 5 PRs
+
+| PR | Change for this decision |
+|---|---|
+| cashu-voucher#56 (0.16.1) | None. Merge it. Release 0.16.1 only if the merge-first path below is taken, otherwise fold it into 0.17.0. A new PR adds the attestation (0.17.0) with golden digest and signature vectors that the wallet's tests also load |
+| imani-wallet#196 | **Before merge, two changes.** (1) A `terminal` warrant that passes today's checks returns `unwarranted`, not `verified`. `validationStatus` already reads `unwarranted` as failed, `refuseIfUnwarranted` already refuses it before the swap, and `describeWarrant`'s copy for it already describes a terminal sale. A tampered one still returns `failed`. Not `claimed`: that would label the sale *Recorded by a processor*. (2) `mayWarrantSale` stays false for a terminal actor, so the till keeps showing *"Selling from a terminal is not available yet"*. The routes, warrant builder and parity tests stay, gated. **Follow-up PR:** lift the gate, sign at enrolment, `credentialDefect`, `credentialFromToken`, the `verifyTerminalWarrant` mirror and its three refusals, the roster's *Renew to keep selling*, and the till's notice |
+| imani-gateway-portal#80 | Nothing before merge. Follow-up: bump to 0.17.0, add the new refusals to `terminalTag`, give `TerminalSellIT`'s fixture credentials attestations, and add an IT that an unattested credential gets 403 |
+| imani-gateway-customer#204 | V28 is not merged, so add `owner_attestation_nonce` (unique) and `attested` to it now. Otherwise they go in V29. Follow-up: mint-time validation, `expires_at := T`, and `attested` in the internal endpoint and in `free` |
+| imani-gateway-core#130 | Small: read `attested` and grant `voucher:issue:<stall>` only when it is true. Missing reads as false |
+
+**Can they merge first, with the attestation as a follow-up? Yes, on one
+condition.** No build that turns a `terminal` warrant into `verified` on the
+service key alone may reach customers. With #196 changed as above, the PRs can
+merge and deploy. Terminal Sell then works end to end on the gateways, but
+every customer wallet refuses a terminal-sold coupon before the swap with
+*"carries no usable authorisation from the stall that issued it"*, and the
+coupon stays unspent. In practice the wallet's own gate stops the till before
+it mints, so only a modified till reaches the gateways, and its coupons are
+refused. In production nobody sees this, because no stall has a
+selling terminal. On staging, phase 5's AC *"C's wallet accepts a coupon B
+sold, verdict `verified`"* moves to the follow-up. Until it lands, the till's
+Sell screen says *"Selling from a terminal is not available yet"*, so no
+operator takes money for a coupon the customer will refuse.
+
+**The interim label "sold by a terminal of this stall".** Not recommended.
+"Of this stall" asserts the stall's consent, which is precisely what only the
+service vouches for until section 4.6 lands. A label is also the wrong lever:
+if the coupon is **accepted**, the HIGH stands whatever the badge says,
+because a forged till's coupons still swap and spend. If an interim label is
+needed at all (say, for an owner reviewing a staging sale), it should be
+neutral, not green, and accurate: *"Sold on a till the issuing service
+registered for this stall. The stall's own signature is not on this sale."*
+Customers should keep refusing such coupons until the attestation ships.
+
+#### 4.6.7 Effort and phasing
+
+| Step | Repos | Estimate |
+|---|---|---|
+| 5a. Merge the open PRs with #196's interim verdict | wallet (a few lines and tests), the rest unchanged | 0.5 day plus review |
+| 5b-1. Attestation and 0.17.0 release | cashu-voucher | 1 day: digest, `verifyOwnerAttestation`, three refusals, golden vectors, mutants |
+| 5b-2. Mint-time validation, `expires_at := T`, V28/V29 columns, `attested` | gateway-customer | 1 day including ITs |
+| 5b-3. `attested` gates `voucher:issue` | gateway-core | 0.5 day |
+| 5b-4. 0.17.0, refusal labels, ITs | portal | 0.5 day |
+| 5b-5. Sign at enrolment, owner, device and customer checks, roster and till copy, e2e | wallet | 2 to 3 days |
+| Cutover | staging: re-add each terminal | under an hour |
+
+About **6 developer days** plus review rounds. 5b-1 must be **released**
+before 5b-2 and 5b-4 can build. 5b-5 can start in parallel against the golden
+vectors. Phase 5's e2e AC (*verdict `verified`*) is met at the end of 5b.
 
 ## 5. API and wire changes
 
@@ -450,6 +719,12 @@ the mint is asked (ADR 0006 ordering):
   (`core:docs/issuance-authorisation-warrant.md:253,382`), there under the
   name `delegated`, which this spec does not reuse (section 5.1). The wallet's
   `verifyIssuanceWarrant` gains a `terminal` member that mirrors it.
+- **0.17.0 (decision 5, section 4.6):** `verifyTerminal` also requires the
+  owner attestation in the credential's metadata, signed by `issuerId`, with
+  the credential's `expires_at` no later than the attestation's. A new
+  `verifyOwnerAttestation(credential, issuerId)` exposes the same check to
+  gateway-customer. New refusals `OWNER_ATTESTATION_MISSING`,
+  `BAD_OWNER_ATTESTATION` and `ATTESTATION_EXCEEDED`.
 
 ## 6. Data model and migrations
 
@@ -478,16 +753,21 @@ of the owner's own phone, which is the case revocation exists for.
 ## 7. Issuance warrants on a terminal
 
 A terminal's Sell must carry a warrant the customer's wallet verifies, or it is
-refused on receipt (#159). **The terminal key `K` signs, as a `terminal`
-warrant. The owner does not.** (Not `delegated`: that name is the shipped
-card-purchase form, section 5.1.)
+refused on receipt (#159). **The terminal key `K` signs each sale, as a
+`terminal` warrant. The owner does not sign per sale. The owner signs once, at
+enrolment, the attestation inside the credential (decision 5, section 4.6).**
+(Not `delegated`: that name is the shipped card-purchase form, section 5.1.)
 
 The owner cannot sign per sale: the digest covers sale total and nonce, which
 only exist at the counter, and a blanket owner signature made in advance is a
 bearer authority to mint, which is what this design refuses. What the owner
-signed in advance is the credential, through the gateway: "this stall lets `K`
-issue". The `terminal` form chains the two, offline: the credential proves the
-stall delegated to `K`, and `K`'s signature proves this sale. Liveness is
+signs in advance is narrower: "this stall lets `K` issue, as this role, until
+`T`", with the stall key, embedded in the credential the gateway mints and
+revocable by spending it. (Until decision 5 this read "signed through the
+gateway", and the stall's consent was the gateway's word alone. That was the
+imani-wallet#196 review's HIGH.) The `terminal` form chains the two, offline:
+the owner attestation proves the stall delegated to `K`, and `K`'s signature
+proves this sale. Liveness is
 checked online at issuance by the portal, so a coupon cannot be minted on a
 revoked credential, and coupons sold before a revocation stay valid, as they
 should.
@@ -575,6 +855,11 @@ keeps the unlock-time refusal and returning the role.)
   Portal licence cache and `TERMINAL_UNLICENSED` (decision 3).
   Wallet builds `terminal` and lifts `mayWarrantSale` and the gates at
   `wallet:src/lib/issue.ts:644` and `wallet:src/lib/cashbackIssue.ts:85`.
+- **Owner attestation (decision 5, section 4.6):** split into 5a (merge the
+  open PRs with a terminal sale reading `unwarranted` and terminal Sell still
+  gated) and 5b (the attestation, cashu-voucher 0.17.0, then the rest). The
+  `verified` AC below is met at the end of 5b. An unattested credential gets
+  403 on Sell, and its coupons read `failed`.
 - **AC:** C's wallet accepts a coupon B sold, verdict `verified`. A replayed
   warrant nonce gets 409. A Sell split into two parts under one `terminal`
   warrant mints both parts. B's credential gets 403 on dashboard, campaigns,
@@ -613,3 +898,88 @@ the sections named.
    waiting credential expires after 24 hours (the owner's wallet cancels it),
    and a stall may have at most 2 waiting at a time. Sections 2.1, 4.5, 5.1,
    phase 1.
+5. **The stall owner signs each terminal's credential, and customers' wallets
+   verify that signature** (2026-10-07). A terminal sale is then backed by the
+   stall, not only by gateway-customer's issuing key. Sections 4.5, 4.6, 5.5,
+   7, phase 5, and the ADR below.
+
+### ADR: the stall owner attests each terminal credential (decision 5, 2026-10-07)
+
+**Status:** Accepted (product owner, 2026-10-07, imani-wallet#160). The design
+is section 4.6. Nothing is implemented yet.
+
+**Context.** A `terminal` warrant (section 7) proves that `K` signed the sale
+and that a credential signed by gateway-customer's issuing key names `K` as a
+selling till of the stall. The stall itself signs nothing, so `verified` on a
+terminal-sold coupon rests on the issuing key alone. That is the key issuance
+warrants exist to distrust: its holder can mint a credential for any stall
+under their own `K`, and the coupons read `verified`. This was the HIGH in
+the imani-wallet#196 review. `merchant` and `delegated` warrants do not have
+this hole, because the stall signs them.
+
+**Decision.**
+
+1. At enrolment the owner's wallet signs an **owner attestation** with the
+   stall key, the same key and signer that sign `merchant` warrants. It
+   covers `(v, stall, K, role, expires_at, nonce)` under a domain-separated
+   digest (section 4.6.2).
+2. The attestation is **embedded in the credential's signed
+   `merchant_metadata`** as `owner_attestation` (option A). It is not carried
+   beside the credential in the warrant (option B), so it can never be paired
+   with the wrong credential, and it needs no new transport, storage or
+   warrant field.
+3. Every verifier of a terminal's authority to **sell** checks it against the
+   stall's pubkey, which equals `issuerId`: cashu-voucher `verifyTerminal`
+   (so the portal, at issuance), the customer wallet offline, gateway-customer
+   at mint and in its verifier, and the device at unlock. The credential's
+   `expires_at` may not exceed the attestation's.
+4. **The gateway's signature stays required.** It no longer carries the
+   stall's consent. It is what makes the credential revocable (NUT-07 means
+   something only for a proof the service minted), it pins the lock and the
+   canonical bytes, and it scopes which service's tills a build accepts. A
+   forged selling till now needs both the stall key and the service key.
+5. **Migration: refuse and renew, no grace period.** Unattested credentials
+   keep Redeem but cannot Sell. The owner renews them (phase 6) or adds the
+   device again. cashu-voucher **0.17.0**.
+6. **The open phase 5 PRs may merge first** (5a), provided no customer build
+   reads a terminal sale as `verified` on the service key alone: #196 maps
+   today's `terminal` verdict to `unwarranted` and keeps terminal Sell gated.
+   The attestation follows as 5b (section 4.6.7). The interim label *"sold by
+   a terminal of this stall"* is not adopted, because it asserts the very
+   consent that is unproven.
+
+**Consequences.**
+
+- Stall consent to a till becomes verifiable offline by any customer wallet,
+  with no new trust in the gateway.
+- One more signature at Add terminal and at every renewal, by a key the owner's
+  device already holds. No extra tap.
+- gateway-customer takes the credential's expiry from the owner (`T`) rather
+  than from `expires_in_days`.
+- Terminal Sell reaches customers one release later than the phase 5 PRs.
+
+**Rejected.**
+
+- *Option B (attestation in the warrant).* It binds `voucher_id`, but that
+  closes no case a compromised service could not reach anyway (section
+  4.6.4). It costs a new field on four wire forms and warrant size budget.
+- *Grace period for unattested credentials.* The grace window is exactly the
+  hole being closed, and there are no production terminals to protect.
+- *Owner signs per sale.* Impossible: the sale exists only at the counter
+  (section 7).
+- *Reuse the shipped `delegated` form* (an `imani:issuer-delegation` event to
+  `K`). It is an equivalent stall signature, but it has a different scope
+  (`coupon:issue`) and its single-use nonce ledger refuses a split Sell's
+  second part (section 5.1). It would also add a second artefact beside the
+  credential, which is option B.
+
+**Open questions for the owner.**
+
+1. Should the attestation also bind the credential's `name`, so a modified
+   service cannot rename a till that customers see? The recommendation is no:
+   customers see the stall, and the owner sees the name from their roster.
+2. Should the owner's wallet publish its attestations (or their nonces) in the
+   encrypted roster event (phase 6)? That would let a restored phone detect a
+   credential its stall never attested.
+3. Should cashu-voucher 0.16.1 (#56) be released on its own for the 5a merge,
+   or held and folded into 0.17.0?
