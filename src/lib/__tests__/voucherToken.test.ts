@@ -344,7 +344,11 @@ describe('the legacy window refuses an integral float, as Java does (#194)', () 
   }
   const uint32 = (n: number) => new Uint8Array([0x1a, n >>> 24, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff])
   /** The real legacy STAGING voucher as a CBOR blob, with `expiresAt` and `faceValue` as given. */
-  const stagingToken = (expires: Uint8Array, face: Uint8Array = cborBytes(0x19, 0x03, 0xe8)) => {
+  const stagingToken = (
+    expires: Uint8Array,
+    face: Uint8Array = cborBytes(0x19, 0x03, 0xe8),
+    decimals: Uint8Array = uint(2),
+  ) => {
     const blob = cborBytes(
       head(5, 12),
       pair('voucherId', tstr(STAGING.voucherId)),
@@ -355,7 +359,7 @@ describe('the legacy window refuses an integral float, as Java does (#194)', () 
       pair('memo', tstr(STAGING.memo!)),
       pair('backingStrategy', tstr(STAGING.backingStrategy!)),
       pair('issuanceRatio', float64(STAGING.issuanceRatio)),
-      pair('faceDecimals', uint(2)),
+      pair('faceDecimals', decimals),
       pair('nonce', tstr(STAGING.nonce)),
       pair('issuerSignature', tstr(STAGING.issuerSignature)),
       pair('issuerPublicKey', tstr(STAGING.issuerPublicKey)),
@@ -379,6 +383,21 @@ describe('the legacy window refuses an integral float, as Java does (#194)', () 
 
   it('refuses the same voucher whose faceValue arrived as the float 1000.0', () => {
     const parsed = stagingToken(uint32(STAGING.expiresAt!), float64(1000))
+    expect(parsed.voucher.faceValue).toBe(1000)
+    expect(verifyVoucher(parsed.voucher).signatureValid).toBe(false)
+  })
+
+  // faceDecimals is a long in Java too: 2.0 as a CBOR float is not one, so no legacy window.
+  it('refuses the same voucher whose faceDecimals arrived as the float 2.0', () => {
+    const parsed = stagingToken(uint32(STAGING.expiresAt!), undefined, float64(2))
+    expect(parsed.voucher.faceDecimals).toBe(2)
+    expect(verifyVoucher(parsed.voucher).signatureValid).toBe(false)
+  })
+
+  // A text string "1000" where Java expects a CBOR integer is not a long either. The wallet's
+  // Number() would quietly read it as 1000, so the legacy window must be closed to it.
+  it('refuses the same voucher whose faceValue arrived as the text "1000"', () => {
+    const parsed = stagingToken(uint32(STAGING.expiresAt!), tstr('1000'))
     expect(parsed.voucher.faceValue).toBe(1000)
     expect(verifyVoucher(parsed.voucher).signatureValid).toBe(false)
   })
