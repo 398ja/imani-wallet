@@ -4,7 +4,7 @@ import { Lock, QrCode, Send, Settings } from 'lucide-react'
 
 import { Alert, Button, Centered, Input, PageHeader, Panel, Screen, ListSection, BackLink } from '../components/ui'
 import { fetchMerchantRecord, type MerchantProfile } from '../lib/merchant'
-import { profileName, refreshProfile } from '../lib/profile'
+import { profileName, refreshProfile, type Profile } from '../lib/profile'
 import {
   forgetTerminal,
   removeTerminalFromDevice,
@@ -81,7 +81,9 @@ export function TerminalApp() {
     if (!record) return
     let live = true
     void fetchMerchantRecord(record.stallPubkey).then((m) => live && setStall(m))
-    void publicStallName(record.stallPubkey).then((n) => live && setStallName(n))
+    void publicStallName(record.stallPubkey, (n) => live && setStallName(n)).then(
+      (n) => live && setStallName((shown) => n ?? shown),
+    )
     return () => {
       live = false
     }
@@ -203,11 +205,17 @@ function SellUnavailable({ till, stall }: { till: Till; stall: MerchantProfile |
   return <Navigate to="/" replace />
 }
 
-/** The stall's public name from its profile, or null. Never throws. */
-async function publicStallName(stallPubkey: string): Promise<string | null> {
-  const profile = await refreshProfile(stallPubkey).catch(() => null)
-  if (!profile || (!profile.displayName && !profile.nip05)) return null
-  return profileName(profile)
+/**
+ * The stall's public name from its profile, or null. Never throws. `onLater` gets a name that only
+ * the slower store had (round 4: a cold till otherwise said "Your stall" for good).
+ */
+async function publicStallName(stallPubkey: string, onLater?: (name: string) => void): Promise<string | null> {
+  const named = (p: Profile | null) => (!p || (!p.displayName && !p.nip05) ? null : profileName(p))
+  const profile = await refreshProfile(stallPubkey, (later) => {
+    const n = named(later)
+    if (n) onLater?.(n)
+  }).catch(() => null)
+  return named(profile)
 }
 
 /**

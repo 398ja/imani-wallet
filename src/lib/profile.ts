@@ -208,10 +208,30 @@ export function mergeKind0(profile: Profile, content: string, createdAt = 0): Pr
  *
  * Never throws: an unreachable gateway means we show the copy we already have,
  * which is the entire reason a local copy exists.
+ *
+ * `onLater` gets the profile again if a store that missed `fetchNewestKind0`'s
+ * 150 ms window answers afterwards with something newer. Without it that answer
+ * was dropped: a FRESH device (nothing stored, cold relay socket) whose only copy
+ * of a stall's name came from the slower store showed "A stall with no public
+ * name" for good. That is the terminal setup screen's case (#160, staging
+ * redeploy 3, "B names the stall": the stall's kind-0 had been on the relay for
+ * 13 s).
  */
-export async function refreshProfile(pubkey: string): Promise<Profile> {
+export async function refreshProfile(
+  pubkey: string,
+  onLater?: (profile: Profile) => void,
+): Promise<Profile> {
   try {
-    const newest = await fetchNewestKind0(pubkey)
+    const newest = await fetchNewestKind0(pubkey, (later) => {
+      try {
+        const stored = loadProfile(pubkey) ?? emptyProfile(pubkey)
+        const merged = mergeKind0(stored, later.content, later.createdAt)
+        if (merged !== stored) saveProfile(merged)
+        onLater?.(merged)
+      } catch {
+        // A late correction is best effort; the screen keeps what it has.
+      }
+    })
     // The stored copy is READ AFTER THE FETCH, not before it.
     //
     // This runs concurrently with itself on every login: OnboardingPage awaits
