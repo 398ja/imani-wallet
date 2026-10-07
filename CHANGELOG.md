@@ -81,6 +81,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- **Spec 9.1 decision 6 describes what shipped (rev80-r2 LOW-E).** `free` comes from
+  gateway-customer's V28 `terminal_credential` registry plus the V27 pending-row standing, and
+  counts `issue-and-redeem` credentials only (a redeem-only terminal never holds the free sell
+  slot, rev80-r2 LOW-D). Sections 5.2 to 5.4 now say a store or mint that cannot vouch is 503 at
+  gateway-customer and core, not `live: false` (rev80-r2 MEDIUM-A).
 - **Spec 5.3 (terminals in service): `live: false` yields `[]`.** A not-live credential gets no
   permissions at all, not even redeem, and the stall must be an active merchant; ACL or
   gateway-customer failures fail closed. Matches gateway-core#130 after its review (imani-wallet#160).

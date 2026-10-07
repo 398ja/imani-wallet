@@ -786,9 +786,11 @@ either order. Phase 5's e2e AC (*verdict `verified`*) is met at the end of 5b.
   waiting credential, not per terminal, and it carries no authority.
 - **New** `GET /internal/v1/terminal-credentials/{voucherId}?caller=<hex>`,
   service-credential only: `200 {"stall","role","lock_key","live":true|false|null,"free":true|false}`
-  (`free`: this is the stall's earliest-issued live terminal credential, used by
-  the portal's licence check, decision 3)
-  or `404`. The one verifier the other gateways call, so there is one
+  (`free`: this is the stall's earliest-issued live `issue-and-redeem` terminal
+  credential, used by the portal's licence check, decision 3 and section 9.1
+  decision 6), `404`, or **503** `TERMINAL_CREDENTIAL_UNAVAILABLE` when its
+  stores or the mint cannot vouch right now (never `live: false` on a missing
+  answer). The one verifier the other gateways call, so there is one
   definition of a valid credential.
 
 ### 5.3 imani-gateway-core
@@ -801,13 +803,15 @@ either order. Phase 5's e2e AC (*verdict `verified`*) is met at the end of 5b.
   gateway-customer reports `free: true` (section 5.4 reads it, so the portal
   never calls gateway-customer itself). Never `coupon:issue`.
 - `[]` (200) when the credential is `live: false` (revoked, unconfirmed,
-  cancelled, expired, self-minted, or the mint cannot vouch): a not-live answer
+  cancelled, expired, or self-minted): a not-live answer
   carries only what the metadata claims, so not even redeem is granted. Also
   `[]` when the credential is unknown or locked to another key, when the stall
   is suspended or is not an active merchant (`MerchantAclService` roles lack
   `merchant`). Amended after the core#130 review.
-- **503** `TERMINAL_AUTH_UNAVAILABLE` (with `[]`) when gateway-customer or the
-  ACL store cannot answer. Fail closed, but distinguishable from a refusal, so
+- **503** `TERMINAL_AUTH_UNAVAILABLE` (with `[]`) when gateway-customer cannot
+  answer (unreachable, 5xx, including its own 503 when the mint or its stores
+  cannot vouch) or the ACL store or stall record cannot be read (a strict
+  resolve, not the NAP path's fall-back to customer). Fail closed, but distinguishable from a refusal, so
   the portal neither grants nor caches it. Amended after the portal#80 review.
 
 ### 5.4 imani-gateway-portal
@@ -838,7 +842,7 @@ either order. Phase 5's e2e AC (*verdict `verified`*) is met at the end of 5b.
   with 402 `TERMINAL_UNLICENSED` when the credential is not the stall's free
   terminal and the stall has no current licence. The internal verifier
   (section 5.2) reports `free: true` for the stall's earliest-issued live
-  terminal credential, and core relays it as `terminal:free` (section 5.3), so
+  `issue-and-redeem` terminal credential, and core relays it as `terminal:free` (section 5.3), so
   the portal never counts terminals and never calls gateway-customer. The
   licence check reads only the portal's **own cached licence state**
   (`stall_licence_state`: stall, `licensed_until`, `refreshed_at`), refreshed in
@@ -1183,9 +1187,16 @@ this hole, because the stall signs them.
    by portal tests: different nonces both mint, and an owner nonce reused by a
    till is 409.
 6. **Free terminal source: gateway-customer computes `free` (option a).**
-   `free` is the stall's earliest-issued live terminal credential, from the
-   stall's voucher list (`walletPort.listVouchers` filtered by
-   `merchant_metadata.terminal`), so credentials issued before V27 count. The
-   `terminal_credential_pending` rows are not used. Rejected: counting from the
-   pending rows, which miss pre-V27 credentials. gateway-core relays the answer
-   as `terminal:free` (section 5.3) and the portal reads it from there.
+   `free` is the stall's earliest-issued standing `issue-and-redeem`
+   credential, read from gateway-customer's V28 `terminal_credential`
+   registry (`unrevokedForStall`), which is backfilled at boot so credentials
+   issued before V27 count. Standing means not revoked and not past its signed
+   expiry. An earlier candidate holds the slot only while it is in service
+   under its V27 `terminal_credential_pending` standing (CONFIRMED, or no row
+   for a pre-V27 credential; UNCONFIRMED and CANCELLED never hold it) and the
+   mint says it is UNSPENT. A `redeem-only` terminal cannot sell, so it never
+   holds the free sell slot (owner decision, rev80-r2 LOW-D). Rejected:
+   counting from the pending rows alone, which miss pre-V27 credentials, and
+   from the voucher list, which loses credentials once the issued-voucher
+   purge removes their rows. gateway-core relays the answer as `terminal:free`
+   (section 5.3) and the portal reads it from there.
