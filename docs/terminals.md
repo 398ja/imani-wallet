@@ -267,7 +267,11 @@ another of your phones.
 ## Subscriptions, and what a lapse does
 
 - **One extra till is free.** Your own phone is counted, never converted, so
-  the first terminal you enrol is the free one.
+  the first *Sell and redeem* terminal you enrol is the free one.
+- **A Redeem-only terminal never takes the free slot.** Adding one first does
+  not use up your free till. Until subscriptions are available
+  (imani-wallet#197), only your stall's earliest *Sell and redeem* terminal can
+  sell.
 - **More than that needs a subscription**, sold per stall rather than per
   device: one licence, however many terminals.
 - **A lapse suspends, it never revokes.** Terminals stop serving and are marked
