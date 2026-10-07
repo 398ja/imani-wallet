@@ -91,7 +91,7 @@ describe('the dev proxy table', () => {
    * as a bad signature and nothing in that message mentions a proxy. The file's
    * own header comment warns about this, so it is asserted rather than trusted.
    */
-  it.each(['/api/v1/atomic-send', '/api/v1/nip05', '/api/v1/merchant/stripe'])(
+  it.each(['/api/v1/atomic-send', '/api/v1/atomic/fulfilment', '/api/v1/nip05', '/api/v1/merchant/stripe'])(
     'keeps changeOrigin off for the origin-sensitive route %s',
     (rule) => {
       const entry = (proxy as Record<string, { changeOrigin?: boolean }>)[rule]
@@ -124,6 +124,8 @@ describe('the dev proxy table', () => {
     // when the wallet starts calling a new one.
     const GATEWAY_CORE_PATHS = [
       '/api/v1/atomic-send',
+      // A terminal's Redeem screen asks here whether it was paid (#160 phase 3).
+      '/api/v1/atomic/fulfilment/0123456789abcdef',
       '/api/v1/incoming-notifications',
       '/api/v1/payment-receipts',
       '/api/v1/nip05',

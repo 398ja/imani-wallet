@@ -1,20 +1,33 @@
 /**
- * #160 phase 2, two real browsers: an owner adds a terminal, a fresh device receives it.
+ * #160 phases 2 and 3, three real browsers: an owner adds a terminal, a fresh device receives
+ * it, and the device opens its till and takes a payment.
  *
  * Context A registers a stall and adds a terminal from Settings → Terminals. Context B is a
- * fresh browser with nothing in storage: it opens /terminal/setup, shows its code, receives
- * the credential by DM, shows the same check code as A, takes a passphrase, and tells the
- * stall. A's row turns In service without a reload. No `localStorage` is injected anywhere.
+ * fresh browser with nothing in storage: it opens /terminal/setup, shows its code, receives the
+ * credential by DM, shows the same check code as A, takes a passphrase, and tells the stall.
+ * A's row turns In service without a reload. No `localStorage` is injected anywhere.
+ *
+ * Phase 3: B reloads, unlocks with its passphrase (no NAP session) and lands on the till naming
+ * the stall. A redeem-only B has no Sell route. A customer C pays B's Redeem request, and B shows
+ * Paid, learned from gateway-core because the coupon went to the stall.
  *
  * Needs a stack whose gateway-customer mints the stall co-key (imani-gateway-customer#187).
- * Against an older gateway, A's wallet refuses the credential, which this reports plainly.
  *
- * Run: E2E_BASE=http://localhost:5177 tsx e2e/terminalSetup.e2e.ts
+ * Run against a local dev server:   E2E_BASE=http://localhost:5177 tsx e2e/terminalSetup.e2e.ts
+ * Run a local build against staging: E2E_BASE=https://wallet.staging.398ja.xyz \
+ *                                     E2E_BUNDLE_DIR=dist tsx e2e/terminalSetup.e2e.ts
  */
-import { chromium, type Browser, type Page } from 'playwright'
-import { registerMerchant } from './register.mts'
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright'
+import { readFile } from 'node:fs/promises'
+import { extname, join, normalize } from 'node:path'
+import { registerCustomer, registerMerchant, TEST_PASSPHRASE, TEST_STALL_NAME } from './register.mts'
 
-const BASE = process.env.E2E_BASE ?? 'http://localhost:5177'
+const BASE = (process.env.E2E_BASE ?? 'http://localhost:5177').replace(/\/+$/, '')
+const BUNDLE_DIR = process.env.E2E_BUNDLE_DIR
+const PHASE = Number(process.env.E2E_PHASE ?? '3')
+const TILL_PASSPHRASE = 'counter-pass'
+/** A new stall's coupon:issue permission is cached this long by the gateway (#114). */
+const PERMISSION_CACHE_MS = 62_000
 const failures: string[] = []
 
 function check(name: string, ok: boolean, detail = '') {
@@ -26,13 +39,54 @@ async function text(page: Page): Promise<string> {
   return (await page.locator('body').innerText()).replace(/\s+/g, ' ')
 }
 
+const CONTENT_TYPES: Record<string, string> = {
+  '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2',
+}
+
+/** Serves the app from a local build while the API, relay and mint stay those of E2E_BASE. */
+async function context(browser: Browser): Promise<BrowserContext> {
+  const ctx = await browser.newContext({ locale: 'en-GB', serviceWorkers: BUNDLE_DIR ? 'block' : 'allow' })
+  if (BUNDLE_DIR) {
+    const root = normalize(BUNDLE_DIR)
+    const shell = join(root, 'index.html')
+    await ctx.route(`${BASE}/**`, async (route) => {
+      const path = new URL(route.request().url()).pathname
+      if (path.startsWith('/api/') || path.startsWith('/.well-known/')) return route.continue()
+      const candidate = normalize(join(root, path))
+      const file =
+        candidate.startsWith(root) && extname(candidate)
+          ? await readFile(candidate).then(() => candidate, () => shell)
+          : shell
+      return route.fulfill({ status: 200, body: await readFile(file), contentType: CONTENT_TYPES[extname(file)] ?? 'application/octet-stream' })
+    })
+  }
+  return ctx
+}
+
+/** Unlocks the till on B, after a reload. Returns the screen. */
+async function unlockTill(device: Page): Promise<string> {
+  await device.goto(`${BASE}/`, { waitUntil: 'load' })
+  await device.getByRole('button', { name: 'Open the till' }).waitFor({ timeout: 30_000 })
+  await device.getByLabel('Passphrase').fill(TILL_PASSPHRASE)
+  await device.getByRole('button', { name: 'Open the till' }).click()
+  await device
+    .waitForFunction(() => /Redeem|Not trading/.test(document.body.innerText), undefined, { timeout: 30_000 })
+    .catch(() => {})
+  return text(device)
+}
+
 async function main() {
   const browser: Browser = await chromium.launch()
-  const owner = await (await browser.newContext()).newPage()
-  const device = await (await browser.newContext()).newPage()
+  const owner = await (await context(browser)).newPage()
+  const device = await (await context(browser)).newPage()
   const errors: string[] = []
+  const authCalls: string[] = []
   owner.on('pageerror', (e) => errors.push(`A: ${e.message}`))
   device.on('pageerror', (e) => errors.push(`B: ${e.message}`))
+  device.on('request', (r) => {
+    if (new URL(r.url()).pathname.startsWith('/api/v1/auth')) authCalls.push(r.url())
+  })
 
   console.log('\nA registers a stall')
   await registerMerchant(owner, BASE)
@@ -90,11 +144,17 @@ async function main() {
   check('B shows the same check code as A', aCode !== '' && bOffer.includes(aCode), bOffer.slice(0, 300))
   check('B names the stall', /Test Stall/.test(bOffer), bOffer.slice(0, 200))
   await device.getByRole('button', { name: 'They match' }).click()
-  await device.getByLabel('Passphrase', { exact: true }).fill('counter-pass')
-  await device.getByLabel('Repeat passphrase').fill('counter-pass')
+  await device.getByLabel('Passphrase', { exact: true }).fill(TILL_PASSPHRASE)
+  await device.getByLabel('Repeat passphrase').fill(TILL_PASSPHRASE)
   await device.getByRole('button', { name: 'Finish setup' }).click()
   await device.getByText('This terminal is set up').waitFor({ timeout: 30_000 }).catch(() => {})
   check('B is set up', /This terminal is set up/.test(await text(device)))
+  const record = await device.evaluate(() => localStorage.getItem('imani-wallet:terminal') ?? '')
+  check(
+    'B stores the token and no role-bearing fields beside it',
+    /"token"/.test(record) && !/"permissions"|"merchantMetadata"|"issuerId"/.test(record),
+    record.slice(0, 200),
+  )
 
   console.log('\nA sees it In service without a reload')
   await owner.goto(`${BASE}/settings/terminals`, { waitUntil: 'networkidle' })
@@ -107,8 +167,145 @@ async function main() {
       () => false,
     )
   check("A's row turned In service without a reload", turned, (await text(owner)).slice(0, 300))
-  check('no uncaught errors', errors.length === 0, errors.join('; '))
 
+  if (PHASE < 3) return finish(browser, errors)
+
+  console.log('\nPhase 3: B reloads and opens its till')
+  const till = await unlockTill(device)
+  check('B lands on the till naming the stall', new RegExp(TEST_STALL_NAME).test(till), till.slice(0, 200))
+  check('B names itself', /Front counter/.test(till), till.slice(0, 200))
+  check('B offers Redeem', /Redeem/.test(till))
+  check('a redeem-only B offers no Sell', !/\bSell\b/.test(till.replace(/Selling/g, '')), till.slice(0, 200))
+  check('B made no call to /api/v1/auth', authCalls.length === 0, authCalls.join(', '))
+  // In-app navigation, as staff would reach a URL: a reload locks the till by design (the
+  // signer lives only in memory), so `page.goto` would land on the unlock screen instead.
+  const visit = (path: string) =>
+    device.evaluate((p) => {
+      window.history.pushState({}, '', p)
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    }, path)
+  await visit('/sell')
+  await device.getByTestId('terminal-name').waitFor({ timeout: 15_000 }).catch(() => {})
+  check('a redeem-only B has no Sell route: /sell lands on the till', !device.url().endsWith('/sell') && !/Scan the customer/.test(await text(device)), device.url())
+  await visit('/merchant/dashboard')
+  await device.getByTestId('terminal-name').waitFor({ timeout: 15_000 }).catch(() => {})
+  check("B cannot open the stall's dashboard", !device.url().endsWith('/dashboard') && !/Dashboard/.test(await text(device)), device.url())
+
+  console.log('\nPhase 3: a customer C pays B\'s Redeem request')
+  // The owner sells C a coupon first, so C has something of this stall's to pay with. The
+  // stall's coupon:issue permission is cached by the gateway for a minute after registration.
+  const customer = await (await context(browser)).newPage()
+  customer.on('pageerror', (e) => errors.push(`C: ${e.message}`))
+  const customerPubkey = await registerCustomer(customer, BASE)
+  check('C is registered', /^[0-9a-f]{64}$/.test(customerPubkey), customerPubkey)
+  await owner.waitForTimeout(PERMISSION_CACHE_MS)
+  const sold = await ownerSells(owner, customerPubkey, '10.00')
+  check('A sells C a coupon', /It is in their wallet now/.test(sold), sold.slice(0, 300))
+
+  // The till may have idle-locked during the sale above (10 minutes is the default, the sale is
+  // well under that), so unlock if asked, then tap Redeem.
+  if (await device.getByRole('button', { name: 'Open the till' }).isVisible().catch(() => false)) {
+    await unlockTill(device)
+  }
+  await device.getByRole('button', { name: /Redeem/ }).click()
+  await device.getByLabel(/Amount/).waitFor({ timeout: 30_000 })
+  await device.getByLabel(/Amount/).fill('3.00')
+  await device.getByRole('button', { name: 'Show payment code' }).click()
+  // #160 review (BLOCKER): the till registers the request's terms with gateway-core before it
+  // shows the code (core#131). Against a gateway without that endpoint the till must refuse to
+  // show a code it could never confirm, rather than show one a customer could fake Paid on.
+  const shown = await device
+    .getByText('Waiting for payment')
+    .waitFor({ timeout: 15_000 })
+    .then(
+      () => true,
+      () => false,
+    )
+  if (!shown) {
+    const refusedToShow = /could not be set up/i.test(await text(device))
+    check(
+      'B refuses to show a request gateway-core will not register (gateway without core#131)',
+      refusedToShow,
+      (await text(device)).slice(0, 200),
+    )
+    console.log('  (gateway-core here has no registration endpoint: the Paid half needs core#131 deployed)')
+  } else {
+    const request = await device.evaluate(() => {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i)!
+        if (!key.startsWith('imani-wallet:payment-requests:')) continue
+        const rows = JSON.parse(localStorage.getItem(key) ?? '[]') as Array<{ requestString: string }>
+        if (rows[0]) return rows[0].requestString
+      }
+      return ''
+    })
+    check('B shows a payment request', request.startsWith('vreqA'), request.slice(0, 16))
+
+    const paid = await customerPays(customer, request)
+    check('C pays it', /Paid|Sent/.test(paid), paid.slice(0, 300))
+    const bPaid = await device
+      .getByText('Paid', { exact: true })
+      .waitFor({ timeout: 120_000 })
+      .then(
+        () => true,
+        () => false,
+      )
+    check('B shows Paid, learned from gateway-core', bPaid, (await text(device)).slice(0, 200))
+  }
+
+  return finish(browser, errors)
+}
+
+/** The owner sells `amount` to a customer, through the real Sell screen. */
+async function ownerSells(owner: Page, customerPubkey: string, amount: string): Promise<string> {
+  await owner.goto(`${BASE}/sell`, { waitUntil: 'load' })
+  const lock = owner.locator('input[placeholder="Passphrase"]')
+  if (await lock.isVisible({ timeout: 3_000 }).catch(() => false)) {
+    await lock.fill(TEST_PASSPHRASE)
+    await owner.getByRole('button', { name: /unlock/i }).first().click()
+    await owner.waitForTimeout(4_000)
+    await owner.goto(`${BASE}/sell`, { waitUntil: 'load' })
+  }
+  const recipient = owner.locator('input[placeholder="name"]')
+  if (!(await recipient.waitFor({ timeout: 30_000 }).then(() => true, () => false))) {
+    // A cold staging relay can leave the merchant record unread on the first visit; one reload.
+    await owner.screenshot({ path: 'e2e/.terminalSetup-sell.png' }).catch(() => {})
+    console.log(`  (sell screen not ready: ${(await text(owner)).slice(0, 160)}; retrying)`)
+    await owner.goto(`${BASE}/sell`, { waitUntil: 'load' })
+  }
+  await recipient.fill(customerPubkey, { timeout: 60_000 })
+  await owner.getByRole('button', { name: /^Continue$/ }).click()
+  await owner.locator('input[placeholder="0.00"]').waitFor({ timeout: 30_000 })
+  await owner.locator('input[placeholder="0.00"]').fill(amount)
+  await owner.getByRole('button', { name: /Send voucher/i }).click()
+  for (let i = 0; i < 60; i++) {
+    await owner.waitForTimeout(3_000)
+    const t = await text(owner)
+    if (/It is in their wallet now|failed|could not|refused/i.test(t)) return t
+  }
+  return text(owner)
+}
+
+/** The customer pays a payment request through /pay. */
+async function customerPays(customer: Page, request: string): Promise<string> {
+  // The coupon arrives by DM; give the customer's wallet time to receive it.
+  for (let i = 0; i < 24; i++) {
+    await customer.goto(`${BASE}/`, { waitUntil: 'load' })
+    if (/Test Stall/.test(await text(customer))) break
+    await customer.waitForTimeout(5_000)
+  }
+  await customer.goto(`${BASE}/pay?paymentRequest=${encodeURIComponent(request)}`, { waitUntil: 'load' })
+  await customer.getByRole('button', { name: /^(Pay|Send)/ }).last().click({ timeout: 60_000 })
+  for (let i = 0; i < 60; i++) {
+    await customer.waitForTimeout(3_000)
+    const t = await text(customer)
+    if (/\bPaid\b|\bSent\b|failed|could not|refused/i.test(t)) return t
+  }
+  return text(customer)
+}
+
+async function finish(browser: Browser, errors: string[]) {
+  check('no uncaught errors', errors.length === 0, errors.join('; '))
   await browser.close()
   console.log(failures.length === 0 ? '\nAll checks passed.\n' : `\n${failures.length} FAILED: ${failures.join(', ')}\n`)
   process.exit(failures.length === 0 ? 0 : 1)

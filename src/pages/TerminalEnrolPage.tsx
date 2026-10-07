@@ -164,7 +164,7 @@ export function TerminalEnrolPage({
    */
   const enrol = async () => {
     if (!context || busy) return
-    const credential = prepareEnrolment(request, context)
+    const credential = { ...prepareEnrolment(request, context), idleLockMinutes: idleLock }
     setBusy(true)
     setFailure(null)
     const mintKey = crypto.randomUUID()

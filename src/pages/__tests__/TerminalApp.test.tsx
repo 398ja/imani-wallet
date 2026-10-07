@@ -1,0 +1,229 @@
+/**
+ * @vitest-environment jsdom
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
+
+/**
+ * The till a terminal runs (#160 phase 3, spec 2.4).
+ *
+ * `TerminalApp` is mounted the way `App` mounts it on an enrolled device, with the unlocked
+ * session supplied by `terminalUnlock` and the stall read from its public record. Each case is a
+ * row of the spec's screen table.
+ */
+
+const STALL = 'a'.repeat(64)
+const DEVICE = 'c'.repeat(64)
+
+const state = vi.hoisted(() => ({ till: null as unknown }))
+vi.mock('../../lib/terminalUnlock', () => ({
+  openTill: () => state.till,
+  lockTerminal: vi.fn(),
+  forgetTerminalSession: vi.fn(),
+  unlockTerminal: vi.fn(),
+}))
+vi.mock('../../lib/merchant', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/merchant')>()),
+  fetchMerchantRecord: async () => ({
+    pubkey: STALL,
+    name: 'Test Stall',
+    active: true,
+    categories: [],
+    issuanceCurrency: 'GBP',
+  }),
+}))
+vi.mock('../../lib/profile', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/profile')>()),
+  refreshProfile: async (pubkey: string) => ({ pubkey, displayName: 'Test Stall' }),
+}))
+// The Redeem screen itself is covered in RedeemPageTerminal.test.tsx; here only its route.
+vi.mock('../RedeemPage', () => ({ RedeemPage: () => <p>redeem-screen</p> }))
+
+const { TerminalApp, TerminalUnlockPage } = await import('../TerminalApp')
+const { TERMINAL_ROLES, grantFor } = await import('../../lib/terminalRole')
+const { SESSION_KIND, openSession } = await import('../../lib/terminalSession')
+import type { TerminalActor } from '../../lib/actor'
+
+function enrol(role: string) {
+  localStorage.setItem(
+    'imani-wallet:terminal',
+    JSON.stringify({ stallPubkey: STALL, role, terminalPubkey: DEVICE, name: 'Front counter', enrolledAt: 1, token: 'cashuBx' }),
+  )
+}
+
+function unlockedAs(
+  role: (typeof TERMINAL_ROLES)[keyof typeof TERMINAL_ROLES],
+  kind: (typeof SESSION_KIND)[keyof typeof SESSION_KIND] = SESSION_KIND.FULL,
+) {
+  const actor: TerminalActor = {
+    kind: 'terminal',
+    stallPubkey: STALL,
+    role,
+    terminalPubkey: DEVICE,
+    permissions: grantFor(role, STALL),
+  }
+  state.till = { devicePubkey: DEVICE, actor, session: openSession(actor, kind) }
+}
+
+function at(path: string) {
+  render(
+    <MemoryRouter initialEntries={[path]}>
+      <TerminalApp />
+    </MemoryRouter>,
+  )
+}
+
+beforeEach(() => {
+  localStorage.clear()
+  state.till = null
+})
+afterEach(() => cleanup())
+
+describe('a locked terminal', () => {
+  // Every path asks for the passphrase first, the owner's screens included.
+  it('shows only the unlock screen, whatever the path', async () => {
+    enrol(TERMINAL_ROLES.REDEEM_ONLY)
+    at('/merchant/dashboard')
+    expect(await screen.findByRole('button', { name: 'Open the till' })).toBeTruthy()
+    expect(screen.getByText('Front counter')).toBeTruthy()
+  })
+})
+
+describe('the till, per role', () => {
+  // Home names the terminal and the stall, and a redeem-only till offers Redeem, Settings and
+  // Lock, and no Sell.
+  it('redeem-only: Redeem, Settings and Lock, no Sell', async () => {
+    enrol(TERMINAL_ROLES.REDEEM_ONLY)
+    unlockedAs(TERMINAL_ROLES.REDEEM_ONLY)
+    at('/')
+    expect(await screen.findByText('Test Stall')).toBeTruthy()
+    expect(screen.getByTestId('terminal-name').textContent).toBe('Front counter')
+    expect(screen.getByRole('button', { name: /Redeem/ })).toBeTruthy()
+    expect(screen.getByRole('link', { name: /Settings/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Lock/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Sell/ })).toBeNull()
+  })
+
+  // A sell-and-redeem till on a FULL session is told selling arrives with phase 5, not offered a
+  // Sell that every customer wallet would refuse.
+  it('sell-and-redeem, FULL: Redeem, and a line saying Sell is not available yet', async () => {
+    enrol(TERMINAL_ROLES.ISSUE_AND_REDEEM)
+    unlockedAs(TERMINAL_ROLES.ISSUE_AND_REDEEM)
+    at('/')
+    expect(await screen.findByText(/Selling from a terminal is not available yet/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Sell/ })).toBeNull()
+  })
+
+  // REDUCED (mint unreachable at unlock): redemption only, and no line about selling.
+  it('sell-and-redeem, REDUCED: Redeem only', async () => {
+    enrol(TERMINAL_ROLES.ISSUE_AND_REDEEM)
+    unlockedAs(TERMINAL_ROLES.ISSUE_AND_REDEEM, SESSION_KIND.REDUCED)
+    at('/')
+    expect(await screen.findByRole('button', { name: /Redeem/ })).toBeTruthy()
+    expect(screen.queryByText(/Selling from a terminal/)).toBeNull()
+  })
+})
+
+describe('the routes a terminal has', () => {
+  // A redeem-only terminal has no Sell route: typing it lands on the till.
+  it('has no /sell: it lands on the till', async () => {
+    enrol(TERMINAL_ROLES.REDEEM_ONLY)
+    unlockedAs(TERMINAL_ROLES.REDEEM_ONLY)
+    at('/sell')
+    expect(await screen.findByTestId('terminal-name')).toBeTruthy()
+  })
+
+  // The owner's business has no route on a terminal at all.
+  it.each(['/merchant/dashboard', '/merchant/coupons', '/settings/terminals', '/settings/backup', '/profile'])(
+    'sends %s to the till',
+    async (path) => {
+      enrol(TERMINAL_ROLES.ISSUE_AND_REDEEM)
+      unlockedAs(TERMINAL_ROLES.ISSUE_AND_REDEEM)
+      at(path)
+      expect(await screen.findByTestId('terminal-name')).toBeTruthy()
+    },
+  )
+
+  // Redeem is reachable once the stall's record is read.
+  it('opens Redeem', async () => {
+    enrol(TERMINAL_ROLES.REDEEM_ONLY)
+    unlockedAs(TERMINAL_ROLES.REDEEM_ONLY)
+    at('/redeem')
+    expect(await screen.findByText('redeem-screen')).toBeTruthy()
+  })
+
+  // Settings → Security offers only taking the terminal out of service.
+  it('offers Take out of service under Settings → Security', async () => {
+    enrol(TERMINAL_ROLES.REDEEM_ONLY)
+    unlockedAs(TERMINAL_ROLES.REDEEM_ONLY)
+    at('/settings/security')
+    expect(await screen.findByRole('button', { name: 'Take this terminal out of service' })).toBeTruthy()
+    expect(screen.queryByText(/Log out/)).toBeNull()
+  })
+})
+
+describe('a refused device is never stranded (#160 review, MEDIUM)', () => {
+  /** The unlock screen alone, with an unlock that refuses and a local removal we can watch. */
+  async function refusedWith(reason: string, message: string) {
+    const removed = vi.fn(async () => undefined)
+    const reload = vi.fn()
+    render(
+      <MemoryRouter>
+        <TerminalUnlockPage
+          name="Front counter"
+          terminalPubkey={DEVICE}
+          stallName="Test Stall"
+          onUnlocked={() => {}}
+          unlock={async () => ({ unlocked: false, reason: reason as never, message })}
+          removeFromDevice={removed}
+          reload={reload}
+        />
+      </MemoryRouter>,
+    )
+    fireEvent.change(screen.getByLabelText('Passphrase'), { target: { value: 'eight888' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Open the till' }))
+    return { removed, reload }
+  }
+
+  // A credential that cannot be read, or is not this device's, can never be handed back: the
+  // device holds nothing the mint would spend. Decommission fails and erases nothing, so before
+  // the review the device was stuck on this screen for good. It now offers to remove the terminal
+  // from this device, which clears everything logout clears, and says the owner must still revoke
+  // it.
+  it.each([
+    ['unreadable', 'This terminal’s authority cannot be read. Ask the stall owner to set it up again.'],
+    ['not-ours', 'This authority is not for this device. Ask the stall owner to set it up again.'],
+    ['untrusted-issuer', 'This app cannot confirm who issued this terminal’s authority.'],
+  ])('offers a local removal for a %s credential, and it clears the device', async (reason, message) => {
+    const { removed, reload } = await refusedWith(reason, message)
+
+    const remove = await screen.findByRole('button', { name: 'Remove this terminal from this device' })
+    expect(screen.getByText(/stall owner should still revoke it/i)).toBeTruthy()
+    fireEvent.click(remove)
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove it' }))
+
+    await waitFor(() => expect(removed).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1))
+  })
+
+  // A revoked credential is already spent, so the normal decommission works and is what is shown.
+  it('keeps Take out of service for a revoked credential', async () => {
+    await refusedWith('revoked', 'This terminal is no longer in service. Ask the stall owner to set it up again.')
+
+    expect(await screen.findByRole('button', { name: 'Take this terminal out of service' })).toBeTruthy()
+  })
+})
+
+describe('a terminal record without a token (#160 review, LOW)', () => {
+  // The record still names this device, so it is still a terminal: the unlock screen, never the
+  // onboarding or customer screens.
+  it('still shows the unlock screen', async () => {
+    localStorage.setItem(
+      'imani-wallet:terminal',
+      JSON.stringify({ stallPubkey: STALL, role: TERMINAL_ROLES.REDEEM_ONLY, terminalPubkey: DEVICE, enrolledAt: 1 }),
+    )
+    at('/')
+    expect(await screen.findByRole('button', { name: 'Open the till' })).toBeTruthy()
+  })
+})

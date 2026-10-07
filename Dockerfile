@@ -9,6 +9,7 @@
 #     --build-arg VITE_INTERNAL_RELAY_URL=ws://nostr-relay:7777 \
 #     --build-arg VITE_GOOGLE_CLIENT_ID=<oauth-client-id>.apps.googleusercontent.com \
 #     --build-arg VITE_TRUSTED_MINT_URLS=https://mint.staging.398ja.xyz \
+#     --build-arg VITE_VOUCHER_ISSUER_PUBKEYS=<gateway voucher issuing key, 64 hex> \
 #     -t imani-wallet .
 #
 # The /build/{imani-wallet,nap} layout below reproduces the on-disk sibling shape
@@ -79,6 +80,15 @@ ENV VITE_TRUSTED_MINT_URLS=$VITE_TRUSTED_MINT_URLS
 ARG ALLOW_UNTRUSTED_MINT_BUILD=false
 COPY scripts/check-trusted-mint-build.sh /tmp/check-trusted-mint-build.sh
 RUN ALLOW_UNTRUSTED_MINT_BUILD="$ALLOW_UNTRUSTED_MINT_BUILD" sh /tmp/check-trusted-mint-build.sh
+
+# The keys that sign vouchers this build believes, comma-separated 64-hex x-only keys
+# (src/lib/issuerAllowlist.ts): the customer gateway's voucher issuing key. Not a secret.
+# Coupons are refused offline when signed by any other key. Terminal credentials are
+# refused outright unless their signer is listed, and with this EMPTY no terminal opens
+# (#160 review, IW-15). Optional for the build so a wallet-only image still builds; a
+# deployment with terminals must set it.
+ARG VITE_VOUCHER_ISSUER_PUBKEYS=
+ENV VITE_VOUCHER_ISSUER_PUBKEYS=$VITE_VOUCHER_ISSUER_PUBKEYS
 
 COPY . .
 # `tsc -b && vite build`. The tsc half typechecks ./packages AND ../nap through

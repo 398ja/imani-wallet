@@ -9,6 +9,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A terminal opens its till (#160 phase 3).** A device set up as a terminal now lands on
+  `/terminal/unlock`, where its passphrase opens the till. Unlocking never opens a NAP
+  session, so a terminal makes no call to `/api/v1/auth/*` and is never signed in as a
+  customer. The mint's NUT-07 answer decides the session: `UNSPENT` opens FULL, unreachable
+  opens REDUCED (redeem only), `SPENT` refuses with "no longer in service" (G8: before this,
+  every terminal opened REDUCED because nothing asked the mint).
+- **The till is its own app.** `TerminalApp` sits beside `AuthedApp` and starts no DM poll,
+  wallet sync or push. It offers the till (terminal and stall name), Redeem, Settings →
+  Security → Take out of service, and Lock. Every other path, the owner's dashboard included,
+  lands on the till; a locked till sends every path to the unlock screen.
+- **Redeem on a terminal says Paid (G12).** The customer's coupon goes to the stall, so a
+  terminal's own wallet never sees it. On a terminal the Redeem screen asks gateway-core
+  (`GET /api/v1/atomic/fulfilment/{id}`, NIP-98 signed by the terminal key) every 3 s, and
+  only an answer naming this stall counts. The dev proxy routes that path to gateway-core.
+- **The idle lock (decision 2).** An untouched till locks after the owner's chosen minutes (10
+  by default, `0` is never), and Lock does the same. Locking drops the signer and keeps the
+  12-hour session, so unlocking again within it needs only the passphrase.
+
+### Security
+
+- **A customer could fake "Paid" on a terminal's Redeem (#160 review, BLOCKER).** The till
+  showed Paid for any fulfilment gateway-core reported, which was any completed send carrying
+  the request id, and the payer sets that id. Reading it off the QR code and sending 1 sat to
+  yourself was enough. The till now registers the request's terms with gateway-core before it
+  shows the code (`PUT /api/v1/atomic/fulfilment/{id}`, first registration wins), and Paid
+  needs the answer to name the stall as recipient and as issuer, in the request's unit, for at
+  least the request's amount. An answer missing any of these, or a request gateway-core would
+  not register, is never Paid. Needs imani-gateway-core#131.
+- **A terminal credential needs a signer this build trusts (#160 review, IW-15).** The
+  signature is checked against the `issuer_pubkey` the token carries, and an unset
+  `VITE_VOUCHER_ISSUER_PUBKEYS` meant "unchecked". No deploy set it, so a credential re-signed
+  with any key opened an issuing till for any stall. A terminal credential is now refused
+  unless its signer is on the list, and an empty list refuses every one ("cannot confirm who
+  issued this terminal's authority"). Customer coupons keep the old rule. **Deploy:** set
+  `VITE_VOUCHER_ISSUER_PUBKEYS` to the gateway's voucher issuing key (imani-deploy PR), or no
+  terminal opens.
+- **A refused terminal is no longer stranded (#160 review).** A credential that cannot be read,
+  is not this device's, or has an untrusted signer can never be handed back, so Take out of
+  service failed and erased nothing. Those refusals now offer **Remove this terminal from this
+  device**, which clears everything logout clears and says the owner should still revoke it.
+- **A terminal record without its token stays a terminal (#160 review).** It used to read as not
+  enrolled, so the device went to `/login` and its terminal key opened a customer session
+  (spec 2.3). It now reaches the unlock screen, is refused, and is offered removal.
+- **The idle lock is signed (#160 review).** The owner's idle lock is signed into the
+  credential (`idle_lock_minutes`), and the till prefers it to the editable device record.
+  Credentials minted before this fall back to the record.
+- **The device record can no longer raise a terminal's role (IW-15).** Login read the stall,
+  role and lock from `merchantMetadata`, `issuerId` and `permissions` stored beside the token,
+  which anyone holding the device could edit: a redeem-only till could be edited into an
+  issuing one. Login now reads them from the token's own bytes, after checking its single
+  `P2PK_VOUCHER` lock equals the metadata's `lock_key`, its signature, and (where the build
+  names them) its signing key. The record keeps only the token as authority, a record without
+  one reads as not enrolled, and `completeEnrolment` refuses a token that does not match the
+  credential it verified. `enrolledActor` and its `nosemgrep` are gone, so Semgrep reports 4
+  findings, down from 5.
+
 ## [0.14.3] - 2026-10-06
 
 ### Fixed

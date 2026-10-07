@@ -10,6 +10,8 @@ import { useTerminalIdentity } from '../useTerminalIdentity'
 import { parseVoucherToken } from '../voucherToken'
 import { SESSION_KIND } from '../terminalSession'
 import { TERMINAL_ROLES } from '../terminalRole'
+import { generateSecretKey, getPublicKey } from 'nostr-tools'
+import { buildLockedCredentialToken } from './voucherFixtures'
 
 /**
  * The hook that finally makes ticket 07's gating reachable.
@@ -36,6 +38,8 @@ const MINTED = JSON.parse(
 ) as { stall: string; device: string }
 const DEVICE = MINTED.device
 const STALL = MINTED.stall
+/** The key that signed the live credential: the issuing gateway's, not the stall's. */
+const GATEWAY_SIGNER = parsed.voucher.issuerPublicKey
 
 const ENROLMENT_KEY = 'imani-wallet:terminal'
 
@@ -58,8 +62,17 @@ function enrol(over: Record<string, unknown> = {}) {
 
 const mint = (state: string) => ({ validateToken: vi.fn(async () => ({ state })) })
 
-beforeEach(() => localStorage.clear())
-afterEach(() => vi.restoreAllMocks())
+// The build names the key that signs terminal credentials, as every deploy must now: a terminal
+// credential whose signer is not on VITE_VOUCHER_ISSUER_PUBKEYS is refused (#160 review, IW-15).
+// The real fixture was signed by the gateway's issuing key, which is what a deploy names.
+beforeEach(() => {
+  vi.stubEnv('VITE_VOUCHER_ISSUER_PUBKEYS', GATEWAY_SIGNER)
+  localStorage.clear()
+})
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllEnvs()
+})
 
 describe('the stall’s own device', () => {
   it('is not a terminal, and settles immediately', () => {
@@ -165,6 +178,89 @@ describe('a real terminal', () => {
     await waitFor(() => expect(result.current.ready).toBe(true))
     expect(result.current.actor!.role).toBe(TERMINAL_ROLES.REDEEM_ONLY)
     expect(result.current.actor!.permissions).not.toContain(`voucher:issue:${STALL}`)
+  })
+})
+
+describe('#160 phase 3: login reads the token, never the fields stored beside it', () => {
+  // IW-15. The record's `merchantMetadata` used to be what login verified, and anyone holding the
+  // device can edit it. Here it is replaced with metadata claiming the issuing role, keeping the
+  // real token. The terminal must still log in as the redeem-only till its signed token says.
+  it('ignores metadata and issuer edited into the record', async () => {
+    const forged = JSON.stringify({
+      ...JSON.parse(String(parsed.voucher.merchantMetadata)),
+      role: TERMINAL_ROLES.ISSUE_AND_REDEEM,
+    })
+    enrol({ role: TERMINAL_ROLES.ISSUE_AND_REDEEM, merchantMetadata: forged })
+    const { result } = renderHook(() => useTerminalIdentity({ devicePubkey: DEVICE, ...mint('UNSPENT') }))
+
+    await waitFor(() => expect(result.current.ready).toBe(true))
+    expect(result.current.actor!.role).toBe(TERMINAL_ROLES.REDEEM_ONLY)
+    expect(result.current.actor!.permissions).not.toContain(`voucher:issue:${STALL}`)
+  })
+
+  // #160 review (IW-15 test gap). The credential is signed by a key this build TRUSTS, so the only
+  // thing that can refuse it is the signature check. Its metadata is then edited after signing, to
+  // claim the issuing role. The signature no longer covers the bytes, so login refuses it. Before
+  // the review this test signed with a random key, so the allowlist refused it first and deleting
+  // the signature check left the test passing.
+  it('refuses a token whose signed metadata was edited', async () => {
+    const trustedKey = generateSecretKey()
+    vi.stubEnv('VITE_VOUCHER_ISSUER_PUBKEYS', getPublicKey(trustedKey))
+    const metadata = (role: string) =>
+      JSON.stringify({ terminal: true, stall_pubkey: getPublicKey(trustedKey), role, lock_key: DEVICE, name: 'Front counter' })
+    const signed = buildLockedCredentialToken({
+      stallKey: trustedKey,
+      devicePubkey: DEVICE,
+      metadata: metadata(TERMINAL_ROLES.REDEEM_ONLY),
+    })
+    const tampered = buildLockedCredentialToken({
+      stallKey: trustedKey,
+      devicePubkey: DEVICE,
+      metadata: metadata(TERMINAL_ROLES.REDEEM_ONLY),
+      tamperMetadata: metadata(TERMINAL_ROLES.ISSUE_AND_REDEEM),
+    })
+
+    // The control: the same credential, untouched, logs in. So the refusal below is the edit's.
+    enrol({ stallPubkey: getPublicKey(trustedKey), token: signed })
+    const control = renderHook(() => useTerminalIdentity({ devicePubkey: DEVICE, ...mint('UNSPENT') }))
+    await waitFor(() => expect(control.result.current.ready).toBe(true))
+    expect(control.result.current.actor?.role).toBe(TERMINAL_ROLES.REDEEM_ONLY)
+    control.unmount()
+
+    enrol({ stallPubkey: getPublicKey(trustedKey), token: tampered })
+    const { result } = renderHook(() => useTerminalIdentity({ devicePubkey: DEVICE, ...mint('UNSPENT') }))
+
+    await waitFor(() => expect(result.current.ready).toBe(true))
+    expect(result.current.actor).toBeNull()
+    expect(result.current.refusal).not.toBeNull()
+  })
+
+  // #160 review (IW-15). A credential re-signed with the attacker's own key verifies against the
+  // key it carries. Only the allowlist can tell it from a real one, so it must refuse it.
+  it('refuses a credential signed by a key the build does not trust', async () => {
+    const forged = buildLockedCredentialToken({
+      stallKey: generateSecretKey(),
+      devicePubkey: DEVICE,
+      role: TERMINAL_ROLES.ISSUE_AND_REDEEM,
+    })
+    enrol({ token: forged })
+    const { result } = renderHook(() => useTerminalIdentity({ devicePubkey: DEVICE, ...mint('UNSPENT') }))
+
+    await waitFor(() => expect(result.current.ready).toBe(true))
+    expect(result.current.actor).toBeNull()
+  })
+
+  // #160 review (IW-15). No deploy set VITE_VOUCHER_ISSUER_PUBKEYS, and an unset list used to
+  // mean "unchecked": any self-signed credential opened an issuing till for any stall. For a
+  // terminal credential an empty list now refuses, even the real one.
+  it('refuses every credential when the build names no trusted signer', async () => {
+    vi.stubEnv('VITE_VOUCHER_ISSUER_PUBKEYS', '')
+    enrol()
+    const { result } = renderHook(() => useTerminalIdentity({ devicePubkey: DEVICE, ...mint('UNSPENT') }))
+
+    await waitFor(() => expect(result.current.ready).toBe(true))
+    expect(result.current.actor).toBeNull()
+    expect(result.current.refusal).toMatch(/cannot confirm who issued/)
   })
 })
 
