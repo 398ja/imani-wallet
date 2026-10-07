@@ -9,6 +9,7 @@ import { gatewayConfig, DEFAULT_CASHBACK_EXPIRY_DAYS } from '../lib/config'
 import { currencyDecimals, formatDate, formatFace, parseAmountToMinor } from '../lib/format'
 import type { MerchantProfile } from '../lib/merchant'
 import { ownerActor, type Actor } from '../lib/actor'
+import type { TerminalSession } from '../lib/terminalSession'
 import { TERMINAL_CASHBACK_UNSUPPORTED, mayWarrantSale } from '../lib/warrantSigner'
 
 /**
@@ -26,6 +27,7 @@ import { TERMINAL_CASHBACK_UNSUPPORTED, mayWarrantSale } from '../lib/warrantSig
 export function CashbackIssuePage({
   merchant,
   actor,
+  session,
 }: {
   merchant: MerchantProfile
   /**
@@ -36,6 +38,8 @@ export function CashbackIssuePage({
    * the stall's own device.
    */
   actor?: Actor
+  /** The terminal's session, which decides whether it may issue now. Absent for the owner. */
+  session?: TerminalSession | null
 }) {
   const navigate = useNavigate()
   const [amount, setAmount] = useState('')
@@ -83,6 +87,7 @@ export function CashbackIssuePage({
       // `cashbackIssue.ts` for why the order matters.
       const cashback = await issuer.submit({
         actor: actor ?? ownerActor(merchant.pubkey),
+        session,
         amountMinor: minor,
         unit: merchant.issuanceCurrency,
         decimals,
@@ -109,7 +114,7 @@ export function CashbackIssuePage({
     on arrival, before an amount is typed or a code is minted; `cashbackIssue`
     refuses the same request made around this screen.
   */
-  if (actor && !mayWarrantSale(actor)) {
+  if (actor && !mayWarrantSale(actor, session ?? null)) {
     return (
       <Screen>
         <BackLink to="/" label="Back" />

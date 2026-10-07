@@ -4,6 +4,9 @@ import { hexToBytes } from '@noble/hashes/utils'
 import { installTerminalSigner, keyStore, lockTerminalSigner } from './nap'
 import { storedTerminal, storedTerminalPubkey } from './terminalEnrol'
 import { LOGIN_MESSAGE, LOGIN_REFUSAL, loginFromToken, type LoginRefusal } from './terminalLogin'
+import { setRequestCredential, type HeldCredential } from './terminalRequestCredential'
+import { credentialFromToken } from './terminalLogin'
+import { tokenProofs } from './voucherToken'
 import { credentialState, unspentForLogin, type CredentialMintApi } from './credentialRevocation'
 import { sessionState, type TerminalSession } from './terminalSession'
 import { terminalMintApi } from './terminalTill'
@@ -35,6 +38,20 @@ export type UnlockOutcome =
 export const WRONG_PASSPHRASE = 'That passphrase does not open this terminal.'
 export const NOT_A_TERMINAL_KEY =
   'That passphrase opens a wallet, not this terminal. Open the wallet instead.'
+
+/** Read the voucher id and secret out of a credential token, or null if it is not one. */
+function heldCredentialFrom(token: string): HeldCredential | null {
+  const facts = credentialFromToken(token)
+  if (!facts) return null
+  try {
+    const proofs = tokenProofs(token)
+    return proofs.length === 1
+      ? { voucherId: facts.voucherId, stallPubkey: facts.issuerId.toLowerCase(), secret: proofs[0].secret }
+      : null
+  } catch {
+    return null
+  }
+}
 
 /** The session the last unlock opened. In memory only: see the module comment. */
 let held: { devicePubkey: string; actor: TerminalActor; session: TerminalSession } | null = null
@@ -95,8 +112,17 @@ export async function unlockTerminal(
   }
 
   // Within the twelve hours and for the same key, the idle lock's re-unlock needs no mint call.
+  //
+  // So a till revoked MID-DAY re-unlocks here without learning of it: the mint is asked only at
+  // the session's first unlock. That is accepted, and bounded elsewhere. The revocation is a
+  // NUT-07 spend of the credential, and the portal checks it at every issuance, so a revoked
+  // till's Sell is refused there, whatever this device believes. What a revoked till can still
+  // do until its session ends is redeem, which `canRedeemNow` already allows on an authority
+  // nobody could check, because a wrong redemption is recoverable. The twelve-hour session is
+  // the outer bound.
   if (held && held.devicePubkey === devicePubkey && sessionState(held.session, { now }).live) {
     install(privkeyHex)
+    setRequestCredential(heldCredentialFrom(stored.token))
     unlocked = true
     return { unlocked: true, ...held }
   }
@@ -111,6 +137,8 @@ export async function unlockTerminal(
   }
 
   install(privkeyHex)
+  // The voucher id from the token's signed bytes, not the record's field (IW-15).
+  setRequestCredential(heldCredentialFrom(stored.token))
   unlocked = true
   held = { devicePubkey, actor: outcome.actor, session: outcome.session }
   return { unlocked: true, ...held }
@@ -137,6 +165,7 @@ export function openTill(): {
 /** Lock the till: drop the signer, keep the twelve-hour session (spec 2.3). */
 export function lockTerminal(): void {
   unlocked = false
+  setRequestCredential(null)
   lockTerminalSigner()
 }
 
@@ -144,5 +173,6 @@ export function lockTerminal(): void {
 export function forgetTerminalSession(): void {
   held = null
   unlocked = false
+  setRequestCredential(null)
   lockTerminalSigner()
 }

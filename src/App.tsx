@@ -413,7 +413,11 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             <Route
               path="/sell/cashback"
               element={
-                <CashbackIssuePage merchant={merchant} actor={terminal.actor ?? undefined} />
+                <CashbackIssuePage
+                  merchant={merchant}
+                  actor={terminal.actor ?? undefined}
+                  session={terminal.session}
+                />
               }
             />
             <Route

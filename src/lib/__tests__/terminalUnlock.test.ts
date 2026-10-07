@@ -41,6 +41,7 @@ const { unlockTerminal, forgetTerminalSession, heldTerminalSession, lockTerminal
 const { SESSION_KIND, SESSION_HOURS } = await import('../terminalSession')
 const { TERMINAL_ROLES } = await import('../terminalRole')
 const { isTerminalDevice } = await import('../terminalEnrol')
+const { requestCredential } = await import('../terminalRequestCredential')
 
 function enrol(role: string = TERMINAL_ROLES.ISSUE_AND_REDEEM, over: Record<string, unknown> = {}) {
   localStorage.setItem(
@@ -200,6 +201,21 @@ describe('the idle lock keeps the twelve-hour session', () => {
     const again = await unlockTerminal(PASSPHRASE, { mint: api, now: t0 + 60_000 })
     expect(again.unlocked).toBe(true)
     expect(api.validateToken).toHaveBeenCalledTimes(1)
+  })
+
+  // Locking drops the credential too, not just the signer. Every request a till makes names the
+  // credential it holds, and a locked till must name none, so nothing sold or signed in its name
+  // can go out while it sits locked at the counter.
+  it('forgets the request credential when the till locks, and holds it again on unlock', async () => {
+    enrol()
+    const api = mint('UNSPENT')
+    const t0 = 1_800_000_000_000
+    await unlockTerminal(PASSPHRASE, { mint: api, now: t0 })
+    expect(requestCredential()?.stallPubkey).toBe(STALL)
+    lockTerminal()
+    expect(requestCredential()).toBeNull()
+    await unlockTerminal(PASSPHRASE, { mint: api, now: t0 + 60_000 })
+    expect(requestCredential()?.stallPubkey).toBe(STALL)
   })
 
   // After the twelve hours the session is over, so the next unlock asks the mint again, which is

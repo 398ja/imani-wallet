@@ -100,9 +100,8 @@ export function MerchantHomePage({
     allowed by role says so in one line, so staff know it is not broken.
   */
   const roleMayIssue = actor ? canIssueNow(actor, session ?? null) : true
-  const mayIssue = roleMayIssue && (actor ? mayWarrantSale(actor) : true)
+  const mayIssue = roleMayIssue && (actor ? mayWarrantSale(actor, session ?? null) : true)
   const mayRedeem = actor ? canRedeemNow(actor, session ?? null) : true
-  const sellPending = roleMayIssue && !mayIssue
 
   return (
     <Screen>
@@ -131,12 +130,6 @@ export function MerchantHomePage({
             </Button>
           ) : null}
         </div>
-        {sellPending && (
-          <p className="mt-4 text-center text-sm text-mono-500">
-            Selling from a terminal is not available yet. Sell from the stall owner’s own
-            device.
-          </p>
-        )}
       </div>
     </Screen>
   )

@@ -205,9 +205,8 @@ async function main() {
   check('renders', enrol.includes('Add a terminal') || enrol.includes('terminal'))
   check('asks for a name', enrol.includes('Name'))
   check('offers both roles', /Redemption only/i.test(enrol) && /Sell and redeem/i.test(enrol))
-  // #159: no terminal can sell until the delegated warrant form ships, so the
-  // role an owner picks must say so before they pick it.
-  check('says selling is not yet available on a terminal', /selling not yet available/i.test(enrol))
+  // #160 phase 5: a full till sells under the terminal warrant form.
+  check('says a full till sells', /sells and honours/i.test(enrol))
 
   const add = page.getByRole('button', { name: 'Add terminal' })
   check('will not enrol an empty form', await add.isDisabled())

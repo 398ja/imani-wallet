@@ -79,7 +79,7 @@ export function SellPage({
     typed, so staff learn it before taking payment rather than after.
     `issueAndDeliver` refuses the same request made around this screen.
   */
-  if (actor && !mayWarrantSale(actor)) {
+  if (actor && !mayWarrantSale(actor, session ?? null)) {
     return (
       <Screen>
         <BackLink to="/" label="Back" />

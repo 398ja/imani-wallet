@@ -14,6 +14,7 @@ import { CashbackGenerateError, generateCashback, type IssuedCashback } from './
 import { getSigner } from './nap'
 import { buildCashbackTransaction } from './transactions'
 import { getWallet, notifyWalletChanged } from './wallet'
+import type { TerminalSession } from './terminalSession'
 import {
   TERMINAL_CASHBACK_UNSUPPORTED,
   UnwarrantedSaleError,
@@ -29,12 +30,12 @@ export interface CashbackRequest {
    * WHO is issuing. Null only when the session names no stall, in which case
    * no warrant can be signed and none is sent.
    *
-   * A terminal is refused before anything is signed or minted (#159): its key
-   * is not the stall's, so the most it could send is a signed `none`, and the
-   * issuing stall's till refuses that coupon when the customer spends it.
-   * Fixing that needs the `delegated` form and is separate.
+   * A terminal issues under the `terminal` warrant form (#160 phase 5), and only in a live
+   * FULL session with a selling role (`mayWarrantSale`), so `session` is required for one.
    */
   actor: Actor | null
+  /** The terminal's session. Absent or null for the owner, who has none. */
+  session?: TerminalSession | null
   amountMinor: number
   unit: string
   decimals: number
@@ -71,7 +72,7 @@ export interface CashbackAttempt {
  */
 export async function prepareCashbackAttempt(request: CashbackRequest): Promise<CashbackAttempt> {
   const { actor, amountMinor, decimals, unit } = request
-  refuseUnwarrantableIssuer(actor)
+  refuseUnwarrantableIssuer(actor, request.session ?? null)
   const warrant = actor ? await buildIssuanceWarrant(actor, amountMinor, decimals, unit) : undefined
   if (actor) assertSaleWarranted(warrant)
   return {
@@ -80,9 +81,9 @@ export async function prepareCashbackAttempt(request: CashbackRequest): Promise<
   }
 }
 
-/** A terminal cannot sign a warrant the stall's till accepts. See above. */
-function refuseUnwarrantableIssuer(actor: Actor | null): void {
-  if (actor && !mayWarrantSale(actor)) throw new UnwarrantedSaleError(TERMINAL_CASHBACK_UNSUPPORTED)
+/** A terminal outside a FULL selling session cannot sign a `terminal` warrant. See above. */
+function refuseUnwarrantableIssuer(actor: Actor | null, session: TerminalSession | null): void {
+  if (actor && !mayWarrantSale(actor, session)) throw new UnwarrantedSaleError(TERMINAL_CASHBACK_UNSUPPORTED)
 }
 
 /**
@@ -103,7 +104,7 @@ export async function issueCashback(
   const { idempotencyKey, warrant } = attempt ?? (await prepareCashbackAttempt(request))
   // Again on the attempt actually used, so a caller-supplied attempt cannot
   // carry a terminal or an unwarranted issue past the checks above.
-  refuseUnwarrantableIssuer(actor)
+  refuseUnwarrantableIssuer(actor, request.session ?? null)
   if (actor) assertSaleWarranted(warrant)
 
   const issued = await generateCashback({
