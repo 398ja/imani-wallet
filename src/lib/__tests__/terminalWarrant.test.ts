@@ -20,6 +20,7 @@ import {
 } from '../terminalWarrant'
 import { parseIssuanceWarrant, verifyIssuanceWarrant, warrantSaleDigest } from '../issuanceWarrant'
 import { lockedCanonicalBytes } from '../voucherToken'
+import parityCorpus from './fixtures/terminalWarrantParity0161.json'
 
 // Keys: the gateway's credential-minting service, the stall, and the till's own K.
 const SERVICE_SK = '11'.repeat(32)
@@ -399,6 +400,159 @@ describe('one credential, one reading (0.16.1 parity)', () => {
   // Java refuses at parse. Here too, so it never reaches LOCK_MISMATCH on one side only.
   it('refuses data that repeats a pubkeys key, as NUT-11 does', () => {
     expect(parseCredentialSecret(credential({ lock: STALL }))).toBeNull()
+  })
+
+  /** The genuine wire text with `rows` appended after signing (the signature rows stay as they are). */
+  function withSignatureRows(edit: (rows: string[][]) => string[][]): string {
+    const [, body] = JSON.parse(credential()) as [string, { nonce: string; data: string; tags: string[][] }]
+    return JSON.stringify(['P2PK_VOUCHER', { ...body, tags: edit(body.tags) }])
+  }
+  const parses = (wire: string) => parseCredentialSecret(wire) !== null
+  // An x-coordinate with no point on secp256k1 above it, so 02||x and 03||x are not keys.
+  const OFF_CURVE_X = '00'.repeat(31) + '05'
+
+  // Each tag the verdict reads must hold exactly one value. A row such as
+  // ["issuer", STALL, STRANGER] is two readings, so it is refused even when the first one is right.
+  it('refuses a read tag row that carries more than one value', () => {
+    const meta = JSON.stringify({ terminal: true, stall_pubkey: STALL, role: 'issue-and-redeem', lock_key: TILL, name: 'Front' })
+    for (const [key, extra] of [['issuer', STALL], ['issuer', STRANGER], ['merchant_metadata', meta], ['expires_at', '1']]) {
+      const wire = withTags((t) => t.map((r) => (r[0] === key ? [...r, extra] : r)))
+      expect(refusal({ credential: wire }), key).not.toBe('VALID')
+    }
+    for (const key of ['issuer_sig', 'issuer_pubkey']) {
+      const wire = withSignatureRows((t) => t.map((r) => (r[0] === key ? [...r, r[1]] : r)))
+      expect(refusal({ credential: wire }), key).not.toBe('VALID')
+    }
+    // The genuine one-value rows still verify.
+    expect(refusal({})).toBe('VALID')
+  })
+
+  // A lone surrogate in the credential nonce hashes differently in Java and here, like one in a tag.
+  it('refuses a lone surrogate in the credential nonce', () => {
+    const [, body] = JSON.parse(credential()) as [string, { nonce: string; data: string; tags: string[][] }]
+    for (const nonce of ['ab\ud800', 'ab\udc00cd']) {
+      expect(parseCredentialSecret(JSON.stringify(['P2PK_VOUCHER', { ...body, nonce }])), nonce).toBeNull()
+    }
+  })
+
+  // The tag key is hashed too, so a lone surrogate there is refused just as one in a value is.
+  it('refuses a lone surrogate in a tag key', () => {
+    expect(parses(withTags((t) => [...t, ['me\ud800mo', 'a']]))).toBe(false)
+    expect(parses(withTags((t) => [...t, ['memo', 'a']]))).toBe(true)
+  })
+
+  // NUT-11 knows two sigflags, spelled in upper case. Anything else fails Java's parse.
+  it('refuses a sigflag other than SIG_INPUTS or SIG_ALL', () => {
+    const set = (v: string) => withTags((t) => t.map((r) => (r[0] === 'sigflag' ? ['sigflag', v] : r)))
+    for (const v of ['sig_all', 'SIG_NONE', '']) expect(parses(set(v)), v).toBe(false)
+    expect(parses(set('SIG_INPUTS'))).toBe(true)
+    expect(parses(set('SIG_ALL'))).toBe(true)
+  })
+
+  // n_sigs must be at least 1 and no more than the keys in the main pathway (data plus pubkeys).
+  it('refuses an n_sigs below 1 or above the number of keys', () => {
+    const set = (v: string) => withTags((t) => t.map((r) => (r[0] === 'n_sigs' ? ['n_sigs', v] : r)))
+    for (const v of ['0', '-1', '3', '9223372036854775807']) expect(parses(set(v)), v).toBe(false)
+    expect(parses(set('1'))).toBe(true)
+    expect(parses(set('2'))).toBe(true)
+  })
+
+  // Numbers are read as Java's Long.parseLong(s.trim()): surrounding spaces are fine, but a
+  // value outside a signed 64-bit long is refused.
+  it('reads n_sigs and locktime as Java longs: trimmed, and within 64 bits', () => {
+    const refund = ['refund', '02' + STRANGER]
+    const lock = (v: string) => withTags((t) => [...t, ['locktime', v], refund])
+    expect(parses(withTags((t) => t.map((r) => (r[0] === 'n_sigs' ? ['n_sigs', ' 1'] : r))))).toBe(true)
+    expect(parses(withTags((t) => t.map((r) => (r[0] === 'n_sigs' ? ['n_sigs', '1 '] : r))))).toBe(true)
+    expect(parses(lock(' 1'))).toBe(true)
+    expect(parses(lock('9223372036854775807'))).toBe(true)
+    expect(parses(lock('9223372036854775808'))).toBe(false)
+    expect(parses(lock('1e3'))).toBe(false)
+  })
+
+  // A locktime must be non-negative and needs refund keys to unlock to. Either fault fails parse.
+  it('refuses a negative locktime, and a locktime with no refund keys', () => {
+    const refund = ['refund', '02' + STRANGER]
+    expect(parses(withTags((t) => [...t, ['locktime', '100'], refund]))).toBe(true)
+    expect(parses(withTags((t) => [...t, ['locktime', '-1'], refund]))).toBe(false)
+    expect(parses(withTags((t) => [...t, ['locktime', '100']]))).toBe(false)
+  })
+
+  // Keys are compared on the x-coordinate, so 02||x and 03||x are the same key twice. That holds in
+  // the main pathway and, separately, among refund keys.
+  it('refuses the same key twice in a pathway, whatever its 02/03 prefix', () => {
+    const pub = (v: string) => withTags((t) => t.map((r) => (r[0] === 'pubkeys' ? ['pubkeys', v] : r)))
+    expect(parses(pub('03' + TILL))).toBe(false)
+    expect(parses(pub('03' + STALL))).toBe(true)
+    expect(parses(withTags((t) => [...t, ['refund', '02' + STRANGER, '03' + STRANGER]]))).toBe(false)
+    expect(parses(withTags((t) => [...t, ['refund', '02' + STRANGER, '02' + SERVICE]]))).toBe(true)
+  })
+
+  // Every pubkeys and refund key must be a real point on the curve, not just 66 hex characters
+  // starting 02 or 03. The service signs whatever it is handed, so a signature does not save it.
+  it('refuses a pubkeys or refund key that is not a point on secp256k1', () => {
+    for (const p of ['02', '03']) {
+      expect(parses(withTags((t) => t.map((r) => (r[0] === 'pubkeys' ? ['pubkeys', p + OFF_CURVE_X] : r)))), p).toBe(false)
+      expect(parses(withTags((t) => [...t, ['refund', p + OFF_CURVE_X]])), p).toBe(false)
+    }
+    expect(parses(withTags((t) => t.map((r) => (r[0] === 'pubkeys' ? ['pubkeys', '04' + STALL] : r))))).toBe(false)
+  })
+
+  // `data` too must be a point on the curve. Java refuses a well-formed but off-curve lock at
+  // parse, so the wallet must not let it through to a later check.
+  it('refuses data that is not a point on secp256k1', () => {
+    expect(parses(withTags((t) => t, { data: '02' + OFF_CURVE_X }))).toBe(false)
+    expect(parses(withTags((t) => t, { data: '03' + OFF_CURVE_X }))).toBe(false)
+  })
+})
+
+/**
+ * A golden corpus taken from the #196 review fuzz: each credential and sale, with the verdict
+ * cashu-voucher 0.16.1 (Java) gave it. If the wallet ever accepts what Java refuses, or the other
+ * way round, this fails. The reasons may differ (Java refuses at parse, the wallet often later),
+ * so only accept/refuse is compared, plus the wallet's own reason as a change detector.
+ */
+describe('parity with cashu-voucher 0.16.1 on the review corpus', () => {
+  interface ParityCase {
+    id: string
+    java: string
+    wallet: string
+    issuerId: string
+    credential: string
+    trusted: string[]
+    saleTotal: number
+    faceDecimals: number
+    unit: string
+    nonce: string
+    sig: string
+    couponFace: number
+    expiry: 'skip' | number
+  }
+  const cases = parityCorpus as ParityCase[]
+
+  // The corpus is the size we committed, so a truncated file cannot pass silently.
+  it('holds every committed case', () => {
+    expect(cases.length).toBe(438)
+    expect(cases.filter((c) => c.java === 'VALID').length).toBe(131)
+  })
+
+  // Each case gets the same accept/refuse verdict as Java, and the wallet's reason is unchanged.
+  it.each(cases.map((c) => [c.id, c] as const))('%s', (_id, c) => {
+    const v = verifyTerminalWarrant({
+      issuerId: c.issuerId,
+      credential: c.credential,
+      trustedServiceKeys: c.trusted,
+      saleTotalMinor: c.saleTotal,
+      faceDecimals: c.faceDecimals,
+      unit: c.unit,
+      saleNonce: c.nonce,
+      signatureHex: c.sig,
+      couponFaceMinor: c.couponFace,
+      expiryCheck: c.expiry === 'skip' ? 'skip-offline' : { at: c.expiry },
+    })
+    const got = v.valid ? 'VALID' : v.refusal
+    expect(got === 'VALID', `java said ${c.java}`).toBe(c.java === 'VALID')
+    expect(got).toBe(c.wallet)
   })
 })
 
