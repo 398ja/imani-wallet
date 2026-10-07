@@ -1,6 +1,6 @@
 /**
- * #160 phases 2 and 3, three real browsers: an owner adds a terminal, a fresh device receives
- * it, and the device opens its till and takes a payment.
+ * #160 phases 2 to 4, three real browsers: an owner adds a terminal, a fresh device receives it,
+ * the device opens its till and takes a payment, and the owner's revocation stops it.
  *
  * Context A registers a stall and adds a terminal from Settings → Terminals. Context B is a
  * fresh browser with nothing in storage: it opens /terminal/setup, shows its code, receives the
@@ -10,6 +10,9 @@
  * Phase 3: B reloads, unlocks with its passphrase (no NAP session) and lands on the till naming
  * the stall. A redeem-only B has no Sell route. A customer C pays B's Redeem request, and B shows
  * Paid, learned from gateway-core because the coupon went to the stall.
+ *
+ * Phase 4 (`E2E_PHASE=4`, the default): A revokes B, B reloads and is refused at unlock, B can
+ * still take itself out of service, and A's row reads revoked.
  *
  * Needs a stack whose gateway-customer mints the stall co-key (imani-gateway-customer#187).
  *
@@ -24,7 +27,7 @@ import { registerCustomer, registerMerchant, TEST_PASSPHRASE, TEST_STALL_NAME } 
 
 const BASE = (process.env.E2E_BASE ?? 'http://localhost:5177').replace(/\/+$/, '')
 const BUNDLE_DIR = process.env.E2E_BUNDLE_DIR
-const PHASE = Number(process.env.E2E_PHASE ?? '3')
+const PHASE = Number(process.env.E2E_PHASE ?? '4')
 const TILL_PASSPHRASE = 'counter-pass'
 /** A new stall's coupon:issue permission is cached this long by the gateway (#114). */
 const PERMISSION_CACHE_MS = 62_000
@@ -253,7 +256,111 @@ async function main() {
     check('B shows Paid, learned from gateway-core', bPaid, (await text(device)).slice(0, 200))
   }
 
+
+  if (PHASE < 4) return finish(browser, errors)
+
+  console.log('\nPhase 4: A revokes B, and B is refused at its next unlock')
+  await owner.goto(`${BASE}/settings/terminals`, { waitUntil: 'load', timeout: 60_000 })
+  await owner.getByRole('button', { name: 'Revoke' }).first().click({ timeout: 30_000 })
+  await owner.getByRole('button', { name: /^Revoke/ }).last().click()
+  const revoked = await owner
+    .waitForFunction(() => /Revoked/.test(document.body.innerText), undefined, { timeout: 60_000 })
+    .then(
+      () => true,
+      () => false,
+    )
+  check("A's row shows revoked", revoked, (await text(owner)).slice(0, 300))
+
+  await device.reload({ waitUntil: 'load' })
+  const refused = await unlockTill(device)
+  check('B is refused: no longer in service', /no longer in service/.test(refused), refused.slice(0, 200))
+  check('B offers no Redeem once refused', !/\bRedeem\b/.test(refused))
+
+  console.log('\nPhase 4: B can still take itself out of service')
+  await device.getByRole('button', { name: 'Take this terminal out of service' }).click()
+  await device.getByRole('button', { name: 'Take out of service' }).click()
+  const wiped = await device
+    .waitForFunction(() => localStorage.getItem('imani-wallet:terminal') === null, undefined, { timeout: 30_000 })
+    .then(
+      () => true,
+      () => false,
+    )
+  check('B erased its terminal record', wiped)
+
+  console.log('\nPhase 4: a device that hands itself back shows revoked on the owner\'s list')
+  // A second device, set up and then taken out of service FROM THE DEVICE while still live. The
+  // credential is spent by the device's own key, and A's list learns it from the mint.
+  const second = await (await context(browser)).newPage()
+  second.on('pageerror', (e) => errors.push(`B2: ${e.message}`))
+  const secondReady = await setUpDevice(owner, second, 'Door')
+  check('a second device B2 is set up', secondReady)
+  if (secondReady) {
+    await unlockTill(second)
+    await second.getByRole('link', { name: /Settings/ }).click()
+    await second.getByRole('link', { name: 'Security' }).click()
+    await second.getByRole('button', { name: 'Take this terminal out of service' }).click()
+    await second.getByRole('button', { name: 'Take out of service' }).click()
+    const handedBack = await second
+      .waitForFunction(() => localStorage.getItem('imani-wallet:terminal') === null, undefined, { timeout: 60_000 })
+      .then(
+        () => true,
+        () => false,
+      )
+    check('B2 handed its authority back and erased itself', handedBack, (await text(second)).slice(0, 200))
+    await owner.goto(`${BASE}/settings/terminals`, { waitUntil: 'load', timeout: 60_000 })
+    // Read from A's own roster record, not the screen text, where B's revoked row sits nearby.
+    const doorRevoked = await owner
+      .waitForFunction(
+        () => {
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i)!
+            if (!key.startsWith('imani-wallet:terminals:')) continue
+            const rows = JSON.parse(localStorage.getItem(key) ?? '[]') as Array<{ name?: string; revokedAt?: number }>
+            if (rows.some((r) => r.name === 'Door' && typeof r.revokedAt === 'number')) return true
+          }
+          return false
+        },
+        undefined,
+        { timeout: 60_000 },
+      )
+      .then(
+        () => true,
+        () => false,
+      )
+    check("A's row for B2 reads revoked, learned from the mint", doorRevoked, (await text(owner)).slice(0, 400))
+  }
+
   return finish(browser, errors)
+}
+
+/** A adds a redeem-only terminal named `name`, and `device` (a fresh browser) sets itself up. */
+async function setUpDevice(owner: Page, device: Page, name: string): Promise<boolean> {
+  await device.goto(`${BASE}/terminal/setup`, { waitUntil: 'load' })
+  const code = device.getByTestId('terminal-code')
+  if (!(await code.waitFor({ timeout: 30_000 }).then(() => true, () => false))) return false
+  const key = (await code.innerText()).trim()
+  await owner.goto(`${BASE}/settings/terminals/add`, { waitUntil: 'load', timeout: 60_000 })
+  await owner.getByRole('button', { name: 'Add terminal' }).waitFor({ timeout: 30_000 })
+  await owner.getByLabel('Name').fill(name)
+  await owner.getByRole('button', { name: /Redemption only/ }).click()
+  await owner.getByLabel("Or enter the device's key").fill(key)
+  await owner.getByRole('button', { name: 'Continue' }).click()
+  await owner.getByRole('button', { name: 'Add terminal' }).click()
+  const setup = owner.getByTestId('setup-code')
+  if (!(await setup.waitFor({ timeout: 90_000 }).then(() => true, () => false))) return false
+  await device.getByLabel('Or enter the setup code').fill((await setup.innerText()).trim())
+  await device.getByRole('button', { name: 'Continue' }).click()
+  await device.getByRole('button', { name: 'They match' }).click({ timeout: 60_000 })
+  await device.getByLabel('Passphrase', { exact: true }).fill(TILL_PASSPHRASE)
+  await device.getByLabel('Repeat passphrase').fill(TILL_PASSPHRASE)
+  await device.getByRole('button', { name: 'Finish setup' }).click()
+  return device
+    .getByText('This terminal is set up')
+    .waitFor({ timeout: 30_000 })
+    .then(
+      () => true,
+      () => false,
+    )
 }
 
 /** The owner sells `amount` to a customer, through the real Sell screen. */
@@ -267,13 +374,24 @@ async function ownerSells(owner: Page, customerPubkey: string, amount: string): 
     await owner.goto(`${BASE}/sell`, { waitUntil: 'load' })
   }
   const recipient = owner.locator('input[placeholder="name"]')
-  if (!(await recipient.waitFor({ timeout: 30_000 }).then(() => true, () => false))) {
-    // A cold staging relay can leave the merchant record unread on the first visit; one reload.
-    await owner.screenshot({ path: 'e2e/.terminalSetup-sell.png' }).catch(() => {})
-    console.log(`  (sell screen not ready: ${(await text(owner)).slice(0, 160)}; retrying)`)
+  // A cold staging relay can leave the merchant record unread on a visit, and the new stall's
+  // coupon:issue can lag the gateway's permission cache: reload a few times before giving up.
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (await recipient.waitFor({ timeout: 30_000 }).then(() => true, () => false)) break
+    console.log(`  (sell screen not ready: ${(await text(owner)).slice(0, 160)}; logging in again)`)
+    // A new stall's session carries the permissions it had at login, before coupon:issue
+    // landed (#114). A fresh login picks it up, as probe-concurrent-redeem's relogin does.
+    await owner.context().clearCookies()
+    await owner.goto(`${BASE}/`, { waitUntil: 'load' })
+    const pass = owner.locator('input[placeholder="Passphrase"]')
+    if (await pass.waitFor({ timeout: 30_000 }).then(() => true, () => false)) {
+      await pass.fill(TEST_PASSPHRASE)
+      await owner.getByRole('button', { name: /unlock/i }).first().click()
+      await owner.waitForTimeout(6_000)
+    }
     await owner.goto(`${BASE}/sell`, { waitUntil: 'load' })
   }
-  await recipient.fill(customerPubkey, { timeout: 60_000 })
+  await recipient.fill(customerPubkey, { timeout: 30_000 })
   await owner.getByRole('button', { name: /^Continue$/ }).click()
   await owner.locator('input[placeholder="0.00"]').waitFor({ timeout: 30_000 })
   await owner.locator('input[placeholder="0.00"]').fill(amount)
