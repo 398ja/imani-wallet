@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Terminal e2e: an owner surface may refuse a till at the edge (401) or the portal (403).**
+  imani-deploy#139 lets a till through the edge only for Sell and cashback issue. Dashboard,
+  campaigns, policies and SSE still need a NAP session there and answer 401 "No session cookie"
+  before the portal sees them. The phase 5 probe accepted only the portal's 403, so it would have
+  failed the redeploy for the stricter answer. It now accepts either refusal, and the edge's only
+  when the body is the edge's own. Sell, replay 409 and revoked 403 are unchanged.
+
 ## [0.15.0] - 2026-10-07
 
 ### Fixed
