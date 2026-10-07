@@ -12,12 +12,10 @@ import { canIssueNow, sessionState, type TerminalSession } from './terminalSessi
 import { attributionFor } from './terminalAttribution'
 import { currencyDecimals } from './format'
 import {
-  TERMINAL_SALE_UNSUPPORTED,
   UnwarrantedSaleError,
   assertSaleWarranted,
   buildIssuanceWarrant,
   holdsWarrantCredential,
-  mayWarrantSale,
 } from './warrantSigner'
 import { parseIssuanceWarrant } from './issuanceWarrant'
 import type { AttestedSale } from './cashAttestation'
@@ -691,13 +689,12 @@ export async function issueAndDeliver(
 
   /**
    * Whether this actor can sign a warrant the customer's wallet accepts (#159, lifted for
-   * terminals in #160 phase 5). A terminal signs the `terminal` form, and only in a FULL
-   * session, which `canIssueNow` above has already required; asked again here so the one
-   * question the Sell screen asks is the one enforced before anything is minted.
+   * terminals in #160 phase 5). A terminal signs the `terminal` form, only in a FULL session,
+   * and `mayWarrantSale` is exactly `canIssueNow` for a terminal (and true for the owner), so
+   * the check above already is the Sell screen's question; asking it twice was dead code (#196
+   * review). What remains is the one thing `canIssueNow` cannot see: that the till still holds
+   * its credential right now.
    */
-  if (!mayWarrantSale(params.actor, params.session ?? null)) {
-    throw new UnwarrantedSaleError(TERMINAL_SALE_UNSUPPORTED)
-  }
   if (!holdsWarrantCredential(params.actor)) {
     throw new UnwarrantedSaleError(
       'This terminal is locked or has lost its authority. Lock it and open it again, then ' +

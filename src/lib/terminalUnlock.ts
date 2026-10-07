@@ -112,6 +112,14 @@ export async function unlockTerminal(
   }
 
   // Within the twelve hours and for the same key, the idle lock's re-unlock needs no mint call.
+  //
+  // So a till revoked MID-DAY re-unlocks here without learning of it: the mint is asked only at
+  // the session's first unlock. That is accepted, and bounded elsewhere. The revocation is a
+  // NUT-07 spend of the credential, and the portal checks it at every issuance, so a revoked
+  // till's Sell is refused there, whatever this device believes. What a revoked till can still
+  // do until its session ends is redeem, which `canRedeemNow` already allows on an authority
+  // nobody could check, because a wrong redemption is recoverable. The twelve-hour session is
+  // the outer bound.
   if (held && held.devicePubkey === devicePubkey && sessionState(held.session, { now }).live) {
     install(privkeyHex)
     setRequestCredential(heldCredentialFrom(stored.token))
