@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -63,10 +63,14 @@ const api = (over = {}) => ({
   ...over,
 })
 
+// The build names the key that signs terminal credentials, as every deploy must now: a terminal
+// credential whose signer is not on VITE_VOUCHER_ISSUER_PUBKEYS is refused (#160 review, IW-15).
 beforeEach(() => {
+  vi.stubEnv('VITE_VOUCHER_ISSUER_PUBKEYS', parseVoucherToken(TOKEN).voucher.issuerPublicKey)
   localStorage.clear()
   erased.length = 0
 })
+afterEach(() => vi.unstubAllEnvs())
 
 describe('the order', () => {
   it('revokes before erasing anything', async () => {

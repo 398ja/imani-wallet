@@ -81,6 +81,9 @@ export function credentialRequestBody(credential: PreparedCredential): Record<st
         role: credential.role,
         lockKey: credential.lockedTo,
         name: credential.name,
+        // Signed, so the device reads the owner's idle lock from the token rather than from
+        // its own editable record (#160 review, LOW).
+        ...(credential.idleLockMinutes !== undefined ? { idleLockMinutes: credential.idleLockMinutes } : {}),
       }),
     ),
   }

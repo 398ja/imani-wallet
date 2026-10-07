@@ -7,7 +7,7 @@ import { Button, Screen, BackLink, PageHeader, Alert, Panel, Input } from '../co
 import { RefusedCouponsNote } from '../components/ui/RefusedCouponsNote'
 import { currencyDecimals, formatFace, parseAmountToMinor, formatDate } from '../lib/format'
 import type { MerchantProfile } from '../lib/merchant'
-import type { Actor } from '../lib/actor'
+import { issuingStall, type Actor } from '../lib/actor'
 import {
   createRequest,
   expireRequests,
@@ -18,6 +18,10 @@ import {
   type VoucherPaymentRequest,
 } from '../lib/vreq'
 import { onWalletChanged } from '../lib/wallet'
+import { paidForStall, type FulfilmentCheck, type RequestRegistration } from '../lib/terminalTill'
+
+/** How often a terminal asks gateway-core whether its request was paid. */
+export const FULFILMENT_POLL_MS = 3_000
 
 /**
  * Redeem: take a customer's coupons as payment.
@@ -37,6 +41,8 @@ export function RedeemPage({
   pubkey,
   merchant,
   actor,
+  fulfilment,
+  register,
 }: {
   pubkey: string
   merchant: MerchantProfile
@@ -49,6 +55,19 @@ export function RedeemPage({
    * nobody can decrypt it.
    */
   actor?: Actor
+  /**
+   * How a terminal learns it was paid (#160 phase 3, G12). The request names the STALL, so the
+   * customer's coupon goes to the stall's key and a terminal's own wallet never sees it. On a
+   * terminal this asks gateway-core instead; absent on the owner's device, which watches its own
+   * wallet as before.
+   */
+  fulfilment?: FulfilmentCheck
+  /**
+   * Registers the request's terms with gateway-core before the code is shown (#160 review,
+   * BLOCKER). Given with `fulfilment` on a terminal: gateway-core measures payments against these
+   * terms, first registration wins, so they must be in before a customer can read the id.
+   */
+  register?: RequestRegistration
 }) {
   const navigate = useNavigate()
   const [request, setRequest] = useState<VoucherPaymentRequest | null>(null)
@@ -63,11 +82,14 @@ export function RedeemPage({
           merchant={merchant}
           issuerPubkey={pubkey}
           actor={actor}
+          register={register}
           onCreated={setRequest}
         />
       ) : (
         <RequestDisplay
           pubkey={pubkey}
+          stallPubkey={actor?.stallPubkey ?? pubkey}
+          fulfilment={fulfilment}
           request={request}
           onChange={setRequest}
           onNew={() => setRequest(null)}
@@ -82,16 +104,19 @@ function RequestForm({
   merchant,
   issuerPubkey,
   actor,
+  register,
   onCreated,
 }: {
   merchant: MerchantProfile
   issuerPubkey: string
   actor?: Actor
+  register?: RequestRegistration
   onCreated: (request: VoucherPaymentRequest) => void
 }) {
   const [amount, setAmount] = useState('')
   const [memo, setMemo] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
 
   // ISO decimals, which is what the sats backing needs — see currencyDecimals.
   // The gateway labels every coupon 2-decimal regardless; that mismatch is its
@@ -99,9 +124,10 @@ function RequestForm({
   const decimals = currencyDecimals(merchant.issuanceCurrency)
   const minor = parseAmountToMinor(amount, decimals)
 
-  const submit = () => {
+  const submit = async () => {
     if (minor === null) return
     setError(null)
+    setBusy(true)
     try {
       const created = createRequest({
         amount: minor,
@@ -113,6 +139,22 @@ function RequestForm({
         actor: actor ?? { kind: 'owner', stallPubkey: issuerPubkey },
         description: memo,
       })
+      // A terminal registers the terms BEFORE the code is on screen (#160 review, BLOCKER):
+      // gateway-core keeps the first registration, and once the id is visible a customer could
+      // register their own. A request it will not hold could never be confirmed, so it is not shown.
+      if (register) {
+        const held = await register({
+          paymentId: created.paymentId,
+          // The stall the request names: the terminal's stall, never the device.
+          issuerId: actor ? issuingStall(actor) : issuerPubkey,
+          amount: created.amount,
+          unit: created.unit,
+        })
+        if (!held) {
+          setError('This payment request could not be set up. Check the connection and try again.')
+          return
+        }
+      }
       // Persisted before it is shown: a request the merchant is looking at but
       // that was never stored cannot be matched against an incoming payment
       // after a reload.
@@ -121,6 +163,8 @@ function RequestForm({
       onCreated(created)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -140,7 +184,7 @@ function RequestForm({
         value={memo}
         onChange={(e) => setMemo(e.target.value)}
       />
-      <Button size="lg" className="w-full" disabled={minor === null} onClick={submit}>
+      <Button size="lg" className="w-full" disabled={minor === null || busy} onClick={() => void submit()}>
         Show payment code
       </Button>
       {error && <Alert>{error}</Alert>}
@@ -169,12 +213,16 @@ const STATUS_LABEL: Record<VoucherPaymentRequest['status'], string> = {
 
 function RequestDisplay({
   pubkey,
+  stallPubkey,
+  fulfilment,
   request,
   onChange,
   onNew,
   onDone,
 }: {
   pubkey: string
+  stallPubkey: string
+  fulfilment?: FulfilmentCheck
   request: VoucherPaymentRequest
   onChange: (request: VoucherPaymentRequest) => void
   onNew: () => void
@@ -195,8 +243,37 @@ function RequestDisplay({
     QRCode.toDataURL(request.clickableUri, { width: 320, margin: 1 }).then(setQr, () => setQr(null))
   }, [request.clickableUri])
 
+  // A terminal: ask gateway-core, on a timer, until the request is paid or expires (spec 2.5).
+  // Its own wallet never receives the coupon, so there is nothing local to watch.
   useEffect(() => {
-    if (request.status !== 'pending') return
+    if (!fulfilment || request.status !== 'pending') return
+    let live = true
+    const check = async () => {
+      if (request.expiresAt * 1000 <= Date.now()) {
+        const expired = { ...request, status: 'expired' as const }
+        saveRequests(pubkey, loadRequests(pubkey).map((r) => (r.paymentId === request.paymentId ? expired : r)))
+        if (live) onChange(expired)
+        return
+      }
+      const answer = await fulfilment(request.paymentId)
+      // Checked against THIS request: the money must have reached the stall, in the stall's own
+      // coupons, in this unit, and at least this amount (#160 review, BLOCKER).
+      if (!live || !paidForStall(answer, stallPubkey, request)) return
+      // Recorded so the request list agrees with the screen after a reload.
+      const paid = { ...request, status: 'fulfilled' as const }
+      saveRequests(pubkey, loadRequests(pubkey).map((r) => (r.paymentId === request.paymentId ? paid : r)))
+      onChange(paid)
+    }
+    void check()
+    const timer = setInterval(() => void check(), FULFILMENT_POLL_MS)
+    return () => {
+      live = false
+      clearInterval(timer)
+    }
+  }, [fulfilment, request, pubkey, stallPubkey, onChange])
+
+  useEffect(() => {
+    if (fulfilment || request.status !== 'pending') return
 
     let live = true
 
@@ -239,7 +316,7 @@ function RequestDisplay({
       unsubscribe()
       clearInterval(timer)
     }
-  }, [request, pubkey, onChange])
+  }, [fulfilment, request, pubkey, onChange])
 
   const copy = async () => {
     try {
