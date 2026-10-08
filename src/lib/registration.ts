@@ -256,7 +256,9 @@ export async function register(
       const signed = await signer.signEvent(buildMerchantEvent(merchantRecord))
       merchantRecord.eventAt = signed.created_at
       saveMerchant(merchantRecord)
-      await publish(signed)
+      const { ok, errors } = await publish(signed)
+      // Not fatal (see below), but not silent either (#203).
+      if (ok === 0) console.warn('[registration] no relay accepted the merchant record', errors)
     } catch {
       // Same contract as the profile above: reported by absence, never thrown.
       // The handle is claimed and the key is saved; this is not a failed signup.
