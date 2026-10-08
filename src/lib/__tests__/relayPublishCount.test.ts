@@ -13,6 +13,11 @@ import WebSocket from 'ws'
 import { publish } from '../relay'
 
 setWebSocketImplementation(WebSocket)
+// relay.ts imports SimplePool from 'nostr-tools', a different module instance
+// from 'nostr-tools/pool' under vitest, so the setter above does not reach it
+// (the two tests above passed regardless, since a refused port fails either
+// way). A global WebSocket does.
+;(globalThis as { WebSocket?: unknown }).WebSocket ??= WebSocket
 
 /**
  * `publish` must not count a relay it never reached as one that accepted the
@@ -58,5 +63,35 @@ describe('publish', () => {
 
     expect(result).toMatchObject({ ok: 0, total: 2 })
     expect(result.errors).toHaveLength(2)
+  })
+})
+
+/**
+ * A relay that answers `OK false` has refused the event, and its reason must
+ * reach the caller (#203). strfry says `invalid: event too large: 66031` for a
+ * coupon backup over `maxEventSize`, and that refusal went unseen because the
+ * caller ignored the result. Over a real socket, against a relay that refuses
+ * everything, so a nostr-tools change that resolved `OK false` as a string
+ * would fail here rather than in production.
+ */
+describe('publish against a relay that refuses', () => {
+  it('counts an OK false as a failure and carries the relay reason', async () => {
+    const { WebSocketServer } = await import('ws')
+    const server = new WebSocketServer({ port: 0, host: '127.0.0.1' })
+    await new Promise<void>((resolve) => server.on('listening', () => resolve()))
+    server.on('connection', (socket) =>
+      socket.on('message', (raw) => {
+        const [type, ev] = JSON.parse(String(raw)) as [string, { id: string }]
+        if (type === 'EVENT') socket.send(JSON.stringify(['OK', ev.id, false, 'invalid: event too large: 66031']))
+      }),
+    )
+    try {
+      const { port } = server.address() as { port: number }
+      const result = await publish(event(), [`ws://127.0.0.1:${port}`])
+      expect(result).toMatchObject({ ok: 0, total: 1 })
+      expect(result.errors).toEqual(['invalid: event too large: 66031'])
+    } finally {
+      server.close()
+    }
   })
 })

@@ -285,7 +285,12 @@ export async function publishTx(row: TransactionRow): Promise<void> {
   try {
     const template = buildTxEvent(toTransaction(row))
     if (!template) return
-    await publish(await getSigner().signEvent(template))
+    const result = await publish(await getSigner().signEvent(template))
+    // `publish` never throws; a relay's `OK false` comes back as ok 0 with its
+    // reason. Ignoring the result is how #203's coupon backups failed in silence.
+    if (result.ok === 0) {
+      throw new Error(`relay refused the record: ${result.errors.join('; ') || 'no reason given'}`)
+    }
   } catch (error) {
     console.error('[txRecords] transaction not backed up to the relay', error)
   }
