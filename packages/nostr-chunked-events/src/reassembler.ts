@@ -3,11 +3,13 @@
  */
 
 import type { Event } from 'nostr-tools';
-import { TAGS } from './constants';
+import { config, HASH_ALG_SHA256, TAGS } from './constants';
+import { sha256Hex } from './hash';
 import type {
   AncestrySnapshotLike,
   ChunkData,
   ChunkEventData,
+  ChunkValidationOptions,
   SnapshotParentReference,
   SnapshotCandidate,
   SnapshotSelectionOptions,
@@ -18,10 +20,15 @@ import type {
   ValidationResult,
 } from './types';
 
+/**
+ * Strict non-negative integer parse. Rejects "1abc", "1.5", " 2", "-1" and
+ * values beyond Number.MAX_SAFE_INTEGER, which parseInt() would accept or
+ * silently truncate.
+ */
 function parseInteger(value: string | undefined): number | null {
-  if (!value) return null;
-  const parsed = parseInt(value, 10);
-  return Number.isFinite(parsed) ? parsed : null;
+  if (!value || !/^\d+$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
 function getTagValue(event: Event, tagName: string): string | undefined {
@@ -39,21 +46,12 @@ function normalizeHashAlgorithm(hashAlg: string | undefined): string | null {
   return hashAlg.toLowerCase().replace(/-/g, '');
 }
 
-async function defaultHashContent(algorithm: string, content: string): Promise<string> {
+function defaultHashContent(algorithm: string, content: string): string {
   const normalized = normalizeHashAlgorithm(algorithm);
-  if (normalized !== 'sha256') {
+  if (normalized !== HASH_ALG_SHA256) {
     throw new Error(`Unsupported hash algorithm: ${algorithm}`);
   }
-
-  if (typeof globalThis.crypto?.subtle === 'undefined') {
-    throw new Error('SubtleCrypto is not available');
-  }
-
-  const bytes = new TextEncoder().encode(content);
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('');
+  return sha256Hex(content);
 }
 
 function dedupeChunksByIndex(chunks: ChunkEventData[]): ChunkEventData[] {
@@ -189,7 +187,7 @@ export function parseChunkEvent(event: Event): ChunkEventData | null {
   const index = parseInteger(chunkTag[1]);
   const total = parseInteger(chunkTag[2]);
 
-  if (index === null || total === null || index < 0 || total <= 0) {
+  if (index === null || total === null || total <= 0) {
     return null;
   }
 
@@ -278,12 +276,14 @@ export function sortChunks<T extends ChunkData>(chunks: T[]): T[] {
  * @param chunks - Array of chunks to validate
  * @returns Validation result with details about any issues
  */
-export function validateChunks(chunks: ChunkData[]): ValidationResult {
+export function validateChunks(chunks: ChunkData[], options: ChunkValidationOptions = {}): ValidationResult {
   if (chunks.length === 0) {
     return {
       valid: false,
       missing: [],
       duplicates: [],
+      outOfRange: [],
+      inconsistentTotal: false,
     };
   }
 
@@ -294,6 +294,26 @@ export function validateChunks(chunks: ChunkData[]): ValidationResult {
       valid: false,
       missing: [],
       duplicates: [],
+      outOfRange: [],
+      inconsistentTotal: true,
+    };
+  }
+
+  const maxChunks = options.maxChunks ?? config.maxChunks;
+  const outOfRange = Array.from(new Set(
+    chunks
+      .map((chunk) => chunk.index)
+      .filter((index) => !Number.isSafeInteger(index) || index < 0 || index >= expectedTotal),
+  )).sort((a, b) => a - b);
+
+  if (!Number.isSafeInteger(expectedTotal) || expectedTotal <= 0 || expectedTotal > maxChunks) {
+    // Refuse before allocating per-index bookkeeping for a hostile total.
+    return {
+      valid: false,
+      missing: [],
+      duplicates: [],
+      outOfRange,
+      inconsistentTotal: false,
     };
   }
 
@@ -316,9 +336,11 @@ export function validateChunks(chunks: ChunkData[]): ValidationResult {
   }
 
   return {
-    valid: missing.length === 0 && duplicates.length === 0,
+    valid: missing.length === 0 && duplicates.length === 0 && outOfRange.length === 0,
     missing,
     duplicates,
+    outOfRange,
+    inconsistentTotal: false,
   };
 }
 
@@ -405,13 +427,20 @@ export async function validateSnapshot(
   }
 
   const uniqueChunks = dedupeChunksByEventId(chunks);
-  const indexCounts = new Map<number, number>();
+  const byIndex = new Map<number, ChunkEventData[]>();
   for (const chunk of uniqueChunks) {
-    indexCounts.set(chunk.index, (indexCounts.get(chunk.index) ?? 0) + 1);
+    const list = byIndex.get(chunk.index);
+    if (list) {
+      list.push(chunk);
+    } else {
+      byIndex.set(chunk.index, [chunk]);
+    }
   }
 
-  for (const [index, count] of indexCounts.entries()) {
-    if (count > 1) {
+  for (const [index, list] of byIndex.entries()) {
+    const benign = options.allowIdenticalDuplicates === true
+      && list.every((chunk) => chunk.data === list[0].data);
+    if (list.length > 1 && !benign) {
       issues.push({
         code: 'duplicate_index',
         message: `Multiple chunk events found for index ${index}`,
@@ -422,7 +451,16 @@ export async function validateSnapshot(
 
   const dedupedChunks = dedupeChunksByIndex(uniqueChunks);
   const sortedChunks = sortChunks(dedupedChunks);
-  const chunkValidation = validateChunks(sortedChunks);
+  const maxChunks = options.maxChunks ?? config.maxChunks;
+  const chunkValidation = validateChunks(sortedChunks, { maxChunks });
+  const declaredTotal = sortedChunks[0]?.total ?? 0;
+
+  if (!chunkValidation.inconsistentTotal && declaredTotal > maxChunks) {
+    issues.push({
+      code: 'too_many_chunks',
+      message: `Snapshot declares ${declaredTotal} chunks, above maxChunks ${maxChunks}`,
+    });
+  }
 
   for (const missingIndex of chunkValidation.missing) {
     issues.push({
@@ -432,7 +470,15 @@ export async function validateSnapshot(
     });
   }
 
-  if (!chunkValidation.valid && chunkValidation.missing.length === 0) {
+  for (const index of chunkValidation.outOfRange ?? []) {
+    issues.push({
+      code: 'index_out_of_range',
+      message: `Chunk index ${index} is outside 0..${declaredTotal - 1}`,
+      chunkIndex: index,
+    });
+  }
+
+  if (chunkValidation.inconsistentTotal) {
     issues.push({
       code: 'inconsistent_total',
       message: 'Chunk totals are inconsistent across the candidate set',
@@ -572,7 +618,7 @@ export async function validateSnapshot(
 
     try {
       const actualPayloadHash = await hashFn(algorithm, reassembled);
-      if (actualPayloadHash !== expectedPayloadHash) {
+      if (actualPayloadHash.toLowerCase() !== expectedPayloadHash.toLowerCase()) {
         issues.push({
           code: 'payload_hash_mismatch',
           message: `Payload hash mismatch: expected ${expectedPayloadHash}, got ${actualPayloadHash}`,
@@ -711,20 +757,37 @@ export async function reassembleSnapshot(
  * @returns Reassembled content string
  * @throws Error if chunks are invalid or incomplete
  */
-export function reassembleChunks(chunks: ChunkData[]): string {
-  const validation = validateChunks(chunks);
+export function reassembleChunks(chunks: ChunkData[], options: ChunkValidationOptions = {}): string {
+  const validation = validateChunks(chunks, options);
   if (!validation.valid) {
-    if (validation.missing.length > 0) {
-      throw new Error(`Missing chunks: ${validation.missing.join(', ')}`);
-    }
-    if (validation.duplicates.length > 0) {
-      throw new Error(`Duplicate chunks: ${validation.duplicates.join(', ')}`);
-    }
-    throw new Error('Invalid chunks');
+    throw new Error(describeChunkValidationFailure(validation, options));
   }
 
   const sorted = sortChunks(chunks);
   return sorted.map((chunk) => chunk.data).join('');
+}
+
+/**
+ * Human-readable reason for a failed {@link validateChunks} result.
+ * Message prefixes ("Missing chunks: ", "Duplicate chunks: ") match v0.1.0.
+ */
+export function describeChunkValidationFailure(
+  validation: ValidationResult,
+  options: ChunkValidationOptions = {},
+): string {
+  if (validation.inconsistentTotal) {
+    return 'Inconsistent chunk totals';
+  }
+  if (validation.outOfRange && validation.outOfRange.length > 0) {
+    return `Chunk index out of range: ${validation.outOfRange.join(', ')}`;
+  }
+  if (validation.missing.length > 0) {
+    return `Missing chunks: ${validation.missing.join(', ')}`;
+  }
+  if (validation.duplicates.length > 0) {
+    return `Duplicate chunks: ${validation.duplicates.join(', ')}`;
+  }
+  return `Invalid chunks (total must be 1..${options.maxChunks ?? config.maxChunks}, see maxChunks)`;
 }
 
 /**

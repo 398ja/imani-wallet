@@ -1,4 +1,4 @@
-import type { Event, UnsignedEvent } from 'nostr-tools';
+import type { Event, Filter, UnsignedEvent } from 'nostr-tools';
 
 // ============================================================================
 // Core Types
@@ -83,6 +83,48 @@ export interface ChunkOptions {
 }
 
 /**
+ * Options for {@link createSnapshotChunks}
+ */
+export interface SnapshotChunkOptions {
+  /** Maximum UTF-8 bytes of payload per chunk (default: config.chunkSize). Must be >= 4. */
+  chunkSize?: number;
+  /**
+   * d-tag prefix. When set, each chunk gets `["d", "<prefix>-chunk-<i>"]`, for
+   * addressable kinds. Omit for regular kinds such as 7375.
+   */
+  dTagPrefix?: string;
+  /** Snapshot id (default: random UUID) */
+  snapshotId?: string;
+  /**
+   * Ancestry parents. `[]` marks a genesis snapshot, omit for no ancestry tags.
+   * At most two parents (a merge).
+   */
+  parents?: SnapshotParentReference[];
+}
+
+/**
+ * One chunk of a snapshot, with every tag it needs
+ */
+export interface SnapshotChunk extends ChunkData {
+  /** d-tag, if a dTagPrefix was given */
+  dTag?: string;
+  /** Tags to put on the event (merge in your own, e.g. NIP-60 tags) */
+  tags: string[][];
+}
+
+/**
+ * Result of {@link createSnapshotChunks}
+ */
+export interface SnapshotChunks {
+  snapshotId: string;
+  /** SHA-256 hex of the full UTF-8 payload */
+  payloadHash: string;
+  hashAlg: string;
+  totalChunks: number;
+  chunks: SnapshotChunk[];
+}
+
+/**
  * Result of chunk validation
  */
 export interface ValidationResult {
@@ -92,6 +134,21 @@ export interface ValidationResult {
   missing: number[];
   /** Indices with duplicate chunks */
   duplicates: number[];
+  /**
+   * Indices outside 0..total-1 (or chunk totals above maxChunks).
+   * Optional for compatibility with v0.1.0 result objects.
+   */
+  outOfRange?: number[];
+  /** Whether the chunks disagree on `total` */
+  inconsistentTotal?: boolean;
+}
+
+/**
+ * Options for {@link validateChunks}
+ */
+export interface ChunkValidationOptions {
+  /** Reject chunk sets whose total exceeds this (default: config.maxChunks) */
+  maxChunks?: number;
 }
 
 /**
@@ -110,6 +167,8 @@ export interface SnapshotValidationIssue {
     | 'missing_payload_hash'
     | 'unsupported_hash_alg'
     | 'missing_index'
+    | 'index_out_of_range'
+    | 'too_many_chunks'
     | 'payload_hash_mismatch';
   message: string;
   chunkIndex?: number;
@@ -132,8 +191,19 @@ export interface SnapshotValidationOptions {
   verifyPayloadHash?: boolean;
   /** Allow legacy chunk sets without strict metadata (default: true) */
   allowLegacy?: boolean;
-  /** Custom hashing function for payload verification */
-  hashFn?: (algorithm: string, content: string) => Promise<string>;
+  /**
+   * Custom hashing function for payload verification. The default is a pure-JS
+   * SHA-256 (@noble/hashes) that needs neither Buffer nor SubtleCrypto.
+   */
+  hashFn?: (algorithm: string, content: string) => Promise<string> | string;
+  /** Reject candidates whose total exceeds this (default: config.maxChunks) */
+  maxChunks?: number;
+  /**
+   * Accept several events for one index when their content is byte-identical
+   * (e.g. a retried publish of a regular-kind chunk). Default: false, any
+   * second event for an index is a `duplicate_index` issue.
+   */
+  allowIdenticalDuplicates?: boolean;
 }
 
 /**
@@ -258,6 +328,16 @@ export interface PublisherOptions {
 }
 
 /**
+ * Opt-in integrity metadata for published chunks
+ */
+export interface PublishSnapshotOptions {
+  /** Snapshot id (default: random UUID) */
+  snapshotId?: string;
+  /** Ancestry parents; `[]` marks genesis, omit for no ancestry tags */
+  parents?: SnapshotParentReference[];
+}
+
+/**
  * Options for a publish operation
  */
 export interface PublishOptions {
@@ -271,6 +351,32 @@ export interface PublishOptions {
   additionalTags?: string[][];
   /** Progress callback */
   onProgress?: (published: number, total: number) => void;
+  /**
+   * Content size (bytes) above which the payload is chunked, for this call
+   * (default: config.maxSingleEventSize = 350,000). For strfry (maxEventSize
+   * 65,536 for the whole event) use something well under 64KB.
+   */
+  maxSingleEventSize?: number;
+  /** Bytes per chunk for this call (default: config.chunkSize = 300,000) */
+  chunkSize?: number;
+  /**
+   * Tag every chunk with snapshot_id / payload_hash / hash_alg / total_chunks
+   * so readers can use strict snapshot selection. `true` uses defaults.
+   * Only applies when the payload is chunked. Default: off (v0.1.0 tags).
+   */
+  snapshot?: boolean | PublishSnapshotOptions;
+}
+
+/**
+ * Per-chunk publish outcome
+ */
+export interface ChunkPublishResult {
+  index: number;
+  eventId: string;
+  /** Relays that acknowledged with OK=true */
+  acceptedBy: string[];
+  /** Relays that rejected or timed out, with the reason */
+  rejectedBy: Array<{ relay: string; message?: string }>;
 }
 
 /**
@@ -293,6 +399,10 @@ export interface PublishResult {
   originalSize: number;
   /** Final size after compression (if applied) */
   finalSize: number;
+  /** Snapshot id, when `snapshot` publishing was enabled */
+  snapshotId?: string;
+  /** Per-event relay outcomes (one entry per published event) */
+  chunkResults?: ChunkPublishResult[];
   /** Error message if failed */
   error?: string;
 }
@@ -300,6 +410,13 @@ export interface PublishResult {
 // ============================================================================
 // Fetcher Types
 // ============================================================================
+
+/**
+ * Custom query function. Lets callers route reads through their own cache,
+ * backend or relay pool instead of the built-in RelayPool. Results are still
+ * filtered to the exact author and validated.
+ */
+export type QueryEventsFn = (filter: Filter) => Promise<Event[]>;
 
 /**
  * Options for the ChunkedFetcher constructor
@@ -312,11 +429,12 @@ export interface FetcherOptions {
   /** Query timeout in ms (default: 10000) */
   timeout?: number;
   /**
-   * Use backend API when available (default: true)
-   * When nostrApi is available, queries will use the backend API
-   * which handles chunk reassembly transparently via nostrdb.
+   * Replace relay queries with a custom function (e.g. a backend API or local
+   * cache). When set, `defaultRelays` is not required.
    */
-  useApi?: boolean;
+  queryEvents?: QueryEventsFn;
+  /** Maximum chunk count accepted from chunk-0 (default: config.maxChunks) */
+  maxChunks?: number;
 }
 
 /**
@@ -335,6 +453,15 @@ export interface FetchOptions {
   author?: string;
   /** Strict snapshot selection and validation options */
   snapshotSelection?: SnapshotSelectionOptions;
+  /** Maximum chunk count accepted for this call (default: FetcherOptions.maxChunks) */
+  maxChunks?: number;
+  /**
+   * Default (non-strict) mode only: when chunks carry `payload_hash`, check it
+   * against the reassembled content (default: true). Set false if the writer
+   * hashed something other than the concatenated event contents, e.g. the
+   * plaintext before per-chunk encryption.
+   */
+  verifyPayloadHash?: boolean;
 }
 
 /**
