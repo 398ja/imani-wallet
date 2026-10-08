@@ -1,4 +1,6 @@
+import { readOwnerAttestation, type OwnerAttestation } from './ownerAttestation'
 import { roleOf, type TerminalRole } from './terminalRole'
+import { parseVoucherToken } from './voucherToken'
 
 /**
  * The stall's record of the terminals it has out, and withdrawing one.
@@ -87,6 +89,13 @@ export interface TerminalRecord {
    */
   mintKey?: string
   /**
+   * The owner's attestation the mint request carries (#160 decision 5, spec 4.6.2). Written on
+   * the `minting` row with `mintKey`, so `resumeMinting` re-sends the identical body: signing
+   * again would pick a fresh nonce, and the gateway's idempotent replay would refuse it as a
+   * different request. Kept afterwards, as the roster's record of what the owner signed.
+   */
+  attestation?: OwnerAttestation
+  /**
    * Why a minted credential was refused, on a `minting` row whose cancelling
    * spend has not landed yet. Kept so the next open retries the spend.
    */
@@ -157,6 +166,9 @@ function read(stallPubkey: string): TerminalRecord[] {
           revokedAt: typeof row.revokedAt === 'number' ? row.revokedAt : undefined,
           status: statusOf(row.status),
           mintKey: typeof row.mintKey === 'string' ? row.mintKey : undefined,
+          attestation: row.attestation && typeof row.attestation === 'object'
+            ? (readOwnerAttestation({ owner_attestation: row.attestation }) ?? undefined)
+            : undefined,
           defect: typeof row.defect === 'string' ? row.defect : undefined,
           delivered: typeof row.delivered === 'boolean' ? row.delivered : undefined,
           gatewayState: gatewayStateOf(row.gatewayState),
@@ -280,6 +292,35 @@ export function expiredWaiting(stallPubkey: string, now: number = Date.now()): T
 /** Whether a row holds what revoking needs. Rows set up by hand before #160 do not. */
 export function isRevocable(record: TerminalRecord): boolean {
   return typeof record.token === 'string' && record.token.length > 0
+}
+
+/**
+ * A selling till whose credential carries no owner attestation (#160 decision 5, spec 4.6.5).
+ *
+ * Read from the token the row holds, not from the row's `attestation` field, so rows minted
+ * before 5b-5 (which have the token and nothing else) are found too. It still redeems; it cannot
+ * sell, and the roster offers the re-enrol steps. A redeem-only till needs no attestation.
+ */
+export function needsRenewalToSell(record: TerminalRecord): boolean {
+  if (record.revokedAt !== undefined || record.status === 'minting' || !record.token) return false
+  if (record.role !== 'issue-and-redeem') return false
+  return !tokenCarriesAttestation(record.token)
+}
+
+/** What the roster tells the owner about such a row: the four re-enrol steps (spec 4.6.5). */
+export const RENEW_TO_KEEP_SELLING =
+  'Renew to keep selling. This terminal was set up before you signed each terminal, so it can ' +
+  'redeem but not sell. Until one-tap Renew arrives: 1. Revoke it here. 2. The till then says ' +
+  'it is no longer in service. 3. On the device, take it out of service (Settings → Security). ' +
+  '4. Add it again here, with a new passphrase and setup code.'
+
+function tokenCarriesAttestation(token: string): boolean {
+  try {
+    const metadata = JSON.parse(String(parseVoucherToken(token).voucher.merchantMetadata)) as Record<string, unknown>
+    return readOwnerAttestation(metadata) !== null
+  } catch {
+    return false
+  }
 }
 
 /** Thrown rather than silently dropping a live credential's revocation handle. */

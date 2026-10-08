@@ -6,7 +6,10 @@ import { schnorr } from '@noble/curves/secp256k1.js'
 import { bytesToHex } from '@noble/hashes/utils'
 
 import {
+  ATTESTATION_EXPIRY_SLACK_SECONDS,
   CREDENTIAL_LIFETIME_DAYS,
+  attestEnrolment,
+  requestedMetadata,
   CredentialMintError,
   checkCode,
   credentialDefect,
@@ -238,5 +241,125 @@ describe('the check code', () => {
   // Shown as "482 913" so it can be read aloud across a counter.
   it('is shown in two groups of three', () => {
     expect(formatCheckCode('482913')).toBe('482 913')
+  })
+})
+
+describe('the owner attests the till at enrolment (#160 decision 5)', () => {
+  const signer = { pubkey: STALL, withPrivkey: <T,>(f: (k: Uint8Array) => T) => f(STALL_KEY) }
+  const selling: PreparedCredential = {
+    ...prepared,
+    role: TERMINAL_ROLES.ISSUE_AND_REDEEM,
+    permissions: grantFor(TERMINAL_ROLES.ISSUE_AND_REDEEM, STALL),
+    idleLockMinutes: 10,
+  }
+  const NOW_MS = 1_800_000_000_000
+  const attested = (): PreparedCredential => ({ ...selling, attestation: attestEnrolment(selling, signer, NOW_MS) })
+  /** What gateway-customer 5b-2 mints for the request: the metadata it was sent, expiry T. */
+  const minted = (c: PreparedCredential, over: { metadata?: Record<string, unknown>; expiresAt?: number } = {}) =>
+    buildLockedCredentialToken({
+      stallKey: STALL_KEY,
+      devicePubkey: DEVICE,
+      role: c.role,
+      metadata: JSON.stringify(over.metadata ?? requestedMetadata(c)),
+      expiresAt: over.expiresAt ?? Number(c.attestation!.expires_at),
+    })
+
+  // The stall key signs, over this till's stall, lock and role, until a year from now (plus the
+  // slack that lets an older gateway's own clock land inside T).
+  it('signs with the stall key, for a year plus slack', () => {
+    const a = attestEnrolment(selling, signer, NOW_MS)
+    expect(a.v).toBe('1')
+    expect(Number(a.expires_at)).toBe(NOW_MS / 1000 + 365 * 86_400 + ATTESTATION_EXPIRY_SLACK_SECONDS)
+    expect(a.nonce).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  // Any other key would attest a till no verifier accepts, so it is refused before the mint.
+  it('refuses to attest with a key that is not the stall', () => {
+    const stranger = schnorr.utils.randomSecretKey()
+    const other = { pubkey: bytesToHex(schnorr.getPublicKey(stranger)), withPrivkey: <T,>(f: (k: Uint8Array) => T) => f(stranger) }
+    expect(() => attestEnrolment(selling, other, NOW_MS)).toThrow(/stall’s own key/)
+  })
+
+  // The request carries the attestation inside its metadata and T in the header gateway-customer
+  // compares, beside the Idempotency-Key.
+  it('sends the attestation in the metadata and T in X-Idempotency-Expires-At', async () => {
+    const c = attested()
+    const t = transport(minted(c))
+    await mintTerminalCredential(c, async () => true, t, { idempotencyKey: 'k' })
+    const [, body, headers] = t.post.mock.calls[0] as [string, Record<string, unknown>, Record<string, string>]
+    expect((body.merchant_metadata as Record<string, unknown>).owner_attestation).toEqual(c.attestation)
+    expect(headers).toEqual({
+      'Idempotency-Key': 'k',
+      'X-Idempotency-Expires-At': new Date(Number(c.attestation!.expires_at) * 1000).toISOString().replace('.000Z', 'Z'),
+    })
+  })
+
+  // What 5b-2 mints for an attested request is accepted as it is.
+  it('accepts the credential the gateway minted as asked', () => {
+    const c = attested()
+    expect(credentialDefect(minted(c), c)).toBeNull()
+  })
+})
+
+describe('the owner checks the WHOLE metadata came back (spec 4.6.3, credentialDefect)', () => {
+  const signer = { pubkey: STALL, withPrivkey: <T,>(f: (k: Uint8Array) => T) => f(STALL_KEY) }
+  const c: PreparedCredential = {
+    ...prepared,
+    role: TERMINAL_ROLES.ISSUE_AND_REDEEM,
+    permissions: grantFor(TERMINAL_ROLES.ISSUE_AND_REDEEM, STALL),
+    idleLockMinutes: 10,
+  }
+  const asked = { ...c, attestation: attestEnrolment(c, signer, 1_800_000_000_000) }
+  const T = Number(asked.attestation.expires_at)
+  const mintedWith = (metadata: Record<string, unknown>, expiresAt = T) =>
+    buildLockedCredentialToken({ stallKey: STALL_KEY, devicePubkey: DEVICE, metadata: JSON.stringify(metadata), expiresAt })
+  const base = () => requestedMetadata(asked)
+
+  // `name` is not in the attestation digest, so this is the only check that catches a service
+  // renaming the till.
+  it('refuses a renamed till', () => {
+    expect(credentialDefect(mintedWith({ ...base(), name: 'Back counter' }), asked)).toBe('metadata-mismatch')
+  })
+
+  // A device holder must not be able to have the idle lock switched off by the service.
+  it('refuses an idle lock changed or dropped', () => {
+    expect(credentialDefect(mintedWith({ ...base(), idle_lock_minutes: 0 }), asked)).toBe('metadata-mismatch')
+    const without = base()
+    delete without.idle_lock_minutes
+    expect(credentialDefect(mintedWith(without), asked)).toBe('metadata-mismatch')
+  })
+
+  // A key the owner never asked for is a claim nobody signed for.
+  it('refuses an extra metadata key', () => {
+    expect(credentialDefect(mintedWith({ ...base(), free: true }), asked)).toBe('metadata-mismatch')
+  })
+
+  // The attestation the owner signed must come back, unaltered.
+  it('refuses the attestation dropped or swapped', () => {
+    const without = base()
+    delete without.owner_attestation
+    expect(credentialDefect(mintedWith(without), asked)).toBe('metadata-mismatch')
+    const other = attestEnrolment(c, signer, 1_800_000_000_000)
+    expect(credentialDefect(mintedWith({ ...base(), owner_attestation: other }), asked)).toBe('metadata-mismatch')
+  })
+
+  // A repeated key is two readings of one metadata; JSON.parse would silently keep the last.
+  it('refuses metadata text with a repeated key', () => {
+    const json = JSON.stringify(base()).replace('{', '{"name":"Evil",')
+    const token = buildLockedCredentialToken({ stallKey: STALL_KEY, devicePubkey: DEVICE, metadata: json, expiresAt: T })
+    expect(credentialDefect(token, asked)).toBe('metadata-mismatch')
+  })
+
+  // The gateway set an expiry later than the T the owner signed: every verifier would refuse the
+  // till with ATTESTATION_EXCEEDED, so the owner refuses it now.
+  it('refuses a credential that outlives the attestation', () => {
+    expect(credentialDefect(mintedWith(base(), T + 1), asked)).toBe('attestation-invalid')
+    expect(credentialDefect(mintedWith(base(), T), asked)).toBeNull()
+  })
+
+  // Key order and spacing do not matter: the gateway re-serialises the object.
+  it('accepts the same metadata in another key order', () => {
+    const reordered = Object.fromEntries(Object.entries(base()).reverse())
+    expect(credentialDefect(mintedWith(reordered), asked)).toBeNull()
   })
 })

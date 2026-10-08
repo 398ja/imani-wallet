@@ -44,11 +44,16 @@ const fakeTransport = {
     })
   },
   get: async () => {
-    const meta = (posts.at(-1) as { merchant_metadata: { role: string } }).merchant_metadata
+    // Signs back exactly the metadata it was sent, attestation included, and writes the owner's
+    // `T` as the credential's expiry, as gateway-customer does since 5b-2 (spec 4.6.2).
+    const meta = (posts.at(-1) as { merchant_metadata: Record<string, unknown> & { owner_attestation?: { expires_at: string } } })
+      .merchant_metadata
+    const device = mintWrongDevice ? bytesToHex(schnorr.getPublicKey(schnorr.utils.randomSecretKey())) : DEVICE
     const token = buildLockedCredentialToken({
       stallKey: STALL_KEY,
-      devicePubkey: mintWrongDevice ? bytesToHex(schnorr.getPublicKey(schnorr.utils.randomSecretKey())) : DEVICE,
-      role: meta.role,
+      devicePubkey: device,
+      metadata: JSON.stringify({ ...meta, lock_key: device }),
+      ...(meta.owner_attestation ? { expiresAt: Number(meta.owner_attestation.expires_at) } : {}),
     })
     return new Response(JSON.stringify({ status: 'ISSUED', token }), { status: 200 })
   },
@@ -106,6 +111,7 @@ function renderPage() {
         spendApi={fakeSpend}
         publisher={{ publish: async (w) => (sentDms.push(w), true) }}
         seal={(borrow) => borrow(STALL_KEY)}
+        stallSigner={stallSigner}
       />
     </MemoryRouter>,
   )
@@ -119,6 +125,9 @@ async function fillEverything() {
   fireEvent.click(screen.getByRole('button', { name: /Redemption only/ }))
   fireEvent.click(screen.getByRole('button', { name: 'scan' }))
 }
+
+/** The stall's own signer, which attests every till at enrolment (#160 decision 5). */
+const stallSigner = () => ({ pubkey: STALL, withPrivkey: <T,>(borrow: (key: Uint8Array) => T) => borrow(STALL_KEY) })
 
 const addButton = () => screen.getByRole('button', { name: 'Add terminal' }) as HTMLButtonElement
 
@@ -487,7 +496,7 @@ describe('#160 review: a mint whose answer is lost is not orphaned', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => (clock += 60_000))
     render(
       <MemoryRouter>
-        <TerminalEnrolPage stallPubkey={STALL} transport={slow} spendApi={fakeSpend} />
+        <TerminalEnrolPage stallPubkey={STALL} transport={slow} spendApi={fakeSpend} stallSigner={stallSigner} />
       </MemoryRouter>,
     )
     await waitFor(() => expect(screen.getByRole('button', { name: 'Add terminal' })).toBeTruthy())
@@ -516,7 +525,7 @@ describe('#160 review: a mint whose answer is lost is not orphaned', () => {
     }
     render(
       <MemoryRouter>
-        <TerminalEnrolPage stallPubkey={STALL} transport={keyed} spendApi={fakeSpend} />
+        <TerminalEnrolPage stallPubkey={STALL} transport={keyed} spendApi={fakeSpend} stallSigner={stallSigner} />
       </MemoryRouter>,
     )
     await waitFor(() => expect(screen.getByRole('button', { name: 'Add terminal' })).toBeTruthy())
@@ -547,7 +556,7 @@ describe('#160 review: a mint whose answer is lost is not orphaned', () => {
     }
     render(
       <MemoryRouter>
-        <TerminalEnrolPage stallPubkey={STALL} transport={refusing} spendApi={fakeSpend} />
+        <TerminalEnrolPage stallPubkey={STALL} transport={refusing} spendApi={fakeSpend} stallSigner={stallSigner} />
       </MemoryRouter>,
     )
     await waitFor(() => expect(screen.getByRole('button', { name: 'Add terminal' })).toBeTruthy())
