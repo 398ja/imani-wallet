@@ -630,7 +630,11 @@ async function legacyTill(owner: Page) {
   const sale = await asTillResponse(k, 'POST', '/api/v1/portal/vouchers', {
     face_value_minor: 100, currency: 'EUR', quantity: 1, issuance_warrant: await freshWarrant(k, 100, 'EUR'),
   })
+  // With cv 0.17.0 (5b-4) the refusal is the owner attestation (metric label owner_attestation).
+  // Before it, a 403 here can have another cause (licence, service keys unset), so the body is
+  // printed for the record.
   checkDeployed('the portal refuses a Sell from the legacy till (403)', sale.status === 403, `${sale.status} ${sale.body.slice(0, 160)}`)
+  console.log(`  (portal answer to the legacy Sell: ${sale.status} ${sale.body.slice(0, 200)})`)
 
   // The owner's roster shows the re-enrol path. The row is the one an owner app before 5b-5 wrote
   // for this mint, token and all, so it is written into A's roster as that app left it.
@@ -668,7 +672,7 @@ async function legacyTill(owner: Page) {
     asked &&
     (await owner.getByRole('button', { name: 'Revoke Legacy till', exact: true }).click({ timeout: 30_000 }).then(() => true, () => false))
   const revokedAt = confirmed ? await rosterRevokedAt(owner, 'Legacy till') : null
-  check('A revokes the legacy till (step 1 of re-enrolling), and the notice goes', revokedAt !== null, `asked=${asked} confirmed=${confirmed}`)
+  check('A revokes the legacy till (step 1 of re-enrolling), spent at the mint', revokedAt !== null, `asked=${asked} confirmed=${confirmed}`)
 }
 
 /** The `owner_attestation` in a credential secret's signed metadata, or null. */
