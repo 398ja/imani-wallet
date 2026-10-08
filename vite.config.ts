@@ -535,9 +535,6 @@ export default defineConfig({
       '@imani/reports': imani('reports'),
       '@imani/payment-requests': imani('payment-requests'),
       'imani-qr': imani('imani-qr'),
-      // Vendored from imani-apps' hardened 0.2.0 until the reconciled standalone
-      // release is on npm (#203). Only src/lib/chunkedRecord.ts imports it.
-      'nostr-chunked-events': r('./packages/nostr-chunked-events/wallet-entry.ts'),
     },
   },
   server: { proxy },
