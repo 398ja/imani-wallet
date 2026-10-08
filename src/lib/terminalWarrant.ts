@@ -449,8 +449,12 @@ export type OwnerAttestationRefusal =
 
 /**
  * Did the stall attest this credential? Mirrors cashu-voucher 0.17.0's public
- * `IssuanceWarrant.verifyOwnerAttestation(credential, issuerId)`, which the gateways run, and
- * which the device runs at unlock (`credentialFromToken`).
+ * `IssuanceWarrant.verifyOwnerAttestation(credential, issuerId)`, which the gateways run, step
+ * for step: `issuerId` must equal the metadata's `stall_pubkey` and the credential's `issuer`
+ * tag exactly, else WRONG_STALL.
+ *
+ * The device does not call this: at unlock `credentialFromToken` runs `ownerAttestationOf` on
+ * the token's already-verified metadata, so pre-0.16.1 tills keep Redeem.
  *
  * The signature check only: no trusted-key list, no service signature, no expiry instant and no
  * role requirement (a redeem-only till may be attested too). The caller has its own reasons to
@@ -480,6 +484,11 @@ export function verifyOwnerAttestation(credential: string, issuerId: string): Ow
   ) {
     return TERMINAL_REFUSAL.MALFORMED_CREDENTIAL
   }
-  if (m.stall_pubkey !== issuerId) return TERMINAL_REFUSAL.WRONG_STALL
+  // Java: issuerId must equal both the metadata's stall_pubkey and the credential's single
+  // `issuer` tag, exactly (no case folding). An absent, repeated or differently spelled tag is
+  // WRONG_STALL.
+  if (m.stall_pubkey !== issuerId || single(parsed.rows, 'issuer') !== issuerId) {
+    return TERMINAL_REFUSAL.WRONG_STALL
+  }
   return checkOwnerAttestation(m, issuerId, rawExpiry)
 }
