@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-10-08
+
 ### Changed
 
 - **Terminal e2e: an owner surface may refuse a till at the edge (401) or the portal (403).**
