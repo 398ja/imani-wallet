@@ -125,6 +125,12 @@ function readPool(): SimplePool {
  * A partial publish is the normal case on Nostr, not an error: the event is
  * live as soon as one relay accepts it. Callers report "n/m" and carry on, which
  * is why this never rejects.
+ *
+ * A relay that REFUSES the event (`OK false`, e.g. strfry's
+ * `invalid: event too large: 66031`) is a failure too: nostr-tools rejects that
+ * promise with the relay's reason, which lands in `errors` and not in `ok`.
+ * Locked by relayPublishCount.test.ts against a real socket. The silence in
+ * #203 was a CALLER ignoring this result; every caller must check `ok`.
  */
 export async function publish(event: Event, relays: string[] = [RELAY_URL]): Promise<PublishResult> {
   const pool = new SimplePool()
