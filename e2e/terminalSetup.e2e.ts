@@ -191,6 +191,14 @@ async function main() {
 
   console.log('\nB receives it')
   await device.getByText('Check this is your stall').waitFor({ timeout: 60_000 }).catch(() => {})
+  // The stall's name is looked up when the offer appears, so it lands a moment after the heading
+  // (one gateway round trip, a 150 ms grace for the relay, then React). Round 3 read the screen
+  // ~0.1 s after the heading and so raced the lookup: "A stall with no public name" on staging
+  // in redeploy 3 and here, while the gateway had answered "Test Stall" in 48 ms. Wait for it.
+  await device
+    .waitForFunction((n) => document.body.innerText.includes(n), TEST_STALL_NAME, { timeout: 15_000 })
+    .catch(() => {})
+  await snap(device, 'p1-b-offer')
   const bOffer = await text(device)
   check('B shows the same check code as A', aCode !== '' && bOffer.includes(aCode), bOffer.slice(0, 300))
   check('B names the stall', /Test Stall/.test(bOffer), bOffer.slice(0, 200))
@@ -223,9 +231,13 @@ async function main() {
 
   console.log('\nPhase 3: B reloads and opens its till')
   const till = await unlockTill(device)
-  check('B lands on the till naming the stall', new RegExp(TEST_STALL_NAME).test(till), till.slice(0, 200))
+  // As on the offer screen: the stall's name and record are read after the till opens.
+  const named = await device
+    .waitForFunction((n) => document.body.innerText.includes(n), TEST_STALL_NAME, { timeout: 15_000 })
+    .then(() => text(device), () => till)
+  check('B lands on the till naming the stall', new RegExp(TEST_STALL_NAME).test(named), named.slice(0, 200))
   check('B names itself', /Front counter/.test(till), till.slice(0, 200))
-  check('B offers Redeem', /Redeem/.test(till))
+  check('B offers Redeem', /Redeem/.test(named))
   check('a redeem-only B offers no Sell', !/\bSell\b/.test(till.replace(/Selling/g, '')), till.slice(0, 200))
   check('B made no call to /api/v1/auth', authCalls.length === 0, authCalls.join(', '))
   // In-app navigation, as staff would reach a URL: a reload locks the till by design (the
@@ -414,6 +426,13 @@ async function phase5(browser: Browser, owner: Page, customer: Page, customerPub
       window.dispatchEvent(new PopStateEvent('popstate'))
     }, p)
   const outbound: Array<{ path: string; header: string | null; warrant: string | null; body: string }> = []
+  /** The voucher ids the portal minted for B3's Sell, from its 201 response. */
+  const soldIds: string[] = []
+  till.on('response', async (res) => {
+    if (new URL(res.url()).pathname !== '/api/v1/portal/vouchers' || res.status() !== 201) return
+    const body = (await res.json().catch(() => null)) as { items?: Array<{ voucher_id?: string }> } | null
+    for (const item of body?.items ?? []) if (item.voucher_id) soldIds.push(item.voucher_id)
+  })
   till.on('request', (r) => {
     const path = new URL(r.url()).pathname
     if (!path.startsWith('/api/v1/portal/')) return
@@ -444,7 +463,7 @@ async function phase5(browser: Browser, owner: Page, customer: Page, customerPub
     String(sentWarrant?.form),
   )
   checkDeployed('the gateway mints B3\'s sale ("It is in their wallet now")', /It is in their wallet now/.test(sold), sold.slice(0, 200))
-  const verdict = /It is in their wallet now/.test(sold) ? await couponVerdict(customer, sentWarrant?.nonce as string) : 'not sold'
+  const verdict = /It is in their wallet now/.test(sold) ? await couponVerdict(customer, soldIds) : 'not sold'
   checkDeployed("C's coupon from B3 has warrant verdict `verified`", verdict === 'verified', verdict)
 
   console.log("\nPhase 5: A sees B3's sale attributed")
@@ -653,14 +672,17 @@ async function tillSells(till: Page, customerPubkey: string, amount: string): Pr
 }
 
 /**
- * The warrant verdict C's wallet recorded on the coupon carrying `nonce`, from its own history.
- * The wallet writes `validation.warrant` on every received row (voucherValidationRecord.ts).
+ * The warrant verdict C's wallet recorded on the coupon B3 sold, from its own history.
+ * The wallet writes `validation.warrant` on every received row (voucherValidationRecord.ts), and the
+ * row names the coupon's `voucherId`. (Round 3 searched for the warrant's nonce, which no received
+ * row stores, so this could never have found the coupon.)
  */
-async function couponVerdict(customer: Page, nonce: string): Promise<string> {
+async function couponVerdict(customer: Page, voucherIds: string[]): Promise<string> {
+  if (voucherIds.length === 0) return 'no voucher id from the Sell response'
   // Source text, for the same tsx reason as `tillKey`.
   const source = `(async () => {
-    const wanted = ${JSON.stringify(nonce)}
-    const dbs = (await indexedDB.databases()).filter((d) => (d.name || '').startsWith('imani-wallet-'))
+    const wanted = ${JSON.stringify(voucherIds)}
+    const dbs = (await indexedDB.databases()).filter((d) => (d.name || '').startsWith('imani-wallet'))
     for (const info of dbs) {
       const db = await new Promise((ok, ko) => {
         const r = indexedDB.open(info.name)
@@ -675,7 +697,7 @@ async function couponVerdict(customer: Page, nonce: string): Promise<string> {
         })
         for (const row of rows) {
           const s = JSON.stringify(row)
-          if (!s.includes(wanted)) continue
+          if (!wanted.some((id) => s.includes(id))) continue
           const m = s.match(/"warrant":"(\\w+)"/)
           if (m) return m[1]
         }
