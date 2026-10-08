@@ -38,10 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `nostr-chunked-events` v0.3.0 (398ja/nostr-chunked-events#1 at `c0d73e7`), vendored under
-  `packages/` with its LICENSE and provenance (`VENDORED.md`). It is imported only through
-  `src/lib/chunkedRecord.ts`, until the release is on npm. `pako` and `@noble/hashes` are its
-  runtime dependencies.
+- `nostr-chunked-events` v0.3.0 as a git dependency (`github:398ja/nostr-chunked-events#v0.3.0`,
+  locked at `8f45de7`). It is imported only through `src/lib/chunkedRecord.ts`. `pako` and
+  `@noble/hashes` come in through it, not as direct dependencies.
 
 ### Changed
 

@@ -14,10 +14,8 @@ import {
 /**
  * Self-encrypted records that may be too large for one relay event (#203).
  *
- * The ONLY file that imports `nostr-chunked-events`. It is vendored today from
- * 398ja/nostr-chunked-events v0.3.0 (see packages/nostr-chunked-events/VENDORED.md); when
- * the reconciled standalone release is published, the alias in vite.config.ts
- * and tsconfig.app.json is swapped for the npm dependency and nothing else moves.
+ * The ONLY file that imports `nostr-chunked-events`, pinned to the git tag
+ * `github:398ja/nostr-chunked-events#v0.3.0` (not published to npm).
  *
  * WHY THE LOW-LEVEL API. The library's `ChunkedPublisher`/`ChunkedFetcher` key
  * everything by `d` and assume a parameterised-replaceable kind: a record that
