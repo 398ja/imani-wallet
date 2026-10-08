@@ -46,7 +46,7 @@ describe('the Java vector file', () => {
     expect(vectors.domain).toBe(ATTESTATION_DOMAIN)
     expect(vectors.separator).toBe('\u001f')
     expect(vectors.digest_vectors.length).toBe(3)
-    expect(credentials.length).toBe(30)
+    expect(credentials.length).toBe(32)
   })
 })
 
