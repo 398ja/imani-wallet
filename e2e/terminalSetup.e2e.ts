@@ -238,7 +238,10 @@ async function main() {
   check('B lands on the till naming the stall', new RegExp(TEST_STALL_NAME).test(named), named.slice(0, 200))
   check('B names itself', /Front counter/.test(till), till.slice(0, 200))
   check('B offers Redeem', /Redeem/.test(named))
-  check('a redeem-only B offers no Sell', !/\bSell\b/.test(till.replace(/Selling/g, '')), till.slice(0, 200))
+  // A negative check on the later text (`named`, read once the stall's record has loaded), not the
+  // early `till` snapshot: a Sell button that renders late would be missed by the early one, and
+  // the check would pass without having looked (wallet#201 review, W-1).
+  check('a redeem-only B offers no Sell', !/\bSell\b/.test(named.replace(/Selling/g, '')), named.slice(0, 200))
   check('B made no call to /api/v1/auth', authCalls.length === 0, authCalls.join(', '))
   // In-app navigation, as staff would reach a URL: a reload locks the till by design (the
   // signer lives only in memory), so `page.goto` would land on the unlock screen instead.
