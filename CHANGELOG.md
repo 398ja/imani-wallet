@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The nap packages are npm dependencies; the build no longer needs a `../nap` checkout (#212).**
+  `@imani/nap-core`, `-client-http`, `-client-web`, `-client-nip46` and `-react` are installed at
+  `^0.12.0`, published as `@398ja/nap-*` and aliased to their import names in `package.json`, so
+  no import changes. The source aliases in `vite.config.ts`, `tsconfig.app.json` and
+  `tsconfig.services.json` are gone, and so are the Dockerfile's second build context and nap
+  install and the perf workflow's nap checkout. `git clone`, `npm ci`, `npm run build` and
+  `docker build .` work with this repository alone, and the nap version is pinned in
+  `package-lock.json`. The bundle drops about 92 KB (gzip about 33 KB): the old layout compiled
+  a second copy of `nostr-tools` and `@noble/*` from `../nap/node_modules`, and the published
+  packages share the wallet's copy as peers.
+
 ### Fixed
 
 - **A coupon too large for one relay event is now backed up in chunks (#203).** A 7-proof terminal
