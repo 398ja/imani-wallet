@@ -66,7 +66,11 @@ describe('a prepared part, as the receiving wallet reads it', () => {
     expect(metadata!.faceValue).toBe(sent.faceValue)
     expect(metadata!.faceUnit).toBe(sent.faceUnit)
     expect(metadata!.issuerId).toBe(sent.stallId)
-  })
+    // The first import of the whole dmCrypto graph (nostr-tools, noble, the
+    // voucher verifier) takes ~3.7 s on its own and past 5 s under a full
+    // parallel `npm test`, on main as well as here. The budget is for the cold
+    // import, not for the assertion.
+  }, 30_000)
 
   it('carries the token the service reported splitting', () => {
     const payload = JSON.parse(unsignedEvent.content)

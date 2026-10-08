@@ -54,12 +54,14 @@ const VOUCHER_ID = '5f8a487d-6cea-4a7d-b681-9d5d62cc9dd9'
 let mailbox: Event[] = []
 const published: Event[] = []
 
-function renderPage() {
+function renderPage(
+  stallName: (pk: string, onLater?: (n: string) => void) => Promise<string | null> = async () => 'Test Stall',
+) {
   return render(
     <MemoryRouter>
       <TerminalSetupPage
         fetchWraps={async (pubkey) => mailbox.filter((e) => e.tags.some((t) => t[1] === pubkey))}
-        stallName={async () => 'Test Stall'}
+        stallName={stallName}
         publisherFor={() => ({ publish: async (w) => (published.push(w), true) })}
         confirmAtGateway={async (id) => void confirmed.push(id)}
       />
@@ -143,6 +145,25 @@ describe('the whole setup, owner and device', () => {
     expect(unwrapSealed(published[0], STALL_KEY)?.sealer).toBe(device)
     // And the private key is in no element of the page.
     expect(document.body.innerHTML).not.toContain(saved[0].privkeyHex)
+  })
+
+  // #160 round 4, "B names the stall": the first answer had no name (the faster store had none)
+  // and the name arrived later. The screen must show it, not "A stall with no public name".
+  it('names the stall when its name arrives after the first answer', { timeout: 20_000 }, async () => {
+    let late: ((n: string) => void) | undefined
+    renderPage(async (_pk, onLater) => {
+      late = onLater
+      return null
+    })
+    const device = shownCode()
+    scanSetupCode()
+    ownerSends(device)
+    expect(await screen.findByText('A stall with no public name', {}, { timeout: 8000 })).toBeTruthy()
+
+    late?.('Test Stall')
+
+    expect(await screen.findByText('Test Stall', {}, { timeout: 4000 })).toBeTruthy()
+    expect(screen.queryByText('A stall with no public name')).toBeNull()
   })
 
   // Decision 2: a short passphrase is refused on the screen, before storing.

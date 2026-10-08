@@ -211,6 +211,31 @@ describe('DmPollService', () => {
       expect(redemptionAdapter.redeem).toHaveBeenCalledTimes(1);
     });
 
+    it('leaves the blocked copy unprocessed, so it survives a failure of the first (imani-wallet#204)', async () => {
+      // The first redemption fails retryably. Its copy must still be offered
+      // again, and so must the duplicate that was turned away meanwhile.
+      (redemptionAdapter.redeem as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('HTTP 502'));
+      const service = new DmPollService({
+        recipientPubkey: 'recipient-pub',
+        recipientPrivkey: 'recipient-priv',
+        nostrdbAdapter,
+        cryptoAdapter,
+        redemptionAdapter,
+        enableAutoRedemption: true,
+        fetchRecentOnStart: false,
+      });
+
+      await Promise.all([
+        service.processGiftWrap(createMockGiftWrap({ id: 'first-copy' })),
+        service.processGiftWrap(createMockGiftWrap({ id: 'second-copy' })),
+      ]);
+
+      expect(service.hasProcessed('first-copy')).toBe(false);
+      expect(service.hasProcessed('second-copy')).toBe(false);
+      // And it redeems on the next offer.
+      expect(await service.processGiftWrap(createMockGiftWrap({ id: 'second-copy' }))).not.toBeNull();
+    });
+
     it('should allow same fingerprint after first processing completes', async () => {
       // Return different fingerprints for sequential calls
       let callCount = 0;
