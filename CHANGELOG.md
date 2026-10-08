@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A coupon too large for one relay event is now backed up in chunks (#203).** A 7-proof terminal
+  coupon's NIP-60 record came to 66,063 bytes after NIP-44, and strfry (`maxEventSize` 65,536)
+  refused it, so a wiped browser could not get it back. When a record's estimated size after
+  NIP-44 would exceed 60,000 bytes, it is gzipped, split into chunks of 30,000 bytes or less, and
+  each chunk is NIP-44-sealed to self. This uses `nostr-chunked-events`' format: the `chunk`,
+  `snapshot_id`, `payload_hash` and `total_chunks` tags, with `d` = `<token_id>-chunk-<n>`. The real
+  coupon becomes one 14 KB event. A record that fits stays one plain kind-7375 event, unchanged
+  for other NIP-60 wallets. Restore and back-fill reassemble chunked records, verify the payload
+  hash, and still read single-event records. A coupon with a missing or corrupted chunk is
+  skipped with a warning, and back-fill publishes it again.
+- **A relay's refusal is no longer silent.** `publish()` already counted an `OK false` as a
+  failure. Now a test locks that against a real socket. The coupon, transaction and signup
+  merchant-record writers ignored the result. They now log the relay's reason.
+
+### Added
+
+- `nostr-chunked-events` 0.2.0 (the hardened imani-apps copy), vendored under `packages/` and
+  imported only through `src/lib/chunkedRecord.ts`, until the reconciled standalone release is
+  on npm. `pako` is its runtime dependency.
+
 ### Changed
 
 - **Terminal e2e: an owner surface may refuse a till at the edge (401) or the portal (403).**
