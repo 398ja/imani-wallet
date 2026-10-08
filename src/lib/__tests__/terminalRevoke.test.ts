@@ -15,7 +15,9 @@ import {
 import { allTerminals, recordTerminal, waitingTerminals, type TerminalRecord } from '../terminalRoster'
 import { TERMINAL_ROLES } from '../terminalRole'
 import type { MintTransport } from '../terminalMint'
-import { buildLockedCredentialToken } from './voucherFixtures'
+import { buildAttestedCredentialToken, buildLockedCredentialToken } from './voucherFixtures'
+import { attestEnrolment, credentialRequestBody } from '../terminalMint'
+import { grantFor } from '../terminalRole'
 
 /**
  * The owner's roster settles what a lost answer left behind (#160 review).
@@ -346,5 +348,57 @@ describe('#160 phase 4: a credential spent elsewhere reads as revoked here', () 
 
     expect(await markSpentElsewhere(STALL, mintSays('SPENT'))).toBe(2)
     expect(released).toEqual(['waiting-1'])
+  })
+})
+
+describe('a resumed mint carries the attestation signed at enrolment (#160 decision 5)', () => {
+  /**
+   * The enrol screen signs the attestation once and persists it on the `minting` row, beside the
+   * Idempotency-Key. A resumed request must send that very body: signing again would pick a fresh
+   * nonce, and the gateway would refuse the replay as a different request (spec 4.6.2).
+   */
+  it('re-sends the persisted attestation and idle lock byte for byte, with T in the header', async () => {
+    const prepared = {
+      name: 'Front counter',
+      stallPubkey: STALL,
+      role: TERMINAL_ROLES.ISSUE_AND_REDEEM,
+      lockedTo: DEVICE,
+      permissions: grantFor(TERMINAL_ROLES.ISSUE_AND_REDEEM, STALL),
+      idleLockMinutes: 5,
+    }
+    const signer = { pubkey: STALL, withPrivkey: <T,>(f: (k: Uint8Array) => T) => f(STALL_KEY) }
+    const attestation = attestEnrolment(prepared, signer, 1_800_000_000_000)
+    // What the enrol screen sent the first time.
+    const firstBody = {
+      ...credentialRequestBody(prepared),
+      merchant_metadata: { ...(credentialRequestBody(prepared).merchant_metadata as object), owner_attestation: attestation },
+    }
+    recordTerminal(STALL, row({ role: TERMINAL_ROLES.ISSUE_AND_REDEEM, attestation, idleLockMinutes: 5 }))
+    const t = transport(
+      buildAttestedCredentialToken({
+        stallKey: STALL_KEY,
+        devicePubkey: DEVICE,
+        voucherId: VOUCHER,
+        expiresAt: Number(attestation.expires_at),
+      }),
+    )
+
+    await resumeMinting(STALL, spendApi(), t)
+
+    const [, body, headers] = t.post.mock.calls[0] as unknown as [string, unknown, Record<string, string>]
+    expect(JSON.stringify(body)).toBe(JSON.stringify(firstBody))
+    expect(headers['Idempotency-Key']).toBe('key-1')
+    expect(headers['X-Idempotency-Expires-At']).toBe(new Date(Number(attestation.expires_at) * 1000).toISOString().replace('.000Z', 'Z'))
+  })
+
+  // The attestation survives the row's reload from storage: it is read back field by field.
+  it('keeps the attestation on the roster row across a reload', () => {
+    const signer = { pubkey: STALL, withPrivkey: <T,>(f: (k: Uint8Array) => T) => f(STALL_KEY) }
+    const attestation = attestEnrolment(
+      { name: 'x', stallPubkey: STALL, role: TERMINAL_ROLES.ISSUE_AND_REDEEM, lockedTo: DEVICE, permissions: [] },
+      signer,
+    )
+    recordTerminal(STALL, row({ attestation }))
+    expect(allTerminals(STALL)[0].attestation).toEqual(attestation)
   })
 })
