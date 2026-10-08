@@ -41,18 +41,13 @@
     "lib": ["ES2023", "DOM"],
     "paths": {
       "@imani/wallet-core": ["./packages/wallet-core/src/index.ts"],
-      /* The nap packages resolve to the sibling checkout, exactly as
-         tsconfig.app.json resolves them. `nip98.ts` imports `./nap`, which
-         imports `./signer`, which is where `WalletSigner` comes from — with
-         these unresolved the type degraded to an implicit any and produced
-         four errors that looked like real signature mismatches
+      /* The nap packages are npm dependencies (#212) and resolve through
+         node_modules, exactly as in tsconfig.app.json. They must resolve:
+         `nip98.ts` imports `./nap`, which imports `./signer`, which is where
+         `WalletSigner` comes from. Unresolved, the type degraded to an implicit
+         any and produced four errors that looked like real signature mismatches
          (`Property 'signEvent' is missing in type 'WalletSigner'`) but were
          only the unresolved import wearing a disguise. */
-      "@imani/nap-core": ["../nap/packages/nap-core/src/index.ts"],
-      "@imani/nap-client-http": ["../nap/packages/nap-client-http/src/index.ts"],
-      "@imani/nap-client-web": ["../nap/packages/nap-client-web/src/index.ts"],
-      "@imani/nap-client-nip46": ["../nap/packages/nap-client-nip46/src/index.ts"],
-      "@imani/nap-react": ["../nap/packages/nap-react/src/index.ts"],
       "@imani/reports": ["./packages/reports/src/index.ts"],
       "@imani/payment-requests": ["./packages/payment-requests/src/index.ts"],
       "@imani/redemption": ["./packages/redemption/src/index.ts"],

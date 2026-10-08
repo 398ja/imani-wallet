@@ -13,10 +13,9 @@ import type { ClientRequest } from 'node:http'
 
 const r = (p: string) => fileURLToPath(new URL(p, import.meta.url))
 
-// Consume @imani/* and @imani/nap-* straight from source — no build step, no
-// npm link. This is nap's own convention (its packages point `exports` at
-// ./src/index.ts and ship no dist/), and every one of these packages is plain
-// framework-agnostic TS, so there is nothing React-specific to compile first.
+// Consume the @imani/* wallet packages straight from source: no build step, no
+// npm link. Every one of them is plain framework-agnostic TS, so there is
+// nothing React-specific to compile first.
 //
 // Because aliasing bypasses each package's own node_modules, their runtime deps
 // (nostr-tools, qr-scanner, @gandlaf21/bc-ur, buffer) are installed here.
@@ -24,11 +23,13 @@ const r = (p: string) => fileURLToPath(new URL(p, import.meta.url))
 // `imani` now points INSIDE this repo. The 11 wallet packages were copied out of
 // imani-apps and this repo owns them, which is what makes a Docker build
 // possible at all: a build context rooted here could never see ../imani-apps.
-// nap is deliberately still a sibling — it is a separate product with other
-// consumers — so the image reproduces the ../nap layout via a second build
-// context. See Dockerfile.
+//
+// The five @imani/nap-* packages are NOT aliased. nap is a separate product with
+// other consumers, and it is an ordinary versioned npm dependency: published as
+// @398ja/nap-* (compiled ESM + .d.ts) and installed under its @imani/nap-* import
+// names through npm aliases in package.json (#212). No ../nap sibling, no second
+// Docker build context.
 const imani = (name: string) => r(`./packages/${name}/src/index.ts`)
-const nap = (name: string) => r(`../nap/packages/${name}/src/index.ts`)
 
 /**
  * The shared secret every edge-gated service trusts its edge proxy with.
@@ -493,26 +494,21 @@ export default defineConfig({
   resolve: {
     // ONE React, or the production build renders a blank page.
     //
-    // `@imani/nap-react` is aliased to source in ../nap, so its `import 'react'`
-    // resolves against THAT repo's node_modules — react 19.2.4 there against
-    // 19.2.3 here. Two instances means two hook dispatchers, and the one
-    // nap-react calls is null while the other renders: the whole app dies on
-    // `Cannot read properties of null (reading 'useState')` with an empty body
-    // and a single console line.
+    // `@imani/nap-react` declares react as a peer dependency, so npm resolves its
+    // `import 'react'` to this app's copy and there is only one. This used to be
+    // load-bearing: while nap-react was aliased to source in ../nap, its react
+    // resolved against THAT repo's node_modules (19.2.4 against 19.2.3 here). Two
+    // instances means two hook dispatchers, and the one nap-react calls is null
+    // while the other renders: the whole app dies on `Cannot read properties of
+    // null (reading 'useState')` with an empty body and a single console line.
     //
     // Dev never showed it — the dep optimizer collapses the duplicate — so this
-    // only appears once the app is built, which is exactly when nobody is
-    // looking for a resolution bug.
+    // only appears once the app is built. Kept as a guard: it costs nothing, and
+    // a future dependency that bundles its own react would bring the blank page
+    // straight back.
     dedupe: ['react', 'react-dom'],
     alias: {
       '@': r('./src'),
-
-      // nap — auth
-      '@imani/nap-core': nap('nap-core'),
-      '@imani/nap-client-http': nap('nap-client-http'),
-      '@imani/nap-client-web': nap('nap-client-web'),
-      '@imani/nap-client-nip46': nap('nap-client-nip46'),
-      '@imani/nap-react': nap('nap-react'),
 
       // imani-apps — wallet core. Order matters: nostr-vouchers must precede
       // any shorter prefix that could shadow it.
