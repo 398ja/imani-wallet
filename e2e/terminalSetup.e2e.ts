@@ -22,6 +22,14 @@
  * gateway-core Phase 5 PRs deployed: until `E2E_P5_DEPLOYED=1` their checks print PENDING and do
  * not fail the run.
  *
+ * Phase 5b (#160 decision 5, owner attestation): B3 is enrolled by an owner app that signs the
+ * attestation, so B3's warrant carries a credential whose metadata holds `owner_attestation`, the
+ * till offers Sell with no renewal notice, and C reads the coupon `verified`. Then a LEGACY
+ * credential, minted the way an owner app before 5b-5 asked for one (no attestation), is refused:
+ * at mint by a gateway-customer with 5b-2 (400), or else at Sell by the 0.17.0 portal (403), and
+ * the owner's roster shows the re-enrol path (Renew to keep selling: revoke, take out of service,
+ * add again), whose first step, Revoke, is then carried out for real.
+ *
  * Needs a stack whose gateway-customer mints the stall co-key (imani-gateway-customer#187).
  *
  * Run against a local dev server:   E2E_BASE=http://localhost:5177 tsx e2e/terminalSetup.e2e.ts
@@ -36,6 +44,7 @@ import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 import { finalizeEvent, nip98 } from 'nostr-tools'
 import { registerCustomer, registerMerchant, TEST_PASSPHRASE, TEST_STALL_NAME } from './register.mts'
+import { tokenProofs } from '../src/lib/voucherToken'
 
 const BASE = (process.env.E2E_BASE ?? 'http://localhost:5177').replace(/\/+$/, '')
 const BUNDLE_DIR = process.env.E2E_BUNDLE_DIR
@@ -415,6 +424,8 @@ async function phase5(browser: Browser, owner: Page, customer: Page, customerPub
   if (!ready) return
   const home = await unlockTill(till)
   check('B3 offers Sell and Redeem', /\bSell\b/.test(home) && /Redeem/.test(home), home.slice(0, 200))
+  // Attested at enrolment (#160 decision 5), so the till is not told to ask for a renewal.
+  check('B3, attested, shows no "renew to sell" notice', !/renew this terminal to sell/.test(home), home.slice(0, 200))
 
   // B3's key and credential, read the way the app reads them: K from its encrypted key store with
   // the passphrase, the voucher id and secret from the stored token. Used only to probe the
@@ -457,6 +468,18 @@ async function phase5(browser: Browser, owner: Page, customer: Page, customerPub
       k.secret.includes(`["voucher_id","${k.voucherId}"]`) &&
       !/cashuB|"C":/.test(sellRequest?.warrant ?? ''),
     String(sentWarrant?.form),
+  )
+  // The credential in B3's warrant carries the stall's attestation, inside the metadata the
+  // service signed (option A), with the four string fields and nothing else.
+  const attestation = credentialAttestation(k.secret)
+  check(
+    "B3's credential carries the owner's attestation in its signed metadata",
+    attestation !== null &&
+      attestation.v === '1' &&
+      /^[0-9]+$/.test(attestation.expires_at) &&
+      /^[0-9a-f]{64}$/.test(attestation.nonce) &&
+      /^[0-9a-f]{128}$/.test(attestation.sig),
+    JSON.stringify(attestation),
   )
   checkDeployed('the gateway mints B3\'s sale ("It is in their wallet now")', /It is in their wallet now/.test(sold), sold.slice(0, 200))
   const verdict = /It is in their wallet now/.test(sold)
@@ -554,6 +577,149 @@ async function phase5(browser: Browser, owner: Page, customer: Page, customerPub
     })
     checkDeployed('a revoked B3 gets 403 on Sell (31 s after the revocation)', revoked === 403, String(revoked))
   }
+
+  await legacyTill(owner)
+}
+
+/**
+ * Phase 5b: a legacy, unattested selling credential is refused, and the roster shows the way out.
+ *
+ * Minted by the harness with the owner's own key and NIP-98, exactly as an owner app before 5b-5
+ * asked for one: an issue-and-redeem credential whose metadata carries no `owner_attestation`. The
+ * harness generates the till key K itself, so it can sign a sale with it as that till would.
+ */
+async function legacyTill(owner: Page) {
+  console.log('\nPhase 5b: a legacy, unattested selling credential is refused')
+  const ownerSk = await ownerKey(owner)
+  if (!/^[0-9a-f]{64}$/.test(ownerSk)) return check("the harness opened A's key with its passphrase", false, ownerSk)
+  const stall = bytesToHex(schnorr.getPublicKey(hexToBytes(ownerSk)))
+  const tillSk = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
+  const lock = bytesToHex(schnorr.getPublicKey(hexToBytes(tillSk)))
+  const body = {
+    face_value: 1, face_unit: 'sat', face_decimals: 0, backing_strategy: 'PROPORTIONAL',
+    issuer_id: stall, memo: 'Imani terminal credential', expires_in_days: 365,
+    merchant_metadata: { terminal: true, stall_pubkey: stall, role: 'issue-and-redeem', lock_key: lock, name: 'Legacy till' },
+  }
+  const minted = await asKey(ownerSk, 'POST', '/api/v1/wallet/vouchers', body, { 'Idempotency-Key': crypto.randomUUID() })
+  if (minted.status === 400) {
+    // gateway-customer with 5b-2: a selling credential without the stall's attestation is never minted.
+    check(
+      'a legacy selling credential is refused at mint (400 TERMINAL_ATTESTATION_INVALID)',
+      /TERMINAL_ATTESTATION_INVALID/.test(minted.body),
+      minted.body.slice(0, 200),
+    )
+    return
+  }
+  const voucherId = (JSON.parse(minted.body || '{}') as { voucher_id?: string }).voucher_id ?? ''
+  check('a pre-5b-2 gateway mints the legacy credential', minted.status === 201 && voucherId !== '', `${minted.status} ${minted.body.slice(0, 160)}`)
+  if (!voucherId) return
+  let token = ''
+  for (let i = 0; i < 30 && !token; i++) {
+    const got = await asKey(ownerSk, 'GET', `/api/v1/wallet/vouchers/${encodeURIComponent(voucherId)}`)
+    const answer = JSON.parse(got.body || '{}') as { status?: string; token?: string }
+    if (answer.status === 'ISSUED' && answer.token) token = answer.token.trim()
+    else await owner.waitForTimeout(2_000)
+  }
+  check('the legacy credential arrives', token !== '')
+  if (!token) return
+
+  // The portal (cashu-voucher 0.17.0) refuses the till's Sell: no stall attestation, metric
+  // label owner_attestation. Signed with K and naming the credential, as the till would.
+  const secret = tokenProofs(token)[0]?.secret ?? ''
+  const k: TillKey = { sk: tillSk, voucherId, secret, stall }
+  const sale = await asTillResponse(k, 'POST', '/api/v1/portal/vouchers', {
+    face_value_minor: 100, currency: 'EUR', quantity: 1, issuance_warrant: await freshWarrant(k, 100, 'EUR'),
+  })
+  checkDeployed('the portal refuses a Sell from the legacy till (403)', sale.status === 403, `${sale.status} ${sale.body.slice(0, 160)}`)
+
+  // The owner's roster shows the re-enrol path. The row is the one an owner app before 5b-5 wrote
+  // for this mint, token and all, so it is written into A's roster as that app left it.
+  await owner.evaluate(
+    ({ key, row }) => {
+      const rows = JSON.parse(localStorage.getItem(key) ?? '[]') as unknown[]
+      localStorage.setItem(key, JSON.stringify([...rows, row]))
+    },
+    {
+      key: `imani-wallet:terminals:${stall}`,
+      row: { terminalPubkey: lock, name: 'Legacy till', role: 'issue-and-redeem', enrolledAt: Date.now(), token, voucherId, status: 'in-service', gatewayState: 'confirmed' },
+    },
+  )
+  await owner.goto(`${BASE}/settings/terminals`, { waitUntil: 'load', timeout: 60_000 })
+  const notice = await owner
+    .getByTestId('renew-to-sell')
+    .first()
+    .innerText({ timeout: 30_000 })
+    .catch(() => '')
+  await snap(owner, 'p5b-a-renew-to-sell')
+  check(
+    'A\'s roster reads "Renew to keep selling" with the revoke, decommission and set-up-again steps',
+    /^Renew to keep selling/.test(notice) && /Revoke it here/.test(notice) && /take it out of service/.test(notice) && /Add it again here/.test(notice),
+    notice.slice(0, 300),
+  )
+
+  // Step 1 of the path, for real: the owner revokes the legacy till and the mint takes the spend.
+  const row = owner
+    .locator('div')
+    .filter({ has: owner.getByText('Legacy till', { exact: true }) })
+    .filter({ has: owner.getByRole('button', { name: 'Revoke', exact: true }) })
+    .last()
+  const asked = await row.getByRole('button', { name: 'Revoke', exact: true }).click({ timeout: 30_000 }).then(() => true, () => false)
+  const confirmed =
+    asked &&
+    (await owner.getByRole('button', { name: 'Revoke Legacy till', exact: true }).click({ timeout: 30_000 }).then(() => true, () => false))
+  const revokedAt = confirmed ? await rosterRevokedAt(owner, 'Legacy till') : null
+  check('A revokes the legacy till (step 1 of re-enrolling), and the notice goes', revokedAt !== null, `asked=${asked} confirmed=${confirmed}`)
+}
+
+/** The `owner_attestation` in a credential secret's signed metadata, or null. */
+function credentialAttestation(secret: string): Record<string, string> | null {
+  try {
+    const body = (JSON.parse(secret) as [string, { tags: string[][] }])[1]
+    const metadata = body.tags.find((t) => t[0] === 'merchant_metadata')?.[1]
+    const a = metadata ? (JSON.parse(metadata) as { owner_attestation?: Record<string, string> }).owner_attestation : undefined
+    return a ?? null
+  } catch {
+    return null
+  }
+}
+
+/** The owner's key, decrypted from A's key store with the test passphrase (as `tillKey` does). */
+async function ownerKey(owner: Page): Promise<string> {
+  const source = `(async () => {
+    try {
+      const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0))
+      const env = JSON.parse(localStorage.getItem('imani-wallet-key') || 'null')
+      const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(${JSON.stringify(TEST_PASSPHRASE)}), 'PBKDF2', false, ['deriveKey'])
+      const key = await crypto.subtle.deriveKey(
+        { name: 'PBKDF2', salt: b64(env.kdf.salt), iterations: env.kdf.iterations, hash: env.kdf.hash },
+        material, { name: 'AES-GCM', length: 256 }, false, ['decrypt'])
+      const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64(env.iv) }, key, b64(env.ciphertext))
+      return new TextDecoder().decode(plain)
+    } catch (e) {
+      return String(e)
+    }
+  })()`
+  return (await owner.evaluate(source)) as string
+}
+
+/** A request signed with NIP-98 by `sk`, with no terminal credential header. */
+async function asKey(
+  sk: string,
+  method: string,
+  path: string,
+  body?: unknown,
+  headers: Record<string, string> = {},
+): Promise<{ status: number; body: string }> {
+  const url = `${BASE}${path}`
+  const payload = body === undefined ? undefined : JSON.stringify(body)
+  const auth = await nip98.getToken(url, method.toUpperCase(), (e) => finalizeEvent(e, hexToBytes(sk)), true, body as Record<string, unknown>)
+  const res = await fetch(url, {
+    method,
+    headers: { Authorization: auth, ...(payload ? { 'Content-Type': 'application/json' } : {}), ...headers },
+    body: payload,
+    signal: AbortSignal.timeout(20_000),
+  }).catch(() => null)
+  return { status: res?.status ?? 0, body: res ? await res.text().catch(() => '') : '' }
 }
 
 /** When A's roster recorded the named terminal as revoked (epoch ms), or null within 60 s. */
