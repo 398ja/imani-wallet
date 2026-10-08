@@ -156,9 +156,12 @@ describe('dm-poll CryptoAdapter', () => {
         const wraps = chunkWraps(recipientSk, javaChunks as unknown[])
         const adapter = createDmCryptoAdapter()
 
-        // The first wrap is a real DM that is not yet a coupon. Null keeps it
-        // unconsumed so the poll re-offers it; anything else loses the money.
-        expect(await adapter.unwrapNip17Dm(wraps[0] as never, '')).toBeNull()
+        // The first wrap is a real DM that is not yet a coupon. HELD keeps it
+        // unconsumed (and out of the failed tracker) so the poll re-offers it;
+        // anything that consumes it loses the money.
+        const first = await adapter.unwrapNip17Dm(wraps[0] as never, '')
+        expect(first?.hold).toBe(true)
+        expect(adapter.extractToken(first!.content)).toBeNull()
 
         const done = await adapter.unwrapNip17Dm(wraps[1] as never, '')
         expect(done?.content).toBe(JSON.stringify(javaPayload))
