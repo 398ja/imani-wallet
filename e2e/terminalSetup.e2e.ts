@@ -426,13 +426,6 @@ async function phase5(browser: Browser, owner: Page, customer: Page, customerPub
       window.dispatchEvent(new PopStateEvent('popstate'))
     }, p)
   const outbound: Array<{ path: string; header: string | null; warrant: string | null; body: string }> = []
-  /** The voucher ids the portal minted for B3's Sell, from its 201 response. */
-  const soldIds: string[] = []
-  till.on('response', async (res) => {
-    if (new URL(res.url()).pathname !== '/api/v1/portal/vouchers' || res.status() !== 201) return
-    const body = (await res.json().catch(() => null)) as { items?: Array<{ voucher_id?: string }> } | null
-    for (const item of body?.items ?? []) if (item.voucher_id) soldIds.push(item.voucher_id)
-  })
   till.on('request', (r) => {
     const path = new URL(r.url()).pathname
     if (!path.startsWith('/api/v1/portal/')) return
@@ -463,7 +456,9 @@ async function phase5(browser: Browser, owner: Page, customer: Page, customerPub
     String(sentWarrant?.form),
   )
   checkDeployed('the gateway mints B3\'s sale ("It is in their wallet now")', /It is in their wallet now/.test(sold), sold.slice(0, 200))
-  const verdict = /It is in their wallet now/.test(sold) ? await couponVerdict(customer, soldIds) : 'not sold'
+  const verdict = /It is in their wallet now/.test(sold)
+    ? await couponVerdict(customer, Number(sentWarrant?.sale_total))
+    : 'not sold'
   checkDeployed("C's coupon from B3 has warrant verdict `verified`", verdict === 'verified', verdict)
 
   console.log("\nPhase 5: A sees B3's sale attributed")
@@ -673,15 +668,17 @@ async function tillSells(till: Page, customerPubkey: string, amount: string): Pr
 
 /**
  * The warrant verdict C's wallet recorded on the coupon B3 sold, from its own history.
- * The wallet writes `validation.warrant` on every received row (voucherValidationRecord.ts), and the
- * row names the coupon's `voucherId`. (Round 3 searched for the warrant's nonce, which no received
- * row stores, so this could never have found the coupon.)
+ * The wallet writes `validation.warrant` and `validation.warrantedSaleTotal` on every received row
+ * (voucherValidationRecord.ts). Round 3 searched for the warrant's nonce, and a voucher id would not
+ * do either: no received row stores the nonce, and a received row's voucherId is the swap result's
+ * (a fresh UUID), not the issuer's. C holds two coupons of this stall, A's 10.00 and B3's 4.00, so
+ * the warranted sale total tells them apart.
  */
-async function couponVerdict(customer: Page, voucherIds: string[]): Promise<string> {
-  if (voucherIds.length === 0) return 'no voucher id from the Sell response'
+async function couponVerdict(customer: Page, saleTotal: number): Promise<string> {
+  if (!Number.isFinite(saleTotal)) return 'no sale total in B3 warrant'
   // Source text, for the same tsx reason as `tillKey`.
   const source = `(async () => {
-    const wanted = ${JSON.stringify(voucherIds)}
+    const wanted = ${JSON.stringify(`"warrantedSaleTotal":${saleTotal}`)}
     const dbs = (await indexedDB.databases()).filter((d) => (d.name || '').startsWith('imani-wallet'))
     for (const info of dbs) {
       const db = await new Promise((ok, ko) => {
@@ -697,7 +694,7 @@ async function couponVerdict(customer: Page, voucherIds: string[]): Promise<stri
         })
         for (const row of rows) {
           const s = JSON.stringify(row)
-          if (!wanted.some((id) => s.includes(id))) continue
+          if (!s.includes(wanted)) continue
           const m = s.match(/"warrant":"(\\w+)"/)
           if (m) return m[1]
         }
