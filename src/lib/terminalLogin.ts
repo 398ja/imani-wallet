@@ -5,6 +5,9 @@ import { parseVoucherToken, tokenProofs, verifyVoucher } from './voucherToken'
 import { checkIssuer } from './issuerAllowlist'
 import { lockedToPubkey, xOnly } from './witness'
 import { ATTESTATION_REFUSAL, checkOwnerAttestation } from './ownerAttestation'
+import { hasDuplicateKeys } from './terminalWarrant'
+
+const LOWER_HEX64_STALL = /^[0-9a-f]{64}$/
 
 /**
  * Terminal login: turn a stored credential back into a session.
@@ -262,7 +265,10 @@ function readCredential(token: string): { facts: CredentialFacts } | { refusal: 
  * The device's attestation check, `verifyOwnerAttestation`'s steps on metadata already verified.
  *
  * Not the strict credential parser: tokens minted before 0.16.1 serialised some tags in ways it
- * refuses, and the device has already verified this token's signature and lock itself. The
+ * refuses, and the device has already verified this token's signature and lock itself. But the
+ * metadata is read as strictly as the verifiers read it: a repeated key is never attested, and
+ * `stall_pubkey` must equal `issuerId` exactly. So "attested" here implies the verifiers accept
+ * the attestation step. The
  * digest is rebuilt from the metadata's own `stall_pubkey`, `lock_key` and `role`, verbatim.
  */
 function ownerAttestationOf(
@@ -279,11 +285,20 @@ function ownerAttestationOf(
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return 'missing'
   const m = metadata as Record<string, unknown>
   if (!('owner_attestation' in m)) return 'missing'
+  // A repeated key at any depth: `JSON.parse` kept the last one, but every verifier's strict
+  // parse refuses the whole credential, so it can never sell. Never attested here either; read
+  // as missing (Redeem only), like any other attestation the verifiers would not read.
+  if (hasDuplicateKeys(metadataJson)) return 'missing'
   // An attestation over a credential with no expiry would bound nothing. Refused, not read as
   // missing: the stall signed something, and not this.
   if (expiresAt === undefined || !Number.isSafeInteger(expiresAt) || expiresAt < 0) return 'bad'
-  if (m.stall_pubkey !== issuerId.toLowerCase()) return 'bad'
-  const refusal = checkOwnerAttestation(m, issuerId.toLowerCase(), String(expiresAt))
+  // As the verifiers read it: `stall_pubkey` lowercase hex, exactly the stall. An uppercase
+  // spelling (even one the stall signed in uppercase) is what every verifier refuses.
+  const stall = issuerId.toLowerCase()
+  if (typeof m.stall_pubkey !== 'string' || !LOWER_HEX64_STALL.test(m.stall_pubkey) || m.stall_pubkey !== stall) {
+    return 'bad'
+  }
+  const refusal = checkOwnerAttestation(m, stall, String(expiresAt))
   if (refusal === null) return 'attested'
   // Present but malformed reads as missing in the Java (OWNER_ATTESTATION_MISSING), so here too:
   // the till keeps Redeem. Only a well-formed attestation that fails is a refusal.

@@ -236,6 +236,8 @@ export interface LockedCredentialOptions {
   tamperMetadata?: string
   /** The signed `expires_at`, epoch seconds. A fixed instant in 2027 unless set. */
   expiresAt?: number
+  /** Leaves the `expires_at` tag out altogether: a credential with no expiry. */
+  omitExpiry?: boolean
 }
 
 /**
@@ -265,7 +267,7 @@ export function buildLockedCredentialToken(o: LockedCredentialOptions): string {
     ['issuer', stall],
     ['unit', 'sat'],
     ['face_value', '1'],
-    ['expires_at', String(o.expiresAt ?? 1820071167)],
+    ...(o.omitExpiry ? [] : [['expires_at', String(o.expiresAt ?? 1820071167)]]),
     ['memo', 'Imani terminal credential'],
     ['backing_strategy', 'PROPORTIONAL'],
     ['issuance_ratio', '1'],
