@@ -249,10 +249,16 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
       }
 
       // Prevent concurrent redemption of the same token across different events
-      // (e.g., same token re-wrapped in a new DM, or SSE re-delivery)
+      // (e.g., same token re-wrapped in a new DM, or SSE re-delivery).
+      //
+      // NOT marked processed (imani-wallet#204). The redemption in flight may
+      // yet fail and be left for a retry, and consuming this copy meanwhile
+      // would leave nothing to retry from if that attempt's own event is lost.
+      // Left unprocessed, it is offered again on the next poll and then either
+      // redeems or is recognised by `hasTokenBeenReceived` above.
       if (this.inFlightFingerprints.has(fingerprint)) {
         console.log('[DmPollService] Token fingerprint already in-flight:', fingerprint.substring(0, 8));
-        await this.eventTracker.add(event.id);
+        fingerprint = null; // Not ours to release in `finally`.
         return null;
       }
       this.inFlightFingerprints.add(fingerprint);

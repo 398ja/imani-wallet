@@ -41,6 +41,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `nostr-chunked-events` v0.3.0 as a git dependency (`github:398ja/nostr-chunked-events#v0.3.0`,
   locked at `8f45de7`). It is imported only through `src/lib/chunkedRecord.ts`. `pako` and
   `@noble/hashes` come in through it, not as direct dependencies.
+## [0.15.2] - 2026-10-08
+
+### Fixed
+
+- **A chunked coupon is no longer stranded between reassembly and save (#204).**
+  `dmChunks` marked a transfer completed, and persisted that, the moment its pieces decoded.
+  That was before the coupon was redeemed, saved or its escrow acked. A reload mid-receive,
+  or any outcome dm-poll leaves retryable (a failed save, a deferral, a transient error), then
+  left the coupon unreceivable for 8 days ("holding chunk" on every poll), with
+  gateway-customer's escrow never acked. A transfer is now marked completed only when dm-poll
+  marks its completing wrap processed, after the save. Until then, the completing wrap yields the
+  coupon again and the receive replays under the same idempotency key, so the coupon is saved
+  once and the escrow acked once. Tombstones from earlier builds are re-checked, so coupons they
+  stranded are recovered. dm-poll also no longer consumes a same-token duplicate while the first
+  redemption may still fail.
+
+## [0.15.1] - 2026-10-08
 
 ### Changed
 

@@ -40,7 +40,7 @@ import {
   transferIdFor,
 } from './transferSignature'
 import { createDmCryptoAdapter, toLegacyMetadata } from './dmCrypto'
-import { resetChunkAssembly } from './dmChunks'
+import { confirmChunkDeliveries, resetChunkAssembly } from './dmChunks'
 import { cancelDeferredWrite, deferWrite, flushDeferredWrites } from './deferredWrite'
 import { loadMerchant } from './merchant'
 import { licenceFromToken } from './licences'
@@ -550,6 +550,13 @@ function storageAdapter(): StorageAdapter {
       return [...readSet(PROCESSED_KEY)]
     },
     async saveProcessedEventIds(ids: string[]) {
+      // The one moment a chunked coupon's transfer may be remembered as
+      // completed (#204). dm-poll calls this only after an outcome it will not
+      // retry (saved, already held, refused for good), so a transfer whose
+      // completing event is in `ids` is durably handled. Before this, the
+      // transfer was tombstoned the moment its pieces decoded, and a reload or
+      // any retryable failure in the redemption stranded the coupon.
+      confirmChunkDeliveries(ids)
       // Deferred and coalesced, unlike `markTokenAsReceived` above.
       //
       // dm-poll calls this once per event it finishes, and `localStorage` is
