@@ -96,3 +96,30 @@ describe('what it refuses to announce', () => {
     expect(() => announceRefusal(boom as never)).not.toThrow()
   })
 })
+
+describe('telling a CUSTOMER why a coupon was refused (#160 5b-5)', () => {
+  // The stall's wording asks it to question the customer. A customer refused a coupon a stall
+  // just sold them needs the other side of that: nothing was taken, and what to ask the stall.
+  it('speaks to the customer about an unwarranted coupon, not to a stall', () => {
+    announceRefusal({ reason: 'unwarranted' }, 'customer')
+
+    expect(toasts.errors).toHaveLength(1)
+    expect(toasts.errors[0].title).toBe('Coupon not accepted')
+    expect(toasts.errors[0].description).toMatch(/did not sign for this coupon/)
+    expect(toasts.errors[0].description).toMatch(/Nothing was taken from you/)
+    expect(toasts.errors[0].description).not.toMatch(/Ask the customer/)
+  })
+
+  // The stall keeps its own wording, which tells it to question where the coupon came from.
+  it('keeps the stall’s wording for a stall', () => {
+    announceRefusal({ reason: 'unwarranted' })
+    expect(toasts.errors[0].title).toBe('Coupon not authorised')
+    expect(toasts.errors[0].description).toMatch(/Ask the customer/)
+  })
+
+  // Reasons that already speak to whoever holds the coupon read the same for both.
+  it('uses the shared wording where no customer variant exists', () => {
+    announceRefusal({ reason: 'over-redeemed' }, 'customer')
+    expect(toasts.errors[0].title).toMatch(/already spent/i)
+  })
+})

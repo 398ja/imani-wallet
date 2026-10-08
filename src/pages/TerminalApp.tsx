@@ -18,7 +18,8 @@ import {
   unlockTerminal,
   type UnlockOutcome,
 } from '../lib/terminalUnlock'
-import { LOGIN_REFUSAL } from '../lib/terminalLogin'
+import { LOGIN_REFUSAL, UNATTESTED_TILL_NOTICE } from '../lib/terminalLogin'
+import { mayAct, TERMINAL_ACTIONS } from '../lib/terminalRole'
 import { canIssueNow, canRedeemNow, sessionState, type TerminalSession } from '../lib/terminalSession'
 import { mayWarrantSale } from '../lib/warrantSigner'
 import {
@@ -376,7 +377,15 @@ function TerminalHome({
             </Button>
           ) : null}
         </div>
-        {till.session.kind === 'reduced' && (
+        {/* A selling role the stall never attested (spec 4.6.5): Redeem only, and the steps
+            that put it back on sale until phase 6's one-tap Renew. */}
+        {till.actor.attested !== true &&
+          mayAct(till.actor.permissions, TERMINAL_ACTIONS.ISSUE, till.actor.stallPubkey) && (
+            <p className="mt-4 text-center text-sm text-mono-500" data-testid="renew-to-sell">
+              {UNATTESTED_TILL_NOTICE}
+            </p>
+          )}
+        {till.session.kind === 'reduced' && till.actor.attested === true && (
           <p className="mt-4 text-center text-sm text-mono-500">
             Selling needs the network. This till opened without it, so it redeems only until you
             lock it and open it again.

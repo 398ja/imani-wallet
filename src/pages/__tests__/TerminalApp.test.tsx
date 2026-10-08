@@ -60,6 +60,8 @@ function enrol(role: string) {
 function unlockedAs(
   role: (typeof TERMINAL_ROLES)[keyof typeof TERMINAL_ROLES],
   kind: (typeof SESSION_KIND)[keyof typeof SESSION_KIND] = SESSION_KIND.FULL,
+  /** Whether the stall attested this till's credential (#160 decision 5). Current tills are. */
+  attested = true,
 ) {
   const actor: TerminalActor = {
     kind: 'terminal',
@@ -67,6 +69,7 @@ function unlockedAs(
     role,
     terminalPubkey: DEVICE,
     permissions: grantFor(role, STALL),
+    attested,
   }
   state.till = { devicePubkey: DEVICE, actor, session: openSession(actor, kind) }
 }
@@ -138,6 +141,28 @@ describe('the till, per role', () => {
     expect(await screen.findByRole('button', { name: /Redeem/ })).toBeTruthy()
     expect(screen.queryByRole('button', { name: /Sell/ })).toBeNull()
     expect(screen.getByText(/Selling needs the network/)).toBeTruthy()
+  })
+
+  // A selling till the stall never attested (#160 decision 5, spec 4.6.5): FULL, yet Redeem
+  // only, and the till tells the operator to ask for a renewal and how it is done today.
+  it('sell-and-redeem, unattested: Redeem only, with the renew steps', async () => {
+    enrol(TERMINAL_ROLES.ISSUE_AND_REDEEM)
+    unlockedAs(TERMINAL_ROLES.ISSUE_AND_REDEEM, SESSION_KIND.FULL, false)
+    at('/')
+    expect(await screen.findByRole('button', { name: /Redeem/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Sell/ })).toBeNull()
+    const notice = screen.getByTestId('renew-to-sell').textContent ?? ''
+    expect(notice).toMatch(/Ask the owner to renew this terminal to sell/)
+    expect(notice).toMatch(/take it out of service/)
+  })
+
+  // A redeem-only till is not told to renew: it has nothing to sell.
+  it('redeem-only, unattested: no renew notice', async () => {
+    enrol(TERMINAL_ROLES.REDEEM_ONLY)
+    unlockedAs(TERMINAL_ROLES.REDEEM_ONLY, SESSION_KIND.FULL, false)
+    at('/')
+    expect(await screen.findByRole('button', { name: /Redeem/ })).toBeTruthy()
+    expect(screen.queryByTestId('renew-to-sell')).toBeNull()
   })
 })
 
