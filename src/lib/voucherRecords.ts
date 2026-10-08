@@ -6,8 +6,8 @@ import { getSigner } from './nap'
 import { allEvents, publish, type PublishResult } from './relay'
 import {
   buildRecordEvents,
-  completeChunkedIds,
   isChunkEvent,
+  reassembleChunkSets,
   reassembleRecords,
   recordIdOf,
   type ChunkingOptions,
@@ -156,8 +156,56 @@ export async function tombstoneVoucher(tokenId: string): Promise<void> {
     await publishRecords(await buildRecords(tokenId, { spent: true }))
   } catch (error) {
     console.error('[voucherRecords] spent coupon not tombstoned on the relay', error)
+    return
+  }
+  // Only once the tombstone is ON the relay: the chunks of a spent coupon are
+  // dead weight from here on (#206 review L2).
+  try {
+    const signer = getSigner()
+    const chunks = (await allEvents(signer.pubkey, NIP60_TOKEN_KIND)).filter(
+      (e) => isChunkEvent(e) && recordIdOf(e) === tokenId,
+    )
+    await requestDeletion(chunks.map((e) => e.id))
+  } catch (error) {
+    console.warn('[voucherRecords] spent coupon chunks not cleaned up', error)
   }
 }
+
+/**
+ * Ask the relay to delete our own kind-7375 events (NIP-09). ADVISORY ONLY: a
+ * relay may ignore it, so nothing ever depends on it. A tombstone stays the
+ * authority on spent, and newest-complete-snapshot stays the rule on restore.
+ * It exists to bound growth, which also keeps a wallet under the relay's
+ * per-filter cap for longer (#206 review L2, M2).
+ */
+async function requestDeletion(eventIds: string[]): Promise<void> {
+  if (eventIds.length === 0) return
+  const signer = getSigner()
+  // Bounded batches keep each kind-5 event far under the relay's size limit.
+  for (let i = 0; i < eventIds.length; i += DELETION_BATCH) {
+    const ids = eventIds.slice(i, i + DELETION_BATCH)
+    const result = await publish(
+      await signer.signEvent({
+        kind: 5,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [...ids.map((id) => ['e', id]), ['k', String(NIP60_TOKEN_KIND)]],
+        content: 'superseded or spent coupon backup',
+      }),
+    )
+    if (result.ok === 0) console.warn('[voucherRecords] relay refused a deletion request', result.errors)
+  }
+}
+
+/** 500 `e` tags is about 38 KB: well under 65,536. */
+const DELETION_BATCH = 500
+
+/**
+ * Snapshot keys already warned about this session (#206 review L3). An orphan
+ * of a failed publish stays on the relay; without this it warned on every
+ * restore, forever. Orphans of a coupon that has since been republished are
+ * not reported at all (see reassembleRecords).
+ */
+const warnedChunkSets = new Set<string>()
 
 function parseRecord(event: Event): { id: string; record: TokenRecord } | null {
   try {
@@ -203,9 +251,12 @@ async function liveRecords(events: Event[], pubkey: string): Promise<VoucherRow[
 
   // Chunked records (#203): reassembled, hash-checked and decompressed first.
   // An incomplete or corrupted set is skipped, never half-read.
-  const chunked = await reassembleRecords(events, pubkey, selfSealer(), (id, reason) =>
-    console.warn('[voucherRecords] chunked coupon record unreadable; skipped', { id, reason }),
-  )
+  const chunked = await reassembleRecords(events, pubkey, selfSealer(), (id, reason, set) => {
+    const key = set.snapshotId ?? set.eventIds.slice().sort().join(',')
+    if (warnedChunkSets.has(key)) return
+    warnedChunkSets.add(key)
+    console.warn('[voucherRecords] chunked coupon record unreadable; skipped', { id, reason })
+  })
   for (const { id, at, plaintext } of chunked) {
     try {
       entries.push({ id, at, record: JSON.parse(plaintext) as TokenRecord })
@@ -344,12 +395,40 @@ export async function restoreVouchers(pubkey: string): Promise<number> {
  * everything received before this existed, or whose publish lost the race with a
  * closing tab. Cheap: one query, then only what is missing.
  */
+async function pruneSuperseded(
+  records: { id: string; at: number; eventIds: string[] }[],
+  rejected: { id?: string; eventIds: string[] }[],
+): Promise<void> {
+  // Keep the newest verified snapshot of each coupon; everything else chunked
+  // for that coupon (older snapshots, orphans of a failed publish) is dead.
+  // A coupon with no verified snapshot keeps all its chunks: never delete the
+  // only copy of anything.
+  try {
+    const newest = new Map<string, { at: number; eventIds: string[] }>()
+    for (const r of records) {
+      const cur = newest.get(r.id)
+      if (!cur || r.at > cur.at) newest.set(r.id, r)
+    }
+    const keep = new Set([...newest.values()].flatMap((r) => r.eventIds))
+    const dead = [...records, ...rejected]
+      .filter((r) => r.id !== undefined && newest.has(r.id))
+      .flatMap((r) => r.eventIds)
+      .filter((id) => !keep.has(id))
+    await requestDeletion([...new Set(dead)])
+  } catch (error) {
+    console.warn('[voucherRecords] superseded coupon chunks not cleaned up', error)
+  }
+}
+
 export async function backfillVouchers(pubkey: string): Promise<number> {
   try {
     const events = await allEvents(pubkey, NIP60_TOKEN_KIND)
-    // A plain record counts by its `d`; a chunked one only once EVERY chunk of
-    // a snapshot is there, so a half-landed set is published again (#203).
-    const known = completeChunkedIds(events)
+    // A plain record counts by its `d`; a chunked one only once a snapshot
+    // decrypts, validates and matches its payload hash, so a half-landed or
+    // corrupt set is published again (#203, #206 review L4). Once per login.
+    const { records, rejected } = await reassembleChunkSets(events, pubkey, selfSealer())
+    const known = new Set(records.map((r) => r.id))
+    await pruneSuperseded(records, rejected)
     for (const event of events) {
       if (isChunkEvent(event)) continue
       const id = recordIdOf(event)

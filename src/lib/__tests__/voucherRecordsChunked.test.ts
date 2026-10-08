@@ -58,7 +58,7 @@ vi.mock('../wallet', () => ({
   notifyWalletChanged: () => undefined,
 }))
 
-import { backfillVouchers, publishVoucher, restoreVouchers } from '../voucherRecords'
+import { backfillVouchers, publishVoucher, restoreVouchers, tombstoneVoucher } from '../voucherRecords'
 import {
   EVENT_BUDGET_BYTES,
   RELAY_MAX_EVENT_BYTES,
@@ -320,5 +320,144 @@ describe('a relay refusal is not silent', () => {
     }
     expect(relay.refused.length).toBe(1)
     expect(String(error.mock.calls[0]?.[1])).toMatch(/event too large/)
+  })
+})
+
+/** Re-sign an event with new tags/content, as a different writer or a retry would. */
+const resign = (e: Event, patch: Partial<EventTemplate>) =>
+  finalizeEvent({ kind: e.kind, created_at: e.created_at, tags: e.tags, content: e.content, ...patch }, sk)
+
+describe('relay order (review M1)', () => {
+  it('restores when the relay returns chunks newest-first, shuffled and duplicated', async () => {
+    const coupon = row('cashuB' + noise(150_000))
+    await publishVoucher(coupon)
+    expect(relay.events.length).toBeGreaterThan(2)
+    // strfry: created_at desc, then id. All chunks share created_at, so the
+    // order is by event id, i.e. random. Reverse AND shuffle AND replay one.
+    const sorted = [...relay.events].sort((a, b) => (a.id < b.id ? 1 : -1))
+    const shuffled = [sorted[sorted.length - 1], ...sorted.slice(0, -1)].reverse()
+    expect(shuffled.map((e) => e.id)).not.toEqual(relay.events.map((e) => e.id))
+    relay.events = [...shuffled, shuffled[1]]
+    expect(await restoreVouchers(pk)).toBe(1)
+    expect(store.restored[0]).toEqual(coupon)
+  })
+})
+
+describe('a misconfigured chunk size is loud (review L1)', () => {
+  it('throws rather than build a chunk event over the budget', async () => {
+    await expect(
+      buildRecordEvents(7375, 'ab'.repeat(32), noise(200_000), [['spent', 'false']], sealer, { chunkSize: 60_000 }),
+    ).rejects.toThrow(/over the 60000 budget/)
+  })
+})
+
+describe('v0.3.0 chunk shapes (review V1, V2)', () => {
+  it('restores chunks that carry no d tag, by their record_id tag', async () => {
+    const coupon = row('cashuB' + noise(90_000))
+    await publishVoucher(coupon)
+    expect(relay.events.every((e) => e.tags.some(([n, v]) => n === 'record_id' && v === coupon.token_id))).toBe(true)
+    relay.events = relay.events.map((e) => resign(e, { tags: e.tags.filter(([n]) => n !== 'd') }))
+    expect(await restoreVouchers(pk)).toBe(1)
+    expect(store.restored[0]).toEqual(coupon)
+    store.held = [coupon]
+    expect(await backfillVouchers(pk)).toBe(0)
+  })
+
+  it('still restores chunks written with only d=<id>-chunk-n (pre-record_id)', async () => {
+    const coupon = row('cashuB' + noise(90_000))
+    await publishVoucher(coupon)
+    relay.events = relay.events.map((e) => resign(e, { tags: e.tags.filter(([n]) => n !== 'record_id') }))
+    expect(await restoreVouchers(pk)).toBe(1)
+    expect(store.restored[0]).toEqual(coupon)
+  })
+
+  it('reports, never silently drops, a chunk set with no record id at all', async () => {
+    await publishVoucher(row('cashuB' + noise(90_000)))
+    relay.events = relay.events.map((e) => resign(e, { tags: e.tags.filter(([n]) => n !== 'record_id' && n !== 'd') }))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    expect(await restoreVouchers(pk)).toBe(0)
+    expect(warn.mock.calls.some(([m]) => String(m).includes('unreadable'))).toBe(true)
+  })
+
+  it('accepts a retried chunk: same plaintext, new nonce, new event id', async () => {
+    const coupon = row('cashuB' + noise(90_000))
+    await publishVoucher(coupon)
+    const first = relay.events[0]
+    relay.events.push(resign(first, { content: nip44.encrypt(nip44.decrypt(first.content, key), key) }))
+    expect(await restoreVouchers(pk)).toBe(1)
+    expect(store.restored[0]).toEqual(coupon)
+  })
+})
+
+describe('back-fill trusts only a verified chunk set (review L4)', () => {
+  it('republishes a coupon whose complete chunk set fails the payload hash', async () => {
+    const coupon = row('cashuB' + noise(90_000))
+    await publishVoucher(coupon)
+    const victim = relay.events[0]
+    const plain = nip44.decrypt(victim.content, key)
+    relay.events[0] = resign(victim, {
+      content: nip44.encrypt((plain[0] === 'A' ? 'B' : 'A') + plain.slice(1), key),
+    })
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    store.held = [coupon]
+    expect(await backfillVouchers(pk)).toBe(1)
+  })
+})
+
+describe('orphan chunks do not warn on every login (review L3)', () => {
+  it('is quiet about an orphan once a complete snapshot of the same coupon exists', async () => {
+    const coupon = row('cashuB' + noise(90_000))
+    await publishVoucher(coupon)
+    relay.events.splice(1) // orphan: only chunk 0 of snapshot A landed
+    await publishVoucher(coupon) // back-fill's republish: snapshot B, complete
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    expect(await restoreVouchers(pk)).toBe(1)
+    expect(await restoreVouchers(pk)).toBe(1)
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('warns about a genuinely unrecoverable set once per session, not per login', async () => {
+    await publishVoucher(row('cashuB' + noise(90_000), 'f1'.repeat(32)))
+    relay.events.splice(1)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    await restoreVouchers(pk)
+    await restoreVouchers(pk)
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('NIP-09 cleanup of dead chunks (review L2)', () => {
+  const deletions = () => relay.events.filter((e) => e.kind === 5)
+  const deleted = () => new Set(deletions().flatMap((e) => e.tags.filter(([n]) => n === 'e').map(([, v]) => v)))
+
+  it('asks the relay to delete the chunks of a tombstoned coupon', async () => {
+    const coupon = row('cashuB' + noise(90_000))
+    await publishVoucher(coupon)
+    const chunkIds = relay.events.map((e) => e.id)
+    await tombstoneVoucher(coupon.token_id!)
+    expect([...deleted()].sort()).toEqual([...chunkIds].sort())
+    expect(deletions().every((e) => e.tags.some(([n, v]) => n === 'k' && v === '7375'))).toBe(true)
+    expect(await restoreVouchers(pk)).toBe(0)
+  })
+
+  it('back-fill deletes superseded snapshots and keeps the newest complete one', async () => {
+    const coupon = row('cashuB' + noise(90_000))
+    await publishVoucher(coupon)
+    const old = relay.events.map((e) => resign(e, { created_at: e.created_at - 10 }))
+    relay.events = [...old]
+    await publishVoucher(coupon)
+    const fresh = relay.events.slice(old.length).map((e) => e.id)
+    store.held = [coupon]
+    expect(await backfillVouchers(pk)).toBe(0)
+    expect([...deleted()].sort()).toEqual(old.map((e) => e.id).sort())
+    for (const id of fresh) expect(deleted().has(id)).toBe(false)
+  })
+
+  it('never deletes the only copy of a coupon', async () => {
+    const coupon = row(TERMINAL_TOKEN)
+    await publishVoucher(coupon)
+    store.held = [coupon]
+    await backfillVouchers(pk)
+    expect(deletions()).toEqual([])
   })
 })
