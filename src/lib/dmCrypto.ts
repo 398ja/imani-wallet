@@ -11,7 +11,7 @@ import { checkIssuer } from './issuerAllowlist'
 import { checkMintAndUnit } from './trustedMint'
 import { getSigner } from './nap'
 import { buildValidationRecord } from './voucherValidationRecord'
-import { asChunk, looksLikeChunk, offerChunk } from './dmChunks'
+import { asChunk, looksLikeChunk, offerChunkFrom } from './dmChunks'
 import {
   heldWrapDecision,
   holdTransferSignatureWrap,
@@ -349,25 +349,50 @@ export function createDmCryptoAdapter(): CryptoAdapter {
          */
         const chunk = asChunk(rumor.content)
         if (chunk) {
-          const whole = await offerChunk(chunk)
-          if (!whole) {
-            console.log('[dmCrypto] holding chunk', {
-              transfer: chunk.transfer_id.slice(0, 8),
-              index: chunk.chunk_index,
-              of: chunk.chunk_total,
-            })
-            return null
-          }
-          console.log('[dmCrypto] reassembled a chunked coupon', {
+          const offer = await offerChunkFrom(chunk, event.id)
+          const tag = {
             transfer: chunk.transfer_id.slice(0, 8),
-            chunks: chunk.chunk_total,
-            bytes: whole.length,
-          })
-          return {
-            eventId: event.id,
-            senderPubkey: rumor.pubkey,
-            content: whole,
-            createdAt: rumor.created_at,
+            index: chunk.chunk_index,
+            of: chunk.chunk_total,
+          }
+          switch (offer.kind) {
+            case 'complete':
+              console.log(
+                offer.redelivery
+                  ? '[dmCrypto] offering a reassembled coupon again (its last attempt did not finish)'
+                  : '[dmCrypto] reassembled a chunked coupon',
+                { transfer: tag.transfer, chunks: chunk.chunk_total, bytes: offer.payload.length },
+              )
+              return {
+                eventId: event.id,
+                senderPubkey: rumor.pubkey,
+                content: offer.payload,
+                createdAt: rumor.created_at,
+              }
+            case 'done':
+              // A straggler from a transfer whose coupon is durably handled
+              // (#204: only ever recorded once the completing event is
+              // processed). An empty non-token DM, so dm-poll marks it
+              // processed and stops re-reading it.
+              console.log('[dmCrypto] chunk of a transfer already received; releasing it', tag)
+              return { eventId: event.id, senderPubkey: rumor.pubkey, content: '', createdAt: rumor.created_at }
+            case 'pending':
+            case 'in_delivery':
+              // HELD, not failed and not processed: the wrap stays on the relay
+              // and is offered again. `in_delivery` is a sibling of a coupon
+              // being redeemed right now, or waiting on a retry; consuming it
+              // would be the #204 tombstone by another route.
+              console.log(
+                offer.kind === 'pending'
+                  ? '[dmCrypto] holding chunk until its siblings arrive'
+                  : '[dmCrypto] holding chunk while its coupon is redeemed',
+                tag,
+              )
+              return { eventId: event.id, senderPubkey: rumor.pubkey, content: '', createdAt: rumor.created_at, hold: true }
+            case 'refused':
+              // Did not verify. Null, so dm-poll records a retryable failure
+              // and the relay's copies can be tried again.
+              return null
           }
         }
 

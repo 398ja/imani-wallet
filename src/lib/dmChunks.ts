@@ -176,67 +176,106 @@ interface Pending {
 const pending = new Map<string, Pending>()
 
 /**
- * Transfers already reassembled, so their stragglers are not held again.
+ * Transfers whose coupon has been DURABLY handled, so their stragglers can be
+ * let go.
  *
- * Only ONE of a transfer's events ever yields a token — the one that completed
- * it — and dm-poll marks only that event processed. Every earlier chunk's event
- * stays unprocessed by design, so `fetchRecentDms` re-fetches and re-offers it
- * on every poll, for as long as the wrap is inside the query window.
+ * Only ONE of a transfer's events ever yields a token (the one that completed
+ * it), and dm-poll marks only that event processed. Every earlier chunk's event
+ * stays unprocessed, so `fetchRecentDms` re-fetches and re-offers it on every
+ * poll for as long as the wrap is inside the query window. Without a memory of
+ * finished transfers each of those re-offers opened a pending entry that could
+ * never complete.
  *
- * Without this set each of those re-offers opened a fresh pending entry that
- * could never complete, because the sibling that would finish it is the one
- * event that IS marked processed and will never be offered again. The entry
- * then sat until the sweep, and the next poll built it again: a slow leak and a
- * "holding chunk" line every cycle for a coupon already in the wallet.
+ * **Written only once the coupon is safe (#204).** This used to be written the
+ * moment the pieces DECODED, which is before the coupon was redeemed, saved or
+ * its escrow acknowledged. Anything that stopped the redemption in between left
+ * a tombstone over a coupon that was never saved:
  *
- * **Persisted, because the thing it guards against outlives the tab.** This was
- * in memory only, and the processed set it partners with is in localStorage —
- * so every reload dropped the memory of completed transfers while keeping the
- * tombstones that make their stragglers un-completable. The first poll after a
- * reload then rebuilt exactly the wedged pending entry described above, for
- * every large coupon received in the last seven days, and rebuilt it again on
- * every poll thereafter. Both halves of the pair must have the same lifetime or
- * one contradicts the other.
+ *  - a reload or a killed tab mid-receive (the gate's customer reloads every
+ *    ~5 s; a phone does the same to a backgrounded PWA). After the reload every
+ *    piece came back, `completed.has` answered null, and the coupon could not
+ *    be reassembled for the next eight days;
+ *  - and, with no reload at all, every outcome dm-poll deliberately leaves
+ *    retryable: a failed save, a rate-limit budget that ran out, a deferred or
+ *    held backing check, a transient mint error. dm-poll re-offers the
+ *    completing event so it can try again, and the tombstone refused it.
  *
- * Keyed by transfer id, which is exactly the identity that matters, and holds
- * only ids and a timestamp — a few dozen bytes each, bounded below.
+ * Now a transfer is remembered as completed only when dm-poll has marked its
+ * completing event processed (`confirmChunkDeliveries`), which it does only on
+ * an outcome it will not retry: the coupon saved, already held here, or refused
+ * for good. Until then the transfer is `delivered` (below), in memory only, so
+ * a reload simply reassembles it again from the relay and the receive replays
+ * under the same idempotency key.
+ *
+ * Persisted, because the processed set it partners with is in localStorage and
+ * both halves must have the same lifetime. Holds only ids and a timestamp.
  */
-const COMPLETED_KEY = 'imani-wallet:dm-chunks:completed'
+const COMPLETED_KEY = 'imani-wallet:dm-chunks:completed:v2'
 
-function loadCompleted(): Map<string, number> {
+/**
+ * The store written under the old rule, tombstoned at DECODE time (#204).
+ *
+ * Not trusted: an entry here may be a coupon that was decoded and never saved,
+ * which is exactly the stranded case. Nor discarded outright: most entries are
+ * genuinely received coupons, and forgetting them would rebuild an assembly
+ * nobody can finish for each one.
+ *
+ * So a legacy entry is simply assembled again. A stranded transfer has ALL its
+ * pieces still unprocessed, completes, and is redeemed (or recognised by the
+ * received-token set if it was in fact banked). A genuinely received one is
+ * missing its completing piece, which is processed, so its assembly cannot
+ * finish; one pending TTL after it was first offered it is promoted to
+ * `completed`, after which its stragglers are released. One bounded, one-time
+ * cost per old transfer, and no coupon left behind.
+ */
+const LEGACY_COMPLETED_KEY = 'imani-wallet:dm-chunks:completed'
+
+function loadStore(key: string): Map<string, number> {
   try {
-    const raw = localStorage.getItem(COMPLETED_KEY)
+    const raw = localStorage.getItem(key)
     if (!raw) return new Map()
     const parsed = JSON.parse(raw) as [string, number][]
     // Shape-checked rather than trusted: this is parsed storage, and a bad
     // entry here would throw on every poll. A corrupt store is simply an empty
-    // one, which costs one round of re-holds and then self-heals.
+    // one, which costs one round of reassembly and then self-heals, because
+    // the received-token set (keyed on the token) is what stops a double credit.
     return Array.isArray(parsed) ? new Map(parsed.filter(
       (e) => Array.isArray(e) && typeof e[0] === 'string' && typeof e[1] === 'number',
     )) : new Map()
-  } catch {
-    // Private-browsing modes throw on access. In-memory only is the old
-    // behaviour and still correct, just less durable.
+  } catch (error) {
+    // Private-browsing modes throw on access. In memory only is still correct,
+    // just less durable, so this is said rather than swallowed.
+    console.warn('[dmChunks] could not read completed transfers; starting empty', { key, error })
     return new Map()
   }
 }
 
-const completed = loadCompleted()
+const completed = loadStore(COMPLETED_KEY)
+const legacy = loadStore(LEGACY_COMPLETED_KEY)
+/** When each legacy transfer was first offered this session. In memory. */
+const legacyProbe = new Map<string, number>()
+
+function persistLegacy(): void {
+  deferWrite(LEGACY_COMPLETED_KEY, () => {
+    try {
+      if (legacy.size === 0) localStorage.removeItem(LEGACY_COMPLETED_KEY)
+      else localStorage.setItem(LEGACY_COMPLETED_KEY, JSON.stringify([...legacy]))
+    } catch (error) {
+      console.warn('[dmChunks] could not persist legacy transfers', error)
+    }
+  })
+}
 
 function persistCompleted(): void {
-  // Deferred and coalesced. This is called on every completed transfer, and a
-  // catch-up completes many in a burst; a synchronous write per completion
-  // serialises the whole set each time and blocks paint. See `deferredWrite`.
-  //
-  // The callback re-reads `completed` when it runs rather than closing over a
-  // snapshot, so a coalesced write persists the final state and not the state
-  // at the moment it was queued.
+  // Deferred and coalesced. A catch-up confirms many transfers in a burst, and
+  // a synchronous write per confirmation serialises the whole set each time.
+  // Safe to defer: losing the tail costs one reassembly that the received-token
+  // set then recognises, never a coupon. See `deferredWrite`.
   deferWrite(COMPLETED_KEY, () => {
     try {
       localStorage.setItem(COMPLETED_KEY, JSON.stringify([...completed]))
-    } catch {
-      // Quota or private browsing. The in-memory set still works for this
-      // session, and losing durability must not fail a receipt.
+    } catch (error) {
+      console.warn('[dmChunks] could not persist completed transfers', error)
     }
   })
 }
@@ -244,26 +283,15 @@ function persistCompleted(): void {
 /**
  * How long a completed transfer is remembered.
  *
- * **Must outlast the poll's fetch window**, which is 7 days — see
- * `recentDmsSince` in `dmPoll.ts`. At the old 24 hours, a transfer's
- * stragglers were still being re-fetched for six more days after this set had
- * forgotten the transfer was ever completed, which is precisely the condition
- * that re-opens a pending entry nothing can finish. One day longer than the
- * window, so the guard is retired only once the wraps it guards against have
- * dropped out of the query.
+ * **Must outlast the poll's fetch window**, which is 7 days (`recentDmsSince`
+ * in `dmPoll.ts`). One day longer, so the guard is retired only once the wraps
+ * it guards against have dropped out of the query.
  */
 const COMPLETED_TTL_MS = 8 * 24 * 60 * 60 * 1000
 
 /**
- * A ceiling on remembered transfers, so a long-lived session cannot grow this
- * without bound. Oldest go first.
- *
- * Forgetting one early is NOT harmless now that the TTL spans the whole fetch
- * window: an evicted id whose stragglers are still inside that window is the
- * re-hold this set exists to prevent, and the sweep cannot clear it because
- * the pending entry is rebuilt on the very next poll. 5000 is sized against
- * the window rather than the session, matching `maxProcessedEvents`, and at a
- * transfer id plus a timestamp it is a few hundred KB at worst.
+ * A ceiling on remembered transfers. Oldest go first. Forgetting one early
+ * costs a reassembly the received-token set then recognises, never a coupon.
  */
 const MAX_COMPLETED = 5000
 
@@ -273,31 +301,68 @@ const PENDING_TTL_MS = 10 * 60 * 1000
 /**
  * How many transfers may be part-assembled at once.
  *
- * `MAX_REASSEMBLED_BYTES` bounds ONE transfer. Nothing bounded how many could
- * be open together, so the real ceiling on this map was the per-transfer budget
- * times however many distinct `transfer_id`s a sender cared to mention — and
- * every entry is decrypted fragments of someone's money, held for the full
- * `PENDING_TTL_MS`. Raising the per-transfer budget to cover honest large
- * coupons raised that product with it, so the count needs its own limit.
- *
- * 64 concurrent transfers is far past any real delivery: a sale splits into a
- * handful of coupons and each arrives within seconds. When the map is full the
- * OLDEST incomplete transfer is dropped, because it is the one least likely to
- * still be arriving and the one closest to its TTL anyway. Its wraps are never
- * marked processed, so dropping it costs a re-read and never a coupon.
+ * `MAX_REASSEMBLED_BYTES` bounds ONE transfer; this bounds how many are open
+ * together, since every entry is decrypted fragments of someone's money. When
+ * full, the OLDEST is dropped. Its wraps are never marked processed, so
+ * dropping it costs a re-read and never a coupon. The same bound applies to
+ * `delivered` below.
  */
 const MAX_PENDING_TRANSFERS = 64
 
+/**
+ * Transfers reassembled and handed to dm-poll whose coupon is not yet safe.
+ *
+ * The middle state that did not exist, and whose absence was #204. A transfer
+ * sits here from the moment it decodes until dm-poll marks its completing event
+ * processed (then it moves to `completed`), or until it ages out.
+ *
+ * While here:
+ *  - its OTHER pieces are held (`in_delivery`), neither processed nor failed,
+ *    so a straggler re-offered mid-redemption can neither start a second
+ *    assembly of the same coupon nor be tombstoned on the first one's behalf;
+ *  - its COMPLETING event, offered again, gets the coupon again. dm-poll never
+ *    offers an event that is still in flight, so seeing it again means the
+ *    earlier attempt ended without consuming it: a failed save, a deferral, a
+ *    hold. That is exactly the retry dm-poll intends, and the receive replays
+ *    under the token's idempotency key, so the gateway settles it once.
+ *
+ * In memory only, on purpose. It holds the decrypted payload, and after a
+ * reload the right behaviour is to reassemble from the relay, which is what an
+ * absent entry gives.
+ */
+interface Delivered {
+  /** The gift wrap whose piece completed the transfer, if the caller said. */
+  eventId: string | undefined
+  payload: string
+  atMs: number
+}
+
+const delivered = new Map<string, Delivered>()
+
 function sweep(now: number): void {
+  let legacyChanged = false
   for (const [id, p] of pending) {
     if (now - p.firstSeenMs > PENDING_TTL_MS) {
+      pending.delete(id)
       console.warn('[dmChunks] discarding incomplete transfer', {
         transfer_id: id.slice(0, 8),
         had: p.parts.size,
         of: p.total,
       })
-      pending.delete(id)
     }
+  }
+  for (const [id, at] of legacy) {
+    if (now - at > COMPLETED_TTL_MS) {
+      legacy.delete(id)
+      legacyChanged = true
+    }
+  }
+  if (legacyChanged) persistLegacy()
+  // A delivery nobody has asked about for the pending TTL is forgotten, so its
+  // pieces assemble afresh. Its completing event refreshes `atMs` on every
+  // re-offer, so a coupon still being retried is never aged out from under it.
+  for (const [id, d] of delivered) {
+    if (now - d.atMs > PENDING_TTL_MS) delivered.delete(id)
   }
   let expired = false
   for (const [id, at] of completed) {
@@ -320,35 +385,89 @@ function rememberCompleted(transferId: string, now: number): void {
     completed.delete(oldest)
   }
   completed.set(transferId, now)
-  // Persisted at the moment of completion rather than on unload: a wallet on a
-  // phone is killed rather than closed, and a beforeunload that never fires
-  // would lose exactly the entries a reload is about to need.
   persistCompleted()
 }
 
+function rememberDelivered(transferId: string, entry: Delivered): void {
+  delivered.delete(transferId)
+  while (delivered.size >= MAX_PENDING_TRANSFERS) {
+    const oldest = delivered.keys().next().value
+    if (oldest === undefined) break
+    delivered.delete(oldest)
+  }
+  delivered.set(transferId, entry)
+}
+
 /**
- * Offer one chunk. Returns the reassembled payload once the last piece lands.
+ * What one offered piece amounted to.
  *
- * Null for "not yet" AND for "this transfer is unusable", which the caller
- * treats identically: in both cases this DM yields no token on its own.
+ *  - `complete`: this piece finished the transfer (or is its completing event,
+ *    offered again after an attempt that did not finish). Here is the coupon.
+ *  - `pending`: more pieces are needed.
+ *  - `in_delivery`: the transfer is reassembled and its coupon is being, or
+ *    will be retried as, redeemed. Keep this wrap UNPROCESSED and unfailed.
+ *  - `done`: the transfer's coupon is durably handled. A straggler, safe to
+ *    mark processed.
+ *  - `refused`: this transfer did not verify. Retryable from the relay.
  */
-export async function offerChunk(
+export type ChunkOffer =
+  | { kind: 'complete'; payload: string; redelivery: boolean }
+  | { kind: 'pending' }
+  | { kind: 'in_delivery' }
+  | { kind: 'done' }
+  | { kind: 'refused' }
+
+/**
+ * Offer one piece, from the gift wrap `eventId`, and say what it amounted to.
+ *
+ * `eventId` is what lets a completing event that comes back be told apart from
+ * a straggler. Without it, a reassembled transfer can only be re-offered by
+ * assembling it again, which is still correct, just slower.
+ */
+export async function offerChunkFrom(
   chunk: ChunkEnvelope,
+  eventId: string | undefined,
   now = Date.now(),
-): Promise<string | null> {
+): Promise<ChunkOffer> {
   sweep(now)
 
-  // A straggler from a transfer already reassembled. Its event was never marked
-  // processed, so the poll keeps offering it; holding it again would open an
-  // entry that can never complete.
-  if (completed.has(chunk.transfer_id)) return null
+  if (completed.has(chunk.transfer_id)) return { kind: 'done' }
+
+  // A transfer the OLD rule tombstoned. Given one pending TTL to prove it can
+  // still be assembled (a stranded coupon has every piece unprocessed and
+  // completes at once). One that has not by then is missing its completing
+  // piece because that piece was processed, so its coupon was received and
+  // its stragglers can be released. Timed from the first offer this session,
+  // not from the assembly, so evicting the assembly cannot restart the clock.
+  if (legacy.has(chunk.transfer_id)) {
+    const since = legacyProbe.get(chunk.transfer_id)
+    if (since === undefined) {
+      legacyProbe.set(chunk.transfer_id, now)
+    } else if (now - since > PENDING_TTL_MS) {
+      legacy.delete(chunk.transfer_id)
+      legacyProbe.delete(chunk.transfer_id)
+      pending.delete(chunk.transfer_id)
+      persistLegacy()
+      rememberCompleted(chunk.transfer_id, now)
+      return { kind: 'done' }
+    }
+  }
+  const inDelivery = delivered.get(chunk.transfer_id)
+  if (inDelivery) {
+    if (eventId !== undefined && inDelivery.eventId === eventId) {
+      // Only the completing event keeps a delivery alive. If it stops being
+      // offered, the delivery ages out and the pieces assemble afresh, so a
+      // sibling can never pin a delivery whose own wrap has gone.
+      inDelivery.atMs = now
+      return { kind: 'complete', payload: inDelivery.payload, redelivery: true }
+    }
+    return { kind: 'in_delivery' }
+  }
 
   let entry = pending.get(chunk.transfer_id)
   if (!entry) {
-    // Evict before inserting, so the map never exceeds its bound. Map preserves
-    // insertion order, so the first key is the oldest assembly. A transfer
-    // dropped here is not lost: none of its wraps were marked processed, so the
-    // poll re-offers them and it starts again.
+    // Evict before inserting, so the map never exceeds its bound. A transfer
+    // dropped here is not lost: none of its wraps were marked processed.
     while (pending.size >= MAX_PENDING_TRANSFERS) {
       const oldest = pending.keys().next().value
       if (oldest === undefined) break
@@ -372,30 +491,94 @@ export async function offerChunk(
       got: chunk.chunk_total,
     })
     pending.delete(chunk.transfer_id)
-    return null
+    return { kind: 'refused' }
   }
 
   entry.parts.set(chunk.chunk_index, chunk)
-  if (entry.parts.size < entry.total) return null
+  if (entry.parts.size < entry.total) return { kind: 'pending' }
 
+  // Everything that decides completeness above runs synchronously, before the
+  // first await below, so two pieces racing cannot both complete the transfer.
   pending.delete(chunk.transfer_id)
 
   try {
     const whole = await decodeAssembly(entry)
-    // Only a transfer that actually decoded is remembered. A failed one must
-    // stay re-attemptable: the pieces may have been corrupted in flight, and
-    // the relay still holds them.
-    rememberCompleted(chunk.transfer_id, now)
-    return whole
+    // Delivered, NOT completed. The coupon is not safe until dm-poll says so
+    // (`confirmChunkDeliveries`); until then a reload or a failed attempt must
+    // be able to produce it again (#204).
+    rememberDelivered(chunk.transfer_id, { eventId, payload: whole, atMs: now })
+    // A legacy tombstone that reassembled is a coupon the old rule stranded.
+    // From here it follows the new rule.
+    if (legacy.delete(chunk.transfer_id)) {
+      legacyProbe.delete(chunk.transfer_id)
+      console.warn('[dmChunks] recovering a chunked coupon an earlier build tombstoned before saving it (#204)', {
+        transfer_id: chunk.transfer_id.slice(0, 8),
+      })
+      persistLegacy()
+    }
+    return { kind: 'complete', payload: whole, redelivery: false }
   } catch (error) {
-    // Integrity failures are refusals, not warnings to carry forward: the whole
-    // point of the digest is that a payload failing it must not be credited.
+    // Integrity failures are refusals: a payload failing its digest must not be
+    // credited. Nothing is remembered, so the relay's copies can be retried.
     console.error('[dmChunks] refusing a transfer that failed verification', {
       transfer_id: chunk.transfer_id.slice(0, 8),
       error: error instanceof Error ? error.message : String(error),
     })
-    return null
+    return { kind: 'refused' }
   }
+}
+
+/**
+ * Offer one chunk. Returns the reassembled payload once the last piece lands.
+ *
+ * The id-less form of `offerChunkFrom`, for callers that only care whether a
+ * coupon came out. Null for every other outcome.
+ */
+export async function offerChunk(
+  chunk: ChunkEnvelope,
+  now = Date.now(),
+): Promise<string | null> {
+  const offer = await offerChunkFrom(chunk, undefined, now)
+  return offer.kind === 'complete' ? offer.payload : null
+}
+
+/**
+ * dm-poll has marked these gift wraps processed: any transfer one of them
+ * completed is now durably handled.
+ *
+ * Called from the poller's processed-set write, which dm-poll makes only after
+ * an outcome it will never retry. That is the single moment a transfer may be
+ * remembered as completed (#204). Cheap when nothing is in delivery, which is
+ * almost always.
+ *
+ * @returns how many transfers were confirmed
+ */
+export function confirmChunkDeliveries(processedEventIds: Iterable<string>, now = Date.now()): number {
+  if (delivered.size === 0) return 0
+  const processed = processedEventIds instanceof Set ? processedEventIds : new Set(processedEventIds)
+  let confirmed = 0
+  for (const [transferId, d] of delivered) {
+    if (d.eventId === undefined || !processed.has(d.eventId)) continue
+    delivered.delete(transferId)
+    pending.delete(transferId)
+    rememberCompleted(transferId, now)
+    confirmed += 1
+  }
+  if (confirmed > 0) {
+    // SYNCHRONOUS, unlike the sweep's write-back. The processed-set write that
+    // calls this is deferred, so writing here at once guarantees the
+    // completed record never lands AFTER the tombstone of its completing event.
+    // The other order would leave a reload with the completing event consumed
+    // and no record of the transfer, so its stragglers re-open an assembly that
+    // can never finish. One write per chunked coupon, so the cost is nothing.
+    cancelDeferredWrite(COMPLETED_KEY)
+    try {
+      localStorage.setItem(COMPLETED_KEY, JSON.stringify([...completed]))
+    } catch (error) {
+      console.warn('[dmChunks] could not persist completed transfers', error)
+    }
+  }
+  return confirmed
 }
 
 /** Concatenate, decode, decompress, and verify. Throws if anything disagrees. */
@@ -517,7 +700,11 @@ async function gunzip(input: Uint8Array<ArrayBuffer>): Promise<Uint8Array> {
 /** Drop every half-assembled transfer. For tests and for sign-out. */
 export function resetChunkAssembly(): void {
   pending.clear()
+  delivered.clear()
   completed.clear()
+  legacy.clear()
+  legacyProbe.clear()
+  cancelDeferredWrite(LEGACY_COMPLETED_KEY)
   // Cleared SYNCHRONOUSLY, unlike every other write to this key. This is the
   // sign-out path, and a deferred clear is a window in which one account's
   // transfer ids are still on disk — on a shared device, after the user
@@ -526,12 +713,19 @@ export function resetChunkAssembly(): void {
   cancelDeferredWrite(COMPLETED_KEY)
   try {
     localStorage.removeItem(COMPLETED_KEY)
-  } catch {
+    localStorage.removeItem(LEGACY_COMPLETED_KEY)
+  } catch (error) {
     // Private browsing. The in-memory clear above is the part that matters.
+    console.warn('[dmChunks] could not clear completed transfers from storage', error)
   }
 }
 
 /** How many transfers are part-assembled. For tests and diagnostics. */
 export function pendingChunkTransfers(): number {
   return pending.size
+}
+
+/** How many transfers are reassembled but not yet confirmed safe. For tests and diagnostics. */
+export function deliveredChunkTransfers(): number {
+  return delivered.size
 }
