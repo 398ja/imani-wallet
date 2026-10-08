@@ -273,6 +273,15 @@ describe('the owner attests the till at enrolment (#160 decision 5)', () => {
     expect(a.nonce).toMatch(/^[0-9a-f]{64}$/)
   })
 
+  // Review rev-5b M2 (O4): the 600 s is what lets an older gateway's own now + 365 d land inside
+  // T, so the owner's app and the gateway deploy in either order. Pinned as a literal, not via
+  // the constant, so a slack of 0 fails here.
+  it('leaves 600 s of slack past the credential year', () => {
+    expect(ATTESTATION_EXPIRY_SLACK_SECONDS).toBe(600)
+    const T = Number(attestEnrolment(selling, signer, NOW_MS).expires_at)
+    expect(T - NOW_MS / 1000).toBe(365 * 86_400 + 600)
+  })
+
   // Any other key would attest a till no verifier accepts, so it is refused before the mint.
   it('refuses to attest with a key that is not the stall', () => {
     const stranger = schnorr.utils.randomSecretKey()
