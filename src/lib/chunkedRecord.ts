@@ -1,10 +1,11 @@
 import type { Event, EventTemplate } from 'nostr-tools'
 import {
   compress,
-  createChunks,
+  createSnapshotChunks,
   decompress,
   groupChunksBySnapshot,
   isChunkEvent,
+  maxNip44PlaintextSize,
   parseDTag,
   validateSnapshot,
   type ChunkEventData,
@@ -14,7 +15,7 @@ import {
  * Self-encrypted records that may be too large for one relay event (#203).
  *
  * The ONLY file that imports `nostr-chunked-events`. It is vendored today from
- * imani-apps' hardened 0.2.0 (snapshot_id, payload_hash, total_chunks); when
+ * 398ja/nostr-chunked-events v0.3.0 (see packages/nostr-chunked-events/VENDORED.md); when
  * the reconciled standalone release is published, the alias in vite.config.ts
  * and tsconfig.app.json is swapped for the npm dependency and nothing else moves.
  *
@@ -45,11 +46,20 @@ export const RELAY_MAX_EVENT_BYTES = 65_536
 export const EVENT_BUDGET_BYTES = 60_000
 
 /**
- * Plaintext per chunk. 30,000 bytes pads to 32,768 under NIP-44 and the event
- * comes out at about 44 KB, as the owner's direction on #203 suggested; the
- * test asserts the estimate stays under the budget.
+ * Plaintext per chunk: the library's strfry sizing, the largest plaintext whose
+ * NIP-44 payload leaves 1.5 KB of a 65,536-byte event for id, pubkey, sig and
+ * tags. That is 40,960 bytes (pads to itself), about 55 KB per event, and the
+ * per-chunk guard below checks every chunk against our own 60,000 budget too.
  */
-export const CHUNK_PLAINTEXT_BYTES = 30_000
+export const CHUNK_PLAINTEXT_BYTES = maxNip44PlaintextSize(RELAY_MAX_EVENT_BYTES - 1_536)
+
+/**
+ * The record a chunk belongs to (#203 review V1). Explicit, so a chunk written
+ * without a `d` tag (v0.3.0's `createSnapshotChunks` adds none by default) still
+ * names its coupon. `d=<id>-chunk-<n>` is kept too, and read as a fallback, so
+ * chunks written before this tag existed still restore.
+ */
+export const RECORD_ID_TAG = 'record_id'
 
 /**
  * NIP-44 v2 padded length (the spec's `calc_padded_len`), as nostr-tools does it.
@@ -84,11 +94,6 @@ export function estimateEventBytes(plainLen: number, tags: string[][]): number {
 }
 
 const utf8 = (s: string) => new TextEncoder().encode(s).length
-
-async function sha256Hex(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
-  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('')
-}
 
 export interface Sealer {
   encrypt(plaintext: string): string
@@ -130,23 +135,12 @@ export async function buildRecordEvents(
   // fit one event it goes out in the chunk format (one chunk of one), because
   // a plain 7375 must hold the plain JSON other readers expect.
   const payload = compress(plaintext).data
-  const payloadHash = await sha256Hex(payload)
-  const snapshotId = crypto.randomUUID()
-  const chunks = createChunks(payload, { chunkSize, dTagPrefix: id })
-  const total = chunks.length
+  // payload_hash covers the chunk PLAINTEXT (here the gzip/base64 text), so a
+  // reader decrypts every chunk before validateSnapshot (v0.3.0 semantics).
+  const { chunks } = createSnapshotChunks(payload, { chunkSize, dTagPrefix: id })
 
   return chunks.map((chunk) => {
-    const tags = [
-      // createChunks names a lone chunk `<id>-state`; a chunk is always a chunk here.
-      ['d', `${id}-chunk-${chunk.index}`],
-      ['chunk', String(chunk.index), String(total)],
-      ['total_chunks', String(total)],
-      ['snapshot_id', snapshotId],
-      ['payload_hash', payloadHash],
-      ['hash_alg', 'sha256'],
-      ['compressed', 'gzip'],
-      ...extraTags,
-    ]
+    const tags = [...chunk.tags, [RECORD_ID_TAG, id], ['compressed', 'gzip'], ...extraTags]
     const size = estimateEventBytes(utf8(chunk.data), tags)
     if (size > budget) {
       // A configuration error (a chunk size the budget cannot hold), not data.
@@ -156,11 +150,16 @@ export async function buildRecordEvents(
   })
 }
 
-/** The record id an event belongs to: `d`, with any `-chunk-n` suffix removed. */
+/** The record id an event belongs to: `record_id` on a chunk, else `d` without its `-chunk-n`. */
 export function recordIdOf(event: Pick<Event, 'tags'>): string | undefined {
-  const d = event.tags.find(([name]) => name === 'd')?.[1]
+  const tag = (name: string) => event.tags.find(([n]) => n === name)?.[1]
+  if (!isChunkEvent(event as Event)) return tag('d') || undefined
+  const explicit = tag(RECORD_ID_TAG)
+  if (explicit) return explicit
+  const d = tag('d')
   if (!d) return undefined
-  return isChunkEvent(event as Event) ? parseDTag(d).prefix : d
+  const parsed = parseDTag(d)
+  return parsed.chunkIndex === null ? undefined : parsed.prefix
 }
 
 export { isChunkEvent }
@@ -169,25 +168,54 @@ export interface ReassembledRecord {
   id: string
   at: number
   plaintext: string
+  /** The event ids of the snapshot this record was read from. */
+  eventIds: string[]
+}
+
+export interface ChunkSet {
+  /** The record id, or undefined when no chunk names one. */
+  id: string | undefined
+  snapshotId: string | null
+  at: number
+  eventIds: string[]
+}
+
+export interface ReassemblyResult {
+  records: ReassembledRecord[]
+  /** Snapshots that are incomplete, corrupt or unattributable. */
+  rejected: (ChunkSet & { reason: string })[]
 }
 
 /**
- * Every complete, verified chunked record among `events`.
+ * Every complete, verified chunked record among `events`, newest snapshot per
+ * id first in nothing: callers pick. Each set is decrypted chunk by chunk, then
+ * validated with v0.3.0's 7375 recipe (snapshot id and payload hash required and
+ * verified, identical duplicates from a retried publish allowed), then joined in
+ * INDEX order from `validation.chunks`, never in relay order.
  *
- * Incomplete or corrupted snapshots are skipped and reported through `onReject`:
- * one damaged coupon must not cost the restore of the others, and an older
- * complete snapshot of the same coupon still counts.
+ * A bad set is never silently skipped: it lands in `rejected` with its reason.
  */
-export async function reassembleRecords(
+export async function reassembleChunkSets(
   events: Event[],
   author: string,
   sealer: Sealer,
-  onReject: (id: string, reason: string) => void = () => undefined,
-): Promise<ReassembledRecord[]> {
-  const out: ReassembledRecord[] = []
+): Promise<ReassemblyResult> {
+  const byId = new Map(events.map((e) => [e.id, e]))
+  const records: ReassembledRecord[] = []
+  const rejected: ReassemblyResult['rejected'] = []
   for (const candidate of groupChunksBySnapshot(events.filter(isChunkEvent), { expectedAuthor: author })) {
-    const id = candidate.chunks[0]?.dTag ? parseDTag(candidate.chunks[0].dTag).prefix : undefined
-    if (!id) continue
+    const eventIds = candidate.chunks.map((c) => c.eventId).filter((x): x is string => Boolean(x))
+    const ids = new Set(eventIds.map((eid) => byId.get(eid)).map((e) => (e ? recordIdOf(e) : undefined)))
+    const set: ChunkSet = {
+      id: ids.size === 1 ? [...ids][0] : undefined,
+      snapshotId: candidate.snapshotId,
+      at: candidate.newestCreatedAt,
+      eventIds,
+    }
+    if (!set.id) {
+      rejected.push({ ...set, reason: ids.size > 1 ? 'chunks name different records' : 'no record id on the chunks' })
+      continue
+    }
     try {
       const opened: ChunkEventData[] = candidate.chunks.map((c) => ({ ...c, data: sealer.decrypt(c.data) }))
       const validation = await validateSnapshot(opened, {
@@ -195,34 +223,37 @@ export async function reassembleRecords(
         requireSnapshotId: true,
         requirePayloadHash: true,
         verifyPayloadHash: true,
+        allowIdenticalDuplicates: true,
       })
       if (!validation.valid) {
-        onReject(id, validation.issues.map((i) => i.message).join('; '))
+        rejected.push({ ...set, reason: validation.issues.map((i) => i.message).join('; ') })
         continue
       }
       const payload = validation.chunks.map((c) => c.data).join('')
-      out.push({ id, at: candidate.newestCreatedAt, plaintext: decompress(payload) })
+      records.push({ id: set.id, at: set.at, plaintext: decompress(payload), eventIds })
     } catch (error) {
-      onReject(id, error instanceof Error ? error.message : String(error))
+      rejected.push({ ...set, reason: error instanceof Error ? error.message : String(error) })
     }
   }
-  return out
+  return { records, rejected }
 }
 
 /**
- * Ids whose chunk set is complete on the relay, judged from tags alone (no
- * decryption). For a back-fill: a coupon whose chunks only partly landed is
- * NOT known, so the next back-fill publishes it again.
+ * Every complete, verified chunked record among `events`. A rejected set is
+ * reported through `onReject` unless a verified snapshot of the same record
+ * exists (an orphan of a failed publish that was since republished, #203 L3).
  */
-export function completeChunkedIds(events: Event[]): Set<string> {
-  const ids = new Set<string>()
-  for (const candidate of groupChunksBySnapshot(events.filter(isChunkEvent))) {
-    const first = candidate.chunks[0]
-    if (!first?.dTag) continue
-    const indices = new Set(candidate.chunks.map((c) => c.index))
-    if (indices.size === first.total && [...indices].every((i) => i < first.total)) {
-      ids.add(parseDTag(first.dTag).prefix)
-    }
+export async function reassembleRecords(
+  events: Event[],
+  author: string,
+  sealer: Sealer,
+  onReject: (id: string, reason: string, set: ChunkSet) => void = () => undefined,
+): Promise<ReassembledRecord[]> {
+  const { records, rejected } = await reassembleChunkSets(events, author, sealer)
+  const good = new Set(records.map((r) => r.id))
+  for (const r of rejected) {
+    if (r.id && good.has(r.id)) continue
+    onReject(r.id ?? '(unknown)', r.reason, r)
   }
-  return ids
+  return records
 }
