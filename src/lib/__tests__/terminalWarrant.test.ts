@@ -15,6 +15,7 @@ import {
   TERMINAL_REFUSAL,
   hasControlCharacter,
   parseCredentialSecret,
+  verifyOwnerAttestation,
   verifyTerminalWarrant,
   type TerminalSale,
 } from '../terminalWarrant'
@@ -718,4 +719,34 @@ describe('what the customer reads for each attestation outcome (review M7)', () 
       reason: 'terminal warrant refused: ATTESTATION_EXCEEDED',
     })
   })
+})
+
+// Review rev-5b M1: the exported mirror runs the Java's steps exactly, including the issuer tag.
+describe('verifyOwnerAttestation checks the issuer tag as the Java does', () => {
+  it('accepts a genuine attested credential', () => {
+    expect(verifyOwnerAttestation(credential(), STALL)).toBeNull()
+  })
+  it.each([
+    ['another stall', STRANGER],
+    ['an uppercase spelling', STALL.toUpperCase()],
+  ])('refuses WRONG_STALL when only the issuer tag is %s', (_n, issuer) => {
+    expect(verifyOwnerAttestation(credential({ issuer }), STALL)).toBe(TERMINAL_REFUSAL.WRONG_STALL)
+  })
+  it('refuses WRONG_STALL when the issuer tag is absent', () => {
+    const c = JSON.parse(credential()) as [string, { tags: string[][] }]
+    c[1].tags = c[1].tags.filter((t) => t[0] !== 'issuer')
+    expect(verifyOwnerAttestation(JSON.stringify(c), STALL)).toBe(TERMINAL_REFUSAL.WRONG_STALL)
+  })
+})
+
+// Review rev-5b M2 (T4): a control character in `role` is MALFORMED, before any signature check
+// (which would otherwise read BAD_OWNER_ATTESTATION), as in the Java.
+describe('verifyOwnerAttestation refuses a control character in role as malformed', () => {
+  it.each(['issue-and-redeem\u0001', 'issue\u001fand-redeem', 'issue-and-redeem\u007f', 'issue-and-redeem\u0085'])(
+    'role %j',
+    (role) => {
+      const metadata = { terminal: true, stall_pubkey: STALL, role, lock_key: TILL, name: 'Front' }
+      expect(verifyOwnerAttestation(credential({ metadata }), STALL)).toBe(TERMINAL_REFUSAL.MALFORMED_CREDENTIAL)
+    },
+  )
 })

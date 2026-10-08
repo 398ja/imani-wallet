@@ -347,6 +347,33 @@ describe('enrolling', () => {
     expect(row.waitingUntil).toBeGreaterThan(Date.now())
   })
 
+  // Review rev-5b M2 (P4): the attestation is persisted on the `minting` row at its source, before
+  // the request leaves, and it is the one the request carried. Without it, a resumed mint would
+  // re-send a body with no attestation under the same Idempotency-Key.
+  it('persists the attestation it sent on the minting row', async () => {
+    const minting: Array<Record<string, unknown>> = []
+    const roster = await import('../../lib/terminalRoster')
+    const real = roster.recordTerminal
+    const spy = vi.spyOn(roster, 'recordTerminal').mockImplementation((stall, row) => {
+      if (row.status === 'minting') minting.push({ ...row, postsSoFar: posts.length })
+      return real(stall, row)
+    })
+    renderPage()
+    await waitFor(() => expect(addButton()).toBeTruthy())
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Till' } })
+    fireEvent.click(screen.getByRole('button', { name: /Sell and redeem/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
+    fireEvent.click(addButton())
+
+    await waitFor(() => expect(posts).toHaveLength(1))
+    spy.mockRestore()
+    expect(minting).toHaveLength(1)
+    const sent = (posts[0] as { merchant_metadata: { owner_attestation: unknown } }).merchant_metadata.owner_attestation
+    expect(sent).toMatchObject({ v: '1', sig: expect.stringMatching(/^[0-9a-f]{128}$/) })
+    expect(minting[0].attestation).toEqual(sent)
+    expect(minting[0].postsSoFar).toBe(0)
+  })
+
   // The owner reads the same check code the device will show (spec 2.1).
   it('shows a six-digit check code', async () => {
     await fillEverything()
