@@ -22,6 +22,7 @@ export { ancestryOf, supersedesRelation, MAX_WALK } from './ancestry';
 // Chunking
 export {
   createChunks,
+  createSnapshotChunks,
   needsChunking,
   calculateSize,
   estimateChunkCount,
@@ -42,6 +43,7 @@ export {
   validateSnapshot,
   selectBestSnapshot,
   reassembleSnapshot,
+  describeChunkValidationFailure,
   isGenesis,
   isMergeSnapshot,
   isLegacyPreAncestry,
@@ -60,6 +62,14 @@ export {
   tryDecompress,
 } from './compression';
 
+// Hashing and size budgeting
+export {
+  sha256Hex,
+  nip44CiphertextSize,
+  maxNip44PlaintextSize,
+  NIP44_MAX_PLAINTEXT_SIZE,
+} from './hash';
+
 // Relay utilities
 export { RelayPool, publishToRelay, queryRelay } from './relay';
 
@@ -72,6 +82,9 @@ export {
   config,
   MAX_SINGLE_EVENT_SIZE,
   DEFAULT_CHUNK_SIZE,
+  DEFAULT_MAX_CHUNKS,
+  STRFRY_DEFAULT_MAX_EVENT_SIZE,
+  HASH_ALG_SHA256,
   DEFAULT_RELAY_TIMEOUT,
   DEFAULT_RELAY_RETRIES,
   LIBRARY_VERSION,
@@ -93,7 +106,11 @@ export type {
   ChunkEventData,
   SnapshotParentReference,
   ChunkOptions,
+  ChunkValidationOptions,
   ValidationResult,
+  SnapshotChunkOptions,
+  SnapshotChunk,
+  SnapshotChunks,
   SnapshotValidationIssue,
   SnapshotValidationOptions,
   SnapshotValidationResult,
@@ -112,12 +129,15 @@ export type {
   PublisherOptions,
   PublishOptions,
   PublishResult,
+  PublishSnapshotOptions,
+  ChunkPublishResult,
 
   // Fetcher
   FetcherOptions,
   FetchOptions,
   FetchResult,
   ProbeResult,
+  QueryEventsFn,
 
   // Relay
   RelayOptions,
