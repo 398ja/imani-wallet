@@ -628,7 +628,7 @@ async function asTillResponse(
 ): Promise<{ status: number; body: string }> {
   const url = `${BASE}${path}`
   const payload = body === undefined ? undefined : JSON.stringify(body)
-  const auth = await nip98.getToken(url, method.toLowerCase(), (e) => finalizeEvent(e, hexToBytes(k.sk)), true, body as Record<string, unknown>)
+  const auth = await nip98.getToken(url, method.toUpperCase(), (e) => finalizeEvent(e, hexToBytes(k.sk)), true, body as Record<string, unknown>)
   const res = await fetch(url, {
     method,
     headers: {
