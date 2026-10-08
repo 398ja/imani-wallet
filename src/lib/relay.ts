@@ -234,17 +234,52 @@ export async function allEvents(
   kind: number,
   relays: string[] = [RELAY_URL],
 ): Promise<Event[]> {
+  // PAGED (#206 review M2). strfry caps every filter at `maxFilterLimit` (500)
+  // newest events and says nothing, so an unpaged read silently loses a wallet's
+  // OLDEST records. Walk back with `until`. The cursor is INCLUSIVE (the oldest
+  // second seen) because several events share a second (every chunk of a
+  // snapshot does) and a page can end inside one; duplicates are dropped by id.
   const pool = readPool()
+  const seen = new Map<string, Event>()
   try {
-    return await pool.querySync(
-      relays,
-      { authors: [pubkey], kinds: [kind] },
-      { maxWait: READ_CONNECT_TIMEOUT_MS },
-    )
+    let until: number | undefined
+    for (let page = 0; page < MAX_READ_PAGES; page++) {
+      const batch = await pool.querySync(
+        relays,
+        { authors: [pubkey], kinds: [kind], limit: RELAY_PAGE_LIMIT, ...(until === undefined ? {} : { until }) },
+        { maxWait: READ_CONNECT_TIMEOUT_MS },
+      )
+      let fresh = 0
+      for (const event of batch) {
+        if (!seen.has(event.id)) {
+          seen.set(event.id, event)
+          fresh++
+        }
+      }
+      // A SHORT page is not the end: `maxWait` is an EOSE timeout, and a page of
+      // 55 KB chunk events can outlast it (measured on strfry: 151 of 500 at
+      // 1200ms), so querySync hands back the newest part of a page. Only a page
+      // that brings nothing new ends the walk.
+      if (batch.length === 0) break
+      if (fresh === 0) {
+        if (batch.length < RELAY_PAGE_LIMIT) break
+        // A full page with nothing new: more than a page's worth in one
+        // second. Step past that second rather than loop on it.
+        until = Math.min(...batch.map((e) => e.created_at)) - 1
+        continue
+      }
+      until = Math.min(...batch.map((e) => e.created_at))
+    }
+    return [...seen.values()]
   } finally {
     pool.close(relays)
   }
 }
+
+/** strfry's default `maxFilterLimit`; a relay may cap lower, which only costs an extra page. */
+export const RELAY_PAGE_LIMIT = 500
+/** A backstop against a relay that ignores `until`: 100 pages, 50,000 events. */
+const MAX_READ_PAGES = 100
 
 export async function newestAddressable(
   pubkey: string,
