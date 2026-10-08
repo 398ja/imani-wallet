@@ -231,6 +231,9 @@ const COMPLETED_KEY = 'imani-wallet:dm-chunks:completed:v2'
 const LEGACY_COMPLETED_KEY = 'imani-wallet:dm-chunks:completed'
 
 function loadStore(key: string): Map<string, number> {
+  // No storage API at all (a service worker, a node test): in memory only, by
+  // design, and nothing to report. A store that EXISTS and throws is reported.
+  if (typeof localStorage === 'undefined') return new Map()
   try {
     const raw = localStorage.getItem(key)
     if (!raw) return new Map()
