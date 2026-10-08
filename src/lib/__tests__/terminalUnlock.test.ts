@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { generateSecretKey, getPublicKey } from 'nostr-tools'
 import { bytesToHex } from '@noble/hashes/utils'
 
-import { buildLockedCredentialToken } from './voucherFixtures'
+import { buildAttestedCredentialToken, buildLockedCredentialToken } from './voucherFixtures'
 
 /**
  * Opening the till (#160 phase 3, spec 2.3).
@@ -262,5 +262,55 @@ describe('a terminal record without a token (#160 review, LOW)', () => {
     const out = await unlockTerminal('pass', { loadKey: async () => bytesToHex(generateSecretKey()), mint: mint('UNSPENT') })
     expect(out.unlocked).toBe(false)
     if (!out.unlocked) expect(out.reason).toBe('not-a-terminal-key')
+  })
+})
+
+describe('the till checks the stall attested it (#160 decision 5, spec 4.6.3)', () => {
+  afterEach(() => forgetTerminalSession())
+
+  const enrolWith = (token: string) => enrol(TERMINAL_ROLES.ISSUE_AND_REDEEM, { token })
+  const unlockNow = () => unlockTerminal(PASSPHRASE, { mint: mint('UNSPENT'), now: Date.now() })
+
+  // A credential the stall attested opens a selling till: the actor is marked attested, so Sell
+  // is offered in a FULL session.
+  it('opens an attested selling till able to sell', async () => {
+    enrolWith(buildAttestedCredentialToken({ stallKey: STALL_KEY, devicePubkey: DEVICE }))
+    const out = await unlockNow()
+    if (!out.unlocked) throw new Error(out.message)
+    expect(out.actor.attested).toBe(true)
+  })
+
+  // No attestation at all (a till set up before 0.17.0): admitted, for Redeem only.
+  it('opens a till with no attestation for Redeem only, not refused', async () => {
+    enrolWith(buildLockedCredentialToken({ stallKey: STALL_KEY, devicePubkey: DEVICE, role: TERMINAL_ROLES.ISSUE_AND_REDEEM }))
+    const out = await unlockNow()
+    if (!out.unlocked) throw new Error(out.message)
+    expect(out.actor.attested).toBe(false)
+  })
+
+  // An attestation signed by any key but the stall's: the stall never signed this till, so the
+  // till is refused outright and nothing is installed.
+  it('refuses a till whose attestation another key signed, and installs nothing', async () => {
+    enrolWith(buildAttestedCredentialToken({ stallKey: STALL_KEY, devicePubkey: DEVICE, attestWith: generateSecretKey() }))
+    const out = await unlockNow()
+    expect(out.unlocked).toBe(false)
+    if (!out.unlocked) expect(out.reason).toBe('bad-attestation')
+    expect(nap.installTerminalSigner).not.toHaveBeenCalled()
+  })
+
+  // A credential that outlives what the owner signed (the service stretched T): refused too.
+  it('refuses a till whose credential outlives the attestation', async () => {
+    enrolWith(buildAttestedCredentialToken({ stallKey: STALL_KEY, devicePubkey: DEVICE, expiresAt: 1820071167, until: 1820071166 }))
+    const out = await unlockNow()
+    expect(out.unlocked).toBe(false)
+    if (!out.unlocked) expect(out.reason).toBe('bad-attestation')
+  })
+
+  // The boundary: a credential expiring exactly at T is within what the owner signed.
+  it('opens a till whose credential expires exactly at T', async () => {
+    enrolWith(buildAttestedCredentialToken({ stallKey: STALL_KEY, devicePubkey: DEVICE, expiresAt: 1820071167, until: 1820071167 }))
+    const out = await unlockNow()
+    if (!out.unlocked) throw new Error(out.message)
+    expect(out.actor.attested).toBe(true)
   })
 })

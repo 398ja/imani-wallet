@@ -54,6 +54,8 @@ const till: TerminalActor = {
   role: TERMINAL_ROLES.ISSUE_AND_REDEEM,
   terminalPubkey: 'c'.repeat(64),
   permissions: grantFor(TERMINAL_ROLES.ISSUE_AND_REDEEM, STALL),
+  // The stall attested this till at enrolment (#160 decision 5), so it may sell.
+  attested: true,
 }
 
 function show(actor?: TerminalActor, kind: 'full' | 'reduced' | null = null) {

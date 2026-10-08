@@ -33,6 +33,8 @@ function terminal(role: TerminalRole = TERMINAL_ROLES.ISSUE_AND_REDEEM): Termina
     role,
     terminalPubkey: DEVICE,
     permissions: grantFor(role, STALL),
+    // Attested by the stall at enrolment (#160 decision 5), as login reads a current till.
+    attested: true,
   }
 }
 
