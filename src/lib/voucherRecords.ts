@@ -3,7 +3,16 @@ import type { VoucherRow } from '@imani/wallet-storage'
 
 import { isRedeemed } from './merchants'
 import { getSigner } from './nap'
-import { allEvents, publish } from './relay'
+import { allEvents, publish, type PublishResult } from './relay'
+import {
+  buildRecordEvents,
+  completeChunkedIds,
+  isChunkEvent,
+  reassembleRecords,
+  recordIdOf,
+  type ChunkingOptions,
+  type Sealer,
+} from './chunkedRecord'
 import { legacyApi } from './legacyBridge'
 import { addRestoredVoucher, getWallet, notifyWalletChanged } from './wallet'
 
@@ -54,18 +63,55 @@ export interface TokenRecord {
   voucher?: VoucherRow
 }
 
-function buildRecord(tokenId: string, record: TokenRecord): EventTemplate {
+/**
+ * How big a single record may get before it is chunked, set HERE rather than
+ * through the library's global `configure()`: its defaults (400 KB / 350 KB)
+ * suit relays far looser than strfry's 65,536, and other users of the library
+ * should keep them. See chunkedRecord.ts for the size model.
+ */
+export const VOUCHER_CHUNKING: ChunkingOptions = {}
+
+function selfSealer(): Sealer {
   const signer = getSigner()
   return {
-    kind: NIP60_TOKEN_KIND,
-    created_at: Math.floor(Date.now() / 1000),
-    // `spent` as a tag as well as in the payload: a future reader can skip
-    // tombstones without decrypting them.
-    tags: [
-      ['d', tokenId],
-      ['spent', record.spent ? 'true' : 'false'],
-    ],
-    content: signer.nip44Encrypt(signer.pubkey, JSON.stringify(record)),
+    encrypt: (plain) => signer.nip44Encrypt(signer.pubkey, plain),
+    decrypt: (cipher) => signer.nip44Decrypt(signer.pubkey, cipher),
+  }
+}
+
+/**
+ * The events for one record (#203).
+ *
+ * A record that fits is ONE plain NIP-60 kind-7375 event, `d` = token_id, exactly
+ * as before and readable by any NIP-60 wallet. One that would not fit under the
+ * relay's 65,536-byte limit after NIP-44 (a terminal coupon with 7 warrant-laden
+ * proofs is about 66 KB) goes out as gzip-compressed chunks: `d` = `<token_id>-chunk-<n>`,
+ * sharing a snapshot_id and payload_hash. Tombstones are tiny and always plain.
+ */
+function buildRecords(tokenId: string, record: TokenRecord): Promise<EventTemplate[]> {
+  // `spent` as a tag as well as in the payload: a future reader can skip
+  // tombstones without decrypting them.
+  return buildRecordEvents(
+    NIP60_TOKEN_KIND,
+    tokenId,
+    JSON.stringify(record),
+    [['spent', record.spent ? 'true' : 'false']],
+    selfSealer(),
+    VOUCHER_CHUNKING,
+  )
+}
+
+/**
+ * Sign and publish every event of a record. Throws with the relay's own reason
+ * when any event is not accepted: a record missing one chunk is not backed up.
+ */
+async function publishRecords(templates: EventTemplate[]): Promise<void> {
+  const signer = getSigner()
+  for (const template of templates) {
+    const result: PublishResult = await publish(await signer.signEvent(template))
+    if (result.ok === 0) {
+      throw new Error(`relay refused the record: ${result.errors.join('; ') || 'no reason given'}`)
+    }
   }
 }
 
@@ -91,7 +137,7 @@ export async function publishVoucher(row: VoucherRow): Promise<void> {
       })
       return
     }
-    await publish(await getSigner().signEvent(buildRecord(row.token_id, { voucher: row })))
+    await publishRecords(await buildRecords(row.token_id, { voucher: row }))
   } catch (error) {
     console.error('[voucherRecords] coupon not backed up to the relay', error)
   }
@@ -107,7 +153,7 @@ export async function publishVoucher(row: VoucherRow): Promise<void> {
 export async function tombstoneVoucher(tokenId: string): Promise<void> {
   try {
     if (!tokenId) return
-    await publish(await getSigner().signEvent(buildRecord(tokenId, { spent: true })))
+    await publishRecords(await buildRecords(tokenId, { spent: true }))
   } catch (error) {
     console.error('[voucherRecords] spent coupon not tombstoned on the relay', error)
   }
@@ -152,9 +198,24 @@ export function pickLive(entries: { id: string; at: number; record: TokenRecord 
   return [...newest.entries()].filter(([id]) => !spent.has(id)).map(([, v]) => v.row)
 }
 
-function liveRecords(events: Event[]): VoucherRow[] {
-  const entries = []
+async function liveRecords(events: Event[], pubkey: string): Promise<VoucherRow[]> {
+  const entries: { id: string; at: number; record: TokenRecord }[] = []
+
+  // Chunked records (#203): reassembled, hash-checked and decompressed first.
+  // An incomplete or corrupted set is skipped, never half-read.
+  const chunked = await reassembleRecords(events, pubkey, selfSealer(), (id, reason) =>
+    console.warn('[voucherRecords] chunked coupon record unreadable; skipped', { id, reason }),
+  )
+  for (const { id, at, plaintext } of chunked) {
+    try {
+      entries.push({ id, at, record: JSON.parse(plaintext) as TokenRecord })
+    } catch {
+      // Same rule as parseRecord: one bad record does not abort the rest.
+    }
+  }
+
   for (const event of events) {
+    if (isChunkEvent(event)) continue
     // Skip a tombstone without decrypting it.
     //
     // `buildRecord` puts `spent` in a TAG as well as in the payload, exactly so
@@ -220,7 +281,7 @@ async function isStillLive(token: string): Promise<boolean> {
  */
 export async function restoreVouchers(pubkey: string): Promise<number> {
   try {
-    const candidates = liveRecords(await allEvents(pubkey, NIP60_TOKEN_KIND))
+    const candidates = await liveRecords(await allEvents(pubkey, NIP60_TOKEN_KIND), pubkey)
     if (candidates.length === 0) return 0
 
     // What this device already has, read once.
@@ -285,11 +346,15 @@ export async function restoreVouchers(pubkey: string): Promise<number> {
  */
 export async function backfillVouchers(pubkey: string): Promise<number> {
   try {
-    const known = new Set(
-      (await allEvents(pubkey, NIP60_TOKEN_KIND))
-        .map((e) => e.tags.find(([name]) => name === 'd')?.[1])
-        .filter((d): d is string => Boolean(d)),
-    )
+    const events = await allEvents(pubkey, NIP60_TOKEN_KIND)
+    // A plain record counts by its `d`; a chunked one only once EVERY chunk of
+    // a snapshot is there, so a half-landed set is published again (#203).
+    const known = completeChunkedIds(events)
+    for (const event of events) {
+      if (isChunkEvent(event)) continue
+      const id = recordIdOf(event)
+      if (id) known.add(id)
+    }
 
     const missing = (await getWallet().getAllVouchers()).filter(
       (row) => row.token_id && !known.has(row.token_id),
