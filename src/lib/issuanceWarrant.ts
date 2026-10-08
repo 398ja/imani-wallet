@@ -31,7 +31,7 @@ import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 
 import { verifyIssuerDelegation } from './issuerDelegation'
-import { trustedCredentialServiceKeys, verifyTerminalWarrant } from './terminalWarrant'
+import { TERMINAL_REFUSAL, trustedCredentialServiceKeys, verifyTerminalWarrant } from './terminalWarrant'
 
 /**
  * Separates fields in the digest preimage. Mirrors `IssuanceWarrant.java`.
@@ -450,9 +450,13 @@ export function verifyIssuanceWarrant(
       couponFaceMinor,
       expiryCheck: 'skip-offline',
     })
-    return result.valid
-      ? { verdict: 'verified' }
-      : { verdict: 'failed', reason: `terminal warrant refused: ${result.refusal}` }
+    if (result.valid === true) return { verdict: 'verified' }
+    // A till the stall never attested (spec 4.6.3, review M7): the sale is unsigned by the
+    // stall, not tampered with, so it reads `unwarranted`, which is also what such a coupon read
+    // before 0.17.0. `refuseIfUnwarranted` refuses it before the swap all the same. A present
+    // but bad attestation, or one the credential outlives, is a forgery and reads `failed`.
+    if (result.refusal === TERMINAL_REFUSAL.OWNER_ATTESTATION_MISSING) return { verdict: 'unwarranted' }
+    return { verdict: 'failed', reason: `terminal warrant refused: ${result.refusal}` }
   }
 
   // Whose signature the digest must carry: the stall's own, or the key the
