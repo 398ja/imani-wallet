@@ -20,6 +20,7 @@ import {
 } from '../terminalWarrant'
 import { parseIssuanceWarrant, verifyIssuanceWarrant, warrantSaleDigest } from '../issuanceWarrant'
 import { lockedCanonicalBytes } from '../voucherToken'
+import { signOwnerAttestation } from '../ownerAttestation'
 import parityCorpus from './fixtures/terminalWarrantParity0161.json'
 
 // Keys: the gateway's credential-minting service, the stall, and the till's own K.
@@ -46,6 +47,24 @@ interface CredentialShape {
   signer?: string
   /** The stall co-key row; null leaves it out, as the Java fixture does. */
   pubkeys?: string | null
+  /**
+   * The owner's attestation (0.17.0). By default the stall attests an object metadata over its
+   * own stall, lock and role until the credential's expiry; `false` leaves it out (a legacy
+   * credential), and a number attests until that instant instead.
+   */
+  attest?: false | number
+}
+
+/** The stall's attestation of `metadata`, as the owner's wallet signs it at enrolment. */
+function attested(metadata: Record<string, unknown>, until: number): Record<string, unknown> {
+  if ('owner_attestation' in metadata) return metadata
+  const { stall_pubkey, lock_key, role } = metadata
+  if (typeof stall_pubkey !== 'string' || typeof lock_key !== 'string' || typeof role !== 'string') return metadata
+  const signer = { pubkey: STALL, withPrivkey: <T,>(f: (k: Uint8Array) => T) => f(hexToBytes(STALL_SK)) }
+  // Signed over the metadata's own spellings, which is what a verifier rebuilds the digest from.
+  const owner_attestation = signOwnerAttestation({ stallPubkey: STALL, lockKey: TILL, role, expiresAt: until }, signer)
+  if (stall_pubkey !== STALL || lock_key !== TILL) return metadata
+  return { ...metadata, owner_attestation }
 }
 
 /**
@@ -54,11 +73,15 @@ interface CredentialShape {
  */
 function credential(over: CredentialShape = {}): string {
   const lock = over.lock ?? TILL
+  const objectMetadata = over.metadata ?? { terminal: true, stall_pubkey: STALL, role: 'issue-and-redeem', lock_key: TILL, name: 'Front' }
+  const credentialExpiry = Number(over.expiresAt ?? EXPIRES_AT)
   const metadata =
-    typeof over.metadata === 'string'
-      ? over.metadata
+    typeof objectMetadata === 'string'
+      ? objectMetadata
       : JSON.stringify(
-          over.metadata ?? { terminal: true, stall_pubkey: STALL, role: 'issue-and-redeem', lock_key: TILL, name: 'Front' },
+          over.attest === false
+            ? objectMetadata
+            : attested(objectMetadata, over.attest ?? (Number.isSafeInteger(credentialExpiry) ? credentialExpiry : EXPIRES_AT)),
         )
   const tags: string[][] = [
     ['n_sigs', '1'],
@@ -135,7 +158,10 @@ describe('the golden credential cashu-voucher 0.16.0 froze', () => {
   const G_SERVICE = '1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f'
   const G_TILL_SK = '03'.repeat(32)
 
-  it('parses byte-exact, and a sale its till signs verifies against the Java-signed credential', () => {
+  // Frozen before owner attestation existed, so it carries none. It passes every 0.16.x check
+  // and is then refused at the new step: a legacy till reaches OWNER_ATTESTATION_MISSING and no
+  // earlier refusal, which is what lets the customer read it `unwarranted` rather than `failed`.
+  it('parses byte-exact, passes every 0.16.x check against the Java-signed credential, and is refused only for lacking the owner attestation', () => {
     expect(parseCredentialSecret(GOLDEN)).not.toBeNull()
     const signature = bytesToHex(
       schnorr.sign(warrantSaleDigest(G_STALL, 2500, 2, 'EUR', NONCE), hexToBytes(G_TILL_SK)),
@@ -147,7 +173,7 @@ describe('the golden credential cashu-voucher 0.16.0 froze', () => {
       trustedServiceKeys: [G_SERVICE],
       signatureHex: signature,
     })
-    expect(verdict).toEqual({ valid: true })
+    expect(verdict).toEqual({ valid: false, refusal: TERMINAL_REFUSAL.OWNER_ATTESTATION_MISSING })
   })
 })
 
@@ -529,6 +555,7 @@ describe('parity with cashu-voucher 0.16.1 on the review corpus', () => {
     expiry: 'skip' | number
   }
   const cases = parityCorpus as ParityCase[]
+  const UPPERCASE_STALL_CASES = ['case-stall_pubkey-upper', 'meta-stall-upper']
 
   // The corpus is the size we committed, so a truncated file cannot pass silently.
   it('holds every committed case', () => {
@@ -551,8 +578,18 @@ describe('parity with cashu-voucher 0.16.1 on the review corpus', () => {
       expiryCheck: c.expiry === 'skip' ? 'skip-offline' : { at: c.expiry },
     })
     const got = v.valid ? 'VALID' : v.refusal
-    expect(got === 'VALID', `java said ${c.java}`).toBe(c.java === 'VALID')
-    expect(got).toBe(c.wallet)
+    // The corpus predates owner attestation (0.17.0), so none of its credentials is attested.
+    // Every case 0.16.1 accepted is now refused at the new step and nowhere earlier, and every
+    // case it refused is refused for the same reason as before.
+    // One deliberate tightening in 0.17.0: `stall_pubkey` must equal the issuer exactly, because
+    // the attestation digest is built from it verbatim. The corpus's uppercase spellings, which
+    // 0.16.1 accepted ignoring case, are now not a selling terminal of this stall.
+    const expected = UPPERCASE_STALL_CASES.includes(c.id)
+      ? TERMINAL_REFUSAL.NOT_A_SELLING_TERMINAL
+      : c.wallet === 'VALID'
+        ? TERMINAL_REFUSAL.OWNER_ATTESTATION_MISSING
+        : c.wallet
+    expect(got, `java 0.16.1 said ${c.java}`).toBe(expected)
   })
 })
 
@@ -588,5 +625,97 @@ describe('the customer-side call into verifyTerminalWarrant', () => {
     } finally {
       vi.unstubAllEnvs()
     }
+  })
+})
+
+describe('the owner attestation step (cashu-voucher 0.17.0, spec 4.6.3)', () => {
+  const metadata = { terminal: true, stall_pubkey: STALL, role: 'issue-and-redeem', lock_key: TILL, name: 'Front' }
+
+  // A till set up before 0.17.0: everything else holds, the stall never signed it.
+  it('refuses a credential with no attestation (OWNER_ATTESTATION_MISSING)', () => {
+    expect(refusal({ credential: credential({ attest: false }) })).toBe(TERMINAL_REFUSAL.OWNER_ATTESTATION_MISSING)
+  })
+
+  // Malformed reads as missing, as in the Java: an extra key, a number, v other than "1".
+  it('reads a malformed attestation as missing', () => {
+    const good = JSON.parse(JSON.parse(credential()).at(1).tags.find((t: string[]) => t[0] === 'merchant_metadata')[1])
+      .owner_attestation as Record<string, string>
+    for (const bad of [
+      { ...good, extra: 'x' },
+      { ...good, v: '2' },
+      { ...good, expires_at: Number(good.expires_at) },
+      { ...good, sig: good.sig.toUpperCase() },
+      'not-an-object',
+    ]) {
+      expect(refusal({ credential: credential({ metadata: { ...metadata, owner_attestation: bad } }) })).toBe(
+        TERMINAL_REFUSAL.OWNER_ATTESTATION_MISSING,
+      )
+    }
+  })
+
+  // Signed by the service, not the stall: one key making a till alone is the hole closed here.
+  it('refuses an attestation the stall did not sign (BAD_OWNER_ATTESTATION)', () => {
+    const signer = { pubkey: SERVICE, withPrivkey: <T,>(f: (k: Uint8Array) => T) => f(hexToBytes(SERVICE_SK)) }
+    const forged = signOwnerAttestation({ stallPubkey: SERVICE, lockKey: TILL, role: 'issue-and-redeem', expiresAt: EXPIRES_AT }, signer)
+    expect(refusal({ credential: credential({ metadata: { ...metadata, owner_attestation: forged } }) })).toBe(
+      TERMINAL_REFUSAL.BAD_OWNER_ATTESTATION,
+    )
+  })
+
+  // The service stretched the credential past the T the owner signed.
+  it('refuses a credential that outlives its attestation (ATTESTATION_EXCEEDED), and not one that ends at T', () => {
+    expect(refusal({ credential: credential({ attest: EXPIRES_AT - 1 }) })).toBe(TERMINAL_REFUSAL.ATTESTATION_EXCEEDED)
+    expect(refusal({ credential: credential({ attest: EXPIRES_AT }) })).toBe('VALID')
+  })
+
+  // The order is the Java's: after the lock, before the sale signature. A missing attestation
+  // with a bad sale signature reports the attestation.
+  it('checks the attestation before the sale signature', () => {
+    expect(refusal({ credential: credential({ attest: false }), signatureHex: saleSignature(STRANGER_SK) })).toBe(
+      TERMINAL_REFUSAL.OWNER_ATTESTATION_MISSING,
+    )
+  })
+
+  // stall_pubkey must now equal the issuer exactly: the digest is built from it verbatim.
+  it('refuses an uppercase stall_pubkey as not a selling terminal of this stall', () => {
+    expect(refusal({ credential: credential({ metadata: { ...metadata, stall_pubkey: STALL.toUpperCase() }, attest: false }) })).toBe(
+      TERMINAL_REFUSAL.NOT_A_SELLING_TERMINAL,
+    )
+  })
+})
+
+describe('what the customer reads for each attestation outcome (review M7)', () => {
+  const coupon = { faceValueMinor: SALE_TOTAL, unit: UNIT, faceDecimals: DECIMALS }
+  const verdictFor = (cred: string) =>
+    verifyIssuanceWarrant(
+      parseIssuanceWarrant(
+        JSON.stringify({ form: 'terminal', sale_total: SALE_TOTAL, face_decimals: DECIMALS, unit: UNIT, nonce: NONCE, signature: saleSignature(), credential: cred }),
+      ),
+      STALL,
+      coupon,
+      { trustedServiceKeys: [SERVICE] },
+    )
+
+  // A valid attestation: the stall signed this till and the till signed this sale.
+  it('reads `verified` when the stall attested the till', () => {
+    expect(verdictFor(credential())).toEqual({ verdict: 'verified' })
+  })
+
+  // Missing: unsigned by the stall, not tampered with. Same as before 0.17.0, so the cutover does
+  // not turn a legacy coupon red.
+  it('reads `unwarranted`, not `failed`, when the attestation is missing', () => {
+    expect(verdictFor(credential({ attest: false }))).toEqual({ verdict: 'unwarranted' })
+  })
+
+  // A forged or stretched attestation is tampering, and reads `failed`.
+  it('reads `failed` for a bad or exceeded attestation', () => {
+    const signer = { pubkey: SERVICE, withPrivkey: <T,>(f: (k: Uint8Array) => T) => f(hexToBytes(SERVICE_SK)) }
+    const forged = signOwnerAttestation({ stallPubkey: SERVICE, lockKey: TILL, role: 'issue-and-redeem', expiresAt: EXPIRES_AT }, signer)
+    const metadata = { terminal: true, stall_pubkey: STALL, role: 'issue-and-redeem', lock_key: TILL, owner_attestation: forged }
+    expect(verdictFor(credential({ metadata }))).toEqual({ verdict: 'failed', reason: 'terminal warrant refused: BAD_OWNER_ATTESTATION' })
+    expect(verdictFor(credential({ attest: EXPIRES_AT - 1 }))).toEqual({
+      verdict: 'failed',
+      reason: 'terminal warrant refused: ATTESTATION_EXCEEDED',
+    })
   })
 })

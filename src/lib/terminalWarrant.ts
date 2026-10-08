@@ -22,6 +22,7 @@ import { sha256 } from '@noble/hashes/sha256'
 import { hexToBytes } from '@noble/hashes/utils'
 
 import { warrantSaleDigest } from './issuanceWarrant'
+import { ATTESTATION_REFUSAL, checkOwnerAttestation, type AttestationRefusal } from './ownerAttestation'
 import { hasCanonicalNumericTags, lockedCanonicalBytes } from './voucherToken'
 
 /** Why a `terminal` warrant was refused. Same names as `IssuanceWarrant.TerminalRefusal`. */
@@ -36,6 +37,7 @@ export const TERMINAL_REFUSAL = {
   NOT_A_SELLING_TERMINAL: 'NOT_A_SELLING_TERMINAL',
   LOCK_IS_STALL: 'LOCK_IS_STALL',
   LOCK_MISMATCH: 'LOCK_MISMATCH',
+  ...ATTESTATION_REFUSAL,
   BAD_SALE_SIGNATURE: 'BAD_SALE_SIGNATURE',
 } as const
 
@@ -310,8 +312,8 @@ export function hasDuplicateKeys(json: string): boolean {
   return false
 }
 
-/** The `lock_key` of a selling terminal of `issuerId`, or null. Mirrors `terminalLockKey`. */
-function terminalLockKey(metadataJson: string | undefined, issuerId: string): string | null {
+/** Metadata JSON as an object, refusing duplicate keys at any depth as the Java's parser does. */
+function metadataObject(metadataJson: string | undefined): Record<string, unknown> | null {
   if (metadataJson === undefined) return null
   let metadata: unknown
   try {
@@ -321,14 +323,29 @@ function terminalLockKey(metadataJson: string | undefined, issuerId: string): st
   }
   if (hasDuplicateKeys(metadataJson)) return null
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null
-  const m = metadata as Record<string, unknown>
+  return metadata as Record<string, unknown>
+}
+
+/**
+ * The metadata of a selling terminal of `issuerId`, or null. Mirrors `terminalLockKey`.
+ *
+ * `stall_pubkey` must equal `issuerId` exactly since 0.17.0 (it was compared ignoring case): the
+ * attestation digest is built from `stall_pubkey` verbatim, so an uppercase copy would sign
+ * different bytes than the key it names.
+ */
+function sellingTerminalMetadata(
+  metadataJson: string | undefined,
+  issuerId: string,
+): { metadata: Record<string, unknown>; lockKey: string } | null {
+  const m = metadataObject(metadataJson)
+  if (!m) return null
   // The boolean true, not truthy: "terminal": "yes" is not authority.
   if (m.terminal !== true) return null
-  if (typeof m.stall_pubkey !== 'string' || m.stall_pubkey.toLowerCase() !== issuerId.toLowerCase()) return null
+  if (m.stall_pubkey !== issuerId) return null
   if (m.role !== ISSUE_AND_REDEEM) return null
   // Lowercase only, as the gateway writes it and as the Java (0.16.1) requires.
   if (typeof m.lock_key !== 'string' || !LOWER_HEX64.test(m.lock_key)) return null
-  return m.lock_key
+  return { metadata: m, lockKey: m.lock_key }
 }
 
 function refused(refusal: TerminalRefusal): TerminalVerdict {
@@ -396,8 +413,9 @@ export function verifyTerminalWarrant(sale: TerminalSale): TerminalVerdict {
   }
 
   // 6. A selling terminal of this stall, whose key is not the stall's own.
-  const lockKey = terminalLockKey(single(credential.rows, 'merchant_metadata'), issuerId)
-  if (!lockKey) return refused(TERMINAL_REFUSAL.NOT_A_SELLING_TERMINAL)
+  const selling = sellingTerminalMetadata(single(credential.rows, 'merchant_metadata'), issuerId)
+  if (!selling) return refused(TERMINAL_REFUSAL.NOT_A_SELLING_TERMINAL)
+  const { lockKey } = selling
   if (lockKey.toLowerCase() === issuerId) return refused(TERMINAL_REFUSAL.LOCK_IS_STALL)
 
   // 7. The mint lock is `lock_key`.
@@ -405,7 +423,12 @@ export function verifyTerminalWarrant(sale: TerminalSale): TerminalVerdict {
     return refused(TERMINAL_REFUSAL.LOCK_MISMATCH)
   }
 
-  // 8. `K` signed this sale.
+  // 8. The stall attested this till (0.17.0, spec 4.6.3): present and well-formed, signed by
+  // `issuerId` over the digest rebuilt from this metadata, and not outlived by the credential.
+  const attestation = checkOwnerAttestation(selling.metadata, issuerId, rawExpiry)
+  if (attestation) return refused(attestation)
+
+  // 9. `K` signed this sale.
   if (!/^[0-9a-fA-F]{128}$/.test(sale.signatureHex)) return refused(TERMINAL_REFUSAL.BAD_SALE_SIGNATURE)
   try {
     const digest = warrantSaleDigest(issuerId, saleTotalMinor, faceDecimals, sale.unit, sale.saleNonce)
@@ -416,4 +439,47 @@ export function verifyTerminalWarrant(sale: TerminalSale): TerminalVerdict {
     return refused(TERMINAL_REFUSAL.BAD_SALE_SIGNATURE)
   }
   return { valid: true }
+}
+
+/** Why `verifyOwnerAttestation` refused a credential. Same names as the Java. */
+export type OwnerAttestationRefusal =
+  | typeof TERMINAL_REFUSAL.MALFORMED_CREDENTIAL
+  | typeof TERMINAL_REFUSAL.WRONG_STALL
+  | AttestationRefusal
+
+/**
+ * Did the stall attest this credential? Mirrors cashu-voucher 0.17.0's public
+ * `IssuanceWarrant.verifyOwnerAttestation(credential, issuerId)`, which the gateways run, and
+ * which the device runs at unlock (`credentialFromToken`).
+ *
+ * The signature check only: no trusted-key list, no service signature, no expiry instant and no
+ * role requirement (a redeem-only till may be attested too). The caller has its own reasons to
+ * trust the credential bytes, and decides what a refusal costs.
+ *
+ * @param credential the credential's NUT-10 secret, exactly as it arrived
+ * @param issuerId the stall, lowercase hex
+ * @returns null when attested, else the refusal
+ */
+export function verifyOwnerAttestation(credential: string, issuerId: string): OwnerAttestationRefusal | null {
+  const parsed = parseCredentialSecret(credential)
+  if (!parsed) return TERMINAL_REFUSAL.MALFORMED_CREDENTIAL
+  const rawExpiry = single(parsed.rows, 'expires_at')
+  if (rawExpiry === undefined || !CANONICAL_INTEGER.test(rawExpiry) || BigInt(rawExpiry) > JAVA_LONG_MAX) {
+    return TERMINAL_REFUSAL.MALFORMED_CREDENTIAL
+  }
+  const m = metadataObject(single(parsed.rows, 'merchant_metadata'))
+  if (
+    !m ||
+    m.terminal !== true ||
+    typeof m.stall_pubkey !== 'string' ||
+    !LOWER_HEX64.test(m.stall_pubkey) ||
+    typeof m.lock_key !== 'string' ||
+    !LOWER_HEX64.test(m.lock_key) ||
+    typeof m.role !== 'string' ||
+    hasControlCharacter(m.role)
+  ) {
+    return TERMINAL_REFUSAL.MALFORMED_CREDENTIAL
+  }
+  if (m.stall_pubkey !== issuerId) return TERMINAL_REFUSAL.WRONG_STALL
+  return checkOwnerAttestation(m, issuerId, rawExpiry)
 }
