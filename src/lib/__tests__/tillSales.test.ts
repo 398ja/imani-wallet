@@ -31,6 +31,7 @@ import {
   sendTillSale,
 } from '../tillSales'
 import { unwrapSealed, wrapMessage, type Rumor } from '../terminalDelivery'
+import { NOTE_MAX_CHARS } from '../note'
 import { buildCashbackTransaction, buildIssueTransaction, toTransaction } from '../transactions'
 import { warrantSaleDigest } from '../issuanceWarrant'
 import { parseCredentialSecret } from '../terminalWarrant'
@@ -212,6 +213,76 @@ describe('the till sends, and keeps what did not land', () => {
       return saleRowsFromRumor(o.rumor, o.sealer, STALL, opts)!.rows
     })
     expect(filed).toHaveLength(30)
+  })
+
+  // Review sh6 (W1-M1 follow-up): the budget counted UTF-16 code units, the relay counts bytes,
+  // and the Sell note was uncapped. 30 rows with a 500-character CJK note made a 66,045-byte
+  // wrap; one row with a 30,000-character note made 76,965 (one row never splits). Now the
+  // budget is UTF-8 bytes and the note is capped at NOTE_MAX_CHARS where the till builds the DM.
+  const wrapBytes = (e: Event) => new TextEncoder().encode(JSON.stringify(e)).length
+  async function sendWithMemo(memo: string, n: number) {
+    const w = terminalWarrant()
+    const rows = Array.from({ length: n }, (_, i) => ({ ...saleRow(w, `v-${i}-${'x'.repeat(30)}`), memo }) as TransactionRow)
+    const sent: Event[] = []
+    expect(await sendTillSale(rows, STALL, 'cred-1', tillSeal, { publish: async (e) => (sent.push(e), true) })).toBe(true)
+    const filed = sent.flatMap((e) => {
+      const o = unwrapSealed(e, hexToBytes(STALL_SK))!
+      return saleRowsFromRumor(o.rumor, o.sealer, STALL, opts)!.rows
+    })
+    return { sent, filed }
+  }
+
+  for (const [label, memo] of [
+    ['CJK', '漢'.repeat(500)],
+    ['Arabic', 'ع'.repeat(1_000)],
+    ['emoji (4-byte)', '😀'.repeat(400)],
+    ['quotes and backslashes', '"\\'.repeat(1_000)],
+  ] as const) {
+    it(`budgets in UTF-8 bytes: 30 rows with a long ${label} note all fit the relay (≤ 55,121 bytes)`, async () => {
+      const { sent, filed } = await sendWithMemo(memo, 30)
+      for (const e of sent) expect(wrapBytes(e)).toBeLessThanOrEqual(55_121)
+      expect(filed).toHaveLength(30)
+    })
+  }
+
+  it('one row with a note far past the cap still fits one wrap (≤ 55,121 bytes)', async () => {
+    const { sent, filed } = await sendWithMemo('a'.repeat(30_000), 1)
+    expect(sent).toHaveLength(1)
+    expect(wrapBytes(sent[0])).toBeLessThanOrEqual(55_121)
+    expect(filed).toHaveLength(1)
+  })
+
+  // The cap counts UTF-16 code units, as HTML maxLength and the portal's @Size(max = 280) do, so
+  // the most bytes a capped note can be is 280 three-byte characters (840 B); 4-byte characters
+  // are two units each (140 of them, 560 B).
+  const MAX_EMOJI = '😀'.repeat(NOTE_MAX_CHARS / 2)
+  const MAX_CJK = '漢'.repeat(NOTE_MAX_CHARS)
+  for (const [label, memo] of [['4-byte', MAX_EMOJI], ['3-byte', MAX_CJK]] as const) {
+    it(`one row with the maximum note of ${label} characters fits one wrap (≤ 55,121 bytes)`, async () => {
+      const { sent, filed } = await sendWithMemo(memo, 1)
+      expect(sent).toHaveLength(1)
+      expect(wrapBytes(sent[0])).toBeLessThanOrEqual(55_121)
+      expect(toTransaction(filed[0]).memo).toBe(memo)
+    })
+
+    it(`30 rows with the maximum note of ${label} characters all fit (≤ 55,121 bytes)`, async () => {
+      const { sent, filed } = await sendWithMemo(memo, 30)
+      for (const e of sent) expect(wrapBytes(e)).toBeLessThanOrEqual(55_121)
+      expect(filed).toHaveLength(30)
+      for (const r of filed) expect(toTransaction(r).memo).toBe(memo)
+    })
+  }
+
+  it('caps the note where the till builds the sale record, never splitting a character', () => {
+    const memoOf = (memo: string) =>
+      (JSON.parse(saleMessageJson([{ ...saleRow(), memo } as TransactionRow], 'cred-1')) as { rows: Array<{ memo?: string }> }).rows[0].memo!
+    expect(memoOf('😀'.repeat(NOTE_MAX_CHARS))).toBe(MAX_EMOJI)
+    // An odd cut lands inside a surrogate pair: the whole character goes, never half of it.
+    const odd = memoOf('a' + '😀'.repeat(NOTE_MAX_CHARS))
+    expect(odd).toBe('a' + '\u{1F600}'.repeat(NOTE_MAX_CHARS / 2 - 1))
+    expect(odd.length).toBeLessThanOrEqual(NOTE_MAX_CHARS)
+    expect(memoOf('a'.repeat(30_000))).toHaveLength(NOTE_MAX_CHARS)
+    expect(memoOf('short note')).toBe('short note')
   })
 
   it('queues a wrap that landed nowhere, and the next flush sends exactly it', async () => {
