@@ -3,6 +3,8 @@ import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils'
 
 import { signedFetch } from './nip98'
 import { parseTerminalMetadata, terminalMetadataJson } from './terminalCredential'
+import { hasDuplicateKeys } from './terminalWarrant'
+import { checkOwnerAttestation, signOwnerAttestation, type OwnerAttestation, type StallSigner } from './ownerAttestation'
 import { parseVoucherToken, tokenProofs, verifyVoucher } from './voucherToken'
 import { spendingKeys, xOnly } from './witness'
 import type { PreparedCredential } from './terminalIssue'
@@ -27,6 +29,54 @@ import type { PreparedCredential } from './terminalIssue'
 
 /** Days a credential lasts. Decision 1 on #160: a year, with renewal warnings later. */
 export const CREDENTIAL_LIFETIME_DAYS = 365
+
+/**
+ * Slack added to `T`, the expiry the owner attests (spec 4.6.2).
+ *
+ * A gateway with 5b-2 writes `T` verbatim as the credential's expiry. One without it still
+ * computes `its own now + 365 days`, a few seconds after the owner's, and the credential would
+ * then outlive its attestation (`ATTESTATION_EXCEEDED`) everywhere. Ten minutes covers that and
+ * ordinary clock skew, and stays within the gateway's one-day tolerance between the header and
+ * `expires_in_days`. So the owner's app and the gateway may deploy in either order.
+ */
+export const ATTESTATION_EXPIRY_SLACK_SECONDS = 600
+
+/** The header that carries `T` beside `expires_in_days` (gateway-customer's idempotency check). */
+export const EXPIRES_AT_HEADER = 'X-Idempotency-Expires-At'
+
+/** `T` for a credential enrolled at `nowMs`: the credential's year, plus the slack above. */
+export function attestationExpiry(nowMs: number): number {
+  return Math.floor(nowMs / 1000) + CREDENTIAL_LIFETIME_DAYS * 86_400 + ATTESTATION_EXPIRY_SLACK_SECONDS
+}
+
+/**
+ * The owner's attestation for this enrolment, signed with the stall key (#160 decision 5).
+ *
+ * The same signer `buildIssuanceWarrant` uses for a `merchant` warrant, asserted to be the
+ * stall. Signed once per enrolment and persisted on the `minting` row, so a resumed mint sends
+ * the identical body: a fresh signature would carry a fresh nonce and the gateway's idempotent
+ * replay would refuse it as a different request.
+ */
+export function attestEnrolment(
+  credential: PreparedCredential,
+  signer: StallSigner,
+  nowMs: number = Date.now(),
+): OwnerAttestation {
+  return signOwnerAttestation(
+    {
+      stallPubkey: credential.stallPubkey,
+      lockKey: credential.lockedTo,
+      role: credential.role,
+      expiresAt: attestationExpiry(nowMs),
+    },
+    signer,
+  )
+}
+
+/** `T` as the instant gateway-customer's `X-Idempotency-Expires-At` parses (ISO-8601, UTC). */
+export function expiresAtHeader(attestation: OwnerAttestation): string {
+  return new Date(Number(attestation.expires_at) * 1000).toISOString().replace('.000Z', 'Z')
+}
 
 /** How long the gateway gets to produce the token after accepting the request. */
 const TOKEN_WAIT_MS = 60_000
@@ -89,6 +139,26 @@ export function credentialRequestBody(credential: PreparedCredential): Record<st
   }
 }
 
+/**
+ * The `merchant_metadata` this owner asked for, attestation included: exactly what the
+ * credential must carry back (`credentialDefect`).
+ */
+export function requestedMetadata(credential: PreparedCredential): Record<string, unknown> {
+  const metadata = credentialRequestBody(credential).merchant_metadata as Record<string, unknown>
+  return credential.attestation ? { ...metadata, owner_attestation: credential.attestation } : metadata
+}
+
+/** The full mint request: the body with the owner's attestation in its metadata, and headers. */
+function mintRequest(credential: PreparedCredential): { body: Record<string, unknown>; headers: Record<string, string> } {
+  const body = { ...credentialRequestBody(credential), merchant_metadata: requestedMetadata(credential) }
+  // `T` beside `expires_in_days`, so gateway-customer can write it verbatim as the credential's
+  // expiry and refuse a mint whose header and attestation disagree (spec 4.6.2).
+  const headers: Record<string, string> = credential.attestation
+    ? { [EXPIRES_AT_HEADER]: expiresAtHeader(credential.attestation) }
+    : {}
+  return { body, headers }
+}
+
 /** Why a minted credential was refused. Each is a property the owner relies on. */
 export type CredentialDefect =
   | 'unreadable'
@@ -98,6 +168,7 @@ export type CredentialDefect =
   | 'wrong-issuer'
   | 'bad-signature'
   | 'metadata-mismatch'
+  | 'attestation-invalid'
 
 /**
  * Does this token hold exactly the credential that was asked for?
@@ -147,7 +218,58 @@ export function credentialDefect(token: string, expected: PreparedCredential): C
     return 'metadata-mismatch'
   }
 
+  // The WHOLE metadata came back as asked (spec 4.6.3, owner decision on question 1): stall,
+  // lock and role above, and also `name`, `idle_lock_minutes` and the attestation, with no key
+  // added. `name` and `idle_lock_minutes` are outside the attestation's digest, so this is the
+  // one place a service that renamed a till or switched its idle lock off is caught. Compared as
+  // values rather than text, because the gateway re-serialises the object.
+  if (!sameMetadata(String(voucher.merchantMetadata), requestedMetadata(expected))) return 'metadata-mismatch'
+
+  // And the attestation holds on what was minted: signed by the stall over this metadata, and
+  // not outlived by the credential. A gateway that set a later expiry than the owner signed
+  // minted a till every verifier would refuse.
+  if (expected.attestation) {
+    const signed = JSON.parse(String(voucher.merchantMetadata)) as Record<string, unknown>
+    const expiresAt = voucher.expiresAt
+    if (
+      expiresAt === undefined ||
+      !Number.isSafeInteger(expiresAt) ||
+      checkOwnerAttestation(signed, expected.stallPubkey, String(expiresAt)) !== null
+    ) {
+      return 'attestation-invalid'
+    }
+  }
+
   return null
+}
+
+/**
+ * Two metadata objects hold exactly the same keys with exactly the same values. JSON text whose
+ * keys repeat is refused, because `JSON.parse` would silently keep the last.
+ */
+function sameMetadata(returnedJson: string, requested: Record<string, unknown>): boolean {
+  let returned: unknown
+  try {
+    returned = JSON.parse(returnedJson)
+  } catch {
+    return false
+  }
+  if (hasDuplicateKeys(returnedJson)) return false
+  return deepEqual(returned, JSON.parse(JSON.stringify(requested)))
+}
+
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  if (Array.isArray(a) !== Array.isArray(b)) return false
+  const ka = Object.keys(a as object)
+  const kb = Object.keys(b as object)
+  if (ka.length !== kb.length) return false
+  return ka.every(
+    (k) =>
+      Object.prototype.hasOwnProperty.call(b, k) &&
+      deepEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]),
+  )
 }
 
 /** NUT-11 tags that add a spending path beyond `data` and `pubkeys`. */
@@ -185,6 +307,7 @@ const DEFECT_MESSAGE: Record<CredentialDefect, string> = {
   'wrong-issuer': 'The terminal’s authority came back for a different stall.',
   'bad-signature': 'The terminal’s authority came back with a signature that does not check out.',
   'metadata-mismatch': 'The terminal’s authority came back describing a different terminal.',
+  'attestation-invalid': 'The terminal’s authority came back without your signature holding for it.',
 }
 
 export class CredentialMintError extends Error {
@@ -226,10 +349,15 @@ export async function mintTerminalCredential(
   transport: MintTransport = ownerTransport,
   progress: MintProgress = {},
 ): Promise<MintedCredential> {
+  const request = mintRequest(credential)
+  const headers = {
+    ...request.headers,
+    ...(progress.idempotencyKey ? { 'Idempotency-Key': progress.idempotencyKey } : {}),
+  }
   const created = await transport.post(
     '/api/v1/wallet/vouchers',
-    credentialRequestBody(credential),
-    progress.idempotencyKey ? { 'Idempotency-Key': progress.idempotencyKey } : undefined,
+    request.body,
+    Object.keys(headers).length > 0 ? headers : undefined,
   )
   if (!created.ok) {
     throw new CredentialMintError(await refusal(created), undefined, created.status)

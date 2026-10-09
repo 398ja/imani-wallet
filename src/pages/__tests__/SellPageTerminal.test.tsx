@@ -77,6 +77,8 @@ const till: TerminalActor = {
   role: TERMINAL_ROLES.ISSUE_AND_REDEEM,
   terminalPubkey: DEVICE,
   permissions: grantFor(TERMINAL_ROLES.ISSUE_AND_REDEEM, STALL),
+  // The stall attested this till at enrolment (#160 decision 5), so it may sell.
+  attested: true,
 }
 
 function show(props: Partial<Parameters<typeof SellPage>[0]> = {}) {

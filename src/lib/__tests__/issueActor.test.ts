@@ -222,8 +222,9 @@ describe('an owner issuing on their own device', () => {
  * mint has left a voucher nobody can deliver.
  */
 describe('a request made around the UI is refused, not merely hidden', () => {
-  const till = () =>
-    terminalActor(
+  // A till the stall attested at enrolment (#160 decision 5), which login marks `attested`.
+  const till = () => ({
+    ...terminalActor(
       {
         stallPubkey: STALL,
         role: TERMINAL_ROLES.ISSUE_AND_REDEEM,
@@ -231,7 +232,9 @@ describe('a request made around the UI is refused, not merely hidden', () => {
         permissions: grantFor(TERMINAL_ROLES.ISSUE_AND_REDEEM, STALL),
       },
       DEVICE,
-    )!
+    )!,
+    attested: true,
+  })
 
   it('refuses a terminal whose trading day has rolled over', async () => {
     const actor = till()
@@ -308,8 +311,9 @@ describe('a request made around the UI is refused, not merely hidden', () => {
  * inspect, and `calls` being empty is the stronger statement.
  */
 describe('a sale the customer’s wallet would refuse is never made (#159)', () => {
-  const till = () =>
-    terminalActor(
+  // A till the stall attested at enrolment (#160 decision 5), which login marks `attested`.
+  const till = () => ({
+    ...terminalActor(
       {
         stallPubkey: STALL,
         role: TERMINAL_ROLES.ISSUE_AND_REDEEM,
@@ -317,7 +321,9 @@ describe('a sale the customer’s wallet would refuse is never made (#159)', () 
         permissions: grantFor(TERMINAL_ROLES.ISSUE_AND_REDEEM, STALL),
       },
       DEVICE,
-    )!
+    )!,
+    attested: true,
+  })
 
   it('refuses a full till holding no credential, before anything is minted', async () => {
     // A FULL selling till may sell (#160 phase 5), but only with the credential it unlocked with

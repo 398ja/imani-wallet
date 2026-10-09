@@ -11,7 +11,9 @@ import {
   REVOCATION_DELAY_NOTE,
   allTerminals,
   hasUnconfirmed,
+  RENEW_TO_KEEP_SELLING,
   isRevocable,
+  needsRenewalToSell,
   revocationBitesAt,
   type TerminalRecord,
 } from '../lib/terminalRoster'
@@ -405,6 +407,12 @@ function TerminalRow({
       ) : !revoked && !revocable ? (
         <p className="mt-2 text-sm text-mono-500">
           Set up before revocation existed: add it again to be able to revoke it.
+        </p>
+      ) : null}
+
+      {needsRenewalToSell(terminal) ? (
+        <p className="mt-2 text-sm text-amber-700 dark:text-amber-400" data-testid="renew-to-sell">
+          {RENEW_TO_KEEP_SELLING}
         </p>
       ) : null}
 

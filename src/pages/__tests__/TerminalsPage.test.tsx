@@ -552,3 +552,32 @@ describe('#160 round 2: the list shows what the gateway says', () => {
     await waitFor(() => expect(deliver).toHaveBeenCalledWith(STALL))
   })
 })
+
+describe('a selling till set up before owner attestation (#160 decision 5, spec 4.6.5)', () => {
+  // The token carries no owner attestation. As a selling till it can redeem but not sell, so its
+  // row says "Renew to keep selling" and spells out the four re-enrol steps.
+  it('reads "Renew to keep selling", with the revoke, decommission and set-up-again steps', () => {
+    enrol({ role: TERMINAL_ROLES.ISSUE_AND_REDEEM })
+    renderPage()
+
+    const notice = screen.getByTestId('renew-to-sell').textContent ?? ''
+    expect(notice).toMatch(/^Renew to keep selling/)
+    expect(notice).toMatch(/Revoke it here/)
+    expect(notice).toMatch(/take it out of service/)
+    expect(notice).toMatch(/Add it again here, with a new passphrase and setup code/)
+  })
+
+  // A redeem-only till needs no attestation to do its job, so it is not told to renew.
+  it('says nothing of renewal on a redeem-only till', () => {
+    enrol({ role: TERMINAL_ROLES.REDEEM_ONLY })
+    renderPage()
+    expect(screen.queryByTestId('renew-to-sell')).toBeNull()
+  })
+
+  // Once revoked, the row is history: renewing it is no longer the owner's next step.
+  it('says nothing of renewal once the till is revoked', () => {
+    enrol({ role: TERMINAL_ROLES.ISSUE_AND_REDEEM, revokedAt: 2_000_000 })
+    renderPage()
+    expect(screen.queryByTestId('renew-to-sell')).toBeNull()
+  })
+})

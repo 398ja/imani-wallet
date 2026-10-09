@@ -4,6 +4,10 @@ import type { TerminalActor } from './actor'
 import { parseVoucherToken, tokenProofs, verifyVoucher } from './voucherToken'
 import { checkIssuer } from './issuerAllowlist'
 import { lockedToPubkey, xOnly } from './witness'
+import { ATTESTATION_REFUSAL, checkOwnerAttestation } from './ownerAttestation'
+import { hasDuplicateKeys } from './terminalWarrant'
+
+const LOWER_HEX64_STALL = /^[0-9a-f]{64}$/
 
 /**
  * Terminal login: turn a stored credential back into a session.
@@ -52,6 +56,13 @@ export const LOGIN_REFUSAL = {
    * against a key the token carries, so without the allowlist anyone can sign one.
    */
   UNTRUSTED_ISSUER: 'untrusted-issuer',
+  /**
+   * The credential carries an owner attestation that does not hold: not signed by the stall it
+   * names, or outlived by the credential (#160 decision 5, spec 4.6.3). The stall never signed
+   * this till, so it is refused outright, unlike a credential with no attestation at all, which
+   * opens for Redeem only.
+   */
+  BAD_ATTESTATION: 'bad-attestation',
 } as const
 
 export type LoginRefusal = (typeof LOGIN_REFUSAL)[keyof typeof LOGIN_REFUSAL]
@@ -67,7 +78,18 @@ export const LOGIN_MESSAGE: Record<LoginRefusal, string> = {
     'This terminal is no longer in service. Ask the stall owner to set it up again.',
   [LOGIN_REFUSAL.UNTRUSTED_ISSUER]:
     'This app cannot confirm who issued this terminal’s authority. Ask the stall owner to set it up again.',
+  [LOGIN_REFUSAL.BAD_ATTESTATION]:
+    'The stall did not sign this terminal’s authority. Take it out of service and ask the stall owner to set it up again.',
 }
+
+/**
+ * What a till without the stall's attestation tells its operator (spec 4.6.5): it still
+ * redeems, and selling needs the owner to set it up again, step by step, until phase 6's Renew.
+ */
+export const UNATTESTED_TILL_NOTICE =
+  'Ask the owner to renew this terminal to sell. Redeeming still works. Until Renew arrives, ' +
+  'renewing means: the owner revokes this terminal, you take it out of service ' +
+  '(Settings → Security), and the owner adds it again with a new passphrase and setup code.'
 
 export type LoginOutcome =
   | { admitted: true; actor: TerminalActor; session: TerminalSession }
@@ -97,6 +119,11 @@ export interface LoginInput {
    */
   unspent: boolean | null
   openedAt?: number
+  /**
+   * Whether the stall attested this credential (`credentialFromToken`). Only `true` lets a
+   * selling role sell: absent or false opens the till for Redeem only (spec 4.6.5).
+   */
+  attested?: boolean
 }
 
 /**
@@ -112,6 +139,7 @@ export function loginTerminal({
   devicePubkey,
   unspent,
   openedAt = Date.now(),
+  attested = false,
 }: LoginInput): LoginOutcome {
   if (merchantMetadata === null || merchantMetadata === undefined || merchantMetadata === '') {
     return refuse(LOGIN_REFUSAL.NOT_ENROLLED)
@@ -128,11 +156,12 @@ export function loginTerminal({
   // Only a definite NO from the mint revokes. `null` is "we could not ask".
   if (unspent === false) return refuse(LOGIN_REFUSAL.REVOKED)
 
+  const attestedActor = { ...actor, attested: attested === true } as TerminalActor
   return {
     admitted: true,
-    actor: { ...actor, name: metadata.name } as TerminalActor,
+    actor: { ...attestedActor, name: metadata.name } as TerminalActor,
     session: openSession(
-      actor as TerminalActor,
+      attestedActor,
       // Reduced when the mint could not confirm the credential is live. The
       // terminal still redeems, because a queue cannot wait; it does not issue,
       // because issuing on an authority nobody could check is money created on
@@ -156,6 +185,12 @@ export interface CredentialFacts {
   voucherId: string
   /** Unix seconds, from the signed voucher. Undefined when the voucher carries none. */
   expiresAt?: number
+  /**
+   * The stall signed this credential's `owner_attestation`, and the credential does not outlive
+   * it (spec 4.6.3). False when it carries none: a legacy till, which opens for Redeem only. A
+   * present but invalid attestation never gets this far: the credential is refused.
+   */
+  attested: boolean
 }
 
 /**
@@ -206,8 +241,15 @@ function readCredential(token: string): { facts: CredentialFacts } | { refusal: 
     // credential, unlike for a customer's coupon: see the function comment.
     if (checkIssuer(parsed) !== 'allowed') return { refusal: LOGIN_REFUSAL.UNTRUSTED_ISSUER }
 
+    // The stall's attestation (#160 decision 5), on the metadata the service's signature just
+    // covered, against the stall the voucher names. Missing means a legacy till: admitted, for
+    // Redeem only. Present and not holding means the stall never signed this till: refused.
+    const attestation = ownerAttestationOf(String(voucher.merchantMetadata), voucher.issuerId, voucher.expiresAt)
+    if (attestation === 'bad') return { refusal: LOGIN_REFUSAL.BAD_ATTESTATION }
+
     return {
       facts: {
+        attested: attestation === 'attested',
         merchantMetadata: String(voucher.merchantMetadata),
         issuerId: voucher.issuerId,
         voucherId: voucher.voucherId,
@@ -217,6 +259,50 @@ function readCredential(token: string): { facts: CredentialFacts } | { refusal: 
   } catch {
     return unreadable
   }
+}
+
+/**
+ * The device's attestation check, `verifyOwnerAttestation`'s steps on metadata already verified.
+ *
+ * Not the strict credential parser: tokens minted before 0.16.1 serialised some tags in ways it
+ * refuses, and the device has already verified this token's signature and lock itself. But the
+ * metadata is read as strictly as the verifiers read it: a repeated key is never attested, and
+ * `stall_pubkey` must equal `issuerId` exactly. So "attested" here implies the verifiers accept
+ * the attestation step. The
+ * digest is rebuilt from the metadata's own `stall_pubkey`, `lock_key` and `role`, verbatim.
+ */
+function ownerAttestationOf(
+  metadataJson: string,
+  issuerId: string,
+  expiresAt: number | undefined,
+): 'attested' | 'missing' | 'bad' {
+  let metadata: unknown
+  try {
+    metadata = JSON.parse(metadataJson)
+  } catch {
+    return 'missing'
+  }
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return 'missing'
+  const m = metadata as Record<string, unknown>
+  if (!('owner_attestation' in m)) return 'missing'
+  // A repeated key at any depth: `JSON.parse` kept the last one, but every verifier's strict
+  // parse refuses the whole credential, so it can never sell. Never attested here either; read
+  // as missing (Redeem only), like any other attestation the verifiers would not read.
+  if (hasDuplicateKeys(metadataJson)) return 'missing'
+  // An attestation over a credential with no expiry would bound nothing. Refused, not read as
+  // missing: the stall signed something, and not this.
+  if (expiresAt === undefined || !Number.isSafeInteger(expiresAt) || expiresAt < 0) return 'bad'
+  // As the verifiers read it: `stall_pubkey` lowercase hex, exactly the stall. An uppercase
+  // spelling (even one the stall signed in uppercase) is what every verifier refuses.
+  const stall = issuerId.toLowerCase()
+  if (typeof m.stall_pubkey !== 'string' || !LOWER_HEX64_STALL.test(m.stall_pubkey) || m.stall_pubkey !== stall) {
+    return 'bad'
+  }
+  const refusal = checkOwnerAttestation(m, stall, String(expiresAt))
+  if (refusal === null) return 'attested'
+  // Present but malformed reads as missing in the Java (OWNER_ATTESTATION_MISSING), so here too:
+  // the till keeps Redeem. Only a well-formed attestation that fails is a refusal.
+  return refusal === ATTESTATION_REFUSAL.OWNER_ATTESTATION_MISSING ? 'missing' : 'bad'
 }
 
 /**
@@ -245,6 +331,7 @@ export function loginFromToken({
     issuerId: facts.issuerId,
     devicePubkey,
     unspent,
+    attested: facts.attested,
     ...(openedAt !== undefined ? { openedAt } : {}),
   })
 }

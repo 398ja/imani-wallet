@@ -78,11 +78,22 @@ describe('only a mismatch is an alarm', () => {
   })
 
   it('does NOT alarm on a sale that simply carries no signature', () => {
-    // Every sale made before warrants shipped, and every sale made on a
-    // terminal, whose key is not the stall's. Colouring these red would bury
+    // Every sale made before warrants shipped, and every sale from a till the
+    // stall has not attested. Colouring these red would bury
     // the one row that actually disagrees with itself.
     expect(describeWarrant({ verdict: 'absent' }).tone).toBe('neutral')
     expect(describeWarrant({ verdict: 'unwarranted' }).tone).toBe('neutral')
+  })
+
+  // The terminal wording was true while a till's key could not stand for the stall. Since owner
+  // attestation (#160 decision 5) an attested till's sales read `verified`, so the copy must no
+  // longer say that every terminal sale is unsigned.
+  it('no longer says every terminal sale is unsigned', () => {
+    expect(describeRail({ kind: 'unknown' }).detail).not.toMatch(/terminal/)
+    const unwarranted = describeWarrant({ verdict: 'unwarranted' }).detail ?? ''
+    expect(unwarranted).not.toMatch(/That is what a terminal issues/)
+    expect(unwarranted).not.toMatch(/a terminal’s key is not the stall’s/)
+    expect(unwarranted).toMatch(/till you have not set up again/)
   })
 
   it('does NOT alarm on a sale with no customer receipt', () => {
