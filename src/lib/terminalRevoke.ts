@@ -81,6 +81,29 @@ export async function revokeTerminalAtMint(
     return refused('not-revocable')
   }
 
+  // A renewal out is a second live credential to the same K, already sent to the device. Revoking
+  // the till must spend it too, first, or a stolen device adopts it and keeps selling (review rv6
+  // H1). Not revoked until it is spent: the owner is told the revocation did not land.
+  const renewal = row.renewal
+  if (renewal?.token) {
+    let renewalMetadata: unknown
+    try {
+      renewalMetadata = parseVoucherToken(renewal.token).voucher.merchantMetadata
+    } catch {
+      renewalMetadata = null
+    }
+    const out = await revokeCredential(renewal.token, renewalMetadata, api)
+    if (!out.revoked && out.reason !== 'already-revoked') return refused('unreachable')
+    updateTerminal(stallPubkey, terminalPubkey, (r) => ({
+      ...r,
+      renewal: undefined,
+      credentials: (r.credentials ?? []).map((c) =>
+        c.voucherId === renewal.voucherId ? { ...c, revokedAt: c.revokedAt ?? at, token: undefined } : c,
+      ),
+    }))
+    if (renewal.voucherId) await releasePending(renewal.voucherId)
+  }
+
   const spent = await revokeCredential(row.token!, metadata, api)
   // `already-revoked` from the mint means the credential is spent: the device
   // decommissioned itself, or an earlier attempt landed. Either way it is out

@@ -264,3 +264,72 @@ describe('a renew request from a till the owner lost (Q3)', () => {
 })
 
 void hexToBytes
+
+// Review rv6 (H1): revoking a till while its renewal is out must spend the renewal too. The
+// renewal is a live, attested credential locked to the same K and already DM'd to the device, so
+// a stolen device (the reason to revoke) could unwrap it, confirm it at gc as the device, and sell.
+describe('revoking a till with a renewal out (review rv6 H1)', () => {
+  it('spends the renewal credential as well as the current one, and frees its pending slot', async () => {
+    const released: string[] = []
+    setReleasePending(async (id) => void released.push(id))
+    recordTerminal(STALL, inService())
+    await startRenewal(STALL, DEVICE, { transport: transport(), api: spendApi(), stallSigner, send: async () => true, now: 5_000 })
+    const renewalToken = allTerminals(STALL)[0].renewal!.token!
+    const { revokeTerminalAtMint } = await import('../terminalRevoke')
+    const api = spendApi()
+    const out = await revokeTerminalAtMint(STALL, DEVICE, api, 6_000)
+    expect(out.revoked).toBe(true)
+    const spent = (api.receive.mock.calls as unknown as string[][]).map((c) => c[0])
+    expect(spent).toContain(oldToken)
+    expect(spent).toContain(renewalToken)
+    const [row] = allTerminals(STALL)
+    expect(row.renewal).toBeUndefined()
+    expect(row.credentials!.find((c) => c.voucherId === NEW)).toMatchObject({ revokedAt: 6_000 })
+    expect(released).toContain(NEW)
+  })
+
+  it('does not mark the till revoked when the renewal could not be spent', async () => {
+    recordTerminal(STALL, inService())
+    await startRenewal(STALL, DEVICE, { transport: transport(), api: spendApi(), stallSigner, send: async () => true, now: 5_000 })
+    const renewalToken = allTerminals(STALL)[0].renewal!.token!
+    const { revokeTerminalAtMint } = await import('../terminalRevoke')
+    const api = { ...spendApi(), receive: vi.fn(async (t: string) => { if (t === renewalToken) throw new Error('offline') }) }
+    const out = await revokeTerminalAtMint(STALL, DEVICE, api, 6_000)
+    expect(out.revoked).toBe(false)
+    expect(allTerminals(STALL)[0].revokedAt).toBeUndefined()
+  })
+})
+
+// Review rv6 (H2): the device adopted the renewal and spent its old credential, but its enrolled
+// DM never arrived (offline at adoption, or a crash after the store). 24 h later the owner's app
+// must not "cancel" the renewal: that spends the till's CURRENT credential and kills it.
+describe('a renewal the device adopted whose enrolled DM was lost (review rv6 H2)', () => {
+  it('is completed, not cancelled, once the old credential is spent', async () => {
+    recordTerminal(STALL, inService())
+    await startRenewal(STALL, DEVICE, { transport: transport(), api: spendApi(), stallSigner, send: async () => true, now: 5_000 })
+    const renewalToken = allTerminals(STALL)[0].renewal!.token!
+    const api = {
+      validateToken: vi.fn(async (t: string) => ({ state: t === oldToken ? 'SPENT' : 'UNSPENT' })),
+      receive: vi.fn(async () => ({})),
+    }
+    expect(await cancelLapsedRenewals(STALL, api, 5_000 + RENEWAL_TTL_MS)).toEqual([])
+    expect(api.receive).not.toHaveBeenCalled()
+    const [row] = allTerminals(STALL)
+    expect(row.voucherId).toBe(NEW)
+    expect(row.token).toBe(renewalToken)
+    expect(row.renewal).toBeUndefined()
+    expect(row.revokedAt).toBeUndefined()
+  })
+})
+
+// Review rv6 (M12 survived): a mint that cannot be asked is not UNSPENT. Nothing is adopted.
+describe('a renew request when the mint cannot answer (review rv6, mutant M12)', () => {
+  it('is not adopted', async () => {
+    const api = { validateToken: vi.fn(async () => { throw new Error('offline') }) }
+    const out = await adoptRenewRequest(STALL, {
+      terminalPubkey: DEVICE, voucherId: OLD, token: oldToken, role: 'issue-and-redeem', name: 'F', attested: false,
+    }, api, 1_000)
+    expect(out).toBe('unknown-state')
+    expect(allTerminals(STALL)).toEqual([])
+  })
+})

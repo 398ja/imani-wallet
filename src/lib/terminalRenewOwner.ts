@@ -362,6 +362,22 @@ export async function cancelLapsedRenewals(
   for (const row of liveTerminals(stallPubkey)) {
     if (!row.renewal || now - row.renewal.startedAt < RENEWAL_TTL_MS) continue
     const { voucherId, token } = row.renewal
+    // The device adopted it and spent its old credential, but its enrolled DM never reached this
+    // phone (offline at adoption, or a crash after the store). Cancelling now would spend the
+    // till's CURRENT credential. The mint says what happened: old SPENT, renewal live, so the
+    // renewal landed. Complete it as the enrolled DM would have (review rv6 H2).
+    if (token && voucherId && row.token) {
+      const [oldState, newState] = await Promise.all([
+        credentialState(row.token, api),
+        credentialState(token, api),
+      ])
+      if (oldState === CREDENTIAL_STATE.REVOKED && newState === CREDENTIAL_STATE.LIVE) {
+        await completeRenewals(stallPubkey, [{ voucherId, terminalPubkey: row.terminalPubkey }], api, now)
+        continue
+      }
+      // Unknown: neither cancel nor complete on a guess. The next open asks again.
+      if (oldState === CREDENTIAL_STATE.UNKNOWN || newState === CREDENTIAL_STATE.UNKNOWN) continue
+    }
     if (token) {
       const ok = await spendAtOnce(api)(token).catch(() => false)
       if (!ok) continue
