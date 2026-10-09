@@ -9,8 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-09
+
+The stall owner attests each terminal credential, wallet half (imani-wallet#160 decision 5, step
+5b-5, #211). Pairs with gateway-customer 0.24.0, gateway-core 0.21.0 and gateway-portal 0.13.0.
+Also bundles #203 (chunked coupon backups) and #214 (nap from npm).
+
 ### Changed
 
+- **A till sells only with an attested credential (#211).** At unlock, a present but invalid
+  owner attestation refuses the till; a missing one admits it for Redeem only. The till and the
+  roster show "Renew to keep selling" for an unattested till.
+- **The owner attests each terminal credential at enrolment (#211).** The enrol screen signs an
+  `owner_attestation` with the stall signer and sends its expiry T in
+  `X-Idempotency-Expires-At`. The minting row keeps the attestation and the idle lock, so a
+  resumed mint re-sends the identical body under the same Idempotency-Key. The returned
+  credential's whole merchant metadata is checked against the request, and a credential that
+  outlives T is refused.
+- **Warrant checks mirror cashu-voucher 0.17.0 (#211).** `verifyTerminalWarrant` and
+  `verifyOwnerAttestation` refuse `OWNER_ATTESTATION_MISSING`, `BAD_OWNER_ATTESTATION` and
+  `ATTESTATION_EXCEEDED`, check the issuer tag as the Java does, and replay cashu-voucher's
+  golden owner-attestation vectors. A customer reads a missing attestation as unwarranted, and a
+  bad or exceeded one as failed.
 - **The nap packages are npm dependencies; the build no longer needs a `../nap` checkout (#212).**
   `@imani/nap-core`, `-client-http`, `-client-web`, `-client-nip46` and `-react` are installed at
   `^0.12.0`, published as `@398ja/nap-*` and aliased to their import names in `package.json`, so
