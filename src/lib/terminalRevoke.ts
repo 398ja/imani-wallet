@@ -320,6 +320,19 @@ export async function markSpentElsewhere(
 ): Promise<number> {
   let marked = 0
   for (const row of allTerminals(stallPubkey)) {
+    // A credential renewed away whose spend this phone lost to the device's own (Q2, found by the
+    // local gate, E8) is still open in the history, token and all. Once the mint says it is spent,
+    // the history says so. The till itself is not touched: its current credential answers for it.
+    for (const c of row.credentials ?? []) {
+      if (!c.token || c.revokedAt !== undefined || c.voucherId === row.voucherId || c.voucherId === row.renewal?.voucherId) continue
+      if ((await credentialState(c.token, api)) !== CREDENTIAL_STATE.REVOKED) continue
+      updateTerminal(stallPubkey, row.terminalPubkey, (r) => ({
+        ...r,
+        credentials: (r.credentials ?? []).map((e) =>
+          e.voucherId === c.voucherId ? { ...e, revokedAt: e.revokedAt ?? now, token: undefined } : e,
+        ),
+      }))
+    }
     if (row.revokedAt !== undefined || !isRevocable(row) || row.status === 'minting') continue
     if ((await credentialState(row.token!, api)) !== CREDENTIAL_STATE.REVOKED) continue
     // A renewal out (#160 phase 6, Q2): the device spends its OLD credential itself once it has
