@@ -32,6 +32,7 @@ import {
 } from '../tillSales'
 import { unwrapSealed, wrapMessage, type Rumor } from '../terminalDelivery'
 import { NOTE_MAX_CHARS } from '../note'
+import { toContent } from '../txRecords'
 import { buildCashbackTransaction, buildIssueTransaction, toTransaction } from '../transactions'
 import { warrantSaleDigest } from '../issuanceWarrant'
 import { parseCredentialSecret } from '../terminalWarrant'
@@ -51,7 +52,7 @@ const OTHER_STALL_SK = '55'.repeat(32)
 const OTHER_STALL = bytesToHex(schnorr.getPublicKey(hexToBytes(OTHER_STALL_SK)))
 
 /** A credential the service minted to `lock` for `stall`, attested by the stall unless told not to. */
-function credentialSecret(o: { stall?: string; stallSk?: string; lock?: string; attested?: boolean } = {}): string {
+function credentialSecret(o: { stall?: string; stallSk?: string; lock?: string; attested?: boolean; name?: string } = {}): string {
   const stall = o.stall ?? STALL
   const lock = o.lock ?? TILL
   const signer = { pubkey: stall, withPrivkey: <T,>(f: (k: Uint8Array) => T) => f(hexToBytes(o.stallSk ?? STALL_SK)) }
@@ -64,6 +65,7 @@ function credentialSecret(o: { stall?: string; stallSk?: string; lock?: string; 
     stall_pubkey: stall,
     role: 'issue-and-redeem',
     lock_key: lock,
+    ...(o.name ? { name: o.name } : {}),
     ...(o.attested === false ? {} : { owner_attestation }),
   })
   const tags = [
@@ -253,8 +255,9 @@ describe('the till sends, and keeps what did not land', () => {
   })
 
   // The cap counts UTF-16 code units, as HTML maxLength and the portal's @Size(max = 280) do, so
-  // the most bytes a capped note can be is 280 three-byte characters (840 B); 4-byte characters
-  // are two units each (140 of them, 560 B).
+  // the most raw UTF-8 a capped note can be is 280 three-byte characters (840 B); 4-byte
+  // characters are two units each (140 of them, 560 B). Escaped in the rumor, as the budget
+  // measures it, the worst is ~1,960 B (280 control characters at 7 B each, review rw1).
   const MAX_EMOJI = '😀'.repeat(NOTE_MAX_CHARS / 2)
   const MAX_CJK = '漢'.repeat(NOTE_MAX_CHARS)
   for (const [label, memo] of [['4-byte', MAX_EMOJI], ['3-byte', MAX_CJK]] as const) {
@@ -270,6 +273,26 @@ describe('the till sends, and keeps what did not land', () => {
       for (const e of sent) expect(wrapBytes(e)).toBeLessThanOrEqual(55_121)
       expect(filed).toHaveLength(30)
       for (const r of filed) expect(toTransaction(r).memo).toBe(memo)
+    })
+  }
+
+  // Review rw1: the cap alone kept every test above green with the budget back on `.length`. The
+  // note is not the only non-ASCII text in a row: the warrant carries the credential, and the
+  // credential carries the till's NAME, which the owner types and nothing caps. With the budget in
+  // UTF-16 units, 30 rows at a capped CJK note made 66,045 bytes with a 40-character CJK till name
+  // and 76,965 with 400. In bytes, every wrap stays at 55,121.
+  for (const nameLen of [40, 400]) {
+    it(`budgets in UTF-8 bytes beyond the note: a ${nameLen}-character CJK till name (≤ 55,121 bytes)`, async () => {
+      const w = terminalWarrant({ secret: credentialSecret({ name: '收'.repeat(nameLen) }) })
+      const rows = Array.from({ length: 30 }, (_, i) => ({ ...saleRow(w, `v-${i}`), memo: MAX_CJK }) as TransactionRow)
+      const sent: Event[] = []
+      expect(await sendTillSale(rows, STALL, 'cred-1', tillSeal, { publish: async (e) => (sent.push(e), true) })).toBe(true)
+      for (const e of sent) expect(wrapBytes(e)).toBeLessThanOrEqual(55_121)
+      const filed = sent.flatMap((e) => {
+        const o = unwrapSealed(e, hexToBytes(STALL_SK))!
+        return saleRowsFromRumor(o.rumor, o.sealer, STALL, opts)!.rows
+      })
+      expect(filed).toHaveLength(30)
     })
   }
 
@@ -331,6 +354,23 @@ describe('the owner collects till sales from its inbox', () => {
     expect(await collectTillSales(STALL, deps)).toBe(1)
     expect(await collectTillSales(STALL, deps)).toBe(0)
     expect([...written.keys()]).toEqual(['issued:v-1'])
+  })
+
+  // Review rw1: the clamp is the till's, not the owner's. A wrap from a till built before the cap
+  // (76,965 bytes, so the relay refused it and only the gateway mirror kept it) still arrives by
+  // the mirror, and is filed whole, its long note intact. Garbage that size is skipped, not thrown.
+  it('files an oversize wrap from a till built before the note cap, whole, and skips oversize garbage', async () => {
+    const legacy = JSON.stringify({
+      type: SALE_DM_TYPE,
+      rows: [toContent(toTransaction({ ...saleRow(), memo: 'a'.repeat(30_000) } as TransactionRow))],
+      credential_voucher_id: 'cred-1',
+    })
+    const wrap = wrapMessage(hexToBytes(TILL_SK), STALL, legacy)
+    expect(new TextEncoder().encode(JSON.stringify(wrap)).length).toBeGreaterThan(65_536)
+    const garbage = wrapMessage(hexToBytes(STRANGER_SK), STALL, 'x'.repeat(200_000))
+    const { written, deps } = harness([garbage, { ...garbage, id: 'f'.repeat(64), content: 'A'.repeat(200_000) }, wrap])
+    expect(await collectTillSales(STALL, deps)).toBe(1)
+    expect(toTransaction(written.get('issued:v-1')!).memo).toHaveLength(30_000)
   })
 
   it("notes the till's last use on the roster", async () => {
