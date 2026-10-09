@@ -740,7 +740,13 @@ async function phase6(browser: Browser, owner: Page, customer: Page, customerPub
   await restored.locator('input[placeholder="Confirm passphrase"]').fill(TEST_PASSPHRASE)
   await restored.getByRole('button', { name: /^Add key and unlock$/ }).last().click()
   await restored.waitForFunction(() => !location.pathname.startsWith('/onboarding'), undefined, { timeout: 60_000 }).catch(() => {})
-  const restoredSale = await restored.goto(`${BASE}/merchant/coupons`, { waitUntil: 'load' })
+  // In-app navigation, not a reload: a reload right after the login can land before the unlocked
+  // session is kept, and the app opens at home, never at the list (found by the local gate).
+  await restored.waitForFunction(() => /\b(Sell|Redeem)\b/.test(document.body.innerText), undefined, { timeout: 60_000 }).catch(() => {})
+  const restoredSale = await restored.evaluate(() => {
+    window.history.pushState({}, '', '/merchant/coupons')
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  })
     .then(() => restored.waitForFunction(() => /Sold on Sales counter/.test(document.body.innerText), undefined, { timeout: 120_000 }))
     .then(() => true, () => false)
   check("E4 A' sees B3's sale still attributed to Sales counter", restoredSale, (await text(restored)).slice(0, 300))
