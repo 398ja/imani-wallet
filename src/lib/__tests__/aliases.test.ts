@@ -1,11 +1,12 @@
 /**
- * Smoke test for the source-aliasing scheme in vite.config.ts.
+ * Smoke test for package resolution.
  *
- * Nine imani-apps packages and five nap packages are consumed straight from
- * their TypeScript sources rather than built dist bundles. That saves a build
- * step but means any transitive-import assumption a package makes about its own
- * node_modules layout blows up here instead of at runtime. Importing each entry
- * point is the cheapest way to find that out.
+ * The imani-apps packages are consumed straight from their TypeScript sources
+ * (vite.config.ts aliases), and the five nap packages are npm dependencies
+ * resolved through node_modules to their published dist (#212). Either way, any
+ * transitive-import assumption a package makes about its own node_modules
+ * layout blows up here instead of at runtime. Importing each entry point is the
+ * cheapest way to find that out.
  */
 import { describe, it, expect } from 'vitest'
 
@@ -35,10 +36,11 @@ const entrypoints = {
   '@imani/nap-core': () => import('@imani/nap-core'),
   '@imani/nap-client-http': () => import('@imani/nap-client-http'),
   '@imani/nap-client-web': () => import('@imani/nap-client-web'),
+  '@imani/nap-client-nip46': () => import('@imani/nap-client-nip46'),
   '@imani/nap-react': () => import('@imani/nap-react'),
 }
 
-describe('package aliases resolve from source', () => {
+describe('package entry points resolve', () => {
   for (const [name, load] of Object.entries(entrypoints)) {
     it(`loads ${name}`, async () => {
       const mod = await load()

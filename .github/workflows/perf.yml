@@ -30,29 +30,12 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      # Both checkouts go under explicit paths, so they end up SIBLINGS —
-      # which is the layout the aliases below require and the layout a
-      # developer already has.
+      # The wallet alone. The @imani/nap-* packages used to be aliased to a
+      # sibling ../nap checkout, which this job had to clone and install; they
+      # are npm dependencies now (#212), so `npm ci` supplies them.
       - uses: actions/checkout@v4
         with:
           path: imani-wallet
-
-      # The nap packages are NOT npm dependencies. `vite.config.ts` and
-      # `tsconfig.app.json` both alias `@imani/nap-*` to source at
-      # `../nap/packages/*/src/index.ts`, so `npm ci` cannot supply them:
-      # there is nothing in package.json to install.
-      #
-      # Without this, every run of this workflow failed at `npm run build`
-      # with six TS2307 "Cannot find module '@imani/nap-react'" errors — on
-      # main as much as on any branch. The workflow has therefore never
-      # measured anything; it died two steps before the perf check.
-      #
-      # tcheeric/nap is public, so no token is needed.
-      - uses: actions/checkout@v4
-        with:
-          repository: tcheeric/nap
-          ref: develop
-          path: nap
 
       - uses: actions/setup-node@v4
         with:
@@ -62,12 +45,6 @@ jobs:
 
       - run: npm ci
         working-directory: imani-wallet
-
-      # nap is aliased to SOURCE, but its packages still import react, and the
-      # `dedupe` in vite.config.ts needs those installed to resolve against.
-      - name: Install nap's dependencies
-        run: npm ci || npm install
-        working-directory: nap
 
       # Chromium only. The suite measures this wallet's own cost, not browser
       # differences, and three engines would triple the runtime for a number
