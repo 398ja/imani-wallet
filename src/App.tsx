@@ -19,6 +19,7 @@ import { reconcileClaims } from './lib/claimReconcile'
 import { sweepInterruptedReceives } from './lib/receiveSweep'
 import { restoreIssued } from './lib/issuedRecords'
 import { restoreTx, backfillTx } from './lib/txRecords'
+import { collectTillSalesForOwner } from './lib/tillSalesNet'
 import { restoreVouchers, backfillVouchers } from './lib/voucherRecords'
 import { logout as runLogout } from './lib/logout'
 import { emptyProfile, loadProfile, refreshProfile, type Profile } from './lib/profile'
@@ -222,6 +223,13 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             // before this existed, while a relay was refusing writes, or whose
             // publish lost the race with a closing tab.
             return backfillTx(pubkey)
+          })
+          // A till's sales, sent to this stall as sealed sale records (#160 phase 6, wallet#202).
+          // After the history restore, so a sale already filed on another of the owner's devices
+          // comes back as that row and is not written again. Never throws.
+          .then(() => collectTillSalesForOwner(pubkey))
+          .then((tillSales) => {
+            if (tillSales > 0) console.info(`[app] filed ${tillSales} till sale(s)`)
           })
           // Last, once both the coupons and the history are back: re-files
           // redemptions written without their claim (pre-#90 rows) against
@@ -448,7 +456,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             {terminal.actor === null && (
               <>
                 <Route path="/merchant/transactions" element={<MerchantTransactionsPage />} />
-                <Route path="/merchant/coupons" element={<IssuedCouponsPage />} />
+                <Route path="/merchant/coupons" element={<IssuedCouponsPage stallPubkey={pubkey} />} />
                 {/* The full list behind the dashboard's capped "Expiring soon". */}
                 <Route path="/merchant/expiring" element={<ExpiringVouchersPage />} />
                 {/* `pubkey` is the STALL's own key, which the detail screen

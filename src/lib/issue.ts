@@ -20,6 +20,7 @@ import {
 import { parseIssuanceWarrant } from './issuanceWarrant'
 import type { AttestedSale } from './cashAttestation'
 import { NEVER_EXPIRES } from './merchant'
+import { recordTillSale } from './tillSales'
 
 /**
  * Issuing a coupon and delivering it to a customer.
@@ -894,8 +895,8 @@ async function recordSale(
 ): Promise<void> {
   if (delivered.length === 0) return
   try {
-    for (const ready of delivered) {
-      const row = buildIssueTransaction({
+    const rows = delivered.map((ready) =>
+      buildIssueTransaction({
         voucherId: ready.voucher_id,
         // The PART's face value, not the whole sale's. Falling back to the
         // requested total would file each part at the full amount and inflate a
@@ -935,8 +936,18 @@ async function recordSale(
         // reached the customer rather than what was asked for.
         saleVoucherIds: delivered.map((v) => v.voucher_id),
         cashAttestation,
-      })
+      }),
+    )
 
+    // A till opens no wallet (spec 2.3), so its rows go to the STALL, sealed by the till's own
+    // key, and the owner's app files them in the stall's books (#160 phase 6, wallet#202). Before
+    // this, `getWallet()` threw here and the sale reached nobody's history.
+    if (params.actor.kind === 'terminal') {
+      await recordTillSale(rows)
+      return
+    }
+
+    for (const row of rows) {
       // The relay copy rides along with the write: `openWallet` wraps
       // `addTransaction` so every row is published, encrypted to this merchant's
       // own key, and the sale survives this device (lib/txRecords.ts). Publishing

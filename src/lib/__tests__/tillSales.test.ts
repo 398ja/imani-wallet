@@ -1,0 +1,282 @@
+/**
+ * @vitest-environment jsdom
+ */
+/**
+ * A till's sale reaches the stall's own history (#160 phase 6, wallet#202, plan 2.1).
+ *
+ * The till holds no NAP wallet, so its sale row went nowhere: `getWallet()` threw, and
+ * `recordSale` swallowed it. Now the till sends the row to the stall as a NIP-17 gift wrap
+ * sealed by its own key K, and the owner's app files it only if:
+ *
+ * - the seal is K, and K is the `lock_key` of the credential inside the row's warrant;
+ * - the warrant verifies for THIS stall (`verifyIssuanceWarrant` → `verified`), which checks the
+ *   service signature, K's sale signature, and the stall's own attestation of that till.
+ *
+ * So nobody the stall did not attest can write into its books.
+ */
+import { beforeEach, describe, expect, it } from 'vitest'
+import { schnorr } from '@noble/curves/secp256k1.js'
+import { sha256 } from '@noble/hashes/sha256'
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
+import type { Event } from 'nostr-tools'
+
+import {
+  SALE_DM_TYPE,
+  collectTillSales,
+  flushSaleOutbox,
+  pendingTillSales,
+  saleMessageJson,
+  saleRowsFromRumor,
+  sendTillSale,
+} from '../tillSales'
+import { unwrapSealed, wrapMessage, type Rumor } from '../terminalDelivery'
+import { buildCashbackTransaction, buildIssueTransaction, toTransaction } from '../transactions'
+import { warrantSaleDigest } from '../issuanceWarrant'
+import { parseCredentialSecret } from '../terminalWarrant'
+import { signOwnerAttestation } from '../ownerAttestation'
+import { recordTerminal } from '../terminalRoster'
+import type { TransactionRow } from '@imani/wallet-storage'
+
+const SERVICE_SK = '11'.repeat(32)
+const SERVICE = bytesToHex(schnorr.getPublicKey(hexToBytes(SERVICE_SK)))
+const STALL_SK = '22'.repeat(32)
+const STALL = bytesToHex(schnorr.getPublicKey(hexToBytes(STALL_SK)))
+const TILL_SK = '33'.repeat(32)
+const TILL = bytesToHex(schnorr.getPublicKey(hexToBytes(TILL_SK)))
+const STRANGER_SK = '44'.repeat(32)
+const STRANGER = bytesToHex(schnorr.getPublicKey(hexToBytes(STRANGER_SK)))
+const OTHER_STALL_SK = '55'.repeat(32)
+const OTHER_STALL = bytesToHex(schnorr.getPublicKey(hexToBytes(OTHER_STALL_SK)))
+
+/** A credential the service minted to `lock` for `stall`, attested by the stall unless told not to. */
+function credentialSecret(o: { stall?: string; stallSk?: string; lock?: string; attested?: boolean } = {}): string {
+  const stall = o.stall ?? STALL
+  const lock = o.lock ?? TILL
+  const signer = { pubkey: stall, withPrivkey: <T,>(f: (k: Uint8Array) => T) => f(hexToBytes(o.stallSk ?? STALL_SK)) }
+  const owner_attestation = signOwnerAttestation(
+    { stallPubkey: stall, lockKey: lock, role: 'issue-and-redeem', expiresAt: 4_000_000_000 },
+    signer,
+  )
+  const metadata = JSON.stringify({
+    terminal: true,
+    stall_pubkey: stall,
+    role: 'issue-and-redeem',
+    lock_key: lock,
+    ...(o.attested === false ? {} : { owner_attestation }),
+  })
+  const tags = [
+    ['voucher_id', 'cred-1'], ['issuer', stall], ['unit', 'sat'], ['face_value', '1'],
+    ['expires_at', '4000000000'], ['merchant_metadata', metadata],
+  ]
+  const body = { nonce: 'ab', data: '02' + lock, tags }
+  const signed = parseCredentialSecret(JSON.stringify(['P2PK_VOUCHER', body]))!.signed
+  const sig = bytesToHex(schnorr.sign(sha256(signed), hexToBytes(SERVICE_SK)))
+  body.tags = [...tags, ['issuer_sig', sig], ['issuer_pubkey', SERVICE]]
+  return JSON.stringify(['P2PK_VOUCHER', body])
+}
+
+function terminalWarrant(o: { total?: number; signerSk?: string; secret?: string; stall?: string } = {}): string {
+  const total = o.total ?? 400
+  const nonce = 'n-' + Math.random().toString(16).slice(2)
+  const digest = warrantSaleDigest(o.stall ?? STALL, total, 2, 'EUR', nonce)
+  return JSON.stringify({
+    form: 'terminal', sale_total: total, face_decimals: 2, unit: 'EUR', nonce,
+    signature: bytesToHex(schnorr.sign(digest, hexToBytes(o.signerSk ?? TILL_SK))),
+    credential: o.secret ?? credentialSecret(),
+  })
+}
+
+function saleRow(warrant = terminalWarrant(), voucherId = 'v-1', amount = 400): TransactionRow {
+  return buildIssueTransaction({
+    voucherId, amount, unit: 'EUR', decimals: 2, recipientPubkey: 'cc'.repeat(32), at: 1_786_891_362_412,
+    terminalPubkey: TILL, issuanceWarrant: warrant, merchantId: STALL,
+  })
+}
+
+/** What the owner sees: the wrap the till sealed with `sealSk`, unwrapped with the stall key. */
+function received(content: string, sealSk = TILL_SK): { rumor: Rumor; sealer: string } {
+  const opened = unwrapSealed(wrapMessage(hexToBytes(sealSk), STALL, content), hexToBytes(STALL_SK))
+  if (!opened) throw new Error('did not open')
+  return opened
+}
+
+const opts = { trustedServiceKeys: [SERVICE] }
+
+describe('the owner files a till sale only when the stall attested that till', () => {
+  it('accepts a genuine sale, attributed to the sealer, under the id the till would have used', () => {
+    const { rumor, sealer } = received(saleMessageJson([saleRow()], 'cred-1'))
+    const out = saleRowsFromRumor(rumor, sealer, STALL, opts)
+    expect(out).not.toBeNull()
+    expect(out!.refused).toEqual([])
+    expect(out!.rows).toHaveLength(1)
+    const tx = toTransaction(out!.rows[0])
+    expect(out!.rows[0].id).toBe('issued:v-1')
+    expect(tx.terminalPubkey).toBe(TILL)
+    expect(tx.merchantId).toBe(STALL)
+    expect(tx.amount).toBe(400)
+    expect(tx.type).toBe('issued')
+  })
+
+  it('attributes to the key that sealed it, whatever till the row claims, and files it as this stall', () => {
+    const lying = { ...saleRow(), terminalPubkey: STRANGER, merchantId: OTHER_STALL } as unknown as TransactionRow
+    const { rumor, sealer } = received(saleMessageJson([lying], 'cred-1'))
+    const out = saleRowsFromRumor(rumor, sealer, STALL, opts)!
+    expect(toTransaction(out.rows[0]).terminalPubkey).toBe(TILL)
+    expect(toTransaction(out.rows[0]).merchantId).toBe(STALL)
+  })
+
+  it('accepts a cashback issued on the till, under its cashback id', () => {
+    const cashback = buildCashbackTransaction({
+      cashbackId: 'cb-9', claimCode: 'WXYZ', amount: 150, unit: 'EUR', decimals: 2, at: 1,
+      issuanceWarrant: terminalWarrant({ total: 150 }), merchantId: STALL, terminalPubkey: TILL,
+    })
+    const { rumor, sealer } = received(saleMessageJson([cashback], 'cred-1'))
+    const out = saleRowsFromRumor(rumor, sealer, STALL, opts)!
+    expect(out.rows.map((r) => r.id)).toEqual(['cashback:cb-9'])
+    expect(toTransaction(out.rows[0]).claimCode).toBe('WXYZ')
+    expect(toTransaction(out.rows[0]).terminalPubkey).toBe(TILL)
+  })
+
+  it('refuses a wrap sealed by anyone other than the credential lock (mutant: drop the sealer check)', () => {
+    // The stranger replays a real till's row: the warrant verifies, but the stranger is not K.
+    const { rumor, sealer } = received(saleMessageJson([saleRow()], 'cred-1'), STRANGER_SK)
+    expect(sealer).toBe(STRANGER)
+    const out = saleRowsFromRumor(rumor, sealer, STALL, opts)!
+    expect(out.rows).toEqual([])
+    expect(out.refused).toEqual([{ id: 'issued:v-1', reason: 'sealer-not-lock' }])
+  })
+
+  it('refuses a warrant that fails for this stall (mutant: drop the warrant check)', () => {
+    // A self-made till: credential for K, but the stall never attested it.
+    const unattested = terminalWarrant({ secret: credentialSecret({ attested: false }) })
+    const forged = terminalWarrant({ signerSk: STRANGER_SK })
+    const otherStalls = terminalWarrant({
+      stall: OTHER_STALL, secret: credentialSecret({ stall: OTHER_STALL, stallSk: OTHER_STALL_SK }),
+    })
+    const { rumor, sealer } = received(
+      saleMessageJson([saleRow(unattested, 'v-a'), saleRow(forged, 'v-b'), saleRow(otherStalls, 'v-c')], 'cred-1'),
+    )
+    const out = saleRowsFromRumor(rumor, sealer, STALL, opts)!
+    expect(out.rows).toEqual([])
+    expect(out.refused.map((r) => r.reason)).toEqual(['warrant-unwarranted', 'warrant-failed', 'warrant-failed'])
+  })
+
+  it('refuses a row with no terminal warrant, and one claiming more than its warrant', () => {
+    const none = buildIssueTransaction({ voucherId: 'v-n', amount: 1, unit: 'EUR', decimals: 2, recipientPubkey: 'c', at: 1 })
+    const { rumor, sealer } = received(saleMessageJson([none, saleRow(terminalWarrant({ total: 100 }), 'v-big', 999)], 'c'))
+    const out = saleRowsFromRumor(rumor, sealer, STALL, opts)!
+    expect(out.rows).toEqual([])
+    expect(out.refused.map((r) => r.reason)).toEqual(['not-a-terminal-sale', 'warrant-failed'])
+  })
+
+  it('ignores a gift wrap that is not a sale record', () => {
+    const { rumor, sealer } = received(JSON.stringify({ type: 'imani-terminal-enrolled/1' }))
+    expect(saleRowsFromRumor(rumor, sealer, STALL, opts)).toBeNull()
+  })
+
+  it('names the wire type', () => {
+    expect(JSON.parse(saleMessageJson([saleRow()], 'cred-1')).type).toBe(SALE_DM_TYPE)
+  })
+})
+
+describe('the till sends, and keeps what did not land', () => {
+  beforeEach(() => localStorage.clear())
+
+  const tillSeal = <T,>(borrow: (k: Uint8Array) => T) => borrow(hexToBytes(TILL_SK))
+
+  it('sends one wrap to the stall, sealed by K, and needs no wallet', async () => {
+    const sent: Event[] = []
+    const ok = await sendTillSale([saleRow()], STALL, 'cred-1', tillSeal, {
+      publish: async (w) => (sent.push(w), true),
+    })
+    expect(ok).toBe(true)
+    expect(sent).toHaveLength(1)
+    expect(sent[0].tags).toEqual([['p', STALL]])
+    const opened = unwrapSealed(sent[0], hexToBytes(STALL_SK))!
+    expect(opened.sealer).toBe(TILL)
+    expect(pendingTillSales()).toBe(0)
+  })
+
+  it('queues a wrap that landed nowhere, and the next flush sends exactly it', async () => {
+    const ok = await sendTillSale([saleRow()], STALL, 'cred-1', tillSeal, { publish: async () => false })
+    expect(ok).toBe(false)
+    expect(pendingTillSales()).toBe(1)
+
+    // Still offline: kept.
+    expect(await flushSaleOutbox(tillSeal, { publish: async () => false })).toBe(0)
+    expect(pendingTillSales()).toBe(1)
+
+    const later: Event[] = []
+    expect(await flushSaleOutbox(tillSeal, { publish: async (w) => (later.push(w), true) })).toBe(1)
+    expect(pendingTillSales()).toBe(0)
+    expect(unwrapSealed(later[0], hexToBytes(STALL_SK))!.sealer).toBe(TILL)
+  })
+
+  it('a publisher that throws is a wrap that did not land, never a failed sale', async () => {
+    await expect(
+      sendTillSale([saleRow()], STALL, 'cred-1', tillSeal, { publish: async () => { throw new Error('down') } }),
+    ).resolves.toBe(false)
+    expect(pendingTillSales()).toBe(1)
+  })
+})
+
+describe('the owner collects till sales from its inbox', () => {
+  beforeEach(() => localStorage.clear())
+
+  function harness(wraps: Event[]) {
+    const written = new Map<string, TransactionRow>()
+    const queries: Array<number | undefined> = []
+    const deps = {
+      wraps: async (_p: string, since?: number) => (queries.push(since), wraps),
+      open: (w: Event) => unwrapSealed(w, hexToBytes(STALL_SK)),
+      has: async (id: string) => written.has(id),
+      write: async (row: TransactionRow) => void written.set(row.id as string, row),
+      trustedServiceKeys: [SERVICE],
+      now: 2_000_000_000_000,
+    }
+    return { written, queries, deps }
+  }
+
+  it('files each verified row once, however often it runs (idempotent)', async () => {
+    const wrap = wrapMessage(hexToBytes(TILL_SK), STALL, saleMessageJson([saleRow()], 'cred-1'))
+    const { written, deps } = harness([wrap, wrap])
+    expect(await collectTillSales(STALL, deps)).toBe(1)
+    expect(await collectTillSales(STALL, deps)).toBe(0)
+    expect([...written.keys()]).toEqual(['issued:v-1'])
+  })
+
+  it("notes the till's last use on the roster", async () => {
+    recordTerminal(STALL, { terminalPubkey: TILL, name: 'Sales counter', role: 'issue-and-redeem', enrolledAt: 1 })
+    const wrap = wrapMessage(hexToBytes(TILL_SK), STALL, saleMessageJson([saleRow()], 'cred-1'))
+    await collectTillSales(STALL, harness([wrap]).deps)
+    const rows = JSON.parse(localStorage.getItem(`imani-wallet:terminals:${STALL}`)!) as Array<{ lastUsedAt?: number }>
+    // The wire carries seconds, as every 7376 does.
+    expect(rows[0].lastUsedAt).toBe(1_786_891_362_000)
+  })
+
+  it('reads from a cursor after the first run, and from 24 h before the earliest terminal before it', async () => {
+    recordTerminal(STALL, { terminalPubkey: TILL, name: 'S', role: 'issue-and-redeem', enrolledAt: 1_900_000_000_000 })
+    const wrap = wrapMessage(hexToBytes(TILL_SK), STALL, saleMessageJson([saleRow()], 'cred-1'))
+    const { queries, deps } = harness([wrap])
+    await collectTillSales(STALL, deps)
+    await collectTillSales(STALL, deps)
+    expect(queries[0]).toBe(1_900_000_000 - 24 * 3600)
+    expect(queries[1]).toBe(wrap.created_at)
+  })
+
+  it('files nothing a stranger sealed', async () => {
+    const wrap = wrapMessage(hexToBytes(STRANGER_SK), STALL, saleMessageJson([saleRow()], 'cred-1'))
+    const { written, deps } = harness([wrap])
+    expect(await collectTillSales(STALL, deps)).toBe(0)
+    expect(written.size).toBe(0)
+  })
+})
+
+describe('dm-poll hands a sale record to the collector', () => {
+  it('recognises a sale record and nothing else', async () => {
+    const { isTillSaleMessage } = await import('../tillSales')
+    expect(isTillSaleMessage(saleMessageJson([saleRow()], 'cred-1'))).toBe(true)
+    expect(isTillSaleMessage(JSON.stringify({ type: 'cashu_token_transfer' }))).toBe(false)
+    expect(isTillSaleMessage('not json')).toBe(false)
+  })
+})
