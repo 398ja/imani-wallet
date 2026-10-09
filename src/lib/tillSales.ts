@@ -8,6 +8,7 @@ import { parseCredentialSecret } from './terminalWarrant'
 import { wrapMessage, type Rumor, type WrapPublisher } from './terminalDelivery'
 import { allTerminals, noteTerminalUse } from './terminalRoster'
 import { clampNote } from './note'
+import { raiseHomecomingAlert } from './terminalHomecoming'
 
 /**
  * A till's sales reach the stall's own books (#160 phase 6, wallet#202, plan 2.1, Q1 (a)).
@@ -410,7 +411,10 @@ export async function collectTillSales(stallPubkey: string, deps: CollectDeps): 
     for (const row of read.rows) {
       const id = String((row as unknown as { id: string }).id)
       if (await deps.has(id)) continue
-      await deps.write(row)
+      // Trigger (b) of the home-coming check (#160 phase 6, decision 5 Q2): a sale under a
+      // credential the roster never had is filed (the customer paid) and marked on the row.
+      const verdict = raiseHomecomingAlert(stall, toTransaction(row).issuanceWarrant, id)
+      await deps.write(verdict === 'unknown-till' ? ({ ...row, homecomingAlert: verdict } as unknown as TransactionRow) : row)
       filed += 1
       const tx = toTransaction(row)
       if (tx.terminalPubkey) noteTerminalUse(stall, tx.terminalPubkey, tx.at)
