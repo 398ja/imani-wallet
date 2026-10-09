@@ -95,6 +95,29 @@ flowchart LR
 The terminal now appears in your list as in service, and the device offers
 **Open the till**.
 
+### Renewing a terminal
+
+A terminal's authority lasts **a year**. Your list warns you a month before it
+runs out (an amber **Renew** button and *"Front counter stops on 12 March. Renew
+it."*), and again, in red, a week before. Tap **Renew** on the row: your phone
+creates a fresh authority for the **same device** and sends it there. The
+terminal picks it up the next time it is opened (or within five minutes if it
+is open), with **its usual passphrase**. There is no new setup code. The old
+authority is handed back by the terminal itself as soon as it has the new one.
+
+A terminal set up before you signed each terminal shows **Renew to keep
+selling**: it can redeem but not sell. The same **Renew** puts it back on sale.
+
+If the terminal is not opened within 24 hours, the renewal lapses and your list
+says *"The renewal did not reach Front counter. Open the till, then renew
+again."* At most two terminals can be waiting at once, renewals included. If
+more need renewing, the list tells you how many are waiting their turn.
+
+**Your list is on all your phones.** It is kept, encrypted to your own key,
+beside your other records, so a terminal added on one phone appears on another
+after you restore your backup key there, and can be revoked from it. Logging
+out no longer loses it.
+
 ## Opening a terminal for trade
 
 Staff open the terminal with its **passphrase**. That is what stops a stolen
@@ -226,7 +249,10 @@ Two things to hold on to:
   authority, and the device is not consulted. Revoking spends the terminal's
   authority at the mint with your stall's key. If that does not get through,
   the terminal stays on your list as in service and the screen says so: tap
-  **Revoke** again when you have a connection. A terminal set up before this
+  **Revoke** again when you have a connection. If you had sent the terminal a
+  renewal it has not picked up yet, revoking spends that renewal too, first,
+  so the device cannot adopt it and keep selling. Until both have been spent
+  the terminal stays in service and the screen says so. A terminal set up before this
   existed says *Set up before revocation existed*: add the device again to
   replace it.
 - **When it bites.** The terminal is refused the next time it opens its till,
@@ -362,20 +388,18 @@ and, with the *Sell and redeem* role, to **sell**. The plan is
    credential it holds, as its device, the first time it reads it. Anything else
    that mints a terminal credential must call
    `POST /api/v1/wallet/terminal-credentials/{id}/confirm` itself.
-2. **Terminal Sell needs the gateway's phase 5 to be live** (#160). A terminal
-   signs its sales with the `terminal` warrant form: its own key signs the sale
-   total, and the warrant carries the terminal's authority (the signed voucher
-   fields only, never anything spendable). The customer's wallet verifies it
-   offline against the gateway's published issuing key. Until gateway-portal,
-   gateway-customer and gateway-core with terminal Sell are deployed, the
-   gateway refuses a terminal's Sell with 403, and nothing is minted.
+2. **More than one terminal needs a subscription** (#197). One terminal is free.
+   The server-checked licence that lets a subscribed stall run more is a
+   separate piece of work. A renewal keeps your free terminal free.
 3. **A coupon sold by a till keeps its authorisation after the till expires or
    is revoked.** That is on purpose: it was sold while the till was in service,
    and the customer paid for it. Expiry and revocation stop new sales only.
 
 Everything else described above is built and running: role gating, the lapse
-notice, the dashboard guard, decommissioning, attribution on records, and
-revocation that genuinely spends at the mint. Subscriptions work end to end.
+notice, the dashboard guard, decommissioning, attribution on records (a till's
+sales reach your history and Vouchers list, named by till), renewal, the
+terminal list on all your phones, and revocation that genuinely spends at the
+mint. Subscriptions work end to end.
 
 ## Common questions
 
@@ -413,6 +437,35 @@ connection.
 **Does a coupon sold on a terminal look different to the customer?**
 No. It names your stall, and their wallet shows it as authorised by your stall.
 Which till sold it is on your records only.
+
+**Do sales made on a till show up in my records?**
+Yes. A till sends each sale (and each cashback code) to your stall, signed with
+its own key, and your phone files it in your history after checking that the
+till is one you signed. Your Vouchers list says *Sold on Front counter*. If the
+till was offline it keeps the record and sends it later; don't take it out of
+service while it says sale records have not reached you yet.
+
+**My terminal's year is nearly up. Do I have to set it up again?**
+No. Tap **Renew** on its row. The terminal picks it up the next time it is
+opened, with the same passphrase.
+
+**The till says its authority ran out.**
+It still redeems. It stops selling on the date shown, and asks you to renew it.
+Renew it from your list, then open the till again.
+
+**I lost my phone. Can I still revoke my terminals?**
+Yes. Restore your backup key on another phone: your terminal list comes back
+with it, and **Revoke** works from there.
+
+**The till says "Ask the owner to renew", but it is not on my list.**
+Tap **Ask the owner to renew** on the till. It sends its authority to your
+stall; your list adds it (only if it really is one of yours and still valid),
+and you can renew or revoke it.
+
+**I got "A coupon came back from a till that is not on your list".**
+A coupon signed by a till under your stall came back to you, but your list has
+never had that till. The coupon is honoured, because the customer paid. If you
+did not set that till up, contact support.
 
 **Why does my customer's wallet refuse a coupon instead of keeping it?**
 Because a coupon your stall did not authorise is one your own till would refuse

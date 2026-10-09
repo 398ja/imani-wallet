@@ -9,6 +9,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Terminals phase 6 (imani-wallet#160): till sales reach the owner, the terminal list syncs across
+the owner's devices, one-tap Renew, expiry on the till, and the home-coming roster check. Pairs
+with gateway-customer 0.24.1 (review NITs only); renewal needs no server change.
+
+### Added
+
+- **A till's sales reach the stall's history (#202).** A till has no wallet, so its sale and
+  cashback rows were lost. It now sends them to the stall as a NIP-17 gift wrap sealed by its own
+  key (`imani-terminal-sale/1`), keeping any that did not land in an outbox retried at every
+  unlock and every minute; Take out of service warns while any are waiting. The owner's app files
+  a row only when the sealer is the lock of the credential in the row's `terminal` warrant and the
+  warrant verifies for this stall, the stall's own attestation included, and files it as the
+  owner's own 7376. Collected at login, on the Vouchers list and when dm-poll sees one. Each wrap
+  is budgeted in UTF-8 bytes to stay at or under 55,121 bytes, inside strfry's 65,536.
+- **The Note on Sell and cashback is capped at 280 characters,** the portal's own cashback memo
+  limit, so a long or non-ASCII note cannot push a till's sale past the relay.
+- **The Vouchers list names the till** ("· Sold on Front counter", "(no longer in service)").
+- **The terminal list syncs across the owner's devices.** An encrypted kind-30078 event
+  (`d=imani:terminals`), chunked above the relay budget, merged by a property-tested join that
+  never un-revokes, never moves status backwards and never drops the token of an unrevoked
+  credential. Rows keep every credential the device ever held (`credentials[]`). Synced at login,
+  on every change (debounced) and when Terminals opens, then checked against the mint.
+- **Renew.** One tap mints a fresh, attested credential to the same device key and sends it with
+  `renews`. Amber 30 days and red 7 days before expiry. The till adopts it at unlock (same
+  passphrase, no setup code), confirms it, tells the stall, and spends its own old credential so
+  the free terminal follows the renewal. A renewal not adopted in 24 hours is cancelled, unless
+  the mint shows the till adopted it and only its enrolled notice was lost: then it is completed.
+  Revoking a till also spends a renewal it has not picked up yet, first. Renewals
+  count against the two-waiting limit; the list says how many more wait. Replaces the four
+  re-enrol steps for a till set up before owner attestation.
+- **Expiry on the till.** Past its expiry a till opens for Redeem only with "Ask the owner to
+  renew it. Redeeming still works."; within seven days it warns.
+- **Ask the owner to renew.** A till the owner's list lost can send its own credential to the
+  stall, which adopts it (only this stall's, co-keyed, locked to the sender, trusted, unspent).
+- **Home-coming roster check.** A coupon from a `terminal` warrant whose credential the roster has
+  never had raises "A coupon came back from a till that is not on your list" (never refused;
+  quiet until the roster has synced once on the device).
+
+### Fixed
+
+- **Logout no longer loses the terminal list (F4).** It was the only copy of the stall's
+  revocation handles; it now comes back from the roster event.
+- **A restored history keeps each till sale's till (F2).** The 7376 content carries
+  `terminal_pubkey`, and `toTransaction` reads it back (it never did, even locally).
+
 ## [0.16.1] - 2026-10-09
 
 A new merchant sells from the first render (#114). Pairs with imani-gateway-core 0.21.1
