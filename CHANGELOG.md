@@ -9,9 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-09
+
 Terminals phase 6 (imani-wallet#160): till sales reach the owner, the terminal list syncs across
 the owner's devices, one-tap Renew, expiry on the till, and the home-coming roster check. Pairs
-with gateway-customer 0.24.1 (review NITs only); renewal needs no server change.
+with gateway-customer 0.24.1 (review NITs only) and imani-cashback-claim 0.1.0 (a till's cashback
+ciphertext is about 73k, over the old 64 KiB deposit cap); renewal needs no server change.
 
 ### Added
 
