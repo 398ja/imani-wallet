@@ -300,6 +300,26 @@ describe('enrolling', () => {
     expect(allTerminals(STALL)[0].role).toBe(TERMINAL_ROLES.ISSUE_AND_REDEEM)
   })
 
+  // Review rw1: the name rides in every warrant the till builds, and the portal refuses a warrant
+  // over 4,096 units. An uncapped name (about 2,600 characters) made every sale from the till
+  // refused, so the name is capped where it is typed and again in what is minted.
+  it('caps the name at TERMINAL_NAME_MAX_CHARS in the field and in what is recorded', async () => {
+    const { TERMINAL_NAME_MAX_CHARS } = await import('../../lib/terminalIssue')
+    expect(TERMINAL_NAME_MAX_CHARS).toBe(64)
+    renderPage()
+    await waitFor(() => expect(addButton()).toBeTruthy())
+    const field = screen.getByLabelText('Name') as HTMLInputElement
+    expect(field.maxLength).toBe(TERMINAL_NAME_MAX_CHARS)
+    // A paste or a script can set more than maxLength allows typing.
+    fireEvent.change(field, { target: { value: '漢'.repeat(3_000) } })
+    fireEvent.click(screen.getByRole('button', { name: /Redemption only/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
+    fireEvent.click(addButton())
+
+    await waitFor(() => expect(allTerminals(STALL)).toHaveLength(1))
+    expect(allTerminals(STALL)[0].name).toBe('漢'.repeat(TERMINAL_NAME_MAX_CHARS))
+  })
+
   it('tells the owner the job is not finished on this device', async () => {
     // The terminal still needs a passphrase entered on IT. An owner who walks
     // away here has a device that cannot open, and no reason to know why.
