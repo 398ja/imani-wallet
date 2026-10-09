@@ -29,6 +29,7 @@ import {
 import { present } from '../lib/detailRows'
 import { onWalletChanged } from '../lib/wallet'
 import { handlerFor } from '../lib/terminalAttribution'
+import { onRosterView } from '../lib/terminalRoster'
 import { collectTillSalesForOwner } from '../lib/tillSalesNet'
 import { repairedTransactions } from '../lib/redemptionLedger'
 import type { WalletTransaction } from '../lib/transactions'
@@ -202,6 +203,15 @@ export function IssuedCouponsPage({ stallPubkey }: { stallPubkey?: string } = {}
   // opens, so a sale made on a till shows here without a re-login.
   useEffect(() => {
     if (stallPubkey) void collectTillSalesForOwner(stallPubkey)
+  }, [stallPubkey])
+  // The till names come from the roster, which the login sync may merge in after this list opened
+  // (on a restored phone, #160 phase 6 E4): re-render when it does.
+  const [, setRosterRev] = useState(0)
+  useEffect(() => {
+    if (!stallPubkey) return
+    return onRosterView((stall) => {
+      if (stall === stallPubkey) setRosterRev((n) => n + 1)
+    })
   }, [stallPubkey])
   const [includeExpired, setIncludeExpired] = useState(false)
 

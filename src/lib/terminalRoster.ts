@@ -295,6 +295,7 @@ function write(stallPubkey: string, rows: TerminalRecord[]): void {
   }
   // Every mutation is published, debounced, to the owner's other devices (#160 phase 6).
   for (const listener of rosterListeners) listener(stallPubkey)
+  notifyRosterView(stallPubkey)
 }
 
 const rosterListeners = new Set<(stallPubkey: string) => void>()
@@ -303,6 +304,23 @@ const rosterListeners = new Set<(stallPubkey: string) => void>()
 export function onRosterChanged(listener: (stallPubkey: string) => void): () => void {
   rosterListeners.add(listener)
   return () => rosterListeners.delete(listener)
+}
+
+const viewListeners = new Set<(stallPubkey: string) => void>()
+
+function notifyRosterView(stallPubkey: string): void {
+  for (const listener of viewListeners) listener(stallPubkey)
+}
+
+/**
+ * Called after every change to what the roster reads as, the sync's merge included. For screens
+ * that name a till from it (the Vouchers list's "Sold on"): on a restored phone the list opens
+ * before the login sync has merged the roster in (found by the local gate, #160 phase 6 E4). Not
+ * the publish hook: the sync's own write must not publish again.
+ */
+export function onRosterView(listener: (stallPubkey: string) => void): () => void {
+  viewListeners.add(listener)
+  return () => viewListeners.delete(listener)
 }
 
 const FORGOTTEN_KEY = (stallPubkey: string) => `imani-wallet:terminals-forgotten:${stallPubkey}`
@@ -346,12 +364,13 @@ export function replaceRoster(stallPubkey: string, rows: TerminalRecord[], forgo
   } catch {
     // Without the tombstones a forgotten row may come back once; the next forget removes it.
   }
-  // Written without notifying: the sync writes what it just merged and published.
+  // Not published again: the sync writes what it just merged and published. Screens are told.
   try {
     localStorage.setItem(ROSTER_KEY(stallPubkey), JSON.stringify(rows.map(normalizeRow)))
   } catch {
     // As `write`.
   }
+  notifyRosterView(stallPubkey)
 }
 
 /** Everything this stall has ever enrolled, newest first. */
