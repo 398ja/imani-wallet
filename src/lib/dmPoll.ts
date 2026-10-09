@@ -869,7 +869,8 @@ export function homecomingAlertFor(
     const { voucher } = parseVoucherToken(token)
     if (voucher.issuerId.toLowerCase() !== stallPubkey.toLowerCase()) return
     const id = typeof meta?.voucherId === 'string' ? meta.voucherId : voucher.voucherId
-    raiseHomecomingAlert(stallPubkey.toLowerCase(), voucher.issuanceWarrant, id)
+    // Not awaited: an alert never holds up a redemption. Never rejects.
+    void raiseHomecomingAlert(stallPubkey.toLowerCase(), voucher.issuanceWarrant, id)
   } catch {
     // Not a voucher, or unreadable: there is no till to check.
   }

@@ -50,19 +50,35 @@ export function homecomingCheck(stallPubkey: string, warrant: string | undefined
   return knownCredentials(stallPubkey).has(credential) ? 'ok' : 'unknown-till'
 }
 
+/** Read the published roster into this device again. True when it was read. */
+export type RosterRefresh = (stallPubkey: string) => Promise<boolean>
+
+const syncFromNetwork: RosterRefresh = (stall) =>
+  import('./terminalRosterSyncNet').then((m) => m.syncRosterNow(stall))
+
 /**
  * Check a home-coming coupon and, for one from a till the list never had, record the alert in
  * the owner's notification bell. Once per credential, however many of its coupons come home.
  * Never refuses and never throws.
+ *
+ * A credential this device does not know is checked again after reading the published roster:
+ * this phone's copy may predate a till the owner set up or renewed on another phone (found by
+ * the local gate, #160 phase 6). Only a credential the published list does not have either is
+ * alerted on.
  */
-export function raiseHomecomingAlert(
+export async function raiseHomecomingAlert(
   stallPubkey: string,
   warrant: string | undefined | null,
   couponId: string,
-): HomecomingVerdict {
+  refresh: RosterRefresh = syncFromNetwork,
+): Promise<HomecomingVerdict> {
   try {
-    const verdict = homecomingCheck(stallPubkey, warrant)
+    let verdict = homecomingCheck(stallPubkey, warrant)
     if (verdict !== 'unknown-till') return verdict
+    if (await refresh(stallPubkey).catch(() => false)) {
+      verdict = homecomingCheck(stallPubkey, warrant)
+      if (verdict !== 'unknown-till') return verdict
+    }
     const credential = credentialOfWarrant(warrant)
     recordNotification(stallPubkey, {
       id: `homecoming:${credential}`,

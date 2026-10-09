@@ -398,6 +398,8 @@ describe('trigger (b): a filed till sale is checked against the roster (#160 pha
       has: async (id) => written.has(id),
       write: async (row) => void written.set(row.id as string, row),
       trustedServiceKeys: [SERVICE],
+      // The published list does not have it either.
+      refreshRoster: async () => true,
     })
     expect(filed).toBe(1)
     expect((written.get('issued:v-1') as unknown as { homecomingAlert?: string }).homecomingAlert).toBe('unknown-till')
