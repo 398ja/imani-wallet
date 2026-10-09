@@ -31,6 +31,7 @@ import { setupCode } from '../lib/terminalDelivery'
 import { getSigner } from '../lib/nap'
 import type { CredentialMintApi } from '../lib/credentialRevocation'
 import { legacyApi } from '../lib/legacyBridge'
+import { syncRosterNow } from '../lib/terminalRosterSyncNet'
 
 /** How often the list looks for a device's "I have it" while something is waiting. */
 const ENROLLED_POLL_MS = 5_000
@@ -82,6 +83,7 @@ export function TerminalsPage({
   collect = collectEnrolled,
   confirm = stallConfirm,
   deliver = ownerDeliver,
+  sync = syncRosterNow,
 }: {
   stallPubkey: string
   /** Injected by tests. Spends a credential with the stall's key. */
@@ -94,6 +96,8 @@ export function TerminalsPage({
   confirm?: ConfirmCall
   /** Injected by tests. Sends the credential DM to waiting devices that never got one. */
   deliver?: (stallPubkey: string) => Promise<number>
+  /** Injected by tests. Merges the roster the owner's other devices published (#160 phase 6). */
+  sync?: (stallPubkey: string) => Promise<boolean>
 }) {
   // Read lazily rather than in an effect. The roster is local storage, so it is
   // available on the first render — going through an effect would paint an
@@ -204,6 +208,11 @@ export function TerminalsPage({
     let cancelled = false
     void (async () => {
       try {
+        // The list from the owner's other devices first (#160 phase 6), merged into this one,
+        // so a terminal added or revoked on another phone shows here.
+        if (await sync(stallPubkey).catch(() => false)) {
+          if (!cancelled) refresh()
+        }
         const api = await spendApi()
         // Settle any credential request that did not finish (#160 review)
         // before expiring waiting rows, so a request that is resumed now and
@@ -224,7 +233,7 @@ export function TerminalsPage({
     return () => {
       cancelled = true
     }
-  }, [stallPubkey, spendApi, transport, deliver, refresh])
+  }, [stallPubkey, spendApi, transport, deliver, sync, refresh])
   const live = terminals.filter((t) => t.revokedAt === undefined)
   const retired = terminals.filter((t) => t.revokedAt !== undefined)
 

@@ -73,12 +73,16 @@ const fakeMint = {
   }),
 }
 
+/** No relay in a unit test: the roster sync (#160 phase 6) is its own test file. */
+const noSync = async () => false
+
 function renderPage() {
   return render(
     <MemoryRouter>
       {/* The gateway confirms at once and there is no DM to send: the
           round 2 tests below inject their own. */}
       <TerminalsPage
+        sync={noSync}
         stallPubkey={STALL}
         spendApi={async () => fakeMint}
         collect={collect}
@@ -425,7 +429,7 @@ describe('#160 review: rows left behind by earlier versions and lost answers', (
     }
     render(
       <MemoryRouter>
-        <TerminalsPage stallPubkey={STALL} spendApi={async () => fakeMint} transport={resumeTransport} />
+        <TerminalsPage sync={noSync} stallPubkey={STALL} spendApi={async () => fakeMint} transport={resumeTransport} />
       </MemoryRouter>,
     )
 
@@ -466,6 +470,7 @@ describe('#160 phase 2: the row turns In service when the device confirms', () =
       <StrictMode>
         <MemoryRouter>
           <TerminalsPage
+        sync={noSync}
             stallPubkey={STALL}
             spendApi={async () => fakeMint}
             collect={collect}
@@ -497,6 +502,7 @@ describe('#160 round 2: the list shows what the gateway says', () => {
     return render(
       <MemoryRouter>
         <TerminalsPage
+        sync={noSync}
           stallPubkey={STALL}
           spendApi={async () => fakeMint}
           collect={collect}
