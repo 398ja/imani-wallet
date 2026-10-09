@@ -30,6 +30,12 @@
  * the owner's roster shows the re-enrol path (Renew to keep selling: revoke, take out of service,
  * add again), whose first step, Revoke, is then carried out for real.
  *
+ * Phase 6 (`E2E_PHASE>=6`, #160 plan 4.1): E1 the till sale reaches A attributed (hard check), E2 the
+ * record verifies, E3 a till cashback is filed, E4 a restored A sees the attribution and the roster,
+ * E5 A' revokes, E6 the roster survives logout, E7 expiry badges on a moved clock, E8 Renew to the
+ * same key with the old credential spent and Sell 201, E9 a wider role refused, E10 a legacy
+ * redeem-only till renews attested, E11 the home-coming alert, E12 an expired till opens Redeem only.
+ *
  * Needs a stack whose gateway-customer mints the stall co-key (imani-gateway-customer#187).
  *
  * Run against a local dev server:   E2E_BASE=http://localhost:5177 tsx e2e/terminalSetup.e2e.ts
@@ -42,10 +48,10 @@ import { extname, join, normalize } from 'node:path'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
-import { finalizeEvent, nip98 } from 'nostr-tools'
+import { finalizeEvent, getPublicKey, nip19, nip44, nip98, type Event } from 'nostr-tools'
 import WebSocket from 'ws'
 import { registerCustomer, registerMerchant, TEST_PASSPHRASE, TEST_STALL_NAME } from './register.mts'
-import { tokenProofs } from '../src/lib/voucherToken'
+import { parseVoucherToken, tokenProofs } from '../src/lib/voucherToken'
 
 const BASE = (process.env.E2E_BASE ?? 'http://localhost:5177').replace(/\/+$/, '')
 const BUNDLE_DIR = process.env.E2E_BUNDLE_DIR
@@ -61,6 +67,8 @@ const ARTIFACTS = process.env.E2E_ARTIFACTS ?? ''
 /** A local gate fronts its mint with a throwaway CA (imani-deploy scripts/local-terminal-gate). */
 const IGNORE_HTTPS_ERRORS = process.env.E2E_IGNORE_HTTPS_ERRORS === '1'
 const contexts: Array<{ name: string; ctx: BrowserContext }> = []
+/** What phase 5 leaves for phase 6 (#160 phase 6). */
+const p6: { b3?: Page; saleTotal?: number } = {}
 const failures: string[] = []
 const pendingDeploy: string[] = []
 
@@ -484,6 +492,7 @@ async function main() {
   }
 
   if (PHASE >= 5) await phase5(browser, owner, customer, customerPubkey, errors)
+  if (PHASE >= 6) await phase6(browser, owner, customer, customerPubkey, errors)
 
   return finish(browser, errors)
 }
@@ -499,6 +508,7 @@ async function main() {
 async function phase5(browser: Browser, owner: Page, customer: Page, customerPubkey: string, errors: string[]) {
   console.log('\nPhase 5: a sell-and-redeem till B3 is set up and opens a FULL till')
   const till = await (await context(browser, 'B3-till')).newPage()
+  p6.b3 = till
   till.on('pageerror', (e) => errors.push(`B3: ${e.message}`))
   const ready = await setUpDevice(owner, till, 'Sales counter', /Sell and redeem/)
   check('B3 is set up as a sell-and-redeem till', ready)
@@ -577,7 +587,11 @@ async function phase5(browser: Browser, owner: Page, customer: Page, customerPub
         .then(() => owner.waitForFunction(() => /Sales counter/.test(document.body.innerText), undefined, { timeout: 120_000 }))
         .then(() => true, () => false)
     : false
-  checkDeployed('A sees the sale attributed to "Sales counter"', attributed)
+  // E1 (#160 phase 6, wallet#202): the till's sale reaches A's own history by a sealed sale record,
+  // and A's Vouchers list names the till. A hard check from phase 6 on; PENDING before it.
+  if (PHASE >= 6) check('A sees the sale attributed to "Sales counter"', attributed)
+  else checkDeployed('A sees the sale attributed to "Sales counter"', attributed)
+  if (PHASE >= 6 && attributed) p6.saleTotal = Number(sentWarrant?.sale_total)
 
   if (k.sk) {
     console.log('\nPhase 5: the gateway refuses what a till may not do')
@@ -660,6 +674,506 @@ async function phase5(browser: Browser, owner: Page, customer: Page, customerPub
   }
 
   await legacyTill(owner)
+}
+
+/**
+ * Phase 6 (#160, plan 4.1, E1 to E12): till sales reach the owner, the roster syncs and survives
+ * logout and restore, Renew to the same key, expiry on the till, and the home-coming check.
+ *
+ * E1 is the phase 5 attribution check, made hard above. Run after phase 5, so B3 has been revoked
+ * and the stall's free terminal is available again for B4.
+ */
+async function phase6(browser: Browser, owner: Page, customer: Page, customerPubkey: string, errors: string[]) {
+  const ownerSk = await ownerKey(owner)
+  if (!/^[0-9a-f]{64}$/.test(ownerSk)) return check("the harness opened A's key with its passphrase (phase 6)", false, ownerSk)
+  const stall = bytesToHex(schnorr.getPublicKey(hexToBytes(ownerSk)))
+
+  console.log("\nPhase 6: A's records of B3's sale")
+  // E2: the record behind the row names the till and verifies its warrant.
+  await owner.goto(`${BASE}/merchant/coupons`, { waitUntil: 'load' })
+  const row = owner.getByRole('link').filter({ hasText: /Sold on Sales counter/ }).first()
+  const opened = await row.click({ timeout: 30_000 }).then(() => true, () => false)
+  const detail = opened
+    ? await owner.waitForFunction(() => /Signed by this stall|Authorised/.test(document.body.innerText), undefined, { timeout: 30_000 })
+        .then(() => text(owner), () => text(owner))
+    : ''
+  check('E2 the sale record says "Signed by this stall" (warrant verified)', /Signed by this stall/.test(detail), detail.slice(0, 300))
+  const handled = await handledBy(owner, 'Sales counter')
+  check('E2 the transaction reads "Handled by: Sales counter"', handled, '')
+  await snap(owner, 'p6-e2-record')
+
+  console.log('\nPhase 6: a till issues cashback, and the stall files it (E3)')
+  // B3 was revoked in phase 5, so a fresh selling till B4 is set up (the free slot is free again).
+  const b4 = await (await context(browser, 'B4-till')).newPage()
+  b4.on('pageerror', (e) => errors.push(`B4: ${e.message}`))
+  const b4Ready = await setUpDevice(owner, b4, 'Back counter', /Sell and redeem/)
+  check('B4 is set up as a sell-and-redeem till', b4Ready)
+  if (!b4Ready) return
+  await unlockTill(b4)
+  const visitB4 = (path: string) => b4.evaluate((p) => {
+    window.history.pushState({}, '', p)
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  }, path)
+  await visitB4('/sell/cashback')
+  const amount = b4.locator('input[placeholder="0.00"]')
+  let cashbackCode = ''
+  if (await amount.waitFor({ timeout: 30_000 }).then(() => true, () => false)) {
+    await amount.fill('1.50')
+    await b4.getByRole('button', { name: 'Create cashback code' }).click()
+    cashbackCode = await b4.waitForFunction(() => document.body.innerText.match(/CB-[A-Z0-9]{5}-[A-Z0-9]{5}/)?.[0] ?? '', undefined, { timeout: 60_000 })
+      .then((h) => h.jsonValue() as Promise<string>, () => '')
+  }
+  check('B4 issues a cashback code', /^CB-/.test(cashbackCode), (await text(b4)).slice(0, 200))
+  const cashbackFiled = cashbackCode
+    ? await waitForOwnerRow(owner, (r) => r.type === 'cashback' && r.claimCode === cashbackCode && typeof r.terminalPubkey === 'string')
+    : false
+  check("E3 B4's cashback is in A's history, attributed to the till", cashbackFiled)
+
+  console.log('\nPhase 6: A, restored on a fresh device from its backup key (E4)')
+  const nsec = nip19.nsecEncode(hexToBytes(ownerSk))
+  const restored = await (await context(browser, "A'-restored")).newPage()
+  restored.on('pageerror', (e) => errors.push(`A': ${e.message}`))
+  await restored.goto(`${BASE}/onboarding`, { waitUntil: 'networkidle' })
+  await restored.getByRole('button', { name: /^Log in$/ }).first().click()
+  await restored.locator('input[placeholder^="nsec1"]').fill(nsec)
+  await restored.locator('input[placeholder="Choose a passphrase"]').fill(TEST_PASSPHRASE)
+  await restored.locator('input[placeholder="Confirm passphrase"]').fill(TEST_PASSPHRASE)
+  await restored.getByRole('button', { name: /^Add key and unlock$/ }).last().click()
+  await restored.waitForFunction(() => !location.pathname.startsWith('/onboarding'), undefined, { timeout: 60_000 }).catch(() => {})
+  const restoredSale = await restored.goto(`${BASE}/merchant/coupons`, { waitUntil: 'load' })
+    .then(() => restored.waitForFunction(() => /Sold on Sales counter/.test(document.body.innerText), undefined, { timeout: 120_000 }))
+    .then(() => true, () => false)
+  check("E4 A' sees B3's sale still attributed to Sales counter", restoredSale, (await text(restored)).slice(0, 300))
+  const aB4 = await rosterRow(owner, 'Back counter')
+  const rB4 = await waitRosterRow(restored, 'Back counter', (r) => r.status === 'in-service')
+  check("E4 A' lists B4 In service, with the same credential and expiry", !!rB4 && rB4.voucherId === aB4?.voucherId && rB4.status === 'in-service',
+    JSON.stringify({ a: aB4?.voucherId, r: rB4?.voucherId, s: rB4?.status }))
+  await restored.goto(`${BASE}/settings/terminals`, { waitUntil: 'load' })
+  const listsB4 = await restored.getByText('Back counter', { exact: true }).first().waitFor({ timeout: 60_000 }).then(() => true, () => false)
+  check("E4 A' Terminals screen lists Back counter", listsB4)
+
+  console.log("\nPhase 6: A' revokes B4, and B4 is refused at its next unlock (E5)")
+  const rowR = restored.locator('div')
+    .filter({ has: restored.getByText('Back counter', { exact: true }) })
+    .filter({ has: restored.getByRole('button', { name: 'Revoke', exact: true }) }).last()
+  const asked = await rowR.getByRole('button', { name: 'Revoke', exact: true }).click({ timeout: 30_000 }).then(() => true, () => false)
+  const confirmed = asked && (await restored.getByRole('button', { name: 'Revoke Back counter', exact: true }).click({ timeout: 30_000 }).then(() => true, () => false))
+  const revokedAt = confirmed ? await rosterRevokedAt(restored, 'Back counter') : null
+  check("E5 A' revokes B4 (spent at the mint)", revokedAt !== null, `asked=${asked} confirmed=${confirmed}`)
+  await b4.reload({ waitUntil: 'load' })
+  const refused = await unlockTill(b4)
+  check('E5 B4 reloads and its unlock is refused: no longer in service', /no longer in service/.test(refused), refused.slice(0, 200))
+  await owner.goto(`${BASE}/settings/terminals`, { waitUntil: 'load' })
+  const aSeesRevoked = (await rosterRevokedAt(owner, 'Back counter')) !== null
+  check('E5 A, reopened, shows B4 revoked', aSeesRevoked)
+
+  console.log('\nPhase 6: A logs out and in again, and the roster is back (E6)')
+  await owner.goto(`${BASE}/settings/security`, { waitUntil: 'load' })
+  owner.once('dialog', (d) => void d.accept())
+  await owner.getByRole('button', { name: 'Log out' }).click({ timeout: 30_000 }).catch(() => {})
+  await owner.waitForFunction(() => !Object.keys(localStorage).some((k) => k.startsWith('imani-wallet:terminals:')), undefined, { timeout: 30_000 }).catch(() => {})
+  const wiped = await owner.evaluate(() => !Object.keys(localStorage).some((k) => k.startsWith('imani-wallet:terminals:')))
+  check('E6 logout wiped the roster from this device', wiped)
+  await owner.goto(`${BASE}/onboarding`, { waitUntil: 'networkidle' })
+  await owner.getByRole('button', { name: /^Log in$/ }).first().click()
+  await owner.locator('input[placeholder^="nsec1"]').fill(nsec)
+  await owner.locator('input[placeholder="Choose a passphrase"]').fill(TEST_PASSPHRASE)
+  await owner.locator('input[placeholder="Confirm passphrase"]').fill(TEST_PASSPHRASE)
+  await owner.getByRole('button', { name: /^Add key and unlock$/ }).last().click()
+  await owner.waitForFunction(() => !location.pathname.startsWith('/onboarding'), undefined, { timeout: 60_000 }).catch(() => {})
+  const back = await waitRosterRow(owner, 'Sales counter', () => true)
+  const backB4 = await waitRosterRow(owner, 'Back counter', (r) => typeof r.revokedAt === 'number')
+  check('E6 after logging in again the roster is back (Sales counter, and Back counter revoked)', !!back && !!backB4)
+
+  console.log('\nPhase 6: a fresh attested till B5, expiry badges (E7) and Renew (E8)')
+  const b5 = await (await context(browser, 'B5-till')).newPage()
+  b5.on('pageerror', (e) => errors.push(`B5: ${e.message}`))
+  const b5Ready = await setUpDevice(owner, b5, 'Market till', /Sell and redeem/)
+  check('B5 is set up as a sell-and-redeem till', b5Ready)
+  if (!b5Ready) return finishPhase6(owner, stall, ownerSk, customer, customerPubkey, null)
+  await unlockTill(b5)
+  const b5Row = await waitRosterRow(owner, 'Market till', (r) => r.status === 'in-service')
+  const b5Old = b5Row?.voucherId ?? ''
+  const t = b5Row?.attestation ? Number(b5Row.attestation.expires_at) : 0
+  check('B5 is in service on A with an attested expiry T', !!b5Old && t > 0, JSON.stringify(b5Row?.attestation ?? {}))
+
+  // E7: A's clock moved to T - 20 days (amber), then T - 5 days (red). Only A's page clock.
+  for (const [days, badge] of [[20, 'renew-amber'], [5, 'renew-red']] as const) {
+    const at = (t - days * 86_400) * 1000
+    const page = await (await context(browser, `A-clock-${days}`)).newPage()
+    await page.clock.setFixedTime(at)
+    await copyLogin(owner, page)
+    await page.goto(`${BASE}/settings/terminals`, { waitUntil: 'load' })
+    const shown = await page.getByTestId(badge).first().waitFor({ timeout: 30_000 }).then(() => true, () => false)
+    const line = shown ? await page.getByTestId('expiry-line').first().innerText().catch(() => '') : ''
+    check(`E7 at T - ${days} days A shows ${badge === 'renew-amber' ? 'amber' : 'red'}, "stops on … Renew it."`, shown && /Market till stops on .+\. Renew it\./.test(line), line)
+    await snap(page, `p6-e7-${days}`)
+    await page.context().close()
+  }
+
+  // E8: real clock. A taps Renew; B5 locked, then unlocked with the same passphrase, adopts it.
+  await owner.goto(`${BASE}/settings/terminals`, { waitUntil: 'load' })
+  const renewClicked = await owner.getByRole('button', { name: 'Renew Market till' }).click({ timeout: 30_000 }).then(() => true, () => false)
+  const renewalSent = renewClicked && (await waitRosterRow(owner, 'Market till', (r) => !!r.renewal?.token && r.renewal?.delivered === true)) !== null
+  check('E8 A renews B5: a fresh credential to the same key, sent to the device', renewalSent)
+  const b5OldToken = await b5.evaluate(() => (JSON.parse(localStorage.getItem('imani-wallet:terminal') || '{}') as { token?: string }).token ?? '')
+  await b5.getByRole('button', { name: /Lock/ }).click().catch(() => {})
+  await b5.getByRole('button', { name: 'Open the till' }).waitFor({ timeout: 15_000 }).catch(() => {})
+  await b5.getByLabel('Passphrase').fill(TILL_PASSPHRASE)
+  await b5.getByRole('button', { name: 'Open the till' }).click()
+  const adopted = await b5.waitForFunction((old) => {
+    const r = JSON.parse(localStorage.getItem('imani-wallet:terminal') || '{}') as { voucherId?: string; previousToken?: string }
+    return !!r.voucherId && r.voucherId !== old && !r.previousToken
+  }, b5Old, { timeout: 120_000 }).then(() => true, () => false)
+  check('E8 B5 adopts the renewal at unlock, same passphrase, no setup code, and spends its old credential', adopted)
+  const renewed = await waitRosterRow(owner, 'Market till', (r) => r.voucherId !== b5Old && !r.renewal, async () => {
+    await owner.goto(`${BASE}/settings/terminals`, { waitUntil: 'load' })
+  })
+  check("E8 A's row shows the new credential (old one in history, revoked)", !!renewed && !!renewed.credentials?.some((c) => c.voucherId === b5Old && typeof c.revokedAt === 'number'),
+    JSON.stringify(renewed?.credentials ?? []).slice(0, 300))
+  const oldState = b5OldToken ? await tokenState(b5OldToken) : ''
+  check('E8 the old credential is SPENT at the mint', oldState === 'SPENT', oldState)
+  // Sells with 201: the free slot passed to the new credential (F7).
+  await b5.evaluate(() => {
+    window.history.pushState({}, '', '/sell')
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  })
+  const statuses: number[] = []
+  b5.on('response', (r) => {
+    if (new URL(r.url()).pathname === '/api/v1/portal/vouchers' && r.request().method() === 'POST') statuses.push(r.status())
+  })
+  const sold = await tillSells(b5, customerPubkey, '2.00')
+  check('E8 B5 sells to C with 201, not 402 (the free slot followed the renewal)', statuses.includes(201) && !statuses.includes(402), `${statuses.join(',')} ${sold.slice(0, 120)}`)
+  const verdict = /It is in their wallet now/.test(sold) ? await couponVerdict(customer, 200) : 'not sold'
+  check("E8 C's coupon from the renewed B5 reads `verified`", verdict === 'verified', verdict)
+
+  await finishPhase6(owner, stall, ownerSk, customer, customerPubkey, { b5, b5Key: await tillKey(b5) })
+}
+
+/** E9 to E12: refusals, the legacy migration, the home-coming check, and expiry on the till. */
+async function finishPhase6(
+  owner: Page,
+  stall: string,
+  ownerSk: string,
+  customer: Page,
+  customerPubkey: string,
+  b5: { b5: Page; b5Key: TillKey } | null,
+) {
+  if (b5 && b5.b5Key.sk) {
+    console.log('\nPhase 6: a renewal that widens the role is refused by the device (E9)')
+    // The harness, as a stall gone wrong, mints a REDEEM-ONLY-to-SELL "renewal"? A wider role
+    // cannot be minted for a selling till, so the device's rule is exercised the other way round
+    // on a redeem-only till: B6 is redeem-only and is offered an issue-and-redeem renewal.
+    const b6 = await (await context(owner.context().browser()!, 'B6-door')).newPage()
+    const ready = await setUpDevice(owner, b6, 'Side door')
+    check('B6 is set up redeem-only', ready)
+    if (ready) {
+      await unlockTill(b6)
+      const k = await tillKey(b6)
+      const lock = bytesToHex(schnorr.getPublicKey(hexToBytes(k.sk)))
+      const minted = await mintAttested(ownerSk, stall, lock, 'issue-and-redeem', 'Side door')
+      check('the harness mints a wider-role credential to B6\'s key', minted.token !== '', minted.error)
+      if (minted.token) {
+        const sent = await dmAsStall(ownerSk, lock, JSON.stringify({
+          type: 'imani-terminal-credential/1', voucher_id: minted.voucherId, token: minted.token,
+          stall_pubkey: stall, name: 'Side door', idle_lock_minutes: 10, renews: k.voucherId,
+        }))
+        check('the wider "renewal" DM reaches B6', sent)
+        await b6.getByRole('button', { name: /Lock/ }).click().catch(() => {})
+        await b6.getByRole('button', { name: 'Open the till' }).waitFor({ timeout: 15_000 }).catch(() => {})
+        await b6.getByLabel('Passphrase').fill(TILL_PASSPHRASE)
+        await b6.getByRole('button', { name: 'Open the till' }).click()
+        await b6.waitForTimeout(15_000)
+        const kept = await b6.evaluate(() => (JSON.parse(localStorage.getItem('imani-wallet:terminal') || '{}') as { voucherId?: string }).voucherId ?? '')
+        const home = await text(b6)
+        check('E9 B6 refuses the wider role (role-not-renewal) and keeps its old credential, still Redeem only', kept === k.voucherId && !/\bSell\b/.test(home.replace(/Selling/g, '')), `${kept} vs ${k.voucherId}`)
+      }
+    }
+  }
+
+  console.log('\nPhase 6: a legacy, unattested redeem-only till renews to an attested one (E10)')
+  {
+    const tillSk = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
+    const lock = bytesToHex(schnorr.getPublicKey(hexToBytes(tillSk)))
+    const body = {
+      face_value: 1, face_unit: 'sat', face_decimals: 0, backing_strategy: 'PROPORTIONAL',
+      issuer_id: stall, memo: 'Imani terminal credential', expires_in_days: 365,
+      merchant_metadata: { terminal: true, stall_pubkey: stall, role: 'redeem-only', lock_key: lock, name: 'Legacy door' },
+    }
+    const minted = await asKey(ownerSk, 'POST', '/api/v1/wallet/vouchers', body, { 'Idempotency-Key': crypto.randomUUID() })
+    const voucherId = (JSON.parse(minted.body || '{}') as { voucher_id?: string }).voucher_id ?? ''
+    const token = voucherId ? await fetchToken(ownerSk, voucherId) : ''
+    check('a legacy redeem-only credential L is minted the 5a way (no attestation)', token !== '', `${minted.status} ${minted.body.slice(0, 120)}`)
+    if (token) {
+      await owner.evaluate(({ key, row }) => {
+        const rows = JSON.parse(localStorage.getItem(key) ?? '[]') as unknown[]
+        localStorage.setItem(key, JSON.stringify([...rows, row]))
+      }, { key: `imani-wallet:terminals:${stall}`, row: { terminalPubkey: lock, name: 'Legacy door', role: 'redeem-only', enrolledAt: Date.now(), token, voucherId, status: 'in-service', gatewayState: 'confirmed' } })
+      await owner.goto(`${BASE}/settings/terminals`, { waitUntil: 'load' })
+      await owner.getByRole('button', { name: 'Renew Legacy door' }).click({ timeout: 30_000 }).catch(() => {})
+      const row = await waitRosterRow(owner, 'Legacy door', (r) => !!r.renewal?.token)
+      const newToken = row?.renewal?.token ?? ''
+      const attested = !!newToken && /owner_attestation/.test(new TextDecoder().decode(Uint8Array.from(atob(newToken.slice(6).replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0))))
+      check('E10 Renew mints L an ATTESTED credential, still redeem-only, to the same key', attested && row?.role === 'redeem-only')
+      // L's device is the harness: it adopts as a till does (confirm, enrolled DM), and spends the old.
+      if (row?.renewal?.voucherId) {
+        await asKey(tillSk, 'POST', `/api/v1/wallet/terminal-credentials/${row.renewal.voucherId}/confirm`, {})
+        await dmFrom(tillSk, stall, JSON.stringify({ type: 'imani-terminal-enrolled/1', voucher_id: row.renewal.voucherId, terminal_pubkey: lock }))
+        const done = await waitRosterRow(owner, 'Legacy door', (r) => r.voucherId === row.renewal!.voucherId, async () => {
+          await owner.goto(`${BASE}/settings/terminals`, { waitUntil: 'load' })
+        })
+        const oldState = await tokenState(token)
+        check('E10 L is now attested, redeem-only, and its old credential is spent', !!done && done.role === 'redeem-only' && oldState === 'SPENT', `${done?.voucherId} ${oldState}`)
+      }
+    }
+  }
+
+  console.log('\nPhase 6: the home-coming check (E11)')
+  {
+    // A stall-attested credential for a fresh K' minted straight through the API, NOT on the roster.
+    const tillSk = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
+    const lock = bytesToHex(schnorr.getPublicKey(hexToBytes(tillSk)))
+    const minted = await mintAttested(ownerSk, stall, lock, 'issue-and-redeem', 'Shadow till')
+    check("the harness mints a stall-attested credential for K' outside the roster", minted.token !== '', minted.error)
+    if (minted.token) {
+      await asKey(tillSk, 'POST', `/api/v1/wallet/terminal-credentials/${minted.voucherId}/confirm`, {})
+      const k: TillKey = { sk: tillSk, voucherId: minted.voucherId, secret: tokenProofs(minted.token)[0]?.secret ?? '', stall }
+      const sale = await asTillResponse(k, 'POST', '/api/v1/portal/vouchers', {
+        face_value_minor: 100, currency: 'EUR', quantity: 1, recipient_pubkey: customerPubkey,
+        issuance_warrant: await freshWarrant(k, 100, 'EUR'),
+      })
+      check("K' sells through the portal", sale.status === 201 || sale.status === 200, `${sale.status} ${sale.body.slice(0, 160)}`)
+      // C pays the stall with that coupon: it comes home to A, whose dm-poll raises the alert.
+      const notified = await owner.waitForFunction(() => {
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i)!
+          if (!key.startsWith('imani-wallet:notifications:')) continue
+          if ((localStorage.getItem(key) ?? '').includes('a till that is not on your list')) return true
+        }
+        return false
+      }, undefined, { timeout: 5_000 }).then(() => true, () => false)
+      if (!notified) await customerPaysStall(customer, owner, '1.00')
+      const alerted = await owner.waitForFunction(() => {
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i)!
+          if (!key.startsWith('imani-wallet:notifications:')) continue
+          if ((localStorage.getItem(key) ?? '').includes('a till that is not on your list')) return true
+        }
+        return false
+      }, undefined, { timeout: 180_000 }).then(() => true, () => false)
+      check('E11 A raises "a till not on your list" when that coupon comes home', alerted)
+      const alerts = await owner.evaluate(() => {
+        let n = 0
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i)!
+          if (key.startsWith('imani-wallet:notifications:')) n += ((localStorage.getItem(key) ?? '').match(/homecoming:/g) ?? []).length
+        }
+        return n
+      })
+      check('E11 a coupon from a till on the list (B3, B5) raises nothing: exactly one alert', alerts === 1, String(alerts))
+    }
+  }
+
+  if (b5) {
+    console.log('\nPhase 6: past its expiry the till opens Redeem only (E12)')
+    const page = await (await context(owner.context().browser()!, 'B5-expired')).newPage()
+    const state = await b5.b5.context().storageState()
+    await page.context().addCookies(state.cookies)
+    const origin = state.origins.find((o) => o.origin === BASE)
+    await page.goto(`${BASE}/terminal/unlock`, { waitUntil: 'load' })
+    await page.evaluate((items) => { for (const { name, value } of items) localStorage.setItem(name, value) }, origin?.localStorage ?? [])
+    const token = await page.evaluate(() => (JSON.parse(localStorage.getItem('imani-wallet:terminal') || '{}') as { token?: string }).token ?? '')
+    const expiresAt = token ? Number(parseVoucherToken(token).voucher.expiresAt) : 0
+    await page.clock.setFixedTime((expiresAt + 3600) * 1000)
+    const home = await unlockTill(page)
+    check('E12 past its expiry B5 opens Redeem only, with "Ask the owner to renew it", and no Sell', /Redeem/.test(home) && !/\bSell\b/.test(home.replace(/Selling/g, '')) && /authority ran out on .* Ask the owner to renew it/.test(home), home.slice(0, 300))
+    await page.evaluate(() => {
+      window.history.pushState({}, '', '/sell')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    await page.getByTestId('terminal-name').waitFor({ timeout: 15_000 }).catch(() => {})
+    check('E12 an expired B5 has no Sell route', !page.url().endsWith('/sell'), page.url())
+    await snap(page, 'p6-e12-expired')
+  }
+}
+
+/** Whether the opened transaction reads "Handled by" the named till. */
+async function handledBy(owner: Page, name: string): Promise<boolean> {
+  const id = await owner.evaluate(async () => {
+    const dbs = (await indexedDB.databases()).filter((d) => (d.name || '').startsWith('imani-wallet'))
+    for (const info of dbs) {
+      const db = await new Promise<IDBDatabase>((ok, ko) => { const r = indexedDB.open(info.name!); r.onsuccess = () => ok(r.result); r.onerror = () => ko(r.error) })
+      for (const store of Array.from(db.objectStoreNames)) {
+        const rows = await new Promise<unknown[]>((ok) => { const r = db.transaction(store).objectStore(store).getAll(); r.onsuccess = () => ok(r.result); r.onerror = () => ok([]) })
+        for (const row of rows as Array<Record<string, unknown>>) {
+          if (row.type === 'issued' && typeof row.terminalPubkey === 'string') return String(row.id)
+        }
+      }
+    }
+    return ''
+  }).catch(() => '')
+  if (!id) return false
+  await owner.goto(`${BASE}/transaction/${encodeURIComponent(id)}`, { waitUntil: 'load' })
+  return owner.waitForFunction((n) => new RegExp(`Handled by\\s*${n}`).test(document.body.innerText), name, { timeout: 30_000 }).then(() => true, () => false)
+}
+
+/** Waits for a row in A's own history matching `pred`. */
+async function waitForOwnerRow(owner: Page, pred: (r: Record<string, unknown>) => boolean): Promise<boolean> {
+  const source = `(async () => {
+    const pred = ${pred.toString()}
+    const dbs = (await indexedDB.databases()).filter((d) => (d.name || '').startsWith('imani-wallet'))
+    for (const info of dbs) {
+      const db = await new Promise((ok, ko) => { const r = indexedDB.open(info.name); r.onsuccess = () => ok(r.result); r.onerror = () => ko(r.error) })
+      for (const store of Array.from(db.objectStoreNames)) {
+        const rows = await new Promise((ok) => { const r = db.transaction(store).objectStore(store).getAll(); r.onsuccess = () => ok(r.result); r.onerror = () => ok([]) })
+        for (const row of rows) if (pred(row)) return true
+      }
+    }
+    return false
+  })()`
+  for (let i = 0; i < 40; i++) {
+    await owner.goto(`${BASE}/merchant/coupons`, { waitUntil: 'load' })
+    if ((await owner.evaluate(source).catch(() => false)) as boolean) return true
+    await owner.waitForTimeout(5_000)
+  }
+  return false
+}
+
+interface RosterRowView {
+  voucherId?: string
+  status?: string
+  revokedAt?: number
+  role?: string
+  attestation?: { expires_at: string }
+  renewal?: { token?: string; voucherId?: string; delivered?: boolean }
+  credentials?: Array<{ voucherId: string; revokedAt?: number }>
+}
+
+async function rosterRow(page: Page, name: string): Promise<RosterRowView | null> {
+  const source = `(() => {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (!key || !key.startsWith('imani-wallet:terminals:')) continue
+      const rows = JSON.parse(localStorage.getItem(key) || '[]')
+      const row = rows.filter((r) => r.name === ${JSON.stringify(name)}).sort((a, b) => (b.credentialAt ?? b.enrolledAt) - (a.credentialAt ?? a.enrolledAt))[0]
+      if (row) return row
+    }
+    return null
+  })()`
+  return (await page.evaluate(source).catch(() => null)) as RosterRowView | null
+}
+
+/** Polls the roster on `page` for the named row matching `pred`, for up to two minutes. */
+async function waitRosterRow(
+  page: Page,
+  name: string,
+  pred: (r: RosterRowView) => boolean,
+  between?: () => Promise<void>,
+): Promise<RosterRowView | null> {
+  for (let i = 0; i < 40; i++) {
+    const row = await rosterRow(page, name)
+    if (row && pred(row)) return row
+    if (between && i % 4 === 3) await between().catch(() => {})
+    await page.waitForTimeout(3_000)
+  }
+  return null
+}
+
+/** Copies A's logged-in state into another page, so a moved clock can read A's list. */
+async function copyLogin(from: Page, to: Page): Promise<void> {
+  const state = await from.context().storageState()
+  await to.context().addCookies(state.cookies)
+  await to.goto(`${BASE}/onboarding`, { waitUntil: 'load' })
+  const origin = state.origins.find((o) => o.origin === BASE)
+  await to.evaluate((items) => { for (const { name, value } of items) localStorage.setItem(name, value) }, origin?.localStorage ?? [])
+  // The session key is held in memory, so unlock with the passphrase on the copy.
+  await to.goto(`${BASE}/`, { waitUntil: 'load' })
+  const pass = to.locator('input[placeholder="Passphrase"]')
+  if (await pass.waitFor({ timeout: 15_000 }).then(() => true, () => false)) {
+    await pass.fill(TEST_PASSPHRASE)
+    await to.getByRole('button', { name: /unlock/i }).first().click()
+    await to.waitForTimeout(3_000)
+  }
+}
+
+/** NUT-07 state of a token, through the gateway's public check. */
+async function tokenState(token: string): Promise<string> {
+  const res = await fetch(`${BASE}/api/v1/wallet/token/validate`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }),
+  }).catch(() => null)
+  if (!res?.ok) return `http ${res?.status ?? 0}`
+  return String(((await res.json()) as { state?: string }).state ?? '')
+}
+
+/** The ISSUED token of a voucher the owner minted, polled. */
+async function fetchToken(ownerSk: string, voucherId: string): Promise<string> {
+  for (let i = 0; i < 30; i++) {
+    const got = await asKey(ownerSk, 'GET', `/api/v1/wallet/vouchers/${encodeURIComponent(voucherId)}`)
+    const answer = JSON.parse(got.body || '{}') as { status?: string; token?: string }
+    if (answer.status === 'ISSUED' && answer.token) return answer.token.trim()
+    await new Promise((r) => setTimeout(r, 2_000))
+  }
+  return ''
+}
+
+/** A credential the stall attests, minted with the owner's key, as the app's Add terminal does. */
+async function mintAttested(ownerSk: string, stall: string, lock: string, role: string, name: string): Promise<{ token: string; voucherId: string; error: string }> {
+  const T = Math.floor(Date.now() / 1000) + 365 * 86_400 + 600
+  const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
+  const pre = ['imani-terminal-attestation', '1', stall, lock, role, String(T), nonce].join('\u001f')
+  const sig = bytesToHex(schnorr.sign(sha256(new TextEncoder().encode(pre)), hexToBytes(ownerSk)))
+  const body = {
+    face_value: 1, face_unit: 'sat', face_decimals: 0, backing_strategy: 'PROPORTIONAL',
+    issuer_id: stall, memo: 'Imani terminal credential', expires_in_days: 365,
+    merchant_metadata: { terminal: true, stall_pubkey: stall, role, lock_key: lock, name, owner_attestation: { v: '1', expires_at: String(T), nonce, sig } },
+  }
+  const minted = await asKey(ownerSk, 'POST', '/api/v1/wallet/vouchers', body, {
+    'Idempotency-Key': crypto.randomUUID(),
+    'X-Idempotency-Expires-At': new Date(T * 1000).toISOString().replace('.000Z', 'Z'),
+  })
+  const voucherId = (JSON.parse(minted.body || '{}') as { voucher_id?: string }).voucher_id ?? ''
+  if (!voucherId) return { token: '', voucherId: '', error: `${minted.status} ${minted.body.slice(0, 200)}` }
+  return { token: await fetchToken(ownerSk, voucherId), voucherId, error: '' }
+}
+
+/** NIP-17/59 gift wrap, as `terminalDelivery.wrapMessage` builds it (inlined: tsx cannot load the app's aliases). */
+function wrapMessage(senderKey: Uint8Array, recipient: string, content: string): Event {
+  const now = Math.floor(Date.now() / 1000)
+  const rumor = { kind: 14, pubkey: getPublicKey(senderKey), created_at: now, content, tags: [['p', recipient]] }
+  const seal = finalizeEvent({ kind: 13, created_at: now, tags: [], content: nip44.encrypt(JSON.stringify(rumor), nip44.getConversationKey(senderKey, recipient)) }, senderKey)
+  const throwaway = crypto.getRandomValues(new Uint8Array(32))
+  return finalizeEvent({ kind: 1059, created_at: now, tags: [['p', recipient]], content: nip44.encrypt(JSON.stringify(seal), nip44.getConversationKey(throwaway, recipient)) }, throwaway)
+}
+
+/** A NIP-17 gift wrap from `sk` to `recipient`, mirrored to the gateway (as `devicePublisher` does). */
+async function dmFrom(sk: string, recipient: string, content: string): Promise<boolean> {
+  const wrap = wrapMessage(hexToBytes(sk), recipient, content)
+  const res = await asKey(sk, 'POST', '/api/v1/nostr/events', {
+    id: wrap.id, pubkey: wrap.pubkey, createdAt: wrap.created_at, kind: wrap.kind, tags: wrap.tags, content: wrap.content, sig: wrap.sig,
+  })
+  return res.status >= 200 && res.status < 300
+}
+
+const dmAsStall = (ownerSk: string, to: string, content: string) => dmFrom(ownerSk, to, content)
+
+/** C pays A, the stall, with what it holds of the stall's coupons, through A's Redeem request. */
+async function customerPaysStall(customer: Page, owner: Page, amount: string): Promise<void> {
+  await owner.goto(`${BASE}/redeem`, { waitUntil: 'load' })
+  const field = owner.getByLabel(/Amount/)
+  if (!(await field.waitFor({ timeout: 30_000 }).then(() => true, () => false))) return
+  await field.fill(amount)
+  await owner.getByRole('button', { name: 'Show payment code' }).click()
+  await owner.getByText('Waiting for payment').waitFor({ timeout: 30_000 }).catch(() => {})
+  const request = await owner.evaluate(() => {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)!
+      if (!key.startsWith('imani-wallet:payment-requests:')) continue
+      const rows = JSON.parse(localStorage.getItem(key) ?? '[]') as Array<{ requestString: string }>
+      if (rows[0]) return rows[0].requestString
+    }
+    return ''
+  })
+  if (request) await customerPays(customer, request)
 }
 
 /**
