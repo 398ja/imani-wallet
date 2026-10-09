@@ -11,7 +11,7 @@
  * told. The check stays quiet until this device has synced the roster once, so a fresh restore
  * cannot raise a false alarm.
  */
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
@@ -38,6 +38,9 @@ function warrantFor(voucherId: string): string {
 }
 
 const synced = () => localStorage.setItem(`imani-wallet:terminals-synced:${STALL}`, '1')
+
+// The default refresh reads the published roster from the network; here it has nothing newer.
+vi.mock('../terminalRosterSyncNet', () => ({ syncRosterNow: async () => true }))
 
 beforeEach(() => localStorage.clear())
 
@@ -94,15 +97,36 @@ describe('raising the alert', () => {
     _resetInboxCacheForTests()
     synced()
     recordTerminal(STALL, { terminalPubkey: KEY, name: 'Till', role: 'issue-and-redeem', enrolledAt: 1, voucherId: 'cred-1', token: 't' })
+    const refresh = async () => true
 
-    expect(raiseHomecomingAlert(STALL, warrantFor('cred-1'), 'coupon-a')).toBe('ok')
+    expect(await raiseHomecomingAlert(STALL, warrantFor('cred-1'), 'coupon-a', refresh)).toBe('ok')
     expect(listNotifications(STALL)).toEqual([])
 
-    expect(raiseHomecomingAlert(STALL, warrantFor('cred-x'), 'coupon-b')).toBe('unknown-till')
-    expect(raiseHomecomingAlert(STALL, warrantFor('cred-x'), 'coupon-b')).toBe('unknown-till')
+    expect(await raiseHomecomingAlert(STALL, warrantFor('cred-x'), 'coupon-b', refresh)).toBe('unknown-till')
+    expect(await raiseHomecomingAlert(STALL, warrantFor('cred-x'), 'coupon-b', refresh)).toBe('unknown-till')
     const items = listNotifications(STALL)
     expect(items).toHaveLength(1)
     expect(items[0]).toMatchObject({ body: HOMECOMING_ALERT, url: '/settings/terminals' })
+  })
+
+  // Found by the local gate: the owner's second phone had synced the roster at login, the first
+  // phone then renewed a till, and that till's next sale reached the second phone first. A roster
+  // older than the till is not a till the owner never set up: read the list again before alerting.
+  it('reads the roster again before alerting, and stays quiet when the till is there now', async () => {
+    const { raiseHomecomingAlert } = await import('../terminalHomecoming')
+    const { listNotifications, _resetInboxCacheForTests } = await import('../notifications/inbox')
+    _resetInboxCacheForTests()
+    synced()
+    let asked = 0
+    const refresh = async () => {
+      asked += 1
+      recordTerminal(STALL, { terminalPubkey: KEY, name: 'Till', role: 'issue-and-redeem', enrolledAt: 1, voucherId: 'cred-new', token: 't' })
+      return true
+    }
+
+    expect(await raiseHomecomingAlert(STALL, warrantFor('cred-new'), 'coupon-c', refresh)).toBe('ok')
+    expect(asked).toBe(1)
+    expect(listNotifications(STALL)).toEqual([])
   })
 })
 
@@ -120,8 +144,8 @@ describe("trigger (a): dm-poll's redemption of a coupon coming home", () => {
     // Another stall that has synced its own list: a coupon it did not issue is not its till's.
     localStorage.setItem(`imani-wallet:terminals-synced:${'e'.repeat(64)}`, '1')
     homecomingAlertFor({ voucherId: 'v' }, 'e'.repeat(64), token)
-    expect(listNotifications('e'.repeat(64))).toEqual([])
     homecomingAlertFor({ voucherId: 'v' }, stall, token)
-    expect(listNotifications(stall).map((n) => n.body)).toEqual([HOMECOMING_ALERT])
+    await vi.waitFor(() => expect(listNotifications(stall).map((n) => n.body)).toEqual([HOMECOMING_ALERT]))
+    expect(listNotifications('e'.repeat(64))).toEqual([])
   })
 })

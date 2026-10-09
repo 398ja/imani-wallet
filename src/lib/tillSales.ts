@@ -8,7 +8,7 @@ import { parseCredentialSecret } from './terminalWarrant'
 import { wrapMessage, type Rumor, type WrapPublisher } from './terminalDelivery'
 import { allTerminals, noteTerminalUse } from './terminalRoster'
 import { clampNote } from './note'
-import { raiseHomecomingAlert } from './terminalHomecoming'
+import { raiseHomecomingAlert, type RosterRefresh } from './terminalHomecoming'
 
 /**
  * A till's sales reach the stall's own books (#160 phase 6, wallet#202, plan 2.1, Q1 (a)).
@@ -364,6 +364,8 @@ export interface CollectDeps {
   write(row: TransactionRow): Promise<void>
   trustedServiceKeys?: readonly string[]
   now?: number
+  /** Read the published roster again before alerting on an unknown till (default: the network). */
+  refreshRoster?: RosterRefresh
 }
 
 function readCursor(stall: string): number | undefined {
@@ -413,7 +415,7 @@ export async function collectTillSales(stallPubkey: string, deps: CollectDeps): 
       if (await deps.has(id)) continue
       // Trigger (b) of the home-coming check (#160 phase 6, decision 5 Q2): a sale under a
       // credential the roster never had is filed (the customer paid) and marked on the row.
-      const verdict = raiseHomecomingAlert(stall, toTransaction(row).issuanceWarrant, id)
+      const verdict = await raiseHomecomingAlert(stall, toTransaction(row).issuanceWarrant, id, deps.refreshRoster)
       await deps.write(verdict === 'unknown-till' ? ({ ...row, homecomingAlert: verdict } as unknown as TransactionRow) : row)
       filed += 1
       const tx = toTransaction(row)
