@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-10-09
+
+A new merchant sells from the first render (#114). Pairs with imani-gateway-core 0.21.1
+(nap-java 0.9.1: `/auth/session` resolves the ACL live).
+
+### Fixed
+
+- **Re-read `/auth/session` after a login that lost the race to the stall record (#114, #217).**
+  A merchant who publishes their stall record and logs in at once can beat the gateway's ACL,
+  so the login answers customer while this device holds an active stall record, and the home
+  showed no Sell until a reload. Only when the two disagree, the wallet re-reads
+  `/auth/session` up to twice (after 500 ms and 1.5 s). It never grants anything itself: the
+  session is whatever the server answers, and any failure keeps the customer view (fail closed).
+
+### Tests
+
+- The terminal e2e gate asserts a freshly registered stall shows Sell on its first render, with
+  publish and login forced to race (#217).
+
 ## [0.16.0] - 2026-10-09
 
 The stall owner attests each terminal credential, wallet half (imani-wallet#160 decision 5, step
