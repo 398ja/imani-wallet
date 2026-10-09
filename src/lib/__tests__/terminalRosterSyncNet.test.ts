@@ -33,8 +33,11 @@ vi.mock('../relay', () => ({
 vi.mock('../gatewayNostr', () => ({ gatewayEvents: async () => [...gatewayStore] }))
 vi.mock('../transferSignature', () => ({ mirrorToGateway: async (e: Event) => (gatewayStore.push(e), true) }))
 vi.mock('../legacyBridge', () => ({ legacyApi: async () => ({}) }))
+const collectEnrolled = vi.hoisted(() => vi.fn(async () => 0))
+vi.mock('../terminalDeliveryNet', () => ({ collectEnrolled }))
+vi.mock('../terminalRevoke', () => ({ markSpentElsewhere: async () => 0 }))
 
-const { fetchRosterPlaintext, publishRosterPlaintext, ROSTER_KIND, ROSTER_D_TAG } = await import('../terminalRosterSyncNet')
+const { fetchRosterPlaintext, publishRosterPlaintext, syncRosterNow, ROSTER_KIND, ROSTER_D_TAG } = await import('../terminalRosterSyncNet')
 const { rosterPayload } = await import('../terminalRosterSync')
 const { RELAY_MAX_EVENT_BYTES } = await import('../chunkedRecord')
 
@@ -86,5 +89,19 @@ describe('the roster event', () => {
   it('answers null for a stall that never published one', async () => {
     relayStore.push(finalizeEvent({ kind: 1, created_at: 1, tags: [], content: 'x' }, hexToBytes(SK)))
     expect(await fetchRosterPlaintext(PK)).toBeNull()
+  })
+})
+
+/**
+ * Found by the local gate (#160 phase 6, E4). A restored phone merged a roster whose till was
+ * still Waiting when it was published. The till's "enrolled" DM had come and gone, and only the
+ * Terminals screen's poll ever read it, so the till read Waiting there for good. The login sync
+ * collects the enrolled notices once the merge is in.
+ */
+describe('the login sync', () => {
+  it('collects the enrolled notices after merging, so a merged Waiting till can read In service', async () => {
+    collectEnrolled.mockClear()
+    await syncRosterNow(PK)
+    expect(collectEnrolled).toHaveBeenCalledWith(PK)
   })
 })

@@ -26,6 +26,15 @@ import {
   type VoucherValidation,
 } from './voucherToken'
 
+/** `terminalDelivery.ENROLLED_DM_TYPE`, matched here without loading the delivery module. */
+function isEnrolledMessage(content: string): boolean {
+  try {
+    return (JSON.parse(content) as { type?: unknown })?.type === 'imani-terminal-enrolled/1'
+  } catch {
+    return false
+  }
+}
+
 /**
  * The JSON payload the gateway actually sends.
  *
@@ -454,6 +463,15 @@ export function createDmCryptoAdapter(): CryptoAdapter {
         if (isTillSaleMessage(rumor.content)) {
           const stall = getSigner().pubkey
           void import('./tillSalesNet').then((m) => m.collectTillSalesForOwner(stall)).catch(() => 0)
+        }
+        /**
+         * A till saying it holds its credential (#160 phase 6, found by the local gate). Read only
+         * by the Terminals screen's poll before, so an owner on any other screen, or on a restored
+         * phone, kept the till Waiting. The collector verifies the notice against the roster.
+         */
+        if (isEnrolledMessage(rumor.content)) {
+          const stall = getSigner().pubkey
+          void import('./terminalDeliveryNet').then((m) => m.collectEnrolled(stall)).catch(() => 0)
         }
 
         const transferSignature = parseTransferSignature(rumor.content)

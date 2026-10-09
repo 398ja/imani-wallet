@@ -15,10 +15,16 @@ import { hexToBytes } from '@noble/hashes/utils'
  * `vi.hoisted` because `vi.mock` is hoisted above the imports, so its factory
  * cannot close over an ordinary `const` declared below it.
  */
-const signerState = vi.hoisted(() => ({ privkey: null as string | null }))
+const signerState = vi.hoisted(() => ({ privkey: null as string | null, pubkey: '' }))
+const collectEnrolled = vi.hoisted(() => vi.fn(async () => 0))
+
+vi.mock('../terminalDeliveryNet', () => ({ collectEnrolled }))
 
 vi.mock('../nap', () => ({
   getSigner: () => ({
+    get pubkey() {
+      return signerState.pubkey
+    },
     privkeyHex() {
       if (!signerState.privkey) throw new Error('The wallet is locked.')
       return signerState.privkey
@@ -125,6 +131,22 @@ describe('dm-poll CryptoAdapter', () => {
       signerState.privkey = bytesToHex(generateSecretKey())
 
       expect(await createDmCryptoAdapter().unwrapNip17Dm(wrap as never, '')).toBeNull()
+    })
+
+    // #160 phase 6, found by the local gate (B5, E4). A till's "enrolled" DM was read only by the
+    // Terminals screen's poll, so an owner on any other screen, or on a restored phone, kept the
+    // till Waiting. dm-poll opening one must ask the owner's app to collect it now.
+    it('asks for the enrolled notices to be collected when a till says it is enrolled', async () => {
+      const stallSk = generateSecretKey()
+      const tillSk = generateSecretKey()
+      signerState.privkey = bytesToHex(stallSk)
+      signerState.pubkey = getPublicKey(stallSk)
+      const content = JSON.stringify({ type: 'imani-terminal-enrolled/1', voucher_id: 'v1', terminal_pubkey: getPublicKey(tillSk) })
+      const wrap = nip17.wrapEvent(tillSk, { publicKey: getPublicKey(stallSk) }, content)
+
+      await createDmCryptoAdapter().unwrapNip17Dm(wrap as never, '')
+
+      await vi.waitFor(() => expect(collectEnrolled).toHaveBeenCalledWith(getPublicKey(stallSk)))
     })
 
     /**
