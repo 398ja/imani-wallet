@@ -106,6 +106,19 @@ function sameKey(a: string | undefined, b: string): boolean {
  * the mint state, and refuses anything else.
  */
 export async function reportLicence(options: ReportOptions): Promise<ReportOutcome> {
+  // One report at a time per account: the dashboard and the Terminals screen both ask when they
+  // load, and two posts of one licence are one too many (seen on the local gate).
+  const key = options.pubkey.toLowerCase()
+  const running = inFlight.get(key)
+  if (running) return running
+  const attempt = reportOnce(options).finally(() => inFlight.delete(key))
+  inFlight.set(key, attempt)
+  return attempt
+}
+
+const inFlight = new Map<string, Promise<ReportOutcome>>()
+
+async function reportOnce(options: ReportOptions): Promise<ReportOutcome> {
   // nosemgrep: imani-caller-supplied-clock
   // CLIENT-side and app-built: only decides whether to send, the server decides with its own clock.
   const now = options.now ?? Math.floor(Date.now() / 1000)
