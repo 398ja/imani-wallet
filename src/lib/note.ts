@@ -7,9 +7,11 @@
  *
  * Why it must be capped at all: a till sends each sale row to the stall as a NIP-17 gift wrap
  * (`tillSales.ts`), and one row never splits. An uncapped note made a single row's wrap 76,965
- * bytes, over strfry's 65,536 `maxEventSize`. At 280 units the worst case is 280 three-byte
- * characters, 840 UTF-8 bytes (a 4-byte character is two units, so at most 560 bytes), which
- * leaves a capped row far inside the 24,000-byte wrap budget next to its 2 to 2.5 KB warrant.
+ * bytes, over strfry's 65,536 `maxEventSize`. At 280 units the worst case, measured as the wrap
+ * budget measures it (escaped, inside the rumor's JSON), is about 1,960 bytes: 280 control
+ * characters or lone surrogates at 7 bytes each (`\\u0001` escaped twice). Raw UTF-8 it is at most
+ * 840 bytes. Either way a capped row stays far inside the 24,000-byte wrap budget next to its
+ * warrant (review rw1).
  */
 export const NOTE_MAX_CHARS = 280
 

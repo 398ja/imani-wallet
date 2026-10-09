@@ -24,7 +24,11 @@ with gateway-customer 0.24.1 (review NITs only); renewal needs no server change.
   owner's own 7376. Collected at login, on the Vouchers list and when dm-poll sees one. Each wrap
   is budgeted in UTF-8 bytes to stay at or under 55,121 bytes, inside strfry's 65,536.
 - **The Note on Sell and cashback is capped at 280 characters,** the portal's own cashback memo
-  limit, so a long or non-ASCII note cannot push a till's sale past the relay.
+  limit, so a long or non-ASCII note cannot push a till's sale past the relay. Its worst case is
+  about 1,960 bytes as the wrap budget counts it (escaped in the sale's JSON), 840 bytes raw.
+- **A terminal's name is capped at 64 characters.** The name rides in every warrant the till
+  builds, and the portal refuses a warrant over 4,096 characters, so a very long name left a till
+  whose every sale was refused.
 - **The Vouchers list names the till** ("· Sold on Front counter", "(no longer in service)").
 - **The terminal list syncs across the owner's devices.** An encrypted kind-30078 event
   (`d=imani:terminals`), chunked above the relay budget, merged by a property-tested join that
