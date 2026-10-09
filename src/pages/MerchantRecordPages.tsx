@@ -28,6 +28,8 @@ import {
 } from '../components/ui'
 import { present } from '../lib/detailRows'
 import { onWalletChanged } from '../lib/wallet'
+import { handlerFor } from '../lib/terminalAttribution'
+import { collectTillSalesForOwner } from '../lib/tillSalesNet'
 import { repairedTransactions } from '../lib/redemptionLedger'
 import type { WalletTransaction } from '../lib/transactions'
 import { entryKey, groupHistory } from '../lib/historyGroups'
@@ -194,8 +196,13 @@ export function MerchantTransactionsPage() {
  * heading that counted a set the list is not showing is the kind of quiet
  * disagreement that makes a merchant distrust the whole screen.
  */
-export function IssuedCouponsPage() {
+export function IssuedCouponsPage({ stallPubkey }: { stallPubkey?: string } = {}) {
   const state = useMerchantTransactions()
+  // A till's sales arrive by DM (#160 phase 6, wallet#202): look for new ones whenever this list
+  // opens, so a sale made on a till shows here without a re-login.
+  useEffect(() => {
+    if (stallPubkey) void collectTillSalesForOwner(stallPubkey)
+  }, [stallPubkey])
   const [includeExpired, setIncludeExpired] = useState(false)
 
   // Recomputed only when the rows or the filter change, which is a cost
@@ -281,7 +288,7 @@ export function IssuedCouponsPage() {
             : 'None yet. Vouchers you sell and cashback you issue show up here.'}
         </EmptyRow>
       ) : (
-        visible.map((tx) => <IssuedCouponRow key={tx.id} tx={tx} now={state?.loadedAt ?? 0} />)
+        visible.map((tx) => <IssuedCouponRow key={tx.id} tx={tx} now={state?.loadedAt ?? 0} stallPubkey={stallPubkey} />)
       )}
     </ListFrame>
   )
@@ -785,7 +792,7 @@ function EvidenceRow({ label, line }: { label: string; line: EvidenceLine }) {
   )
 }
 
-function IssuedCouponRow({ tx, now }: { tx: WalletTransaction; now: number }) {
+function IssuedCouponRow({ tx, now, stallPubkey }: { tx: WalletTransaction; now: number; stallPubkey?: string }) {
   // Expiry is the one thing a merchant gets asked about after the sale ("how
   // long do I have?"), so it leads the second line rather than hiding in detail.
   // `now` is the load time, not a fresh clock read — see useMerchantTransactions.
@@ -826,6 +833,11 @@ function IssuedCouponRow({ tx, now }: { tx: WalletTransaction; now: number }) {
           {tx.counterparty ? ` · ${identityLabel(tx.counterparty, customer)}` : ''}
           {/* A cashback's claim state comes from the portal, which does know it. */}
           {claimLabel ? ` · ${claimLabel}` : ''}
+          {/* Which till sold it (#160 phase 6, F3), named from the roster, "(no longer in
+              service)" once revoked. Absent on the owner's own sales. */}
+          {tx.terminalPubkey && stallPubkey
+            ? ` · Sold on ${handlerFor({ terminalPubkey: tx.terminalPubkey }, stallPubkey).label}`
+            : ''}
         </p>
       </div>
       <p className="shrink-0 text-right text-mono-900 dark:text-mono-50">
