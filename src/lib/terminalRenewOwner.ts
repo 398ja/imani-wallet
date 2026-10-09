@@ -196,7 +196,7 @@ async function runRenewal(stallPubkey: string, row: TerminalRecord, deps: RenewD
     // A definitive refusal, or a wrong credential that was spent: nothing live is left behind.
     if (
       error instanceof CredentialMintError &&
-      ((error.defect && !error.unspentToken) || isDefinitiveRefusal(error.status))
+      ((error.defect && !error.unspentToken) || isDefinitiveRefusal(error.status, error.code))
     ) {
       updateTerminal(stallPubkey, row.terminalPubkey, (r) => ({ ...r, renewal: undefined }))
       return 'cleared'

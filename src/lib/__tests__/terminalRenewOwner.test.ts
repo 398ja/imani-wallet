@@ -135,6 +135,24 @@ describe('Renew mints to the same key and DMs it with renews', () => {
   })
 })
 
+describe('a renewal racing itself (found by the local gate, E8)', () => {
+  // The Renew tap and the screen's resume can send the same Idempotency-Key at once. The second
+  // gets 409 IDEMPOTENCY_IN_PROGRESS: the first is minting, so the renewal must not be dropped.
+  it('keeps the renewal on 409 IDEMPOTENCY_IN_PROGRESS, and still drops it on a plain refusal', async () => {
+    recordTerminal(STALL, inService())
+    const busy = transport()
+    busy.post = vi.fn(async () => new Response(JSON.stringify({ error: { code: 'IDEMPOTENCY_IN_PROGRESS', message: 'in progress' } }), { status: 409 }))
+    const out = await startRenewal(STALL, DEVICE, { transport: busy, api: spendApi(), stallSigner, send: async () => true, now: 5_000 })
+    expect(out).toMatchObject({ started: false, reason: 'pending' })
+    expect(allTerminals(STALL)[0].renewal).toBeDefined()
+
+    const refused = transport()
+    refused.post = vi.fn(async () => new Response(JSON.stringify({ error: { code: 'TERMINAL_PENDING_LIMIT', message: 'two waiting' } }), { status: 409 }))
+    await resumeRenewal(STALL, { transport: refused, api: spendApi(), send: async () => true })
+    expect(allTerminals(STALL)[0].renewal).toBeUndefined()
+  })
+})
+
 describe('the owner retires the old credential only on the enrolled DM for the NEW voucher', () => {
   async function started() {
     recordTerminal(STALL, inService())
