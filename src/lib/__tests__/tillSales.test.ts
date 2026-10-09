@@ -198,6 +198,22 @@ describe('the till sends, and keeps what did not land', () => {
     expect(pendingTillSales()).toBe(0)
   })
 
+  // Review rv6 (W1-M1): NIP-17 encrypts twice and NIP-44 pads in steps, so a 12-part sale (about
+  // 25 KB of rows) became a 66,045-byte wrap, over strfry's 65,536 maxEventSize (the gc#207 H1
+  // step). The relay refused it; only the gateway mirror held it. Every wrap must fit the relay.
+  it('splits a large sale so every wrap fits the relay (strfry maxEventSize 65,536)', async () => {
+    const w = terminalWarrant()
+    const rows = Array.from({ length: 30 }, (_, i) => saleRow(w, `v-${i}-${'x'.repeat(30)}`))
+    const sent: Event[] = []
+    expect(await sendTillSale(rows, STALL, 'cred-1', tillSeal, { publish: async (e) => (sent.push(e), true) })).toBe(true)
+    for (const e of sent) expect(JSON.stringify(e).length).toBeLessThanOrEqual(65_536)
+    const filed = sent.flatMap((e) => {
+      const o = unwrapSealed(e, hexToBytes(STALL_SK))!
+      return saleRowsFromRumor(o.rumor, o.sealer, STALL, opts)!.rows
+    })
+    expect(filed).toHaveLength(30)
+  })
+
   it('queues a wrap that landed nowhere, and the next flush sends exactly it', async () => {
     const ok = await sendTillSale([saleRow()], STALL, 'cred-1', tillSeal, { publish: async () => false })
     expect(ok).toBe(false)

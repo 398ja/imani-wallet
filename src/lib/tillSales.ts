@@ -56,10 +56,14 @@ const OUTBOX_KEY = 'imani-wallet:terminal:sale-outbox'
 const CURSOR_KEY = (stall: string) => `imani-wallet:till-sales-cursor:${stall.toLowerCase()}`
 
 /**
- * NIP-44 caps a plaintext at 65,535 bytes. A row carries its warrant, whose credential secret is
- * 1.5 to 2.5 KB, so a split sale is sent as several wraps when one would not fit.
+ * The content budget per wrap, sized on the EVENT the relay sees, not on NIP-44's plaintext cap.
+ * NIP-17 encrypts twice and NIP-44 pads in steps: content past about 28.6 KB makes a 66,045-byte
+ * kind 1059, over strfry's 65,536 `maxEventSize` (gc#207 H1, `GiftWrapSizeModel`). 24,000 is
+ * gc's own direct-send limit and keeps a wrap at or under 55,121 bytes (review rv6 W1-M1). A row
+ * is 2 to 2.5 KB, so a split sale goes as several wraps; one row never splits. Measured escaped,
+ * as the content sits inside the rumor's JSON (the sale is nested JSON, so escaping adds ~15%).
  */
-const MAX_WRAP_PLAINTEXT = 48_000
+const MAX_WRAP_PLAINTEXT = 24_000
 
 /** First run with no cursor: wraps from a day before the earliest terminal was added. */
 const FIRST_RUN_SLACK_SECONDS = 24 * 3600
@@ -96,7 +100,8 @@ function saleMessages(rows: readonly TransactionRow[], credentialVoucherId: stri
   let batch: TransactionRow[] = []
   for (const row of rows) {
     const next = [...batch, row]
-    if (batch.length > 0 && saleMessageJson(next, credentialVoucherId).length > MAX_WRAP_PLAINTEXT) {
+    // Measured as it sits in the rumor: JSON in a JSON string, every quote escaped.
+    if (batch.length > 0 && JSON.stringify(saleMessageJson(next, credentialVoucherId)).length > MAX_WRAP_PLAINTEXT) {
       out.push(saleMessageJson(batch, credentialVoucherId))
       batch = [row]
     } else {
