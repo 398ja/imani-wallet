@@ -7,6 +7,7 @@ import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
 import { parseCredentialSecret } from './terminalWarrant'
 import { wrapMessage, type Rumor, type WrapPublisher } from './terminalDelivery'
 import { allTerminals, noteTerminalUse } from './terminalRoster'
+import { clampNote } from './note'
 
 /**
  * A till's sales reach the stall's own books (#160 phase 6, wallet#202, plan 2.1, Q1 (a)).
@@ -61,7 +62,9 @@ const CURSOR_KEY = (stall: string) => `imani-wallet:till-sales-cursor:${stall.to
  * kind 1059, over strfry's 65,536 `maxEventSize` (gc#207 H1, `GiftWrapSizeModel`). 24,000 is
  * gc's own direct-send limit and keeps a wrap at or under 55,121 bytes (review rv6 W1-M1). A row
  * is 2 to 2.5 KB, so a split sale goes as several wraps; one row never splits. Measured escaped,
- * as the content sits inside the rumor's JSON (the sale is nested JSON, so escaping adds ~15%).
+ * as the content sits inside the rumor's JSON (the sale is nested JSON, so escaping adds ~15%),
+ * and in UTF-8 bytes, not UTF-16 units: a CJK note is three bytes a unit (review sh6). One row
+ * fits because its note is capped (`note.ts`, 280 units, at most 840 bytes).
  */
 const MAX_WRAP_PLAINTEXT = 24_000
 
@@ -89,19 +92,29 @@ export function isTillSaleMessage(content: string): boolean {
 export function saleMessageJson(rows: readonly TransactionRow[], credentialVoucherId: string): string {
   return JSON.stringify({
     type: SALE_DM_TYPE,
-    rows: rows.map((r) => toContent(toTransaction(r))),
+    // The note capped again here, whatever screen built the row: one row never splits, so an
+    // uncapped note is the one thing that could push a single wrap past the relay (review sh6).
+    rows: rows.map((r) => {
+      const tx = toTransaction(r)
+      return toContent(tx.memo === undefined ? tx : { ...tx, memo: clampNote(tx.memo) })
+    }),
     credential_voucher_id: credentialVoucherId,
   })
 }
 
-/** The record split so each wrap fits NIP-44. One row never splits. */
+const encoder = new TextEncoder()
+const utf8Bytes = (s: string): number => encoder.encode(s).length
+
+/** The record split so each wrap fits the relay. One row never splits. */
 function saleMessages(rows: readonly TransactionRow[], credentialVoucherId: string): string[] {
   const out: string[] = []
   let batch: TransactionRow[] = []
   for (const row of rows) {
     const next = [...batch, row]
-    // Measured as it sits in the rumor: JSON in a JSON string, every quote escaped.
-    if (batch.length > 0 && JSON.stringify(saleMessageJson(next, credentialVoucherId)).length > MAX_WRAP_PLAINTEXT) {
+    // Measured as it sits in the rumor: JSON in a JSON string, every quote escaped, and in UTF-8
+    // BYTES, which is what the relay counts (`.length` counts UTF-16 units: a CJK or emoji note
+    // read as a third of its size, review sh6).
+    if (batch.length > 0 && utf8Bytes(JSON.stringify(saleMessageJson(next, credentialVoucherId))) > MAX_WRAP_PLAINTEXT) {
       out.push(saleMessageJson(batch, credentialVoucherId))
       batch = [row]
     } else {
