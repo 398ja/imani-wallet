@@ -114,6 +114,11 @@ export function buildVoucherToken(
    * needs a warrant inside the coupon to verify against the coupon's issuer.
    */
   issuerKey: Uint8Array = schnorr.utils.randomSecretKey(),
+  /**
+   * Give each proof a C (a 33-byte stand-in for the mint's signature), as a real token has. Off by
+   * default so existing fixtures are byte-identical; on for a test that must show C never leaves.
+   */
+  withC = false,
 ): BuiltVoucherToken {
   const priv = issuerKey
   const pub = bytesToHex(schnorr.getPublicKey(priv))
@@ -142,13 +147,23 @@ export function buildVoucherToken(
 
   const blobHex = bytesToHex(voucherBlob(voucher))
   const proofs = amounts.map((amount, i) =>
-    bytes(
-      head(5, 2),
-      tstr('a'),
-      uint(amount),
-      tstr('s'),
-      tstr(JSON.stringify(['VOUCHER', blobHex, `wrapper-nonce-${i}`, []])),
-    ),
+    withC
+      ? bytes(
+          head(5, 3),
+          tstr('a'),
+          uint(amount),
+          tstr('s'),
+          tstr(JSON.stringify(['VOUCHER', blobHex, `wrapper-nonce-${i}`, []])),
+          tstr('c'),
+          bytes(head(2, 33), 2, ...new Uint8Array(32).fill(0x40 + i)),
+        )
+      : bytes(
+          head(5, 2),
+          tstr('a'),
+          uint(amount),
+          tstr('s'),
+          tstr(JSON.stringify(['VOUCHER', blobHex, `wrapper-nonce-${i}`, []])),
+        ),
   )
   const entry = bytes(head(5, 1), tstr('p'), head(4, proofs.length), ...proofs)
   const root = bytes(

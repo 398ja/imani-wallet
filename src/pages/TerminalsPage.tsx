@@ -4,6 +4,7 @@ import { Tablet, TriangleAlert } from 'lucide-react'
 import { Screen, BackLink, PageHeader, Panel, ListSection, Button, EmptyRow, Alert } from '../components/ui'
 import { Link } from 'react-router-dom'
 import { licenceStatus, type LicenceStatus } from '../lib/licenceStatus'
+import { reportLicence } from '../lib/licenceReport'
 import { mayServe } from '../lib/lapseService'
 import { formatDate } from '../lib/format'
 import { TERMINAL_ROLE_LABELS } from '../lib/terminalRole'
@@ -168,6 +169,9 @@ export function TerminalsPage({
     let cancelled = false
     void licenceStatus({ pubkey: stallPubkey }).then((status) => {
       if (!cancelled) setLicence(status)
+      // imani-wallet#197: the owner looking at their tills is a good moment to make sure the server
+      // knows the stall is licensed. Fire and forget, at most once per interval per licence.
+      if (status.decision.granted) void reportLicence({ pubkey: stallPubkey }).catch(() => undefined)
     })
     return () => {
       cancelled = true

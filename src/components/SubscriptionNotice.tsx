@@ -5,6 +5,7 @@ import { Clock } from 'lucide-react'
 import { formatDate } from '../lib/format'
 import { noticeFor, noticeText, NOTICE_URGENCY, type ExpiryNotice } from '../lib/expiryNotice'
 import { licenceStatus } from '../lib/licenceStatus'
+import { reportLicence } from '../lib/licenceReport'
 import { onWalletChanged } from '../lib/wallet'
 
 /**
@@ -49,6 +50,13 @@ export function SubscriptionNotice({ pubkey }: { pubkey: string }) {
       try {
         const status = await licenceStatus({ pubkey })
         if (live) setNotice(noticeFor(status, Math.floor(Date.now() / 1000)))
+        // imani-wallet#197: a licence that verifies here is also reported to the server, so the
+        // stall's paid tills can sell. This runs after login (the dashboard), and again whenever a
+        // licence or a renewal arrives by DM. Fire and forget: `reportLicence` sends at most once
+        // per interval for the same licence, and nothing it does can change this banner.
+        if (status.decision.granted) {
+          void reportLicence({ pubkey }).catch(() => undefined)
+        }
       } catch {
         if (live) setNotice(null)
       }
