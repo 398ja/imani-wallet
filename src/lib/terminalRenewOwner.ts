@@ -319,6 +319,11 @@ export async function completeRenewals(
       })()
       const spent = await revokeCredential(oldToken, metadata, api)
       oldRetired = spent.revoked || spent.reason === 'already-revoked'
+      // The device spends the old credential itself at unlock (Q2), so this spend can lose the
+      // race ("Proof already used", found by the local gate, E8). Ask the mint once more.
+      if (!spent.revoked && spent.reason === 'unreachable') {
+        oldRetired = (await credentialState(oldToken, api)) === CREDENTIAL_STATE.REVOKED
+      }
     }
     const renewal = row.renewal!
     updateTerminal(stallPubkey, row.terminalPubkey, (r) => ({

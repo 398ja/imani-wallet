@@ -171,6 +171,38 @@ describe('the owner retires the old credential only on the enrolled DM for the N
     expect(api.receive).not.toHaveBeenCalled()
     expect(allTerminals(STALL)[0].credentials!.find((c) => c.voucherId === OLD)!.revokedAt).toBe(6_000)
   })
+
+  it('a spend that lost the race to the device still retires the old credential when the mint says SPENT', async () => {
+    await started()
+    let spentNow = false
+    const api = {
+      validateToken: vi.fn(async () => ({ state: spentNow ? 'SPENT' : 'UNSPENT' })),
+      receive: vi.fn(async () => { spentNow = true; throw new Error('Proof already used') }),
+    }
+    expect(await completeRenewals(STALL, [{ voucherId: NEW, terminalPubkey: DEVICE }], api, 6_000)).toBe(1)
+    expect(allTerminals(STALL)[0].credentials!.find((c) => c.voucherId === OLD)).toMatchObject({ revokedAt: 6_000 })
+  })
+
+  // Found by the local gate (E8): the owner's spend raced the device's own (Q2) and lost, so the
+  // old entry stayed open in the history with its token. The mint later says SPENT: the next
+  // check marks the history entry revoked, and leaves the till itself in service.
+  it('marks a lost race in the history once the mint says the old credential is spent', async () => {
+    await started()
+    const lost = { ...spendApi(), receive: vi.fn(async () => { throw new Error('already being spent') }) }
+    expect(await completeRenewals(STALL, [{ voucherId: NEW, terminalPubkey: DEVICE }], lost, 6_000)).toBe(1)
+    expect(allTerminals(STALL)[0].credentials!.find((c) => c.voucherId === OLD)!.revokedAt).toBeUndefined()
+
+    const { markSpentElsewhere } = await import('../terminalRevoke')
+    const newToken = allTerminals(STALL)[0].token!
+    const mint = { validateToken: vi.fn(async (t: string) => ({ state: t === newToken ? 'UNSPENT' : 'SPENT' })) }
+    await markSpentElsewhere(STALL, mint, 7_000)
+
+    const [row] = allTerminals(STALL)
+    expect(row.revokedAt).toBeUndefined()
+    expect(row.voucherId).toBe(NEW)
+    expect(row.credentials!.find((c) => c.voucherId === OLD)).toMatchObject({ revokedAt: 7_000 })
+    expect(row.credentials!.find((c) => c.voucherId === OLD)!.token).toBeUndefined()
+  })
 })
 
 describe('a renewal not adopted in 24 hours has lapsed', () => {
