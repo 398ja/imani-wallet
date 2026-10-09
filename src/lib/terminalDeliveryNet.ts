@@ -3,7 +3,11 @@ import { SimplePool, type Event } from 'nostr-tools'
 import { getSigner } from './nap'
 import { publish, RELAY_URL } from './relay'
 import { mirrorToGateway } from './transferSignature'
-import { markInService, waitingTerminals } from './terminalRoster'
+import { liveTerminals, markInService, waitingTerminals } from './terminalRoster'
+import { adoptRenewRequest, completeRenewals } from './terminalRenewOwner'
+import { renewRequestFromRumor } from './terminalRenewal'
+import { legacyApi } from './legacyBridge'
+import type { CredentialMintApi } from './credentialRevocation'
 import { enrolledNotices, giftWrapsFor, unwrapSealed, type WrapPublisher } from './terminalDelivery'
 import { signedFetch, type RequestSigner } from './nip98'
 
@@ -91,10 +95,18 @@ export async function giftWraps(pubkey: string, sinceSeconds?: number): Promise<
  *
  * Reads only when something is waiting, so an owner with no setup in progress pays nothing.
  */
-export async function collectEnrolled(stallPubkey: string): Promise<number> {
+export async function collectEnrolled(
+  stallPubkey: string,
+  api?: () => Promise<CredentialMintApi>,
+): Promise<number> {
   const waiting = waitingTerminals(stallPubkey)
-  if (waiting.length === 0) return 0
-  const since = Math.floor(Math.min(...waiting.map((t) => t.enrolledAt)) / 1000)
+  // Renewals waiting for their device count too (#160 phase 6): the enrolled DM for the NEW
+  // voucher is what retires the old credential.
+  const renewing = liveTerminals(stallPubkey).filter((t) => t.renewal?.token)
+  if (waiting.length === 0 && renewing.length === 0) return 0
+  const since = Math.floor(
+    Math.min(...waiting.map((t) => t.enrolledAt), ...renewing.map((t) => t.renewal!.startedAt)) / 1000,
+  )
   const wraps = await giftWraps(stallPubkey, since)
   const notices = enrolledNotices(wraps, (wrap) =>
     getSigner().withPrivkey((key) => unwrapSealed(wrap, key)),
@@ -103,5 +115,43 @@ export async function collectEnrolled(stallPubkey: string): Promise<number> {
   for (const n of notices) {
     if (markInService(stallPubkey, n.terminalPubkey, n.voucherId)) changed += 1
   }
+  if (renewing.length > 0 && notices.length > 0) {
+    const mint = await (api ?? ownerMintApi)()
+    changed += await completeRenewals(stallPubkey, notices, mint)
+  }
   return changed
+}
+
+async function ownerMintApi(): Promise<CredentialMintApi> {
+  return (await legacyApi()) as unknown as CredentialMintApi
+}
+
+/**
+ * Renew requests from tills the owner's list lost (#160 phase 6, Q3): each one that is this
+ * stall's own, unspent credential, held by the till that sealed it, becomes a row the owner can
+ * Renew. Never throws.
+ *
+ * @returns how many rows were added or marked as asking
+ */
+export async function collectRenewRequests(stallPubkey: string, api?: () => Promise<CredentialMintApi>): Promise<number> {
+  try {
+    const since = Math.floor(Date.now() / 1000) - 30 * 86_400
+    const wraps = await giftWraps(stallPubkey, since)
+    const mint = await (api ?? ownerMintApi)()
+    let changed = 0
+    for (const wrap of wraps) {
+      const opened = getSigner().withPrivkey((key) => unwrapSealed(wrap, key))
+      if (!opened) continue
+      const request = renewRequestFromRumor(opened.rumor, opened.sealer, stallPubkey)
+      if (typeof request === 'string') {
+        if (request !== 'not-a-renew-request') console.warn('[renewal] renew request refused', request)
+        continue
+      }
+      const out = await adoptRenewRequest(stallPubkey, request, mint, opened.rumor.created_at * 1000)
+      if (out === 'adopted' || out === 'already-listed') changed += 1
+    }
+    return changed
+  } catch {
+    return 0
+  }
 }

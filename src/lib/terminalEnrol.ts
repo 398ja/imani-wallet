@@ -190,6 +190,49 @@ export interface StoredTerminal {
    * default. A display hint like the rest: the owner chose it, and nothing here grants.
    */
   idleLockMinutes?: number
+  /**
+   * The credential a renewal replaced, until the device has spent it with K (#160 phase 6, Q2).
+   * Kept so a spend that failed is retried at the next unlock. Never the authority: login reads
+   * `token` only.
+   */
+  previousToken?: string
+}
+
+/**
+ * Adopt a renewed credential (#160 phase 6, plan 2.3 step 1): the new token becomes the record's
+ * authority and the old one is kept as `previousToken` until it is spent. Written in one
+ * `setItem`, so a crash leaves either the old record or the new one, never half of each.
+ */
+export function storeRenewedCredential(
+  token: string,
+  voucherId: string,
+  previousToken: string,
+  hints: { name?: string; idleLockMinutes?: number } = {},
+): void {
+  const raw = localStorage.getItem(ENROLMENT_KEY)
+  const current = raw ? (JSON.parse(raw) as Record<string, unknown>) : {}
+  const facts = credentialFromToken(token)
+  localStorage.setItem(
+    ENROLMENT_KEY,
+    JSON.stringify({
+      ...current,
+      token,
+      voucherId,
+      previousToken,
+      ...(facts ? { role: parseTerminalMetadata(facts.merchantMetadata)?.role ?? current.role } : {}),
+      ...(hints.name ? { name: hints.name } : {}),
+      ...(hints.idleLockMinutes !== undefined ? { idleLockMinutes: hints.idleLockMinutes } : {}),
+    }),
+  )
+}
+
+/** The old credential is spent: forget it (#160 phase 6, plan 2.3 step 4). */
+export function clearPreviousToken(): void {
+  const raw = localStorage.getItem(ENROLMENT_KEY)
+  if (!raw) return
+  const current = JSON.parse(raw) as Record<string, unknown>
+  delete current.previousToken
+  localStorage.setItem(ENROLMENT_KEY, JSON.stringify(current))
 }
 
 /**
@@ -369,6 +412,7 @@ export function storedTerminal(): StoredTerminal | null {
         typeof parsed.idleLockMinutes === 'number' && parsed.idleLockMinutes >= 0
           ? parsed.idleLockMinutes
           : undefined,
+      ...(typeof parsed.previousToken === 'string' && parsed.previousToken ? { previousToken: parsed.previousToken } : {}),
     }
   } catch {
     return null
