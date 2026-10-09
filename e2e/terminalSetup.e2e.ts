@@ -948,7 +948,7 @@ async function finishPhase6(
       issuer_id: stall, memo: 'Imani terminal credential', expires_in_days: 365,
       merchant_metadata: { terminal: true, stall_pubkey: stall, role: 'redeem-only', lock_key: lock, name: 'Legacy door' },
     }
-    const minted = await asKey(ownerSk, 'POST', '/api/v1/wallet/vouchers', body, { 'Idempotency-Key': crypto.randomUUID() })
+    const minted = await mintAsOwner(ownerSk, body, { 'Idempotency-Key': crypto.randomUUID() })
     const voucherId = (JSON.parse(minted.body || '{}') as { voucher_id?: string }).voucher_id ?? ''
     const token = voucherId ? await fetchToken(ownerSk, voucherId) : ''
     check('a legacy redeem-only credential L is minted the 5a way (no attestation)', token !== '', `${minted.status} ${minted.body.slice(0, 120)}`)
@@ -1174,7 +1174,7 @@ async function mintAttested(ownerSk: string, stall: string, lock: string, role: 
     issuer_id: stall, memo: 'Imani terminal credential', expires_in_days: 365,
     merchant_metadata: { terminal: true, stall_pubkey: stall, role, lock_key: lock, name, owner_attestation: { v: '1', expires_at: String(T), nonce, sig } },
   }
-  const minted = await asKey(ownerSk, 'POST', '/api/v1/wallet/vouchers', body, {
+  const minted = await mintAsOwner(ownerSk, body, {
     'Idempotency-Key': crypto.randomUUID(),
     'X-Idempotency-Expires-At': new Date(T * 1000).toISOString().replace('.000Z', 'Z'),
   })
@@ -1242,7 +1242,7 @@ async function legacyTill(owner: Page) {
     issuer_id: stall, memo: 'Imani terminal credential', expires_in_days: 365,
     merchant_metadata: { terminal: true, stall_pubkey: stall, role: 'issue-and-redeem', lock_key: lock, name: 'Legacy till' },
   }
-  const minted = await asKey(ownerSk, 'POST', '/api/v1/wallet/vouchers', body, { 'Idempotency-Key': crypto.randomUUID() })
+  const minted = await mintAsOwner(ownerSk, body, { 'Idempotency-Key': crypto.randomUUID() })
   if (minted.status === 400) {
     // gateway-customer with 5b-2: a selling credential without the stall's attestation is never minted.
     check(
@@ -1346,6 +1346,19 @@ async function ownerKey(owner: Page): Promise<string> {
     }
   })()`
   return (await owner.evaluate(source)) as string
+}
+
+/**
+ * The owner's own mint call, waiting out the mint's issuance limit (10 a minute per caller, and the
+ * gateway is one caller) rather than failing a check on it: the harness mints several credentials
+ * back to back on top of the run's own sales (found by the local gate, E10 and E11).
+ */
+async function mintAsOwner(ownerSk: string, body: unknown, headers: Record<string, string>): Promise<{ status: number; body: string }> {
+  for (let attempt = 0; ; attempt++) {
+    const out = await asKey(ownerSk, 'POST', '/api/v1/wallet/vouchers', body, headers)
+    if (attempt >= 3 || !/HTTP client error: 429/.test(out.body)) return out
+    await new Promise((ok) => setTimeout(ok, 65_000))
+  }
 }
 
 /** A request signed with NIP-98 by `sk`, with no terminal credential header. */
