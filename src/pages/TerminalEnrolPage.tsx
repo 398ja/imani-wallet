@@ -6,7 +6,7 @@ import { Check, Clock } from 'lucide-react'
 import { Screen, BackLink, PageHeader, Panel, Button, Input, Alert } from '../components/ui'
 import { ScanRecipient } from '../components/ScanRecipient'
 import { ALL_TERMINAL_ROLES, TERMINAL_ROLE_LABELS, type TerminalRole } from '../lib/terminalRole'
-import { checkEnrolment, prepareEnrolment } from '../lib/terminalIssue'
+import { TERMINAL_NAME_MAX_CHARS, checkEnrolment, prepareEnrolment } from '../lib/terminalIssue'
 import { licenceStatus } from '../lib/licenceStatus'
 import {
   WAITING_TTL_MS,
@@ -342,6 +342,8 @@ export function TerminalEnrolPage({
           <Input
             label="Name"
             value={name}
+            // Capped (review rw1): the name rides in every warrant this till builds.
+            maxLength={TERMINAL_NAME_MAX_CHARS}
             onChange={(e) => setName(e.target.value)}
             placeholder="Front counter"
           />

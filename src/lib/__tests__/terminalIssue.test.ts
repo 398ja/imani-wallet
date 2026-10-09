@@ -118,6 +118,19 @@ describe('what an owner must supply', () => {
     if (!check.ready) expect(check.reason).toBe(ENROLMENT_REFUSAL.NO_NAME)
   })
 
+  // Review rw1: the name is signed into every warrant the till builds, and the portal refuses a
+  // warrant over 4,096 units, so an uncapped name would leave a till whose every sale is refused.
+  it('caps the minted name at 64 units, never splitting a character', async () => {
+    const { TERMINAL_NAME_MAX_CHARS } = await import('../terminalIssue')
+    expect(TERMINAL_NAME_MAX_CHARS).toBe(64)
+    const ctx = context({ licence: await subscribed() })
+    expect(prepareEnrolment(request({ name: 'x'.repeat(3_000) }), ctx).name).toBe('x'.repeat(64))
+    // 63 units then an emoji: the pair would straddle the cut, so it goes whole.
+    expect(prepareEnrolment(request({ name: 'a'.repeat(63) + '😀😀' }), ctx).name).toBe('a'.repeat(63))
+    // Trimmed before the cut, so padding does not eat into the name.
+    expect(prepareEnrolment(request({ name: '   Door   ' }), ctx).name).toBe('Door')
+  })
+
   it('will not enrol a terminal with no role', async () => {
     // The first acceptance criterion. A default would be the app deciding what
     // a device may do.

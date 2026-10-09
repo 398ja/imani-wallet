@@ -150,6 +150,12 @@ existing `revokeCredential` (`wallet:src/lib/credentialRevocation.ts:128`). The
 row is marked revoked only when the spend lands or the mint reports it already
 spent. Otherwise the screen says it did not land and offers a retry.
 
+A renewal out (section 2.7) is a second live credential to the same `K`, already
+sent to the device. Revoke spends it **first**, marks it revoked in the row's
+`credentials[]` and releases its pending slot, then spends the current
+credential. If the renewal's spend does not land, nothing is marked and the
+owner is told the revocation did not land (review rv6 H1).
+
 The device is never consulted, so a lost, stolen or dead device is revoked the
 same way. Effect: Sell is refused within the verifier cache window (30 s), and
 the device is refused at its next unlock. A revoked redeem-only terminal that is
@@ -166,12 +172,30 @@ expiry from the token's own signed bytes and warns **30 days** and again **7
 days** before it: a badge on the row and a notice on the Terminals screen,
 *"Front counter stops on 12 March. Renew it."* **Renew** is one tap: the wallet
 mints a fresh 365-day credential locked to the **same** device key `K` (taken
-from the row), DMs it to the device, and revokes the old one only after the
-device confirms the new one with the enrolled DM. The device accepts a re-issue
-at its next unlock without a new setup or passphrase, provided it is locked to
-its own `K`, issued by its own stall and has the same role or a smaller one. A
-re-issue that changes the role is not a renewal: the owner adds the device
-again.
+from the row), and DMs it to the device with `"renews":"<old voucher_id>"`.
+The device accepts a re-issue at its next unlock (or within five minutes while
+open) without a new setup or passphrase, provided it is locked to its own `K`,
+issued and sealed by its own stall, attested, and has the same role or a
+smaller one. It then stores it, confirms it at gateway-customer, sends the
+enrolled DM, and **spends its own old credential with `K`** (owner decision Q2,
+2026-10-09: until the old one is spent the free slot stays with it, and an
+unlicensed stall's renewed till would get 402 on Sell). The owner's app makes
+the new credential current on the enrolled DM for the new voucher id and
+revokes the old one as the fallback; `already-revoked` counts as done. A
+re-issue that widens the role is refused (`role-not-renewal`): the owner adds
+the device again. A renewal not picked up within 24 hours has lapsed at the
+gateway and is cancelled (*"The renewal did not reach Front counter. Open the
+till, then renew again."*). Renewals take one of the stall's two pending slots
+(Q6); the list says how many more wait their turn.
+
+Past its expiry a till opens for **Redeem only** and says *"This terminal's
+authority ran out on <date>. Ask the owner to renew it. Redeeming still
+works."* (Q4); within seven days it says when it stops selling. A till whose
+owner's list has lost it (logout wiped the roster before phase 6) has an
+**Ask the owner to renew** button, which sends its own credential to the stall
+sealed by `K`; the owner's app adopts it into the roster only if it is the
+stall's own, co-keyed to the stall, locked to the sealer, from a trusted
+issuer and UNSPENT (Q3).
 
 ## 3. Why "Add terminal" mints nothing and reaches no device today
 
@@ -919,6 +943,10 @@ Wallet `localStorage`, read with the existing validate-don't-cast style:
 | Key | Change |
 |---|---|
 | `imani-wallet:terminal` (device) | Keep `stallPubkey, role, terminalPubkey, name, enrolledAt, idleLockMinutes` as display hints. `token` and **new** `voucherId` are the authority. Drop `permissions`, `merchantMetadata`, `issuerId`: login derives them from the token. A record without `token` reads as not enrolled |
+| `imani-wallet:terminals:<stall>` (owner), phase 6 | Rows gain `credentials: [{voucherId, issuedAt, nonce?, expiresAt?, renews?, revokedAt?, token?}]`, the full history (old rows migrate on read: their `voucherId` and attestation become `credentials[0]`), `credentialAt` (when the current credential was issued, set by a renewal), `renewal` (a renewal in progress, persisted before the request) and `renewRequest`. `token` is kept only for unrevoked credentials |
+| `imani-wallet:terminals-forgotten:<stall>` (owner), phase 6 | Tombstones for rows removed on purpose (a refused mint), so a sync from another phone does not bring them back |
+| `imani-wallet:terminal` (device), phase 6 | Gains `previousToken`: the credential a renewal replaced, until the device has spent it |
+| `imani-wallet:terminal:sale-outbox` (device), phase 6 | Sale records that reached neither the relay nor the gateway mirror, retried at every unlock and every minute |
 | `imani-wallet:terminals:<stall>` (owner) | Replace `revocationSecret` with `token` and `voucherId`. Add `status: 'waiting' \| 'in-service' \| 'revoked'`, `idleLockMinutes` and `expiresAt` (display only, re-read from the token). Existing rows have no token and cannot be revoked. They are shown as *Set up before revocation existed: add it again* and do not count against the allowance |
 | key store `imani-wallet-key` | Unchanged slot. Holds `K` on a terminal device, guarded by `hasKey()` |
 
@@ -929,6 +957,25 @@ of the owner's own phone, which is the case revocation exists for. Each row
 also carries the credential's `voucher_id`, attestation `nonce` and `T`, so
 the stall's wallet can run the home-coming roster check (section 9, decision
 5, question 2).
+
+As shipped (phase 6): content `{"v":1,"rows":[...],"forgotten":[...]}`, chunked
+through `chunkedRecord` above the relay budget, published to the relay and the
+gateway mirror, and merged by a join (`terminalRosterSync.mergeRosters`:
+commutative, associative, idempotent, property-tested): credentials united by
+`voucher_id`, `revokedAt` sticky (earliest kept), status only forward,
+`confirmed` over `unconfirmed`, `lapsed` sticky, and no token of an unrevoked
+credential ever dropped. Local storage is an input to every merge, never
+overwritten blind. Revocation truth stays the mint (`markSpentElsewhere` runs
+after each merge).
+
+**Till sales (phase 6, wallet#202, owner decision Q1).** A till has no wallet,
+so it sends the rows it would have written to its stall as a NIP-17 gift wrap
+sealed by `K`: `{"type":"imani-terminal-sale/1","rows":[<7376 content>…],
+"credential_voucher_id"}`. The owner's app files a row only when the sealer is
+the `lock_key` of the credential in the row's `terminal` warrant and the warrant
+reads `verified` for this stall (the stall's own attestation included), then
+writes it through its own `addTransaction`, so it becomes the owner's 7376. The
+7376 content gains `terminal_pubkey`.
 
 ## 7. Issuance warrants on a terminal
 
@@ -1048,7 +1095,14 @@ keeps the unlock-time refusal and returning the role.)
 - **E2E:** B sells to C, C holds it. A sees the coupon attributed to B. A
   revokes, B's next Sell is refused.
 
-### Phase 6: roster sync and docs (wallet, imani-docs)
+### Phase 6: roster sync and docs (wallet, imani-docs) — done (wallet 0.17.0, gc 0.24.1)
+
+Shipped with the owner's answers of 2026-10-09 (plan `.wt/plan-160-phase6.md`
+section 5): Q1 the till's sale record to the stall; Q2 the device spends its
+own old credential; Q3 the till's renew request; Q4 expired means Redeem only;
+Q5 `docs/terminals.md` stays canonical; Q6 renewals keep the two-waiting limit.
+gateway-customer 0.24.1 carries the gc#209 review NITs only; renewal needs no
+server change.
 
 - Encrypted roster event. Expiry warnings at 30 and 7 days and one-tap
   renewal (section 2.7). Roster rows carry `voucher_id`, attestation `nonce`

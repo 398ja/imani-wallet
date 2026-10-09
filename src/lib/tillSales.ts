@@ -65,7 +65,9 @@ const CURSOR_KEY = (stall: string) => `imani-wallet:till-sales-cursor:${stall.to
  * is 2 to 2.5 KB, so a split sale goes as several wraps; one row never splits. Measured escaped,
  * as the content sits inside the rumor's JSON (the sale is nested JSON, so escaping adds ~15%),
  * and in UTF-8 bytes, not UTF-16 units: a CJK note is three bytes a unit (review sh6). One row
- * fits because its note is capped (`note.ts`, 280 units, at most 840 bytes).
+ * fits because its note is capped (`note.ts`, 280 units, at most ~1,960 bytes escaped) and its
+ * warrant is bounded by the portal (4,096 units, at most ~16 KB escaped), so the worst row is
+ * about 19.4 KB (review rw1).
  */
 const MAX_WRAP_PLAINTEXT = 24_000
 
