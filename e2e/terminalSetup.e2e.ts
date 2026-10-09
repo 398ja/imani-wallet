@@ -988,12 +988,15 @@ async function finishPhase6(
     if (minted.token) {
       await asKey(tillSk, 'POST', `/api/v1/wallet/terminal-credentials/${minted.voucherId}/confirm`, {})
       const k: TillKey = { sk: tillSk, voucherId: minted.voucherId, secret: tokenProofs(minted.token)[0]?.secret ?? '', stall }
+      // K' sells to the STALL's own key, so it is K's coupon that comes home to A. Paid by C instead,
+      // C's wallet picks which of its coupons to spend, and in the gate it spent B5's (found by the
+      // local gate: the check then passed for B5's credential, correctly, and E11 saw no alert).
       const sale = await asTillResponse(k, 'POST', '/api/v1/portal/vouchers', {
-        face_value_minor: 100, currency: 'EUR', quantity: 1, recipient_pubkey: customerPubkey,
+        face_value_minor: 100, currency: 'EUR', quantity: 1, recipient_pubkey: stall,
         issuance_warrant: await freshWarrant(k, 100, 'EUR'),
       })
       check("K' sells through the portal", sale.status === 201 || sale.status === 200, `${sale.status} ${sale.body.slice(0, 160)}`)
-      // C pays the stall with that coupon: it comes home to A, whose dm-poll raises the alert.
+      // The coupon comes home to A by DM, and A's dm-poll raises the alert.
       const notified = await owner.waitForFunction(() => {
         for (let i = 0; i < localStorage.length; i++) {
           const key = localStorage.key(i)!
@@ -1002,7 +1005,7 @@ async function finishPhase6(
         }
         return false
       }, undefined, { timeout: 5_000 }).then(() => true, () => false)
-      if (!notified) await customerPaysStall(customer, owner, '1.00')
+      if (!notified) await owner.goto(`${BASE}/`, { waitUntil: 'load' })
       const alerted = await owner.waitForFunction(() => {
         for (let i = 0; i < localStorage.length; i++) {
           const key = localStorage.key(i)!
@@ -1203,26 +1206,6 @@ async function dmFrom(sk: string, recipient: string, content: string): Promise<b
 
 const dmAsStall = (ownerSk: string, to: string, content: string) => dmFrom(ownerSk, to, content)
 
-/** C pays A, the stall, with what it holds of the stall's coupons, through A's Redeem request. */
-async function customerPaysStall(customer: Page, owner: Page, amount: string): Promise<void> {
-  await owner.goto(`${BASE}/redeem`, { waitUntil: 'load' })
-  const field = owner.getByLabel(/Amount/)
-  if (!(await field.waitFor({ timeout: 30_000 }).then(() => true, () => false))) return
-  await field.fill(amount)
-  await owner.getByRole('button', { name: 'Show payment code' }).click()
-  await owner.getByText('Waiting for payment').waitFor({ timeout: 30_000 }).catch(() => {})
-  const request = await owner.evaluate(() => {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i)!
-      if (!key.startsWith('imani-wallet:payment-requests:')) continue
-      const rows = JSON.parse(localStorage.getItem(key) ?? '[]') as Array<{ requestString: string }>
-      if (rows[0]) return rows[0].requestString
-    }
-    return ''
-  })
-  if (request) await customerPays(customer, request)
-}
-
 /**
  * Phase 5b: a legacy, unattested selling credential is refused, and the roster shows the way out.
  *
@@ -1355,7 +1338,10 @@ async function ownerKey(owner: Page): Promise<string> {
  */
 async function mintAsOwner(ownerSk: string, body: unknown, headers: Record<string, string>): Promise<{ status: number; body: string }> {
   for (let attempt = 0; ; attempt++) {
-    const out = await asKey(ownerSk, 'POST', '/api/v1/wallet/vouchers', body, headers)
+    // A fresh Idempotency-Key each time: the gateway refuses the same key after an attempt that
+    // failed (IDEMPOTENCY_PREVIOUS_ATTEMPT_UNRECORDED), and a 429 at the quote minted nothing.
+    const sent = attempt === 0 || !headers['Idempotency-Key'] ? headers : { ...headers, 'Idempotency-Key': crypto.randomUUID() }
+    const out = await asKey(ownerSk, 'POST', '/api/v1/wallet/vouchers', body, sent)
     if (attempt >= 3 || !/HTTP client error: 429/.test(out.body)) return out
     await new Promise((ok) => setTimeout(ok, 65_000))
   }
