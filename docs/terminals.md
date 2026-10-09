@@ -62,8 +62,8 @@ phone**:
 
 1. Go to **Settings → Terminals → Add a terminal**.
 2. Type a **name** you'll recognise later: `Front counter`, `Door`, `Sam's
-   phone`. The name is how you'll tell devices apart when you come to revoke
-   one.
+   phone`, up to 64 characters. The name is how you'll tell devices apart when
+   you come to revoke one.
 3. Choose **what it can do**. This is the security decision of the whole flow,
    so pick the smaller role when the smaller role is enough. A device at the
    door that only takes coupons back should be **Redemption only**: it then has

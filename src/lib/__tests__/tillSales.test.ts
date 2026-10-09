@@ -255,8 +255,9 @@ describe('the till sends, and keeps what did not land', () => {
   })
 
   // The cap counts UTF-16 code units, as HTML maxLength and the portal's @Size(max = 280) do, so
-  // the most bytes a capped note can be is 280 three-byte characters (840 B); 4-byte characters
-  // are two units each (140 of them, 560 B).
+  // the most raw UTF-8 a capped note can be is 280 three-byte characters (840 B); 4-byte
+  // characters are two units each (140 of them, 560 B). Escaped in the rumor, as the budget
+  // measures it, the worst is ~1,960 B (280 control characters at 7 B each, review rw1).
   const MAX_EMOJI = '😀'.repeat(NOTE_MAX_CHARS / 2)
   const MAX_CJK = '漢'.repeat(NOTE_MAX_CHARS)
   for (const [label, memo] of [['4-byte', MAX_EMOJI], ['3-byte', MAX_CJK]] as const) {
