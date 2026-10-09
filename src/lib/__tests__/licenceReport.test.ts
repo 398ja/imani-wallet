@@ -165,4 +165,23 @@ describe('how often it reports', () => {
     expect(outcome).toBe('failed')
     expect(post).not.toHaveBeenCalled()
   })
+
+  it('two screens asking at once send ONE report (seen on the local gate: dashboard and Terminals)', async () => {
+    const row = licenceRow(terms(), NOW + YEAR)
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((r) => { release = r })
+    const post = vi.fn<(body: { secrets: string[] }) => Promise<{ status: number }>>(async () => {
+      await gate
+      return { status: 200 }
+    })
+    const load = async () => [row]
+
+    const first = reportLicence({ pubkey: STALL, now: NOW, loadRows: load, post })
+    const second = reportLicence({ pubkey: STALL, now: NOW, loadRows: load, post })
+    release()
+
+    expect(await first).toBe('reported')
+    expect(await second).toBe('reported')
+    expect(post).toHaveBeenCalledTimes(1)
+  })
 })
