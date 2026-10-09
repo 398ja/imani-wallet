@@ -46,6 +46,7 @@ import { loadMerchant } from './merchant'
 import { licenceFromToken } from './licences'
 import { checkPart, checkRedemption, redeemLockName } from './redemptionLedger'
 import { exactFaceValue, parseVoucherToken, type VoucherValidation } from './voucherToken'
+import { raiseHomecomingAlert } from './terminalHomecoming'
 import { getWallet, notifyWalletChanged, recordReceiptByNullifier } from './wallet'
 import { legacyApi, withCorrelation } from './legacyBridge'
 import { claimToFile } from './merchantClaim'
@@ -854,6 +855,26 @@ function attestReceived(token: string): string | undefined {
   }
 }
 
+/**
+ * The home-coming check for one coupon (#160 phase 6). Only for this stall's own coupons, read
+ * from the SIGNED voucher. Never throws and never refuses.
+ */
+export function homecomingAlertFor(
+  meta: Record<string, unknown> | undefined,
+  stallPubkey: string | undefined,
+  token: string,
+): void {
+  try {
+    if (!stallPubkey) return
+    const { voucher } = parseVoucherToken(token)
+    if (voucher.issuerId.toLowerCase() !== stallPubkey.toLowerCase()) return
+    const id = typeof meta?.voucherId === 'string' ? meta.voucherId : voucher.voucherId
+    raiseHomecomingAlert(stallPubkey.toLowerCase(), voucher.issuanceWarrant, id)
+  } catch {
+    // Not a voucher, or unreadable: there is no till to check.
+  }
+}
+
 export function refuseIfUnwarranted(meta: Record<string, unknown> | undefined): void {
   const validation = meta?.validation as VoucherValidation | undefined
   if (!validation?.signatureValid) return
@@ -995,6 +1016,10 @@ function redemptionAdapter(): RedemptionAdapter {
       const checkSwapAndWrite = async (): Promise<Voucher> => {
         refuseIfAnotherStalls(meta, currentPubkey, token)
         refuseIfUnwarranted(meta)
+        // Trigger (a) of the home-coming roster check (#160 phase 6, decision 5 Q2): a coupon a
+        // till sold, coming home to its stall, under a credential the stall's list never had.
+        // An alert only: the coupon is honoured, because the customer paid.
+        homecomingAlertFor(meta, currentPubkey, token)
         // The part's CUMULATIVE credit, when the token could be read: what is
         // booked and honoured from here on, in place of the per-part rounding
         // dmCrypto put on `faceValue`. See `refuseIfOverRedeemed`.
