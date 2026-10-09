@@ -1007,8 +1007,11 @@ async function finishPhase6(
       })()
       check("K' has a coupon to deliver", issued.length > 0, sale.body.slice(0, 160))
       for (const v of issued) {
+        // The portal answers before the coupon is minted; the till polls for its token (issue.ts
+        // `waitForToken`). The stall can read its own coupon, so the harness polls as the owner.
+        const token = typeof v.token === 'string' && v.token ? v.token : await fetchToken(ownerSk, String(v.voucher_id))
         const sent = await asTillResponse(k, 'POST', '/api/v1/dm/tokens/send', {
-          recipient_pubkey: stall, token: v.token, memo: v.memo, voucher_id: v.voucher_id,
+          recipient_pubkey: stall, token, memo: v.memo, voucher_id: v.voucher_id,
           face_value: v.face_value, face_unit: v.face_unit, face_decimals: v.face_decimals,
           token_amount: v.token_amount, backing_strategy: v.backing_strategy, issuer_id: stall, sender_pubkey: stall,
           ...(typeof v.expires_at === 'string' ? { expires_at: Math.floor(Date.parse(v.expires_at) / 1000) } : typeof v.expires_at === 'number' ? { expires_at: v.expires_at } : {}),
