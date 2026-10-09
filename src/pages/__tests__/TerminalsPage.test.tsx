@@ -3,6 +3,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { parseVoucherToken } from '../../lib/voucherToken'
 import { MemoryRouter } from 'react-router-dom'
 import { StrictMode } from 'react'
 
@@ -75,6 +76,7 @@ const fakeMint = {
 
 /** No relay in a unit test: the roster sync (#160 phase 6) is its own test file. */
 const noSync = async () => false
+const noRenewals = async () => ({ changed: 0, lapsed: [] as string[] })
 
 function renderPage() {
   return render(
@@ -83,6 +85,7 @@ function renderPage() {
           round 2 tests below inject their own. */}
       <TerminalsPage
         sync={noSync}
+        renewals={noRenewals}
         stallPubkey={STALL}
         spendApi={async () => fakeMint}
         collect={collect}
@@ -429,7 +432,8 @@ describe('#160 review: rows left behind by earlier versions and lost answers', (
     }
     render(
       <MemoryRouter>
-        <TerminalsPage sync={noSync} stallPubkey={STALL} spendApi={async () => fakeMint} transport={resumeTransport} />
+        <TerminalsPage sync={noSync}
+        renewals={noRenewals} stallPubkey={STALL} spendApi={async () => fakeMint} transport={resumeTransport} />
       </MemoryRouter>,
     )
 
@@ -471,6 +475,7 @@ describe('#160 phase 2: the row turns In service when the device confirms', () =
         <MemoryRouter>
           <TerminalsPage
         sync={noSync}
+        renewals={noRenewals}
             stallPubkey={STALL}
             spendApi={async () => fakeMint}
             collect={collect}
@@ -503,6 +508,7 @@ describe('#160 round 2: the list shows what the gateway says', () => {
       <MemoryRouter>
         <TerminalsPage
         sync={noSync}
+        renewals={noRenewals}
           stallPubkey={STALL}
           spendApi={async () => fakeMint}
           collect={collect}
@@ -561,16 +567,17 @@ describe('#160 round 2: the list shows what the gateway says', () => {
 
 describe('a selling till set up before owner attestation (#160 decision 5, spec 4.6.5)', () => {
   // The token carries no owner attestation. As a selling till it can redeem but not sell, so its
-  // row says "Renew to keep selling" and spells out the four re-enrol steps.
-  it('reads "Renew to keep selling", with the revoke, decommission and set-up-again steps', () => {
+  // row says "Renew to keep selling" and, since phase 6 (S4), offers one-tap Renew in place of
+  // the four re-enrol steps.
+  it('reads "Renew to keep selling" and offers Renew, not the four re-enrol steps', () => {
     enrol({ role: TERMINAL_ROLES.ISSUE_AND_REDEEM })
     renderPage()
 
     const notice = screen.getByTestId('renew-to-sell').textContent ?? ''
     expect(notice).toMatch(/^Renew to keep selling/)
-    expect(notice).toMatch(/Revoke it here/)
-    expect(notice).toMatch(/take it out of service/)
-    expect(notice).toMatch(/Add it again here, with a new passphrase and setup code/)
+    expect(notice).not.toMatch(/Revoke it here/)
+    expect(notice).not.toMatch(/Add it again here/)
+    expect(screen.getByRole('button', { name: 'Renew Door' })).toBeTruthy()
   })
 
   // A redeem-only till needs no attestation to do its job, so it is not told to renew.
@@ -585,5 +592,85 @@ describe('a selling till set up before owner attestation (#160 decision 5, spec 
     enrol({ role: TERMINAL_ROLES.ISSUE_AND_REDEEM, revokedAt: 2_000_000 })
     renderPage()
     expect(screen.queryByTestId('renew-to-sell')).toBeNull()
+  })
+})
+
+describe('renewal on the list (#160 phase 6, decision 1)', () => {
+  // The fixture credential's own signed expiry: the badges are read from the token, not stored.
+  const expiresAt = parseVoucherToken(TOKEN).voucher.expiresAt as number
+
+  // One function per instant, so the page's clock effect sees a stable prop.
+  const clocks = new Map<number, () => number>()
+  const clock = (at: number) => clocks.get(at) ?? (clocks.set(at, () => at), clocks.get(at)!)
+
+  function renderAt(nowMs: number, renew = vi.fn(async () => ({ started: true })), renewals = noRenewals) {
+    render(
+      <MemoryRouter>
+        <TerminalsPage
+          sync={noSync}
+          renewals={renewals}
+          stallPubkey={STALL}
+          spendApi={async () => fakeMint}
+          collect={collect}
+          confirm={async () => 204}
+          deliver={async () => 0}
+          renew={renew}
+          now={clock(nowMs)}
+        />
+      </MemoryRouter>,
+    )
+    return renew
+  }
+
+  it('says nothing about expiry with months to go, and offers a plain Renew', () => {
+    enrol({ status: 'in-service' })
+    renderAt((expiresAt - 90 * 86_400) * 1000)
+    expect(screen.queryByTestId('expiry-line')).toBeNull()
+    expect(screen.getByTestId('renew')).toBeTruthy()
+  })
+
+  it('goes amber 30 days out, with "stops on … Renew it."', () => {
+    enrol({ status: 'in-service' })
+    renderAt((expiresAt - 20 * 86_400) * 1000)
+    expect(screen.getByTestId('expiry-line').textContent).toMatch(/^Door stops on .+\. Renew it\.$/)
+    expect(screen.getByTestId('renew-amber')).toBeTruthy()
+  })
+
+  it('goes red 7 days out, and past expiry says it stopped', () => {
+    enrol({ status: 'in-service' })
+    renderAt((expiresAt - 5 * 86_400) * 1000)
+    expect(screen.getByTestId('renew-red')).toBeTruthy()
+    cleanup()
+    renderAt((expiresAt + 86_400) * 1000)
+    expect(screen.getByTestId('renew-expired')).toBeTruthy()
+    expect(screen.getByTestId('expiry-line').textContent).toMatch(/stopped selling on/)
+  })
+
+  it('Renew calls the renewal for that terminal', async () => {
+    enrol({ status: 'in-service' })
+    const renew = renderAt((expiresAt - 5 * 86_400) * 1000)
+    fireEvent.click(screen.getByRole('button', { name: 'Renew Door' }))
+    await waitFor(() => expect(renew).toHaveBeenCalledWith(STALL, DOOR, fakeMint))
+  })
+
+  it('shows why a renewal could not start (two already waiting, Q6)', async () => {
+    enrol({ status: 'in-service' })
+    renderAt(Date.now(), vi.fn(async () => ({ started: false, message: 'Two terminals are already waiting for their device.' })))
+    fireEvent.click(screen.getByRole('button', { name: 'Renew Door' }))
+    expect(await screen.findByText(/Two terminals are already waiting/)).toBeTruthy()
+  })
+
+  it('says a renewal the device never picked up lapsed', async () => {
+    enrol({ status: 'in-service' })
+    renderAt(Date.now(), undefined, async () => ({ changed: 1, lapsed: ['Door'] }))
+    expect((await screen.findByTestId('renewal-lapsed')).textContent).toBe(
+      'The renewal did not reach Door. Open the till, then renew again.',
+    )
+  })
+
+  it('offers no Renew on a revoked terminal', () => {
+    enrol({ status: 'in-service', revokedAt: 2 })
+    renderAt(Date.now())
+    expect(screen.queryByRole('button', { name: 'Renew Door' })).toBeNull()
   })
 })

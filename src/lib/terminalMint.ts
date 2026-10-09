@@ -279,7 +279,7 @@ const EXTRA_PATH_TAGS = ['refund', 'locktime', 'n_sigs_refund']
  * The secret's NUT-11 `pubkeys` tag is exactly `[stall]`, `n_sigs` is 1 (or
  * absent), and there is no refund or locktime path.
  */
-function exactlyTheStall(secret: string, stall: string): boolean {
+export function exactlyTheStall(secret: string, stall: string): boolean {
   try {
     const body = (JSON.parse(secret) as [string, { tags?: unknown }])[1]
     const tags = Array.isArray(body?.tags) ? (body.tags as unknown[]) : []

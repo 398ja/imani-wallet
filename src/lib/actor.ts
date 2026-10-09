@@ -59,6 +59,15 @@ export interface TerminalActor {
    * so an actor built anywhere else cannot sell by default.
    */
   attested?: boolean
+  /**
+   * The credential's signed `expires_at`, epoch seconds (#160 phase 6, F5). Set by login.
+   */
+  expiresAt?: number
+  /**
+   * Past `expiresAt` when the till opened (#160 phase 6, Q4): it opens for Redeem only and asks
+   * the owner to renew. The portal refuses its Sell anyway; this stops the till offering one.
+   */
+  expired?: boolean
 }
 
 export type Actor = OwnerActor | TerminalActor
@@ -178,6 +187,8 @@ export function issuingStall(actor: Actor): string {
 export function mayIssue(actor: Actor): boolean {
   if (actor.kind === 'owner') return true
   if (actor.attested !== true) return false
+  // An expired credential redeems, never sells (Q4). Redeem keeps working for a paperwork lapse.
+  if (actor.expired === true) return false
   return mayAct(actor.permissions, TERMINAL_ACTIONS.ISSUE, actor.stallPubkey)
 }
 

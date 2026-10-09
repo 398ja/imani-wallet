@@ -314,3 +314,28 @@ describe('the till checks the stall attested it (#160 decision 5, spec 4.6.3)', 
     expect(out.actor.attested).toBe(true)
   })
 })
+
+// #160 phase 6, plan 2.3: a renewal adopted while the twelve-hour session lives is picked up at
+// the idle re-unlock with the same passphrase, no setup code: the actor comes from the NEW token
+// (an attested one sells), and the session keeps its clock.
+describe('a renewal adopted within the session', () => {
+  it('re-derives the actor from the new token at re-unlock, keeping the session clock', async () => {
+    enrol()
+    const first = await unlockTerminal(PASSPHRASE, { mint: mint('UNSPENT'), now: 1_000_000 })
+    if (!first.unlocked) throw new Error('expected unlock')
+    expect(first.actor.attested).toBe(false)
+    lockTerminal()
+
+    const { storeRenewedCredential } = await import('../terminalEnrol')
+    const renewed = buildAttestedCredentialToken({ stallKey: STALL_KEY, devicePubkey: DEVICE, voucherId: 'renewed-1' })
+    storeRenewedCredential(renewed, 'renewed-1', JSON.parse(localStorage.getItem('imani-wallet:terminal')!).token)
+
+    const api = mint('UNSPENT')
+    const again = await unlockTerminal(PASSPHRASE, { mint: api, now: 2_000_000 })
+    if (!again.unlocked) throw new Error('expected unlock')
+    expect(again.actor.attested).toBe(true)
+    expect(again.session.openedAt).toBe(first.session.openedAt)
+    expect(api.validateToken).toHaveBeenCalledTimes(1)
+    expect(requestCredential()?.voucherId).toBe('renewed-1')
+  })
+})

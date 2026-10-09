@@ -6,6 +6,7 @@ import { checkIssuer } from './issuerAllowlist'
 import { lockedToPubkey, xOnly } from './witness'
 import { ATTESTATION_REFUSAL, checkOwnerAttestation } from './ownerAttestation'
 import { hasDuplicateKeys } from './terminalWarrant'
+import { TERMINAL_ROLES } from './terminalRole'
 
 const LOWER_HEX64_STALL = /^[0-9a-f]{64}$/
 
@@ -84,12 +85,35 @@ export const LOGIN_MESSAGE: Record<LoginRefusal, string> = {
 
 /**
  * What a till without the stall's attestation tells its operator (spec 4.6.5): it still
- * redeems, and selling needs the owner to set it up again, step by step, until phase 6's Renew.
+ * redeems, and selling needs the owner to renew it. Since #160 phase 6 that is one tap on the
+ * owner's side, and this till can ask for it (Q3), so the four re-enrol steps are gone.
  */
 export const UNATTESTED_TILL_NOTICE =
-  'Ask the owner to renew this terminal to sell. Redeeming still works. Until Renew arrives, ' +
-  'renewing means: the owner revokes this terminal, you take it out of service ' +
-  '(Settings → Security), and the owner adds it again with a new passphrase and setup code.'
+  'Ask the owner to renew this terminal to sell. Redeeming still works. The owner renews it in ' +
+  'one tap from their Terminals list; this terminal picks it up the next time it is opened.'
+
+/** Days before expiry the till starts warning (decision 1). */
+export const TILL_EXPIRY_WARNING_DAYS = 7
+
+function dateOf(epochSeconds: number): string {
+  return new Date(epochSeconds * 1000).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+}
+
+/**
+ * What the till says about its credential's expiry (#160 phase 6, Q4), or null. Past it: Redeem
+ * only, ask the owner to renew. Within seven days: when it stops selling.
+ */
+export function expiryNotice(actor: TerminalActor, nowMs: number = Date.now()): string | null {
+  if (actor.expiresAt === undefined) return null
+  const now = Math.floor(nowMs / 1000)
+  if (actor.expired === true || now > actor.expiresAt) {
+    return `This terminal's authority ran out on ${dateOf(actor.expiresAt)}. Ask the owner to renew it. Redeeming still works.`
+  }
+  if (actor.expiresAt - now <= TILL_EXPIRY_WARNING_DAYS * 86_400 && actor.role === TERMINAL_ROLES.ISSUE_AND_REDEEM) {
+    return `This terminal stops selling on ${dateOf(actor.expiresAt)}. Ask the owner to renew it.`
+  }
+  return null
+}
 
 export type LoginOutcome =
   | { admitted: true; actor: TerminalActor; session: TerminalSession }
@@ -124,6 +148,8 @@ export interface LoginInput {
    * selling role sell: absent or false opens the till for Redeem only (spec 4.6.5).
    */
   attested?: boolean
+  /** The credential's signed `expires_at`, epoch seconds (#160 phase 6, F5). */
+  expiresAt?: number
 }
 
 /**
@@ -140,6 +166,7 @@ export function loginTerminal({
   unspent,
   openedAt = Date.now(),
   attested = false,
+  expiresAt,
 }: LoginInput): LoginOutcome {
   if (merchantMetadata === null || merchantMetadata === undefined || merchantMetadata === '') {
     return refuse(LOGIN_REFUSAL.NOT_ENROLLED)
@@ -156,7 +183,14 @@ export function loginTerminal({
   // Only a definite NO from the mint revokes. `null` is "we could not ask".
   if (unspent === false) return refuse(LOGIN_REFUSAL.REVOKED)
 
-  const attestedActor = { ...actor, attested: attested === true } as TerminalActor
+  // Expired only once now > expires_at, as the mint and the portal decide it (#160 phase 6, F5).
+  const expired = expiresAt !== undefined && Math.floor(openedAt / 1000) > expiresAt
+  const attestedActor = {
+    ...actor,
+    attested: attested === true,
+    ...(expiresAt !== undefined ? { expiresAt } : {}),
+    ...(expired ? { expired: true } : {}),
+  } as TerminalActor
   return {
     admitted: true,
     actor: { ...attestedActor, name: metadata.name } as TerminalActor,
@@ -218,7 +252,7 @@ export function credentialFromToken(token: string): CredentialFacts | null {
 }
 
 /** `credentialFromToken`, saying which check refused it. */
-function readCredential(token: string): { facts: CredentialFacts } | { refusal: LoginRefusal } {
+export function readCredential(token: string): { facts: CredentialFacts } | { refusal: LoginRefusal } {
   const unreadable = { refusal: LOGIN_REFUSAL.UNREADABLE }
   try {
     const proofs = tokenProofs(token)
@@ -332,6 +366,7 @@ export function loginFromToken({
     devicePubkey,
     unspent,
     attested: facts.attested,
+    ...(facts.expiresAt !== undefined ? { expiresAt: facts.expiresAt } : {}),
     ...(openedAt !== undefined ? { openedAt } : {}),
   })
 }

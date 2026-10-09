@@ -23,7 +23,16 @@ vi.mock('../../lib/terminalUnlock', () => ({
   lockTerminal: vi.fn(),
   forgetTerminalSession: vi.fn(),
   unlockTerminal: vi.fn(),
+  refreshAfterRenewal: vi.fn(async () => null),
 }))
+// The till's network side effects (#160 phase 6): stubbed, each has its own test file.
+const renewRequests = vi.hoisted(() => ({ sent: 0 }))
+vi.mock('../../lib/terminalRenewalNet', () => ({
+  checkForRenewal: vi.fn(async () => null),
+  sendRenewRequest: vi.fn(async () => ((renewRequests.sent += 1), true)),
+  RENEWAL_POLL_MS: 300_000,
+}))
+vi.mock('../../lib/tillSalesNet', () => ({ openTillSales: () => () => undefined }))
 vi.mock('../../lib/merchant', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/merchant')>()),
   fetchMerchantRecord: async () => ({
@@ -145,7 +154,9 @@ describe('the till, per role', () => {
 
   // A selling till the stall never attested (#160 decision 5, spec 4.6.5): FULL, yet Redeem
   // only, and the till tells the operator to ask for a renewal and how it is done today.
-  it('sell-and-redeem, unattested: Redeem only, with the renew steps', async () => {
+  // Phase 6 (Q3): no more four re-enrol steps. The till asks the owner, with one button that
+  // sends its own credential to the stall so the owner can press Renew.
+  it('sell-and-redeem, unattested: Redeem only, with "Ask the owner to renew"', async () => {
     enrol(TERMINAL_ROLES.ISSUE_AND_REDEEM)
     unlockedAs(TERMINAL_ROLES.ISSUE_AND_REDEEM, SESSION_KIND.FULL, false)
     at('/')
@@ -153,7 +164,28 @@ describe('the till, per role', () => {
     expect(screen.queryByRole('button', { name: /Sell/ })).toBeNull()
     const notice = screen.getByTestId('renew-to-sell').textContent ?? ''
     expect(notice).toMatch(/Ask the owner to renew this terminal to sell/)
-    expect(notice).toMatch(/take it out of service/)
+    expect(notice).not.toMatch(/take it out of service/)
+    renewRequests.sent = 0
+    fireEvent.click(screen.getByRole('button', { name: 'Ask the owner to renew' }))
+    await waitFor(() => expect(renewRequests.sent).toBe(1))
+    expect(await screen.findByText(/Sent\. The owner sees it on their Terminals list/)).toBeTruthy()
+  })
+
+  // Phase 6 (Q4): past its expiry an attested selling till opens Redeem only, says so, and
+  // offers the same button. The route to /sell is gone too.
+  it('sell-and-redeem, expired: Redeem only, the expiry notice, and no Sell route', async () => {
+    enrol(TERMINAL_ROLES.ISSUE_AND_REDEEM)
+    unlockedAs(TERMINAL_ROLES.ISSUE_AND_REDEEM)
+    const t = state.till as { actor: TerminalActor }
+    t.actor = { ...t.actor, expiresAt: 1_700_000_000, expired: true }
+    at('/')
+    expect(await screen.findByRole('button', { name: /Redeem/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Sell/ })).toBeNull()
+    expect(screen.getByTestId('expiry-notice').textContent).toMatch(/authority ran out on .*Ask the owner to renew it\. Redeeming still works\./)
+    expect(screen.getByRole('button', { name: 'Ask the owner to renew' })).toBeTruthy()
+    act(() => navigateTo!('/sell'))
+    expect(await screen.findByTestId('terminal-name')).toBeTruthy()
+    expect(screen.queryByText('sell-screen')).toBeNull()
   })
 
   // A redeem-only till is not told to renew: it has nothing to sell.
