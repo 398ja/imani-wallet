@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Paid extra terminals sell (#197). Pairs with imani-gateway-customer and imani-gateway-portal
+`/licence` releases; without them the report is refused and nothing changes.
+
+### Added
+
+- **The owner's wallet reports its licence to the server** (`src/lib/licenceReport.ts`). When the
+  dashboard (after login, and whenever a licence or renewal arrives by DM) or the Terminals screen
+  finds a licence that verifies, it sends `POST /api/v1/portal/licence` with the licence's proof
+  SECRETS only, never C, so nothing on the path can spend it. NIP-98 signed by the stall: the server
+  licenses only the signer, and only if the licence is locked to it. At most once per 6 hours for
+  the same licence, at once for a renewal. Fire and forget: a failure changes nothing on screen.
+
 ## [0.17.0] - 2026-10-09
 
 Terminals phase 6 (imani-wallet#160): till sales reach the owner, the terminal list syncs across
