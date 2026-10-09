@@ -44,7 +44,7 @@ import { toTransaction, type WalletTransaction } from './transactions'
  * expiry, receive rows with no token id (and therefore no way back to the same
  * row key), and bundles that no longer know they were bundles.
  */
-type HistoryContent = Nip60HistoryContent & {
+export type HistoryContent = Nip60HistoryContent & {
   /** Epoch SECONDS, as the gateway reports it. */
   expires_at?: number
   /** The content-derived coupon key, for rows that have one. */
@@ -96,6 +96,12 @@ type HistoryContent = Nip60HistoryContent & {
    */
   transfer_id?: string
   transfer_signature?: string
+  /**
+   * The till that handled this row, on the stall's own `issued` and `cashback` rows only
+   * (terminals ticket 09). Carried since #160 phase 6 (F2): without it a restored stall read
+   * every till sale as "Your device", the same defect class as the issuance evidence above.
+   */
+  terminal_pubkey?: string
   /**
    * Filler that brings the plaintext to a size bucket (#99), so a record's
    * length does not say what it carries. Ignored on read: `toRow` never looks
@@ -203,6 +209,7 @@ export function toContent(tx: WalletTransaction): HistoryContent {
     exact_value: tx.exactValue,
     transfer_id: tx.transferId,
     transfer_signature: tx.transferSignature,
+    terminal_pubkey: tx.terminalPubkey,
   }
 }
 
@@ -248,6 +255,7 @@ export function toRow(id: string, content: HistoryContent): TransactionRow {
     exactValue: content.exact_value,
     transferId: content.transfer_id,
     transferSignature: content.transfer_signature,
+    ...(content.terminal_pubkey ? { terminalPubkey: content.terminal_pubkey } : {}),
   } as unknown as TransactionRow
 }
 
