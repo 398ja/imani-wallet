@@ -322,6 +322,11 @@ export async function markSpentElsewhere(
   for (const row of allTerminals(stallPubkey)) {
     if (row.revokedAt !== undefined || !isRevocable(row) || row.status === 'minting') continue
     if ((await credentialState(row.token!, api)) !== CREDENTIAL_STATE.REVOKED) continue
+    // A renewal out (#160 phase 6, Q2): the device spends its OLD credential itself once it has
+    // adopted the new one, before this phone has collected the enrolled DM. So the old one being
+    // spent is the renewal landing. The renewal's credential is the live handle then; only that
+    // one being spent too says the till was revoked.
+    if (row.renewal?.token && (await credentialState(row.renewal.token, api)) !== CREDENTIAL_STATE.REVOKED) continue
     if (!revokeTerminal(stallPubkey, row.terminalPubkey, now).revoked) continue
     marked += 1
     // A waiting row still holds one of the stall's pending slots at the gateway. Give it back,

@@ -349,6 +349,35 @@ describe('#160 phase 4: a credential spent elsewhere reads as revoked here', () 
     expect(await markSpentElsewhere(STALL, mintSays('SPENT'))).toBe(2)
     expect(released).toEqual(['waiting-1'])
   })
+
+  // #160 phase 6, Q2 (found by the local gate, E8). A renewed till spends its OLD credential
+  // itself, at unlock, after it has adopted the new one. Until the owner's phone collects the
+  // enrolled DM, the row still names the old credential, and the mint says SPENT. That is a
+  // renewal landing, not a revocation: revoking here retired a till that was trading on its new
+  // credential, and left the renewal stranded.
+  const renewing = () =>
+    inService({
+      renewal: {
+        startedAt: 1, mintKey: 'renew-key', voucherId: 'renewed-1', token: 'cashuBnew', delivered: true,
+        attestation: { v: '1', expires_at: '1900000000', nonce: 'ab'.repeat(32), sig: 'cd'.repeat(64) },
+      },
+    })
+  const mintAnswers = (byToken: Record<string, string>) => ({
+    validateToken: vi.fn(async (token: string) => ({ state: byToken[token] ?? 'SPENT' })),
+  })
+
+  it('leaves a row alone while its renewal is out: the device spent the old credential (Q2)', async () => {
+    recordTerminal(STALL, renewing())
+    expect(await markSpentElsewhere(STALL, mintAnswers({ cashuBnew: 'UNSPENT' }), 5_000)).toBe(0)
+    expect(allTerminals(STALL)[0].revokedAt).toBeUndefined()
+  })
+
+  // The renewal's credential is then the one that answers: revoked from another phone, it is.
+  it('still marks a renewing row revoked when the renewal credential is spent too', async () => {
+    recordTerminal(STALL, renewing())
+    expect(await markSpentElsewhere(STALL, mintAnswers({}), 5_000)).toBe(1)
+    expect(allTerminals(STALL)[0].revokedAt).toBe(5_000)
+  })
 })
 
 describe('a resumed mint carries the attestation signed at enrolment (#160 decision 5)', () => {
