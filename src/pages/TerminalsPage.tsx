@@ -27,11 +27,23 @@ import {
 import { ownerTransport, type MintTransport } from '../lib/terminalMint'
 import { collectEnrolled, ownerPublisher } from '../lib/terminalDeliveryNet'
 import { confirmEnrolled, deliverWaiting, stallConfirm, type ConfirmCall } from '../lib/terminalConfirm'
-import { setupCode } from '../lib/terminalDelivery'
+import { setupCode, wrapMessage } from '../lib/terminalDelivery'
 import { getSigner } from '../lib/nap'
 import type { CredentialMintApi } from '../lib/credentialRevocation'
 import { legacyApi } from '../lib/legacyBridge'
 import { syncRosterNow } from '../lib/terminalRosterSyncNet'
+import {
+  cancelLapsedRenewals,
+  currentExpiry,
+  isRenewable,
+  lapsedRenewalMessage,
+  renewalsQueued,
+  resumeRenewal,
+  startRenewal,
+} from '../lib/terminalRenewOwner'
+import { expiryBand, type ExpiryBand } from '../lib/terminalRenewal'
+import { collectRenewRequests } from '../lib/terminalDeliveryNet'
+
 
 /** How often the list looks for a device's "I have it" while something is waiting. */
 const ENROLLED_POLL_MS = 5_000
@@ -39,6 +51,28 @@ const ENROLLED_POLL_MS = 5_000
 /** Sends a credential DM to every waiting device that has not had one, sealed by the stall. */
 const ownerDeliver = (stallPubkey: string) =>
   deliverWaiting(stallPubkey, (borrow) => getSigner().withPrivkey(borrow), ownerPublisher)
+
+/** A stable clock: a fresh arrow per render would re-run the effect that reads it, forever. */
+const systemNow = () => Date.now()
+
+/** Sends a renewal's credential DM to the device, sealed by the stall (#160 phase 6). */
+const ownerSend = (json: string, terminalPubkey: string) =>
+  ownerPublisher.publish(getSigner().withPrivkey((key) => wrapMessage(key, terminalPubkey, json)))
+
+/** Renew, with the owner's own key, transport and publisher (#160 phase 6). */
+const ownerRenew = (stallPubkey: string, terminalPubkey: string, api: CredentialMintApi) =>
+  startRenewal(stallPubkey, terminalPubkey, { api, send: ownerSend, stallSigner: getSigner() })
+
+/**
+ * When the list opens: finish renewals that did not, cancel any the device never picked up in
+ * 24 hours, and adopt renew requests from tills this list lost (Q3).
+ */
+async function ownerRenewals(stallPubkey: string, api: CredentialMintApi, transport: MintTransport) {
+  const resumed = await resumeRenewal(stallPubkey, { transport, api, send: ownerSend }).catch(() => ({ completed: 0, cleared: 0, pending: 0 }))
+  const lapsed = await cancelLapsedRenewals(stallPubkey, api).catch(() => [] as string[])
+  const asked = await collectRenewRequests(stallPubkey, async () => api).catch(() => 0)
+  return { changed: resumed.completed + resumed.cleared + lapsed.length + asked, lapsed }
+}
 
 /** The owner's spend client, the one `burn.ts` and decommissioning use. */
 async function ownerSpendApi(): Promise<CredentialMintApi> {
@@ -84,6 +118,9 @@ export function TerminalsPage({
   confirm = stallConfirm,
   deliver = ownerDeliver,
   sync = syncRosterNow,
+  renew = ownerRenew,
+  renewals = ownerRenewals,
+  now = systemNow,
 }: {
   stallPubkey: string
   /** Injected by tests. Spends a credential with the stall's key. */
@@ -98,6 +135,12 @@ export function TerminalsPage({
   deliver?: (stallPubkey: string) => Promise<number>
   /** Injected by tests. Merges the roster the owner's other devices published (#160 phase 6). */
   sync?: (stallPubkey: string) => Promise<boolean>
+  /** Injected by tests. Renews one terminal (#160 phase 6). */
+  renew?: (stallPubkey: string, terminalPubkey: string, api: CredentialMintApi) => Promise<{ started: boolean; message?: string }>
+  /** Injected by tests. Resumes, cancels and adopts renewals when the list opens (#160 phase 6). */
+  renewals?: (stallPubkey: string, api: CredentialMintApi, transport: MintTransport) => Promise<{ changed: number; lapsed: string[] }>
+  /** Injected by tests (E7 moves the clock). */
+  now?: () => number
 }) {
   // Read lazily rather than in an effect. The roster is local storage, so it is
   // available on the first render — going through an effect would paint an
@@ -164,12 +207,36 @@ export function TerminalsPage({
     [stallPubkey, spendApi, refresh],
   )
 
+  /** Renewing, and what went wrong or lapsed (#160 phase 6). */
+  const [renewing, setRenewing] = useState<string | null>(null)
+  const [renewNotice, setRenewNotice] = useState<{ terminal: string; message: string } | null>(null)
+  const [lapsed, setLapsed] = useState<string[]>([])
+
+  const renewOne = useCallback(
+    async (terminalPubkey: string) => {
+      setRenewing(terminalPubkey)
+      setRenewNotice(null)
+      try {
+        const out = await renew(stallPubkey, terminalPubkey, await spendApi())
+        if (!out.started && out.message) setRenewNotice({ terminal: terminalPubkey, message: out.message })
+      } catch {
+        setRenewNotice({ terminal: terminalPubkey, message: 'The renewal did not reach the gateway. Try again.' })
+      } finally {
+        setRenewing(null)
+        refresh()
+      }
+    },
+    [stallPubkey, spendApi, renew, refresh],
+  )
+
   // Phase 2: while a row waits, look for its device's enrolled DM, so the row
   // turns In service without a reload (spec 2.1 step 4).
   // Round 2: and while a row is in service by the device's word but not yet confirmed at the
   // gateway, confirm it as the stall, with backoff, so a lost device confirm cannot leave a
   // till the list calls in service and the gateway refuses.
-  const hasWaiting = terminals.some((t) => t.status === 'waiting' && t.revokedAt === undefined)
+  const hasWaiting = terminals.some(
+    (t) => (t.status === 'waiting' || t.renewal !== undefined) && t.revokedAt === undefined,
+  )
   const needsConfirm = hasUnconfirmed(stallPubkey) || terminals.some((t) => t.gatewayState === 'unconfirmed')
   useEffect(() => {
     if (!hasWaiting && !needsConfirm) return
@@ -219,6 +286,11 @@ export function TerminalsPage({
         // turns out to be past its 24 hours is cancelled in the same pass.
         const resumed = await resumeMinting(stallPubkey, api, transport)
         const n = await cancelExpiredWaiting(stallPubkey, api)
+        // Renewals (#160 phase 6): finish any that did not, cancel any the device never picked up
+        // in 24 hours, and adopt renew requests from tills this list lost (Q3).
+        const { changed, lapsed: gone } = await renewals(stallPubkey, api, transport).catch(() => ({ changed: 0, lapsed: [] as string[] }))
+        if (gone.length > 0 && !cancelled) setLapsed(gone)
+        if (changed > 0 && !cancelled) refresh()
         // A credential spent somewhere else (the device took itself out of service, or another
         // of the owner's phones revoked it) reads as revoked here too (#160 phase 4).
         const elsewhere = await markSpentElsewhere(stallPubkey, api).catch(() => 0)
@@ -233,7 +305,15 @@ export function TerminalsPage({
     return () => {
       cancelled = true
     }
-  }, [stallPubkey, spendApi, transport, deliver, sync, refresh])
+  }, [stallPubkey, spendApi, transport, deliver, sync, renewals, refresh])
+  // Read once per render, from state set in an effect: render stays pure (react-hooks/purity).
+  const [nowMs, setNowMs] = useState(() => now())
+  useEffect(() => {
+    setNowMs(now())
+    const timer = setInterval(() => setNowMs(now()), 60_000)
+    return () => clearInterval(timer)
+  }, [now])
+  const queued = renewalsQueued(stallPubkey, nowMs)
   const live = terminals.filter((t) => t.revokedAt === undefined)
   const retired = terminals.filter((t) => t.revokedAt !== undefined)
 
@@ -241,6 +321,18 @@ export function TerminalsPage({
     <Screen>
       <BackLink to="/settings" label="Settings" />
       <PageHeader title="Terminals" subtitle="The devices trading for your stall" />
+
+      {lapsed.map((name) => (
+        <div key={name} className="mb-4" data-testid="renewal-lapsed">
+          <Alert>{lapsedRenewalMessage(name)}</Alert>
+        </div>
+      ))}
+      {queued > 0 ? (
+        <p className="mb-4 text-sm text-mono-500" data-testid="renewals-queued">
+          {queued} more to renew. Two can wait for their device at a time;
+          renew the next once one has picked up its renewal.
+        </p>
+      ) : null}
 
       {live.length === 0 ? (
         <Panel className="mb-6">
@@ -268,6 +360,10 @@ export function TerminalsPage({
                 removeUnmintedWaiting(stallPubkey, terminal.terminalPubkey)
                 refresh()
               }}
+              now={nowMs}
+              renewing={renewing === terminal.terminalPubkey}
+              renewError={renewNotice?.terminal === terminal.terminalPubkey ? renewNotice.message : null}
+              onRenew={() => void renewOne(terminal.terminalPubkey)}
               setup={
                 terminal.status === 'waiting' && terminal.voucherId && terminal.token
                   ? setupCode(stallPubkey, terminal.voucherId)
@@ -284,7 +380,7 @@ export function TerminalsPage({
         // retired.
         <ListSection title="No longer in service">
           {retired.map((terminal) => (
-            <TerminalRow key={terminal.terminalPubkey} terminal={terminal} />
+            <TerminalRow key={terminal.terminalPubkey} terminal={terminal} now={nowMs} />
           ))}
         </ListSection>
       ) : null}
@@ -315,8 +411,17 @@ function TerminalRow({
   onRevoke,
   onRemove,
   setup,
+  now,
+  renewing = false,
+  renewError = null,
+  onRenew,
 }: {
   terminal: TerminalRecord
+  /** The clock the expiry badge reads (#160 phase 6). The list passes its own. */
+  now: number
+  renewing?: boolean
+  renewError?: string | null
+  onRenew?: () => void
   /** The setup code for a waiting row, so it can be finished after the enrol screen closed. */
   setup?: string
   /** Enrolled and unrevoked, but a lapse has stopped it. Undefined = unknown. */
@@ -344,6 +449,12 @@ function TerminalRow({
   const unminted = waiting && !isRevocable(terminal)
   const label = TERMINAL_ROLE_LABELS[terminal.role]
   const bitesAt = revocationBitesAt(terminal)
+  // Decision 1 (#160 phase 6): amber within 30 days, red within 7, and past it.
+  const expiresAt = !revoked ? currentExpiry(terminal) : undefined
+  const band: ExpiryBand = !revoked && (terminal.status === undefined || terminal.status === 'in-service') ? expiryBand(expiresAt, now) : 'ok'
+  const legacySeller = needsRenewalToSell(terminal)
+  const renewable = isRenewable(terminal) && !terminal.renewal && !!onRenew
+  const highlight = band !== 'ok' || legacySeller || terminal.renewRequest !== undefined
 
   return (
     // Not `press-row`: the row is not a link, and the grey press tint would
@@ -376,6 +487,19 @@ function TerminalRow({
                 : 'Never used'}
           </p>
         </div>
+        {renewable && !confirming ? (
+          <Button
+            variant={highlight ? 'primary' : 'outline'}
+            size="sm"
+            onClick={onRenew}
+            disabled={renewing}
+            aria-label={`Renew ${terminal.name}`}
+            data-testid={band === 'ok' ? 'renew' : `renew-${band}`}
+            className={band === 'red' || band === 'expired' ? '!bg-red-600 !text-white' : band === 'amber' ? '!bg-amber-500 !text-white' : ''}
+          >
+            {renewing ? 'Renewing…' : 'Renew'}
+          </Button>
+        ) : null}
         {!revoked && revocable && onAskRevoke && !confirming ? (
           // `size="sm"`: a secondary action beside a name, not the point of the
           // row. Red on the outline rather than a filled red button — the
@@ -419,7 +543,35 @@ function TerminalRow({
         </p>
       ) : null}
 
-      {needsRenewalToSell(terminal) ? (
+      {band !== 'ok' && expiresAt !== undefined ? (
+        <p
+          className={`mt-2 text-sm ${band === 'amber' ? 'text-amber-700 dark:text-amber-400' : 'text-red-600 dark:text-red-400'}`}
+          data-testid="expiry-line"
+        >
+          {band === 'expired'
+            ? `${terminal.name} stopped selling on ${formatDate(expiresAt * 1000)}. Renew it.`
+            : `${terminal.name} stops on ${formatDate(expiresAt * 1000)}. Renew it.`}
+        </p>
+      ) : null}
+      {terminal.renewal && !revoked ? (
+        <p className="mt-2 text-sm text-mono-500" data-testid="renewal-waiting">
+          {terminal.renewal.token
+            ? `Renewal sent. ${terminal.name} picks it up the next time it is opened.`
+            : 'Renewing…'}
+        </p>
+      ) : null}
+      {terminal.renewRequest && !terminal.renewal && !revoked ? (
+        <p className="mt-2 text-sm text-amber-700 dark:text-amber-400" data-testid="renew-request">
+          {terminal.name} asked to be renewed.
+        </p>
+      ) : null}
+      {renewError ? (
+        <div className="mt-2">
+          <Alert>{renewError}</Alert>
+        </div>
+      ) : null}
+
+      {legacySeller ? (
         <p className="mt-2 text-sm text-amber-700 dark:text-amber-400" data-testid="renew-to-sell">
           {RENEW_TO_KEEP_SELLING}
         </p>

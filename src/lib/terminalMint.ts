@@ -279,7 +279,7 @@ const EXTRA_PATH_TAGS = ['refund', 'locktime', 'n_sigs_refund']
  * The secret's NUT-11 `pubkeys` tag is exactly `[stall]`, `n_sigs` is 1 (or
  * absent), and there is no refund or locktime path.
  */
-function exactlyTheStall(secret: string, stall: string): boolean {
+export function exactlyTheStall(secret: string, stall: string): boolean {
   try {
     const body = (JSON.parse(secret) as [string, { tags?: unknown }])[1]
     const tags = Array.isArray(body?.tags) ? (body.tags as unknown[]) : []
@@ -318,6 +318,8 @@ export class CredentialMintError extends Error {
     readonly status?: number,
     /** A defective credential whose cancelling spend did not land, so it must be kept. */
     readonly unspentToken?: string,
+    /** The gateway's error code, when it gave one (`IDEMPOTENCY_IN_PROGRESS`, ...). */
+    readonly code?: string,
   ) {
     super(message)
     this.name = 'CredentialMintError'
@@ -360,7 +362,8 @@ export async function mintTerminalCredential(
     Object.keys(headers).length > 0 ? headers : undefined,
   )
   if (!created.ok) {
-    throw new CredentialMintError(await refusal(created), undefined, created.status)
+    const { message, code } = await refusal(created)
+    throw new CredentialMintError(message, undefined, created.status, undefined, code)
   }
   const { voucher_id: voucherId } = (await created.json()) as { voucher_id?: string }
   if (!voucherId) throw new CredentialMintError('The gateway minted nothing.')
@@ -421,14 +424,16 @@ async function waitForToken(voucherId: string, transport: MintTransport): Promis
   )
 }
 
-async function refusal(response: Response): Promise<string> {
+async function refusal(response: Response): Promise<{ message: string; code?: string }> {
   try {
-    const body = (await response.json()) as { error?: { message?: string } }
-    if (body.error?.message) return `Could not set up the terminal: ${body.error.message}`
+    const body = (await response.json()) as { error?: { message?: string; code?: string } }
+    const code = typeof body.error?.code === 'string' ? body.error.code : undefined
+    if (body.error?.message) return { message: `Could not set up the terminal: ${body.error.message}`, code }
+    if (code) return { message: `Could not set up the terminal (${response.status}).`, code }
   } catch {
     // Not JSON. The status is the best we have.
   }
-  return `Could not set up the terminal (${response.status}).`
+  return { message: `Could not set up the terminal (${response.status}).` }
 }
 
 /**

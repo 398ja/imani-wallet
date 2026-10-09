@@ -267,6 +267,18 @@ describe('#160 round 2: an ambiguous answer keeps the minting row', () => {
     expect((await resumeMinting(STALL, spendApi(), t)).cleared).toBe(1)
     expect(allTerminals(STALL)).toEqual([])
   })
+
+  // Found by the local gate (#160 phase 6, E8): the same Idempotency-Key sent twice at once (the
+  // Renew tap and the screen's resume) gets 409 IDEMPOTENCY_IN_PROGRESS for the second. The first
+  // is minting: forgetting the row then strands a live credential nobody holds.
+  it('keeps the row on 409 IDEMPOTENCY_IN_PROGRESS: the same request is still minting', async () => {
+    recordTerminal(STALL, row())
+    const body = JSON.stringify({ error: { code: 'IDEMPOTENCY_IN_PROGRESS', message: 'in progress' } })
+    const t = transport(good(), { post: vi.fn(async () => new Response(body, { status: 409 })) })
+
+    expect((await resumeMinting(STALL, spendApi(), t)).pending).toBe(1)
+    expect(allTerminals(STALL)[0].mintKey).toBe('key-1')
+  })
 })
 
 describe('#160 round 2: a wrong credential that was spent gives its slot back', () => {
@@ -348,6 +360,35 @@ describe('#160 phase 4: a credential spent elsewhere reads as revoked here', () 
 
     expect(await markSpentElsewhere(STALL, mintSays('SPENT'))).toBe(2)
     expect(released).toEqual(['waiting-1'])
+  })
+
+  // #160 phase 6, Q2 (found by the local gate, E8). A renewed till spends its OLD credential
+  // itself, at unlock, after it has adopted the new one. Until the owner's phone collects the
+  // enrolled DM, the row still names the old credential, and the mint says SPENT. That is a
+  // renewal landing, not a revocation: revoking here retired a till that was trading on its new
+  // credential, and left the renewal stranded.
+  const renewing = () =>
+    inService({
+      renewal: {
+        startedAt: 1, mintKey: 'renew-key', voucherId: 'renewed-1', token: 'cashuBnew', delivered: true,
+        attestation: { v: '1', expires_at: '1900000000', nonce: 'ab'.repeat(32), sig: 'cd'.repeat(64) },
+      },
+    })
+  const mintAnswers = (byToken: Record<string, string>) => ({
+    validateToken: vi.fn(async (token: string) => ({ state: byToken[token] ?? 'SPENT' })),
+  })
+
+  it('leaves a row alone while its renewal is out: the device spent the old credential (Q2)', async () => {
+    recordTerminal(STALL, renewing())
+    expect(await markSpentElsewhere(STALL, mintAnswers({ cashuBnew: 'UNSPENT' }), 5_000)).toBe(0)
+    expect(allTerminals(STALL)[0].revokedAt).toBeUndefined()
+  })
+
+  // The renewal's credential is then the one that answers: revoked from another phone, it is.
+  it('still marks a renewing row revoked when the renewal credential is spent too', async () => {
+    recordTerminal(STALL, renewing())
+    expect(await markSpentElsewhere(STALL, mintAnswers({}), 5_000)).toBe(1)
+    expect(allTerminals(STALL)[0].revokedAt).toBe(5_000)
   })
 })
 
