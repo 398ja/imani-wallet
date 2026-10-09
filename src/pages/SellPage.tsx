@@ -22,6 +22,7 @@ import { currencyDecimals, formatDate, formatFace, parseAmountToMinor } from '..
 import { ValidityPicker } from '../components/ValidityPicker'
 import { useCashbackAvailable } from '../lib/cashback'
 import type { MerchantProfile } from '../lib/merchant'
+import { NOTE_MAX_CHARS, clampNote } from '../lib/note'
 
 /**
  * Sell: issue a coupon to a customer standing in front of you.
@@ -202,7 +203,7 @@ function IssueForm({
           faceValueMinor: minor,
           currency: merchant.issuanceCurrency,
           expiryDays: validity,
-          memo: memo.trim() || undefined,
+          memo: clampNote(memo.trim() || undefined),
           recipientPubkey: customer,
           // The ACTOR, not a key. On the owner's own device the stall IS the
           // session pubkey — a positive claim rather than the fallback
@@ -333,6 +334,8 @@ function IssueForm({
           label="Note (optional)"
           placeholder="£5 welcome voucher"
           value={memo}
+          // Capped (note.ts): a till's sale row must fit one relay event (review sh6).
+          maxLength={NOTE_MAX_CHARS}
           onChange={(e) => setMemo(e.target.value)}
           disabled={busy}
         />

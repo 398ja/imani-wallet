@@ -8,6 +8,7 @@ import { createCashbackIssuer } from '../lib/cashbackIssue'
 import { gatewayConfig, DEFAULT_CASHBACK_EXPIRY_DAYS } from '../lib/config'
 import { currencyDecimals, formatDate, formatFace, parseAmountToMinor } from '../lib/format'
 import type { MerchantProfile } from '../lib/merchant'
+import { NOTE_MAX_CHARS, clampNote } from '../lib/note'
 import { ownerActor, type Actor } from '../lib/actor'
 import type { TerminalSession } from '../lib/terminalSession'
 import { TERMINAL_CASHBACK_UNSUPPORTED, mayWarrantSale } from '../lib/warrantSigner'
@@ -91,7 +92,7 @@ export function CashbackIssuePage({
         amountMinor: minor,
         unit: merchant.issuanceCurrency,
         decimals,
-        memo: memo.trim() || undefined,
+        memo: clampNote(memo.trim() || undefined),
         expiryDays,
         // The coupon ages out on the stall's term, as a Sell coupon does
         // (398ja/imani-gateway-portal#58). `expiryDays` above is only the claim window.
@@ -169,6 +170,9 @@ export function CashbackIssuePage({
             label="Note (optional)"
             placeholder="What it is for"
             value={memo}
+            // The portal's own cap (@Size(max = 280)), and a till's cashback row must fit one
+            // relay event (note.ts, review sh6).
+            maxLength={NOTE_MAX_CHARS}
             onChange={(e) => setMemo(e.target.value)}
           />
         </div>
