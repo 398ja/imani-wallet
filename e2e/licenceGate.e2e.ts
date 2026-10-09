@@ -1,0 +1,410 @@
+/**
+ * imani-wallet#197 on a full local stack: a licensed stall's paid till sells, and a spent licence
+ * takes that back after the grace.
+ *
+ * Real throughout except who drives the API: the edge, gateway-core, gateway-customer (verifying
+ * the licence and asking the mint), the portal (its licence gate, cache and refresh), the mint,
+ * the relay, and the owner's wallet bundle in a browser, which reports the licence ITSELF from the
+ * dashboard (src/lib/licenceReport.ts) once the licence arrives by DM.
+ *
+ * Steps:
+ *   1. Owner A registers a stall in the browser. The harness reads A's key from A's own key store.
+ *   2. Two attested sell-and-redeem credentials are minted for A with A's key (as the owner app
+ *      does), each for a device key T1, T2 the harness holds, and confirmed. T1 is the stall's free
+ *      terminal, T2 is not.
+ *   3. T2 sells (NIP-98 by T2, terminal warrant): 402 TERMINAL_UNLICENSED. T1 sells: 201.
+ *   4. A copied licence: a licence sold to a DIFFERENT stall, reported by A, is refused 422 WRONG_KEY.
+ *   5. The seller sells A a licence (sell-subscription.mjs's metadata) and DMs it to A. A's wallet,
+ *      on its dashboard, verifies it and reports it (the request is watched in the browser).
+ *   6. T2 sells: 201.
+ *   7. The seller spends A's licence at the mint (a refund). After the portal's refresh and the
+ *      grace (shortened on the gate), T2 sells: 402 again. T1 still 201.
+ *
+ * Env: E2E_BASE, E2E_BUNDLE_DIR, E2E_LICENCE_SELLER_SK (the seller stall's key, which the gate names
+ * in GATEWAY_CUSTOMER_LICENCE_SELLER_PUBKEYS), E2E_MINT_URL, E2E_LICENCE_GRACE_S,
+ * E2E_IGNORE_HTTPS_ERRORS, E2E_CHROMIUM_ARGS. Run by imani-deploy's local gate with
+ * E2E_SCRIPT=licenceGate.e2e.ts.
+ */
+import { chromium, type Browser, type Page } from 'playwright'
+import { readFile } from 'node:fs/promises'
+import { extname, join, normalize } from 'node:path'
+import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js'
+import { sha256 } from '@noble/hashes/sha256'
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
+import { finalizeEvent, nip98 } from 'nostr-tools'
+import { registerMerchant, TEST_PASSPHRASE } from './register.mts'
+import { tokenProofs } from '../src/lib/voucherToken'
+import { terminalMetadataJson } from '../src/lib/terminalCredential'
+import { signOwnerAttestation } from '../src/lib/ownerAttestation'
+import { licenceIssueParams } from '../src/lib/licenceIssue'
+
+const BASE = (process.env.E2E_BASE ?? 'http://localhost').replace(/\/+$/, '')
+const BUNDLE_DIR = process.env.E2E_BUNDLE_DIR
+const SELLER_SK = process.env.E2E_LICENCE_SELLER_SK ?? ''
+const MINT = (process.env.E2E_MINT_URL ?? '').replace(/\/+$/, '')
+const GRACE_S = Number(process.env.E2E_LICENCE_GRACE_S ?? '30')
+const INTERNAL_RELAY = 'ws://nostr-relay:7777'
+if (process.env.E2E_IGNORE_HTTPS_ERRORS === '1') process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+
+const failures: string[] = []
+function check(name: string, ok: boolean, detail = '') {
+  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${ok || !detail ? '' : ` — ${detail}`}`)
+  if (!ok) failures.push(name)
+}
+
+const pub = (sk: string) => bytesToHex(schnorr.getPublicKey(hexToBytes(sk)))
+const randomSk = () => bytesToHex(secp256k1.utils.randomSecretKey())
+
+/** A request signed with NIP-98 by `sk`, optionally naming a terminal credential. */
+async function as(
+  sk: string,
+  method: string,
+  path: string,
+  body?: unknown,
+  headers: Record<string, string> = {},
+): Promise<{ status: number; body: string }> {
+  const url = `${BASE}${path}`
+  const payload = body === undefined ? undefined : JSON.stringify(body)
+  const auth = await nip98.getToken(url, method.toUpperCase(), (e) => finalizeEvent(e, hexToBytes(sk)), true,
+    body as Record<string, unknown>)
+  const res = await fetch(url, {
+    method,
+    headers: { Authorization: auth, ...(payload ? { 'Content-Type': 'application/json' } : {}), ...headers },
+    body: payload,
+    signal: AbortSignal.timeout(30_000),
+  }).catch((e) => ({ status: 0, text: async () => String(e) }) as unknown as Response)
+  return { status: res.status, body: await res.text().catch(() => '') }
+}
+
+/** Mint a voucher as `sk` and wait for its token. Waits out the mint's per-minute quote quota. */
+async function mint(sk: string, body: Record<string, unknown>, headers: Record<string, string> = {}) {
+  let created = { status: 0, body: '' }
+  for (let i = 0; i < 6; i++) {
+    created = await as(sk, 'POST', '/api/v1/wallet/vouchers', body, { 'Idempotency-Key': crypto.randomUUID(), ...headers })
+    // Retry the mint's per-minute quote quota (429 inside a 400) and a timed-out request.
+    if (created.status === 201 || created.status === 200) break
+    if (!/429|Timeout/i.test(created.body) && created.status !== 0) break
+    await new Promise((r) => setTimeout(r, 20_000))
+  }
+  let voucherId = ''
+  try {
+    voucherId = (JSON.parse(created.body || '{}') as { voucher_id?: string }).voucher_id ?? ''
+  } catch {
+    voucherId = ''
+  }
+  if (!voucherId) return { status: created.status, error: created.body.slice(0, 300), voucherId: '', token: '', voucher: {} as Record<string, unknown> }
+  for (let i = 0; i < 45; i++) {
+    const got = await as(sk, 'GET', `/api/v1/wallet/vouchers/${encodeURIComponent(voucherId)}`)
+    let v: Record<string, unknown> = {}
+    try {
+      v = JSON.parse(got.body || '{}') as Record<string, unknown>
+    } catch {
+      v = {}
+    }
+    if (v.status === 'ISSUED' && typeof v.token === 'string') return { status: 201, error: '', voucherId, token: v.token.trim(), voucher: v }
+    await new Promise((r) => setTimeout(r, 2_000))
+  }
+  return { status: 0, error: 'no token', voucherId, token: '', voucher: {} }
+}
+
+/** An attested issue-and-redeem credential for the stall `ownerSk`, locked to `deviceSk`. */
+async function sellingTill(ownerSk: string, name: string) {
+  const stall = pub(ownerSk)
+  const deviceSk = randomSk()
+  const lock = pub(deviceSk)
+  const expiresAt = Math.floor(Date.now() / 1000) + 365 * 86_400 + 600
+  const attestation = signOwnerAttestation(
+    { stallPubkey: stall, lockKey: lock, role: 'issue-and-redeem', expiresAt },
+    { pubkey: stall, withPrivkey: (f) => f(hexToBytes(ownerSk)) },
+  )
+  const metadata = { ...JSON.parse(terminalMetadataJson({ stallPubkey: stall, role: 'issue-and-redeem', lockKey: lock, name })), owner_attestation: attestation }
+  const minted = await mint(ownerSk, {
+    face_value: 1, face_unit: 'sat', face_decimals: 0, backing_strategy: 'PROPORTIONAL', issuer_id: stall,
+    memo: 'Imani terminal credential', expires_in_days: 365, merchant_metadata: metadata,
+  }, { 'X-Idempotency-Expires-At': new Date(expiresAt * 1000).toISOString().replace('.000Z', 'Z') })
+  if (minted.voucherId) {
+    await as(deviceSk, 'POST', `/api/v1/wallet/terminal-credentials/${encodeURIComponent(minted.voucherId)}/confirm`, {})
+  }
+  return { deviceSk, stall, voucherId: minted.voucherId, secret: minted.token ? tokenProofs(minted.token)[0].secret : '', error: minted.error }
+}
+
+/** The till sells EUR 1.00 with a fresh terminal warrant. Returns the HTTP status and body. */
+async function tillSells(t: { deviceSk: string; stall: string; voucherId: string; secret: string }) {
+  const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)))
+  const digest = sha256(new TextEncoder().encode([t.stall, '100', '2', 'EUR', nonce].join('\u001f')))
+  const warrant = JSON.stringify({
+    form: 'terminal', sale_total: 100, face_decimals: 2, unit: 'EUR', nonce,
+    signature: bytesToHex(schnorr.sign(digest, hexToBytes(t.deviceSk))), credential: t.secret,
+  })
+  return as(t.deviceSk, 'POST', '/api/v1/portal/vouchers',
+    { face_value_minor: 100, currency: 'EUR', quantity: 1, issuance_warrant: warrant },
+    { 'X-Imani-Terminal-Credential': t.voucherId })
+}
+
+/** The seller sells `buyer` a licence (sell-subscription.mjs's metadata, our licenceIssue.ts). */
+async function sellLicence(buyer: string) {
+  // 1 sat, so the licence is ONE proof. gateway-customer P2PK-locks a licence (its lock_key), and
+  // the wallet's receive sends a NUT-11 witness per locked proof in X-Cashu-Witnesses: a 4000-sat
+  // licence is a dozen ~2 KB secrets, which the edge refuses as "Request Header Or Cookie Too
+  // Large" (found by this gate; a separate follow-up, not #197's).
+  const params = licenceIssueParams({
+    lockKey: buyer, subscriptionId: `sub_${bytesToHex(crypto.getRandomValues(new Uint8Array(8)))}`,
+    paidAmountMinor: 1, paidCurrency: 'sat',
+  })
+  return mint(SELLER_SK, {
+    face_value: params.faceValueMinor, face_unit: 'sat', face_decimals: 0, backing_strategy: 'PROPORTIONAL',
+    issuer_id: pub(SELLER_SK), memo: params.memo, expires_in_days: params.expiryDays,
+    merchant_metadata: JSON.parse(params.merchantMetadata),
+    // The seller's own `merchant` warrant over the sale: since #159 every wallet refuses a coupon
+    // without one, a licence included (sell-subscription.mjs signs the same).
+    issuance_warrant: sellerWarrant(params.faceValueMinor, 0, 'sat'),
+  })
+}
+
+function sellerWarrant(saleTotal: number, faceDecimals: number, unit: string): string {
+  const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)))
+  const digest = sha256(new TextEncoder().encode([pub(SELLER_SK), String(saleTotal), String(faceDecimals), unit, nonce].join('\u001f')))
+  return JSON.stringify({
+    form: 'merchant', sale_total: saleTotal, face_decimals: faceDecimals, unit, nonce,
+    sig: bytesToHex(schnorr.sign(digest, hexToBytes(SELLER_SK))),
+  })
+}
+
+/** NUT-07 for a token's proofs, straight from the mint. */
+function hashToCurveHex(message: string): string {
+  const DOMAIN = new TextEncoder().encode('Secp256k1_HashToCurve_Cashu_')
+  const msgHash = sha256(new Uint8Array([...DOMAIN, ...new TextEncoder().encode(message)]))
+  for (let c = 0; c < 2 ** 16; c++) {
+    const ctr = new Uint8Array(4)
+    new DataView(ctr.buffer).setUint32(0, c, true)
+    try {
+      return secp256k1.Point.fromHex(bytesToHex(new Uint8Array([0x02, ...sha256(new Uint8Array([...msgHash, ...ctr]))]))).toHex(true)
+    } catch { /* next */ }
+  }
+  throw new Error('no point')
+}
+
+/**
+ * Spend a licence's proofs at the mint (NUT-03 swap), with a NUT-11 witness by `sk` for each locked
+ * proof. The outputs are throwaway.
+ */
+async function spendAtMint(token: string, sk: string): Promise<{ status: number; body: string }> {
+  const proofs = tokenProofs(token)
+  const outputs = proofs.map((p) => {
+    const Y = secp256k1.Point.fromHex(hashToCurveHex(bytesToHex(crypto.getRandomValues(new Uint8Array(32)))))
+    const r = BigInt('0x' + bytesToHex(secp256k1.utils.randomSecretKey()))
+    return { amount: p.amount, id: p.id, B_: Y.add(secp256k1.Point.BASE.multiply(r)).toHex(true) }
+  })
+  const witness = (secret: string) =>
+    JSON.stringify({ signatures: [bytesToHex(schnorr.sign(sha256(new TextEncoder().encode(secret)), hexToBytes(sk)))] })
+  const r = await fetch(`${MINT}/v1/swap`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      inputs: proofs.map((p) => ({ amount: p.amount, id: p.id, secret: p.secret, C: p.C, witness: witness(p.secret) })),
+      outputs,
+    }),
+  }).catch(() => null)
+  return { status: r?.status ?? 0, body: r ? (await r.text()).slice(0, 200) : 'unreachable' }
+}
+
+/** A POST NIP-98 signed by `sk`, sent with the owner's browser session cookie (the edge's NAP gate). */
+async function asOwnerSession(owner: Page, sk: string, path: string, body: unknown): Promise<{ status: number; body: string }> {
+  const url = `${BASE}${path}`
+  const auth = await nip98.getToken(url, 'POST', (e) => finalizeEvent(e, hexToBytes(sk)), true, body as Record<string, unknown>)
+  const res = await owner.context().request.post(url, {
+    headers: { Authorization: auth, 'Content-Type': 'application/json' },
+    data: JSON.stringify(body),
+  })
+  return { status: res.status(), body: await res.text() }
+}
+
+async function mintState(token: string): Promise<string[]> {
+  const ys = tokenProofs(token).map((p) => hashToCurveHex(p.secret))
+  const r = await fetch(`${MINT}/v1/checkstate`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ Ys: ys }),
+  }).catch(() => null)
+  const body = r ? ((await r.json().catch(() => ({}))) as { states?: Array<{ state: string }> }) : {}
+  return (body.states ?? []).map((s) => s.state)
+}
+
+const CONTENT_TYPES: Record<string, string> = {
+  '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2',
+}
+
+async function ownerPage(browser: Browser): Promise<Page> {
+  const ctx = await browser.newContext({ locale: 'en-GB', serviceWorkers: BUNDLE_DIR ? 'block' : 'allow', ignoreHTTPSErrors: true })
+  if (BUNDLE_DIR) {
+    const root = normalize(BUNDLE_DIR)
+    const shell = join(root, 'index.html')
+    await ctx.route(`${BASE}/**`, async (route) => {
+      const path = new URL(route.request().url()).pathname
+      if (path.startsWith('/api/') || path.startsWith('/.well-known/')) return route.continue()
+      const candidate = normalize(join(root, path))
+      const file = candidate.startsWith(root) && extname(candidate) ? await readFile(candidate).then(() => candidate, () => shell) : shell
+      return route.fulfill({ status: 200, body: await readFile(file), contentType: CONTENT_TYPES[extname(file)] ?? 'application/octet-stream' })
+    })
+  }
+  return ctx.newPage()
+}
+
+/** The licence token A's wallet holds, read from its own store (wallet_vouchers), or ''. */
+async function heldLicenceToken(owner: Page, seller: string): Promise<string> {
+  return (await owner.evaluate(`(async () => {
+    const dbs = (await indexedDB.databases()).map((d) => d.name).filter((n) => n && n.startsWith('imani-wallet'))
+    for (const name of dbs) {
+      const db = await new Promise((res, rej) => { const r = indexedDB.open(name); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error) })
+      if (!db.objectStoreNames.contains('wallet_vouchers')) continue
+      const all = await new Promise((res) => { const r = db.transaction('wallet_vouchers').objectStore('wallet_vouchers').getAll(); r.onsuccess = () => res(r.result) })
+      const v = all.find((x) => (x.issuer_id || '') === ${JSON.stringify(seller)} && x.token)
+      if (v) return v.token
+    }
+    return ''
+  })()`).catch(() => '')) as string
+}
+
+async function ownerKey(owner: Page): Promise<string> {
+  return (await owner.evaluate(`(async () => {
+    try {
+      const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0))
+      const env = JSON.parse(localStorage.getItem('imani-wallet-key') || 'null')
+      const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(${JSON.stringify(TEST_PASSPHRASE)}), 'PBKDF2', false, ['deriveKey'])
+      const key = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt: b64(env.kdf.salt), iterations: env.kdf.iterations, hash: env.kdf.hash },
+        material, { name: 'AES-GCM', length: 256 }, false, ['decrypt'])
+      return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64(env.iv) }, key, b64(env.ciphertext)))
+    } catch (e) { return String(e) }
+  })()`)) as string
+}
+
+async function main() {
+  if (!/^[0-9a-f]{64}$/.test(SELLER_SK) || !MINT) {
+    console.error('licenceGate: E2E_LICENCE_SELLER_SK and E2E_MINT_URL are required (run through the local gate)')
+    process.exit(2)
+  }
+  const browser = await chromium.launch({ args: (process.env.E2E_CHROMIUM_ARGS ?? '').split(' ').filter(Boolean) })
+  const errors: string[] = []
+
+  console.log('\n#197: owner A registers a stall')
+  const owner = await ownerPage(browser)
+  owner.on('pageerror', (e) => errors.push(e.message))
+  // The wallet's own licence reports, as the browser saw them. The status is taken synchronously:
+  // reading the body here races the next navigation, which is what hid a 200 in early runs.
+  const reports: Array<{ status: number }> = []
+  owner.on('response', (r) => {
+    if (new URL(r.url()).pathname === '/api/v1/portal/licence') reports.push({ status: r.status() })
+  })
+  const reportBodies: string[] = []
+  owner.on('request', (r) => {
+    if (new URL(r.url()).pathname === '/api/v1/portal/licence') reportBodies.push(r.postData() ?? '')
+  })
+  await registerMerchant(owner, BASE)
+  const ownerSk = await ownerKey(owner)
+  check("the harness opened A's key", /^[0-9a-f]{64}$/.test(ownerSk), ownerSk.slice(0, 80))
+  if (!/^[0-9a-f]{64}$/.test(ownerSk)) return finish(browser, errors)
+  const stall = pub(ownerSk)
+
+  console.log('\n#197: two attested sell-and-redeem tills; the first is the free one')
+  const t1 = await sellingTill(ownerSk, 'Front till')
+  await new Promise((r) => setTimeout(r, 1_500))
+  const t2 = await sellingTill(ownerSk, 'Second till')
+  check('T1 and T2 are minted', !!t1.secret && !!t2.secret, `${t1.error} ${t2.error}`)
+  if (!t1.secret || !t2.secret) return finish(browser, errors)
+  const t1Sale = await tillSells(t1)
+  check('T1 (the free terminal) sells: 201', t1Sale.status === 201, `${t1Sale.status} ${t1Sale.body.slice(0, 200)}`)
+  const before = await tillSells(t2)
+  check('T2 (a paid terminal) without a licence: 402 TERMINAL_UNLICENSED',
+    before.status === 402 && /TERMINAL_UNLICENSED/.test(before.body), `${before.status} ${before.body.slice(0, 200)}`)
+
+  console.log("\n#197: a licence sold to ANOTHER stall, reported by A, licenses nothing")
+  const other = await sellLicence(pub(randomSk()))
+  check('the seller mints a licence for another stall', !!other.token, other.error)
+  if (other.token) {
+    // Through A's own browser session, as the wallet sends it: the edge admits /api/v1/portal/ only
+    // with a NAP session, and the request is still NIP-98 signed by A.
+    const copied = await asOwnerSession(owner, ownerSk, '/api/v1/portal/licence', { secrets: tokenProofs(other.token).map((p) => p.secret) })
+    check('the copied licence is refused 422 LICENCE_WRONG_KEY', copied.status === 422 && /LICENCE_WRONG_KEY/.test(copied.body),
+      `${copied.status} ${copied.body.slice(0, 200)}`)
+    const still = await tillSells(t2)
+    check('T2 is still 402 after the copied report', still.status === 402, String(still.status))
+  }
+
+  console.log("\n#197: A buys a licence; A's wallet reports it by itself")
+  const sold = await sellLicence(stall)
+  check('the seller mints A a licence', !!sold.token, sold.error)
+  if (!sold.token) return finish(browser, errors)
+  const dm = await as(SELLER_SK, 'POST', '/api/v1/dm/tokens/send', {
+    recipient_pubkey: stall, token: sold.token, memo: sold.voucher.memo, voucher_id: sold.voucherId,
+    face_value: sold.voucher.face_value, face_unit: sold.voucher.face_unit, face_decimals: sold.voucher.face_decimals,
+    token_amount: sold.voucher.token_amount, backing_strategy: sold.voucher.backing_strategy,
+    issuer_id: pub(SELLER_SK), sender_pubkey: pub(SELLER_SK),
+    expires_at: Math.floor(Date.parse(String(sold.voucher.expires_at)) / 1000) || undefined,
+    relay_urls: [INTERNAL_RELAY],
+  })
+  check('the licence is delivered to A by DM', dm.status >= 200 && dm.status < 300, `${dm.status} ${dm.body.slice(0, 200)}`)
+  // The dashboard is where the owner lands after login; its licence check reports a verified licence.
+  // The wallet redeems the DM: it swaps the licence at the mint and keeps fresh proofs (same signed
+  // voucher, new secrets). So what it reports, and what must later be spent, are ITS proofs.
+  let held = ''
+  for (let i = 0; i < 24 && !held; i++) {
+    await owner.goto(`${BASE}/merchant/dashboard`, { waitUntil: 'load' }).catch(() => {})
+    await owner.waitForTimeout(5_000)
+    held = await heldLicenceToken(owner, pub(SELLER_SK))
+  }
+  check("A's wallet holds the licence (stored after the DM)", held !== '')
+  let reported = false
+  for (let i = 0; i < 12 && !reported; i++) {
+    reported = reports.some((r) => r.status === 200)
+    if (!reported) {
+      await owner.goto(`${BASE}/merchant/dashboard`, { waitUntil: 'load' }).catch(() => {})
+      await owner.waitForTimeout(5_000)
+    }
+  }
+  check("A's wallet reported the licence by itself (POST /api/v1/portal/licence 200)", reported,
+    JSON.stringify(reports.slice(-2)))
+  const sent = reportBodies.find((b) => b.includes('P2PK_VOUCHER') || b.includes('VOUCHER')) ?? ''
+  const heldProofs = held ? tokenProofs(held) : []
+  check('the report carried exactly the held proof SECRETS, and no C and no token',
+    heldProofs.length > 0 &&
+      JSON.stringify((JSON.parse(sent || '{}') as { secrets?: string[] }).secrets) === JSON.stringify(heldProofs.map((p) => p.secret)) &&
+      heldProofs.every((p) => !sent.includes(p.C)) && !sent.includes('cashuB'),
+    sent.slice(0, 160))
+  const after = await tillSells(t2)
+  check('T2 (a paid, attested terminal) of the licensed stall sells: 201', after.status === 201, `${after.status} ${after.body.slice(0, 200)}`)
+
+  console.log('\n#197: the licence is refunded (spent at the mint); after the grace T2 is 402 again')
+  // The licence leaves A's stall: spent at the mint. gateway-customer mints a licence P2PK-locked
+  // to its buyer (lock_key), so only A's key can spend it (a seller's refund needs #226's refund
+  // key). A's held proofs are spent here, which is what a refund or a theft looks like to the mint.
+  const refund = await spendAtMint(held, ownerSk)
+  const states = await mintState(held)
+  check('the licence is spent at the mint (NUT-07 SPENT)', states.length > 0 && states.every((s) => s === 'SPENT'),
+    `swap=${refund.status} ${refund.body} states=${states.join(',')}`)
+  // Wait out the grace and two refresh periods BEFORE asking, rather than polling: every 201 mints a
+  // coupon, and the mint's per-identity quote quota (429) is low enough to trip in a poll loop.
+  await new Promise((r) => setTimeout(r, (GRACE_S + 20) * 1000))
+  let dropped = false
+  let last = { status: 0, body: '' }
+  for (let i = 0; i < 6 && !dropped; i++) {
+    last = await tillSells(t2)
+    dropped = last.status === 402
+    if (!dropped) await new Promise((r) => setTimeout(r, 15_000))
+  }
+  check(`after the refresh and the ${GRACE_S} s grace, T2 is 402 TERMINAL_UNLICENSED`, dropped && /TERMINAL_UNLICENSED/.test(last.body),
+    `${last.status} ${last.body.slice(0, 200)}`)
+  const t1After = await tillSells(t1)
+  check('T1, the free terminal, still sells', t1After.status === 201, `${t1After.status} ${t1After.body.slice(0, 160)}`)
+
+  return finish(browser, errors)
+}
+
+async function finish(browser: Browser, errors: string[]) {
+  check('no uncaught errors in the owner wallet', errors.length === 0, errors.join('; ').slice(0, 300))
+  await browser.close()
+  console.log(failures.length === 0 ? '\nAll checks passed.\n' : `\n${failures.length} FAILED: ${failures.join(', ')}\n`)
+  process.exit(failures.length === 0 ? 0 : 1)
+}
+
+main().catch((e) => {
+  console.error('E2E harness error:', e)
+  process.exit(1)
+})
