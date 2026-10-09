@@ -37,6 +37,10 @@ import { SellPage } from './SellPage'
 import { CashbackIssuePage } from './CashbackIssuePage'
 import { NotTrading } from './MerchantHomePage'
 import { LAPSE } from '../lib/terminalSession'
+import { getSigner } from '../lib/nap'
+import { requestCredential } from '../lib/terminalRequestCredential'
+import { openTillSales } from '../lib/tillSalesNet'
+import { pendingTillSales, UNSENT_SALES_WARNING } from '../lib/tillSales'
 
 /**
  * The till, on a device enrolled as a terminal (#160 phase 3, spec 2.3 and 2.4).
@@ -101,6 +105,20 @@ export function TerminalApp() {
     if (!till) return
     return startIdleLock(idleLockMs(record ? idleLockMinutesFor(record) : undefined), lock)
   }, [till, record, lock])
+
+  // While the till is open its sales go to the stall, sealed by K (#160 phase 6, wallet#202), and
+  // anything a dead connection left in the outbox is sent again, now and every minute.
+  useEffect(() => {
+    if (!till) return
+    const held = requestCredential()
+    if (!held) return
+    return openTillSales(
+      till.actor.stallPubkey,
+      held.voucherId,
+      (borrow) => getSigner().withPrivkey(borrow),
+      getSigner(),
+    )
+  }, [till])
 
   // A record whose token is gone is still a terminal (#160 review, LOW): it gets the unlock screen,
   // which refuses it and offers to remove the terminal, never the customer's routes.
@@ -501,6 +519,12 @@ function DecommissionButton({ devicePubkey }: { devicePubkey: string }) {
       {asking ? (
         <div className="mt-3 space-y-2">
           <p className="text-sm">{DECOMMISSION_COPY.confirmBody}</p>
+          {/* #160 phase 6: a sale record that has not reached the stall is erased with the rest. */}
+          {pendingTillSales() > 0 ? (
+            <p className="text-sm text-amber-700 dark:text-amber-400" data-testid="unsent-sales">
+              {UNSENT_SALES_WARNING(pendingTillSales())}
+            </p>
+          ) : null}
           <Button variant="outline" size="sm" onClick={() => setAsking(false)} disabled={busy}>
             Keep it in service
           </Button>

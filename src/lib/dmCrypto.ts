@@ -10,6 +10,7 @@ import type { CryptoAdapter, GiftWrapEvent, UnwrappedDm, TokenMetadata } from '@
 import { checkIssuer } from './issuerAllowlist'
 import { checkMintAndUnit } from './trustedMint'
 import { getSigner } from './nap'
+import { isTillSaleMessage } from './tillSales'
 import { buildValidationRecord } from './voucherValidationRecord'
 import { asChunk, looksLikeChunk, offerChunkFrom } from './dmChunks'
 import {
@@ -444,6 +445,17 @@ export function createDmCryptoAdapter(): CryptoAdapter {
          * payload's own identity `sig`, and what binds it to the COUPON is the
          * sender check in `transferSignature.queueIfPaired`.
          */
+        /**
+         * A till's sale record (#160 phase 6, wallet#202). It carries no token: dm-poll marks it
+         * processed as a non-token DM, which is fine, because filing it is the collector's job and
+         * the collector reads the inbox itself, from its own cursor, verifying every row against
+         * this stall's attestation. This only makes the sale show up now rather than at next login.
+         */
+        if (isTillSaleMessage(rumor.content)) {
+          const stall = getSigner().pubkey
+          void import('./tillSalesNet').then((m) => m.collectTillSalesForOwner(stall)).catch(() => 0)
+        }
+
         const transferSignature = parseTransferSignature(rumor.content)
         if (transferSignature) {
           const sealAuthor = getSigner().withPrivkey((key) => sealAuthorOf(event as never, key))

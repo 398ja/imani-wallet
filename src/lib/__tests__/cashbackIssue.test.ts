@@ -537,3 +537,37 @@ describe('a terminal cannot issue cashback (#159)', () => {
     expect(calls.order).not.toContain('generate')
   })
 })
+
+/**
+ * A till's cashback reaches the stall's books (#160 phase 6, plan F1). `record` wrote it through
+ * `getWallet()`, which a till does not have, so the code it read out at the counter was in nobody's
+ * history. Now it goes to the stall as a sealed sale record, attributed to the till.
+ */
+describe("a till's cashback is recorded with its stall, never in a wallet it does not have", () => {
+  it('sends the cashback row to the till sale sink, attributed to the till', async () => {
+    const { setTillSaleSink } = await import('../tillSales')
+    const { openSession, SESSION_KIND } = await import('../terminalSession')
+    const { grantFor } = await import('../terminalRole')
+    const till = {
+      kind: 'terminal', stallPubkey: STALL, terminalPubkey: OTHER, role: 'issue-and-redeem',
+      permissions: grantFor('issue-and-redeem', STALL), attested: true,
+    } as Actor
+    const warrant = JSON.stringify({
+      form: 'terminal', sale_total: 1500, face_decimals: 2, unit: 'EUR', nonce: 'n', signature: 'ab'.repeat(64), credential: 'c',
+    })
+    const sent: Array<Record<string, unknown>> = []
+    setTillSaleSink(async (rows) => (sent.push(...(rows as unknown as Array<Record<string, unknown>>)), true))
+    calls.rows.length = 0
+    try {
+      await issueCashback(
+        { actor: till, session: openSession(till as never, SESSION_KIND.FULL, Date.now()), amountMinor: 1500, unit: 'EUR', decimals: 2, expiryDays: 30, voucherValidityDays: 90 },
+        { idempotencyKey: 'k-till', warrant },
+      )
+    } finally {
+      setTillSaleSink(null)
+    }
+    expect(calls.rows).toEqual([])
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({ id: 'cashback:cb-1', type: 'cashback', terminalPubkey: OTHER, merchantId: STALL, issuanceWarrant: warrant })
+  })
+})

@@ -15,6 +15,7 @@ import { getSigner } from './nap'
 import { buildCashbackTransaction } from './transactions'
 import { getWallet, notifyWalletChanged } from './wallet'
 import type { TerminalSession } from './terminalSession'
+import { recordTillSale } from './tillSales'
 import {
   TERMINAL_CASHBACK_UNSUPPORTED,
   UnwarrantedSaleError,
@@ -122,6 +123,7 @@ export async function issueCashback(
     memo: memo ?? '',
     warrant,
     stallPubkey: actor ? issuingStall(actor) : undefined,
+    terminalPubkey: actor?.kind === 'terminal' ? actor.terminalPubkey : undefined,
   })
   return issued
 }
@@ -208,12 +210,11 @@ function signerPubkey(): string | null {
  */
 async function record(
   issued: IssuedCashback,
-  extra: { decimals: number; memo: string; warrant?: string; stallPubkey?: string },
+  extra: { decimals: number; memo: string; warrant?: string; stallPubkey?: string; terminalPubkey?: string },
 ): Promise<void> {
   try {
     const expiresAt = Date.parse(issued.expiresAt)
-    await getWallet().addTransaction(
-      buildCashbackTransaction({
+    const row = buildCashbackTransaction({
         cashbackId: issued.cashbackId,
         claimCode: issued.claimCode,
         voucherId: issued.voucherId,
@@ -226,8 +227,15 @@ async function record(
         at: Date.now(),
         issuanceWarrant: extra.warrant,
         merchantId: extra.stallPubkey,
-      }),
-    )
+        terminalPubkey: extra.terminalPubkey,
+      })
+    // A till has no wallet: its cashback goes to the stall, sealed by the till's key, and the
+    // owner's app files it (#160 phase 6, plan F1), as a till's sale does.
+    if (extra.terminalPubkey) {
+      await recordTillSale([row])
+      return
+    }
+    await getWallet().addTransaction(row)
     // A write made by this tab is not echoed back to it, so the history screen
     // behind this one needs telling. Same as issue.ts.
     notifyWalletChanged()

@@ -38,8 +38,13 @@ vi.mock('../nip98', () => ({
   },
 }))
 
+/** Every time the owner's wallet is asked for: a till has none (#160 phase 6, wallet#202). */
+const walletAsked = vi.hoisted(() => ({ count: 0 }))
 vi.mock('../wallet', () => ({
-  getWallet: () => ({ addTransaction: async () => {} }),
+  getWallet: () => {
+    walletAsked.count += 1
+    return { addTransaction: async () => {} }
+  },
   notifyWalletChanged: () => {},
 }))
 
@@ -72,6 +77,7 @@ const { TERMINAL_ROLES, grantFor } = await import('../terminalRole')
 const { openSession, SESSION_KIND } = await import('../terminalSession')
 const { UnwarrantedSaleError } = await import('../warrantSigner')
 const { setRequestCredential } = await import('../terminalRequestCredential')
+const { setTillSaleSink } = await import('../tillSales')
 
 /**
  * A live, full-authority session.
@@ -365,6 +371,42 @@ describe('a sale the customer’s wallet would refuse is never made (#159)', () 
     ])
     expect(warrant.form).toBe('terminal')
     expect(warrant.credential).toBe('["P2PK_VOUCHER",{}]')
+  })
+
+  // wallet#202: a till opens no wallet, so its sale row went to `getWallet()`, which threw and
+  // was swallowed. Now the row goes to the stall as a sealed sale record, and the wallet is never
+  // asked for.
+  it('sends a till sale record to its stall and never touches a wallet (#160 phase 6)', async () => {
+    const actor = till()
+    signerState.pubkey = DEVICE
+    setRequestCredential({ voucherId: 'cred-1', stallPubkey: STALL, secret: '["P2PK_VOUCHER",{}]' })
+    const sent: Array<Record<string, unknown>[]> = []
+    setTillSaleSink(async (rows) => (sent.push(rows as unknown as Record<string, unknown>[]), true))
+    walletAsked.count = 0
+    try {
+      await issueAndDeliver({ ...params, actor, session: live(actor) })
+    } finally {
+      setTillSaleSink(null)
+    }
+
+    expect(walletAsked.count).toBe(0)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toHaveLength(1)
+    expect(sent[0][0]).toMatchObject({ id: 'issued:v1', type: 'issued', terminalPubkey: DEVICE, merchantId: STALL })
+    expect(JSON.parse(String(sent[0][0].issuanceWarrant)).form).toBe('terminal')
+  })
+
+  it("files the owner's own sale in the owner's wallet, as before", async () => {
+    const sent: unknown[] = []
+    setTillSaleSink(async (rows) => (sent.push(rows), true))
+    walletAsked.count = 0
+    try {
+      await issueAndDeliver({ ...params, actor: ownerActor(STALL)! })
+    } finally {
+      setTillSaleSink(null)
+    }
+    expect(sent).toEqual([])
+    expect(walletAsked.count).toBeGreaterThan(0)
   })
 
   it('refuses a REDUCED till before anything is minted, even with its credential', async () => {
