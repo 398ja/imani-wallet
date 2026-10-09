@@ -8,6 +8,7 @@ import { buildRecordEvents, isChunkEvent, reassembleRecords, recordIdOf, type Se
 import { onRosterChanged } from './terminalRoster'
 import { syncRoster } from './terminalRosterSync'
 import { markSpentElsewhere } from './terminalRevoke'
+import { collectEnrolled } from './terminalDeliveryNet'
 import { legacyApi } from './legacyBridge'
 import type { CredentialMintApi } from './credentialRevocation'
 
@@ -97,7 +98,12 @@ export async function syncRosterNow(stallPubkey: string): Promise<boolean> {
     const out = await syncRoster(stallPubkey, {
       fetch: fetchRosterPlaintext,
       publish: publishRosterPlaintext,
-      afterMerge: async (stall) => void (await markSpentElsewhere(stall, await ownerMint())),
+      afterMerge: async (stall) => {
+        await markSpentElsewhere(stall, await ownerMint())
+        // A merged row may be Waiting for an "enrolled" DM that came while no Terminals screen
+        // was open, or on another phone (found by the local gate, E4). Read the inbox for it.
+        await collectEnrolled(stall).catch(() => 0)
+      },
     })
     return out.fetched
   } catch (error) {
