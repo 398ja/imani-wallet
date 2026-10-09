@@ -47,6 +47,26 @@ export interface EnrolmentRequest {
   terminalPubkey: string
 }
 
+/**
+ * The longest terminal name, in UTF-16 code units (the unit of an HTML `maxLength`).
+ *
+ * The name is signed into the credential's `merchant_metadata`, so it rides in every warrant the
+ * till builds, and the portal refuses a warrant over 4,096 units (`IssuanceWarrantGate`). An
+ * uncapped name of about 2,600 characters made every sale from that till refused as malformed
+ * (review rw1). 64 is far more than "Front counter" needs and far inside the warrant limit.
+ */
+export const TERMINAL_NAME_MAX_CHARS = 64
+
+/** The trimmed name cut to `TERMINAL_NAME_MAX_CHARS` units, never splitting a surrogate pair. */
+export function clampTerminalName(name: string): string {
+  const trimmed = name.trim()
+  if (trimmed.length <= TERMINAL_NAME_MAX_CHARS) return trimmed
+  let end = TERMINAL_NAME_MAX_CHARS
+  const last = trimmed.charCodeAt(end - 1)
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1
+  return trimmed.slice(0, end).trimEnd()
+}
+
 export const ENROLMENT_REFUSAL = {
   NO_NAME: 'no-name',
   NO_ROLE: 'no-role',
@@ -287,7 +307,7 @@ export function prepareEnrolment(
   const stall = context.stallPubkey.toLowerCase()
 
   return {
-    name: request.name.trim(),
+    name: clampTerminalName(request.name),
     stallPubkey: stall,
     role: request.role,
     // Locked to the key the device showed. This is what makes the returned QR
