@@ -35,6 +35,7 @@ import {
 } from './lib/merchant'
 import { clearPendingBackup, peekPendingBackup } from './lib/onboardingHandoff'
 import { forgetResume, recover, remember } from './lib/resume'
+import { catchUpMerchantGrant } from './lib/merchantGrantCatchUp'
 import { Centered, Fatal } from './components/ui'
 import { Header } from './components/ui/Header'
 import { LoginPage } from './pages/LoginPage'
@@ -865,6 +866,10 @@ export default function App() {
       // for why this is not simply sessionStorage.
       const pubkey = next.getSession()?.pubkey
       if (pubkey) void remember(pubkey, privkeyHex)
+      // A merchant whose login beat the gateway's ingest of their stall record would
+      // otherwise render a customer home until the next reload (#114). A no-op unless
+      // the local record is active and the login answer lacks coupon:issue.
+      await catchUpMerchantGrant(next)
       setSession(next)
     },
     [callbacks],
