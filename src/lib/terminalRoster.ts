@@ -1,6 +1,7 @@
 import { readOwnerAttestation, type OwnerAttestation } from './ownerAttestation'
 import { roleOf, type TerminalRole } from './terminalRole'
 import { parseVoucherToken } from './voucherToken'
+import { isForgotten, normalizeRow, type ForgottenRow } from './terminalRosterSync'
 
 /**
  * The stall's record of the terminals it has out, and withdrawing one.
@@ -116,6 +117,57 @@ export interface TerminalRecord {
   confirmAttempts?: number
   /** Epoch ms before which the next confirm attempt is not made. */
   nextConfirmAt?: number
+  /**
+   * When the CURRENT credential was issued, epoch ms (#160 phase 6). Set by a renewal, so the row
+   * keeps its `enrolledAt` (when the device was first added) and the roster sync can still tell
+   * which credential is the newest. Absent: `enrolledAt` is the current credential's issue time.
+   */
+  credentialAt?: number
+  /**
+   * Every credential this device ever held (#160 phase 6, spec 6, plan 2.2): the current one and
+   * those renewed away or revoked. The home-coming check (decision 5 Q2) reads it, and the roster
+   * sync merges it. `token` only on credentials that can still be revoked (F9).
+   */
+  credentials?: TerminalCredentialEntry[]
+  /**
+   * A renewal in progress (#160 phase 6, plan 2.3): written BEFORE the mint request, as a
+   * `minting` row is, so `resumeRenewal` finishes it from either of the owner's phones.
+   */
+  renewal?: TerminalRenewal
+  /** Set when a till asked for a renewal and the owner has not renewed yet (Q3). */
+  renewRequest?: { at: number }
+}
+
+/** One credential a terminal held, in the roster's history (#160 phase 6). */
+export interface TerminalCredentialEntry {
+  voucherId: string
+  /** Epoch ms the owner's app recorded it. */
+  issuedAt: number
+  /** The attestation's nonce, the gateway's one-time claim (spec 4.6.2). */
+  nonce?: string
+  /** `T`, epoch seconds: the credential's signed expiry. */
+  expiresAt?: number
+  /** The voucher id this credential renewed, if it was a renewal. */
+  renews?: string
+  /** Set once the mint took the spend (or reported it spent). */
+  revokedAt?: number
+  /** Only while unrevoked: what revoking spends. */
+  token?: string
+}
+
+/** A renewal the owner started for an in-service terminal (#160 phase 6, plan 2.3). */
+export interface TerminalRenewal {
+  /** Epoch ms the owner pressed Renew. The gateway lapses an unadopted renewal after 24 h. */
+  startedAt: number
+  /** Sent as `Idempotency-Key`, so a lost answer replays the same credential. */
+  mintKey: string
+  attestation: OwnerAttestation
+  /** Known once the gateway accepted the request. */
+  voucherId?: string
+  /** Known once the token was fetched and checked. */
+  token?: string
+  /** The renews-DM reached the relay or the mirror. */
+  delivered?: boolean
 }
 
 /** The credential's standing at gateway-customer, as the owner's app last learned it. */
@@ -139,43 +191,95 @@ function statusOf(value: unknown): TerminalStatus | undefined {
 
 const ROSTER_KEY = (stallPubkey: string) => `imani-wallet:terminals:${stallPubkey}`
 
-function read(stallPubkey: string): TerminalRecord[] {
+const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
+const text = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
+
+function credentialEntryOf(raw: unknown): TerminalCredentialEntry | null {
+  const c = raw as Partial<TerminalCredentialEntry>
+  if (!c || typeof c.voucherId !== 'string' || typeof c.issuedAt !== 'number') return null
+  const entry: TerminalCredentialEntry = { voucherId: c.voucherId, issuedAt: c.issuedAt }
+  if (text(c.nonce) !== undefined) entry.nonce = c.nonce
+  if (num(c.expiresAt) !== undefined) entry.expiresAt = c.expiresAt
+  if (text(c.renews) !== undefined) entry.renews = c.renews
+  if (num(c.revokedAt) !== undefined) entry.revokedAt = c.revokedAt
+  if (text(c.token) !== undefined) entry.token = c.token
+  return entry
+}
+
+function attestationOf(raw: unknown): OwnerAttestation | undefined {
+  return raw && typeof raw === 'object' ? (readOwnerAttestation({ owner_attestation: raw }) ?? undefined) : undefined
+}
+
+function renewalOf(raw: unknown): TerminalRenewal | undefined {
+  const r = raw as Partial<TerminalRenewal>
+  const attestation = attestationOf(r?.attestation)
+  if (!r || typeof r.startedAt !== 'number' || typeof r.mintKey !== 'string' || !attestation) return undefined
+  return {
+    startedAt: r.startedAt,
+    mintKey: r.mintKey,
+    attestation,
+    ...(text(r.voucherId) !== undefined ? { voucherId: r.voucherId } : {}),
+    ...(text(r.token) !== undefined ? { token: r.token } : {}),
+    ...(typeof r.delivered === 'boolean' ? { delivered: r.delivered } : {}),
+  }
+}
+
+/**
+ * One stored or synced row, validated rather than cast, and folded into its credential history
+ * (`normalizeRow`). An old row's single `voucherId` and attestation become `credentials[0]`.
+ * A roster row with an unknown role would otherwise render as a terminal whose powers nobody
+ * can state, so it is dropped.
+ */
+export function sanitizeRow(entry: unknown): TerminalRecord | null {
+  const row = entry as Partial<TerminalRecord>
+  const role = roleOf(row?.role)
+  if (!row || !role || typeof row.terminalPubkey !== 'string') return null
+  const record: TerminalRecord = {
+    terminalPubkey: row.terminalPubkey,
+    name: typeof row.name === 'string' ? row.name : 'Terminal',
+    role,
+    enrolledAt: typeof row.enrolledAt === 'number' ? row.enrolledAt : 0,
+    lastUsedAt: num(row.lastUsedAt),
+    token: text(row.token),
+    voucherId: text(row.voucherId),
+    waitingUntil: num(row.waitingUntil),
+    idleLockMinutes: num(row.idleLockMinutes),
+    revokedAt: num(row.revokedAt),
+    status: statusOf(row.status),
+    mintKey: text(row.mintKey),
+    attestation: attestationOf(row.attestation),
+    defect: text(row.defect),
+    delivered: typeof row.delivered === 'boolean' ? row.delivered : undefined,
+    gatewayState: gatewayStateOf(row.gatewayState),
+    confirmAttempts: num(row.confirmAttempts),
+    nextConfirmAt: num(row.nextConfirmAt),
+    credentialAt: num(row.credentialAt),
+    credentials: Array.isArray(row.credentials)
+      ? row.credentials.flatMap((c) => {
+          const e = credentialEntryOf(c)
+          return e ? [e] : []
+        })
+      : undefined,
+    renewal: renewalOf(row.renewal),
+    renewRequest:
+      row.renewRequest && typeof row.renewRequest.at === 'number' ? { at: row.renewRequest.at } : undefined,
+  }
+  for (const key of Object.keys(record) as (keyof TerminalRecord)[]) {
+    if (record[key] === undefined) delete record[key]
+  }
+  return normalizeRow(record)
+}
+
+/** Every stored row, forgotten ones included: the roster sync's merge input. */
+function readAll(stallPubkey: string): TerminalRecord[] {
   try {
     const raw = localStorage.getItem(ROSTER_KEY(stallPubkey))
     if (!raw) return []
     const parsed: unknown = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
-
-    // Each record is validated rather than cast. A roster row with an unknown
-    // role would otherwise render as a terminal whose powers nobody can state.
     return parsed.flatMap((entry): TerminalRecord[] => {
-      const row = entry as Partial<TerminalRecord>
-      const role = roleOf(row.role)
-      if (!role || typeof row.terminalPubkey !== 'string') return []
-      return [
-        {
-          terminalPubkey: row.terminalPubkey,
-          name: typeof row.name === 'string' ? row.name : 'Terminal',
-          role,
-          enrolledAt: typeof row.enrolledAt === 'number' ? row.enrolledAt : 0,
-          lastUsedAt: typeof row.lastUsedAt === 'number' ? row.lastUsedAt : undefined,
-          token: typeof row.token === 'string' ? row.token : undefined,
-          voucherId: typeof row.voucherId === 'string' ? row.voucherId : undefined,
-          waitingUntil: typeof row.waitingUntil === 'number' ? row.waitingUntil : undefined,
-          idleLockMinutes: typeof row.idleLockMinutes === 'number' ? row.idleLockMinutes : undefined,
-          revokedAt: typeof row.revokedAt === 'number' ? row.revokedAt : undefined,
-          status: statusOf(row.status),
-          mintKey: typeof row.mintKey === 'string' ? row.mintKey : undefined,
-          attestation: row.attestation && typeof row.attestation === 'object'
-            ? (readOwnerAttestation({ owner_attestation: row.attestation }) ?? undefined)
-            : undefined,
-          defect: typeof row.defect === 'string' ? row.defect : undefined,
-          delivered: typeof row.delivered === 'boolean' ? row.delivered : undefined,
-          gatewayState: gatewayStateOf(row.gatewayState),
-          confirmAttempts: typeof row.confirmAttempts === 'number' ? row.confirmAttempts : undefined,
-          nextConfirmAt: typeof row.nextConfirmAt === 'number' ? row.nextConfirmAt : undefined,
-        },
-      ]
+      const row = sanitizeRow(entry)
+      return row ? [row] : []
     })
   } catch {
     return []
@@ -184,10 +288,69 @@ function read(stallPubkey: string): TerminalRecord[] {
 
 function write(stallPubkey: string, rows: TerminalRecord[]): void {
   try {
-    localStorage.setItem(ROSTER_KEY(stallPubkey), JSON.stringify(rows))
+    localStorage.setItem(ROSTER_KEY(stallPubkey), JSON.stringify(rows.map(normalizeRow)))
   } catch {
     // Storage refused. The caller has already issued the credential, so losing
     // the roster row costs the owner their list, not the terminal its authority.
+  }
+  // Every mutation is published, debounced, to the owner's other devices (#160 phase 6).
+  for (const listener of rosterListeners) listener(stallPubkey)
+}
+
+const rosterListeners = new Set<(stallPubkey: string) => void>()
+
+/** Called after every roster write. The roster sync publishes from here. */
+export function onRosterChanged(listener: (stallPubkey: string) => void): () => void {
+  rosterListeners.add(listener)
+  return () => rosterListeners.delete(listener)
+}
+
+const FORGOTTEN_KEY = (stallPubkey: string) => `imani-wallet:terminals-forgotten:${stallPubkey}`
+
+/** Rows this device deliberately removed, so a sync from another phone does not restore them. */
+export function forgottenRows(stallPubkey: string): ForgottenRow[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(FORGOTTEN_KEY(stallPubkey)) ?? '[]') as unknown
+    return Array.isArray(parsed)
+      ? parsed.filter(
+          (f): f is ForgottenRow =>
+            !!f && typeof (f as ForgottenRow).terminalPubkey === 'string' && typeof (f as ForgottenRow).enrolledAt === 'number',
+        )
+      : []
+  } catch {
+    return []
+  }
+}
+
+/** The stored roster and tombstones, as the sync merges them. */
+export function localRoster(stallPubkey: string): { rows: TerminalRecord[]; forgotten: ForgottenRow[] } {
+  return { rows: readAll(stallPubkey), forgotten: forgottenRows(stallPubkey) }
+}
+
+/**
+ * The rows this device works with: every stored row the owner did not remove on purpose. A
+ * synced roster keeps a removed row's history (the merge must), so it is hidden here.
+ */
+function read(stallPubkey: string): TerminalRecord[] {
+  const forgotten = forgottenRows(stallPubkey)
+  return readAll(stallPubkey).filter((t) => !isForgotten(t, forgotten))
+}
+
+/**
+ * Replace the stored roster with a merged one (the sync's only write). Never blind: the caller
+ * merged the local roster in, so nothing local is lost (R1).
+ */
+export function replaceRoster(stallPubkey: string, rows: TerminalRecord[], forgotten: ForgottenRow[]): void {
+  try {
+    localStorage.setItem(FORGOTTEN_KEY(stallPubkey), JSON.stringify(forgotten))
+  } catch {
+    // Without the tombstones a forgotten row may come back once; the next forget removes it.
+  }
+  // Written without notifying: the sync writes what it just merged and published.
+  try {
+    localStorage.setItem(ROSTER_KEY(stallPubkey), JSON.stringify(rows.map(normalizeRow)))
+  } catch {
+    // As `write`.
   }
 }
 
@@ -421,6 +584,17 @@ export function hasUnconfirmed(stallPubkey: string): boolean {
  */
 export function forgetTerminal(stallPubkey: string, terminalPubkey: string): void {
   const key = terminalPubkey.toLowerCase()
+  // Remember it, so the roster sync does not bring back what this phone removed (#160 phase 6).
+  const gone = read(stallPubkey).filter((t) => t.terminalPubkey.toLowerCase() === key)
+  if (gone.length > 0) {
+    const at = Math.max(...gone.map((t) => t.credentialAt ?? t.enrolledAt))
+    const kept = forgottenRows(stallPubkey).filter((f) => f.terminalPubkey !== key)
+    try {
+      localStorage.setItem(FORGOTTEN_KEY(stallPubkey), JSON.stringify([...kept, { terminalPubkey: key, enrolledAt: at }]))
+    } catch {
+      // As `write`.
+    }
+  }
   write(
     stallPubkey,
     read(stallPubkey).filter((t) => t.terminalPubkey.toLowerCase() !== key),
