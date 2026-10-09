@@ -17,6 +17,7 @@ import {
   waitingTerminals,
 } from '../lib/terminalRoster'
 import {
+  attestEnrolment,
   checkCode,
   formatCheckCode,
   mintTerminalCredential,
@@ -36,6 +37,7 @@ import {
 } from '../lib/terminalDelivery'
 import { ownerPublisher } from '../lib/terminalDeliveryNet'
 import { getSigner } from '../lib/nap'
+import type { StallSigner } from '../lib/ownerAttestation'
 import { useOnline } from '../lib/useOnline'
 import type { LicenceStatus } from '../lib/licenceStatus'
 
@@ -79,6 +81,7 @@ export function TerminalEnrolPage({
   spendApi = ownerSpendApi,
   publisher = ownerPublisher,
   seal = stallSeal,
+  stallSigner = getSigner,
 }: {
   stallPubkey: string
   /** Injected by tests. The owner's NIP-98 signer otherwise. */
@@ -89,6 +92,8 @@ export function TerminalEnrolPage({
   publisher?: WrapPublisher
   /** Injected by tests. Lends the stall's key for sealing the credential DM. */
   seal?: <T>(borrow: (key: Uint8Array) => T) => T
+  /** The stall's signer, which attests the till (#160 decision 5). Injected for tests. */
+  stallSigner?: () => StallSigner
 }) {
   const navigate = useNavigate()
   const online = useOnline()
@@ -164,12 +169,17 @@ export function TerminalEnrolPage({
    */
   const enrol = async () => {
     if (!context || busy) return
-    const credential = { ...prepareEnrolment(request, context), idleLockMinutes: idleLock }
+    const prepared = { ...prepareEnrolment(request, context), idleLockMinutes: idleLock }
     setBusy(true)
     setFailure(null)
     const mintKey = crypto.randomUUID()
     const startedAt = Date.now()
+    let credential: typeof prepared
     try {
+      // The stall's own consent to this till (#160 decision 5): signed here, once, with the key
+      // that signs `merchant` warrants, before anything is sent. Every customer's wallet checks
+      // it, so a till minted without it could never sell.
+      credential = { ...prepared, attestation: attestEnrolment(prepared, stallSigner(), startedAt) }
       // Written BEFORE the request leaves this phone (#160 review). If the
       // gateway mints but its answer, or the token, never arrives, this row is
       // what lets the next open of Terminals finish the job or cancel it,
@@ -181,6 +191,9 @@ export function TerminalEnrolPage({
         enrolledAt: startedAt,
         status: 'minting',
         mintKey,
+        // With the key, so a resumed mint re-sends this exact body (spec 4.6.2).
+        attestation: credential.attestation,
+        idleLockMinutes: idleLock,
         waitingUntil: startedAt + WAITING_TTL_MS,
       })
     } catch (e) {

@@ -1556,7 +1556,11 @@ export function startDmPoll(pubkey: string): DmPollService {
   // "you receive no coupons at all" — a cosmetic feature taking down the
   // money path. The guard is cheap and the failure it prevents is total.
   if (typeof service.on === 'function') {
-    service.on('redemption:refused', announceRefusal)
+    // A stall explains a refusal to the person at its counter; a customer is told what to do
+    // about their own payment (#160 5b-5). Asked per event: the merchant record can arrive later.
+    service.on('redemption:refused', (event) =>
+      announceRefusal(event, currentPubkey && loadMerchant(currentPubkey) !== null ? 'stall' : 'customer'),
+    )
     // And remember it against the payment it belonged to, so the payment's
     // screen still says so after the toast has gone (#145).
     const owner = currentPubkey

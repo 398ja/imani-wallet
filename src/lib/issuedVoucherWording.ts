@@ -18,8 +18,9 @@
  *     counter rail nothing else ever can — so the two are never collapsed into
  *     one "verified" line.
  *  3. **Only a mismatch is an alarm.** Unwarranted sales are every sale made
- *     before warrants shipped and every sale made on a terminal, so colouring
- *     them red would bury the one row that disagrees with its own signature.
+ *     before warrants shipped, and every sale from a till the stall has not
+ *     attested, so colouring them red would bury the one row that disagrees
+ *     with its own signature.
  *     `IssuanceReconciliation` already draws that line; this follows it.
  */
 import type { CashAttestationVerdict } from './cashAttestation'
@@ -85,7 +86,7 @@ export function describeRail(rail: PaymentRail): EvidenceLine {
         label: 'Not recorded',
         tone: 'neutral',
         detail:
-          'Nothing on this sale says how it was paid for. That is every sale made before signing was added, and every sale made on a terminal — not a sign that anything went wrong.',
+          'Nothing on this sale says how it was paid for. That is every sale made before signing was added — not a sign that anything went wrong.',
       }
   }
 }
@@ -122,7 +123,7 @@ export function describeWarrant(verdict: WarrantVerdict): EvidenceLine {
         label: 'Issued unsigned',
         tone: 'neutral',
         detail:
-          'The issuer stated that nothing outside the issuing service authorised this. That is what a terminal issues, because a terminal’s key is not the stall’s.',
+          'Nothing outside the issuing service authorised this sale. That is a sale its issuer marked unauthorised, or one from a till you have not set up again since terminals began carrying your signature. Customers’ wallets refuse such coupons.',
       }
     case 'failed':
       return {

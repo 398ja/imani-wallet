@@ -237,12 +237,17 @@ export async function resumeMinting(
         continue
       }
 
+      // Exactly what the enrol screen sent: the same idle lock and the same signed attestation,
+      // read back off the row, never signed afresh (spec 4.6.2). A different body under the same
+      // Idempotency-Key is refused by the gateway as a different request.
       const credential = {
         name: row.name,
         stallPubkey: stallPubkey.toLowerCase(),
         role: row.role,
         lockedTo: row.terminalPubkey.toLowerCase(),
         permissions: grantFor(row.role, stallPubkey.toLowerCase()),
+        ...(row.idleLockMinutes !== undefined ? { idleLockMinutes: row.idleLockMinutes } : {}),
+        ...(row.attestation ? { attestation: row.attestation } : {}),
       }
       const minted = row.voucherId
         ? await checkMinted(credential, row.voucherId, spendAtOnce, transport)

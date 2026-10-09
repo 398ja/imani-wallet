@@ -1,3 +1,4 @@
+import type { OwnerAttestation } from './ownerAttestation'
 import { secp256k1 } from '@noble/curves/secp256k1.js'
 
 import { grantFor, type TerminalRole } from './terminalRole'
@@ -255,6 +256,11 @@ export type PreparedCredential = TerminalCredential & {
   permissions: readonly string[]
   /** The owner's idle lock, signed into the credential (#160 review). */
   idleLockMinutes?: number
+  /**
+   * The owner's attestation of this till, signed with the stall key at enrolment (#160 decision
+   * 5). Persisted on the `minting` row, so a resumed mint sends it unchanged.
+   */
+  attestation?: OwnerAttestation
 }
 
 /**

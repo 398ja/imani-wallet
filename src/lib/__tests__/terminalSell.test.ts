@@ -13,7 +13,8 @@ import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 
 const TILL_SK = '33'.repeat(32)
 const TILL = bytesToHex(schnorr.getPublicKey(hexToBytes(TILL_SK)))
-const STALL = bytesToHex(schnorr.getPublicKey(hexToBytes('22'.repeat(32))))
+const STALL_SK = '22'.repeat(32)
+const STALL = bytesToHex(schnorr.getPublicKey(hexToBytes(STALL_SK)))
 const SERVICE_SK = '11'.repeat(32)
 const SERVICE = bytesToHex(schnorr.getPublicKey(hexToBytes(SERVICE_SK)))
 
@@ -41,6 +42,7 @@ const { setRequestCredential, TERMINAL_CREDENTIAL_HEADER } = await import('../te
 const { signedFetch } = await import('../nip98')
 const { openSession, SESSION_KIND } = await import('../terminalSession')
 const { grantFor } = await import('../terminalRole')
+const { signOwnerAttestation } = await import('../ownerAttestation')
 import type { TerminalActor } from '../actor'
 
 const till: TerminalActor = {
@@ -49,11 +51,27 @@ const till: TerminalActor = {
   role: 'issue-and-redeem',
   terminalPubkey: TILL,
   permissions: grantFor('issue-and-redeem', STALL),
+  // The stall attested this till at enrolment (#160 decision 5), so it may sell.
+  attested: true,
 }
 
-/** A credential the service minted to K for this stall, as its wire secret. */
-function credentialSecret(): string {
-  const metadata = JSON.stringify({ terminal: true, stall_pubkey: STALL, role: 'issue-and-redeem', lock_key: TILL })
+/**
+ * A credential the service minted to K for this stall, as its wire secret. Attested by the stall
+ * at enrolment unless `attested` is false, which is a till set up before 0.17.0.
+ */
+function credentialSecret(attested = true): string {
+  const stallSigner = { pubkey: STALL, withPrivkey: <T,>(f: (k: Uint8Array) => T) => f(hexToBytes(STALL_SK)) }
+  const owner_attestation = signOwnerAttestation(
+    { stallPubkey: STALL, lockKey: TILL, role: 'issue-and-redeem', expiresAt: 4_000_000_000 },
+    stallSigner,
+  )
+  const metadata = JSON.stringify({
+    terminal: true,
+    stall_pubkey: STALL,
+    role: 'issue-and-redeem',
+    lock_key: TILL,
+    ...(attested ? { owner_attestation } : {}),
+  })
   const tags = [
     ['voucher_id', 'cred-1'], ['issuer', STALL], ['unit', 'sat'], ['face_value', '1'],
     ['expires_at', '4000000000'], ['merchant_metadata', metadata],
@@ -74,6 +92,19 @@ beforeEach(() => {
 })
 
 describe('a FULL selling till signs a terminal warrant the customer verifies', () => {
+  // A till set up before owner attestation still signs its sales with K, but its credential
+  // carries no stall signature: the customer reads the coupon `unwarranted` (review M7), which
+  // `refuseIfUnwarranted` refuses before the swap, rather than `failed` (it is not tampered with).
+  it('reads `unwarranted`, not `failed`, when the till was never attested', async () => {
+    setRequestCredential({ voucherId: 'cred-1', stallPubkey: STALL, secret: credentialSecret(false) })
+    const warrant = parseIssuanceWarrant(await buildIssuanceWarrant(till, 2500, 2, 'EUR'))
+    expect(
+      verifyIssuanceWarrant(warrant, STALL, { faceValueMinor: 2500, unit: 'EUR', faceDecimals: 2 }, {
+        trustedServiceKeys: [SERVICE],
+      }),
+    ).toEqual({ verdict: 'unwarranted' })
+  })
+
   it('may warrant a sale in a FULL session, not a REDUCED one', () => {
     // The gate this phase lifts: before it, every terminal was refused here.
     expect(mayWarrantSale(till, openSession(till, SESSION_KIND.FULL))).toBe(true)

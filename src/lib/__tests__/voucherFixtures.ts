@@ -234,6 +234,10 @@ export interface LockedCredentialOptions {
   kind?: 'P2PK_VOUCHER' | 'VOUCHER'
   /** Applied after signing, to forge a signature mismatch. */
   tamperMetadata?: string
+  /** The signed `expires_at`, epoch seconds. A fixed instant in 2027 unless set. */
+  expiresAt?: number
+  /** Leaves the `expires_at` tag out altogether: a credential with no expiry. */
+  omitExpiry?: boolean
 }
 
 /**
@@ -263,7 +267,7 @@ export function buildLockedCredentialToken(o: LockedCredentialOptions): string {
     ['issuer', stall],
     ['unit', 'sat'],
     ['face_value', '1'],
-    ['expires_at', '1820071167'],
+    ...(o.omitExpiry ? [] : [['expires_at', String(o.expiresAt ?? 1820071167)]]),
     ['memo', 'Imani terminal credential'],
     ['backing_strategy', 'PROPORTIONAL'],
     ['issuance_ratio', '1'],
@@ -315,4 +319,32 @@ export function buildLockedCredentialToken(o: LockedCredentialOptions): string {
     entry,
   )
   return `cashuB${base64Url(root)}`
+}
+
+/**
+ * A terminal credential the stall attested at enrolment (#160 decision 5), signed into its
+ * metadata as gateway-customer 5b-2 mints it, with the credential's expiry equal to `T`.
+ *
+ * `attestWith` signs the attestation with another key (a forgery); `until` attests a different
+ * `T` from the credential's expiry (`expiresAt`), to make one the credential outlives.
+ */
+export function buildAttestedCredentialToken(
+  o: LockedCredentialOptions & { attestWith?: Uint8Array; until?: number; name?: string },
+): string {
+  const stall = bytesToHex(schnorr.getPublicKey(o.stallKey))
+  const role = o.role ?? 'issue-and-redeem'
+  const expiresAt = o.expiresAt ?? 1820071167
+  const until = o.until ?? expiresAt
+  const nonce = 'c4'.repeat(32)
+  const preimage = ['imani-terminal-attestation', '1', stall, o.devicePubkey, role, String(until), nonce].join('\u001f')
+  const sig = bytesToHex(schnorr.sign(sha256(new TextEncoder().encode(preimage)), o.attestWith ?? o.stallKey))
+  const metadata = JSON.stringify({
+    terminal: true,
+    stall_pubkey: stall,
+    role,
+    lock_key: o.devicePubkey,
+    name: o.name ?? 'Front counter',
+    owner_attestation: { v: '1', expires_at: String(until), nonce, sig },
+  })
+  return buildLockedCredentialToken({ ...o, role, metadata, expiresAt })
 }

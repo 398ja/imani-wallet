@@ -442,8 +442,14 @@ which trusted key will sign. The cost is that an attestation can be
 transplanted into a credential minted by another key the same build trusts.
 That still needs `K` (section 4.6.4).
 
-**Expiry.** The owner picks `T` = the credential's expiry (decision 1,
-365 days). Gateway-customer **uses `T` as the credential's `expires_at`** for
+**Expiry.** The owner picks `T` = enrolment + 365 days (decision 1) **+ 600 s
+of slack** (`ATTESTATION_EXPIRY_SLACK_SECONDS`, `wallet:src/lib/terminalMint.ts`).
+The slack lets a gateway that predates 5b-2, which computes its own
+now + 365 d, land inside `T` unless its clock runs about 10 minutes ahead of the
+phone (then the owner's `credentialDefect` refuses the token and it fails
+safe). So the owner's app and the gateway deploy in either order. With 5b-2,
+which writes `T` verbatim, a credential therefore lives **365 d + 10 min**.
+Gateway-customer **uses `T` as the credential's `expires_at`** for
 a terminal credential, instead of computing it from `expires_in_days`. Every
 verifier requires `credential.expires_at <= attestation.expires_at`. The
 service therefore cannot extend a till beyond what the owner signed.
@@ -486,7 +492,7 @@ already run.
 | Customer wallet, offline (`verifyTerminalWarrant`) | the line-by-line mirror | coupon receipt and every re-check | `skip-offline`, unchanged: a coupon sold before expiry stays valid |
 | gateway-customer at mint (`VoucherController`) | `verifyOwnerAttestation` against the **resolved** issuer, pre-mint | `POST /api/v1/wallet/vouchers` with terminal metadata | n/a. Also sets `expires_at := T` |
 | gateway-customer verifier (`TerminalCredentialVerifier`, internal endpoint) | the same | each lookup. Reports `attested`. An unattested credential is never `live` for issuance | n/a |
-| The terminal itself (`credentialFromToken`) | the same, at unlock and on a renewal. A **missing** attestation opens the till for Redeem only (section 4.6.5). A **present but invalid** one refuses the credential outright: the stall never signed it | login | n/a |
+| The terminal itself (`credentialFromToken`) | the same step, at unlock and on a renewal, on the token's verified metadata (resolution 3 below). A **missing or malformed** attestation opens the till for Redeem only (section 4.6.5). A **well-formed** one that does not verify, or that the credential outlives, refuses the credential outright: the stall never signed it | login | n/a |
 | The owner (`credentialDefect`) | the **whole** requested `merchant_metadata` came back byte for byte as sent: stall, lock, role, `name`, `idle_lock_minutes` and the attestation. `idle_lock_minutes` is security-relevant (a device holder must not switch it off) | after every mint | n/a |
 
 New cashu-voucher refusals: `OWNER_ATTESTATION_MISSING` (absent or malformed),
@@ -502,6 +508,34 @@ That is also what the same coupon reads in 5a, so its verdict does not change
 at the cutover. Only `BAD_OWNER_ATTESTATION` and `ATTESTATION_EXCEEDED` map to
 `failed` ("Does not match its signature"). Both are refused before the swap
 (`refuseIfUnwarranted`).
+
+**Resolutions (5b-5, review rev-5b M3).** Where this section was ambiguous, the
+wallet follows cashu-voucher 0.17.0, and the parity vectors pin it:
+
+1. **Exact stall match.** `issuerId` must equal the metadata's `stall_pubkey`
+   **and** the credential's single `issuer` tag, byte for byte: lowercase hex,
+   no case folding. An absent, repeated or differently spelled `issuer` tag,
+   or an uppercase `stall_pubkey`, is `WRONG_STALL` (or
+   `NOT_A_SELLING_TERMINAL` where the metadata check comes first). The owner's
+   wallet always writes lowercase.
+2. **Malformed means missing.** An attestation that is present but not exactly
+   `{v, expires_at, nonce, sig}` with well-formed string values reads as
+   `OWNER_ATTESTATION_MISSING`: `unwarranted` for a customer, and Redeem only on
+   the device. Only a well-formed attestation whose signature fails
+   (`BAD_OWNER_ATTESTATION`) or that the credential outlives
+   (`ATTESTATION_EXCEEDED`) refuses. Only the service key can strip or mangle
+   it (it sits inside the service-signed metadata), and that key can already
+   mint an unattested till, so nothing is gained. An attestation on a
+   credential with **no** `expires_at` bounds nothing and is refused on the
+   device.
+3. **The device reads the verified token, not the strict parser.** Tokens
+   minted before 0.16.1 serialise some tags in ways the strict credential
+   parser refuses, and those tills must keep Redeem. So `credentialFromToken`
+   runs the attestation step on metadata whose service signature and lock it
+   has already verified. It reads that metadata as strictly as the verifiers
+   do: a repeated key at any depth is never attested, and `stall_pubkey` must
+   be exactly the lowercase stall. So "attested" on the till implies every
+   verifier accepts the attestation step.
 
 **Is the gateway's signature still needed? Yes, but for a different job.**
 After this change, `verified` means *the stall signed this till, and the till
