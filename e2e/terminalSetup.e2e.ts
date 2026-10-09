@@ -797,15 +797,24 @@ async function phase6(browser: Browser, owner: Page, customer: Page, customerPub
   const t = b5Row?.attestation ? Number(b5Row.attestation.expires_at) : 0
   check('B5 is in service on A with an attested expiry T', !!b5Old && t > 0, JSON.stringify(b5Row?.attestation ?? {}))
 
-  // E7: A's clock moved to T - 20 days (amber), then T - 5 days (red). Only A's page clock.
+  // E7: A's clock moved to T - 20 days (amber), then T - 5 days (red). Only A's page clock, and
+  // only after the unlock: NAP's challenge is signed with the page's time, and a clock a year out
+  // is refused (401). The badge and line are Market till's own, not the first on the page.
   for (const [days, badge] of [[20, 'renew-amber'], [5, 'renew-red']] as const) {
     const at = (t - days * 86_400) * 1000
     const page = await (await context(browser, `A-clock-${days}`)).newPage()
-    await page.clock.setFixedTime(at)
+    await page.clock.install()
     await copyLogin(owner, page)
-    await page.goto(`${BASE}/settings/terminals`, { waitUntil: 'load' })
-    const shown = await page.getByTestId(badge).first().waitFor({ timeout: 30_000 }).then(() => true, () => false)
-    const line = shown ? await page.getByTestId('expiry-line').first().innerText().catch(() => '') : ''
+    await page.clock.setFixedTime(at)
+    await page.evaluate(() => {
+      window.history.pushState({}, '', '/settings/terminals')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    const renew = page.getByRole('button', { name: 'Renew Market till' })
+    const shown = await renew.waitFor({ timeout: 30_000 }).then(() => true, () => false)
+      && (await renew.getAttribute('data-testid')) === badge
+    const lines = shown ? await page.getByTestId('expiry-line').allInnerTexts().catch(() => [] as string[]) : []
+    const line = lines.find((l) => l.startsWith('Market till')) ?? lines.join(' / ')
     check(`E7 at T - ${days} days A shows ${badge === 'renew-amber' ? 'amber' : 'red'}, "stops on … Renew it."`, shown && /Market till stops on .+\. Renew it\./.test(line), line)
     await snap(page, `p6-e7-${days}`)
     await page.context().close()
@@ -859,6 +868,36 @@ async function finishPhase6(
   customerPubkey: string,
   b5: { b5: Page; b5Key: TillKey } | null,
 ) {
+  if (b5) {
+    console.log('\nPhase 6: past its expiry the till opens Redeem only (E12)')
+    const page = await (await context(owner.context().browser()!, 'B5-expired')).newPage()
+    const state = await b5.b5.context().storageState()
+    await page.context().addCookies(state.cookies)
+    const origin = state.origins.find((o) => o.origin === BASE)
+    await page.goto(`${BASE}/terminal/unlock`, { waitUntil: 'load' })
+    await page.evaluate((items) => { for (const { name, value } of items) localStorage.setItem(name, value) }, origin?.localStorage ?? [])
+    const token = await page.evaluate(() => (JSON.parse(localStorage.getItem('imani-wallet:terminal') || '{}') as { token?: string }).token ?? '')
+    const expiresAt = token ? Number(parseVoucherToken(token).voucher.expiresAt) : 0
+    await page.clock.setFixedTime((expiresAt + 3600) * 1000)
+    const home = await unlockTill(page)
+    check('E12 past its expiry B5 opens Redeem only, with "Ask the owner to renew it", and no Sell', /Redeem/.test(home) && !/\bSell\b/.test(home.replace(/Selling/g, '')) && /authority ran out on .* Ask the owner to renew it/.test(home), home.slice(0, 300))
+    await page.evaluate(() => {
+      window.history.pushState({}, '', '/sell')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    await page.getByTestId('terminal-name').waitFor({ timeout: 15_000 }).catch(() => {})
+    check('E12 an expired B5 has no Sell route', !page.url().endsWith('/sell'), page.url())
+    await snap(page, 'p6-e12-expired')
+  }
+
+  // The test stall holds no licence, so it has one free terminal, and B5 holds it now that its
+  // renewal kept it in service. E9 adds a till and E11 sells from one outside the list: A revokes
+  // B5 first (after E12, which needs B5's credential), as an owner without a licence would.
+  if (b5) {
+    const freed = await revokeOnA(owner, 'Market till')
+    check('A revokes B5, freeing the stall\'s one free terminal for E9 and E11', freed)
+  }
+
   if (b5 && b5.b5Key.sk) {
     console.log('\nPhase 6: a renewal that widens the role is refused by the device (E9)')
     // The harness, as a stall gone wrong, mints a REDEEM-ONLY-to-SELL "renewal"? A wider role
@@ -979,27 +1018,19 @@ async function finishPhase6(
     }
   }
 
-  if (b5) {
-    console.log('\nPhase 6: past its expiry the till opens Redeem only (E12)')
-    const page = await (await context(owner.context().browser()!, 'B5-expired')).newPage()
-    const state = await b5.b5.context().storageState()
-    await page.context().addCookies(state.cookies)
-    const origin = state.origins.find((o) => o.origin === BASE)
-    await page.goto(`${BASE}/terminal/unlock`, { waitUntil: 'load' })
-    await page.evaluate((items) => { for (const { name, value } of items) localStorage.setItem(name, value) }, origin?.localStorage ?? [])
-    const token = await page.evaluate(() => (JSON.parse(localStorage.getItem('imani-wallet:terminal') || '{}') as { token?: string }).token ?? '')
-    const expiresAt = token ? Number(parseVoucherToken(token).voucher.expiresAt) : 0
-    await page.clock.setFixedTime((expiresAt + 3600) * 1000)
-    const home = await unlockTill(page)
-    check('E12 past its expiry B5 opens Redeem only, with "Ask the owner to renew it", and no Sell', /Redeem/.test(home) && !/\bSell\b/.test(home.replace(/Selling/g, '')) && /authority ran out on .* Ask the owner to renew it/.test(home), home.slice(0, 300))
-    await page.evaluate(() => {
-      window.history.pushState({}, '', '/sell')
-      window.dispatchEvent(new PopStateEvent('popstate'))
-    })
-    await page.getByTestId('terminal-name').waitFor({ timeout: 15_000 }).catch(() => {})
-    check('E12 an expired B5 has no Sell route', !page.url().endsWith('/sell'), page.url())
-    await snap(page, 'p6-e12-expired')
-  }
+}
+
+/** A revokes the named till from its Terminals screen. True when the roster records it revoked. */
+async function revokeOnA(owner: Page, name: string): Promise<boolean> {
+  await owner.goto(`${BASE}/settings/terminals`, { waitUntil: 'load' })
+  const row = owner
+    .locator('div')
+    .filter({ has: owner.getByText(name, { exact: true }) })
+    .filter({ has: owner.getByRole('button', { name: 'Revoke', exact: true }) })
+    .last()
+  const asked = await row.getByRole('button', { name: 'Revoke', exact: true }).click({ timeout: 30_000 }).then(() => true, () => false)
+  const confirmed = asked && (await owner.getByRole('button', { name: `Revoke ${name}`, exact: true }).click({ timeout: 30_000 }).then(() => true, () => false))
+  return confirmed && (await rosterRevokedAt(owner, name)) !== null
 }
 
 /** Whether the opened transaction reads "Handled by" the named till. */
