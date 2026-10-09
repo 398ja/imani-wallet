@@ -996,6 +996,26 @@ async function finishPhase6(
         issuance_warrant: await freshWarrant(k, 100, 'EUR'),
       })
       check("K' sells through the portal", sale.status === 201 || sale.status === 200, `${sale.status} ${sale.body.slice(0, 160)}`)
+      // The portal mints; the selling device delivers (issue.ts `deliver`). K' does, to the stall.
+      const issued = (() => {
+        try {
+          const b = JSON.parse(sale.body) as { items?: Array<Record<string, unknown>> } | Array<Record<string, unknown>>
+          return (Array.isArray(b) ? b : b.items ?? []).filter((v) => typeof v.voucher_id === 'string')
+        } catch {
+          return []
+        }
+      })()
+      check("K' has a coupon to deliver", issued.length > 0, sale.body.slice(0, 160))
+      for (const v of issued) {
+        const sent = await asTillResponse(k, 'POST', '/api/v1/dm/tokens/send', {
+          recipient_pubkey: stall, token: v.token, memo: v.memo, voucher_id: v.voucher_id,
+          face_value: v.face_value, face_unit: v.face_unit, face_decimals: v.face_decimals,
+          token_amount: v.token_amount, backing_strategy: v.backing_strategy, issuer_id: stall, sender_pubkey: stall,
+          ...(typeof v.expires_at === 'string' ? { expires_at: Math.floor(Date.parse(v.expires_at) / 1000) } : typeof v.expires_at === 'number' ? { expires_at: v.expires_at } : {}),
+          relay_urls: ['ws://nostr-relay:7777'],
+        })
+        check("K' delivers its coupon to the stall", sent.status === 200 || sent.status === 201, `${sent.status} ${sent.body.slice(0, 160)}`)
+      }
       // The coupon comes home to A by DM, and A's dm-poll raises the alert.
       const notified = await owner.waitForFunction(() => {
         for (let i = 0; i < localStorage.length; i++) {
