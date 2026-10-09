@@ -725,7 +725,7 @@ async function phase6(browser: Browser, owner: Page, customer: Page, customerPub
   }
   check('B4 issues a cashback code', /^CB-/.test(cashbackCode), (await text(b4)).slice(0, 200))
   const cashbackFiled = cashbackCode
-    ? await waitForOwnerRow(owner, (r) => r.type === 'cashback' && r.claimCode === cashbackCode && typeof r.terminalPubkey === 'string')
+    ? await waitForOwnerRow(owner, { type: 'cashback', claimCode: cashbackCode }, 'terminalPubkey')
     : false
   check("E3 B4's cashback is in A's history, attributed to the till", cashbackFiled)
 
@@ -1059,23 +1059,28 @@ async function handledBy(owner: Page, name: string): Promise<boolean> {
   return owner.waitForFunction((n) => new RegExp(`Handled by\\s*${n}`).test(document.body.innerText), name, { timeout: 30_000 }).then(() => true, () => false)
 }
 
-/** Waits for a row in A's own history matching `pred`. */
-async function waitForOwnerRow(owner: Page, pred: (r: Record<string, unknown>) => boolean): Promise<boolean> {
-  const source = `(async () => {
-    const pred = ${pred.toString()}
+/**
+ * Waits for a row in A's own history whose fields equal `match` and which carries `present`.
+ * Data, not a predicate: a function is stringified into the page, where the closure it reads
+ * (the claim code) does not exist, so every evaluate threw (found by the local gate, E3).
+ */
+async function waitForOwnerRow(owner: Page, match: Record<string, string>, present: string): Promise<boolean> {
+  const find = async ({ match, present }: { match: Record<string, string>; present: string }) => {
     const dbs = (await indexedDB.databases()).filter((d) => (d.name || '').startsWith('imani-wallet'))
     for (const info of dbs) {
-      const db = await new Promise((ok, ko) => { const r = indexedDB.open(info.name); r.onsuccess = () => ok(r.result); r.onerror = () => ko(r.error) })
+      const db = await new Promise<IDBDatabase>((ok, ko) => { const r = indexedDB.open(String(info.name)); r.onsuccess = () => ok(r.result); r.onerror = () => ko(r.error) })
       for (const store of Array.from(db.objectStoreNames)) {
-        const rows = await new Promise((ok) => { const r = db.transaction(store).objectStore(store).getAll(); r.onsuccess = () => ok(r.result); r.onerror = () => ok([]) })
-        for (const row of rows) if (pred(row)) return true
+        const rows = await new Promise<unknown[]>((ok) => { const r = db.transaction(store).objectStore(store).getAll(); r.onsuccess = () => ok(r.result); r.onerror = () => ok([]) })
+        for (const row of rows as Array<Record<string, unknown>>) {
+          if (Object.entries(match).every(([k, v]) => row[k] === v) && typeof row[present] === 'string') return true
+        }
       }
     }
     return false
-  })()`
+  }
   for (let i = 0; i < 40; i++) {
     await owner.goto(`${BASE}/merchant/coupons`, { waitUntil: 'load' })
-    if ((await owner.evaluate(source).catch(() => false)) as boolean) return true
+    if (await owner.evaluate(find, { match, present }).catch(() => false)) return true
     await owner.waitForTimeout(5_000)
   }
   return false
