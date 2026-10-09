@@ -1,5 +1,6 @@
 import { getSession, keyStore, resetSession } from './nap'
 import { stopDmPoll } from './dmPoll'
+import { stopRosterSync } from './terminalRosterSyncNet'
 import { stopIncomingNotifications } from './incomingNotifications'
 import { disableNotifications } from './notifications/manager'
 import { forgetResume } from './resume'
@@ -58,6 +59,8 @@ export async function logout(
   // to the user-scoped IndexedDB, and letting it run past the session teardown
   // means a write landing after the identity it belongs to is gone.
   stopDmPoll()
+  // A debounced roster publish must not fire after the key is gone (#160 phase 6).
+  stopRosterSync()
   // Same reason: the drain loop signs NIP-98 with the session key and would keep
   // polling for payments addressed to the account being torn down.
   stopIncomingNotifications()
@@ -112,9 +115,14 @@ export async function logout(
   // payment requests) and will grow again.
   //
   // Safe to do wholesale because none of it is unique to the device: the profile
-  // and the stall are on the relay, the sales are on the relay encrypted, and
+  // and the stall are on the relay, the sales are on the relay encrypted, the
+  // terminal list (with every revocation handle) is on the relay encrypted since
+  // #160 phase 6 (`terminalRosterSync`, kind 30078 `imani:terminals`), and
   // dm-poll's cursor is state we WANT reset — a stale "already processed" set is
   // exactly what silently drops the next account's coupons.
+  //
+  // Before #160 phase 6 that was false for the terminal list (F4): logging out
+  // erased the only copy of the stall's revocation handles.
   sweepAppStorage()
 
   // And the coupons, the transaction history and the issued-coupon records.

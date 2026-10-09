@@ -20,6 +20,7 @@ import { sweepInterruptedReceives } from './lib/receiveSweep'
 import { restoreIssued } from './lib/issuedRecords'
 import { restoreTx, backfillTx } from './lib/txRecords'
 import { collectTillSalesForOwner } from './lib/tillSalesNet'
+import { startRosterSync, syncRosterNow } from './lib/terminalRosterSyncNet'
 import { restoreVouchers, backfillVouchers } from './lib/voucherRecords'
 import { logout as runLogout } from './lib/logout'
 import { emptyProfile, loadProfile, refreshProfile, type Profile } from './lib/profile'
@@ -161,6 +162,10 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         // ways is still one line in the bell.
         startPaymentReceipts(pubkey)
 
+        // Every change to the terminal list is published, debounced, to the owner's other
+        // devices (#160 phase 6). Stopped on logout.
+        startRosterSync(pubkey)
+
         // Finish any send this wallet stopped waiting for. The 20s poll in
         // pay.ts is not a verdict — a saga can complete minutes later — and
         // until this ran, one that did left the customer holding a coupon whose
@@ -227,6 +232,11 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           // A till's sales, sent to this stall as sealed sale records (#160 phase 6, wallet#202).
           // After the history restore, so a sale already filed on another of the owner's devices
           // comes back as that row and is not written again. Never throws.
+          // The owner's terminal list, from the relay (#160 phase 6, F4): logout wipes it from
+          // this device, and it is the only place the stall's revocation handles live. Merged
+          // into local, then checked against the mint. Before till sales, so a sale is
+          // attributed by name. Never throws.
+          .then(() => syncRosterNow(pubkey))
           .then(() => collectTillSalesForOwner(pubkey))
           .then((tillSales) => {
             if (tillSales > 0) console.info(`[app] filed ${tillSales} till sale(s)`)
