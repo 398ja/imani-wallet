@@ -52,8 +52,6 @@ const PHASE = Number(process.env.E2E_PHASE ?? '4')
 /** Phase 5's server half (portal, gateway-customer, gateway-core) is deployed where E2E_BASE points. */
 const P5_DEPLOYED = process.env.E2E_P5_DEPLOYED === '1'
 const TILL_PASSPHRASE = 'counter-pass'
-/** A new stall's coupon:issue permission is cached this long by the gateway (#114). */
-const PERMISSION_CACHE_MS = 62_000
 /**
  * Where the run leaves screenshots and a Playwright trace per browser (round 4: the r3 run left no
  * artifacts, so whether the owner's Revoke landed could only be read from the edge's access log).
@@ -151,6 +149,27 @@ async function main() {
   console.log('\nA registers a stall')
   await registerMerchant(owner, BASE)
   check('A is registered', !owner.url().includes('onboarding'), owner.url())
+  // imani-wallet#114: a stall registered through onboarding is a merchant from its FIRST render.
+  // No sleep and no re-login: those are what the post-deploy suite used to hide this behind.
+  await owner.getByText('Total balance').waitFor({ timeout: 30_000 }).catch(() => undefined)
+  const firstRender = await text(owner)
+  check('A offers Sell and Redeem on its first render (#114)',
+    /\bSell\b/.test(firstRender.replace(/Selling/g, '')) && /\bRedeem\b/.test(firstRender), firstRender.slice(0, 200))
+  const sessionGrants = await owner.evaluate(async () => {
+    const r = await fetch('/api/v1/auth/session', { credentials: 'include' })
+    return r.ok ? ((await r.json()).permissions ?? []) as string[] : [`HTTP ${r.status}`]
+  })
+  check('A\'s session carries coupon:issue (#114)', sessionGrants.includes('coupon:issue'), sessionGrants.join(','))
+  await owner.reload({ waitUntil: 'load' })
+  const relock = owner.locator('input[placeholder="Passphrase"]')
+  if (await relock.isVisible({ timeout: 3_000 }).catch(() => false)) {
+    await relock.fill(TEST_PASSPHRASE)
+    await owner.getByRole('button', { name: /unlock/i }).first().click()
+  }
+  await owner.getByText('Total balance').waitFor({ timeout: 30_000 }).catch(() => undefined)
+  const resumed = await text(owner)
+  check('A still offers Sell after a reload resumes the session (#114)',
+    /\bSell\b/.test(resumed.replace(/Selling/g, '')), resumed.slice(0, 200))
 
   console.log('\nB, a fresh device, offers to become a terminal')
   await device.goto(`${BASE}/onboarding`, { waitUntil: 'networkidle' })
@@ -267,13 +286,12 @@ async function main() {
   check("B cannot open the stall's dashboard", !device.url().endsWith('/dashboard') && !/Dashboard/.test(await text(device)), device.url())
 
   console.log('\nPhase 3: a customer C pays B\'s Redeem request')
-  // The owner sells C a coupon first, so C has something of this stall's to pay with. The
-  // stall's coupon:issue permission is cached by the gateway for a minute after registration.
+  // The owner sells C a coupon first, so C has something of this stall's to pay with. No wait for
+  // a permission cache: the stall's session carries coupon:issue from registration (#114).
   const customer = await (await context(browser, 'C-customer')).newPage()
   customer.on('pageerror', (e) => errors.push(`C: ${e.message}`))
   const customerPubkey = await registerCustomer(customer, BASE)
   check('C is registered', /^[0-9a-f]{64}$/.test(customerPubkey), customerPubkey)
-  await owner.waitForTimeout(PERMISSION_CACHE_MS)
   const sold = await ownerSells(owner, customerPubkey, '10.00')
   check('A sells C a coupon', /It is in their wallet now/.test(sold), sold.slice(0, 300))
 
