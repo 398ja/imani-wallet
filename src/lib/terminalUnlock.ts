@@ -55,6 +55,8 @@ function heldCredentialFrom(token: string): HeldCredential | null {
 
 /** The session the last unlock opened. In memory only: see the module comment. */
 let held: { devicePubkey: string; actor: TerminalActor; session: TerminalSession } | null = null
+/** The credential `held` was derived from. A renewal changes the stored token (#160 phase 6). */
+let heldToken: string | null = null
 /** Whether the signer is installed right now. False after a lock, while `held` survives it. */
 let unlocked = false
 
@@ -120,12 +122,15 @@ export async function unlockTerminal(
   // do until its session ends is redeem, which `canRedeemNow` already allows on an authority
   // nobody could check, because a wrong redemption is recoverable. The twelve-hour session is
   // the outer bound.
-  if (held && held.devicePubkey === devicePubkey && sessionState(held.session, { now }).live) {
+  // A renewal adopted since (#160 phase 6) changes the token: the actor is re-derived from it
+  // below, keeping the session's twelve hours, so the renewed till sells with no reload.
+  if (held && held.devicePubkey === devicePubkey && sessionState(held.session, { now }).live && heldToken === stored.token) {
     install(privkeyHex)
     setRequestCredential(heldCredentialFrom(stored.token))
     unlocked = true
     return { unlocked: true, ...held }
   }
+  const keptSession = held && held.devicePubkey === devicePubkey && sessionState(held.session, { now }).live ? held.session : null
   held = null
 
   const unspent = unspentForLogin(await credentialState(stored.token, mint))
@@ -140,7 +145,11 @@ export async function unlockTerminal(
   // The voucher id from the token's signed bytes, not the record's field (IW-15).
   setRequestCredential(heldCredentialFrom(stored.token))
   unlocked = true
-  held = { devicePubkey, actor: outcome.actor, session: outcome.session }
+  // A renewed credential in a live session keeps that session's clock (spec 2.3: twelve hours
+  // from the first unlock), and takes the new answer's kind.
+  const session = keptSession ? { ...keptSession, kind: outcome.session.kind } : outcome.session
+  held = { devicePubkey, actor: outcome.actor, session }
+  heldToken = stored.token
   return { unlocked: true, ...held }
 }
 
@@ -172,7 +181,30 @@ export function lockTerminal(): void {
 /** Forget the session too. For tests, and for taking the device out of service. */
 export function forgetTerminalSession(): void {
   held = null
+  heldToken = null
   unlocked = false
   setRequestCredential(null)
   lockTerminalSigner()
+}
+
+/**
+ * A renewal was adopted while the till is open (#160 phase 6, plan 2.3): re-derive the actor and
+ * the request credential from the NEW token, so Sell lights up with no reload. The session keeps
+ * its kind and its twelve hours; only what the credential says changes. Asks the mint, as unlock
+ * does, so a renewal that was somehow spent already is not adopted into the session.
+ *
+ * @returns the refreshed till, or null when nothing changed
+ */
+export async function refreshAfterRenewal(
+  { mint = terminalMintApi(), now = Date.now() }: { mint?: Pick<CredentialMintApi, 'validateToken'>; now?: number } = {},
+): Promise<{ devicePubkey: string; actor: TerminalActor; session: TerminalSession } | null> {
+  const stored = storedTerminal()
+  if (!held || !stored) return null
+  const unspent = unspentForLogin(await credentialState(stored.token, mint))
+  const outcome = loginFromToken({ token: stored.token, devicePubkey: held.devicePubkey, unspent, openedAt: now })
+  if (!outcome.admitted) return null
+  held = { devicePubkey: held.devicePubkey, actor: outcome.actor, session: { ...held.session, kind: outcome.session.kind } }
+  heldToken = stored.token
+  if (unlocked) setRequestCredential(heldCredentialFrom(stored.token))
+  return held
 }

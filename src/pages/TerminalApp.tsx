@@ -15,10 +15,11 @@ import {
   forgetTerminalSession,
   lockTerminal,
   openTill,
+  refreshAfterRenewal,
   unlockTerminal,
   type UnlockOutcome,
 } from '../lib/terminalUnlock'
-import { LOGIN_REFUSAL, UNATTESTED_TILL_NOTICE } from '../lib/terminalLogin'
+import { LOGIN_REFUSAL, UNATTESTED_TILL_NOTICE, expiryNotice } from '../lib/terminalLogin'
 import { mayAct, TERMINAL_ACTIONS } from '../lib/terminalRole'
 import { canIssueNow, canRedeemNow, sessionState, type TerminalSession } from '../lib/terminalSession'
 import { mayWarrantSale } from '../lib/warrantSigner'
@@ -40,6 +41,7 @@ import { LAPSE } from '../lib/terminalSession'
 import { getSigner } from '../lib/nap'
 import { requestCredential } from '../lib/terminalRequestCredential'
 import { openTillSales } from '../lib/tillSalesNet'
+import { checkForRenewal, sendRenewRequest, RENEWAL_POLL_MS } from '../lib/terminalRenewalNet'
 import { pendingTillSales, UNSENT_SALES_WARNING } from '../lib/tillSales'
 
 /**
@@ -119,6 +121,27 @@ export function TerminalApp() {
       getSigner(),
     )
   }, [till])
+
+  // Renewal (#160 phase 6, plan 2.3): at every unlock and every five minutes while open, look for
+  // the owner's renewal of this till's credential, adopt it, and re-derive the till from it so a
+  // renewed till sells with no reload. A failed spend of the old credential is retried here too.
+  useEffect(() => {
+    if (!till) return
+    let live = true
+    const tick = async () => {
+      const adopted = await checkForRenewal()
+      if (!adopted || !live) return
+      const refreshed = await refreshAfterRenewal()
+      if (refreshed && live) setTill(refreshed)
+    }
+    void tick()
+    const timer = setInterval(() => void tick(), RENEWAL_POLL_MS)
+    return () => {
+      live = false
+      clearInterval(timer)
+    }
+    // The till's identity, not every re-render of it: a refreshed till must not restart the poll.
+  }, [till?.devicePubkey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // A record whose token is gone is still a terminal (#160 review, LOW): it gets the unlock screen,
   // which refuses it and offers to remove the terminal, never the customer's routes.
@@ -371,6 +394,7 @@ function TerminalHome({
   const roleMayIssue = canIssueNow(till.actor, till.session)
   const mayIssue = roleMayIssue && mayWarrantSale(till.actor, till.session) && stall !== null
   const mayRedeem = canRedeemNow(till.actor, till.session) && stall !== null
+  const expiry = expiryNotice(till.actor)
 
   return (
     <Screen>
@@ -395,14 +419,26 @@ function TerminalHome({
             </Button>
           ) : null}
         </div>
-        {/* A selling role the stall never attested (spec 4.6.5): Redeem only, and the steps
-            that put it back on sale until phase 6's one-tap Renew. */}
+        {/* A selling role the stall never attested (spec 4.6.5): Redeem only, and the owner's
+            one-tap Renew, which this till can ask for (#160 phase 6, Q3). */}
         {till.actor.attested !== true &&
           mayAct(till.actor.permissions, TERMINAL_ACTIONS.ISSUE, till.actor.stallPubkey) && (
-            <p className="mt-4 text-center text-sm text-mono-500" data-testid="renew-to-sell">
-              {UNATTESTED_TILL_NOTICE}
-            </p>
+            <div className="mt-4 text-center">
+              <p className="text-sm text-mono-500" data-testid="renew-to-sell">
+                {UNATTESTED_TILL_NOTICE}
+              </p>
+              <AskToRenew />
+            </div>
           )}
+        {/* Past or near its expiry (#160 phase 6, Q4): Redeem only once past it. */}
+        {expiry ? (
+          <div className="mt-4 text-center">
+            <p className="text-sm text-amber-700 dark:text-amber-400" data-testid="expiry-notice">
+              {expiry}
+            </p>
+            {till.actor.attested === true ? <AskToRenew /> : null}
+          </div>
+        ) : null}
         {till.session.kind === 'reduced' && till.actor.attested === true && (
           <p className="mt-4 text-center text-sm text-mono-500">
             Selling needs the network. This till opened without it, so it redeems only until you
@@ -419,6 +455,36 @@ function TerminalHome({
         </div>
       </div>
     </Screen>
+  )
+}
+
+/**
+ * "Ask the owner to renew" (#160 phase 6, Q3): sends this till's own credential to its stall,
+ * sealed by K, so an owner whose list lost this till can adopt it and press Renew.
+ */
+function AskToRenew({ send = sendRenewRequest }: { send?: () => Promise<boolean> }) {
+  const [state, setState] = useState<'idle' | 'sending' | 'sent' | 'failed'>('idle')
+  return (
+    <div className="mt-2">
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={state === 'sending'}
+        onClick={() => {
+          setState('sending')
+          void send().then((ok) => setState(ok ? 'sent' : 'failed'))
+        }}
+      >
+        Ask the owner to renew
+      </Button>
+      {state === 'sent' ? (
+        <p className="mt-2 text-sm text-mono-500">
+          Sent. The owner sees it on their Terminals list and can renew this terminal there.
+        </p>
+      ) : state === 'failed' ? (
+        <p className="mt-2 text-sm text-mono-500">That did not send. Check the connection and try again.</p>
+      ) : null}
+    </div>
   )
 }
 

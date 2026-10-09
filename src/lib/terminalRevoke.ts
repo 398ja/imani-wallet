@@ -81,6 +81,29 @@ export async function revokeTerminalAtMint(
     return refused('not-revocable')
   }
 
+  // A renewal out is a second live credential to the same K, already sent to the device. Revoking
+  // the till must spend it too, first, or a stolen device adopts it and keeps selling (review rv6
+  // H1). Not revoked until it is spent: the owner is told the revocation did not land.
+  const renewal = row.renewal
+  if (renewal?.token) {
+    let renewalMetadata: unknown
+    try {
+      renewalMetadata = parseVoucherToken(renewal.token).voucher.merchantMetadata
+    } catch {
+      renewalMetadata = null
+    }
+    const out = await revokeCredential(renewal.token, renewalMetadata, api)
+    if (!out.revoked && out.reason !== 'already-revoked') return refused('unreachable')
+    updateTerminal(stallPubkey, terminalPubkey, (r) => ({
+      ...r,
+      renewal: undefined,
+      credentials: (r.credentials ?? []).map((c) =>
+        c.voucherId === renewal.voucherId ? { ...c, revokedAt: c.revokedAt ?? at, token: undefined } : c,
+      ),
+    }))
+    if (renewal.voucherId) await releasePending(renewal.voucherId)
+  }
+
   const spent = await revokeCredential(row.token!, metadata, api)
   // `already-revoked` from the mint means the credential is spent: the device
   // decommissioned itself, or an earlier attempt landed. Either way it is out
@@ -142,7 +165,10 @@ export function removeUnmintedWaiting(stallPubkey: string, terminalPubkey: strin
  * proxy 502/504, 408 (timeout) and 429 (slow down) say nothing about whether the gateway
  * minted before it failed, so they are not definitive.
  */
-export function isDefinitiveRefusal(status: number | undefined): boolean {
+export function isDefinitiveRefusal(status: number | undefined, code?: string): boolean {
+  // The same Idempotency-Key still being minted (found by the local gate, #160 phase 6 E8): the
+  // other request is minting, so something may exist. Not a refusal; retried later.
+  if (code === 'IDEMPOTENCY_IN_PROGRESS') return false
   return status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429
 }
 
@@ -170,7 +196,7 @@ export async function settleMintFailure(
     await forgetSpentDefect(stallPubkey, terminalPubkey)
     return 'cleared'
   }
-  if (error instanceof CredentialMintError && isDefinitiveRefusal(error.status)) {
+  if (error instanceof CredentialMintError && isDefinitiveRefusal(error.status, error.code)) {
     forgetTerminal(stallPubkey, terminalPubkey)
     return 'cleared'
   }
@@ -320,8 +346,26 @@ export async function markSpentElsewhere(
 ): Promise<number> {
   let marked = 0
   for (const row of allTerminals(stallPubkey)) {
+    // A credential renewed away whose spend this phone lost to the device's own (Q2, found by the
+    // local gate, E8) is still open in the history, token and all. Once the mint says it is spent,
+    // the history says so. The till itself is not touched: its current credential answers for it.
+    for (const c of row.credentials ?? []) {
+      if (!c.token || c.revokedAt !== undefined || c.voucherId === row.voucherId || c.voucherId === row.renewal?.voucherId) continue
+      if ((await credentialState(c.token, api)) !== CREDENTIAL_STATE.REVOKED) continue
+      updateTerminal(stallPubkey, row.terminalPubkey, (r) => ({
+        ...r,
+        credentials: (r.credentials ?? []).map((e) =>
+          e.voucherId === c.voucherId ? { ...e, revokedAt: e.revokedAt ?? now, token: undefined } : e,
+        ),
+      }))
+    }
     if (row.revokedAt !== undefined || !isRevocable(row) || row.status === 'minting') continue
     if ((await credentialState(row.token!, api)) !== CREDENTIAL_STATE.REVOKED) continue
+    // A renewal out (#160 phase 6, Q2): the device spends its OLD credential itself once it has
+    // adopted the new one, before this phone has collected the enrolled DM. So the old one being
+    // spent is the renewal landing. The renewal's credential is the live handle then; only that
+    // one being spent too says the till was revoked.
+    if (row.renewal?.token && (await credentialState(row.renewal.token, api)) !== CREDENTIAL_STATE.REVOKED) continue
     if (!revokeTerminal(stallPubkey, row.terminalPubkey, now).revoked) continue
     marked += 1
     // A waiting row still holds one of the stall's pending slots at the gateway. Give it back,

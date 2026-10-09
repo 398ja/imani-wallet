@@ -489,12 +489,15 @@ export function needsRenewalToSell(record: TerminalRecord): boolean {
   return !tokenCarriesAttestation(record.token)
 }
 
-/** What the roster tells the owner about such a row: the four re-enrol steps (spec 4.6.5). */
+/**
+ * What the roster tells the owner about such a row (spec 4.6.5). Since #160 phase 6 (S4) it is
+ * one-tap Renew: the four re-enrol steps (revoke, decommission, add again with a new passphrase
+ * and setup code) are gone.
+ */
 export const RENEW_TO_KEEP_SELLING =
   'Renew to keep selling. This terminal was set up before you signed each terminal, so it can ' +
-  'redeem but not sell. Until one-tap Renew arrives: 1. Revoke it here. 2. The till then says ' +
-  'it is no longer in service. 3. On the device, take it out of service (Settings → Security). ' +
-  '4. Add it again here, with a new passphrase and setup code.'
+  'redeem but not sell. Renew it here: the device picks up the renewal the next time it is ' +
+  'opened, with the same passphrase.'
 
 function tokenCarriesAttestation(token: string): boolean {
   try {

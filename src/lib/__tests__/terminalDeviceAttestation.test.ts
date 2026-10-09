@@ -86,3 +86,40 @@ describe('the device parses the metadata as strictly as the verifiers', () => {
     expect(read({ ...base, stall_pubkey: upper, owner_attestation: att(upper) })?.attested).not.toBe(true)
   })
 })
+
+// #160 phase 6 (F5, Q4): past its expiry a till opens for Redeem only and says so, rather than
+// offering a Sell the portal will refuse. Within seven days it warns.
+describe('a till past or near its expiry (#160 phase 6, Q4)', () => {
+  const login = async (expiresAt: number, nowMs: number) => {
+    const { loginFromToken } = await import('../terminalLogin')
+    return loginFromToken({ token: token(JSON.stringify({ ...base, owner_attestation: att(STALL, "issue-and-redeem", expiresAt) }), { expiresAt }), devicePubkey: DEVICE, unspent: true, openedAt: nowMs })
+  }
+
+  it('opens for Redeem only once expired, with the renewal notice', async () => {
+    const { canIssueNow, canRedeemNow } = await import('../terminalSession')
+    const { expiryNotice } = await import('../terminalLogin')
+    const out = await login(UNTIL, (UNTIL + 1) * 1000)
+    if (!out.admitted) throw new Error('expected admission')
+    expect(out.actor.expired).toBe(true)
+    expect(canRedeemNow(out.actor, out.session)).toBe(true)
+    expect(canIssueNow(out.actor, out.session)).toBe(false)
+    expect(expiryNotice(out.actor, (UNTIL + 1) * 1000)).toMatch(/authority ran out on .* Ask the owner to renew it\. Redeeming still works\./)
+  })
+
+  it('still sells at exactly its expiry second (expired only when now > expires_at)', async () => {
+    const { canIssueNow } = await import('../terminalSession')
+    const out = await login(UNTIL, UNTIL * 1000)
+    if (!out.admitted) throw new Error('expected admission')
+    expect(canIssueNow(out.actor, out.session)).toBe(true)
+  })
+
+  it('warns within seven days, and says nothing before', async () => {
+    const { expiryNotice } = await import('../terminalLogin')
+    const soon = await login(UNTIL, (UNTIL - 5 * 86_400) * 1000)
+    if (!soon.admitted) throw new Error('expected admission')
+    expect(expiryNotice(soon.actor, (UNTIL - 5 * 86_400) * 1000)).toMatch(/stops selling on/)
+    const later = await login(UNTIL, (UNTIL - 20 * 86_400) * 1000)
+    if (!later.admitted) throw new Error('expected admission')
+    expect(expiryNotice(later.actor, (UNTIL - 20 * 86_400) * 1000)).toBeNull()
+  })
+})

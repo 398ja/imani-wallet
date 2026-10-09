@@ -180,12 +180,13 @@ describe('a till the stall never attested (#160 decision 5, spec 4.6.5)', () => 
     expect(canIssueNow(out.actor, out.session)).toBe(false)
   })
 
-  // The till's own words for that state name the re-enrol steps.
-  it('tells the operator to ask for a renewal, and how', () => {
+  // The till's own words for that state: ask the owner, who renews in one tap (#160 phase 6).
+  // The four re-enrol steps are gone, with their new passphrase and setup code.
+  it('tells the operator to ask for a renewal, which is one tap for the owner', () => {
     expect(UNATTESTED_TILL_NOTICE).toMatch(/Ask the owner to renew this terminal to sell/)
-    expect(UNATTESTED_TILL_NOTICE).toMatch(/revokes/)
-    expect(UNATTESTED_TILL_NOTICE).toMatch(/take it out of service/)
-    expect(UNATTESTED_TILL_NOTICE).toMatch(/adds it again/)
+    expect(UNATTESTED_TILL_NOTICE).toMatch(/one tap/)
+    expect(UNATTESTED_TILL_NOTICE).not.toMatch(/take it out of service/)
+    expect(UNATTESTED_TILL_NOTICE).not.toMatch(/adds it again/)
   })
 })
 
