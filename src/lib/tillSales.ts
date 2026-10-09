@@ -64,6 +64,14 @@ const MAX_WRAP_PLAINTEXT = 48_000
 /** First run with no cursor: wraps from a day before the earliest terminal was added. */
 const FIRST_RUN_SLACK_SECONDS = 24 * 3600
 
+/**
+ * How far a gift wrap's `created_at` may sit before the moment it was sent. NIP-59 blurs it, and
+ * `terminalDelivery.wrapMessage` backdates by up to ten minutes. The cursor reads back by this
+ * much, or a sale sent after the cursor moved, but stamped earlier, is never read (found by the
+ * local gate, #160 phase 6 E3). Rows already filed are skipped by id, so re-reading costs nothing.
+ */
+export const WRAP_BLUR_SECONDS = 15 * 60
+
 /** Whether a rumor's content is a till sale record, so dm-poll can hand it to the collector. */
 export function isTillSaleMessage(content: string): boolean {
   try {
@@ -360,7 +368,9 @@ export async function collectTillSales(stallPubkey: string, deps: CollectDeps): 
     undefined,
   )
   const since =
-    cursor ?? (earliest !== undefined ? Math.floor(earliest / 1000) - FIRST_RUN_SLACK_SECONDS : undefined)
+    cursor !== undefined
+      ? cursor - WRAP_BLUR_SECONDS
+      : earliest !== undefined ? Math.floor(earliest / 1000) - FIRST_RUN_SLACK_SECONDS : undefined
 
   const wraps = await deps.wraps(stall, since)
   let filed = 0

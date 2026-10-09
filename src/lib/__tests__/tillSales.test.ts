@@ -22,6 +22,7 @@ import type { Event } from 'nostr-tools'
 
 import {
   SALE_DM_TYPE,
+  WRAP_BLUR_SECONDS,
   collectTillSales,
   flushSaleOutbox,
   pendingTillSales,
@@ -261,7 +262,22 @@ describe('the owner collects till sales from its inbox', () => {
     await collectTillSales(STALL, deps)
     await collectTillSales(STALL, deps)
     expect(queries[0]).toBe(1_900_000_000 - 24 * 3600)
-    expect(queries[1]).toBe(wrap.created_at)
+    expect(queries[1]).toBe(wrap.created_at - WRAP_BLUR_SECONDS)
+  })
+
+  // Found by the local gate (E3): NIP-59 backdates a wrap by up to ten minutes. A sale sent after
+  // the cursor was set can carry an older created_at than the cursor, so a cursor read from the
+  // newest created_at seen skipped it for good. The read goes back by the blur.
+  it('still files a sale whose wrap is backdated before the cursor (NIP-59 blur)', async () => {
+    const first = { ...wrapMessage(hexToBytes(TILL_SK), STALL, saleMessageJson([saleRow()], 'cred-1')), created_at: 1_900_000_500 }
+    const later = { ...wrapMessage(hexToBytes(TILL_SK), STALL, saleMessageJson([saleRow(terminalWarrant(), 'v-2')], 'cred-1')), created_at: 1_900_000_100, id: 'later' }
+    const relay = [first]
+    const { written, deps } = harness([])
+    deps.wraps = async (_p: string, since?: number) => relay.filter((w) => since === undefined || w.created_at >= since)
+    await collectTillSales(STALL, deps)
+    relay.push(later)
+    await collectTillSales(STALL, deps)
+    expect([...written.keys()].sort()).toEqual(['issued:v-1', 'issued:v-2'])
   })
 
   it('files nothing a stranger sealed', async () => {
