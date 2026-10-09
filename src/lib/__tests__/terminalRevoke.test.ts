@@ -267,6 +267,18 @@ describe('#160 round 2: an ambiguous answer keeps the minting row', () => {
     expect((await resumeMinting(STALL, spendApi(), t)).cleared).toBe(1)
     expect(allTerminals(STALL)).toEqual([])
   })
+
+  // Found by the local gate (#160 phase 6, E8): the same Idempotency-Key sent twice at once (the
+  // Renew tap and the screen's resume) gets 409 IDEMPOTENCY_IN_PROGRESS for the second. The first
+  // is minting: forgetting the row then strands a live credential nobody holds.
+  it('keeps the row on 409 IDEMPOTENCY_IN_PROGRESS: the same request is still minting', async () => {
+    recordTerminal(STALL, row())
+    const body = JSON.stringify({ error: { code: 'IDEMPOTENCY_IN_PROGRESS', message: 'in progress' } })
+    const t = transport(good(), { post: vi.fn(async () => new Response(body, { status: 409 })) })
+
+    expect((await resumeMinting(STALL, spendApi(), t)).pending).toBe(1)
+    expect(allTerminals(STALL)[0].mintKey).toBe('key-1')
+  })
 })
 
 describe('#160 round 2: a wrong credential that was spent gives its slot back', () => {

@@ -165,7 +165,10 @@ export function removeUnmintedWaiting(stallPubkey: string, terminalPubkey: strin
  * proxy 502/504, 408 (timeout) and 429 (slow down) say nothing about whether the gateway
  * minted before it failed, so they are not definitive.
  */
-export function isDefinitiveRefusal(status: number | undefined): boolean {
+export function isDefinitiveRefusal(status: number | undefined, code?: string): boolean {
+  // The same Idempotency-Key still being minted (found by the local gate, #160 phase 6 E8): the
+  // other request is minting, so something may exist. Not a refusal; retried later.
+  if (code === 'IDEMPOTENCY_IN_PROGRESS') return false
   return status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429
 }
 
@@ -193,7 +196,7 @@ export async function settleMintFailure(
     await forgetSpentDefect(stallPubkey, terminalPubkey)
     return 'cleared'
   }
-  if (error instanceof CredentialMintError && isDefinitiveRefusal(error.status)) {
+  if (error instanceof CredentialMintError && isDefinitiveRefusal(error.status, error.code)) {
     forgetTerminal(stallPubkey, terminalPubkey)
     return 'cleared'
   }
