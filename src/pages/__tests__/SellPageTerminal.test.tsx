@@ -21,13 +21,15 @@ import { MemoryRouter } from 'react-router-dom'
 
 const issued = vi.hoisted(() => ({
   calls: 0,
+  args: undefined as unknown,
   impl: null as null | (() => Promise<unknown>),
 }))
 
 vi.mock('../../lib/issue', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/issue')>()),
-  issueAndDeliver: async () => {
+  issueAndDeliver: async (params: unknown) => {
     issued.calls += 1
+    issued.args = params
     if (!issued.impl) throw new Error('issueAndDeliver not stubbed')
     return issued.impl()
   },
@@ -154,5 +156,28 @@ describe('the owner’s own device', () => {
     await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/Nothing has been issued/))
     expect(issued.calls).toBe(1)
     expect(screen.queryByText(SUCCESS)).toBeNull()
+  })
+})
+
+// Review sh6: the Note is capped where it is typed (maxLength) and again in what the sale is
+// given, so a pasted or scripted note cannot reach the till's sale DM uncapped.
+describe('the Note on a sale', () => {
+  it('is capped at NOTE_MAX_CHARS in the field and in what the sale is given', async () => {
+    const { NOTE_MAX_CHARS } = await import('../../lib/note')
+    issued.impl = async () => {
+      throw new UnwarrantedSaleError('stop here')
+    }
+    show()
+
+    fireEvent.click(screen.getByText('fake-scan'))
+    const note = screen.getByLabelText('Note (optional)') as HTMLInputElement
+    expect(note.maxLength).toBe(NOTE_MAX_CHARS)
+    fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '5' } })
+    // A paste or a script can set more than maxLength allows typing.
+    fireEvent.change(note, { target: { value: '漢'.repeat(NOTE_MAX_CHARS + 100) } })
+    fireEvent.click(screen.getByRole('button', { name: /Send voucher/ }))
+
+    await waitFor(() => expect(issued.calls).toBe(1))
+    expect((issued.args as { memo?: string }).memo).toBe('漢'.repeat(NOTE_MAX_CHARS))
   })
 })

@@ -281,6 +281,10 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     // Either spelling, as for the issuance evidence above.
     transferId: str(r.transferId) ?? str(r.transfer_id),
     transferSignature: str(r.transferSignature) ?? str(r.transfer_signature),
+    // Which till handled it (terminals ticket 09). Read back since #160 phase 6: it was written
+    // on the stall's rows and never read, so even a local row lost its till on the way to a
+    // screen. Either spelling, as for the evidence above.
+    terminalPubkey: str(r.terminalPubkey) ?? str(r.terminal_pubkey),
   }
 }
 
@@ -582,6 +586,8 @@ export function buildCashbackTransaction(input: {
   issuanceWarrant?: string
   /** The stall this was issued for, so an audit has something to check against. */
   merchantId?: string
+  /** The till that issued it, when it was not the stall's own device (#160 phase 6). */
+  terminalPubkey?: string
 }): TransactionRow {
   return {
     id: `cashback:${input.cashbackId}`,
@@ -603,6 +609,7 @@ export function buildCashbackTransaction(input: {
     // to tell "not checked" from "not claimed".
     ...(input.issuanceWarrant ? { issuanceWarrant: input.issuanceWarrant } : {}),
     ...(input.merchantId ? { merchantId: input.merchantId } : {}),
+    ...(input.terminalPubkey ? { terminalPubkey: input.terminalPubkey } : {}),
   } as unknown as TransactionRow
 }
 
