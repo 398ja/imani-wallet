@@ -887,6 +887,9 @@ async function finishPhase6(
         const kept = await b6.evaluate(() => (JSON.parse(localStorage.getItem('imani-wallet:terminal') || '{}') as { voucherId?: string }).voucherId ?? '')
         const home = await text(b6)
         check('E9 B6 refuses the wider role (role-not-renewal) and keeps its old credential, still Redeem only', kept === k.voucherId && !/\bSell\b/.test(home.replace(/Selling/g, '')), `${kept} vs ${k.voucherId}`)
+        // The refused credential still holds one of the stall's two pending slots at the gateway.
+        // The owner's app would cancel it; the harness minted it, so the harness does.
+        await asKey(ownerSk, 'POST', `/api/v1/wallet/terminal-credentials/${minted.voucherId}/cancel`, {})
       }
     }
   }
@@ -905,6 +908,8 @@ async function finishPhase6(
     const token = voucherId ? await fetchToken(ownerSk, voucherId) : ''
     check('a legacy redeem-only credential L is minted the 5a way (no attestation)', token !== '', `${minted.status} ${minted.body.slice(0, 120)}`)
     if (token) {
+      // A 5a till confirmed its credential when it took it: confirmed, L holds no pending slot.
+      await asKey(tillSk, 'POST', `/api/v1/wallet/terminal-credentials/${voucherId}/confirm`, {})
       await owner.evaluate(({ key, row }) => {
         const rows = JSON.parse(localStorage.getItem(key) ?? '[]') as unknown[]
         localStorage.setItem(key, JSON.stringify([...rows, row]))
