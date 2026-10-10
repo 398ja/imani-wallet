@@ -53,10 +53,24 @@ import { claimToFile } from './merchantClaim'
 import { withWebLock } from './webLock'
 import { CALLS_PER_RECEIVE, receivePacer } from './receivePacer'
 import { checkTokenBacking, loadTrustedMints, onTrustedMintsChange } from './trustedMint'
+import { couponReference, fullyRedeemedMessage, isVoucherFullyRedeemed } from './fullyRedeemed'
 
-/** cashu-mint#540: a 90025 receive as dm-poll's terminal refusal. Red: not wired. */
-export function asFullyRedeemedRefusal(failure: unknown, _meta: Record<string, unknown> | undefined): unknown {
-  return failure
+/**
+ * A receive the mint refused as redeemed in full (cashu-mint#540), as dm-poll's terminal refusal.
+ * Anything else is returned unchanged.
+ */
+export function asFullyRedeemedRefusal(failure: unknown, meta: Record<string, unknown> | undefined): unknown {
+  if (!isVoucherFullyRedeemed(failure)) return failure
+  const voucherId = typeof meta?.voucherId === 'string' ? meta.voucherId : ''
+  const signed = Number((meta?.validation as { signedFaceValue?: unknown } | undefined)?.signedFaceValue ?? 0)
+  console.warn('[dmPoll] coupon refused by the mint: redeemed in full', { reference: couponReference(voucherId) })
+  return new RedemptionRefusedError(
+    fullyRedeemedMessage(voucherId),
+    voucherId,
+    Number.isFinite(signed) ? signed : 0,
+    Number.isFinite(signed) ? signed : 0,
+    'fully-redeemed',
+  )
 }
 
 /**
@@ -1168,6 +1182,12 @@ function redemptionAdapter(): RedemptionAdapter {
             },
           },
           )) as unknown as Voucher
+        } catch (failure) {
+          // cashu-mint#540: gateway-customer declared this home-coming coupon and the mint refused
+          // it as redeemed in full (400 VOUCHER_FULLY_REDEEMED). Nothing was swapped. Terminal: as
+          // a typed refusal, dm-poll marks the delivery handled and announces it, rather than
+          // retrying a coupon whose answer cannot change.
+          throw asFullyRedeemedRefusal(failure, meta)
         } finally {
           // The wait is over, whichever way it went — and `finally` because the
           // way that matters most is the one that throws. A toast saying "still
