@@ -143,7 +143,7 @@ would already have refused it as `NO_EXPIRY`.
 Re-issue path for any existing buyer (this one included), run by the owner:
 
 ```
-WALLET_URL=https://api.wallet.staging.398ja.xyz node scripts/sell-subscription.mjs \
+WALLET_URL=https://wallet.staging.398ja.xyz node scripts/sell-subscription.mjs \
   --env-file ../imani-deploy/.env.staging \
   --customer-pubkey <the buyer's stall pubkey> --paid 4000 --currency GBP \
   --subscription-id sub_bdfa6692f475a40f      # same relationship, receipt kept

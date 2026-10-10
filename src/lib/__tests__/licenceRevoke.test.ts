@@ -75,6 +75,19 @@ describe('sell-subscription.mjs --revoke (imani-wallet#226)', () => {
     ])
   })
 
+  it('refuses to sell a renewal under a subscription id the ledger records as revoked (review of #226)', async () => {
+    const { assertNotRevoked } = await import('../../../scripts/sell-subscription.mjs')
+    const rows = [
+      { subscription_id: 'sub_a', revoked_at: '2026-10-10T12:00:00Z' },
+      { subscription_id: 'sub_b' },
+    ]
+
+    expect(() => assertNotRevoked(rows, 'sub_a')).toThrow(/revoked.*NEW subscription id/s)
+    expect(() => assertNotRevoked(rows, 'sub_b')).not.toThrow()
+    expect(() => assertNotRevoked(rows, 'sub_never_sold')).not.toThrow()
+    expect(() => assertNotRevoked(null as unknown as [], 'sub_a')).not.toThrow()
+  })
+
   it('notify-expiring sends no reminder for a revoked subscription', async () => {
     const { remindable } = await import('../../../scripts/notify-expiring.mjs')
     expect(remindable({ subscription_id: 'sub_a', expires_at: 10 })).toBe(true)

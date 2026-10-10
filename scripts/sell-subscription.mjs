@@ -16,7 +16,7 @@
  * The deployed seller (staging): its nsec is IMANI_SUBSCRIPTIONS_SELLER_NSEC in the deploy env file,
  * and only that line is read:
  *
- *   WALLET_URL=https://api.wallet.staging.398ja.xyz node scripts/sell-subscription.mjs \
+ *   WALLET_URL=https://wallet.staging.398ja.xyz node scripts/sell-subscription.mjs \
  *       --env-file ../imani-deploy/.env.staging --customer-pubkey <hex> --paid 4000
  *
  * ## What makes this a licence rather than a coupon
@@ -219,6 +219,40 @@ export function revokeRequest(seller, walletUrl, subscriptionId, reason) {
       Authorization: nip98(typeof seller.sk === 'string' ? hexToBytes(seller.sk) : seller.sk, url, 'POST', body),
     },
   }
+}
+
+/**
+ * Refuses to sell under a subscription id this ledger records as revoked (review of #226).
+ *
+ * A revocation is permanent at gateway-customer: every licence of that id, sold by this seller, is
+ * refused `422 LICENCE_REVOKED` when reported, including one minted AFTER the revocation. So a
+ * "renewal" under a revoked id would charge the customer for a licence that grants nothing. A
+ * customer who comes back gets a NEW subscription id (omit `--subscription-id`).
+ *
+ * The ledger is local, so this only catches what this machine revoked; gateway-customer is still
+ * the authority.
+ */
+export function assertNotRevoked(rows, subscriptionId) {
+  const row = (Array.isArray(rows) ? rows : []).find((r) => r && r.subscription_id === subscriptionId)
+  if (row && row.revoked_at) {
+    throw new Error(
+      `subscription ${subscriptionId} was revoked at ${row.revoked_at}: a licence under it would grant ` +
+        'nothing (422 LICENCE_REVOKED). Sell under a NEW subscription id: omit --subscription-id.',
+    )
+  }
+}
+
+/** The ledger rows, or [] when it is missing or unreadable. */
+function readLedger() {
+  try {
+    if (existsSync(SOLD)) {
+      const parsed = JSON.parse(readFileSync(SOLD, 'utf8'))
+      if (Array.isArray(parsed)) return parsed
+    }
+  } catch {
+    // unreadable: treated as empty, as recordSale does
+  }
+  return []
 }
 
 /** The ledger with this subscription marked revoked (added if it was never recorded). */
@@ -556,6 +590,15 @@ async function main() {
   // a working licence and quietly turns one relationship into two.
   const renewing = arg('--subscription-id', '')
   const subscriptionId = renewing || newSubscriptionId()
+  if (renewing) {
+    try {
+      assertNotRevoked(readLedger(), renewing)
+    } catch (e) {
+      console.error(e.message)
+      process.exitCode = 1
+      return
+    }
+  }
 
   const seller = sellerKey()
   const metadata = licenceMetadata({
