@@ -379,6 +379,7 @@ async function main() {
   // The licence leaves A's stall: spent at the mint. gateway-customer mints a licence P2PK-locked
   // to its buyer (lock_key), so only A's key can spend it (a seller's refund needs #226's refund
   // key). A's held proofs are spent here, which is what a refund or a theft looks like to the mint.
+  if (!held) return finish(browser, errors)
   const refund = await spendAtMint(held, ownerSk)
   const states = await mintState(held)
   check('the licence is spent at the mint (NUT-07 SPENT)', states.length > 0 && states.every((s) => s === 'SPENT'),
