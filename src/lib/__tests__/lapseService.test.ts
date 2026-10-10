@@ -33,7 +33,7 @@ import type { TerminalRecord } from '../terminalRoster'
  * ticket: this is where the design is either kind or punitive.
  */
 
-const TOKEN = readFileSync(join(__dirname, 'fixtures/live-licence.token'), 'utf8').trim()
+const TOKEN = readFileSync(join(__dirname, 'fixtures/live-licence.p2pk'), 'utf8').trim()
 const parsed = parseVoucherToken(TOKEN)
 const ISSUER = parsed.voucher.issuerPublicKey
 const EXPIRES_AT = parsed.voucher.expiresAt!

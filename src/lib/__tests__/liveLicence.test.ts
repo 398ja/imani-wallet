@@ -55,7 +55,7 @@ import { parseVoucherToken, verifyVoucher } from '../voucherToken'
  * from every balance by `spendable`, which is one of the things asserted below.
  */
 
-const TOKEN = readFileSync(join(__dirname, 'fixtures/live-licence.token'), 'utf8').trim()
+const TOKEN = readFileSync(join(__dirname, 'fixtures/live-licence.p2pk'), 'utf8').trim()
 
 /** The customer this licence was actually locked to. */
 const CUSTOMER = '114e0944b34f44f005419d987cd9ebcef988877c79a19564be9579daefe249d0'
