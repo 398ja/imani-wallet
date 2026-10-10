@@ -77,6 +77,8 @@ declare module '*/scripts/sell-subscription.mjs' {
     subscriptionId: string,
     reason?: string,
   ): { url: string; method: 'POST'; body: string; headers: Record<string, string> }
+  /** Throws when the ledger records `subscriptionId` as revoked: a renewal under it grants nothing. */
+  export function assertNotRevoked(rows: Array<{ subscription_id: string; revoked_at?: string | null }>, subscriptionId: string): void
   /** The sold-subscriptions ledger with `subscriptionId` marked revoked. */
   export function markRevoked<T extends { subscription_id: string }>(
     rows: T[],
