@@ -48,6 +48,21 @@ declare module '*/scripts/sell-subscription.mjs' {
     paidAmountMinor: number
     paidCurrency: string
   }): string
+  /** The issuance request for one licence: FIXED, with the seller's merchant warrant. */
+  export function licenceIssueBody(
+    seller: { pk: string; sk: string | Uint8Array },
+    sale: { paidAmountMinor: number; paidCurrency: string; term: string; metadata: string },
+  ): {
+    face_value: number
+    face_unit: string
+    face_decimals: number
+    backing_strategy: 'FIXED'
+    issuer_id: string
+    memo: string
+    expires_in_days: number
+    merchant_metadata: Record<string, unknown>
+    issuance_warrant: string
+  }
 }
 
 /**
