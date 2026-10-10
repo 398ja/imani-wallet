@@ -12,6 +12,12 @@
  *   node scripts/sell-subscription.mjs --customer-pubkey <hex> --paid 4200 \
  *       --subscription-id sub_9f2c11          # a RENEWAL, or a re-issue
  *
+ * The deployed seller (staging): its nsec is IMANI_SUBSCRIPTIONS_SELLER_NSEC in the deploy env file,
+ * and only that line is read:
+ *
+ *   WALLET_URL=https://api.wallet.staging.398ja.xyz node scripts/sell-subscription.mjs \
+ *       --env-file ../imani-deploy/.env.staging --customer-pubkey <hex> --paid 4000
+ *
  * ## What makes this a licence rather than a coupon
  *
  * One field: `merchant_metadata`, carrying a subscription id, a grant, and the
@@ -101,8 +107,46 @@ const TERM_DAYS = { annual: 365, monthly: 30 }
 
 // ---------------------------------------------------------------- auth
 
-/** The seller's own identity, reused across runs so renewals come from one key. */
+/** The deployed seller's secret: the deploy env file holds it, nothing else does. */
+export const SELLER_NSEC_VAR = 'IMANI_SUBSCRIPTIONS_SELLER_NSEC'
+
+/**
+ * The `imani-subscriptions` seller from the environment, or `null` when it is not set.
+ *
+ * The deployed seller's nsec lives ONLY in the deploy env file (`imani-deploy/.env.staging`), next
+ * to the public `GATEWAY_CUSTOMER_LICENCE_SELLER_PUBKEYS`. No compose service references it, so
+ * this script is its only reader. Pass it as an env var, or point `--env-file` at the env file and
+ * only that one line is read. A bad value is refused WITHOUT echoing it.
+ */
+export function sellerFromEnv(env = process.env, envFile = '') {
+  let value = (env[SELLER_NSEC_VAR] ?? '').trim()
+  if (!value && envFile) {
+    const line = readFileSync(envFile, 'utf8')
+      .split(/\r?\n/)
+      .find((l) => l.startsWith(`${SELLER_NSEC_VAR}=`))
+    value = (line?.slice(SELLER_NSEC_VAR.length + 1) ?? '').trim().replace(/^["']|["']$/g, '')
+  }
+  if (!value) return null
+  let sk
+  try {
+    const decoded = nip19.decode(value)
+    if (decoded.type !== 'nsec') throw new Error('not an nsec')
+    sk = decoded.data
+  } catch {
+    throw new Error(`${SELLER_NSEC_VAR} is set but is not a valid nsec (value not shown)`)
+  }
+  return { name: 'imani-subscriptions', sk, pk: getPublicKey(sk) }
+}
+
+/**
+ * The seller's own identity, reused across runs so renewals come from one key.
+ *
+ * The env (`IMANI_SUBSCRIPTIONS_SELLER_NSEC`, or `--env-file <path>`) wins: that is the deployed
+ * seller. `.seed-keys.json` is the local dev stack's fallback only.
+ */
 function sellerKey() {
+  const fromEnv = sellerFromEnv(process.env, arg('--env-file', ''))
+  if (fromEnv) return fromEnv
   const name = arg('--seller', 'imani-subscriptions')
   const store = existsSync(KEYS) ? JSON.parse(readFileSync(KEYS, 'utf8')) : {}
   if (!store[name]) {
