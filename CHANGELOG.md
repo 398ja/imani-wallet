@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+cashu-mint#540 phase 2: the holder side of the mint's per-coupon redemption cap. Pairs with
+imani-gateway-core#143 and imani-gateway-customer#216, which declare credits and answer
+`VOUCHER_FULLY_REDEEMED`; without them nothing here fires.
+
+### Added
+
+- **"Redeemed in full" is terminal.** A payment or send that gateway-core reports FAILED with
+  `error_code = VOUCHER_FULLY_REDEEMED` (the mint refused the coupon, 90025) shows "This coupon has
+  already been redeemed in full. If you believe this is wrong, contact <stall>, quoting reference
+  <8>." It is not retried and not reclaimed (nothing moved), and the coupon is marked
+  `fully_redeemed`, so it is never offered for a payment again. A send that ended this way after
+  the wallet stopped waiting is marked on the next login.
+- **Swap back to sats** (`src/lib/swapBack.ts`), offered under that refusal and on the stall's
+  coupon list: the wallet's own swap at the coupon's trusted mint turns its proofs into plain sats
+  only this wallet holds, kept on the row as a `cashuB` token. It sends no declaration header, so
+  it consumes none of the coupon's cap. An interrupted swap back is finished by the start-up
+  recovery sweep.
+- **The till** maps gateway-customer's 400 `VOUCHER_FULLY_REDEEMED` on a home-coming coupon to a
+  terminal `fully-redeemed` refusal, announced to staff and never retried.
+- **D9 guard tests**: the wallet never sends `X-Cashu-Voucher-Redemption` or
+  `X-Cashu-Voucher-Redeemer`, and its own receive swap still refuses vouchers.
+- **wallet-api**: `/v1/redeem/prepare` is documented, with the `VOUCHER_FULLY_REDEEMED` answer
+  integrators get from the receive it hands them. wallet-api holds no redeemer token (it never
+  swaps), pinned by a test.
+
 ## [0.18.0] - 2026-10-10
 
 Paid extra terminals sell (#197). Pairs with imani-gateway-customer 0.25.0 and imani-gateway-portal

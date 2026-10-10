@@ -14,9 +14,21 @@ import {
   usePagination,
 } from '../components/ui'
 import { listVouchers, transactionsWith, onWalletChanged } from '../lib/wallet'
-import { couponsFor, redeemedFor } from '../lib/merchants'
+import { couponsFor, fullyRedeemedRows, issuerKey, redeemedFor } from '../lib/merchants'
+import { couponReference, fullyRedeemedMessage } from '../lib/fullyRedeemed'
+import { getSigner } from '../lib/nap'
+import { SwapBackOffer } from '../components/SwapBackOffer'
 import type { WalletTransaction } from '../lib/transactions'
 import { entryKey, groupHistory } from '../lib/historyGroups'
+
+/** Whose wallet this is: the swap back's intent record is scoped by it. */
+function holderPubkey(): string {
+  try {
+    return getSigner().pubkey
+  } catch {
+    return ''
+  }
+}
 
 /**
  * The full lists behind "See all" on the merchant screen.
@@ -63,12 +75,16 @@ export function CouponsPage() {
   const { pubkey = '' } = useParams()
   const [coupons, setCoupons] = useState<VoucherRow[]>([])
   const [redeemed, setRedeemed] = useState<VoucherRow[]>([])
+  // cashu-mint#540: this merchant's coupons the mint refused as redeemed in full. Still held, so
+  // each offers "Swap back to sats".
+  const [refused, setRefused] = useState<VoucherRow[]>([])
 
   useEffect(() => {
     const load = async () => {
       const rows = await listVouchers()
       setCoupons(couponsFor(rows, pubkey))
       setRedeemed(redeemedFor(rows, pubkey))
+      setRefused(fullyRedeemedRows(rows).filter((row) => issuerKey(row.issuer_id) === issuerKey(pubkey)))
     }
     load()
     return onWalletChanged(load)
@@ -102,6 +118,13 @@ export function CouponsPage() {
       subtitle={coupons.length === 1 ? '1 voucher' : `${coupons.length} vouchers`}
       footer={<Pagination page={page} pageCount={pageCount} onPage={setPage} />}
     >
+      {refused.map((row) => (
+        <div key={row.token_id} className="border-b border-mono-100 px-4 py-3 dark:border-mono-800">
+          <p className="text-sm font-medium">Redeemed in full (reference {couponReference(row.voucher_id)})</p>
+          <p className="mt-1 text-sm text-mono-500">{fullyRedeemedMessage(row.voucher_id)}</p>
+          <SwapBackOffer tokenId={row.token_id} pubkey={holderPubkey()} />
+        </div>
+      ))}
       {visible.length === 0 ? (
         <EmptyRow>No vouchers.</EmptyRow>
       ) : (

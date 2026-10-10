@@ -17,6 +17,7 @@ import { reconcileRequests } from './lib/vreq'
 import { sweepBurnable } from './lib/burn'
 import { reconcileClaims } from './lib/claimReconcile'
 import { sweepInterruptedReceives } from './lib/receiveSweep'
+import { saveRecoveredSwapBack } from './lib/swapBack'
 import { restoreIssued } from './lib/issuedRecords'
 import { restoreTx, backfillTx } from './lib/txRecords'
 import { collectTillSalesForOwner } from './lib/tillSalesNet'
@@ -264,8 +265,12 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           // that quietly dropped the proofs would be a landmine for whoever
           // switches the receive on, because it would look wired and lose money
           // the first time it fired. Throwing logs the amount at ERROR instead.
+          //
+          // The one exception is "Swap back to sats" (cashu-mint#540): it tags its coupon row with
+          // the swap id before swapping, so a recovered swap back goes back onto that row.
           .then(() =>
-            sweepInterruptedReceives(pubkey, (swap) => {
+            sweepInterruptedReceives(pubkey, async (swap) => {
+              if (await saveRecoveredSwapBack(swap)) return
               throw new Error(
                 `no save is wired for recovered receives yet (swap ${swap.swapId}); ` +
                   'wire one before switching the wallet-side receive on',
