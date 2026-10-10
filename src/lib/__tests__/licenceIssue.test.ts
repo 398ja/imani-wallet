@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { verifyLicence, DENIAL_REASONS } from '@imani/licence'
+import { schnorr } from '@noble/curves/secp256k1.js'
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
+
+import { parseIssuanceWarrant, verifyIssuanceWarrant } from '../issuanceWarrant'
 
 import {
   LICENCE_FEATURES,
@@ -14,7 +18,7 @@ import {
 } from '../licenceIssue'
 import { forgetLicenceParses, heldLicences, licenceFromToken, licenceSignatureVerifier } from '../licences'
 import { spendable, toMerchants, walletTotals } from '../merchants'
-import { buildVoucherToken } from './voucherFixtures'
+import { buildLicenceVoucherToken as buildVoucherToken } from './voucherFixtures'
 import type { VoucherRow } from '@imani/wallet-storage'
 
 /**
@@ -332,6 +336,29 @@ describe('a subscription id', () => {
 })
 
 describe('the seller script writes what the wallet reads', () => {
+  it('asks for a FIXED licence, so it is one proof (ADR 0007; review of #197, 4a)', async () => {
+    // PROPORTIONAL backed a GBP 40 licence with ~52k sats: a dozen locked proofs whose NUT-11
+    // witness header the edge refused ("Request Header Or Cookie Too Large"), and spendable value.
+    const script = await import('../../../scripts/sell-subscription.mjs')
+    const sk = 'ab'.repeat(32)
+    const pk = bytesToHex(schnorr.getPublicKey(hexToBytes(sk)))
+    const body = script.licenceIssueBody({ pk, sk }, {
+      paidAmountMinor: 4000, paidCurrency: 'GBP', term: 'annual', metadata: '{"subscription_id":"s"}',
+    })
+
+    expect(body.backing_strategy).toBe('FIXED')
+    expect(body.face_value).toBe(4000)
+    expect(body.face_unit).toBe('GBP')
+    expect(body.face_decimals).toBe(2)
+    expect(body.issuer_id).toBe(pk)
+    // Since #159 a wallet refuses a coupon with no warrant from its stall, a licence included.
+    const warrant = JSON.parse(body.issuance_warrant) as Record<string, unknown>
+    expect(warrant).toMatchObject({ form: 'merchant', sale_total: 4000, face_decimals: 2, unit: 'GBP' })
+    const parsed = parseIssuanceWarrant(body.issuance_warrant)
+    expect(parsed.state).toBe('present')
+    expect(verifyIssuanceWarrant(parsed, pk, { faceValueMinor: 4000, faceDecimals: 2, unit: 'GBP' }))
+      .toMatchObject({ verdict: 'verified' })
+  })
   /**
    * `scripts/sell-subscription.mjs` is the tool that actually sells one, and it
    * cannot import this app's TypeScript without a build step — so it restates
@@ -387,5 +414,51 @@ describe('the seller script writes what the wallet reads', () => {
 
     expect(verdict.granted).toBe(true)
     if (verdict.granted) expect(verdict.grant.subscriptionId).toBe('sub_from_script')
+  })
+})
+
+describe('the seller key comes from the env, never from a repo file (imani-wallet#197, redeploy 9)', () => {
+  // The imani-subscriptions nsec lives ONLY in the deploy env file (`.env.staging`), as
+  // IMANI_SUBSCRIPTIONS_SELLER_NSEC. No compose service references it, so the seller script is its
+  // only reader, and it must never echo it back.
+  const SK = 'cd'.repeat(32)
+  const PK = bytesToHex(schnorr.getPublicKey(hexToBytes(SK)))
+
+  it('reads IMANI_SUBSCRIPTIONS_SELLER_NSEC from the environment', async () => {
+    const { sellerFromEnv } = await import('../../../scripts/sell-subscription.mjs')
+    const { nip19 } = await import('nostr-tools')
+    const seller = sellerFromEnv({ IMANI_SUBSCRIPTIONS_SELLER_NSEC: nip19.nsecEncode(hexToBytes(SK)) })
+    expect(seller?.pk).toBe(PK)
+    expect(seller?.name).toBe('imani-subscriptions')
+    expect(bytesToHex(seller!.sk)).toBe(SK)
+  })
+
+  it('reads it from an env FILE (the deploy .env.staging) when pointed at one', async () => {
+    const { sellerFromEnv } = await import('../../../scripts/sell-subscription.mjs')
+    const { nip19 } = await import('nostr-tools')
+    const { mkdtempSync, writeFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const { tmpdir } = await import('node:os')
+    const file = join(mkdtempSync(join(tmpdir(), 'sellerenv-')), '.env.staging')
+    writeFileSync(file, `# comment\nOTHER=1\nIMANI_SUBSCRIPTIONS_SELLER_NSEC=${nip19.nsecEncode(hexToBytes(SK))}\n`)
+    expect(sellerFromEnv({}, file)?.pk).toBe(PK)
+  })
+
+  it('is absent (null) when the variable is unset, so the dev fallback applies', async () => {
+    const { sellerFromEnv } = await import('../../../scripts/sell-subscription.mjs')
+    expect(sellerFromEnv({})).toBeNull()
+  })
+
+  it('refuses a malformed value WITHOUT echoing it', async () => {
+    const { sellerFromEnv } = await import('../../../scripts/sell-subscription.mjs')
+    const bad = 'nsec1notarealkeyatall-secretish'
+    let message = ''
+    try {
+      sellerFromEnv({ IMANI_SUBSCRIPTIONS_SELLER_NSEC: bad })
+    } catch (e) {
+      message = String((e as Error).message)
+    }
+    expect(message).toMatch(/IMANI_SUBSCRIPTIONS_SELLER_NSEC/)
+    expect(message).not.toContain('notarealkey')
   })
 })

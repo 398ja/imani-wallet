@@ -38,12 +38,12 @@ const { beginEnrolment, completeEnrolment, forgetPendingKey, forgetTerminal } =
   await import('../terminalEnrol')
 const { terminalActor } = await import('../actor')
 
-const TOKEN = readFileSync(join(__dirname, 'fixtures/live-licence.token'), 'utf8').trim()
+const TOKEN = readFileSync(join(__dirname, 'fixtures/live-licence.p2pk'), 'utf8').trim()
 const parsed = parseVoucherToken(TOKEN)
 const ISSUER = parsed.voucher.issuerPublicKey
 const EXPIRES_AT = parsed.voucher.expiresAt!
 /** The licence is locked to this key, so it is the stall for these tests. */
-const STALL = '4728fd8ad6a2f5c8930f4065347907e22186fba6c73bd04e145dfd780b98e451'
+const STALL = '114e0944b34f44f005419d987cd9ebcef988877c79a19564be9579daefe249d0'
 /**
  * A key that is a real point on the curve. `'c'.repeat(64)` used to stand in
  * here, and is not one: phase 0 of #160 refuses such keys, as it should.

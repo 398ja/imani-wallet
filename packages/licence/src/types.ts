@@ -29,6 +29,14 @@ export interface LicenceVoucher {
    * being optional widens the type without widening what is allowed.
    */
   lockKey?: string
+  /**
+   * The NUT-11 key the MINT enforces (`data` of a `P2PK_VOUCHER`), hex, x-only or compressed.
+   * Absent on a plain `VOUCHER`, whose lock is only advisory metadata: refused as
+   * `NOT_LOCKED_AT_MINT`, as gateway-customer refuses it (review of imani-wallet#197).
+   */
+  mintLockKey?: string
+  /** The signed `issuer` tag: the stall that SOLD it, which the seller pin compares. */
+  issuerId?: string
   /** Unix SECONDS. A licence with no expiry is refused rather than eternal. */
   expiresAt?: number
   /** What was paid, so the credential is its own receipt. */
@@ -74,6 +82,13 @@ export const DENIAL_REASONS = {
   NO_EXPIRY: 'no-expiry',
   /** Verified, and confers nothing. A licence for no features is not a licence. */
   NO_FEATURES: 'no-features',
+  /**
+   * A plain `VOUCHER`: its lock is metadata the mint never enforces, and its NUT-10 nonce is
+   * unsigned, so the server cannot tie it to a proof the mint issued and refuses it. So does this.
+   */
+  NOT_LOCKED_AT_MINT: 'not-locked-at-mint',
+  /** Signed by our gateway key, but sold (`issuer`) by a stall that is not the configured seller. */
+  NOT_SOLD_BY_US: 'not-sold-by-us',
 } as const
 
 export type DenialReason = (typeof DENIAL_REASONS)[keyof typeof DENIAL_REASONS]
@@ -111,4 +126,11 @@ export interface VerifyOptions {
    * the branch where a signature fails without forging one.
    */
   verifySignature: (voucher: LicenceVoucher) => boolean
+  /**
+   * The licence SELLER's stall key, x-only hex (`VITE_LICENCE_SELLER_PUBKEY`). When set, a licence
+   * whose signed `issuer` is anyone else is refused `NOT_SOLD_BY_US`: the gateway key signs every
+   * stall's coupons, so it alone cannot tell a sold licence from a stall's self-made one. Empty or
+   * absent does not pin (the server pins regardless).
+   */
+  sellerPublicKey?: string
 }
