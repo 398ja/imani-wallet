@@ -20,6 +20,15 @@
  *   7. The seller spends A's licence at the mint (a refund). After the portal's refresh and the
  *      grace (shortened on the gate), T2 sells: 402 again. T1 still 201.
  *
+ * imani-wallet#226 (a copied licence is useless; the seller can revoke):
+ *   6a. A sends A's held licence to B (a second registered stall). B's wallet sees no licence in it
+ *       (WRONG_KEY), the server refuses B's report (422 LICENCE_WRONG_KEY), the mint refuses B's
+ *       swap (NUT-11: no signature by A) and the proofs stay UNSPENT, and A's T2 still sells.
+ *   8.  The seller sells A a second licence, A reports it, T2 sells. A non-seller's revocation is
+ *       refused 403. The seller revokes the subscription (`sell-subscription.mjs`'s
+ *       `revokeRequest`, NIP-98). Within one refresh (well inside the grace) T2 is 402, A's
+ *       re-report is 422 LICENCE_REVOKED, and T1 still sells.
+ *
  * Env: E2E_BASE, E2E_BUNDLE_DIR, E2E_LICENCE_SELLER_SK (the seller stall's key, which the gate names
  * in GATEWAY_CUSTOMER_LICENCE_SELLER_PUBKEYS), E2E_MINT_URL, E2E_LICENCE_GRACE_S,
  * E2E_IGNORE_HTTPS_ERRORS, E2E_CHROMIUM_ARGS. Run by imani-deploy's local gate with
@@ -33,11 +42,12 @@ import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 import { finalizeEvent, nip98 } from 'nostr-tools'
 import { registerMerchant, TEST_PASSPHRASE } from './register.mts'
-import { tokenProofs } from '../src/lib/voucherToken'
+import { parseVoucherToken, tokenProofs } from '../src/lib/voucherToken'
 import { terminalMetadataJson } from '../src/lib/terminalCredential'
 import { signOwnerAttestation } from '../src/lib/ownerAttestation'
 import { licenceIssueParams } from '../src/lib/licenceIssue'
-import { licenceIssueBody } from '../scripts/sell-subscription.mjs'
+import { licenceIssueBody, revokeRequest } from '../scripts/sell-subscription.mjs'
+import { licenceOf, verifyLicence } from '../packages/licence/src/index'
 import { mkdir, writeFile } from 'node:fs/promises'
 
 const BASE = (process.env.E2E_BASE ?? 'http://localhost').replace(/\/+$/, '')
@@ -45,6 +55,8 @@ const BUNDLE_DIR = process.env.E2E_BUNDLE_DIR
 const SELLER_SK = process.env.E2E_LICENCE_SELLER_SK ?? ''
 const MINT = (process.env.E2E_MINT_URL ?? '').replace(/\/+$/, '')
 const GRACE_S = Number(process.env.E2E_LICENCE_GRACE_S ?? '30')
+/** The portal's licence refresh on the gate (GATE_LICENCE_REFRESH_MS, default 5000). */
+const REFRESH_S = Math.ceil(Number(process.env.E2E_LICENCE_REFRESH_MS ?? '5000') / 1000)
 const INTERNAL_RELAY = 'ws://nostr-relay:7777'
 if (process.env.E2E_IGNORE_HTTPS_ERRORS === '1') process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
 
@@ -151,14 +163,41 @@ async function tillSells(t: { deviceSk: string; stall: string; voucherId: string
  * Header Or Cookie Too Large" (review of #197, 4a).
  */
 async function sellLicence(buyer: string) {
+  const subscriptionId = `sub_${bytesToHex(crypto.getRandomValues(new Uint8Array(8)))}`
   const params = licenceIssueParams({
-    lockKey: buyer, subscriptionId: `sub_${bytesToHex(crypto.getRandomValues(new Uint8Array(8)))}`,
+    lockKey: buyer, subscriptionId,
     paidAmountMinor: 4000, paidCurrency: 'GBP',
   })
-  return mint(SELLER_SK, licenceIssueBody({ pk: pub(SELLER_SK), sk: SELLER_SK }, {
+  const minted = await mint(SELLER_SK, licenceIssueBody({ pk: pub(SELLER_SK), sk: SELLER_SK }, {
     paidAmountMinor: params.faceValueMinor, paidCurrency: params.currency, term: 'annual',
     metadata: params.merchantMetadata,
   }))
+  return { ...minted, subscriptionId }
+}
+
+/** Does the wallet's own licence check grant `presenter` anything from this token? */
+function walletGrants(token: string, presenter: string): { granted: boolean; reason: string } {
+  // What the wallet's licenceIn does (src/lib/licences.ts), without its @imani/* alias imports.
+  let licence: ReturnType<typeof licenceOf> = null
+  try {
+    licence = licenceOf(parseVoucherToken(token).voucher)
+  } catch {
+    licence = null
+  }
+  if (!licence) return { granted: false, reason: 'not-a-licence' }
+  // The issuer is the gate's own gateway key, read off the licence: this checks the BINDING.
+  const verdict = verifyLicence(licence, {
+    issuerPublicKey: licence.issuerPublicKey, now: Math.floor(Date.now() / 1000), presenter,
+    sellerPublicKey: pub(SELLER_SK), verifySignature: () => true,
+  })
+  return verdict.granted ? { granted: true, reason: 'granted' } : { granted: false, reason: verdict.reason }
+}
+
+/** The seller's revocation, exactly as `sell-subscription.mjs --revoke` sends it. */
+async function revokeAs(sk: string, subscriptionId: string, reason: string) {
+  const req = revokeRequest({ pk: pub(sk), sk }, BASE, subscriptionId, reason)
+  const r = await fetch(req.url, { method: req.method, headers: req.headers, body: req.body }).catch(() => null)
+  return { status: r?.status ?? 0, body: r ? await r.text() : 'unreachable' }
 }
 
 /** NUT-07 for a token's proofs, straight from the mint. */
@@ -375,6 +414,32 @@ async function main() {
   const after = await tillSells(t2)
   check('T2 (a paid, attested terminal) of the licensed stall sells: 201', after.status === 201, `${after.status} ${after.body.slice(0, 200)}`)
 
+  console.log("\n#226: A sends A's licence to B; B gets nothing, and A keeps working")
+  if (held) {
+    const b = await ownerPage(browser)
+    b.on('pageerror', (e) => errors.push(`B: ${e.message}`))
+    await registerMerchant(b, BASE)
+    const bSk = await ownerKey(b)
+    check("the harness opened B's key", /^[0-9a-f]{64}$/.test(bSk), bSk.slice(0, 80))
+    if (/^[0-9a-f]{64}$/.test(bSk)) {
+      const mine = walletGrants(held, stall)
+      const theirs = walletGrants(held, pub(bSk))
+      check("A's wallet check grants A the licence (control)", mine.granted, mine.reason)
+      check("B's wallet check sees NO licence in A's copy (wrong-key)", !theirs.granted && theirs.reason === 'wrong-key', theirs.reason)
+      const bReport = await asOwnerSession(b, bSk, '/api/v1/portal/licence', { secrets: tokenProofs(held).map((p) => p.secret) })
+      check("the server refuses B's report of A's licence: 422 LICENCE_WRONG_KEY",
+        bReport.status === 422 && /LICENCE_WRONG_KEY/.test(bReport.body), `${bReport.status} ${bReport.body.slice(0, 200)}`)
+      const bSwap = await spendAtMint(held, bSk)
+      const afterSwap = await mintState(held)
+      check("the mint refuses B's swap of A's licence, and it stays UNSPENT",
+        bSwap.status !== 200 && afterSwap.length > 0 && afterSwap.every((s) => s === 'UNSPENT'),
+        `swap=${bSwap.status} ${bSwap.body} states=${afterSwap.join(',')}`)
+      const aStill = await tillSells(t2)
+      check("A's T2 still sells after B's attempts: 201", aStill.status === 201, `${aStill.status} ${aStill.body.slice(0, 200)}`)
+    }
+    await b.context().close().catch(() => {})
+  }
+
   console.log('\n#197: the licence is refunded (spent at the mint); after the grace T2 is 402 again')
   // The licence leaves A's stall: spent at the mint. gateway-customer mints a licence P2PK-locked
   // to its buyer (lock_key), so only A's key can spend it (a seller's refund needs #226's refund
@@ -398,6 +463,40 @@ async function main() {
     `${last.status} ${last.body.slice(0, 200)}`)
   const t1After = await tillSells(t1)
   check('T1, the free terminal, still sells', t1After.status === 201, `${t1After.status} ${t1After.body.slice(0, 160)}`)
+
+  console.log('\n#226: the seller revokes a licence (a refund); A\'s paid till drops within one refresh, no grace')
+  const second = await sellLicence(stall)
+  check('the seller mints A a second licence (a new subscription)', !!second.token, second.error)
+  if (!second.token) return finish(browser, errors)
+  const secrets2 = tokenProofs(second.token).map((p) => p.secret)
+  const report2 = await asOwnerSession(owner, ownerSk, '/api/v1/portal/licence', { secrets: secrets2 })
+  check('A reports the second licence: 200', report2.status === 200, `${report2.status} ${report2.body.slice(0, 200)}`)
+  const licensedAgain = await tillSells(t2)
+  check('T2 sells again on the second licence: 201', licensedAgain.status === 201, `${licensedAgain.status} ${licensedAgain.body.slice(0, 200)}`)
+  const notSeller = await revokeAs(ownerSk, second.subscriptionId, 'the buyer tries')
+  check('a revocation signed by anyone but the seller is 403 NOT_A_LICENCE_SELLER',
+    notSeller.status === 403 && /NOT_A_LICENCE_SELLER/.test(notSeller.body), `${notSeller.status} ${notSeller.body.slice(0, 200)}`)
+  const revoked = await revokeAs(SELLER_SK, second.subscriptionId, 'refund (gate)')
+  check('the seller revokes the subscription by NIP-98: 200, one reported licence',
+    revoked.status === 200 && /"reported_licences":1/.test(revoked.body) && /"already_revoked":false/.test(revoked.body),
+    `${revoked.status} ${revoked.body.slice(0, 200)}`)
+  const revokedAt = Date.now()
+  // One refresh period plus slack, and well inside the grace: a revocation has none.
+  await new Promise((r) => setTimeout(r, (REFRESH_S + 3) * 1000))
+  let cut = { status: 0, body: '' }
+  for (let i = 0; i < 4; i++) {
+    cut = await tillSells(t2)
+    if (cut.status === 402) break
+    await new Promise((r) => setTimeout(r, REFRESH_S * 1000))
+  }
+  const elapsedS = Math.round((Date.now() - revokedAt) / 1000)
+  check(`after the seller's revocation T2 is 402 TERMINAL_UNLICENSED within one refresh (${elapsedS} s, grace ${GRACE_S} s)`,
+    cut.status === 402 && /TERMINAL_UNLICENSED/.test(cut.body) && elapsedS < GRACE_S, `${cut.status} ${cut.body.slice(0, 200)} after ${elapsedS} s`)
+  const reReport = await asOwnerSession(owner, ownerSk, '/api/v1/portal/licence', { secrets: secrets2 })
+  check("A's re-report of the revoked licence is 422 LICENCE_REVOKED",
+    reReport.status === 422 && /LICENCE_REVOKED/.test(reReport.body), `${reReport.status} ${reReport.body.slice(0, 200)}`)
+  const t1Last = await tillSells(t1)
+  check('T1, the free terminal, still sells after the revocation', t1Last.status === 201, `${t1Last.status} ${t1Last.body.slice(0, 160)}`)
 
   return finish(browser, errors)
 }
