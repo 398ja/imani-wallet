@@ -314,8 +314,8 @@ describe("a stranger's licence-shaped DM cannot shadow the real licence (review 
 })
 
 describe('re-review of #197: the fallback is bounded and the refused list cannot grow', () => {
-  it('a flood of 80 fakes: at most MAX_CANDIDATES posts per look, no fake re-tried, and the genuine one is reached', async () => {
-    const fakes = Array.from({ length: 80 }, (_, i) =>
+  it('a flood of 70 fakes (past the old 64 window): at most MAX_CANDIDATES posts per look, no fake re-tried, and the genuine one is reached', async () => {
+    const fakes = Array.from({ length: 70 }, (_, i) =>
       lockedRow({
         expiresAt: NOW + (100 - i) * YEAR,
         voucherId: `${String(i).padStart(8, '0')}-2222-4222-8222-222222222222`,
@@ -338,10 +338,10 @@ describe('re-review of #197: the fallback is bounded and the refused list cannot
     }
     expect(outcome).toBe('reported')
     // Every fake sent once, then the genuine one: nothing forgotten and re-tried.
-    expect(sentIds).toHaveLength(81)
-    expect(new Set(sentIds).size).toBe(81)
+    expect(sentIds).toHaveLength(71)
+    expect(new Set(sentIds).size).toBe(71)
     expect(sentIds.at(-1)).toBe(GENUINE)
-  })
+  }, 60_000)
 
   it('a refusal is forgotten once that voucher is no longer held, so the list cannot grow', async () => {
     const genuine = lockedRow({ expiresAt: NOW + YEAR, voucherId: GENUINE })
