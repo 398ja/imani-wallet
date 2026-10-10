@@ -144,6 +144,16 @@ async function sellingTill(ownerSk: string, name: string) {
 
 /** The till sells EUR 1.00 with a fresh terminal warrant. Returns the HTTP status and body. */
 async function tillSells(t: { deviceSk: string; stall: string; voucherId: string; secret: string }) {
+  // A 429 is the per-minute issuance quota, not a licence answer: wait it out (as mint() does).
+  let r = await tillSellsOnce(t)
+  for (let i = 0; i < 3 && r.status === 429; i++) {
+    await new Promise((res) => setTimeout(res, 20_000))
+    r = await tillSellsOnce(t)
+  }
+  return r
+}
+
+async function tillSellsOnce(t: { deviceSk: string; stall: string; voucherId: string; secret: string }) {
   const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)))
   const digest = sha256(new TextEncoder().encode([t.stall, '100', '2', 'EUR', nonce].join('\u001f')))
   const warrant = JSON.stringify({
