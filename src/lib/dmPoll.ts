@@ -54,6 +54,11 @@ import { withWebLock } from './webLock'
 import { CALLS_PER_RECEIVE, receivePacer } from './receivePacer'
 import { checkTokenBacking, loadTrustedMints, onTrustedMintsChange } from './trustedMint'
 
+/** cashu-mint#540: a 90025 receive as dm-poll's terminal refusal. Red: not wired. */
+export function asFullyRedeemedRefusal(failure: unknown, _meta: Record<string, unknown> | undefined): unknown {
+  return failure
+}
+
 /**
  * Gateway REST, same-origin: `/api/v1/...` reaches customer-wallet through the
  * proxy rule that already routes `/api`. See branding.ts for why the old
