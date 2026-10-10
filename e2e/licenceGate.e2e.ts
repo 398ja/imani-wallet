@@ -26,11 +26,16 @@
  *       swap (NUT-11: no signature by A) and the proofs stay UNSPENT, and A's T2 still sells.
  *   8.  The seller sells A a second licence, A reports it, T2 sells. A non-seller's revocation is
  *       refused 403. The seller revokes the subscription (`sell-subscription.mjs`'s
- *       `revokeRequest`, NIP-98). Within one refresh (well inside the grace) T2 is 402, A's
- *       re-report is 422 LICENCE_REVOKED, and T1 still sells.
+ *       `revokeRequest`, NIP-98). T2 is 402, A's re-report is 422 LICENCE_REVOKED, and T1 still
+ *       sells. (A still holds its spent #197 licence, so this 402 is that end's grace running out.)
+ *   9.  E-1: stall C, which has never held a licence, buys one, its wallet reports it, C's T2 sells;
+ *       the seller revokes it; the portal's next refresh holds licensed_until NULL, and C's T2 is
+ *       402 at once, well inside the grace. W-1: C's wallet re-reports, is told 422, and its
+ *       Subscription screen says the seller revoked it.
  *
  * Env: E2E_BASE, E2E_BUNDLE_DIR, E2E_LICENCE_SELLER_SK (the seller stall's key, which the gate names
  * in GATEWAY_CUSTOMER_LICENCE_SELLER_PUBKEYS), E2E_MINT_URL, E2E_LICENCE_GRACE_S,
+ * E2E_PORTAL_SQL_CMD (a psql -tAc on the gate's portal database, for step 9),
  * E2E_IGNORE_HTTPS_ERRORS, E2E_CHROMIUM_ARGS. Run by imani-deploy's local gate with
  * E2E_SCRIPT=licenceGate.e2e.ts.
  */
@@ -49,6 +54,7 @@ import { licenceIssueParams } from '../src/lib/licenceIssue'
 import { licenceIssueBody, revokeRequest } from '../scripts/sell-subscription.mjs'
 import { licenceOf, verifyLicence } from '../packages/licence/src/index'
 import { mkdir, writeFile } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
 
 const BASE = (process.env.E2E_BASE ?? 'http://localhost').replace(/\/+$/, '')
 const BUNDLE_DIR = process.env.E2E_BUNDLE_DIR
@@ -500,15 +506,140 @@ async function main() {
     await new Promise((r) => setTimeout(r, REFRESH_S * 1000))
   }
   const elapsedS = Math.round((Date.now() - revokedAt) / 1000)
-  check(`after the seller's revocation T2 is 402 TERMINAL_UNLICENSED within one refresh (${elapsedS} s, grace ${GRACE_S} s)`,
-    cut.status === 402 && /TERMINAL_UNLICENSED/.test(cut.body) && elapsedS < GRACE_S, `${cut.status} ${cut.body.slice(0, 200)} after ${elapsedS} s`)
+  // Review of #226, E-1: A still holds its #197 licence (spent), so its licensed_until is that
+  // licence's end, not null, and this 402 is that end's grace running out. It shows the revoked
+  // licence stops counting; "no grace" itself is proved on stall C below, which has no other licence.
+  check(`after the seller's revocation A's T2 is 402 TERMINAL_UNLICENSED (${elapsedS} s; A falls back to its older, spent licence)`,
+    cut.status === 402 && /TERMINAL_UNLICENSED/.test(cut.body), `${cut.status} ${cut.body.slice(0, 200)} after ${elapsedS} s`)
   const reReport = await asOwnerSession(owner, ownerSk, '/api/v1/portal/licence', { secrets: secrets2 })
   check("A's re-report of the revoked licence is 422 LICENCE_REVOKED",
     reReport.status === 422 && /LICENCE_REVOKED/.test(reReport.body), `${reReport.status} ${reReport.body.slice(0, 200)}`)
   const t1Last = await tillSells(t1)
   check('T1, the free terminal, still sells after the revocation', t1Last.status === 201, `${t1Last.status} ${t1Last.body.slice(0, 160)}`)
 
+  await revokedWithNoHistory(browser, errors)
+
   return finish(browser, errors)
+}
+
+/**
+ * The portal's cached answer for `stall` (stall_licence_state), as `licensed_until|refreshed_at`, read
+ * through the gate's psql (E2E_PORTAL_SQL_CMD), or '' when the stall has no row. `stall` is 64 hex.
+ */
+function portalLicenceState(stall: string): string {
+  const cmd = process.env.E2E_PORTAL_SQL_CMD ?? ''
+  if (!cmd || !/^[0-9a-f]{64}$/.test(stall)) return 'unavailable'
+  const sql = `select coalesce(licensed_until::text, 'NULL') || '|' || coalesce(extract(epoch from refreshed_at)::bigint::text, '') ` +
+    `from stall_licence_state where stall_pubkey = '${stall}'`
+  try {
+    return execFileSync('sh', ['-c', `${cmd} "$1"`, 'sh', sql], { encoding: 'utf8', timeout: 30_000 }).trim()
+  } catch (e) {
+    return `error: ${String(e).slice(0, 120)}`
+  }
+}
+
+/**
+ * Review of #226, E-1. The revocation above runs on A, whose OTHER licence (spent in the #197 step)
+ * still gives the stall an end in the past: the portal's `licensed_until` is that end, not null, and
+ * T2 is 402 because that end's grace has run out, which a grace on revocation would pass too. So
+ * "no grace" is proved here on stall C, which has never held a licence: one licence, reported by C's
+ * own wallet, revoked, and then the portal holds `licensed_until` NULL from a refresh AFTER the
+ * revocation, and C's T2 is 402 straight away: well inside the grace, which null never gets.
+ *
+ * Then W-1 in C's browser: C's wallet re-reports, is told 422 LICENCE_REVOKED, and its Subscription
+ * screen says the seller revoked it rather than "Active".
+ */
+async function revokedWithNoHistory(browser: Browser, errors: string[]) {
+  console.log('\n#226 E-1: stall C, which never held a licence, is revoked: licensed_until NULL and T2 402 at once')
+  const c = await ownerPage(browser)
+  c.on('pageerror', (e) => errors.push(`C: ${e.message}`))
+  const cReports: Array<{ status: number }> = []
+  c.on('response', (r) => {
+    if (new URL(r.url()).pathname === '/api/v1/portal/licence') cReports.push({ status: r.status() })
+  })
+  await registerMerchant(c, BASE)
+  const cSk = await ownerKey(c)
+  check("the harness opened C's key", /^[0-9a-f]{64}$/.test(cSk), cSk.slice(0, 80))
+  if (!/^[0-9a-f]{64}$/.test(cSk)) return
+  const cStall = pub(cSk)
+
+  const c1 = await sellingTill(cSk, 'C front till')
+  await new Promise((r) => setTimeout(r, 1_500))
+  const c2 = await sellingTill(cSk, 'C second till')
+  check("C's T1 and T2 are minted", !!c1.secret && !!c2.secret, `${c1.error} ${c2.error}`)
+  if (!c1.secret || !c2.secret) return
+  const unlicensed = await tillSells(c2)
+  const before = portalLicenceState(cStall)
+  check("C has no licence history: T2 is 402 and the portal holds no licence end for C",
+    unlicensed.status === 402 && (before === '' || before.startsWith('NULL|')),
+    `${unlicensed.status} state=${before}`)
+
+  const sold = await sellLicence(cStall)
+  check('the seller mints C its first licence', !!sold.token, sold.error)
+  if (!sold.token) return
+  const dm = await as(SELLER_SK, 'POST', '/api/v1/dm/tokens/send', {
+    recipient_pubkey: cStall, token: sold.token, memo: sold.voucher.memo, voucher_id: sold.voucherId,
+    face_value: sold.voucher.face_value, face_unit: sold.voucher.face_unit, face_decimals: sold.voucher.face_decimals,
+    token_amount: sold.voucher.token_amount, backing_strategy: sold.voucher.backing_strategy,
+    issuer_id: pub(SELLER_SK), sender_pubkey: pub(SELLER_SK),
+    expires_at: Math.floor(Date.parse(String(sold.voucher.expires_at)) / 1000) || undefined,
+    relay_urls: [INTERNAL_RELAY],
+  })
+  check('the licence is delivered to C by DM', dm.status >= 200 && dm.status < 300, `${dm.status} ${dm.body.slice(0, 200)}`)
+  let reported = false
+  for (let i = 0; i < 24 && !reported; i++) {
+    await c.goto(`${BASE}/merchant/dashboard`, { waitUntil: 'load' }).catch(() => {})
+    await c.waitForTimeout(5_000)
+    reported = cReports.some((r) => r.status === 200)
+  }
+  check("C's wallet holds the licence and reported it by itself (200)", reported, JSON.stringify(cReports.slice(-3)))
+  const licensed = await tillSells(c2)
+  check("C's T2 sells on its licence: 201", licensed.status === 201, `${licensed.status} ${licensed.body.slice(0, 200)}`)
+  const during = portalLicenceState(cStall)
+  check('the portal holds a licence end for C while licensed (control)', /^\d{4}-/.test(during), during)
+
+  const revoked = await revokeAs(SELLER_SK, sold.subscriptionId, 'refund (gate, E-1)')
+  check("the seller revokes C's subscription: 200, one reported licence",
+    revoked.status === 200 && /"reported_licences":1/.test(revoked.body), `${revoked.status} ${revoked.body.slice(0, 200)}`)
+  const revokedAtS = Math.floor(Date.now() / 1000)
+  // The first refresh after the revocation, and no longer: null has no grace to wait out.
+  let state = ''
+  for (let i = 0; i < 6; i++) {
+    await new Promise((r) => setTimeout(r, REFRESH_S * 1000))
+    state = portalLicenceState(cStall)
+    const refreshed = Number(state.split('|')[1] ?? '0')
+    if (refreshed > revokedAtS) break
+  }
+  const [until, refreshedAt] = state.split('|')
+  check("after C's revocation the portal's refresh answers licensed_until NULL (not a past end)",
+    until === 'NULL' && Number(refreshedAt) > revokedAtS, `state=${state} revoked_at=${revokedAtS}`)
+  const cut = await tillSellsOnce(c2)
+  const elapsedS = Math.floor(Date.now() / 1000) - revokedAtS
+  check(`C's T2 is 402 TERMINAL_UNLICENSED at its first Sell after that refresh (${elapsedS} s, grace ${GRACE_S} s)`,
+    cut.status === 402 && /TERMINAL_UNLICENSED/.test(cut.body) && elapsedS < GRACE_S,
+    `${cut.status} ${cut.body.slice(0, 200)} after ${elapsedS} s`)
+  const free = await tillSells(c1)
+  check("C's T1, the free terminal, still sells", free.status === 201, `${free.status} ${free.body.slice(0, 160)}`)
+
+  console.log("\n#226 W-1: C's wallet learns of the revocation and stops granting")
+  // The wallet re-reports a licence at most every 6 h (REPORT_INTERVAL_SECONDS); forgetting that
+  // note stands in for the interval passing, and nothing else about the wallet is touched.
+  await c.evaluate((k) => localStorage.removeItem(k), `imani.licence.reported.${cStall}`).catch(() => {})
+  const seen = cReports.length
+  let told = false
+  for (let i = 0; i < 6 && !told; i++) {
+    await c.goto(`${BASE}/merchant/dashboard`, { waitUntil: 'load' }).catch(() => {})
+    await c.waitForTimeout(4_000)
+    told = cReports.slice(seen).some((r) => r.status === 422)
+  }
+  check("C's wallet re-reports and is told 422 (LICENCE_REVOKED)", told, JSON.stringify(cReports.slice(seen)))
+  await c.goto(`${BASE}/settings/subscription`, { waitUntil: 'load' }).catch(() => {})
+  // The app opens the wallet first ("Opening wallet…"), then the screen checks: wait for a verdict.
+  await c.getByText(/^(Not active|Active|Working, unconfirmed)$/).first().waitFor({ timeout: 30_000 }).catch(() => {})
+  const screenText = await c.locator('body').innerText({ timeout: 20_000 }).catch(() => '')
+  check("C's Subscription screen says it was revoked by the seller, not Active",
+    /revoked by the seller/i.test(screenText) && /Not active/.test(screenText), screenText.replace(/\s+/g, ' ').slice(0, 300))
+  await c.context().close().catch(() => {})
 }
 
 async function finish(browser: Browser, errors: string[]) {
