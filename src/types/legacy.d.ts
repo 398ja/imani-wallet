@@ -99,5 +99,5 @@ declare module '*/scripts/notify-expiring.mjs' {
   export function noticeDueOn(expiresAt: number, now: number): number | null
   export function noticeMessage(daysLeft: number, expiresAt: number): string
   /** False for a revoked (refunded) subscription: no reminders. */
-  export function remindable(row: { revoked_at?: string | null }): boolean
+  export function remindable(row: { subscription_id?: string; expires_at?: number | null; revoked_at?: string | null }): boolean
 }
