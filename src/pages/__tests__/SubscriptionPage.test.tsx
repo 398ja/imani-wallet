@@ -45,7 +45,7 @@ import type { LicenceTerms } from '../../lib/licenceIssue'
 
 const { SubscriptionPage } = await import('../SubscriptionPage')
 const { licenceIssueParams } = await import('../../lib/licenceIssue')
-const { buildVoucherToken } = await import('../../lib/__tests__/voucherFixtures')
+const { buildLicenceVoucherToken: buildVoucherToken } = await import('../../lib/__tests__/voucherFixtures')
 const { forgetLicenceParses } = await import('../../lib/licences')
 const { forgetVerification } = await import('../../lib/licenceStatus')
 

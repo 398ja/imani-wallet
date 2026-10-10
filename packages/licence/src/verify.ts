@@ -5,6 +5,12 @@ import {
   type VerifyOptions,
 } from './types.js'
 
+/** The x of a 66-hex compressed key, or the key unchanged. */
+function xOnly(key: string): string {
+  const k = key.trim()
+  return k.length === 66 && /^0[23]/.test(k) ? k.slice(2) : k
+}
+
 /** Constant-time-ish comparison of two hex strings, case-insensitively. */
 function sameKey(a: string | undefined, b: string | undefined): boolean {
   if (!a || !b) return false
@@ -69,6 +75,16 @@ export function verifyLicence(
    * From here every field is SIGNED, so it is a fact rather than a claim.
    */
 
+  // The seller pin (review of imani-wallet#197, MEDIUM-3). Before the lock, because a licence a
+  // stranger minted to us is not ours to reason about either.
+  if (options.sellerPublicKey && !sameKey(voucher.issuerId, options.sellerPublicKey)) {
+    return {
+      granted: false,
+      reason: DENIAL_REASONS.NOT_SOLD_BY_US,
+      detail: 'this licence was not sold by our licence seller',
+    }
+  }
+
   if (!voucher.lockKey) {
     // Refused rather than accepted. A voucher with no lock is one that
     // possession alone unlocks, which is the bearer-credential failure ADR 0006
@@ -87,6 +103,24 @@ export function verifyLicence(
       granted: false,
       reason: DENIAL_REASONS.WRONG_KEY,
       detail: 'this licence is locked to a different key',
+    }
+  }
+
+  // Locked at the MINT, to the same key (review of imani-wallet#197). A plain VOUCHER's lock is
+  // metadata the mint never checks, and gateway-customer refuses it, so the wallet must not show
+  // "licensed" for one either.
+  if (!voucher.mintLockKey) {
+    return {
+      granted: false,
+      reason: DENIAL_REASONS.NOT_LOCKED_AT_MINT,
+      detail: 'this licence is not locked at the mint, so the server will not count it',
+    }
+  }
+  if (!sameKey(xOnly(voucher.mintLockKey), voucher.lockKey)) {
+    return {
+      granted: false,
+      reason: DENIAL_REASONS.WRONG_KEY,
+      detail: 'the mint lock is not the licence lock_key',
     }
   }
 

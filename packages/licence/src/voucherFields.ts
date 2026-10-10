@@ -13,4 +13,8 @@ export interface SignedVoucherFields {
   faceValue: number
   unit: string
   merchantMetadata?: string | null
+  /** The NUT-11 key in `data`, on a `P2PK_VOUCHER` only. */
+  lockKey?: string
+  /** The signed `issuer` tag: who sold it. */
+  issuerId?: string
 }

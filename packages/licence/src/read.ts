@@ -80,6 +80,8 @@ export function licenceOf(signed: SignedVoucherFields): LicenceVoucher | null {
     issuerPublicKey: signed.issuerPublicKey,
     issuerSignature: signed.issuerSignature,
     lockKey: asString(meta.lock_key),
+    mintLockKey: asString(signed.lockKey),
+    issuerId: asString(signed.issuerId),
     expiresAt: signed.expiresAt,
     // The credential is its own receipt (ADR 0007): what was paid, and until
     // when, both read off the voucher rather than off a record we would have to
