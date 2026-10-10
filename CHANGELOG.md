@@ -9,8 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Paid extra terminals sell (#197). Pairs with imani-gateway-customer and imani-gateway-portal
-`/licence` releases; without them the report is refused and nothing changes.
+## [0.18.0] - 2026-10-10
+
+Paid extra terminals sell (#197). Pairs with imani-gateway-customer 0.25.0 and imani-gateway-portal
+0.14.0; without them the report is refused and nothing changes.
 
 ### Added
 
@@ -34,6 +36,10 @@ Paid extra terminals sell (#197). Pairs with imani-gateway-customer and imani-ga
 - **`scripts/sell-subscription.mjs` mints licences `FIXED`** (ADR 0007): one sat, one proof, with
   the seller's own sale warrant. `PROPORTIONAL` split a GBP 40 licence into a dozen locked proofs
   whose witness header the edge refused on receive ("Request Header Or Cookie Too Large").
+- **`scripts/sell-subscription.mjs` signs as the deployed seller from `IMANI_SUBSCRIPTIONS_SELLER_NSEC`**
+  (env var, or `--env-file <deploy .env>`, which reads only that line). The nsec lives only in the
+  deploy env file; `.seed-keys.json` stays the local dev fallback. A bad value is refused without
+  being echoed.
 
 ## [0.17.0] - 2026-10-09
 
