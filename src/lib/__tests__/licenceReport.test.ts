@@ -8,7 +8,7 @@ import { forgetLicenceParses } from '../licences'
 import { licenceIssueParams, type LicenceTerms } from '../licenceIssue'
 import { forgetLicenceReport, reportLicence, REPORT_INTERVAL_SECONDS } from '../licenceReport'
 import { tokenProofs } from '../voucherToken'
-import { buildVoucherToken } from './voucherFixtures'
+import { buildLicenceToken, buildVoucherToken } from './voucherFixtures'
 
 /**
  * imani-wallet#197: the owner's wallet tells the server about its licence, so the stall's paid
@@ -26,7 +26,13 @@ function terms(over: Partial<LicenceTerms> = {}): LicenceTerms {
   return { lockKey: STALL, subscriptionId: 'sub_9f2c11', paidAmountMinor: 4000, paidCurrency: 'GBP', ...over }
 }
 
+/** A licence as gateway-customer mints it (P2PK, one proof). See `lockedRow` below. */
 function licenceRow(t: LicenceTerms, expiresAt: number, voucherId = '1d4410af-70f5-4c14-8606-519404684ea7'): VoucherRow {
+  return lockedRow({ expiresAt, voucherId, lockKey: t.lockKey })
+}
+
+/** A pre-#226 plain VOUCHER licence: the lock is only in its metadata. */
+function plainLicenceRow(t: LicenceTerms, expiresAt: number, voucherId = '1d4410af-70f5-4c14-8606-519404684ea7'): VoucherRow {
   const params = licenceIssueParams(t)
   const built = buildVoucherToken(
     {
@@ -183,5 +189,126 @@ describe('how often it reports', () => {
     expect(await first).toBe('reported')
     expect(await second).toBe('reported')
     expect(post).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ---------------------------------------------------------------- review of #197, MEDIUM-3
+
+/** A licence as gateway-customer mints it: one P2PK proof locked to `lockKey`, sold by `seller`. */
+function lockedRow(o: { expiresAt: number; voucherId: string; seller?: string; lockKey?: string; sub?: string }): VoucherRow {
+  const params = licenceIssueParams(terms({ lockKey: o.lockKey ?? STALL, ...(o.sub ? { subscriptionId: o.sub } : {}) }))
+  const built = buildLicenceToken({
+    metadata: params.merchantMetadata, lockKey: o.lockKey ?? STALL, expiresAt: o.expiresAt,
+    faceValue: params.faceValueMinor, unit: params.currency, sellerId: o.seller, voucherId: o.voucherId,
+  })
+  return {
+    token_id: `id-${o.voucherId}`, token: built.token, amount: 1, face_value: params.faceValueMinor,
+    face_unit: params.currency, face_decimals: 2, token_amount: 1, issuer_id: built.issuerPublicKey,
+    status: 'active', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
+  }
+}
+
+const GENUINE = '11111111-1111-4111-8111-111111111111'
+const FAKE = '22222222-2222-4222-8222-222222222222'
+const FAKE2 = '33333333-3333-4333-8333-333333333333'
+const FAKE3 = '44444444-4444-4444-8444-444444444444'
+
+/** The portal: 422 for every voucher in `refused`, 200 otherwise. Records which voucher was sent. */
+function portal(rows: VoucherRow[], refused: string[]) {
+  const sentIds: string[] = []
+  const post = vi.fn(async (body: { secrets: string[] }) => {
+    const row = rows.find((r) => tokenProofs(r.token).some((p) => p.secret === body.secrets[0]))
+    const id = row?.token_id?.replace(/^id-/, '') ?? '?'
+    sentIds.push(id)
+    return { status: refused.includes(id) ? 422 : 200 }
+  })
+  return { post, sentIds }
+}
+
+describe("a stranger's licence-shaped DM cannot shadow the real licence (review of #197, MEDIUM-3)", () => {
+  it('on a 422 it reports the next candidate by expiry, and that one is recorded', async () => {
+    const genuine = lockedRow({ expiresAt: NOW + YEAR, voucherId: GENUINE })
+    const fake = lockedRow({ expiresAt: NOW + 2 * YEAR, voucherId: FAKE, seller: 'f'.repeat(64), sub: 'sub_fake' })
+    const rows = [genuine, fake]
+    const { post, sentIds } = portal(rows, [FAKE])
+
+    expect(await reportLicence({ pubkey: STALL, now: NOW, loadRows: async () => rows, post })).toBe('reported')
+    expect(sentIds).toEqual([FAKE, GENUINE])
+  })
+
+  it("falls back even when the fake copies the genuine licence's subscription_id", async () => {
+    // heldLicences keeps one licence per subscription, the later expiry winning, so a fake naming
+    // the victim's own subscription would otherwise hide the genuine licence from the report.
+    const genuine = lockedRow({ expiresAt: NOW + YEAR, voucherId: GENUINE })
+    const fake = lockedRow({ expiresAt: NOW + 2 * YEAR, voucherId: FAKE, seller: 'f'.repeat(64) })
+    const rows = [genuine, fake]
+    const { post, sentIds } = portal(rows, [FAKE])
+
+    expect(await reportLicence({ pubkey: STALL, now: NOW, loadRows: async () => rows, post })).toBe('reported')
+    expect(sentIds).toEqual([FAKE, GENUINE])
+  })
+
+  it('remembers a refused voucher and never sends it again', async () => {
+    const genuine = lockedRow({ expiresAt: NOW + YEAR, voucherId: GENUINE })
+    const fake = lockedRow({ expiresAt: NOW + 2 * YEAR, voucherId: FAKE, seller: 'f'.repeat(64) })
+    const rows = [genuine, fake]
+    const { post, sentIds } = portal(rows, [FAKE])
+
+    await reportLicence({ pubkey: STALL, now: NOW, loadRows: async () => rows, post })
+    await reportLicence({ pubkey: STALL, now: NOW + REPORT_INTERVAL_SECONDS + 1, loadRows: async () => rows, post })
+
+    expect(sentIds).toEqual([FAKE, GENUINE, GENUINE])
+  })
+
+  it('tries at most three candidates in one report', async () => {
+    const rows = [
+      lockedRow({ expiresAt: NOW + 4 * YEAR, voucherId: FAKE, seller: 'f'.repeat(64) }),
+      lockedRow({ expiresAt: NOW + 3 * YEAR, voucherId: FAKE2, seller: 'f'.repeat(64) }),
+      lockedRow({ expiresAt: NOW + 2 * YEAR, voucherId: FAKE3, seller: 'f'.repeat(64) }),
+      lockedRow({ expiresAt: NOW + YEAR, voucherId: GENUINE }),
+    ]
+    const { post, sentIds } = portal(rows, [FAKE, FAKE2, FAKE3])
+
+    expect(await reportLicence({ pubkey: STALL, now: NOW, loadRows: async () => rows, post })).toBe('failed')
+    expect(sentIds).toEqual([FAKE, FAKE2, FAKE3])
+    // The three are remembered, so the next look reaches the genuine one at once.
+    expect(await reportLicence({ pubkey: STALL, now: NOW + 1, loadRows: async () => rows, post })).toBe('reported')
+    expect(sentIds.slice(3)).toEqual([GENUINE])
+  })
+
+  it('an outage (503) is not a refusal: it stops there and remembers nothing', async () => {
+    const genuine = lockedRow({ expiresAt: NOW + YEAR, voucherId: GENUINE })
+    const fake = lockedRow({ expiresAt: NOW + 2 * YEAR, voucherId: FAKE })
+    const rows = [genuine, fake]
+    const post = vi.fn(async () => ({ status: 503 }))
+
+    expect(await reportLicence({ pubkey: STALL, now: NOW, loadRows: async () => rows, post })).toBe('failed')
+    expect(post).toHaveBeenCalledTimes(1)
+    const ok = okPost()
+    await reportLicence({ pubkey: STALL, now: NOW + 1, loadRows: async () => rows, post: ok })
+    expect(ok.mock.calls[0][0].secrets).toEqual(tokenProofs(fake.token).map((p) => p.secret))
+  })
+
+  it('a pinned seller (VITE_LICENCE_SELLER_PUBKEY) means a stranger-sold licence is never sent', async () => {
+    const seller = 'e'.repeat(64)
+    const genuine = lockedRow({ expiresAt: NOW + YEAR, voucherId: GENUINE, seller })
+    const fake = lockedRow({ expiresAt: NOW + 2 * YEAR, voucherId: FAKE, seller: 'f'.repeat(64) })
+    const rows = [genuine, fake]
+    const { post, sentIds } = portal(rows, [])
+
+    await reportLicence({ pubkey: STALL, now: NOW, loadRows: async () => rows, post, sellerPublicKey: seller })
+
+    expect(sentIds).toEqual([GENUINE])
+  })
+
+  it('a plain VOUCHER licence is never reported: the server refuses it NOT_LOCKED_AT_MINT', async () => {
+    const plain = plainLicenceRow(terms(), NOW + 2 * YEAR, FAKE)
+    const genuine = lockedRow({ expiresAt: NOW + YEAR, voucherId: GENUINE })
+    const rows = [plain, genuine]
+    const { post, sentIds } = portal(rows, [])
+
+    await reportLicence({ pubkey: STALL, now: NOW, loadRows: async () => rows, post })
+
+    expect(sentIds).toEqual([GENUINE])
   })
 })
