@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { verifyLicence, DENIAL_REASONS } from '@imani/licence'
+import { schnorr } from '@noble/curves/secp256k1.js'
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
+
+import { parseIssuanceWarrant, verifyIssuanceWarrant } from '../issuanceWarrant'
 
 import {
   LICENCE_FEATURES,
@@ -14,7 +18,7 @@ import {
 } from '../licenceIssue'
 import { forgetLicenceParses, heldLicences, licenceFromToken, licenceSignatureVerifier } from '../licences'
 import { spendable, toMerchants, walletTotals } from '../merchants'
-import { buildVoucherToken } from './voucherFixtures'
+import { buildLicenceVoucherToken as buildVoucherToken } from './voucherFixtures'
 import type { VoucherRow } from '@imani/wallet-storage'
 
 /**
@@ -332,6 +336,29 @@ describe('a subscription id', () => {
 })
 
 describe('the seller script writes what the wallet reads', () => {
+  it('asks for a FIXED licence, so it is one proof (ADR 0007; review of #197, 4a)', async () => {
+    // PROPORTIONAL backed a GBP 40 licence with ~52k sats: a dozen locked proofs whose NUT-11
+    // witness header the edge refused ("Request Header Or Cookie Too Large"), and spendable value.
+    const script = await import('../../../scripts/sell-subscription.mjs')
+    const sk = 'ab'.repeat(32)
+    const pk = bytesToHex(schnorr.getPublicKey(hexToBytes(sk)))
+    const body = script.licenceIssueBody({ pk, sk }, {
+      paidAmountMinor: 4000, paidCurrency: 'GBP', term: 'annual', metadata: '{"subscription_id":"s"}',
+    })
+
+    expect(body.backing_strategy).toBe('FIXED')
+    expect(body.face_value).toBe(4000)
+    expect(body.face_unit).toBe('GBP')
+    expect(body.face_decimals).toBe(2)
+    expect(body.issuer_id).toBe(pk)
+    // Since #159 a wallet refuses a coupon with no warrant from its stall, a licence included.
+    const warrant = JSON.parse(body.issuance_warrant) as Record<string, unknown>
+    expect(warrant).toMatchObject({ form: 'merchant', sale_total: 4000, face_decimals: 2, unit: 'GBP' })
+    const parsed = parseIssuanceWarrant(body.issuance_warrant)
+    expect(parsed.state).toBe('present')
+    expect(verifyIssuanceWarrant(parsed, pk, { faceValueMinor: 4000, faceDecimals: 2, unit: 'GBP' }))
+      .toMatchObject({ verdict: 'verified' })
+  })
   /**
    * `scripts/sell-subscription.mjs` is the tool that actually sells one, and it
    * cannot import this app's TypeScript without a build step — so it restates

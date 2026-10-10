@@ -37,6 +37,8 @@ import { tokenProofs } from '../src/lib/voucherToken'
 import { terminalMetadataJson } from '../src/lib/terminalCredential'
 import { signOwnerAttestation } from '../src/lib/ownerAttestation'
 import { licenceIssueParams } from '../src/lib/licenceIssue'
+import { licenceIssueBody } from '../scripts/sell-subscription.mjs'
+import { mkdir, writeFile } from 'node:fs/promises'
 
 const BASE = (process.env.E2E_BASE ?? 'http://localhost').replace(/\/+$/, '')
 const BUNDLE_DIR = process.env.E2E_BUNDLE_DIR
@@ -141,33 +143,22 @@ async function tillSells(t: { deviceSk: string; stall: string; voucherId: string
     { 'X-Imani-Terminal-Credential': t.voucherId })
 }
 
-/** The seller sells `buyer` a licence (sell-subscription.mjs's metadata, our licenceIssue.ts). */
+/**
+ * The seller sells `buyer` a licence exactly as scripts/sell-subscription.mjs does: its request body
+ * (`licenceIssueBody`), so a realistic GBP 40.00 licence, `FIXED` (ADR 0007), with the seller's own
+ * merchant warrant. FIXED backs it with one sat, so it is ONE P2PK proof: the buyer's receive sends
+ * one NUT-11 witness, where PROPORTIONAL made a dozen and the edge refused the header as "Request
+ * Header Or Cookie Too Large" (review of #197, 4a).
+ */
 async function sellLicence(buyer: string) {
-  // 1 sat, so the licence is ONE proof. gateway-customer P2PK-locks a licence (its lock_key), and
-  // the wallet's receive sends a NUT-11 witness per locked proof in X-Cashu-Witnesses: a 4000-sat
-  // licence is a dozen ~2 KB secrets, which the edge refuses as "Request Header Or Cookie Too
-  // Large" (found by this gate; a separate follow-up, not #197's).
   const params = licenceIssueParams({
     lockKey: buyer, subscriptionId: `sub_${bytesToHex(crypto.getRandomValues(new Uint8Array(8)))}`,
-    paidAmountMinor: 1, paidCurrency: 'sat',
+    paidAmountMinor: 4000, paidCurrency: 'GBP',
   })
-  return mint(SELLER_SK, {
-    face_value: params.faceValueMinor, face_unit: 'sat', face_decimals: 0, backing_strategy: 'PROPORTIONAL',
-    issuer_id: pub(SELLER_SK), memo: params.memo, expires_in_days: params.expiryDays,
-    merchant_metadata: JSON.parse(params.merchantMetadata),
-    // The seller's own `merchant` warrant over the sale: since #159 every wallet refuses a coupon
-    // without one, a licence included (sell-subscription.mjs signs the same).
-    issuance_warrant: sellerWarrant(params.faceValueMinor, 0, 'sat'),
-  })
-}
-
-function sellerWarrant(saleTotal: number, faceDecimals: number, unit: string): string {
-  const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)))
-  const digest = sha256(new TextEncoder().encode([pub(SELLER_SK), String(saleTotal), String(faceDecimals), unit, nonce].join('\u001f')))
-  return JSON.stringify({
-    form: 'merchant', sale_total: saleTotal, face_decimals: faceDecimals, unit, nonce,
-    sig: bytesToHex(schnorr.sign(digest, hexToBytes(SELLER_SK))),
-  })
+  return mint(SELLER_SK, licenceIssueBody({ pk: pub(SELLER_SK), sk: SELLER_SK }, {
+    paidAmountMinor: params.faceValueMinor, paidCurrency: params.currency, term: 'annual',
+    metadata: params.merchantMetadata,
+  }))
 }
 
 /** NUT-07 for a token's proofs, straight from the mint. */
@@ -332,6 +323,19 @@ async function main() {
   const sold = await sellLicence(stall)
   check('the seller mints A a licence', !!sold.token, sold.error)
   if (!sold.token) return finish(browser, errors)
+  // The realistic licence (review of #197, 4a): GBP 40.00 face, FIXED, so ONE locked proof.
+  const soldProofs = tokenProofs(sold.token)
+  check('a GBP 40.00 FIXED licence is ONE P2PK proof (backing_strategy FIXED, face 4000 GBP)',
+    soldProofs.length === 1 && soldProofs[0].secret.startsWith('["P2PK_VOUCHER"') &&
+      sold.voucher.backing_strategy === 'FIXED' && sold.voucher.face_value === 4000 && sold.voucher.face_unit === 'GBP',
+    `proofs=${soldProofs.length} amount=${soldProofs.map((p) => p.amount).join('+')} backing=${String(sold.voucher.backing_strategy)} ` +
+      `face=${String(sold.voucher.face_value)} ${String(sold.voucher.face_unit)}`)
+  if (process.env.E2E_ARTIFACTS) {
+    // The artefact a customer receives, for src/lib/__tests__/fixtures/live-licence.token.
+    await mkdir(process.env.E2E_ARTIFACTS, { recursive: true }).catch(() => {})
+    await writeFile(join(process.env.E2E_ARTIFACTS, 'live-licence.token'), `${sold.token}\n`).catch(() => {})
+    await writeFile(join(process.env.E2E_ARTIFACTS, 'live-licence.customer'), `${stall}\n`).catch(() => {})
+  }
   const dm = await as(SELLER_SK, 'POST', '/api/v1/dm/tokens/send', {
     recipient_pubkey: stall, token: sold.token, memo: sold.voucher.memo, voucher_id: sold.voucherId,
     face_value: sold.voucher.face_value, face_unit: sold.voucher.face_unit, face_decimals: sold.voucher.face_decimals,
@@ -350,7 +354,7 @@ async function main() {
     await owner.waitForTimeout(5_000)
     held = await heldLicenceToken(owner, pub(SELLER_SK))
   }
-  check("A's wallet holds the licence (stored after the DM)", held !== '')
+  check("A's wallet holds the licence (stored after the DM; the receive's witness header fits)", held !== '')
   let reported = false
   for (let i = 0; i < 12 && !reported; i++) {
     reported = reports.some((r) => r.status === 200)
