@@ -12,6 +12,12 @@
  *   node scripts/sell-subscription.mjs --customer-pubkey <hex> --paid 4200 \
  *       --subscription-id sub_9f2c11          # a RENEWAL, or a re-issue
  *
+ * The deployed seller (staging): its nsec is IMANI_SUBSCRIPTIONS_SELLER_NSEC in the deploy env file,
+ * and only that line is read:
+ *
+ *   WALLET_URL=https://api.wallet.staging.398ja.xyz node scripts/sell-subscription.mjs \
+ *       --env-file ../imani-deploy/.env.staging --customer-pubkey <hex> --paid 4000
+ *
  * ## What makes this a licence rather than a coupon
  *
  * One field: `merchant_metadata`, carrying a subscription id, a grant, and the
@@ -45,6 +51,7 @@
  * recognised as a licence means that fix is not in the deployed build.
  */
 import { finalizeEvent, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
+import { schnorr } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
@@ -100,8 +107,46 @@ const TERM_DAYS = { annual: 365, monthly: 30 }
 
 // ---------------------------------------------------------------- auth
 
-/** The seller's own identity, reused across runs so renewals come from one key. */
+/** The deployed seller's secret: the deploy env file holds it, nothing else does. */
+export const SELLER_NSEC_VAR = 'IMANI_SUBSCRIPTIONS_SELLER_NSEC'
+
+/**
+ * The `imani-subscriptions` seller from the environment, or `null` when it is not set.
+ *
+ * The deployed seller's nsec lives ONLY in the deploy env file (`imani-deploy/.env.staging`), next
+ * to the public `GATEWAY_CUSTOMER_LICENCE_SELLER_PUBKEYS`. No compose service references it, so
+ * this script is its only reader. Pass it as an env var, or point `--env-file` at the env file and
+ * only that one line is read. A bad value is refused WITHOUT echoing it.
+ */
+export function sellerFromEnv(env = process.env, envFile = '') {
+  let value = (env[SELLER_NSEC_VAR] ?? '').trim()
+  if (!value && envFile) {
+    const line = readFileSync(envFile, 'utf8')
+      .split(/\r?\n/)
+      .find((l) => l.startsWith(`${SELLER_NSEC_VAR}=`))
+    value = (line?.slice(SELLER_NSEC_VAR.length + 1) ?? '').trim().replace(/^["']|["']$/g, '')
+  }
+  if (!value) return null
+  let sk
+  try {
+    const decoded = nip19.decode(value)
+    if (decoded.type !== 'nsec') throw new Error('not an nsec')
+    sk = decoded.data
+  } catch {
+    throw new Error(`${SELLER_NSEC_VAR} is set but is not a valid nsec (value not shown)`)
+  }
+  return { name: 'imani-subscriptions', sk, pk: getPublicKey(sk) }
+}
+
+/**
+ * The seller's own identity, reused across runs so renewals come from one key.
+ *
+ * The env (`IMANI_SUBSCRIPTIONS_SELLER_NSEC`, or `--env-file <path>`) wins: that is the deployed
+ * seller. `.seed-keys.json` is the local dev stack's fallback only.
+ */
 function sellerKey() {
+  const fromEnv = sellerFromEnv(process.env, arg('--env-file', ''))
+  if (fromEnv) return fromEnv
   const name = arg('--seller', 'imani-subscriptions')
   const store = existsSync(KEYS) ? JSON.parse(readFileSync(KEYS, 'utf8')) : {}
   if (!store[name]) {
@@ -146,18 +191,50 @@ function authHeaders(seller, url, method, body) {
  * decision: "it makes the credential its own receipt". The wallet keeps it out
  * of every balance by recognising it as a licence, not by it being worth zero.
  */
-async function mintLicence(seller, { paidAmountMinor, paidCurrency, term, metadata }) {
-  const url = `${WALLET}/api/v1/wallet/vouchers`
-  const body = JSON.stringify({
+/**
+ * The issuance request for one licence. Exported so a test pins it.
+ *
+ * **`FIXED`**, as ADR 0007 decides: non-splittable, backed by the platform's fixed 1 sat, so the
+ * licence is ONE proof. `PROPORTIONAL` backed a GBP 40 licence with its whole value in sats: a
+ * dozen P2PK-locked proofs, whose NUT-11 witness header (one entry of the full secret per proof)
+ * the edge refused as "Request Header Or Cookie Too Large" on the buyer's receive, and sats a
+ * buyer could melt (review of imani-wallet#197, 4a).
+ *
+ * The seller's own `merchant` warrant over the sale goes inside: since #159 every wallet refuses a
+ * coupon with no usable authorisation from its stall, a licence included.
+ */
+export function licenceIssueBody(seller, { paidAmountMinor, paidCurrency, term, metadata }) {
+  const faceDecimals = paidCurrency === 'sat' ? 0 : 2
+  return {
     face_value: paidAmountMinor,
     face_unit: paidCurrency,
-    face_decimals: paidCurrency === 'sat' ? 0 : 2,
-    backing_strategy: 'PROPORTIONAL',
+    face_decimals: faceDecimals,
+    backing_strategy: 'FIXED',
     issuer_id: seller.pk,
     memo: `Imani subscription (${term})`,
     expires_in_days: TERM_DAYS[term],
     merchant_metadata: JSON.parse(metadata),
+    issuance_warrant: sellerWarrant(seller, paidAmountMinor, faceDecimals, paidCurrency),
+  }
+}
+
+/** The seller's signed `merchant` warrant (src/lib/issuanceWarrant.ts, IssuanceWarrant.java). */
+function sellerWarrant(seller, saleTotal, faceDecimals, unit) {
+  const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)))
+  const digest = sha256(
+    new TextEncoder().encode([seller.pk, String(saleTotal), String(faceDecimals), unit, nonce].join('\u001f')),
+  )
+  const sk = typeof seller.sk === 'string' ? hexToBytes(seller.sk) : seller.sk
+  if (!sk) throw new Error('the seller key is needed to sign the sale warrant')
+  return JSON.stringify({
+    form: 'merchant', sale_total: saleTotal, face_decimals: faceDecimals, unit, nonce,
+    sig: bytesToHex(schnorr.sign(digest, sk)),
   })
+}
+
+async function mintLicence(seller, { paidAmountMinor, paidCurrency, term, metadata }) {
+  const url = `${WALLET}/api/v1/wallet/vouchers`
+  const body = JSON.stringify(licenceIssueBody(seller, { paidAmountMinor, paidCurrency, term, metadata }))
 
   const response = await fetch(url, { method: 'POST', headers: authHeaders(seller, url, 'POST', body), body })
   const text = await response.text()

@@ -40,6 +40,13 @@ declare module '*/shared/currency.js' {
  * over the network and has no business being reachable from a test.
  */
 declare module '*/scripts/sell-subscription.mjs' {
+  /** The env var that holds the deployed seller's nsec (the deploy env file only). */
+  export const SELLER_NSEC_VAR: 'IMANI_SUBSCRIPTIONS_SELLER_NSEC'
+  /** The seller from IMANI_SUBSCRIPTIONS_SELLER_NSEC (env, or one line of `envFile`), or null. */
+  export function sellerFromEnv(
+    env?: Record<string, string | undefined>,
+    envFile?: string,
+  ): { name: string; sk: Uint8Array; pk: string } | null
   export function licenceMetadata(terms: {
     lockKey: string
     subscriptionId: string
@@ -48,6 +55,21 @@ declare module '*/scripts/sell-subscription.mjs' {
     paidAmountMinor: number
     paidCurrency: string
   }): string
+  /** The issuance request for one licence: FIXED, with the seller's merchant warrant. */
+  export function licenceIssueBody(
+    seller: { pk: string; sk: string | Uint8Array },
+    sale: { paidAmountMinor: number; paidCurrency: string; term: string; metadata: string },
+  ): {
+    face_value: number
+    face_unit: string
+    face_decimals: number
+    backing_strategy: 'FIXED'
+    issuer_id: string
+    memo: string
+    expires_in_days: number
+    merchant_metadata: Record<string, unknown>
+    issuance_warrant: string
+  }
 }
 
 /**

@@ -778,7 +778,10 @@ async function phase6(browser: Browser, owner: Page, customer: Page, customerPub
   owner.once('dialog', (d) => void d.accept())
   await owner.getByRole('button', { name: 'Log out' }).click({ timeout: 30_000 }).catch(() => {})
   await owner.waitForFunction(() => !Object.keys(localStorage).some((k) => k.startsWith('imani-wallet:terminals:')), undefined, { timeout: 30_000 }).catch(() => {})
-  const wiped = await owner.evaluate(() => !Object.keys(localStorage).some((k) => k.startsWith('imani-wallet:terminals:')))
+  // Log out navigates, so the page's context can be torn down under this read ("Execution context
+  // was destroyed", a flake seen in the #197 and mint#540 gates). Retried after the load settles.
+  const wiped = await evaluateAcrossNavigation(owner,
+    () => !Object.keys(localStorage).some((k) => k.startsWith('imani-wallet:terminals:')))
   check('E6 logout wiped the roster from this device', wiped)
   await owner.goto(`${BASE}/onboarding`, { waitUntil: 'networkidle' })
   await owner.getByRole('button', { name: /^Log in$/ }).first().click()
@@ -1050,6 +1053,22 @@ async function finishPhase6(
     }
   }
 
+}
+
+/**
+ * `page.evaluate`, retried when a navigation destroys the context mid-call. Only that error is
+ * retried (up to 5 times, after the page settles); any other error, and the last one, propagates.
+ */
+async function evaluateAcrossNavigation<T>(page: Page, fn: () => T): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await page.evaluate(fn)
+    } catch (e) {
+      if (attempt >= 5 || !/Execution context was destroyed|navigat/i.test(String(e))) throw e
+      await page.waitForLoadState('load').catch(() => {})
+      await page.waitForTimeout(500)
+    }
+  }
 }
 
 /** A revokes the named till from its Terminals screen. True when the roster records it revoked. */

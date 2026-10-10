@@ -114,6 +114,11 @@ export function buildVoucherToken(
    * needs a warrant inside the coupon to verify against the coupon's issuer.
    */
   issuerKey: Uint8Array = schnorr.utils.randomSecretKey(),
+  /**
+   * Give each proof a C (a 33-byte stand-in for the mint's signature), as a real token has. Off by
+   * default so existing fixtures are byte-identical; on for a test that must show C never leaves.
+   */
+  withC = false,
 ): BuiltVoucherToken {
   const priv = issuerKey
   const pub = bytesToHex(schnorr.getPublicKey(priv))
@@ -142,13 +147,23 @@ export function buildVoucherToken(
 
   const blobHex = bytesToHex(voucherBlob(voucher))
   const proofs = amounts.map((amount, i) =>
-    bytes(
-      head(5, 2),
-      tstr('a'),
-      uint(amount),
-      tstr('s'),
-      tstr(JSON.stringify(['VOUCHER', blobHex, `wrapper-nonce-${i}`, []])),
-    ),
+    withC
+      ? bytes(
+          head(5, 3),
+          tstr('a'),
+          uint(amount),
+          tstr('s'),
+          tstr(JSON.stringify(['VOUCHER', blobHex, `wrapper-nonce-${i}`, []])),
+          tstr('c'),
+          bytes(head(2, 33), 2, ...new Uint8Array(32).fill(0x40 + i)),
+        )
+      : bytes(
+          head(5, 2),
+          tstr('a'),
+          uint(amount),
+          tstr('s'),
+          tstr(JSON.stringify(['VOUCHER', blobHex, `wrapper-nonce-${i}`, []])),
+        ),
   )
   const entry = bytes(head(5, 1), tstr('p'), head(4, proofs.length), ...proofs)
   const root = bytes(
@@ -238,6 +253,15 @@ export interface LockedCredentialOptions {
   expiresAt?: number
   /** Leaves the `expires_at` tag out altogether: a credential with no expiry. */
   omitExpiry?: boolean
+  /**
+   * The signed `issuer` tag. The signer's own key unless set: a licence is signed by the gateway
+   * key and names its SELLER here (imani-wallet#197).
+   */
+  issuerId?: string
+  /** Signed `face_value` and `unit`. 1 sat unless set. */
+  faceValue?: number
+  unit?: string
+  memo?: string
 }
 
 /**
@@ -264,11 +288,11 @@ export function buildLockedCredentialToken(o: LockedCredentialOptions): string {
     ['sigflag', 'SIG_INPUTS'],
     ...(coKeys.length ? [['pubkeys', ...coKeys]] : []),
     ['voucher_id', o.voucherId ?? '5f8a487d-6cea-4a7d-b681-9d5d62cc9dd9'],
-    ['issuer', stall],
-    ['unit', 'sat'],
-    ['face_value', '1'],
+    ['issuer', o.issuerId ?? stall],
+    ['unit', o.unit ?? 'sat'],
+    ['face_value', String(o.faceValue ?? 1)],
     ...(o.omitExpiry ? [] : [['expires_at', String(o.expiresAt ?? 1820071167)]]),
-    ['memo', 'Imani terminal credential'],
+    ['memo', o.memo ?? 'Imani terminal credential'],
     ['backing_strategy', 'PROPORTIONAL'],
     ['issuance_ratio', '1'],
     ['face_decimals', '0'],
@@ -319,6 +343,59 @@ export function buildLockedCredentialToken(o: LockedCredentialOptions): string {
     entry,
   )
   return `cashuB${base64Url(root)}`
+}
+
+/**
+ * A licence exactly as gateway-customer mints one since #226 / the #197 review: a one-proof
+ * `P2PK_VOUCHER` locked to the buyer (`data` = 02‖lock_key, no co-key), signed by the gateway key
+ * (`signerKey`), naming the SELLER as `issuer` (`sellerId`, the signer unless set).
+ */
+export function buildLicenceToken(o: {
+  metadata: string
+  lockKey: string
+  expiresAt?: number
+  faceValue?: number
+  unit?: string
+  signerKey?: Uint8Array
+  sellerId?: string
+  voucherId?: string
+}): { token: string; issuerPublicKey: string } {
+  const signerKey = o.signerKey ?? schnorr.utils.randomSecretKey()
+  const token = buildLockedCredentialToken({
+    stallKey: signerKey,
+    devicePubkey: o.lockKey,
+    pubkeys: [],
+    metadata: o.metadata,
+    expiresAt: o.expiresAt,
+    issuerId: o.sellerId,
+    faceValue: o.faceValue,
+    unit: o.unit,
+    memo: 'Imani subscription (annual)',
+    voucherId: o.voucherId,
+  })
+  return { token, issuerPublicKey: bytesToHex(schnorr.getPublicKey(signerKey)) }
+}
+
+/**
+ * `buildVoucherToken`'s shape for a LICENCE, minted as gateway-customer mints one (P2PK, one
+ * proof, locked to the metadata's `lock_key`). The wallet and the server refuse a plain VOUCHER
+ * licence (review of imani-wallet#197), so every licence fixture goes through here.
+ */
+export function buildLicenceVoucherToken(
+  overrides: Pick<Partial<SignedVoucherFields>, 'merchantMetadata' | 'faceValue' | 'unit' | 'expiresAt' | 'voucherId'>,
+  signerKey: Uint8Array = schnorr.utils.randomSecretKey(),
+): { token: string; voucher: { issuerPublicKey: string } } {
+  const meta = JSON.parse(overrides.merchantMetadata ?? '{}') as { lock_key?: string }
+  const built = buildLicenceToken({
+    metadata: overrides.merchantMetadata ?? '{}',
+    lockKey: meta.lock_key ?? 'b'.repeat(64),
+    expiresAt: overrides.expiresAt,
+    faceValue: overrides.faceValue,
+    unit: overrides.unit,
+    voucherId: overrides.voucherId,
+    signerKey,
+  })
+  return { token: built.token, voucher: { issuerPublicKey: built.issuerPublicKey } }
 }
 
 /**

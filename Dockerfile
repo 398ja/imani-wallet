@@ -62,6 +62,13 @@ RUN ALLOW_UNTRUSTED_MINT_BUILD="$ALLOW_UNTRUSTED_MINT_BUILD" sh /tmp/check-trust
 ARG VITE_VOUCHER_ISSUER_PUBKEYS=
 ENV VITE_VOUCHER_ISSUER_PUBKEYS=$VITE_VOUCHER_ISSUER_PUBKEYS
 
+# The licence SELLER's stall key, 64-hex x-only (src/lib/licenceStatus.ts licenceSellerPubkey): the
+# signed `issuer` a licence must name, so a licence-shaped voucher another stall minted through the
+# gateway and DM'd here grants nothing in this wallet and is never reported (imani-wallet#197 review,
+# MEDIUM-3). Not a secret. Empty does not pin (logged once); the server pins regardless.
+ARG VITE_LICENCE_SELLER_PUBKEY=
+ENV VITE_LICENCE_SELLER_PUBKEY=$VITE_LICENCE_SELLER_PUBKEY
+
 COPY . .
 # `tsc -b && vite build`. The tsc half typechecks ./packages through the paths
 # mirror in tsconfig.app.json, and the nap packages through their published

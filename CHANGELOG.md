@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Paid extra terminals sell (#197). Pairs with imani-gateway-customer and imani-gateway-portal
+`/licence` releases; without them the report is refused and nothing changes.
+
+### Added
+
+- **The owner's wallet reports its licence to the server** (`src/lib/licenceReport.ts`). When the
+  dashboard (after login, and whenever a licence or renewal arrives by DM) or the Terminals screen
+  finds a licence that verifies, it sends `POST /api/v1/portal/licence` with the licence's proof
+  SECRETS only, never C, so nothing on the path can spend it. NIP-98 signed by the stall: the server
+  licenses only the signer, and only if the licence is locked to it. At most once per 6 hours for
+  the same licence, at once for a renewal. Fire and forget: a failure changes nothing on screen.
+- **`VITE_LICENCE_SELLER_PUBKEY`** (build arg): the licence seller's stall key. A licence must name
+  it as `issuer`, or it grants nothing here and is never reported. Unset does not pin, and says so
+  once in the console. The server pins regardless (`GATEWAY_CUSTOMER_LICENCE_SELLER_PUBKEYS`).
+
+### Changed (review of #197)
+
+- **A stranger's licence-shaped DM can no longer shadow the real licence.** A report refused 422
+  remembers that voucher and tries the next held licence by expiry at once (at most 3 per report);
+  a refused voucher is never sent again. An outage (503) stops there and remembers nothing.
+- **A licence must be locked at the mint (`P2PK_VOUCHER`)**, its NUT-11 key equal to its signed
+  `lock_key`, as the server requires. A plain `VOUCHER` licence is `not-locked-at-mint` here too.
+- **`scripts/sell-subscription.mjs` mints licences `FIXED`** (ADR 0007): one sat, one proof, with
+  the seller's own sale warrant. `PROPORTIONAL` split a GBP 40 licence into a dozen locked proofs
+  whose witness header the edge refused on receive ("Request Header Or Cookie Too Large").
+
 ## [0.17.0] - 2026-10-09
 
 Terminals phase 6 (imani-wallet#160): till sales reach the owner, the terminal list syncs across
