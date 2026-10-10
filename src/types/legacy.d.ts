@@ -40,6 +40,13 @@ declare module '*/shared/currency.js' {
  * over the network and has no business being reachable from a test.
  */
 declare module '*/scripts/sell-subscription.mjs' {
+  /** The env var that holds the deployed seller's nsec (the deploy env file only). */
+  export const SELLER_NSEC_VAR: 'IMANI_SUBSCRIPTIONS_SELLER_NSEC'
+  /** The seller from IMANI_SUBSCRIPTIONS_SELLER_NSEC (env, or one line of `envFile`), or null. */
+  export function sellerFromEnv(
+    env?: Record<string, string | undefined>,
+    envFile?: string,
+  ): { name: string; sk: Uint8Array; pk: string } | null
   export function licenceMetadata(terms: {
     lockKey: string
     subscriptionId: string
