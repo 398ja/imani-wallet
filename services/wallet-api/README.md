@@ -518,6 +518,38 @@ ordering that leaves the coupon whole. A refusal is 200 with `prepared: null`:
 { "prepared": null, "refusal": { "reason": "wrong-stall", "detail": "…" }, "holdingUnchanged": true }
 ```
 
+### `POST /v1/redeem/prepare`
+
+Taking a coupon a customer presents, at your own stall. The service verifies the
+coupon (yours, unexpired, signature intact) and answers what to sign to accept it:
+
+```json
+{ "ok": true, "voucher": { "…": "…" }, "url": "https://…/api/v1/wallet/receive", "method": "POST", "body": "{\"token\":\"cashuB…\"}" }
+```
+
+You sign that request (NIP-98, the `body` string verbatim) and send it to `url`
+yourself. The swap that takes the coupon is **gateway-customer's**, not this
+service's: wallet-api never swaps and holds no mint credential, so it holds no
+voucher redeemer token either (cashu-mint#540).
+
+#### Redeemed in full: `VOUCHER_FULLY_REDEEMED`
+
+gateway-customer declares your stall's coupon credit to the mint's per-coupon
+redemption cap. If the coupon's value has already been redeemed (most likely
+through a copy of it), the mint refuses (`voucher_not_accepted`, 90025) and the
+receive answers **400**:
+
+```json
+{ "error": { "code": "VOUCHER_FULLY_REDEEMED", "details": "1b6f3e2a",
+  "message": "This coupon has already been redeemed in full. If you believe this is wrong, contact the stall, quoting reference 1b6f3e2a." } }
+```
+
+- **Terminal. Do not retry**: every retry is refused the same way.
+- **Nothing was taken.** The mint signed nothing; the customer still holds the
+  coupon, and their wallet can swap it back to sats.
+- `details` is the reference (the voucher id's first 8 characters). Support is
+  keyed on it: quote it when the customer disputes the refusal.
+
 ### `GET /metrics`
 
 Unauthenticated counters: requests, errors, refusals by reason, validation

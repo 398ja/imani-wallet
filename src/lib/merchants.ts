@@ -269,6 +269,11 @@ export function isSpent(row: Pick<VoucherRow, 'status'>): boolean {
   return status === 'redeemed' || status === 'spent'
 }
 
+/** cashu-mint#540: coupons refused as redeemed in full. Red: not wired. */
+export function fullyRedeemedRows(_rows: VoucherRow[]): VoucherRow[] {
+  return []
+}
+
 /**
  * The rows that are still MONEY.
  *
