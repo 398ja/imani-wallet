@@ -312,3 +312,75 @@ describe("a stranger's licence-shaped DM cannot shadow the real licence (review 
     expect(sentIds).toEqual([GENUINE])
   })
 })
+
+describe('re-review of #197: the fallback is bounded and the refused list cannot grow', () => {
+  it('a flood of 80 fakes: at most MAX_CANDIDATES posts per look, no fake re-tried, and the genuine one is reached', async () => {
+    const fakes = Array.from({ length: 80 }, (_, i) =>
+      lockedRow({
+        expiresAt: NOW + (100 - i) * YEAR,
+        voucherId: `${String(i).padStart(8, '0')}-2222-4222-8222-222222222222`,
+        seller: 'f'.repeat(64),
+      }),
+    )
+    const genuine = lockedRow({ expiresAt: NOW + YEAR, voucherId: GENUINE })
+    const rows = [...fakes, genuine]
+    const { post, sentIds } = portal(rows, fakes.map((r) => r.token_id!.replace(/^id-/, '')))
+
+    let looks = 0
+    let outcome = 'failed'
+    while (outcome !== 'reported' && looks < 40) {
+      const before = sentIds.length
+      outcome = await reportLicence({ pubkey: STALL, now: NOW + looks, loadRows: async () => rows, post })
+      expect(sentIds.length - before).toBeLessThanOrEqual(3)
+      const stored = JSON.parse(localStorage.getItem(`imani.licence.refused.${STALL}`) ?? '[]') as string[]
+      expect(stored.length).toBeLessThanOrEqual(rows.length)
+      looks++
+    }
+    expect(outcome).toBe('reported')
+    // Every fake sent once, then the genuine one: nothing forgotten and re-tried.
+    expect(sentIds).toHaveLength(81)
+    expect(new Set(sentIds).size).toBe(81)
+    expect(sentIds.at(-1)).toBe(GENUINE)
+  })
+
+  it('a refusal is forgotten once that voucher is no longer held, so the list cannot grow', async () => {
+    const genuine = lockedRow({ expiresAt: NOW + YEAR, voucherId: GENUINE })
+    const fake = lockedRow({ expiresAt: NOW + 2 * YEAR, voucherId: FAKE, seller: 'f'.repeat(64) })
+    const fake2 = lockedRow({ expiresAt: NOW + 3 * YEAR, voucherId: FAKE2, seller: 'f'.repeat(64) })
+    const { post } = portal([genuine, fake, fake2], [FAKE, FAKE2])
+    await reportLicence({ pubkey: STALL, now: NOW, loadRows: async () => [genuine, fake], post })
+    // fake is gone from the wallet (spent, deleted); a new one arrives and is refused.
+    await reportLicence({ pubkey: STALL, now: NOW + REPORT_INTERVAL_SECONDS + 1, loadRows: async () => [genuine, fake2], post })
+    const stored = JSON.parse(localStorage.getItem(`imani.licence.refused.${STALL}`) ?? '[]') as string[]
+    expect(stored).toHaveLength(1)
+  })
+
+  it('a 409 (spent) stops the report and is not remembered as a refusal', async () => {
+    const genuine = lockedRow({ expiresAt: NOW + YEAR, voucherId: GENUINE })
+    const fake = lockedRow({ expiresAt: NOW + 2 * YEAR, voucherId: FAKE })
+    const rows = [genuine, fake]
+    const post = vi.fn(async () => ({ status: 409 }))
+    expect(await reportLicence({ pubkey: STALL, now: NOW, loadRows: async () => rows, post })).toBe('failed')
+    expect(post).toHaveBeenCalledTimes(1)
+    expect(localStorage.getItem(`imani.licence.refused.${STALL}`)).toBeNull()
+  })
+
+  it("a fake that reuses the genuine licence's voucher_id cannot get the genuine one skipped", async () => {
+    // The fake sorts first (later expiry), is refused 422, and its voucher_id is remembered. If that
+    // id is the genuine one's, the genuine licence is then never a candidate again.
+    const genuine = lockedRow({ expiresAt: NOW + YEAR, voucherId: GENUINE })
+    const fake = lockedRow({ expiresAt: NOW + 2 * YEAR, voucherId: GENUINE, seller: 'f'.repeat(64) })
+    const rows = [fake, genuine]
+    const sent: string[] = []
+    const post = vi.fn(async (body: { secrets: string[] }) => {
+      const isFake = tokenProofs(fake.token).some((p) => p.secret === body.secrets[0])
+      sent.push(isFake ? 'fake' : 'genuine')
+      return { status: isFake ? 422 : 200 }
+    })
+    const first = await reportLicence({ pubkey: STALL, now: NOW, loadRows: async () => rows, post })
+    const second = await reportLicence({ pubkey: STALL, now: NOW + 1, loadRows: async () => rows, post })
+    expect(first).toBe('reported')
+    expect(second).toBe('recent')
+    expect(sent).toEqual(['fake', 'genuine'])
+  })
+})

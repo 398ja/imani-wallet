@@ -1,4 +1,6 @@
 import type { VoucherRow } from '@imani/wallet-storage'
+import { sha256 } from '@noble/hashes/sha2.js'
+import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils'
 
 import { licenceIn } from './licences'
 import { licenceSellerPubkey } from './licenceStatus'
@@ -55,8 +57,22 @@ const REFUSED_KEY_PREFIX = 'imani.licence.refused.'
 /** How many licences one report tries before it gives up until the next look. */
 export const MAX_CANDIDATES = 3
 
-/** Remembered refusals per account, newest kept: a bound so a flood of fakes cannot grow storage. */
-const MAX_REFUSED = 64
+/**
+ * Remembered refusals per account. Only refusals of licences still HELD are kept (re-review of
+ * #197), so the list is bounded by what the wallet holds and a held fake is never forgotten and
+ * re-tried: with a newest-64 window, 65 fakes cycled for ever and the genuine licence was never
+ * reached. This cap is only a backstop.
+ */
+const MAX_REFUSED = 1024
+
+/**
+ * What a refusal is remembered by: the proof secrets themselves, hashed. Not the voucher id, which
+ * is whatever the stranger's metadata says: a fake reusing the genuine licence's voucher_id, refused
+ * first (later expiry), would otherwise get the GENUINE licence skipped for ever (re-review of #197).
+ */
+function fingerprint(secrets: string[]): string {
+  return bytesToHex(sha256(utf8ToBytes(secrets.join('\n'))))
+}
 
 export type ReportOutcome = 'reported' | 'recent' | 'none' | 'failed'
 
@@ -110,10 +126,10 @@ function readRefused(pubkey: string): string[] {
   }
 }
 
-function rememberRefused(pubkey: string, voucherId: string): void {
+function rememberRefused(pubkey: string, refusedNow: string, held: Set<string>): void {
   try {
-    const refused = readRefused(pubkey).filter((id) => id !== voucherId)
-    refused.push(voucherId)
+    const refused = readRefused(pubkey).filter((id) => id !== refusedNow && held.has(id))
+    refused.push(refusedNow)
     localStorage.setItem(`${REFUSED_KEY_PREFIX}${pubkey}`, JSON.stringify(refused.slice(-MAX_REFUSED)))
   } catch {
     // Not remembered: the next look tries it again and is refused again. Harmless.
@@ -175,7 +191,8 @@ async function reportOnce(options: ReportOptions): Promise<ReportOutcome> {
 
   const seller = (options.sellerPublicKey ?? licenceSellerPubkey()).trim().toLowerCase()
   const refused = new Set(readRefused(options.pubkey))
-  const candidates: Array<{ voucherId: string; secrets: string[]; expiresAt: number }> = []
+  const candidates: Array<{ voucherId: string; secrets: string[]; expiresAt: number; print: string }> = []
+  const held = new Set<string>()
   // EVERY held licence row, not one per subscription (heldLicences): a stranger's voucher that
   // copies this account's subscription_id with a later expiry must not hide the genuine one.
   for (const row of rows) {
@@ -193,9 +210,12 @@ async function reportOnce(options: ReportOptions): Promise<ReportOutcome> {
     } catch {
       continue
     }
-    if (secrets.length === 0 || refused.has(voucherId)) continue
-    if (candidates.some((c) => c.voucherId === voucherId)) continue
-    candidates.push({ voucherId, secrets, expiresAt: licence.expiresAt })
+    if (secrets.length === 0) continue
+    const print = fingerprint(secrets)
+    held.add(print)
+    if (refused.has(print)) continue
+    if (candidates.some((c) => c.print === print)) continue
+    candidates.push({ voucherId, secrets, expiresAt: licence.expiresAt, print })
   }
   if (candidates.length === 0) return refused.size > 0 ? 'failed' : 'none'
   // Latest expiry first: the one that licenses longest is the one worth the server's answer.
@@ -223,7 +243,7 @@ async function reportOnce(options: ReportOptions): Promise<ReportOutcome> {
       return 'failed'
     }
     console.warn('[licence] the server refused a held licence; trying the next one', candidate.voucherId)
-    rememberRefused(options.pubkey, candidate.voucherId)
+    rememberRefused(options.pubkey, candidate.print, held)
   }
   return 'failed'
 }
