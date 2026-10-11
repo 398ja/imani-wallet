@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security (claim links, phase 1: the confirm prompt, [spec](docs/spec-claim-links.md) 4.3)
+
+- **Opening a claim link never redeems it.** With a session, `/c/:ref` (and `/c`, the resume of a
+  parked claim) used to call `redeemClaimRef` on load, so anything that rendered the link in a
+  logged-in browser (a prefetch, a link preview, a restored tab, a mis-tap) spent the voucher. It
+  now shows a confirm prompt built from the portal's public metadata, which is not destructive:
+  the stall (resolved from the issuer key), the face value, the claim-by date and what could be
+  verified. **Add to my wallet** redeems, exactly once however often it is tapped. **Decline**
+  forgets the parked claim on this device and leaves the voucher unclaimed.
+- **Verification before the tap.** `✓ verified stall` only when the issuer is a well-formed key that
+  resolves to a published stall; otherwise *"We could not verify this voucher"* and *Unknown stall*.
+  Add is disabled for a malformed issuer, and when the wallet trusts no mint. The voucher's own
+  signature (against `VITE_VOUCHER_ISSUER_PUBKEYS`) and its mint (against the trusted-mint list) are
+  still checked on Accept by the existing redeem, which holds a token at an untrusted mint.
+- **States instead of Add:** already claimed (with the date), expired (including an `Unclaimed`
+  record past its expiry), revoked, your stall's own cashback (a merchant opening its own link is
+  refused, spec 3.2), not found, incomplete link, unreachable (with Retry: nothing was spent), and a
+  deployment that cannot claim. A different logged-in account sees the prompt as its own.
+- **The claim key stays in memory.** It is read from the fragment in the first render and scrubbed
+  from the address bar with `history.replaceState` before any await. Tests assert it never reaches
+  a request URL, a header or a log line, and that no request on the link path carries a voucher
+  declaration header (D9). The typed code (`/receive/cashback`) is unchanged (Q2).
+- New `fetchClaimSummary(ref)` in `lib/cashback.ts`: the non-destructive read the prompt uses.
+
 ### Fixed (claim links, phase 0: [spec](docs/spec-claim-links.md))
 
 - **A returning device that opens a claim link goes to Login, not to registration.** With no
