@@ -11,6 +11,7 @@ import { buildPaymentTransaction, buildSentTransaction } from './transactions'
 import { sendTransferSignature } from './transferSignature'
 import { creditableFaceValue, parseVoucherToken } from './voucherToken'
 import { publishTx } from './txRecords'
+import { FULLY_REDEEMED_STATUS, VoucherFullyRedeemedError, isVoucherFullyRedeemed } from './fullyRedeemed'
 import type { NUT18VRequest } from './nap'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
 
@@ -91,6 +92,35 @@ type SendStatus = {
   sent_voucher_id?: string
   error?: string
   error_message?: string
+  /** Why a FAILED send failed. `VOUCHER_FULLY_REDEEMED` is the mint's 90025 (cashu-mint#540). */
+  error_code?: string
+}
+
+/**
+ * The send failed because the mint's redemption cap refused the coupon (cashu-mint#540, 90025).
+ *
+ * Not reclaimed: the mint signed nothing, so the source row still holds the holder's proofs, and
+ * the reclaim endpoint refuses a FAILED send anyway. The row is marked `fully_redeemed` so it is
+ * never offered for a payment again (a retry is refused the same way) and is listed for "Swap back
+ * to sats" instead. Never throws: the caller's job is to report the refusal, which a failed write
+ * must not replace.
+ */
+async function markFullyRedeemed(
+  wallet: ReturnType<typeof getWallet>,
+  pending: Pick<PendingSend, 'tokenId' | 'sendId' | 'voucherId'>,
+): Promise<void> {
+  try {
+    const row = await wallet.getVoucher(pending.tokenId)
+    if (!row) return
+    await wallet.saveVoucher({
+      ...row,
+      status: FULLY_REDEEMED_STATUS,
+      updated_at: new Date().toISOString(),
+    } as Parameters<typeof wallet.saveVoucher>[0])
+    notifyWalletChanged()
+  } catch (error) {
+    console.error('[pay] could not mark a fully redeemed coupon', pending.sendId, error)
+  }
 }
 
 /**
@@ -615,6 +645,14 @@ async function reconcileOnce(pubkey: string): Promise<number> {
         continue
       }
 
+      // cashu-mint#540: refused by the mint's redemption cap. Nothing moved, so there is
+      // nothing to reclaim: the coupon is marked and offered for a swap back to sats.
+      if (isVoucherFullyRedeemed(status)) {
+        await markFullyRedeemed(wallet, send)
+        console.warn(`[pay] pending send ${send.sendId} refused: coupon redeemed in full`)
+        continue
+      }
+
       // Terminal but not completed. Same reasoning as the live path: the saga
       // has already burnt the source coupon's proofs and is holding the
       // replacement, so failing without reclaiming leaves the money in an escrow
@@ -1035,6 +1073,14 @@ async function awaitAndSettle(
         `unchanged here — check your history again in a moment before retrying.${cause}`,
       pending.sendId,
     )
+  }
+
+  // cashu-mint#540: the mint's redemption cap refused this coupon (90025). Terminal, never
+  // retried: the holder is told it is redeemed in full and offered a swap back to sats.
+  if (status.status !== 'COMPLETED' && isVoucherFullyRedeemed(status)) {
+    await markFullyRedeemed(wallet, pending)
+    forgetPendingSend(payer, pending.sendId)
+    throw new VoucherFullyRedeemedError(pending.voucherId, pending.tokenId, pending.merchantName)
   }
 
   if (status.status !== 'COMPLETED') {

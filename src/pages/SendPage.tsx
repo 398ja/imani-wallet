@@ -15,6 +15,8 @@ import {
   IdentityInline,
 } from '../components/ui'
 import { ScanRecipient } from '../components/ScanRecipient'
+import { SwapBackOffer } from '../components/SwapBackOffer'
+import { VoucherFullyRedeemedError } from '../lib/fullyRedeemed'
 import { listVouchers } from '../lib/wallet'
 import { merchantStatus, type MerchantStatus } from '../lib/merchant'
 import { toMerchants, type Merchant } from '../lib/merchants'
@@ -100,7 +102,7 @@ function sendOptions(merchants: Merchant[]): SendOption[] {
 type Status =
   | { step: 'idle' }
   | { step: 'sending' }
-  | { step: 'failed'; message: string }
+  | { step: 'failed'; message: string; swapBackTokenId?: string }
   | { step: 'unconfirmed'; message: string }
 
 export function SendPage({ pubkey }: { pubkey: string }) {
@@ -436,6 +438,9 @@ export function SendPage({ pubkey }: { pubkey: string }) {
         </p>
 
         {(status.step === 'failed' || status.step === 'unconfirmed') && <Alert>{status.message}</Alert>}
+        {status.step === 'failed' && status.swapBackTokenId && (
+          <SwapBackOffer tokenId={status.swapBackTokenId} pubkey={pubkey} />
+        )}
 
         <div className="space-y-2">
           <Button
@@ -465,6 +470,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
                 setStatus({
                   step: e instanceof SendOutcomeUnknownError ? 'unconfirmed' : 'failed',
                   message: e instanceof Error ? e.message : 'Send failed.',
+                  swapBackTokenId: e instanceof VoucherFullyRedeemedError ? e.tokenId : undefined,
                 })
               }
             }}

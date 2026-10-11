@@ -8,6 +8,8 @@ import {
   parseCheckInput,
   checkRedemption,
   receiveBody,
+  receiveUrl,
+  RECEIVE_PATH,
   REFUSAL,
 } from '../redeem.js'
 
@@ -201,6 +203,37 @@ describe('what to sign to accept a coupon', () => {
     // key order changes the hash, and the gateway refuses the request from a
     // service the caller never addressed directly.
     expect(receiveBody('cashuBabc')).toBe('{"token":"cashuBabc"}')
+  })
+})
+
+/**
+ * cashu-mint#540 phase 2: wallet-api is a courier, so the declared swap (and its 90025 refusal)
+ * belongs to gateway-customer's receive, which the caller signs and calls. Pinned here because a
+ * change that made this service swap, or call the mint, would need a redeemer token it must not
+ * hold, and would move the holder contract somewhere the README does not say.
+ */
+describe('the redemption cap (cashu-mint#540)', () => {
+  const SOURCES = ['redeem.ts', 'server.ts', 'prepare.ts'].map((file) =>
+    readFileSync(join(__dirname, '..', file), 'utf8'),
+  )
+
+  it('routes the accepting swap to gateway-customer, which declares it and answers 90025', () => {
+    expect(RECEIVE_PATH).toBe('/api/v1/wallet/receive')
+    expect(receiveUrl().endsWith(RECEIVE_PATH)).toBe(true)
+  })
+
+  it('holds no redeemer token and never sends the declaration headers', () => {
+    for (const source of SOURCES) {
+      expect(source).not.toMatch(/REDEEMER_TOKEN/)
+      expect(source.toLowerCase()).not.toContain('x-cashu-voucher-redeemer')
+      expect(source.toLowerCase()).not.toContain('x-cashu-voucher-redemption')
+    }
+  })
+
+  it('documents the VOUCHER_FULLY_REDEEMED answer as terminal for integrators', () => {
+    const readme = readFileSync(join(__dirname, '..', 'README.md'), 'utf8')
+    expect(readme).toContain('VOUCHER_FULLY_REDEEMED')
+    expect(readme).toMatch(/Terminal\. Do not retry/)
   })
 })
 

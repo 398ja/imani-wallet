@@ -12,6 +12,8 @@ import {
   SendOutcomeUnknownError,
   signedPartOf,
 } from '../pay'
+import { VoucherFullyRedeemedError } from '../fullyRedeemed'
+import { fullyRedeemedRows, spendable } from '../merchants'
 
 // Stand-ins for the wallet store and imani-apps' classic-script API client. The
 // reconcile path is the only thing here that reaches for either; every other
@@ -1679,5 +1681,110 @@ describe('sendVouchers and payRequest', () => {
       expect(transactions).toHaveLength(1)
       expect(transactions[0]).toMatchObject({ type: 'sent', direction: 'out' })
     })
+  })
+})
+
+/**
+ * cashu-mint#540 phase 2: the mint's redemption cap refused the coupon (90025), which gateway-core
+ * reports as a FAILED send with `error_code = VOUCHER_FULLY_REDEEMED`. Terminal: the holder is told
+ * the coupon is redeemed in full (design §2.13), it is NOT reclaimed (nothing moved), it is never
+ * offered again, and the screen can offer "Swap back to sats" for its row.
+ */
+describe('a coupon the mint refuses as redeemed in full (cashu-mint#540)', () => {
+  const PAYER = 'c'.repeat(64)
+  const ISSUER = 'f'.repeat(64)
+  const VOUCHER = '1b6f3e2a-9c44-4f0b-8a21-3d5e6f7a8b9c'
+  const merchant = { pubkey: ISSUER, name: 'Hill Farm', groups: [], voucherCount: 0 }
+  const source = {
+    token_id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    token: `cashuB${'o'.repeat(30)}`,
+    voucher_id: VOUCHER,
+    face_value: 1000,
+    face_unit: 'EUR',
+    face_decimals: 2,
+    token_amount: 1000,
+    amount: 1000,
+    issuer_id: ISSUER,
+    status: 'active',
+  } as unknown as VoucherRow
+
+  function refusingGateway() {
+    const calls = { initiate: 0, reclaim: 0 }
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async () => {
+        calls.initiate += 1
+        return { send_id: 'as_refused', status: 'PENDING' }
+      },
+      getAtomicSendStatus: async () => ({
+        status: 'FAILED',
+        error_code: 'VOUCHER_FULLY_REDEEMED',
+        error_message: 'This coupon has already been redeemed in full.',
+      }),
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => {
+        calls.reclaim += 1
+        return {}
+      },
+    })
+    return calls
+  }
+
+  function wallet() {
+    const saved: Record<string, unknown>[] = []
+    Object.assign(stubs.wallet, {
+      getVoucher: async (id: string) => (id === source.token_id ? source : null),
+      removeVoucher: async () => true,
+      saveVoucher: async (row: Record<string, unknown>) => void saved.push(row),
+      addTransaction: async () => {},
+    })
+    return saved
+  }
+
+  beforeEach(() => {
+    stubs.rows = [source]
+    localStorage.removeItem(`imani-wallet:pending-sends:${PAYER}`)
+  })
+
+  it('tells the holder, with the stall and reference, and never retries or reclaims', async () => {
+    const calls = refusingGateway()
+    const saved = wallet()
+
+    const failure = await payRequest({ request: request(250), raw: 'vreqA', merchant, payer: PAYER }).catch(
+      (e: unknown) => e,
+    )
+
+    expect(failure).toBeInstanceOf(VoucherFullyRedeemedError)
+    expect((failure as Error).message).toBe(
+      'This coupon has already been redeemed in full. If you believe this is wrong, contact Hill Farm, ' +
+        'quoting reference 1b6f3e2a.',
+    )
+    expect((failure as VoucherFullyRedeemedError).tokenId).toBe(source.token_id)
+    expect(calls).toEqual({ initiate: 1, reclaim: 0 })
+    expect(saved).toEqual([expect.objectContaining({ token_id: source.token_id, status: 'fully_redeemed' })])
+    expect(loadPendingSends(PAYER)).toEqual([])
+  })
+
+  it('never offers the refused coupon for a payment again', () => {
+    expect(spendable([{ ...source, status: 'fully_redeemed' } as VoucherRow])).toEqual([])
+    expect(fullyRedeemedRows([{ ...source, status: 'fully_redeemed' } as VoucherRow])).toHaveLength(1)
+  })
+
+  it('marks it on the next login when the refusal arrived after the wallet stopped waiting', async () => {
+    refusingGateway()
+    const saved = wallet()
+    localStorage.setItem(
+      `imani-wallet:pending-sends:${PAYER}`,
+      JSON.stringify([
+        {
+          sendId: 'as_refused', tokenId: source.token_id, amount: 250, unit: 'EUR', decimals: 2,
+          merchantPubkey: ISSUER, voucherId: VOUCHER, sourceFaceValue: 1000, at: Date.now(),
+          paymentRequestId: 'pay-1',
+        },
+      ]),
+    )
+
+    expect(await reconcilePendingSends(PAYER)).toBe(0)
+    expect(saved).toEqual([expect.objectContaining({ status: 'fully_redeemed' })])
+    expect(loadPendingSends(PAYER)).toEqual([])
   })
 })
