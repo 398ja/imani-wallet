@@ -1002,19 +1002,7 @@ async function finishPhase6(
       // K' sells to the STALL's own key, so it is K's coupon that comes home to A. Paid by C instead,
       // C's wallet picks which of its coupons to spend, and in the gate it spent B5's (found by the
       // local gate: the check then passed for B5's credential, correctly, and E11 saw no alert).
-      // The mint limits voucher quotes per minute, and by E11 this run has minted many credentials
-      // in a burst: a 429 here is the mint's quote limiter (gateway-customer logs
-      // `/v1/mint/quote/voucher/bolt11` 429), not the portal refusing K'. Waited out like
-      // `mintAsOwner` does, with a fresh warrant nonce per attempt; any other answer is final.
-      let sale = { status: 0, body: '' }
-      for (let attempt = 0; attempt < 4; attempt++) {
-        if (attempt > 0) await new Promise((r) => setTimeout(r, 20_000))
-        sale = await asTillResponse(k, 'POST', '/api/v1/portal/vouchers', {
-          face_value_minor: 100, currency: 'EUR', quantity: 1, recipient_pubkey: stall,
-          issuance_warrant: await freshWarrant(k, 100, 'EUR'),
-        })
-        if (sale.status !== 429) break
-      }
+      const sale = await tillPortalSale(k, 100, 'EUR', stall)
       check("K' sells through the portal", sale.status === 201 || sale.status === 200, `${sale.status} ${sale.body.slice(0, 160)}`)
       // The portal mints; the selling device delivers (issue.ts `deliver`). K' does, to the stall.
       const issued = (() => {
@@ -1188,10 +1176,7 @@ async function notMerchantPhase(owner: Page, ownerSk: string, stall: string) {
     if (minted.token) {
       await asKey(tillSk, 'POST', `/api/v1/wallet/terminal-credentials/${minted.voucherId}/confirm`, {})
       const k: TillKey = { sk: tillSk, voucherId: minted.voucherId, secret: tokenProofs(minted.token)[0]?.secret ?? '', stall }
-      const sell = async () => asTillResponse(k, 'POST', '/api/v1/portal/vouchers', {
-        face_value_minor: 100, currency: 'EUR', quantity: 1, recipient_pubkey: stall,
-        issuance_warrant: await freshWarrant(k, 100, 'EUR'),
-      })
+      const sell = async () => tillPortalSale(k, 100, 'EUR', stall)
       const before = await sell()
       // Authorised as a till: 201, or 402 when the stall's one free slot is held by E11's till (the
       // portal's licence gate runs AFTER core granted the terminal). Either way, not 403.
@@ -1677,11 +1662,21 @@ async function asTillResponse(
   path: string,
   body?: unknown,
 ): Promise<{ status: number; body: string }> {
-  // The mint's issuance quota (10 a minute, and the gateway is one caller) is waited out, as
-  // mintAsOwner does: the harness's direct mints share it with the run's own sales.
+  return asTillOnce(k, method, path, body)
+}
+
+/**
+ * A till's portal sale, waiting out the mint's issuance quota (10 a minute, and the gateway is one
+ * caller) as mintAsOwner does: the harness's direct mints share it with the run's own sales. Each
+ * attempt signs a FRESH warrant, since the portal spends a warrant's nonce before it mints.
+ */
+async function tillPortalSale(k: TillKey, total: number, unit: string, recipient: string): Promise<{ status: number; body: string }> {
   for (let attempt = 0; ; attempt++) {
-    const out = await asTillOnce(k, method, path, body)
-    if (out.status !== 429 || attempt >= 2 || !/\/portal\/vouchers$/.test(path)) return out
+    const out = await asTillOnce(k, 'POST', '/api/v1/portal/vouchers', {
+      face_value_minor: total, currency: unit, quantity: 1, recipient_pubkey: recipient,
+      issuance_warrant: await freshWarrant(k, total, unit),
+    })
+    if (out.status !== 429 || attempt >= 2) return out
     await new Promise((ok) => setTimeout(ok, 65_000))
   }
 }
