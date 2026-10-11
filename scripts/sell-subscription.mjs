@@ -11,11 +11,12 @@
  *   node scripts/sell-subscription.mjs --customer-pubkey <hex> --paid 0 --pilot
  *   node scripts/sell-subscription.mjs --customer-pubkey <hex> --paid 4200 \
  *       --subscription-id sub_9f2c11          # a RENEWAL, or a re-issue
+ *   node scripts/sell-subscription.mjs --revoke sub_9f2c11 --reason "refund"   # a REFUND
  *
  * The deployed seller (staging): its nsec is IMANI_SUBSCRIPTIONS_SELLER_NSEC in the deploy env file,
  * and only that line is read:
  *
- *   WALLET_URL=https://api.wallet.staging.398ja.xyz node scripts/sell-subscription.mjs \
+ *   WALLET_URL=https://wallet.staging.398ja.xyz node scripts/sell-subscription.mjs \
  *       --env-file ../imani-deploy/.env.staging --customer-pubkey <hex> --paid 4000
  *
  * ## What makes this a licence rather than a coupon
@@ -49,6 +50,16 @@
  * reach the SIGNED bytes (imani-gateway-customer b0fdca5). It carries the value
  * through its response either way, so a token that verifies but is not
  * recognised as a licence means that fix is not in the deployed build.
+ *
+ * ## Refunds: `--revoke` (imani-wallet#226)
+ *
+ * A licence is P2PK-locked to the buyer, so neither the seller nor anyone who copies it can spend
+ * it, and the seller holds nothing that would end it. A refund therefore revokes the SUBSCRIPTION
+ * at gateway-customer: `--revoke <subscription id>` signs `POST /api/v1/wallet/licences/revoke`
+ * with NIP-98 as the seller (only a key in `GATEWAY_CUSTOMER_LICENCE_SELLER_PUBKEYS` may), and every
+ * licence of that subscription stops counting at once. The buyer's paid terminals are refused on
+ * the portal's next refresh (15 minutes), with no grace. It is permanent: a customer who comes
+ * back buys under a NEW subscription id (omit `--subscription-id`).
  */
 import { finalizeEvent, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
 import { schnorr } from '@noble/curves/secp256k1.js'
@@ -180,6 +191,104 @@ function authHeaders(seller, url, method, body) {
     'X-Auth-Pubkey': seller.pk,
     'X-Edge-Auth': EDGE_SECRET,
   }
+}
+
+// ---------------------------------------------------------------- revoking (#226)
+
+/** The shape gateway-customer accepts, which `newSubscriptionId` always produces. */
+const SUBSCRIPTION_ID = /^[A-Za-z0-9_.:-]{1,128}$/
+
+/**
+ * The revocation request: NIP-98 ONLY. No `X-Auth-Pubkey` / `X-Edge-Auth`: the server refuses an
+ * edge session for a revocation (a leaked edge secret must not revoke anyone's licence), and the
+ * signature is what proves this is the seller.
+ */
+export function revokeRequest(seller, walletUrl, subscriptionId, reason) {
+  if (typeof subscriptionId !== 'string' || !SUBSCRIPTION_ID.test(subscriptionId)) {
+    throw new Error('--revoke needs the subscription id as sold (sub_…)')
+  }
+  const url = `${walletUrl.replace(/\/+$/, '')}/api/v1/wallet/licences/revoke`
+  const trimmed = (reason ?? '').trim()
+  const body = JSON.stringify(trimmed ? { subscription_id: subscriptionId, reason: trimmed } : { subscription_id: subscriptionId })
+  return {
+    url,
+    method: 'POST',
+    body,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: nip98(typeof seller.sk === 'string' ? hexToBytes(seller.sk) : seller.sk, url, 'POST', body),
+    },
+  }
+}
+
+/**
+ * Refuses to sell under a subscription id this ledger records as revoked (review of #226).
+ *
+ * A revocation is permanent at gateway-customer: every licence of that id, sold by this seller, is
+ * refused `422 LICENCE_REVOKED` when reported, including one minted AFTER the revocation. So a
+ * "renewal" under a revoked id would charge the customer for a licence that grants nothing. A
+ * customer who comes back gets a NEW subscription id (omit `--subscription-id`).
+ *
+ * The ledger is local, so this only catches what this machine revoked; gateway-customer is still
+ * the authority.
+ */
+export function assertNotRevoked(rows, subscriptionId) {
+  const row = (Array.isArray(rows) ? rows : []).find((r) => r && r.subscription_id === subscriptionId)
+  if (row && row.revoked_at) {
+    throw new Error(
+      `subscription ${subscriptionId} was revoked at ${row.revoked_at}: a licence under it would grant ` +
+        'nothing (422 LICENCE_REVOKED). Sell under a NEW subscription id: omit --subscription-id.',
+    )
+  }
+}
+
+/** The ledger rows, or [] when it is missing or unreadable. */
+function readLedger() {
+  try {
+    if (existsSync(SOLD)) {
+      const parsed = JSON.parse(readFileSync(SOLD, 'utf8'))
+      if (Array.isArray(parsed)) return parsed
+    }
+  } catch {
+    // unreadable: treated as empty, as recordSale does
+  }
+  return []
+}
+
+/** The ledger with this subscription marked revoked (added if it was never recorded). */
+export function markRevoked(rows, subscriptionId, revokedAt, reason) {
+  const out = rows.map((r) => ({ ...r }))
+  let row = out.find((r) => r.subscription_id === subscriptionId)
+  if (!row) {
+    row = { subscription_id: subscriptionId, notices: [] }
+    out.push(row)
+  }
+  row.revoked_at = revokedAt
+  if (reason && reason.trim()) row.revoked_reason = reason.trim()
+  return out
+}
+
+async function revoke(seller, subscriptionId, reason) {
+  const req = revokeRequest(seller, WALLET, subscriptionId, reason)
+  const r = await fetch(req.url, { method: req.method, headers: req.headers, body: req.body })
+  const text = await r.text()
+  if (!r.ok) throw new Error(`revoke failed ${r.status}: ${text}`)
+  const answer = JSON.parse(text)
+  let rows = []
+  try {
+    if (existsSync(SOLD)) {
+      const parsed = JSON.parse(readFileSync(SOLD, 'utf8'))
+      if (Array.isArray(parsed)) rows = parsed
+    }
+  } catch {
+    rows = []
+  }
+  try {
+    writeFileSync(SOLD, JSON.stringify(markRevoked(rows, subscriptionId, answer.revoked_at, reason), null, 2))
+  } catch {
+    console.warn('WARNING: revoked at the server, but .sold-subscriptions.json could not be updated.')
+  }
+  return answer
 }
 
 // ---------------------------------------------------------------- minting
@@ -440,6 +549,20 @@ async function main() {
     return
   }
 
+  const revoking = arg('--revoke', '')
+  if (revoking) {
+    const seller = sellerKey()
+    console.log(`seller        ${seller.name} (${seller.pk.slice(0, 12)}…)`)
+    console.log(`revoking      ${revoking}`)
+    const answer = await revoke(seller, revoking, arg('--reason', ''))
+    console.log(
+      `${answer.already_revoked ? 'already revoked' : 'revoked'} at ${answer.revoked_at}; ` +
+        `${answer.reported_licences} reported licence(s) stop counting. The buyer's paid terminals ` +
+        'are refused on the next licence refresh.',
+    )
+    return
+  }
+
   const customerPubkey = arg('--customer-pubkey', '')
   if (!customerPubkey || !/^[0-9a-f]{64}$/i.test(customerPubkey)) {
     console.error(
@@ -467,6 +590,15 @@ async function main() {
   // a working licence and quietly turns one relationship into two.
   const renewing = arg('--subscription-id', '')
   const subscriptionId = renewing || newSubscriptionId()
+  if (renewing) {
+    try {
+      assertNotRevoked(readLedger(), renewing)
+    } catch (e) {
+      console.error(e.message)
+      process.exitCode = 1
+      return
+    }
+  }
 
   const seller = sellerKey()
   const metadata = licenceMetadata({
@@ -515,4 +647,3 @@ async function main() {
 
   console.log(`\nkeep this for renewal:  --subscription-id ${subscriptionId}`)
 }
-

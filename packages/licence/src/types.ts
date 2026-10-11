@@ -89,6 +89,12 @@ export const DENIAL_REASONS = {
   NOT_LOCKED_AT_MINT: 'not-locked-at-mint',
   /** Signed by our gateway key, but sold (`issuer`) by a stall that is not the configured seller. */
   NOT_SOLD_BY_US: 'not-sold-by-us',
+  /**
+   * The seller ended this subscription (a refund), and the server said so: `422 LICENCE_REVOKED`
+   * (imani-wallet#226). Not something this package can see in the voucher: the caller supplies it
+   * from the server's verdict, and it is final, so no grace window applies.
+   */
+  REVOKED_BY_SELLER: 'revoked-by-seller',
 } as const
 
 export type DenialReason = (typeof DENIAL_REASONS)[keyof typeof DENIAL_REASONS]

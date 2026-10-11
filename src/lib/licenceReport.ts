@@ -3,7 +3,8 @@ import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils'
 
 import { licenceIn } from './licences'
-import { licenceSellerPubkey } from './licenceStatus'
+import { forgetVerification, licenceSellerPubkey } from './licenceStatus'
+import { rememberRevocation } from './licenceRevocations'
 import { signedFetch } from './nip98'
 import { parseVoucherToken, proofSecrets } from './voucherToken'
 import { listVouchers } from './wallet'
@@ -82,8 +83,8 @@ export interface ReportOptions {
   /** Unix SECONDS. */
   now?: number
   loadRows?: () => Promise<VoucherRow[]>
-  /** Overridable for tests. Defaults to a NIP-98 signed POST to the portal. */
-  post?: (body: { secrets: string[] }) => Promise<{ status: number }>
+  /** Overridable for tests. Defaults to a NIP-98 signed POST to the portal. `code` is its `error_code`. */
+  post?: (body: { secrets: string[] }) => Promise<{ status: number; code?: string }>
   /** The licence seller to pin. Defaults to `licenceSellerPubkey()`; empty does not pin. */
   sellerPublicKey?: string
 }
@@ -146,9 +147,18 @@ export function forgetLicenceReport(pubkey: string): void {
   }
 }
 
-async function postToPortal(body: { secrets: string[] }): Promise<{ status: number }> {
+async function postToPortal(body: { secrets: string[] }): Promise<{ status: number; code?: string }> {
   const response = await signedFetch('/api/v1/portal/licence', 'POST', body)
-  return { status: response.status }
+  let code: string | undefined
+  if (!response.ok) {
+    try {
+      const answer = (await response.json()) as { error_code?: unknown }
+      if (typeof answer?.error_code === 'string') code = answer.error_code
+    } catch {
+      // No readable body: the status alone decides, as before.
+    }
+  }
+  return { status: response.status, code }
 }
 
 function sameKey(a: string | undefined, b: string): boolean {
@@ -191,7 +201,14 @@ async function reportOnce(options: ReportOptions): Promise<ReportOutcome> {
 
   const seller = (options.sellerPublicKey ?? licenceSellerPubkey()).trim().toLowerCase()
   const refused = new Set(readRefused(options.pubkey))
-  const candidates: Array<{ voucherId: string; secrets: string[]; expiresAt: number; print: string }> = []
+  const candidates: Array<{
+    voucherId: string
+    secrets: string[]
+    expiresAt: number
+    print: string
+    subscriptionId?: string
+    seller?: string
+  }> = []
   const held = new Set<string>()
   // EVERY held licence row, not one per subscription (heldLicences): a stranger's voucher that
   // copies this account's subscription_id with a later expiry must not hide the genuine one.
@@ -215,7 +232,14 @@ async function reportOnce(options: ReportOptions): Promise<ReportOutcome> {
     held.add(print)
     if (refused.has(print)) continue
     if (candidates.some((c) => c.print === print)) continue
-    candidates.push({ voucherId, secrets, expiresAt: licence.expiresAt, print })
+    candidates.push({
+      voucherId,
+      secrets,
+      expiresAt: licence.expiresAt,
+      print,
+      subscriptionId: licence.subscriptionId,
+      seller: licence.issuerId,
+    })
   }
   if (candidates.length === 0) return refused.size > 0 ? 'failed' : 'none'
   // Latest expiry first: the one that licenses longest is the one worth the server's answer.
@@ -228,8 +252,9 @@ async function reportOnce(options: ReportOptions): Promise<ReportOutcome> {
 
   for (const candidate of candidates.slice(0, MAX_CANDIDATES)) {
     let status: number
+    let code: string | undefined
     try {
-      status = (await post({ secrets: candidate.secrets })).status
+      ;({ status, code } = await post({ secrets: candidate.secrets }))
     } catch {
       return 'failed'
     }
@@ -244,6 +269,12 @@ async function reportOnce(options: ReportOptions): Promise<ReportOutcome> {
     }
     console.warn('[licence] the server refused a held licence; trying the next one', candidate.voucherId)
     rememberRefused(options.pubkey, candidate.print, held)
+    if (code === 'LICENCE_REVOKED' && candidate.subscriptionId && candidate.seller) {
+      // The seller ended this subscription (#226 W-1). A verdict on the SUBSCRIPTION, not only on
+      // this voucher: licenceStatus stops granting it, and the grace window it earned is dropped.
+      rememberRevocation(options.pubkey, candidate.subscriptionId, candidate.seller, now)
+      forgetVerification(options.pubkey)
+    }
   }
   return 'failed'
 }
