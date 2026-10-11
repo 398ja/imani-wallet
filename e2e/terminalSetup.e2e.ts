@@ -1677,6 +1677,21 @@ async function asTillResponse(
   path: string,
   body?: unknown,
 ): Promise<{ status: number; body: string }> {
+  // The mint's issuance quota (10 a minute, and the gateway is one caller) is waited out, as
+  // mintAsOwner does: the harness's direct mints share it with the run's own sales.
+  for (let attempt = 0; ; attempt++) {
+    const out = await asTillOnce(k, method, path, body)
+    if (out.status !== 429 || attempt >= 2 || !/\/portal\/vouchers$/.test(path)) return out
+    await new Promise((ok) => setTimeout(ok, 65_000))
+  }
+}
+
+async function asTillOnce(
+  k: TillKey,
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<{ status: number; body: string }> {
   const url = `${BASE}${path}`
   const payload = body === undefined ? undefined : JSON.stringify(body)
   const auth = await nip98.getToken(url, method.toUpperCase(), (e) => finalizeEvent(e, hexToBytes(k.sk)), true, body as Record<string, unknown>)
