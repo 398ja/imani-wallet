@@ -1193,20 +1193,25 @@ async function notMerchantPhase(owner: Page, ownerSk: string, stall: string) {
         issuance_warrant: await freshWarrant(k, 100, 'EUR'),
       })
       const before = await sell()
-      check('N3 T sells for the stall', before.status === 200 || before.status === 201, `${before.status} ${before.body.slice(0, 160)}`)
+      // Authorised as a till: 201, or 402 when the stall's one free slot is held by E11's till (the
+      // portal's licence gate runs AFTER core granted the terminal). Either way, not 403.
+      check('N3 T is authorised as a till at the portal (not 403)', [200, 201, 402].includes(before.status), `${before.status} ${before.body.slice(0, 160)}`)
+      const gcSell = async () => asTillResponse(k, 'POST', '/api/v1/wallet/vouchers', {
+        face_value: 100, face_unit: 'EUR', face_decimals: 2, backing_strategy: 'PROPORTIONAL',
+        issuer_id: stall, expires_in_days: 30, memo: `turncoat-${crypto.randomUUID()}`,
+      })
+      const gcBefore = await gcSell()
+      check('N3 T sells for the stall at gateway-customer (201)', gcBefore.status === 201, `${gcBefore.status} ${gcBefore.body.slice(0, 160)}`)
       check('N3 T opens a stall of its own', await openStallAs(tillSk))
       await waitForMerchant(lock)
       // The portal caches a refusal, never a grant: the next request asks core, which asks nostrdb.
       const after = await sell()
       check('N3 T\'s next Sell is refused (403): a merchant key is no till', after.status === 403, `${after.status} ${after.body.slice(0, 160)}`)
-      const gc = await asTillResponse(k, 'POST', '/api/v1/wallet/vouchers', {
-        face_value: 100, face_unit: 'EUR', face_decimals: 2, backing_strategy: 'PROPORTIONAL',
-        issuer_id: stall, expires_in_days: 30, memo: `turncoat-${crypto.randomUUID()}`,
-      })
+      const gc = await gcSell()
       check('N3 and gateway-customer refuses its credential too (403)', gc.status === 403, `${gc.status} ${gc.body.slice(0, 160)}`)
     }
   }
-  await owner.goto(`${BASE}/`, { waitUntil: 'load' }).catch(() => undefined)
+  void owner
 }
 
 /** Publish an active `imani:merchant` stall record as `sk` to the gate relay. */
