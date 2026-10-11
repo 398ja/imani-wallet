@@ -9,11 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-cashu-mint#540 phase 2: the holder side of the mint's per-coupon redemption cap. Pairs with
+## [0.19.0] - 2026-10-11
+
+Seller licence revocation (#226, #230) and the holder side of the mint's per-coupon redemption
+cap (cashu-mint#540 phase 2, #231). Needs gateway-customer 0.26.0 and gateway-core 0.22.0.
+
+### Added (#226)
+
+- **The seller revokes a subscription** (refund): `scripts/sell-subscription.mjs --revoke sub_…
+  [--reason …]` signs gateway-customer's NIP-98 `POST /api/v1/wallet/licences/revoke` and marks
+  the sale revoked in `.sold-subscriptions.json`. A renewal under a revoked id is refused before
+  any key or network access. `notify-expiring.mjs` skips revoked subscriptions. The staging
+  `WALLET_URL` is `https://wallet.staging.398ja.xyz` (the NIP-98 origin).
+- **The wallet honours a revocation.** A report answered 422 `LICENCE_REVOKED` is remembered per
+  (subscription id, seller); `licenceStatus` answers `REVOKED_BY_SELLER` (final, no grace) when
+  only revoked subscriptions are held, the Subscription screen says the seller ended it, and paid
+  tills stop being offered.
+- **e2e/licenceGate.e2e.ts** proves a copied licence is useless (wrong key, 422, mint refuses) and
+  that revocation is immediate with no grace on a stall holding nothing else.
+
+### Added (cashu-mint#540 phase 2)
+
+The holder side of the mint's per-coupon redemption cap. Pairs with
 imani-gateway-core#143 and imani-gateway-customer#216, which declare credits and answer
 `VOUCHER_FULLY_REDEEMED`; without them nothing here fires.
-
-### Added
 
 - **"Redeemed in full" is terminal.** A payment or send that gateway-core reports FAILED with
   `error_code = VOUCHER_FULLY_REDEEMED` (the mint refused the coupon, 90025) shows "This coupon has
