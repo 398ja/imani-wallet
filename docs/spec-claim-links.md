@@ -1,7 +1,8 @@
 # Spec: claim links (cashback and gifts by link or QR)
 
-**Status:** Proposed, for the owner's review. Nothing here is built. The open questions are in
-section 9.
+**Status:** Accepted 2026-10-11. The owner decided Q1 to Q8 as recommended (section 9) at
+22:00Z. Phase 0 and phase 1 are approved to build first; each phase gets its own PR, an
+independent review, and owner approval before merge or deploy.
 **Requested:** 2026-10-11 by the owner. Merchant cashback should be claimable by scanning a link
 or QR as well as by typing the code. A customer should be able to send a voucher to someone
 without an account, and a recipient with no account should be taken through registration and
@@ -884,11 +885,24 @@ Done when CL-C, CL-D and CL-EXP pass.
 
 ---
 
-## 9. Open questions for the owner
+## 9. Decisions (formerly open questions)
 
-Each question has a recommendation. Answering "yes" to all of them is a coherent plan.
+**All eight questions were DECIDED by the owner on 2026-10-11 at 22:00Z, each as recommended.**
+The decision is recorded on PR #237. The wording below keeps each question and its
+recommendation, which is now the decision.
 
-1. **Link design.**
+| Q | Topic | Decision (2026-10-11) |
+|---|---|---|
+| Q1 | Link design | DECIDED: cashback by claim ref plus fragment key through the claim service; gifts over NIP-17 with a fresh fragment link key, not through the claim service |
+| Q2 | Typed code | DECIDED: the typed code stays, always next to the link |
+| Q3 | Default expiry | DECIDED: cashback uses `cashback_expiry_days`, set explicitly in each environment; gifts 7 days, with 1, 7 or 30 |
+| Q4 | Funder takes it back | DECIDED: Cancel cashback in the wallet, Take it back for gifts; cancelled or expired cashback still burns with no refund |
+| Q5 | Gift fees and limits | DECIDED: no fee, at most 10 outstanding links per wallet, no per-link cap beyond the face |
+| Q6 | Merchant own coupons by link | DECIDED: no, use Cashback |
+| Q7 | Recipient copy after a take-back | DECIDED: "This voucher is no longer available"; no ADR 0014 transfer signature on link sends in v1 |
+| Q8 | Native app | DECIDED: phase 5; until then, finish in the browser |
+
+1. **Q1. Link design.** DECIDED 2026-10-11 as recommended.
    - Cashback by (i), a claim ref plus a key in the fragment, through the claim service (as
      today).
    - Gifts by (i) over NIP-17, with a fresh link key in the fragment, **not** through the claim
@@ -897,16 +911,16 @@ Each question has a recommendation. Answering "yes" to all of them is a coherent
    *Recommend: yes.* The alternative extends the claim service with NIP-98 customer deposits and
    a return-to-depositor path. That means more server state, and the claim service learns
    senders' identities (section 3.1).
-2. **Does the typed code stay?** *Recommend: yes, always next to the link.* Paper receipts,
+2. **Q2. Does the typed code stay?** DECIDED 2026-10-11 as recommended. *Recommend: yes, always next to the link.* Paper receipts,
    reading a code aloud, and phones whose camera will not open all need it, and it costs nothing:
    the link is derived from the same secret.
-3. **Default expiry.**
+3. **Q3. Default expiry.** DECIDED 2026-10-11 as recommended.
    - Cashback: keep the deployment's `cashback_expiry_days`. Note that the wallet fallback (5)
      and the portal default (30) disagree today; set it explicitly in each environment.
    - Gifts: 7 days, with a choice of 1, 7 or 30.
 
    *Recommend: as stated.*
-4. **Can the funder take it back?**
+4. **Q4. Can the funder take it back?** DECIDED 2026-10-11 as recommended.
    - Merchant cashback: yes, with a **Cancel cashback** button in the wallet. The portal supports
      it; the wallet has no button.
    - Gift: yes, **Take it back** until claimed, and automatically after expiry.
@@ -914,16 +928,16 @@ Each question has a recommendation. Answering "yes" to all of them is a coherent
    *Recommend: yes to both.* Also confirm that a cancelled or expired cashback still **burns
    with no refund to the merchant** (today's portal behaviour). Changing that is a separate
    decision with ledger consequences.
-5. **Fees or limits on gifts.** *Recommend: no fee. At most 10 outstanding links per wallet. No
+5. **Q5. Fees or limits on gifts.** DECIDED 2026-10-11 as recommended. *Recommend: no fee. At most 10 outstanding links per wallet. No
    per-link cap beyond the coupon's own face.* The mint fee of the split is already paid by the
    atomic send, as for any send.
-6. **Should a merchant be able to send their own coupons by link?** *Recommend: no, use
+6. **Q6. Should a merchant be able to send their own coupons by link?** DECIDED 2026-10-11 as recommended. *Recommend: no, use
    Cashback.* It keeps the warrant, issuance accounting and the #540 declarations on the paths
    built for them (section 3.2).
-7. **What the recipient sees when the sender takes a gift back.** "Already claimed" is honest
+7. **Q7. What the recipient sees when the sender takes a gift back.** DECIDED 2026-10-11 as recommended. "Already claimed" is honest
    but vague. "The sender took it back" tells a stranger holding a leaked link something about
    the sender. *Recommend: "This voucher is no longer available"*, the same for a reclaim and a
    claim by someone else. Also recommend no ADR 0014 transfer signature on link sends in v1.
-8. **Native app.** *Recommend: phase 5, and until then tell people to finish in the browser.*
+8. **Q8. Native app.** DECIDED 2026-10-11 as recommended. *Recommend: phase 5, and until then tell people to finish in the browser.*
    The parked claim cannot cross from the browser into the Capacitor app's storage without App
    Links.
