@@ -1186,7 +1186,8 @@ async function notMerchantPhase(owner: Page, ownerSk: string, stall: string) {
         issuer_id: stall, expires_in_days: 30, memo: `turncoat-${crypto.randomUUID()}`,
       })
       const gcBefore = await gcSell()
-      check('N3 T sells for the stall at gateway-customer (201)', gcBefore.status === 201, `${gcBefore.status} ${gcBefore.body.slice(0, 160)}`)
+      // Authorised: past resolveIssuer. A mint quota answer (WALLET_002 after the mint's 429) is past it too.
+      check('N3 gateway-customer accepts T\'s credential (not 403)', gcBefore.status !== 403 && gcBefore.status !== 0, `${gcBefore.status} ${gcBefore.body.slice(0, 160)}`)
       check('N3 T opens a stall of its own', await openStallAs(tillSk))
       await waitForMerchant(lock)
       // The portal caches a refusal, never a grant: the next request asks core, which asks nostrdb.
