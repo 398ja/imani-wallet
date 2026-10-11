@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (claim links, phase 0: [spec](docs/spec-claim-links.md))
+
+- **A returning device that opens a claim link goes to Login, not to registration.** With no
+  session, `/c/:ref` sent everyone to `/onboarding`, which offered Register to a customer who
+  already had an account on this device. It now routes by device, as `Entry` does: a stored key
+  goes to `/login` (unlock), no key goes to `/onboarding`, and a terminal goes to its till and
+  parks nothing (a terminal key must never open a customer session). The claim is parked and the
+  fragment is scrubbed from the address bar before the async key-store read. Nothing is redeemed
+  on this path, and `/` still resumes the parked claim once the session opens.
+
 ## [0.19.0] - 2026-10-11
 
 Seller licence revocation (#226, #230) and the holder side of the mint's per-coupon redemption
