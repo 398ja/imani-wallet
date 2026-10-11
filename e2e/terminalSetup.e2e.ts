@@ -994,10 +994,19 @@ async function finishPhase6(
       // K' sells to the STALL's own key, so it is K's coupon that comes home to A. Paid by C instead,
       // C's wallet picks which of its coupons to spend, and in the gate it spent B5's (found by the
       // local gate: the check then passed for B5's credential, correctly, and E11 saw no alert).
-      const sale = await asTillResponse(k, 'POST', '/api/v1/portal/vouchers', {
-        face_value_minor: 100, currency: 'EUR', quantity: 1, recipient_pubkey: stall,
-        issuance_warrant: await freshWarrant(k, 100, 'EUR'),
-      })
+      // The mint limits voucher quotes per minute, and by E11 this run has minted many credentials
+      // in a burst: a 429 here is the mint's quote limiter (gateway-customer logs
+      // `/v1/mint/quote/voucher/bolt11` 429), not the portal refusing K'. Waited out like
+      // `mintAsOwner` does, with a fresh warrant nonce per attempt; any other answer is final.
+      let sale = { status: 0, body: '' }
+      for (let attempt = 0; attempt < 4; attempt++) {
+        if (attempt > 0) await new Promise((r) => setTimeout(r, 20_000))
+        sale = await asTillResponse(k, 'POST', '/api/v1/portal/vouchers', {
+          face_value_minor: 100, currency: 'EUR', quantity: 1, recipient_pubkey: stall,
+          issuance_warrant: await freshWarrant(k, 100, 'EUR'),
+        })
+        if (sale.status !== 429) break
+      }
       check("K' sells through the portal", sale.status === 201 || sale.status === 200, `${sale.status} ${sale.body.slice(0, 160)}`)
       // The portal mints; the selling device delivers (issue.ts `deliver`). K' does, to the stall.
       const issued = (() => {
