@@ -18,6 +18,8 @@ import {
 } from '../lib/pay'
 import type { NUT18VRequest } from '../lib/nap'
 import { passedOverNote } from '../lib/passedOverWording'
+import { VoucherFullyRedeemedError } from '../lib/fullyRedeemed'
+import { SwapBackOffer } from '../components/SwapBackOffer'
 import {
   Button,
   Centered,
@@ -33,7 +35,7 @@ type Status =
   | { step: 'review' }
   | { step: 'paying' }
   | { step: 'done'; result: SendResult }
-  | { step: 'failed'; message: string }
+  | { step: 'failed'; message: string; swapBackTokenId?: string }
   /** The gateway took the payment and its outcome is unknown: Pay stays locked (#128). */
   | { step: 'unconfirmed'; message: string }
 
@@ -248,6 +250,9 @@ export function PayPage({ pubkey }: { pubkey: string }) {
         <p className="mb-2 text-sm text-mono-500">{passedNote}</p>
       )}
       {(status.step === 'failed' || status.step === 'unconfirmed') && <Alert>{status.message}</Alert>}
+      {status.step === 'failed' && status.swapBackTokenId && (
+        <SwapBackOffer tokenId={status.swapBackTokenId} pubkey={pubkey} />
+      )}
 
       <Button
         size="lg"
@@ -262,6 +267,8 @@ export function PayPage({ pubkey }: { pubkey: string }) {
             setStatus({
               step: e instanceof SendOutcomeUnknownError ? 'unconfirmed' : 'failed',
               message: e instanceof Error ? e.message : 'Payment failed.',
+              // cashu-mint#540: terminal, not retried; the holder is offered the coupon's sats.
+              swapBackTokenId: e instanceof VoucherFullyRedeemedError ? e.tokenId : undefined,
             })
           }
         }}

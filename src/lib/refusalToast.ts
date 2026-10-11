@@ -79,6 +79,18 @@ export const REFUSAL_MESSAGES: Record<RefusalReason, { title: string; detail: st
     title: 'Coupon could not be read',
     detail: 'The coupon arrived damaged or in a form this wallet does not understand. Nothing was taken.',
   },
+  /**
+   * cashu-mint#540: the mint refused it, because this coupon's value has already been redeemed,
+   * most likely through a copy. Worded so staff can explain it and quote the reference, which
+   * the refusal record carries.
+   */
+  'fully-redeemed': {
+    title: 'That coupon has already been redeemed in full',
+    detail:
+      'The mint will not credit it again. Nothing was taken: the customer still holds it and can ' +
+      'swap it back to sats. If they believe this is wrong, they should contact the stall with the ' +
+      'coupon reference.',
+  },
 }
 
 /**

@@ -266,7 +266,25 @@ export function isRedeemed(row: Pick<VoucherRow, 'status'>): boolean {
  */
 export function isSpent(row: Pick<VoucherRow, 'status'>): boolean {
   const status = (row.status ?? '').toLowerCase()
-  return status === 'redeemed' || status === 'spent'
+  return (
+    status === 'redeemed' ||
+    status === 'spent' ||
+    // cashu-mint#540: the mint refuses this coupon as redeemed in full, so it is not money a
+    // payment can spend. Still held (its proofs are untouched): see `fullyRedeemedRows`.
+    status === 'fully_redeemed' ||
+    // Swapped back to sats: the coupon's proofs are spent, its value is in `sats_token`.
+    status === 'swapped_to_sats'
+  )
+}
+
+/**
+ * Coupons the mint refused as redeemed in full (cashu-mint#540), newest first. Their proofs are
+ * still the holder's, so each is offered "Swap back to sats" (`swapBack.ts`).
+ */
+export function fullyRedeemedRows(rows: VoucherRow[]): VoucherRow[] {
+  return rows
+    .filter((row) => (row.status ?? '').toLowerCase() === 'fully_redeemed')
+    .sort((a, b) => String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? '')))
 }
 
 /**
