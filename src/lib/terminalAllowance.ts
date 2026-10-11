@@ -56,6 +56,8 @@ export const ENROL_REFUSAL = {
   AT_FREE_LIMIT: 'at-free-limit',
   /** Had a subscription; it ended. Renewing restores this immediately. */
   LAPSED: 'lapsed',
+  /** The seller revoked the subscription (a refund, #226). Renewing the same one cannot restore it. */
+  REVOKED: 'revoked',
 } as const
 
 export type EnrolRefusal = (typeof ENROL_REFUSAL)[keyof typeof ENROL_REFUSAL]
@@ -118,6 +120,19 @@ export function mayEnrol(status: LicenceStatus, enrolledCount: number): EnrolDec
     !decision.granted &&
     (decision.reason === DENIAL_REASONS.ABSENT ||
       decision.reason === GRACE_REASONS.NEVER_VERIFIED)
+
+  if (!decision.granted && decision.reason === DENIAL_REASONS.REVOKED_BY_SELLER) {
+    // Not a lapse: "renewing restores it" would be untrue, since the seller revoked the
+    // subscription itself (#226 W-1). The server refuses the paid tills regardless; this only stops
+    // the owner enrolling one that could never sell.
+    return {
+      allowed: false,
+      reason: ENROL_REFUSAL.REVOKED,
+      message:
+        'Your seller ended this subscription, so you cannot add another till. ' +
+        'A new subscription restores your tills. Your stall keeps trading on its free till.',
+    }
+  }
 
   return neverSubscribed
     ? {
