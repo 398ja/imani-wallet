@@ -32,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a request URL, a header or a log line, and that no request on the link path carries a voucher
   declaration header (D9). The typed code (`/receive/cashback`) is unchanged (Q2).
 - New `fetchClaimSummary(ref)` in `lib/cashback.ts`: the non-destructive read the prompt uses.
+- New `e2e/claimLinks.e2e.ts` (CL-BOT, CL-OWN, closed states, Decline, Accept once, the returning
+  device, the hosted page's headers): run on the local gate with
+  `E2E_SCRIPT=claimLinks.e2e.ts E2E_CLAIM_HOST_VIA=http://127.0.0.1:<edge port>`.
 
 ### Fixed (claim links, phase 0: [spec](docs/spec-claim-links.md))
 

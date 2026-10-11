@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 
 import { fetchClaimSummary, redeemClaimRef, type ClaimSummary, type RedeemResult } from '../lib/cashback'
 import { currencyDecimals, formatFace, shortPubkey } from '../lib/format'
-import { humanName, useIdentity } from '../lib/identity'
+import { humanName, useIdentityState } from '../lib/identity'
 import { hasStoredKey } from '../lib/nap'
 import { clearPendingClaim, peekPendingClaim, stashPendingClaim, takePendingClaim } from '../lib/pendingClaim'
 import { isTerminalDevice } from '../lib/terminalEnrol'
@@ -158,7 +158,7 @@ function ConfirmPrompt({
   }, [fetchSummary])
 
   const issuer = state.step === 'summary' && state.summary.kind === 'ok' ? state.summary.issuerPubkey : null
-  const identity = useIdentity(issuer && PUBKEY_HEX.test(issuer) ? issuer : undefined)
+  const { identity, loading: stallLoading } = useIdentityState(issuer && PUBKEY_HEX.test(issuer) ? issuer : undefined)
   const stallName = humanName(identity?.name)
 
   const accept = useCallback(() => {
@@ -228,7 +228,9 @@ function ConfirmPrompt({
 
   const issuerKey = summary.issuerPubkey
   const issuerWellFormed = issuerKey !== null && PUBKEY_HEX.test(issuerKey)
-  const stall = stallName ?? 'Unknown stall'
+  // While the stall's profile is still on its way, say so rather than flash "Unknown stall" and an
+  // unverified warning at a voucher that is about to verify.
+  const stall = stallName ?? (stallLoading ? 'Checking the stall…' : 'Unknown stall')
   const closed = closedState(summary, stall)
   if (closed) return <Outcome title="Voucher unavailable" body={closed} onDone={onDone} />
 
@@ -258,9 +260,13 @@ function ConfirmPrompt({
     <Centered>
       <div className="materialize w-full max-w-sm px-6 text-center" data-testid="claim-prompt">
         <p className="text-[15px] font-medium text-mono-900 dark:text-mono-50">{stall}</p>
-        <p className={verified ? 'text-sm text-emerald-600' : 'text-sm text-amber-600'}>
-          {verified ? '✓ verified stall' : 'We could not verify this voucher'}
-        </p>
+        {stallLoading && !stallName ? (
+          <p className="text-sm text-mono-400">Checking who issued this voucher…</p>
+        ) : (
+          <p className={verified ? 'text-sm text-emerald-600' : 'text-sm text-amber-600'}>
+            {verified ? '✓ verified stall' : 'We could not verify this voucher'}
+          </p>
+        )}
         {!stallName && issuerWellFormed && <p className="text-xs text-mono-400">{shortPubkey(issuerKey)}</p>}
         {face && <p className="mt-4 text-amount text-mono-900 dark:text-mono-50">{face}</p>}
         <p className="mt-1 text-sm text-mono-500">Cashback from {stall}</p>
