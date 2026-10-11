@@ -31,10 +31,13 @@ vi.mock('../../lib/cashback', async (importOriginal) => ({
 vi.mock('../../lib/nap', () => ({ hasStoredKey: async () => true }))
 vi.mock('../../lib/terminalEnrol', () => ({ isTerminalDevice: () => false }))
 // Identity resolution reads the relay and the gateway; the prompt only needs a name.
+const identityLoading = { value: false }
 vi.mock('../../lib/identity', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/identity')>()),
-  useIdentity: (pubkey: string | undefined) =>
-    pubkey === ISSUER ? { name: 'Mama Ngozi Grill' } : undefined,
+  useIdentityState: (pubkey: string | undefined) =>
+    identityLoading.value
+      ? { identity: undefined, loading: true }
+      : { identity: pubkey === ISSUER ? { name: 'Mama Ngozi Grill' } : {}, loading: false },
 }))
 
 import { ClaimLandingPage } from '../ClaimLandingPage'
@@ -84,6 +87,7 @@ async function settle() {
 }
 
 beforeEach(() => {
+  identityLoading.value = false
   localStorage.clear()
   redeemClaimRef.mockReset().mockResolvedValue({ kind: 'ok', amountMinor: 500, unit: 'EUR', memo: null })
   fetchClaimSummary.mockReset().mockResolvedValue(summary())
@@ -248,6 +252,15 @@ describe('issuer and mint verification', () => {
     open()
     await screen.findByRole('button', { name: 'Add to my wallet' })
     expect(document.body.textContent).toMatch(/verified stall/i)
+  })
+
+  it('while the stall is still resolving it says so, and flashes no unverified warning', async () => {
+    identityLoading.value = true
+    open()
+    await screen.findByRole('button', { name: 'Add to my wallet' })
+    expect(document.body.textContent).toMatch(/Checking who issued this voucher/)
+    expect(document.body.textContent).not.toMatch(/could not verify/i)
+    expect(document.body.textContent).not.toMatch(/Unknown stall/)
   })
 
   it('an issuer that resolves to no stall reads Unknown stall and unverified', async () => {
