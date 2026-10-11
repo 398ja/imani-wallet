@@ -125,6 +125,44 @@ describe('a voucher that only CLAIMS to be a credential stays money', () => {
     expect(terminalCredentialFromToken(token)).toBeNull()
   })
 
+  // Review of #236 (mutation): each test below changes ONE thing about an otherwise genuine
+  // credential, so it pins exactly one guard in `terminalCredentialFromToken`. Built from the
+  // genuine fixture, the control proves the only difference is the one under test.
+  it('control: the genuine fixture IS a credential, so each case below differs in one thing', () => {
+    expect(terminalCredentialFromToken(buildLockedCredentialToken({ stallKey: STALL_KEY, devicePubkey: DEVICE }))).not.toBeNull()
+  })
+
+  it('a credential-shaped voucher whose proof carries more than 1 sat is still counted', () => {
+    const token = buildLockedCredentialToken({ stallKey: STALL_KEY, devicePubkey: DEVICE, proofAmount: 1024 })
+    expect(terminalCredentialFromToken(token)).toBeNull()
+  })
+
+  it('a credential-shaped voucher signed at more than 1 sat face value is still counted', () => {
+    const token = buildLockedCredentialToken({ stallKey: STALL_KEY, devicePubkey: DEVICE, faceValue: 2 })
+    expect(terminalCredentialFromToken(token)).toBeNull()
+  })
+
+  it('a credential-shaped voucher in another unit is still counted', () => {
+    // 1 EUR minor unit is still money, and is not how any credential is minted.
+    const token = buildLockedCredentialToken({ stallKey: STALL_KEY, devicePubkey: DEVICE, unit: 'EUR' })
+    expect(terminalCredentialFromToken(token)).toBeNull()
+  })
+
+  it('a credential-shaped token of several proofs is still counted', () => {
+    const token = buildLockedCredentialToken({ stallKey: STALL_KEY, devicePubkey: DEVICE, proofCount: 2 })
+    expect(terminalCredentialFromToken(token)).toBeNull()
+    // Two 1-sat proofs also trip the amount cap. Zero-sat proofs isolate the one-proof rule itself.
+    const zeros = buildLockedCredentialToken({ stallKey: STALL_KEY, devicePubkey: DEVICE, proofCount: 2, proofAmount: 0 })
+    expect(terminalCredentialFromToken(zeros)).toBeNull()
+  })
+
+  it('a genuine-looking credential whose signed metadata was altered after signing is still counted', () => {
+    const forgedMetadata = JSON.stringify({ terminal: true, stall_pubkey: STALL, role: 'issue-and-redeem', lock_key: DEVICE })
+    const token = buildLockedCredentialToken({ stallKey: STALL_KEY, devicePubkey: DEVICE, tamperMetadata: forgedMetadata })
+    expect(terminalCredentialFromToken(token)).toBeNull()
+    expect(isTerminalCredential({ token, token_id: 'tampered' })).toBe(false)
+  })
+
   it('a memo saying "terminal credential" proves nothing', () => {
     const { token } = buildVoucherToken({ memo: 'Imani terminal credential', faceValue: 1, unit: 'sat', faceDecimals: 0 }, [1], {}, STALL_KEY)
     expect(terminalCredentialFromToken(token)).toBeNull()

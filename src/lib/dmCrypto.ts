@@ -19,6 +19,7 @@ import {
   holdTransferSignatureWrap,
   parseTransferSignature,
   sealAuthorOf,
+  TRANSFER_SIGNATURE_TYPE,
 } from './transferSignature'
 import {
   parseVoucherToken,
@@ -46,19 +47,20 @@ function isCredentialMessage(content: string): boolean {
 }
 
 /**
- * A JSON object naming a `type` other than a token transfer: one of the app's own messages
- * (`imani-terminal-*`, a transfer signature, a chunk). None of them is a payment, and the text
- * regex must not be let loose on one.
+ * One of the app's OWN non-payment messages: a terminal credential, renewal, renew request, sale
+ * record or enrolled notice (`imani-terminal-*`), or a transfer signature. None of them is a
+ * payment, and the text regex must not be let loose on one.
+ *
+ * A deny-list of types this app writes, not "any type but a token transfer" (review of #236): a
+ * DM with no token is marked PROCESSED by dm-poll and never offered again, so a real coupon in
+ * JSON of a type this build does not know would be lost for good. Before #236 the regex redeemed
+ * it, and it still does. A credential is refused in every envelope by `extractToken` itself.
  */
 function typedAppMessage(content: string): boolean {
   try {
     const parsed = JSON.parse(content) as { type?: unknown } | null
-    return (
-      !!parsed &&
-      typeof parsed === 'object' &&
-      typeof parsed.type === 'string' &&
-      parsed.type !== 'cashu_token_transfer'
-    )
+    const type = parsed && typeof parsed === 'object' ? parsed.type : undefined
+    return typeof type === 'string' && (type.startsWith('imani-terminal-') || type === TRANSFER_SIGNATURE_TYPE)
   } catch {
     return false
   }
@@ -627,7 +629,9 @@ export function createDmCryptoAdapter(): CryptoAdapter {
         // would otherwise find the `cashuB…` credential token inside one and swap it at the mint:
         // the 1 sat in a personal wallet's balance when its npub was enrolled as a till (#160).
         if (typedAppMessage(content)) return null
-        return extractTokenFromText(content)
+        const found = extractTokenFromText(content)
+        // Nor from a legacy text DM or untyped JSON: a credential is authority, never value.
+        return found && terminalCredentialFromToken(found) ? null : found
       }
       // A terminal credential is authority, not value, whatever envelope it arrives in.
       if (terminalCredentialFromToken(payload.token)) return null

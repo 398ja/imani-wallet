@@ -60,4 +60,28 @@ describe('terminal DMs are not payments', () => {
   it('a legacy text DM still comes through', () => {
     expect(crypto.extractToken('🎁 Token Transfer: 1.00 USD\ncashuAtoken123')).toContain('cashuA')
   })
+
+  // Review of #236: the credential must not be extracted from ANY envelope, the text ones included.
+  it('a credential pasted into a legacy text DM yields no token', () => {
+    expect(crypto.extractToken(`🎁 Token Transfer: 1 sat\n${TOKEN}`)).toBeNull()
+  })
+
+  it('a credential in untyped JSON yields no token', () => {
+    expect(crypto.extractToken(JSON.stringify({ token: TOKEN }))).toBeNull()
+  })
+
+  // Review of #236, the money direction: a typed message this build does not know is not
+  // necessarily an app message. dm-poll marks a DM with no token PROCESSED, so dropping the coupon
+  // inside one would strand it for good. Only the app's own non-payment types are skipped.
+  it('a real coupon inside JSON of a type this build does not know still comes through', () => {
+    const { token } = buildVoucherToken()
+    expect(crypto.extractToken(JSON.stringify({ type: 'cashu_token_transfer/2', token }))).toBe(token)
+  })
+
+  it("the app's own non-payment messages yield no token even when one carries an ordinary coupon", () => {
+    const { token } = buildVoucherToken()
+    for (const type of ['imani-terminal-enrolled/1', 'imani-terminal-sale/1', 'imani-terminal-renew-request/1']) {
+      expect(crypto.extractToken(JSON.stringify({ type, token }))).toBeNull()
+    }
+  })
 })
