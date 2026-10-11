@@ -219,27 +219,31 @@ async function main() {
   const focused = await page.evaluate(() => document.activeElement?.tagName)
   check('clicking the label focuses the input', focused === 'INPUT', `focused ${focused}`)
 
-  console.log('\n#160 phase 0: an off-curve key is refused, a real one says Waiting')
-  // Typed into the manual field, which is the same path a scan takes
-  // (`resolveRecipient` then `onFound`). 'c' x 64 is 64 hex characters that
-  // are no point on secp256k1, so nobody's key.
+  console.log('\n#160 phase 0 / inv-terminal-not-merchant: a bare key is refused, a device code says Waiting')
+  // Typed into the manual field, which is the same path a scan takes. 'c' x 64 is 64 hex characters
+  // that are no point on secp256k1; and since inv-terminal-not-merchant ANY bare key (or npub) is an
+  // account, not a terminal: only the device's signed setup code is accepted.
   await page.getByLabel('Name').fill('Front counter')
   await page.getByRole('button', { name: /Redemption only/ }).click()
   const enterKey = async (hex: string) => {
-    await page.getByLabel("Or enter the device's key").fill(hex)
+    await page.getByLabel("Or enter the device's code").fill(hex)
     await page.getByRole('button', { name: 'Continue' }).click()
     await page.waitForTimeout(800)
   }
   await enterKey('c'.repeat(64))
   const offCurve = await page.locator('body').innerText()
-  check('an off-curve key is refused in words', /not a terminal code/.test(offCurve), offCurve.slice(0, 200))
+  check('an off-curve key is refused in words', /personal account, not a terminal/.test(offCurve), offCurve.slice(0, 200))
   check('and cannot be added', await add.isDisabled())
 
-  await page.getByRole('button', { name: 'Rescan' }).click()
-  // A real x-only key, generated here so no fixture key is reused.
+  // A real x-only key and its signed device code, generated here so no fixture key is reused.
   const { getPublicKey, generateSecretKey } = await import('nostr-tools')
-  const devicePubkey = getPublicKey(generateSecretKey())
+  const { signEnrolmentCode } = await import('../src/lib/terminalEnrolProof')
+  const deviceSk = generateSecretKey()
+  const devicePubkey = getPublicKey(deviceSk)
   await enterKey(devicePubkey)
+  const bareKey = await page.locator('body').innerText()
+  check('a bare account key is refused: it is not a terminal', /personal account, not a terminal/.test(bareKey), bareKey.slice(0, 200))
+  await enterKey(signEnrolmentCode(deviceSk, devicePubkey, Math.floor(Date.now() / 1000)))
 
   // #160 phase 1: Add makes exactly one minting call, to the owner's gateway.
   const mintCalls: string[] = []

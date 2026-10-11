@@ -274,6 +274,7 @@ export async function resumeMinting(
         permissions: grantFor(row.role, stallPubkey.toLowerCase()),
         ...(row.idleLockMinutes !== undefined ? { idleLockMinutes: row.idleLockMinutes } : {}),
         ...(row.attestation ? { attestation: row.attestation } : {}),
+        ...(row.enrolmentProof ? { enrolmentProof: row.enrolmentProof } : {}),
       }
       const minted = row.voucherId
         ? await checkMinted(credential, row.voucherId, spendAtOnce, transport)

@@ -58,6 +58,10 @@ const BUNDLE_DIR = process.env.E2E_BUNDLE_DIR
 const PHASE = Number(process.env.E2E_PHASE ?? '4')
 /** Phase 5's server half (portal, gateway-customer, gateway-core) is deployed where E2E_BASE points. */
 const P5_DEPLOYED = process.env.E2E_P5_DEPLOYED === '1'
+/** inv-terminal-not-merchant's server-side checks (gateway-customer and gateway-core with the fix). */
+const NOT_MERCHANT = process.env.E2E_TERMINAL_NOT_MERCHANT === '1'
+/** The relay the harness publishes stall records to (the gate's published port). */
+const RELAY_URL = process.env.E2E_RELAY_URL ?? 'ws://localhost:28378'
 const TILL_PASSPHRASE = 'counter-pass'
 /**
  * Where the run leaves screenshots and a Playwright trace per browser (round 4: the r3 run left no
@@ -249,6 +253,9 @@ async function main() {
   await codeEl.waitFor({ timeout: 15_000 })
   const deviceKey = (await codeEl.innerText()).trim()
   check('B shows a 64-hex code', /^[0-9a-f]{64}$/.test(deviceKey), deviceKey)
+  // The whole signed code (inv-terminal-not-merchant): only it proves K was made as a terminal.
+  const deviceCode = (await device.getByTestId('terminal-enrolment-code').textContent())?.trim() ?? ''
+  check('B shows its signed terminal code', deviceCode.startsWith(`imani-terminal-key:1:${deviceKey}:`), deviceCode)
   check('B says the code is not a secret', /not a secret/.test(await text(device)))
   const bStorage = await device.evaluate(() => Object.keys(localStorage).filter((k) => k.includes('terminal')))
   check('B has stored nothing yet', bStorage.length === 0, bStorage.join(','))
@@ -258,8 +265,9 @@ async function main() {
   await owner.getByRole('button', { name: 'Add terminal' }).waitFor({ timeout: 15_000 })
   await owner.getByLabel('Name').fill('Front counter')
   await owner.getByRole('button', { name: /Redemption only/ }).click()
-  await owner.getByLabel("Or enter the device's key").fill(deviceKey)
+  await owner.getByLabel("Or enter the device's code").fill(deviceCode)
   await owner.getByRole('button', { name: 'Continue' }).click()
+  await owner.getByText('Device scanned').waitFor({ timeout: 15_000 })
   await owner.getByRole('button', { name: 'Add terminal' }).click()
   await owner
     .getByRole('heading', { name: /Waiting for the device/ })
@@ -951,7 +959,7 @@ async function finishPhase6(
       issuer_id: stall, memo: 'Imani terminal credential', expires_in_days: 365,
       merchant_metadata: { terminal: true, stall_pubkey: stall, role: 'redeem-only', lock_key: lock, name: 'Legacy door' },
     }
-    const minted = await mintAsOwner(ownerSk, body, { 'Idempotency-Key': crypto.randomUUID() })
+    const minted = await mintAsOwner(ownerSk, body, { 'Idempotency-Key': crypto.randomUUID(), 'X-Imani-Terminal-Enrolment': enrolmentProof(tillSk) })
     const voucherId = (JSON.parse(minted.body || '{}') as { voucher_id?: string }).voucher_id ?? ''
     const token = voucherId ? await fetchToken(ownerSk, voucherId) : ''
     check('a legacy redeem-only credential L is minted the 5a way (no attestation)', token !== '', `${minted.status} ${minted.body.slice(0, 120)}`)
@@ -986,7 +994,7 @@ async function finishPhase6(
     // A stall-attested credential for a fresh K' minted straight through the API, NOT on the roster.
     const tillSk = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
     const lock = bytesToHex(schnorr.getPublicKey(hexToBytes(tillSk)))
-    const minted = await mintAttested(ownerSk, stall, lock, 'issue-and-redeem', 'Shadow till')
+    const minted = await mintAttested(ownerSk, stall, lock, 'issue-and-redeem', 'Shadow till', tillSk)
     check("the harness mints a stall-attested credential for K' outside the roster", minted.token !== '', minted.error)
     if (minted.token) {
       await asKey(tillSk, 'POST', `/api/v1/wallet/terminal-credentials/${minted.voucherId}/confirm`, {})
@@ -1063,6 +1071,7 @@ async function finishPhase6(
   }
 
   await wrongPathCredential(owner, ownerSk, stall, customer, customerPubkey)
+  if (NOT_MERCHANT) await notMerchantPhase(owner, ownerSk, stall)
 }
 
 /**
@@ -1136,6 +1145,95 @@ async function moneyView(page: Page): Promise<{ text: string }> {
   const counts = (t.match(/\b\d+ vouchers?\b/g) ?? []).join(',')
   const sats = /\b1 sat\b/.test(t) ? ' 1 sat' : ''
   return { text: `${balance} [${counts}]${sats}${/Wrong path till/.test(t) ? ' Wrong path till' : ''}` }
+}
+
+/**
+ * inv-terminal-not-merchant (E2E_TERMINAL_NOT_MERCHANT=1): a terminal is a key created as a
+ * terminal, never a merchant and never an existing account. Driven at the gateway, as an API client
+ * that bypasses /terminal/setup and the owner's Add terminal would (case e).
+ */
+async function notMerchantPhase(owner: Page, ownerSk: string, stall: string) {
+  console.log('\ninv-terminal-not-merchant: an owner tries to enrol a merchant\'s key, and is refused at mint')
+  {
+    // Another merchant M, with a live stall record that gateway-core has ingested.
+    const mSk = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
+    const m = bytesToHex(schnorr.getPublicKey(hexToBytes(mSk)))
+    const opened = await openStallAs(mSk)
+    check('N1 merchant M publishes its stall record', opened)
+    await waitForMerchant(m)
+    // Even WITH M's own enrolment proof (M cooperating): a merchant is never a till.
+    const refused = await mintAttested(ownerSk, stall, m, 'issue-and-redeem', 'Borrowed till', mSk)
+    check('N1 a credential for a merchant\'s key is refused at mint (409 TERMINAL_KEY_IS_MERCHANT)',
+      refused.token === '' && /409/.test(refused.error) && /TERMINAL_KEY_IS_MERCHANT/.test(refused.error), refused.error)
+  }
+
+  console.log('\ninv-terminal-not-merchant: an existing account key, with no enrolment proof, is refused')
+  {
+    const cSk = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
+    const c = bytesToHex(schnorr.getPublicKey(hexToBytes(cSk)))
+    const refused = await mintAttested(ownerSk, stall, c, 'issue-and-redeem', 'Somebody\'s phone')
+    check('N2 a key with no enrolment proof is refused at mint (422 TERMINAL_KEY_NOT_A_TERMINAL)',
+      refused.token === '' && /422/.test(refused.error) && /TERMINAL_KEY_NOT_A_TERMINAL/.test(refused.error), refused.error)
+    const own = await mintAttested(ownerSk, stall, stall, 'issue-and-redeem', 'Myself', ownerSk)
+    check('N2 the stall\'s own key is refused at mint (409 TERMINAL_KEY_IS_MERCHANT)',
+      own.token === '' && /409/.test(own.error) && /TERMINAL_KEY_IS_MERCHANT/.test(own.error), own.error)
+  }
+
+  console.log('\ninv-terminal-not-merchant: a till whose key opens a stall loses its terminal rights on its next request')
+  {
+    const tillSk = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
+    const lock = bytesToHex(schnorr.getPublicKey(hexToBytes(tillSk)))
+    const minted = await mintAttested(ownerSk, stall, lock, 'issue-and-redeem', 'Turncoat till', tillSk)
+    check('N3 a fresh terminal key T, with its enrolment proof, is minted a credential', minted.token !== '', minted.error)
+    if (minted.token) {
+      await asKey(tillSk, 'POST', `/api/v1/wallet/terminal-credentials/${minted.voucherId}/confirm`, {})
+      const k: TillKey = { sk: tillSk, voucherId: minted.voucherId, secret: tokenProofs(minted.token)[0]?.secret ?? '', stall }
+      const sell = async () => asTillResponse(k, 'POST', '/api/v1/portal/vouchers', {
+        face_value_minor: 100, currency: 'EUR', quantity: 1, recipient_pubkey: stall,
+        issuance_warrant: await freshWarrant(k, 100, 'EUR'),
+      })
+      const before = await sell()
+      check('N3 T sells for the stall', before.status === 200 || before.status === 201, `${before.status} ${before.body.slice(0, 160)}`)
+      check('N3 T opens a stall of its own', await openStallAs(tillSk))
+      await waitForMerchant(lock)
+      // The portal caches a refusal, never a grant: the next request asks core, which asks nostrdb.
+      const after = await sell()
+      check('N3 T\'s next Sell is refused (403): a merchant key is no till', after.status === 403, `${after.status} ${after.body.slice(0, 160)}`)
+      const gc = await asTillResponse(k, 'POST', '/api/v1/wallet/vouchers', {
+        face_value: 100, face_unit: 'EUR', face_decimals: 2, backing_strategy: 'PROPORTIONAL',
+        issuer_id: stall, expires_in_days: 30, memo: `turncoat-${crypto.randomUUID()}`,
+      })
+      check('N3 and gateway-customer refuses its credential too (403)', gc.status === 403, `${gc.status} ${gc.body.slice(0, 160)}`)
+    }
+  }
+  await owner.goto(`${BASE}/`, { waitUntil: 'load' }).catch(() => undefined)
+}
+
+/** Publish an active `imani:merchant` stall record as `sk` to the gate relay. */
+async function openStallAs(sk: string): Promise<boolean> {
+  const event = finalizeEvent({
+    kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'imani:merchant']],
+    content: JSON.stringify({ active: true, name: 'inv-terminal-not-merchant' }),
+  }, hexToBytes(sk))
+  return new Promise<boolean>((resolve) => {
+    const ws = new WebSocket(RELAY_URL)
+    const done = (ok: boolean) => { try { ws.close() } catch { /* closed */ } resolve(ok) }
+    ws.on('open', () => ws.send(JSON.stringify(['EVENT', event])))
+    ws.on('message', (m) => {
+      const msg = JSON.parse(m.toString()) as unknown[]
+      if (msg[0] === 'OK') done(msg[2] === true)
+    })
+    ws.on('error', () => done(false))
+    setTimeout(() => done(false), 15_000)
+  })
+}
+
+/** Give gateway-core's relay subscription time to ingest `pubkey`'s stall record into nostrdb. */
+async function waitForMerchant(pubkey: string): Promise<void> {
+  // StallRecordSync ingests from a standing relay subscription; give it time rather than poll a
+  // surface the harness has no credential for.
+  await new Promise((ok) => setTimeout(ok, 8_000))
+  void pubkey
 }
 
 /**
@@ -1292,7 +1390,7 @@ async function fetchToken(ownerSk: string, voucherId: string): Promise<string> {
 }
 
 /** A credential the stall attests, minted with the owner's key, as the app's Add terminal does. */
-async function mintAttested(ownerSk: string, stall: string, lock: string, role: string, name: string): Promise<{ token: string; voucherId: string; error: string }> {
+async function mintAttested(ownerSk: string, stall: string, lock: string, role: string, name: string, tillSk?: string): Promise<{ token: string; voucherId: string; error: string }> {
   const T = Math.floor(Date.now() / 1000) + 365 * 86_400 + 600
   const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
   const pre = ['imani-terminal-attestation', '1', stall, lock, role, String(T), nonce].join('\u001f')
@@ -1305,6 +1403,7 @@ async function mintAttested(ownerSk: string, stall: string, lock: string, role: 
   const minted = await mintAsOwner(ownerSk, body, {
     'Idempotency-Key': crypto.randomUUID(),
     'X-Idempotency-Expires-At': new Date(T * 1000).toISOString().replace('.000Z', 'Z'),
+    ...(tillSk ? { 'X-Imani-Terminal-Enrolment': enrolmentProof(tillSk) } : {}),
   })
   const voucherId = (JSON.parse(minted.body || '{}') as { voucher_id?: string }).voucher_id ?? ''
   if (!voucherId) return { token: '', voucherId: '', error: `${minted.status} ${minted.body.slice(0, 200)}` }
@@ -1350,7 +1449,7 @@ async function legacyTill(owner: Page) {
     issuer_id: stall, memo: 'Imani terminal credential', expires_in_days: 365,
     merchant_metadata: { terminal: true, stall_pubkey: stall, role: 'issue-and-redeem', lock_key: lock, name: 'Legacy till' },
   }
-  const minted = await mintAsOwner(ownerSk, body, { 'Idempotency-Key': crypto.randomUUID() })
+  const minted = await mintAsOwner(ownerSk, body, { 'Idempotency-Key': crypto.randomUUID(), 'X-Imani-Terminal-Enrolment': enrolmentProof(tillSk) })
   if (minted.status === 400) {
     // gateway-customer with 5b-2: a selling credential without the stall's attestation is never minted.
     check(
@@ -1470,6 +1569,17 @@ async function mintAsOwner(ownerSk: string, body: unknown, headers: Record<strin
     if (attempt >= 3 || !/HTTP client error: 429/.test(out.body)) return out
     await new Promise((ok) => setTimeout(ok, 65_000))
   }
+}
+
+/**
+ * `X-Imani-Terminal-Enrolment` for the key `sk`: the proof its setup screen would show that it was
+ * created as a terminal (inv-terminal-not-merchant). The harness holds K, so it signs as the device.
+ */
+function enrolmentProof(sk: string): string {
+  const k = bytesToHex(schnorr.getPublicKey(hexToBytes(sk)))
+  const at = Math.floor(Date.now() / 1000)
+  const digest = sha256(new TextEncoder().encode(['imani-terminal-enrolment', '1', k, String(at)].join('\u001f')))
+  return `1:${at}:${bytesToHex(schnorr.sign(digest, hexToBytes(sk)))}`
 }
 
 /** A request signed with NIP-98 by `sk`, with no terminal credential header. */
@@ -1658,15 +1768,16 @@ async function setUpDevice(
   role: RegExp = /Redemption only/,
 ): Promise<boolean> {
   await device.goto(`${BASE}/terminal/setup`, { waitUntil: 'load' })
-  const code = device.getByTestId('terminal-code')
-  if (!(await code.waitFor({ timeout: 30_000 }).then(() => true, () => false))) return false
-  const key = (await code.innerText()).trim()
+  const code = device.getByTestId('terminal-enrolment-code')
+  if (!(await code.waitFor({ state: 'attached', timeout: 30_000 }).then(() => true, () => false))) return false
+  const key = ((await code.textContent()) ?? '').trim()
   await owner.goto(`${BASE}/settings/terminals/add`, { waitUntil: 'load', timeout: 60_000 })
   await owner.getByRole('button', { name: 'Add terminal' }).waitFor({ timeout: 30_000 })
   await owner.getByLabel('Name').fill(name)
   await owner.getByRole('button', { name: role }).click()
-  await owner.getByLabel("Or enter the device's key").fill(key)
+  await owner.getByLabel("Or enter the device's code").fill(key)
   await owner.getByRole('button', { name: 'Continue' }).click()
+  await owner.getByText('Device scanned').waitFor({ timeout: 15_000 }).catch(() => undefined)
   // Add stays disabled when enrolment is refused (allowance, licence, a live row): say why.
   if (!(await owner.getByRole('button', { name: 'Add terminal' }).isEnabled({ timeout: 15_000 }).catch(() => false))) {
     console.log(`  (Add terminal is disabled: ${(await text(owner)).slice(0, 300)})`)

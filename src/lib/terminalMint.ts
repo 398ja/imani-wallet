@@ -3,6 +3,7 @@ import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils'
 
 import { signedFetch } from './nip98'
 import { parseTerminalMetadata, terminalMetadataJson } from './terminalCredential'
+import { ENROLMENT_PROOF_HEADER } from './terminalEnrolProof'
 import { hasDuplicateKeys } from './terminalWarrant'
 import { checkOwnerAttestation, signOwnerAttestation, type OwnerAttestation, type StallSigner } from './ownerAttestation'
 import { parseVoucherToken, tokenProofs, verifyVoucher } from './voucherToken'
@@ -156,6 +157,10 @@ function mintRequest(credential: PreparedCredential): { body: Record<string, unk
   const headers: Record<string, string> = credential.attestation
     ? { [EXPIRES_AT_HEADER]: expiresAtHeader(credential.attestation) }
     : {}
+  // The device's proof that K was created as a terminal (inv-terminal-not-merchant). A header, not
+  // metadata: it is about the enrolment, not the credential, and the credential's bytes stay as
+  // they were.
+  if (credential.enrolmentProof) headers[ENROLMENT_PROOF_HEADER] = credential.enrolmentProof
   return { body, headers }
 }
 
