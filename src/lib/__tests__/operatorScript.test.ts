@@ -240,4 +240,17 @@ describe('running it', () => {
     expect(out.join('\n')).toMatch(/GATEWAY_CORE_OPERATOR_PUBKEYS/)
     expect(out.join('\n')).not.toContain(NSEC)
   })
+
+  it('--help or no command prints the usage and needs no key', async () => {
+    for (const argv of [['--help'], ['-h'], []]) {
+      const out: string[] = []
+      const fetchImpl = vi.fn()
+      const code = await operator.run(argv, { env: {}, fetchImpl, print: (s: string) => out.push(s) })
+      expect(code).toBe(argv.length ? 0 : 2)
+      expect(fetchImpl).not.toHaveBeenCalled()
+      const all = out.join('\n')
+      for (const c of ['lookup', 'refund-redemption', 'manual-attention', 'merchant suspend', 'IMANI_OPERATOR_NSEC',
+        'IMANI_PUBLIC_BASE_URL', 'GATEWAY_CORE_URL', 'operator-access.md']) expect(all).toContain(c)
+    }
+  })
 })
