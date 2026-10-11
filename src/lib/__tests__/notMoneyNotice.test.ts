@@ -87,6 +87,14 @@ describe('a terminal credential is announced as a setup request', () => {
     expect(recorded).toHaveLength(1)
   })
 
+  it('is announced once when a resend varies only the envelope voucher_id', async () => {
+    expect(terminalNotice(offer({ voucher_id: 'spoofed' }))!.id).toBe('terminal-setup:v-cred')
+    await announceTerminalDm(offer(), ME)
+    await announceTerminalDm(offer({ voucher_id: 'other-1' }), ME)
+    await announceTerminalDm(offer({ voucher_id: 'other-2' }), ME)
+    expect(recorded).toHaveLength(1)
+  })
+
   it('a DM that only CLAIMS to carry a credential gets no notice', async () => {
     const forged = JSON.stringify({ type: 'imani-terminal-credential/1', voucher_id: 'x', token: buildVoucherToken().token })
     expect(terminalNotice(forged)).toBeNull()
