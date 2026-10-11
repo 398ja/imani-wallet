@@ -4,6 +4,7 @@ import { nip19 } from 'nostr-tools'
 import { recordNotification } from './notifications/inbox'
 import { loadProfile, profileName, refreshProfile, type Profile } from './profile'
 import { terminalCredentialFromToken } from './notMoney'
+import { parseVoucherToken } from './voucherToken'
 import { TERMINAL_ROLE_LABELS } from './terminalRole'
 import type { NotMoneyNoticeType } from './notifications/types'
 
@@ -70,7 +71,9 @@ export function terminalNotice(content: string, stallName?: string): NotMoneyNot
   const from = stallName ?? nameOf(signed.stall_pubkey)
   const role = TERMINAL_ROLE_LABELS[signed.role].name
   const terminal = signed.name ?? 'A terminal'
-  const voucherId = typeof m.voucher_id === 'string' ? m.voucher_id : ''
+  // The SIGNED voucher id, not the envelope's `voucher_id`, which the sender writes: varying it
+  // would otherwise raise a fresh notice for the same credential (review of #236, N5).
+  const voucherId = parseVoucherToken(m.token).voucher.voucherId
   return renewal
     ? {
         id: `terminal-renewal:${voucherId}`,
