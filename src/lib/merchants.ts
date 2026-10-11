@@ -7,6 +7,7 @@ import { toEpochMs } from './format'
 import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
 import { parseVoucherToken } from './voucherToken'
 import { isLicence } from './licences'
+import { isTerminalCredential } from './notMoney'
 import type { WalletTransaction } from './transactions'
 
 /**
@@ -353,8 +354,13 @@ export function isWarranted(row: Pick<VoucherRow, 'token'>): boolean {
   }
 }
 
+/**
+ * The rows that are money. Every balance, the home carousel, `couponsFor`, pay and send go
+ * through here, so a licence and a terminal credential (#160) are excluded once, from their
+ * signed bytes, for all of them. Both rows stay in the store for their own readers.
+ */
 export function spendable(rows: VoucherRow[]): VoucherRow[] {
-  return rows.filter((row) => !isSpent(row) && !isLicence(row))
+  return rows.filter((row) => !isSpent(row) && !isLicence(row) && !isTerminalCredential(row))
 }
 
 /**
