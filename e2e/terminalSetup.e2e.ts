@@ -1114,12 +1114,17 @@ async function wrongPathCredential(owner: Page, ownerSk: string, stall: string, 
 /** The home screen's money, without the toaster: the balance and each carousel card's count. */
 async function moneyView(page: Page): Promise<{ text: string }> {
   const t = await page.evaluate(() => {
-    const clone = document.body.cloneNode(true) as HTMLElement
-    clone.querySelectorAll('[data-sonner-toaster], section[aria-label*="otification"]').forEach((n) => n.remove())
-    return clone.innerText.replace(/\s+/g, ' ')
+    // The live DOM (innerText needs layout), minus the toaster and the bell's panel, which may
+    // carry the notice's own words.
+    const hidden = [...document.querySelectorAll<HTMLElement>('[data-sonner-toaster], details:has(> summary [aria-label^="Notifications"]), details:has(> summary[aria-label^="Notifications"])')]
+    const was = hidden.map((n) => n.style.display)
+    hidden.forEach((n) => (n.style.display = 'none'))
+    const out = document.body.innerText.replace(/\s+/g, ' ')
+    hidden.forEach((n, i) => (n.style.display = was[i]))
+    return out
   })
-  const balance = t.match(/Total balance (\S+)/)?.[1] ?? '?'
-  const counts = (t.match(/\d+ vouchers?/g) ?? []).join(',')
+  const balance = t.match(/Total balance (\S+ ?\S*)/)?.[1] ?? '?'
+  const counts = (t.match(/\b\d+ vouchers?\b/g) ?? []).join(',')
   const sats = /\b1 sat\b/.test(t) ? ' 1 sat' : ''
   return { text: `${balance} [${counts}]${sats}${/Wrong path till/.test(t) ? ' Wrong path till' : ''}` }
 }
