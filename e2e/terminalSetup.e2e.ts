@@ -1053,6 +1053,58 @@ async function finishPhase6(
     }
   }
 
+  await wrongPathCredential(owner, ownerSk, stall, customer, customerPubkey)
+}
+
+/**
+ * E13, the wrong path (owner report on wallet 0.19.0): a stall enrols a PERSONAL wallet's key as a
+ * till. The credential DM reaches customer C's wallet, whose dm-poll used to regex the `cashuB…`
+ * token out of it and swap it as money: 1 sat in the balance, a coupon in the carousel, and
+ * "Payment received". Now C must not redeem it (the token stays UNSPENT at the mint), must not
+ * book it, and must say "Terminal setup request from <stall>" instead.
+ */
+async function wrongPathCredential(owner: Page, ownerSk: string, stall: string, customer: Page, customerPubkey: string) {
+  console.log('\nE13: a credential sent to a personal wallet is not money')
+  const minted = await mintAttested(ownerSk, stall, customerPubkey, 'redeem-only', 'Wrong path till')
+  check('E13 the harness mints a credential locked to C\'s personal key', minted.token !== '', minted.error)
+  if (!minted.token) return
+  const sent = await dmAsStall(ownerSk, customerPubkey, JSON.stringify({
+    type: 'imani-terminal-credential/1', voucher_id: minted.voucherId, token: minted.token,
+    stall_pubkey: stall, name: 'Wrong path till', idle_lock_minutes: 10,
+  }))
+  check('E13 the credential DM reaches C', sent)
+  const before = await text(customer)
+  await customer.goto(`${BASE}/`, { waitUntil: 'load' })
+  const noticed = await customer.waitForFunction((vid) => {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)!
+      if (!key.startsWith('imani-wallet:notifications:')) continue
+      if ((localStorage.getItem(key) ?? '').includes(`terminal-setup:${vid}`)) return true
+    }
+    return false
+  }, minted.voucherId, { timeout: 120_000 }).then(() => true, () => false)
+  const rows = await customer.evaluate((vid) => {
+    const out: Array<{ id: string; type: string; title: string; url: string }> = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)!
+      if (!key.startsWith('imani-wallet:notifications:')) continue
+      for (const r of JSON.parse(localStorage.getItem(key) ?? '[]') as typeof out) if (r.id.includes(vid)) out.push(r)
+    }
+    return out
+  }, minted.voucherId)
+  const setupRow = rows.find((r) => r.type === 'terminal_setup_request')
+  check('E13 C\'s bell reads "Terminal setup request from <stall>", linking to setup', noticed && !!setupRow &&
+    /^Terminal setup request from (Test Stall|@|npub1)/.test(setupRow.title) && setupRow.url === '/terminal/setup', JSON.stringify(rows))
+  check('E13 C files no "Payment received" for it', !rows.some((r) => r.type === 'voucher_received' || /Payment/.test(r.title)), JSON.stringify(rows))
+  // Given the poller every chance to have redeemed it, the mint still holds it unspent.
+  await customer.waitForTimeout(5_000)
+  const state = await tokenState(minted.token)
+  check('E13 C did not swap the credential at the mint (still UNSPENT)', state === 'UNSPENT', state)
+  const home = await text(customer)
+  check('E13 C\'s home carousel shows no "Wrong path till" or 1 sat from it',
+    !/Wrong path till/.test(home) && (home.match(/Test Stall/g) ?? []).length === (before.match(/Test Stall/g) ?? []).length,
+    home.slice(0, 300))
+  await asKey(ownerSk, 'POST', `/api/v1/wallet/terminal-credentials/${minted.voucherId}/cancel`, {})
 }
 
 /**

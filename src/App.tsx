@@ -492,6 +492,10 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           </>
         )}
         <Route path="/scan" element={<ScanPage />} />
+        {/* A terminal setup code scanned, or a setup link opened, on a device that holds a
+            personal wallet (#160 owner report). A terminal is a fresh identity on its own
+            device, so this explains rather than sets anything up. */}
+        <Route path="/terminal/setup" element={<WalletHolderIsNotATerminal />} />
         <Route path="/pay" element={<PayPage pubkey={pubkey} />} />
         <Route path="/send" element={<SendPage pubkey={pubkey} />} />
         <Route path="/receive" element={<ReceivePage profile={profile} />} />
@@ -817,15 +821,28 @@ function TerminalSetupGate() {
     )
   }, [])
   if (hasKey === null) return <Centered>Checking…</Centered>
-  if (hasKey) {
-    return (
-      <Centered>
-        This device already holds a wallet. Log in and log out of it first, keeping its backup
-        key, then set the device up as a terminal.
-      </Centered>
-    )
-  }
+  if (hasKey) return <WalletHolderIsNotATerminal />
   return <TerminalSetupPage />
+}
+
+/** What the owner's operator meant to do, and why this device cannot (#160 owner report). */
+const PERSONAL_WALLET_NOT_A_TERMINAL =
+  'This device already has a personal wallet. A terminal needs its own device with no account, ' +
+  'or log out here first (keep your backup).'
+
+function WalletHolderIsNotATerminal() {
+  return (
+    <Centered>
+      <div className="max-w-sm space-y-3 text-center" role="alert">
+        <p className="text-lg font-semibold text-mono-900 dark:text-mono-50">This is a personal wallet</p>
+        <p>{PERSONAL_WALLET_NOT_A_TERMINAL}</p>
+        <p className="text-sm">
+          On the terminal&apos;s own device, choose &quot;Set this device up as a terminal&quot; and
+          scan the owner&apos;s setup code from that screen.
+        </p>
+      </div>
+    </Centered>
+  )
 }
 
 /** Entry's answer for a device enrolled as a terminal (#160). Not a route. */

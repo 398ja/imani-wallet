@@ -12,6 +12,7 @@ import { checkMintAndUnit } from './trustedMint'
 import { getSigner } from './nap'
 import { isTillSaleMessage } from './tillSales'
 import { buildValidationRecord } from './voucherValidationRecord'
+import { terminalCredentialFromToken } from './notMoney'
 import { asChunk, looksLikeChunk, offerChunkFrom } from './dmChunks'
 import {
   heldWrapDecision,
@@ -30,6 +31,34 @@ import {
 function isEnrolledMessage(content: string): boolean {
   try {
     return (JSON.parse(content) as { type?: unknown })?.type === 'imani-terminal-enrolled/1'
+  } catch {
+    return false
+  }
+}
+
+/** `terminalDelivery.CREDENTIAL_DM_TYPE` (a renewal is one too, with `renews`). */
+function isCredentialMessage(content: string): boolean {
+  try {
+    return (JSON.parse(content) as { type?: unknown })?.type === 'imani-terminal-credential/1'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * A JSON object naming a `type` other than a token transfer: one of the app's own messages
+ * (`imani-terminal-*`, a transfer signature, a chunk). None of them is a payment, and the text
+ * regex must not be let loose on one.
+ */
+function typedAppMessage(content: string): boolean {
+  try {
+    const parsed = JSON.parse(content) as { type?: unknown } | null
+    return (
+      !!parsed &&
+      typeof parsed === 'object' &&
+      typeof parsed.type === 'string' &&
+      parsed.type !== 'cashu_token_transfer'
+    )
   } catch {
     return false
   }
@@ -474,6 +503,17 @@ export function createDmCryptoAdapter(): CryptoAdapter {
           void import('./terminalDeliveryNet').then((m) => m.collectEnrolled(stall)).catch(() => 0)
         }
 
+        /**
+         * A terminal credential or renewal that reached THIS wallet (#160 owner report). It is
+         * never redeemed (`extractToken` returns null for it); it is announced as what it is,
+         * "Terminal setup request from <stall>", from its signed metadata. A personal wallet
+         * only gets one when its key was enrolled as a till, which is the wrong path.
+         */
+        if (isCredentialMessage(rumor.content)) {
+          const me = getSigner().pubkey
+          void import('./notMoneyNotice').then((m) => m.announceTerminalDm(rumor.content, me)).catch(() => false)
+        }
+
         const transferSignature = parseTransferSignature(rumor.content)
         if (transferSignature) {
           const sealAuthor = getSigner().withPrivkey((key) => sealAuthorOf(event as never, key))
@@ -581,7 +621,16 @@ export function createDmCryptoAdapter(): CryptoAdapter {
      */
     extractToken(content: string): string | null {
       const payload = asPayload(content)
-      if (!payload) return extractTokenFromText(content)
+      if (!payload) {
+        // An app message of another type (a terminal credential, a renewal, a till's renew
+        // request, a sale record, an enrolled notice) is never a payment. dm-poll's text regex
+        // would otherwise find the `cashuB…` credential token inside one and swap it at the mint:
+        // the 1 sat in a personal wallet's balance when its npub was enrolled as a till (#160).
+        if (typedAppMessage(content)) return null
+        return extractTokenFromText(content)
+      }
+      // A terminal credential is authority, not value, whatever envelope it arrives in.
+      if (terminalCredentialFromToken(payload.token)) return null
       return verifiedVoucherFrom(payload.token) === REJECTED ? null : payload.token
     },
 

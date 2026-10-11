@@ -56,6 +56,16 @@ export function ScanPage() {
           navigate(`/pay?paymentRequest=${encodeURIComponent(text.trim())}`)
           return
         }
+        // A terminal setup code (#160, owner report on wallet 0.19.0). It is scanned by the
+        // device being set up, on its setup screen, and the owner's operator reached this screen
+        // instead, which said "not a payment request, a voucher, or an account". Sent to
+        // /terminal/setup with the code, which a fresh device takes as the code it scanned and a
+        // device holding a personal wallet answers with why it cannot become a terminal.
+        const { parseSetupCode } = await import('../lib/terminalDelivery')
+        if (parseSetupCode(text)) {
+          navigate(`/terminal/setup?code=${encodeURIComponent(text.trim())}`)
+          return
+        }
         // A pass barcode. Routed to the merchant's own record of the coupon,
         // which is the only screen that can say anything true about it: the
         // issuance rows in this wallet are the sole record of a Sell-flow
