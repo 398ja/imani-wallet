@@ -1065,6 +1065,10 @@ async function finishPhase6(
  */
 async function wrongPathCredential(owner: Page, ownerSk: string, stall: string, customer: Page, customerPubkey: string) {
   console.log('\nE13: a credential sent to a personal wallet is not money')
+  // C's home, as money, before anything arrives: the balance line and every "N vouchers" count.
+  await customer.goto(`${BASE}/`, { waitUntil: 'load' })
+  await customer.getByText('Total balance').waitFor({ timeout: 30_000 }).catch(() => undefined)
+  const before = await moneyView(customer)
   const minted = await mintAttested(ownerSk, stall, customerPubkey, 'redeem-only', 'Wrong path till')
   check('E13 the harness mints a credential locked to C\'s personal key', minted.token !== '', minted.error)
   if (!minted.token) return
@@ -1073,7 +1077,6 @@ async function wrongPathCredential(owner: Page, ownerSk: string, stall: string, 
     stall_pubkey: stall, name: 'Wrong path till', idle_lock_minutes: 10,
   }))
   check('E13 the credential DM reaches C', sent)
-  const before = await text(customer)
   await customer.goto(`${BASE}/`, { waitUntil: 'load' })
   const noticed = await customer.waitForFunction((vid) => {
     for (let i = 0; i < localStorage.length; i++) {
@@ -1100,11 +1103,25 @@ async function wrongPathCredential(owner: Page, ownerSk: string, stall: string, 
   await customer.waitForTimeout(5_000)
   const state = await tokenState(minted.token)
   check('E13 C did not swap the credential at the mint (still UNSPENT)', state === 'UNSPENT', state)
-  const home = await text(customer)
-  check('E13 C\'s home carousel shows no "Wrong path till" or 1 sat from it',
-    !/Wrong path till/.test(home) && (home.match(/Test Stall/g) ?? []).length === (before.match(/Test Stall/g) ?? []).length,
-    home.slice(0, 300))
+  await customer.goto(`${BASE}/`, { waitUntil: 'load' })
+  await customer.getByText('Total balance').waitFor({ timeout: 30_000 }).catch(() => undefined)
+  const after = await moneyView(customer)
+  check('E13 C\'s balance and home carousel are unchanged: no 1 sat, no extra coupon, no "Wrong path till"',
+    after.text === before.text && !/Wrong path till/.test(after.text), `before: ${before.text} | after: ${after.text}`)
   await asKey(ownerSk, 'POST', `/api/v1/wallet/terminal-credentials/${minted.voucherId}/cancel`, {})
+}
+
+/** The home screen's money, without the toaster: the balance and each carousel card's count. */
+async function moneyView(page: Page): Promise<{ text: string }> {
+  const t = await page.evaluate(() => {
+    const clone = document.body.cloneNode(true) as HTMLElement
+    clone.querySelectorAll('[data-sonner-toaster], section[aria-label*="otification"]').forEach((n) => n.remove())
+    return clone.innerText.replace(/\s+/g, ' ')
+  })
+  const balance = t.match(/Total balance (\S+)/)?.[1] ?? '?'
+  const counts = (t.match(/\d+ vouchers?/g) ?? []).join(',')
+  const sats = /\b1 sat\b/.test(t) ? ' 1 sat' : ''
+  return { text: `${balance} [${counts}]${sats}${/Wrong path till/.test(t) ? ' Wrong path till' : ''}` }
 }
 
 /**
