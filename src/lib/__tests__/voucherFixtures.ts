@@ -262,6 +262,10 @@ export interface LockedCredentialOptions {
   faceValue?: number
   unit?: string
   memo?: string
+  /** The proof's amount in sats. 1 unless set, as every credential is minted. */
+  proofAmount?: number
+  /** How many copies of the proof the token carries. 1 unless set. */
+  proofCount?: number
 }
 
 /**
@@ -323,7 +327,7 @@ export function buildLockedCredentialToken(o: LockedCredentialOptions): string {
   const proof = bytes(
     head(5, 4),
     tstr('a'),
-    uint(1),
+    uint(o.proofAmount ?? 1),
     tstr('s'),
     tstr(secret),
     tstr('c'),
@@ -331,7 +335,14 @@ export function buildLockedCredentialToken(o: LockedCredentialOptions): string {
     tstr('i'),
     tstr('00ad268c4d1f5826'),
   )
-  const entry = bytes(head(5, 2), tstr('i'), tstr('00ad268c4d1f5826'), tstr('p'), head(4, 1), proof)
+  const entry = bytes(
+    head(5, 2),
+    tstr('i'),
+    tstr('00ad268c4d1f5826'),
+    tstr('p'),
+    head(4, o.proofCount ?? 1),
+    ...Array.from({ length: o.proofCount ?? 1 }, () => proof),
+  )
   const root = bytes(
     head(5, 3),
     tstr('m'),
