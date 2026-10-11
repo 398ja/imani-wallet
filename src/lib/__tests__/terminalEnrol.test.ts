@@ -65,6 +65,7 @@ const { credentialMessageJson, enrolledMessageJson, unwrapSealed, wrapMessage } 
   '../terminalDelivery'
 )
 const { buildLockedCredentialToken } = await import('./voucherFixtures')
+const { readEnrolmentCode } = await import('../terminalEnrolProof')
 const { generateSecretKey, getPublicKey } = await import('nostr-tools')
 const { TERMINAL_ROLES, grantFor } = await import('../terminalRole')
 type TerminalRole = (typeof TERMINAL_ROLES)[keyof typeof TERMINAL_ROLES]
@@ -154,9 +155,13 @@ describe('the key never leaves the device', () => {
   it('shows a PUBLIC key, and nothing that could reconstruct the private one', () => {
     const code = beginEnrolment()
 
-    // A 32-byte hex pubkey and a URI wrapping it. Nothing else.
+    // A 32-byte hex pubkey, and a code that is that key's signed claim to be a terminal
+    // (inv-terminal-not-merchant). Nothing else.
     expect(code.terminalPubkey).toMatch(/^[0-9a-f]{64}$/)
-    expect(code.uri).toBe(`nostr:${code.terminalPubkey}`)
+    expect(code.uri).toBe(code.enrolmentCode)
+    expect(code.enrolmentCode).toMatch(new RegExp(`^imani-terminal-key:1:${code.terminalPubkey}:\\d+:[0-9a-f]{128}$`))
+    const read = readEnrolmentCode(code.uri)
+    expect(typeof read === 'object' && read.terminalPubkey).toBe(code.terminalPubkey)
 
     // The negative, over everything the flow displays: whatever private key was
     // minted, it is not in here. Compared against what the key store was

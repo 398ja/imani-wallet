@@ -281,6 +281,12 @@ export type PreparedCredential = TerminalCredential & {
    * 5). Persisted on the `minting` row, so a resumed mint sends it unchanged.
    */
   attestation?: OwnerAttestation
+  /**
+   * The device's enrolment proof header value, `1:<created_at>:<sig>` (inv-terminal-not-merchant):
+   * gateway-customer refuses a new terminal without it. Absent on a renewal, which re-mints to a key
+   * the stall already enrolled.
+   */
+  enrolmentProof?: string
 }
 
 /**
