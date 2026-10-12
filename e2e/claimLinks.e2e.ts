@@ -194,6 +194,22 @@ async function openLink(page: Page, link: string): Promise<string> {
   return text(page)
 }
 
+/**
+ * Wait out the portal's public-metadata limiter (10 a minute per address). Every browser in this
+ * harness shares one address, so the banner and prompt reads of several "people" in a row would be
+ * throttled together; a real visitor is one address. Phase 3 sections start from a fresh window.
+ */
+async function freshMetadataWindow(): Promise<void> {
+  await new Promise((ok) => setTimeout(ok, 61_000))
+}
+
+/** Click, recording a failed check rather than aborting the remaining sections. */
+async function tap(page: Page, name: string, label: string): Promise<boolean> {
+  const ok = await page.getByRole('button', { name }).first().click({ timeout: 20_000 }).then(() => true, () => false)
+  if (!ok) check(`${label}: "${name}" was there to tap`, false, (await text(page)).slice(0, 300))
+  return ok
+}
+
 async function main() {
   const args = (process.env.E2E_CHROMIUM_ARGS ?? '').split(/\s+/).filter(Boolean)
   const browser = await chromium.launch({ args })
@@ -207,7 +223,7 @@ async function main() {
   const c = await (await context(browser, 'C')).newPage()
   await registerCustomer(c, BASE)
   const d = await (await context(browser, 'D')).newPage()
-  await registerCustomer(d, BASE)
+  const dPubkey = await registerCustomer(d, BASE)
 
   const one = await issueCashback(a, '1.25')
   check('A issues a cashback and the portal returns its link', one !== null)
@@ -310,6 +326,7 @@ async function main() {
     check('L9 and is still Unclaimed', (await portalStatus(three.ref)) === 'Unclaimed')
   }
 
+  await freshMetadataWindow()
   console.log('\nL11 CL-B: no account, two links, register, prompt, Add (phase 3)')
   const b1 = await issueCashback(a, '0.40')
   const b2 = await issueCashback(a, '0.60')
@@ -334,23 +351,24 @@ async function main() {
     check('L11 both links are parked, keyed by ref', [b1.ref, b2.ref].every((r) => parked.some((p) => p.ref === r)), JSON.stringify(parked.map((p) => p.ref)))
     check('L11 nothing spent on the way', (await portalStatus(b1.ref)) === 'Unclaimed' && (await portalStatus(b2.ref)) === 'Unclaimed')
 
+    await freshMetadataWindow()
     await registerCustomer(e, BASE)
     await e.waitForFunction(() => /Add to my wallet|Voucher unavailable/.test(document.body.innerText), undefined, { timeout: 60_000 }).catch(() => {})
     let t = await text(e)
     check('L11 after register and backup the newest claim waits behind the prompt', /Add to my wallet/.test(t) && /0\.60/.test(t), t.slice(0, 300))
     check('L11 still Unclaimed at the prompt', (await portalStatus(b2.ref)) === 'Unclaimed')
-    await e.getByRole('button', { name: 'Add to my wallet' }).click()
+    await tap(e, 'Add to my wallet', 'L11')
     await e.waitForFunction(() => /Voucher added|Voucher unavailable/.test(document.body.innerText), undefined, { timeout: 90_000 }).catch(() => {})
     t = await text(e)
     check('L11 Add adds it', /Voucher added/.test(t), t.slice(0, 300))
     check('L11 the portal reads Claimed', (await waitStatus(b2.ref, 'Claimed')) === 'Claimed')
 
     // Then home resumes the other one: it was not lost to the second link.
-    await e.getByRole('button', { name: 'Open my wallet' }).click()
+    await tap(e, 'Open my wallet', 'L11')
     await e.waitForFunction(() => /Add to my wallet|Voucher unavailable/.test(document.body.innerText), undefined, { timeout: 60_000 }).catch(() => {})
     t = await text(e)
     check('L11 the first link is resumed next (O4)', /Add to my wallet/.test(t) && /0\.40/.test(t), t.slice(0, 300))
-    await e.getByRole('button', { name: 'Add to my wallet' }).click()
+    await tap(e, 'Add to my wallet', 'L11')
     await e.waitForFunction(() => /Voucher added|Voucher unavailable/.test(document.body.innerText), undefined, { timeout: 90_000 }).catch(() => {})
     check('L11 and is added too', (await waitStatus(b1.ref, 'Claimed')) === 'Claimed')
     const left = await e.evaluate(() => localStorage.getItem('imani-wallet:pending-claim'))
@@ -358,6 +376,7 @@ async function main() {
     await e.context().close()
   }
 
+  await freshMetadataWindow()
   console.log('\nL12 CL-B2: a stored key, no session: Login with the banner')
   const b3 = await issueCashback(a, '0.30')
   check('A issues a cashback for a returning customer', b3 !== null)
@@ -385,6 +404,7 @@ async function main() {
     await c.getByRole('button', { name: 'Decline' }).click().catch(() => {})
   }
 
+  await freshMetadataWindow()
   console.log('\nL13 CL-SWITCH: X sees the prompt, Switch account, Y resumes it')
   const b4 = await issueCashback(a, '0.20')
   check('A issues a cashback for the switch', b4 !== null)
@@ -392,22 +412,33 @@ async function main() {
     const t13 = await openLink(d, b4.link)
     check('L13 X (D) sees the prompt', /Add to my wallet/.test(t13), t13.slice(0, 300))
     d.once('dialog', (dlg) => void dlg.accept())
-    await d.getByRole('button', { name: 'Switch account' }).click()
+    await tap(d, 'Switch account', 'L13')
     await d.waitForURL(/\/(onboarding|login)/, { timeout: 60_000 }).catch(() => {})
+    // Logout reloads the document (`/`), and Entry then routes it: let that settle before reading.
+    await d.waitForLoadState('load').catch(() => {})
+    await d.waitForURL(/\/onboarding/, { timeout: 30_000 }).catch(() => {})
+    await d.waitForLoadState('load').catch(() => {})
+    await d.waitForTimeout(1_000)
     check('L13 the logout ran (X is gone)', /\/onboarding/.test(d.url()), d.url())
     const parked = await d.evaluate(() => localStorage.getItem('imani-wallet:pending-claim') ?? '')
     check('L13 the claim survived the logout', parked.includes(b4.ref))
-    const leftovers = await d.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('imani-wallet:') && k !== 'imani-wallet:pending-claim'))
-    check('L13 nothing else of X survived it', leftovers.length === 0, JSON.stringify(leftovers))
+    // Nothing of X: no key naming X's pubkey and no value carrying it. (The banner caches the STALL's
+    // public profile after the reload, `identity:<issuer>`, which is not X's.)
+    const leftovers = await d.evaluate((x) => Object.keys(localStorage).filter((k) => k.startsWith('imani-wallet:')
+      && k !== 'imani-wallet:pending-claim' && (k.includes(x) || (localStorage.getItem(k) ?? '').includes(x))), dPubkey)
+    check('L13 nothing else of X survived it', dPubkey.length === 64 && leftovers.length === 0, JSON.stringify(leftovers))
+    const parkedOnly = await d.evaluate(() => JSON.parse(localStorage.getItem('imani-wallet:pending-claim') ?? '[]') as Record<string, unknown>[])
+    check('L13 the parked entry holds only kind, ref, key and age', parkedOnly.every((e) => Object.keys(e).sort().join() === 'at,key,kind,ref'), JSON.stringify(parkedOnly.map((e) => Object.keys(e))))
     const banner = `Create an account to redeem the voucher from ${TEST_STALL_NAME}`
     await d.waitForFunction((s) => document.body.innerText.includes(s), banner, { timeout: 45_000 }).catch(() => {})
     check('L13 onboarding shows the banner', (await text(d)).includes(banner))
+    await freshMetadataWindow()
     await registerCustomer(d, BASE)
     await d.waitForFunction(() => /Add to my wallet|Voucher unavailable/.test(document.body.innerText), undefined, { timeout: 60_000 }).catch(() => {})
     let t = await text(d)
     check('L13 Y is offered the claim', /Add to my wallet/.test(t) && /0\.20/.test(t), t.slice(0, 300))
     check('L13 still Unclaimed', (await portalStatus(b4.ref)) === 'Unclaimed')
-    await d.getByRole('button', { name: 'Add to my wallet' }).click()
+    await tap(d, 'Add to my wallet', 'L13')
     await d.waitForFunction(() => /Voucher added|Voucher unavailable/.test(document.body.innerText), undefined, { timeout: 90_000 }).catch(() => {})
     t = await text(d)
     check('L13 Y adds it', /Voucher added/.test(t), t.slice(0, 300))
