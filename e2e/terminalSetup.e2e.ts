@@ -1089,6 +1089,24 @@ async function wrongPathCredential(owner: Page, ownerSk: string, stall: string, 
   check('E13 R1: C\'s account key with a proof signed by C\'s OWN key is refused at mint (422 TERMINAL_KEY_NOT_A_TERMINAL)',
     selfProof.token === '' && /422/.test(selfProof.error) && /TERMINAL_KEY_NOT_A_TERMINAL/.test(selfProof.error)
       && /Set this device up as a terminal/.test(selfProof.error), selfProof.error)
+  // rev-option-a-r1 A1: the stall has gateway-customer sign an ORDINARY coupon locked to C whose
+  // metadata reads like a till (terminal as the TEXT "true", so the mint does not treat it as a
+  // credential: no attestation, no key guard), then offers it as C's "predecessor" credential. It
+  // proves no enrolment: still 422.
+  {
+    const lookalike = await mintCoupon(ownerSk, {
+      face_value: 1, face_unit: 'sat', face_decimals: 0, backing_strategy: 'PROPORTIONAL',
+      issuer_id: stall, memo: 'Not a terminal', expires_in_days: 30,
+      merchant_metadata: { terminal: 'true', stall_pubkey: stall, role: 'redeem-only', lock_key: customerPubkey, name: 'Lookalike' },
+    })
+    check('E13 A1: the stall can mint an ordinary coupon locked to C whose metadata says terminal "true" (text)',
+      lookalike.token !== '', lookalike.error)
+    const viaLookalike = await mintAttested(ownerSk, stall, customerPubkey, 'redeem-only', 'Wrong path till', undefined, lookalike.token)
+    check('E13 A1: that coupon as X-Imani-Terminal-Renews does not make C\'s account a till (422 TERMINAL_KEY_NOT_A_TERMINAL)',
+      viaLookalike.token === '' && /422/.test(viaLookalike.error) && /TERMINAL_KEY_NOT_A_TERMINAL/.test(viaLookalike.error),
+      viaLookalike.error || `minted ${viaLookalike.voucherId}`)
+    if (viaLookalike.voucherId) await asKey(ownerSk, 'POST', `/api/v1/wallet/terminal-credentials/${viaLookalike.voucherId}/cancel`, {})
+  }
   // And the owner's app refuses C's personal QR (its npub) before anything is signed or sent.
   {
     await owner.goto(`${BASE}/settings/terminals/add`, { waitUntil: 'networkidle' })
@@ -1455,6 +1473,14 @@ async function fetchToken(ownerSk: string, voucherId: string): Promise<string> {
     await new Promise((r) => setTimeout(r, 2_000))
   }
   return ''
+}
+
+/** An ordinary coupon (no attestation), minted with the owner's key; its ISSUED token. */
+async function mintCoupon(ownerSk: string, body: Record<string, unknown>): Promise<{ token: string; voucherId: string; error: string }> {
+  const minted = await mintAsOwner(ownerSk, body, { 'Idempotency-Key': crypto.randomUUID() })
+  const voucherId = (JSON.parse(minted.body || '{}') as { voucher_id?: string }).voucher_id ?? ''
+  if (!voucherId) return { token: '', voucherId: '', error: `${minted.status} ${minted.body.slice(0, 200)}` }
+  return { token: await fetchToken(ownerSk, voucherId), voucherId, error: '' }
 }
 
 /** A credential the stall attests, minted with the owner's key, as the app's Add terminal does. */
