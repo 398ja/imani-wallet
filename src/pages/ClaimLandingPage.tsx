@@ -219,8 +219,11 @@ function ConfirmPrompt({
         forgetIfParked(arrival.ref)
       } else if (arrival.kind === 'link') {
         // Failed before the claim was spent, and the key came from the URL rather than the
-        // store. Park it so a retry has something to work from.
-        stashPendingClaim(arrival.ref, arrival.key)
+        // store. Park it so a retry has something to work from, but never over a DIFFERENT
+        // parked claim: there is one slot, and that claim is just as unspent. This link is still
+        // in the customer's hands (they just opened it); the parked one may exist nowhere else.
+        const parked = peekPendingClaim()
+        if (!parked || parked.ref === arrival.ref) stashPendingClaim(arrival.ref, arrival.key)
       }
       setState({ step: 'done', result })
     })

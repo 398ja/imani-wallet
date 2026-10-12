@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
 /**
@@ -484,12 +484,131 @@ describe('the parked claim is only ever forgotten for the claim on screen', () =
     })
   }
 
+  // Third check of the fix verification: the failure branch re-parks a LINK arrival so a retry can
+  // find it. `stashPendingClaim` overwrites the single slot, so a link that failed before the spend
+  // replaced a different, still unspent parked claim, whose key exists nowhere else on this device.
+  for (const [label, result] of [
+    ['unreachable', { kind: 'unreachable', reason: 'network' }],
+    ['throttled', { kind: 'throttled', retryAfterSeconds: 30 }],
+    ['disabled', { kind: 'disabled' }],
+    ['a deployment with no claim host (nothing spent)', { kind: 'invalid', reason: 'untrusted_claim_url' }],
+  ] as const) {
+    it(`a link that fails before the spend (${label}) never replaces a different parked claim`, async () => {
+      stashPendingClaim(OTHER_REF, KEY)
+      redeemClaimRef.mockResolvedValue(result)
+      open()
+      fireEvent.click(await screen.findByRole('button', { name: 'Add to my wallet' }))
+      await screen.findByRole('button', { name: 'Open my wallet' })
+      expect(peekPendingClaim()?.ref).toBe(OTHER_REF)
+    })
+
+    it(`a link that fails before the spend (${label}) with nothing else parked is parked for a retry`, async () => {
+      redeemClaimRef.mockResolvedValue(result)
+      open()
+      fireEvent.click(await screen.findByRole('button', { name: 'Add to my wallet' }))
+      await screen.findByRole('button', { name: 'Open my wallet' })
+      expect(peekPendingClaim()?.ref).toBe(REF)
+    })
+  }
+
   it('a terminal answer after Accept forgets the claim on screen', async () => {
     stashPendingClaim(REF, KEY)
     redeemClaimRef.mockResolvedValue({ kind: 'terminal', code: 'revoked' })
     open(CUSTOMER, '/c', '')
     fireEvent.click(await screen.findByRole('button', { name: 'Add to my wallet' }))
     await screen.findByRole('button', { name: 'Open my wallet' })
+    expect(peekPendingClaim()).toBeNull()
+  })
+})
+
+/**
+ * Third check: the whole lifecycle with two claims on one device. B is parked (opened logged out),
+ * then the customer, logged in, opens link A. No unspent claim is lost on the way, and nothing
+ * returns to a prompt it has already shown this page session.
+ */
+describe('two claims on one device, end to end', () => {
+  const B = 'bbbb2222cccc3333'
+  const KEY_B = 'B'.repeat(43)
+
+  function app(path: string, hash = '') {
+    window.history.replaceState(null, '', path + hash)
+    return render(
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route path="/" element={<ResumeParkedClaim pubkey={CUSTOMER}><p>HOME</p></ResumeParkedClaim>} />
+          <Route path="/c/:ref" element={<ClaimLandingPage authed pubkey={CUSTOMER} />} />
+          <Route path="/c" element={<ClaimLandingPage authed pubkey={CUSTOMER} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+  }
+
+  it('A fails, A is accepted, B is resumed and declined, then refresh and expiry reach home', async () => {
+    stashPendingClaim(B, KEY_B)
+
+    // Open A while B is parked. A first fails before the spend: B must survive.
+    redeemClaimRef.mockResolvedValueOnce({ kind: 'unreachable', reason: 'network' })
+    app(`/c/${REF}`, `#k=${KEY}`)
+    fireEvent.click(await screen.findByRole('button', { name: 'Add to my wallet' }))
+    await screen.findByText('We could not reach the voucher service. Your voucher is still waiting, so please try again.')
+    expect(peekPendingClaim()?.ref).toBe(B)
+    cleanup()
+
+    // Open A again, accept: added. B is still parked and unspent.
+    app(`/c/${REF}`, `#k=${KEY}`)
+    fireEvent.click(await screen.findByRole('button', { name: 'Add to my wallet' }))
+    await screen.findByText('Voucher added')
+    expect(peekPendingClaim()?.ref).toBe(B)
+
+    // Home resumes B (never shown this session), once.
+    fireEvent.click(screen.getByRole('button', { name: 'Open my wallet' }))
+    await screen.findByTestId('claim-prompt')
+    expect(redeemClaimRef).toHaveBeenLastCalledWith(REF, KEY)
+
+    // Decline B: home, not the prompt, and nothing is parked.
+    fireEvent.click(screen.getByRole('button', { name: 'Decline' }))
+    await screen.findByText('HOME')
+    expect(peekPendingClaim()).toBeNull()
+    expect(redeemClaimRef).toHaveBeenCalledTimes(2)
+    cleanup()
+
+    // Refresh (a new page session): still home.
+    resetPendingClaimOffers()
+    app('/')
+    await screen.findByText('HOME')
+    cleanup()
+
+    // Expiry: a claim parked more than 24 h ago is never resumed.
+    const now = Date.now()
+    stashPendingClaim(B, KEY_B)
+    const spy = vi.spyOn(Date, 'now').mockReturnValue(now + 24 * 60 * 60 * 1000 + 1)
+    try {
+      resetPendingClaimOffers()
+      app('/')
+      await screen.findByText('HOME')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('a second tab: B accepted in one tab, the other tab’s Accept is answered claimed and nothing loops', async () => {
+    stashPendingClaim(B, KEY_B)
+    app('/')
+    await screen.findByTestId('claim-prompt')
+    // The second tab shares localStorage but not this page session.
+    const second = app('/c')
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Add to my wallet' })).toHaveLength(2))
+    const [firstAdd, secondAdd] = screen.getAllByRole('button', { name: 'Add to my wallet' })
+    fireEvent.click(firstAdd)
+    await screen.findByText('Voucher added')
+    expect(peekPendingClaim()).toBeNull()
+
+    redeemClaimRef.mockResolvedValueOnce({ kind: 'terminal', code: 'claimed' })
+    fireEvent.click(secondAdd)
+    await screen.findByText('This voucher was already added to a wallet. If that was you on another device, it is there.')
+    const open2 = second.getAllByRole('button', { name: 'Open my wallet' })
+    fireEvent.click(open2[open2.length - 1])
+    await second.findByText('HOME')
     expect(peekPendingClaim()).toBeNull()
   })
 })
