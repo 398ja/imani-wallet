@@ -1,0 +1,49 @@
+/**
+ * @vitest-environment jsdom
+ */
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+/**
+ * Claim links phase 3 (spec 2.5, CL-SWITCH): the real `logout` keeps the parked claim links and
+ * still erases every other `imani-wallet:*` key.
+ */
+vi.mock('../nap', () => ({
+  getSession: () => ({ logout: vi.fn().mockResolvedValue(undefined) }),
+  keyStore: { clear: vi.fn().mockResolvedValue(undefined) },
+  resetSession: vi.fn(),
+}))
+vi.mock('../dmPoll', () => ({ stopDmPoll: vi.fn() }))
+vi.mock('../terminalRosterSyncNet', () => ({ stopRosterSync: vi.fn() }))
+vi.mock('../incomingNotifications', () => ({ stopIncomingNotifications: vi.fn() }))
+vi.mock('../notifications/manager', () => ({ disableNotifications: vi.fn(async () => undefined) }))
+vi.mock('../resume', () => ({ forgetResume: vi.fn() }))
+vi.mock('../wallet', () => ({ wipeWallet: vi.fn(async () => undefined) }))
+
+const { logout } = await import('../logout')
+const { listPendingClaims, stashPendingClaim } = await import('../pendingClaim')
+
+const REF = 'abcd1234efgh5678'
+const KEY = 'K'.repeat(43)
+
+beforeEach(() => localStorage.clear())
+
+describe('logout and the parked claim', () => {
+  it('keeps the parked claim and erases the account data', async () => {
+    stashPendingClaim(REF, KEY)
+    localStorage.setItem('imani-wallet:profile:' + 'a'.repeat(64), '{"name":"X"}')
+    localStorage.setItem('imani:cashback:pending', '["cashuBxyz"]')
+
+    await expect(logout('a'.repeat(64), () => true, () => {})).resolves.toBe(true)
+
+    expect(listPendingClaims().map((c) => [c.ref, c.key])).toEqual([[REF, KEY]])
+    expect(localStorage.getItem('imani-wallet:profile:' + 'a'.repeat(64))).toBeNull()
+    // The cashback token stash is outside the swept prefix and must stay (spec 2.5).
+    expect(localStorage.getItem('imani:cashback:pending')).toBe('["cashuBxyz"]')
+  })
+
+  it('cancelling keeps everything', async () => {
+    stashPendingClaim(REF, KEY)
+    await expect(logout('a'.repeat(64), () => false, () => {})).resolves.toBe(false)
+    expect(listPendingClaims()).toHaveLength(1)
+  })
+})
