@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Navigate, useNavigate, useParams } from 'react-router-dom'
 
 import { fetchClaimSummary, redeemClaimRef, type ClaimSummary, type RedeemResult } from '../lib/cashback'
 import { currencyDecimals, formatFace, shortPubkey } from '../lib/format'
 import { humanName, useIdentityState } from '../lib/identity'
 import { hasStoredKey } from '../lib/nap'
-import { clearPendingClaim, peekPendingClaim, stashPendingClaim, takePendingClaim } from '../lib/pendingClaim'
+import { clearPendingClaim, markPendingClaimOffered, peekPendingClaim, pendingClaimToResume, stashPendingClaim, takePendingClaim } from '../lib/pendingClaim'
 import { isTerminalDevice } from '../lib/terminalEnrol'
 import { Button } from '../components/ui'
 import { Centered } from '../components/ui/layout'
@@ -24,6 +24,8 @@ type Arrival =
 
 /** The pattern a cashback claim key has: 32 bytes, base64url, unpadded. */
 const KEY_IN_FRAGMENT = /[#&]k=([A-Za-z0-9_-]+)/
+/** A whole key, as `redeemClaimRef` requires it (`CLAIM_KEY_RE`). */
+const WHOLE_KEY = /^[A-Za-z0-9_-]{43}$/
 /** An x-only public key, as the portal returns the issuer. */
 const PUBKEY_HEX = /^[0-9a-f]{64}$/
 
@@ -35,14 +37,48 @@ const PUBKEY_HEX = /^[0-9a-f]{64}$/
 function readArrival(ref: string | undefined): Arrival {
   const match = KEY_IN_FRAGMENT.exec(window.location.hash)
   scrubFragment()
-  if (ref && match) return { kind: 'link', ref, key: match[1] }
+  if (ref && match) {
+    // A key of the wrong length is a truncated link, not a claim: never park it or offer Add.
+    return WHOLE_KEY.test(match[1]) ? { kind: 'link', ref, key: match[1] } : { kind: 'incomplete' }
+  }
 
   // A claim parked before onboarding or login arrives with no fragment at all, so a bare visit is
   // not necessarily a broken link.
   const pending = peekPendingClaim()
-  if (pending) return { kind: 'resumed', ref: pending.ref, key: pending.key }
+  if (pending) {
+    if (WHOLE_KEY.test(pending.key)) return { kind: 'resumed', ref: pending.ref, key: pending.key }
+    // Parked before this check existed. `/` would bounce back here for as long as it is parked.
+    clearPendingClaim()
+  }
 
   return { kind: 'incomplete' }
+}
+
+/**
+ * Forget the parked claim, but only if it is THIS one: a newer link parked meanwhile is left alone.
+ *
+ * Every dead end (claimed, expired, revoked, own cashback, not found, a bad key) must call this
+ * before going home, because `/` sends a device with a parked claim straight back to `/c`. Left
+ * parked, a dead claim held the customer on this screen until it aged out (24 h).
+ */
+function forgetIfParked(ref: string): void {
+  if (peekPendingClaim()?.ref === ref) clearPendingClaim()
+}
+
+/**
+ * `/`: a parked claim first, otherwise the home screen (`children`).
+ *
+ * A component rather than a condition in `App.tsx`'s route table, because a route's `element` is
+ * built when the PARENT renders, and `AuthedApp` does not re-render on navigation. As a condition,
+ * the answer was whatever it had been at `AuthedApp`'s last render: "Open my wallet" from the prompt
+ * bounced back to `/c` (and, after a successful Accept, to a "link is incomplete" screen) until
+ * something unrelated re-rendered the app. Here it is decided each time `/` is entered.
+ *
+ * Once per page session and account (`pendingClaimToResume`): the prompt's own way home must reach
+ * home. A claim still waiting is offered again on the next launch or unlock.
+ */
+export function ResumeParkedClaim({ pubkey, children }: { pubkey: string; children: ReactNode }) {
+  return pendingClaimToResume(pubkey) ? <Navigate to="/c" replace /> : <>{children}</>
 }
 
 /**
@@ -139,6 +175,9 @@ function ConfirmPrompt({
   /** Redeeming is DESTRUCTIVE: a second tap, or a re-render, must never start a second claim. */
   const spending = useRef(false)
 
+  // Shown now, so `/` does not send the customer back here when they leave it this session.
+  useEffect(() => markPendingClaimOffered(arrival.ref, pubkey), [arrival.ref, pubkey])
+
   const fetchSummary = useCallback(() => {
     let live = true
     void fetchClaimSummary(arrival.ref).then(
@@ -172,6 +211,9 @@ function ConfirmPrompt({
         // would offer a dead claim to the next visit. (`held` and `refused` keep the TOKEN in the
         // cashback stash; the claim itself is spent.)
         takePendingClaim()
+      } else if (result.kind === 'invalid') {
+        // Nothing a retry could fix: do not park it, and drop it if it was parked.
+        forgetIfParked(arrival.ref)
       } else if (arrival.kind === 'link') {
         // Failed before the claim was spent, and the key came from the URL rather than the
         // store. Park it so a retry has something to work from.
@@ -180,6 +222,12 @@ function ConfirmPrompt({
       setState({ step: 'done', result })
     })
   }, [arrival])
+
+  /** A dead end: nothing here can ever be added, so it must not stay parked (see `forgetIfParked`). */
+  const finish = useCallback(() => {
+    forgetIfParked(arrival.ref)
+    onDone()
+  }, [arrival.ref, onDone])
 
   const decline = useCallback(() => {
     // On this device only. The voucher is untouched at the server: its funder can still revoke
@@ -220,7 +268,7 @@ function ConfirmPrompt({
     )
   }
   if (summary.kind === 'not_found') {
-    return <Outcome title="Voucher unavailable" body="We could not find this voucher. Check the link is complete." onDone={onDone} />
+    return <Outcome title="Voucher unavailable" body="We could not find this voucher. Check the link is complete." onDone={finish} />
   }
   if (summary.kind === 'disabled') {
     return <Outcome title="Voucher unavailable" body="This wallet cannot claim vouchers yet." onDone={onDone} />
@@ -232,7 +280,7 @@ function ConfirmPrompt({
   // unverified warning at a voucher that is about to verify.
   const stall = stallName ?? (stallLoading ? 'Checking the stall…' : 'Unknown stall')
   const closed = closedState(summary, stall)
-  if (closed) return <Outcome title="Voucher unavailable" body={closed} onDone={onDone} />
+  if (closed) return <Outcome title="Voucher unavailable" body={closed} onDone={finish} />
 
   // The merchant's own cashback (spec 3.2): receiving it would declare a credit for a coupon that
   // never left home. Refused before the tap, so nothing is redeemed.
@@ -241,7 +289,7 @@ function ConfirmPrompt({
       <Outcome
         title="Your own cashback"
         body="This is your stall's own cashback. Give it to a customer, or cancel it."
-        onDone={onDone}
+        onDone={finish}
       />
     )
   }

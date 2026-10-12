@@ -63,10 +63,9 @@ import { CashbackIssuePage } from './pages/CashbackIssuePage'
 import { MerchantDashboardPage } from './pages/MerchantDashboardPage'
 import { RedeemPage } from './pages/RedeemPage'
 import { MerchantPage } from './pages/MerchantPage'
-import { ClaimLandingPage } from './pages/ClaimLandingPage'
+import { ClaimLandingPage, ResumeParkedClaim } from './pages/ClaimLandingPage'
 import { BuyPage } from './pages/BuyPage'
 import { PublicProfilePage } from './pages/PublicProfilePage'
-import { peekPendingClaim } from './lib/pendingClaim'
 import { CouponsPage, TransactionsPage } from './pages/RecordListPages'
 import { CouponPage, TransactionPage } from './pages/RecordDetailPages'
 import { ScanPage } from './pages/ScanPage'
@@ -402,20 +401,21 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             /*
               Someone who arrived holding a claim link came for a voucher, not
               for an empty wallet. If one is still parked after onboarding,
-              finish that first — peeked rather than taken, so the claim is
-              still there for the screen that spends it.
+              finish that first. Decided inside `ResumeParkedClaim` on every
+              visit to `/`, not here: this element is built when AuthedApp
+              renders, which is not on navigation.
             */
-            peekPendingClaim() ? (
-              <Navigate to="/c" replace />
-            ) : trading ? (
-              <MerchantHomePage
-                actor={terminal.actor ?? undefined}
-                session={terminal.session}
-                refusal={terminal.refusal}
-              />
-            ) : (
-              <MerchantsPage />
-            )
+            <ResumeParkedClaim pubkey={pubkey}>
+              {trading ? (
+                <MerchantHomePage
+                  actor={terminal.actor ?? undefined}
+                  session={terminal.session}
+                  refusal={terminal.refusal}
+                />
+              ) : (
+                <MerchantsPage />
+              )}
+            </ResumeParkedClaim>
           }
         />
         {trading && (
