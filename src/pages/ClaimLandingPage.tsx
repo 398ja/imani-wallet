@@ -6,7 +6,7 @@ import { currencyDecimals, formatFace, handleLabel, shortPubkey } from '../lib/f
 import { humanName, useIdentityState } from '../lib/identity'
 import { hasStoredKey } from '../lib/nap'
 import { loadProfile } from '../lib/profile'
-import { forgetPendingClaim, markPendingClaimOffered, peekPendingClaim, pendingClaimToResume, stashPendingClaim } from '../lib/pendingClaim'
+import { forgetPendingClaim, listPendingClaims, markPendingClaimOffered, pendingClaimToResume, stashPendingClaim } from '../lib/pendingClaim'
 import { isTerminalDevice } from '../lib/terminalEnrol'
 import { Button } from '../components/ui'
 import { Centered } from '../components/ui/layout'
@@ -50,11 +50,17 @@ function readArrival(ref: string | undefined, pubkey: string | undefined): Arriv
   // Never visit a ref twice: on a storage that refuses writes the forget below is a no-op, and the
   // next read returned the same entry, which spun this loop forever and froze the tab during the
   // first render (review of #245, F3).
-  const next = () => pendingClaimToResume(pubkey) ?? peekPendingClaim()
+  // A bad ref is also marked offered, and the fallback skips what was tried: on such a storage the
+  // newest entry stays the bad one, which hid an older whole claim behind "incomplete" and left `/`
+  // bouncing back here (second check of #245). Each pass adds a ref, so the loop is bounded.
   const tried = new Set<string>()
+  const next = () => pendingClaimToResume(pubkey)
+    ?? listPendingClaims().reverse().find((e) => !tried.has(e.ref))
+    ?? null
   for (let pending = next(); pending && !tried.has(pending.ref); pending = next()) {
     if (WHOLE_KEY.test(pending.key)) return { kind: 'resumed', ref: pending.ref, key: pending.key }
     tried.add(pending.ref)
+    markPendingClaimOffered(pending.ref, pubkey)
     // Parked before this check existed. `/` would bounce back here for as long as it is parked.
     forgetPendingClaim(pending.ref)
   }
