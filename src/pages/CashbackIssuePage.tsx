@@ -2,9 +2,13 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Check, Copy } from 'lucide-react'
 
+import { CancelCashback, ClaimLinkPanel } from '../components/CashbackClaimLink'
+
 import { Button, Screen, BackLink, PageHeader, Alert, Panel, Input } from '../components/ui'
 import type { IssuedCashback } from '../lib/cashback'
 import { createCashbackIssuer } from '../lib/cashbackIssue'
+import { useLiveCashbackStatus } from '../lib/cashbackLiveStatus'
+import { formatCashbackLink } from '../lib/claimLink'
 import { gatewayConfig, DEFAULT_CASHBACK_EXPIRY_DAYS } from '../lib/config'
 import { currencyDecimals, formatDate, formatFace, parseAmountToMinor } from '../lib/format'
 import type { MerchantProfile } from '../lib/merchant'
@@ -134,7 +138,7 @@ export function CashbackIssuePage({
     return (
       <Screen>
         <BackLink to="/sell" label="Sell" />
-        <PageHeader title="Cashback ready" subtitle="Give this code to the customer." />
+        <PageHeader title="Cashback ready" subtitle="Give the customer this code, or let them scan the QR." />
         <IssuedCode
           issued={issued}
           decimals={decimals}
@@ -179,7 +183,7 @@ export function CashbackIssuePage({
       </Panel>
 
       <p className="mt-3 text-sm text-mono-500">
-        The customer gets a short code to type into their wallet. It works for{' '}
+        The customer gets a short code and a link: they scan, or type into their wallet. It works for{' '}
         {expiryDays} {expiryDays === 1 ? 'day' : 'days'}, once.
       </p>
 
@@ -196,14 +200,11 @@ export function CashbackIssuePage({
 }
 
 /**
- * The code, and nothing competing with it.
+ * The code, then the link and QR beside it (claim links phase 2, spec 4.1).
  *
- * Sized and spaced to be read across a counter and copied down by hand, which
- * is the only thing this screen is for: wide tracking so the ten characters
- * separate, monospace so `0` and `O` cannot trade places, and negative-tracked
- * display type everywhere else per the house scale. Sized so `CB-XXXXX-XXXXX`
- * still fits one line on a 360px phone, and allowed to break rather than
- * overflow on anything narrower.
+ * The code comes first and is unchanged (Q2): sized and spaced to be read across a counter and
+ * copied down by hand, monospace so `0` and `O` cannot trade places. Below it, Show QR and Share
+ * link carry the same claim as a link, and the screen follows the claim live until it settles.
  */
 function IssuedCode({
   issued,
@@ -217,6 +218,12 @@ function IssuedCode({
   onDone: () => void
 }) {
   const [copied, setCopied] = useState(false)
+  const [cancelled, setCancelled] = useState(false)
+  const live = useLiveCashbackStatus(issued.cashbackId || undefined, !cancelled)
+  const status = cancelled ? 'Revoked' : live?.status
+  const link = issued.claim
+    ? formatCashbackLink(window.location.origin, issued.claim.ref, issued.claim.key)
+    : null
 
   const copy = async () => {
     try {
@@ -227,7 +234,7 @@ function IssuedCode({
       setTimeout(() => setCopied(false), 2000)
     } catch {
       // Clipboard permission is not something the merchant can act on, and the
-      // code is already on screen to be read aloud — which is the point of it.
+      // code is already on screen to be read aloud, which is the point of it.
     }
   }
 
@@ -253,6 +260,7 @@ function IssuedCode({
       </Panel>
 
       <div className="mt-4 space-y-2">
+        <ClaimState status={status} link={link} expiresAt={issued.expiresAt} />
         <Button variant="secondary" size="lg" className="w-full" onClick={() => void copy()}>
           {copied ? (
             <>
@@ -264,6 +272,9 @@ function IssuedCode({
             </>
           )}
         </Button>
+        {issued.cashbackId && isOpen(status) ? (
+          <CancelCashback cashbackId={issued.cashbackId} onCancelled={() => setCancelled(true)} />
+        ) : null}
         <Button size="lg" className="w-full" onClick={onAgain}>
           Create another
         </Button>
@@ -273,4 +284,40 @@ function IssuedCode({
       </div>
     </>
   )
+}
+
+/** Unclaimed, or not known yet: the link is still live. */
+function isOpen(status: string | undefined): boolean {
+  return status === undefined || status === 'Unclaimed'
+}
+
+/** What replaces the QR once the claim has closed (spec 4.1, "Claimed just now"). */
+const CLOSED_LINE: Record<string, string> = {
+  Claimed: 'Claimed just now',
+  Revoked: 'Cancelled. The link and the code no longer work.',
+  Expired: 'Expired. The link and the code no longer work.',
+  ManualAttention: 'Closed. Ask support about this one.',
+}
+
+/** The link and QR while the claim is open, the closed line once it is not. */
+function ClaimState({
+  status,
+  link,
+  expiresAt,
+}: {
+  status: string | undefined
+  link: string | null
+  expiresAt: string
+}) {
+  if (!isOpen(status)) {
+    return (
+      <p
+        role="status"
+        className="rounded-xl bg-mono-100 p-3 text-center text-sm font-medium text-mono-900 dark:bg-mono-800 dark:text-mono-50"
+      >
+        {CLOSED_LINE[status ?? ''] ?? CLOSED_LINE.ManualAttention}
+      </p>
+    )
+  }
+  return link ? <ClaimLinkPanel link={link} expiresAt={expiresAt} /> : null
 }
