@@ -31,7 +31,7 @@ import { gatewayConfig, cashbackEnabled } from './config'
 import { cashbackValidation } from './cashbackValidation'
 import { legacyApi, withCorrelation } from './legacyBridge'
 import { signedFetch } from './nip98'
-import { checkTokenBacking, loadTrustedMints } from './trustedMint'
+import { checkTokenBacking, loadTrustedMints, trustedMintUrls } from './trustedMint'
 import { notifyWalletChanged, recordCashbackStatus } from './wallet'
 
 /**
@@ -907,6 +907,79 @@ export async function redeemCashbackCode(canonical: string): Promise<RedeemResul
   if (!parsed) return { kind: 'invalid', reason: 'untrusted_claim_url' }
 
   return redeemParsedClaim(parsed)
+}
+
+/**
+ * What the confirm prompt shows BEFORE anything is spent (claim links phase 1, spec 4.3).
+ *
+ * Read from the portal's public metadata, which is non-destructive: the ciphertext endpoint is
+ * never touched here, so a claim link can be opened, prefetched or re-rendered any number of
+ * times and the voucher stays where it is. The ref is checked against the claim pattern first; the
+ * key is not needed and not taken.
+ *
+ * `mintTrusted` is whether this wallet trusts any mint at all. The voucher's own mint is inside
+ * the ciphertext and cannot be read without spending the claim, so the redeem checks it after the
+ * tap (`commitToken` holds a token at a mint it does not trust). A wallet that trusts NO mint would
+ * hold every claim, so the prompt refuses to start one.
+ */
+export type ClaimSummary =
+  | {
+      kind: 'ok'
+      /** The portal's record status: Unclaimed, Claimed, Expired, Revoked or ManualAttention. */
+      status: string
+      amountMinor: number | null
+      unit: string | null
+      decimals: number | null
+      memo: string | null
+      expiresAt: string | null
+      claimedAt: string | null
+      revokedAt: string | null
+      /** The stall that funded the cashback, hex. */
+      issuerPubkey: string | null
+      mintTrusted: boolean
+    }
+  | { kind: 'not_found' }
+  | { kind: 'unreachable' }
+  | { kind: 'disabled' }
+
+export async function fetchClaimSummary(ref: string): Promise<ClaimSummary> {
+  if (!CLAIM_REF_RE.test(ref)) return { kind: 'not_found' }
+
+  const config = await gatewayConfig().catch(() => null)
+  if (!config) return { kind: 'unreachable' }
+  if (!cashbackEnabled(config)) return { kind: 'disabled' }
+
+  let response: Response
+  try {
+    response = await fetchWithTimeout(PUBLIC_META_PATH + encodeURIComponent(ref), {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    })
+  } catch {
+    return { kind: 'unreachable' }
+  }
+  if (response.status === 404) return { kind: 'not_found' }
+  if (response.status !== 200) return { kind: 'unreachable' }
+
+  const body = (await response.json().catch(() => null)) as Record<string, unknown> | null
+  if (!body || typeof body.status !== 'string') return { kind: 'unreachable' }
+
+  await loadTrustedMints()
+  const str = (v: unknown) => (typeof v === 'string' && v !== '' ? v : null)
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+  return {
+    kind: 'ok',
+    status: body.status,
+    amountMinor: num(body.amountMinor),
+    unit: str(body.unit),
+    decimals: num(body.decimals),
+    memo: str(body.memo),
+    expiresAt: str(body.expiresAt),
+    claimedAt: str(body.claimedAt),
+    revokedAt: str(body.revokedAt),
+    issuerPubkey: str(body.issuerPubkey)?.toLowerCase() ?? null,
+    mintTrusted: trustedMintUrls().length > 0,
+  }
 }
 
 /**

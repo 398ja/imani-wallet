@@ -63,10 +63,9 @@ import { CashbackIssuePage } from './pages/CashbackIssuePage'
 import { MerchantDashboardPage } from './pages/MerchantDashboardPage'
 import { RedeemPage } from './pages/RedeemPage'
 import { MerchantPage } from './pages/MerchantPage'
-import { ClaimLandingPage } from './pages/ClaimLandingPage'
+import { ClaimLandingPage, ResumeParkedClaim } from './pages/ClaimLandingPage'
 import { BuyPage } from './pages/BuyPage'
 import { PublicProfilePage } from './pages/PublicProfilePage'
-import { peekPendingClaim } from './lib/pendingClaim'
 import { CouponsPage, TransactionsPage } from './pages/RecordListPages'
 import { CouponPage, TransactionPage } from './pages/RecordDetailPages'
 import { ScanPage } from './pages/ScanPage'
@@ -402,20 +401,21 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             /*
               Someone who arrived holding a claim link came for a voucher, not
               for an empty wallet. If one is still parked after onboarding,
-              finish that first — peeked rather than taken, so the claim is
-              still there for the screen that spends it.
+              finish that first. Decided inside `ResumeParkedClaim` on every
+              visit to `/`, not here: this element is built when AuthedApp
+              renders, which is not on navigation.
             */
-            peekPendingClaim() ? (
-              <Navigate to="/c" replace />
-            ) : trading ? (
-              <MerchantHomePage
-                actor={terminal.actor ?? undefined}
-                session={terminal.session}
-                refusal={terminal.refusal}
-              />
-            ) : (
-              <MerchantsPage />
-            )
+            <ResumeParkedClaim pubkey={pubkey}>
+              {trading ? (
+                <MerchantHomePage
+                  actor={terminal.actor ?? undefined}
+                  session={terminal.session}
+                  refusal={terminal.refusal}
+                />
+              ) : (
+                <MerchantsPage />
+              )}
+            </ResumeParkedClaim>
           }
         />
         {trading && (
@@ -503,12 +503,12 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         {/* A claim link handed over by the hosted page. Present in BOTH trees:
             here it redeems, and in `PublicRoutes` it parks the claim and sends
             the customer to onboarding first. */}
-        <Route path="/c/:ref" element={<ClaimLandingPage authed />} />
+        <Route path="/c/:ref" element={<ClaimLandingPage authed pubkey={pubkey} />} />
         {/* Where a parked claim is picked up after onboarding. `Entry` sends a
             new wallet here rather than to the home screen when one is waiting,
             so the last step of "install the app to get your voucher" is not
             left to the customer to work out. */}
-        <Route path="/c" element={<ClaimLandingPage authed />} />
+        <Route path="/c" element={<ClaimLandingPage authed pubkey={pubkey} />} />
         {/* Buying a stall's coupon by card. In BOTH trees: a shopper who
             already holds coupons is topping up, and a stranger who scanned a
             QR is the reason the hosted page exists. */}
