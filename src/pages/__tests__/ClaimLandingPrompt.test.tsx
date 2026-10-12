@@ -157,6 +157,18 @@ describe('Accept and Decline', () => {
     expect(peekPendingClaim()).toBeNull()
   })
 
+  it('two taps in the same task, before React re-renders, still redeem once (the ref guard, not the re-render)', async () => {
+    redeemClaimRef.mockReturnValue(new Promise(() => {}))
+    open()
+    const accept = await screen.findByRole('button', { name: 'Add to my wallet' })
+    // Native clicks outside act(): React has not yet swapped the button for "Adding…" when the
+    // second lands. Review of phase 1: `fireEvent` alone could not see the guard go missing.
+    accept.click()
+    accept.click()
+    await settle()
+    expect(redeemClaimRef).toHaveBeenCalledTimes(1)
+  })
+
   it('Decline does not redeem, forgets the parked claim, and goes home', async () => {
     stashPendingClaim(REF, KEY)
     open()
