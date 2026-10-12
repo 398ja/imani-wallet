@@ -6,6 +6,7 @@ import { disableNotifications } from './notifications/manager'
 import { forgetResume } from './resume'
 import { wipeWallet } from './wallet'
 import { sweepAppStorage } from './appStorage'
+import { carryPendingClaimsAcrossLogout } from './pendingClaim'
 
 /**
  * Log out: end the session and erase the key from this browser.
@@ -123,7 +124,13 @@ export async function logout(
   //
   // Before #160 phase 6 that was false for the terminal list (F4): logging out
   // erased the only copy of the stall's revocation handles.
-  sweepAppStorage()
+  //
+  // Except the parked claim links (claim links phase 3, spec 2.5): an unspent
+  // link opened on this device belongs to whoever logs in next to add it, which
+  // is the whole "Switch account" journey (CL-SWITCH). The cashback token stash
+  // (`imani:cashback:pending`) is outside the `imani-wallet:` prefix and was
+  // never swept.
+  carryPendingClaimsAcrossLogout(sweepAppStorage)
 
   // And the coupons, the transaction history and the issued-coupon records.
   // Recoverable: sales come back from the relay via restoreIssued(), and held

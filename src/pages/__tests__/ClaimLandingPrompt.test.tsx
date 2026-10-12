@@ -41,7 +41,7 @@ vi.mock('../../lib/identity', async (importOriginal) => ({
 }))
 
 import { ClaimLandingPage, ResumeParkedClaim } from '../ClaimLandingPage'
-import { peekPendingClaim, resetPendingClaimOffers, stashPendingClaim } from '../../lib/pendingClaim'
+import { listPendingClaims, peekPendingClaim, peekPendingClaimFor, resetPendingClaimOffers, stashPendingClaim } from '../../lib/pendingClaim'
 
 const REF = 'abcd1234efgh5678'
 const KEY = 'Q'.repeat(43)
@@ -485,8 +485,8 @@ describe('the parked claim is only ever forgotten for the claim on screen', () =
   }
 
   // Third check of the fix verification: the failure branch re-parks a LINK arrival so a retry can
-  // find it. `stashPendingClaim` overwrites the single slot, so a link that failed before the spend
-  // replaced a different, still unspent parked claim, whose key exists nowhere else on this device.
+  // find it. With one slot that replaced a different, still unspent parked claim, whose key exists
+  // nowhere else on this device. Parked claims are keyed by ref now (F4-1): BOTH stay parked.
   for (const [label, result] of [
     ['unreachable', { kind: 'unreachable', reason: 'network' }],
     ['throttled', { kind: 'throttled', retryAfterSeconds: 30 }],
@@ -499,7 +499,7 @@ describe('the parked claim is only ever forgotten for the claim on screen', () =
       open()
       fireEvent.click(await screen.findByRole('button', { name: 'Add to my wallet' }))
       await screen.findByRole('button', { name: 'Open my wallet' })
-      expect(peekPendingClaim()?.ref).toBe(OTHER_REF)
+      expect(listPendingClaims().map((c) => c.ref).sort()).toEqual([REF, OTHER_REF].sort())
     })
 
     it(`a link that fails before the spend (${label}) with nothing else parked is parked for a retry`, async () => {
@@ -551,7 +551,8 @@ describe('two claims on one device, end to end', () => {
     app(`/c/${REF}`, `#k=${KEY}`)
     fireEvent.click(await screen.findByRole('button', { name: 'Add to my wallet' }))
     await screen.findByText('We could not reach the voucher service. Your voucher is still waiting, so please try again.')
-    expect(peekPendingClaim()?.ref).toBe(B)
+    expect(peekPendingClaimFor(B)?.key).toBe(KEY_B)
+    expect(peekPendingClaimFor(REF)?.key).toBe(KEY)
     cleanup()
 
     // Open A again, accept: added. B is still parked and unspent.
@@ -610,5 +611,42 @@ describe('two claims on one device, end to end', () => {
     fireEvent.click(open2[open2.length - 1])
     await second.findByText('HOME')
     expect(peekPendingClaim()).toBeNull()
+  })
+})
+
+/** Claim links phase 3 (spec 4.3, CL-SWITCH): "Not you? Switch account" keeps the claim on screen. */
+describe('Switch account', () => {
+  function openWithSwitch(onSwitch: () => void) {
+    window.history.replaceState(null, '', `/c/${REF}#k=${KEY}`)
+    return render(
+      <MemoryRouter initialEntries={[`/c/${REF}`]}>
+        <Routes>
+          <Route path="/c/:ref" element={<ClaimLandingPage authed pubkey={CUSTOMER} onSwitchAccount={onSwitch} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+  }
+
+  it('parks the claim on screen (opened by link), runs logout, and spends nothing', async () => {
+    const onSwitch = vi.fn()
+    openWithSwitch(onSwitch)
+    fireEvent.click(await screen.findByRole('button', { name: 'Switch account' }))
+    expect(onSwitch).toHaveBeenCalledOnce()
+    expect(peekPendingClaimFor(REF)?.key).toBe(KEY)
+    expect(redeemClaimRef).not.toHaveBeenCalled()
+  })
+
+  it('leaves a different parked claim alone', async () => {
+    const OTHER = 'zzzz9999yyyy8888'
+    stashPendingClaim(OTHER, KEY)
+    openWithSwitch(vi.fn())
+    fireEvent.click(await screen.findByRole('button', { name: 'Switch account' }))
+    expect(listPendingClaims().map((c) => c.ref).sort()).toEqual([REF, OTHER].sort())
+  })
+
+  it('is not offered without a logout to run', async () => {
+    open()
+    await screen.findByRole('button', { name: 'Add to my wallet' })
+    expect(screen.queryByRole('button', { name: 'Switch account' })).toBeNull()
   })
 })
