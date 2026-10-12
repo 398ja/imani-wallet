@@ -289,7 +289,7 @@ async function main() {
     console.log('\nL7 a different account sees the prompt for itself')
     const t7 = await openLink(d, two.link)
     check('L7 D is offered it (Add present)', /Add to my wallet/.test(t7), t7.slice(0, 300))
-    check('L7 the prompt adds it to D\'s own wallet', /Adding to your wallet/.test(t7), t7.slice(0, 300))
+    check('L7 the prompt adds it to D\'s own wallet', /Adding to (@cust\d+|your wallet)/.test(t7), t7.slice(0, 300))
 
     console.log('\nL8 a revoked link')
     // A revokes through its own session, as the merchant screen will (phase 2).

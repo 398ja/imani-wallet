@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { fetchClaimSummary, type ClaimSummary } from '../lib/cashback'
 import { currencyDecimals, formatFace } from '../lib/format'
 import { humanName, useIdentityState } from '../lib/identity'
-import { hasExpiredPendingClaim, peekPendingClaim } from '../lib/pendingClaim'
+import { hasExpiredPendingClaim, peekPendingClaim, prunePendingClaims } from '../lib/pendingClaim'
 
 /** An x-only public key, as the portal returns the issuer. */
 const PUBKEY_HEX = /^[0-9a-f]{64}$/
@@ -27,6 +27,10 @@ export function ParkedClaimBanner() {
   const [parked] = useState(() => peekPendingClaim())
   const [expired] = useState(() => !parked && hasExpiredPendingClaim())
   const [summary, setSummary] = useState<ClaimSummary | null>(null)
+
+  // Read, then erase what has aged out: "Open your voucher link again" is said once, and an aged-out
+  // key does not stay on disk (review of #245, F1). Live entries are untouched.
+  useEffect(() => prunePendingClaims(), [])
 
   useEffect(() => {
     if (!parked || parked.kind !== 'cashback') return

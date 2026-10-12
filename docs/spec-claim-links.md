@@ -877,7 +877,8 @@ Done when CL-B, CL-B2 and CL-SWITCH pass.
 - The key is parked in plaintext localStorage, as since phase 0 and as section 2.5 requires (not
   sessionStorage: the install journey comes back in a new tab). There is no account key to wrap it
   under before registration. It is bounded instead: 24 h, five entries, removed once added,
-  declined or dead. It is never rendered, logged or sent: the banner sends only the ref.
+  declined or dead. An aged-out entry is erased, not just hidden, when the banner has shown the
+  aged-out copy (once) or when `/` resumes (review of #245, F1). It is never rendered, logged or sent: the banner sends only the ref.
 - Logout sweeps every `imani-wallet:*` key except this one, whose live entries are carried across
   with their ages. The cashback token stash (`imani:cashback:pending`) was never swept. Nothing that
   names the logged-out account survives (CL-SWITCH checks the account's pubkey).

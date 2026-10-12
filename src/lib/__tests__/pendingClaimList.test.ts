@@ -146,3 +146,27 @@ describe('parked claims survive logout (spec 2.5)', () => {
     expect(localStorage.getItem('imani-wallet:pending-claim')).toBeNull()
   })
 })
+
+/** Review of #245, F1: 24 h bounds the key on disk, not only the offer. */
+describe('an aged-out entry is erased, not just hidden', () => {
+  it('resuming at / erases aged-out entries for a logged-in account', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    stashPendingClaim(A, KA)
+    vi.setSystemTime(DAY + 1)
+    expect(pendingClaimToResume('c'.repeat(64))).toBeNull()
+    expect(localStorage.getItem('imani-wallet:pending-claim')).toBeNull()
+  })
+})
+
+/** Review of #245, F1b: an entry stamped in the future (clock set back, or a tampered value) is not immortal. */
+describe('a parked claim from the future', () => {
+  it('is not live, so it is neither offered nor kept forever as the newest', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(DAY * 10)
+    localStorage.setItem('imani-wallet:pending-claim', JSON.stringify([{ kind: 'cashback', ref: A, key: KA, at: DAY * 30 }]))
+    expect(listPendingClaims()).toEqual([])
+    expect(pendingClaimToResume('c'.repeat(64))).toBeNull()
+    expect(localStorage.getItem('imani-wallet:pending-claim')).toBeNull()
+  })
+})
