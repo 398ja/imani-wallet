@@ -435,3 +435,61 @@ describe('after Accept, home is home', () => {
     expect(redeemClaimRef).toHaveBeenCalledTimes(1)
   })
 })
+
+/**
+ * Fix verification of the review: the parked claim is cleared on every terminal state and on
+ * Decline, ONLY for the claim on screen, and never before a successful claim. A device can hold a
+ * parked claim B while its customer opens another link A; finishing A must not drop B.
+ */
+describe('the parked claim is only ever forgotten for the claim on screen', () => {
+  const OTHER_REF = 'zzzz9999yyyy8888'
+
+  for (const [label, result] of [
+    ['added', { kind: 'ok', amountMinor: 500, unit: 'EUR', memo: null }],
+    ['already claimed', { kind: 'terminal', code: 'claimed' }],
+    ['held by the mint gate', { kind: 'held', reason: 'untrusted-mint' }],
+    ['undecryptable after the spend', { kind: 'invalid', reason: 'decrypt_failure' }],
+  ] as const) {
+    it(`accepting another link (${label}) leaves a different parked claim alone`, async () => {
+      stashPendingClaim(OTHER_REF, KEY)
+      redeemClaimRef.mockResolvedValue(result)
+      open()
+      fireEvent.click(await screen.findByRole('button', { name: 'Add to my wallet' }))
+      await screen.findByRole('button', { name: 'Open my wallet' })
+      expect(peekPendingClaim()?.ref).toBe(OTHER_REF)
+    })
+  }
+
+  it('declining another link leaves a different parked claim alone', async () => {
+    stashPendingClaim(OTHER_REF, KEY)
+    open()
+    fireEvent.click(await screen.findByRole('button', { name: 'Decline' }))
+    await screen.findByText('HOME')
+    expect(peekPendingClaim()?.ref).toBe(OTHER_REF)
+  })
+
+  for (const [label, result] of [
+    ['unreachable', { kind: 'unreachable', reason: 'network' }],
+    ['throttled', { kind: 'throttled', retryAfterSeconds: 30 }],
+    ['disabled', { kind: 'disabled' }],
+    ['a deployment with no claim host (nothing spent)', { kind: 'invalid', reason: 'untrusted_claim_url' }],
+  ] as const) {
+    it(`a resumed claim that fails before the spend (${label}) stays parked`, async () => {
+      stashPendingClaim(REF, KEY)
+      redeemClaimRef.mockResolvedValue(result)
+      open(CUSTOMER, '/c', '')
+      fireEvent.click(await screen.findByRole('button', { name: 'Add to my wallet' }))
+      await screen.findByRole('button', { name: 'Open my wallet' })
+      expect(peekPendingClaim()?.ref).toBe(REF)
+    })
+  }
+
+  it('a terminal answer after Accept forgets the claim on screen', async () => {
+    stashPendingClaim(REF, KEY)
+    redeemClaimRef.mockResolvedValue({ kind: 'terminal', code: 'revoked' })
+    open(CUSTOMER, '/c', '')
+    fireEvent.click(await screen.findByRole('button', { name: 'Add to my wallet' }))
+    await screen.findByRole('button', { name: 'Open my wallet' })
+    expect(peekPendingClaim()).toBeNull()
+  })
+})

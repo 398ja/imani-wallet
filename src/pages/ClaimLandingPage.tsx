@@ -5,7 +5,7 @@ import { fetchClaimSummary, redeemClaimRef, type ClaimSummary, type RedeemResult
 import { currencyDecimals, formatFace, shortPubkey } from '../lib/format'
 import { humanName, useIdentityState } from '../lib/identity'
 import { hasStoredKey } from '../lib/nap'
-import { clearPendingClaim, markPendingClaimOffered, peekPendingClaim, pendingClaimToResume, stashPendingClaim, takePendingClaim } from '../lib/pendingClaim'
+import { clearPendingClaim, markPendingClaimOffered, peekPendingClaim, pendingClaimToResume, stashPendingClaim } from '../lib/pendingClaim'
 import { isTerminalDevice } from '../lib/terminalEnrol'
 import { Button } from '../components/ui'
 import { Centered } from '../components/ui/layout'
@@ -209,10 +209,13 @@ function ConfirmPrompt({
         || result.kind === 'held' || result.kind === 'refused') {
         // Spent, or gone for good. Either way there is nothing left to resume, and keeping it
         // would offer a dead claim to the next visit. (`held` and `refused` keep the TOKEN in the
-        // cashback stash; the claim itself is spent.)
-        takePendingClaim()
-      } else if (result.kind === 'invalid') {
-        // Nothing a retry could fix: do not park it, and drop it if it was parked.
+        // cashback stash; the claim itself is spent.) Only THIS claim: a different one parked on
+        // this device is still unspent, and its key exists nowhere else.
+        forgetIfParked(arrival.ref)
+      } else if (result.kind === 'invalid' && result.reason !== 'untrusted_claim_url') {
+        // Spent, but the answer was unusable (decrypt or payload failure): nothing a retry could
+        // fix, so drop it if it was parked. `untrusted_claim_url` is refused BEFORE the spend (no
+        // claim host configured), so it is kept like any other failure a retry may fix.
         forgetIfParked(arrival.ref)
       } else if (arrival.kind === 'link') {
         // Failed before the claim was spent, and the key came from the URL rather than the
@@ -231,10 +234,10 @@ function ConfirmPrompt({
 
   const decline = useCallback(() => {
     // On this device only. The voucher is untouched at the server: its funder can still revoke
-    // it, or it lapses at its expiry. Nobody is told anything.
-    clearPendingClaim()
+    // it, or it lapses at its expiry. Nobody is told anything. Only THIS claim is forgotten.
+    forgetIfParked(arrival.ref)
     onDone()
-  }, [onDone])
+  }, [arrival.ref, onDone])
 
   if (state.step === 'loading') return <Centered>Checking your voucher…</Centered>
   if (state.step === 'redeeming') return <Centered>Adding your voucher…</Centered>
