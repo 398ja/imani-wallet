@@ -237,3 +237,26 @@ E2E_SCRIPT=claimLinks.e2e.ts E2E_CLAIM_HOST_VIA=http://127.0.0.1:$GATE_EDGE_PORT
 
 `E2E_CLAIM_HOST_VIA` serves the deployment's claim host (`cashback_origins[0]`) from the gate's edge,
 so a local run never reaches the real staging claim host. Omit it against staging itself.
+
+## `claimLinksMerchant.e2e.ts` — the merchant's link and QR (claim links phase 2)
+
+[docs/spec-claim-links.md](../docs/spec-claim-links.md), sections 4.1 and 7. The link is taken from
+the merchant's own screen (Share link), never from the generate response:
+
+- **CL-A**: the code stays beside the link, the QR is hidden until Show QR, a logged-in customer
+  opens the shared link and adds it, their balance goes up, and the merchant's open screen flips to
+  *"Claimed just now"* by itself.
+- **CL-RACE**: two customers tap Add within 50 ms: one *"Voucher added"*, one *"already added"*, one
+  `claimed` row in the claim service.
+- **CL-OWN**: the merchant's own link is refused, stays `pending`, and gateway-customer's
+  `voucher_redemption_receipt` has no row for its voucher.
+- **QR-AGAIN**: after a reload the record page rebuilds the identical link from the code (the key is
+  in no web storage), then Cancel cashback revokes it.
+
+The portal's public metadata and by-code share a per-address limiter (10 a minute, then 429 for
+300 s). The harness books its reads under 7 a minute and reads statuses from the databases, so it
+never trips it. Needs `E2E_PORTAL_SQL_CMD` (the gate passes it).
+
+```sh
+E2E_SCRIPT=claimLinksMerchant.e2e.ts E2E_CLAIM_HOST_VIA=http://127.0.0.1:$GATE_EDGE_PORT scripts/local-terminal-gate/run.sh e2e
+```
