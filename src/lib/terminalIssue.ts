@@ -287,6 +287,12 @@ export type PreparedCredential = TerminalCredential & {
    * the stall already enrolled.
    */
   enrolmentProof?: string
+  /**
+   * On a renewal, the till's CURRENT credential token (rev-option-a R2). gateway-customer signed it,
+   * so it proves this stall enrolled the key before, for a till minted before the gateway kept a
+   * registry row for it. Sent as `X-Imani-Terminal-Renews`; never part of the credential.
+   */
+  renewsToken?: string
 }
 
 /**

@@ -90,8 +90,15 @@ export function enrolmentProofHeader(proof: Pick<EnrolmentProof, 'createdAt' | '
 /** What the owner is told, in the owner's words (coordinator, 2026-10-11). */
 export const ENROLMENT_CODE_MESSAGES: Record<EnrolmentCodeRefusal | 'merchant', string> = {
   'not-a-terminal-code':
-    "That is a personal account, not a terminal. On the device, open Imani and choose 'Set up as a terminal'.",
+    "That is a personal account, not a terminal. On the device, open Imani and choose 'Set this device up as a terminal'.",
   'bad-signature': 'That terminal code does not check out. Scan the code on the device again.',
   expired: 'That terminal code is out of date. Scan the code on the device again.',
   merchant: 'That device belongs to a merchant, so it cannot be a terminal for your stall.',
 }
+
+/**
+ * gateway-customer could not check the key just now (503 TERMINAL_KEY_CHECK_UNAVAILABLE): not a
+ * refusal, so the owner is told to try again, never that the device is wrong (rev-option-a R4).
+ */
+export const TERMINAL_KEY_CHECK_UNAVAILABLE_MESSAGE =
+  'Could not check the terminal right now. Nothing was set up. Try again in a moment.'

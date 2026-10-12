@@ -115,6 +115,19 @@ describe('Renew mints to the same key and DMs it with renews', () => {
     expect(row.credentials!.map((c) => c.voucherId)).toEqual([OLD, NEW])
   })
 
+  // rev-option-a R2: the till's current credential goes with the renewal, so gateway-customer can
+  // renew a till it holds no registry row for. It never travels on a first enrolment.
+  it('sends the current credential as X-Imani-Terminal-Renews, and no enrolment proof', async () => {
+    const row = inService()
+    recordTerminal(STALL, row)
+    const t = transport()
+
+    await startRenewal(STALL, DEVICE, { transport: t, api: spendApi(), stallSigner, send: async () => true, now: 5_000 })
+
+    expect(t.posted[0].headers!['X-Imani-Terminal-Renews']).toBe(row.token)
+    expect(t.posted[0].headers!['X-Imani-Terminal-Enrolment']).toBeUndefined()
+  })
+
   it('resumes a renewal whose answer was lost, re-sending the identical body under the same key', async () => {
     recordTerminal(STALL, inService())
     const failing = transport()
