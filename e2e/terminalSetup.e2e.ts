@@ -1075,8 +1075,17 @@ async function wrongPathCredential(owner: Page, ownerSk: string, stall: string, 
   await customer.goto(`${BASE}/`, { waitUntil: 'load' })
   await customer.getByText('Total balance').waitFor({ timeout: 30_000 }).catch(() => undefined)
   const before = await moneyView(customer)
-  const minted = await mintAttested(ownerSk, stall, customerPubkey, 'redeem-only', 'Wrong path till')
-  check('E13 the harness mints a credential locked to C\'s personal key', minted.token !== '', minted.error)
+  // inv-terminal-not-merchant (d): the owner's actual mistake, scanning C's account and minting to it,
+  // is refused at mint now. An account key carries no enrolment proof.
+  const refused = await mintAttested(ownerSk, stall, customerPubkey, 'redeem-only', 'Wrong path till')
+  check('E13 a credential for C\'s personal account key, with no enrolment proof, is refused at mint (422 TERMINAL_KEY_NOT_A_TERMINAL)',
+    refused.token === '' && /422/.test(refused.error) && /TERMINAL_KEY_NOT_A_TERMINAL/.test(refused.error), refused.error)
+  // To still reach C's not-money path, the harness signs the proof with C's OWN key, as only C's
+  // holder could. The gateway accepts it: the proof shows "the holder of K chose to present K as a
+  // terminal", not that K is fresh (rev-option-a, residual R1).
+  const cSk = await ownerKey(customer)
+  const minted = await mintAttested(ownerSk, stall, customerPubkey, 'redeem-only', 'Wrong path till', cSk)
+  check('E13 with a proof signed by C\'s own key, the harness mints a credential locked to C\'s personal key', minted.token !== '', minted.error)
   if (!minted.token) return
   const sent = await dmAsStall(ownerSk, customerPubkey, JSON.stringify({
     type: 'imani-terminal-credential/1', voucher_id: minted.voucherId, token: minted.token,
