@@ -29,6 +29,7 @@ import { useEffect, useState } from 'react'
 
 import { gatewayConfig, cashbackEnabled } from './config'
 import { cashbackValidation } from './cashbackValidation'
+import { claimRefFromUrl, isClaimKey } from './claimLink'
 import { legacyApi, withCorrelation } from './legacyBridge'
 import { signedFetch } from './nip98'
 import { checkTokenBacking, loadTrustedMints, trustedMintUrls } from './trustedMint'
@@ -160,6 +161,13 @@ export interface IssuedCashback {
    * do not return it, and a row without it simply stays off the Vouchers list.
    */
   voucherId?: string
+  /**
+   * The claim reference and its one-time key, for the link and QR (claim links phase 2, spec
+   * 4.1). Held in this screen's memory only: never written to the row, a log or storage. A later
+   * visit rebuilds the link from the code through `by-code` (`resolveClaimLinkByCode`). Absent
+   * when the portal did not return a well-formed pair, and the screen then offers the code alone.
+   */
+  claim?: { ref: string; key: string }
 }
 
 interface GenerateResponse {
@@ -169,6 +177,8 @@ interface GenerateResponse {
   unit?: unknown
   expiresAt?: unknown
   voucherId?: unknown
+  claimUrl?: unknown
+  claimKey?: unknown
 }
 
 /**
@@ -248,10 +258,10 @@ export class CashbackGenerateError extends Error {
  * mint two vouchers, and a network error whose request actually landed would
  * otherwise be indistinguishable from one that did not.
  *
- * The response also carries a one-time `claimKey`. This app deliberately drops
- * it. It is the AES key for the QR flow, and reading it here would mean holding
- * key material for a path we do not offer — `by-code` hands the key back to the
- * customer from the server when they redeem.
+ * The response also carries a one-time `claimKey`, the AES key in the claim
+ * link's fragment. It is kept on `IssuedCashback.claim`, in memory, so the
+ * success screen can show the link and QR (claim links phase 2). It is never
+ * stored: `by-code` rebuilds the same link from the code later.
  */
 export async function generateCashback(params: {
   amountMinor: number
@@ -304,7 +314,40 @@ export async function generateCashback(params: {
     unit: typeof body.unit === 'string' ? body.unit : params.unit,
     expiresAt: typeof body.expiresAt === 'string' ? body.expiresAt : '',
     ...(typeof body.voucherId === 'string' && body.voucherId ? { voucherId: body.voucherId } : {}),
+    ...claimOf(body),
   }
+}
+
+/** The claim ref and key from a generate answer, only when both are well formed. */
+function claimOf(body: GenerateResponse): { claim?: { ref: string; key: string } } {
+  const ref = claimRefFromUrl(typeof body.claimUrl === 'string' ? body.claimUrl : null)
+  return ref && isClaimKey(body.claimKey) ? { claim: { ref, key: body.claimKey } } : {}
+}
+
+/** What a merchant's Cancel came to. */
+export type RevokeOutcome =
+  | { kind: 'revoked' }
+  /** The customer claimed it first, or it already closed another way: nothing to cancel. */
+  | { kind: 'not_revocable' }
+  /** The gateway could not be reached, or failed. The cashback may still be live. */
+  | { kind: 'failed' }
+
+/**
+ * Cancel a cashback (spec 4.1, Q4): the portal's revoke, which closes the claim and burns the
+ * voucher. Nothing is refunded to the merchant. Scoped to the authenticated merchant by the
+ * portal, like the status read.
+ */
+export async function revokeCashback(cashbackId: string): Promise<RevokeOutcome> {
+  const path = `/api/v1/portal/cashback/${encodeURIComponent(cashbackId)}/revoke`
+  let response: Response
+  try {
+    response = await signedFetch(path, 'POST', {})
+  } catch {
+    return { kind: 'failed' }
+  }
+  if (response.ok) return { kind: 'revoked' }
+  if (response.status === HTTP_CONFLICT) return { kind: 'not_revocable' }
+  return { kind: 'failed' }
 }
 
 /**
@@ -881,6 +924,31 @@ async function commitToken(token: string): Promise<CommitOutcome> {
   // its own BroadcastChannel post.
   notifyWalletChanged()
   return { kind: 'banked' }
+}
+
+/**
+ * The wallet-origin claim link for a code, rebuilt through `by-code` (spec 4.1, Show QR again).
+ *
+ * Non-destructive: `by-code` only looks the claim up. The ref and key come back in the claim-host
+ * URL, are checked against the trusted hosts exactly as a redeem checks them, and are returned as
+ * parts for `formatCashbackLink`. The key is never stored.
+ */
+export async function resolveClaimLinkByCode(
+  code: string,
+): Promise<{ kind: 'ok'; ref: string; key: string } | RedeemFailure> {
+  const canonical = canonicaliseTypedClaimCode(code)
+  if (!canonical) return { kind: 'not_found' }
+
+  const config = await gatewayConfig().catch(() => null)
+  if (!config) return { kind: 'unreachable', reason: 'network' }
+  if (!cashbackEnabled(config)) return { kind: 'disabled' }
+
+  const resolved = await resolveClaimUrl(canonical)
+  if ('kind' in resolved) return resolved
+
+  const parsed = parseClaimUrl(resolved.claimUrl, config.cashbackOrigins)
+  if (!parsed) return { kind: 'invalid', reason: 'untrusted_claim_url' }
+  return { kind: 'ok', ref: parsed.claimRef, key: parsed.claimKey }
 }
 
 /**
