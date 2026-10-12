@@ -12,12 +12,14 @@ import { checkMintAndUnit } from './trustedMint'
 import { getSigner } from './nap'
 import { isTillSaleMessage } from './tillSales'
 import { buildValidationRecord } from './voucherValidationRecord'
+import { terminalCredentialFromToken } from './notMoney'
 import { asChunk, looksLikeChunk, offerChunkFrom } from './dmChunks'
 import {
   heldWrapDecision,
   holdTransferSignatureWrap,
   parseTransferSignature,
   sealAuthorOf,
+  TRANSFER_SIGNATURE_TYPE,
 } from './transferSignature'
 import {
   parseVoucherToken,
@@ -30,6 +32,35 @@ import {
 function isEnrolledMessage(content: string): boolean {
   try {
     return (JSON.parse(content) as { type?: unknown })?.type === 'imani-terminal-enrolled/1'
+  } catch {
+    return false
+  }
+}
+
+/** `terminalDelivery.CREDENTIAL_DM_TYPE` (a renewal is one too, with `renews`). */
+function isCredentialMessage(content: string): boolean {
+  try {
+    return (JSON.parse(content) as { type?: unknown })?.type === 'imani-terminal-credential/1'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * One of the app's OWN non-payment messages: a terminal credential, renewal, renew request, sale
+ * record or enrolled notice (`imani-terminal-*`), or a transfer signature. None of them is a
+ * payment, and the text regex must not be let loose on one.
+ *
+ * A deny-list of types this app writes, not "any type but a token transfer" (review of #236): a
+ * DM with no token is marked PROCESSED by dm-poll and never offered again, so a real coupon in
+ * JSON of a type this build does not know would be lost for good. Before #236 the regex redeemed
+ * it, and it still does. A credential is refused in every envelope by `extractToken` itself.
+ */
+function typedAppMessage(content: string): boolean {
+  try {
+    const parsed = JSON.parse(content) as { type?: unknown } | null
+    const type = parsed && typeof parsed === 'object' ? parsed.type : undefined
+    return typeof type === 'string' && (type.startsWith('imani-terminal-') || type === TRANSFER_SIGNATURE_TYPE)
   } catch {
     return false
   }
@@ -474,6 +505,17 @@ export function createDmCryptoAdapter(): CryptoAdapter {
           void import('./terminalDeliveryNet').then((m) => m.collectEnrolled(stall)).catch(() => 0)
         }
 
+        /**
+         * A terminal credential or renewal that reached THIS wallet (#160 owner report). It is
+         * never redeemed (`extractToken` returns null for it); it is announced as what it is,
+         * "Terminal setup request from <stall>", from its signed metadata. A personal wallet
+         * only gets one when its key was enrolled as a till, which is the wrong path.
+         */
+        if (isCredentialMessage(rumor.content)) {
+          const me = getSigner().pubkey
+          void import('./notMoneyNotice').then((m) => m.announceTerminalDm(rumor.content, me)).catch(() => false)
+        }
+
         const transferSignature = parseTransferSignature(rumor.content)
         if (transferSignature) {
           const sealAuthor = getSigner().withPrivkey((key) => sealAuthorOf(event as never, key))
@@ -581,7 +623,18 @@ export function createDmCryptoAdapter(): CryptoAdapter {
      */
     extractToken(content: string): string | null {
       const payload = asPayload(content)
-      if (!payload) return extractTokenFromText(content)
+      if (!payload) {
+        // An app message of another type (a terminal credential, a renewal, a till's renew
+        // request, a sale record, an enrolled notice) is never a payment. dm-poll's text regex
+        // would otherwise find the `cashuB…` credential token inside one and swap it at the mint:
+        // the 1 sat in a personal wallet's balance when its npub was enrolled as a till (#160).
+        if (typedAppMessage(content)) return null
+        const found = extractTokenFromText(content)
+        // Nor from a legacy text DM or untyped JSON: a credential is authority, never value.
+        return found && terminalCredentialFromToken(found) ? null : found
+      }
+      // A terminal credential is authority, not value, whatever envelope it arrives in.
+      if (terminalCredentialFromToken(payload.token)) return null
       return verifiedVoucherFrom(payload.token) === REJECTED ? null : payload.token
     },
 

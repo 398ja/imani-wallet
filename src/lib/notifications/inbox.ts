@@ -28,13 +28,13 @@
  * — once by push and once by the drain loop — and one event should be one line.
  */
 
-import type { NotificationTypeOrGeneric } from './types'
+import type { NotMoneyNoticeType, NotificationTypeOrGeneric } from './types'
 
 /** One line in the inbox. */
 export interface InboxItem {
   /** Stable identity, used to dedupe and to mark read. */
   id: string
-  type: NotificationTypeOrGeneric
+  type: NotificationTypeOrGeneric | NotMoneyNoticeType
   title: string
   body: string
   /** Wallet-relative route to open on tap. */
