@@ -80,6 +80,22 @@ flowchart LR
 Keep the customer there until it confirms. If a delivery fails, it's better to
 know while they're still at the stall.
 
+## Cashback for a customer without the app (code, link or QR)
+
+1. Tap **Sell → Cashback**, type the amount, and tap **Create cashback code**.
+2. The screen shows the **code** to read out or write on a receipt. Below it:
+   - **Show QR**: the customer scans it with their phone camera. It is hidden until you tap it,
+     so nobody else at the counter can scan it first.
+   - **Share link** (or **Copy link**): send the same voucher by message.
+
+   Anyone with the code, the link or the QR can claim it **once**, until the date on screen.
+3. Leave the screen open: it changes to *"Claimed just now"* by itself when the customer adds it.
+4. **Cancel cashback** takes it back while it is unclaimed. The customer can no longer claim it,
+   and the value is **not** returned to you.
+
+Lost the QR? Open the cashback in **Transactions** and tap **Show QR again**. The app rebuilds the
+link from the code; it never keeps the link itself on your phone.
+
 ## Taking payment (Redeem)
 
 When a customer pays you back with a coupon they hold from you:

@@ -16,6 +16,7 @@ import {
   Pass,
   IdentityInline,
   ValidationBadge,
+  Button,
 } from '../components/ui'
 import { present } from '../lib/detailRows'
 import {
@@ -23,6 +24,7 @@ import {
   getTransactionRow,
   onWalletChanged,
   recheckCashbackRowOnOpen,
+  recordCashbackStatus,
 } from '../lib/wallet'
 import { issuanceRatioOf } from '../lib/merchants'
 import { formatFace, formatDate, formatSats } from '../lib/format'
@@ -38,7 +40,9 @@ import {
 } from '../lib/validationStatus'
 import { otherParty, toTransaction, transactionLabel, type WalletTransaction } from '../lib/transactions'
 import { RefusedCouponsNote } from '../components/ui/RefusedCouponsNote'
-import { useCashbackStatus } from '../lib/cashback'
+import { resolveClaimLinkByCode, useCashbackStatus } from '../lib/cashback'
+import { formatCashbackLink } from '../lib/claimLink'
+import { CancelCashback, ClaimLinkPanel } from '../components/CashbackClaimLink'
 
 /**
  * One record, in full.
@@ -406,10 +410,13 @@ function CashbackSection({ tx }: { tx: WalletTransaction }) {
     cachedClaimedAt: tx.claimedAt,
   })
 
+  const [cancelled, setCancelled] = useState(false)
+
   if (!tx.cashbackId) return null
 
-  const status = reading?.status
+  const status = cancelled ? 'Revoked' : reading?.status
   const redeemed = status === 'Claimed'
+  const open = status === 'Unclaimed'
 
   return (
     <ListSection title="Cashback">
@@ -455,7 +462,70 @@ function CashbackSection({ tx }: { tx: WalletTransaction }) {
           merchant at a counter that a code lasts forever is the one wrong
           answer here. */}
       <DetailRow label="Expires" value={formatDate(tx.expiresAt) || 'Not recorded'} />
+      {/* Only while the gateway says it is still open: a claimed, cancelled or expired code has
+          no link worth showing, and an unchecked one is not offered a destructive Cancel. */}
+      {open && tx.claimCode ? (
+        <div className="space-y-2 py-3">
+          <ShowQrAgain code={tx.claimCode} expiresAt={tx.expiresAt} />
+          <CancelCashback
+            cashbackId={tx.cashbackId}
+            onCancelled={() => {
+              setCancelled(true)
+              void recordCashbackStatus(tx.id, { status: 'Revoked' })
+            }}
+          />
+        </div>
+      ) : null}
     </ListSection>
+  )
+}
+
+/** Why the link could not be rebuilt, in the merchant's words. */
+const REBUILD_FAILURE: Record<string, string> = {
+  terminal: 'This code is no longer open, so there is no link to show.',
+  not_found: 'The gateway did not find this code just now. Try again in a minute.',
+  throttled: 'Too many tries. Wait a minute and try again.',
+}
+
+/**
+ * Show QR again (spec 4.1): rebuild the link from the code this row already stores, through the
+ * public `by-code` lookup, which spends nothing. The key comes back in memory only and is dropped
+ * with this component: it is never written to the row or anywhere else.
+ */
+function ShowQrAgain({ code, expiresAt }: { code: string; expiresAt?: number }) {
+  const [state, setState] = useState<
+    { kind: 'idle' } | { kind: 'loading' } | { kind: 'ok'; link: string } | { kind: 'failed'; message: string }
+  >({ kind: 'idle' })
+
+  const rebuild = async () => {
+    setState({ kind: 'loading' })
+    const result = await resolveClaimLinkByCode(code)
+    const link = result.kind === 'ok' ? formatCashbackLink(window.location.origin, result.ref, result.key) : null
+    if (link) {
+      setState({ kind: 'ok', link })
+      return
+    }
+    setState({
+      kind: 'failed',
+      message: REBUILD_FAILURE[result.kind] ?? 'Could not rebuild the link just now. Try again.',
+    })
+  }
+
+  if (state.kind === 'ok') {
+    return <ClaimLinkPanel link={state.link} expiresAt={expiresAt} initiallyShown />
+  }
+  return (
+    <>
+      {state.kind === 'failed' && <p className="text-sm text-mono-500">{state.message}</p>}
+      <Button
+        variant="secondary"
+        className="w-full"
+        disabled={state.kind === 'loading'}
+        onClick={() => void rebuild()}
+      >
+        {state.kind === 'loading' ? 'Rebuilding the link…' : 'Show QR again'}
+      </Button>
+    </>
   )
 }
 
