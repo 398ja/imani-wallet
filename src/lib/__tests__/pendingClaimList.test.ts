@@ -13,6 +13,7 @@ import {
   peekPendingClaim,
   peekPendingClaimFor,
   pendingClaimToResume,
+  prunePendingClaims,
   resetPendingClaimOffers,
   stashPendingClaim,
   takePendingClaim,
@@ -168,5 +169,17 @@ describe('a parked claim from the future', () => {
     expect(listPendingClaims()).toEqual([])
     expect(pendingClaimToResume('c'.repeat(64))).toBeNull()
     expect(localStorage.getItem('imani-wallet:pending-claim')).toBeNull()
+  })
+})
+
+/** Second check of #245 (F1b): the 5 min of clock skew is allowed, and pruning keeps it. */
+describe('a parked claim a little in the future (an NTP nudge)', () => {
+  it('stays live and survives pruning', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(DAY)
+    localStorage.setItem('imani-wallet:pending-claim', JSON.stringify([{ kind: 'cashback', ref: A, key: KA, at: DAY + 60_000 }]))
+    prunePendingClaims()
+    expect(listPendingClaims().map((e) => e.ref)).toEqual([A])
+    expect(pendingClaimToResume('c'.repeat(64))?.ref).toBe(A)
   })
 })
