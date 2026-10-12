@@ -218,3 +218,22 @@ Stripe's DOM rather than ours.
 Verified by mutation: flipping `charges_enabled` back to true in the test
 database reproduced the incident exactly, landing the browser on a real
 `checkout.stripe.com` session that would 400 at confirm. 4 of 11 checks red.
+
+## `claimLinks.e2e.ts` — a claim link never redeems on open (claim links phases 0 and 1)
+
+[docs/spec-claim-links.md](../docs/spec-claim-links.md), section 7. A merchant issues cashback; the
+harness builds the link from the portal's own generate response (`claimUrl#k=claimKey`) and checks:
+a headless GET, a prefetch and a sessionless browser spend nothing (CL-BOT); the prompt names the
+stall, the face and the claim-by date and redeems nothing while open; Decline leaves it unclaimed;
+Accept tapped twice redeems once; a claimed, a revoked and the merchant's own link (CL-OWN) offer no
+Add; a different account is offered it as its own; a returning device lands on Login and the parked
+claim waits behind the prompt; and the hosted claim page is `no-store`, `no-referrer`, with no store
+placeholder, handing off to this wallet.
+
+```sh
+# on the local gate (imani-deploy scripts/local-terminal-gate)
+E2E_SCRIPT=claimLinks.e2e.ts E2E_CLAIM_HOST_VIA=http://127.0.0.1:$GATE_EDGE_PORT scripts/local-terminal-gate/run.sh e2e
+```
+
+`E2E_CLAIM_HOST_VIA` serves the deployment's claim host (`cashback_origins[0]`) from the gate's edge,
+so a local run never reaches the real staging claim host. Omit it against staging itself.
