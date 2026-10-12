@@ -112,8 +112,14 @@ function writeAll(entries: PendingClaim[]): void {
   }
 }
 
+/** A clock nudged back a little (NTP) must not drop a claim parked a moment ago. */
+const FUTURE_SKEW_MS = 5 * 60 * 1000
+
 function live(entry: PendingClaim, now = Date.now()): boolean {
-  return now - entry.at <= MAX_AGE_MS
+  // An entry stamped well in the future (a clock that was wrong when it was parked, or a value
+  // written by hand) would otherwise be live, and the newest, until that future date plus a day,
+  // and would ride every logout (review of #245, F1b).
+  return entry.at <= now + FUTURE_SKEW_MS && now - entry.at <= MAX_AGE_MS
 }
 
 /** The live entries, oldest first. */
@@ -190,6 +196,23 @@ export function hasExpiredPendingClaim(): boolean {
 }
 
 /**
+ * Erase aged-out and malformed entries, keys included (review of #245, F1). Hiding them was not
+ * enough: an aged-out key stayed on disk with no end date (the claim window is longer than 24 h),
+ * and the banner said "Open your voucher link again" on every later visit.
+ */
+export function prunePendingClaims(): void {
+  let raw: string | null
+  try {
+    raw = localStorage.getItem(KEY)
+  } catch {
+    return
+  }
+  if (raw === null) return
+  const kept = listPendingClaims()
+  if (JSON.stringify(kept) !== raw) writeAll(kept)
+}
+
+/**
  * Refs whose prompt has already been shown in this page session (memory only, never stored).
  *
  * `/` sends a device holding a parked claim to `/c`. Without this, every way back home from the
@@ -207,6 +230,7 @@ export function markPendingClaimOffered(ref: string, pubkey = ''): void {
 
 /** The parked claim `/` should resume now: the newest one not yet offered, or null. */
 export function pendingClaimToResume(pubkey = ''): PendingClaim | null {
+  prunePendingClaims()
   const all = listPendingClaims()
   for (let i = all.length - 1; i >= 0; i--) {
     if (!offered.has(`${pubkey}:${all[i].ref}`)) return all[i]

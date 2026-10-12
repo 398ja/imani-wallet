@@ -19,7 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   your voucher"*, never blocks, and says *"Open your voucher link again to add it."* once the parked
   claim has aged out.
 - **Switch account** on the claim prompt ("Not you?"): keeps the claim parked and runs the normal
-  logout, so it resumes on the next account (CL-SWITCH).
+  logout, so it resumes on the next account (CL-SWITCH). The prompt names the account it adds to
+  (`Adding to @handle`, spec 4.3; review of #245, F2).
 
 ### Changed
 
@@ -28,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that fails before the spend is parked beside a different parked claim rather than skipped, and
   forgetting one claim leaves the others. `/` resumes the newest one not yet shown. A value from an
   older build is read as a list of one. Entries carry `kind` (and `x`, for phase 4 gifts).
+  An aged-out entry is erased, key included, once the banner has said "Open your voucher link
+  again" (said once, not on every visit) or when `/` resumes; an entry stamped in the future is not
+  live; the resume never revisits a ref, so a storage that refuses writes cannot hang the tab
+  (review of #245, F1, F1b, F3).
 - **Parked claims survive logout** (spec 2.5): logout still erases every other `imani-wallet:*` key
   and all account data.
 

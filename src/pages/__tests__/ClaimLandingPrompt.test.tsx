@@ -650,3 +650,46 @@ describe('Switch account', () => {
     expect(screen.queryByRole('button', { name: 'Switch account' })).toBeNull()
   })
 })
+
+/** Review of #245, F2 (spec 4.3 "Adding to: {your handle}  Not you? Switch account"): name the account. */
+describe('the prompt names the account it adds to', () => {
+  it('shows this account\'s handle next to Switch account', async () => {
+    localStorage.setItem(`imani-wallet:profile:${CUSTOMER}`, JSON.stringify({ pubkey: CUSTOMER, npub: 'npub1x', nip05: 'alice@imani.local' }))
+    window.history.replaceState(null, '', `/c/${REF}#k=${KEY}`)
+    render(
+      <MemoryRouter initialEntries={[`/c/${REF}`]}>
+        <Routes>
+          <Route path="/c/:ref" element={<ClaimLandingPage authed pubkey={CUSTOMER} onSwitchAccount={() => {}} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await screen.findByRole('button', { name: 'Add to my wallet' })
+    expect(document.body.textContent).toMatch(/Adding to @alice/)
+    localStorage.removeItem(`imani-wallet:profile:${CUSTOMER}`)
+  })
+
+  it('falls back to "your wallet" with no stored handle', async () => {
+    open()
+    await screen.findByRole('button', { name: 'Add to my wallet' })
+    expect(document.body.textContent).toMatch(/Adding to your wallet/)
+  })
+})
+
+/** Review of #245, F3: a storage that cannot be written must not spin the resume loop forever. */
+describe('a parked claim with a bad key, on a storage that refuses writes', () => {
+  it('ends on "incomplete" rather than looping', async () => {
+    localStorage.setItem('imani-wallet:pending-claim', JSON.stringify([
+      { kind: 'cashback', ref: 'goodgoodgoodgood', key: 'short', at: Date.now() - 2 },
+      { kind: 'cashback', ref: REF, key: 'short', at: Date.now() - 1 },
+    ]))
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('full', 'QuotaExceededError')
+    })
+    try {
+      open(CUSTOMER, '/c', '')
+      expect(await screen.findByText('This link is incomplete. Ask for it again, or scan the whole QR.')).toBeTruthy()
+    } finally {
+      setItem.mockRestore()
+    }
+  }, 5_000)
+})

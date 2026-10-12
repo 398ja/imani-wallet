@@ -2,9 +2,10 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Navigate, useNavigate, useParams } from 'react-router-dom'
 
 import { fetchClaimSummary, redeemClaimRef, type ClaimSummary, type RedeemResult } from '../lib/cashback'
-import { currencyDecimals, formatFace, shortPubkey } from '../lib/format'
+import { currencyDecimals, formatFace, handleLabel, shortPubkey } from '../lib/format'
 import { humanName, useIdentityState } from '../lib/identity'
 import { hasStoredKey } from '../lib/nap'
+import { loadProfile } from '../lib/profile'
 import { forgetPendingClaim, markPendingClaimOffered, peekPendingClaim, pendingClaimToResume, stashPendingClaim } from '../lib/pendingClaim'
 import { isTerminalDevice } from '../lib/terminalEnrol'
 import { Button } from '../components/ui'
@@ -46,9 +47,14 @@ function readArrival(ref: string | undefined, pubkey: string | undefined): Arriv
   // not necessarily a broken link.
   // The same one `/` chose (`ResumeParkedClaim`): the newest this account has not been shown.
   // A direct visit to `/c` (a second tab) with every claim already shown gets the newest one.
+  // Never visit a ref twice: on a storage that refuses writes the forget below is a no-op, and the
+  // next read returned the same entry, which spun this loop forever and froze the tab during the
+  // first render (review of #245, F3).
   const next = () => pendingClaimToResume(pubkey) ?? peekPendingClaim()
-  for (let pending = next(); pending; pending = next()) {
+  const tried = new Set<string>()
+  for (let pending = next(); pending && !tried.has(pending.ref); pending = next()) {
     if (WHOLE_KEY.test(pending.key)) return { kind: 'resumed', ref: pending.ref, key: pending.key }
+    tried.add(pending.ref)
     // Parked before this check existed. `/` would bounce back here for as long as it is parked.
     forgetPendingClaim(pending.ref)
   }
@@ -212,6 +218,10 @@ function ConfirmPrompt({
   const issuer = state.step === 'summary' && state.summary.kind === 'ok' ? state.summary.issuerPubkey : null
   const { identity, loading: stallLoading } = useIdentityState(issuer && PUBKEY_HEX.test(issuer) ? issuer : undefined)
   const stallName = humanName(identity?.name)
+  const [ownHandle] = useState(() => {
+    const nip05 = pubkey ? loadProfile(pubkey)?.nip05 : undefined
+    return nip05 ? handleLabel(nip05) : null
+  })
 
   const accept = useCallback(() => {
     if (spending.current) return
@@ -337,7 +347,9 @@ function ConfirmPrompt({
         <p className="mt-1 text-sm text-mono-500">Cashback from {stall}</p>
         {summary.memo && <p className="mt-1 text-sm text-mono-500">{summary.memo}</p>}
         {summary.expiresAt && <p className="mt-1 text-sm text-mono-500">Claim by {formatDate(summary.expiresAt)}</p>}
-        <p className="mt-3 text-sm text-mono-500">Adding to your wallet</p>
+        {/* Spec 4.3: "Adding to: {your handle}". The account's own handle, so a shared device shows
+            WHICH account is about to receive it, next to the way to switch (review of #245, F2). */}
+        <p className="mt-3 text-sm text-mono-500">Adding to {ownHandle ?? 'your wallet'}</p>
         {onSwitchAccount && (
           <p className="mt-1 text-sm text-mono-500">
             Not you?{' '}

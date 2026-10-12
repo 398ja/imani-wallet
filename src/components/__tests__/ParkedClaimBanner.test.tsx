@@ -110,3 +110,34 @@ describe('the parked-claim banner', () => {
     expect(banner.compareDocumentPosition(register) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })
+
+/** Review of #245, F1: an aged-out claim is said once, then erased (its key with it). */
+describe('an aged-out parked claim', () => {
+  const STALE = JSON.stringify([{ kind: 'cashback', ref: REF, key: KEY, at: 0 }])
+
+  it('is erased from storage once the banner has said so', () => {
+    localStorage.setItem('imani-wallet:pending-claim', STALE)
+    render(<ParkedClaimBanner />)
+    expect(screen.getByText('Open your voucher link again to add it.')).toBeTruthy()
+    expect(localStorage.getItem('imani-wallet:pending-claim')).toBeNull()
+  })
+
+  it('is said once, not on every later visit', () => {
+    localStorage.setItem('imani-wallet:pending-claim', STALE)
+    render(<ParkedClaimBanner />)
+    cleanup()
+    const { container } = render(<ParkedClaimBanner />)
+    expect(container.textContent).toBe('')
+  })
+
+  it('erasing it leaves a live claim alone', async () => {
+    localStorage.setItem('imani-wallet:pending-claim', JSON.stringify([
+      { kind: 'cashback', ref: 'oldoldoldoldold1', key: KEY, at: 0 },
+      { kind: 'cashback', ref: REF, key: KEY, at: Date.now() },
+    ]))
+    render(<ParkedClaimBanner />)
+    await screen.findByText("Create an account to redeem the voucher from Ana's Bakery")
+    const left = JSON.parse(localStorage.getItem('imani-wallet:pending-claim') ?? '[]') as { ref: string }[]
+    expect(left.map((e) => e.ref)).toEqual([REF])
+  })
+})
