@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 
 import { redeemClaimRef, type RedeemResult } from '../lib/cashback'
+import { hasStoredKey } from '../lib/nap'
 import { peekPendingClaim, stashPendingClaim, takePendingClaim } from '../lib/pendingClaim'
+import { isTerminalDevice } from '../lib/terminalEnrol'
 import { Button } from '../components/ui'
 import { Centered } from '../components/ui/layout'
 
@@ -28,9 +30,10 @@ type Arrival =
  * Two arrivals, one screen:
  *
  * - **With a wallet.** Redeem straight away and show the result.
- * - **Without one.** Park the claim, send them to onboarding, and pick it up
- *   afterwards. Nothing is spent in the meantime, so leaving to install the app
- *   costs them nothing.
+ * - **Without a session.** Park the claim, scrub the fragment, and send them to
+ *   Login if this device holds a key (a returning customer) or to onboarding if
+ *   it does not; a terminal goes to its till. Pick the claim up afterwards.
+ *   Nothing is spent in the meantime, so leaving to sign in costs them nothing.
  *
  * ## The key is read from the fragment and then removed
  *
@@ -77,9 +80,25 @@ export function ClaimLandingPage({ authed }: { authed: boolean }) {
     started.current = true
 
     if (!authed) {
-      // Park it and go and get a wallet. Nothing is spent by doing this.
+      // A terminal is not a customer: it never parks a claim, and its key must never reach
+      // /login, where it would open a customer session (#160 spec 2.3). Its till, as `Entry`.
+      if (isTerminalDevice()) {
+        scrubFragment()
+        navigate('/terminal/unlock', { replace: true })
+        return
+      }
+      // Park it, and take the key out of the address bar, BEFORE the first await: the key-store
+      // read below is async, and nothing may be left holding the key in the URL meanwhile.
+      // Nothing is spent by any of this (claim links, phase 0).
       stashPendingClaim(arrival.ref, arrival.key)
-      navigate('/onboarding', { replace: true })
+      scrubFragment()
+      // Route by DEVICE (spec 1.6, 2.5). A device that holds a key belongs to someone with an
+      // account whose session ended: they unlock, they do not register again. Anyone else gets
+      // a wallet first. Either way `/` resumes the parked claim after the session opens.
+      void hasStoredKey().then(
+        (has) => navigate(has ? '/login' : '/onboarding', { replace: true }),
+        () => navigate('/onboarding', { replace: true }),
+      )
       return
     }
 
@@ -136,6 +155,13 @@ export function ClaimLandingPage({ authed }: { authed: boolean }) {
       onDone={() => navigate('/', { replace: true })}
     />
   )
+}
+
+/** Drop the fragment (the claim key) from the address bar and from this history entry. */
+function scrubFragment(): void {
+  if (window.location.hash) {
+    window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search)
+  }
 }
 
 /**
