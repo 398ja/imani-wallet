@@ -44,6 +44,7 @@
  */
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright'
 import { mkdir, readFile } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
 import { extname, join, normalize } from 'node:path'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha256'
@@ -1080,12 +1081,31 @@ async function wrongPathCredential(owner: Page, ownerSk: string, stall: string, 
   const refused = await mintAttested(ownerSk, stall, customerPubkey, 'redeem-only', 'Wrong path till')
   check('E13 a credential for C\'s personal account key, with no enrolment proof, is refused at mint (422 TERMINAL_KEY_NOT_A_TERMINAL)',
     refused.token === '' && /422/.test(refused.error) && /TERMINAL_KEY_NOT_A_TERMINAL/.test(refused.error), refused.error)
-  // To still reach C's not-money path, the harness signs the proof with C's OWN key, as only C's
-  // holder could. The gateway accepts it: the proof shows "the holder of K chose to present K as a
-  // terminal", not that K is fresh (rev-option-a, residual R1).
+  // rev-option-a R1: C's holder signs the enrolment proof with C's OWN key (the format is public). The
+  // proof holds, but C registered through real onboarding (a handle, a NAP session), so gateway-core
+  // says C is a personal account, and an account is never a terminal: still 422.
   const cSk = await ownerKey(customer)
-  const minted = await mintAttested(ownerSk, stall, customerPubkey, 'redeem-only', 'Wrong path till', cSk)
-  check('E13 with a proof signed by C\'s own key, the harness mints a credential locked to C\'s personal key', minted.token !== '', minted.error)
+  const selfProof = await mintAttested(ownerSk, stall, customerPubkey, 'redeem-only', 'Wrong path till', cSk)
+  check('E13 R1: C\'s account key with a proof signed by C\'s OWN key is refused at mint (422 TERMINAL_KEY_NOT_A_TERMINAL)',
+    selfProof.token === '' && /422/.test(selfProof.error) && /TERMINAL_KEY_NOT_A_TERMINAL/.test(selfProof.error)
+      && /Set this device up as a terminal/.test(selfProof.error), selfProof.error)
+  // And the owner's app refuses C's personal QR (its npub) before anything is signed or sent.
+  {
+    await owner.goto(`${BASE}/settings/terminals/add`, { waitUntil: 'networkidle' })
+    await owner.getByRole('button', { name: 'Add terminal' }).waitFor({ timeout: 15_000 })
+    await owner.getByLabel("Or enter the device's code").fill(nip19.npubEncode(customerPubkey))
+    await owner.getByRole('button', { name: 'Continue' }).click()
+    const words = await owner.getByText(/personal account, not a terminal/).waitFor({ timeout: 15_000 }).then(() => true, () => false)
+    const addDisabled = await owner.getByRole('button', { name: 'Add terminal' }).isDisabled().catch(() => false)
+    check('E13 the owner\'s Add terminal refuses C\'s personal QR (npub) in words, and Add stays disabled',
+      words && addDisabled && /Set this device up as a terminal/.test(await text(owner)), (await text(owner)).slice(0, 300))
+  }
+  // To still reach C's not-money path, the stall sends C a credential for a FRESH terminal key T (as a
+  // mis-addressed DM would): nothing in C's wallet may treat it as money.
+  const tSk = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
+  const minted = await mintAttested(ownerSk, stall, bytesToHex(schnorr.getPublicKey(hexToBytes(tSk))), 'redeem-only',
+    'Wrong path till', tSk)
+  check('E13 a credential for a fresh terminal key T (with T\'s proof) is minted', minted.token !== '', minted.error)
   if (!minted.token) return
   const sent = await dmAsStall(ownerSk, customerPubkey, JSON.stringify({
     type: 'imani-terminal-credential/1', voucher_id: minted.voucherId, token: minted.token,
@@ -1206,7 +1226,55 @@ async function notMerchantPhase(owner: Page, ownerSk: string, stall: string) {
       check('N3 and gateway-customer refuses its credential too (403)', gc.status === 403, `${gc.status} ${gc.body.slice(0, 160)}`)
     }
   }
+  await legacyTillRenewal(ownerSk, stall)
   void owner
+}
+
+/**
+ * rev-option-a R2: a till minted before gateway-customer kept a registry row for it (V27/V28) renews.
+ * The harness enrols a fresh till T for real, then deletes T's V27/V28 rows from the GATE's
+ * throwaway database (what a till minted before those tables looks like), and renews it the way the
+ * owner's app does: same K, the stall's attestation, no enrolment proof, and T's current credential
+ * as X-Imani-Terminal-Renews. Without the credential it is a first enrolment and refused (422).
+ */
+async function legacyTillRenewal(ownerSk: string, stall: string) {
+  console.log('\nrev-option-a R2: a legacy till with no registry row renews with its own credential')
+  const sql = customerSql()
+  if (!sql) return check('R2 legacy-till renewal needs the gate database (E2E_PORTAL_SQL_CMD)', false)
+  const tSk = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
+  const t = bytesToHex(schnorr.getPublicKey(hexToBytes(tSk)))
+  const first = await mintAttested(ownerSk, stall, t, 'redeem-only', 'Legacy counter', tSk)
+  check('R2 a till T is enrolled (fresh key, its proof)', first.token !== '', first.error)
+  if (!first.token) return
+  await asKey(tSk, 'POST', `/api/v1/wallet/terminal-credentials/${first.voucherId}/confirm`, {})
+  const deleted = sql(`with a as (delete from terminal_credential where lock_key = '${t}' returning 1), `
+    + `b as (delete from terminal_credential_pending where lock_key = '${t}' returning 1) `
+    + `select (select count(*) from a) || '/' || (select count(*) from b)`)
+  check('R2 T\'s V27/V28 rows are removed on the gate database: T is now a legacy till', /^[1-9]\d*\/[1-9]\d*$/.test(deleted), deleted)
+  const bare = await mintAttested(ownerSk, stall, t, 'redeem-only', 'Legacy counter')
+  check('R2 renewing T with neither a row nor its credential is a first enrolment: refused (422 TERMINAL_KEY_NOT_A_TERMINAL)',
+    bare.token === '' && /422/.test(bare.error) && /TERMINAL_KEY_NOT_A_TERMINAL/.test(bare.error), bare.error)
+  const renewed = await mintAttested(ownerSk, stall, t, 'redeem-only', 'Legacy counter', undefined, first.token)
+  check('R2 renewing T with T\'s current credential (X-Imani-Terminal-Renews) mints the renewal', renewed.token !== '', renewed.error)
+  const forged = await mintAttested(ownerSk, stall, bytesToHex(schnorr.getPublicKey(crypto.getRandomValues(new Uint8Array(32)))),
+    'redeem-only', 'Someone else', undefined, first.token)
+  check('R2 T\'s credential renews only T: another key presenting it is refused (422)',
+    forged.token === '' && /422/.test(forged.error), forged.error)
+  if (renewed.voucherId) await asKey(ownerSk, 'POST', `/api/v1/wallet/terminal-credentials/${renewed.voucherId}/cancel`, {})
+}
+
+/** psql on the gate's gateway-customer database, from the portal command run.sh passes, or null. */
+function customerSql(): ((query: string) => string) | null {
+  const portal = process.env.E2E_PORTAL_SQL_CMD ?? ''
+  if (!/-d imani_portal\b/.test(portal)) return null
+  const cmd = portal.replace(/-d imani_portal\b/, '-d imani_customer')
+  return (query: string) => {
+    try {
+      return execFileSync('sh', ['-c', `${cmd} "$1"`, 'sh', query], { encoding: 'utf8', timeout: 30_000 }).trim()
+    } catch (e) {
+      return `error: ${String(e).slice(0, 160)}`
+    }
+  }
 }
 
 /** Publish an active `imani:merchant` stall record as `sk` to the gate relay. */
@@ -1390,7 +1458,7 @@ async function fetchToken(ownerSk: string, voucherId: string): Promise<string> {
 }
 
 /** A credential the stall attests, minted with the owner's key, as the app's Add terminal does. */
-async function mintAttested(ownerSk: string, stall: string, lock: string, role: string, name: string, tillSk?: string): Promise<{ token: string; voucherId: string; error: string }> {
+async function mintAttested(ownerSk: string, stall: string, lock: string, role: string, name: string, tillSk?: string, renews?: string): Promise<{ token: string; voucherId: string; error: string }> {
   const T = Math.floor(Date.now() / 1000) + 365 * 86_400 + 600
   const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
   const pre = ['imani-terminal-attestation', '1', stall, lock, role, String(T), nonce].join('\u001f')
@@ -1404,6 +1472,7 @@ async function mintAttested(ownerSk: string, stall: string, lock: string, role: 
     'Idempotency-Key': crypto.randomUUID(),
     'X-Idempotency-Expires-At': new Date(T * 1000).toISOString().replace('.000Z', 'Z'),
     ...(tillSk ? { 'X-Imani-Terminal-Enrolment': enrolmentProof(tillSk) } : {}),
+    ...(renews ? { 'X-Imani-Terminal-Renews': renews } : {}),
   })
   const voucherId = (JSON.parse(minted.body || '{}') as { voucher_id?: string }).voucher_id ?? ''
   if (!voucherId) return { token: '', voucherId: '', error: `${minted.status} ${minted.body.slice(0, 200)}` }

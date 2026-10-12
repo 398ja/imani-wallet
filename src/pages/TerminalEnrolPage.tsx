@@ -43,6 +43,7 @@ import type { LicenceStatus } from '../lib/licenceStatus'
 import { merchantStatus, type MerchantStatus } from '../lib/merchant'
 import {
   ENROLMENT_CODE_MESSAGES,
+  TERMINAL_KEY_CHECK_UNAVAILABLE_MESSAGE,
   enrolmentProofHeader,
   readEnrolmentCode,
 } from '../lib/terminalEnrolProof'
@@ -56,6 +57,7 @@ function ownerMessageFor(e: unknown): string {
   if (e instanceof CredentialMintError) {
     if (e.code === 'TERMINAL_KEY_NOT_A_TERMINAL') return ENROLMENT_CODE_MESSAGES['not-a-terminal-code']
     if (e.code === 'TERMINAL_KEY_IS_MERCHANT') return ENROLMENT_CODE_MESSAGES.merchant
+    if (e.code === 'TERMINAL_KEY_CHECK_UNAVAILABLE') return TERMINAL_KEY_CHECK_UNAVAILABLE_MESSAGE
   }
   return e instanceof Error ? e.message : 'Could not set up the terminal.'
 }
@@ -186,18 +188,24 @@ export function TerminalEnrolPage({
     lastScanned.current = text
     setScanRefusal(null)
     const read = readEnrolmentCode(text)
+    // rev-option-a R5: a refused code is forgotten, so scanning it again (after fixing a clock, say)
+    // reads it again instead of showing nothing new.
+    const refuse = (message: string) => {
+      lastScanned.current = null
+      setScanRefusal(message)
+    }
     if (typeof read === 'string') {
-      setScanRefusal(ENROLMENT_CODE_MESSAGES[read])
+      refuse(ENROLMENT_CODE_MESSAGES[read])
       return true
     }
     if (read.terminalPubkey === stallPubkey.toLowerCase()) {
-      setScanRefusal('That is your own stall. Scan the code on the other device.')
+      refuse('That is your own stall. Scan the code on the other device.')
       return true
     }
     const key = read.terminalPubkey
     void merchantCheck(key).then((status) => {
       if (status === 'merchant') {
-        setScanRefusal(ENROLMENT_CODE_MESSAGES.merchant)
+        refuse(ENROLMENT_CODE_MESSAGES.merchant)
         return
       }
       setTerminalPubkey(key)

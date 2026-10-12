@@ -150,7 +150,13 @@ function spendAtOnce(api: CredentialMintApi) {
 /** Mint (or resume) and deliver one row's renewal. The row's `renewal` is already persisted. */
 async function runRenewal(stallPubkey: string, row: TerminalRecord, deps: RenewDeps): Promise<'done' | 'pending' | 'cleared'> {
   const renewal = row.renewal!
-  const credential = { ...preparedFor(stallPubkey, row), attestation: renewal.attestation }
+  // rev-option-a R2: the till's current credential, which the gateway signed, goes with the mint as
+  // proof of the earlier enrolment, for a till the gateway holds no registry row for.
+  const credential = {
+    ...preparedFor(stallPubkey, row),
+    attestation: renewal.attestation,
+    ...(row.token ? { renewsToken: row.token } : {}),
+  }
   const transport = deps.transport ?? ownerTransport
   try {
     const minted = renewal.voucherId

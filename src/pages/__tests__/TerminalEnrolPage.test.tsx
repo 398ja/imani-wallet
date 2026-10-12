@@ -711,7 +711,7 @@ describe('inv-terminal-not-merchant: only a key created as a terminal can be add
 
     expect(
       await screen.findByText(
-        "That is a personal account, not a terminal. On the device, open Imani and choose 'Set up as a terminal'.",
+        "That is a personal account, not a terminal. On the device, open Imani and choose 'Set this device up as a terminal'.",
       ),
     ).toBeTruthy()
     expect(addButton().disabled).toBe(true)
@@ -724,6 +724,26 @@ describe('inv-terminal-not-merchant: only a key created as a terminal can be add
 
     expect(await screen.findByText(/does not check out/)).toBeTruthy()
     expect(addButton().disabled).toBe(true)
+  })
+
+  // rev-option-a R5: a REFUSED code is not remembered as "seen". Re-scanning it reads it again, so
+  // a code refused as out of date is accepted once the device's clock (or the owner's) is right.
+  it('reads a refused code again when it is scanned again', async () => {
+    const at = Math.floor(Date.now() / 1000)
+    scanned = signEnrolmentCode(DEVICE_KEY, DEVICE, at)
+    const realNow = Date.now
+    // The owner's phone is two days ahead: the device's code reads as out of date.
+    Date.now = () => realNow() + 2 * 86_400_000
+    try {
+      await fillEverything()
+      expect(await screen.findByText(/out of date/)).toBeTruthy()
+    } finally {
+      Date.now = realNow
+    }
+    // Clock fixed; the same code, scanned again.
+    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
+    expect(await screen.findByText(/Device scanned/)).toBeTruthy()
+    expect(screen.queryByText(/out of date/)).toBeNull()
   })
 
   // Best effort: the stall-record lookup says this key trades as a merchant. The gateway decides too.

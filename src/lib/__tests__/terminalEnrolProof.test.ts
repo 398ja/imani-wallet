@@ -39,7 +39,7 @@ describe('the device enrolment code', () => {
       expect(readEnrolmentCode(text, NOW)).toBe('not-a-terminal-code')
     }
     expect(ENROLMENT_CODE_MESSAGES['not-a-terminal-code']).toBe(
-      "That is a personal account, not a terminal. On the device, open Imani and choose 'Set up as a terminal'.",
+      "That is a personal account, not a terminal. On the device, open Imani and choose 'Set this device up as a terminal'.",
     )
   })
 

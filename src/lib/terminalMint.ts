@@ -44,6 +44,8 @@ export const ATTESTATION_EXPIRY_SLACK_SECONDS = 600
 
 /** The header that carries `T` beside `expires_in_days` (gateway-customer's idempotency check). */
 export const EXPIRES_AT_HEADER = 'X-Idempotency-Expires-At'
+/** The renewed till's current credential, the gateway's proof of an earlier enrolment (rev-option-a R2). */
+export const RENEWS_HEADER = 'X-Imani-Terminal-Renews'
 
 /** `T` for a credential enrolled at `nowMs`: the credential's year, plus the slack above. */
 export function attestationExpiry(nowMs: number): number {
@@ -161,6 +163,8 @@ function mintRequest(credential: PreparedCredential): { body: Record<string, unk
   // metadata: it is about the enrolment, not the credential, and the credential's bytes stay as
   // they were.
   if (credential.enrolmentProof) headers[ENROLMENT_PROOF_HEADER] = credential.enrolmentProof
+  // rev-option-a R2: a renewal names the credential it renews, which the gateway itself signed.
+  if (credential.renewsToken) headers[RENEWS_HEADER] = credential.renewsToken
   return { body, headers }
 }
 
