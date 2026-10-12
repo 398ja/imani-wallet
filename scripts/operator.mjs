@@ -5,8 +5,6 @@
  *   node scripts/operator.mjs lookup --voucher-id <id> | --payment-request-id <id> [--limit N] [--cursor C]
  *   node scripts/operator.mjs refund-redemption <sendId> --note "<why>"
  *   node scripts/operator.mjs manual-attention list [--limit N]
- *   node scripts/operator.mjs manual-attention retry-payout <purchaseId> --note "<why>"
- *   node scripts/operator.mjs manual-attention open-refund <purchaseId> --disposition NOT_DELIVERED|RECLAIMED --note "<why>"
  *   node scripts/operator.mjs merchant suspend <pubkey-hex>
  *   node scripts/operator.mjs merchant unsuspend <pubkey-hex> [--role merchant|customer]
  *
@@ -47,7 +45,6 @@ const PUBLIC_DEPLOY_VAR = 'GATEWAY_SECURITY_NIP98_PUBLIC_BASE_URL'
 const CORE_VAR = 'GATEWAY_CORE_URL'
 const DEFAULT_CORE = 'http://127.0.0.1:8081'
 const PUBKEY = /^[0-9a-f]{64}$/
-const DISPOSITIONS = ['NOT_DELIVERED', 'RECLAIMED']
 const ROLES = ['merchant', 'customer']
 
 const USAGE = `gateway-core operator commands (rev-540p2 6a). Runbook: imani-deploy docs/runbooks/operator-access.md
@@ -55,8 +52,6 @@ const USAGE = `gateway-core operator commands (rev-540p2 6a). Runbook: imani-dep
   operator.mjs lookup --voucher-id <id> | --payment-request-id <id> [--limit N] [--cursor C]
   operator.mjs refund-redemption <sendId> --note "<why>"
   operator.mjs manual-attention list [--limit N]
-  operator.mjs manual-attention retry-payout <purchaseId> --note "<why>"
-  operator.mjs manual-attention open-refund <purchaseId> --disposition NOT_DELIVERED|RECLAIMED --note "<why>"
   operator.mjs merchant suspend <pubkey-hex>
   operator.mjs merchant unsuspend <pubkey-hex> [--role merchant|customer]
   any command: [--env-file <deploy env file>]
@@ -170,19 +165,8 @@ export function parseArgs(argv) {
     case 'manual-attention': {
       const action = rest[0]
       if (action === 'list') return { command, action, limit, envFile: flags['env-file'] }
-      if (action === 'retry-payout') {
-        requireNote()
-        return { command, action, purchaseId: one('<purchaseId>', rest[1]), note, envFile: flags['env-file'] }
-      }
-      if (action === 'open-refund') {
-        if (!DISPOSITIONS.includes(flags.disposition)) {
-          throw new Error(`open-refund needs --disposition ${DISPOSITIONS.join('|')}`)
-        }
-        requireNote()
-        return { command, action, purchaseId: one('<purchaseId>', rest[1]), disposition: flags.disposition, note,
-          envFile: flags['env-file'] }
-      }
-      throw new Error('manual-attention list | retry-payout <purchaseId> | open-refund <purchaseId>')
+      // retry-payout and open-refund went with the atomic purchase (gateway-core#156): the list is read-only.
+      throw new Error('manual-attention list (read-only: the atomic purchase is removed)')
     }
     case 'merchant': {
       const action = rest[0]
@@ -234,15 +218,7 @@ function route(cmd) {
       return { method: 'POST', path: `/internal/v1/atomic-sends/${seg(cmd.sendId)}/refund-redemption`,
         body: JSON.stringify({ note: cmd.note }) }
     case 'manual-attention':
-      if (cmd.action === 'list') {
-        return { method: 'GET', path: '/internal/v1/atomic-purchases/manual-attention' + query([['limit', cmd.limit]]) }
-      }
-      if (cmd.action === 'retry-payout') {
-        return { method: 'POST', path: `/internal/v1/atomic-purchases/manual-attention/${seg(cmd.purchaseId)}/retry-payout`,
-          body: JSON.stringify({ note: cmd.note }) }
-      }
-      return { method: 'POST', path: `/internal/v1/atomic-purchases/manual-attention/${seg(cmd.purchaseId)}/open-refund`,
-        body: JSON.stringify({ voucherDisposition: cmd.disposition, note: cmd.note }) }
+      return { method: 'GET', path: '/internal/v1/atomic-purchases/manual-attention' + query([['limit', cmd.limit]]) }
     case 'merchant':
       return { method: 'POST', path: `/internal/v1/merchants/${seg(cmd.pubkey)}/${cmd.action}`
         + query([['role', cmd.role]]), body: '' }
