@@ -115,6 +115,17 @@ describe('showing the code', () => {
     expect(screen.getByText(/This code is not a secret/)).toBeTruthy()
     expect(localStorage.length).toBe(0)
   })
+
+  // Leaving the setup screen and coming back (Back, then the onboarding link again) within one
+  // page load shows the SAME key, so a credential the owner already minted for it still fits
+  // (#160 owner report: checked whether a remount re-keys; it does not).
+  it('keeps the same key when the screen is left and opened again', () => {
+    const first = renderPage()
+    const before = shownCode()
+    first.unmount()
+    renderPage()
+    expect(shownCode()).toBe(before)
+  })
 })
 
 describe('the whole setup, owner and device', () => {

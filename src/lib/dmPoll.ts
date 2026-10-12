@@ -1227,7 +1227,17 @@ function redemptionAdapter(): RedemptionAdapter {
       // total and count ride along as display hints only: the row above was
       // written from the coupon itself, and nothing here touches it. A coupon
       // with no usable declaration takes the plain `announceArrival` path.
-      void announceBundleArrival(
+      // A licence is not a payment either: no money toast, no "+…" and no `voucher_received`
+      // row, but its own "Licence from …" notice (#160 owner report). Read from the token's
+      // signed metadata, as `licences.ts` reads it for the balance.
+      const licence = licenceFromToken(token)
+      if (licence) {
+        // Lazily, like every toast module on this path: sonner touches the DOM at import.
+        const voucherKey = licence.subscriptionId + ':' + String(meta?.voucherId ?? '')
+        void import('./notMoneyNotice')
+          .then((m) => m.showNotice(m.licenceNotice(voucherKey, licence.issuerId), currentPubkey))
+          .catch(() => undefined)
+      } else void announceBundleArrival(
         toArrivedVoucher(voucher),
         declaredBundleOf(meta),
         currentPubkey,

@@ -994,10 +994,19 @@ async function finishPhase6(
       // K' sells to the STALL's own key, so it is K's coupon that comes home to A. Paid by C instead,
       // C's wallet picks which of its coupons to spend, and in the gate it spent B5's (found by the
       // local gate: the check then passed for B5's credential, correctly, and E11 saw no alert).
-      const sale = await asTillResponse(k, 'POST', '/api/v1/portal/vouchers', {
-        face_value_minor: 100, currency: 'EUR', quantity: 1, recipient_pubkey: stall,
-        issuance_warrant: await freshWarrant(k, 100, 'EUR'),
-      })
+      // The mint limits voucher quotes per minute, and by E11 this run has minted many credentials
+      // in a burst: a 429 here is the mint's quote limiter (gateway-customer logs
+      // `/v1/mint/quote/voucher/bolt11` 429), not the portal refusing K'. Waited out like
+      // `mintAsOwner` does, with a fresh warrant nonce per attempt; any other answer is final.
+      let sale = { status: 0, body: '' }
+      for (let attempt = 0; attempt < 4; attempt++) {
+        if (attempt > 0) await new Promise((r) => setTimeout(r, 20_000))
+        sale = await asTillResponse(k, 'POST', '/api/v1/portal/vouchers', {
+          face_value_minor: 100, currency: 'EUR', quantity: 1, recipient_pubkey: stall,
+          issuance_warrant: await freshWarrant(k, 100, 'EUR'),
+        })
+        if (sale.status !== 429) break
+      }
       check("K' sells through the portal", sale.status === 201 || sale.status === 200, `${sale.status} ${sale.body.slice(0, 160)}`)
       // The portal mints; the selling device delivers (issue.ts `deliver`). K' does, to the stall.
       const issued = (() => {
@@ -1053,6 +1062,80 @@ async function finishPhase6(
     }
   }
 
+  await wrongPathCredential(owner, ownerSk, stall, customer, customerPubkey)
+}
+
+/**
+ * E13, the wrong path (owner report on wallet 0.19.0): a stall enrols a PERSONAL wallet's key as a
+ * till. The credential DM reaches customer C's wallet, whose dm-poll used to regex the `cashuB…`
+ * token out of it and swap it as money: 1 sat in the balance, a coupon in the carousel, and
+ * "Payment received". Now C must not redeem it (the token stays UNSPENT at the mint), must not
+ * book it, and must say "Terminal setup request from <stall>" instead.
+ */
+async function wrongPathCredential(owner: Page, ownerSk: string, stall: string, customer: Page, customerPubkey: string) {
+  console.log('\nE13: a credential sent to a personal wallet is not money')
+  // C's home, as money, before anything arrives: the balance line and every "N vouchers" count.
+  await customer.goto(`${BASE}/`, { waitUntil: 'load' })
+  await customer.getByText('Total balance').waitFor({ timeout: 30_000 }).catch(() => undefined)
+  const before = await moneyView(customer)
+  const minted = await mintAttested(ownerSk, stall, customerPubkey, 'redeem-only', 'Wrong path till')
+  check('E13 the harness mints a credential locked to C\'s personal key', minted.token !== '', minted.error)
+  if (!minted.token) return
+  const sent = await dmAsStall(ownerSk, customerPubkey, JSON.stringify({
+    type: 'imani-terminal-credential/1', voucher_id: minted.voucherId, token: minted.token,
+    stall_pubkey: stall, name: 'Wrong path till', idle_lock_minutes: 10,
+  }))
+  check('E13 the credential DM reaches C', sent)
+  await customer.goto(`${BASE}/`, { waitUntil: 'load' })
+  const noticed = await customer.waitForFunction((vid) => {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)!
+      if (!key.startsWith('imani-wallet:notifications:')) continue
+      if ((localStorage.getItem(key) ?? '').includes(`terminal-setup:${vid}`)) return true
+    }
+    return false
+  }, minted.voucherId, { timeout: 120_000 }).then(() => true, () => false)
+  const rows = await customer.evaluate((vid) => {
+    const out: Array<{ id: string; type: string; title: string; url: string }> = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)!
+      if (!key.startsWith('imani-wallet:notifications:')) continue
+      for (const r of JSON.parse(localStorage.getItem(key) ?? '[]') as typeof out) if (r.id.includes(vid)) out.push(r)
+    }
+    return out
+  }, minted.voucherId)
+  const setupRow = rows.find((r) => r.type === 'terminal_setup_request')
+  check('E13 C\'s bell reads "Terminal setup request from <stall>", linking to setup', noticed && !!setupRow &&
+    /^Terminal setup request from (Test Stall|@|npub1)/.test(setupRow.title) && setupRow.url === '/terminal/setup', JSON.stringify(rows))
+  check('E13 C files no "Payment received" for it', !rows.some((r) => r.type === 'voucher_received' || /Payment/.test(r.title)), JSON.stringify(rows))
+  // Given the poller every chance to have redeemed it, the mint still holds it unspent.
+  await customer.waitForTimeout(5_000)
+  const state = await tokenState(minted.token)
+  check('E13 C did not swap the credential at the mint (still UNSPENT)', state === 'UNSPENT', state)
+  await customer.goto(`${BASE}/`, { waitUntil: 'load' })
+  await customer.getByText('Total balance').waitFor({ timeout: 30_000 }).catch(() => undefined)
+  const after = await moneyView(customer)
+  check('E13 C\'s balance and home carousel are unchanged: no 1 sat, no extra coupon, no "Wrong path till"',
+    after.text === before.text && !/Wrong path till/.test(after.text), `before: ${before.text} | after: ${after.text}`)
+  await asKey(ownerSk, 'POST', `/api/v1/wallet/terminal-credentials/${minted.voucherId}/cancel`, {})
+}
+
+/** The home screen's money, without the toaster: the balance and each carousel card's count. */
+async function moneyView(page: Page): Promise<{ text: string }> {
+  const t = await page.evaluate(() => {
+    // The live DOM (innerText needs layout), minus the toaster and the bell's panel, which may
+    // carry the notice's own words.
+    const hidden = [...document.querySelectorAll<HTMLElement>('[data-sonner-toaster], details:has(> summary [aria-label^="Notifications"]), details:has(> summary[aria-label^="Notifications"])')]
+    const was = hidden.map((n) => n.style.display)
+    hidden.forEach((n) => (n.style.display = 'none'))
+    const out = document.body.innerText.replace(/\s+/g, ' ')
+    hidden.forEach((n, i) => (n.style.display = was[i]))
+    return out
+  })
+  const balance = t.match(/Total balance (\S+ ?\S*)/)?.[1] ?? '?'
+  const counts = (t.match(/\b\d+ vouchers?\b/g) ?? []).join(',')
+  const sats = /\b1 sat\b/.test(t) ? ' 1 sat' : ''
+  return { text: `${balance} [${counts}]${sats}${/Wrong path till/.test(t) ? ' Wrong path till' : ''}` }
 }
 
 /**
