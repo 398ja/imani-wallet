@@ -33,6 +33,12 @@
  *       402 at once, well inside the grace. W-1: C's wallet re-reports, is told 422, and its
  *       Subscription screen says the seller revoked it.
  *
+ * LOCAL GATE ONLY. E2E_BASE must be the local gate's edge (imani-deploy
+ * scripts/local-terminal-gate, E2E_SCRIPT=licenceGate.e2e.ts), never the staging edge: it mints
+ * real vouchers with POST /api/v1/wallet/vouchers. Since imani-deploy#183 (E179b) the staging edge
+ * refuses, 403, any such body without merchant_metadata, recipient_pubkey or issuance_warrant (a
+ * float-funded create, rev-float F1), and staging's float is not test money.
+ *
  * Env: E2E_BASE, E2E_BUNDLE_DIR, E2E_LICENCE_SELLER_SK (the seller stall's key, which the gate names
  * in GATEWAY_CUSTOMER_LICENCE_SELLER_PUBKEYS), E2E_MINT_URL, E2E_LICENCE_GRACE_S,
  * E2E_PORTAL_SQL_CMD (a psql -tAc on the gate's portal database, for step 9),
@@ -57,6 +63,11 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 
 const BASE = (process.env.E2E_BASE ?? 'http://localhost').replace(/\/+$/, '')
+// LOCAL GATE ONLY (see the header): refuse to run against anything but a loopback edge.
+if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(BASE).hostname)) {
+  console.error(`licenceGate.e2e.ts runs on the local gate only; E2E_BASE=${BASE} is not loopback`)
+  process.exit(2)
+}
 const BUNDLE_DIR = process.env.E2E_BUNDLE_DIR
 const SELLER_SK = process.env.E2E_LICENCE_SELLER_SK ?? ''
 const MINT = (process.env.E2E_MINT_URL ?? '').replace(/\/+$/, '')
