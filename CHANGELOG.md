@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-12
+
+Claim links phases 0 and 1 (#238, #239), plus the terminal wrong-path fix (#236).
+
 ### Security (claim links, phase 1: the confirm prompt, [spec](docs/spec-claim-links.md) 4.3)
 
 - **Opening a claim link never redeems it.** With a session, `/c/:ref` (and `/c`, the resume of a
@@ -45,6 +49,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parks nothing (a terminal key must never open a customer session). The claim is parked and the
   fragment is scrubbed from the address bar before the async key-store read. Nothing is redeemed
   on this path, and `/` still resumes the parked claim once the session opens.
+
+### Fixed (terminals, #236, imani-wallet#160 owner report)
+
+- **A terminal credential is never money.** A logged-in personal wallet that received a terminal
+  credential DM (`imani-terminal-credential/1`) used to extract its 1-sat cashuB token through the
+  text fallback and swap it at the mint, so it showed "Payment received" and spent the credential.
+  Only the app's own message types are skipped now, a credential is never extracted from any
+  envelope or text, and `spendable()` excludes a verified terminal credential from balance,
+  carousel, pay and send. The bell says "Terminal setup request from <stall>" (deduped on the
+  signed voucher id) instead.
+- **Scan routes a terminal setup code** (`imani-terminal:1:`) to `/terminal/setup`; a device with a
+  personal wallet is told it needs its own device with no account.
+
+### Added (#234)
+
+- `scripts/operator.mjs` for gateway-core's operator endpoints (not bundled into the app).
 
 ## [0.19.0] - 2026-10-11
 
