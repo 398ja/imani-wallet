@@ -142,6 +142,7 @@ export function CashbackIssuePage({
         <IssuedCode
           issued={issued}
           decimals={decimals}
+          owner={!actor || actor.kind === 'owner'}
           onAgain={() => {
             setIssued(null)
             setAmount('')
@@ -209,17 +210,24 @@ export function CashbackIssuePage({
 function IssuedCode({
   issued,
   decimals,
+  owner,
   onAgain,
   onDone,
 }: {
   issued: IssuedCashback
   decimals: number
+  /**
+   * The stall's own device. A till (#160 phase 5) gets the code and the link, but the portal's
+   * status and revoke are owner-only and need a session a till never has, so it neither polls nor
+   * offers Cancel: the owner cancels from the record the till files in their history.
+   */
+  owner: boolean
   onAgain: () => void
   onDone: () => void
 }) {
   const [copied, setCopied] = useState(false)
   const [cancelled, setCancelled] = useState(false)
-  const live = useLiveCashbackStatus(issued.cashbackId || undefined, !cancelled)
+  const live = useLiveCashbackStatus(issued.cashbackId || undefined, owner && !cancelled)
   const status = cancelled ? 'Revoked' : live?.status
   const link = issued.claim
     ? formatCashbackLink(window.location.origin, issued.claim.ref, issued.claim.key)
@@ -272,7 +280,7 @@ function IssuedCode({
             </>
           )}
         </Button>
-        {issued.cashbackId && isOpen(status) ? (
+        {owner && issued.cashbackId && isOpen(status) ? (
           <CancelCashback cashbackId={issued.cashbackId} onCancelled={() => setCancelled(true)} />
         ) : null}
         <Button size="lg" className="w-full" onClick={onAgain}>

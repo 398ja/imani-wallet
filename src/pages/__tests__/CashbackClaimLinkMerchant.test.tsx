@@ -198,6 +198,38 @@ describe('Cashback ready: the link next to the code', () => {
   })
 })
 
+describe('Cashback ready on a till (#160 phase 5)', () => {
+  // The portal's /status and /revoke are owner-only (MERCHANT_ONLY), and the edge sends them through
+  // the NAP session gate, which a till never has: a till would read 401 forever and its Cancel could
+  // only ever fail. The till keeps the code, the QR and the link; the owner cancels from the record.
+  it('shows the link but neither polls the status nor offers Cancel', async () => {
+    const { TERMINAL_ROLES, grantFor } = await import('../../lib/terminalRole')
+    const { SESSION_KIND, openSession } = await import('../../lib/terminalSession')
+    const stall = 'a'.repeat(64)
+    const till = {
+      kind: 'terminal' as const,
+      stallPubkey: stall,
+      role: TERMINAL_ROLES.ISSUE_AND_REDEEM,
+      terminalPubkey: 'c'.repeat(64),
+      permissions: grantFor(TERMINAL_ROLES.ISSUE_AND_REDEEM, stall),
+      attested: true,
+    }
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    render(
+      <MemoryRouter>
+        <CashbackIssuePage merchant={merchant} actor={till} session={openSession(till, SESSION_KIND.FULL, Date.now())} />
+      </MemoryRouter>,
+    )
+    fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '1.25' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create cashback code' }))
+    await screen.findByText('CB-ABCDE-FGHJK')
+    expect(screen.getByRole('button', { name: /Show QR/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Cancel cashback/ })).toBeNull()
+    await act(async () => void (await vi.advanceTimersByTimeAsync(30_000)))
+    expect(h.statusReads).toBe(0)
+  })
+})
+
 function cashbackRow(over: Record<string, unknown> = {}) {
   return {
     id: 'cashback:cb-1',
