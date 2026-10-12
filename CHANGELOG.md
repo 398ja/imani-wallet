@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-12
+
+Claim links phase 2: the merchant's link and QR (#241), plus a local-gate guard on the licence e2e (#242).
+
 ### Added (claim links, phase 2: the merchant's link and QR, [spec](docs/spec-claim-links.md) 4.1)
 
 - **Cashback ready shows a link and a QR next to the code.** The code is unchanged and stays first
@@ -30,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `revokeCashback` and `resolveClaimLinkByCode` in `lib/cashback.ts`. No new dependency (`qrcode`).
 - New `e2e/claimLinksMerchant.e2e.ts`: CL-A, CL-RACE, CL-OWN and Show QR again, paced under the
   portal's public limiter.
+- **A till's Cashback ready** shows the link and QR but neither polls the owner-only `/status` nor
+  offers Cancel (both are merchant-only on the portal); the owner keeps both (review of #241, F1).
+
+### Changed (tests only, #242)
+
+- `e2e/licenceGate.e2e.ts` runs on the local gate only: a header note, and it exits 2 when
+  `E2E_BASE` is not loopback (it mints real vouchers; the staging edge refuses such bodies since
+  imani-deploy#183).
 
 ## [0.20.0] - 2026-10-12
 
