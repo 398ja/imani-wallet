@@ -129,3 +129,30 @@ export function clearPendingClaim(): void {
     // Nothing to do; the age check bounds it.
   }
 }
+
+/**
+ * Refs whose prompt has already been shown in this page session (memory only, never stored).
+ *
+ * `/` sends a device holding a parked claim to `/c`. Without this, every way back home from the
+ * prompt ("Open my wallet" on a network failure, a deployment that cannot claim, a dead link)
+ * bounced straight back to it, and the customer could not reach their wallet until the claim aged
+ * out (review of claim links phase 1). A claim still waiting is offered again on the next launch
+ * or unlock, which is what "Your voucher is still waiting" promises.
+ */
+const offered = new Set<string>()
+
+/** Keyed by account too, so a claim shown to one account is still resumed after switching to another. */
+export function markPendingClaimOffered(ref: string, pubkey = ''): void {
+  offered.add(`${pubkey}:${ref}`)
+}
+
+/** The parked claim `/` should resume now, or null when there is none or it was already offered. */
+export function pendingClaimToResume(pubkey = ''): PendingClaim | null {
+  const pending = peekPendingClaim()
+  return pending && !offered.has(`${pubkey}:${pending.ref}`) ? pending : null
+}
+
+/** Tests only: a fresh page session. */
+export function resetPendingClaimOffers(): void {
+  offered.clear()
+}

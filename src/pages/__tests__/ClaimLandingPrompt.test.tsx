@@ -40,8 +40,8 @@ vi.mock('../../lib/identity', async (importOriginal) => ({
       : { identity: pubkey === ISSUER ? { name: 'Mama Ngozi Grill' } : {}, loading: false },
 }))
 
-import { ClaimLandingPage } from '../ClaimLandingPage'
-import { peekPendingClaim, stashPendingClaim } from '../../lib/pendingClaim'
+import { ClaimLandingPage, ResumeParkedClaim } from '../ClaimLandingPage'
+import { peekPendingClaim, resetPendingClaimOffers, stashPendingClaim } from '../../lib/pendingClaim'
 
 const REF = 'abcd1234efgh5678'
 const KEY = 'Q'.repeat(43)
@@ -89,6 +89,7 @@ async function settle() {
 beforeEach(() => {
   identityLoading.value = false
   localStorage.clear()
+  resetPendingClaimOffers()
   redeemClaimRef.mockReset().mockResolvedValue({ kind: 'ok', amountMinor: 500, unit: 'EUR', memo: null })
   fetchClaimSummary.mockReset().mockResolvedValue(summary())
 })
@@ -344,5 +345,81 @@ describe('the claim key stays in memory', () => {
       spies.forEach((s) => s.mockRestore())
       vi.unstubAllGlobals()
     }
+  })
+})
+
+/**
+ * Review of phases 0 and 1: `/` sends a device holding a parked claim to `/c`, so every way home
+ * from the prompt used to bounce straight back to it. A dead claim (claimed, revoked, expired, own,
+ * unknown, a truncated key) held the customer on this screen for up to 24 h, and a claim still
+ * waiting (unreachable, disabled) did the same until it was claimed.
+ */
+describe('leaving the prompt reaches the wallet', () => {
+  function withHomeRule(pubkey = CUSTOMER, path = '/', hash = '') {
+    window.history.replaceState(null, '', path + hash)
+    return render(
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route path="/" element={<ResumeParkedClaim pubkey={pubkey}><p>HOME</p></ResumeParkedClaim>} />
+          <Route path="/c/:ref" element={<ClaimLandingPage authed pubkey={pubkey} />} />
+          <Route path="/c" element={<ClaimLandingPage authed pubkey={pubkey} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+  }
+
+  for (const [label, answer] of [
+    ['claimed', () => summary({ status: 'Claimed', claimedAt: '2026-10-01T00:00:00Z' })],
+    ['revoked', () => summary({ status: 'Revoked' })],
+    ['expired', () => summary({ status: 'Expired' })],
+    ['own cashback', () => summary({ issuerPubkey: CUSTOMER })],
+    ['not found', () => ({ kind: 'not_found' })],
+  ] as const) {
+    it(`a resumed ${label} claim goes home and is forgotten`, async () => {
+      stashPendingClaim(REF, KEY)
+      fetchClaimSummary.mockResolvedValue(answer())
+      withHomeRule()
+      fireEvent.click(await screen.findByRole('button', { name: 'Open my wallet' }))
+      await screen.findByText('HOME')
+      expect(peekPendingClaim()).toBeNull()
+      expect(redeemClaimRef).not.toHaveBeenCalled()
+    })
+  }
+
+  it('a claim still waiting (unreachable) goes home and stays parked for the next visit', async () => {
+    stashPendingClaim(REF, KEY)
+    fetchClaimSummary.mockResolvedValue({ kind: 'unreachable' })
+    withHomeRule()
+    fireEvent.click(await screen.findByRole('button', { name: 'Open my wallet' }))
+    await screen.findByText('HOME')
+    expect(peekPendingClaim()?.ref).toBe(REF)
+  })
+
+  it('a truncated key is incomplete: no Add, nothing parked, nothing fetched', async () => {
+    withHomeRule(CUSTOMER, `/c/${REF}`, '#k=abc')
+    await screen.findByText('This link is incomplete. Ask for it again, or scan the whole QR.')
+    expect(screen.queryByRole('button', { name: 'Add to my wallet' })).toBeNull()
+    expect(peekPendingClaim()).toBeNull()
+    expect(fetchClaimSummary).not.toHaveBeenCalled()
+  })
+})
+
+describe('after Accept, home is home', () => {
+  it('a resumed claim, accepted, then "Open my wallet" reaches the wallet, not the prompt again', async () => {
+    stashPendingClaim(REF, KEY)
+    window.history.replaceState(null, '', '/')
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route path="/" element={<ResumeParkedClaim pubkey={CUSTOMER}><p>HOME</p></ResumeParkedClaim>} />
+          <Route path="/c" element={<ClaimLandingPage authed pubkey={CUSTOMER} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Add to my wallet' }))
+    await screen.findByText('Voucher added')
+    fireEvent.click(screen.getByRole('button', { name: 'Open my wallet' }))
+    await screen.findByText('HOME')
+    expect(redeemClaimRef).toHaveBeenCalledTimes(1)
   })
 })
