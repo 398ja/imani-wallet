@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (claim links, phase 2: the merchant's link and QR, [spec](docs/spec-claim-links.md) 4.1)
+
+- **Cashback ready shows a link and a QR next to the code.** The code is unchanged and stays first
+  (Q2). **Show QR** reveals a QR of `https://<wallet-origin>/c/<ref>#k=<key>` (hidden until tapped,
+  against shoulder-surfing). **Share link** uses the system share sheet, or **Copy link** where there
+  is none. The note reads *"Anyone with this link or QR can claim it once. It works until {date}."*
+- **Live status.** While the screen is open it reads the merchant's own `/status` every 5 s and swaps
+  the QR for *"Claimed just now"*. Gentle by design: failures back off to 60 s, a hidden page asks
+  nothing (and asks at once when shown again), a final status stops it, and it never touches the
+  public metadata limiter.
+- **Cancel cashback** on that screen and on the record page: the portal's existing revoke, asked
+  first with *"… The value is not returned to you."* (Q4: a cancelled or expired cashback still
+  burns, no refund). A 409 (claimed first) says so.
+- **Show QR again** on the record page while the code is open: rebuilds the identical link from the
+  stored code through `by-code`, which spends nothing. Works after a reload because nothing about the
+  key is stored: it lives only in the screen's memory (spec 4.1).
+- `generateCashback` keeps the portal's `claimKey` (it used to drop it) as `IssuedCashback.claim`.
+  New `lib/claimLink.ts` (`formatCashbackLink`), `lib/claimLinkShare.ts`, `lib/cashbackLiveStatus.ts`,
+  `revokeCashback` and `resolveClaimLinkByCode` in `lib/cashback.ts`. No new dependency (`qrcode`).
+- New `e2e/claimLinksMerchant.e2e.ts`: CL-A, CL-RACE, CL-OWN and Show QR again, paced under the
+  portal's public limiter.
+
 ## [0.20.0] - 2026-10-12
 
 Claim links phases 0 and 1 (#238, #239), plus the terminal wrong-path fix (#236).
