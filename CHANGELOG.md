@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-13
+
+A terminal is only a key created as a terminal (option A, #235), the dead atomic-purchase client
+is removed (#244), and claim links phase 3 adds registration (#245). Needs imani-gateway-customer
+0.28.0 (it reads `X-Imani-Terminal-Enrolment`) and imani-gateway-core 0.25.0.
+
+### Security (option A, inv-terminal-not-merchant, #235)
+
+- **Only a key created as a terminal can be added.** The device's code is now its signed enrolment
+  code, `imani-terminal-key:1:<K>:<t>:<sig>` (BIP-340 by K). An account's npub, hex key or handle
+  cannot carry it. Add terminal refuses an npub or handle: *"That is a personal account, not a
+  terminal."* It also refuses a key that trades as a merchant before anything is signed.
+- The proof goes to gateway-customer as `X-Imani-Terminal-Enrolment` and is kept on the minting row
+  for a resumed mint. The gateway's `TERMINAL_KEY_NOT_A_TERMINAL` / `TERMINAL_KEY_IS_MERCHANT` reach
+  the owner in the same words. Renew sends the owner header only on a renewal, never on a first
+  enrolment.
+
+### Removed (#244)
+
+- **The dead atomic-purchase client methods** in `shared/api.js` (imani-gateway-core 0.25.0 removes
+  the atomic purchase). Nothing live called them.
+- **`scripts/operator.mjs` manual-attention is list-only.** The resolve/refund subcommands refuse,
+  because their routes are gone.
+
 ### Added (claim links, phase 3: registration, [spec](docs/spec-claim-links.md) 2.5, 4.4, 5.2)
 
 - **A voucher banner on onboarding and Login.** When a claim link is parked, the start step of
