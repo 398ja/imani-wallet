@@ -9,6 +9,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (claim links, phase 4: gifts by link, [spec](docs/spec-claim-links.md) 3.3, 4.2, 4.3, 5.3, 5.4)
+
+- **Send by link.** Send has a new option, *"Anyone, by link"*: pick a coupon and an amount, choose
+  how long the link lasts (1, 7 or 30 days, default 7, Q3), confirm (*"Anyone with the link can
+  claim {face} from {stall}. You can take it back until it is claimed."*), and get **Show QR**,
+  **Share link** and **Copy link**. The link is `https://<wallet>/g#v=1&k=<linkSecret>&x=<expiry>`;
+  the secret is only ever in the fragment.
+- **Link keys.** `linkSecret_i = HMAC-SHA256(identitySecret, "imani-gift-link/v1/" || i) mod n`, retried
+  on 0, with a local counter that never reuses an index (reserved before the send). An account whose
+  key this wallet cannot read gets a random secret instead, carried in its encrypted history backup.
+- **The gift prompt at `/g`**, in both route trees. The fragment is scrubbed in the first render;
+  with no session the gift is parked (kind `gift`, keyed by the link's public key) and the visitor goes
+  to Login or onboarding, where the banner reads *"{Sender} sent you a voucher from {Stall}. Create
+  an account to add it to your wallet."* With a session, everything is checked from the token
+  itself before Add is offered: the issuer signature, a trusted mint, not a licence or terminal
+  credential or locked voucher, not past `x` nor the coupon's own expiry, and every proof UNSPENT by
+  NUT-07 (otherwise *"already added"*). Only **Add to my wallet** spends, once, through
+  `TokenRedemption.redeem(token, { source: 'gift_link' })`.
+- **History.** A gift's `sent` row carries a **By link** badge and its status (Waiting to be claimed,
+  Claimed, Taken back, Expired), shows the link again while it waits, and has **Take it back** (Q4).
+  On start and on opening the row, each waiting link is checked by NUT-07: spent is Claimed, and
+  past its expiry it is taken back (`source: 'gift_link_reclaim'`).
+- **Restore scan.** On start, a wallet derives link keys `i = 0 … last + 20` and adopts any
+  unclaimed link its history does not know (a lost phone).
+- **Limit (Q5).** At most 10 links wait at once: *"You have 10 links waiting to be claimed. Take one
+  back or wait for it to be claimed."* No fee.
+- New receive sources `gift_link` and `gift_link_reclaim` (`shared/tokenRedemption.js`,
+  `packages/wallet-storage`).
+
+### Changed
+
+- **No ADR 0014 transfer signature on a send to a link key** (Q7, pre-check build item 1). Its
+  `recipient` would name the link key, not whoever claims it.
+- The gift wrap query uses **no rolling `since`** (pre-check build item 2): NIP-59 back-dates a wrap by
+  up to about two days, so dm-poll's 7-day window would lose a gift opened late. It is signed NIP-98
+  by the link key, never the visitor, with credentials omitted.
+- **Gift expiry is `min(chosen, the coupon's own expiry, 30 days)`** (pre-check build item 3).
+- The picker excludes licences, terminal credentials, locked vouchers and the sender's own stall's
+  coupons (*"To give away your own stall’s vouchers, use Cashback."*); `sendVouchers` refuses them
+  as well for a link send.
+- `/` resumes a parked claim on its own screen: a gift on `/g`, cashback on `/c`.
+
+Wallet only: the core and customer verifications (spec 6.4, 6.5) and relay retention (6.6) passed
+with no server change.
+
 ## [0.22.0] - 2026-10-13
 
 A terminal is only a key created as a terminal (option A, #235), the dead atomic-purchase client
