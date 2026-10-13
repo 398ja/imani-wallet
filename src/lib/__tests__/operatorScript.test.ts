@@ -109,8 +109,6 @@ describe('the command line', () => {
       command: 'refund-redemption', sendId: 's1', note: 'counter refund',
     })
     expect(operator.parseArgs(['manual-attention', 'list'])).toMatchObject({ command: 'manual-attention', action: 'list' })
-    expect(operator.parseArgs(['manual-attention', 'open-refund', 'p1', '--disposition', 'NOT_DELIVERED', '--note', 'n']))
-      .toMatchObject({ action: 'open-refund', purchaseId: 'p1', disposition: 'NOT_DELIVERED' })
     expect(operator.parseArgs(['merchant', 'unsuspend', PK, '--role', 'customer'])).toMatchObject({
       command: 'merchant', action: 'unsuspend', pubkey: PK, role: 'customer',
     })
@@ -121,7 +119,10 @@ describe('the command line', () => {
     expect(() => operator.parseArgs(['lookup', '--voucher-id', 'a', '--payment-request-id', 'b'])).toThrow(/exactly one of/)
     expect(() => operator.parseArgs(['refund-redemption', 's1'])).toThrow(/--note/)
     expect(() => operator.parseArgs(['merchant', 'suspend', 'npub1xyz'])).toThrow(/64-hex/)
-    expect(() => operator.parseArgs(['manual-attention', 'open-refund', 'p1', '--disposition', 'LOST'])).toThrow(/disposition/)
+    // The manual-attention writes went with the atomic purchase (gateway-core#156).
+    expect(() => operator.parseArgs(['manual-attention', 'open-refund', 'p1', '--disposition', 'RECLAIMED', '--note', 'n']))
+      .toThrow(/read-only/)
+    expect(() => operator.parseArgs(['manual-attention', 'retry-payout', 'p1', '--note', 'n'])).toThrow(/read-only/)
     expect(() => operator.parseArgs(['frobnicate'])).toThrow(/unknown command/)
   })
 })
@@ -171,9 +172,6 @@ describe('the request', () => {
   it('every route the script knows', () => {
     const routes = [
       [['manual-attention', 'list', '--limit', '20'], 'GET', '/internal/v1/atomic-purchases/manual-attention?limit=20'],
-      [['manual-attention', 'retry-payout', 'p1', '--note', 'n'], 'POST', '/internal/v1/atomic-purchases/manual-attention/p1/retry-payout'],
-      [['manual-attention', 'open-refund', 'p1', '--disposition', 'RECLAIMED', '--note', 'n'], 'POST',
-        '/internal/v1/atomic-purchases/manual-attention/p1/open-refund'],
       [['merchant', 'unsuspend', PK, '--role', 'merchant'], 'POST', `/internal/v1/merchants/${PK}/unsuspend?role=merchant`],
       [['lookup', '--payment-request-id', 'pr-9'], 'GET', '/internal/v1/atomic-sends/lookup?payment_request_id=pr-9'],
     ] as const
@@ -183,8 +181,6 @@ describe('the request', () => {
       expect(req.url).toBe(CORE + path)
       expect(tag(decodeAuth(req.headers.Authorization), 'u')).toBe(PUBLIC + path)
     }
-    const open = operator.buildRequest(op, operator.parseArgs(['manual-attention', 'open-refund', 'p1', '--disposition', 'RECLAIMED', '--note', 'n']), opts)
-    expect(JSON.parse(open.body)).toEqual({ voucherDisposition: 'RECLAIMED', note: 'n' })
   })
 
   it('never sends the edge identity headers', () => {
