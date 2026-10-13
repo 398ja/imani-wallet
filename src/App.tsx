@@ -64,6 +64,8 @@ import { MerchantDashboardPage } from './pages/MerchantDashboardPage'
 import { RedeemPage } from './pages/RedeemPage'
 import { MerchantPage } from './pages/MerchantPage'
 import { ClaimLandingPage, ResumeParkedClaim } from './pages/ClaimLandingPage'
+import { GiftLandingPage } from './pages/GiftLandingPage'
+import { reconcileGiftLinks, restoreScan } from './lib/giftLinks'
 import { BuyPage } from './pages/BuyPage'
 import { PublicProfilePage } from './pages/PublicProfilePage'
 import { CouponsPage, TransactionsPage } from './pages/RecordListPages'
@@ -71,6 +73,7 @@ import { CouponPage, TransactionPage } from './pages/RecordDetailPages'
 import { ScanPage } from './pages/ScanPage'
 import { PayPage } from './pages/PayPage'
 import { SendPage } from './pages/SendPage'
+import { SendLinkPage } from './pages/SendLinkPage'
 import { ReceivePage } from './pages/ReceivePage'
 import { CashbackRedeemPage } from './pages/CashbackRedeemPage'
 import { ProfilePage } from './pages/ProfilePage'
@@ -280,6 +283,21 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             if (recovered > 0) {
               console.info(`[app] recovered ${recovered} interrupted receive(s) from the mint`)
             }
+          })
+          // Gift links (claim links phase 4, spec 3.3). After the history restore, so a link sent
+          // from another device is known by its row. The restore scan adopts any outstanding link
+          // this device's history does not know (a lost phone), then every outstanding link is
+          // checked by NUT-07: spent is claimed, and past its expiry it is taken back. Never throws.
+          .then(() => restoreScan(pubkey))
+          .then((adopted) => {
+            if (adopted > 0) console.info(`[app] found ${adopted} outstanding gift link(s)`)
+            return reconcileGiftLinks()
+          })
+          .then(({ claimed, reclaimed }) => {
+            if (claimed + reclaimed > 0) console.info(`[app] gift links: ${claimed} claimed, ${reclaimed} taken back`)
+          })
+          .catch(() => {
+            // Never blocks start-up; logged inside.
           })
       },
       (e) => live && setError(e as Error),
@@ -498,6 +516,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route path="/terminal/setup" element={<WalletHolderIsNotATerminal />} />
         <Route path="/pay" element={<PayPage pubkey={pubkey} />} />
         <Route path="/send" element={<SendPage pubkey={pubkey} />} />
+        <Route path="/send/link" element={<SendLinkPage pubkey={pubkey} />} />
         <Route path="/receive" element={<ReceivePage profile={profile} />} />
         <Route path="/receive/cashback" element={<CashbackRedeemPage />} />
         {/* A claim link handed over by the hosted page. Present in BOTH trees:
@@ -509,6 +528,8 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             so the last step of "install the app to get your voucher" is not
             left to the customer to work out. */}
         <Route path="/c" element={<ClaimLandingPage authed pubkey={pubkey} onSwitchAccount={onLogout} />} />
+        {/* A gift link (claim links phase 4): in BOTH trees, as `/c`. */}
+        <Route path="/g" element={<GiftLandingPage authed pubkey={pubkey} onSwitchAccount={onLogout} />} />
         {/* Buying a stall's coupon by card. In BOTH trees: a shopper who
             already holds coupons is topping up, and a stranger who scanned a
             QR is the reason the hosted page exists. */}
@@ -774,6 +795,7 @@ function PublicRoutes({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<
           page parks the claim and resumes it after onboarding, and nothing is
           spent until a wallet exists to hold it. */}
       <Route path="/c/:ref" element={<ClaimLandingPage authed={false} />} />
+      <Route path="/g" element={<GiftLandingPage authed={false} />} />
       {/* A stall's profile, which is a PUBLIC thing: the kind-30078 record and
           the kind-0 profile are both plaintext and readable over an
           unauthenticated relay query, and the whole point of a QR on a stall

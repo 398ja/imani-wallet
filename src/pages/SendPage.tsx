@@ -15,6 +15,7 @@ import {
   IdentityInline,
 } from '../components/ui'
 import { ScanRecipient } from '../components/ScanRecipient'
+import { SendByLinkOption } from './SendLinkPage'
 import { SwapBackOffer } from '../components/SwapBackOffer'
 import { VoucherFullyRedeemedError } from '../lib/fullyRedeemed'
 import { listVouchers } from '../lib/wallet'
@@ -353,6 +354,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
           }}
           selfPubkey={pubkey}
         />
+        <SendByLinkOption />
       </Screen>
     )
   }
