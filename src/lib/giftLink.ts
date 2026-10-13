@@ -352,7 +352,8 @@ export function combinedState(states: ProofState[]): ProofState {
 // ─── Verifying a gift before anything is spent (spec 3.3 claim step 4) ───────
 
 export type GiftVerdict =
-  | { kind: 'ok'; summary: GiftSummary }
+  /** `tokens` is what Add may redeem: the coupons that passed every check and are still unspent. */
+  | { kind: 'ok'; summary: GiftSummary; tokens: GiftToken[] }
   | { kind: 'not_money' }
   | { kind: 'untrusted_mint' }
   | { kind: 'unverified' }
@@ -380,13 +381,70 @@ export interface GiftSummary {
  * proof UNSPENT by NUT-07, otherwise "already claimed".
  */
 export async function verifyGift(
-  tokens: GiftToken[],
+  found: GiftToken[],
   x: number,
   nowMs: number,
   state: (token: string) => Promise<ProofState> = (t) => tokenState(t),
 ): Promise<GiftVerdict> {
-  if (tokens.length === 0) return { kind: 'unreachable' }
-  const parsed: ParsedVoucherToken[] = []
+  if (found.length === 0) return { kind: 'unreachable' }
+  // Anyone can gift-wrap something to a link's PUBLIC key (the gateway learns it from the send, and
+  // the wrap's p tag is public). So a token that fails its own checks, or that is already spent or
+  // past its own expiry (free for anyone to wrap), is noise and never a reason to refuse the coupon
+  // that passes (review of #247, F1). Only when NOTHING passes is the refusal explained.
+  const usable = giftCandidates(found)
+  if (usable.length === 0) return explainRefusal(found)
+
+  const now = Math.floor(nowMs / 1000)
+  const parsedOf = new Map(usable.map((t) => [t.token, parseVoucherToken(t.token)]))
+  const expiryOf = (t: GiftToken) => {
+    const e = parsedOf.get(t.token)!.voucher.expiresAt
+    return typeof e === 'number' && e > 0 ? toSeconds(e) : undefined
+  }
+  const live = usable.filter((t) => {
+    const e = expiryOf(t)
+    return e === undefined || now < e
+  })
+  if (now >= x || live.length === 0) {
+    const at = now >= x ? x : Math.min(...usable.map((t) => expiryOf(t) ?? Infinity))
+    return { kind: 'expired', at, summary: summaryOf(usable, usable.map((t) => parsedOf.get(t.token)!), expiryOf) }
+  }
+
+  const states = await Promise.all(live.map((t) => state(t.token)))
+  if (states.includes('UNKNOWN')) return { kind: 'unreachable' }
+  // What is still unspent is still the recipient's to add, even when an earlier Add took part of a
+  // multi-coupon gift and then failed (review of #247, F4). Claimed only when nothing is left.
+  const tokens = live.filter((_, n) => states[n] === 'UNSPENT')
+  if (tokens.length === 0) return { kind: 'claimed' }
+  const parsed = tokens.map((t) => parsedOf.get(t.token)!)
+  const issuer = stallOf(parsed[0])
+  const unit = parsed[0].voucher.unit
+  if (parsed.some((p) => stallOf(p) !== issuer || p.voucher.unit !== unit)) {
+    return { kind: 'unverified' }
+  }
+  return { kind: 'ok', summary: summaryOf(tokens, parsed, expiryOf), tokens }
+}
+
+// The STALL is the voucher's signed `issuerId`; `issuerPublicKey` is the key that signed it, which
+// for cashback is the gateway's (as dmCrypto and the cashback prompt name the stall).
+function stallOf(p: ParsedVoucherToken): string {
+  const id = (p.voucher.issuerId ?? '').toLowerCase()
+  return /^[0-9a-f]{64}$/.test(id) ? id : p.voucher.issuerPublicKey.toLowerCase()
+}
+
+function summaryOf(tokens: GiftToken[], parsed: ParsedVoucherToken[], expiryOf: (t: GiftToken) => number | undefined): GiftSummary {
+  const expiries = tokens.map(expiryOf).filter((e): e is number => e !== undefined)
+  return {
+    issuer: stallOf(parsed[0]),
+    faceMinor: parsed.reduce((sum, p) => sum + exactFaceOf(p), 0),
+    unit: parsed[0].voucher.unit,
+    decimals: parsed[0].voucher.faceDecimals,
+    senderPubkey: tokens.find((t) => t.senderPubkey)?.senderPubkey,
+    couponExpiresAt: expiries.length ? Math.min(...expiries) : undefined,
+  }
+}
+
+/** Why a link with NO usable coupon is refused, in the spec's order (4.3 states). */
+function explainRefusal(tokens: GiftToken[]): GiftVerdict {
   for (const { token } of tokens) {
     if (licenceFromToken(token) || terminalCredentialFromToken(token)) return { kind: 'not_money' }
     let p: ParsedVoucherToken
@@ -397,44 +455,31 @@ export async function verifyGift(
     }
     if (!verifyVoucher(p.voucher).signatureValid || checkIssuer(p) === 'unknown-issuer') return { kind: 'unverified' }
     if (p.voucher.lockKey) return { kind: 'not_money' }
-    parsed.push(p)
-  }
-  // The STALL is the voucher's signed `issuerId`; `issuerPublicKey` is the key that signed it, which
-  // for cashback is the gateway's (as dmCrypto and the cashback prompt name the stall).
-  const stallOf = (p: ParsedVoucherToken) => {
-    const id = (p.voucher.issuerId ?? '').toLowerCase()
-    return /^[0-9a-f]{64}$/.test(id) ? id : p.voucher.issuerPublicKey.toLowerCase()
-  }
-  const issuer = stallOf(parsed[0])
-  const unit = parsed[0].voucher.unit
-  if (parsed.some((p) => stallOf(p) !== issuer || p.voucher.unit !== unit)) {
-    return { kind: 'unverified' }
   }
   for (const { token } of tokens) {
     if (checkTokenBacking(token).outcome !== 'accept') return { kind: 'untrusted_mint' }
   }
+  return { kind: 'not_money' }
+}
 
-  const couponExpiries = parsed.map((p) => p.voucher.expiresAt).filter((e): e is number => typeof e === 'number' && e > 0)
-  const summary: GiftSummary = {
-    issuer,
-    faceMinor: parsed.reduce((sum, p) => sum + exactFaceOf(p), 0),
-    unit,
-    decimals: parsed[0].voucher.faceDecimals,
-    senderPubkey: tokens.find((t) => t.senderPubkey)?.senderPubkey,
-    couponExpiresAt: couponExpiries.length ? Math.min(...couponExpiries.map(toSeconds)) : undefined,
-  }
-
-  const now = Math.floor(nowMs / 1000)
-  if (now >= x) return { kind: 'expired', at: x, summary }
-  if (summary.couponExpiresAt !== undefined && now >= summary.couponExpiresAt) {
-    return { kind: 'expired', at: summary.couponExpiresAt, summary }
-  }
-
-  const states = await Promise.all(tokens.map((t) => state(t.token)))
-  const combined = combinedState(states)
-  if (combined === 'SPENT' || combined === 'PENDING' || states.includes('SPENT')) return { kind: 'claimed' }
-  if (combined !== 'UNSPENT') return { kind: 'unreachable' }
-  return { kind: 'ok', summary }
+/**
+ * The tokens that pass every per-token check on their own: readable, a valid issuer signature from
+ * a known issuer, money (not a licence, credential or locked voucher), at a trusted mint. Used to
+ * drop what a third party gift-wrapped to the link's public key (review of #247, F1).
+ */
+export function giftCandidates(tokens: GiftToken[]): GiftToken[] {
+  return tokens.filter(({ token }) => {
+    try {
+      if (licenceFromToken(token) || terminalCredentialFromToken(token)) return false
+      const p = parseVoucherToken(token)
+      if (!verifyVoucher(p.voucher).signatureValid || checkIssuer(p) === 'unknown-issuer') return false
+      if (p.voucher.lockKey) return false
+      if (tokenProofs(token).some((proof) => /^\["P2PK/.test(proof.secret))) return false
+      return checkTokenBacking(token).outcome === 'accept'
+    } catch {
+      return false
+    }
+  })
 }
 
 /** What a receiver will credit for this token: the same rule every receive uses. */

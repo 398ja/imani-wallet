@@ -12,6 +12,7 @@ import {
   deriveLinkSecret,
   fetchGiftWraps,
   formatGiftLink,
+  giftCandidates,
   giftTokensFrom,
   linkPubOf,
   randomLinkSecret,
@@ -113,6 +114,44 @@ export function allocateLink(pubkey: string, usedIndices: ReadonlySet<number>): 
 
 // ─── Rows ────────────────────────────────────────────────────────────────────
 
+/** How many derived indices a send skips past (each one already holding a wrap) before giving up. */
+const MAX_INDEX_PROBES = 64
+
+/**
+ * The next link key that is unused AT THE RELAY, not only on this device (review of #247, F3).
+ *
+ * The local counter and rows are gone after a logout (`sweepAppStorage`, `wipeWallet`), on a restored
+ * or second device, and until start-up's history restore and scan have run. Allocating from them alone
+ * re-derived i = 0 for a new gift while gift 0 was still unclaimed: two coupons on one bearer key, so
+ * whoever opened either link took both. So every derived index is checked for wraps first and skipped
+ * (and reserved) while it has any. A check that cannot complete refuses the send: "unknown" is not
+ * "unused", and nothing has moved yet. A random secret (remote signer) needs no check.
+ */
+export async function unusedLink(
+  pubkey: string,
+  usedIndices: ReadonlySet<number>,
+  wrapsAt: (secret: Uint8Array) => Promise<unknown[]> = fetchGiftWraps,
+): Promise<AllocatedLink> {
+  const used = new Set(usedIndices)
+  for (let probe = 0; probe < MAX_INDEX_PROBES; probe++) {
+    const allocated = allocateLink(pubkey, used)
+    if (allocated.i === undefined) return allocated
+    // Reserved BEFORE the await, so a second send started meanwhile (this tab or another) never
+    // derives the same index. A probe that then fails leaves a gap, never a reuse.
+    advanceLinkIndex(pubkey, allocated.i)
+    used.add(allocated.i)
+    let wraps: unknown[]
+    try {
+      wraps = await wrapsAt(allocated.secret)
+    } catch {
+      throw new Error('Could not check the link with the voucher service. Nothing has been sent; try again.')
+    }
+    if (wraps.length === 0) return allocated
+    // Somebody (this wallet, before a wipe) already used this key: never again. Already reserved.
+  }
+  throw new Error('Could not find a free link. Nothing has been sent; try again later.')
+}
+
 export interface LinkRow {
   id: string
   row: TransactionRow
@@ -193,7 +232,7 @@ export async function sendGift({
   if (outstanding >= MAX_OUTSTANDING_LINKS) throw new Error(tooManyLinksMessage())
 
   const used = new Set(rows.map((r) => r.link.i).filter((i): i is number => i !== undefined))
-  const allocated = allocateLink(payer, used)
+  const allocated = await unusedLink(payer, used)
   const k = secretToText(allocated.secret)
   const link = formatGiftLink(walletOrigin, allocated.secret, x)
   if (!link) throw new Error('Could not make a link for this wallet.')
@@ -317,6 +356,9 @@ export async function takeBack(k: string): Promise<TakeBackOutcome> {
   } catch (error) {
     return { kind: 'failed', message: error instanceof Error ? error.message : String(error) }
   }
+  // Only coupons that pass their own checks: anything else was wrapped to the link's public key by
+  // someone else and must not block the take-back (review of #247, F1).
+  tokens = giftCandidates(tokens)
   if (tokens.length === 0) return { kind: 'not_found' }
   const states = await Promise.all(tokens.map((t) => tokenState(t.token)))
   if (combinedState(states) === 'SPENT') {
@@ -352,6 +394,8 @@ export async function reconcileGiftLinks(
       } catch {
         continue
       }
+      // As in takeBack: a third party's wrap to the link key must not freeze it (review of #247, F1).
+      tokens = giftCandidates(tokens)
       if (tokens.length === 0) continue
       const states = await Promise.all(tokens.map((t) => state(t.token)))
       const overall = combinedState(states)
@@ -362,7 +406,7 @@ export async function reconcileGiftLinks(
       }
       if (overall !== 'UNSPENT') continue
       if (Math.floor(nowMs / 1000) >= parts[0].link.x) {
-        const outcome = await redeemGiftTokens(tokens, 'gift_link_reclaim')
+        const outcome = await redeemGiftTokens(tokens.filter((_, n) => states[n] === 'UNSPENT'), 'gift_link_reclaim')
         if (outcome.kind === 'ok') {
           await setLinkStatus(parts, 'reclaimed')
           reclaimed += 1
@@ -413,6 +457,8 @@ export async function restoreScan(
       if (i > last) last = i
       advanceLinkIndex(pubkey, i)
       if (known.has(k)) continue
+      tokens = giftCandidates(tokens)
+      if (tokens.length === 0) continue
       const states = await Promise.all(tokens.map((t) => state(t.token)))
       if (combinedState(states) !== 'UNSPENT') continue
       await adoptLink(k, i, tokens, nowMs)
