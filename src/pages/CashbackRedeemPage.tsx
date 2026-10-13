@@ -10,6 +10,7 @@ import {
   type RedeemResult,
 } from '../lib/cashback'
 import { currencyDecimals, formatFace } from '../lib/format'
+import { MERCHANT_FOREIGN_VOUCHER, MERCHANT_STATUS_UNKNOWN } from '../lib/merchantVouchers'
 
 /**
  * Redeem a cashback code.
@@ -206,5 +207,7 @@ function failureMessage(result: RedeemResult): string {
         'Your cashback is saved on this phone but could not be added to this wallet. ' +
         'Nothing was lost. Show this message to the shop.'
       )
+     case 'merchant_refused':
+      return result.reason === 'merchant' ? MERCHANT_FOREIGN_VOUCHER : MERCHANT_STATUS_UNKNOWN
   }
 }

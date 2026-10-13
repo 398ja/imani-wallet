@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A merchant account takes only its own stall's vouchers** (owner rule, 2026-10-13). Before anything
+  is spent, a merchant account (a stall record on this device, or one on the relay) refuses another
+  stall's voucher on every receive path, with *"Merchant accounts can only take their own stall's
+  vouchers. To use a voucher from another stall, use a customer account."*:
+  - the `/c/` cashback prompt and the `/g` gift prompt show the refusal instead of **Add**, with
+    **Switch account** (the claim stays parked for the customer account);
+  - a cashback claim (link or code) is refused **before** the destructive ciphertext fetch when the
+    portal names the issuer, and before the swap when only the token does (kept in the stash);
+  - a gift is refused before the swap; a DM receive is refused before the swap (relay-known stalls and
+    unverified vouchers too, extending `refuseIfAnotherStalls`);
+  - Send by link refuses a merchant account's foreign coupon (it could never take it back).
+  A role that cannot be checked refuses a foreign voucher (Retry; a DM retries on the next tick) and
+  never an own one. Exempt: the account's own vouchers, plain ecash, licences (from the pinned seller
+  when `VITE_LICENCE_SELLER_PUBKEY` is set) and terminal credentials. The server's 403
+  `FOREIGN_VOUCHER_FOR_MERCHANT` (gateway-customer receive, gateway-core atomic send) is shown with the
+  same copy. `src/lib/merchantVouchers.ts`, `src/lib/useForeignVoucherRole.ts`.
+
 ## [0.23.0] - 2026-10-13
 
 Claim links phase 4: a customer gives a coupon to anyone by link (#247). Wallet only; no server

@@ -110,6 +110,25 @@ You don't need to press anything to detect the payment: your till is already
 listening, and the coupon arrives through the same channel any coupon does. If
 the customer pays less than a whole coupon, they keep the change automatically.
 
+### Your stall takes only its own coupons
+
+A merchant account can only take vouchers **your stall issued**. That is what Redeem is for, and it
+keeps working exactly as before: a customer paying you with your own coupon, a coupon locked to your
+stall, your till's sales coming home, and your own cashback all go through.
+
+Another stall's voucher is refused, whichever way it arrives (a customer sending it to you, a
+cashback link or code, a gift link, a pasted token), with *"Merchant accounts can only take their
+own stall's vouchers. To use a voucher from another stall, use a customer account."* Nothing is
+spent when it is refused: the voucher stays with whoever sent it. The gateway refuses it too
+(`FOREIGN_VOUCHER_FOR_MERCHANT`), so the rule holds however the request is made.
+
+Not money, and so not affected: your terminal licence from the subscriptions seller and your own
+terminals' credentials.
+
+**To use another stall's coupons yourself, use a separate customer account.** Register a second
+handle without the merchant profile and keep your shopping there. Your stall's key stays your
+stall's.
+
 ## History, stats, and what's expiring
 
 - **Transactions** lists every movement: coupons you issued and coupons that came
@@ -210,7 +229,8 @@ spent twice. There's no separate pot of money behind a coupon, which is also why
 it's only ever worth something at your stall.
 
 **Can a customer spend my coupon somewhere else?**
-No. Coupons are tied to you. They can only be redeemed back with your stall.
+No. Coupons are tied to you. They can only be redeemed back with your stall. Another stall's
+account cannot even receive it: merchant accounts take only their own stall's vouchers.
 
 **Can a coupon be spent twice?**
 No. Once a coupon comes back to you it's used up. Partial payments leave the

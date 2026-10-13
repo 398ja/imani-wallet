@@ -39,6 +39,8 @@ const stubs = vi.hoisted(() => ({
 vi.mock('../merchant', () => ({
   loadMerchant: () => stubs.merchant,
   MERCHANT_KIND: 30078,
+  // Owner rule 2026-10-13: the relay's answer for an account with no local stall record.
+  merchantStatus: async () => 'customer',
 }))
 vi.mock('../legacyBridge', () => ({
   legacyApi: async () => ({}),
