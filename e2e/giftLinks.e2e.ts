@@ -125,7 +125,7 @@ async function rumorsFor(k: string): Promise<{ types: string[]; tokens: string[]
   const url = `${BASE}/api/v1/nostr/query`
   const body = JSON.stringify({ kinds: [1059], pTags: [getPublicKey(sk)], limit: 50 })
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: nip98(sk, url, 'POST', body) }, body })
-  const events = res.ok ? (((await res.json()) as { events?: any[] }).events ?? []) : []
+  const events = res.ok ? (((await res.json()) as { events?: Parameters<typeof nip17.unwrapEvent>[0][] }).events ?? []) : []
   const types: string[] = []
   const tokens: string[] = []
   for (const ev of events) {
@@ -176,13 +176,14 @@ async function sendByLink(s: Page, amount: string, days = '7 days'): Promise<Sen
       r.onsuccess = () => ok(r.result)
       r.onerror = () => ko(r.error)
     })
-    const rows = await new Promise<any[]>((ok) => {
+    type Row = { id: string; timestamp: number; link?: { k: string; x: number } }
+    const rows = await new Promise<Row[]>((ok) => {
       const r = db.transaction('wallet_transactions').objectStore('wallet_transactions').getAll()
       r.onsuccess = () => ok(r.result)
     })
     db.close()
     const linked = rows.filter((r) => r.link?.k).sort((a, b) => b.timestamp - a.timestamp)
-    return linked[0] ? { k: linked[0].link.k as string, x: linked[0].link.x as number, rowId: linked[0].id as string } : null
+    return linked[0]?.link ? { k: linked[0].link.k, x: linked[0].link.x, rowId: linked[0].id } : null
   })
   if (!row) return null
   return { ...row, link: `${BASE}/g#v=1&k=${row.k}&x=${row.x}` }
@@ -289,7 +290,7 @@ async function main() {
         const r = indexedDB.open(name)
         r.onsuccess = () => ok(r.result)
       })
-      const row = await new Promise<any>((ok) => {
+      const row = await new Promise<{ merchantId?: string } | undefined>((ok) => {
         const r = db.transaction('wallet_transactions').objectStore('wallet_transactions').get(rowId)
         r.onsuccess = () => ok(r.result)
       })
