@@ -43,6 +43,7 @@ import { RefusedCouponsNote } from '../components/ui/RefusedCouponsNote'
 import { resolveClaimLinkByCode, useCashbackStatus } from '../lib/cashback'
 import { formatCashbackLink } from '../lib/claimLink'
 import { CancelCashback, ClaimLinkPanel } from '../components/CashbackClaimLink'
+import { GiftLinkSection } from '../components/GiftLinkSection'
 
 /**
  * One record, in full.
@@ -681,6 +682,8 @@ export function TransactionPage({
       </ListSection>
 
       <CashbackSection tx={tx} />
+
+      <GiftLinkSection link={tx.link} />
 
       <ValidationSection tx={tx} />
 

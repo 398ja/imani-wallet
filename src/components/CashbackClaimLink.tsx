@@ -17,10 +17,12 @@ export function ClaimLinkPanel({
   link,
   expiresAt,
   initiallyShown = false,
+  qrAlt = 'QR code to claim this cashback',
 }: {
   link: string
   expiresAt?: string | number
   initiallyShown?: boolean
+  qrAlt?: string
 }) {
   const [shown, setShown] = useState(initiallyShown)
   const qr = useQrDataUrl(shown ? link : null)
@@ -40,7 +42,7 @@ export function ClaimLinkPanel({
         qr ? (
           <img
             src={qr}
-            alt="QR code to claim this cashback"
+            alt={qrAlt}
             className="mx-auto w-full max-w-xs rounded-2xl bg-white p-4"
           />
         ) : null
