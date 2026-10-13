@@ -91,6 +91,41 @@ There is a tiny floor on how small a split can be (it depends on the coupon), bu
 for everyday amounts you'll never hit it. Paying a coupon in full is always
 allowed.
 
+## Sending a gift by link
+
+You can give a coupon to anyone, even someone with no account yet, as a link or a
+QR code.
+
+1. Tap **Send**, then **Anyone, by link**.
+2. Pick the coupon and the amount. Choose how long the link lasts: **1 day**,
+   **7 days** (the usual) or **30 days**. It never lasts longer than the coupon
+   itself.
+3. Check the confirm screen: *"Anyone with the link can claim it. You can take it
+   back until it is claimed."* Tap **Make link**.
+4. Tap **Show QR**, **Share link** or **Copy link**, and send it however you like.
+
+The person who opens it sees who it is from, which stall and how much, and taps
+**Add to my wallet**. If they have no account, they make one first; the gift waits
+for them. Nothing is spent until they tap Add.
+
+Things worth knowing:
+
+- **Treat the link like cash.** Whoever opens it first and taps Add gets the
+  coupon. If you know their handle, send it to them directly instead: nobody else
+  can claim that.
+- **You can take it back.** Open the send in your history (it has a **By link**
+  badge) and tap **Take it back**. The coupon comes back to your wallet and the
+  link stops working.
+- **Unclaimed links come back on their own.** After the link expires, your wallet
+  takes the coupon back the next time you open it, and the history says
+  **Taken back**. Once someone claims it, the history says **Claimed**.
+- **Lost your phone?** Restore your account and your wallet finds the links you
+  sent that are still waiting, so it can still take them back.
+- At most **10 links** can wait to be claimed at once. A link never asks for your
+  key or passphrase; if a page that looks like this wallet does, close it.
+- Links can't carry a stall's own coupons (use **Cashback** for those), a
+  subscription, or a terminal pass.
+
 ## Keeping your account safe
 
 Imani Wallet is **self-custodial**. That's a fancy way of saying: your coupons

@@ -6,7 +6,7 @@ import { vouchers } from '../../lib/bundleWording'
 import { formatFace, formatDate, displayDecimals } from '../../lib/format'
 import { worstValidation, type HistoryEntry } from '../../lib/historyGroups'
 import { isRedeemed } from '../../lib/merchants'
-import { transactionLabel, type WalletTransaction } from '../../lib/transactions'
+import { giftStatusLabel, transactionLabel, type WalletTransaction } from '../../lib/transactions'
 import { hasValidationClaim } from '../../lib/validationStatus'
 import { ValidationBadge } from './ValidationBadge'
 
@@ -188,9 +188,15 @@ export function TransactionListItem({ tx }: { tx: WalletTransaction }) {
             signal that matters gets ignored.
           */}
           {hasValidationClaim(tx) ? <ValidationBadge validation={tx.validation} /> : null}
+          {tx.link ? (
+            <span className="shrink-0 rounded-full border border-mono-300 px-1.5 text-[11px] font-medium text-mono-500 dark:border-mono-600">
+              By link
+            </span>
+          ) : null}
         </p>
         <p className="truncate text-sm text-mono-500">
           {formatDate(tx.at)}
+          {tx.link ? ` · ${giftStatusLabel(tx.link)}` : ''}
           {tx.memo ? ` · ${tx.memo}` : ''}
         </p>
       </div>

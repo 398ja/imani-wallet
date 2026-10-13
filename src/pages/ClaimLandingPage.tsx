@@ -54,8 +54,8 @@ function readArrival(ref: string | undefined, pubkey: string | undefined): Arriv
   // newest entry stays the bad one, which hid an older whole claim behind "incomplete" and left `/`
   // bouncing back here (second check of #245). Each pass adds a ref, so the loop is bounded.
   const tried = new Set<string>()
-  const next = () => pendingClaimToResume(pubkey)
-    ?? listPendingClaims().reverse().find((e) => !tried.has(e.ref))
+  const next = () => pendingClaimToResume(pubkey, 'cashback')
+    ?? listPendingClaims().reverse().find((e) => e.kind === 'cashback' && !tried.has(e.ref))
     ?? null
   for (let pending = next(); pending && !tried.has(pending.ref); pending = next()) {
     if (WHOLE_KEY.test(pending.key)) return { kind: 'resumed', ref: pending.ref, key: pending.key }
@@ -92,7 +92,9 @@ function forgetIfParked(ref: string): void {
  * home. A claim still waiting is offered again on the next launch or unlock.
  */
 export function ResumeParkedClaim({ pubkey, children }: { pubkey: string; children: ReactNode }) {
-  return pendingClaimToResume(pubkey) ? <Navigate to="/c" replace /> : <>{children}</>
+  const parked = pendingClaimToResume(pubkey)
+  // A gift (phase 4) resumes on `/g`, a cashback on `/c`: each screen resumes only its own kind.
+  return parked ? <Navigate to={parked.kind === 'gift' ? '/g' : '/c'} replace /> : <>{children}</>
 }
 
 /**
@@ -432,7 +434,7 @@ function scrubFragment(): void {
  * Centred and short. There is one thing to do here (two with Retry), and a page with one action
  * should not make somebody find it.
  */
-function Outcome({
+export function Outcome({
   title,
   body,
   onDone,

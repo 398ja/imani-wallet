@@ -5,7 +5,7 @@ import type { TransactionRow } from '@imani/wallet-storage'
 import { getSigner } from './nap'
 import { allAddressable, publish } from './relay'
 import { addRestoredTransaction, getWallet, notifyWalletChanged } from './wallet'
-import { toTransaction, type WalletTransaction } from './transactions'
+import { asGiftLinkRecord, toTransaction, type WalletTransaction } from './transactions'
 
 /**
  * The wallet's ledger, backed by the key instead of the browser.
@@ -102,6 +102,12 @@ export type HistoryContent = Nip60HistoryContent & {
    * every till sale as "Your device", the same defect class as the issuance evidence above.
    */
   terminal_pubkey?: string
+  /**
+   * A gift link on a `sent` row (claim links phase 4): its secret, index, expiry and status, so a
+   * restored or second device can show it again, watch it and take it back. Inside the sender's
+   * own NIP-44-encrypted record, like everything else here.
+   */
+  gift_link?: unknown
   /**
    * Filler that brings the plaintext to a size bucket (#99), so a record's
    * length does not say what it carries. Ignored on read: `toRow` never looks
@@ -210,6 +216,7 @@ export function toContent(tx: WalletTransaction): HistoryContent {
     transfer_id: tx.transferId,
     transfer_signature: tx.transferSignature,
     terminal_pubkey: tx.terminalPubkey,
+    ...(tx.link ? { gift_link: tx.link } : {}),
   }
 }
 
@@ -256,6 +263,7 @@ export function toRow(id: string, content: HistoryContent): TransactionRow {
     transferId: content.transfer_id,
     transferSignature: content.transfer_signature,
     ...(content.terminal_pubkey ? { terminalPubkey: content.terminal_pubkey } : {}),
+    ...(asGiftLinkRecord(content.gift_link) ? { link: asGiftLinkRecord(content.gift_link) } : {}),
   } as unknown as TransactionRow
 }
 

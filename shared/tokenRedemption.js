@@ -914,7 +914,7 @@ const TokenRedemption = {
      * @param {boolean} options.skipDuplicateCheck - Skip local duplicate check (for DM auto-redeem)
      * @param {string} options.source - Spec 039 (T018a) canonical context source. Identifies the
      *   receive surface that originated this call. Recognised values:
-     *     'scan' | 'manual' | 'sse' | 'catchup' | 'cashback' | 'escrow_recovery' | 'dm-poll'
+     *     'scan' | 'manual' | 'sse' | 'catchup' | 'cashback' | 'gift_link' | 'gift_link_reclaim' | 'escrow_recovery' | 'dm-poll'
      *     | 'receive-screen' | 'unknown'
      *   The string is plumbed verbatim onto the `ctx.source` field passed to
      *   `_persistRedeemed`. Downstream tightenings (spec-039 US 1 T030
@@ -2315,7 +2315,7 @@ const TokenRedemption = {
      *   surface. Plumbed verbatim from the `redeem(token, opts)` call site.
      *   Future tightenings (US 1 T030 inspect-before-save) gate on
      *   `ctx.source === 'scan' || 'manual'`. Values: 'scan' | 'manual' |
-     *   'sse' | 'catchup' | 'cashback' | 'escrow_recovery' | 'dm-poll' |
+     *   'sse' | 'catchup' | 'cashback' | 'gift_link' | 'gift_link_reclaim' | 'escrow_recovery' | 'dm-poll' |
      *   'receive-screen' | 'unknown'.
      * @returns {Promise<Object>} The persisted voucher, or a saveError
      *   shape on failure.

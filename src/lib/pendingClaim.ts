@@ -228,10 +228,13 @@ export function markPendingClaimOffered(ref: string, pubkey = ''): void {
   offered.add(`${pubkey}:${ref}`)
 }
 
-/** The parked claim `/` should resume now: the newest one not yet offered, or null. */
-export function pendingClaimToResume(pubkey = ''): PendingClaim | null {
+/**
+ * The parked claim `/` should resume now: the newest one not yet offered, or null. `kind` narrows it
+ * to one screen's claims: `/c` resumes cashback and `/g` resumes gifts (phase 4).
+ */
+export function pendingClaimToResume(pubkey = '', kind?: PendingClaim['kind']): PendingClaim | null {
   prunePendingClaims()
-  const all = listPendingClaims()
+  const all = listPendingClaims().filter((e) => kind === undefined || e.kind === kind)
   for (let i = all.length - 1; i >= 0; i--) {
     if (!offered.has(`${pubkey}:${all[i].ref}`)) return all[i]
   }
