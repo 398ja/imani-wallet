@@ -399,9 +399,15 @@ export async function verifyGift(
     if (p.voucher.lockKey) return { kind: 'not_money' }
     parsed.push(p)
   }
-  const issuer = parsed[0].voucher.issuerPublicKey.toLowerCase()
+  // The STALL is the voucher's signed `issuerId`; `issuerPublicKey` is the key that signed it, which
+  // for cashback is the gateway's (as dmCrypto and the cashback prompt name the stall).
+  const stallOf = (p: ParsedVoucherToken) => {
+    const id = (p.voucher.issuerId ?? '').toLowerCase()
+    return /^[0-9a-f]{64}$/.test(id) ? id : p.voucher.issuerPublicKey.toLowerCase()
+  }
+  const issuer = stallOf(parsed[0])
   const unit = parsed[0].voucher.unit
-  if (parsed.some((p) => p.voucher.issuerPublicKey.toLowerCase() !== issuer || p.voucher.unit !== unit)) {
+  if (parsed.some((p) => stallOf(p) !== issuer || p.voucher.unit !== unit)) {
     return { kind: 'unverified' }
   }
   for (const { token } of tokens) {

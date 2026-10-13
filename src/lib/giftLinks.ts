@@ -442,7 +442,7 @@ async function adoptLink(k: string, i: number, tokens: GiftToken[], nowMs: numbe
       amount: creditableFaceValue(parsed).faceValue,
       unit: parsed.voucher.unit,
       decimals: parsed.voucher.faceDecimals,
-      merchantId: parsed.voucher.issuerPublicKey.toLowerCase(),
+      merchantId: (/^[0-9a-f]{64}$/i.test(parsed.voucher.issuerId ?? '') ? parsed.voucher.issuerId : parsed.voucher.issuerPublicKey).toLowerCase(),
       recipientPubkey: linkPubOf(secretFromText(k)!),
       recipientName: 'Link',
       voucherId: parsed.voucher.voucherId,

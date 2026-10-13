@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import { fetchClaimSummary, type ClaimSummary } from '../lib/cashback'
-import { currencyDecimals, formatFace } from '../lib/format'
+import { currencyDecimals, formatFace, handleLabel } from '../lib/format'
 import type { GiftSummary } from '../lib/giftLink'
 import { humanName, useIdentityState } from '../lib/identity'
 import { hasExpiredPendingClaim, peekPendingClaim, prunePendingClaims } from '../lib/pendingClaim'
@@ -61,7 +61,8 @@ export function ParkedClaimBanner() {
   const { identity } = useIdentityState(issuer)
   const stall = humanName(identity?.name)
   const { identity: senderIdentity } = useIdentityState(gift?.senderPubkey)
-  const sender = humanName(senderIdentity?.name)
+  // A customer often publishes no name, only the handle they registered: that is who they are.
+  const sender = humanName(senderIdentity?.name) ?? (senderIdentity?.nip05 ? handleLabel(senderIdentity.nip05) : undefined)
 
   if (expired) {
     return (
