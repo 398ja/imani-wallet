@@ -76,7 +76,7 @@ beforeEach(() => {
   localStorage.clear()
   resetPendingClaimOffers()
   storedKey.value = false
-  readGift.mockReset().mockResolvedValue({ verdict: { kind: 'ok', summary: SUMMARY }, tokens: TOKENS })
+  readGift.mockReset().mockResolvedValue({ verdict: { kind: 'ok', summary: SUMMARY, tokens: TOKENS }, tokens: TOKENS })
   redeemGiftTokens.mockReset().mockResolvedValue({ kind: 'ok' })
   logged.length = 0
   requested.length = 0
@@ -119,6 +119,15 @@ describe('opening a gift link', () => {
     expect(text).toMatch(/5[.,]00/)
     expect(text).toContain('Sent by Bob via link')
     expect(text).toContain('Claim by')
+  })
+
+  it('Add redeems only the coupons verifyGift passed, never everything found at the link (review of #247, F1)', async () => {
+    const junk = { token: 'cashuBjunk-wrapped-by-someone-else', sentAt: 0 }
+    readGift.mockResolvedValue({ verdict: { kind: 'ok', summary: SUMMARY, tokens: TOKENS }, tokens: [...TOKENS, junk] })
+    open(true)
+    fireEvent.click(await screen.findByRole('button', { name: 'Add to my wallet' }))
+    await settle()
+    expect(redeemGiftTokens).toHaveBeenCalledWith(TOKENS, 'gift_link')
   })
 
   it('spends once on Add, however many taps, with source gift_link', async () => {

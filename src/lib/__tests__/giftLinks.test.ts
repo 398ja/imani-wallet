@@ -16,6 +16,8 @@ const h = vi.hoisted(() => ({
   wraps: new Map<string, string[]>(),
   sent: [] as Array<Record<string, unknown>>,
   signerKey: null as Uint8Array | null,
+  /** The send delivers a wrap to this link key (as the gateway does on COMPLETED). */
+  deliverTo: null as string | null,
 }))
 
 vi.mock('../wallet', () => ({
@@ -53,6 +55,8 @@ vi.mock('../cashbackValidation', () => ({ cashbackValidation: () => undefined })
 vi.mock('../pay', () => ({
   sendVouchers: async (args: Record<string, unknown>) => {
     h.sent.push(args)
+    const to = (args.recipient as { pubkey: string }).pubkey
+    if (h.deliverTo === to) h.wraps.set(to, ['cashuBdelivered'])
     return { id: 's1', requested: 100, delivered: 100, parts: 1 }
   },
 }))
@@ -61,7 +65,9 @@ vi.mock('../giftLink', async (orig) => {
   const real = await orig<typeof import('../giftLink')>()
   return {
     ...real,
-    fetchGiftWraps: async (secret: Uint8Array) => [{ id: real.linkPubOf(secret) }],
+    // A key with nothing registered has no wraps (so the send's free-key probe passes it).
+    fetchGiftWraps: async (secret: Uint8Array) =>
+      (h.wraps.get(real.linkPubOf(secret)) ?? []).length ? [{ id: real.linkPubOf(secret) }] : [],
     giftTokensFrom: async (secret: Uint8Array) =>
       (h.wraps.get(real.linkPubOf(secret)) ?? []).map((token) => ({ token, sentAt: 1_800_000_000 })),
   }
@@ -97,6 +103,7 @@ beforeEach(() => {
   h.wraps.clear()
   h.sent = []
   h.signerKey = ID
+  h.deliverTo = null
   vi.stubGlobal('localStorage', {
     getItem: (k: string) => store.get(k) ?? null,
     setItem: (k: string, v: string) => void store.set(k, v),
@@ -147,7 +154,7 @@ describe('Send by link (Q5)', () => {
   it('counts claimed and taken-back links as no longer waiting', async () => {
     h.rows = [...Array.from({ length: 9 }, (_, i) => linkRow(i)), linkRow(9, 'claimed'), linkRow(10, 'reclaimed')]
     // The delivery check (spec 3.3 send step 3) finds the wrap at once.
-    h.wraps.set(linkPubOf(deriveLinkSecret(ID, 11)), ['cashuBdelivered'])
+    h.deliverTo = linkPubOf(deriveLinkSecret(ID, 11))
     const out = await sendGift({ payer: PUB, merchant: {} as never, unit: 'EUR', amount: 100, x: 1_900_000_000 })
     expect(out.delivered).toBe(true)
     expect(h.sent).toHaveLength(1)

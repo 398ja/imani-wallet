@@ -182,7 +182,9 @@ function GiftPrompt({
   const accept = useCallback(() => {
     if (spending.current || state.step !== 'ready' || state.verdict.kind !== 'ok') return
     spending.current = true
-    const { tokens } = state
+    // Only what verifyGift passed and found unspent: never a token a third party wrapped to the
+    // link's public key, and never a part an earlier Add already took (review of #247, F1, F4).
+    const { tokens } = state.verdict
     const verified = state.verdict.summary
     setState({ step: 'redeeming' })
     void redeemGiftTokens(tokens, 'gift_link').then(

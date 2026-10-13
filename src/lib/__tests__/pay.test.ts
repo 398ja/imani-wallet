@@ -66,7 +66,7 @@ vi.mock('../transferSignature', () => ({
 import { tokenIdFrom } from '../../../packages/wallet-storage/src/tokenId'
 import type { NUT18VRequest } from '../nap'
 import { creditableFaceValue, parseVoucherToken } from '../voucherToken'
-import { buildVoucherToken } from './voucherFixtures'
+import { buildLicenceVoucherToken, buildVoucherToken } from './voucherFixtures'
 
 /** A €5.00 coupon, the only denomination this stack issues. */
 const coupon = (over: Partial<Voucher> = {}): Voucher =>
@@ -1502,6 +1502,32 @@ describe('sendVouchers and payRequest', () => {
       // D3: the id is kept on the sent row, which is all a wiped sender needs
       // to rebuild the signature (its nonce derives from their key and this).
       expect(transactions[0]).toMatchObject({ type: 'sent', transferId: SENT_ID })
+    })
+
+    it('a link send never draws a locked voucher or licence, even when the screen did not filter it (spec 4.2)', async () => {
+      // `sendGift` hands over only merchant + unit + amount: this filter is the door, not the picker.
+      const meta = JSON.stringify({ kind: 'imani_licence', v: 1, lock_key: 'b'.repeat(64), product: 'annual' })
+      const { token: locked } = buildLicenceVoucherToken({ merchantMetadata: meta, unit: 'EUR' })
+      const rows = [row({ token: locked })]
+      stubs.rows = rows
+      const sent = completingWith({ status: 'COMPLETED', sent_voucher_id: SENT_ID })
+      wallet(rows)
+      const link = { k: 'A'.repeat(42) + 'E', x: 1_900_000_000, status: 'outstanding' as const, i: 3 }
+      await expect(
+        sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 250, link }),
+      ).rejects.toThrow()
+      expect(sent).toEqual([])
+    })
+
+    it("a link send of the sender's own stall's coupons is refused before anything moves (Q6)", async () => {
+      stubs.rows = [row({ issuer_id: PAYER })]
+      const sent = completingWith({ status: 'COMPLETED', sent_voucher_id: SENT_ID })
+      wallet([row({ issuer_id: PAYER })])
+      const link = { k: 'A'.repeat(42) + 'E', x: 1_900_000_000, status: 'outstanding' as const, i: 3 }
+      await expect(
+        sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant: { ...merchant, pubkey: PAYER }, unit: 'EUR', amount: 250, link }),
+      ).rejects.toThrow(/use Cashback/)
+      expect(sent).toEqual([])
     })
 
     it('does NOT sign a send to a gift link key (spec 3.3, Q7, pre-check build item 1)', async () => {
