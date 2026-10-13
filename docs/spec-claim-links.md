@@ -589,7 +589,10 @@ wallet."*
 Then:
 - On `/onboarding`, **Register** is primary and "I already have an account" (Log in / Restore) is
   secondary. On `/login` it is Unlock.
-- The merchant toggle stays available.
+- A claim-driven registration is customer-only: only customers redeem cashback and gifts. While a
+  live parked claim exists (cashback or gift, the banner's rule), the "I am a merchant" switch is
+  hidden and replaced by *"You're redeeming a voucher, so this is a customer account."*, and the
+  form refuses the merchant steps and a merchant submit even if the switch was set earlier.
 - If the summary cannot be fetched, the banner falls back to *"Create an account to redeem your
   voucher"*. It never blocks registration.
 
@@ -644,7 +647,7 @@ disappear until real listings exist (they are placeholders today, `PublicClaimCo
    parks the claim and scrubs the URL.
 2. The device holds no key, so the visitor goes to `/onboarding`. The banner reads *"Create an
    account to redeem the voucher from Ana's Bakery. €2.00. Claim by 16 Oct."*
-3. Register: handle and passphrase, optionally the merchant profile. Then the backup screen
+3. Register: handle and passphrase (a customer account, section 4.4). Then the backup screen
    (unchanged).
 4. `/` sees the parked claim and redirects to `/c`. The prompt shows. **Add to my wallet**, then
    *"Voucher added"*.
