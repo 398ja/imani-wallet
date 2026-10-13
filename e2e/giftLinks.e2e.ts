@@ -278,6 +278,10 @@ async function main() {
       await r.locator('input[placeholder="your-handle"]').waitFor({ timeout: 20_000 }).catch(() => {})
       const acct = await text(r)
       check('CL-C the merchant switch is absent', !(await r.getByText('I am a merchant').count()) && acct.includes("You're redeeming a voucher, so this is a customer account."), acct.slice(0, 300))
+      // Back to the start step: registerCustomer's goto to this same URL is a reload in Chromium, and a
+      // reload keeps history.state (the account step), so its Register button would never show.
+      await r.getByRole('button', { name: /^Back$/ }).first().click()
+      await r.getByRole('button', { name: /^Register$/ }).first().waitFor({ timeout: 20_000 }).catch(() => {})
     }
     await registerCustomer(r, BASE)
     await r.waitForFunction(() => /Add to my wallet|Voucher unavailable/.test(document.body.innerText), undefined, { timeout: 60_000 }).catch(() => {})
