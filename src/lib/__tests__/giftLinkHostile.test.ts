@@ -50,7 +50,7 @@ vi.mock('../pay', () => ({
 }))
 
 import { deriveLinkSecret, giftTokensFrom, linkPubOf, secretToText, verifyGift, type GiftToken } from '../giftLink'
-import { reconcileGiftLinks, sendGift, takeBack } from '../giftLinks'
+import { reconcileGiftLinks, redeemGiftTokens, restoreScan, sendGift, takeBack } from '../giftLinks'
 import { gatewayAnswers, resetGate } from './trustedMintKit'
 import { buildPlainToken, buildVoucherToken } from './voucherFixtures'
 
@@ -187,6 +187,83 @@ describe('F3: a link index is never reused after this device lost its counter an
       /Nothing has been sent/,
     )
     expect(h.sent).toHaveLength(0)
+  })
+})
+
+describe('second check of the fix (review of #247)', () => {
+  const now = Date.UTC(2026, 9, 13)
+  const x = Math.floor(now / 1000) + 86400
+
+  it('the restore scan adopts the genuine link even when a third party wrapped junk to it', async () => {
+    const real = buildVoucherToken({ expiresAt: 0 }, [8]).token
+    const junk = buildPlainToken('http://evil.example')
+    const target = linkPubOf(deriveLinkSecret(ID, 0))
+    const probe = async (secret: Uint8Array) =>
+      linkPubOf(secret) === target ? [real, junk].map((token) => ({ token, sentAt: 1_800_000_000 })) : []
+    // tokenState never asks a mint this wallet does not trust: the junk reads UNKNOWN.
+    const adopted = await restoreScan('b'.repeat(64), probe, async (t) => (t === real ? 'UNSPENT' : 'UNKNOWN'), now)
+    expect(adopted).toBe(1)
+    expect(h.rows).toHaveLength(1)
+    expect(h.rows[0]).toMatchObject({ type: 'sent', link: { i: 0, status: 'outstanding' } })
+  })
+
+  it('a coupon whose state cannot be read keeps the whole gift waiting (never a partial Add)', async () => {
+    const stall = hexToBytes('44'.repeat(32))
+    const a = buildVoucherToken({ expiresAt: 0, voucherId: 'cccccccc-0000-4000-8000-000000000001' }, [8], {}, stall).token
+    const b = buildVoucherToken({ expiresAt: 0, voucherId: 'cccccccc-0000-4000-8000-000000000002' }, [4], {}, stall).token
+    const tokens: GiftToken[] = [a, b].map((token) => ({ token, sentAt: 0 }))
+    expect((await verifyGift(tokens, x, now, async (t) => (t === a ? 'UNSPENT' : 'UNKNOWN'))).kind).toBe('unreachable')
+  })
+
+  // Residual (follow-up): a VALID coupon of another stall wrapped to the link key still makes the
+  // recipient's prompt refuse ("could not verify"), because the wallet cannot tell which stall the
+  // sender meant. Pinned so the check is not dropped silently; the sender can still take it back.
+  it('coupons of two stalls are refused for the recipient, and Take it back still works', async () => {
+    const real = buildVoucherToken({ expiresAt: 0 }, [8], {}, hexToBytes('44'.repeat(32))).token
+    const other = buildVoucherToken({ expiresAt: 0, voucherId: 'dddddddd-0000-4000-8000-000000000001' }, [4], {}, hexToBytes('55'.repeat(32))).token
+    const secret = deriveLinkSecret(ID, 7)
+    const wraps = [real, other].map((t) => wrapTo(linkPubOf(secret), t))
+    const tokens = await giftTokensFrom(secret, wraps as never)
+    expect((await verifyGift(tokens, x, now, async () => 'UNSPENT')).kind).toBe('unverified')
+
+    const k = secretToText(secret)
+    h.rows = [{ id: 'sent:m', type: 'sent', timestamp: 1, link: { k, i: 7, x: 2_000_000_000, status: 'outstanding' } }]
+    vi.stubGlobal('fetch', async (url: string) =>
+      String(url).endsWith('/v1/checkstate') ? Response.json({ states: [{ state: 'UNSPENT' }] }) : Response.json({ events: wraps }),
+    )
+    expect((await takeBack(k)).kind).toBe('ok')
+    expect(h.redeemed.map((r) => r.token)).toContain(real)
+  })
+
+  // A third party re-uses the SIGNED secret of a voucher it holds (issuer signature valid, trusted
+  // mint, NUT-07 UNSPENT) with a garbage mint signature `C`. It passes every client-side check, and
+  // the mint refuses it at redeem. Wrapped FIRST, it must not stop the genuine coupon from being
+  // added or taken back (one idle voucher could otherwise freeze every link it is wrapped to).
+  it('an unredeemable decoy wrapped first does not stop the genuine coupon being added or taken back', async () => {
+    const stall = hexToBytes('44'.repeat(32))
+    const decoy = buildVoucherToken({ expiresAt: 0, voucherId: 'eeeeeeee-0000-4000-8000-000000000001' }, [4], {}, stall).token
+    const real = buildVoucherToken({ expiresAt: 0, voucherId: 'eeeeeeee-0000-4000-8000-000000000002' }, [8], {}, stall).token
+    const redeem = window.TokenRedemption!.redeem
+    ;(window as unknown as { TokenRedemption: { redeem: typeof redeem } }).TokenRedemption.redeem = async (token, opts) => {
+      if (token === decoy) throw new Error('mint: could not verify proofs (10003)')
+      return redeem(token, opts)
+    }
+    const secret = deriveLinkSecret(ID, 9)
+    const wraps = [decoy, real].map((t) => wrapTo(linkPubOf(secret), t))
+    const tokens = await giftTokensFrom(secret, wraps as never)
+    const verdict = await verifyGift(tokens, x, now, async () => 'UNSPENT')
+    expect(verdict.kind).toBe('ok')
+    await redeemGiftTokens(verdict.kind === 'ok' ? verdict.tokens : [], 'gift_link')
+    expect(h.redeemed).toEqual([{ token: real, source: 'gift_link' }])
+
+    h.redeemed = []
+    const k = secretToText(secret)
+    h.rows = [{ id: 'sent:d', type: 'sent', timestamp: 1, link: { k, i: 9, x: 2_000_000_000, status: 'outstanding' } }]
+    vi.stubGlobal('fetch', async (url: string) =>
+      String(url).endsWith('/v1/checkstate') ? Response.json({ states: [{ state: 'UNSPENT' }] }) : Response.json({ events: wraps }),
+    )
+    await takeBack(k)
+    expect(h.redeemed).toEqual([{ token: real, source: 'gift_link_reclaim' }])
   })
 })
 
