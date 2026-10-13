@@ -41,7 +41,15 @@ vi.mock('../../lib/identity', async (importOriginal) => ({
 }))
 
 import { ClaimLandingPage, ResumeParkedClaim } from '../ClaimLandingPage'
-import { peekPendingClaim, resetPendingClaimOffers, stashPendingClaim } from '../../lib/pendingClaim'
+import {
+  listPendingClaims,
+  markPendingClaimOffered,
+  peekPendingClaim,
+  peekPendingClaimFor,
+  pendingClaimToResume,
+  resetPendingClaimOffers,
+  stashPendingClaim,
+} from '../../lib/pendingClaim'
 
 const REF = 'abcd1234efgh5678'
 const KEY = 'Q'.repeat(43)
@@ -485,8 +493,8 @@ describe('the parked claim is only ever forgotten for the claim on screen', () =
   }
 
   // Third check of the fix verification: the failure branch re-parks a LINK arrival so a retry can
-  // find it. `stashPendingClaim` overwrites the single slot, so a link that failed before the spend
-  // replaced a different, still unspent parked claim, whose key exists nowhere else on this device.
+  // find it. With one slot that replaced a different, still unspent parked claim, whose key exists
+  // nowhere else on this device. Parked claims are keyed by ref now (F4-1): BOTH stay parked.
   for (const [label, result] of [
     ['unreachable', { kind: 'unreachable', reason: 'network' }],
     ['throttled', { kind: 'throttled', retryAfterSeconds: 30 }],
@@ -499,7 +507,7 @@ describe('the parked claim is only ever forgotten for the claim on screen', () =
       open()
       fireEvent.click(await screen.findByRole('button', { name: 'Add to my wallet' }))
       await screen.findByRole('button', { name: 'Open my wallet' })
-      expect(peekPendingClaim()?.ref).toBe(OTHER_REF)
+      expect(listPendingClaims().map((c) => c.ref).sort()).toEqual([REF, OTHER_REF].sort())
     })
 
     it(`a link that fails before the spend (${label}) with nothing else parked is parked for a retry`, async () => {
@@ -551,7 +559,8 @@ describe('two claims on one device, end to end', () => {
     app(`/c/${REF}`, `#k=${KEY}`)
     fireEvent.click(await screen.findByRole('button', { name: 'Add to my wallet' }))
     await screen.findByText('We could not reach the voucher service. Your voucher is still waiting, so please try again.')
-    expect(peekPendingClaim()?.ref).toBe(B)
+    expect(peekPendingClaimFor(B)?.key).toBe(KEY_B)
+    expect(peekPendingClaimFor(REF)?.key).toBe(KEY)
     cleanup()
 
     // Open A again, accept: added. B is still parked and unspent.
@@ -610,5 +619,182 @@ describe('two claims on one device, end to end', () => {
     fireEvent.click(open2[open2.length - 1])
     await second.findByText('HOME')
     expect(peekPendingClaim()).toBeNull()
+  })
+})
+
+/** Claim links phase 3 (spec 4.3, CL-SWITCH): "Not you? Switch account" keeps the claim on screen. */
+describe('Switch account', () => {
+  function openWithSwitch(onSwitch: () => void) {
+    window.history.replaceState(null, '', `/c/${REF}#k=${KEY}`)
+    return render(
+      <MemoryRouter initialEntries={[`/c/${REF}`]}>
+        <Routes>
+          <Route path="/c/:ref" element={<ClaimLandingPage authed pubkey={CUSTOMER} onSwitchAccount={onSwitch} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+  }
+
+  it('parks the claim on screen (opened by link), runs logout, and spends nothing', async () => {
+    const onSwitch = vi.fn()
+    openWithSwitch(onSwitch)
+    fireEvent.click(await screen.findByRole('button', { name: 'Switch account' }))
+    expect(onSwitch).toHaveBeenCalledOnce()
+    expect(peekPendingClaimFor(REF)?.key).toBe(KEY)
+    expect(redeemClaimRef).not.toHaveBeenCalled()
+  })
+
+  it('leaves a different parked claim alone', async () => {
+    const OTHER = 'zzzz9999yyyy8888'
+    stashPendingClaim(OTHER, KEY)
+    openWithSwitch(vi.fn())
+    fireEvent.click(await screen.findByRole('button', { name: 'Switch account' }))
+    expect(listPendingClaims().map((c) => c.ref).sort()).toEqual([REF, OTHER].sort())
+  })
+
+  it('is not offered without a logout to run', async () => {
+    open()
+    await screen.findByRole('button', { name: 'Add to my wallet' })
+    expect(screen.queryByRole('button', { name: 'Switch account' })).toBeNull()
+  })
+})
+
+/** Review of #245, F2 (spec 4.3 "Adding to: {your handle}  Not you? Switch account"): name the account. */
+describe('the prompt names the account it adds to', () => {
+  it('shows this account\'s handle next to Switch account', async () => {
+    localStorage.setItem(`imani-wallet:profile:${CUSTOMER}`, JSON.stringify({ pubkey: CUSTOMER, npub: 'npub1x', nip05: 'alice@imani.local' }))
+    window.history.replaceState(null, '', `/c/${REF}#k=${KEY}`)
+    render(
+      <MemoryRouter initialEntries={[`/c/${REF}`]}>
+        <Routes>
+          <Route path="/c/:ref" element={<ClaimLandingPage authed pubkey={CUSTOMER} onSwitchAccount={() => {}} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await screen.findByRole('button', { name: 'Add to my wallet' })
+    expect(document.body.textContent).toMatch(/Adding to @alice/)
+    localStorage.removeItem(`imani-wallet:profile:${CUSTOMER}`)
+  })
+
+  it('falls back to "your wallet" with no stored handle', async () => {
+    open()
+    await screen.findByRole('button', { name: 'Add to my wallet' })
+    expect(document.body.textContent).toMatch(/Adding to your wallet/)
+  })
+})
+
+/** Review of #245, F3: a storage that cannot be written must not spin the resume loop forever. */
+describe('a parked claim with a bad key, on a storage that refuses writes', () => {
+  it('ends on "incomplete" rather than looping', async () => {
+    localStorage.setItem('imani-wallet:pending-claim', JSON.stringify([
+      { kind: 'cashback', ref: 'goodgoodgoodgood', key: 'short', at: Date.now() - 2 },
+      { kind: 'cashback', ref: REF, key: 'short', at: Date.now() - 1 },
+    ]))
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('full', 'QuotaExceededError')
+    })
+    try {
+      open(CUSTOMER, '/c', '')
+      expect(await screen.findByText('This link is incomplete. Ask for it again, or scan the whole QR.')).toBeTruthy()
+    } finally {
+      setItem.mockRestore()
+    }
+  }, 5_000)
+})
+
+/** Second check of #245 (F3 follow-up): the guard must not skip a valid claim, nor trap `/`. */
+describe('a bad-key entry on a storage that refuses writes, beside a good one', () => {
+  const quota = () => vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new DOMException('full', 'QuotaExceededError')
+  })
+
+  it('offers the older valid claim behind a newer bad one', async () => {
+    localStorage.setItem('imani-wallet:pending-claim', JSON.stringify([
+      { kind: 'cashback', ref: 'goodgoodgoodgood', key: KEY, at: Date.now() - 3 },
+      { kind: 'cashback', ref: 'badbadbadbadbad1', key: 'short', at: Date.now() - 1 },
+    ]))
+    const setItem = quota()
+    try {
+      open(CUSTOMER, '/c', '')
+      await screen.findByRole('button', { name: 'Add to my wallet' })
+      expect(fetchClaimSummary).toHaveBeenCalledWith('goodgoodgoodgood')
+    } finally {
+      setItem.mockRestore()
+    }
+  }, 5_000)
+
+  it('lets "/" reach home after the incomplete screen', async () => {
+    localStorage.setItem('imani-wallet:pending-claim', JSON.stringify([
+      { kind: 'cashback', ref: 'badbadbadbadbad0', key: 'short', at: Date.now() - 2 },
+      { kind: 'cashback', ref: 'badbadbadbadbad1', key: 'short', at: Date.now() - 1 },
+    ]))
+    const setItem = quota()
+    try {
+      window.history.replaceState(null, '', '/c')
+      render(
+        <MemoryRouter initialEntries={['/c']}>
+          <Routes>
+            <Route path="/c" element={<ClaimLandingPage authed pubkey={CUSTOMER} />} />
+            <Route path="/" element={<ResumeParkedClaim pubkey={CUSTOMER}><p>HOME</p></ResumeParkedClaim>} />
+          </Routes>
+        </MemoryRouter>,
+      )
+      await screen.findByText('This link is incomplete. Ask for it again, or scan the whole QR.')
+      fireEvent.click(screen.getAllByRole('button')[0])
+      expect(await screen.findByText('HOME')).toBeTruthy()
+    } finally {
+      setItem.mockRestore()
+    }
+  }, 5_000)
+
+  // Third look: the direct-visit fallback (every claim already shown) must skip the bad entries
+  // too, or a storage that refuses writes ends on "incomplete" where a writable one resumes.
+  it('a direct visit with the good claim already shown still reaches it past a newer bad one', async () => {
+    localStorage.setItem('imani-wallet:pending-claim', JSON.stringify([
+      { kind: 'cashback', ref: 'goodgoodgoodgood', key: KEY, at: Date.now() - 3 },
+      { kind: 'cashback', ref: 'badbadbadbadbad1', key: 'short', at: Date.now() - 1 },
+    ]))
+    markPendingClaimOffered('goodgoodgoodgood', CUSTOMER)
+    const setItem = quota()
+    try {
+      open(CUSTOMER, '/c', '')
+      await screen.findByRole('button', { name: 'Add to my wallet' })
+      expect(fetchClaimSummary).toHaveBeenCalledWith('goodgoodgoodgood')
+    } finally {
+      setItem.mockRestore()
+    }
+  }, 5_000)
+})
+
+/** Third look at the F3 follow-up: marking a bad entry "offered" must not suppress anything else. */
+describe('a bad-key entry marked offered', () => {
+  it('on a writable storage: resumes the good claims around it and forgets every bad one', async () => {
+    localStorage.setItem('imani-wallet:pending-claim', JSON.stringify([
+      { kind: 'cashback', ref: 'badbadbadbadbad0', key: 'short', at: Date.now() - 4 },
+      { kind: 'cashback', ref: 'goodgoodgoodgood', key: KEY, at: Date.now() - 3 },
+      { kind: 'cashback', ref: 'badbadbadbadbad1', key: 'short', at: Date.now() - 2 },
+      { kind: 'cashback', ref: 'badbadbadbadbad2', key: 'short', at: Date.now() - 1 },
+    ]))
+    open(CUSTOMER, '/c', '')
+    await screen.findByRole('button', { name: 'Add to my wallet' })
+    expect(fetchClaimSummary).toHaveBeenCalledWith('goodgoodgoodgood')
+    expect(listPendingClaims().map((c) => c.ref)).toEqual(['badbadbadbadbad0', 'goodgoodgoodgood'])
+  })
+
+  it('does not hide the same ref re-parked with a whole key, nor hide it from another account', async () => {
+    localStorage.setItem('imani-wallet:pending-claim', JSON.stringify([
+      { kind: 'cashback', ref: REF, key: 'short', at: Date.now() - 1 },
+    ]))
+    open(CUSTOMER, '/c', '')
+    await screen.findByText('This link is incomplete. Ask for it again, or scan the whole QR.')
+    expect(listPendingClaims()).toEqual([])
+    cleanup()
+
+    // The whole link arrives later and is parked (a logged-out tab, or "Not now" elsewhere).
+    stashPendingClaim(REF, KEY)
+    expect(pendingClaimToResume(OTHER_CUSTOMER)?.ref).toBe(REF)
+    // The whole link itself is always offered: the fragment path does not consult the marks.
+    open(CUSTOMER, `/c/${REF}`, `#k=${KEY}`)
+    await screen.findByRole('button', { name: 'Add to my wallet' })
   })
 })

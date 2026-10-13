@@ -2,10 +2,11 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Navigate, useNavigate, useParams } from 'react-router-dom'
 
 import { fetchClaimSummary, redeemClaimRef, type ClaimSummary, type RedeemResult } from '../lib/cashback'
-import { currencyDecimals, formatFace, shortPubkey } from '../lib/format'
+import { currencyDecimals, formatFace, handleLabel, shortPubkey } from '../lib/format'
 import { humanName, useIdentityState } from '../lib/identity'
 import { hasStoredKey } from '../lib/nap'
-import { clearPendingClaim, markPendingClaimOffered, peekPendingClaim, pendingClaimToResume, stashPendingClaim } from '../lib/pendingClaim'
+import { loadProfile } from '../lib/profile'
+import { forgetPendingClaim, listPendingClaims, markPendingClaimOffered, pendingClaimToResume, stashPendingClaim } from '../lib/pendingClaim'
 import { isTerminalDevice } from '../lib/terminalEnrol'
 import { Button } from '../components/ui'
 import { Centered } from '../components/ui/layout'
@@ -34,7 +35,7 @@ const PUBKEY_HEX = /^[0-9a-f]{64}$/
  * else happens (claim links phase 1). The key then lives only in this component's memory (and in
  * the parked claim, for a resume): never in a URL query, never in a log line, never in a request.
  */
-function readArrival(ref: string | undefined): Arrival {
+function readArrival(ref: string | undefined, pubkey: string | undefined): Arrival {
   const match = KEY_IN_FRAGMENT.exec(window.location.hash)
   scrubFragment()
   if (ref && match) {
@@ -44,25 +45,38 @@ function readArrival(ref: string | undefined): Arrival {
 
   // A claim parked before onboarding or login arrives with no fragment at all, so a bare visit is
   // not necessarily a broken link.
-  const pending = peekPendingClaim()
-  if (pending) {
+  // The same one `/` chose (`ResumeParkedClaim`): the newest this account has not been shown.
+  // A direct visit to `/c` (a second tab) with every claim already shown gets the newest one.
+  // Never visit a ref twice: on a storage that refuses writes the forget below is a no-op, and the
+  // next read returned the same entry, which spun this loop forever and froze the tab during the
+  // first render (review of #245, F3).
+  // A bad ref is also marked offered, and the fallback skips what was tried: on such a storage the
+  // newest entry stays the bad one, which hid an older whole claim behind "incomplete" and left `/`
+  // bouncing back here (second check of #245). Each pass adds a ref, so the loop is bounded.
+  const tried = new Set<string>()
+  const next = () => pendingClaimToResume(pubkey)
+    ?? listPendingClaims().reverse().find((e) => !tried.has(e.ref))
+    ?? null
+  for (let pending = next(); pending && !tried.has(pending.ref); pending = next()) {
     if (WHOLE_KEY.test(pending.key)) return { kind: 'resumed', ref: pending.ref, key: pending.key }
+    tried.add(pending.ref)
+    markPendingClaimOffered(pending.ref, pubkey)
     // Parked before this check existed. `/` would bounce back here for as long as it is parked.
-    clearPendingClaim()
+    forgetPendingClaim(pending.ref)
   }
 
   return { kind: 'incomplete' }
 }
 
 /**
- * Forget the parked claim, but only if it is THIS one: a newer link parked meanwhile is left alone.
+ * Forget the parked claim for THIS ref only: every other parked claim is left alone (F4-1).
  *
  * Every dead end (claimed, expired, revoked, own cashback, not found, a bad key) must call this
  * before going home, because `/` sends a device with a parked claim straight back to `/c`. Left
  * parked, a dead claim held the customer on this screen until it aged out (24 h).
  */
 function forgetIfParked(ref: string): void {
-  if (peekPendingClaim()?.ref === ref) clearPendingClaim()
+  forgetPendingClaim(ref)
 }
 
 /**
@@ -105,13 +119,22 @@ export function ResumeParkedClaim({ pubkey, children }: { pubkey: string; childr
  * survive in history, a bookmark, a screenshot of the URL bar or a referrer. Pinned by
  * `ClaimLandingPrompt.test.tsx`, which also asserts it never reaches a log line or a request URL.
  */
-export function ClaimLandingPage({ authed, pubkey }: { authed: boolean; pubkey?: string }) {
+export function ClaimLandingPage({
+  authed,
+  pubkey,
+  onSwitchAccount,
+}: {
+  authed: boolean
+  pubkey?: string
+  /** "Not you? Switch account" (spec 4.3): the app's own logout, which keeps parked claims. */
+  onSwitchAccount?: () => void
+}) {
   const { ref } = useParams<{ ref: string }>()
   const navigate = useNavigate()
 
   // Read once per mount, in the first render: React may render twice (StrictMode) and the second
   // read would find the fragment already scrubbed.
-  const [arrival] = useState<Arrival>(() => readArrival(ref))
+  const [arrival] = useState<Arrival>(() => readArrival(ref, pubkey))
   const started = useRef(false)
 
   useEffect(() => {
@@ -149,7 +172,7 @@ export function ClaimLandingPage({ authed, pubkey }: { authed: boolean; pubkey?:
   }
   if (!authed) return <Centered>Opening your voucher…</Centered>
 
-  return <ConfirmPrompt arrival={arrival} pubkey={pubkey} onDone={goHome} />
+  return <ConfirmPrompt arrival={arrival} pubkey={pubkey} onDone={goHome} onSwitchAccount={onSwitchAccount} />
 }
 
 type PromptState =
@@ -166,10 +189,12 @@ function ConfirmPrompt({
   arrival,
   pubkey,
   onDone,
+  onSwitchAccount,
 }: {
   arrival: Extract<Arrival, { ref: string }>
   pubkey: string | undefined
   onDone: () => void
+  onSwitchAccount?: () => void
 }) {
   const [state, setState] = useState<PromptState>({ step: 'loading' })
   /** Redeeming is DESTRUCTIVE: a second tap, or a re-render, must never start a second claim. */
@@ -199,6 +224,10 @@ function ConfirmPrompt({
   const issuer = state.step === 'summary' && state.summary.kind === 'ok' ? state.summary.issuerPubkey : null
   const { identity, loading: stallLoading } = useIdentityState(issuer && PUBKEY_HEX.test(issuer) ? issuer : undefined)
   const stallName = humanName(identity?.name)
+  const [ownHandle] = useState(() => {
+    const nip05 = pubkey ? loadProfile(pubkey)?.nip05 : undefined
+    return nip05 ? handleLabel(nip05) : null
+  })
 
   const accept = useCallback(() => {
     if (spending.current) return
@@ -219,11 +248,9 @@ function ConfirmPrompt({
         forgetIfParked(arrival.ref)
       } else if (arrival.kind === 'link') {
         // Failed before the claim was spent, and the key came from the URL rather than the
-        // store. Park it so a retry has something to work from, but never over a DIFFERENT
-        // parked claim: there is one slot, and that claim is just as unspent. This link is still
-        // in the customer's hands (they just opened it); the parked one may exist nowhere else.
-        const parked = peekPendingClaim()
-        if (!parked || parked.ref === arrival.ref) stashPendingClaim(arrival.ref, arrival.key)
+        // store. Park it so a retry has something to work from. Parked claims are keyed by ref
+        // (F4-1), so this never displaces a different one.
+        stashPendingClaim(arrival.ref, arrival.key)
       }
       setState({ step: 'done', result })
     })
@@ -326,7 +353,26 @@ function ConfirmPrompt({
         <p className="mt-1 text-sm text-mono-500">Cashback from {stall}</p>
         {summary.memo && <p className="mt-1 text-sm text-mono-500">{summary.memo}</p>}
         {summary.expiresAt && <p className="mt-1 text-sm text-mono-500">Claim by {formatDate(summary.expiresAt)}</p>}
-        <p className="mt-3 text-sm text-mono-500">Adding to your wallet</p>
+        {/* Spec 4.3: "Adding to: {your handle}". The account's own handle, so a shared device shows
+            WHICH account is about to receive it, next to the way to switch (review of #245, F2). */}
+        <p className="mt-3 text-sm text-mono-500">Adding to {ownHandle ?? 'your wallet'}</p>
+        {onSwitchAccount && (
+          <p className="mt-1 text-sm text-mono-500">
+            Not you?{' '}
+            <button
+              type="button"
+              className="pressable underline hover:text-mono-900 dark:hover:text-mono-50"
+              onClick={() => {
+                // Keeps this claim parked (logout carries parked claims across): it resumes after
+                // the next login, on whichever account that is (spec 4.3, CL-SWITCH).
+                stashPendingClaim(arrival.ref, arrival.key)
+                onSwitchAccount()
+              }}
+            >
+              Switch account
+            </button>
+          </p>
+        )}
         {!summary.mintTrusted && (
           <p className="mt-3 text-sm text-amber-600">
             This wallet has no trusted mint yet, so it cannot add vouchers. Your voucher is still waiting.

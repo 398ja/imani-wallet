@@ -503,12 +503,12 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         {/* A claim link handed over by the hosted page. Present in BOTH trees:
             here it redeems, and in `PublicRoutes` it parks the claim and sends
             the customer to onboarding first. */}
-        <Route path="/c/:ref" element={<ClaimLandingPage authed pubkey={pubkey} />} />
+        <Route path="/c/:ref" element={<ClaimLandingPage authed pubkey={pubkey} onSwitchAccount={onLogout} />} />
         {/* Where a parked claim is picked up after onboarding. `Entry` sends a
             new wallet here rather than to the home screen when one is waiting,
             so the last step of "install the app to get your voucher" is not
             left to the customer to work out. */}
-        <Route path="/c" element={<ClaimLandingPage authed pubkey={pubkey} />} />
+        <Route path="/c" element={<ClaimLandingPage authed pubkey={pubkey} onSwitchAccount={onLogout} />} />
         {/* Buying a stall's coupon by card. In BOTH trees: a shopper who
             already holds coupons is topping up, and a stranger who scanned a
             QR is the reason the hosted page exists. */}

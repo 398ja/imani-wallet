@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (claim links, phase 3: registration, [spec](docs/spec-claim-links.md) 2.5, 4.4, 5.2)
+
+- **A voucher banner on onboarding and Login.** When a claim link is parked, the start step of
+  onboarding (above Register, still primary) and Login (above Unlock) read *"Create an account to
+  redeem the voucher from {Stall}"*, the face value and the claim-by date, then *"Nothing is claimed
+  until you add it. You can do that in a minute, right here."* It reads the portal's public metadata
+  for the ref only (the key is never sent or shown), falls back to *"Create an account to redeem
+  your voucher"*, never blocks, and says *"Open your voucher link again to add it."* once the parked
+  claim has aged out.
+- **Switch account** on the claim prompt ("Not you?"): keeps the claim parked and runs the normal
+  logout, so it resumes on the next account (CL-SWITCH). The prompt names the account it adds to
+  (`Adding to @handle`, spec 4.3; review of #245, F2).
+
+### Changed
+
+- **Parked claims are a short list keyed by ref** (review of #239, F4-1): at most 5, each with its
+  own 24 h age. Opening a second link while logged out no longer overwrites the first (O4), a link
+  that fails before the spend is parked beside a different parked claim rather than skipped, and
+  forgetting one claim leaves the others. `/` resumes the newest one not yet shown. A value from an
+  older build is read as a list of one. Entries carry `kind` (and `x`, for phase 4 gifts).
+  An aged-out entry is erased, key included, once the banner has said "Open your voucher link
+  again" (said once, not on every visit) or when `/` resumes; an entry stamped in the future is not
+  live; the resume never revisits a ref, so a storage that refuses writes cannot hang the tab
+  (review of #245, F1, F1b, F3).
+- **Parked claims survive logout** (spec 2.5): logout still erases every other `imani-wallet:*` key
+  and all account data.
+
+### Tests
+
+- Unit: `pendingClaimList`, `logoutKeepsParkedClaim`, `ParkedClaimBanner` (incl. key never in a
+  request, a log line or the DOM), Switch account; single-slot assertions updated to the list.
+- Gate e2e `claimLinks.e2e.ts`: L11 CL-B (two links, register, both added), L12 CL-B2 (Login with the
+  banner), L13 CL-SWITCH (claim survives the switch, nothing of the old account does).
+
 ## [0.21.0] - 2026-10-12
 
 Claim links phase 2: the merchant's link and QR (#241), plus a local-gate guard on the licence e2e (#242).
