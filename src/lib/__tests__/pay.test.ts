@@ -1504,6 +1504,20 @@ describe('sendVouchers and payRequest', () => {
       expect(transactions[0]).toMatchObject({ type: 'sent', transferId: SENT_ID })
     })
 
+    it('does NOT sign a send to a gift link key (spec 3.3, Q7, pre-check build item 1)', async () => {
+      stubs.rows = [row()]
+      completingWith({ status: 'COMPLETED', sent_voucher_id: SENT_ID })
+      const { transactions } = wallet([row()])
+      const link = { k: 'A'.repeat(42) + 'E', x: 1_900_000_000, status: 'outstanding' as const, i: 3 }
+
+      await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 250, link })
+      await flush()
+
+      expect(signatures.calls).toHaveLength(0)
+      // The row carries the link, so History can show it and take it back.
+      expect(transactions[0]).toMatchObject({ type: 'sent', link })
+    })
+
     it('does NOT sign a plain send to a stall key, which attests with a 7377 instead (L4)', async () => {
       // Sending a stall its own coupon is allowed without a payment request.
       stubs.rows = [row()]

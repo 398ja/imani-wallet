@@ -79,7 +79,7 @@ export interface VoucherRow {
    * the old custodial path" from "this is a receive" without having
    * to infer it from absence.
    */
-  source_transport?: 'sse' | 'catchup' | 'manual' | 'cashback' | 'escrow_recovery' | 'client_mint' | 'gateway_mint';
+  source_transport?: 'sse' | 'catchup' | 'manual' | 'cashback' | 'escrow_recovery' | 'client_mint' | 'gateway_mint' | 'gift_link' | 'gift_link_reclaim';
   // ---------- Spec 041 SA-006 — client-mint provenance fields ----------
   // All optional (TS-level `?`) so receive-side and gateway-mint rows
   // stay unchanged — absence ≡ "not a client-mint row" and downstream

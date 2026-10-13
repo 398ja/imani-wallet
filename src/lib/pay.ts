@@ -7,10 +7,11 @@ import { couponsFor, issuerKey, toMerchants, toVoucher, type Merchant } from './
 import { merchantStatus } from './merchant'
 import { getSigner } from './nap'
 import { spentTokenIds, withoutSpent } from './spentCoupons'
-import { buildPaymentTransaction, buildSentTransaction } from './transactions'
+import { buildPaymentTransaction, buildSentTransaction, type GiftLinkRecord } from './transactions'
 import { sendTransferSignature } from './transferSignature'
 import { creditableFaceValue, parseVoucherToken } from './voucherToken'
 import { publishTx } from './txRecords'
+import { OWN_STALL_COPY, giftExclusion } from './giftLink'
 import { FULLY_REDEEMED_STATUS, VoucherFullyRedeemedError, isVoucherFullyRedeemed } from './fullyRedeemed'
 import type { NUT18VRequest } from './nap'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
@@ -304,6 +305,12 @@ export interface PendingSend {
   /** Source coupon's face, for the change when the gateway omits keep_face_value. */
   sourceFaceValue: number
   at: number
+  /**
+   * Set on a send to a gift LINK key (claim links phase 4, spec 3.3). Stored on the pending send so a
+   * send settled late by `reconcilePendingSends` still writes the link onto its row, and still
+   * skips the ADR 0014 transfer signature (Q7).
+   */
+  link?: GiftLinkRecord
 }
 
 // Same `imani-wallet:` prefix and pubkey scoping as the profile, merchant and
@@ -515,6 +522,7 @@ async function settleSend(
             // What the transfer signature below is keyed on, kept so it can
             // be rebuilt after a wipe (its nonce derives from our key and this).
             transferId: status.sent_voucher_id,
+            link: pending.link,
           })
         : buildPaymentTransaction({ ...common, bundleId: pending.bundleId }),
     )
@@ -534,7 +542,10 @@ async function settleSend(
   // neither call throws, and nothing they do can change the outcome of a send
   // the mint has already completed. Here rather than in the live path so a
   // send finished late by `reconcilePendingSends` is signed too.
-  if (pending.recipientPubkey) {
+  // NOT on a send to a gift link key (spec 3.3, Q7, pre-check build item 1): the signature's
+  // `recipient` would name the link key, not whoever finally claims it, and its wrap is a second
+  // message addressed to the link that the claimer would only have to ignore.
+  if (pending.recipientPubkey && !pending.link) {
     const recipient = pending.recipientPubkey
     const sign = (transfer: string | undefined) =>
       merchantStatus(recipient).then((role) =>
@@ -1219,6 +1230,8 @@ type SendContext = {
   rowOf: Map<Voucher, VoucherRow>
   /** Fallback for a coupon with no `face_unit` — the unit being spent. */
   unit?: string
+  /** Set on a send to a gift link key; see `PendingSend.link`. */
+  link?: GiftLinkRecord
   /**
    * Set when this is a merchant redemption. Two things hang off it: the
    * gateway gets `paymentRequestId`, and the local row is a payment rather
@@ -1305,6 +1318,7 @@ async function sendPart(
       ...(ctx.paymentRequestId
         ? { paymentRequestId: ctx.paymentRequestId }
         : { recipientPubkey: ctx.recipient.pubkey, recipientName: ctx.recipient.name }),
+      ...(ctx.link ? { link: ctx.link } : {}),
       voucherId: voucher.voucher_id,
       memo: ctx.memo,
       sourceFaceValue: voucher.face_value ?? 0,
@@ -1379,6 +1393,7 @@ export async function sendVouchers({
   unit,
   amount,
   memo,
+  link,
 }: {
   payer: string
   /** Who gets it. `name` is stored on the row; see `buildSentTransaction`. */
@@ -1395,6 +1410,11 @@ export async function sendVouchers({
   /** Minor units, as `parseAmountToMinor` produces. */
   amount: number
   memo?: string
+  /**
+   * A send to a gift link key (claim links phase 4). `recipient.pubkey` must be that link's public
+   * key. The rows this writes carry the link, and no ADR 0014 transfer signature is sent (Q7).
+   */
+  link?: GiftLinkRecord
 }): Promise<SendResult> {
   // Refused here and not only on the screen, for the same reason the expiry
   // check lives in `payRequest`: this is the door money leaves by. A send to
@@ -1409,8 +1429,13 @@ export async function sendVouchers({
   const inUnit = mine.filter(
     (v) => (v.face_unit ?? '').toUpperCase() === unit.toUpperCase(),
   )
+  // A gift link carries only money anyone can hold: no licence, terminal credential or locked
+  // voucher, and never the sender's own stall's coupons (spec 4.2 step 2, 3.2). Refused here as well
+  // as on the picker, because this is the door money leaves by.
+  if (link && issuerKey(merchant.pubkey) === issuerKey(payer)) throw new Error(OWN_STALL_COPY)
+  const sendable = link ? inUnit.filter((v) => giftExclusion(v.token, v.issuer_id, payer) === null) : inUnit
 
-  return deliver({ api, payer, recipient, merchant, memo, rowOf, unit }, inUnit, amount, unit)
+  return deliver({ api, payer, recipient, merchant, memo, rowOf, unit, link }, sendable, amount, unit)
 }
 
 /**
