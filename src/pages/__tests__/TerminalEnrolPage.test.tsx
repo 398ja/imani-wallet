@@ -27,7 +27,11 @@ import { buildLockedCredentialToken } from '../../lib/__tests__/voucherFixtures'
 const STALL_KEY = schnorr.utils.randomSecretKey()
 const STALL = bytesToHex(schnorr.getPublicKey(STALL_KEY))
 /** A real point on the curve. Off-curve codes are refused since #160 phase 0. */
-const DEVICE = bytesToHex(schnorr.getPublicKey(schnorr.utils.randomSecretKey()))
+const DEVICE_KEY = schnorr.utils.randomSecretKey()
+const DEVICE = bytesToHex(schnorr.getPublicKey(DEVICE_KEY))
+/** What the device's setup screen shows: K's signed terminal enrolment code (inv-terminal-not-merchant). */
+const { signEnrolmentCode } = await import('../../lib/terminalEnrolProof')
+const deviceCode = () => signEnrolmentCode(DEVICE_KEY, DEVICE, Math.floor(Date.now() / 1000))
 
 /**
  * The gateway, faked at the network edge only. It mints what it is asked for,
@@ -35,10 +39,22 @@ const DEVICE = bytesToHex(schnorr.getPublicKey(schnorr.utils.randomSecretKey()))
  * a test makes it mint the wrong device.
  */
 let mintWrongDevice = false
+/** When set, the fake gateway refuses the mint with this status and error code. */
+let mintRefusal: { status: number; code: string } | null = null
 const posts: unknown[] = []
+/** The headers each mint was sent with. */
+const postHeaders: Array<Record<string, string> | undefined> = []
+/** Keys the best-effort stall lookup reports as merchants. */
+const merchants = new Set<string>()
 const fakeTransport = {
-  post: async (_path: string, body: unknown) => {
+  post: async (_path: string, body: unknown, headers?: Record<string, string>) => {
+    if (mintRefusal) {
+      return new Response(JSON.stringify({ error: { code: mintRefusal.code, message: 'refused' } }), {
+        status: mintRefusal.status,
+      })
+    }
     posts.push(body)
+    postHeaders.push(headers)
     return new Response(JSON.stringify({ voucher_id: '5f8a487d-6cea-4a7d-b681-9d5d62cc9dd9' }), {
       status: 201,
     })
@@ -72,10 +88,14 @@ const fakeSpend = async () => ({
 
 /** When set, the stub scanner returns 64 hex characters that are not a key. */
 let offCurve = false
+/** When set, the stub scanner reads exactly this text (an npub, a merchant's code, ...). */
+let scanned: string | null = null
 
 vi.mock('../../components/ScanRecipient', () => ({
-  ScanRecipient: ({ onFound }: { onFound: (k: string) => void }) => (
-    <button onClick={() => onFound(offCurve ? 'c'.repeat(64) : DEVICE)}>scan</button>
+  // The page reads the raw text through onText (inv-terminal-not-merchant): it never resolves an
+  // account, so the stub hands over what the camera would have read.
+  ScanRecipient: ({ onText }: { onText?: (t: string) => boolean }) => (
+    <button onClick={() => onText?.(scanned ?? (offCurve ? 'c'.repeat(64) : deviceCode()))}>scan</button>
   ),
 }))
 
@@ -112,6 +132,7 @@ function renderPage() {
         publisher={{ publish: async (w) => (sentDms.push(w), true) }}
         seal={(borrow) => borrow(STALL_KEY)}
         stallSigner={stallSigner}
+        merchantCheck={async (k) => (merchants.has(k) ? 'merchant' : 'customer')}
       />
     </MemoryRouter>,
   )
@@ -123,8 +144,25 @@ async function fillEverything() {
   await waitFor(() => expect(screen.getByRole('button', { name: 'Add terminal' })).toBeTruthy())
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Front counter' } })
   fireEvent.click(screen.getByRole('button', { name: /Redemption only/ }))
-  fireEvent.click(screen.getByRole('button', { name: 'scan' }))
+  await scan()
 }
+
+/**
+ * Scan, and wait for the screen to settle: the code is read at once, then the best-effort merchant
+ * lookup answers (inv-terminal-not-merchant) before the key is accepted or refused.
+ */
+async function scan() {
+  fireEvent.click(screen.getByRole('button', { name: 'scan' }))
+  await waitFor(() =>
+    expect(
+      screen.queryByText(/Device scanned/) ??
+        screen.queryAllByText(/not a terminal|check out|belongs to a merchant|out of date|your own stall/)[0],
+    ).toBeTruthy(),
+  )
+}
+
+/** The best-effort stall lookup, answering "not a merchant" without a relay. */
+const notAMerchant = async () => 'customer' as const
 
 /** The stall's own signer, which attests every till at enrolment (#160 decision 5). */
 const stallSigner = () => ({ pubkey: STALL, withPrivkey: <T,>(borrow: (key: Uint8Array) => T) => borrow(STALL_KEY) })
@@ -135,8 +173,12 @@ beforeEach(() => {
   localStorage.clear()
   granted = true
   offCurve = false
+  scanned = null
+  merchants.clear()
+  mintRefusal = null
   mintWrongDevice = false
   posts.length = 0
+  postHeaders.length = 0
   spends.length = 0
   sentDms.length = 0
   vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
@@ -155,7 +197,7 @@ describe('nothing goes live without the three answers', () => {
     await waitFor(() => expect(addButton()).toBeTruthy())
 
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Front counter' } })
-    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
+    await scan()
 
     expect(addButton().disabled).toBe(true)
     expect(allTerminals(STALL)).toEqual([])
@@ -166,7 +208,7 @@ describe('nothing goes live without the three answers', () => {
     await waitFor(() => expect(addButton()).toBeTruthy())
 
     fireEvent.click(screen.getByRole('button', { name: /Redemption only/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
+    await scan()
 
     expect(addButton().disabled).toBe(true)
   })
@@ -210,7 +252,7 @@ describe('scanning does not enrol', () => {
     renderPage()
     await waitFor(() => expect(addButton()).toBeTruthy())
 
-    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
+    await scan()
 
     expect(allTerminals(STALL)).toEqual([])
     expect(screen.queryByText(/Terminal added/)).toBeNull()
@@ -293,7 +335,7 @@ describe('enrolling', () => {
     await waitFor(() => expect(addButton()).toBeTruthy())
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Till' } })
     fireEvent.click(screen.getByRole('button', { name: /Sell and redeem/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
+    await scan()
     fireEvent.click(addButton())
 
     await waitFor(() => expect(allTerminals(STALL)).toHaveLength(1))
@@ -313,7 +355,7 @@ describe('enrolling', () => {
     // A paste or a script can set more than maxLength allows typing.
     fireEvent.change(field, { target: { value: '漢'.repeat(3_000) } })
     fireEvent.click(screen.getByRole('button', { name: /Redemption only/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
+    await scan()
     fireEvent.click(addButton())
 
     await waitFor(() => expect(allTerminals(STALL)).toHaveLength(1))
@@ -382,7 +424,7 @@ describe('enrolling', () => {
     await waitFor(() => expect(addButton()).toBeTruthy())
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Till' } })
     fireEvent.click(screen.getByRole('button', { name: /Sell and redeem/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
+    await scan()
     fireEvent.click(addButton())
 
     await waitFor(() => expect(posts).toHaveLength(1))
@@ -481,7 +523,7 @@ describe('#160 phase 0: a code that is nobody\'s key', () => {
     await fillEverything()
 
     expect(addButton().disabled).toBe(true)
-    expect(screen.getByText(/not a terminal code/)).toBeTruthy()
+    expect(await screen.findByText(/personal account, not a terminal/)).toBeTruthy()
     expect(allTerminals(STALL)).toEqual([])
   })
 })
@@ -543,13 +585,13 @@ describe('#160 review: a mint whose answer is lost is not orphaned', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => (clock += 60_000))
     render(
       <MemoryRouter>
-        <TerminalEnrolPage stallPubkey={STALL} transport={slow} spendApi={fakeSpend} stallSigner={stallSigner} />
+        <TerminalEnrolPage stallPubkey={STALL} transport={slow} spendApi={fakeSpend} stallSigner={stallSigner} merchantCheck={notAMerchant} />
       </MemoryRouter>,
     )
     await waitFor(() => expect(screen.getByRole('button', { name: 'Add terminal' })).toBeTruthy())
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Front counter' } })
     fireEvent.click(screen.getByRole('button', { name: /Redemption only/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
+    await scan()
     fireEvent.click(addButton())
 
     await waitFor(() => expect(screen.getByText(/not ready in time/)).toBeTruthy())
@@ -572,13 +614,13 @@ describe('#160 review: a mint whose answer is lost is not orphaned', () => {
     }
     render(
       <MemoryRouter>
-        <TerminalEnrolPage stallPubkey={STALL} transport={keyed} spendApi={fakeSpend} stallSigner={stallSigner} />
+        <TerminalEnrolPage stallPubkey={STALL} transport={keyed} spendApi={fakeSpend} stallSigner={stallSigner} merchantCheck={notAMerchant} />
       </MemoryRouter>,
     )
     await waitFor(() => expect(screen.getByRole('button', { name: 'Add terminal' })).toBeTruthy())
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Front counter' } })
     fireEvent.click(screen.getByRole('button', { name: /Redemption only/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
+    await scan()
     fireEvent.click(addButton())
 
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Waiting for the device' })).toBeTruthy())
@@ -603,13 +645,13 @@ describe('#160 review: a mint whose answer is lost is not orphaned', () => {
     }
     render(
       <MemoryRouter>
-        <TerminalEnrolPage stallPubkey={STALL} transport={refusing} spendApi={fakeSpend} stallSigner={stallSigner} />
+        <TerminalEnrolPage stallPubkey={STALL} transport={refusing} spendApi={fakeSpend} stallSigner={stallSigner} merchantCheck={notAMerchant} />
       </MemoryRouter>,
     )
     await waitFor(() => expect(screen.getByRole('button', { name: 'Add terminal' })).toBeTruthy())
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Front counter' } })
     fireEvent.click(screen.getByRole('button', { name: /Redemption only/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
+    await scan()
     fireEvent.click(addButton())
 
     await waitFor(() => expect(screen.getByText(/Two terminals are already waiting/)).toBeTruthy())
@@ -656,5 +698,84 @@ describe('#160 review: the owner shows the setup code the device scans', () => {
     expect(screen.getByTestId('setup-code').textContent).toBe(
       `imani-terminal:1:${STALL}:5f8a487d-6cea-4a7d-b681-9d5d62cc9dd9`,
     )
+  })
+})
+
+describe('inv-terminal-not-merchant: only a key created as a terminal can be added', () => {
+  // The owner's real failure (2026-10-11): a logged-in customer's receive QR was scanned as the
+  // till, the credential was minted to the customer's account key, and their wallet took it as money.
+  it('refuses a personal account (an npub) with the owner-facing message, and mints nothing', async () => {
+    const { nip19 } = await import('nostr-tools')
+    scanned = nip19.npubEncode(DEVICE)
+    await fillEverything()
+
+    expect(
+      await screen.findByText(
+        "That is a personal account, not a terminal. On the device, open Imani and choose 'Set this device up as a terminal'.",
+      ),
+    ).toBeTruthy()
+    expect(addButton().disabled).toBe(true)
+    expect(posts).toEqual([])
+  })
+
+  it('refuses a code signed by another key', async () => {
+    scanned = signEnrolmentCode(schnorr.utils.randomSecretKey(), DEVICE, Math.floor(Date.now() / 1000))
+    await fillEverything()
+
+    expect(await screen.findByText(/does not check out/)).toBeTruthy()
+    expect(addButton().disabled).toBe(true)
+  })
+
+  // rev-option-a R5: a REFUSED code is not remembered as "seen". Re-scanning it reads it again, so
+  // a code refused as out of date is accepted once the device's clock (or the owner's) is right.
+  it('reads a refused code again when it is scanned again', async () => {
+    const at = Math.floor(Date.now() / 1000)
+    scanned = signEnrolmentCode(DEVICE_KEY, DEVICE, at)
+    const realNow = Date.now
+    // The owner's phone is two days ahead: the device's code reads as out of date.
+    Date.now = () => realNow() + 2 * 86_400_000
+    try {
+      await fillEverything()
+      expect(await screen.findByText(/out of date/)).toBeTruthy()
+    } finally {
+      Date.now = realNow
+    }
+    // Clock fixed; the same code, scanned again.
+    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
+    expect(await screen.findByText(/Device scanned/)).toBeTruthy()
+    expect(screen.queryByText(/out of date/)).toBeNull()
+  })
+
+  // Best effort: the stall-record lookup says this key trades as a merchant. The gateway decides too.
+  it('refuses a key that is a merchant before anything is signed', async () => {
+    merchants.add(DEVICE)
+    await fillEverything()
+
+    expect(await screen.findByText(/belongs to a merchant/)).toBeTruthy()
+    expect(addButton().disabled).toBe(true)
+    expect(posts).toEqual([])
+  })
+
+  it('sends the device enrolment proof with the mint, and keeps it on the minting row', async () => {
+    await fillEverything()
+    await waitFor(() => expect(addButton().disabled).toBe(false))
+    fireEvent.click(addButton())
+
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(postHeaders[0]?.['X-Imani-Terminal-Enrolment']).toMatch(/^1:\d+:[0-9a-f]{128}$/)
+  })
+
+  // The gateway is the authority. Its refusals reach the owner in the owner's words, and nothing is kept.
+  it.each([
+    [422, 'TERMINAL_KEY_NOT_A_TERMINAL', /personal account, not a terminal/],
+    [409, 'TERMINAL_KEY_IS_MERCHANT', /belongs to a merchant/],
+  ])('shows the gateway refusal %s %s plainly and records nothing', async (status, code, message) => {
+    mintRefusal = { status, code }
+    await fillEverything()
+    await waitFor(() => expect(addButton().disabled).toBe(false))
+    fireEvent.click(addButton())
+
+    expect(await screen.findByText(message)).toBeTruthy()
+    expect(allTerminals(STALL)).toEqual([])
   })
 })

@@ -345,6 +345,14 @@ export function TerminalSetupPage({
       <p className="mb-2 break-all text-center font-mono text-xs text-mono-500" data-testid="terminal-code">
         {code.terminalPubkey}
       </p>
+      {/* The whole signed code, for an owner who types or pastes it instead of scanning: the bare key
+          above is not enough, since only this proves the key was made as a terminal. */}
+      <details className="mb-2 text-center text-xs text-mono-500">
+        <summary>Show the full code</summary>
+        <p className="mt-1 break-all font-mono" data-testid="terminal-enrolment-code">
+          {code.enrolmentCode}
+        </p>
+      </details>
       <p className="mb-6 text-center text-sm text-mono-500">
         This code is not a secret. Keep this screen open until setup finishes.
       </p>
