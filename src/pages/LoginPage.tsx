@@ -4,6 +4,7 @@ import { getPublicKey } from 'nostr-tools'
 import { hexToBytes } from '@noble/hashes/utils'
 
 import { Avatar, Button, Input, Alert, Centered } from '../components/ui'
+import { ParkedClaimBanner } from '../components/ParkedClaimBanner'
 import { keyStore, hasStoredKey } from '../lib/nap'
 import { handleLabel } from '../lib/format'
 import { loadProfile, profileName, refreshProfile, type Profile } from '../lib/profile'
@@ -85,6 +86,9 @@ export function LoginPage({ onUnlock }: { onUnlock: (privkeyHex: string) => Prom
           )}
         </div>
       </div>
+
+      {/* A claim link parked on the way here (claim links phase 3, spec 4.4 and 5.2). */}
+      <ParkedClaimBanner />
 
       <div className="space-y-3">
         <Input

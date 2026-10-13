@@ -15,6 +15,7 @@ import {
   type MerchantFields,
 } from '../lib/merchant'
 import { MerchantFieldset } from '../components/MerchantFieldset'
+import { ParkedClaimBanner } from '../components/ParkedClaimBanner'
 import {
   passphraseStrength,
   validateConfirmation,
@@ -72,6 +73,9 @@ export function OnboardingPage({ onUnlock }: { onUnlock: (privkeyHex: string) =>
 
       {step === 'start' && (
         <div className="space-y-3">
+          {/* A claim link parked on the way here (claim links phase 3, spec 4.4). Above the
+              buttons; Register stays primary, and it never blocks anything. */}
+          <ParkedClaimBanner />
           <Button size="lg" className="w-full" onClick={() => push('account')}>
             Register
           </Button>

@@ -869,6 +869,29 @@ Done when CL-A, CL-RACE and CL-OWN pass.
 
 Done when CL-B, CL-B2 and CL-SWITCH pass.
 
+**As built (wallet, phase 3 PR).**
+- Parked claims are a list keyed by ref under `imani-wallet:pending-claim`, at most 5 entries, each
+  `{kind, ref, key, x?, at}` with its own 24 h age (review of #239, F4-1). A second link opened while
+  logged out is added, never written over the first (O4). `/` resumes the newest entry this account
+  has not been shown this page session. An older build's single object reads as a list of one.
+- The key is parked in plaintext localStorage, as since phase 0 and as section 2.5 requires (not
+  sessionStorage: the install journey comes back in a new tab). There is no account key to wrap it
+  under before registration. It is bounded instead: 24 h, five entries, removed once added,
+  declined or dead. An aged-out entry is erased, not just hidden, when the banner has shown the
+  aged-out copy (once) or when `/` resumes (review of #245, F1). It is never rendered, logged or sent: the banner sends only the ref.
+- Logout sweeps every `imani-wallet:*` key except this one, whose live entries are carried across
+  with their ages. The cashback token stash (`imani:cashback:pending`) was never swept. Nothing that
+  names the logged-out account survives (CL-SWITCH checks the account's pubkey).
+- **Switch account** ("Not you?") on the prompt parks the claim on screen and runs the normal logout,
+  with its warning.
+- The banner (`ParkedClaimBanner`) sits above Register on onboarding's start step and above Unlock
+  on Login, with the same words on both (5.2). It falls back to *"Create an account to redeem your
+  voucher"* when the summary cannot be fetched, and says *"Open your voucher link again to add it."*
+  when the only parked claims have aged out.
+- The hosted page (imani-cashback-claim) uses the fallback sentence as its lede, since it knows no
+  stall name and looking one up would be server logic, and its button reads **Continue in the
+  browser**.
+
 ### Phase 4: gifts (wallet; core and customer verifications)
 
 - Run the two verifications in sections 6.4 and 6.5 first. They gate everything else here.
