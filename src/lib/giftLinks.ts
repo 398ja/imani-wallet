@@ -299,6 +299,7 @@ export async function redeemGiftTokens(
   if (!redemption) return { kind: 'failed', message: 'This wallet could not start the receive.' }
   let added = 0
   let spent = 0
+  let failure: string | undefined
   for (const { token } of tokens) {
     try {
       const validation = cashbackValidation(token)
@@ -312,11 +313,15 @@ export async function redeemGiftTokens(
         spent += 1
         continue
       }
-      notifyWalletChanged()
-      return { kind: 'failed', message }
+      // Keep going (second check of #247): a token the mint refuses (a third party can wrap a copy
+      // of a real voucher's signed secret with a bad mint signature to the link key; it passes
+      // every check here and reads UNSPENT) must not stop the genuine coupon after it being added.
+      // Each redeem is idempotent per token, and the outcome is still 'failed', so a retry follows.
+      failure ??= message
     }
   }
   notifyWalletChanged()
+  if (failure !== undefined) return { kind: 'failed', message: failure }
   if (added === 0 && spent > 0) return { kind: 'claimed' }
   return { kind: 'ok' }
 }
