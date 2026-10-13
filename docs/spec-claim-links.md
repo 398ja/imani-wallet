@@ -900,6 +900,22 @@ Done when CL-B, CL-B2 and CL-SWITCH pass.
 
 Done when CL-C, CL-D and CL-EXP pass.
 
+**As built (wallet, phase 4 PR).**
+- Pre-checks (6.4, 6.5, 6.6) passed with no server change; gifts are wallet-only.
+- `src/lib/giftLink.ts` (derivation, the link, the wrap fetch, `verifyGift`, the picker rule) and
+  `src/lib/giftLinks.ts` (counter, send, status, Take it back, reclaim after `x`, restore scan).
+  Send by link is its own screen (`/send/link`), reached from Send's first step.
+- The link's secret is stored on the sender's `sent` row as `link: {k, i?, x, status}` and in the
+  row's NIP-44 history record (`gift_link`), so a second device or a restore can show and reclaim
+  it. A remote-signer account's random links are recovered from there, not by the scan.
+- The wrap query has no `since`, is NIP-98 signed by the link key, and omits credentials. NUT-07 asks
+  the token's mint directly with the proofs' `Y`s only, and only a mint this wallet trusts.
+- The stall named on the prompt is the voucher's signed `issuerId` (the signing key is the gateway's
+  for cashback-born coupons). The sender is named by kind-0 name, else handle, else short key.
+- A link's status reaches **Claimed** only when every proof is SPENT; a reclaim that loses the race at
+  the mint reads as Claimed. A mint that cannot answer never triggers a reclaim.
+- Gate e2e `e2e/giftLinks.e2e.ts` covers CL-C, CL-D, CL-EXP and Q4 with five browser contexts.
+
 ### Phase 5: reach
 
 - Android App Links into the Capacitor app.
