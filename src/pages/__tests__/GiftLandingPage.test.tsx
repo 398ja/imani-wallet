@@ -146,6 +146,23 @@ describe('opening a gift link', () => {
     expect(redeemGiftTokens).toHaveBeenCalledWith(TOKENS, 'gift_link')
   })
 
+  // Third check of #247 (5798be4): `failed` can now come back after a genuine coupon WAS added (a
+  // refused decoy beside it). The page must keep the claim parked and offer Retry, and a retry reads
+  // the link again (the added coupon reads spent there) and redeems only what verifyGift returns.
+  it('a failed Add keeps the gift parked and offers Retry, which reads the link again', async () => {
+    redeemGiftTokens.mockResolvedValueOnce({ kind: 'failed', message: 'mint: could not verify proofs (10003)' })
+    open(true)
+    fireEvent.click(await screen.findByRole('button', { name: 'Add to my wallet' }))
+    await screen.findByText('Voucher waiting')
+    expect(listPendingClaims()).toEqual([expect.objectContaining({ kind: 'gift', ref: LINK_PUB, key: K, x: X })])
+    expect(readGift).toHaveBeenCalledTimes(1)
+    readGift.mockResolvedValueOnce({ verdict: { kind: 'claimed' }, tokens: TOKENS })
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await screen.findByText(/already added to a wallet/)
+    expect(readGift).toHaveBeenCalledTimes(2)
+    expect(redeemGiftTokens).toHaveBeenCalledTimes(1)
+  })
+
   it('Decline spends nothing and forgets it on this device', async () => {
     open(true)
     fireEvent.click(await screen.findByRole('button', { name: 'Decline' }))

@@ -265,6 +265,51 @@ describe('second check of the fix (review of #247)', () => {
     await takeBack(k)
     expect(h.redeemed).toEqual([{ token: real, source: 'gift_link_reclaim' }])
   })
+
+  // Third check (5798be4): every coupon is tried, but a refusal anywhere still answers `failed`
+  // (the page keeps the parked claim and Retry; the sender's row is not marked reclaimed), whatever
+  // the order, and even when the only other coupon was already spent.
+  it('a refusal anywhere still answers failed, after trying every coupon, and the row stays outstanding', async () => {
+    const stall = hexToBytes('44'.repeat(32))
+    const decoy = buildVoucherToken({ expiresAt: 0, voucherId: 'ffffffff-0000-4000-8000-000000000001' }, [4], {}, stall).token
+    const decoy2 = buildVoucherToken({ expiresAt: 0, voucherId: 'ffffffff-0000-4000-8000-000000000003' }, [2], {}, stall).token
+    const real = buildVoucherToken({ expiresAt: 0, voucherId: 'ffffffff-0000-4000-8000-000000000002' }, [8], {}, stall).token
+    const redeem = window.TokenRedemption!.redeem
+    let spentReal = false
+    ;(window as unknown as { TokenRedemption: { redeem: typeof redeem } }).TokenRedemption.redeem = async (token, opts) => {
+      if (token === decoy) throw new Error('first refusal (10003)')
+      if (token === decoy2) throw new Error('second refusal (10003)')
+      if (token === real && spentReal) throw new Error('Token already spent (11001)')
+      return redeem(token, opts)
+    }
+    const asTokens = (list: string[]): GiftToken[] => list.map((token) => ({ token, sentAt: 0 }))
+
+    // Genuine first, refused one after it: both tried, outcome failed.
+    expect(await redeemGiftTokens(asTokens([real, decoy]), 'gift_link')).toEqual({ kind: 'failed', message: 'first refusal (10003)' })
+    expect(h.redeemed).toEqual([{ token: real, source: 'gift_link' }])
+    // Two refusals around the genuine one: the first refusal is reported.
+    h.redeemed = []
+    expect(await redeemGiftTokens(asTokens([decoy, real, decoy2]), 'gift_link')).toEqual({ kind: 'failed', message: 'first refusal (10003)' })
+    expect(h.redeemed).toEqual([{ token: real, source: 'gift_link' }])
+    // Genuine already spent plus a refusal: still failed, never "claimed".
+    spentReal = true
+    h.redeemed = []
+    expect((await redeemGiftTokens(asTokens([real, decoy]), 'gift_link')).kind).toBe('failed')
+    expect(h.redeemed).toEqual([])
+
+    // Take it back with the decoy: the genuine coupon comes home, the row is not marked reclaimed.
+    spentReal = false
+    const secret = deriveLinkSecret(ID, 11)
+    const wraps = [real, decoy].map((t) => wrapTo(linkPubOf(secret), t))
+    const k = secretToText(secret)
+    h.rows = [{ id: 'sent:e', type: 'sent', timestamp: 1, link: { k, i: 11, x: 2_000_000_000, status: 'outstanding' } }]
+    vi.stubGlobal('fetch', async (url: string) =>
+      String(url).endsWith('/v1/checkstate') ? Response.json({ states: [{ state: 'UNSPENT' }] }) : Response.json({ events: wraps }),
+    )
+    expect((await takeBack(k)).kind).toBe('failed')
+    expect(h.redeemed).toEqual([{ token: real, source: 'gift_link_reclaim' }])
+    expect(h.rows[0]).toMatchObject({ link: { status: 'outstanding' } })
+  })
 })
 
 describe('F4: a partly claimed gift offers what is left', () => {
