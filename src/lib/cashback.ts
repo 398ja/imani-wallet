@@ -33,6 +33,8 @@ import { claimRefFromUrl, isClaimKey } from './claimLink'
 import { legacyApi, withCorrelation } from './legacyBridge'
 import { signedFetch } from './nip98'
 import { checkTokenBacking, loadTrustedMints, trustedMintUrls } from './trustedMint'
+import { getSigner } from './nap'
+import { ForeignVoucherRefusedError, isServerForeignRefusal, refuseForeignIssuer, refuseForeignVouchers, sessionAccount } from './merchantVouchers'
 import { notifyWalletChanged, recordCashbackStatus } from './wallet'
 
 /**
@@ -539,6 +541,12 @@ export type RedeemFailure =
    * Kept on the device all the same, never swapped and never silently dropped.
    */
   | { kind: 'refused'; reason: string }
+  /**
+   * A merchant account and another stall's cashback (owner rule 2026-10-13). Refused before the
+   * destructive claim whenever the portal metadata names the issuer, so nothing is spent and the
+   * voucher still waits for a customer account. `unknown`: the account's role could not be checked.
+   */
+  | { kind: 'merchant_refused'; reason: 'merchant' | 'unknown' }
 
 export type RedeemResult =
   | { kind: 'ok'; amountMinor: number | null; unit: string | null; memo: string | null }
@@ -734,8 +742,8 @@ function base64UrlToBytes(value: string): Uint8Array<ArrayBuffer> | null {
  */
 async function fetchPublicMetadata(
   claimRef: string,
-): Promise<{ amountMinor: number | null; unit: string | null; memo: string | null }> {
-  const empty = { amountMinor: null, unit: null, memo: null }
+): Promise<{ amountMinor: number | null; unit: string | null; memo: string | null; issuerPubkey: string | null }> {
+  const empty = { amountMinor: null, unit: null, memo: null, issuerPubkey: null }
   try {
     const response = await fetchWithTimeout(PUBLIC_META_PATH + encodeURIComponent(claimRef), {
       method: 'GET',
@@ -747,11 +755,13 @@ async function fetchPublicMetadata(
       amountMinor?: unknown
       unit?: unknown
       memo?: unknown
+      issuerPubkey?: unknown
     }
     return {
       amountMinor: typeof body.amountMinor === 'number' ? body.amountMinor : null,
       unit: typeof body.unit === 'string' ? body.unit : null,
       memo: typeof body.memo === 'string' ? body.memo : null,
+      issuerPubkey: typeof body.issuerPubkey === 'string' && body.issuerPubkey !== '' ? body.issuerPubkey.toLowerCase() : null,
     }
   } catch {
     return empty
@@ -859,6 +869,13 @@ type CommitOutcome =
   | { kind: 'banked' }
   | { kind: 'held'; reason: 'untrusted-mint' | 'no-trusted-mint' | 'not-ready' }
   | { kind: 'refused'; reason: string }
+  /** Owner rule 2026-10-13: a merchant account and another stall's voucher. Kept in the stash, never swapped. */
+  | { kind: 'merchant_refused'; reason: 'merchant' | 'unknown' }
+
+/** This session's account key, or undefined before unlock (a test, or a page with no session). */
+function signerPubkey(): string | undefined {
+  return sessionAccount(getSigner)
+}
 
 /**
  * Swap the token at the mint and write it into the wallet.
@@ -894,6 +911,19 @@ async function commitToken(token: string): Promise<CommitOutcome> {
       return { kind: 'refused', reason: backing.reason }
   }
 
+  // Owner rule 2026-10-13, after the claim: the token itself names the stall. The portal's
+  // metadata was asked before the claim; this catches a token whose issuer it did not name. Kept in
+  // the stash (never swapped, never dropped), so a customer account can still take it.
+  const account = signerPubkey()
+  if (account) {
+    try {
+      await refuseForeignVouchers([token], account)
+    } catch (e) {
+      if (e instanceof ForeignVoucherRefusedError) return { kind: 'merchant_refused', reason: e.reason }
+      throw e
+    }
+  }
+
   await legacyApi()
   const redemption = window.TokenRedemption
   if (!redemption) throw new Error('TokenRedemption unavailable')
@@ -905,9 +935,15 @@ async function commitToken(token: string): Promise<CommitOutcome> {
   // Recorded and never refused: the claim above was destructive, so refusing
   // here would lose value. A failed check reads as failed on the row.
   const validation = cashbackValidation(token)
-  await withCorrelation(validation ? { validation: { ...validation } } : {}, (correlationId) =>
-    redemption.redeem(token, { source: 'cashback', metadata: { correlation_id: correlationId } }),
-  )
+  try {
+    await withCorrelation(validation ? { validation: { ...validation } } : {}, (correlationId) =>
+      redemption.redeem(token, { source: 'cashback', metadata: { correlation_id: correlationId } }),
+    )
+  } catch (e) {
+    // The server refused it under the same rule (403 FOREIGN_VOUCHER_FOR_MERCHANT): nothing swapped.
+    if (isServerForeignRefusal(e)) return { kind: 'merchant_refused', reason: 'merchant' }
+    throw e
+  }
 
   // Deliberately NOT attested (lib/attestation.ts). A code review flagged this
   // path as a gap in the ledger; it is a scope boundary rather than an
@@ -1093,6 +1129,18 @@ export async function redeemClaimRef(ref: string, key: string): Promise<RedeemRe
 async function redeemParsedClaim(parsed: ParsedClaimUrl): Promise<RedeemResult> {
   const metadata = await fetchPublicMetadata(parsed.claimRef)
 
+  // Owner rule 2026-10-13: a merchant account takes only its own stall's vouchers. Asked BEFORE
+  // the destructive claim, from the portal's issuer, so a merchant never spends a customer's claim.
+  const account = signerPubkey()
+  if (account) {
+    try {
+      await refuseForeignIssuer(metadata.issuerPubkey, account)
+    } catch (e) {
+      if (e instanceof ForeignVoucherRefusedError) return { kind: 'merchant_refused', reason: e.reason }
+      throw e
+    }
+  }
+
   const claimed = await claimCiphertext(parsed)
   if ('kind' in claimed) return claimed
 
@@ -1113,7 +1161,8 @@ async function redeemParsedClaim(parsed: ParsedClaimUrl): Promise<RedeemResult> 
   }
   if (outcome.kind === 'held') return { kind: 'held', reason: outcome.reason }
   if (outcome.kind === 'refused') return { kind: 'refused', reason: outcome.reason }
+  if (outcome.kind === 'merchant_refused') return { kind: 'merchant_refused', reason: outcome.reason }
   clearStashedToken(claimed.token)
 
-  return { kind: 'ok', ...metadata }
+  return { kind: 'ok', amountMinor: metadata.amountMinor, unit: metadata.unit, memo: metadata.memo }
 }

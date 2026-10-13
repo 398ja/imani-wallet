@@ -8,6 +8,8 @@ import { hasStoredKey } from '../lib/nap'
 import { loadProfile } from '../lib/profile'
 import { forgetPendingClaim, listPendingClaims, markPendingClaimOffered, pendingClaimToResume, stashPendingClaim } from '../lib/pendingClaim'
 import { isTerminalDevice } from '../lib/terminalEnrol'
+import { MERCHANT_FOREIGN_VOUCHER, MERCHANT_STATUS_UNKNOWN } from '../lib/merchantVouchers'
+import { useForeignVoucherRole } from '../lib/useForeignVoucherRole'
 import { Button } from '../components/ui'
 import { Centered } from '../components/ui/layout'
 
@@ -224,6 +226,9 @@ function ConfirmPrompt({
   }, [fetchSummary])
 
   const issuer = state.step === 'summary' && state.summary.kind === 'ok' ? state.summary.issuerPubkey : null
+  // Owner rule 2026-10-13: whether this account is a merchant, asked only for ANOTHER stall's
+  // voucher (own cashback has its own refusal below; a customer is never asked twice).
+  const { role, retry: retryRole } = useForeignVoucherRole(pubkey, issuer)
   const { identity, loading: stallLoading } = useIdentityState(issuer && PUBKEY_HEX.test(issuer) ? issuer : undefined)
   const stallName = humanName(identity?.name)
   const [ownHandle] = useState(() => {
@@ -325,6 +330,34 @@ function ConfirmPrompt({
         title="Your own cashback"
         body="This is your stall's own cashback. Give it to a customer, or cancel it."
         onDone={finish}
+      />
+    )
+  }
+
+  // Owner rule 2026-10-13: a merchant account takes only its own stall's vouchers. Shown instead of
+  // Add, before anything is spent; the claim stays with the voucher service for a customer account.
+  if (role === 'checking') return <Centered>Checking your voucher…</Centered>
+  if (role === 'merchant' || role === 'unknown') {
+    return (
+      <Outcome
+        title={role === 'merchant' ? 'Not for a merchant account' : 'Voucher waiting'}
+        body={role === 'merchant' ? MERCHANT_FOREIGN_VOUCHER : MERCHANT_STATUS_UNKNOWN}
+        {...(role === 'unknown'
+          ? { action: { label: 'Retry', run: retryRole } }
+          : onSwitchAccount
+            ? {
+                action: {
+                  label: 'Switch account',
+                  run: () => {
+                    // Kept parked, as the prompt's own Switch account does: it resumes on the
+                    // customer account after the next login. Nothing was spent.
+                    stashPendingClaim(arrival.ref, arrival.key)
+                    onSwitchAccount()
+                  },
+                },
+              }
+            : {})}
+        onDone={onDone}
       />
     )
   }
@@ -494,5 +527,7 @@ function describe(result: Exclude<RedeemResult, { kind: 'ok' }>): string {
       return 'Your voucher is saved on this phone and waiting to be verified. Nothing was lost: it is added once its mint is confirmed.'
     case 'refused':
       return 'Your voucher is saved on this phone but could not be added to this wallet. Nothing was lost.'
+    case 'merchant_refused':
+      return result.reason === 'merchant' ? MERCHANT_FOREIGN_VOUCHER : MERCHANT_STATUS_UNKNOWN
   }
 }

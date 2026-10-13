@@ -25,6 +25,12 @@ vi.mock('../../lib/giftLinks', async (orig) => ({
 const storedKey = { value: false }
 vi.mock('../../lib/nap', () => ({ hasStoredKey: async () => storedKey.value }))
 vi.mock('../../lib/terminalEnrol', () => ({ isTerminalDevice: () => false }))
+// Owner rule 2026-10-13: who this account is. A customer unless a test says otherwise.
+const role = vi.hoisted(() => ({ value: 'customer' as 'merchant' | 'customer' | 'unknown' }))
+vi.mock('../../lib/merchantVouchers', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/merchantVouchers')>()),
+  accountRole: async () => role.value,
+}))
 vi.mock('../../lib/identity', async (orig) => ({
   ...(await orig<typeof import('../../lib/identity')>()),
   useIdentityState: (pubkey: string | undefined) => ({
@@ -76,6 +82,7 @@ beforeEach(() => {
   localStorage.clear()
   resetPendingClaimOffers()
   storedKey.value = false
+  role.value = 'customer'
   readGift.mockReset().mockResolvedValue({ verdict: { kind: 'ok', summary: SUMMARY, tokens: TOKENS }, tokens: TOKENS })
   redeemGiftTokens.mockReset().mockResolvedValue({ kind: 'ok' })
   logged.length = 0
@@ -194,6 +201,37 @@ describe('the refusal states (spec 4.3)', () => {
     await screen.findByText(/This link is incomplete/)
     expect(readGift).not.toHaveBeenCalled()
     expect(listPendingClaims()).toEqual([])
+  })
+})
+
+describe('owner rule 2026-10-13: a merchant account takes only its own stall\'s vouchers', () => {
+  it('a merchant opening another stall\'s gift sees the refusal instead of Add, and nothing is redeemed', async () => {
+    role.value = 'merchant'
+    open(true)
+    await screen.findByText(/Merchant accounts can only take their own stall's vouchers/)
+    expect(screen.queryByRole('button', { name: 'Add to my wallet' })).toBeNull()
+    expect(redeemGiftTokens).not.toHaveBeenCalled()
+  })
+
+  it('an unknown role refuses a foreign gift with Retry; nothing is redeemed', async () => {
+    role.value = 'unknown'
+    open(true)
+    await screen.findByText(/could not check this account/i)
+    expect(redeemGiftTokens).not.toHaveBeenCalled()
+  })
+
+  it('a stall opening a gift of its OWN coupon is not asked (a redemption at its own stall)', async () => {
+    role.value = 'merchant'
+    readGift.mockResolvedValue({ verdict: { kind: 'ok', summary: { ...SUMMARY, issuer: ME }, tokens: TOKENS }, tokens: TOKENS })
+    open(true)
+    await screen.findByRole('button', { name: 'Add to my wallet' })
+  })
+
+  it('a refusal from the redeem (server or token check) shows the same copy', async () => {
+    redeemGiftTokens.mockResolvedValue({ kind: 'merchant_refused', reason: 'merchant' })
+    open(true)
+    fireEvent.click(await screen.findByRole('button', { name: 'Add to my wallet' }))
+    await screen.findByText(/Merchant accounts can only take their own stall's vouchers/)
   })
 })
 
