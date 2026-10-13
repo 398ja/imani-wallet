@@ -56,6 +56,7 @@ import { registerMerchant, TEST_PASSPHRASE } from './register.mts'
 import { parseVoucherToken, tokenProofs } from '../src/lib/voucherToken'
 import { terminalMetadataJson } from '../src/lib/terminalCredential'
 import { signOwnerAttestation } from '../src/lib/ownerAttestation'
+import { enrolmentProofHeader, signEnrolmentCode } from '../src/lib/terminalEnrolProof'
 import { licenceIssueParams } from '../src/lib/licenceIssue'
 import { licenceIssueBody, revokeRequest } from '../scripts/sell-subscription.mjs'
 import { licenceOf, verifyLicence } from '../packages/licence/src/index'
@@ -152,7 +153,15 @@ async function sellingTill(ownerSk: string, name: string) {
   const minted = await mint(ownerSk, {
     face_value: 1, face_unit: 'sat', face_decimals: 0, backing_strategy: 'PROPORTIONAL', issuer_id: stall,
     memo: 'Imani terminal credential', expires_in_days: 365, merchant_metadata: metadata,
-  }, { 'X-Idempotency-Expires-At': new Date(expiresAt * 1000).toISOString().replace('.000Z', 'Z') })
+  }, {
+    'X-Idempotency-Expires-At': new Date(expiresAt * 1000).toISOString().replace('.000Z', 'Z'),
+    // inv-terminal-not-merchant: the device's own proof that K was created as a terminal, as the
+    // device's /terminal/setup screen signs it. gateway-customer refuses a first enrolment without it.
+    'X-Imani-Terminal-Enrolment': (() => {
+      const at = Math.floor(Date.now() / 1000)
+      return enrolmentProofHeader({ createdAt: at, sig: signEnrolmentCode(hexToBytes(deviceSk), lock, at).split(':').pop()! })
+    })(),
+  })
   if (minted.voucherId) {
     await as(deviceSk, 'POST', `/api/v1/wallet/terminal-credentials/${encodeURIComponent(minted.voucherId)}/confirm`, {})
   }

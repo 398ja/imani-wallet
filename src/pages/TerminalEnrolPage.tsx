@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import QRCode from 'qrcode'
 import { Check, Clock } from 'lucide-react'
@@ -40,6 +40,27 @@ import { getSigner } from '../lib/nap'
 import type { StallSigner } from '../lib/ownerAttestation'
 import { useOnline } from '../lib/useOnline'
 import type { LicenceStatus } from '../lib/licenceStatus'
+import { merchantStatus, type MerchantStatus } from '../lib/merchant'
+import {
+  ENROLMENT_CODE_MESSAGES,
+  TERMINAL_KEY_CHECK_UNAVAILABLE_MESSAGE,
+  enrolmentProofHeader,
+  readEnrolmentCode,
+} from '../lib/terminalEnrolProof'
+import { CredentialMintError } from '../lib/terminalMint'
+
+/**
+ * The gateway's refusals of the KEY, in the owner's words (inv-terminal-not-merchant). Everything
+ * else keeps the message it already had.
+ */
+function ownerMessageFor(e: unknown): string {
+  if (e instanceof CredentialMintError) {
+    if (e.code === 'TERMINAL_KEY_NOT_A_TERMINAL') return ENROLMENT_CODE_MESSAGES['not-a-terminal-code']
+    if (e.code === 'TERMINAL_KEY_IS_MERCHANT') return ENROLMENT_CODE_MESSAGES.merchant
+    if (e.code === 'TERMINAL_KEY_CHECK_UNAVAILABLE') return TERMINAL_KEY_CHECK_UNAVAILABLE_MESSAGE
+  }
+  return e instanceof Error ? e.message : 'Could not set up the terminal.'
+}
 
 /** The stall's key, lent for one wrap, as `signer.withPrivkey` lends it everywhere else. */
 const stallSeal = <T,>(borrow: (key: Uint8Array) => T): T => getSigner().withPrivkey(borrow)
@@ -82,6 +103,7 @@ export function TerminalEnrolPage({
   publisher = ownerPublisher,
   seal = stallSeal,
   stallSigner = getSigner,
+  merchantCheck = merchantStatus,
 }: {
   stallPubkey: string
   /** Injected by tests. The owner's NIP-98 signer otherwise. */
@@ -94,6 +116,8 @@ export function TerminalEnrolPage({
   seal?: <T>(borrow: (key: Uint8Array) => T) => T
   /** The stall's signer, which attests the till (#160 decision 5). Injected for tests. */
   stallSigner?: () => StallSigner
+  /** Best-effort "is this key a merchant" (a stall-record lookup). Injected for tests. */
+  merchantCheck?: (pubkey: string) => Promise<MerchantStatus>
 }) {
   const navigate = useNavigate()
   const online = useOnline()
@@ -103,6 +127,11 @@ export function TerminalEnrolPage({
   // first criterion, and a default would be the app choosing for the owner.
   const [role, setRole] = useState<TerminalRole | null>(null)
   const [terminalPubkey, setTerminalPubkey] = useState<string | null>(null)
+  // The device's proof that the scanned key was created as a terminal (inv-terminal-not-merchant).
+  const [enrolmentProof, setEnrolmentProof] = useState<string | null>(null)
+  // Why the last scan was refused, in the owner's words.
+  const [scanRefusal, setScanRefusal] = useState<string | null>(null)
+  const lastScanned = useRef<string | null>(null)
   const [licence, setLicence] = useState<LicenceStatus | null>(null)
   const [issued, setIssued] = useState<
     { name: string; code: string; sent: boolean; setup: string } | null
@@ -146,6 +175,45 @@ export function TerminalEnrolPage({
     }
   }, [stallPubkey])
 
+  /**
+   * A scanned or typed code (inv-terminal-not-merchant). Only a device's terminal setup code, signed
+   * by the key it names, is accepted: an npub, hex key or handle is somebody's account, and making
+   * an account a till is exactly what the owner ruled out. Then, best effort, a key that already
+   * trades as a merchant is refused here, so the owner is told before anything is signed. The
+   * gateway checks both again and is the authority.
+   */
+  const onScanned = (text: string): boolean => {
+    // The camera reports the same code on every frame: one lookup per code.
+    if (text === lastScanned.current) return true
+    lastScanned.current = text
+    setScanRefusal(null)
+    const read = readEnrolmentCode(text)
+    // rev-option-a R5: a refused code is forgotten, so scanning it again (after fixing a clock, say)
+    // reads it again instead of showing nothing new.
+    const refuse = (message: string) => {
+      lastScanned.current = null
+      setScanRefusal(message)
+    }
+    if (typeof read === 'string') {
+      refuse(ENROLMENT_CODE_MESSAGES[read])
+      return true
+    }
+    if (read.terminalPubkey === stallPubkey.toLowerCase()) {
+      refuse('That is your own stall. Scan the code on the other device.')
+      return true
+    }
+    const key = read.terminalPubkey
+    void merchantCheck(key).then((status) => {
+      if (status === 'merchant') {
+        refuse(ENROLMENT_CODE_MESSAGES.merchant)
+        return
+      }
+      setTerminalPubkey(key)
+      setEnrolmentProof(enrolmentProofHeader(read))
+    })
+    return true
+  }
+
   const request = { name, role, terminalPubkey: terminalPubkey ?? '' }
   const context = licence
     ? {
@@ -169,7 +237,11 @@ export function TerminalEnrolPage({
    */
   const enrol = async () => {
     if (!context || busy) return
-    const prepared = { ...prepareEnrolment(request, context), idleLockMinutes: idleLock }
+    const prepared = {
+      ...prepareEnrolment(request, context),
+      idleLockMinutes: idleLock,
+      ...(enrolmentProof ? { enrolmentProof } : {}),
+    }
     setBusy(true)
     setFailure(null)
     const mintKey = crypto.randomUUID()
@@ -193,6 +265,7 @@ export function TerminalEnrolPage({
         mintKey,
         // With the key, so a resumed mint re-sends this exact body (spec 4.6.2).
         attestation: credential.attestation,
+        ...(credential.enrolmentProof ? { enrolmentProof: credential.enrolmentProof } : {}),
         idleLockMinutes: idleLock,
         waitingUntil: startedAt + WAITING_TTL_MS,
       })
@@ -258,7 +331,7 @@ export function TerminalEnrolPage({
     } catch (e) {
       // Shared with resumeMinting: only a definitive 4xx forgets the row (#160 round 2).
       await settleMintFailure(stallPubkey, credential.lockedTo, e)
-      setFailure(e instanceof Error ? e.message : 'Could not set up the terminal.')
+      setFailure(ownerMessageFor(e))
     } finally {
       setBusy(false)
     }
@@ -399,16 +472,32 @@ export function TerminalEnrolPage({
               <p className="min-w-0 flex-1 text-sm text-mono-500">
                 Device scanned. Check it is the one in your hand.
               </p>
-              <Button variant="ghost" size="sm" onClick={() => setTerminalPubkey(null)}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setTerminalPubkey(null)
+                  setEnrolmentProof(null)
+                  lastScanned.current = null
+                }}
+              >
                 Rescan
               </Button>
             </div>
           ) : (
-            <ScanRecipient
-              onFound={setTerminalPubkey}
-              selfPubkey={stallPubkey}
-              manualLabel="Or enter the device's key"
-            />
+            <>
+              <ScanRecipient
+                onFound={() => {}}
+                onText={onScanned}
+                selfPubkey={stallPubkey}
+                manualLabel="Or enter the device's code"
+              />
+              {scanRefusal ? (
+                <div className="mt-3">
+                  <Alert>{scanRefusal}</Alert>
+                </div>
+              ) : null}
+            </>
           )}
         </div>
       </div>

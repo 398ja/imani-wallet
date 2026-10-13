@@ -97,6 +97,11 @@ export interface TerminalRecord {
    */
   attestation?: OwnerAttestation
   /**
+   * The device's enrolment proof the first mint carried (inv-terminal-not-merchant), kept on the
+   * `minting` row with `mintKey` so a resumed mint sends it again. Public; grants nothing.
+   */
+  enrolmentProof?: string
+  /**
    * Why a minted credential was refused, on a `minting` row whose cancelling
    * spend has not landed yet. Kept so the next open retries the spend.
    */
@@ -248,6 +253,10 @@ export function sanitizeRow(entry: unknown): TerminalRecord | null {
     status: statusOf(row.status),
     mintKey: text(row.mintKey),
     attestation: attestationOf(row.attestation),
+    enrolmentProof:
+      typeof row.enrolmentProof === 'string' && /^1:\d{1,12}:[0-9a-f]{128}$/.test(row.enrolmentProof)
+        ? row.enrolmentProof
+        : undefined,
     defect: text(row.defect),
     delivered: typeof row.delivered === 'boolean' ? row.delivered : undefined,
     gatewayState: gatewayStateOf(row.gatewayState),

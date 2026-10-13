@@ -281,6 +281,18 @@ export type PreparedCredential = TerminalCredential & {
    * 5). Persisted on the `minting` row, so a resumed mint sends it unchanged.
    */
   attestation?: OwnerAttestation
+  /**
+   * The device's enrolment proof header value, `1:<created_at>:<sig>` (inv-terminal-not-merchant):
+   * gateway-customer refuses a new terminal without it. Absent on a renewal, which re-mints to a key
+   * the stall already enrolled.
+   */
+  enrolmentProof?: string
+  /**
+   * On a renewal, the till's CURRENT credential token (rev-option-a R2). gateway-customer signed it,
+   * so it proves this stall enrolled the key before, for a till minted before the gateway kept a
+   * registry row for it. Sent as `X-Imani-Terminal-Renews`; never part of the credential.
+   */
+  renewsToken?: string
 }
 
 /**

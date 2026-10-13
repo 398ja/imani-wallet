@@ -19,6 +19,7 @@ import { roleOf, type TerminalRole } from './terminalRole'
 import { terminalActor, type TerminalActor, type TerminalCredential } from './actor'
 import { credentialFromToken } from './terminalLogin'
 import { parseTerminalMetadata } from './terminalCredential'
+import { signEnrolmentCode } from './terminalEnrolProof'
 
 /**
  * Setting a device up as a terminal, from the device's side.
@@ -136,7 +137,12 @@ export interface EnrolmentAnnouncer {
 export interface EnrolmentCode {
   /** The device's public key, hex. Safe to photograph. */
   terminalPubkey: string
-  /** What the QR encodes. */
+  /**
+   * K's signed enrolment code, `imani-terminal-key:1:<K>:<created_at>:<sig>` (inv-terminal-not-merchant):
+   * the proof that K was created AS a terminal, which an ordinary account's npub cannot carry. Public.
+   */
+  enrolmentCode: string
+  /** What the QR encodes: the enrolment code. */
   uri: string
 }
 
@@ -147,13 +153,23 @@ export interface EnrolmentCode {
  * that was never enrolled, and at next launch it is indistinguishable from one
  * that never started — which is the correct outcome.
  */
-export function beginEnrolment(): EnrolmentCode {
-  const { pubkey } = mintKey()
+export function beginEnrolment(nowSeconds: number = Math.floor(Date.now() / 1000)): EnrolmentCode {
+  const { pubkey, privkeyHex } = mintKey()
+  // Signed with K, here, so the private half never leaves this module. The owner's phone and
+  // gateway-customer both refuse a key without it (inv-terminal-not-merchant, case d).
+  const key = hexToBytes(privkeyHex)
+  let enrolmentCode: string
+  try {
+    enrolmentCode = signEnrolmentCode(key, pubkey, nowSeconds)
+  } finally {
+    key.fill(0)
+  }
   return {
     terminalPubkey: pubkey,
-    // The same `nostr:` convention the rest of the app's scanners already
-    // tolerate, so the owner's scanner routes it without a new format.
-    uri: `nostr:${pubkey}`,
+    enrolmentCode,
+    // Not `nostr:<K>` any more: that is what an ordinary account shows, and an owner who could
+    // enrol one could make a customer's wallet a till (inv-terminal-not-merchant).
+    uri: enrolmentCode,
   }
 }
 
