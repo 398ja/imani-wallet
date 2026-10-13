@@ -14,6 +14,12 @@ vi.mock('../../lib/registration', async (importOriginal) => ({
 vi.mock('../../lib/config', () => ({ gatewayConfig: async () => ({ nip05Domain: 'example.test' }) }))
 // The banner fetches public metadata; its content is not what this file is about.
 vi.mock('../../components/ParkedClaimBanner', () => ({ ParkedClaimBanner: () => null }))
+// The merchant screen's fields are not under test: let its submit be reachable (review of #254).
+vi.mock('../../components/MerchantFieldset', () => ({ MerchantFieldset: () => null }))
+vi.mock('../../lib/merchant', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/merchant')>()),
+  merchantFieldsValid: () => true,
+}))
 
 import { OnboardingPage } from '../OnboardingPage'
 import { MAX_AGE_MS, stashPendingClaim } from '../../lib/pendingClaim'
@@ -112,5 +118,46 @@ describe('onboarding with a parked claim is customer-only', () => {
     )
     expect(screen.queryByText('What you sell')).toBeNull()
     expect(screen.queryByText('Your business')).toBeNull()
+  })
+
+  // Review of #254: a claim parked by another tab while this tab sits on the merchant screen does
+  // not re-render it, so the submit must re-read the claim itself.
+  const toMerchantScreen = () => {
+    renderAccount()
+    fireEvent.click(screen.getByText('I am a merchant'))
+    fill()
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    expect(screen.getByText('What you sell')).toBeTruthy()
+  }
+
+  it('refuses a merchant submit when a claim was parked since the last render', async () => {
+    toMerchantScreen()
+    stashPendingClaim('ref-other-tab', 'k1')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Create merchant account' }))
+    })
+    expect(register).not.toHaveBeenCalled()
+    expect(screen.queryByText('What you sell')).toBeNull()
+    expect(screen.getByText(/You're redeeming a voucher, so this is a customer account\./)).toBeTruthy()
+  })
+
+  it('drops the merchant screen when another tab parks a claim (storage event)', () => {
+    toMerchantScreen()
+    stashPendingClaim('ref-other-tab', 'k1')
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', { key: 'imani-wallet:pending-claim' }))
+    })
+    expect(screen.queryByText('What you sell')).toBeNull()
+    expect(screen.queryByText('I am a merchant')).toBeNull()
+  })
+
+  it('still creates a merchant account with no parked claim', async () => {
+    toMerchantScreen()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Create merchant account' }))
+    })
+    expect(register).toHaveBeenCalledTimes(1)
+    expect(register.mock.calls[0][3]).toBeTruthy()
   })
 })

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useReducer, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { getPublicKey } from 'nostr-tools'
 import { hexToBytes } from '@noble/hashes/utils'
@@ -182,6 +182,14 @@ function CreateForm({
   // `isMerchant` cannot be true here whatever the switch state says.
   const claimDriven = peekPendingClaim() !== null
   const isMerchant = merchantChosen && !claimDriven
+  // A claim parked by another tab fires `storage` here: re-render so the switch and the merchant
+  // steps go at once rather than on the next keystroke (review of #254).
+  const [, rerender] = useReducer((n: number) => n + 1, 0)
+  useEffect(() => {
+    const onStorage = () => rerender()
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
   const [displayName, setDisplayName] = useState('')
   const [about, setAbout] = useState('')
   const [merchant, setMerchant] = useState<MerchantFields>(() => ({
@@ -238,6 +246,13 @@ function CreateForm({
   const current = complete && isMerchant ? step : 'account'
 
   const submit = async () => {
+    // Re-read at the moment of submitting: `isMerchant` is from the last render, and a claim parked
+    // since then (another tab, no render in between) must still win. Refuse rather than silently
+    // create a customer from the merchant screen: the re-render shows the customer-only form.
+    if (isMerchant && peekPendingClaim() !== null) {
+      rerender()
+      return
+    }
     setBusy(true)
     setError(null)
     try {
