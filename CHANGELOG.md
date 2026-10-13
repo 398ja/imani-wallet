@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-10-13
+
+Claim links phase 4: a customer gives a coupon to anyone by link (#247). Wallet only; no server
+change is needed.
+
 ### Added (claim links, phase 4: gifts by link, [spec](docs/spec-claim-links.md) 3.3, 4.2, 4.3, 5.3, 5.4)
 
 - **Send by link.** Send has a new option, *"Anyone, by link"*: pick a coupon and an amount, choose
@@ -53,6 +58,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Wallet only: the core and customer verifications (spec 6.4, 6.5) and relay retention (6.6) passed
 with no server change.
+
+### Security (review hardening of #247)
+
+- A third party's gift wrap to a link's public key no longer freezes the gift: the recipient's
+  prompt, Take it back, the reclaim after expiry and the restore scan only consider coupons that pass
+  their own checks (signature, allowlist, money, trusted mint).
+- One coupon the mint refuses (for example a copy of a real voucher with a bad mint signature) no
+  longer stops the rest: every coupon is tried, and the outcome stays "Voucher waiting" with Retry.
+- A link index is never reused after this device lost its counter (logout, restore, second device):
+  the next index is probed at the gateway before it is used.
+- A partly claimed gift offers only what is left, at its own face.
 
 ## [0.22.0] - 2026-10-13
 
