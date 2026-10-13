@@ -324,6 +324,47 @@ async function main() {
     check('CL-D S sees Claimed', /Status Claimed/.test(st), st.slice(0, 300))
   }
 
+  // ── CL-MERCHANT (owner rule 2026-10-13) ──
+  console.log("\nCL-MERCHANT: a merchant account is refused another stall's gift, by the prompt and by the server")
+  const gm = await sendByLink(s, '0.05')
+  check('CL-MERCHANT a link was made', gm !== null)
+  if (gm) {
+    const mPage = await (await context(browser, 'M')).newPage()
+    await registerMerchant(mPage, BASE)
+    const t = await openGift(mPage, gm.link)
+    check("CL-MERCHANT the prompt refuses with the rule's copy, no Add",
+      /Merchant accounts can only take their own stall's vouchers/.test(t) && !/Add to my wallet/.test(t), t.slice(0, 300))
+    const { tokens } = await rumorsFor(gm.k)
+    check('CL-MERCHANT the refusal spent nothing', tokens.length > 0 && (await checkstate(tokens[0])).every((x) => x === 'UNSPENT'))
+    // Bypass the wallet's own check: receive the token straight through the legacy redeem, which
+    // goes to gateway-customer's wallet/receive signed as the merchant. The server must refuse.
+    await mPage.goto(`${BASE}/`, { waitUntil: 'load' })
+    await mPage.waitForFunction(() => !!(window as unknown as { TokenRedemption?: unknown }).TokenRedemption, undefined, { timeout: 60_000 }).catch(() => {})
+    const direct = await mPage.evaluate(async (token) => {
+      const r = (window as unknown as { TokenRedemption?: { redeem(t: string, o: unknown): Promise<unknown> } }).TokenRedemption
+      if (!r) return 'no TokenRedemption'
+      try {
+        await r.redeem(token, { source: 'gift_link' })
+        return 'received'
+      } catch (e) {
+        const err = e as { message?: string; code?: string; status?: number }
+        return `${err.status ?? ''} ${err.code ?? ''} ${err.message ?? ''}`
+      }
+    }, tokens[0] ?? '')
+    check('CL-MERCHANT the server refuses a direct receive: 403 FOREIGN_VOUCHER_FOR_MERCHANT', /FOREIGN_VOUCHER_FOR_MERCHANT/.test(direct), direct.slice(0, 300))
+    check('CL-MERCHANT and the proofs are still UNSPENT', (await checkstate(tokens[0])).every((x) => x === 'UNSPENT'))
+    // A customer still takes it.
+    const cPage = await (await context(browser, 'MC')).newPage()
+    await registerCustomer(cPage, BASE)
+    const tc = await openGift(cPage, gm.link)
+    check('CL-MERCHANT a customer is offered it', /Add to my wallet/.test(tc), tc.slice(0, 300))
+    await cPage.getByRole('button', { name: 'Add to my wallet' }).click()
+    await cPage.waitForFunction(() => /Voucher added|Voucher unavailable/.test(document.body.innerText), undefined, { timeout: 90_000 }).catch(() => {})
+    check('CL-MERCHANT the customer adds it', /Voucher added/.test(await text(cPage)), (await text(cPage)).slice(0, 200))
+    await mPage.context().close()
+    await cPage.context().close()
+  }
+
   // ── CL-EXP ──
   console.log('\nCL-EXP: past x is refused, and the sender reclaims')
   const e = await sendByLink(s, '0.20', '1 day')
@@ -390,10 +431,10 @@ async function main() {
   await s.goto(`${BASE}/`, { waitUntil: 'load' })
   await s.waitForTimeout(4_000)
   const home = await text(s)
-  check('S holds 1.20 after two claims and two take-backs', /1\.20/.test(home), home.slice(0, 300))
+  check('S holds 1.15 after three claims (one the CL-MERCHANT gift) and two take-backs', /1\.15/.test(home), home.slice(0, 300))
 
   // ── Fragment hygiene across every context (spec 2.4) ──
-  const secrets = [c, d, e, f].filter(Boolean).map((x) => x!.k)
+  const secrets = [c, d, gm, e, f].filter(Boolean).map((x) => x!.k)
   const leaks = seen.filter((r) => secrets.some((k) => r.url.includes(k) || r.referer.includes(k)))
   check('no request URL or Referer, from any browser, ever carried a link secret', leaks.length === 0, JSON.stringify(leaks.slice(0, 3)))
   check('no uncaught page errors', errors.length === 0, errors.slice(0, 3).join(' | '))

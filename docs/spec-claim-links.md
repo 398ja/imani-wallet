@@ -458,6 +458,11 @@ directly. Nothing on the gateway sees it. Under #540 that swap declares nothing,
 redemption, attestation or ledger credit for the merchant; closing it would need the mint to require
 a declared, non-merchant redeemer for every voucher swap (a cashu-mint change, not in scope).
 
+**Residual: an unsigned receive.** gateway-customer's receive accepts an anonymous caller (a
+terminal's decommission hand-back is unsigned), so a merchant who strips NIP-98 receives as nobody:
+the same bearer swap as at the mint, crediting no identity and declaring nothing. Closing it needs
+the hand-back signed by the terminal key, then NIP-98 required on receive (follow-up).
+
 ### 3.3 Gift links: how they work
 
 **Send** (the sender's wallet):
