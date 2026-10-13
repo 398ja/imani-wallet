@@ -63,7 +63,9 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
   const [amount, setAmount] = useState('')
   const [memo, setMemo] = useState('')
   const [days, setDays] = useState<number>(DEFAULT_EXPIRY_DAYS)
-  const [confirming, setConfirming] = useState(false)
+  /** When Continue was tapped, ms: the expiry is fixed then, so the confirm screen and the send agree. */
+  const [confirmedAt, setConfirmedAt] = useState<number | null>(null)
+  const confirming = confirmedAt !== null
   const [status, setStatus] = useState<{ step: 'idle' | 'sending' } | { step: 'failed' | 'unconfirmed'; message: string }>({ step: 'idle' })
   const [sent, setSent] = useState<{ link: string; x: number; face: string; delivered: boolean } | null>(null)
 
@@ -144,7 +146,7 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
   const minor = parseAmountToMinor(amount, chosen.decimals)
   const obstacle = minor === null || minor <= 0 ? null : splitObstacle(chosen.vouchers, minor)
   const short = minor !== null && minor > chosen.total
-  const x = giftExpiry(Date.now(), days, chosen.vouchers.map((v) => toEpochMs(v.expires_at)))
+  const x = giftExpiry(confirmedAt ?? 0, days, chosen.vouchers.map((v) => toEpochMs(v.expires_at)))
 
   if (confirming && minor !== null) {
     const face = formatFace(minor, chosen)
@@ -197,7 +199,7 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
             className="w-full"
             disabled={status.step === 'sending' || status.step === 'unconfirmed'}
             onClick={() => {
-              setConfirming(false)
+              setConfirmedAt(null)
               setStatus({ step: 'idle' })
             }}
           >
@@ -257,7 +259,7 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
           size="lg"
           className="w-full"
           disabled={minor === null || minor <= 0 || short || !!obstacle}
-          onClick={() => setConfirming(true)}
+          onClick={() => setConfirmedAt(Date.now())}
         >
           Continue
         </Button>

@@ -166,7 +166,9 @@ function GiftPrompt({
   const { identity: stallIdentity, loading: stallLoading } = useIdentityState(summary?.issuer)
   const { identity: senderIdentity } = useIdentityState(summary?.senderPubkey)
   const stallName = humanName(stallIdentity?.name)
-  const senderName = humanName(senderIdentity?.name) ?? (summary?.senderPubkey ? shortPubkey(summary.senderPubkey) : 'someone')
+  const senderName = humanName(senderIdentity?.name)
+    ?? (senderIdentity?.nip05 ? handleLabel(senderIdentity.nip05) : undefined)
+    ?? (summary?.senderPubkey ? shortPubkey(summary.senderPubkey) : 'someone')
   const [ownHandle] = useState(() => {
     const nip05 = pubkey ? loadProfile(pubkey)?.nip05 : undefined
     return nip05 ? handleLabel(nip05) : null
