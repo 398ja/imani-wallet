@@ -167,6 +167,15 @@ they issue.
 **Can I use one merchant's coupon at another shop?**
 No. A coupon is tied to the merchant who issued it. You spend it back with them.
 
+**I also run a stall. Can my stall's account hold coupons from other shops?**
+No. A merchant account can only take its own stall's vouchers: it refuses a coupon, a cashback link
+or a gift link from another stall, and says *"Merchant accounts can only take their own stall's
+vouchers. To use a voucher from another stall, use a customer account."* Nothing is spent when it
+refuses, so the voucher still waits for you. To shop at other stalls, keep a separate customer
+account (register a second handle, without the merchant profile) and open the link there: on the
+refusal screen, **Switch account** keeps the voucher parked and brings it back after you log in.
+Sending a gift to a customer is unaffected.
+
 **What if I get a new phone?**
 Restore from your backup file and passphrase. Your coupons come back from the
 network. (Any coupon you'd already spent stays spent, which is correct.)

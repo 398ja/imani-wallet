@@ -26,6 +26,7 @@ import {
 } from './giftLink'
 import { legacyApi, withCorrelation } from './legacyBridge'
 import { getSigner } from './nap'
+import { ForeignVoucherRefusedError, isServerForeignRefusal, refuseForeignIssuer, refuseForeignVouchers, sessionAccount } from './merchantVouchers'
 import { sendVouchers, type SendResult } from './pay'
 import { publishTx } from './txRecords'
 import { cashbackValidation } from './cashbackValidation'
@@ -227,6 +228,13 @@ export async function sendGift({
   x: number
   walletOrigin?: string
 }): Promise<GiftSent & { delivered: boolean }> {
+  // Owner rule 2026-10-13: a merchant account takes only its own stall's vouchers, so it could never
+  // take a link of another stall's coupon back (reclaim is a receive). Refused before anything moves.
+  // Own-stall coupons are already excluded from gifts (spec 4.2), so a merchant gifts nothing.
+  const issuer = typeof merchant?.pubkey === 'string' ? merchant.pubkey.toLowerCase() : ''
+  if (issuer && issuer !== payer.toLowerCase()) {
+    await refuseForeignIssuerForGift(issuer, payer)
+  }
   const rows = await linkRows()
   const outstanding = [...distinctLinks(rows).values()].filter((p) => p.some((r) => r.link.status === 'outstanding')).length
   if (outstanding >= MAX_OUTSTANDING_LINKS) throw new Error(tooManyLinksMessage())
@@ -265,6 +273,21 @@ export async function sendGift({
   return { result, link, x, delivered }
 }
 
+async function refuseForeignIssuerForGift(issuer: string, payer: string): Promise<void> {
+  try {
+    await refuseForeignIssuer(issuer, payer)
+  } catch (e) {
+    if (e instanceof ForeignVoucherRefusedError) {
+      throw new Error(
+        e.reason === 'merchant'
+          ? 'A merchant account cannot send another stall\u2019s voucher by link: it could not take it back. Send it to a customer instead.'
+          : e.message,
+      )
+    }
+    throw e
+  }
+}
+
 /** The link for a stored row, to show again. */
 export function linkFor(record: GiftLinkRecord, walletOrigin = window.location.origin): string | null {
   const secret = secretFromText(record.k)
@@ -278,6 +301,8 @@ export type GiftRedeemOutcome =
   | { kind: 'claimed' }
   | { kind: 'held' }
   | { kind: 'failed'; message: string }
+  /** Owner rule 2026-10-13: a merchant account and another stall's voucher. Nothing was swapped. */
+  | { kind: 'merchant_refused'; reason: 'merchant' | 'unknown' }
 
 /**
  * Receive gift tokens into this wallet. `gift_link` for a recipient, `gift_link_reclaim` for the
@@ -294,6 +319,17 @@ export async function redeemGiftTokens(
   for (const { token } of tokens) {
     if (checkTokenBacking(token).outcome !== 'accept') return { kind: 'held' }
   }
+  // Owner rule 2026-10-13: a merchant account takes only its own stall's vouchers. Before any swap,
+  // so a refused gift stays on its link for a customer account (or for the sender to take back).
+  const account = sessionAccount(getSigner)
+  if (account) {
+    try {
+      await refuseForeignVouchers(tokens.map((t) => t.token), account)
+    } catch (e) {
+      if (e instanceof ForeignVoucherRefusedError) return { kind: 'merchant_refused', reason: e.reason }
+      throw e
+    }
+  }
   await legacyApi()
   const redemption = window.TokenRedemption
   if (!redemption) return { kind: 'failed', message: 'This wallet could not start the receive.' }
@@ -309,6 +345,8 @@ export async function redeemGiftTokens(
       added += 1
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
+      // The server refused it under the same rule: nothing was swapped, and nothing else will pass.
+      if (isServerForeignRefusal(error)) return { kind: 'merchant_refused', reason: 'merchant' }
       if (/11001|already[\s_]spent|proof already used|already been redeemed|already redeemed/i.test(message)) {
         spent += 1
         continue

@@ -30,6 +30,12 @@ vi.mock('../../lib/cashback', async (importOriginal) => ({
 }))
 vi.mock('../../lib/nap', () => ({ hasStoredKey: async () => true }))
 vi.mock('../../lib/terminalEnrol', () => ({ isTerminalDevice: () => false }))
+// Owner rule 2026-10-13: who this account is. A customer unless a test says otherwise.
+const role = vi.hoisted(() => ({ value: 'customer' as 'merchant' | 'customer' | 'unknown' }))
+vi.mock('../../lib/merchantVouchers', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/merchantVouchers')>()),
+  accountRole: async () => role.value,
+}))
 // Identity resolution reads the relay and the gateway; the prompt only needs a name.
 const identityLoading = { value: false }
 vi.mock('../../lib/identity', async (importOriginal) => ({
@@ -95,6 +101,7 @@ async function settle() {
 }
 
 beforeEach(() => {
+  role.value = 'customer'
   identityLoading.value = false
   localStorage.clear()
   resetPendingClaimOffers()
@@ -260,6 +267,43 @@ describe('who the prompt is for', () => {
 
     expect(screen.queryByRole('button', { name: 'Add to my wallet' })).toBeNull()
     expect(redeemClaimRef).not.toHaveBeenCalled()
+  })
+})
+
+describe('owner rule 2026-10-13: a merchant account takes only its own stall\'s vouchers', () => {
+  const MERCHANT = 'e'.repeat(64)
+
+  it('a merchant opening ANOTHER stall\'s cashback sees the refusal instead of Add, and nothing is spent', async () => {
+    role.value = 'merchant'
+    open(MERCHANT)
+    await screen.findByText(/Merchant accounts can only take their own stall's vouchers/)
+    expect(document.body.textContent).toContain('use a customer account')
+    expect(screen.queryByRole('button', { name: 'Add to my wallet' })).toBeNull()
+    expect(redeemClaimRef).not.toHaveBeenCalled()
+  })
+
+  it('an account whose role cannot be checked is refused a foreign voucher, with Retry', async () => {
+    role.value = 'unknown'
+    open(MERCHANT)
+    await screen.findByText(/could not check this account/i)
+    expect(screen.queryByRole('button', { name: 'Add to my wallet' })).toBeNull()
+    role.value = 'customer'
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await screen.findByRole('button', { name: 'Add to my wallet' })
+    expect(redeemClaimRef).not.toHaveBeenCalled()
+  })
+
+  it('a customer is unchanged', async () => {
+    role.value = 'customer'
+    open(CUSTOMER)
+    await screen.findByRole('button', { name: 'Add to my wallet' })
+  })
+
+  it('a refusal reported after the tap (the token named another stall) shows the same copy', async () => {
+    redeemClaimRef.mockResolvedValue({ kind: 'merchant_refused', reason: 'merchant' })
+    open()
+    fireEvent.click(await screen.findByRole('button', { name: 'Add to my wallet' }))
+    await screen.findByText(/Merchant accounts can only take their own stall's vouchers/)
   })
 })
 
