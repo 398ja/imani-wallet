@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-10-14
+
+Two owner rules for merchant accounts (#255, #254). Ship after gateway-core 0.26.0 and
+gateway-customer 0.29.0: the servers are the boundary, the wallet's checks are UX.
+
+### Changed
+
+- **Signing up from a claim link makes a customer account** (#254). While a cashback or gift claim
+  is parked (live: at most 24 h old), onboarding hides the merchant switch and never shows the
+  profile or merchant steps: *"You're redeeming a voucher, so this is a customer account."* The
+  submit re-reads the parked claim, so a claim parked by another tab refuses a stale "Create
+  merchant account" and shows the customer form; a `storage` event re-renders the form at once.
+  With no live claim, sign-up is unchanged.
+
 ### Added
 
 - **A merchant account takes only its own stall's vouchers** (owner rule, 2026-10-13). Before anything
