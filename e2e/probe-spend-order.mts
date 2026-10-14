@@ -32,6 +32,7 @@
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright'
 import { parseVoucherToken } from '../src/lib/voucherToken'
 import { registerCustomer, registerMerchant, TEST_PASSPHRASE, TEST_STALL_NAME } from './register.mts'
+import { bypassCaptcha } from './captchaBypass.mts'
 
 const BASE = (process.env.E2E_BASE ?? 'http://localhost:5177').replace(/\/+$/, '')
 const SERVE_FROM = (process.env.E2E_SERVE_FROM ?? '').replace(/\/+$/, '')
@@ -348,6 +349,8 @@ async function main(): Promise<number> {
         // Vite's HMR socket would otherwise reach whatever really listens on BASE.
         await ctx.routeWebSocket((url) => url.port === new URL(BASE).port, (ws) => ws.close())
       }
+      // Last, so it runs first (E2E_CAPTCHA_BYPASS).
+      await bypassCaptcha(ctx)
       return { ctx, page: await ctx.newPage() }
     }
     const till = await mk()

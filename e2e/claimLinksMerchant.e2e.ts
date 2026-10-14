@@ -28,6 +28,7 @@ import { readFile } from 'node:fs/promises'
 import { request as httpRequest } from 'node:http'
 import { extname, join, normalize } from 'node:path'
 import { registerCustomer, registerMerchant, TEST_PASSPHRASE } from './register.mts'
+import { bypassCaptcha } from './captchaBypass.mts'
 
 const BASE = (process.env.E2E_BASE ?? 'http://localhost:5177').replace(/\/+$/, '')
 const BUNDLE_DIR = process.env.E2E_BUNDLE_DIR
@@ -87,7 +88,7 @@ async function context(browser: Browser, name: string): Promise<BrowserContext> 
     const shell = join(root, 'index.html')
     await ctx.route(`${BASE}/**`, async (route) => {
       const path = new URL(route.request().url()).pathname
-      if (path.startsWith('/api/') || path.startsWith('/.well-known/')) return route.continue()
+      if (path.startsWith('/api/') || path.startsWith('/.well-known/') || path.startsWith('/fcaptcha/')) return route.continue()
       const candidate = normalize(join(root, path))
       const file = candidate.startsWith(root) && extname(candidate)
         ? await readFile(candidate).then(() => candidate, () => shell)
@@ -104,6 +105,8 @@ async function context(browser: Browser, name: string): Promise<BrowserContext> 
       return route.fulfill({ status: res.status, headers: res.headers, body: res.body })
     })
   }
+  // Last, so it runs first: QR-AGAIN rebuilds the link through by-code (E2E_CAPTCHA_BYPASS).
+  await bypassCaptcha(ctx)
   ctx.on('page', (p) => p.on('pageerror', (e) => errors.push(`${name}: ${e.message}`)))
   return ctx
 }

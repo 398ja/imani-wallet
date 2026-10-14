@@ -41,6 +41,7 @@ import {
 import { otherParty, toTransaction, transactionLabel, type WalletTransaction } from '../lib/transactions'
 import { RefusedCouponsNote } from '../components/ui/RefusedCouponsNote'
 import { resolveClaimLinkByCode, useCashbackStatus } from '../lib/cashback'
+import { prewarmCaptcha } from '../lib/captcha'
 import { formatCashbackLink } from '../lib/claimLink'
 import { CancelCashback, ClaimLinkPanel } from '../components/CashbackClaimLink'
 import { GiftLinkSection } from '../components/GiftLinkSection'
@@ -497,6 +498,12 @@ function ShowQrAgain({ code, expiresAt }: { code: string; expiresAt?: number }) 
   const [state, setState] = useState<
     { kind: 'idle' } | { kind: 'loading' } | { kind: 'ok'; link: string } | { kind: 'failed'; message: string }
   >({ kind: 'idle' })
+
+  // The by-code lookup carries the edge's bot check (lib/captcha.ts). Start it with the button
+  // on screen, so a merchant's (or a till's) tap waits as little as possible.
+  useEffect(() => {
+    prewarmCaptcha()
+  }, [])
 
   const rebuild = async () => {
     setState({ kind: 'loading' })

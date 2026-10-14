@@ -26,6 +26,7 @@
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright'
 import { parseVoucherToken } from '../src/lib/voucherToken'
 import { registerCustomer, registerMerchant, TEST_PASSPHRASE, TEST_STALL_NAME } from './register.mts'
+import { bypassCaptcha } from './captchaBypass.mts'
 
 const BASE = (process.env.E2E_BASE ?? 'https://wallet.staging.398ja.xyz').replace(/\/+$/, '')
 const BROWSER_LOCALE = 'en-GB'
@@ -278,6 +279,7 @@ async function openWallet(browser: Browser): Promise<{ browserContext: BrowserCo
     locale: BROWSER_LOCALE,
     ignoreHTTPSErrors: process.env.E2E_IGNORE_HTTPS_ERRORS === '1',
   })
+  await bypassCaptcha(browserContext)
   return { browserContext, page: await browserContext.newPage() }
 }
 
