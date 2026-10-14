@@ -12,6 +12,15 @@ const PUBKEY_HEX = /^[0-9a-f]{64}$/
 
 /** The fallback headline when the summary cannot be fetched (spec 4.4). It never blocks registration. */
 export const BANNER_FALLBACK = 'Create an account to redeem your voucher'
+/** The same fallback on Login, where the device already holds an account. */
+export const BANNER_FALLBACK_UNLOCK = 'Log in to redeem your voucher'
+
+/**
+ * Which page the banner sits on. `register` is onboarding (no account yet). `unlock` is Login,
+ * where the device already holds a key, so "Create an account" would be wrong (owner report
+ * 2026-10-14).
+ */
+export type BannerMode = 'register' | 'unlock'
 
 /**
  * The voucher banner on onboarding's start step and on Login (claim links phase 3, spec 2.5 step 3
@@ -21,10 +30,16 @@ export const BANNER_FALLBACK = 'Create an account to redeem your voucher'
  * portal's PUBLIC metadata for its ref: non-destructive, and the same read the prompt makes. Only
  * the ref travels; the key stays in storage and is never rendered, logged or sent.
  *
- * The same words on Login as on onboarding: spec 5.2 sends a device with a stored key to `/login`
- * "with the same banner", and the copy is the spec's verbatim (4.4).
+ * The words follow the page (spec 4.4): onboarding says "Create an account", Login says "Log in".
  */
-export function ParkedClaimBanner() {
+export function ParkedClaimBanner({ mode = 'register' }: { mode?: BannerMode }) {
+  const unlock = mode === 'unlock'
+  const fallback = unlock ? BANNER_FALLBACK_UNLOCK : BANNER_FALLBACK
+  const verb = unlock ? 'Log in' : 'Create an account'
+  // "Right here" promises a registration on this screen. On Login it reads wrong.
+  const reassurance = unlock
+    ? 'Nothing is claimed until you add it.'
+    : 'Nothing is claimed until you add it. You can do that in a minute, right here.'
   // Read once: the banner describes the claim the visitor arrived with, not one parked later.
   const [parked] = useState(() => peekPendingClaim())
   const [expired] = useState(() => !parked && hasExpiredPendingClaim())
@@ -77,21 +92,19 @@ export function ParkedClaimBanner() {
     // Spec 5.3 step 4: "Bob sent you a voucher from Ana's Bakery. Create an account to add it to
     // your wallet." Falls back to the generic headline while it cannot be read.
     const headline = gift
-      ? `${sender ?? 'Someone'} sent you a voucher${stall ? ` from ${stall}` : ''}. Create an account to add it to your wallet.`
-      : BANNER_FALLBACK
+      ? `${sender ?? 'Someone'} sent you a voucher${stall ? ` from ${stall}` : ''}. ${verb} to add it to your wallet.`
+      : fallback
     const giftFace = gift ? formatFace(gift.faceMinor, { unit: gift.unit, decimals: gift.decimals ?? currencyDecimals(gift.unit) }) : null
     return (
       <div role="status" data-testid="claim-banner" className="materialize rounded-2xl bg-mono-100 p-4 text-left dark:bg-mono-800">
         <p className="text-[15px] font-semibold text-mono-900 dark:text-mono-50">{headline}</p>
         {giftFace && <p className="mt-1 text-sm text-mono-700 dark:text-mono-200">{giftFace}.</p>}
-        <p className="mt-1 text-sm text-mono-500">
-          Nothing is claimed until you add it. You can do that in a minute, right here.
-        </p>
+        <p className="mt-1 text-sm text-mono-500">{reassurance}</p>
       </div>
     )
   }
 
-  const headline = stall ? `Create an account to redeem the voucher from ${stall}` : BANNER_FALLBACK
+  const headline = stall ? `${verb} to redeem the voucher from ${stall}` : fallback
   const face = ok && ok.amountMinor !== null && ok.unit
     ? formatFace(ok.amountMinor, { unit: ok.unit, decimals: ok.decimals ?? currencyDecimals(ok.unit) })
     : null
@@ -102,9 +115,7 @@ export function ParkedClaimBanner() {
     <div role="status" data-testid="claim-banner" className="materialize rounded-2xl bg-mono-100 p-4 text-left dark:bg-mono-800">
       <p className="text-[15px] font-semibold text-mono-900 dark:text-mono-50">{headline}</p>
       {details && <p className="mt-1 text-sm text-mono-700 dark:text-mono-200">{details}.</p>}
-      <p className="mt-1 text-sm text-mono-500">
-        Nothing is claimed until you add it. You can do that in a minute, right here.
-      </p>
+      <p className="mt-1 text-sm text-mono-500">{reassurance}</p>
     </div>
   )
 }

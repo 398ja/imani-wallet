@@ -88,7 +88,7 @@ export function LoginPage({ onUnlock }: { onUnlock: (privkeyHex: string) => Prom
       </div>
 
       {/* A claim link parked on the way here (claim links phase 3, spec 4.4 and 5.2). */}
-      <ParkedClaimBanner />
+      <ParkedClaimBanner mode="unlock" />
 
       <div className="space-y-3">
         <Input
