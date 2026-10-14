@@ -90,6 +90,30 @@ describe('captcha token for the cashback lookup', () => {
     expect(await captchaToken()).toBeNull()
   })
 
+  it('gives up on a script that never loads after 5 s, inside a longer budget', async () => {
+    vi.useFakeTimers()
+    serveWidget(null, 'never')
+    let settled = false
+    const pending = captchaToken(CASHBACK_LOOKUP_ACTION, 60_000).then((t) => {
+      settled = true
+      return t
+    })
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(2)
+    expect(settled).toBe(true)
+    expect(await pending).toBeNull()
+  })
+
+  it('sends no header, and does not throw, when starting the session throws', async () => {
+    const { invisible } = serveWidget(async () => ({ success: true, token: 'unused' }))
+    invisible.mockImplementation(() => {
+      throw new Error('no canvas')
+    })
+    expect(await captchaToken()).toBeNull()
+    expect(await captchaHeaders()).toEqual({})
+  })
+
   it('never makes a lookup wait longer than its budget', async () => {
     vi.useFakeTimers()
     serveWidget(() => new Promise(() => {}))
