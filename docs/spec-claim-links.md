@@ -400,7 +400,7 @@ Why the claim service is the wrong escrow for customers:
 | Cashback "claim" (ciphertext release) | claim service | **No swap at all** | It releases bytes. It holds no mint or redeemer credential, and must never be given one. |
 | Recipient banks the cashback | gateway-customer `wallet/receive`, caller = recipient | Only if the recipient **is the issuer** (`RedemptionDeclarations.java:82`) | An honest hop otherwise |
 | Gift split | gateway-core atomic send with no `paymentRequestId` | No (`AtomicSendService.java:684-686`) | Customer-to-customer hop |
-| Recipient claims a gift | gateway-customer `wallet/receive`, caller = recipient | Only if the recipient is the issuer | As above |
+| Recipient claims a gift | gateway-customer `wallet/receive`, caller = recipient | Only if the recipient is the issuer | As above. A merchant recipient that is NOT the issuer is refused (section 3.4) |
 | Sender reclaims a gift | gateway-customer `wallet/receive`, caller = sender | Only if the sender is the issuer | **Prevented**: the gift picker excludes coupons the sender issued (section 4.2) |
 
 The wallet sends no declaration header on any of these paths (D9). The edge strips both headers
@@ -418,6 +418,50 @@ There are two edge cases, and both are refused or explained in the wallet:
 - **A stall opens a gift of its own coupon.** That is a real redemption at the stall, so a
   declaration is correct. The prompt says so: "This is your stall's coupon. Adding it counts as
   redeemed."
+- **A stall opens another stall's cashback or gift.** Refused (owner rule 2026-10-13, section 3.4).
+
+### 3.4 A merchant takes only its own stall's vouchers (owner rule, 2026-10-13)
+
+**Rule.** A merchant account (a key with an open or suspended stall, gateway-core's
+`MerchantAclService.resolveStrict`; in the wallet, a stall record on the device or the relay) may
+receive or redeem only vouchers whose signed issuer is its own stall key. Customers are unaffected.
+A merchant who also shops uses a separate customer account (option A identity separation).
+
+**Who issued it** is the signed secret's `issuer_id` (unlocked `VOUCHER`) or `issuer` tag
+(`P2PK_VOUCHER`), read only when the issuer signature verifies. An unverified voucher is foreign.
+
+**Where it is enforced.**
+
+| Path | Server | Wallet (before anything is spent) |
+|---|---|---|
+| `/c/` link, cashback code | gateway-customer `wallet/receive`, 403 `FOREIGN_VOUCHER_FOR_MERCHANT` | Prompt shows the refusal instead of Add; `redeemParsedClaim` refuses before the destructive ciphertext fetch from the portal's `issuerPubkey`, and before the swap from the token (kept in the stash) |
+| `/g` gift link | gateway-customer `wallet/receive` | Prompt shows the refusal instead of Add; `redeemGiftTokens` refuses before the swap |
+| DM delivery, pasted token | gateway-customer `wallet/receive` | dm-poll refuses before the swap (`refuseIfAnotherStalls`, `refuseForeignForMerchant`) |
+| Atomic send to a merchant | gateway-core `atomic-send`, 403 before the split | `refuseIfWrongMerchant` (existing) |
+| Send by link | (as gift) | A merchant account cannot gift another stall's coupon: it could never take it back |
+| Claim service `/c/{ref}/ciphertext` | **Not enforced, by design**: anonymous, releases bytes only, never swaps (ADR 0001). The swap that credits is gc's receive | Refused before the fetch |
+| Raw swap at the mint | **Residual**: the mint cannot tell merchants apart. The #540 cap still never credits it (no declaration), see below | n/a |
+
+**Fail closed, but only where a foreign voucher is seen.** An unknown standing on a foreign voucher
+is refused (503 `MERCHANT_STANDING_UNAVAILABLE`, wallet: "We could not check this account just
+now…", with Retry). An own voucher, plain ecash, a licence and a terminal credential are never
+asked, so an outage never stops a stall's own sale.
+
+**Exemptions.** The account's own vouchers (till Sell flow, P2PK payment to the stall, burn, take-back
+of its own cashback); plain ecash; licences from a configured seller (gc
+`GATEWAY_CUSTOMER_LICENCE_SELLER_PUBKEYS`, wallet `VITE_LICENCE_SELLER_PUBKEY`): not money; terminal
+credentials (locked to the caller on the server): not money; the portal's cashback burn
+(`burn-by-swap`, internal, the stall's own cashback).
+
+**Residual: a raw mint swap.** A merchant's key can swap another stall's voucher at the mint
+directly. Nothing on the gateway sees it. Under #540 that swap declares nothing, so it records no
+redemption, attestation or ledger credit for the merchant; closing it would need the mint to require
+a declared, non-merchant redeemer for every voucher swap (a cashu-mint change, not in scope).
+
+**Residual: an unsigned receive.** gateway-customer's receive accepts an anonymous caller (a
+terminal's decommission hand-back is unsigned), so a merchant who strips NIP-98 receives as nobody:
+the same bearer swap as at the mint, crediting no identity and declaring nothing. Closing it needs
+the hand-back signed by the terminal key, then NIP-98 required on receive (follow-up).
 
 ### 3.3 Gift links: how they work
 
@@ -563,6 +607,7 @@ npub.
 | Expired | *"This voucher expired on {date}."* Gift: *"Ask {sender} to send it again."* |
 | Revoked | *"{Stall} cancelled this voucher."* |
 | Own cashback (merchant) | *"This is your stall's own cashback. Give it to a customer, or cancel it."* |
+| Another stall's voucher (merchant account, section 3.4) | *"Merchant accounts can only take their own stall's vouchers. To use a voucher from another stall, use a customer account."* With **Switch account** (the claim stays parked). Role unknown: *"We could not check this account just now, so the voucher was not added. Nothing was spent. Try again in a moment."* with Retry |
 | Not money (licence or terminal credential) | *"This link does not contain a voucher."* |
 | Untrusted mint | *"This voucher is from a mint this wallet does not use."* The cashback claim is not attempted. |
 | Network | *"We could not reach the voucher service. Your voucher is still waiting."* with Retry (true, because nothing was spent) |
@@ -835,6 +880,7 @@ through NIP-17. A link does not.
 | CL-EXP | Cashback with the portal clock or the 1-day minimum is out of reach in a gate, so use **revoke** for the closed path, plus a claim-service IT with a past `expires_at` for expiry. Gift: `x` in the past means a refused claim, and the sender's reclaim then succeeds. |
 | CL-SWITCH | Logged in as X, **Switch account**, log in as Y. The parked claim resumes on Y. |
 | CL-OWN | A merchant opens its own cashback link and is refused. No declaration in gateway-customer's `voucher_redemption_receipt`. |
+| CL-MERCHANT | A merchant opens ANOTHER stall's cashback link and gift link: the prompt refuses with the section 3.4 copy, nothing is spent (cashback still `Unclaimed`, gift proofs `UNSPENT`), and a customer account then adds both. A direct `wallet/receive` of a foreign token by the merchant key answers 403 `FOREIGN_VOUCHER_FOR_MERCHANT`. |
 
 ---
 

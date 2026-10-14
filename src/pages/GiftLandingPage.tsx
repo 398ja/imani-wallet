@@ -11,6 +11,8 @@ import {
   type GiftVerdict,
 } from '../lib/giftLink'
 import { readGift, redeemGiftTokens, type GiftRedeemOutcome } from '../lib/giftLinks'
+import { MERCHANT_FOREIGN_VOUCHER, MERCHANT_STATUS_UNKNOWN } from '../lib/merchantVouchers'
+import { useForeignVoucherRole } from '../lib/useForeignVoucherRole'
 import { humanName, useIdentityState } from '../lib/identity'
 import { hasStoredKey } from '../lib/nap'
 import { loadProfile } from '../lib/profile'
@@ -179,6 +181,12 @@ function GiftPrompt({
     onDone()
   }, [arrival.ref, onDone])
 
+  // Owner rule 2026-10-13: a merchant account takes only its own stall's vouchers. The gift's stall
+  // is the verified token's signed issuer, so this is decided before Add, with nothing spent. Only
+  // asked for ANOTHER stall's coupon: a stall opening a gift of its own coupon is a redemption.
+  const giftIssuer = state.step === 'ready' && state.verdict.kind === 'ok' ? state.verdict.summary.issuer : null
+  const { role, retry: retryRole } = useForeignVoucherRole(pubkey, giftIssuer)
+
   const accept = useCallback(() => {
     if (spending.current || state.step !== 'ready' || state.verdict.kind !== 'ok') return
     spending.current = true
@@ -225,6 +233,14 @@ function GiftPrompt({
             onDone={onDone}
           />
         )
+      case 'merchant_refused':
+        return (
+          <Outcome
+            title={state.outcome.reason === 'merchant' ? 'Not for a merchant account' : 'Voucher waiting'}
+            body={state.outcome.reason === 'merchant' ? MERCHANT_FOREIGN_VOUCHER : MERCHANT_STATUS_UNKNOWN}
+            onDone={onDone}
+          />
+        )
     }
   }
 
@@ -257,6 +273,31 @@ function GiftPrompt({
       return <Outcome title="Voucher unavailable" body="We could not verify this voucher." onDone={finish} />
     case 'ok':
       break
+  }
+
+  if (role === 'checking') return <Centered>Checking your voucher…</Centered>
+  if (role === 'merchant' || role === 'unknown') {
+    return (
+      <Outcome
+        title={role === 'merchant' ? 'Not for a merchant account' : 'Voucher waiting'}
+        body={role === 'merchant' ? MERCHANT_FOREIGN_VOUCHER : MERCHANT_STATUS_UNKNOWN}
+        {...(role === 'unknown'
+          ? { action: { label: 'Retry', run: retryRole } }
+          : onSwitchAccount
+            ? {
+                action: {
+                  label: 'Switch account',
+                  run: () => {
+                    // Kept parked: it resumes on the customer account after the next login.
+                    stashPendingClaim(arrival.ref, arrival.key, { kind: 'gift', x: arrival.x })
+                    onSwitchAccount()
+                  },
+                },
+              }
+            : {})}
+        onDone={onDone}
+      />
+    )
   }
 
   const s = verdict.summary

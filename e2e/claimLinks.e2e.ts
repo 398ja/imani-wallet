@@ -457,6 +457,28 @@ async function main() {
     check('L13 the portal reads Claimed', (await waitStatus(b4.ref, 'Claimed')) === 'Claimed')
   }
 
+  await freshMetadataWindow()
+  console.log("\nL14 CL-MERCHANT: another stall's account is refused A's cashback (owner rule 2026-10-13)")
+  const m1 = await issueCashback(a, '0.15')
+  check('A issues a cashback another merchant will open', m1 !== null)
+  if (m1) {
+    const m = await (await context(browser, 'M')).newPage()
+    await registerMerchant(m, BASE)
+    const t14 = await openLink(m, m1.link)
+    check('L14 the merchant account is refused with the rule\'s copy',
+      /Merchant accounts can only take their own stall's vouchers/.test(t14) && /use a customer account/.test(t14), t14.slice(0, 300))
+    check('L14 it gets no Add button', !(await m.getByRole('button', { name: 'Add to my wallet' }).isVisible().catch(() => false)))
+    check('L14 it is offered Switch account', await m.getByRole('button', { name: 'Switch account' }).isVisible().catch(() => false))
+    check('L14 nothing is spent: still Unclaimed', (await portalStatus(m1.ref)) === 'Unclaimed')
+    // A customer account still takes it: the refusal moved nothing.
+    const t14c = await openLink(d, m1.link)
+    check('L14 a customer is still offered it', /Add to my wallet/.test(t14c), t14c.slice(0, 300))
+    await tap(d, 'Add to my wallet', 'L14')
+    await d.waitForFunction(() => /Voucher added|Voucher unavailable/.test(document.body.innerText), undefined, { timeout: 90_000 }).catch(() => {})
+    check('L14 the customer adds it', (await waitStatus(m1.ref, 'Claimed')) === 'Claimed')
+    await m.context().close()
+  }
+
   if (CLAIM_HOST_VIA && one) {
     console.log('\nL10 the hosted claim page')
     const page = await viaEdge(`/c/${one.ref}`).catch(() => null)

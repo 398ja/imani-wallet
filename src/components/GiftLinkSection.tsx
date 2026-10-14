@@ -12,6 +12,10 @@ const TAKE_BACK_FAILURE: Record<Exclude<TakeBackOutcome['kind'], 'ok'>, string> 
   held: 'It could not be taken back here: its mint is not one this wallet uses.',
   not_found: 'We could not find this link’s voucher just now. Try again in a moment.',
   failed: 'Could not take it back just now. Try again.',
+  // Owner rule 2026-10-13. A merchant account cannot send another stall's voucher by link, so this
+  // only meets a link made before the rule, or before the account opened a stall.
+  merchant_refused:
+    "This account is a merchant account now, and it can only take its own stall's vouchers. Open the link in a customer account to take it back.",
 }
 
 /**

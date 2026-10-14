@@ -44,6 +44,7 @@ import { confirmChunkDeliveries, resetChunkAssembly } from './dmChunks'
 import { cancelDeferredWrite, deferWrite, flushDeferredWrites } from './deferredWrite'
 import { loadMerchant } from './merchant'
 import { licenceFromToken } from './licences'
+import { ForeignVoucherRefusedError, MERCHANT_FOREIGN_VOUCHER, MERCHANT_STATUS_UNKNOWN, refuseForeignVouchers } from './merchantVouchers'
 import { checkPart, checkRedemption, redeemLockName } from './redemptionLedger'
 import { exactFaceValue, parseVoucherToken, type VoucherValidation } from './voucherToken'
 import { raiseHomecomingAlert } from './terminalHomecoming'
@@ -929,6 +930,41 @@ export function refuseIfUnwarranted(meta: Record<string, unknown> | undefined): 
   )
 }
 
+/**
+ * The owner rule of 2026-10-13 on the DM path: a merchant account takes only its own stall's
+ * vouchers. `refuseIfAnotherStalls` answers it synchronously for a verified voucher on a device
+ * holding the stall's record; this asks the rest through `refuseForeignVouchers` (relay role,
+ * unverified issuer, licence and credential exemptions), before the swap. A refusal is terminal and
+ * nothing moved, so the coupon stays the sender's.
+ */
+export async function refuseForeignForMerchant(
+  meta: Record<string, unknown> | undefined,
+  account: string | undefined,
+  token: string,
+): Promise<void> {
+  if (!account) return
+  try {
+    await refuseForeignVouchers([token], account)
+  } catch (e) {
+    if (!(e instanceof ForeignVoucherRefusedError)) throw e
+    const voucherId = typeof meta?.voucherId === 'string' ? meta.voucherId : ''
+    if (e.reason === 'unknown') {
+      // Not terminal: the role may be known on the next tick. Thrown as an ordinary error, which
+      // dm-poll treats as transient and retries; nothing was swapped.
+      throw new Error(`${MERCHANT_STATUS_UNKNOWN} (coupon ${voucherId || 'unknown'})`)
+    }
+    const validation = meta?.validation as VoucherValidation | undefined
+    throw new RedemptionRefusedError(
+      `Coupon ${voucherId || '(unknown)'}: ${MERCHANT_FOREIGN_VOUCHER} Refusing before the mint swap, so the ` +
+        'coupon stays the sender\u2019s.',
+      voucherId,
+      0,
+      validation?.signedFaceValue ?? 0,
+      'another-stall',
+    )
+  }
+}
+
 export function refuseIfAnotherStalls(
   meta: Record<string, unknown> | undefined,
   stallPubkey: string | undefined,
@@ -1035,6 +1071,10 @@ function redemptionAdapter(): RedemptionAdapter {
         : undefined
       const checkSwapAndWrite = async (): Promise<Voucher> => {
         refuseIfAnotherStalls(meta, currentPubkey, token)
+        // Owner rule 2026-10-13, the cases the synchronous check above cannot see: a stall known
+        // only from the relay (this device holds no stall record), an unverified voucher, and an
+        // account whose role cannot be checked (fail closed). Own coupons never ask.
+        await refuseForeignForMerchant(meta, currentPubkey, token)
         refuseIfUnwarranted(meta)
         // Trigger (a) of the home-coming roster check (#160 phase 6, decision 5 Q2): a coupon a
         // till sold, coming home to its stall, under a credential the stall's list never had.
