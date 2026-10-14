@@ -314,6 +314,10 @@ async function main() {
     await c.goto(three.link, { waitUntil: 'load' })
     await c.waitForURL(/\/(login|onboarding)/, { timeout: 30_000 }).catch(() => {})
     check('L9 a device with a stored key lands on Login, not registration', /\/login/.test(c.url()), c.url())
+    // Owner report 2026-10-14: Login told a returning user to CREATE an account.
+    await c.waitForFunction(() => /Log in to redeem/.test(document.body.innerText), undefined, { timeout: 45_000 }).catch(() => {})
+    const t9b = await text(c)
+    check('L9 the Login banner says "Log in to redeem", not "Create an account"', /Log in to redeem/.test(t9b) && !/Create an account/.test(t9b), t9b.slice(0, 300))
     check('L9 nothing is spent on the way', (await portalStatus(three.ref)) === 'Unclaimed')
     const pass = c.locator('input[placeholder="Passphrase"]')
     if (await pass.waitFor({ timeout: 20_000 }).then(() => true, () => false)) {
@@ -398,10 +402,10 @@ async function main() {
     await c.goto(b3.link, { waitUntil: 'load' })
     await c.waitForURL(/\/(login|onboarding)/, { timeout: 30_000 }).catch(() => {})
     check('L12 lands on Login', /\/login/.test(c.url()), c.url())
-    const banner = `Create an account to redeem the voucher from ${TEST_STALL_NAME}`
+    const banner = `Log in to redeem the voucher from ${TEST_STALL_NAME}`
     await c.waitForFunction((s) => document.body.innerText.includes(s), banner, { timeout: 45_000 }).catch(() => {})
     const t12 = await text(c)
-    check('L12 Login shows the same banner', t12.includes(banner) && /0\.30/.test(t12), t12.slice(0, 300))
+    check('L12 Login shows the Log in banner (spec 4.4)', t12.includes(banner) && /0\.30/.test(t12), t12.slice(0, 300))
     check('L12 (CL-B2) Login offers no merchant switch', !(await c.getByText('I am a merchant').count()))
     check('L12 Unlock is offered', await c.getByRole('button', { name: /unlock/i }).first().isVisible().catch(() => false))
     const pass = c.locator('input[placeholder="Passphrase"]')
