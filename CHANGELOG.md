@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-10-14
+
+The wallet sends the edge bot-check token with the cashback by-code lookup (#257), and two
+claim/send copy and flow fixes from owner reports (#258, #260). No new build config: the captcha
+widget is same-origin (`/fcaptcha/`), and the edge alone decides whether a missing token is refused.
+
+### Added
+
+- **The cashback by-code lookup carries an FCaptcha token** (#257). `src/lib/captcha.ts` loads the
+  same-origin widget (`/fcaptcha/fcaptcha.js`), keeps one invisible session and gets a fresh
+  single-use token per lookup (action `cashback_lookup`, header `X-Imani-Captcha`). Both by-code call
+  sites send it: the customer's typed code and the merchant's **Show QR again** (tills too). The proof
+  of work is prewarmed on the redeem screen and on Show QR again.
+  - **Fail-open on every path, never throws:** no header when the deployment has no gate, the script
+    fails to load (5 s), the solver throws, the visitor scores as a bot, or the token takes more than
+    6 s. The lookup always proceeds.
+  - An edge `403 {"error":"captcha_required"}` reads as `throttled` ("Too many attempts. Wait a
+    moment…"): the code is still good. Other 403s are unchanged.
+  - The wallet's own nginx answers `/fcaptcha/` with 404, so without an edge gate the widget fails
+    open at once instead of loading the SPA shell.
+  - e2e: by-code requests carry `X-Imani-Captcha-Bypass: $E2E_CAPTCHA_BYPASS` when set (e2e/ only,
+    never in the bundle).
+
+### Fixed
+
+- **The Login screen says "Log in to redeem"** (#258, owner report 2026-10-14). With a parked claim,
+  the Login banner read the onboarding copy ("Create an account…"). It now reads *"Log in to redeem the
+  voucher from {stall}"* / *"Log in to redeem your voucher"* / *"{Sender} sent you a voucher from
+  {stall}. Log in to add it to your wallet."* Onboarding copy is unchanged. On onboarding with a parked
+  claim and a key already on the device, **I already have an account** is the primary button.
+- **Send by link from a merchant's page keeps the merchant** (#260, owner report 2026-10-14). Send →
+  "Anyone, by link" no longer asks "Which voucher?" again: `from` (and `unit` when settled) is carried
+  to `/send/link`, which narrows to that merchant (one option goes straight to "How much?"). When
+  nothing from that merchant can be sent by link it says why, with **Choose another voucher**. Without
+  `from`, unchanged. The 10-link limit, own-stall exclusion, the #255 merchant rule and in-flight
+  filtering are all kept.
+
 ## [0.24.0] - 2026-10-14
 
 Two owner rules for merchant accounts (#255, #254). Ship after gateway-core 0.26.0 and
