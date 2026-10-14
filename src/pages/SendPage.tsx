@@ -354,7 +354,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
           }}
           selfPubkey={pubkey}
         />
-        <SendByLinkOption />
+        <SendByLinkOption from={from} unit={from ? chosen?.unit : undefined} />
       </Screen>
     )
   }

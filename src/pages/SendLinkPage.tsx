@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ChevronRight, Link2 } from 'lucide-react'
 import type { Voucher } from '@imani/voucher-send'
 
@@ -57,6 +57,14 @@ function options(merchants: Merchant[], sender: string): { usable: Option[]; own
 
 export function SendLinkPage({ pubkey }: { pubkey: string }) {
   const navigate = useNavigate()
+  const [params] = useSearchParams()
+  /**
+   * The merchant already chosen on Send, when Send was opened from a merchant's page (owner report
+   * 2026-10-14): asking "Which voucher?" again was confusing. Dropped by "Choose another voucher".
+   */
+  const [from, setFrom] = useState<string | null>(params.get('from'))
+  const unit = params.get('unit')
+  const back = params.get('from') ? `/send?from=${encodeURIComponent(params.get('from')!)}` : '/send'
   const [merchants, setMerchants] = useState<Merchant[] | null>(null)
   const [waiting, setWaiting] = useState<number | null>(null)
   const [picked, setPicked] = useState<string | null>(null)
@@ -97,18 +105,47 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
   if (waiting >= MAX_OUTSTANDING_LINKS) {
     return (
       <Screen>
-        <BackLink to="/send" label="Back" />
+        <BackLink to={back} label="Back" />
         <PageHeader title="Send by link" />
         <Alert>{tooManyLinksMessage()}</Alert>
       </Screen>
     )
   }
 
-  const { usable, ownStall } = options(merchants, pubkey)
+  const { usable: all, ownStall } = options(merchants, pubkey)
+  if (from !== null) {
+    const theirs = merchants.filter((m) => m.pubkey.toLowerCase() === from.toLowerCase())
+    const mine = options(theirs, pubkey)
+    if (mine.usable.length === 0) {
+      // Say why for THIS merchant, rather than the whole picker or "no vouchers" (which may be untrue).
+      const held = theirs.some((m) => m.groups.some((g) => g.vouchers.length > 0))
+      return (
+        <Screen>
+          <BackLink to={back} label="Back" />
+          <PageHeader title="Send by link" />
+          <Alert>
+            {mine.ownStall
+              ? OWN_STALL_COPY
+              : held
+                ? 'None of your vouchers from this merchant can be sent by link.'
+                : 'You have no vouchers left from this merchant to send.'}
+          </Alert>
+          {all.length > 0 && (
+            <Button variant="secondary" className="w-full" onClick={() => setFrom(null)}>
+              Choose another voucher
+            </Button>
+          )}
+        </Screen>
+      )
+    }
+  }
+  const narrowed = from === null ? all : all.filter((o) => o.merchant.pubkey.toLowerCase() === from.toLowerCase())
+  const sameUnit = unit && from !== null ? narrowed.filter((o) => o.unit.toUpperCase() === unit.toUpperCase()) : []
+  const usable = sameUnit.length > 0 ? sameUnit : narrowed
   if (usable.length === 0) {
     return (
       <Screen>
-        <BackLink to="/send" label="Back" />
+        <BackLink to={back} label="Back" />
         <PageHeader title="Send by link" />
         <Alert>{ownStall ? OWN_STALL_COPY : 'You have no vouchers to send.'}</Alert>
       </Screen>
@@ -120,7 +157,7 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
   if (chosen === null) {
     return (
       <Screen>
-        <BackLink to="/send" label="Back" />
+        <BackLink to={back} label="Back" />
         <PageHeader title="Which voucher?" subtitle="Send to anyone, by link" />
         {ownStall && <p className="mb-3 text-sm text-mono-500">{OWN_STALL_COPY}</p>}
         <div className="space-y-2">
@@ -212,7 +249,7 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
 
   return (
     <Screen>
-      <BackLink to="/send" label="Back" />
+      <BackLink to={back} label="Back" />
       <PageHeader title="How much?" subtitle="Send to anyone, by link" />
       <div className="space-y-4">
         <Input
@@ -269,12 +306,14 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
 }
 
 /** The entry on Send's first step (spec 4.2 step 1). */
-export function SendByLinkOption() {
+export function SendByLinkOption({ from, unit }: { from?: string | null; unit?: string | null } = {}) {
   const navigate = useNavigate()
+  // Carries the merchant (and unit) Send already knows, so the link flow does not ask again.
+  const query = from ? `?from=${encodeURIComponent(from)}${unit ? `&unit=${encodeURIComponent(unit)}` : ''}` : ''
   return (
     <button
       type="button"
-      onClick={() => navigate('/send/link')}
+      onClick={() => navigate(`/send/link${query}`)}
       className="mt-4 flex w-full items-center gap-3 rounded-2xl bg-white p-4 text-left dark:bg-mono-900"
     >
       <Link2 className="h-5 w-5 text-mono-500" />
