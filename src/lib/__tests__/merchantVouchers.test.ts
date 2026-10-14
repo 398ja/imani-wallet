@@ -77,6 +77,19 @@ describe('refuseForeignVouchers', () => {
     await expect(refuseForeignVouchers([licence, credential], STALL_A)).resolves.toBeUndefined()
   })
 
+  it('with a pinned licence seller, a "licence" from another stall is foreign (review rmo, W5)', async () => {
+    h.local.add(STALL_A)
+    const seller = getPublicKey(generateSecretKey())
+    vi.stubEnv('VITE_LICENCE_SELLER_PUBKEY', seller)
+    try {
+      const meta = JSON.stringify({ subscription_id: 'sub_1', features: ['terminals'], lock_key: STALL_A })
+      const fake = buildLicenceVoucherToken({ merchantMetadata: meta }, STALL_B_KEY).token
+      await expect(refuseForeignVouchers([fake], STALL_A)).rejects.toMatchObject({ reason: 'merchant' })
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('leaves a customer unchanged', async () => {
     h.status = 'customer'
     await expect(refuseForeignVouchers([foreignCoupon()], CUSTOMER)).resolves.toBeUndefined()
