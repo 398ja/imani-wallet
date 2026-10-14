@@ -171,7 +171,7 @@ async function context(browser: Browser, name = `ctx${contexts.length}`): Promis
     const shell = join(root, 'index.html')
     await ctx.route(`${BASE}/**`, async (route) => {
       const path = new URL(route.request().url()).pathname
-      if (path.startsWith('/api/') || path.startsWith('/.well-known/')) return route.continue()
+      if (path.startsWith('/api/') || path.startsWith('/.well-known/') || path.startsWith('/fcaptcha/')) return route.continue()
       const candidate = normalize(join(root, path))
       const file =
         candidate.startsWith(root) && extname(candidate)
@@ -180,7 +180,8 @@ async function context(browser: Browser, name = `ctx${contexts.length}`): Promis
       return route.fulfill({ status: 200, body: await readFile(file), contentType: CONTENT_TYPES[extname(file)] ?? 'application/octet-stream' })
     })
   }
-  // Last, so it runs first: a till's cashback flow can reach by-code (E2E_CAPTCHA_BYPASS).
+  // Last, so it runs first. A till never calls by-code (its cashback QR is built locally),
+  // so this is insurance only: harmless if by-code is ever reached (E2E_CAPTCHA_BYPASS).
   await bypassCaptcha(ctx)
   return ctx
 }
