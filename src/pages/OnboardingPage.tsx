@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useReducer, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { getPublicKey } from 'nostr-tools'
 import { hexToBytes } from '@noble/hashes/utils'
@@ -16,6 +16,7 @@ import {
 } from '../lib/merchant'
 import { MerchantFieldset } from '../components/MerchantFieldset'
 import { ParkedClaimBanner } from '../components/ParkedClaimBanner'
+import { peekPendingClaim } from '../lib/pendingClaim'
 import {
   passphraseStrength,
   validateConfirmation,
@@ -174,7 +175,21 @@ function CreateForm({
   // A merchant signup is the customer one plus a second screen. `step` only ever
   // reaches 'merchant' while the switch is on, so a customer never meets the
   // stall questions at all.
-  const [isMerchant, setIsMerchant] = useState(false)
+  const [merchantChosen, setIsMerchant] = useState(false)
+  // A registration that starts from a claim link (cashback or gift) is a customer one: only
+  // customers redeem. Read on every render, with the banner's rule (a live, unexpired entry), so
+  // a claim parked after the switch was turned on (back navigation, a second tab) still wins, and
+  // `isMerchant` cannot be true here whatever the switch state says.
+  const claimDriven = peekPendingClaim() !== null
+  const isMerchant = merchantChosen && !claimDriven
+  // A claim parked by another tab fires `storage` here: re-render so the switch and the merchant
+  // steps go at once rather than on the next keystroke (review of #254).
+  const [, rerender] = useReducer((n: number) => n + 1, 0)
+  useEffect(() => {
+    const onStorage = () => rerender()
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
   const [displayName, setDisplayName] = useState('')
   const [about, setAbout] = useState('')
   const [merchant, setMerchant] = useState<MerchantFields>(() => ({
@@ -227,9 +242,17 @@ function CreateForm({
   // Reloading restores the step from history but not the draft above it, which
   // would leave a merchant screen ready to submit an empty account. Only the
   // step you could have reached honestly renders.
-  const current = complete ? step : 'account'
+  // A claim-driven registration never reaches the merchant screens, whatever history holds.
+  const current = complete && isMerchant ? step : 'account'
 
   const submit = async () => {
+    // Re-read at the moment of submitting: `isMerchant` is from the last render, and a claim parked
+    // since then (another tab, no render in between) must still win. Refuse rather than silently
+    // create a customer from the merchant screen: the re-render shows the customer-only form.
+    if (isMerchant && peekPendingClaim() !== null) {
+      rerender()
+      return
+    }
     setBusy(true)
     setError(null)
     try {
@@ -418,13 +441,22 @@ function CreateForm({
 
       {/* Last, under the fields it does not change: everything above is asked of
           both roles, and this only decides whether there is a second screen. */}
-      <Switch
-        label="I am a merchant"
-        hint="Issue vouchers and take them as payment."
-        checked={isMerchant}
-        disabled={busy}
-        onChange={setIsMerchant}
-      />
+      {/* Hidden, not disabled, when a claim link brought them here: a disabled switch invites
+          "why can't I?". Selling is chosen only at registration (see SettingsPage), so this
+          does not promise a later way to become a merchant. */}
+      {claimDriven ? (
+        <p className="text-center text-sm text-mono-500">
+          You're redeeming a voucher, so this is a customer account.
+        </p>
+      ) : (
+        <Switch
+          label="I am a merchant"
+          hint="Issue vouchers and take them as payment."
+          checked={isMerchant}
+          disabled={busy}
+          onChange={setIsMerchant}
+        />
+      )}
 
       {/* A merchant does not submit from here — the account details are only
           half of what registration needs, so this advances to step two and
