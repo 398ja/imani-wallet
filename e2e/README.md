@@ -257,6 +257,15 @@ The portal's public metadata and by-code share a per-address limiter (10 a minut
 300 s). The harness books its reads under 7 a minute and reads statuses from the databases, so it
 never trips it. Needs `E2E_PORTAL_SQL_CMD` (the gate passes it).
 
+**The edge bot check on by-code.** imani-deploy can run FCaptcha on
+`/api/v1/portal/cashback/by-code/` (`nginx/conf.d/lua/captcha_gate.lua`). Playwright's Chromium is
+scored as a bot, so once that gate is in `enforce` mode, QR-AGAIN and every probe that redeems a
+code (`probe-cashback*.mts`, `probe-spend-order.mts`) need `E2E_CAPTCHA_BYPASS` set to the
+edge's `bypass_secret`. `e2e/captchaBypass.mts` adds it to by-code requests only. A till never
+calls by-code, so `terminalSetup.e2e.ts` registers it only as insurance. The bundle routes
+(`E2E_BUNDLE_DIR`) pass `/fcaptcha/` to the network like `/api/`, so the widget comes from the
+edge (or 404s) rather than the SPA shell. Unset, nothing changes (local stacks, observe mode).
+
 ```sh
 E2E_SCRIPT=claimLinksMerchant.e2e.ts E2E_CLAIM_HOST_VIA=http://127.0.0.1:$GATE_EDGE_PORT scripts/local-terminal-gate/run.sh e2e
 ```

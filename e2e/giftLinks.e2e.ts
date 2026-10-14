@@ -77,7 +77,7 @@ async function context(browser: Browser, who: string): Promise<BrowserContext> {
     const shell = join(root, 'index.html')
     await ctx.route(`${BASE}/**`, async (route) => {
       const path = new URL(route.request().url()).pathname
-      if (path.startsWith('/api/') || path.startsWith('/.well-known/')) return route.continue()
+      if (path.startsWith('/api/') || path.startsWith('/.well-known/') || path.startsWith('/fcaptcha/')) return route.continue()
       const cand = normalize(join(root, path))
       const file = cand.startsWith(root) && extname(cand) ? await readFile(cand).then(() => cand, () => shell) : shell
       return route.fulfill({ status: 200, body: await readFile(file), contentType: CT[extname(file)] ?? 'application/octet-stream' })
