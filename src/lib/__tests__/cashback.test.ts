@@ -5,6 +5,7 @@ import {
   normaliseTypedClaimCode,
   toCanonicalClaimCode,
   redeemCashbackCode,
+  resolveClaimLinkByCode,
   replayPendingCashback,
   pendingCashbackCount,
 } from '../cashback'
@@ -30,6 +31,16 @@ vi.mock('../wallet', () => ({
 }))
 vi.mock('../nip98', () => ({
   signedFetch: async () => new Response('{}', { status: 200 }),
+}))
+/**
+ * The edge bot check (lib/captcha.ts has its own tests). Here only: does the lookup carry
+ * whatever token it is handed, and go ahead without one.
+ */
+let captchaToken: string | null = null
+vi.mock('../captcha', () => ({
+  CASHBACK_LOOKUP_ACTION: 'cashback_lookup',
+  captchaHeaders: async () => (captchaToken ? { 'X-Imani-Captcha': captchaToken } : {}),
+  prewarmCaptcha: () => {},
 }))
 
 const ORIGIN = 'cashback.example.test'
@@ -63,6 +74,7 @@ beforeEach(() => {
   resetGate()
   redeemed.length = 0
   redeemFails = false
+  captchaToken = null
   clearConfigCache()
   store.clear()
   vi.stubGlobal('localStorage', fakeLocalStorage)
@@ -118,11 +130,12 @@ function stubFetch(routes: {
   byCode?: { status: number; body?: unknown }
   ciphertext?: { status: number; body?: unknown }
   meta?: unknown
-}) {
+}, headersSeen?: Record<string, Record<string, string>>) {
   const calls: string[] = []
-  vi.stubGlobal('fetch', async (input: string) => {
+  vi.stubGlobal('fetch', async (input: string, init?: RequestInit) => {
     const url = String(input)
     calls.push(url)
+    if (headersSeen) headersSeen[url] = { ...((init?.headers ?? {}) as Record<string, string>) }
 
     if (url.startsWith('/api/v1/config')) {
       return json(
@@ -314,6 +327,49 @@ describe('redeeming a code', () => {
   it('reports a 404 plainly, since throttling hides behind it', async () => {
     stubFetch({ byCode: { status: 404 } })
     expect(await redeemCashbackCode('CB-A1B2-C3')).toEqual({ kind: 'not_found' })
+  })
+
+  it('sends the bot-check token with the lookup, and only with the lookup', async () => {
+    captchaToken = 'tok-1'
+    const headersSeen: Record<string, Record<string, string>> = {}
+    stubFetch({ byCode: { status: 404 } }, headersSeen)
+
+    await redeemCashbackCode('CB-A1B2-C3')
+
+    const lookup = Object.keys(headersSeen).find((u) => u.includes('/by-code/'))
+    expect(lookup).toBeDefined()
+    expect(headersSeen[lookup!]['X-Imani-Captcha']).toBe('tok-1')
+    expect(Object.entries(headersSeen).filter(([u, h]) => !u.includes('/by-code/') && 'X-Imani-Captcha' in h)).toEqual([])
+  })
+
+  it('still looks the code up when no token came (the edge decides, not the app)', async () => {
+    const headersSeen: Record<string, Record<string, string>> = {}
+    stubFetch({ byCode: { status: 404 } }, headersSeen)
+
+    expect(await redeemCashbackCode('CB-A1B2-C3')).toEqual({ kind: 'not_found' })
+    const lookup = Object.keys(headersSeen).find((u) => u.includes('/by-code/'))
+    expect(lookup).toBeDefined()
+    expect('X-Imani-Captcha' in headersSeen[lookup!]).toBe(false)
+  })
+
+  it('reads the edge bot check refusing as a throttle: wait, try again, the code is still good', async () => {
+    stubFetch({ byCode: { status: 403, body: { error: 'captcha_required', reason: 'missing' } } })
+    expect(await redeemCashbackCode('CB-A1B2-C3')).toEqual({ kind: 'throttled', retryAfterSeconds: null })
+  })
+
+  it('does not mistake any other 403 for the bot check', async () => {
+    stubFetch({ byCode: { status: 403, body: { error: 'forbidden' } } })
+    expect(await redeemCashbackCode('CB-A1B2-C3')).toEqual({ kind: 'unreachable', reason: 'http_403' })
+  })
+
+  it('Show QR again carries the token too (it shares the lookup)', async () => {
+    captchaToken = 'tok-qr'
+    const headersSeen: Record<string, Record<string, string>> = {}
+    stubFetch({ byCode: { status: 404 } }, headersSeen)
+
+    expect(await resolveClaimLinkByCode('CB-A1B2-C3')).toEqual({ kind: 'not_found' })
+    const lookup = Object.keys(headersSeen).find((u) => u.includes('/by-code/'))
+    expect(headersSeen[lookup!]['X-Imani-Captcha']).toBe('tok-qr')
   })
 
   it('stays off entirely when the deployment lists no trusted origin', async () => {

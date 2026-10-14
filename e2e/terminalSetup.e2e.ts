@@ -52,6 +52,7 @@ import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 import { finalizeEvent, getPublicKey, nip19, nip44, nip98, type Event } from 'nostr-tools'
 import WebSocket from 'ws'
 import { registerCustomer, registerMerchant, TEST_PASSPHRASE, TEST_STALL_NAME } from './register.mts'
+import { bypassCaptcha } from './captchaBypass.mts'
 import { parseVoucherToken, tokenProofs } from '../src/lib/voucherToken'
 
 const BASE = (process.env.E2E_BASE ?? 'http://localhost:5177').replace(/\/+$/, '')
@@ -179,6 +180,8 @@ async function context(browser: Browser, name = `ctx${contexts.length}`): Promis
       return route.fulfill({ status: 200, body: await readFile(file), contentType: CONTENT_TYPES[extname(file)] ?? 'application/octet-stream' })
     })
   }
+  // Last, so it runs first: a till's cashback flow can reach by-code (E2E_CAPTCHA_BYPASS).
+  await bypassCaptcha(ctx)
   return ctx
 }
 

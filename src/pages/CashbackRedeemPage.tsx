@@ -11,6 +11,7 @@ import {
 } from '../lib/cashback'
 import { currencyDecimals, formatFace } from '../lib/format'
 import { MERCHANT_FOREIGN_VOUCHER, MERCHANT_STATUS_UNKNOWN } from '../lib/merchantVouchers'
+import { prewarmCaptcha } from '../lib/captcha'
 
 /**
  * Redeem a cashback code.
@@ -36,6 +37,9 @@ export function CashbackRedeemPage() {
   // arrival because this is the screen the customer returns to when the first
   // attempt "did nothing".
   useEffect(() => {
+    // Start the bot check's proof of work now, while the code is being typed, so the lookup
+    // itself waits as little as possible (lib/captcha.ts; a no-op where the edge has none).
+    prewarmCaptcha()
     let live = true
     void replayPendingCashback().then((didRecover) => {
       if (live && didRecover) setRecovered(true)
