@@ -351,6 +351,17 @@ async function main() {
     check('L11 both links are parked, keyed by ref', [b1.ref, b2.ref].every((r) => parked.some((p) => p.ref === r)), JSON.stringify(parked.map((p) => p.ref)))
     check('L11 nothing spent on the way', (await portalStatus(b1.ref)) === 'Unclaimed' && (await portalStatus(b2.ref)) === 'Unclaimed')
 
+    {
+      // Claim-driven registration is customer-only: the merchant switch is not there.
+      await e.getByRole('button', { name: /^Register$/ }).first().click()
+      await e.locator('input[placeholder="your-handle"]').waitFor({ timeout: 20_000 }).catch(() => {})
+      const acct = await text(e)
+      check('L11 (CL-B) the merchant switch is absent', !(await e.getByText('I am a merchant').count()) && acct.includes("You're redeeming a voucher, so this is a customer account."), acct.slice(0, 300))
+      // Back to the start step: registerCustomer's goto to this same URL is a reload in Chromium, and a
+      // reload keeps history.state (the account step), so its Register button would never show.
+      await e.getByRole('button', { name: /^Back$/ }).first().click()
+      await e.getByRole('button', { name: /^Register$/ }).first().waitFor({ timeout: 20_000 }).catch(() => {})
+    }
     await freshMetadataWindow()
     await registerCustomer(e, BASE)
     await e.waitForFunction(() => /Add to my wallet|Voucher unavailable/.test(document.body.innerText), undefined, { timeout: 60_000 }).catch(() => {})
@@ -391,6 +402,7 @@ async function main() {
     await c.waitForFunction((s) => document.body.innerText.includes(s), banner, { timeout: 45_000 }).catch(() => {})
     const t12 = await text(c)
     check('L12 Login shows the same banner', t12.includes(banner) && /0\.30/.test(t12), t12.slice(0, 300))
+    check('L12 (CL-B2) Login offers no merchant switch', !(await c.getByText('I am a merchant').count()))
     check('L12 Unlock is offered', await c.getByRole('button', { name: /unlock/i }).first().isVisible().catch(() => false))
     const pass = c.locator('input[placeholder="Passphrase"]')
     if (await pass.waitFor({ timeout: 20_000 }).then(() => true, () => false)) {

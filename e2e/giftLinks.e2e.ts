@@ -272,6 +272,17 @@ async function main() {
     const banner = await text(r)
     check('CL-C the banner says who sent it and the stall (spec 5.3 step 4)', /sent you a voucher from .*Create an account to add it to your wallet/.test(banner), banner.slice(0, 300) || t1.slice(0, 200))
     check('CL-C nothing spent on the way', (await checkstate(before.tokens[0])).every((x) => x === 'UNSPENT'))
+    {
+      // Claim-driven registration is customer-only: the merchant switch is not there.
+      await r.getByRole('button', { name: /^Register$/ }).first().click()
+      await r.locator('input[placeholder="your-handle"]').waitFor({ timeout: 20_000 }).catch(() => {})
+      const acct = await text(r)
+      check('CL-C the merchant switch is absent', !(await r.getByText('I am a merchant').count()) && acct.includes("You're redeeming a voucher, so this is a customer account."), acct.slice(0, 300))
+      // Back to the start step: registerCustomer's goto to this same URL is a reload in Chromium, and a
+      // reload keeps history.state (the account step), so its Register button would never show.
+      await r.getByRole('button', { name: /^Back$/ }).first().click()
+      await r.getByRole('button', { name: /^Register$/ }).first().waitFor({ timeout: 20_000 }).catch(() => {})
+    }
     await registerCustomer(r, BASE)
     await r.waitForFunction(() => /Add to my wallet|Voucher unavailable/.test(document.body.innerText), undefined, { timeout: 60_000 }).catch(() => {})
     const prompt = await text(r)
