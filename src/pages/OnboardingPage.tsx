@@ -5,7 +5,7 @@ import { hexToBytes } from '@noble/hashes/utils'
 
 import { Button, Input, Alert, Switch } from '../components/ui'
 import { gatewayConfig } from '../lib/config'
-import { toPrivkeyHex, keyStore } from '../lib/nap'
+import { toPrivkeyHex, keyStore, hasStoredKey } from '../lib/nap'
 import { HandleTakenError, isHandleAvailable, register } from '../lib/registration'
 import { refreshProfile } from '../lib/profile'
 import {
@@ -62,6 +62,7 @@ export function OnboardingPage({ onUnlock }: { onUnlock: (privkeyHex: string) =>
   const step = (location.state as { step?: Step } | null)?.step ?? 'start'
   const push = (next: Step) => navigate('.', { state: { step: next } })
   const back = () => navigate(-1)
+  const walletHere = useWalletOnDeviceWithParkedClaim()
 
   return (
     <div className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-6 p-6">
@@ -75,9 +76,22 @@ export function OnboardingPage({ onUnlock }: { onUnlock: (privkeyHex: string) =>
       {step === 'start' && (
         <div className="space-y-3">
           {/* A claim link parked on the way here (claim links phase 3, spec 4.4). Above the
-              buttons; Register stays primary, and it never blocks anything. */}
+              buttons. Register stays primary on a fresh device, and it never blocks anything. */}
           <ParkedClaimBanner />
-          <Button size="lg" className="w-full" onClick={() => push('account')}>
+          {/* A voucher is waiting AND this device already holds a wallet (reached via "Use a
+              different account", or a stale tab): the likely intent is the wallet they have, so
+              unlocking it is primary and registering a second account is not (spec 4.4). */}
+          {walletHere && (
+            <Button size="lg" className="w-full" onClick={() => navigate('/login')}>
+              I already have an account
+            </Button>
+          )}
+          <Button
+            size="lg"
+            variant={walletHere ? 'outline' : undefined}
+            className="w-full"
+            onClick={() => push('account')}
+          >
             Register
           </Button>
           <Button
@@ -620,4 +634,24 @@ function ImportForm({
       </p>
     </div>
   )
+}
+
+/**
+ * True when a voucher link is parked AND this device already holds a wallet (spec 4.4). Then the
+ * start step offers the existing wallet first rather than pushing a second registration.
+ */
+function useWalletOnDeviceWithParkedClaim(): boolean {
+  const [walletHere, setWalletHere] = useState(false)
+  useEffect(() => {
+    if (!peekPendingClaim()) return
+    let live = true
+    void hasStoredKey().then(
+      (has) => live && setWalletHere(has),
+      () => {},
+    )
+    return () => {
+      live = false
+    }
+  }, [])
+  return walletHere
 }

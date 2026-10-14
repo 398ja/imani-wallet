@@ -621,27 +621,40 @@ Held and refused outcomes keep today's copy (the `held` and `refused` kinds,
 
 ### 4.4 Registration copy (journey B)
 
-When the start step of onboarding (or Login) finds a parked claim, it shows a voucher banner
-above the buttons:
+When the start step of onboarding, or Login, finds a parked claim, it shows a voucher banner
+above the buttons. The headline follows the page, because the device decides the page (5.2): a
+device with no key is on onboarding and needs an account, a device with a key is on Login and
+already has one (owner report 2026-10-14: Login said "Create an account" to a returning user).
+
+On `/onboarding`:
 
 > **Create an account to redeem the voucher from {Stall name}**
 > {Face value}. Claim by {date}.
 > Nothing is claimed until you add it. You can do that in a minute, right here.
 
+On `/login`:
+
+> **Log in to redeem the voucher from {Stall name}**
+> {Face value}. Claim by {date}.
+> Nothing is claimed until you add it.
+
 For a gift: *"{Sender} sent you a voucher from {Stall name}. Create an account to add it to your
-wallet."*
+wallet."* on onboarding, and *"... Log in to add it to your wallet."* on Login.
 
 Then:
 - On `/onboarding`, **Register** is primary and "I already have an account" (Log in / Restore) is
   secondary. On `/login` it is Unlock.
+- Exception: on `/onboarding` with a parked claim AND a key on this device (reached via "Use a
+  different account" or a stale tab), **I already have an account** (to `/login`) is primary and
+  Register is secondary. Registering a second account is not the likely intent.
 - A claim-driven registration is customer-only: only customers redeem cashback and gifts. While a
   live parked claim exists (cashback or gift, the banner's rule), the "I am a merchant" switch is
   hidden and replaced by *"You're redeeming a voucher, so this is a customer account."*, and the
   form refuses the merchant steps and a merchant submit even if the switch was set earlier.
 - If the summary cannot be fetched, the banner falls back to *"Create an account to redeem your
-  voucher"*. It never blocks registration.
+  voucher"* (onboarding) or *"Log in to redeem your voucher"* (Login). It never blocks anything.
 
-The hosted claim page on the claim host changes its lede to the same sentence. Its primary
+The hosted claim page cannot see whether the device holds a wallet (another origin), so its lede is neutral: "Open this voucher in your Imani wallet." Its primary
 button becomes **Continue in the browser** (the wallet hand-off). App Store and Play buttons
 disappear until real listings exist (they are placeholders today, `PublicClaimController.java:190-191`).
 
@@ -699,7 +712,7 @@ disappear until real listings exist (they are placeholders today, `PublicClaimCo
 
 | Variation | Result |
 |---|---|
-| Device already holds a key (logged out) | Sent to `/login` with the same banner. Unlock, then the prompt. |
+| Device already holds a key (logged out) | Sent to `/login` with the banner in its Login words ("Log in to redeem", 4.4). Unlock, then the prompt. |
 | Registration abandoned, link opened again later | Parked again (the link is still pending). Banner as before. |
 | Opened on a laptop, finished on a phone | The phone claims. The laptop's parked claim later shows "already added". |
 | More than 24 h between the link and finishing registration | The parked claim has expired locally. Copy: *"Open your voucher link again to add it."* The link itself still works until the claim window ends. |
