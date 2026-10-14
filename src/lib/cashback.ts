@@ -28,6 +28,7 @@
 import { useEffect, useState } from 'react'
 
 import { gatewayConfig, cashbackEnabled } from './config'
+import { captchaHeaders, CASHBACK_LOOKUP_ACTION } from './captcha'
 import { cashbackValidation } from './cashbackValidation'
 import { claimRefFromUrl, isClaimKey } from './claimLink'
 import { legacyApi, withCorrelation } from './legacyBridge'
@@ -622,9 +623,12 @@ function unreachable(error: unknown): RedeemFailure {
 async function resolveClaimUrl(canonical: string): Promise<{ claimUrl: string } | RedeemFailure> {
   let response: Response
   try {
+    // The edge's bot check (lib/captcha.ts). Fail-open: no token means the lookup goes
+    // without the header, and the edge alone decides whether that is refused.
+    const captcha = await captchaHeaders(CASHBACK_LOOKUP_ACTION)
     response = await fetchWithTimeout(BY_CODE_PATH + encodeURIComponent(canonical), {
       method: 'GET',
-      headers: { Accept: 'application/json' },
+      headers: { Accept: 'application/json', ...captcha },
     })
   } catch (e) {
     return unreachable(e)
@@ -656,6 +660,14 @@ async function resolveClaimUrl(canonical: string): Promise<{ claimUrl: string } 
     } | null
     const wait = typeof body?.retryAfterSeconds === 'number' ? body.retryAfterSeconds : null
     return { kind: 'throttled', retryAfterSeconds: wait }
+  }
+
+  // The edge's bot check refused the lookup (captcha_gate.lua, enforce mode). Said as a
+  // throttle on purpose: the honest advice is the same (wait, try again, and the next try
+  // carries a fresh token), and the code is still good.
+  if (response.status === 403) {
+    const body = (await response.json().catch(() => null)) as { error?: unknown } | null
+    if (body?.error === 'captcha_required') return { kind: 'throttled', retryAfterSeconds: null }
   }
 
   return { kind: 'unreachable', reason: `http_${response.status}` }
