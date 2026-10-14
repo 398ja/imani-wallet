@@ -151,10 +151,22 @@ async function checkstate(token: string): Promise<string[]> {
 interface Sent { k: string; x: number; link: string; rowId: string }
 
 /** Send by link through the UI, then read the link off the new `sent` row. */
-async function sendByLink(s: Page, amount: string, days = '7 days'): Promise<Sent | null> {
-  await s.goto(`${BASE}/send`, { waitUntil: 'load' })
+async function sendByLink(s: Page, amount: string, days = '7 days', from?: string): Promise<Sent | null> {
+  if (from) {
+    // Start where the owner did: the merchant's page, its Send button.
+    await s.goto(`${BASE}/merchants/${from}`, { waitUntil: 'load' })
+    await s.getByRole('button', { name: /^Send$/ }).click({ timeout: 30_000 })
+  } else {
+    await s.goto(`${BASE}/send`, { waitUntil: 'load' })
+  }
   await s.getByRole('button', { name: /Anyone, by link/ }).click({ timeout: 30_000 })
   await s.waitForFunction(() => /Which voucher\?|How much\?/.test(document.body.innerText), undefined, { timeout: 30_000 })
+  if (from) {
+    // Owner report 2026-10-14: the merchant is already chosen, so no second "Which voucher?".
+    check(`send ${amount} from a merchant's page: straight to "How much?", no "Which voucher?"`,
+      /How much\?/.test(await text(s)) && !/Which voucher\?/.test(await text(s)), (await text(s)).slice(0, 200))
+    check(`send ${amount} from a merchant's page: the link flow kept from`, s.url().includes(`from=${from}`), s.url())
+  }
   if (/Which voucher\?/.test(await text(s))) await s.locator('main button, button').filter({ hasText: /€/ }).first().click()
   await s.locator('input[placeholder="0.00"]').fill(amount)
   await s.getByRole('radio', { name: days }).click()
@@ -256,6 +268,7 @@ async function main() {
 
   // ── CL-C ──
   console.log('\nCL-C: gift to someone with no account (journey C)')
+  let merchantOfGifts = ''
   const c = await sendByLink(s, '0.50')
   check('CL-C a link was made', c !== null)
   if (c) {
@@ -295,7 +308,7 @@ async function main() {
     check('CL-C the gift proofs are now SPENT', (await checkstate(before.tokens[0])).every((x) => x === 'SPENT'))
     const st = await rowStatus(s, c.rowId, /Claimed/)
     check('CL-C S sees Claimed (NUT-07)', /Status Claimed/.test(st), st.slice(0, 300))
-    const issuerOfRow = await s.evaluate(async (rowId) => {
+    const issuerOfRow = (merchantOfGifts = await s.evaluate(async (rowId) => {
       const name = (await indexedDB.databases()).map((d) => d.name ?? '').find((n) => n.startsWith('imani-wallet-'))!
       const db = await new Promise<IDBDatabase>((ok) => {
         const r = indexedDB.open(name)
@@ -307,7 +320,7 @@ async function main() {
       })
       db.close()
       return String(row?.merchantId ?? '')
-    }, c.rowId)
+    }, c.rowId))
     await s.goto(`${BASE}/merchants/${issuerOfRow}/transactions`, { waitUntil: 'load' })
     await s.waitForTimeout(3_000)
     const list = await text(s)
@@ -316,7 +329,8 @@ async function main() {
 
   // ── CL-D ──
   console.log('\nCL-D: gift to someone logged in (journey D)')
-  const d = await sendByLink(s, '0.30')
+  // Started from the merchant's page (owner report 2026-10-14): no "Which voucher?" step.
+  const d = await sendByLink(s, '0.30', '7 days', merchantOfGifts || undefined)
   check('CL-D a link was made', d !== null)
   if (d) {
     const dPage = await (await context(browser, 'D')).newPage()
