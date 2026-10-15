@@ -63,7 +63,11 @@ const GatewayConfig = (function () {
     // policy values are `wss://relay.imani.casa` (primary) and
     // `wss://relay.398ja.xyz` (secondary); the frontend reads them from
     // the gateway env-backed config and never hardcodes either.
-    relay_url_secondary: ''
+    relay_url_secondary: '',
+    // #263 — OpenStreetMap tile URL template ({z}/{x}/{y}) for LocationMap.
+    // Empty default: the wallet falls back to VITE_MAP_TILE_URL, then the
+    // OSMF server. Lets ops switch tile provider without a release.
+    map_tile_url: ''
   };
 
   function _normaliseCashbackOrigins(c) {
@@ -267,6 +271,9 @@ const GatewayConfig = (function () {
 
     /** Async — awaits config load and returns the secondary relay URL. */
     async getSecondaryRelay() { const c = await load(); return c.relay_url_secondary || ''; },
+
+    /** #263 — runtime map tile URL template, '' when unset. */
+    get mapTileUrl() { return _config?.map_tile_url || ''; },
 
     /** Returns relay URL(s) as array — sync; may be [''] before init. */
     getRelays() { return [this.relayUrl]; },
