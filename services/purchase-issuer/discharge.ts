@@ -59,10 +59,25 @@ export interface Obligation {
   processorReference?: string | null
 }
 
+/**
+ * What a minted coupon still owes after this pass, for the delivery outbox (imani-wallet#274):
+ * the sale record, when it did not land inline.
+ */
+export interface Minted {
+  issuerId: string
+  /** The sale record, or null when it was filed inline (or there is no `fileSale` port). */
+  pendingSale: CardSale | null
+}
+
 export type Outcome =
-  | { kind: 'discharged'; voucherId: string; issuerId: string; eventId?: string }
+  | ({ kind: 'discharged'; voucherId: string; eventId?: string } & Minted)
   /** Issued but not delivered: value exists and has not reached anyone. */
-  | { kind: 'undelivered'; voucherId: string; reason: string }
+  | ({ kind: 'undelivered'; voucherId: string; reason: string } & Minted)
+  /**
+   * gc refused 409 UNRECORDED (gc#232): this payment's warrant nonce was spent by a run that never
+   * recorded its voucher. Unknown whether a coupon exists, so never retried: parked for a person.
+   */
+  | { kind: 'unrecorded'; reason: string }
   /**
    * Nothing minted as far as we know. The debt stands and can be tried again.
    *
@@ -160,7 +175,9 @@ export async function discharge(
   }
 
   const issuanceWarrant = delegatedWarrant({
-    eventId: obligation.id,
+    // The nonce derives from the PAYMENT, not the event (imani-wallet#274): any re-drive of one
+    // pi_ is the same warrant use at gc, which replays the recorded voucher (gc#232).
+    paymentIntent: obligation.processorReference,
     issuerId: credential.stallPubkey.toLowerCase(),
     saleTotalMinor: obligation.faceValue,
     faceDecimals: obligation.faceDecimals,
@@ -178,15 +195,19 @@ export async function discharge(
       faceDecimals: obligation.faceDecimals,
       memo: obligation.memo,
       expiresInDays,
-      // The purchase's own id, so every attempt at this debt (including one
-      // after a lapsed claim) mints under one key (imani-wallet#96).
-      idempotencyKey: purchaseIdempotencyKey(obligation.id),
+      // The payment intent, so every attempt at this PAYMENT (a lapsed claim,
+      // a second event, a reconciler re-drive) mints under one key
+      // (imani-wallet#96, #274).
+      idempotencyKey: purchaseIdempotencyKey(obligation.processorReference),
       // Signed as the stall's delegate, with the stall's own delegation inside,
       // so the till verifies it offline (#152). The processor reference rides
       // along inside the signed bytes for reconciliation.
       issuanceWarrant,
     })
   } catch (error) {
+    if (error instanceof IssuanceFailed && error.unrecorded) {
+      return { kind: 'unrecorded', reason: error.message }
+    }
     if (error instanceof IssuanceFailed) {
       // A burnt credential will never mint. Retrying it forever would bury the
       // one case that needs a human in a log of identical failures.
@@ -202,23 +223,24 @@ export async function discharge(
 
   // The sale goes into the stall's ledger as soon as the coupon exists, delivered
   // or not: an undelivered card coupon is still the stall's sale (#275, gap D).
-  // Best effort and inline for now. U8 (the issuer outbox) takes this over so a
-  // record that did not land is retried; until then the pull fallback
-  // (`resendSaleRecords`) re-sends it.
+  // Tried once inline; one that does not land is returned as `pendingSale`, and the
+  // delivery outbox owns its retries (imani-wallet#274, U8).
+  let pendingSale: CardSale | null = null
   if (ports.fileSale) {
-    await ports
-      .fileSale(credential, {
-        voucherId: coupon.voucherId,
-        faceValue: obligation.faceValue,
-        faceUnit: obligation.faceUnit,
-        faceDecimals: obligation.faceDecimals,
-        memo: obligation.memo,
-        recipientPubkey: obligation.recipient.kind === 'pubkey' ? obligation.recipient.pubkey : undefined,
-        at: ports.now(),
-        issuanceWarrant,
-      })
-      .catch(() => false)
+    const sale: CardSale = {
+      voucherId: coupon.voucherId,
+      faceValue: obligation.faceValue,
+      faceUnit: obligation.faceUnit,
+      faceDecimals: obligation.faceDecimals,
+      memo: obligation.memo,
+      recipientPubkey: obligation.recipient.kind === 'pubkey' ? obligation.recipient.pubkey : undefined,
+      at: ports.now(),
+      issuanceWarrant,
+    }
+    const filed = await ports.fileSale(credential, sale).catch(() => false)
+    if (!filed) pendingSale = sale
   }
+  const minted: Minted = { issuerId: coupon.issuerId, pendingSale }
 
   let token = coupon.token
   if (token === '') {
@@ -230,6 +252,7 @@ export async function discharge(
       kind: 'undelivered',
       voucherId: coupon.voucherId,
       reason: 'the mint has not produced a token yet',
+      ...minted,
     }
   }
 
@@ -244,14 +267,15 @@ export async function discharge(
     return {
       kind: 'discharged',
       voucherId: coupon.voucherId,
-      issuerId: coupon.issuerId,
       eventId: delivered.eventId,
+      ...minted,
     }
   } catch (error) {
     return {
       kind: 'undelivered',
       voucherId: coupon.voucherId,
       reason: error instanceof Error ? error.message : describe(error),
+      ...minted,
     }
   }
 }

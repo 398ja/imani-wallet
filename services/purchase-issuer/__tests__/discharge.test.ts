@@ -68,6 +68,7 @@ describe('discharging a purchase', () => {
       voucherId: 'v1',
       issuerId: '',
       eventId: 'ev1',
+      pendingSale: null,
     })
   })
 
