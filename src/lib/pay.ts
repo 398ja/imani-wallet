@@ -15,6 +15,7 @@ import { OWN_STALL_COPY, giftExclusion } from './giftLink'
 import { FULLY_REDEEMED_STATUS, VoucherFullyRedeemedError, isVoucherFullyRedeemed } from './fullyRedeemed'
 import type { NUT18VRequest } from './nap'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
+import { carryExpiryReminders } from './expiryReminders'
 
 /**
  * The money decisions now live in `@imani/wallet-core`.
@@ -206,9 +207,10 @@ export async function replaceVoucherToken(
       ? Math.round(row.token_amount * (faceValue / row.face_value))
       : row?.token_amount)
 
+  const newTokenId = await tokenIdFrom(token)
   await wallet.saveVoucher({
     ...row,
-    token_id: await tokenIdFrom(token),
+    token_id: newTokenId,
     // No `voucher_id` override. The spread already carries the row's own, and
     // the old override wrote whatever id the caller happened to hold — which,
     // for a row without one, was a token_id masquerading as a voucher_id.
@@ -218,6 +220,9 @@ export async function replaceVoucherToken(
     status: 'active',
     updated_at: new Date().toISOString(),
   } as Parameters<typeof wallet.saveVoucher>[0])
+  // #265/#269 review: the change keeps the coupon's expiry, so it keeps what the customer was
+  // already told about it: no second "expires in N days" entry and no banner back. Never throws.
+  carryExpiryReminders(tokenId, newTokenId)
 }
 
 /**

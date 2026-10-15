@@ -16,6 +16,7 @@ vi.mock('../notMoney', async (orig) => ({
 import { _resetInboxCacheForTests, clearNotifications, listNotifications } from '../notifications/inbox'
 import {
   bannerState,
+  carryExpiryReminders,
   dismissBanner,
   runExpiryReminders,
 } from '../expiryReminders'
@@ -130,6 +131,30 @@ describe('runExpiryReminders: the bell', () => {
   it('falls back to "a stall" when no name is known, and never prints a key', () => {
     runExpiryReminders(ME, [row('t1', 6 * DAY_MS)], { now: NOW, names: {} })
     expect(listNotifications(ME)[0]!.body).toBe('Your €2.50 voucher expires in 6 days.')
+  })
+
+  it('a partial spend re-keys the coupon: its reminders and banner dismissal move with it (#269 review)', () => {
+    // pay.ts replaceVoucherToken: the change is saved under a NEW content-derived token_id, same
+    // expiry. Without the carry, the change got a second "7 days" entry and the banner came back.
+    const before = row('old', 6 * DAY_MS)
+    runExpiryReminders(ME, [before], { now: NOW, names })
+    dismissBanner(ME, [before], NOW)
+    carryExpiryReminders('old', 'new')
+    const change = { ...before, token_id: 'new', token: 'cashuB-new', face_value: 100 }
+    runExpiryReminders(ME, [change], { now: NOW + HOUR_MS, names })
+    expect(listNotifications(ME).map((i) => i.id)).toEqual(['coupon-expiring:old:7d'])
+    expect(bannerState(ME, [change], NOW + HOUR_MS).show).toBe(false)
+    // The 1-day threshold is still new for it, once.
+    runExpiryReminders(ME, [change], { now: NOW + 5 * DAY_MS + HOUR_MS, names })
+    expect(listNotifications(ME).map((i) => i.id)).toEqual(['coupon-expiring:new:1d', 'coupon-expiring:old:7d'])
+  })
+
+  it('carryExpiryReminders touches only accounts that had filed the old coupon, and never throws', () => {
+    const OTHER = 'f'.repeat(64)
+    runExpiryReminders(ME, [row('old', 6 * DAY_MS)], { now: NOW, names })
+    carryExpiryReminders('old', 'new')
+    expect(localStorage.getItem(`imani-wallet:expiry-reminders:${OTHER}`)).toBeNull()
+    expect(() => carryExpiryReminders('', 'x')).not.toThrow()
   })
 
   it('is per account', () => {

@@ -44,8 +44,10 @@ import { wantsInApp } from './notifications/wants'
  * files its own entry. That is the right way round, since each device's bell is read separately.
  */
 
-const FILED_KEY = (pubkey: string) => `imani-wallet:expiry-reminders:${pubkey}`
-const BANNER_KEY = (pubkey: string) => `imani-wallet:expiry-banner-dismissed:${pubkey}`
+const FILED_PREFIX = 'imani-wallet:expiry-reminders:'
+const BANNER_PREFIX = 'imani-wallet:expiry-banner-dismissed:'
+const FILED_KEY = (pubkey: string) => `${FILED_PREFIX}${pubkey}`
+const BANNER_KEY = (pubkey: string) => `${BANNER_PREFIX}${pubkey}`
 /** Two reminders per coupon, so this covers 500 coupons' worth of history. */
 const MAX_FILED = 1000
 
@@ -66,6 +68,42 @@ function writeIds(key: string, ids: string[]): void {
     // A private window that refuses writes still gets this session's reminders, once each,
     // through the inbox's own id check.
     console.warn('[expiry] could not persist reminders:', e)
+  }
+}
+
+/**
+ * Move a coupon's "already told" state to its new token id (#269 review).
+ *
+ * `token_id` is content-derived, so a partial spend (`pay.ts replaceVoucherToken`) or a reclaim
+ * saves the change under a NEW id with the SAME expiry. Without this, the change counted as a
+ * coupon never seen: a second "expires in N days" entry, and a dismissed banner back on home,
+ * right after the customer did what the first reminder asked. The caller does not know which
+ * account it is spending for, so every account's set that holds the old id is updated; the
+ * others are left alone. Never throws: it sits on the money path.
+ */
+export function carryExpiryReminders(oldTokenId: string, newTokenId: string): void {
+  if (!oldTokenId || !newTokenId || oldTokenId === newTokenId) return
+  try {
+    const keys: string[] = []
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i)
+      if (key && (key.startsWith(FILED_PREFIX) || key.startsWith(BANNER_PREFIX))) keys.push(key)
+    }
+    for (const key of keys) {
+      const ids = readIds(key)
+      const added: string[] = []
+      for (const id of ids) {
+        // Filed ids are `coupon-expiring:<token>:<t>`, banner keys `<token>:<t>`.
+        const banner = id.startsWith(`${oldTokenId}:`)
+        const filed = id.startsWith(`coupon-expiring:${oldTokenId}:`)
+        if (!banner && !filed) continue
+        const threshold = id.slice(id.lastIndexOf(':') + 1)
+        added.push(banner ? `${newTokenId}:${threshold}` : reminderId(newTokenId, threshold as '7d' | '1d'))
+      }
+      if (added.length > 0) writeIds(key, [...new Set([...ids, ...added])])
+    }
+  } catch (e) {
+    console.warn('[expiry] could not carry reminders to the new token:', e)
   }
 }
 
