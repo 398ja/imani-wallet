@@ -282,7 +282,7 @@ async function main() {
   check('A issues a second cashback', two !== null)
   if (two) {
     const t6 = await openLink(a, two.link)
-    check("L6 A is refused: its stall's own cashback", /your stall's own cashback/i.test(t6), t6.slice(0, 300))
+    check("L6 A is refused: its stall's own Cashlink", /your stall's own Cashlink/i.test(t6), t6.slice(0, 300))
     check('L6 A gets no Add button', !(await a.getByRole('button', { name: 'Add to my wallet' }).isVisible().catch(() => false)))
     check('L6 it stays Unclaimed', (await portalStatus(two.ref)) === 'Unclaimed')
 
