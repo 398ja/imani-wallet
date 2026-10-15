@@ -68,7 +68,8 @@ import { GiftLandingPage } from './pages/GiftLandingPage'
 import { reconcileGiftLinks, restoreScan } from './lib/giftLinks'
 import { BuyPage } from './pages/BuyPage'
 import { PublicProfilePage } from './pages/PublicProfilePage'
-import { CouponsPage, TransactionsPage } from './pages/RecordListPages'
+import { CouponsPage, ExpiringCouponsPage, TransactionsPage } from './pages/RecordListPages'
+import { useExpiryReminders } from './hooks/useExpiryReminders'
 import { CouponPage, TransactionPage } from './pages/RecordDetailPages'
 import { ScanPage } from './pages/ScanPage'
 import { PayPage } from './pages/PayPage'
@@ -348,6 +349,9 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
     return onWalletChanged(() => void reconcileRequests(pubkey).catch(() => {}))
   }, [ready, pubkey])
 
+  // #265: "voucher about to expire" bell entries, filed while the wallet is open. Local only.
+  useExpiryReminders(pubkey, ready)
+
   // Reconcile the local copy with the relay, as bottin does on every login.
   // Never throws — an unreachable relay leaves the stored profile in place.
   useEffect(() => {
@@ -431,7 +435,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
                   refusal={terminal.refusal}
                 />
               ) : (
-                <MerchantsPage />
+                <MerchantsPage pubkey={pubkey} />
               )}
             </ResumeParkedClaim>
           }
@@ -536,6 +540,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route path="/buy/:pubkey" element={<BuyPage buyerPubkey={pubkey} />} />
         <Route path="/merchants/:pubkey" element={<MerchantPage />} />
         <Route path="/merchants/:pubkey/coupons" element={<CouponsPage />} />
+        <Route path="/coupons/expiring" element={<ExpiringCouponsPage pubkey={pubkey} />} />
         <Route path="/merchants/:pubkey/transactions" element={<TransactionsPage />} />
         <Route path="/coupon/:tokenId" element={<CouponPage />} />
         <Route

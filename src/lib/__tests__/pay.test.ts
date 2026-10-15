@@ -253,6 +253,29 @@ describe('replaceVoucherToken', () => {
     expect(saved[0].issuance_ratio).toBe(25)
   })
 
+  it('carries the expiry reminders already filed for the coupon to the change (#269 review)', async () => {
+    const row = sourceRow()
+    const { wallet } = fakeWallet(row)
+    const filedKey = 'imani-wallet:expiry-reminders:' + 'e'.repeat(64)
+    const store = new Map<string, string>([[filedKey, JSON.stringify([`coupon-expiring:${row.token_id}:7d`])]])
+    vi.stubGlobal('localStorage', {
+      get length() { return store.size },
+      key: (i: number) => [...store.keys()][i] ?? null,
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    })
+    onTestFinished(() => {
+      vi.unstubAllGlobals()
+    })
+
+    await replaceVoucherToken(wallet, row.token_id, NEW_TOKEN, 2500)
+
+    expect(JSON.parse(localStorage.getItem(filedKey)!)).toContain(
+      `coupon-expiring:${await tokenIdFrom(NEW_TOKEN)}:7d`,
+    )
+  })
+
   it('re-keys the change row to the new token', async () => {
     const row = sourceRow()
     const { wallet, saved } = fakeWallet(row)
