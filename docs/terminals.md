@@ -163,7 +163,7 @@ What a terminal shows:
 | --- | --- | --- |
 | Till: its name and your stall's | yes | yes |
 | Redeem | yes | yes |
-| Sell, and cashback under it | no | yes, once it opened with a connection |
+| Sell, and Cashlinks under it | no | yes, once it opened with a connection |
 | Settings → Security → Take out of service | yes | yes |
 | Lock | yes | yes |
 | Your dashboard, coupons, records, backup, terminals | no | no |
@@ -186,8 +186,8 @@ Same as on the owner's own till, minus whatever the role excludes:
   coupon is signed for your stall by the terminal itself: its own key signs the
   sale, and the coupon carries the terminal's authority, which your stall's
   issuing service signed. The customer's wallet checks both, offline, and shows
-  the coupon as authorised by your stall. **Cashback** works the same way, from
-  **Give cashback instead** on the Sell screen.
+  the coupon as authorised by your stall. A **Cashlink** (cashback) works the same way, from
+  **Create a Cashlink instead** on the Sell screen.
 
   The gateway checks the terminal's authority on every Sell: a revoked terminal
   is refused within about a minute, even with its till still open, and the same
