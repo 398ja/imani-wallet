@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core'
 import { MapPin } from 'lucide-react'
 
 import { parseLatLng } from '../lib/coords'
-import { BOX_H, BOX_W, TILE, openInMapsHref, tileGrid, tileUrlTemplate } from '../lib/osmTiles'
+import { BOX_H, BOX_W, TILE, mapPoint, openInMapsHref, tileGrid, tileUrlTemplate } from '../lib/osmTiles'
 
 /**
  * Where a stall is, read-only, as a pin on a static OpenStreetMap map (#263).
@@ -39,9 +39,10 @@ export function LocationMap({
   className?: string
 }) {
   const parsed = parseLatLng(location)
-  if (!parsed) return null
+  const point = parsed && mapPoint(parsed.lat, parsed.lng)
+  if (!parsed || !point) return null
 
-  const { tiles, pinX, pinY } = tileGrid(Number(parsed.lat), Number(parsed.lng), tileUrlTemplate())
+  const { tiles, pinX, pinY } = tileGrid(point.lat, point.lng, tileUrlTemplate())
   const native = Capacitor.isNativePlatform()
 
   return (
@@ -59,7 +60,7 @@ export function LocationMap({
         <a
           href={openInMapsHref(parsed.lat, parsed.lng)}
           {...(native ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
-          className="absolute inset-0 block"
+          className="absolute inset-0 block rounded-2xl outline-none ring-inset ring-mono-400 focus-visible:ring-2"
         >
           <div
             className="absolute"
@@ -94,7 +95,7 @@ export function LocationMap({
           href="https://www.openstreetmap.org/copyright"
           target="_blank"
           rel="noopener noreferrer"
-          className="absolute bottom-0 right-0 bg-white/85 px-1 text-[10px] text-mono-700 underline"
+          className="absolute bottom-0 right-0 bg-white/85 px-1 text-[10px] text-mono-700 underline outline-none ring-mono-400 focus-visible:ring-2"
         >
           © OpenStreetMap contributors
         </a>

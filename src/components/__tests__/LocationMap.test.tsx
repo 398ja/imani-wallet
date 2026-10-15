@@ -8,7 +8,7 @@ const native = vi.hoisted(() => ({ value: false }))
 vi.mock('@capacitor/core', () => ({ Capacitor: { isNativePlatform: () => native.value } }))
 
 import { LocationMap } from '../LocationMap'
-import { OSM_TILE_URL, tileFor, tileGrid } from '../../lib/osmTiles'
+import { OSM_TILE_URL, mapPoint, safeTileTemplate, tileFor, tileGrid, tileUrlTemplate } from '../../lib/osmTiles'
 
 /**
  * The stall location as a static OpenStreetMap map (#263): tiles as <img>, no
@@ -53,14 +53,48 @@ describe('tileFor (Web Mercator, z16)', () => {
 })
 
 describe('tileGrid', () => {
-  it('London: the 2x2 tiles around the pin and the pin pixel in the grid', () => {
+  it('London: only the tiles in view, and the pin pixel in the grid', () => {
     const g = tileGrid(51.5074, -0.1278)
-    // px 188 (right half) -> x0 = x; py 100 (top half) -> y0 = y - 1
-    expect(g.tiles.map((t) => t.src)).toEqual([
-      tile(32744, 21791), tile(32745, 21791), tile(32744, 21792), tile(32745, 21792),
+    // px 188 (right half) -> x0 = x; py 100 (top half) -> y0 = y - 1, so the pin
+    // is at y 356 and the 176px-high box spans 268..444: the top row is fully
+    // clipped and must not be fetched (OSMF policy, review fix rev-263).
+    expect(g.tiles).toEqual([
+      { src: tile(32744, 21792), left: 0, top: 256 },
+      { src: tile(32745, 21792), left: 256, top: 256 },
     ])
     expect(g.pinX).toBeCloseTo(188.088, 2)
     expect(g.pinY).toBeCloseTo(356.518, 2)
+  })
+
+  it('Douala needs all four tiles, each in its own quadrant', () => {
+    const g = tileGrid(4.0511, 9.7679)
+    expect(g.tiles).toEqual([
+      { src: tile(34545, 32029), left: 0, top: 0 },
+      { src: tile(34546, 32029), left: 256, top: 0 },
+      { src: tile(34545, 32030), left: 0, top: 256 },
+      { src: tile(34546, 32030), left: 256, top: 256 },
+    ])
+    expect(g.pinX).toBeCloseTo(305.134, 2)
+    expect(g.pinY).toBeCloseTo(231.555, 2)
+  })
+
+  it('drops the bottom row when the box ends above it (box is 176px high, not 256)', () => {
+    // 51.5N: py 142.55, lower half -> y0 = y, pin at y 142.55, box 54.55..230.55.
+    const g = tileGrid(51.5, -0.1278)
+    expect(g.pinY).toBeCloseTo(142.55, 2)
+    expect(g.tiles.map((t) => t.src)).toEqual([tile(32744, 21794), tile(32745, 21794)])
+  })
+
+  it('never asks for a tile row beyond the poles', () => {
+    for (const lat of [90, 89.9, 85.06, -85.06, -89.9, -90]) {
+      const t = tileFor(lat, 0)
+      expect(t.py, String(lat)).toBeCloseTo(lat > 0 ? 0 : 256, 3)
+      for (const { src } of tileGrid(lat, 0).tiles) {
+        const [, x, y] = src.match(/\/16\/(\d+)\/(\d+)\.png$/)!.map(Number)
+        expect(x).toBeLessThan(2 ** 16)
+        expect(y, `${lat} -> ${src}`).toBeLessThan(2 ** 16)
+      }
+    }
   })
 
   it('near a tile edge (0,0) takes the tiles on both sides', () => {
@@ -83,13 +117,61 @@ describe('tileGrid', () => {
   })
 })
 
+describe('safeTileTemplate (review fix rev-263)', () => {
+  it.each([
+    'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    'https://tiles.example.org/osm/{z}/{x}/{y}@2x.png?key=abc',
+  ])('accepts %s', (t) => expect(safeTileTemplate(t)).toBe(t))
+
+  it.each([
+    ['empty', ''],
+    ['not a string', 42],
+    ['http', 'http://tile.example.org/{z}/{x}/{y}.png'],
+    ['javascript:', 'javascript:alert(1)//{z}/{x}/{y}'],
+    ['data:', 'data:image/png,{z}{x}{y}'],
+    ['protocol-relative', '//tile.example.org/{z}/{x}/{y}.png'],
+    ['credentials', 'https://u:p@tile.example.org/{z}/{x}/{y}.png'],
+    ['missing {y}', 'https://tile.example.org/{z}/{x}.png'],
+    ['repeated {x}', 'https://tile.example.org/{z}/{x}/{x}/{y}.png'],
+    ['unknown placeholder', 'https://tile.example.org/{s}/{z}/{x}/{y}.png'],
+    ['whitespace', 'https://tile.example.org/{z}/{x}/{y}.png '],
+  ])('rejects %s', (_n, t) => expect(safeTileTemplate(t)).toBeNull())
+
+  it('an invalid runtime value falls back to the build value, then OSMF', () => {
+    ;(globalThis as { GatewayConfig?: unknown }).GatewayConfig = { mapTileUrl: 'javascript:alert(1)//{z}/{x}/{y}' }
+    vi.stubEnv('VITE_MAP_TILE_URL', 'https://build.example/{z}/{x}/{y}.png')
+    expect(tileUrlTemplate()).toBe('https://build.example/{z}/{x}/{y}.png')
+    vi.stubEnv('VITE_MAP_TILE_URL', 'http://build.example/{z}/{x}/{y}.png')
+    expect(tileUrlTemplate()).toBe(OSM_TILE_URL)
+  })
+})
+
+describe('mapPoint (review fix rev-263)', () => {
+  it('keeps real coordinates and refuses impossible ones', () => {
+    expect(mapPoint('51.5074', '-0.1278')).toEqual({ lat: 51.5074, lng: -0.1278 })
+    expect(mapPoint('-90', '180')).toEqual({ lat: -90, lng: 180 })
+    for (const [la, ln] of [['Infinity', '0'], ['0', '-Infinity'], ['90.1', '0'], ['0', '180.5'], ['1e9', '0']])
+      expect(mapPoint(la, ln), `${la},${ln}`).toBeNull()
+  })
+})
+
 describe('LocationMap', () => {
   it('renders OSM tiles as images, not an iframe, with the pin', () => {
     const { container } = render(<LocationMap location={AT} />)
     expect(container.querySelector('iframe')).toBeNull()
-    expect(srcs(container)).toHaveLength(4)
+    expect(srcs(container)).toHaveLength(2)
     expect(srcs(container)).toContain(tile(32744, 21792))
     expect(screen.getByTestId('map-pin')).toBeDefined()
+    // The grid is shifted so the pin pixel lands on the box centre, and the
+    // pin icon's tip (bottom centre of a 28px icon) sits on that centre.
+    const grid = container.querySelector('img')!.parentElement as HTMLElement
+    expect(grid.style.left).toMatch(/^calc\(50% - 188\.08\d*px\)$/)
+    expect(parseFloat(grid.style.top)).toBeCloseTo(88 - 356.518, 2)
+    const pin = screen.getByTestId('map-pin') as unknown as SVGElement
+    expect(pin.style.left).toBe('calc(50% - 14px)')
+    expect(pin.style.top).toBe('60px')
+    const img = container.querySelector('img')!
+    expect([img.style.left, img.style.top]).toEqual(['0px', '256px'])
     for (const img of container.querySelectorAll('img')) {
       expect(img.getAttribute('alt')).toBe('')
       expect(img.getAttribute('loading')).toBe('lazy')
@@ -149,7 +231,7 @@ describe('LocationMap', () => {
   })
 
   it('renders nothing for a location that will not parse', () => {
-    for (const bad of ['', 'somewhere nice', '51.5', '51.5, ', 'a, b']) {
+    for (const bad of ['', 'somewhere nice', '51.5', '51.5, ', 'a, b', 'Infinity, 0', '200, 500']) {
       const { container } = render(<LocationMap location={bad} />)
       expect(container.innerHTML, bad).toBe('')
       cleanup()
