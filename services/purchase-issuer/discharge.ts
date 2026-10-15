@@ -227,6 +227,7 @@ export async function discharge(
   // delivery outbox owns its retries (imani-wallet#274, U8).
   let pendingSale: CardSale | null = null
   if (ports.fileSale) {
+    const at = ports.now()
     const sale: CardSale = {
       voucherId: coupon.voucherId,
       faceValue: obligation.faceValue,
@@ -234,10 +235,21 @@ export async function discharge(
       faceDecimals: obligation.faceDecimals,
       memo: obligation.memo,
       recipientPubkey: obligation.recipient.kind === 'pubkey' ? obligation.recipient.pubkey : undefined,
-      at: ports.now(),
+      at,
+      // The gateway counts `expires_in_days` from its own mint instant, so this is
+      // the coupon's expiry to within the mint's latency. Without it the merchant
+      // record reads "No expiry" for a coupon that expires (S1 showed the date).
+      expiresAt: Math.floor(at / 1000) + expiresInDays * 86_400,
       issuanceWarrant,
     }
-    const filed = await ports.fileSale(credential, sale).catch(() => false)
+    // try/await, not `.catch`: a port that throws synchronously must not escape
+    // either, because the coupon already exists (review of #278).
+    let filed = false
+    try {
+      filed = await ports.fileSale(credential, sale)
+    } catch {
+      filed = false
+    }
     if (!filed) pendingSale = sale
   }
   const minted: Minted = { issuerId: coupon.issuerId, pendingSale }
