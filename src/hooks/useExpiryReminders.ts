@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 
 import { runExpiryReminders } from '../lib/expiryReminders'
 import { listVouchers, onWalletChanged } from '../lib/wallet'
@@ -33,11 +33,38 @@ export function useExpiryReminders(pubkey: string, ready: boolean): void {
       if (document.visibilityState === 'visible') check()
     }
     document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', check)
     return () => {
       live = false
+      window.removeEventListener('focus', check)
       clearInterval(timer)
       unsubscribe()
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [pubkey, ready])
+}
+
+/**
+ * A re-render tick for screens that show expiry (#265): hourly, and whenever the app comes back
+ * into view. A badge is a function of the clock, and nothing else changes when a coupon crosses
+ * into its last day, so without this a screen left open (or a phone woken after a weekend) would
+ * keep saying "5 days" until some unrelated write re-rendered it. Returns a number to depend on.
+ */
+export function useExpiryClock(): number {
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    const bump = () => setTick((t) => t + 1)
+    const timer = setInterval(bump, RECHECK_MS)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') bump()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', bump)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', bump)
+    }
+  }, [])
+  return tick
 }

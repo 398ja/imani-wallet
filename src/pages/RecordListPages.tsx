@@ -26,6 +26,7 @@ import {
 import { couponReference, fullyRedeemedMessage } from '../lib/fullyRedeemed'
 import { getSigner } from '../lib/nap'
 import { SwapBackOffer } from '../components/SwapBackOffer'
+import { useExpiryClock } from '../hooks/useExpiryReminders'
 import type { WalletTransaction } from '../lib/transactions'
 import { entryKey, groupHistory } from '../lib/historyGroups'
 
@@ -113,6 +114,9 @@ export function CouponsPage() {
   */
   const [sort, setSort] = useState<CouponSort>(loadSort)
   const [expired, setExpired] = useState<VoucherRow[]>([])
+  // Live versus expired, and every badge, are functions of the clock (#265): re-read hourly and
+  // whenever the app comes back into view.
+  const clock = useExpiryClock()
 
   useEffect(() => {
     const load = async () => {
@@ -124,7 +128,7 @@ export function CouponsPage() {
     }
     load()
     return onWalletChanged(load)
-  }, [pubkey])
+  }, [pubkey, clock])
 
   const coupons = useMemo(() => sortCoupons(rows, sort), [rows, sort])
   const chooseSort = (next: CouponSort) => {
@@ -257,12 +261,13 @@ function ExpiredGroup({ rows }: { rows: VoucherRow[] }) {
  */
 export function ExpiringCouponsPage({ pubkey }: { pubkey: string }) {
   const [rows, setRows] = useState<ReminderCandidate[]>([])
+  const clock = useExpiryClock()
 
   useEffect(() => {
     const load = async () => setRows(reminderCandidates(await listVouchers(), pubkey))
     load()
     return onWalletChanged(load)
-  }, [pubkey])
+  }, [pubkey, clock])
 
   return (
     <Screen>

@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Clock, X } from 'lucide-react'
 import type { VoucherRow } from '@imani/wallet-storage'
 
 import { bannerState, dismissBanner } from '../../lib/expiryReminders'
+import { useExpiryClock } from '../../hooks/useExpiryReminders'
 
 /**
  * "2 vouchers expire this week", on home (#265).
@@ -18,11 +19,9 @@ import { bannerState, dismissBanner } from '../../lib/expiryReminders'
  */
 export function ExpiryBanner({ pubkey, rows, now }: { pubkey: string; rows: VoucherRow[]; now?: number }) {
   const [, setTick] = useState(0)
-  // Re-read on the hour, so a banner left on screen picks up a coupon entering its last day.
-  useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 3_600_000)
-    return () => clearInterval(id)
-  }, [])
+  // Re-read on the hour and on return, so a banner left on screen picks up a coupon entering its
+  // last day.
+  useExpiryClock()
 
   const state = bannerState(pubkey, rows, now)
   if (!state.show) return null
