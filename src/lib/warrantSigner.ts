@@ -174,7 +174,7 @@ export const TERMINAL_SALE_UNSUPPORTED =
  * `TERMINAL_SALE_UNSUPPORTED`.
  */
 export const TERMINAL_CASHBACK_UNSUPPORTED =
-  'This terminal cannot issue cashback right now. It needs a full session as a selling till. ' +
+  'This terminal cannot create a Cashlink right now. It needs a full session as a selling till. ' +
   'Lock it and open it again, or ask the stall owner. Nothing has been issued.'
 
 /**

@@ -6,10 +6,12 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
 /**
- * Claim links phase 2 (spec 4.1) on the two merchant screens:
- *  - Cashback ready: the code stays, Show QR reveals the link's QR, Share or Copy hands out the
- *    wallet-origin link, live status turns the QR into "Claimed just now", Cancel asks first;
- *  - the record detail page: Show QR again rebuilds the link from the stored code, and Cancel.
+ * Claim links phase 2 (spec 4.1) on the two merchant screens, with typed codes retired and the
+ * Cashlink name (wallet#268):
+ *  - Cashlink ready: no code anywhere, the QR leads, Share or Copy hands out the wallet-origin
+ *    link, live status turns the QR into "Claimed just now", Cancel asks first;
+ *  - the record detail page: no Code row; Show QR again rebuilds the link through the portal's
+ *    authenticated owner lookup by cashback id (never by-code), and Cancel.
  * The key is never written to storage or logged.
  */
 
@@ -21,6 +23,7 @@ const h = vi.hoisted(() => ({
   revokes: [] as string[],
   revokeAnswer: { kind: 'revoked' } as { kind: string },
   byCode: [] as string[],
+  links: [] as string[],
   qrTexts: [] as string[],
   row: null as Record<string, unknown> | null,
   recorded: [] as unknown[],
@@ -46,6 +49,10 @@ vi.mock('../../lib/cashback', async (importOriginal) => ({
   },
   resolveClaimLinkByCode: async (code: string) => {
     h.byCode.push(code)
+    return { kind: 'ok', ref: REF, key: KEY }
+  },
+  fetchCashbackLink: async (id: string) => {
+    h.links.push(id)
     return { kind: 'ok', ref: REF, key: KEY }
   },
 }))
@@ -95,7 +102,7 @@ const LINK = `${window.location.origin}/c/${REF}#k=${KEY}`
 
 let logged: string[] = []
 beforeEach(() => {
-  Object.assign(h, { status: 'Unclaimed', statusReads: 0, revokes: [], revokeAnswer: { kind: 'revoked' }, byCode: [], qrTexts: [], recorded: [] })
+  Object.assign(h, { status: 'Unclaimed', statusReads: 0, revokes: [], revokeAnswer: { kind: 'revoked' }, byCode: [], links: [], qrTexts: [], recorded: [] })
   logged = []
   for (const m of ['log', 'info', 'warn', 'error', 'debug'] as const) {
     vi.spyOn(console, m).mockImplementation((...a: unknown[]) => void logged.push(a.map(String).join(' ')))
@@ -124,18 +131,21 @@ async function issue() {
     </MemoryRouter>,
   )
   fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '1.25' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Create cashback code' }))
-  await screen.findByText('CB-ABCDE-FGHJK')
+  fireEvent.click(screen.getByRole('button', { name: 'Create Cashlink' }))
+  await screen.findByText('Cashlink ready')
 }
 
-describe('Cashback ready: the link next to the code', () => {
-  it('keeps the code and hides the QR until Show QR is tapped', async () => {
+/** No typed code, and nothing to copy it with, anywhere on the screen. */
+function noCodeShown() {
+  expect(screen.queryByText(/CB-ABCDE-FGHJK/)).toBeNull()
+  expect(screen.queryByRole('button', { name: /Copy code/ })).toBeNull()
+}
+
+describe('Cashlink ready: QR and link, no code', () => {
+  it('shows no code, and leads with the QR of the wallet-origin link', async () => {
     await issue()
-    expect(screen.getByRole('button', { name: /Copy code/ })).toBeTruthy()
-    expect(screen.queryByAltText(/QR code to claim/)).toBeNull()
-    expect(h.qrTexts).toEqual([])
-    fireEvent.click(screen.getByRole('button', { name: /Show QR/ }))
-    await screen.findByAltText(/QR code to claim/)
+    noCodeShown()
+    await screen.findByAltText('QR code to claim this Cashlink')
     expect(h.qrTexts).toEqual([LINK])
     expect(screen.getByText(/Anyone with this link or QR can claim it once\. It works until /)).toBeTruthy()
     noKeyLeaked()
@@ -161,7 +171,6 @@ describe('Cashback ready: the link next to the code', () => {
   it('polls the status every 5 s and swaps the QR for "Claimed just now"', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     await issue()
-    fireEvent.click(screen.getByRole('button', { name: /Show QR/ }))
     await screen.findByAltText(/QR code to claim/)
     expect(h.statusReads).toBe(0)
     await act(async () => void (await vi.advanceTimersByTimeAsync(5_000)))
@@ -170,35 +179,36 @@ describe('Cashback ready: the link next to the code', () => {
     await act(async () => void (await vi.advanceTimersByTimeAsync(5_000)))
     expect(screen.getByText('Claimed just now')).toBeTruthy()
     expect(screen.queryByAltText(/QR code to claim/)).toBeNull()
-    expect(screen.queryByRole('button', { name: /Cancel cashback/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Cancel Cashlink/ })).toBeNull()
     await act(async () => void (await vi.advanceTimersByTimeAsync(60_000)))
     expect(h.statusReads).toBe(2)
   })
 
   it('cancels only after the confirm, with the no-refund words, then stops offering the link', async () => {
     await issue()
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel cashback' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel Cashlink' }))
     expect(h.revokes).toEqual([])
-    expect(screen.getByText(/The value is not returned to you\./)).toBeTruthy()
+    expect(screen.getByText(/Cancel this Cashlink\? .*The value is not returned to you\./)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Keep it' }))
     expect(h.revokes).toEqual([])
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel cashback' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel Cashlink' }))
     fireEvent.click(screen.getByRole('button', { name: 'Yes, cancel it' }))
-    await screen.findByText(/Cancelled\. The link and the code no longer work\./)
+    await screen.findByText(/Cancelled\. The Cashlink no longer works\./)
     expect(h.revokes).toEqual(['cb-1'])
-    expect(screen.queryByRole('button', { name: /Show QR/ })).toBeNull()
+    expect(screen.queryByAltText(/QR code to claim/)).toBeNull()
+    expect(screen.queryByRole('button', { name: /Share link|Copy link/ })).toBeNull()
   })
 
   it('says so when the customer claimed before the cancel landed', async () => {
     h.revokeAnswer = { kind: 'not_revocable' }
     await issue()
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel cashback' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel Cashlink' }))
     fireEvent.click(screen.getByRole('button', { name: 'Yes, cancel it' }))
     await screen.findByText(/may already have claimed it/)
   })
 })
 
-describe('Cashback ready on a till (#160 phase 5)', () => {
+describe('Cashlink ready on a till (#160 phase 5)', () => {
   // The portal's /status and /revoke are owner-only (MERCHANT_ONLY), and the edge sends them through
   // the NAP session gate, which a till never has: a till would read 401 forever and its Cancel could
   // only ever fail. The till keeps the code, the QR and the link; the owner cancels from the record.
@@ -221,10 +231,11 @@ describe('Cashback ready on a till (#160 phase 5)', () => {
       </MemoryRouter>,
     )
     fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '1.25' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Create cashback code' }))
-    await screen.findByText('CB-ABCDE-FGHJK')
-    expect(screen.getByRole('button', { name: /Show QR/ })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /Cancel cashback/ })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Create Cashlink' }))
+    await screen.findByText('Cashlink ready')
+    noCodeShown()
+    await screen.findByAltText(/QR code to claim/)
+    expect(screen.queryByRole('button', { name: /Cancel Cashlink/ })).toBeNull()
     await act(async () => void (await vi.advanceTimersByTimeAsync(30_000)))
     expect(h.statusReads).toBe(0)
   })
@@ -259,16 +270,33 @@ function openRecord() {
 }
 
 describe('the record detail page', () => {
-  it('Show QR again rebuilds the link from the stored code, after a reload, with nothing stored', async () => {
+  it('Show QR again rebuilds the link through the authenticated lookup by id, never by-code', async () => {
     h.row = cashbackRow()
     openRecord()
     const again = await screen.findByRole('button', { name: 'Show QR again' })
-    expect(h.byCode).toEqual([])
+    expect(h.links).toEqual([])
     fireEvent.click(again)
     await screen.findByAltText(/QR code to claim/)
-    expect(h.byCode).toEqual(['CB-ABCDE-FGHJK'])
+    expect(h.links).toEqual(['cb-1'])
+    expect(h.byCode).toEqual([])
     expect(h.qrTexts).toEqual([LINK])
     noKeyLeaked()
+  })
+
+  it('shows no Code row, even for a row that stored one', async () => {
+    h.row = cashbackRow()
+    openRecord()
+    await screen.findByRole('button', { name: 'Show QR again' })
+    expect(screen.queryByText('CB-ABCDE-FGHJK')).toBeNull()
+    expect(screen.queryByText('Code')).toBeNull()
+  })
+
+  it('Show QR again works for a row without a stored code (it needs only the id)', async () => {
+    h.row = cashbackRow({ claimCode: undefined })
+    openRecord()
+    fireEvent.click(await screen.findByRole('button', { name: 'Show QR again' }))
+    await screen.findByAltText(/QR code to claim/)
+    expect(h.links).toEqual(['cb-1'])
   })
 
   it('offers neither Show QR again nor Cancel once the code is claimed, or before the status is known', async () => {
@@ -276,15 +304,15 @@ describe('the record detail page', () => {
     openRecord()
     await screen.findByText(/Yes, redeemed by the customer/)
     expect(screen.queryByRole('button', { name: 'Show QR again' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Cancel cashback' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Cancel Cashlink' })).toBeNull()
   })
 
-  it('Cancel cashback revokes and records the row as cancelled', async () => {
+  it('Cancel Cashlink revokes and records the row as cancelled', async () => {
     h.row = cashbackRow()
     openRecord()
-    fireEvent.click(await screen.findByRole('button', { name: 'Cancel cashback' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel Cashlink' }))
     fireEvent.click(screen.getByRole('button', { name: 'Yes, cancel it' }))
-    await screen.findByText(/No, the code was cancelled/)
+    await screen.findByText(/No, the Cashlink was cancelled/)
     expect(h.revokes).toEqual(['cb-1'])
     expect(h.recorded).toEqual([['cashback:cb-1', { status: 'Revoked' }]])
     expect(screen.queryByRole('button', { name: 'Show QR again' })).toBeNull()

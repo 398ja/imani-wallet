@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Check, Copy } from 'lucide-react'
+import { Check } from 'lucide-react'
 
 import { CancelCashback, ClaimLinkPanel } from '../components/CashbackClaimLink'
 
@@ -18,16 +18,15 @@ import type { TerminalSession } from '../lib/terminalSession'
 import { TERMINAL_CASHBACK_UNSUPPORTED, mayWarrantSale } from '../lib/warrantSigner'
 
 /**
- * Issue cashback: a coupon for someone who has not installed the app.
+ * Create a Cashlink (the stall's cashback): a coupon for someone who has not installed the app.
  *
- * The counterpart to Sell, and the difference is who has to be present. Sell
- * needs the customer standing there with a wallet to scan; this needs nothing
- * but a pen. The merchant types an amount, reads ten characters out loud, and
- * the customer redeems them days later on a phone that does not exist yet.
+ * The counterpart to Sell, and the difference is who has to be present. Sell needs the customer
+ * standing there with a wallet to scan; this needs only their phone camera. The merchant types an
+ * amount, shows the QR or shares the link, and the customer claims it on a phone that may not have
+ * the app yet. Typed codes are retired (wallet#268): the screen shows no code.
  *
- * No recipient step, and therefore no scan step — the whole screen is one
- * amount field. Whoever repeats the code back gets the money, which is the
- * trade being made for reaching someone who cannot yet be addressed.
+ * No recipient step: whoever holds the link gets the money, which is the trade being made for
+ * reaching someone who cannot yet be addressed.
  */
 export function CashbackIssuePage({
   merchant,
@@ -123,7 +122,7 @@ export function CashbackIssuePage({
     return (
       <Screen>
         <BackLink to="/" label="Back" />
-        <PageHeader title="Cashback" />
+        <PageHeader title="Cashlink" />
         <Alert>{TERMINAL_CASHBACK_UNSUPPORTED}</Alert>
         <div className="mt-4">
           <Button variant="ghost" className="w-full" onClick={() => navigate('/')}>
@@ -138,7 +137,7 @@ export function CashbackIssuePage({
     return (
       <Screen>
         <BackLink to="/sell" label="Sell" />
-        <PageHeader title="Cashback ready" subtitle="Give the customer this code, or let them scan the QR." />
+        <PageHeader title="Cashlink ready" subtitle="Let the customer scan the QR, or share the link." />
         <IssuedCode
           issued={issued}
           decimals={decimals}
@@ -157,7 +156,7 @@ export function CashbackIssuePage({
   return (
     <Screen>
       <BackLink to="/sell" label="Sell" />
-      <PageHeader title="Cashback" subtitle="For a customer without the app yet." />
+      <PageHeader title="Create a Cashlink" subtitle="For a customer without the app yet." />
 
       {error && <Alert>{error}</Alert>}
 
@@ -184,7 +183,7 @@ export function CashbackIssuePage({
       </Panel>
 
       <p className="mt-3 text-sm text-mono-500">
-        The customer gets a short code and a link: they scan, or type into their wallet. It works for{' '}
+        The customer gets a link and QR to scan. It works for{' '}
         {expiryDays} {expiryDays === 1 ? 'day' : 'days'}, once.
       </p>
 
@@ -194,18 +193,15 @@ export function CashbackIssuePage({
         disabled={minor === null || busy}
         onClick={() => void submit()}
       >
-        {busy ? 'Creating the code…' : 'Create cashback code'}
+        {busy ? 'Creating the Cashlink…' : 'Create Cashlink'}
       </Button>
     </Screen>
   )
 }
 
 /**
- * The code, then the link and QR beside it (claim links phase 2, spec 4.1).
- *
- * The code comes first and is unchanged (Q2): sized and spaced to be read across a counter and
- * copied down by hand, monospace so `0` and `O` cannot trade places. Below it, Show QR and Share
- * link carry the same claim as a link, and the screen follows the claim live until it settles.
+ * The Cashlink just created: amount, then the QR and Share link first (claim links phase 2, spec
+ * 4.1; typed codes retired, wallet#268). The screen follows the claim live until it settles.
  */
 function IssuedCode({
   issued,
@@ -217,34 +213,20 @@ function IssuedCode({
   issued: IssuedCashback
   decimals: number
   /**
-   * The stall's own device. A till (#160 phase 5) gets the code and the link, but the portal's
-   * status and revoke are owner-only and need a session a till never has, so it neither polls nor
-   * offers Cancel: the owner cancels from the record the till files in their history.
+   * The stall's own device. A till (#160 phase 5) gets the link and QR, but the portal's status
+   * and revoke are owner-only and need a session a till never has, so it neither polls nor offers
+   * Cancel: the owner cancels from the record the till files in their history.
    */
   owner: boolean
   onAgain: () => void
   onDone: () => void
 }) {
-  const [copied, setCopied] = useState(false)
   const [cancelled, setCancelled] = useState(false)
   const live = useLiveCashbackStatus(issued.cashbackId || undefined, owner && !cancelled)
   const status = cancelled ? 'Revoked' : live?.status
   const link = issued.claim
     ? formatCashbackLink(window.location.origin, issued.claim.ref, issued.claim.key)
     : null
-
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(issued.claimCode)
-      setCopied(true)
-      // Long enough to register as confirmation, short enough that the button
-      // is back to its normal label before anyone reaches for it again.
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // Clipboard permission is not something the merchant can act on, and the
-      // code is already on screen to be read aloud, which is the point of it.
-    }
-  }
 
   return (
     <>
@@ -253,33 +235,19 @@ function IssuedCode({
           <div className="mb-3 rounded-full bg-green-600/10 p-3">
             <Check className="h-7 w-7 text-green-600" />
           </div>
-          <p className="select-all break-all font-mono text-2xl font-semibold tracking-[0.15em] text-mono-900 dark:text-mono-50">
-            {issued.claimCode}
-          </p>
-          <p className="mt-3 text-lg text-mono-900 dark:text-mono-50">
+          <p className="text-lg text-mono-900 dark:text-mono-50">
             {formatFace(issued.amountMinor, { unit: issued.unit, decimals })}
           </p>
           {issued.expiresAt && (
             <p className="mt-1 text-sm text-mono-500">
-              Must be redeemed by {formatDate(issued.expiresAt)}.
+              Must be claimed by {formatDate(issued.expiresAt)}.
             </p>
           )}
         </div>
       </Panel>
 
       <div className="mt-4 space-y-2">
-        <ClaimState status={status} link={link} expiresAt={issued.expiresAt} />
-        <Button variant="secondary" size="lg" className="w-full" onClick={() => void copy()}>
-          {copied ? (
-            <>
-              <Check className="mr-2 h-4 w-4" /> Copied
-            </>
-          ) : (
-            <>
-              <Copy className="mr-2 h-4 w-4" /> Copy code
-            </>
-          )}
-        </Button>
+        <ClaimState status={status} link={link} expiresAt={issued.expiresAt} initiallyShown />
         {owner && issued.cashbackId && isOpen(status) ? (
           <CancelCashback cashbackId={issued.cashbackId} onCancelled={() => setCancelled(true)} />
         ) : null}
@@ -302,8 +270,8 @@ function isOpen(status: string | undefined): boolean {
 /** What replaces the QR once the claim has closed (spec 4.1, "Claimed just now"). */
 const CLOSED_LINE: Record<string, string> = {
   Claimed: 'Claimed just now',
-  Revoked: 'Cancelled. The link and the code no longer work.',
-  Expired: 'Expired. The link and the code no longer work.',
+  Revoked: 'Cancelled. The Cashlink no longer works.',
+  Expired: 'Expired. The Cashlink no longer works.',
   ManualAttention: 'Closed. Ask support about this one.',
 }
 
@@ -312,10 +280,12 @@ function ClaimState({
   status,
   link,
   expiresAt,
+  initiallyShown = false,
 }: {
   status: string | undefined
   link: string | null
   expiresAt: string
+  initiallyShown?: boolean
 }) {
   if (!isOpen(status)) {
     return (
@@ -327,5 +297,5 @@ function ClaimState({
       </p>
     )
   }
-  return link ? <ClaimLinkPanel link={link} expiresAt={expiresAt} /> : null
+  return link ? <ClaimLinkPanel link={link} expiresAt={expiresAt} initiallyShown={initiallyShown} /> : null
 }

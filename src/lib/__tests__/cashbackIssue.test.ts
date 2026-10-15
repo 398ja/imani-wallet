@@ -354,7 +354,7 @@ describe('a retry of the same issue', () => {
       .catch((e: Error) => e)
 
     // Assert
-    expect(String(first)).toMatch(/cannot issue cashback right now/)
+    expect(String(first)).toMatch(/cannot create a Cashlink right now/)
     expect(String(second)).toMatch(/full session/)
     expect(calls.order).toEqual([])
   })

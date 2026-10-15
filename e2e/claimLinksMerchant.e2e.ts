@@ -6,17 +6,19 @@
  * Unlike claimLinks.e2e.ts, the link is taken from the MERCHANT'S SCREEN (its Share link button),
  * never from the generate response: that is the feature under test.
  *
- *   CL-A     A issues cashback; the screen shows the code, Show QR (a QR) and Share link. C, logged
+ *   CL-A     A creates a Cashlink; the screen shows NO code (typed codes retired, wallet#268), the
+ *            QR up front and Share link. C, logged
  *            in, opens the shared link: prompt, Add, "Voucher added", C's balance goes up, and A's
  *            open screen flips to "Claimed just now" on its own.
  *   CL-RACE  Two logged-in customers tap Add within 50 ms: exactly one "Voucher added", one
  *            "already added"; the claim service holds one `claimed` row; the portal reads Claimed.
  *   CL-OWN   A opens its own link: refused, nothing spent, and gateway-customer recorded no
  *            redemption declaration for that voucher.
- *   QR-AGAIN After a reload, the record page's Show QR again rebuilds the identical link from the
- *            code (nothing stored on the device), and Cancel cashback revokes it.
+ *   QR-AGAIN After a reload, the record page's Show QR again rebuilds the identical link through
+ *            the portal's authenticated `GET /cashback/{id}/link` (NIP-98), with no request to
+ *            by-code and nothing stored on the device; no Code row; Cancel Cashlink revokes it.
  *
- * Pacing: the portal's public metadata and by-code share one per-address limiter (10 a minute,
+ * Pacing: the portal's public metadata endpoint has a per-address limiter (10 a minute,
  * then 429 for 300 s), and every browser here shares the harness's address. Each step that reads
  * it books its reads with `budget()` first. Status checks go to the databases, never to it.
  *
@@ -105,7 +107,8 @@ async function context(browser: Browser, name: string): Promise<BrowserContext> 
       return route.fulfill({ status: res.status, headers: res.headers, body: res.body })
     })
   }
-  // Last, so it runs first: QR-AGAIN rebuilds the link through by-code (E2E_CAPTCHA_BYPASS).
+  // Kept until the cleanup phase removes by-code and its captcha (wallet#268 step 5). Nothing in
+  // this walk should reach by-code any more; QR-AGAIN asserts that.
   await bypassCaptcha(ctx)
   ctx.on('page', (p) => p.on('pageerror', (e) => errors.push(`${name}: ${e.message}`)))
   return ctx
@@ -172,10 +175,10 @@ async function issueFromScreen(owner: Page, amount: string): Promise<Issued | nu
     await owner.goto(`${BASE}/sell/cashback`, { waitUntil: 'load' })
   }
   await input.fill(amount)
-  await owner.getByRole('button', { name: 'Create cashback code' }).click()
+  await owner.getByRole('button', { name: 'Create Cashlink' }).click()
   const res = await generated.catch(() => null)
   const body = res?.ok() ? ((await res.json().catch(() => null)) as { cashbackId?: string; claimCode?: string } | null) : null
-  if (!body?.cashbackId || !body.claimCode) return null
+  if (!body?.cashbackId) return null
   const share = owner.getByRole('button', { name: /Share link/ })
   if (!(await share.waitFor({ timeout: 20_000 }).then(() => true, () => false))) return null
   await share.click()
@@ -183,7 +186,7 @@ async function issueFromScreen(owner: Page, amount: string): Promise<Issued | nu
     .then((h) => h.jsonValue() as Promise<string>, () => '')
   const m = /\/c\/([A-Za-z0-9_-]{8,64})#k=([A-Za-z0-9_-]{43})$/.exec(link)
   if (!m) return null
-  return { ref: m[1], key: m[2], link, code: body.claimCode, cashbackId: body.cashbackId }
+  return { ref: m[1], key: m[2], link, code: body.claimCode ?? '', cashbackId: body.cashbackId }
 }
 
 /** Open a claim link in an authed page and wait for the prompt or a closed state. */
@@ -191,7 +194,7 @@ async function openLink(page: Page, link: string): Promise<string> {
   await page.goto('about:blank')
   await page.goto(link, { waitUntil: 'load' })
   await page.waitForFunction(
-    () => /Add to my wallet|Voucher unavailable|Your own cashback|Voucher waiting/.test(document.body.innerText),
+    () => /Add to my wallet|Voucher unavailable|Your own Cashlink|Voucher waiting/.test(document.body.innerText),
     undefined, { timeout: 45_000 },
   ).catch(() => {})
   return text(page)
@@ -226,11 +229,11 @@ async function main() {
   check('CL-A the merchant screen hands out a wallet-origin link with the key in the fragment', one !== null && one.link.startsWith(`${BASE}/c/`))
   if (!one) return finish(browser)
   const ta = await text(a)
-  check('CL-A the code stays on screen beside the link (Q2)', ta.includes(one.code), ta.slice(0, 200))
+  check('CL-A the screen says Cashlink ready', /Cashlink ready/.test(ta), ta.slice(0, 200))
+  check('CL-A no typed code is shown (wallet#268)', !/CB-[A-Z0-9]{4,5}-[A-Z0-9]{2,5}/.test(ta) && (!one.code || !ta.includes(one.code)), ta.slice(0, 200))
+  check('CL-A no Copy code button', !(await a.getByRole('button', { name: /Copy code/ }).isVisible().catch(() => false)))
   check('CL-A the bearer note is shown', /Anyone with this link or QR can claim it once\. It works until /.test(ta))
-  check('CL-A the QR is hidden until asked for', !(await a.getByAltText(/QR code to claim/).isVisible().catch(() => false)))
-  await a.getByRole('button', { name: /Show QR/ }).click()
-  check('CL-A Show QR reveals a QR', await a.getByAltText(/QR code to claim/).waitFor({ timeout: 10_000 }).then(() => true, () => false))
+  check('CL-A the QR leads, without a tap', await a.getByAltText('QR code to claim this Cashlink').waitFor({ timeout: 10_000 }).then(() => true, () => false))
   check('CL-A the merchant page never puts the key in its own address bar', !a.url().includes(one.key), a.url())
   check('CL-A a fresh cashback reads Unclaimed', portalStatus(one.ref) === 'Unclaimed')
 
@@ -296,7 +299,7 @@ async function main() {
     // take the logged-out path, park the claim and show Login, which is phase 0's walk, not CL-OWN.
     const page = a
     const t = await openLink(page, three.link)
-    check("CL-OWN A is refused: its stall's own cashback", /your stall's own cashback/i.test(t), t.slice(0, 300))
+    check("CL-OWN A is refused: its stall's own Cashlink", /your stall's own Cashlink/i.test(t), t.slice(0, 300))
     check('CL-OWN A gets no Add button', !(await page.getByRole('button', { name: 'Add to my wallet' }).isVisible().catch(() => false)))
     await page.waitForTimeout(3_000)
     check('CL-OWN it stays Unclaimed', portalStatus(three.ref) === 'Unclaimed')
@@ -311,9 +314,22 @@ async function main() {
     await a.reload({ waitUntil: 'load' })
     const again = a.getByRole('button', { name: 'Show QR again' })
     check('QR-AGAIN the record page offers Show QR again', await again.waitFor({ timeout: 30_000 }).then(() => true, () => false), (await text(a)).slice(0, 300))
-    await budget(1, 'QR-AGAIN (by-code)')
+    const recordText = await text(a)
+    check('QR-AGAIN the record shows no typed code', !/CB-[A-Z0-9]{4,5}-[A-Z0-9]{2,5}/.test(recordText), recordText.slice(0, 300))
+    const lookups: string[] = []
+    const watch = (r: import('playwright').Request) => {
+      const u = r.url()
+      if (u.includes('/api/v1/portal/cashback/')) lookups.push(`${r.method()} ${new URL(u).pathname} ${r.headers()['authorization'] ? 'signed' : 'unsigned'}`)
+    }
+    a.on('request', watch)
+    const linkRes = a.waitForResponse((r) => r.url().endsWith(`/api/v1/portal/cashback/${three.cashbackId}/link`), { timeout: 20_000 }).catch(() => null)
     await again.click()
+    const lr = await linkRes
+    check('QR-AGAIN the authenticated lookup answers 200', lr?.status() === 200, String(lr?.status()))
     check('QR-AGAIN a QR is shown', await a.getByAltText(/QR code to claim/).waitFor({ timeout: 20_000 }).then(() => true, () => false), (await text(a)).slice(0, 300))
+    a.off('request', watch)
+    check('QR-AGAIN no request went to by-code', !lookups.some((l) => l.includes('/by-code/')), lookups.join('; '))
+    check('QR-AGAIN the link lookup was NIP-98 signed', lookups.some((l) => l === `GET /api/v1/portal/cashback/${three.cashbackId}/link signed`), lookups.join('; '))
     await a.evaluate(() => void ((window as unknown as { __shared: string[] }).__shared.length = 0))
     await a.getByRole('button', { name: /Share link/ }).click()
     const rebuilt = await a.evaluate(() => (window as unknown as { __shared: string[] }).__shared.at(-1) ?? '')
@@ -324,11 +340,11 @@ async function main() {
     }, three.key)
     check('QR-AGAIN the key is in no web storage on the merchant device', !stored)
     check('QR-AGAIN rebuilding spent nothing', portalStatus(three.ref) === 'Unclaimed')
-    await a.getByRole('button', { name: 'Cancel cashback' }).click()
-    check('QR-AGAIN Cancel asks first, saying nothing is refunded', /The value is not returned to you\./.test(await text(a)))
+    await a.getByRole('button', { name: 'Cancel Cashlink' }).click()
+    check('QR-AGAIN Cancel asks first, saying nothing is refunded', /Cancel this Cashlink\?[^]*The value is not returned to you\./.test(await text(a)))
     await a.getByRole('button', { name: 'Yes, cancel it' }).click()
     check('QR-AGAIN the portal reads Revoked', (await waitStatus(three.ref, 'Revoked')) === 'Revoked')
-    check('QR-AGAIN the page says it was cancelled', await a.getByText(/the code was cancelled/).waitFor({ timeout: 15_000 }).then(() => true, () => false))
+    check('QR-AGAIN the page says it was cancelled', await a.getByText(/the Cashlink was cancelled/).waitFor({ timeout: 15_000 }).then(() => true, () => false))
   }
 
   return finish(browser)

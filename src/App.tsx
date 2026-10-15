@@ -77,7 +77,7 @@ import { PayPage } from './pages/PayPage'
 import { SendPage } from './pages/SendPage'
 import { SendLinkPage } from './pages/SendLinkPage'
 import { ReceivePage } from './pages/ReceivePage'
-import { CashbackRedeemPage } from './pages/CashbackRedeemPage'
+import { CashbackCodeRetiredPage } from './pages/CashbackCodeRetiredPage'
 import { ProfilePage } from './pages/ProfilePage'
 import { SettingsPage } from './pages/SettingsPage'
 import { LedgerPage } from './pages/LedgerPage'
@@ -523,7 +523,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route path="/send" element={<SendPage pubkey={pubkey} />} />
         <Route path="/send/link" element={<SendLinkPage pubkey={pubkey} />} />
         <Route path="/receive" element={<ReceivePage profile={profile} />} />
-        <Route path="/receive/cashback" element={<CashbackRedeemPage />} />
+        <Route path="/receive/cashback" element={<CashbackCodeRetiredPage />} />
         {/* A claim link handed over by the hosted page. Present in BOTH trees:
             here it redeems, and in `PublicRoutes` it parks the claim and sends
             the customer to onboarding first. */}

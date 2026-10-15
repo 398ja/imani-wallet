@@ -163,7 +163,7 @@ What a terminal shows:
 | --- | --- | --- |
 | Till: its name and your stall's | yes | yes |
 | Redeem | yes | yes |
-| Sell, and cashback under it | no | yes, once it opened with a connection |
+| Sell, and Cashlinks under it | no | yes, once it opened with a connection |
 | Settings → Security → Take out of service | yes | yes |
 | Lock | yes | yes |
 | Your dashboard, coupons, records, backup, terminals | no | no |
@@ -186,8 +186,8 @@ Same as on the owner's own till, minus whatever the role excludes:
   coupon is signed for your stall by the terminal itself: its own key signs the
   sale, and the coupon carries the terminal's authority, which your stall's
   issuing service signed. The customer's wallet checks both, offline, and shows
-  the coupon as authorised by your stall. **Cashback** works the same way, from
-  **Give cashback instead** on the Sell screen.
+  the coupon as authorised by your stall. A **Cashlink** (cashback) works the same way, from
+  **Create a Cashlink instead** on the Sell screen.
 
   The gateway checks the terminal's authority on every Sell: a revoked terminal
   is refused within about a minute, even with its till still open, and the same
@@ -336,7 +336,7 @@ By design, and not merely by hiding a button:
 | *This authority is not for this device* | The authority belongs to another terminal or another stall | Ask the owner to set it up again |
 | *This terminal is no longer in service* | It was revoked | Ask the owner to add it again if that was a mistake |
 | Sell is missing on a full till / *Selling needs the network* | It opened without reaching the mint, so it is on reduced authority | Get it a connection, lock it and open it again |
-| *This terminal cannot sell right now* / *cannot issue cashback right now* | Reduced authority, or a redemption-only role | Lock and open it again with a connection, or ask the owner |
+| *This terminal cannot sell right now* / *cannot create a Cashlink right now* | Reduced authority, or a redemption-only role | Lock and open it again with a connection, or ask the owner |
 | *This terminal is locked or has lost its authority* | The till locked during the sale | Open it again and retry. Nothing was issued |
 | *Not trading while your subscription is inactive* | A lapsed subscription, not a revocation | Renew; terminals resume immediately |
 
@@ -439,7 +439,7 @@ No. It names your stall, and their wallet shows it as authorised by your stall.
 Which till sold it is on your records only.
 
 **Do sales made on a till show up in my records?**
-Yes. A till sends each sale (and each cashback code) to your stall, signed with
+Yes. A till sends each sale (and each Cashlink) to your stall, signed with
 its own key, and your phone files it in your history after checking that the
 till is one you signed. Your Vouchers list says *Sold on Front counter*. If the
 till was offline it keeps the record and sends it later; don't take it out of

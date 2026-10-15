@@ -130,7 +130,7 @@ async function issueCashback(owner: Page, amount: string): Promise<Issued | null
     await owner.goto(`${BASE}/sell/cashback`, { waitUntil: 'load' })
   }
   await input.fill(amount)
-  await owner.getByRole('button', { name: 'Create cashback code' }).click()
+  await owner.getByRole('button', { name: 'Create Cashlink' }).click()
   const res = await generated.catch(() => null)
   if (!res || !res.ok()) return null
   const body = (await res.json().catch(() => null)) as { cashbackId?: string; claimUrl?: string; claimKey?: string } | null
@@ -188,7 +188,7 @@ async function openLink(page: Page, link: string): Promise<string> {
   await page.goto('about:blank')
   await page.goto(link, { waitUntil: 'load' })
   await page.waitForFunction(
-    () => /Add to my wallet|Voucher unavailable|Your own cashback|Voucher waiting/.test(document.body.innerText),
+    () => /Add to my wallet|Voucher unavailable|Your own Cashlink|Voucher waiting/.test(document.body.innerText),
     undefined, { timeout: 45_000 },
   ).catch(() => {})
   return text(page)
@@ -282,7 +282,7 @@ async function main() {
   check('A issues a second cashback', two !== null)
   if (two) {
     const t6 = await openLink(a, two.link)
-    check("L6 A is refused: its stall's own cashback", /your stall's own cashback/i.test(t6), t6.slice(0, 300))
+    check("L6 A is refused: its stall's own Cashlink", /your stall's own Cashlink/i.test(t6), t6.slice(0, 300))
     check('L6 A gets no Add button', !(await a.getByRole('button', { name: 'Add to my wallet' }).isVisible().catch(() => false)))
     check('L6 it stays Unclaimed', (await portalStatus(two.ref)) === 'Unclaimed')
 

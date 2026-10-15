@@ -179,7 +179,10 @@ E2E_BASE=https://wallet.staging.398ja.xyz npx tsx e2e/probe-cashback-spend.mts
 ```
 
 A till issues a EUR cashback code on `/sell/cashback`, and a customer redeems it on
-`/receive/cashback` and pays the whole balance back to the till. It checks:
+`/receive/cashback` and pays the whole balance back to the till. (Out of date since typed codes
+were retired, wallet#268 phase 1: the till's screen shows no code and `/receive/cashback` takes
+none. The cleanup phase ports this probe, `probe-cashback-sev1` and `probe-spend-order` to the
+link path.) It checks:
 
 - the generate request carries an issuance warrant;
 - the response returns the voucher id;

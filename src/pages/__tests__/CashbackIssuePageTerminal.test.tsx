@@ -78,7 +78,7 @@ describe('a terminal reaching /sell/cashback', () => {
     show(till, SESSION_KIND.REDUCED)
 
     const alert = screen.getByRole('alert')
-    expect(alert.textContent).toMatch(/cannot issue cashback right now/)
+    expect(alert.textContent).toMatch(/cannot create a Cashlink right now/)
   })
 
   it('offers no amount field, so no code can be minted', () => {
