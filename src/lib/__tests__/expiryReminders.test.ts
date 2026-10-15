@@ -149,6 +149,29 @@ describe('runExpiryReminders: the bell', () => {
     expect(listNotifications(ME).map((i) => i.id)).toEqual(['coupon-expiring:new:1d', 'coupon-expiring:old:7d'])
   })
 
+  it('a re-key AFTER the 1-day entry does not file a second 1-day entry (#269 review, M5)', () => {
+    const before = row('old', 12 * HOUR_MS)
+    runExpiryReminders(ME, [before], { now: NOW, names })
+    dismissBanner(ME, [before], NOW)
+    carryExpiryReminders('old', 'new')
+    const change = { ...before, token_id: 'new', token: 'cashuB-new' }
+    runExpiryReminders(ME, [change], { now: NOW + HOUR_MS, names })
+    expect(listNotifications(ME).map((i) => i.id)).toEqual(['coupon-expiring:old:1d'])
+    expect(bannerState(ME, [change], NOW + HOUR_MS).show).toBe(false)
+  })
+
+  it("re-keying coupon A does not inherit coupon B's 1-day entry (#269 review, M4)", () => {
+    const a = row('aaa', 6 * DAY_MS)
+    const b = row('bbb', 12 * HOUR_MS)
+    runExpiryReminders(ME, [a, b], { now: NOW, names })
+    carryExpiryReminders('aaa', 'aaa2')
+    const a2 = { ...a, token_id: 'aaa2', token: 'cashuB-aaa2' }
+    // A reaches its last day: its 1-day entry is legitimate and must still fire.
+    runExpiryReminders(ME, [a2, b], { now: NOW + 5 * DAY_MS + HOUR_MS, names })
+    expect(listNotifications(ME).map((i) => i.id)).toContain('coupon-expiring:aaa2:1d')
+    expect(listNotifications(ME).filter((i) => i.id.endsWith(':1d'))).toHaveLength(2)
+  })
+
   it('carryExpiryReminders touches only accounts that had filed the old coupon, and never throws', () => {
     const OTHER = 'f'.repeat(64)
     runExpiryReminders(ME, [row('old', 6 * DAY_MS)], { now: NOW, names })
