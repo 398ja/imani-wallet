@@ -12,6 +12,7 @@ import { hostname } from 'node:os'
 import { getDecimals } from '@imani/money'
 
 import { discharge, type Obligation, type Ports } from './discharge'
+import { countAttempt } from './metrics'
 import type { PurchasesApi, OwedPurchase } from './purchasesApi'
 
 export interface WorkerDeps {
@@ -66,6 +67,7 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
       // We know a debt is owed and cannot tell which stall owes it, so there is
       // no credential to look up. Left for a human rather than guessed at.
       result.skipped += 1
+      countAttempt('skipped')
       continue
     }
 
@@ -74,6 +76,7 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
       // and marking it would hide a misconfiguration behind a stream of
       // failures.
       result.skipped += 1
+      countAttempt('skipped')
       continue
     }
 
@@ -82,6 +85,7 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
     // work, and never writes a note on every pass.
     if ((await deps.ports.credentialFor(purchase.stallPubkey)) === null) {
       result.skipped += 1
+      countAttempt('skipped')
       continue
     }
 
@@ -91,8 +95,13 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
     // but 'claimed', an unreachable API included, means do not mint.
     const claim = await deps.api.claim(purchase.eventId, worker)
     if (claim !== 'claimed') {
-      if (claim === 'unreachable') result.deferred += 1
-      else result.skipped += 1
+      if (claim === 'unreachable') {
+        result.deferred += 1
+        countAttempt('claim_unreachable')
+      } else {
+        result.skipped += 1
+        countAttempt('claim_lost')
+      }
       continue
     }
 
@@ -107,12 +116,14 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
         )
         if (accepted === 'accepted') {
           result.discharged += 1
+          countAttempt('discharged')
         } else {
           // We issued, and the debt did not close. Never retried as a fresh
           // issuance: the coupon exists, and a second pass would mint another
           // for the same payment. Recorded with the voucher id so a person can
           // find the coupon that was already made.
           result.deferred += 1
+          countAttempt('discharge_rejected')
           await deps.api.reportFailure(
             purchase.eventId,
             `issued voucher ${outcome.voucherId} but the discharge was ${accepted}`,
@@ -130,6 +141,7 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
         // Issued, not delivered. Same rule: the coupon exists, so this must
         // never look like an unminted debt.
         result.deferred += 1
+        countAttempt('undelivered')
         await deps.api.reportFailure(
           purchase.eventId,
           `issued voucher ${outcome.voucherId} but delivery failed: ${outcome.reason}`,
@@ -140,11 +152,13 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
 
       case 'blocked':
         result.blocked += 1
+        countAttempt('blocked')
         await deps.api.reportFailure(purchase.eventId, outcome.reason, true, undefined, { worker })
         break
 
       case 'owed':
         result.deferred += 1
+        countAttempt('owed')
         await deps.api.reportFailure(purchase.eventId, outcome.reason, false, undefined, {
           worker,
           keepClaim: outcome.ambiguous,
@@ -156,6 +170,7 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
         // stall re-enrolling mid-pass). Nothing was minted, so the claim is
         // released back to OWED rather than left to lapse.
         result.skipped += 1
+        countAttempt('manual')
         await deps.api.reportFailure(purchase.eventId, 'no issuing credential at mint time', false, undefined, {
           worker,
         })
