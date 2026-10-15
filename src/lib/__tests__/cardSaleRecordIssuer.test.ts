@@ -132,6 +132,49 @@ describe('a discharge files the card sale into the stall ledger', () => {
     expect(outcome.kind).toBe('discharged')
   })
 
+  it('a port that throws SYNCHRONOUSLY never changes the outcome either (review of #278)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(reply(201, { voucher_id: 'v4', issuer_id: STALL, token: 'cashuB4' }))
+        .mockResolvedValueOnce(reply(200, { event_id: 'e4' })),
+    )
+    const outcome = await discharge('http://gw', OBLIGATION, {
+      credentialFor: async () => CREDENTIAL,
+      tokenFor: async () => '',
+      now: () => NOW,
+      sleep: async () => {},
+      fileSale: (() => {
+        throw new Error('sync boom')
+      }) as unknown as Ports['fileSale'],
+    })
+    expect(outcome.kind).toBe('discharged')
+  })
+
+  it('the filed record carries the coupon expiry, so the merchant record does not read "No expiry"', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(reply(201, { voucher_id: 'v5', issuer_id: STALL, token: 'cashuB5' }))
+        .mockResolvedValueOnce(reply(200, { event_id: 'e5' })),
+    )
+    const sink = vi.fn().mockResolvedValue(new Response('{}'))
+    await discharge('http://gw', OBLIGATION, {
+      credentialFor: async () => CREDENTIAL,
+      tokenFor: async () => '',
+      now: () => NOW,
+      sleep: async () => {},
+      fileSale: (credential, sale) => sendSaleRecord('http://gw', credential, sale, sink, NOW),
+    })
+    const [, init] = sink.mock.calls[0] as [string, RequestInit]
+    const opened = unwrapSealed(postedWrap(init), hexToBytes(STALL_SK))!
+    const tx = toTransaction(saleRowsFromRumor(opened.rumor, opened.sealer, STALL)!.rows[0])
+    // 365 days (DEFAULT_EXPIRES_IN_DAYS) from the mint, in ms on the row.
+    expect(tx.expiresAt).toBe((Math.floor(NOW / 1000) + 365 * 86_400) * 1000)
+  })
+
   it('files nothing when nothing was minted', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(reply(400, { error: 'bad' })))
     const fileSale = vi.fn()
