@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The stall map uses OpenStreetMap tiles instead of an embedded map frame** (#263). `LocationMap`
+  is now a static map: 2x2 `<img>` tiles from `https://tile.openstreetmap.org/{z}/{x}/{y}.png` at
+  zoom 16, the pin drawn at the exact pixel, visible "© OpenStreetMap contributors" attribution, and
+  the whole map links to "Open in Maps" (`geo:` in the Android app, openstreetmap.org on the web).
+  No iframe, no library, no third-party script, so no third-party cookies are set without consent
+  (PECR). Tile requests send the IP address and an origin Referer to the OpenStreetMap Foundation
+  and set no cookies. The tile URL is configurable: `map_tile_url` on `/api/v1/config` at runtime,
+  else `VITE_MAP_TILE_URL` at build time, else OSMF. The CSP no longer needs a `frame-src` for the
+  map (the imani-deploy change ships with or after this release).
+
 ## [0.25.0] - 2026-10-14
 
 The wallet sends the edge bot-check token with the cashback by-code lookup (#257), and two
