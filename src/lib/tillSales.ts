@@ -3,7 +3,8 @@ import type { TransactionRow } from '@imani/wallet-storage'
 
 import { toContent, toRow, type HistoryContent } from './txRecords'
 import { toTransaction } from './transactions'
-import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
+import { parseIssuanceWarrant, verifyIssuanceWarrant, type IssuanceWarrant } from './issuanceWarrant'
+import { verifyIssuerDelegation } from './issuerDelegation'
 import { parseCredentialSecret } from './terminalWarrant'
 import { wrapMessage, type Rumor, type WrapPublisher } from './terminalDelivery'
 import { allTerminals, noteTerminalUse } from './terminalRoster'
@@ -271,6 +272,10 @@ export async function flushSaleOutbox(sealWith: SealWith, publisher: WrapPublish
 export type SaleRefusal =
   | 'not-a-terminal-sale'
   | 'sealer-not-lock'
+  /** A `delegated` row sealed by a key other than the delegation's `p` (#275). */
+  | 'sealer-not-delegate'
+  /** A `delegated` row with no processor reference: not a card sale, so not the issuer's to file. */
+  | 'not-a-card-sale'
   | 'warrant-unwarranted'
   | 'warrant-failed'
   | 'unreadable'
@@ -318,6 +323,12 @@ export function saleRowsFromRumor(
     const content = (raw && typeof raw === 'object' ? raw : {}) as HistoryContent
     const id = rowIdOf(content)
     const warrant = parseIssuanceWarrant(content.issuance_warrant)
+    if (id && warrant.state === 'present' && warrant.form === 'delegated' && content.type === 'issued') {
+      const filed = delegatedSaleRow(id, content, warrant, k, stall)
+      if ('reason' in filed) out.refused.push({ id, reason: filed.reason })
+      else out.rows.push(filed.row)
+      continue
+    }
     if (!id || warrant.state !== 'present' || warrant.form !== 'terminal') {
       out.refused.push({ id: id ?? 'unknown', reason: 'not-a-terminal-sale' })
       continue
@@ -355,6 +366,48 @@ export function saleRowsFromRumor(
     } as unknown as TransactionRow)
   }
   return out
+}
+
+/**
+ * A card sale the purchase issuer sent (imani-wallet#275, audit gap D).
+ *
+ * The issuer is not a till: it holds no credential the stall attested, so it proves itself the
+ * way the till does when it redeems the coupon, with the stall's own signed delegation inside the
+ * warrant (`issuerDelegation.ts`, the same checks gateway-customer#231 applies):
+ *
+ * 1. the delegation is a kind-30078 `imani:issuer-delegation` event whose NIP-01 id and sig verify,
+ *    signed by THIS stall, scope `coupon:issue`, in force when the sale was made;
+ * 2. the seal is the delegation's `p`, the key the stall delegated to (`sealer-not-delegate`);
+ * 3. the delegate's signature over the sale and its processor reference verifies.
+ *
+ * Filed with no `terminalPubkey`: naming the issuer as a till would put it on the roster.
+ */
+function delegatedSaleRow(
+  id: string,
+  content: HistoryContent,
+  warrant: Extract<IssuanceWarrant, { form: 'delegated' }>,
+  sealer: string,
+  stall: string,
+): { row: TransactionRow } | { reason: SaleRefusal } {
+  if (!warrant.reference) return { reason: 'not-a-card-sale' }
+  const { terminal_pubkey: _ignored, ...rest } = content
+  void _ignored
+  const row = toRow(id, rest) as unknown as Record<string, unknown>
+  const tx = toTransaction(row as unknown as TransactionRow)
+  // Judged at the sale time, as the ledger judges it (#176 review): a lapsed delegation does not
+  // un-authorise a past card sale. A row with no time is judged now.
+  const when = tx.at > 0 ? { issuedAt: tx.at } : Date.now()
+  const delegation = verifyIssuerDelegation(warrant.delegation, stall, when)
+  if (!delegation.ok) return { reason: 'warrant-failed' }
+  if (delegation.delegatePubkey.toLowerCase() !== sealer) return { reason: 'sealer-not-delegate' }
+  const verdict = verifyIssuanceWarrant(
+    warrant,
+    stall,
+    { faceValueMinor: tx.amount, unit: tx.unit, faceDecimals: tx.decimals },
+    tx.at > 0 ? { issuedAt: tx.at } : {},
+  )
+  if (verdict.verdict !== 'verified') return { reason: 'warrant-failed' }
+  return { row: { ...row, merchantId: stall, direction: 'out' } as unknown as TransactionRow }
 }
 
 export interface CollectDeps {
