@@ -206,18 +206,27 @@ export async function discharge(
   // record that did not land is retried; until then the pull fallback
   // (`resendSaleRecords`) re-sends it.
   if (ports.fileSale) {
-    await ports
-      .fileSale(credential, {
+    const at = ports.now()
+    // try/await, not `.catch`: a port that throws synchronously must not escape
+    // either, because the coupon already exists (review of #278).
+    try {
+      await ports.fileSale(credential, {
         voucherId: coupon.voucherId,
         faceValue: obligation.faceValue,
         faceUnit: obligation.faceUnit,
         faceDecimals: obligation.faceDecimals,
         memo: obligation.memo,
         recipientPubkey: obligation.recipient.kind === 'pubkey' ? obligation.recipient.pubkey : undefined,
-        at: ports.now(),
+        at,
+        // The gateway counts `expires_in_days` from its own mint instant, so this is
+        // the coupon's expiry to within the mint's latency. Without it the merchant
+        // record reads "No expiry" for a coupon that expires (S1 showed the date).
+        expiresAt: Math.floor(at / 1000) + expiresInDays * 86_400,
         issuanceWarrant,
       })
-      .catch(() => false)
+    } catch {
+      // Best effort: the pull fallback re-sends it.
+    }
   }
 
   let token = coupon.token
