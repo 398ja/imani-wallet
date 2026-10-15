@@ -27,10 +27,17 @@ export function useExpiryReminders(pubkey: string, ready: boolean): void {
     check()
     const timer = setInterval(check, RECHECK_MS)
     const unsubscribe = onWalletChanged(check)
+    // A phone woken after days: background tabs throttle timers, so the hourly tick may not have
+    // run. Coming back to the app is the "open" a customer means.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') check()
+    }
+    document.addEventListener('visibilitychange', onVisible)
     return () => {
       live = false
       clearInterval(timer)
       unsubscribe()
+      document.removeEventListener('visibilitychange', onVisible)
     }
   }, [pubkey, ready])
 }
