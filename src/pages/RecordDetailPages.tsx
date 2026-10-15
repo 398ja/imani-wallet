@@ -26,7 +26,7 @@ import {
   recheckCashbackRowOnOpen,
   recordCashbackStatus,
 } from '../lib/wallet'
-import { issuanceRatioOf, isRedeemed } from '../lib/merchants'
+import { issuanceRatioOf, isSpent } from '../lib/merchants'
 import { countdown, expiryState, isExpiringSoon } from '../lib/couponExpiry'
 import { formatFace, formatDate, formatSats } from '../lib/format'
 import { toCouponPass, TERMS, EMPTY_BRANDING } from '../lib/pass'
@@ -108,7 +108,10 @@ export function CouponPage() {
   // stored status says: storage keeps the status of the proofs, and they are unspent; what ended
   // is the stall's promise to honour them.
   const expiry = expiryState(row)
-  const expired = expiry.kind === 'expired' && !isRedeemed(row)
+  // `isSpent`, not `isRedeemed`: a coupon swapped back to sats, spent or refused as redeemed in
+  // full is not money either, so it is neither "expired" nor told to "use it before" (#269 review).
+  const spent = isSpent(row)
+  const expired = expiry.kind === 'expired' && !spent
   const status = expired ? 'Expired' : (row.status ?? 'active')
   const expiresValue =
     expiry.kind === 'live'
@@ -161,7 +164,7 @@ export function CouponPage() {
           This voucher expired on {expiry.dateText}. It can no longer be spent.
         </p>
       )}
-      {!isRedeemed(row) && isExpiringSoon(expiry) && (
+      {!spent && isExpiringSoon(expiry) && (
         <p
           role="status"
           data-expiry-tone={expiry.tone}

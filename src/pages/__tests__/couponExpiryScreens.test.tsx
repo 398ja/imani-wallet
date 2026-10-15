@@ -118,6 +118,23 @@ describe('coupon detail (#265)', () => {
     expect(screen.queryByText(/^Use it before/)).toBeNull()
   })
 
+  it('a coupon already spent another way (swapped back, spent) gets no "Use it before" and keeps its status', async () => {
+    // Review of #269: the gate was `isRedeemed`, which only knows 'redeemed', so a swapped-back or
+    // spent coupon (reachable from an older bell entry) was told to "use it before" a date, and
+    // once past it read "Expired / It can no longer be spent" instead of what happened to it.
+    h.rows = [
+      row('swapped', 3 * DAY, { status: 'swapped_to_sats' }),
+      row('spentOld', -3_600_000, { status: 'spent' }),
+    ]
+    openCoupon('swapped')
+    await screen.findByText('swapped_to_sats')
+    expect(screen.queryByText(/^Use it before/)).toBeNull()
+    cleanup()
+    openCoupon('spentOld')
+    await screen.findByText('spent')
+    expect(screen.queryByText(/It can no longer be spent\.$/)).toBeNull()
+  })
+
   it('a coupon with no expiry still says so', async () => {
     h.rows = [row('never', undefined)]
     openCoupon('never')
