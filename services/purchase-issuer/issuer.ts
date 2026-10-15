@@ -124,9 +124,14 @@ export interface IssuePlan {
   issuanceWarrant?: string
 }
 
-/** The key a purchase mints under. One purchase, one key, forever. */
-export function purchaseIdempotencyKey(eventId: string): string {
-  return `purchase:${eventId}`
+/**
+ * The key a purchase mints under: the PAYMENT INTENT, not the webhook event (imani-wallet#274,
+ * card audit U8). Two events for one payment, or a reconciler re-drive, are one payment and must
+ * mint under one key. gc#232 replays the recorded voucher for the warrant nonce (also from the
+ * pi_) after the 24 h idempotency window, so this key is no longer the only guard.
+ */
+export function purchaseIdempotencyKey(paymentIntent: string): string {
+  return `purchase:pi:${paymentIntent}`
 }
 
 export interface IssuedCoupon {
@@ -146,12 +151,19 @@ export class IssuanceFailed extends Error {
    * an unreadable body). False for a definite refusal (4xx).
    */
   readonly ambiguous: boolean
+  /**
+   * gc answered 409 UNRECORDED (gc#230/#232): this warrant nonce was spent by a run that never
+   * recorded its voucher. Whether a coupon exists is unknown, so this is NEVER retried: the row
+   * is parked `gateway_unrecorded` for a person (imani-wallet#274).
+   */
+  readonly unrecorded: boolean
 
-  constructor(message: string, retryable: boolean, ambiguous = retryable) {
+  constructor(message: string, retryable: boolean, ambiguous = retryable, unrecorded = false) {
     super(message)
     this.name = 'IssuanceFailed'
     this.retryable = retryable
     this.ambiguous = ambiguous
+    this.unrecorded = unrecorded
   }
 }
 
@@ -253,6 +265,10 @@ export async function issueAsStall(
   }
 
   const raw = await response.text()
+
+  if (response.status === 409 && /UNRECORDED/.test(raw)) {
+    throw new IssuanceFailed(explain(response.status, raw), false, true, true)
+  }
 
   if (response.status !== 200 && response.status !== 201) {
     // A 4xx (429 included) is a refusal: nothing was minted. A 5xx may have
