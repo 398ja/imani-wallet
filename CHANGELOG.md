@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-10-15
+
+Payments observability for the purchase issuer (imani-deploy#210). The wallet app itself is
+unchanged: only `services/purchase-issuer` changes, with no new dependency.
+
+### Added
+
+- **`GET /metrics` on the purchase issuer** (#272), on the same internal port as `/health`.
+  `imani_purchase_issuer_attempts_total{outcome}` (discharged, discharge_rejected, undelivered,
+  blocked, owed, manual, skipped, claim_lost, claim_unreachable) and
+  `imani_purchase_issuer_passes_total{result}`. Labels are closed sets: no pubkey, amount or
+  reference. imani-deploy scrapes it as the `purchase-issuer` job.
+
 ## [0.26.0] - 2026-10-15
 
 The stall map comes from OpenStreetMap tiles instead of a Google frame (#263), customers see and are
