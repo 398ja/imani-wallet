@@ -42,6 +42,7 @@ import { createServer } from 'node:http'
 import { confirmCredential, tokenFor, FileCredentialStore } from './adapters'
 import { readConfig, ConfigError, type IssuerConfig } from './config'
 import type { Ports } from './discharge'
+import { countPass, renderMetrics } from './metrics'
 import { PurchasesApi, ReportLostError } from './purchasesApi'
 import { CredentialVault } from './vault'
 import { runPass, type WorkerDeps } from './worker'
@@ -131,6 +132,7 @@ export async function loop(deps: WorkerDeps, intervalMs: number): Promise<void> 
     try {
       const result = await runPass(deps)
       lastPass = { at: Date.now(), ...result }
+      countPass('ok')
       if (result.discharged > 0 || result.blocked > 0) {
         // Quiet on the ordinary case, loud on the two that matter. A line per
         // pass would be 5,760 lines a day saying nothing happened, and
@@ -148,6 +150,7 @@ export async function loop(deps: WorkerDeps, intervalMs: number): Promise<void> 
         // Fail closed (imani-wallet#96). Loud, structured, and the loop stops.
         halted = message
         running = false
+        countPass('halted')
         console.error(
           JSON.stringify({
             event: 'purchase_issuer_halted',
@@ -162,6 +165,7 @@ export async function loop(deps: WorkerDeps, intervalMs: number): Promise<void> 
       // Recorded on the health endpoint as well as logged, so a persistently
       // failing pass is visible to a probe rather than only to whoever reads
       // container output.
+      countPass('failed')
       console.error('[purchase-issuer] pass failed', error)
     }
 
@@ -199,6 +203,13 @@ export const server = createServer((req, res) => {
     }
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ status: 'ok', lastPass }))
+    return
+  }
+  if (req.url === '/metrics') {
+    // Counts by closed outcome only (imani-deploy#210): no id, stall or amount.
+    // Scraped on the internal network; the edge does not route here.
+    res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4' })
+    res.end(renderMetrics())
     return
   }
   res.writeHead(404, { 'Content-Type': 'application/json' })
