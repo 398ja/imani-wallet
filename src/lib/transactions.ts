@@ -655,7 +655,7 @@ export function buildCashbackTransaction(input: {
     cashbackId: input.cashbackId,
     claimCode: input.claimCode,
     ...(input.voucherId ? { voucherId: input.voucherId } : {}),
-    memo: input.memo || 'Cashback issued',
+    memo: input.memo || 'Cashlink issued',
     expiresAt: input.expiresAt,
     // Deliberately no status. The gateway has just minted it, so `Unclaimed` is
     // what it would say — but writing that here would make an unfetched row
@@ -713,6 +713,6 @@ export function isVoucherIssuance(row: Pick<WalletTransaction, 'type'>): boolean
 export function transactionLabel(tx: WalletTransaction): string {
   if (tx.type === 'payment') return 'Paid'
   if (tx.type === 'sent') return 'Sent'
-  if (tx.type === 'cashback') return 'Cashback'
+  if (tx.type === 'cashback') return 'Cashlink'
   return tx.type === 'issued' ? 'Issued' : 'Received'
 }

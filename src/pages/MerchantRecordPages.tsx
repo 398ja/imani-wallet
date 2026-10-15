@@ -297,7 +297,7 @@ export function IssuedCouponsPage({ stallPubkey }: { stallPubkey?: string } = {}
         <EmptyRow>
           {expiredCount > 0 && !includeExpired
             ? 'Nothing still valid. Turn on “Include expired” to see the ones that have run out.'
-            : 'None yet. Vouchers you sell and cashback you issue show up here.'}
+            : 'None yet. Vouchers you sell and Cashlinks you create show up here.'}
         </EmptyRow>
       ) : (
         visible.map((tx) => <IssuedCouponRow key={tx.id} tx={tx} now={state?.loadedAt ?? 0} stallPubkey={stallPubkey} />)
@@ -436,7 +436,7 @@ export function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
         <p className="text-amount text-mono-900 dark:text-mono-50">{money(row.amount)}</p>
         <p className="truncate text-sm text-mono-500">{row.memo || 'Voucher issued'}</p>
         {cashbackClaimLabel(row) ? (
-          <p className="text-sm text-mono-500">Cashback code · {cashbackClaimLabel(row)}</p>
+          <p className="text-sm text-mono-500">Cashlink · {cashbackClaimLabel(row)}</p>
         ) : null}
 
         <ClaimedBar
@@ -515,7 +515,7 @@ export function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
         >
           <span className="shrink-0 text-sm text-mono-500">Transaction</span>
           <span className="flex min-w-0 items-center gap-1 text-right text-mono-900 dark:text-mono-50">
-            {row.type === 'cashback' ? 'The cashback this came from' : 'The sale this came from'}
+            {row.type === 'cashback' ? 'The Cashlink this came from' : 'The sale this came from'}
             <ChevronRight className="h-4 w-4 shrink-0 text-mono-400" />
           </span>
         </Link>

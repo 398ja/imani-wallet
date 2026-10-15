@@ -1549,7 +1549,7 @@ describe('sendVouchers and payRequest', () => {
       const link = { k: 'A'.repeat(42) + 'E', x: 1_900_000_000, status: 'outstanding' as const, i: 3 }
       await expect(
         sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant: { ...merchant, pubkey: PAYER }, unit: 'EUR', amount: 250, link }),
-      ).rejects.toThrow(/use Cashback/)
+      ).rejects.toThrow(/create a Cashlink from Sell/)
       expect(sent).toEqual([])
     })
 

@@ -106,7 +106,7 @@ describe('send by link from a merchant', () => {
 
   it('says why for the sender’s own stall, and offers another voucher', async () => {
     draw(`/send/link?from=${ME}`)
-    await waitFor(() => expect(screen.getByText(/use Cashback/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByText(/create a Cashlink from Sell/)).toBeTruthy())
     expect(screen.queryByText('Which voucher?')).toBeNull()
     expect(screen.queryByText('You have no vouchers to send.')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Choose another voucher' }))
@@ -145,7 +145,7 @@ describe('SendByLinkOption', () => {
         </Routes>
       </MemoryRouter>,
     )
-    fireEvent.click(screen.getByRole('button', { name: /Anyone, by link/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Anyone, as a Cashlink/ }))
   }
 
   it('carries from', () => {

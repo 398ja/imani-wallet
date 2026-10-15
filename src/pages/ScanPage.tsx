@@ -7,6 +7,7 @@ import { Button, Screen, BackLink, PageHeader, Alert, Input } from '../component
 import { toRecipientPubkey } from '../lib/issue'
 import { readClipboard } from '../lib/native'
 import { scannerBlocked } from '../lib/scannerSupport'
+import { CODES_RETIRED, isRetiredCashbackCode } from '../lib/cashlinkCopy'
 
 /**
  * Scan: the one camera for both things a customer points it at.
@@ -52,6 +53,12 @@ export function ScanPage() {
       if (resolving.current) return
       resolving.current = true
       try {
+        // A typed cashback code (`CB-…`). Codes are retired (wallet#268): say so and look
+        // nothing up. Checked first so the code never reaches the address resolver.
+        if (isRetiredCashbackCode(text)) {
+          setError(CODES_RETIRED)
+          return
+        }
         if (new PaymentRequestHandler().validate(text)) {
           navigate(`/pay?paymentRequest=${encodeURIComponent(text.trim())}`)
           return

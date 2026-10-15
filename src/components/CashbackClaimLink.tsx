@@ -17,7 +17,7 @@ export function ClaimLinkPanel({
   link,
   expiresAt,
   initiallyShown = false,
-  qrAlt = 'QR code to claim this cashback',
+  qrAlt = 'QR code to claim this Cashlink',
 }: {
   link: string
   expiresAt?: string | number
@@ -94,7 +94,7 @@ function useQrDataUrl(text: string | null): string | null {
 
 const CANCEL_FAILURE: Record<Exclude<RevokeOutcome['kind'], 'revoked'>, string> = {
   not_revocable: 'It could not be cancelled: the customer may already have claimed it.',
-  failed: 'Could not cancel just now. The cashback may still be claimable. Try again.',
+  failed: 'Could not cancel just now. The Cashlink may still be claimable. Try again.',
 }
 
 /**
@@ -135,7 +135,7 @@ export function CancelCashback({
       <div className="space-y-2">
         {error && <p className="text-sm text-red-700 dark:text-red-300">{error}</p>}
         <Button variant="ghost" className="w-full" onClick={() => setConfirming(true)}>
-          Cancel cashback
+          Cancel Cashlink
         </Button>
       </div>
     )

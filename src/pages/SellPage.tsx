@@ -36,7 +36,7 @@ import { NOTE_MAX_CHARS, clampNote } from '../lib/note'
  * it show up in the customer's wallet without them doing anything — and what
  * requires them to have a wallet at all.
  *
- * For the customer who does not, `/sell/cashback` issues a bearer code instead.
+ * For the customer who does not, `/sell/cashback` creates a Cashlink (a bearer link and QR) instead.
  * It is the deliberate opposite trade: no recipient, no delivery, and whoever
  * repeats the code back gets the money.
  */
@@ -138,7 +138,7 @@ function CashbackLink() {
         to="/sell/cashback"
         className="pressable mt-1 inline-block text-sm font-medium text-mono-900 underline-offset-4 hover:underline dark:text-mono-50"
       >
-        Give cashback instead
+        Create a Cashlink instead
       </Link>
     </div>
   )

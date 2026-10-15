@@ -124,7 +124,7 @@ describe('opening a gift link', () => {
     expect(text).toContain("Ana's Bakery")
     expect(text).toContain('✓ verified stall')
     expect(text).toMatch(/5[.,]00/)
-    expect(text).toContain('Sent by Bob via link')
+    expect(text).toContain('Cashlink from Bob')
     expect(text).toContain('Claim by')
   })
 

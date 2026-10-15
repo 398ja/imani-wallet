@@ -10,7 +10,7 @@ import { giftStatusLabel, type GiftLinkRecord, type GiftLinkStatus } from '../li
 const TAKE_BACK_FAILURE: Record<Exclude<TakeBackOutcome['kind'], 'ok'>, string> = {
   claimed: 'It was already claimed, so there is nothing to take back.',
   held: 'It could not be taken back here: its mint is not one this wallet uses.',
-  not_found: 'We could not find this link’s voucher just now. Try again in a moment.',
+  not_found: 'We could not find this Cashlink’s voucher just now. Try again in a moment.',
   failed: 'Could not take it back just now. Try again.',
   // Owner rule 2026-10-13. A merchant account cannot send another stall's voucher by link, so this
   // only meets a link made before the rule, or before the account opened a stall.
@@ -47,17 +47,17 @@ export function GiftLinkSection({ link }: { link: GiftLinkRecord | undefined }) 
   }
 
   return (
-    <ListSection title="Link">
+    <ListSection title="Cashlink">
       <DetailRow label="Status" value={giftStatusLabel(link)} />
       <DetailRow label="Expires" value={formatDate(link.x * 1000)} />
       {open && url && (
         <div className="space-y-2 p-4">
-          <ClaimLinkPanel link={url} expiresAt={link.x * 1000} qrAlt="QR code to claim this voucher" />
+          <ClaimLinkPanel link={url} expiresAt={link.x * 1000} qrAlt="QR code to claim this Cashlink" />
           {message && <p className="text-sm text-red-700 dark:text-red-300">{message}</p>}
           {confirming ? (
             <div className="space-y-2">
               <p className="text-sm text-mono-600 dark:text-mono-300">
-                Take it back? The link stops working and the voucher returns to your wallet.
+                Take it back? The Cashlink stops working and the voucher returns to your wallet.
               </p>
               <Button variant="primary" className="w-full" disabled={busy} onClick={() => void run()}>
                 {busy ? 'Taking it back…' : 'Take it back'}

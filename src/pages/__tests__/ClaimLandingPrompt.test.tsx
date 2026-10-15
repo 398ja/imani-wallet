@@ -263,7 +263,7 @@ describe('who the prompt is for', () => {
 
   it('a merchant opening its OWN cashback link is refused, and nothing is redeemed', async () => {
     open(ISSUER)
-    await screen.findByText(/your stall's own cashback/i)
+    await screen.findByText(/your stall's own Cashlink/i)
 
     expect(screen.queryByRole('button', { name: 'Add to my wallet' })).toBeNull()
     expect(redeemClaimRef).not.toHaveBeenCalled()

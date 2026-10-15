@@ -191,8 +191,8 @@ interface GenerateResponse {
  * will not help, and the usual cause is a device whose key is not the stall's.
  */
 export const WARRANT_REFUSED_MESSAGE =
-  'The gateway did not accept this device\u2019s authorisation for the cashback. ' +
-  'No code was created. Sign in on the stall\u2019s own device and try again.'
+  'The gateway did not accept this device\u2019s authorisation for the Cashlink. ' +
+  'No Cashlink was created. Sign in on the stall\u2019s own device and try again.'
 
 /**
  * What a merchant sees when the portal already holds this issue under the
@@ -200,7 +200,7 @@ export const WARRANT_REFUSED_MESSAGE =
  * retry. Nothing new was minted.
  */
 export const IDEMPOTENCY_CONFLICT_MESSAGE =
-  'This cashback was already being created with different details, so no second code was made. ' +
+  'This Cashlink was already being created with different details, so no second one was made. ' +
   'Check your history before creating it again.'
 
 /**
@@ -302,13 +302,13 @@ export async function generateCashback(params: {
     const code = envelopeCode(text)
     const message =
       ENVELOPE_MESSAGES[code ?? ''] ??
-      failureDetailFrom(text, response.status, 'Could not create the cashback code')
+      failureDetailFrom(text, response.status, 'Could not create the Cashlink')
     throw new CashbackGenerateError(message, response.status, code)
   }
 
   const body = (await response.json()) as GenerateResponse
   const claimCode = typeof body.claimCode === 'string' ? body.claimCode : null
-  if (!claimCode) throw new Error('The gateway issued no cashback code.')
+  if (!claimCode) throw new Error('The gateway issued no Cashlink.')
 
   return {
     cashbackId: String(body.cashbackId ?? ''),
@@ -975,7 +975,50 @@ async function commitToken(token: string): Promise<CommitOutcome> {
 }
 
 /**
+ * Show QR again (spec 4.1, wallet#268): the claim link of one of this stall's own open Cashlinks,
+ * from the portal's authenticated, owner-scoped `GET /cashback/{id}/link` (NIP-98).
+ *
+ * Replaces the public `by-code` lookup for this button: no typed code, no captcha, and another
+ * stall's id is a 404. Non-destructive: the portal rebuilds the key from what it already holds and
+ * spends nothing. The ref and key come back as parts for `formatCashbackLink`, held in memory only.
+ */
+export async function fetchCashbackLink(
+  cashbackId: string,
+): Promise<{ kind: 'ok'; ref: string; key: string } | RedeemFailure> {
+  const path = `/api/v1/portal/cashback/${encodeURIComponent(cashbackId)}/link`
+  let response: Response
+  try {
+    response = await signedFetch(path, 'GET')
+  } catch {
+    return { kind: 'unreachable', reason: 'network' }
+  }
+  if (response.status === 410) {
+    const body = (await response.json().catch(() => null)) as { code?: unknown } | null
+    const code = body?.code
+    return code === 'claimed' || code === 'expired' || code === 'revoked'
+      ? { kind: 'terminal', code }
+      : { kind: 'terminal', code: 'revoked' }
+  }
+  if (response.status === 404) return { kind: 'not_found' }
+  if (response.status === 429) {
+    const retry = Number(response.headers.get('Retry-After'))
+    return { kind: 'throttled', retryAfterSeconds: Number.isFinite(retry) && retry > 0 ? retry : null }
+  }
+  if (!response.ok) return { kind: 'unreachable', reason: `http_${response.status}` }
+  const body = (await response.json().catch(() => null)) as { claimRef?: unknown; claimKey?: unknown } | null
+  const ref = body?.claimRef
+  const key = body?.claimKey
+  if (typeof ref !== 'string' || !CLAIM_REF_RE.test(ref) || typeof key !== 'string' || !CLAIM_KEY_RE.test(key)) {
+    return { kind: 'invalid', reason: 'malformed_link' }
+  }
+  return { kind: 'ok', ref, key }
+}
+
+/**
  * The wallet-origin claim link for a code, rebuilt through `by-code` (spec 4.1, Show QR again).
+ *
+ * @deprecated Show QR again uses `fetchCashbackLink` (wallet#268). Removed with by-code in the
+ * cleanup phase.
  *
  * Non-destructive: `by-code` only looks the claim up. The ref and key come back in the claim-host
  * URL, are checked against the trusted hosts exactly as a redeem checks them, and are returned as
