@@ -32,6 +32,7 @@ const OBLIGATION: Obligation = {
   memo: 'Voucher',
   recipient: { kind: 'pubkey', pubkey: 'c'.repeat(64) },
   attempts: 0,
+  processorReference: 'pi_3Test',
 }
 
 function ports(over: Partial<Ports> = {}): Ports {
@@ -188,6 +189,36 @@ describe('discharging a purchase', () => {
     }))
 
     expect(outcome.kind).toBe('discharged')
+  })
+
+  it('refuses to mint a card purchase that carries no processor reference (#267)', async () => {
+    // A delegated warrant without `ref` would be minted and then reported as
+    // rail "unknown" rather than "card", and the stall could never reconcile
+    // it. Checkout in payment mode always yields a payment_intent, so a
+    // missing one is a defect upstream: block it for a person, mint nothing.
+    for (const processorReference of [null, undefined, '']) {
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+
+      const outcome = await discharge('http://gw', { ...OBLIGATION, processorReference }, ports())
+
+      expect(outcome.kind).toBe('blocked')
+      expect(outcome).toMatchObject({ reason: expect.stringContaining('no processor reference') })
+      expect(fetchMock).not.toHaveBeenCalled()
+    }
+  })
+
+  it('refuses a guest purchase before minting, since Cashlink delivery is not wired (#267)', async () => {
+    // Minting first would leave a paid coupon issued, undelivered and retried
+    // forever. Checkout already refuses guests; this catches any debt that
+    // predates that refusal.
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    const outcome = await discharge('http://gw', { ...OBLIGATION, recipient: { kind: 'claim' } }, ports())
+
+    expect(outcome.kind).toBe('blocked')
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('falls back to manual issuance when the stall holds no credential', async () => {

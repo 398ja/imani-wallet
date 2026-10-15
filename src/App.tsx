@@ -67,6 +67,7 @@ import { ClaimLandingPage, ResumeParkedClaim } from './pages/ClaimLandingPage'
 import { GiftLandingPage } from './pages/GiftLandingPage'
 import { reconcileGiftLinks, restoreScan } from './lib/giftLinks'
 import { BuyPage } from './pages/BuyPage'
+import { BuyCancelledPage, BuyDonePage } from './pages/BuyReturnPages'
 import { PublicProfilePage } from './pages/PublicProfilePage'
 import { CouponsPage, ExpiringCouponsPage, TransactionsPage } from './pages/RecordListPages'
 import { useExpiryReminders } from './hooks/useExpiryReminders'
@@ -537,6 +538,10 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         {/* Buying a stall's coupon by card. In BOTH trees: a shopper who
             already holds coupons is topping up, and a stranger who scanned a
             QR is the reason the hosted page exists. */}
+        {/* Stripe's return pages for a buyer (#267). Static paths, declared
+            beside /buy/:pubkey; React Router ranks them above the param. */}
+        <Route path="/buy/done" element={<BuyDonePage />} />
+        <Route path="/buy/cancelled" element={<BuyCancelledPage />} />
         <Route path="/buy/:pubkey" element={<BuyPage buyerPubkey={pubkey} />} />
         <Route path="/merchants/:pubkey" element={<MerchantPage />} />
         <Route path="/merchants/:pubkey/coupons" element={<CouponsPage />} />
@@ -825,6 +830,8 @@ function PublicRoutes({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<
           where React Router never reached it and a stranger tapping Buy landed
           on /onboarding. A duplicate path in the wrong <Routes> is dead code
           that looks live. */}
+      <Route path="/buy/done" element={<BuyDonePage />} />
+      <Route path="/buy/cancelled" element={<BuyCancelledPage />} />
       <Route path="/buy/:pubkey" element={<BuyPage />} />
       {/* Anything else, including deep links into the authed app, lands on the
           entry screen; the deep link is not preserved because every authed route
