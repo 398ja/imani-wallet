@@ -1,9 +1,11 @@
 import { useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { CreditCard } from 'lucide-react'
 
 import { Button, Screen, BackLink, Centered } from '../components/ui'
 import { startPurchase } from '../lib/purchase'
+import { GUEST_REFUSED, rememberPurchase } from '../lib/pendingPurchase'
+
 
 /**
  * Buying a stall's coupon with a card.
@@ -20,8 +22,12 @@ import { startPurchase } from '../lib/purchase'
  * already names the recipient and no second lookup is needed. It is passed in
  * rather than read from a session, because this screen renders in both route
  * trees: the authenticated one knows who is buying, and the public one has
- * nobody to ask. A visitor with no wallet sends none, which is a legitimate
- * purchase — they take delivery by claim link instead.
+ * nobody to ask.
+ *
+ * A visitor with no wallet is REFUSED for now (#267 item 2). Their coupon
+ * would be delivered by Cashlink, which purchase-issuer cannot do yet, so they
+ * would pay and receive nothing. payment-adapter refuses the same request
+ * before creating a Checkout Session; this screen just says so first.
  *
  * ## Amounts
  *
@@ -51,6 +57,10 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
     setBusy(true)
     setError(null)
 
+    // Remembered on THIS device so the return page can name the stall without
+    // trusting anything Stripe puts in the URL. Before the call, so a slow
+    // redirect cannot race it.
+    rememberPurchase(pubkey)
     const result = await startPurchase({
       stallPubkey: pubkey,
       amountMinor: minor,
@@ -69,6 +79,26 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
   }
 
   if (busy) return <Centered>Taking you to the payment page…</Centered>
+
+  if (buyerPubkey === null) {
+    return (
+      <Screen>
+        <BackLink to={`/merchants/${pubkey}`} label="Back" />
+        <h1 className="mb-2 text-[22px] font-semibold tracking-[-0.02em]">Buy a voucher</h1>
+        <p className="mb-6 text-[15px] leading-relaxed text-mono-500">{GUEST_REFUSED}</p>
+        <p className="mb-6 text-[15px] leading-relaxed text-mono-500">
+          The voucher is delivered to your wallet, so you need one before you pay. It takes
+          a minute and nothing is charged.
+        </p>
+        <Link
+          to="/"
+          className="pressable block w-full rounded-full bg-mono-900 px-6 py-3 text-center text-[17px] font-medium text-white dark:bg-mono-50 dark:text-mono-900"
+        >
+          Create a wallet
+        </Link>
+      </Screen>
+    )
+  }
 
   return (
     <Screen>
@@ -127,13 +157,6 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
       >
         <CreditCard className="mr-2 h-5 w-5" aria-hidden /> Pay by card
       </Button>
-
-      {buyerPubkey === null && (
-        <p className="mt-4 text-[15px] leading-relaxed text-mono-500">
-          You will get a link to claim your voucher, so you can install the app
-          afterwards.
-        </p>
-      )}
 
       {/* A text button, not a second heavy one. Cancelling is the quiet path
           and should not compete with the thing they came here to do. */}
