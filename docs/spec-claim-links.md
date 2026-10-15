@@ -3,6 +3,11 @@
 **Status:** Accepted 2026-10-11. The owner decided Q1 to Q8 as recommended (section 9) at
 22:00Z. Phase 0 and phase 1 are approved to build first; each phase gets its own PR, an
 independent review, and owner approval before merge or deploy.
+**Amended 2026-10-15 (owner, wallet#268):** **Q2 is reversed**: typed cashback codes are
+retired, the link and QR are the only way to claim. The feature is renamed **"Cashlink"** in
+everything a person reads, and the name covers **both** merchant cashback and customer gift
+links. Show QR again uses the stall's authenticated link lookup instead of by-code (4.1). See
+section 10 for what has shipped and what a later phase removes.
 **Requested:** 2026-10-11 by the owner. Merchant cashback should be claimable by scanning a link
 or QR as well as by typing the code. A customer should be able to send a voucher to someone
 without an account, and a recipient with no account should be taken through registration and
@@ -93,7 +98,13 @@ So **the code encodes nothing**. It is a random secret. The key is a function of
 salt held by the portal. The claim ref is a separate 160-bit random handle
 (`claim:…/service/ClaimService.java:209-214`) that only the portal and the claim service know.
 
-### 1.2 Merchant cashback: claim by code
+### 1.2 Merchant cashback: claim by code (retired 2026-10-15, wallet#268)
+
+> **Retired.** Typed codes are no longer offered (Q2 reversed). The wallet no longer shows a code
+> or asks for one; `/receive/cashback` and a scanned `CB-` code answer *"Codes are no longer used.
+> Ask the shop to show you the Cashlink QR again."* by-code stays on the portal during the
+> transition and is removed in a later phase. The steps below describe the path as it was.
+
 
 1. Customer: **Receive → Cashback code** (`/receive/cashback`, `wallet:src/pages/CashbackRedeemPage.tsx`)
    and type the code.
@@ -274,9 +285,9 @@ It must:
 **Recommendation: (i).**
 - It is the only design that meets all five requirements for a recipient with no account. Most
   of it is already built and has been through review (ADR 0001, imani-gateway-portal#62 and #66).
-- (iii) stays as **the code**, for paper and for reading aloud. Its server-side derivation is
-  acceptable because by-code is rate-limited, and the code is about 49 bits
-  (`portal:…/controller/CashbackByCodeController.java:108-126`).
+- (iii) stayed as **the code**, for paper and for reading aloud, until 2026-10-15, when the owner
+  retired it (Q2 reversed, wallet#268). The portal still derives the key from the stored code and
+  salt, so the code column lives on as an internal key seed only.
 - (iv) is not needed for journey D. Sending to a known npub already binds through NIP-17 and
   the gateway. It does not fit A to C at all.
 - (ii) is rejected for size and for "anyone who ever saw it holds it".
@@ -323,7 +334,7 @@ Gift      https://<wallet-origin>/g#v=1&k=<linkSecret>&x=<expiresAtUnix>
 | **Phishing lookalike domains** | `wallet-imani.casa/c/…` asks for your nsec or passphrase. | The claim path never asks for a key: it shows either the prompt or registration. The wallet derives every server URL from configuration, never from the link (`cashback.ts:933-936`), so a real wallet cannot be pointed at a fake claim host. The prompt shows the wallet's own origin. Customer docs say: "a voucher link never asks for your key". |
 | **Revoke or refund by the funder** | Merchant revokes cashback; sender takes back a gift. | Cashback: the existing revoke-then-burn. The burn returns nothing to the merchant (section 3.1). Gift: the sender's wallet claims its own link (section 3.3). |
 | **Expiry** | Unclaimed past its window. | Cashback: the claim service refuses after `expires_at` and the portal sweep revokes and burns. Gift: the recipient's wallet refuses past `x`, and the sender's wallet reclaims after `x` the next time it runs. |
-| **Sender's device dies before the claim** | | Cashback: nothing is lost. The ciphertext is at the claim service, the code is on the merchant's row, and by-code can rebuild the link from the code on any device. Gift: the link key is derived from the sender's identity key (section 3.3), so a restored wallet re-derives its outstanding link keys and reclaims or watches them. The link itself keeps working for the recipient either way. |
+| **Sender's device dies before the claim** | | Cashback: nothing is lost. The ciphertext is at the claim service, and the stall's authenticated link lookup (`GET /cashback/{id}/link`, 4.1) rebuilds the link on any device signed in as the stall. Gift: the link key is derived from the sender's identity key (section 3.3), so a restored wallet re-derives its outstanding link keys and reclaims or watches them. The link itself keeps working for the recipient either way. |
 | **A gift link carrying a licence or terminal credential** | It would be "money" to nobody. | The gift picker excludes licences, terminal credentials and locked vouchers. The recipient refuses to credit them (`isLicence`, #236) with "This link does not contain a voucher". |
 
 ### 2.5 Surviving the registration redirect
@@ -534,10 +545,16 @@ following:
   status reaches `Claimed`, swap the QR for *"Claimed just now"*. Today's screen reads it once.
 - **Cancel cashback** (also on the record detail page). It calls the existing portal revoke and
   is confirmed with *"Cancel this cashback? The customer will no longer be able to claim it.
-  The value is not returned to you."*
+  The value is not returned to you."* (Since 2026-10-15: *"Cancel Cashlink"* and *"Cancel this
+  Cashlink? …"*, the no-refund sentence unchanged.)
 - **The record detail page** (`wallet:src/pages/RecordDetailPages.tsx:446`) gets **Show QR
-  again**. It rebuilds the link through `by-code` from the code the row already stores. The key
-  itself is never stored on the merchant's device.
+  again**. Since 2026-10-15 (wallet#268, portal#92) it rebuilds the link through the stall's
+  authenticated, owner-scoped `GET /api/v1/portal/cashback/{cashbackId}/link` (NIP-98,
+  `MERCHANT_ONLY`, rate-limited per merchant, `no-store`), not the public `by-code`. It needs only
+  the cashback id, so it also works for a row that never stored a code. The key itself is never
+  stored on the merchant's device.
+- **Since 2026-10-15 the screen shows no code** and no Copy code: it is titled *"Cashlink ready"*,
+  the QR is shown at once, then Share link (Q2 reversed).
 
 The wallet stops dropping `claimKey` (`cashback.ts:251-254`) and returns it on `IssuedCashback`.
 The "Copy code" copy changes from *"type into their wallet"* to *"scan, or type into their
@@ -783,6 +800,7 @@ through NIP-17. A link does not.
 | Change | Kind |
 |---|---|
 | None required for phases 0 to 3. `claimKey`, by-code, public metadata and revoke all exist. | none |
+| wallet#268 / portal#92 (2026-10-15): `GET /api/v1/portal/cashback/{cashbackId}/link`, the owner's authenticated link lookup for Show QR again. by-code is deprecated and removed in a later phase | **NEW**, additive |
 | Optional: `voucherValidityDays` on the public metadata, so the prompt can say "valid for N days once added" | **NEW** field, additive |
 
 ### 6.4 imani-gateway-core
@@ -995,11 +1013,11 @@ recommendation, which is now the decision.
 | Q | Topic | Decision (2026-10-11) |
 |---|---|---|
 | Q1 | Link design | DECIDED: cashback by claim ref plus fragment key through the claim service; gifts over NIP-17 with a fresh fragment link key, not through the claim service |
-| Q2 | Typed code | DECIDED: the typed code stays, always next to the link |
+| Q2 | Typed code | ~~DECIDED: the typed code stays, always next to the link~~ **REVERSED 2026-10-15 (owner, wallet#268): typed codes are retired; the link and QR only** |
 | Q3 | Default expiry | DECIDED: cashback uses `cashback_expiry_days`, set explicitly in each environment; gifts 7 days, with 1, 7 or 30 |
 | Q4 | Funder takes it back | DECIDED: Cancel cashback in the wallet, Take it back for gifts; cancelled or expired cashback still burns with no refund |
 | Q5 | Gift fees and limits | DECIDED: no fee, at most 10 outstanding links per wallet, no per-link cap beyond the face |
-| Q6 | Merchant own coupons by link | DECIDED: no, use Cashback |
+| Q6 | Merchant own coupons by link | DECIDED: no, use Cashback (since 2026-10-15: "create a Cashlink from Sell") |
 | Q7 | Recipient copy after a take-back | DECIDED: "This voucher is no longer available"; no ADR 0014 transfer signature on link sends in v1 |
 | Q8 | Native app | DECIDED: phase 5; until then, finish in the browser |
 
@@ -1015,6 +1033,13 @@ recommendation, which is now the decision.
 2. **Q2. Does the typed code stay?** DECIDED 2026-10-11 as recommended. *Recommend: yes, always next to the link.* Paper receipts,
    reading a code aloud, and phones whose camera will not open all need it, and it costs nothing:
    the link is derived from the same secret.
+
+   **REVERSED 2026-10-15 by the owner (wallet#268).** Typed codes are retired. Staging use of
+   by-code was about zero (9 successful lookups in four days, 6 of them from Show QR again), prod
+   never ran cashback, and the public by-code lookup is the only unauthenticated, enumerable
+   credential surface in the wallet API (it needs the FCaptcha gate). The paper-receipt and
+   read-aloud cases are given up; the QR and Share link cover the counter and remote cases.
+   Show QR again moves to an authenticated owner lookup (4.1).
 3. **Q3. Default expiry.** DECIDED 2026-10-11 as recommended.
    - Cashback: keep the deployment's `cashback_expiry_days`. Note that the wallet fallback (5)
      and the portal default (30) disagree today; set it explicitly in each environment.
@@ -1042,3 +1067,31 @@ recommendation, which is now the decision.
 8. **Q8. Native app.** DECIDED 2026-10-11 as recommended. *Recommend: phase 5, and until then tell people to finish in the browser.*
    The parked claim cannot cross from the browser into the Capacitor app's storage without App
    Links.
+
+## 10. Cashlink (2026-10-15, owner, wallet#268)
+
+**Name.** "Cashlink" is the one user-facing name for every voucher sent by link: a stall's
+cashback **and** a customer's gift link. One word, capital C in sentences ("a Cashlink",
+"Cashlinks"). Copy only: routes (`/sell/cashback`, `/c/<ref>`, `/g`), API paths, identifiers,
+metrics and persisted values (`type: 'cashback'`, the `cashback` / `gift_link` /
+`gift_link_reclaim` receive sources, the NIP-60 fields `cashback_id`, `claim_code`, `gift_link`,
+the HMAC label `imani-gift-link/v1/`) keep their names. Where the two kinds differ (Cancel burns
+a stall's Cashlink with no refund; Take it back returns a gift to the sender), the copy still
+says so.
+
+**Phase 1 (shipped as PRs, not merged):**
+- portal#92: `GET /api/v1/portal/cashback/{cashbackId}/link` (NIP-98, owner-only, scoped by
+  merchant pubkey, 20 a minute per merchant, `no-store`; 410 `claimed|expired|revoked`).
+- wallet: Show QR again uses it; the issue screen and the record show no code; `/receive/cashback`
+  is a transition page with *"Codes are no longer used. Ask the shop to show you the Cashlink QR
+  again."*, which a scanned or pasted `CB-` code also gets; Receive no longer links to it;
+  Cashlink copy.
+- cashback-claim#20: the hosted claim page says Cashlink.
+
+**Transition and the next phase.** by-code stays working, gated as today, while codes already
+handed out can still be within their claim window (`CASHBACK_EXPIRY_DAYS`, 30). The next phase
+then removes: the portal's by-code controller, its limiter and NIP-98 carve-out (portal#92 part
+2); the by-code edge locations and the whole FCaptcha stack (deploy#208); the wallet's
+`lib/captcha.ts` (wallet#257's token code), the code helpers, the `/receive/cashback` route and
+`E2E_CAPTCHA_BYPASS` (wallet#268 step 5).
+

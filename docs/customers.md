@@ -91,20 +91,20 @@ There is a tiny floor on how small a split can be (it depends on the coupon), bu
 for everyday amounts you'll never hit it. Paying a coupon in full is always
 allowed.
 
-## Sending a gift by link
+## Sending a Cashlink
 
-You can give a coupon to anyone, even someone with no account yet, as a link or a
-QR code.
+A **Cashlink** is a coupon sent as a link or QR code. You can send one to anyone, even someone
+with no account yet. (A stall's cashback arrives as a Cashlink too.)
 
-1. Tap **Send**, then **Anyone, by link**.
+1. Tap **Send**, then **Anyone, as a Cashlink**.
 2. Pick the coupon and the amount. Choose how long the link lasts: **1 day**,
    **7 days** (the usual) or **30 days**. It never lasts longer than the coupon
    itself.
 3. Check the confirm screen: *"Anyone with the link can claim it. You can take it
-   back until it is claimed."* Tap **Make link**.
+   back until it is claimed."* Tap **Make Cashlink**.
 4. Tap **Show QR**, **Share link** or **Copy link**, and send it however you like.
 
-The person who opens it sees who it is from, which stall and how much, and taps
+The person who opens it sees *"Cashlink from {you}"*, which stall and how much, and taps
 **Add to my wallet**. If they have no account, they make one first; the gift waits
 for them. Nothing is spent until they tap Add.
 
@@ -113,7 +113,7 @@ Things worth knowing:
 - **Treat the link like cash.** Whoever opens it first and taps Add gets the
   coupon. If you know their handle, send it to them directly instead: nobody else
   can claim that.
-- **You can take it back.** Open the send in your history (it has a **By link**
+- **You can take it back.** Open the send in your history (it has a **Cashlink**
   badge) and tap **Take it back**. The coupon comes back to your wallet and the
   link stops working.
 - **Unclaimed links come back on their own.** After the link expires, your wallet
@@ -123,7 +123,7 @@ Things worth knowing:
   sent that are still waiting, so it can still take them back.
 - At most **10 links** can wait to be claimed at once. A link never asks for your
   key or passphrase; if a page that looks like this wallet does, close it.
-- Links can't carry a stall's own coupons (use **Cashback** for those), a
+- A stall can't send its own coupons this way (it creates a Cashlink from **Sell** instead), a
   subscription, or a terminal pass.
 
 ## Keeping your account safe
@@ -177,13 +177,17 @@ An expired coupon is no longer counted in your balance and cannot be spent. It s
 No. A coupon is tied to the merchant who issued it. You spend it back with them.
 
 **I also run a stall. Can my stall's account hold coupons from other shops?**
-No. A merchant account can only take its own stall's vouchers: it refuses a coupon, a cashback link
-or a gift link from another stall, and says *"Merchant accounts can only take their own stall's
+No. A merchant account can only take its own stall's vouchers: it refuses a coupon or a Cashlink
+from another stall, and says *"Merchant accounts can only take their own stall's
 vouchers. To use a voucher from another stall, use a customer account."* Nothing is spent when it
 refuses, so the voucher still waits for you. To shop at other stalls, keep a separate customer
 account (register a second handle, without the merchant profile) and open the link there: on the
 refusal screen, **Switch account** keeps the voucher parked and brings it back after you log in.
 Sending a gift to a customer is unaffected.
+
+**A shop gave me a code (`CB-…`). Where do I type it?**
+Codes are no longer used. Ask the shop to show you the Cashlink QR again, and scan it with your
+phone camera (or open the link they send you).
 
 **What if I get a new phone?**
 Restore from your backup file and passphrase. Your coupons come back from the

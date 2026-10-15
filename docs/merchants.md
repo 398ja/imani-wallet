@@ -80,21 +80,27 @@ flowchart LR
 Keep the customer there until it confirms. If a delivery fails, it's better to
 know while they're still at the stall.
 
-## Cashback for a customer without the app (code, link or QR)
+## A Cashlink for a customer without the app (link or QR)
 
-1. Tap **Sell → Cashback**, type the amount, and tap **Create cashback code**.
-2. The screen shows the **code** to read out or write on a receipt. Below it:
-   - **Show QR**: the customer scans it with their phone camera. It is hidden until you tap it,
-     so nobody else at the counter can scan it first.
+A **Cashlink** is your stall's cashback, sent as a link or QR. (Typed codes are no longer used:
+the screen shows no code.)
+
+1. Tap **Sell → Create a Cashlink instead**, type the amount, and tap **Create Cashlink**.
+2. The screen says **Cashlink ready** and shows:
+   - the **QR**: the customer scans it with their phone camera;
    - **Share link** (or **Copy link**): send the same voucher by message.
 
-   Anyone with the code, the link or the QR can claim it **once**, until the date on screen.
+   Anyone with the link or the QR can claim it **once**, until the date on screen.
 3. Leave the screen open: it changes to *"Claimed just now"* by itself when the customer adds it.
-4. **Cancel cashback** takes it back while it is unclaimed. The customer can no longer claim it,
+4. **Cancel Cashlink** takes it back while it is unclaimed. The customer can no longer claim it,
    and the value is **not** returned to you.
 
-Lost the QR? Open the cashback in **Transactions** and tap **Show QR again**. The app rebuilds the
-link from the code; it never keeps the link itself on your phone.
+Lost the QR? Open the Cashlink in **Transactions** and tap **Show QR again**. The app asks the
+gateway for the link, signed as your stall (nobody else can); it never keeps the link itself on
+your phone.
+
+A customer who still holds an old `CB-…` code is told *"Codes are no longer used. Ask the shop to
+show you the Cashlink QR again."* Open it in **Transactions** and tap **Show QR again**.
 
 ## Taking payment (Redeem)
 
@@ -114,10 +120,10 @@ the customer pays less than a whole coupon, they keep the change automatically.
 
 A merchant account can only take vouchers **your stall issued**. That is what Redeem is for, and it
 keeps working exactly as before: a customer paying you with your own coupon, a coupon locked to your
-stall, your till's sales coming home, and your own cashback all go through.
+stall, your till's sales coming home, and your own Cashlinks all go through.
 
 Another stall's voucher is refused, whichever way it arrives (a customer sending it to you, a
-cashback link or code, a gift link, a pasted token), with *"Merchant accounts can only take their
+Cashlink, a pasted token), with *"Merchant accounts can only take their
 own stall's vouchers. To use a voucher from another stall, use a customer account."* Nothing is
 spent when it is refused: the voucher stays with whoever sent it. The gateway refuses it too
 (`FOREIGN_VOUCHER_FOR_MERCHANT`), so the rule holds however the request is made.
