@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Card sales reach the stall's own ledger** (#275, card atomicity audit U9, gap D). In Stripe S1
+  the merchant record of a card voucher read "No record of this voucher" until a row was seeded
+  by hand. The stall's sale-record reader (`tillSales.ts`) now also files an
+  `imani-terminal-sale/1` row carrying a `delegated` warrant, after checking the stall's own
+  delegation inside it the way gateway-customer#231 does: NIP-01 id and sig, kind 30078
+  `imani:issuer-delegation`, scope `coupon:issue`, signed by this stall, in force at the sale
+  time, `p` equal to the key that sealed the record, and the delegate's signature over the sale
+  and its pi_ reference. A delegated row without a reference is refused (`not-a-card-sale`), and
+  the issuer is never named as a till, so it never joins the roster. The merchant record then
+  reads "Card" with the pi_ reference.
+- **The purchase issuer sends that record after every mint** (`services/purchase-issuer/saleRecord.ts`),
+  gift-wrapped and sealed by the credential's lock key, published to the gateway's event cache
+  (NIP-98). Sent whether or not delivery succeeds, never throws, never changes a discharge
+  outcome. Inline for now: U8's outbox takes it over.
+- **Pull fallback** `resendSaleRecords`: re-sends a missed card sale (the warrant is
+  deterministic, and the stall files by `issued:<voucher>`, so a re-send files nothing twice).
+  Listing a stall's discharged purchases needs a payment-adapter read endpoint; payment-adapter
+  PR #278 proposes `GET /api/v1/purchases/stall/{pubkey}` (under review). Not built on it yet.
+
 ## [0.27.0] - 2026-10-15
 
 Payments observability for the purchase issuer (imani-deploy#210). The wallet app itself is
