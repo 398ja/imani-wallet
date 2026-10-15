@@ -262,7 +262,9 @@ async function main() {
   const home12 = await text(c)
   check('banner back for the new threshold', home12.includes('1 voucher expires this week'), home12.slice(0, 300))
   const deck12 = await badge(c)
-  check('deck badge is red: "Expires in 12 hours"', deck12?.tone === 'urgent' && deck12.text === 'Expires in 12 hours', deck12)
+  // The fake clock runs on during navigation, and labels floor: 12 h at the jump reads 11 h a few
+  // seconds later, which is the rounding rule working, not drift.
+  check('deck badge is red: "Expires in 11/12 hours"', deck12?.tone === 'urgent' && /^Expires in 1[12] hours$/.test(deck12.text ?? ''), deck12)
   const e12 = await expiringEntries(c)
   const want = VALIDITY_DAYS >= 7 ? ['1d', '7d'] : ['1d']
   check(`bell has exactly ${want.join(' + ')} entries`, JSON.stringify(e12.map((e) => e.id.split(':').pop()).sort()) === JSON.stringify(want.sort()), e12.map((e) => e.id))
