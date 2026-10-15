@@ -17,6 +17,8 @@ import {
 } from '../components/ui'
 import { listVouchers, transactionsWith, onWalletChanged, walletIsOpen } from '../lib/wallet'
 import { findMerchantWithHistory, couponsFor, type Merchant } from '../lib/merchants'
+import { soonestExpiring } from '../lib/couponExpiry'
+import { StallExpiryCue } from '../components/ui/ExpiryBadge'
 import { toMerchantPass, EMPTY_BRANDING, type MerchantBranding } from '../lib/pass'
 import { useBranding } from '../hooks/useBranding'
 import { fetchMerchantRecord, type MerchantProfile } from '../lib/merchant'
@@ -63,6 +65,8 @@ export function MerchantPage() {
   const navigate = useNavigate()
   const [merchant, setMerchant] = useState<Merchant | null | undefined>(undefined)
   const [couponCount, setCouponCount] = useState(0)
+  // #265: this stall's soonest coupon inside the week, for the cue under its card.
+  const [soonest, setSoonest] = useState<ReturnType<typeof soonestExpiring>>(undefined)
   const [transactions, setTransactions] = useState<WalletTransaction[]>([])
   // One line per payment in the preview too, so it agrees with the full list.
   const entries = useMemo(() => groupHistory(transactions), [transactions])
@@ -96,6 +100,7 @@ export function MerchantPage() {
       // Rows, not merchant.groups[].vouchers — only the row carries token_id, and
       // that is what addresses a coupon's detail screen.
       setCouponCount(couponsFor(rows, pubkey).length)
+      setSoonest(soonestExpiring(rows, pubkey))
       setTransactions(history)
     }
     load()
@@ -175,6 +180,7 @@ export function MerchantPage() {
           <p className="mt-2 text-center text-sm text-mono-500">
             {couponCount === 1 ? '1 voucher' : `${couponCount} vouchers`} · tap to see them
           </p>
+          <StallExpiryCue soonest={soonest} />
         </div>
       ) : (
         <StallHeader

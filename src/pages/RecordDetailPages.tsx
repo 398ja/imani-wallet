@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { Info } from 'lucide-react'
+import { AlarmClock, CalendarX, Clock, Info } from 'lucide-react'
 import type { VoucherRow } from '@imani/wallet-storage'
 
 import { handlerFor } from '../lib/terminalAttribution'
@@ -26,7 +26,8 @@ import {
   recheckCashbackRowOnOpen,
   recordCashbackStatus,
 } from '../lib/wallet'
-import { issuanceRatioOf } from '../lib/merchants'
+import { issuanceRatioOf, isRedeemed } from '../lib/merchants'
+import { countdown, expiryState, isExpiringSoon } from '../lib/couponExpiry'
 import { formatFace, formatDate, formatSats } from '../lib/format'
 import { toCouponPass, TERMS, EMPTY_BRANDING } from '../lib/pass'
 import { useBranding } from '../hooks/useBranding'
@@ -100,6 +101,18 @@ export function CouponPage() {
   if (row === null) return <Centered>This voucher is no longer in your wallet.</Centered>
 
   const backTo = row.issuer_id ? `/merchants/${row.issuer_id}` : '/'
+  // #265: read once per render from the clock. An expired coupon is not "active" whatever its
+  // stored status says: storage keeps the status of the proofs, and they are unspent; what ended
+  // is the stall's promise to honour them.
+  const expiry = expiryState(row)
+  const expired = expiry.kind === 'expired' && !isRedeemed(row)
+  const status = expired ? 'Expired' : (row.status ?? 'active')
+  const expiresValue =
+    expiry.kind === 'live'
+      ? `${expiry.dateText} · ${countdown(expiry.msLeft)}`
+      : expiry.kind === 'expired'
+        ? `Expired on ${expiry.dateText}`
+        : formatDate(row.expires_at) || 'No expiry'
 
   return (
     <Screen>
@@ -136,15 +149,44 @@ export function CouponPage() {
         />
       </div>
 
+      {expired && expiry.kind === 'expired' && (
+        <p
+          role="status"
+          className="mb-6 flex items-start gap-3 rounded-2xl bg-mono-100 p-4 text-[15px] leading-snug text-mono-700 dark:bg-mono-900 dark:text-mono-300"
+        >
+          <CalendarX className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+          This voucher expired on {expiry.dateText}. It can no longer be spent.
+        </p>
+      )}
+      {!isRedeemed(row) && isExpiringSoon(expiry) && (
+        <p
+          role="status"
+          data-expiry-tone={expiry.tone}
+          className={`mb-6 flex items-start gap-3 rounded-2xl p-4 text-[15px] font-medium leading-snug ring-1 ring-inset ${
+            expiry.tone === 'urgent'
+              ? 'bg-red-50 text-red-800 ring-red-300 dark:bg-red-950/50 dark:text-red-300 dark:ring-red-800'
+              : 'bg-amber-50 text-amber-900 ring-amber-300 dark:bg-amber-950/50 dark:text-amber-200 dark:ring-amber-800'
+          }`}
+        >
+          {expiry.tone === 'urgent' ? (
+            <AlarmClock className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+          ) : (
+            <Clock className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+          )}
+          Use it before {expiry.dateText}
+        </p>
+      )}
+
       <ListSection title="Voucher">
         {present([
-          ['Status', row.status ?? 'active'],
+          ['Status', status],
           ['Received', formatDate(row.created_at)],
           // Exempt from the drop-empty rule the rest of this list follows:
           // "expires 3 Sep" and "never expires" are different facts, and an
           // absent row reads as the second while meaning the first is unknown.
           // Whether a coupon runs out is the thing a holder needs to know.
-          ['Expires', formatDate(row.expires_at) || 'No expiry'],
+          // #265: with a countdown beside the date, so nobody has to subtract.
+          ['Expires', expiresValue],
           // The id identifies the record, so it stays visible rather than
           // collapsing into Details with the derived and diagnostic fields.
           ['Voucher id', row.token_id],
