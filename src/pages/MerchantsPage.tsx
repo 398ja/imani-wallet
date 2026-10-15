@@ -16,6 +16,7 @@ import { StallExpiryCue } from '../components/ui/ExpiryBadge'
 import { ExpiryBanner } from '../components/ui/ExpiryBanner'
 import { expiredCount, soonestExpiring } from '../lib/couponExpiry'
 import { runExpiryReminders } from '../lib/expiryReminders'
+import { useExpiryClock } from '../hooks/useExpiryReminders'
 import type { VoucherRow } from '@imani/wallet-storage'
 import { listTransactions, listVouchers, onWalletChanged } from '../lib/wallet'
 import { toMerchants, walletTotals, withPastMerchants, type Merchant } from '../lib/merchants'
@@ -325,6 +326,11 @@ export function MerchantsPage({ pubkey = '' }: { pubkey?: string }) {
   // The stored rows too (#265): the deck's expiry cue, the banner and the expired note read them.
   const [rows, setRows] = useState<VoucherRow[]>([])
   const [branding, setBranding] = useState<Record<string, MerchantBranding>>({})
+  // Badges, the banner and the expired note are functions of the clock (#265).
+  const clock = useExpiryClock()
+  useEffect(() => {
+    if (pubkey && clock > 0) runExpiryReminders(pubkey, rows)
+  }, [clock, pubkey, rows])
 
   useEffect(() => {
     // Coupons AND history: a merchant you have spent everything with still belongs

@@ -31,6 +31,7 @@ import { countdown, expiryState, isExpiringSoon } from '../lib/couponExpiry'
 import { formatFace, formatDate, formatSats } from '../lib/format'
 import { toCouponPass, TERMS, EMPTY_BRANDING } from '../lib/pass'
 import { useBranding } from '../hooks/useBranding'
+import { useExpiryClock } from '../hooks/useExpiryReminders'
 import { humanName } from '../lib/identity'
 import {
   VALIDATION_SUMMARY,
@@ -86,6 +87,8 @@ export function CouponPage() {
     `merchantBranding().then(setBranding)` that started every visit at empty.
   */
   const { branding, loading: loadingIssuer } = useBranding(row?.issuer_id)
+  // The countdown, the callout and the expired state are functions of the clock (#265).
+  useExpiryClock()
 
   useEffect(() => {
     const load = async () => {

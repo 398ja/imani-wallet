@@ -214,8 +214,9 @@ async function main() {
   SPA_NAV = true
   const at = async (msBefore: number) => {
     await cctx.clock.setSystemTime(new Date(expMs - msBefore))
-    // A tab coming back is what the reminder hook listens for; Playwright cannot hide the tab, so
-    // home's own load (which runs the pass) is the trigger: navigate there first.
+    // Home is re-entered, not re-pushed: pushState to the route already shown does not remount it,
+    // and the fake clock fires no interval. Leaving and coming back is what a customer's "open" is.
+    await go(c, '/settings')
     await go(c, '/')
   }
 
@@ -229,7 +230,9 @@ async function main() {
     check('deck badge is amber, with text and a dated label', deck?.tone === 'soon' && /^Expires in 5 days$/.test(deck.text ?? '') && /^Expires in 5 days, on /.test(deck.label ?? ''), deck)
     const e7 = await expiringEntries(c)
     check('one 7-day bell entry, linking to the coupon', e7.length === 1 && e7[0]!.id.endsWith(':7d') && e7[0]!.url === `/coupon/${encodeURIComponent(tokenId)}`, e7)
-    check('entry body names the value and stall', /^Your €2\.50 voucher from .+ expires in 5 days\.$/.test(e7[0]?.body ?? ''), e7[0]?.body)
+    // Filed at the FIRST open inside the window (the real-time reload, ~6 d 23 h left), so it says
+    // the days left at that moment.
+    check('entry body names the value and stall', /^Your €2\.50 voucher from Test Stall expires in [56] days\.$/.test(e7[0]?.body ?? ''), e7[0]?.body)
     await go(c, `/merchants/${issuer}`)
     await shoot(c, '2-6d-merchant-page')
     check('merchant page badge', (await badge(c))?.tone === 'soon')
@@ -263,6 +266,7 @@ async function main() {
   const e12 = await expiringEntries(c)
   const want = VALIDITY_DAYS >= 7 ? ['1d', '7d'] : ['1d']
   check(`bell has exactly ${want.join(' + ')} entries`, JSON.stringify(e12.map((e) => e.id.split(':').pop()).sort()) === JSON.stringify(want.sort()), e12.map((e) => e.id))
+  check('1-day entry body', /^Your €2\.50 voucher from Test Stall expires in 1[12] hours\.$/.test(e12.find((e) => e.id.endsWith(':1d'))?.body ?? ''), e12)
   await go(c, `/merchants/${issuer}/coupons`)
   await shoot(c, '7-12h-coupon-list')
   check('list badge is red', (await badge(c))?.tone === 'urgent')
