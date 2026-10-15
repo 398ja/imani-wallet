@@ -206,7 +206,7 @@ export function TransactionListItem({ tx }: { tx: WalletTransaction }) {
           {hasValidationClaim(tx) ? <ValidationBadge validation={tx.validation} /> : null}
           {tx.link ? (
             <span className="shrink-0 rounded-full border border-mono-300 px-1.5 text-[11px] font-medium text-mono-500 dark:border-mono-600">
-              By link
+              Cashlink
             </span>
           ) : null}
         </p>

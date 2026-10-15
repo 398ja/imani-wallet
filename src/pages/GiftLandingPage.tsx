@@ -312,7 +312,7 @@ function GiftPrompt({
         <p className="text-sm text-emerald-600">✓ verified stall</p>
         {!stallName && <p className="text-xs text-mono-400">{shortPubkey(s.issuer)}</p>}
         <p className="mt-4 text-amount text-mono-900 dark:text-mono-50">{face}</p>
-        <p className="mt-1 text-sm text-mono-500">Sent by {senderName} via link</p>
+        <p className="mt-1 text-sm text-mono-500">Cashlink from {senderName}</p>
         <p className="mt-1 text-sm text-mono-500">
           Claim by {formatDate(arrival.x)}
           {validFor ? ` · ${validFor}` : ''}

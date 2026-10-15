@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
  *
  *  - `formatCashbackLink` builds `https://<wallet-origin>/c/<ref>#k=<key>`, key in the fragment only;
  *  - generate keeps `claimKey` (it used to be dropped) as `claim: { ref, key }`, in memory;
- *  - `resolveClaimLinkByCode` rebuilds the same parts from the stored code, spending nothing;
+ *  - `fetchCashbackLink` rebuilds the same parts through the owner's authenticated lookup (#268);
  *  - `revokeCashback` maps the portal's answers;
  *  - the key never reaches a request URL or a log line.
  */
@@ -23,7 +23,7 @@ vi.mock('../wallet', () => ({ notifyWalletChanged: () => {}, recordCashbackStatu
 vi.mock('../legacyBridge', () => ({ legacyApi: async () => ({}), withCorrelation: async () => ({}) }))
 
 const { formatCashbackLink, claimRefFromUrl, isClaimKey } = await import('../claimLink')
-const { generateCashback, resolveClaimLinkByCode, revokeCashback } = await import('../cashback')
+const { generateCashback, fetchCashbackLink, revokeCashback } = await import('../cashback')
 const { clearConfigCache } = await import('../config')
 
 const ORIGIN = 'cashback.example.test'
@@ -106,32 +106,43 @@ describe('generateCashback keeps the claim key (it used to drop it)', () => {
   })
 })
 
-describe('resolveClaimLinkByCode (Show QR again)', () => {
-  it('rebuilds the ref and key from the code through by-code', async () => {
-    stubFetch({ status: 200, body: { claimUrl: `https://${ORIGIN}/c/${REF}#k=${KEY}` } })
-    expect(await resolveClaimLinkByCode('cb-abcde-fghjk')).toEqual({ kind: 'ok', ref: REF, key: KEY })
-    expect(requested.some((u) => u.endsWith('/by-code/CB-ABCDE-FGHJK'))).toBe(true)
-    // Non-destructive: no ciphertext call, and the key in no request URL.
+describe('fetchCashbackLink (Show QR again, wallet#268)', () => {
+  it('asks the portal\'s authenticated owner lookup, never by-code', async () => {
+    signedAnswer = async () => json(200, { cashbackId: 'cb-1', claimRef: REF, claimKey: KEY })
+    stubFetch({ status: 500 })
+    expect(await fetchCashbackLink('cb 1')).toEqual({ kind: 'ok', ref: REF, key: KEY })
+    expect(signed).toEqual([{ path: '/api/v1/portal/cashback/cb%201/link', method: 'GET', body: undefined }])
+    // No public lookup, no ciphertext, and the key in no request URL.
+    expect(requested.some((u) => u.includes('/by-code/'))).toBe(false)
     expect(requested.some((u) => u.includes('/ciphertext'))).toBe(false)
-    expect(requested.some((u) => u.includes(KEY))).toBe(false)
+    expect([...requested, ...signed.map((r) => r.path)].some((u) => u.includes(KEY))).toBe(false)
   })
 
-  it('refuses a claim URL on a host this deployment does not trust', async () => {
-    stubFetch({ status: 200, body: { claimUrl: `https://evil.test/c/${REF}#k=${KEY}` } })
-    expect(await resolveClaimLinkByCode('CB-ABCDE-FGHJK')).toEqual({ kind: 'invalid', reason: 'untrusted_claim_url' })
+  it('passes a closed cashback through as terminal', async () => {
+    for (const code of ['claimed', 'expired', 'revoked'] as const) {
+      signedAnswer = async () => json(410, { code })
+      expect(await fetchCashbackLink('cb-1')).toEqual({ kind: 'terminal', code })
+    }
   })
 
-  it('passes a closed code through as terminal, and a malformed code never leaves the device', async () => {
-    stubFetch({ status: 410, body: { code: 'claimed' } })
-    expect(await resolveClaimLinkByCode('CB-ABCDE-FGHJK')).toEqual({ kind: 'terminal', code: 'claimed' })
-    requested.length = 0
-    expect(await resolveClaimLinkByCode('nope')).toEqual({ kind: 'not_found' })
-    expect(requested).toEqual([])
+  it('reads 404 as not found, 429 as throttled, anything else as unreachable', async () => {
+    signedAnswer = async () => json(404, { code: 'NOT_FOUND' })
+    expect(await fetchCashbackLink('cb-1')).toEqual({ kind: 'not_found' })
+    signedAnswer = async () => new Response('{}', { status: 429, headers: { 'Retry-After': '30' } })
+    expect(await fetchCashbackLink('cb-1')).toEqual({ kind: 'throttled', retryAfterSeconds: 30 })
+    signedAnswer = async () => json(500, {})
+    expect(await fetchCashbackLink('cb-1')).toEqual({ kind: 'unreachable', reason: 'http_500' })
+    signedAnswer = async () => {
+      throw new TypeError('offline')
+    }
+    expect(await fetchCashbackLink('cb-1')).toEqual({ kind: 'unreachable', reason: 'network' })
   })
 
-  it('is disabled where the deployment names no claim host', async () => {
-    stubFetch({ status: 200 }, [])
-    expect(await resolveClaimLinkByCode('CB-ABCDE-FGHJK')).toEqual({ kind: 'disabled' })
+  it('refuses an answer whose ref or key is malformed', async () => {
+    signedAnswer = async () => json(200, { claimRef: 'x', claimKey: KEY })
+    expect(await fetchCashbackLink('cb-1')).toEqual({ kind: 'invalid', reason: 'malformed_link' })
+    signedAnswer = async () => json(200, { claimRef: REF, claimKey: 'short' })
+    expect(await fetchCashbackLink('cb-1')).toEqual({ kind: 'invalid', reason: 'malformed_link' })
   })
 })
 
@@ -162,8 +173,8 @@ describe('fragment hygiene on the merchant path', () => {
     signedAnswer = async () =>
       json(200, { cashbackId: 'cb-1', claimCode: 'CB-ABCDE-FGHJK', claimUrl: `https://${ORIGIN}/c/${REF}`, claimKey: KEY })
     await generateCashback({ amountMinor: 1, unit: 'EUR', expiryDays: 1, voucherValidityDays: 0, idempotencyKey: 'k' })
-    stubFetch({ status: 200, body: { claimUrl: `https://${ORIGIN}/c/${REF}#k=${KEY}` } })
-    await resolveClaimLinkByCode('CB-ABCDE-FGHJK')
+    signedAnswer = async () => json(200, { claimRef: REF, claimKey: KEY })
+    await fetchCashbackLink('cb-1')
     formatCashbackLink(WALLET, REF, KEY)
     spies.forEach((s) => s.mockRestore())
     expect(lines.filter((l) => l.includes(KEY))).toEqual([])
