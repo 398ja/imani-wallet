@@ -39,4 +39,4 @@ export async function shareLink(link: string): Promise<'shared' | 'copied' | 'fa
 }
 
 export const CANCEL_QUESTION =
-  'Cancel this cashback? The customer will no longer be able to claim it. The value is not returned to you.'
+  'Cancel this Cashlink? The customer will no longer be able to claim it. The value is not returned to you.'

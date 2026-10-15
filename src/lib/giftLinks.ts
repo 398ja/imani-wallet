@@ -280,7 +280,7 @@ async function refuseForeignIssuerForGift(issuer: string, payer: string): Promis
     if (e instanceof ForeignVoucherRefusedError) {
       throw new Error(
         e.reason === 'merchant'
-          ? 'A merchant account cannot send another stall\u2019s voucher by link: it could not take it back. Send it to a customer instead.'
+          ? 'A merchant account cannot send another stall\u2019s voucher as a Cashlink: it could not take it back. Send it to a customer instead.'
           : e.message,
       )
     }

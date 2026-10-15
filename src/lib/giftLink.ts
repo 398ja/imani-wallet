@@ -497,7 +497,7 @@ function toSeconds(value: number): number {
 export type GiftExclusion = 'not_money' | 'locked' | 'own_stall'
 
 /** The picker's copy for a sender's own coupons (spec 3.2, 4.2). */
-export const OWN_STALL_COPY = 'To give away your own stall’s vouchers, use Cashback.'
+export const OWN_STALL_COPY = 'To give away your own stall’s vouchers, create a Cashlink from Sell.'
 
 /**
  * Why this coupon may not go in a gift link, or null when it may. Licences and terminal credentials

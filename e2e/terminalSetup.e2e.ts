@@ -729,16 +729,22 @@ async function phase6(browser: Browser, owner: Page, customer: Page, customerPub
   }, path)
   await visitB4('/sell/cashback')
   const amount = b4.locator('input[placeholder="0.00"]')
-  let cashbackCode = ''
+  // Matched on the cashback id from the generate answer: the screen shows no code any more
+  // (typed codes retired, wallet#268).
+  let cashbackId = ''
   if (await amount.waitFor({ timeout: 30_000 }).then(() => true, () => false)) {
     await amount.fill('1.50')
-    await b4.getByRole('button', { name: 'Create cashback code' }).click()
-    cashbackCode = await b4.waitForFunction(() => document.body.innerText.match(/CB-[A-Z0-9]{5}-[A-Z0-9]{5}/)?.[0] ?? '', undefined, { timeout: 60_000 })
-      .then((h) => h.jsonValue() as Promise<string>, () => '')
+    const generated = b4.waitForResponse((r) => r.url().endsWith('/api/v1/portal/cashback/generate') && r.request().method() === 'POST', { timeout: 60_000 })
+    await b4.getByRole('button', { name: 'Create Cashlink' }).click()
+    const res = await generated.catch(() => null)
+    const body = res?.ok() ? ((await res.json().catch(() => null)) as { cashbackId?: string } | null) : null
+    cashbackId = body?.cashbackId ?? ''
+    await b4.getByText('Cashlink ready').waitFor({ timeout: 60_000 }).catch(() => {})
   }
-  check('B4 issues a cashback code', /^CB-/.test(cashbackCode), (await text(b4)).slice(0, 200))
-  const cashbackFiled = cashbackCode
-    ? await waitForOwnerRow(owner, { type: 'cashback', claimCode: cashbackCode }, 'terminalPubkey')
+  check('B4 creates a Cashlink', cashbackId !== '' && /Cashlink ready/.test(await text(b4)), (await text(b4)).slice(0, 200))
+  check('B4 shows no typed code', !/CB-[A-Z0-9]{5}-[A-Z0-9]{5}/.test(await text(b4)))
+  const cashbackFiled = cashbackId
+    ? await waitForOwnerRow(owner, { type: 'cashback', cashbackId }, 'terminalPubkey')
     : false
   check("E3 B4's cashback is in A's history, attributed to the till", cashbackFiled)
 

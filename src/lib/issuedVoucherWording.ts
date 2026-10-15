@@ -172,12 +172,12 @@ export function describeAttestation(verdict: CashAttestationVerdict): EvidenceLi
  */
 export function describeCashbackKind(): EvidenceLine {
   return {
-    label: 'Cashback from this stall',
+    label: 'Cashlink from this stall',
     tone: 'neutral',
     // Says what the record cannot carry, not that no money moved: whether
     // anything changed hands at the counter is not something this row saw.
     detail:
-      'A cashback code this stall gave out, not a sale made through Sell. It has no payment method on record and can never carry a customer receipt, so neither is shown.',
+      'A Cashlink this stall gave out, not a sale made through Sell. It has no payment method on record and can never carry a customer receipt, so neither is shown.',
   }
 }
 
@@ -202,7 +202,7 @@ export function describeCashbackClaim(
       return {
         label: on ? `Claimed on ${on}` : 'Claimed',
         tone: 'confirmed',
-        detail: 'The portal records the customer claiming this cashback.',
+        detail: 'The portal records the customer claiming this Cashlink.',
       }
     }
     case 'Expired':
@@ -217,7 +217,7 @@ export function describeCashbackClaim(
       return {
         label: 'Needs a check',
         tone: 'alarming',
-        detail: 'The portal flagged this cashback for a person to look at.',
+        detail: 'The portal flagged this Cashlink for a person to look at.',
       }
     case undefined:
     case 'Unclaimed':
@@ -231,7 +231,7 @@ export function describeCashbackClaim(
         : {
             label: 'Not claimed yet',
             tone: 'neutral',
-            detail: 'No claim has reached this device yet. The code is still open.',
+            detail: 'No claim has reached this device yet. The Cashlink is still open.',
           }
     default:
       return {

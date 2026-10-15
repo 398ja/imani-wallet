@@ -42,8 +42,7 @@ import {
 } from '../lib/validationStatus'
 import { otherParty, toTransaction, transactionLabel, type WalletTransaction } from '../lib/transactions'
 import { RefusedCouponsNote } from '../components/ui/RefusedCouponsNote'
-import { resolveClaimLinkByCode, useCashbackStatus } from '../lib/cashback'
-import { prewarmCaptcha } from '../lib/captcha'
+import { fetchCashbackLink, useCashbackStatus } from '../lib/cashback'
 import { formatCashbackLink } from '../lib/claimLink'
 import { CancelCashback, ClaimLinkPanel } from '../components/CashbackClaimLink'
 import { GiftLinkSection } from '../components/GiftLinkSection'
@@ -469,7 +468,7 @@ function CashbackSection({ tx }: { tx: WalletTransaction }) {
   const open = status === 'Unclaimed'
 
   return (
-    <ListSection title="Cashback">
+    <ListSection title="Cashlink">
       <DetailRow
         label="Redeemed"
         value={
@@ -498,14 +497,6 @@ function CashbackSection({ tx }: { tx: WalletTransaction }) {
       {redeemed && reading?.claimedAt ? (
         <DetailRow label="Redeemed on" value={formatDate(reading.claimedAt)} />
       ) : null}
-      {/* What the customer was told to type. The one string that identifies
-          this cashback to the person holding the receipt. */}
-      {tx.claimCode ? (
-        <DetailRow
-          label="Code"
-          value={<span className="font-mono tracking-wider">{tx.claimCode}</span>}
-        />
-      ) : null}
       {/* Kept even when absent, but NOT as "never expires": the gateway applies
           its own term to every cashback whether or not it echoed one back, so
           an unrecorded expiry is an unknown, not an absent one. Telling a
@@ -514,9 +505,9 @@ function CashbackSection({ tx }: { tx: WalletTransaction }) {
       <DetailRow label="Expires" value={formatDate(tx.expiresAt) || 'Not recorded'} />
       {/* Only while the gateway says it is still open: a claimed, cancelled or expired code has
           no link worth showing, and an unchecked one is not offered a destructive Cancel. */}
-      {open && tx.claimCode ? (
+      {open ? (
         <div className="space-y-2 py-3">
-          <ShowQrAgain code={tx.claimCode} expiresAt={tx.expiresAt} />
+          <ShowQrAgain cashbackId={tx.cashbackId} expiresAt={tx.expiresAt} />
           <CancelCashback
             cashbackId={tx.cashbackId}
             onCancelled={() => {
@@ -532,30 +523,24 @@ function CashbackSection({ tx }: { tx: WalletTransaction }) {
 
 /** Why the link could not be rebuilt, in the merchant's words. */
 const REBUILD_FAILURE: Record<string, string> = {
-  terminal: 'This code is no longer open, so there is no link to show.',
-  not_found: 'The gateway did not find this code just now. Try again in a minute.',
+  terminal: 'This Cashlink is no longer open, so there is no link to show.',
+  not_found: 'The gateway did not find this Cashlink just now. Try again in a minute.',
   throttled: 'Too many tries. Wait a minute and try again.',
 }
 
 /**
- * Show QR again (spec 4.1): rebuild the link from the code this row already stores, through the
- * public `by-code` lookup, which spends nothing. The key comes back in memory only and is dropped
- * with this component: it is never written to the row or anywhere else.
+ * Show QR again (spec 4.1): rebuild the link through the portal's authenticated, owner-scoped
+ * `GET /cashback/{id}/link` (wallet#268), which spends nothing. The key comes back in memory only
+ * and is dropped with this component: it is never written to the row or anywhere else.
  */
-function ShowQrAgain({ code, expiresAt }: { code: string; expiresAt?: number }) {
+function ShowQrAgain({ cashbackId, expiresAt }: { cashbackId: string; expiresAt?: number }) {
   const [state, setState] = useState<
     { kind: 'idle' } | { kind: 'loading' } | { kind: 'ok'; link: string } | { kind: 'failed'; message: string }
   >({ kind: 'idle' })
 
-  // The by-code lookup carries the edge's bot check (lib/captcha.ts). Start it with the button
-  // on screen, so a merchant's (or a till's) tap waits as little as possible.
-  useEffect(() => {
-    prewarmCaptcha()
-  }, [])
-
   const rebuild = async () => {
     setState({ kind: 'loading' })
-    const result = await resolveClaimLinkByCode(code)
+    const result = await fetchCashbackLink(cashbackId)
     const link = result.kind === 'ok' ? formatCashbackLink(window.location.origin, result.ref, result.key) : null
     if (link) {
       setState({ kind: 'ok', link })
@@ -595,9 +580,9 @@ function ShowQrAgain({ code, expiresAt }: { code: string; expiresAt?: number }) 
  */
 const REDEMPTION: Record<string, string> = {
   Claimed: 'Yes, redeemed by the customer',
-  Unclaimed: 'Not yet — the code is still good',
-  Expired: 'No, and the code has expired',
-  Revoked: 'No, the code was cancelled',
+  Unclaimed: 'Not yet — the Cashlink is still open',
+  Expired: 'No, and the Cashlink has expired',
+  Revoked: 'No, the Cashlink was cancelled',
   ManualAttention: 'Unresolved — ask support about this one',
   checking: 'Checking…',
   unknown: 'Could not check just now',

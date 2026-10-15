@@ -327,8 +327,8 @@ function ConfirmPrompt({
   if (pubkey && issuerKey && pubkey.toLowerCase() === issuerKey) {
     return (
       <Outcome
-        title="Your own cashback"
-        body="This is your stall's own cashback. Give it to a customer, or cancel it."
+        title="Your own Cashlink"
+        body="This is your stall's own Cashlink. Give it to a customer, or cancel it."
         onDone={finish}
       />
     )
@@ -385,7 +385,7 @@ function ConfirmPrompt({
         )}
         {!stallName && issuerWellFormed && <p className="text-xs text-mono-400">{shortPubkey(issuerKey)}</p>}
         {face && <p className="mt-4 text-amount text-mono-900 dark:text-mono-50">{face}</p>}
-        <p className="mt-1 text-sm text-mono-500">Cashback from {stall}</p>
+        <p className="mt-1 text-sm text-mono-500">Cashlink from {stall}</p>
         {summary.memo && <p className="mt-1 text-sm text-mono-500">{summary.memo}</p>}
         {summary.expiresAt && <p className="mt-1 text-sm text-mono-500">Claim by {formatDate(summary.expiresAt)}</p>}
         {/* Spec 4.3: "Adding to: {your handle}". The account's own handle, so a shared device shows

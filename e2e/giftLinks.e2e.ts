@@ -159,7 +159,7 @@ async function sendByLink(s: Page, amount: string, days = '7 days', from?: strin
   } else {
     await s.goto(`${BASE}/send`, { waitUntil: 'load' })
   }
-  await s.getByRole('button', { name: /Anyone, by link/ }).click({ timeout: 30_000 })
+  await s.getByRole('button', { name: /Anyone, as a Cashlink/ }).click({ timeout: 30_000 })
   await s.waitForFunction(() => /Which voucher\?|How much\?/.test(document.body.innerText), undefined, { timeout: 30_000 })
   if (from) {
     // Owner report 2026-10-14: the merchant is already chosen, so no second "Which voucher?".
@@ -174,11 +174,11 @@ async function sendByLink(s: Page, amount: string, days = '7 days', from?: strin
   const confirm = await text(s)
   check(`send ${amount}: confirm says "Anyone with the link can claim …"`, /Anyone with the link can claim .*You can take it back until it is claimed/.test(confirm), confirm.slice(0, 300))
   check(`send ${amount}: confirm suggests a direct send (spec 5.4)`, /If you know their handle, send to them directly/.test(confirm))
-  await s.getByRole('button', { name: 'Make link' }).click()
-  await s.waitForFunction(() => /Link ready|did not complete|could not|refused/i.test(document.body.innerText), undefined, { timeout: 120_000 }).catch(() => {})
+  await s.getByRole('button', { name: 'Make Cashlink' }).click()
+  await s.waitForFunction(() => /Cashlink ready|did not complete|could not|refused/i.test(document.body.innerText), undefined, { timeout: 120_000 }).catch(() => {})
   const done = await text(s)
-  check(`send ${amount}: "Link ready" with Show QR, and Share or Copy link`, /Link ready/.test(done) && /Show QR/.test(done) && /(Share|Copy) link/.test(done), done.slice(0, 300))
-  if (!/Link ready/.test(done)) return null
+  check(`send ${amount}: "Cashlink ready" with Show QR, and Share or Copy link`, /Cashlink ready/.test(done) && /Show QR/.test(done) && /(Share|Copy) link/.test(done), done.slice(0, 300))
+  if (!/Cashlink ready/.test(done)) return null
   const row = await s.evaluate(async () => {
     const dbs = await indexedDB.databases()
     const name = dbs.map((d) => d.name ?? '').find((n) => n.startsWith('imani-wallet-'))
@@ -258,7 +258,7 @@ async function main() {
     await a.goto(`${BASE}/sell/cashback`, { waitUntil: 'load' })
   }
   await input.fill('2.00')
-  await a.getByRole('button', { name: 'Create cashback code' }).click()
+  await a.getByRole('button', { name: 'Create Cashlink' }).click()
   const gen = (await (await generated).json()) as { claimUrl: string; claimKey: string }
   const ref = new URL(gen.claimUrl).pathname.split('/').pop()
   await s.goto(`${BASE}/c/${ref}#k=${gen.claimKey}`, { waitUntil: 'load' })
@@ -299,7 +299,7 @@ async function main() {
     await registerCustomer(r, BASE)
     await r.waitForFunction(() => /Add to my wallet|Voucher unavailable/.test(document.body.innerText), undefined, { timeout: 60_000 }).catch(() => {})
     const prompt = await text(r)
-    check('CL-C after registering, the prompt shows the token-verified gift', /✓ verified stall/.test(prompt) && /0\.50/.test(prompt) && /via link/.test(prompt), prompt.slice(0, 300))
+    check('CL-C after registering, the prompt shows the token-verified gift', /✓ verified stall/.test(prompt) && /0\.50/.test(prompt) && /Cashlink from /.test(prompt), prompt.slice(0, 300))
     check('CL-C still unspent while the prompt waits', (await checkstate(before.tokens[0])).every((x) => x === 'UNSPENT'))
     await r.getByRole('button', { name: 'Add to my wallet' }).click()
     await r.waitForFunction(() => /Voucher added|Voucher unavailable|Voucher waiting/.test(document.body.innerText), undefined, { timeout: 90_000 }).catch(() => {})
@@ -324,7 +324,7 @@ async function main() {
     await s.goto(`${BASE}/merchants/${issuerOfRow}/transactions`, { waitUntil: 'load' })
     await s.waitForTimeout(3_000)
     const list = await text(s)
-    check('CL-C History lists it with the "By link" badge and its status', /By link/.test(list) && /Claimed/.test(list), list.slice(0, 300))
+    check('CL-C History lists it with the "Cashlink" badge and its status', /Cashlink/.test(list) && /Claimed/.test(list), list.slice(0, 300))
   }
 
   // ── CL-D ──
@@ -336,7 +336,7 @@ async function main() {
     const dPage = await (await context(browser, 'D')).newPage()
     await registerCustomer(dPage, BASE)
     const t = await openGift(dPage, d.link)
-    check('CL-D a logged-in visitor goes straight to the prompt', /Add to my wallet/.test(t) && /via link/.test(t), t.slice(0, 300))
+    check('CL-D a logged-in visitor goes straight to the prompt', /Add to my wallet/.test(t) && /Cashlink from /.test(t), t.slice(0, 300))
     check('CL-D the fragment is scrubbed', !dPage.url().includes(d.k), dPage.url())
     const { tokens } = await rumorsFor(d.k)
     check('CL-D opening spent nothing', (await checkstate(tokens[0])).every((x) => x === 'UNSPENT'))

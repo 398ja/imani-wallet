@@ -87,12 +87,12 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
   if (sent) {
     return (
       <Screen>
-        <PageHeader title="Link ready" subtitle={`${sent.face} · expires ${formatDate(sent.x * 1000)}`} />
+        <PageHeader title="Cashlink ready" subtitle={`${sent.face} · expires ${formatDate(sent.x * 1000)}`} />
         <Panel className="mb-4 p-5">
-          <ClaimLinkPanel link={sent.link} expiresAt={sent.x * 1000} qrAlt="QR code to claim this voucher" />
+          <ClaimLinkPanel link={sent.link} expiresAt={sent.x * 1000} qrAlt="QR code to claim this Cashlink" />
         </Panel>
         {!sent.delivered && (
-          <Alert>The link is made. Its voucher may take a moment to reach it, so it can be opened in a minute.</Alert>
+          <Alert>The Cashlink is made. Its voucher may take a moment to reach it, so it can be opened in a minute.</Alert>
         )}
         <p className="mb-4 text-xs text-mono-400">You can show it again, or take it back, from your history.</p>
         <Button size="lg" className="w-full" onClick={() => navigate('/')}>
@@ -106,7 +106,7 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
     return (
       <Screen>
         <BackLink to={back} label="Back" />
-        <PageHeader title="Send by link" />
+        <PageHeader title="Send a Cashlink" />
         <Alert>{tooManyLinksMessage()}</Alert>
       </Screen>
     )
@@ -122,12 +122,12 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
       return (
         <Screen>
           <BackLink to={back} label="Back" />
-          <PageHeader title="Send by link" />
+          <PageHeader title="Send a Cashlink" />
           <Alert>
             {mine.ownStall
               ? OWN_STALL_COPY
               : held
-                ? 'None of your vouchers from this merchant can be sent by link.'
+                ? 'None of your vouchers from this merchant can be sent as a Cashlink.'
                 : 'You have no vouchers left from this merchant to send.'}
           </Alert>
           {all.length > 0 && (
@@ -146,7 +146,7 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
     return (
       <Screen>
         <BackLink to={back} label="Back" />
-        <PageHeader title="Send by link" />
+        <PageHeader title="Send a Cashlink" />
         <Alert>{ownStall ? OWN_STALL_COPY : 'You have no vouchers to send.'}</Alert>
       </Screen>
     )
@@ -158,7 +158,7 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
     return (
       <Screen>
         <BackLink to={back} label="Back" />
-        <PageHeader title="Which voucher?" subtitle="Send to anyone, by link" />
+        <PageHeader title="Which voucher?" subtitle="Send to anyone, as a Cashlink" />
         {ownStall && <p className="mb-3 text-sm text-mono-500">{OWN_STALL_COPY}</p>}
         <div className="space-y-2">
           {usable.map((o) => (
@@ -229,7 +229,7 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
               }
             }}
           >
-            {status.step === 'sending' ? 'Making the link…' : status.step === 'unconfirmed' ? 'Still going through' : 'Make link'}
+            {status.step === 'sending' ? 'Making the Cashlink…' : status.step === 'unconfirmed' ? 'Still going through' : 'Make Cashlink'}
           </Button>
           <Button
             variant="ghost"
@@ -250,7 +250,7 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
   return (
     <Screen>
       <BackLink to={back} label="Back" />
-      <PageHeader title="How much?" subtitle="Send to anyone, by link" />
+      <PageHeader title="How much?" subtitle="Send to anyone, as a Cashlink" />
       <div className="space-y-4">
         <Input
           label={`Amount (${chosen.unit})`}
@@ -318,7 +318,7 @@ export function SendByLinkOption({ from, unit }: { from?: string | null; unit?: 
     >
       <Link2 className="h-5 w-5 text-mono-500" />
       <div className="min-w-0 flex-1">
-        <p className="font-medium text-mono-900 dark:text-mono-50">Anyone, by link</p>
+        <p className="font-medium text-mono-900 dark:text-mono-50">Anyone, as a Cashlink</p>
         <p className="text-sm text-mono-500">Make a link or QR anyone can claim</p>
       </div>
       <ChevronRight className="h-5 w-5 text-mono-400" />
