@@ -50,11 +50,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   else `VITE_MAP_TILE_URL` at build time, else OSMF. The CSP no longer needs a `frame-src` for the
   map (the imani-deploy change ships with or after this release).
 
+Cashlink, phase 1 of #268 (owner, 2026-10-15): typed cashback codes are retired, and "Cashlink"
+is the one name for every voucher sent by link, a stall's cashback and a customer's gift link.
+
+- **Show QR again** asks the portal's authenticated, owner-scoped
+  `GET /api/v1/portal/cashback/{id}/link` (NIP-98, imani-gateway-portal#92) instead of the public
+  by-code lookup. No captcha; it works for a row that never stored a code. Needs portal#92.
+- The issue screen shows **no code** and no Copy code: *Cashlink ready*, the QR up front, then
+  Share link. The record detail drops its Code row.
+- `/receive/cashback` no longer takes a code. It says *"Codes are no longer used. Ask the shop to
+  show you the Cashlink QR again."* and still banks a claimed-but-unbanked Cashlink. Receive no
+  longer links to it. A `CB-` code scanned or pasted on **Scan** gets the same message and is
+  looked up nowhere.
+- User-facing copy says **Cashlink**: *Create Cashlink*, *Cancel Cashlink* (still *"The value is
+  not returned to you."*), *Cashlink from {stall}*, *Cashlink from {sender}*, *Send a Cashlink*,
+  *Anyone, as a Cashlink*, *Make Cashlink*, the **Cashlink** badge, the docs. Routes, identifiers
+  and persisted values (`type: 'cashback'`, `gift_link` sources, `claim_code`, `/c/`, `/g`) are
+  unchanged.
+
 ### Fixed
 
 - **An expired coupon's detail page said "Status active" and showed a redemption QR code** (#265).
   It now reads **Expired**, the code is withdrawn (`toCouponPass` emits no barcode once expired), and
   the page says "This voucher expired on {date}. It can no longer be spent."
+
+### Next phase removes
+
+- by-code on the portal, the FCaptcha gate (imani-deploy#208), `src/lib/captcha.ts` and the code
+  helpers (the #257 token code), the `/receive/cashback` route and `E2E_CAPTCHA_BYPASS`, once
+  codes already handed out are past their claim window.
 
 ## [0.25.0] - 2026-10-14
 
