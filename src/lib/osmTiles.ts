@@ -21,8 +21,46 @@ const MAX_LAT = 85.0511287798
  * switching provider should not need a release.
  */
 export function tileUrlTemplate(): string {
-  const runtime = (globalThis as { GatewayConfig?: { mapTileUrl?: string } }).GatewayConfig?.mapTileUrl
-  return runtime || import.meta.env.VITE_MAP_TILE_URL || OSM_TILE_URL
+  const runtime = (globalThis as { GatewayConfig?: { mapTileUrl?: unknown } }).GatewayConfig?.mapTileUrl
+  return safeTileTemplate(runtime) ?? safeTileTemplate(import.meta.env.VITE_MAP_TILE_URL) ?? OSM_TILE_URL
+}
+
+/**
+ * A tile template we are willing to put in an <img src>, or null.
+ *
+ * Review fix (rev-263): the value comes from config, so it is checked rather
+ * than trusted. https only, no credentials, each of {z} {x} {y} exactly once and
+ * no other braces, so a bad value can neither switch scheme (javascript:, data:,
+ * http:) nor carry extra placeholders. Anything else falls through to the next
+ * source and finally to OSMF.
+ */
+export function safeTileTemplate(value: unknown): string | null {
+  if (typeof value !== 'string' || value === '' || /\s/.test(value)) return null
+  for (const p of ['{z}', '{x}', '{y}']) if (value.split(p).length !== 2) return null
+  const filled = value.replace('{z}', '0').replace('{x}', '0').replace('{y}', '0')
+  if (/[{}]/.test(filled)) return null
+  let url: URL
+  try {
+    url = new URL(filled)
+  } catch {
+    return null
+  }
+  if (url.protocol !== 'https:' || url.username || url.password || !url.hostname) return null
+  return value
+}
+
+/**
+ * The coordinates as numbers when they are a real place, else null.
+ *
+ * Review fix (rev-263): `parseLatLng` only checks `Number()` accepts each half,
+ * so "Infinity, 0" or "200, 500" got through. The record is attacker-writable
+ * (kind-30078); a non-finite value put `NaN` into the tile URLs sent to OSMF.
+ */
+export function mapPoint(lat: string, lng: string): { lat: number; lng: number } | null {
+  const la = Number(lat)
+  const ln = Number(lng)
+  if (!Number.isFinite(la) || !Number.isFinite(ln) || Math.abs(la) > 90 || Math.abs(ln) > 180) return null
+  return { lat: la, lng: ln }
 }
 
 /**
@@ -40,21 +78,36 @@ export function tileFor(lat: number, lng: number, zoom = MAP_ZOOM) {
   return { zoom, n, x, y, px: wx - x * TILE, py: wy - y * TILE }
 }
 
-/** The 2x2 tiles around the pin, and where the pin sits in that grid. */
+/**
+ * The tiles of the 2x2 grid around the pin that the box actually shows, and
+ * where the pin sits in that grid.
+ *
+ * Review fix (rev-263): only tiles overlapping the BOX_W x BOX_H window centred
+ * on the pin are returned. The 2x2 grid fetched up to two tiles that were fully
+ * clipped (pin near a tile's vertical middle), which the OSMF policy asks us not
+ * to download; `loading=lazy` does not stop them, its margin is far larger.
+ */
 export function tileGrid(lat: number, lng: number, template = OSM_TILE_URL, zoom = MAP_ZOOM) {
   const t = tileFor(lat, lng, zoom)
   const x0 = t.px < TILE / 2 ? t.x - 1 : t.x
   const y0 = t.py < TILE / 2 ? t.y - 1 : t.y
+  const pinX = (t.x - x0) * TILE + t.px
+  const pinY = (t.y - y0) * TILE + t.py
   const tiles: { src: string; left: number; top: number }[] = []
   for (let dy = 0; dy < 2; dy++)
     for (let dx = 0; dx < 2; dx++) {
       const ty = y0 + dy
       if (ty < 0 || ty >= t.n) continue // beyond the poles: nothing to draw
+      const left = dx * TILE
+      const top = dy * TILE
+      const inView =
+        left < pinX + BOX_W / 2 && left + TILE > pinX - BOX_W / 2 && top < pinY + BOX_H / 2 && top + TILE > pinY - BOX_H / 2
+      if (!inView) continue
       const tx = (((x0 + dx) % t.n) + t.n) % t.n
       const src = template.replace('{z}', String(zoom)).replace('{x}', String(tx)).replace('{y}', String(ty))
-      tiles.push({ src, left: dx * TILE, top: dy * TILE })
+      tiles.push({ src, left, top })
     }
-  return { tiles, pinX: (t.x - x0) * TILE + t.px, pinY: (t.y - y0) * TILE + t.py }
+  return { tiles, pinX, pinY }
 }
 
 /** Where tapping the map goes: the Android maps chooser, or openstreetmap.org. */
