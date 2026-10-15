@@ -69,8 +69,12 @@
  * with the wallet in front of them saw a notification and concluded push
  * worked. A phone in a pocket got nothing.
  *
- * `voucher_expiring` is the one still dark: expiry is a clock event with no
- * request to hang a call on, so it needs a scheduler that does not exist yet.
+ * `voucher_expiring` is still dark ON THE SERVER: expiry is a clock event with no request to hang
+ * a call on, so a push would need a scheduler and a server-side list of who holds what, which
+ * does not exist (gateway-core `notifyVoucherExpiring` has no caller). The WALLET files it
+ * instead (#265, owner decision 2026-10-15, wallet-only): `expiryReminders.ts` writes a
+ * `voucher_expiring` bell entry when the app is opened, from the coupons on this device, gated
+ * by `couponExpiring`. So the switch is no longer decorative, but a closed app is not reminded.
  *
  * This is deliberately NOT surfaced in the settings screen. A wallet that
  * labelled two of its three switches "not yet" would be describing the

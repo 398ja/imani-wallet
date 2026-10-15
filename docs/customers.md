@@ -161,8 +161,17 @@ it's coupons with a value, sent and spent. No exchanges, no wallets full of
 coins, no prices going up and down.
 
 **Do coupons expire?**
-They can. A coupon shows its expiry date if it has one. Merchants set this when
-they issue.
+They can. Merchants set this when they issue. A coupon that expires within a week carries an
+"Expires in N days" label (amber), and one with less than a day left says how many hours (red).
+Your coupon list puts the soonest to expire first; tap **Newest** for the order they arrived in.
+
+When you open Imani, it reminds you under the bell a week before a coupon runs out and again on its
+last day, and home shows "N vouchers expire this week". Turn this off in **Settings → Notifications
+→ Coupons about to expire**. The reminder is worked out on your phone from the coupons you hold:
+nothing is sent anywhere, which also means it only appears when you open the app.
+
+An expired coupon is no longer counted in your balance and cannot be spent. It stays visible under
+**Expired** at the bottom of that merchant's list, and its page says when it expired.
 
 **Can I use one merchant's coupon at another shop?**
 No. A coupon is tied to the merchant who issued it. You spend it back with them.

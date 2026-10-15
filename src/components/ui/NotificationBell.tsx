@@ -115,8 +115,8 @@ export function NotificationBell({ pubkey }: { pubkey: string }) {
           // that only reports emptiness leaves the user wondering if it is
           // broken.
           <p className="px-4 py-8 text-center text-[13px] text-mono-500">
-            Nothing yet. Coupons you receive and claims on coupons you sent will
-            show up here.
+            Nothing yet. Coupons you receive, claims on coupons you sent and
+            coupons about to expire will show up here.
           </p>
         ) : (
           <ul className="divide-y divide-mono-900/[0.07] overflow-y-auto dark:divide-mono-50/[0.08]">

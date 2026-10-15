@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Customers are told a coupon is about to expire, and can see it** (#265; owner decision
+  2026-10-15: option 2, wallet-only, no server reminder list).
+  - **Reminder when the app opens** (`src/lib/expiryReminders.ts`). On unlock, on every coupon change
+    and hourly while open, the wallet files ONE bell entry per coupon per threshold, 7 days and
+    1 day before expiry ("Your €2.50 voucher from {stall} expires in 6 days."). Tapping it opens the
+    coupon. The id `coupon-expiring:<token_id>:<7d|1d>` plus a per-account filed set means an entry
+    is never repeated, even after it falls off the bell's 50-row cap. A coupon first seen inside
+    1 day gets the 1-day entry only. Excluded: licences, terminal credentials, spent coupons, coupons
+    that never expire, coupons P2PK-locked to another key, and coupons the account issued itself.
+  - **Home banner** "N vouchers expire this week", linking to a new `/coupons/expiring` list.
+    Dismissed, it stays hidden until a coupon crosses a NEW threshold.
+  - Both are gated by **Settings → Notifications → Coupons about to expire**. It now shows without
+    push enabled, and defaults ON: the reminder is local-only, so nothing leaves the device.
+  - No OS notification, no service-worker work and no server call. A wallet that is never opened is
+    not reminded. gateway-core `PushNotificationService.notifyVoucherExpiring` remains without a
+    caller, flagged for a later cleanup.
+- **Expiry visuals** (`src/lib/couponExpiry.ts`, `ExpiryBadge`).
+  - An "Expires in N days / N hours / under an hour" badge on the coupon list, the home deck card
+    and the merchant page. Amber under 7 days (clock icon), red under 1 day (alarm icon). The text
+    is always shown, the aria-label carries the absolute date, and counts are floored.
+  - The coupon list is sorted **soonest expiry first** by default, which is the spend order of
+    #157. **Newest** keeps the received-date order and is remembered.
+  - Expired coupons sit in a collapsed **Expired (N)** group, rather than vanishing. The home
+    balance still leaves them out, with a note "N expired vouchers are not counted."
+  - Coupon detail: "Expires {date} · in N days", plus a "Use it before {date}" callout inside
+    7 days.
+
 ### Changed
 
 - **The stall map uses OpenStreetMap tiles instead of an embedded map frame** (#263). `LocationMap`
@@ -20,6 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and set no cookies. The tile URL is configurable: `map_tile_url` on `/api/v1/config` at runtime,
   else `VITE_MAP_TILE_URL` at build time, else OSMF. The CSP no longer needs a `frame-src` for the
   map (the imani-deploy change ships with or after this release).
+
+### Fixed
+
+- **An expired coupon's detail page said "Status active" and showed a redemption QR code** (#265).
+  It now reads **Expired**, the code is withdrawn (`toCouponPass` emits no barcode once expired), and
+  the page says "This voucher expired on {date}. It can no longer be spent."
 
 ## [0.25.0] - 2026-10-14
 

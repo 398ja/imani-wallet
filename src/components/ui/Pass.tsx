@@ -257,6 +257,12 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
           </p>
         )}
 
+        {!pass.voided && pass.expired && (
+          <p className="mt-4 inline-block rounded-full bg-mono-100 px-3 py-1 text-xs font-medium text-mono-700">
+            This voucher has expired
+          </p>
+        )}
+
         {code && (
           <div className="mt-5 flex justify-center">
             <PassBarcode format={code.format} message={code.message} altText={code.altText} />
@@ -268,7 +274,7 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
 
   // `voided` dims the card, but only when it is not a link — a dimmed control
   // reads as disabled, and a merchant's card is always tappable.
-  if (!to) return <div className={pass.voided ? 'opacity-60' : undefined}>{card}</div>
+  if (!to) return <div className={pass.voided || pass.expired ? 'opacity-60' : undefined}>{card}</div>
 
   // Feedback on the press, not on the release. Waiting for the tap to complete
   // before acknowledging it is where directness falls off a cliff: the card is
