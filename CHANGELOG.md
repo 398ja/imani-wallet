@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-10-15
+
+The stall map comes from OpenStreetMap tiles instead of a Google frame (#263), customers see and are
+reminded of coupons about to expire (#265), the card buyer gets return pages and a guest can no
+longer pay by card for nothing (#267), and Cashlink phase 1 retires typed cashback codes (#268).
+Deploy order: imani-gateway-portal with the authenticated link lookup (#92) before this wallet;
+the imani-deploy CSP change that drops the map `frame-src` with or after it.
+
 ### Added
 
 - **Customers are told a coupon is about to expire, and can see it** (#265; owner decision
@@ -37,6 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     balance still leaves them out, with a note "N expired vouchers are not counted."
   - Coupon detail: "Expires {date} · in N days", plus a "Use it before {date}" callout inside
     7 days.
+
+- **Card purchase return pages** (#267). `/buy/done` and `/buy/cancelled`, in both route trees,
+  are the Stripe return pages for a buyer. The `session_id` is never shown or used; the stall is
+  named from this device's own memory (`sessionStorage`, accepted only as a 64-hex key).
+- **The Stripe payment reference on the merchant's records** (#267): the full `pi_…` with a copy
+  button, the amount and the date on the voucher record, and a compact copyable ref on the sales
+  list. Card rows only; no dashboard link (Express accounts).
 
 ### Changed
 
@@ -70,6 +85,11 @@ is the one name for every voucher sent by link, a stall's cashback and a custome
 
 ### Fixed
 
+- **A guest could pay by card and receive nothing** (#267). The Buy page refuses a guest ("Create a
+  wallet first to buy a voucher by card") and renders no amount or Pay button, and purchase-issuer
+  blocks a claim-recipient debt before minting.
+- **A card purchase with no processor reference minted a coupon whose rail read as unknown** (#267).
+  purchase-issuer now refuses it (blocked, nothing minted) and keeps the debt for a person.
 - **An expired coupon's detail page said "Status active" and showed a redemption QR code** (#265).
   It now reads **Expired**, the code is withdrawn (`toCouponPass` emits no barcode once expired), and
   the page says "This voucher expired on {date}. It can no longer be spent."
