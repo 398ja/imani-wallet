@@ -120,6 +120,29 @@ export async function discharge(
     return { kind: 'manual' }
   }
 
+  // A guest (no buyer pubkey) would take delivery by Cashlink, which is not
+  // wired (delivery.ts). Minting first strands a paid coupon, retried forever.
+  // Checkout refuses guests now; this blocks any debt that predates that.
+  if (obligation.recipient.kind === 'claim') {
+    return {
+      kind: 'blocked',
+      reason: 'guest purchase: Cashlink delivery is not wired yet; nothing minted, refund or deliver by hand',
+    }
+  }
+
+  // Every debt this service works is a CARD purchase, and its warrant is the
+  // only place the stall can reconcile it against Stripe. A delegated warrant
+  // with no `ref` would mint and then read as rail "unknown" (#267). Checkout
+  // in payment mode always yields a payment_intent, so a missing one is an
+  // upstream defect: refuse before minting and leave the debt for a person.
+  // BLOCKED, not owed: retrying the same row cannot produce a reference.
+  if (!obligation.processorReference) {
+    return {
+      kind: 'blocked',
+      reason: 'card purchase has no processor reference (pi_…); refusing to mint an unreconcilable coupon',
+    }
+  }
+
   // The till refuses any coupon this service cannot warrant (#152), so a
   // credential without a live delegation from the stall must not mint at all.
   // BLOCKED rather than owed: retrying cannot help until the stall signs a new

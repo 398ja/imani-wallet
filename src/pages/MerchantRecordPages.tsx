@@ -27,6 +27,8 @@ import {
   Switch,
 } from '../components/ui'
 import { present } from '../lib/detailRows'
+import { CopyReferenceButton, PaymentReferenceBlock } from '../components/PaymentReference'
+import { cardReferenceOf } from '../lib/paymentReference'
 import { onWalletChanged } from '../lib/wallet'
 import { handlerFor } from '../lib/terminalAttribution'
 import { onRosterView } from '../lib/terminalRoster'
@@ -558,6 +560,15 @@ export function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
         ) : (
           <>
             <EvidenceRow label="Paid" line={rail} />
+            {/* The processor's id, copyable and beside the amount and date a
+                merchant on an Express dashboard needs to find it (#267). */}
+            {voucher.rail.kind === 'card' && voucher.rail.reference ? (
+              <PaymentReferenceBlock
+                reference={voucher.rail.reference}
+                amount={money(row.amount)}
+                date={formatDate(row.at)}
+              />
+            ) : null}
             <EvidenceRow label="Authorised" line={warrant} />
             <EvidenceRow label="Customer receipt" line={attestation} />
           </>
@@ -811,8 +822,12 @@ function IssuedCouponRow({ tx, now, stallPubkey }: { tx: WalletTransaction; now:
   // and a merchant's list is mostly repeat customers.
   const customer = useIdentity(tx.counterparty)
   const claimLabel = cashbackClaimLabel(tx)
+  // A card sale's processor reference, compact and copyable (#267). The copy
+  // button sits OUTSIDE the row's link: a button nested in an anchor is
+  // invalid HTML and a tap on it would also navigate.
+  const cardRef = tx.type === 'cashback' ? undefined : cardReferenceOf(tx.issuanceWarrant)
 
-  return (
+  const link = (
     <Link
       // The VOUCHER, not the transaction that issued it. The row is a coupon
       // and the question behind it is "what happened to this coupon" — how
@@ -855,5 +870,16 @@ function IssuedCouponRow({ tx, now, stallPubkey }: { tx: WalletTransaction; now:
       </p>
       <ChevronRight className="h-4 w-4 shrink-0 text-mono-400" />
     </Link>
+  )
+
+  if (!cardRef) return link
+  return (
+    <div>
+      {link}
+      <div className="-mt-3 flex items-center gap-1 px-4 pb-3 pl-11 text-xs text-mono-500">
+        <span>Card</span>
+        <CopyReferenceButton reference={cardRef} compact />
+      </div>
+    </div>
   )
 }
