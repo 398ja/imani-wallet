@@ -336,7 +336,7 @@ By design, and not merely by hiding a button:
 | *This authority is not for this device* | The authority belongs to another terminal or another stall | Ask the owner to set it up again |
 | *This terminal is no longer in service* | It was revoked | Ask the owner to add it again if that was a mistake |
 | Sell is missing on a full till / *Selling needs the network* | It opened without reaching the mint, so it is on reduced authority | Get it a connection, lock it and open it again |
-| *This terminal cannot sell right now* / *cannot issue cashback right now* | Reduced authority, or a redemption-only role | Lock and open it again with a connection, or ask the owner |
+| *This terminal cannot sell right now* / *cannot create a Cashlink right now* | Reduced authority, or a redemption-only role | Lock and open it again with a connection, or ask the owner |
 | *This terminal is locked or has lost its authority* | The till locked during the sale | Open it again and retry. Nothing was issued |
 | *Not trading while your subscription is inactive* | A lapsed subscription, not a revocation | Renew; terminals resume immediately |
 
@@ -439,7 +439,7 @@ No. It names your stall, and their wallet shows it as authorised by your stall.
 Which till sold it is on your records only.
 
 **Do sales made on a till show up in my records?**
-Yes. A till sends each sale (and each cashback code) to your stall, signed with
+Yes. A till sends each sale (and each Cashlink) to your stall, signed with
 its own key, and your phone files it in your history after checking that the
 till is one you signed. Your Vouchers list says *Sold on Front counter*. If the
 till was offline it keeps the record and sends it later; don't take it out of
