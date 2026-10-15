@@ -15,6 +15,7 @@ import { Button, Screen, Panel, Pass } from '../components/ui'
 import { StallExpiryCue } from '../components/ui/ExpiryBadge'
 import { ExpiryBanner } from '../components/ui/ExpiryBanner'
 import { expiredCount, soonestExpiring } from '../lib/couponExpiry'
+import { runExpiryReminders } from '../lib/expiryReminders'
 import type { VoucherRow } from '@imani/wallet-storage'
 import { listTransactions, listVouchers, onWalletChanged } from '../lib/wallet'
 import { toMerchants, walletTotals, withPastMerchants, type Merchant } from '../lib/merchants'
@@ -331,13 +332,16 @@ export function MerchantsPage({ pubkey = '' }: { pubkey?: string }) {
     const load = async () => {
       const [rows, txs] = await Promise.all([listVouchers(), listTransactions()])
       setRows(rows)
+      // Home is the first screen an opened wallet shows, so the reminder pass runs here too
+      // (#265). Deduped by id, so the app-level hook and this never file one twice.
+      if (pubkey) runExpiryReminders(pubkey, rows)
       setMerchants(withPastMerchants(toMerchants(rows), txs.map(toTransaction)))
     }
     load()
     // WalletStorage broadcasts on every write, including coupons arriving by DM
     // while this screen is open, so the list stays live without polling.
     return onWalletChanged(load)
-  }, [])
+  }, [pubkey])
 
   useEffect(() => {
     if (!merchants?.length) return
