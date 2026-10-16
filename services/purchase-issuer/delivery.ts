@@ -120,7 +120,10 @@ export async function deliver(
     // `imani-woo` hit an unexplained 400 here and the right response was to
     // keep the debt open rather than to conclude the customer had been paid.
     throw new IssuanceFailed(
-      `delivery refused with status ${response.status}: ${raw.trim().slice(0, 200)}`,
+      // Redacted: gc's validation answer echoes the rejected value, which for an oversized send
+      // is the token itself. This message reaches logs, payment-adapter's last_failure and the
+      // outbox file (review of #279).
+      `delivery refused with status ${response.status}: ${raw.trim().replace(/cashu[AB][A-Za-z0-9_\-+/=]*/g, 'cashu[redacted]').slice(0, 200)}`,
       true,
     )
   }

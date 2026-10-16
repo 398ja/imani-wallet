@@ -40,6 +40,12 @@ export interface IssuerConfig {
   vaultKeyHex: string
   /** Where sealed credentials live on disk. */
   credentialsPath: string
+  /** The durable delivery outbox (imani-wallet#274). Must be on a persistent volume. */
+  outboxPath: string
+  /** Deliveries before a coupon is parked `delivery_exhausted`. */
+  deliveryMaxAttempts: number
+  /** First retry delay; doubles per attempt, capped at an hour. */
+  deliveryBaseBackoffMs: number
   /** Whether this deployment may mint real coupons. */
   livemode: boolean
   /** How long to sleep between passes. */
@@ -131,6 +137,9 @@ export function readConfig(env: NodeJS.ProcessEnv): IssuerConfig {
     // A path CAN be defaulted: it names a location, not a secret or a mode, and
     // a wrong one fails loudly on the first read rather than silently.
     credentialsPath: (env.PURCHASE_CREDENTIALS_PATH ?? '/var/lib/imani/purchase-credentials.json').trim(),
+    outboxPath: (env.PURCHASE_OUTBOX_PATH ?? '/var/lib/imani/purchase-outbox.json').trim(),
+    deliveryMaxAttempts: positive(env.PURCHASE_DELIVERY_MAX_ATTEMPTS, 12),
+    deliveryBaseBackoffMs: positive(env.PURCHASE_DELIVERY_BASE_BACKOFF_MS, 60_000),
     livemode,
     intervalMs: positive(env.PURCHASE_INTERVAL_MS, 15_000),
     port: positive(env.PURCHASE_ISSUER_PORT, 8791),

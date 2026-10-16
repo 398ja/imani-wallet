@@ -43,6 +43,7 @@ import { confirmCredential, tokenFor, FileCredentialStore } from './adapters'
 import { readConfig, ConfigError, type IssuerConfig } from './config'
 import type { Ports } from './discharge'
 import { countPass, renderMetrics } from './metrics'
+import { DEFAULT_OUTBOX_OPTIONS, DeliveryOutbox, FileOutboxStore, runDeliveryPass } from './outbox'
 import { PurchasesApi, ReportLostError } from './purchasesApi'
 import { sendSaleRecord } from './saleRecord'
 import { CredentialVault } from './vault'
@@ -71,7 +72,7 @@ export function portsFor(config: IssuerConfig, fetchImpl: typeof fetch = fetch):
     tokenFor: (credential, voucherId) => tokenFor(config.gatewayUrl, credential, voucherId),
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    // #275: card sales into the stall's ledger. U8's outbox replaces this direct send.
+    // #275: card sales into the stall's ledger. Tried inline once; the outbox owns retries (#274).
     fileSale: (credential, sale) => sendSaleRecord(config.gatewayUrl, credential, sale, fetchImpl),
   }
 }
@@ -95,6 +96,12 @@ export function depsFor(config: IssuerConfig): WorkerDeps {
     ports: portsFor(config),
     gatewayUrl: config.gatewayUrl,
     livemode: config.livemode,
+    outbox: new DeliveryOutbox(new FileOutboxStore(config.outboxPath), {
+      ...DEFAULT_OUTBOX_OPTIONS,
+      maxAttempts: config.deliveryMaxAttempts,
+      baseBackoffMs: config.deliveryBaseBackoffMs,
+      now: () => Date.now(),
+    }),
   }
 }
 
@@ -134,6 +141,23 @@ export async function loop(deps: WorkerDeps, intervalMs: number): Promise<void> 
   while (running) {
     try {
       const result = await runPass(deps)
+      // Then the outbox (imani-wallet#274): coupons that exist and still owe a delivery or a
+      // sale record. A store that cannot be read throws here, and the pass is reported failed.
+      if (deps.outbox) {
+        const delivery = await runDeliveryPass({
+          outbox: deps.outbox,
+          api: deps.api,
+          ports: deps.ports,
+          gatewayUrl: deps.gatewayUrl,
+          workerId: deps.workerId,
+        })
+        if (delivery.delivered > 0 || delivery.exhausted > 0) {
+          console.log(
+            `[purchase-issuer] outbox delivered ${delivery.delivered}, exhausted ${delivery.exhausted}, ` +
+              `retrying ${delivery.retried}, sales filed ${delivery.salesFiled}`,
+          )
+        }
+      }
       lastPass = { at: Date.now(), ...result }
       countPass('ok')
       if (result.discharged > 0 || result.blocked > 0) {

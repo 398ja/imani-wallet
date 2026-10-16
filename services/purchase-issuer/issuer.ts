@@ -124,9 +124,14 @@ export interface IssuePlan {
   issuanceWarrant?: string
 }
 
-/** The key a purchase mints under. One purchase, one key, forever. */
-export function purchaseIdempotencyKey(eventId: string): string {
-  return `purchase:${eventId}`
+/**
+ * The key a purchase mints under: the PAYMENT INTENT, not the webhook event (imani-wallet#274,
+ * card audit U8). Two events for one payment, or a reconciler re-drive, are one payment and must
+ * mint under one key. gc#232 replays the recorded voucher for the warrant nonce (also from the
+ * pi_) after the 24 h idempotency window, so this key is no longer the only guard.
+ */
+export function purchaseIdempotencyKey(paymentIntent: string): string {
+  return `purchase:pi:${paymentIntent}`
 }
 
 export interface IssuedCoupon {
@@ -146,12 +151,19 @@ export class IssuanceFailed extends Error {
    * an unreadable body). False for a definite refusal (4xx).
    */
   readonly ambiguous: boolean
+  /**
+   * gc answered 409 UNRECORDED (gc#230/#232): this warrant nonce was spent by a run that never
+   * recorded its voucher. Whether a coupon exists is unknown, so this is NEVER retried: the row
+   * is parked `gateway_unrecorded` for a person (imani-wallet#274).
+   */
+  readonly unrecorded: boolean
 
-  constructor(message: string, retryable: boolean, ambiguous = retryable) {
+  constructor(message: string, retryable: boolean, ambiguous = retryable, unrecorded = false) {
     super(message)
     this.name = 'IssuanceFailed'
     this.retryable = retryable
     this.ambiguous = ambiguous
+    this.unrecorded = unrecorded
   }
 }
 
@@ -254,6 +266,10 @@ export async function issueAsStall(
 
   const raw = await response.text()
 
+  if (isUnrecorded(response.status, raw)) {
+    throw new IssuanceFailed(explain(response.status, raw), false, true, true)
+  }
+
   if (response.status !== 200 && response.status !== 201) {
     // A 4xx (429 included) is a refusal: nothing was minted. A 5xx may have
     // minted before failing.
@@ -306,6 +322,22 @@ function explain(status: number, raw: string): string {
   return detail === ''
     ? `the gateway refused with status ${status}`
     : `the gateway refused with status ${status}: ${detail}`
+}
+
+/**
+ * gc refused this payment's mint in a way every later retry gets too, and an earlier attempt may
+ * have minted (review of #279). Parked `gateway_unrecorded`, never retried:
+ *  - 409 `UNRECORDED`: the warrant nonce's first use never recorded its voucher (gc#232). The
+ *    same test also matches the idempotency store's `IDEMPOTENCY_PREVIOUS_ATTEMPT_UNRECORDED`.
+ *  - 409 `WARRANT_ALREADY_USED`: the pi_ nonce was spent by a request with DIFFERENT bytes. A
+ *    retry's body changes when the stall renews its delegation between attempts (the delegation
+ *    rides inside the warrant). Before this it was retryable, so the row looped forever.
+ *  - 422 `IDEMPOTENCY_KEY_REUSED`: the same case inside gc's 24 h key window.
+ */
+function isUnrecorded(status: number, raw: string): boolean {
+  if (status === 409) return /UNRECORDED|WARRANT_ALREADY_USED/.test(raw)
+  if (status === 422) return /IDEMPOTENCY_KEY_REUSED/.test(raw)
+  return false
 }
 
 /** A burnt credential will never succeed; a 500 might. */

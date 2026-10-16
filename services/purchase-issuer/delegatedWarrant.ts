@@ -78,10 +78,12 @@ export function saleDigest(
 /**
  * The per-purchase nonce. DERIVED, not random, so every attempt at one
  * purchase sends a byte-identical body under the same idempotency key
- * (imani-wallet#96). Same derivation the processor warrant used.
+ * (imani-wallet#96). From the PAYMENT INTENT since imani-wallet#274 (v2): gc
+ * records the voucher per nonce (gc#232), so any re-drive of one payment, under
+ * any event id, gets the original voucher back rather than a second one.
  */
-export function purchaseNonce(eventId: string): string {
-  return bytesToHex(sha256(new TextEncoder().encode(`imani-purchase-warrant-v1:${eventId}`))).slice(
+export function purchaseNonce(paymentIntent: string): string {
+  return bytesToHex(sha256(new TextEncoder().encode(`imani-purchase-warrant-v2:${paymentIntent}`))).slice(
     0,
     32,
   )
@@ -169,7 +171,8 @@ export function checkDelegation(
  * from the key and the message), so a retry sends the identical body.
  */
 export function delegatedWarrant(input: {
-  eventId: string
+  /** The payment intent (pi_), which the nonce derives from. */
+  paymentIntent: string
   issuerId: string
   saleTotalMinor: number
   faceDecimals: number
@@ -178,7 +181,7 @@ export function delegatedWarrant(input: {
   lockKeyHex: string
   delegation: Event
 }): string {
-  const nonce = purchaseNonce(input.eventId)
+  const nonce = purchaseNonce(input.paymentIntent)
   const digest = saleDigest(
     input.issuerId,
     input.saleTotalMinor,
