@@ -60,9 +60,14 @@ function refusalCode(raw: string): string | null {
 }
 
 /**
- * The gift wrap went out, but gateway-core refused the issuance receipt permanently (imani-wallet#287):
- * the token is not genuine, its issuer is untrusted, or its proofs are already spent. Re-sending
- * cannot change that, so this is NOT retryable: the row is parked `delivery_exhausted` for a person.
+ * gateway-core refused the issuance receipt permanently (imani-wallet#287): the token is not
+ * genuine, its issuer is untrusted, or its proofs are already spent. Re-sending cannot change that,
+ * so this is NOT retryable: the row is parked `delivery_exhausted` for a person.
+ *
+ * Since F2 of the core#163 review gc asks core BEFORE it publishes, so this attempt sent nothing.
+ * An EARLIER attempt may still have reached the buyer (its publish succeeded, its commit did not,
+ * and the buyer then spent the coupon: `proofs_not_unspent`). The message says exactly that, so an
+ * operator checks the buyer's wallet before resolving, and never reads it as "the buyer holds it".
  */
 export class DeliveryRefused extends IssuanceFailed {
   readonly refused = true as const
@@ -70,8 +75,9 @@ export class DeliveryRefused extends IssuanceFailed {
 
   constructor(voucherId: string, paymentRequestId: string, code: string, status: number) {
     super(
-      `voucher ${voucherId} DELIVERED by DM for payment request ${paymentRequestId}, but the gateway ` +
-        `refused the discharge receipt permanently (${status} ${code}); not retried, needs a person`,
+      `voucher ${voucherId} for payment request ${paymentRequestId}: the gateway refused the discharge ` +
+        `receipt permanently (${status} ${code}) and did NOT send it this time; an earlier attempt may have ` +
+        `DELIVERED it. Not retried, needs a person`,
       false,
       false,
     )
