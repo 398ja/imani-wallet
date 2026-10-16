@@ -20,6 +20,12 @@ export const OUTCOMES = [
   'skipped',
   'claim_lost',
   'claim_unreachable',
+  // imani-wallet#274 (U8)
+  'unrecorded',
+  'outbox_write_failed',
+  'delivered_late',
+  'delivery_retried',
+  'delivery_exhausted',
 ] as const
 export type Outcome = (typeof OUTCOMES)[number]
 

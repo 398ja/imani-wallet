@@ -11,6 +11,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A card coupon is always delivered, or parked for a person** (#274, card atomicity audit U8).
+  - **Key and nonce from the payment intent.** The mint's `Idempotency-Key` is `purchase:pi:<pi_>`
+    and the warrant nonce `H("imani-purchase-warrant-v2:<pi_>")`, so any re-drive of one payment
+    (a second event, a lapsed claim, a reconciler) maps to one gc nonce, which gc#232 replays
+    for the voucher's life. Deploy after gateway-customer with #232.
+  - **Upgrade precondition (key switch).** A row that an older issuer minted under the v1 event-id
+    key/nonce and that is re-claimed by this one would mint AGAIN under the pi_ key/nonce: gc
+    sees a new nonce. Only rows that are `ISSUING` at the switch can be in that state
+    (`OWED` never minted, `ISSUED`/`DISCHARGED`/`BLOCKED` are never re-minted). So before
+    deploying: stop the old issuer, wait out the lease (10 min), and check
+    `select count(*) from stripe_purchase where status = 'ISSUING'` is 0. For a non-zero
+    count, check each row's voucher at gc first. Per the 2026-10-15 card audit, staging had
+    none: purchase #1 BLOCKED (nothing minted, 401), #2 delivered by hand.
+  - **Every gc refusal that answers every retry the same way parks the row** (review of #279):
+    409 `UNRECORDED` (also the idempotency store's `IDEMPOTENCY_PREVIOUS_ATTEMPT_UNRECORDED`),
+    409 `WARRANT_ALREADY_USED` (the pi_ nonce was spent by different bytes, for example after a
+    delegation renewal), and 422 `IDEMPOTENCY_KEY_REUSED`. Before, the last two were
+    retryable and looped forever. 409 `IDEMPOTENCY_IN_PROGRESS` is still retried.
+  - **gc 409 `UNRECORDED` is never retried.** The row is parked `gateway_unrecorded` via
+    payment-adapter#280 `POST /api/v1/purchases/{eventId}/attention`. A payment-adapter without
+    that route (404) gets the old permanent `/failure` instead, so the row still stops looping.
+  - **Durable delivery outbox** (`services/purchase-issuer/outbox.ts`,
+    `PURCHASE_OUTBOX_PATH`, default `/var/lib/imani/purchase-outbox.json` on the existing volume).
+    After a mint, an undelivered DM is written there before the purchases API hears anything.
+    Ids only, never a token: the token is re-read from the gateway (gc#229) at retry time.
+    Capped exponential backoff (`PURCHASE_DELIVERY_BASE_BACKOFF_MS`, default 60 s, doubling,
+    hourly cap). After `PURCHASE_DELIVERY_MAX_ATTEMPTS` (12) it parks the row
+    `delivery_exhausted`, naming the voucher. A corrupt outbox file fails the pass rather than
+    reading as empty. If the outbox write itself fails, the row is not reported ISSUED. Its
+    claim is left to lapse, and the re-mint replays the same voucher.
+  - **The outbox owns sale-record retries** (#275 / PR #278 marked this for U8): one inline try,
+    then retried with the same backoff, independently of delivery.
+  - Metrics outcomes `unrecorded`, `outbox_write_failed`, `delivered_late`, `delivery_retried`,
+    `delivery_exhausted`.
+
 - **Card sales reach the stall's own ledger** (#275, card atomicity audit U9, gap D). In Stripe S1
   the merchant record of a card voucher read "No record of this voucher" until a row was seeded
   by hand. The stall's sale-record reader (`tillSales.ts`) now also files an
