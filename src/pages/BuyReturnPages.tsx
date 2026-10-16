@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
 import { CheckCircle2, XCircle } from 'lucide-react'
 
-import { Screen } from '../components/ui'
+import { Screen, buttonClasses } from '../components/ui'
 import { useBranding } from '../hooks/useBranding'
 import { rememberedStall } from '../lib/pendingPurchase'
 
@@ -27,6 +27,13 @@ import { rememberedStall } from '../lib/pendingPurchase'
  * Stripe, never from the URL, and only if it is a well-formed pubkey.
  */
 
+/**
+ * Both pages are a full-page arrival from Stripe, so each states the outcome
+ * once (`role="status"`, announced on load) and offers a way on AND a way back:
+ * the buyer came from a stall, and a page whose only exit is the wallet home
+ * leaves them nowhere near it. The main action is the house `Button` look, so
+ * it reads as the same control the Buy screen used a minute ago.
+ */
 export function BuyDonePage() {
   const stall = rememberedStall()
   const { branding } = useBranding(stall)
@@ -34,18 +41,22 @@ export function BuyDonePage() {
   return (
     <Screen>
       <div className="flex flex-col items-center pt-16 text-center">
-        <CheckCircle2 className="mb-4 h-12 w-12 text-emerald-600" aria-hidden />
-        <h1 className="mb-2 text-[22px] font-semibold tracking-[-0.02em]">Payment received</h1>
-        <p className="mb-8 text-[15px] leading-relaxed text-mono-500">
-          {name ? `Your voucher from ${name} is on its way.` : 'Your voucher is on its way.'} It
-          usually arrives in your wallet within a minute.
-        </p>
-        <Link
-          to="/"
-          className="pressable w-full rounded-full bg-mono-900 px-6 py-3 text-center text-[17px] font-medium text-white dark:bg-mono-50 dark:text-mono-900"
-        >
+        <div role="status" className="flex flex-col items-center">
+          <CheckCircle2 className="mb-4 h-12 w-12 text-green-600 dark:text-green-500" aria-hidden />
+          <h1 className="mb-2 text-title font-semibold">Payment received</h1>
+          <p className="mb-8 text-callout text-mono-500">
+            {name ? `Your voucher from ${name} is on its way.` : 'Your voucher is on its way.'} It
+            usually arrives in your wallet within a minute.
+          </p>
+        </div>
+        <Link to="/" className={`${buttonClasses('primary', 'lg')} w-full`}>
           Go to my vouchers
         </Link>
+        {stall && (
+          <Link to={`/merchants/${stall}`} className={`${buttonClasses('ghost', 'lg')} mt-2 w-full`}>
+            Back to the stall
+          </Link>
+        )}
       </div>
     </Screen>
   )
@@ -56,19 +67,19 @@ export function BuyCancelledPage() {
   return (
     <Screen>
       <div className="flex flex-col items-center pt-16 text-center">
-        <XCircle className="mb-4 h-12 w-12 text-mono-400" aria-hidden />
-        <h1 className="mb-2 text-[22px] font-semibold tracking-[-0.02em]">
-          Payment cancelled, nothing was charged
-        </h1>
-        <p className="mb-8 text-[15px] leading-relaxed text-mono-500">
-          You can try again whenever you like.
-        </p>
-        <Link
-          to={stall ? `/buy/${stall}` : '/'}
-          className="pressable w-full rounded-full bg-mono-900 px-6 py-3 text-center text-[17px] font-medium text-white dark:bg-mono-50 dark:text-mono-900"
-        >
+        <div role="status" className="flex flex-col items-center">
+          <XCircle className="mb-4 h-12 w-12 text-mono-400" aria-hidden />
+          <h1 className="mb-2 text-title font-semibold">Payment cancelled, nothing was charged</h1>
+          <p className="mb-8 text-callout text-mono-500">You can try again whenever you like.</p>
+        </div>
+        <Link to={stall ? `/buy/${stall}` : '/'} className={`${buttonClasses('primary', 'lg')} w-full`}>
           {stall ? 'Try again' : 'Back to my wallet'}
         </Link>
+        {stall && (
+          <Link to="/" className={`${buttonClasses('ghost', 'lg')} mt-2 w-full`}>
+            Back to my wallet
+          </Link>
+        )}
       </div>
     </Screen>
   )

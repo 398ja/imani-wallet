@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
-import { Alert, BackLink, Button, PageHeader, Screen } from '../components/ui'
+import { BackLink, Button, Notice, PageHeader, Screen } from '../components/ui'
 import { replayPendingCashback } from '../lib/cashback'
 import { CODES_RETIRED } from '../lib/cashlinkCopy'
 
@@ -31,9 +31,14 @@ export function CashbackCodeRetiredPage() {
     <Screen>
       <BackLink to="/receive" label="Back" />
       <PageHeader title="Cashlink" />
-      {recovered && <Alert>An earlier Cashlink finished arriving just now. Check your wallet.</Alert>}
+      {/* Good news, so the success tone and a polite status, not the red
+          assertive `Alert` it used to borrow: a voucher arriving read as an
+          error at a glance. */}
+      {recovered && <Notice tone="success">An earlier Cashlink finished arriving just now. Check your wallet.</Notice>}
       <p className="text-mono-700 dark:text-mono-200">{CODES_RETIRED}</p>
-      <Button variant="ghost" className="mt-4 w-full" onClick={() => navigate('/')}>
+      {/* The page's only action, so it carries the primary weight. As a ghost
+          button it read as a caption and left the screen without a clear exit. */}
+      <Button size="lg" className="mt-6 w-full" onClick={() => navigate('/')}>
         Done
       </Button>
     </Screen>

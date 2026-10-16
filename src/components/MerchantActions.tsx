@@ -117,7 +117,10 @@ function Action({
         {icon} {label}
       </Button>
       {state.reason && (
-        <p id={reasonId} className="text-center text-xs text-mono-500">
+        // mono-600/400 rather than 500: the reason is what makes a disabled
+        // button make sense, and mono-500 on the dark page is about 4.2:1,
+        // under the 4.5:1 small text needs.
+        <p id={reasonId} className="text-center text-xs text-mono-600 dark:text-mono-400">
           {state.reason}
         </p>
       )}

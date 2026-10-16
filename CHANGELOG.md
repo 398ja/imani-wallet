@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **An Apple-design pass over the card-purchase and Cashlink screens.** No flow or behaviour
+  changes. Stripe's return pages (`/buy/done`, `/buy/cancelled`) announce their outcome
+  (`role="status"`), use the house `Button` look instead of a one-off pill, and always offer a way
+  back: "Back to the stall" after a payment, "Back to my wallet" beside "Try again" after a cancel.
+  The claim and gift outcome screens (`Outcome`) carry a glyph for success, waiting or unavailable,
+  are announced, and their heading is no longer grey. A recovered Cashlink on `/receive/cashback`
+  and a "give it a minute" on Cashlink ready use a new `Notice` (green or amber, polite) instead of
+  the red error `Alert`, and Done on `/receive/cashback` is the primary action. New `text-title`
+  and `text-callout` sizes (rem, with their tracking and leading) replace `text-[22px]` /
+  `text-[15px]` on these screens, so they follow the reader's text size. Press feedback on the Send
+  by link rows, the expiry banner link and the inline "change" / "Switch account" links, larger
+  tap targets on those and on the payment reference copy, `role="alert"` on Buy, cancel and
+  take-back failures, live-region announcements for "Copied", and higher-contrast small text on
+  the Buy/Pay reasons, "verified stall" and the Cashlink notes. The QR and the inline Cancel /
+  Take back confirmations enter with the existing `materialize` / `expand-row` motion, which
+  reduced motion already turns off.
+
 ## [0.28.0] - 2026-10-16
 
 Card atomicity waves 2-3 for the purchase issuer (U8 #274, U9 #275) and Buy/Pay on a merchant's page

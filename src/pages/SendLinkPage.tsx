@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ChevronRight, Link2 } from 'lucide-react'
 import type { Voucher } from '@imani/voucher-send'
 
-import { Alert, BackLink, Button, Centered, Input, PageHeader, Panel, Screen } from '../components/ui'
+import { Alert, BackLink, Button, Centered, Input, Notice, PageHeader, Panel, Screen } from '../components/ui'
 import { ClaimLinkPanel } from '../components/CashbackClaimLink'
 import { formatFace, parseAmountToMinor, formatDate } from '../lib/format'
 import {
@@ -91,10 +91,15 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
         <Panel className="mb-4 p-5">
           <ClaimLinkPanel link={sent.link} expiresAt={sent.x * 1000} qrAlt="QR code to claim this Cashlink" />
         </Panel>
+        {/* A delay, not a failure: the link exists and will work. Amber and a
+            polite status rather than the red assertive `Alert`, which made a
+            finished send read as a failed one. */}
         {!sent.delivered && (
-          <Alert>The Cashlink is made. Its voucher may take a moment to reach it, so it can be opened in a minute.</Alert>
+          <Notice tone="warning">The Cashlink is made. Its voucher may take a moment to reach it, so it can be opened in a minute.</Notice>
         )}
-        <p className="mb-4 text-xs text-mono-400">You can show it again, or take it back, from your history.</p>
+        {/* mono-500, not mono-400: the lighter grey is about 2.5:1 on the page,
+            too faint for the sentence that says where the link lives now. */}
+        <p className="mb-4 text-sm text-mono-500">You can show it again, or take it back, from your history.</p>
         <Button size="lg" className="w-full" onClick={() => navigate('/')}>
           Done
         </Button>
@@ -166,13 +171,13 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
               key={key(o)}
               type="button"
               onClick={() => setPicked(key(o))}
-              className="flex w-full items-center justify-between rounded-2xl bg-white p-4 text-left dark:bg-mono-900"
+              className="pressable flex w-full items-center justify-between rounded-2xl bg-white p-4 text-left dark:bg-mono-900"
             >
               <div className="min-w-0">
                 <MerchantText merchant={o.merchant} />
                 <p className="text-sm text-mono-500">{formatFace(o.total, o)}</p>
               </div>
-              <ChevronRight className="h-5 w-5 text-mono-400" />
+              <ChevronRight className="h-5 w-5 text-mono-400" aria-hidden />
             </button>
           ))}
         </div>
@@ -200,7 +205,7 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
           <p className="mt-2 text-sm text-mono-500">The link expires on {formatDate(x * 1000)}.</p>
         </Panel>
         {/* Spec 5.4: a handle binds the voucher to its recipient, a link does not. */}
-        <p className="mb-4 text-xs text-mono-400">
+        <p className="mb-4 text-sm text-mono-500">
           If you know their handle, send to them directly: nobody else can claim it.
         </p>
         {(status.step === 'failed' || status.step === 'unconfirmed') && <Alert>{status.message}</Alert>}
@@ -265,7 +270,11 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
           {usable.length > 1 && (
             <>
               {' · '}
-              <button type="button" className="underline" onClick={() => { setPicked(null); setAmount('') }}>
+              <button
+                type="button"
+                className="pressable -my-2 inline-block py-2 underline"
+                onClick={() => { setPicked(null); setAmount('') }}
+              >
                 change
               </button>
             </>
@@ -314,14 +323,14 @@ export function SendByLinkOption({ from, unit }: { from?: string | null; unit?: 
     <button
       type="button"
       onClick={() => navigate(`/send/link${query}`)}
-      className="mt-4 flex w-full items-center gap-3 rounded-2xl bg-white p-4 text-left dark:bg-mono-900"
+      className="pressable mt-4 flex w-full items-center gap-3 rounded-2xl bg-white p-4 text-left dark:bg-mono-900"
     >
-      <Link2 className="h-5 w-5 text-mono-500" />
+      <Link2 className="h-5 w-5 text-mono-500" aria-hidden />
       <div className="min-w-0 flex-1">
         <p className="font-medium text-mono-900 dark:text-mono-50">Anyone, as a Cashlink</p>
         <p className="text-sm text-mono-500">Make a link or QR anyone can claim</p>
       </div>
-      <ChevronRight className="h-5 w-5 text-mono-400" />
+      <ChevronRight className="h-5 w-5 text-mono-400" aria-hidden />
     </button>
   )
 }

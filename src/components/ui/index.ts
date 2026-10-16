@@ -1,4 +1,5 @@
 export { Button } from './Button'
+export { buttonClasses } from './buttonClasses'
 export { Avatar } from './Avatar'
 export { Skeleton, SkeletonLine } from './Skeleton'
 export { RemoteImage } from './RemoteImage'
@@ -13,6 +14,7 @@ export {
   SeeAll,
   DetailRow,
   Alert,
+  Notice,
   EmptyRow,
   RawDetails,
   Centered,

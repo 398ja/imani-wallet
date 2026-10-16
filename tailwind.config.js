@@ -66,6 +66,15 @@ export default {
         '2xl': ['1.5rem', { lineHeight: '2rem', letterSpacing: '-0.015em' }],
         '3xl': ['1.875rem', { lineHeight: '2.25rem', letterSpacing: '-0.02em' }],
         '4xl': ['2.25rem', { lineHeight: '2.5rem', letterSpacing: '-0.02em' }],
+        // The two in-between sizes the flow screens reach for (Buy, its
+        // return pages, the claim prompts), named so they stop being written as
+        // `text-[22px]` / `text-[15px]`. A px literal ignores the reader's text
+        // size setting, which is the one thing a rem exists to honour, and it
+        // carries no tracking or leading, so each call site restated those too.
+        // `title` is a screen's one heading (22px at the default root size);
+        // `callout` is the sentence under it (15px), with paragraph leading.
+        callout: ['0.9375rem', { lineHeight: '1.5rem', letterSpacing: '0' }],
+        title: ['1.375rem', { lineHeight: '1.75rem', letterSpacing: '-0.02em' }],
         // A money figure: the largest type in the app, so it takes the most
         // tracking. Named `amount` and not `balance` for two reasons — most of
         // its uses are transaction amounts rather than balances, and `balance`
