@@ -431,6 +431,28 @@ describe('the delivery outbox (U8)', () => {
     }
   })
 
+  // Second review of #291: the inline refusal is enqueued already exhausted, so only an OUTBOX
+  // re-send that gets gc#235's 422 reaches the `next.deliver && !next.exhausted` guard. That pass
+  // parks the row and must not also count it `delivery_retried` (red without 8147839's guard).
+  it('parks an outbox re-send refused 422 without counting it retried (#287, gc#235)', async () => {
+    const w = world()
+    w.add('evt_1')
+    vi.stubGlobal('fetch', w.fetchImpl)
+    const outbox = w.outboxOn()
+    Object.assign(w.gw, { dmFail: true, dmStatus: 502, dmBody: { error: 'relay down' } })
+    await runPass(w.worker('a', outbox))
+    Object.assign(w.gw, { dmStatus: 422, dmBody: {}, dmHeader: 'proofs_not_unspent' })
+    w.advance(10_001)
+    const pass = await w.deliveryPass(outbox)
+
+    expect(w.sends).toHaveLength(2)
+    expect(w.rows.get('evt_1')!.status).toBe('NEEDS_ATTENTION')
+    expect(w.rows.get('evt_1')!.attention!.detail).toContain('422 proofs_not_unspent')
+    expect(pass.exhausted).toBe(1)
+    expect(pass.retried).toBe(0)
+    expect(await outbox.size()).toBe(0)
+  })
+
   // imani-wallet#287 (U3): the retry is idempotent. Re-sending the same voucher never mints, and
   // every re-send carries the same voucher id and payment request (gc and core dedupe on those).
   it('re-sends the same voucher under the same payment request, minting once (#287)', async () => {
