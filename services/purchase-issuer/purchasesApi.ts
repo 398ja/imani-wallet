@@ -308,6 +308,46 @@ export class PurchasesApi {
   }
 
   /**
+   * Park a purchase for a person (payment-adapter#280, `POST /{eventId}/attention`, #273).
+   *
+   * `gateway_unrecorded`: gc refused the mint 409 UNRECORDED, so whether a coupon exists is
+   * unknown and nothing automatic may retry it. `delivery_exhausted`: the outbox gave up, a coupon
+   * exists (`voucherId`). Uses the ISSUER token; `/resolve` is the operator's.
+   *
+   * `unsupported` is a 404 with no such row answer from a payment-adapter that predates #280: the
+   * caller logs and falls back to `/failure`. Retried with the same backoff as failure reports.
+   */
+  async attention(
+    eventId: string,
+    reason: 'gateway_unrecorded' | 'delivery_exhausted',
+    { voucherId, detail, worker }: { voucherId?: string; detail?: string; worker?: string } = {},
+  ): Promise<'parked' | 'unsupported' | 'refused' | 'unreachable'> {
+    for (let attempt = 0; attempt <= this.reportBackoffsMs.length; attempt++) {
+      if (attempt > 0) await this.sleep(this.reportBackoffsMs[attempt - 1])
+      try {
+        const response = await this.fetchImpl(
+          `${this.baseUrl}/api/v1/purchases/${encodeURIComponent(eventId)}/attention`,
+          {
+            method: 'POST',
+            headers: this.headers(),
+            body: JSON.stringify({ reason, detail: detail ?? null, worker: worker ?? null, voucherId: voucherId ?? null }),
+          },
+        )
+        if (response.ok) return 'parked'
+        // 404 covers both "no such route" (PA without #280) and "no such row". Either way
+        // parking cannot happen here; the /failure fallback answers the second correctly too.
+        if (response.status === 404) return 'unsupported'
+        // 409: closed, or another worker holds the live claim. 400: a reason PA does not know.
+        if (response.status === 409 || response.status === 400) return 'refused'
+        // 503 (optimistic lock lost) and anything else: retry.
+      } catch {
+        // retry
+      }
+    }
+    return 'unreachable'
+  }
+
+  /**
    * Report that an attempt failed, closing nothing.
    *
    * NOT best-effort any more (imani-wallet#96). When `voucherId` is set this

@@ -11,8 +11,9 @@ import { hostname } from 'node:os'
 
 import { getDecimals } from '@imani/money'
 
-import { discharge, type Obligation, type Ports } from './discharge'
+import { discharge, type Obligation, type Outcome, type Ports } from './discharge'
 import { countAttempt } from './metrics'
+import type { DeliveryOutbox } from './outbox'
 import type { PurchasesApi, OwedPurchase } from './purchasesApi'
 
 export interface WorkerDeps {
@@ -35,6 +36,11 @@ export interface WorkerDeps {
    * Not an authority; the bearer token is.
    */
   workerId?: string
+  /**
+   * The durable delivery outbox (imani-wallet#274). Absent, a failed delivery parks the row ISSUED
+   * with nothing to re-send it (the pre-U8 behaviour, kept for tests and tools only).
+   */
+  outbox?: DeliveryOutbox
 }
 
 /** Host and process, which is what an operator needs to find the claimant. */
@@ -107,7 +113,56 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
 
     const outcome = await discharge(deps.gatewayUrl, toObligation(purchase), deps.ports)
 
+    // A coupon exists. Whatever it still owes goes into the durable outbox BEFORE the purchases
+    // API hears anything, so a crash from here on cannot lose a delivery (imani-wallet#274).
+    if ((outcome.kind === 'undelivered' || outcome.kind === 'discharged') && deps.outbox) {
+      const owesDelivery = outcome.kind === 'undelivered'
+      if (owesDelivery || outcome.pendingSale !== null) {
+        const queued = await enqueue(deps.outbox, purchase, outcome)
+        if (!queued && owesDelivery) {
+          // Not durable, so NOT reported ISSUED: that would park the coupon with nothing to
+          // re-send it. The claim is left to lapse instead; the re-claim re-mints under the same
+          // pi_ nonce, gc replays the original voucher (#232), and delivery is tried again.
+          result.deferred += 1
+          countAttempt('outbox_write_failed')
+          await deps.api.reportFailure(
+            purchase.eventId,
+            `issued voucher ${outcome.voucherId}, delivery failed and the outbox write failed`,
+            false,
+            undefined,
+            { worker, keepClaim: true },
+          )
+          continue
+        }
+      }
+    }
+
     switch (outcome.kind) {
+      case 'unrecorded': {
+        // Never retried (gc#232): the first run may have minted. Parked for a person.
+        result.blocked += 1
+        countAttempt('unrecorded')
+        const parked = await deps.api.attention(purchase.eventId, 'gateway_unrecorded', {
+          detail: outcome.reason.slice(0, 500),
+          worker,
+        })
+        if (parked === 'unsupported') {
+          // A payment-adapter without #280: the old permanent failure, which also stops retries.
+          console.warn(JSON.stringify({ event: 'purchase_attention_unsupported', event_id: purchase.eventId }))
+          await deps.api.reportFailure(purchase.eventId, `gateway_unrecorded: ${outcome.reason}`, true, undefined, {
+            worker,
+          })
+        } else if (parked !== 'parked') {
+          // Could not park it now. Left to lapse, NOT released: the next claim asks gc again and
+          // gets the same 409, and tries to park it again.
+          await deps.api.reportFailure(purchase.eventId, `gateway_unrecorded: ${outcome.reason}`, false, undefined, {
+            worker,
+            keepClaim: true,
+          })
+        }
+        break
+      }
+
       case 'discharged': {
         const accepted = await deps.api.discharge(
           purchase.eventId,
@@ -179,6 +234,39 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
   }
 
   return result
+}
+
+/** Queue what a minted coupon still owes. False when it could not be made durable. */
+async function enqueue(
+  outbox: DeliveryOutbox,
+  purchase: OwedPurchase,
+  outcome: Extract<Outcome, { kind: 'discharged' | 'undelivered' }>,
+): Promise<boolean> {
+  try {
+    await outbox.put({
+      eventId: purchase.eventId,
+      voucherId: outcome.voucherId,
+      issuerId: outcome.issuerId,
+      stallPubkey: purchase.stallPubkey as string,
+      recipientPubkey: purchase.recipientPubkey as string,
+      paymentRequestId: purchase.paymentRequestId,
+      deliver: outcome.kind === 'undelivered',
+      // The inline attempt counts.
+      attempts: outcome.kind === 'undelivered' ? 1 : 0,
+      sale: outcome.pendingSale,
+      saleAttempts: outcome.pendingSale ? 1 : 0,
+    })
+    return true
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: 'purchase_outbox_write_failed',
+        event_id: purchase.eventId,
+        detail: error instanceof Error ? error.message : String(error),
+      }),
+    )
+    return false
+  }
 }
 
 function toObligation(purchase: OwedPurchase): Obligation {
