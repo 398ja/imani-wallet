@@ -29,7 +29,7 @@ import {
   type StallCredential,
 } from './issuer'
 import { checkDelegation, delegatedWarrant } from './delegatedWarrant'
-import { deliver, type Recipient } from './delivery'
+import { DeliveredUnconfirmed, DeliveryRefused, deliver, type Recipient } from './delivery'
 import type { CardSale } from './saleRecord'
 
 /** One coupon a stall owes because a card payment cleared. */
@@ -72,7 +72,18 @@ export interface Minted {
 export type Outcome =
   | ({ kind: 'discharged'; voucherId: string; eventId?: string } & Minted)
   /** Issued but not delivered: value exists and has not reached anyone. */
-  | ({ kind: 'undelivered'; voucherId: string; reason: string } & Minted)
+  | ({
+      kind: 'undelivered'
+      voucherId: string
+      reason: string
+      /**
+       * The DM DID go out, but the gateway did not confirm it recorded the delivery
+       * (imani-wallet#287/#289). Still owed to the outbox: the discharge is not confirmed.
+       */
+      delivered?: true
+      /** gateway-core refused the receipt for good (core#163): park, never retry. */
+      refused?: true
+    } & Minted)
   /**
    * gc refused 409 UNRECORDED (gc#232): this payment's warrant nonce was spent by a run that never
    * recorded its voucher. Unknown whether a coupon exists, so never retried: parked for a person.
@@ -275,6 +286,9 @@ export async function discharge(
       obligation.recipient,
       token,
       obligation.paymentRequestId,
+      coupon.voucherId,
+      fetch,
+      () => ports.now(),
     )
     return {
       kind: 'discharged',
@@ -287,6 +301,8 @@ export async function discharge(
       kind: 'undelivered',
       voucherId: coupon.voucherId,
       reason: error instanceof Error ? error.message : describe(error),
+      ...(error instanceof DeliveredUnconfirmed || error instanceof DeliveryRefused ? { delivered: true as const } : {}),
+      ...(error instanceof DeliveryRefused ? { refused: true as const } : {}),
       ...minted,
     }
   }

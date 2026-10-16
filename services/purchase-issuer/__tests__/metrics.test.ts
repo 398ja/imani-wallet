@@ -52,7 +52,7 @@ describe('purchase-issuer metrics', () => {
   it('counts a discharge', async () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't', issuer_id: 'i1' }))
-      .mockResolvedValueOnce(reply(200, { event_id: 'ev1' })))
+      .mockResolvedValueOnce(reply(200, { event_id: 'ev1', fulfilment_recorded: true })))
     await runPass(deps())
     expect(attemptCount('discharged')).toBe(1)
   })
@@ -60,12 +60,42 @@ describe('purchase-issuer metrics', () => {
   it('counts a refused discharge', async () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't', issuer_id: 'i1' }))
-      .mockResolvedValueOnce(reply(200, {})))
+      .mockResolvedValueOnce(reply(200, { fulfilment_recorded: true })))
     const d = deps()
     mock(d.api.discharge).mockResolvedValue('refused')
     await runPass(d)
     expect(attemptCount('discharge_rejected')).toBe(1)
     expect(attemptCount('discharged')).toBe(0)
+  })
+
+  // imani-wallet#289 (E4), red on main: a delivered-but-unrecorded DM was counted (and worded)
+  // like a failed delivery, so an operator would think the buyer holds nothing.
+  it('counts a delivered but unconfirmed DM apart from a failed one (#289)', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't', issuer_id: 'i1' }))
+      .mockResolvedValueOnce(reply(200, { event_id: 'ev1' })))
+    const d = deps()
+    await runPass(d)
+    expect(attemptCount('delivered_unconfirmed')).toBe(1)
+    expect(attemptCount('undelivered')).toBe(0)
+    expect(attemptCount('discharged')).toBe(0)
+    const text = mock(d.api.reportFailure).mock.calls[0][1] as string
+    expect(text).toContain('DELIVERED')
+    expect(text).not.toContain('delivery failed')
+    expect(renderMetrics()).toContain('outcome="delivered_unconfirmed"} 1')
+  })
+
+  // imani-wallet#289 (E4): a refused discharge after a recorded delivery says it was delivered.
+  it('says DELIVERED when the discharge is refused after a recorded delivery (#289)', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't', issuer_id: 'i1' }))
+      .mockResolvedValueOnce(reply(200, { event_id: 'ev1', fulfilment_recorded: true })))
+    const d = deps()
+    mock(d.api.discharge).mockResolvedValue('refused')
+    await runPass(d)
+    const text = mock(d.api.reportFailure).mock.calls[0][1] as string
+    expect(text).toContain('DELIVERED voucher v1')
+    expect(text).toContain('ev1')
   })
 
   it('counts a burnt credential as blocked', async () => {

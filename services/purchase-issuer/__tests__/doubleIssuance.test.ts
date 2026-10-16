@@ -76,7 +76,7 @@ function world({ leaseMs = 600_000 } = {}) {
         return json(201, { voucher_id: voucherId, issuer_id: STALL, token: 'cashuB-fresh' })
       }
       // Delivery.
-      return json(200, { event_id: 'dm-1' })
+      return json(200, { event_id: 'dm-1', fulfilment_recorded: true })
     }
 
     if (down.payments) throw new TypeError('fetch failed')

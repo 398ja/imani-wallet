@@ -31,7 +31,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
-import { deliver } from './delivery'
+import { DeliveredUnconfirmed, DeliveryRefused, deliver } from './delivery'
 import type { Ports } from './discharge'
 import { countAttempt } from './metrics'
 import type { PurchasesApi } from './purchasesApi'
@@ -56,6 +56,11 @@ export interface OutboxEntry {
   /** Set once delivery is exhausted but the attention report has not landed yet. */
   exhausted?: boolean
   lastError?: string
+  /**
+   * The last attempt's DM went out but the gateway did not record it (imani-wallet#287/#289). Kept
+   * so a park after `maxAttempts` says "delivered, discharge never confirmed", not "delivery failed".
+   */
+  unconfirmed?: boolean
 }
 
 export interface OutboxStore {
@@ -189,7 +194,16 @@ export async function runDeliveryPass(deps: DeliveryDeps): Promise<DeliveryPassR
       } else {
         try {
           const token = await ports.tokenFor(credential, entry.voucherId)
-          await deliver(deps.gatewayUrl, credential, { kind: 'pubkey', pubkey: entry.recipientPubkey }, token, entry.paymentRequestId)
+          await deliver(
+            deps.gatewayUrl,
+            credential,
+            { kind: 'pubkey', pubkey: entry.recipientPubkey },
+            token,
+            entry.paymentRequestId,
+            entry.voucherId,
+            fetch,
+            () => ports.now(),
+          )
           next.deliver = false
           result.delivered += 1
           countAttempt('delivered_late')
@@ -199,9 +213,15 @@ export async function runDeliveryPass(deps: DeliveryDeps): Promise<DeliveryPassR
         } catch (error) {
           next.attempts += 1
           next.lastError = error instanceof Error ? error.message : String(error)
+          // Delivered, discharge not confirmed (imani-wallet#287/#289): re-sent like any failure,
+          // but counted apart so a dashboard does not read it as "the buyer has nothing".
+          next.unconfirmed = error instanceof DeliveredUnconfirmed
+          if (error instanceof DeliveredUnconfirmed) countAttempt('delivered_unconfirmed')
+          // A permanent receipt refusal (core#163): park now, no retry loop.
+          if (error instanceof DeliveryRefused) next.exhausted = true
         }
       }
-      if (next.deliver) {
+      if (next.deliver && !next.exhausted) {
         if (next.attempts >= outbox.options.maxAttempts) {
           next.exhausted = true
         } else {
@@ -214,7 +234,14 @@ export async function runDeliveryPass(deps: DeliveryDeps): Promise<DeliveryPassR
     if (next.exhausted && next.deliver) {
       const parked = await api.attention(entry.eventId, 'delivery_exhausted', {
         voucherId: entry.voucherId,
-        detail: `delivery failed ${next.attempts} times: ${next.lastError ?? 'unknown'}`.slice(0, 500),
+        detail: (next.lastError?.includes('refused the discharge receipt permanently')
+          ? next.lastError
+          : next.unconfirmed
+            ? // E4 (#289): the buyer HAS the coupon; only the gateway's record of it is missing
+              // (e.g. a gateway-customer without #287 U2 during a rolling deploy).
+              `delivered by DM ${next.attempts} times, discharge never confirmed: ${next.lastError ?? 'unknown'}`
+            : `delivery failed ${next.attempts} times: ${next.lastError ?? 'unknown'}`
+        ).slice(0, 500),
         worker: deps.workerId,
       })
       if (parked === 'parked' || parked === 'unsupported' || parked === 'refused') {
