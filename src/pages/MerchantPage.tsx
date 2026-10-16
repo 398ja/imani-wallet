@@ -107,7 +107,10 @@ export function MerchantPage({ viewerPubkey }: { viewerPubkey?: string }) {
       setTransactions(history)
     }
     load()
-    return onWalletChanged(load)
+    // Same guard as `load`: `onWalletChanged` goes through `getWallet` too, and
+    // threw on a visitor's mount, which blanked this page for everyone without a
+    // session (the shop-sign QR case, and #280's logged-out Buy).
+    return walletIsOpen() ? onWalletChanged(load) : undefined
   }, [pubkey, clock])
 
   useEffect(() => {
