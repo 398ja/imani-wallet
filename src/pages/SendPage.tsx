@@ -374,7 +374,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
               key={key(option)}
               type="button"
               onClick={() => setPicked(key(option))}
-              className="flex w-full items-center justify-between rounded-2xl bg-white p-4 text-left dark:bg-mono-900"
+              className="pressable flex w-full items-center justify-between rounded-2xl bg-white p-4 text-left dark:bg-mono-900"
             >
               <div className="min-w-0">
                 <MerchantName merchant={option.merchant} />
@@ -383,7 +383,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
                   {option.vouchers.length === 1 ? '1 voucher' : `${option.vouchers.length} vouchers`}
                 </p>
               </div>
-              <ChevronRight className="h-5 w-5 text-mono-400" />
+              <ChevronRight className="h-5 w-5 text-mono-400" aria-hidden />
             </button>
           ))}
         </div>
@@ -563,7 +563,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
               {' · '}
               <button
                 type="button"
-                className="underline"
+                className="pressable -my-2 inline-block py-2 underline"
                 onClick={() => {
                   setPicked(null)
                   setAmount('')

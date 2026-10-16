@@ -21,7 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the red error `Alert`, and Done on `/receive/cashback` is the primary action. New `text-title`
   and `text-callout` sizes (rem, with their tracking and leading) replace `text-[22px]` /
   `text-[15px]` on these screens, so they follow the reader's text size. Press feedback on the Send
-  by link rows, the expiry banner link and the inline "change" / "Switch account" links, larger
+  by link rows, the Send picker's voucher rows (`/send`, "Which voucher?"), the expiry banner link
+  and the inline "change" / "Switch account" links, larger
   tap targets on those and on the payment reference copy, `role="alert"` on Buy, cancel and
   take-back failures, live-region announcements for "Copied", and higher-contrast small text on
   the Buy/Pay reasons, "verified stall" and the Cashlink notes. The QR and the inline Cancel /
