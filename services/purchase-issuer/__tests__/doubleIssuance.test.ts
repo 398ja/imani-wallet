@@ -170,7 +170,7 @@ describe('two workers on one queue (#96)', () => {
 
     expect(w.minted).toHaveLength(3)
     expect(new Set(w.minted.map((m) => m.key))).toEqual(
-      new Set(['evt_1', 'evt_2', 'evt_3'].map(purchaseIdempotencyKey)),
+      new Set(['pi_evt_1', 'pi_evt_2', 'pi_evt_3'].map(purchaseIdempotencyKey)),
     )
     expect([...w.rows.values()].every((r) => r.status === 'DISCHARGED')).toBe(true)
   })
@@ -265,14 +265,14 @@ describe('a failure report that cannot be recorded (#96)', () => {
 })
 
 describe('the idempotency key', () => {
-  it('is sent on every mint, derived from the purchase alone', async () => {
+  it('is sent on every mint, derived from the payment intent alone (#274)', async () => {
     const w = world()
     w.add('evt_1')
     vi.stubGlobal('fetch', w.fetchImpl)
 
     await runPass(w.worker('a'))
 
-    expect(w.minted).toEqual([{ key: 'purchase:evt_1', voucherId: 'v1' }])
+    expect(w.minted).toEqual([{ key: 'purchase:pi:pi_evt_1', voucherId: 'v1' }])
   })
 })
 
