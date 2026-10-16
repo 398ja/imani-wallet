@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-10-16
+
+Card atomicity waves 2-3 for the purchase issuer (U8 #274, U9 #275) and Buy/Pay on a merchant's page
+(#280). Both the wallet app and `services/purchase-issuer` change. **Deploy order:** gateway-customer
+0.30.0 (gc#232) and payment-adapter 0.21.0 (`/attention`) first, and switch the purchase issuer only
+when no purchase is `ISSUING` (see the key-switch precondition below). New optional env
+`PURCHASE_OUTBOX_PATH` (default on the existing volume), `PURCHASE_DELIVERY_BASE_BACKOFF_MS`,
+`PURCHASE_DELIVERY_MAX_ATTEMPTS`.
+
 ### Added
 
 - **Buy and Pay on a merchant's page; scanning a merchant opens it** (#280). `/merchants/:pubkey`
