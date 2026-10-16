@@ -266,7 +266,7 @@ export async function issueAsStall(
 
   const raw = await response.text()
 
-  if (response.status === 409 && /UNRECORDED/.test(raw)) {
+  if (isUnrecorded(response.status, raw)) {
     throw new IssuanceFailed(explain(response.status, raw), false, true, true)
   }
 
@@ -322,6 +322,22 @@ function explain(status: number, raw: string): string {
   return detail === ''
     ? `the gateway refused with status ${status}`
     : `the gateway refused with status ${status}: ${detail}`
+}
+
+/**
+ * gc refused this payment's mint in a way every later retry gets too, and an earlier attempt may
+ * have minted (review of #279). Parked `gateway_unrecorded`, never retried:
+ *  - 409 `UNRECORDED`: the warrant nonce's first use never recorded its voucher (gc#232). The
+ *    same test also matches the idempotency store's `IDEMPOTENCY_PREVIOUS_ATTEMPT_UNRECORDED`.
+ *  - 409 `WARRANT_ALREADY_USED`: the pi_ nonce was spent by a request with DIFFERENT bytes. A
+ *    retry's body changes when the stall renews its delegation between attempts (the delegation
+ *    rides inside the warrant). Before this it was retryable, so the row looped forever.
+ *  - 422 `IDEMPOTENCY_KEY_REUSED`: the same case inside gc's 24 h key window.
+ */
+function isUnrecorded(status: number, raw: string): boolean {
+  if (status === 409) return /UNRECORDED|WARRANT_ALREADY_USED/.test(raw)
+  if (status === 422) return /IDEMPOTENCY_KEY_REUSED/.test(raw)
+  return false
 }
 
 /** A burnt credential will never succeed; a 500 might. */
