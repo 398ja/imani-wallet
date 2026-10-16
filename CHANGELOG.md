@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **purchase-issuer: a card coupon's DM names the voucher it carries, and a delivery only counts
+  once the gateway has recorded it (imani-wallet#287, E2 unit U3).** The DM send
+  (`/api/v1/dm/tokens/send`) now includes `voucher_id` (snake case), so gateway-customer can tell
+  the issuer's own hand-over and report it to gateway-core as an issuance receipt. A 2xx without
+  `fulfilment_recorded: true` (an older gateway-customer, or one whose core did not record it) is
+  no longer taken as a discharge: the coupon goes to the delivery outbox and is re-sent, with the
+  same voucher and payment request, until the gateway records it or the row parks
+  `delivery_exhausted`. Deploy after gateway-customer U2.
+- **purchase-issuer: says DELIVERED when the discharge is not confirmed (imani-wallet#289, E4).**
+  The failure text names the voucher, the DM event, the time and the payment request, and a new
+  `outcome="delivered_unconfirmed"` on `imani_purchase_issuer_attempts_total` counts it apart from
+  `undelivered`. A discharge refused after a recorded delivery reads "issued and DELIVERED voucher
+  ...".
+
 ### Changed
 
 - **An Apple-design pass over the card-purchase and Cashlink screens.** No flow or behaviour

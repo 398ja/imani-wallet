@@ -26,6 +26,8 @@ export const OUTCOMES = [
   'delivered_late',
   'delivery_retried',
   'delivery_exhausted',
+  // imani-wallet#287/#289: the DM went out, the gateway did not confirm it recorded it.
+  'delivered_unconfirmed',
 ] as const
 export type Outcome = (typeof OUTCOMES)[number]
 

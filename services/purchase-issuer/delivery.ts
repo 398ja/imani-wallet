@@ -31,6 +31,39 @@
 
 import { DELIVER_PATH, IssuanceFailed, authorization, type StallCredential } from './issuer'
 
+/**
+ * The DM went out, but the gateway did not confirm it recorded the delivery against the payment
+ * request (imani-wallet#287 E2, U3). Without that record gateway-core's fulfilment check finds
+ * nothing and payment-adapter refuses the discharge for ever, so this is RETRYABLE: the outbox
+ * re-sends (the wallet dedupes by voucher id, and gc's receipt is idempotent).
+ *
+ * The message says DELIVERED on purpose (imani-wallet#289, E4): an operator reading
+ * `last_failure` must not conclude the buyer holds nothing.
+ */
+export class DeliveredUnconfirmed extends IssuanceFailed {
+  readonly delivered = true as const
+  readonly voucherId: string
+  readonly paymentRequestId: string
+  readonly eventId: string | undefined
+  readonly at: Date
+
+  constructor(voucherId: string, paymentRequestId: string, eventId: string | undefined, at: Date) {
+    super(
+      `voucher ${voucherId} DELIVERED by DM` +
+        (eventId ? ` (event ${eventId})` : '') +
+        ` at ${at.toISOString()} for payment request ${paymentRequestId}, ` +
+        'but the discharge is not yet confirmed: the gateway did not record the delivery (fulfilment_recorded missing)',
+      true,
+      false,
+    )
+    this.name = 'DeliveredUnconfirmed'
+    this.voucherId = voucherId
+    this.paymentRequestId = paymentRequestId
+    this.eventId = eventId
+    this.at = at
+  }
+}
+
 /** How the buyer told us to reach them. */
 export type Recipient =
   /** A pubkey we can DM, because they already hold a wallet. */
@@ -41,6 +74,12 @@ export type Recipient =
 export interface Delivered {
   /** Set for a DM; the gateway's own id for the send. */
   eventId?: string
+  /**
+   * True when the gateway confirmed it recorded the delivery against the payment request
+   * (`fulfilment_recorded`, imani-wallet#287). `deliver` never returns without it: an unconfirmed
+   * 2xx is thrown as {@link DeliveredUnconfirmed}.
+   */
+  fulfilmentRecorded?: true
   /** Set for a claim; the reference the buyer's link carries. */
   claimRef?: string
 }
@@ -59,7 +98,9 @@ export async function deliver(
   recipient: Recipient,
   token: string,
   paymentRequestId: string,
+  voucherId: string,
   fetchImpl: typeof fetch = fetch,
+  now: () => number = Date.now,
 ): Promise<Delivered> {
   if (token === '') {
     // The mint has not finished. Not a failure: the coupon exists and the
@@ -94,6 +135,10 @@ export async function deliver(
     // discharge is refused forever. Sending the wrong case here is invisible at
     // every layer until a debt never closes.
     payment_request_id: paymentRequestId,
+    // SNAKE case too, same trap. gc records the delivery as the issuer's own hand-over (and, with
+    // imani-wallet#287 U2, reports it to gateway-core as an issuance receipt) only when the send
+    // names the voucher it carries. Without it nothing reaches core and the discharge is refused.
+    voucher_id: voucherId,
   })
 
   let response: Response
@@ -138,5 +183,11 @@ export async function deliver(
   }
 
   const record = (decoded ?? {}) as Record<string, unknown>
-  return { eventId: typeof record.event_id === 'string' ? record.event_id : undefined }
+  const eventId = typeof record.event_id === 'string' ? record.event_id : undefined
+  // Strictly `true`. An older gc (no U2) answers 2xx without the field: the DM went out, but
+  // nothing recorded it in gateway-core, so the discharge cannot be confirmed (imani-wallet#287).
+  if (record.fulfilment_recorded !== true) {
+    throw new DeliveredUnconfirmed(voucherId, paymentRequestId, eventId, new Date(now()))
+  }
+  return { eventId, fulfilmentRecorded: true }
 }

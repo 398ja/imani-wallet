@@ -181,7 +181,10 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
           countAttempt('discharge_rejected')
           await deps.api.reportFailure(
             purchase.eventId,
-            `issued voucher ${outcome.voucherId} but the discharge was ${accepted}`,
+            // E4 (imani-wallet#289): this branch is only reached after a recorded delivery.
+            `issued and DELIVERED voucher ${outcome.voucherId}` +
+              (outcome.eventId ? ` (DM event ${outcome.eventId})` : '') +
+              ` for payment request ${purchase.paymentRequestId}, but the discharge was ${accepted}`,
             false,
             // NAMED, so the debt stops being mintable. Without this the row
             // stays in the owed queue and the next pass mints a second coupon
@@ -196,10 +199,14 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
         // Issued, not delivered. Same rule: the coupon exists, so this must
         // never look like an unminted debt.
         result.deferred += 1
-        countAttempt('undelivered')
+        // E4 (imani-wallet#289): a DM that went out but was not recorded is DELIVERED, and says
+        // so in the text and the metric, so nobody concludes the buyer holds nothing.
+        countAttempt(outcome.delivered ? 'delivered_unconfirmed' : 'undelivered')
         await deps.api.reportFailure(
           purchase.eventId,
-          `issued voucher ${outcome.voucherId} but delivery failed: ${outcome.reason}`,
+          outcome.delivered
+            ? `issued voucher ${outcome.voucherId}: ${outcome.reason}`
+            : `issued voucher ${outcome.voucherId} but delivery failed: ${outcome.reason}`,
           false,
           outcome.voucherId,
         )

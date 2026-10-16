@@ -58,7 +58,7 @@ describe('discharging a purchase', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 'cashuB123' }))
-      .mockResolvedValueOnce(reply(200, { event_id: 'ev1' }))
+      .mockResolvedValueOnce(reply(200, { event_id: 'ev1', fulfilment_recorded: true }))
     vi.stubGlobal('fetch', fetchMock)
 
     const outcome = await discharge('http://gw', OBLIGATION, ports())
@@ -79,7 +79,7 @@ describe('discharging a purchase', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't' }))
-      .mockResolvedValueOnce(reply(200, { event_id: 'ev1' }))
+      .mockResolvedValueOnce(reply(200, { event_id: 'ev1', fulfilment_recorded: true }))
     vi.stubGlobal('fetch', fetchMock)
 
     await discharge('http://gw', OBLIGATION, ports())
@@ -94,6 +94,46 @@ describe('discharging a purchase', () => {
     expect(JSON.parse(init.body).paymentRequestId).toBeUndefined()
   })
 
+  // imani-wallet#287 (U3), red on main: without voucher_id gc cannot tell the issuer's own
+  // hand-over, so nothing reaches gateway-core and the discharge is refused for ever (E2).
+  it('names the voucher it delivers, in snake case (#287)', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't' }))
+      .mockResolvedValueOnce(reply(200, { event_id: 'ev1', fulfilment_recorded: true }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await discharge('http://gw', OBLIGATION, ports())
+
+    const sent = JSON.parse(fetchMock.mock.calls[1][1].body)
+    expect(sent.voucher_id).toBe('v1')
+    expect(sent.voucherId).toBeUndefined()
+  })
+
+  // imani-wallet#287 (U3) + #289 (E4), red on main: a 2xx without fulfilment_recorded was a
+  // discharge. It is undelivered-for-the-outbox now, and the reason says the voucher WAS delivered.
+  it('treats a 2xx without fulfilment_recorded as delivered but unconfirmed (#287, #289)', async () => {
+    for (const answer of [{ event_id: 'ev1' }, { event_id: 'ev1', fulfilment_recorded: 'true' }, {}]) {
+      vi.stubGlobal(
+        'fetch',
+        vi
+          .fn()
+          .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't' }))
+          .mockResolvedValueOnce(reply(200, answer)),
+      )
+
+      const outcome = await discharge('http://gw', OBLIGATION, ports())
+
+      expect(outcome.kind).toBe('undelivered')
+      if (outcome.kind === 'undelivered') {
+        expect(outcome.delivered).toBe(true)
+        expect(outcome.reason).toContain('DELIVERED')
+        expect(outcome.reason).toContain('discharge is not yet confirmed')
+        expect(outcome.reason).toContain(OBLIGATION.paymentRequestId)
+      }
+    }
+  })
+
   it('issues as the stall, naming no issuer of its own', async () => {
     // The gateway derives the issuer from the credential. Sending one would be
     // asserting something we are not the authority on, and an unauthenticated
@@ -102,7 +142,7 @@ describe('discharging a purchase', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't' }))
-      .mockResolvedValueOnce(reply(200, {}))
+      .mockResolvedValueOnce(reply(200, { fulfilment_recorded: true }))
     vi.stubGlobal('fetch', fetchMock)
 
     await discharge('http://gw', OBLIGATION, ports())
@@ -181,7 +221,7 @@ describe('discharging a purchase', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: '' }))
-      .mockResolvedValueOnce(reply(200, { event_id: 'ev1' }))
+      .mockResolvedValueOnce(reply(200, { event_id: 'ev1', fulfilment_recorded: true }))
     vi.stubGlobal('fetch', fetchMock)
 
     let polls = 0
@@ -240,7 +280,7 @@ describe('discharging a purchase', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: '' }))
-      .mockResolvedValueOnce(reply(200, {}))
+      .mockResolvedValueOnce(reply(200, { fulfilment_recorded: true }))
     vi.stubGlobal('fetch', fetchMock)
 
     let polls = 0
