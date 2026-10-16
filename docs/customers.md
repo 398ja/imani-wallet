@@ -79,6 +79,22 @@ The app only lets you pay a merchant with coupons **from that same merchant**.
 If the confirmation screen warns about an expired coupon, not enough balance, or
 no matching coupon, it will say so plainly rather than fail silently.
 
+## A merchant's page: Buy and Pay
+
+Scan a merchant's own QR code (or type their handle on **Scan**) and the app opens
+**their page**, not a payment. Scanning a friend's code still starts a send.
+
+A merchant's page has two buttons side by side:
+
+- **Buy**: buy a voucher from them by card. Greyed out, with "Card payments aren't
+  set up for this merchant", when they don't take cards. If you aren't logged in,
+  you log in first and come straight back to the purchase.
+- **Pay**: pay them with the vouchers you hold from them. Greyed out, with "You
+  have no vouchers from this merchant yet", until you hold at least one that is
+  unspent and not expired.
+
+**Send** (give one of their vouchers to someone else) and **Share** sit underneath.
+
 ## Getting change
 
 You don't need an exact-value coupon to pay a smaller amount.
