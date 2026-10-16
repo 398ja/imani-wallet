@@ -44,6 +44,7 @@ import { readConfig, ConfigError, type IssuerConfig } from './config'
 import type { Ports } from './discharge'
 import { countPass, renderMetrics } from './metrics'
 import { PurchasesApi, ReportLostError } from './purchasesApi'
+import { sendSaleRecord } from './saleRecord'
 import { CredentialVault } from './vault'
 import { runPass, type WorkerDeps } from './worker'
 
@@ -70,6 +71,8 @@ export function portsFor(config: IssuerConfig, fetchImpl: typeof fetch = fetch):
     tokenFor: (credential, voucherId) => tokenFor(config.gatewayUrl, credential, voucherId),
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    // #275: card sales into the stall's ledger. U8's outbox replaces this direct send.
+    fileSale: (credential, sale) => sendSaleRecord(config.gatewayUrl, credential, sale, fetchImpl),
   }
 }
 

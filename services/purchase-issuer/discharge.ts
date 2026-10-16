@@ -30,6 +30,7 @@ import {
 } from './issuer'
 import { checkDelegation, delegatedWarrant } from './delegatedWarrant'
 import { deliver, type Recipient } from './delivery'
+import type { CardSale } from './saleRecord'
 
 /** One coupon a stall owes because a card payment cleared. */
 export interface Obligation {
@@ -82,6 +83,11 @@ export interface Ports {
   tokenFor(credential: StallCredential, voucherId: string): Promise<string>
   now(): number
   sleep(ms: number): Promise<void>
+  /**
+   * File the card sale into the stall's own ledger (imani-wallet#275, `saleRecord.ts`). Optional:
+   * absent, nothing is filed. Must never throw; its result never changes the outcome.
+   */
+  fileSale?(credential: StallCredential, sale: CardSale): Promise<boolean>
 }
 
 /**
@@ -153,6 +159,17 @@ export async function discharge(
     return { kind: 'blocked', reason: delegation.reason }
   }
 
+  const issuanceWarrant = delegatedWarrant({
+    eventId: obligation.id,
+    issuerId: credential.stallPubkey.toLowerCase(),
+    saleTotalMinor: obligation.faceValue,
+    faceDecimals: obligation.faceDecimals,
+    unit: obligation.faceUnit,
+    reference: obligation.processorReference ?? null,
+    lockKeyHex: credential.lockKeyHex,
+    delegation: delegation.event,
+  })
+
   let coupon: IssuedCoupon
   try {
     coupon = await issueAsStall(baseUrl, credential, {
@@ -167,16 +184,7 @@ export async function discharge(
       // Signed as the stall's delegate, with the stall's own delegation inside,
       // so the till verifies it offline (#152). The processor reference rides
       // along inside the signed bytes for reconciliation.
-      issuanceWarrant: delegatedWarrant({
-        eventId: obligation.id,
-        issuerId: credential.stallPubkey.toLowerCase(),
-        saleTotalMinor: obligation.faceValue,
-        faceDecimals: obligation.faceDecimals,
-        unit: obligation.faceUnit,
-        reference: obligation.processorReference ?? null,
-        lockKeyHex: credential.lockKeyHex,
-        delegation: delegation.event,
-      }),
+      issuanceWarrant,
     })
   } catch (error) {
     if (error instanceof IssuanceFailed) {
@@ -191,6 +199,36 @@ export async function discharge(
 
   // From here a coupon EXISTS. Nothing below may report the debt as unminted,
   // because a second pass would mint a second coupon for one payment.
+
+  // The sale goes into the stall's ledger as soon as the coupon exists, delivered
+  // or not: an undelivered card coupon is still the stall's sale (#275, gap D).
+  // Best effort and inline for now. U8 (the issuer outbox) takes this over so a
+  // record that did not land is retried; until then the pull fallback
+  // (`resendSaleRecords`) re-sends it.
+  if (ports.fileSale) {
+    const at = ports.now()
+    // try/await, not `.catch`: a port that throws synchronously must not escape
+    // either, because the coupon already exists (review of #278).
+    try {
+      await ports.fileSale(credential, {
+        voucherId: coupon.voucherId,
+        faceValue: obligation.faceValue,
+        faceUnit: obligation.faceUnit,
+        faceDecimals: obligation.faceDecimals,
+        memo: obligation.memo,
+        recipientPubkey: obligation.recipient.kind === 'pubkey' ? obligation.recipient.pubkey : undefined,
+        at,
+        // The gateway counts `expires_in_days` from its own mint instant, so this is
+        // the coupon's expiry to within the mint's latency. Without it the merchant
+        // record reads "No expiry" for a coupon that expires (S1 showed the date).
+        expiresAt: Math.floor(at / 1000) + expiresInDays * 86_400,
+        issuanceWarrant,
+      })
+    } catch {
+      // Best effort: the pull fallback re-sends it.
+    }
+  }
+
   let token = coupon.token
   if (token === '') {
     token = await waitForToken(credential, coupon.voucherId, ports)
