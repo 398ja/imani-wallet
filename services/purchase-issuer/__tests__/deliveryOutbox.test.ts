@@ -426,6 +426,10 @@ describe('the delivery outbox (U8)', () => {
       expect(w.rows.get('evt_1')!.status).toBe('NEEDS_ATTENTION')
       expect(w.rows.get('evt_1')!.attention).toMatchObject({ reason: 'delivery_exhausted', voucherId: 'v1' })
       expect(w.rows.get('evt_1')!.attention!.detail).toContain(`422 ${code}`)
+      // F2 (core#163 review): gc refuses BEFORE it publishes now, so the park must not claim this
+      // attempt delivered anything (an earlier one may have).
+      expect(w.rows.get('evt_1')!.attention!.detail).toContain('did NOT send it this time')
+      expect(w.rows.get('evt_1')!.attention!.detail).not.toMatch(/^voucher v1 DELIVERED/)
       expect(w.rows.get('evt_1')!.attention!.detail).not.toContain('cashuB')
       expect(await outbox.size()).toBe(0)
     }

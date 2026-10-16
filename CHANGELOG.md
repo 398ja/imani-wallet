@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `X-Imani-Issuance-Refused: token_refused|untrusted_issuer|proofs_not_unspent|refused`) parks the
   row `delivery_exhausted` at once, with that code in `last_failure`, and is never re-sent.
   Deploy after gateway-customer U2.
+  Since F2 of the core#163 review, gateway-customer asks core BEFORE it publishes, so the 422 now
+  means this attempt sent nothing (an earlier attempt may have). The park text says so: "did NOT
+  send it this time; an earlier attempt may have DELIVERED it". The HTTP contract is unchanged.
 - **purchase-issuer: says DELIVERED when the discharge is not confirmed (imani-wallet#289, E4).**
   The failure text names the voucher, the DM event, the time and the payment request, and a new
   `outcome="delivered_unconfirmed"` on `imani_purchase_issuer_attempts_total` counts it apart from
