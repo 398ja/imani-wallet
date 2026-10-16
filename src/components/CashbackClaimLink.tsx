@@ -40,10 +40,12 @@ export function ClaimLinkPanel({
     <div className="space-y-2">
       {shown ? (
         qr ? (
+          // Grows out of the Show QR button it replaces, on the same curve as
+          // every other surface here; reduced motion drops it (index.css).
           <img
             src={qr}
             alt={qrAlt}
-            className="mx-auto w-full max-w-xs rounded-2xl bg-white p-4"
+            className="materialize mx-auto w-full max-w-xs rounded-2xl bg-white p-4"
           />
         ) : null
       ) : (
@@ -66,6 +68,12 @@ export function ClaimLinkPanel({
           </>
         )}
       </Button>
+      {/* A button's label changing is not announced, so this says it out loud.
+          Mounted empty from the start: a live region inserted already holding
+          its text is not read by most screen readers. */}
+      <span className="sr-only" aria-live="polite">
+        {copied ? 'Copied to the clipboard' : ''}
+      </span>
       <p className="text-center text-sm text-mono-500">{bearerNote(expiresAt)}</p>
     </div>
   )
@@ -133,7 +141,11 @@ export function CancelCashback({
   if (!confirming) {
     return (
       <div className="space-y-2">
-        {error && <p className="text-sm text-red-700 dark:text-red-300">{error}</p>}
+        {error && (
+          <p role="alert" className="text-sm text-red-700 dark:text-red-300">
+            {error}
+          </p>
+        )}
         <Button variant="ghost" className="w-full" onClick={() => setConfirming(true)}>
           Cancel Cashlink
         </Button>
@@ -142,12 +154,17 @@ export function CancelCashback({
   }
 
   return (
-    <div className="rounded-xl bg-amber-50 p-3 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
+    // Opens out of the button that asked, like the app's other inline confirms.
+    <div className="expand-row rounded-xl bg-amber-50 p-3 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
       <div className="flex gap-2">
         <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
         <p className="text-sm leading-relaxed">{CANCEL_QUESTION}</p>
       </div>
-      {error && <p className="mt-2 text-sm">{error}</p>}
+      {error && (
+        <p role="alert" className="mt-2 text-sm">
+          {error}
+        </p>
+      )}
       <div className="mt-3 flex gap-2">
         <Button size="sm" variant="secondary" onClick={() => setConfirming(false)}>
           Keep it

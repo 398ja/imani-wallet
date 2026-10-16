@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, Clock } from 'lucide-react'
 
 /**
  * The visual vocabulary every screen is built from.
@@ -156,6 +156,40 @@ export function Alert({ children }: { children: React.ReactNode }) {
       className="rounded-xl bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950 dark:text-red-300"
     >
       {children}
+    </p>
+  )
+}
+
+/**
+ * A non-error note: something finished, or something to keep an eye on.
+ *
+ * `Alert` is red and assertive, which is right for a refusal and wrong for good
+ * news or a "give it a minute": a success painted as an error reads as a
+ * failure at a glance, and an assertive live region interrupts a screen reader
+ * for something nobody needs to act on. So this is `role="status"` (polite),
+ * and the tone is carried by an icon as well as the colour, so it still reads in
+ * greyscale.
+ */
+export function Notice({
+  tone,
+  children,
+}: {
+  tone: 'success' | 'warning'
+  children: React.ReactNode
+}) {
+  const Icon = tone === 'success' ? CheckCircle2 : Clock
+  return (
+    <p
+      role="status"
+      data-tone={tone}
+      className={`mb-4 flex gap-2 rounded-xl p-3 text-sm leading-relaxed ${
+        tone === 'success'
+          ? 'bg-green-50 text-green-800 dark:bg-green-950/50 dark:text-green-300'
+          : 'bg-amber-50 text-amber-900 dark:bg-amber-950/50 dark:text-amber-200'
+      }`}
+    >
+      <Icon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+      <span>{children}</span>
     </p>
   )
 }

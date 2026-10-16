@@ -112,7 +112,7 @@ export function GiftLandingPage({
   const goHome = useCallback(() => navigate('/', { replace: true }), [navigate])
 
   if (arrival.kind === 'incomplete') {
-    return <Outcome title="Voucher unavailable" body="This link is incomplete. Ask for it again, or scan the whole QR." onDone={goHome} />
+    return <Outcome tone="unavailable" title="Voucher unavailable" body="This link is incomplete. Ask for it again, or scan the whole QR." onDone={goHome} />
   }
   if (!authed) return <Centered>Opening your voucher…</Centered>
   return <GiftPrompt arrival={arrival} pubkey={pubkey} onDone={goHome} onSwitchAccount={onSwitchAccount} />
@@ -219,15 +219,15 @@ function GiftPrompt({
     const face = formatFace(state.summary.faceMinor, { unit: state.summary.unit, decimals: state.summary.decimals ?? currencyDecimals(state.summary.unit) })
     switch (state.outcome.kind) {
       case 'ok':
-        return <Outcome title="Voucher added" body={`${face}${stallName ? ` from ${stallName}` : ''} is in your wallet.`} onDone={onDone} />
+        return <Outcome tone="success" title="Voucher added" body={`${face}${stallName ? ` from ${stallName}` : ''} is in your wallet.`} onDone={onDone} />
       case 'claimed':
-        return <Outcome title="Voucher unavailable" body={ALREADY_CLAIMED} onDone={onDone} />
+        return <Outcome tone="unavailable" title="Voucher unavailable" body={ALREADY_CLAIMED} onDone={onDone} />
       case 'held':
-        return <Outcome title="Voucher unavailable" body={UNTRUSTED_MINT} onDone={onDone} />
+        return <Outcome tone="unavailable" title="Voucher unavailable" body={UNTRUSTED_MINT} onDone={onDone} />
       case 'failed':
         return (
           <Outcome
-            title="Voucher waiting"
+            tone="waiting" title="Voucher waiting"
             body="We could not add it just now. Your voucher is still waiting, so please try again."
             action={{ label: 'Retry', run: retry }}
             onDone={onDone}
@@ -236,6 +236,7 @@ function GiftPrompt({
       case 'merchant_refused':
         return (
           <Outcome
+            tone={state.outcome.reason === 'merchant' ? 'unavailable' : 'waiting'}
             title={state.outcome.reason === 'merchant' ? 'Not for a merchant account' : 'Voucher waiting'}
             body={state.outcome.reason === 'merchant' ? MERCHANT_FOREIGN_VOUCHER : MERCHANT_STATUS_UNKNOWN}
             onDone={onDone}
@@ -249,28 +250,28 @@ function GiftPrompt({
     case 'unreachable':
       return (
         <Outcome
-          title="Voucher waiting"
+          tone="waiting" title="Voucher waiting"
           body="We could not reach the voucher service. Your voucher is still waiting."
           action={{ label: 'Retry', run: retry }}
           onDone={onDone}
         />
       )
     case 'claimed':
-      return <Outcome title="Voucher unavailable" body={ALREADY_CLAIMED} onDone={finish} />
+      return <Outcome tone="unavailable" title="Voucher unavailable" body={ALREADY_CLAIMED} onDone={finish} />
     case 'expired':
       return (
         <Outcome
-          title="Voucher unavailable"
+          tone="unavailable" title="Voucher unavailable"
           body={`This voucher expired on ${formatDate(verdict.at)}. Ask ${senderName} to send it again.`}
           onDone={finish}
         />
       )
     case 'not_money':
-      return <Outcome title="Voucher unavailable" body="This link does not contain a voucher." onDone={finish} />
+      return <Outcome tone="unavailable" title="Voucher unavailable" body="This link does not contain a voucher." onDone={finish} />
     case 'untrusted_mint':
-      return <Outcome title="Voucher unavailable" body={UNTRUSTED_MINT} onDone={finish} />
+      return <Outcome tone="unavailable" title="Voucher unavailable" body={UNTRUSTED_MINT} onDone={finish} />
     case 'unverified':
-      return <Outcome title="Voucher unavailable" body="We could not verify this voucher." onDone={finish} />
+      return <Outcome tone="unavailable" title="Voucher unavailable" body="We could not verify this voucher." onDone={finish} />
     case 'ok':
       break
   }
@@ -279,7 +280,8 @@ function GiftPrompt({
   if (role === 'merchant' || role === 'unknown') {
     return (
       <Outcome
-        title={role === 'merchant' ? 'Not for a merchant account' : 'Voucher waiting'}
+        tone={role === 'merchant' ? 'unavailable' : 'waiting'}
+            title={role === 'merchant' ? 'Not for a merchant account' : 'Voucher waiting'}
         body={role === 'merchant' ? MERCHANT_FOREIGN_VOUCHER : MERCHANT_STATUS_UNKNOWN}
         {...(role === 'unknown'
           ? { action: { label: 'Retry', run: retryRole } }
@@ -308,9 +310,12 @@ function GiftPrompt({
   return (
     <Centered>
       <div className="materialize w-full max-w-sm px-6 text-center" data-testid="gift-prompt">
-        <p className="text-[15px] font-medium text-mono-900 dark:text-mono-50">{stall}</p>
-        <p className="text-sm text-emerald-600">✓ verified stall</p>
-        {!stallName && <p className="text-xs text-mono-400">{shortPubkey(s.issuer)}</p>}
+        <p className="text-callout font-medium text-mono-900 dark:text-mono-50">{stall}</p>
+        {/* green-700 rather than emerald-600: the lighter green measured about
+            3.6:1 on the page background, under the 4.5:1 small text needs, on
+            the one line that says this voucher can be trusted. */}
+        <p className="text-sm text-green-700 dark:text-green-400">✓ verified stall</p>
+        {!stallName && <p className="text-xs text-mono-500">{shortPubkey(s.issuer)}</p>}
         <p className="mt-4 text-amount text-mono-900 dark:text-mono-50">{face}</p>
         <p className="mt-1 text-sm text-mono-500">Cashlink from {senderName}</p>
         <p className="mt-1 text-sm text-mono-500">
@@ -323,7 +328,9 @@ function GiftPrompt({
             Not you?{' '}
             <button
               type="button"
-              className="pressable underline hover:text-mono-900 dark:hover:text-mono-50"
+              // Padded to a usable target: as a bare inline word it was a
+              // 20px-tall tap at the bottom of a prompt that also spends money.
+              className="pressable -my-2 inline-block py-2 underline hover:text-mono-900 dark:hover:text-mono-50"
               onClick={() => {
                 stashPendingClaim(arrival.ref, arrival.key, { kind: 'gift', x: arrival.x })
                 onSwitchAccount()

@@ -97,7 +97,7 @@ export function ParkedClaimBanner({ mode = 'register' }: { mode?: BannerMode }) 
     const giftFace = gift ? formatFace(gift.faceMinor, { unit: gift.unit, decimals: gift.decimals ?? currencyDecimals(gift.unit) }) : null
     return (
       <div role="status" data-testid="claim-banner" className="materialize rounded-2xl bg-mono-100 p-4 text-left dark:bg-mono-800">
-        <p className="text-[15px] font-semibold text-mono-900 dark:text-mono-50">{headline}</p>
+        <p className="text-callout font-semibold text-mono-900 dark:text-mono-50">{headline}</p>
         {giftFace && <p className="mt-1 text-sm text-mono-700 dark:text-mono-200">{giftFace}.</p>}
         <p className="mt-1 text-sm text-mono-500">{reassurance}</p>
       </div>
@@ -113,7 +113,7 @@ export function ParkedClaimBanner({ mode = 'register' }: { mode?: BannerMode }) 
 
   return (
     <div role="status" data-testid="claim-banner" className="materialize rounded-2xl bg-mono-100 p-4 text-left dark:bg-mono-800">
-      <p className="text-[15px] font-semibold text-mono-900 dark:text-mono-50">{headline}</p>
+      <p className="text-callout font-semibold text-mono-900 dark:text-mono-50">{headline}</p>
       {details && <p className="mt-1 text-sm text-mono-700 dark:text-mono-200">{details}.</p>}
       <p className="mt-1 text-sm text-mono-500">{reassurance}</p>
     </div>

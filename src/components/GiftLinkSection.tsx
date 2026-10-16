@@ -53,9 +53,15 @@ export function GiftLinkSection({ link }: { link: GiftLinkRecord | undefined }) 
       {open && url && (
         <div className="space-y-2 p-4">
           <ClaimLinkPanel link={url} expiresAt={link.x * 1000} qrAlt="QR code to claim this Cashlink" />
-          {message && <p className="text-sm text-red-700 dark:text-red-300">{message}</p>}
+          {message && (
+            <p role="alert" className="text-sm text-red-700 dark:text-red-300">
+              {message}
+            </p>
+          )}
           {confirming ? (
-            <div className="space-y-2">
+            // Opens in place of the button that asked, so the question stays
+            // where the tap was. `expand-row` drops out under reduced motion.
+            <div className="expand-row space-y-2">
               <p className="text-sm text-mono-600 dark:text-mono-300">
                 Take it back? The Cashlink stops working and the voucher returns to your wallet.
               </p>
