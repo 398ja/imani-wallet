@@ -164,7 +164,7 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
           and should not compete with the thing they came here to do. */}
       <button
         type="button"
-        className="pressable mt-4 inline-block py-2 text-sm text-mono-500 underline"
+        className="pressable mt-3 inline-block py-3 text-sm text-mono-500 underline"
         onClick={() => navigate(`/merchants/${pubkey}`)}
       >
         Cancel

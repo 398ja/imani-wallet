@@ -51,7 +51,7 @@ export function CopyReferenceButton({ reference, compact = false }: { reference:
       // Vertical padding cancelled by a negative margin: the row keeps its
       // height and the tap target grows to a usable size. It was the 16px line
       // box of the monospace text alone.
-      className="pressable -my-2 inline-flex min-w-0 items-center gap-1.5 rounded-md py-2 font-mono text-xs text-mono-500"
+      className="pressable -my-3.5 inline-flex min-w-0 items-center gap-1.5 rounded-md py-3.5 font-mono text-xs text-mono-500"
     >
       <span className="truncate">{compact ? compactReference(reference) : reference}</span>
       <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />

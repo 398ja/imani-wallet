@@ -83,6 +83,6 @@ describe('the send picker’s press feedback', () => {
 
     const change = await screen.findByRole('button', { name: 'change' })
     expect(change.className).toContain('pressable')
-    expect(change.className).toContain('py-2')
+    expect(change.className).toContain('py-3')
   })
 })
