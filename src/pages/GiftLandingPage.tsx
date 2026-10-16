@@ -330,7 +330,7 @@ function GiftPrompt({
               type="button"
               // Padded to a usable target: as a bare inline word it was a
               // 20px-tall tap at the bottom of a prompt that also spends money.
-              className="pressable -my-2 inline-block py-2 underline hover:text-mono-900 dark:hover:text-mono-50"
+              className="pressable -my-3 inline-block py-3 underline hover:text-mono-900 dark:hover:text-mono-50"
               onClick={() => {
                 stashPendingClaim(arrival.ref, arrival.key, { kind: 'gift', x: arrival.x })
                 onSwitchAccount()

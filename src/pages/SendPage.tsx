@@ -563,7 +563,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
               {' · '}
               <button
                 type="button"
-                className="pressable -my-2 inline-block py-2 underline"
+                className="pressable -my-3 inline-block py-3 underline"
                 onClick={() => {
                   setPicked(null)
                   setAmount('')
