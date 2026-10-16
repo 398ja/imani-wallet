@@ -40,6 +40,46 @@ import { DELIVER_PATH, IssuanceFailed, authorization, type StallCredential } fro
  * The message says DELIVERED on purpose (imani-wallet#289, E4): an operator reading
  * `last_failure` must not conclude the buyer holds nothing.
  */
+/** The receipt codes gateway-core answers for a permanent refusal (core#163, U1). */
+export const PERMANENT_REFUSALS = ['token_refused', 'untrusted_issuer', 'proofs_not_unspent'] as const
+// (gc#235 adds a generic `refused`, read from its header on a 422.)
+
+function refusalCode(raw: string): string | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  const r = (parsed ?? {}) as Record<string, unknown>
+  const nested = typeof r.error === 'object' && r.error !== null ? (r.error as Record<string, unknown>) : {}
+  for (const c of [r.error, r.code, nested.code, nested.error]) {
+    if (typeof c === 'string' && (PERMANENT_REFUSALS as readonly string[]).includes(c.toLowerCase())) return c.toLowerCase()
+  }
+  return null
+}
+
+/**
+ * The gift wrap went out, but gateway-core refused the issuance receipt permanently (imani-wallet#287):
+ * the token is not genuine, its issuer is untrusted, or its proofs are already spent. Re-sending
+ * cannot change that, so this is NOT retryable: the row is parked `delivery_exhausted` for a person.
+ */
+export class DeliveryRefused extends IssuanceFailed {
+  readonly refused = true as const
+  readonly code: string
+
+  constructor(voucherId: string, paymentRequestId: string, code: string, status: number) {
+    super(
+      `voucher ${voucherId} DELIVERED by DM for payment request ${paymentRequestId}, but the gateway ` +
+        `refused the discharge receipt permanently (${status} ${code}); not retried, needs a person`,
+      false,
+      false,
+    )
+    this.name = 'DeliveryRefused'
+    this.code = code
+  }
+}
+
 export class DeliveredUnconfirmed extends IssuanceFailed {
   readonly delivered = true as const
   readonly voucherId: string
@@ -161,6 +201,15 @@ export async function deliver(
   const raw = await response.text()
 
   if (response.status !== 200 && response.status !== 201) {
+    // gateway-core refuses an issuance receipt for good with 422 token_refused | untrusted_issuer |
+    // proofs_not_unspent (core#163). gc#235 may forward that as its own status; whatever the status,
+    // one of those codes means re-sending cannot help, so the row is parked, never retried.
+    // 502 / 503 (mint_unavailable) and everything else stay retryable.
+    // gc#235 (final): a permanent refusal is HTTP 422 with `X-Imani-Issuance-Refused:
+    // token_refused|untrusted_issuer|proofs_not_unspent|refused`. Every 422 parks; the header names why.
+    const header = response.headers.get('X-Imani-Issuance-Refused')?.trim().toLowerCase() || null
+    const code = response.status === 422 ? (header ?? refusalCode(raw) ?? 'refused') : refusalCode(raw)
+    if (code !== null) throw new DeliveryRefused(voucherId, paymentRequestId, code, response.status)
     // Deliberately retryable even on a 400. The coupon EXISTS by this point:
     // `imani-woo` hit an unexplained 400 here and the right response was to
     // keep the debt open rather than to conclude the customer had been paid.

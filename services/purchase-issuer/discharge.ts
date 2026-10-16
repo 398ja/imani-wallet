@@ -29,7 +29,7 @@ import {
   type StallCredential,
 } from './issuer'
 import { checkDelegation, delegatedWarrant } from './delegatedWarrant'
-import { DeliveredUnconfirmed, deliver, type Recipient } from './delivery'
+import { DeliveredUnconfirmed, DeliveryRefused, deliver, type Recipient } from './delivery'
 import type { CardSale } from './saleRecord'
 
 /** One coupon a stall owes because a card payment cleared. */
@@ -81,6 +81,8 @@ export type Outcome =
        * (imani-wallet#287/#289). Still owed to the outbox: the discharge is not confirmed.
        */
       delivered?: true
+      /** gateway-core refused the receipt for good (core#163): park, never retry. */
+      refused?: true
     } & Minted)
   /**
    * gc refused 409 UNRECORDED (gc#232): this payment's warrant nonce was spent by a run that never
@@ -299,7 +301,8 @@ export async function discharge(
       kind: 'undelivered',
       voucherId: coupon.voucherId,
       reason: error instanceof Error ? error.message : describe(error),
-      ...(error instanceof DeliveredUnconfirmed ? { delivered: true as const } : {}),
+      ...(error instanceof DeliveredUnconfirmed || error instanceof DeliveryRefused ? { delivered: true as const } : {}),
+      ...(error instanceof DeliveryRefused ? { refused: true as const } : {}),
       ...minted,
     }
   }

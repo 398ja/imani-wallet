@@ -260,6 +260,10 @@ async function enqueue(
       deliver: outcome.kind === 'undelivered',
       // The inline attempt counts.
       attempts: outcome.kind === 'undelivered' ? 1 : 0,
+      // core refused the receipt for good (#287, core#163): the next delivery pass parks it, unsent.
+      ...(outcome.kind === 'undelivered' && outcome.refused
+        ? { exhausted: true, lastError: outcome.reason }
+        : {}),
       sale: outcome.pendingSale,
       saleAttempts: outcome.pendingSale ? 1 : 0,
     })

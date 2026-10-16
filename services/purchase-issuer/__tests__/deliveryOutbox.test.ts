@@ -55,7 +55,7 @@ function world({ leaseMs = 60_000, attentionRoute = true } = {}) {
   const sends: { ok: boolean; prid: string; token: string; voucherId?: string; recorded: boolean }[] = []
   const calls: string[] = []
   // `records`: gc#287 U2. false models a gc that publishes the DM but does not (yet) record it in core.
-  const gw = { dmFail: false, records: true, tokenReads: 0, refuse: null as null | { status: number; code: string } }
+  const gw = { dmFail: false, dmHeader: null as null | string, dmStatus: 502, dmBody: { error: 'relay down' } as unknown, records: true, tokenReads: 0, refuse: null as null | { status: number; code: string } }
 
   const add = (eventId: string, pi = `pi_${eventId}`) =>
     rows.set(eventId, {
@@ -104,7 +104,11 @@ function world({ leaseMs = 60_000, attentionRoute = true } = {}) {
         // Like U2: gc records the delivery in core only when the send names the voucher it carries.
         const recorded = !gw.dmFail && gw.records && typeof body.voucher_id === 'string'
         sends.push({ ok: !gw.dmFail, prid: body.payment_request_id, token: body.token, voucherId: body.voucher_id, recorded })
-        if (gw.dmFail) return json(502, { error: 'relay down' })
+        if (gw.dmFail) {
+          const r = json(gw.dmStatus, gw.dmBody)
+          if (gw.dmHeader) r.headers.set('X-Imani-Issuance-Refused', gw.dmHeader)
+          return r
+        }
         return json(200, recorded ? { event_id: 'dm-1', fulfilment_recorded: true } : { event_id: 'dm-1' })
       }
       if (path === '/api/v1/nostr/events') return json(200, {})
@@ -381,6 +385,47 @@ describe('the delivery outbox (U8)', () => {
     expect(pass.delivered).toBe(1)
     expect(w.rows.get('evt_1')).toMatchObject({ status: 'DISCHARGED', voucherId: 'v1' })
     expect(await outbox.size()).toBe(0)
+  })
+
+  // imani-wallet#287 (U3) + core#163, red before this commit: a 503 mint_unavailable and a 502 are
+  // retried, and a permanent receipt refusal (422 proofs_not_unspent, as gc#235 may forward it) is
+  // parked delivery_exhausted at once, naming the code, with no further send.
+  it('retries 502/503, parks a permanent receipt refusal without retrying (#287, core#163)', async () => {
+    for (const [status, body] of [[503, { error: 'mint_unavailable' }], [502, { error: 'core unreachable' }]] as const) {
+      const w = world()
+      w.add('evt_1')
+      vi.stubGlobal('fetch', w.fetchImpl)
+      const outbox = w.outboxOn()
+      Object.assign(w.gw, { dmFail: true, dmStatus: status, dmBody: body })
+      await runPass(w.worker('a', outbox))
+      w.gw.dmFail = false
+      w.advance(10_001)
+      await w.deliveryPass(outbox)
+      expect(w.rows.get('evt_1')!.status).toBe('DISCHARGED')
+    }
+
+    for (const [status, body, header, code] of [
+      // gc#235: 422 + X-Imani-Issuance-Refused, the code goes into last_failure.
+      [422, { error: 'refused' }, 'proofs_not_unspent', 'proofs_not_unspent'],
+      [422, {}, 'refused', 'refused'],
+      [422, {}, null, 'refused'],
+    ] as const) {
+      const w = world()
+      w.add('evt_1')
+      vi.stubGlobal('fetch', w.fetchImpl)
+      const outbox = w.outboxOn()
+      Object.assign(w.gw, { dmFail: true, dmStatus: status, dmBody: body, dmHeader: header })
+      await runPass(w.worker('a', outbox))
+      await w.deliveryPass(outbox)
+      w.advance(3_600_001)
+      await w.deliveryPass(outbox)
+
+      expect(w.sends).toHaveLength(1)
+      expect(w.rows.get('evt_1')!.status).toBe('NEEDS_ATTENTION')
+      expect(w.rows.get('evt_1')!.attention).toMatchObject({ reason: 'delivery_exhausted', voucherId: 'v1' })
+      expect(w.rows.get('evt_1')!.attention!.detail).toContain(`422 ${code}`)
+      expect(await outbox.size()).toBe(0)
+    }
   })
 
   // imani-wallet#287 (U3): the retry is idempotent. Re-sending the same voucher never mints, and

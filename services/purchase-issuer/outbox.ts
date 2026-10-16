@@ -31,7 +31,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
-import { DeliveredUnconfirmed, deliver } from './delivery'
+import { DeliveredUnconfirmed, DeliveryRefused, deliver } from './delivery'
 import type { Ports } from './discharge'
 import { countAttempt } from './metrics'
 import type { PurchasesApi } from './purchasesApi'
@@ -211,6 +211,8 @@ export async function runDeliveryPass(deps: DeliveryDeps): Promise<DeliveryPassR
           // Delivered, discharge not confirmed (imani-wallet#287/#289): re-sent like any failure,
           // but counted apart so a dashboard does not read it as "the buyer has nothing".
           if (error instanceof DeliveredUnconfirmed) countAttempt('delivered_unconfirmed')
+          // A permanent receipt refusal (core#163): park now, no retry loop.
+          if (error instanceof DeliveryRefused) next.exhausted = true
         }
       }
       if (next.deliver) {
@@ -226,7 +228,10 @@ export async function runDeliveryPass(deps: DeliveryDeps): Promise<DeliveryPassR
     if (next.exhausted && next.deliver) {
       const parked = await api.attention(entry.eventId, 'delivery_exhausted', {
         voucherId: entry.voucherId,
-        detail: `delivery failed ${next.attempts} times: ${next.lastError ?? 'unknown'}`.slice(0, 500),
+        detail: (next.lastError?.includes('refused the discharge receipt permanently')
+          ? next.lastError
+          : `delivery failed ${next.attempts} times: ${next.lastError ?? 'unknown'}`
+        ).slice(0, 500),
         worker: deps.workerId,
       })
       if (parked === 'parked' || parked === 'unsupported' || parked === 'refused') {
