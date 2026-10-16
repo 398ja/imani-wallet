@@ -255,6 +255,19 @@ describe('a stall’s public profile', () => {
 
     await waitFor(() => expect(screen.queryByText(/Loading/)).toBeNull())
     expect(screen.queryByText(/personal account/)).toBeNull()
-    expect(screen.queryByRole('button', { name: /Buy a voucher/ })).toBeNull()
+    // #280: drawn but disabled, with the reason, rather than hidden. Still
+    // fails closed: no record means no card offer that can be taken.
+    const buy = screen.getByRole('button', { name: 'Buy a voucher with card' }) as HTMLButtonElement
+    expect(buy.disabled).toBe(true)
+    expect(screen.getByText("Card payments aren't set up for this merchant")).toBeTruthy()
+  })
+
+  /** #280: Pay is drawn too, and a visitor with no wallet cannot use it. */
+  it('shows Pay disabled to a visitor with no session', async () => {
+    draw(STALL)
+
+    const pay = (await screen.findByRole('button', { name: 'Pay with your vouchers' })) as HTMLButtonElement
+    expect(pay.disabled).toBe(true)
+    expect(pay.getAttribute('aria-describedby')).toBeTruthy()
   })
 })

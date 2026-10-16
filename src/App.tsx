@@ -64,6 +64,7 @@ import { MerchantDashboardPage } from './pages/MerchantDashboardPage'
 import { RedeemPage } from './pages/RedeemPage'
 import { MerchantPage } from './pages/MerchantPage'
 import { ClaimLandingPage, ResumeParkedClaim } from './pages/ClaimLandingPage'
+import { takeAfterLogin } from './lib/afterLogin'
 import { GiftLandingPage } from './pages/GiftLandingPage'
 import { reconcileGiftLinks, restoreScan } from './lib/giftLinks'
 import { BuyPage } from './pages/BuyPage'
@@ -429,6 +430,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
               renders, which is not on navigation.
             */
             <ResumeParkedClaim pubkey={pubkey}>
+              <ResumeAfterLogin>
               {trading ? (
                 <MerchantHomePage
                   actor={terminal.actor ?? undefined}
@@ -438,6 +440,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
               ) : (
                 <MerchantsPage pubkey={pubkey} />
               )}
+              </ResumeAfterLogin>
             </ResumeParkedClaim>
           }
         />
@@ -543,7 +546,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route path="/buy/done" element={<BuyDonePage />} />
         <Route path="/buy/cancelled" element={<BuyCancelledPage />} />
         <Route path="/buy/:pubkey" element={<BuyPage buyerPubkey={pubkey} />} />
-        <Route path="/merchants/:pubkey" element={<MerchantPage />} />
+        <Route path="/merchants/:pubkey" element={<MerchantPage viewerPubkey={pubkey} />} />
         <Route path="/merchants/:pubkey/coupons" element={<CouponsPage />} />
         <Route path="/coupons/expiring" element={<ExpiringCouponsPage pubkey={pubkey} />} />
         <Route path="/merchants/:pubkey/transactions" element={<TransactionsPage />} />
@@ -789,6 +792,18 @@ function Gate({ session, onLoggedOut }: { session: NapSession; onLoggedOut: () =
  * `POST /api/v1/nip05` claims a handle for a raw pubkey, so the wallet no longer
  * has to send people elsewhere to get an identity.
  */
+/**
+ * Back to the purchase a visitor left for login (#280).
+ *
+ * Login lands on `/` (every public path falls through to it once a session
+ * exists), so this is where the detour ends. Read once per mount and removed
+ * as it is read: a stale entry must not hijack a later visit to home.
+ */
+function ResumeAfterLogin({ children }: { children: React.ReactNode }) {
+  const [next] = useState(() => takeAfterLogin())
+  return next ? <Navigate to={next} replace /> : <>{children}</>
+}
+
 function PublicRoutes({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<void> }) {
   return (
     <Routes>
