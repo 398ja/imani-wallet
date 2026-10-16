@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { CreditCard } from 'lucide-react'
 
-import { Button, Screen, BackLink, Centered } from '../components/ui'
+import { Button, Screen, BackLink, Centered, buttonClasses } from '../components/ui'
 import { startPurchase } from '../lib/purchase'
 import { GUEST_REFUSED, rememberPurchase } from '../lib/pendingPurchase'
 
@@ -84,15 +84,15 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
     return (
       <Screen>
         <BackLink to={`/merchants/${pubkey}`} label="Back" />
-        <h1 className="mb-2 text-[22px] font-semibold tracking-[-0.02em]">Buy a voucher</h1>
-        <p className="mb-6 text-[15px] leading-relaxed text-mono-500">{GUEST_REFUSED}</p>
-        <p className="mb-6 text-[15px] leading-relaxed text-mono-500">
+        <h1 className="mb-2 text-title font-semibold">Buy a voucher</h1>
+        <p className="mb-6 text-callout text-mono-500">{GUEST_REFUSED}</p>
+        <p className="mb-6 text-callout text-mono-500">
           The voucher is delivered to your wallet, so you need one before you pay. It takes
           a minute and nothing is charged.
         </p>
         <Link
           to="/"
-          className="pressable block w-full rounded-full bg-mono-900 px-6 py-3 text-center text-[17px] font-medium text-white dark:bg-mono-50 dark:text-mono-900"
+          className={`${buttonClasses('primary', 'lg')} w-full`}
         >
           Create a wallet
         </Link>
@@ -106,8 +106,8 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
 
       {/* Tracking tightened at this size: a heading reads loose with the body
           tracking the system font ships by default. */}
-      <h1 className="mb-2 text-[22px] font-semibold tracking-[-0.02em]">Buy a voucher</h1>
-      <p className="mb-6 text-[15px] leading-relaxed text-mono-500">
+      <h1 className="mb-2 text-title font-semibold">Buy a voucher</h1>
+      <p className="mb-6 text-callout text-mono-500">
         You pay this stall directly by card. The voucher arrives in your wallet.
       </p>
 
@@ -126,7 +126,7 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
         id="amount"
         inputMode="decimal"
         autoComplete="off"
-        className="mb-2 w-full rounded-xl border border-mono-200 bg-transparent px-4 py-3 text-[17px] tabular-nums outline-none transition-colors duration-100 ease-out placeholder:text-mono-400 focus:border-mono-400 dark:border-mono-800 dark:focus:border-mono-600"
+        className="mb-2 w-full rounded-xl border border-mono-200 bg-transparent px-4 py-3 text-lg tabular-nums outline-none transition-colors duration-100 ease-out placeholder:text-mono-400 focus:border-mono-400 dark:border-mono-800 dark:focus:border-mono-600"
         value={amount}
         onChange={(e) => setAmount(e.target.value)}
         placeholder="25.00"
@@ -141,7 +141,9 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
       )}
 
       {error && (
-        <p className="expand-row mb-4 mt-2 rounded-xl bg-red-50 px-4 py-3 text-sm leading-relaxed text-red-700 dark:bg-red-950/50 dark:text-red-300">
+        // `role="alert"`, like the shared `Alert`: it answers the tap the
+        // customer just made, so it is announced rather than painted silently.
+        <p role="alert" className="expand-row mb-4 mt-2 rounded-xl bg-red-50 px-4 py-3 text-sm leading-relaxed text-red-700 dark:bg-red-950/50 dark:text-red-300">
           {error}
         </p>
       )}
@@ -161,7 +163,8 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
       {/* A text button, not a second heavy one. Cancelling is the quiet path
           and should not compete with the thing they came here to do. */}
       <button
-        className="pressable mt-6 text-sm text-mono-500 underline"
+        type="button"
+        className="pressable mt-3 inline-block py-3 text-sm text-mono-500 underline"
         onClick={() => navigate(`/merchants/${pubkey}`)}
       >
         Cancel

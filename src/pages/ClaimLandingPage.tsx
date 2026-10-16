@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Navigate, useNavigate, useParams } from 'react-router-dom'
+import { CheckCircle2, Clock, XCircle } from 'lucide-react'
 
 import { fetchClaimSummary, redeemClaimRef, type ClaimSummary, type RedeemResult } from '../lib/cashback'
 import { currencyDecimals, formatFace, handleLabel, shortPubkey } from '../lib/format'
@@ -168,7 +169,7 @@ export function ClaimLandingPage({
   if (arrival.kind === 'incomplete') {
     return (
       <Outcome
-        title="Voucher unavailable"
+        tone="unavailable" title="Voucher unavailable"
         body="This link is incomplete. Ask for it again, or scan the whole QR."
         onDone={goHome}
       />
@@ -287,20 +288,20 @@ function ConfirmPrompt({
         : null
       return (
         <Outcome
-          title="Voucher added"
+          tone="success" title="Voucher added"
           body={face ? `${face}${stallName ? ` from ${stallName}` : ''} is in your wallet.` : 'It is in your wallet now.'}
           onDone={onDone}
         />
       )
     }
-    return <Outcome title="Voucher unavailable" body={describe(result)} onDone={onDone} />
+    return <Outcome tone="unavailable" title="Voucher unavailable" body={describe(result)} onDone={onDone} />
   }
 
   const { summary } = state
   if (summary.kind === 'unreachable') {
     return (
       <Outcome
-        title="Voucher waiting"
+        tone="waiting" title="Voucher waiting"
         body="We could not reach the voucher service. Your voucher is still waiting."
         action={{ label: 'Retry', run: load }}
         onDone={onDone}
@@ -308,10 +309,10 @@ function ConfirmPrompt({
     )
   }
   if (summary.kind === 'not_found') {
-    return <Outcome title="Voucher unavailable" body="We could not find this voucher. Check the link is complete." onDone={finish} />
+    return <Outcome tone="unavailable" title="Voucher unavailable" body="We could not find this voucher. Check the link is complete." onDone={finish} />
   }
   if (summary.kind === 'disabled') {
-    return <Outcome title="Voucher unavailable" body="This wallet cannot claim vouchers yet." onDone={onDone} />
+    return <Outcome tone="unavailable" title="Voucher unavailable" body="This wallet cannot claim vouchers yet." onDone={onDone} />
   }
 
   const issuerKey = summary.issuerPubkey
@@ -320,14 +321,14 @@ function ConfirmPrompt({
   // unverified warning at a voucher that is about to verify.
   const stall = stallName ?? (stallLoading ? 'Checking the stall…' : 'Unknown stall')
   const closed = closedState(summary, stall)
-  if (closed) return <Outcome title="Voucher unavailable" body={closed} onDone={finish} />
+  if (closed) return <Outcome tone="unavailable" title="Voucher unavailable" body={closed} onDone={finish} />
 
   // The merchant's own cashback (spec 3.2): receiving it would declare a credit for a coupon that
   // never left home. Refused before the tap, so nothing is redeemed.
   if (pubkey && issuerKey && pubkey.toLowerCase() === issuerKey) {
     return (
       <Outcome
-        title="Your own Cashlink"
+        tone="unavailable" title="Your own Cashlink"
         body="This is your stall's own Cashlink. Give it to a customer, or cancel it."
         onDone={finish}
       />
@@ -340,6 +341,7 @@ function ConfirmPrompt({
   if (role === 'merchant' || role === 'unknown') {
     return (
       <Outcome
+        tone={role === 'merchant' ? 'unavailable' : 'waiting'}
         title={role === 'merchant' ? 'Not for a merchant account' : 'Voucher waiting'}
         body={role === 'merchant' ? MERCHANT_FOREIGN_VOUCHER : MERCHANT_STATUS_UNKNOWN}
         {...(role === 'unknown'
@@ -467,25 +469,50 @@ function scrubFragment(): void {
  * Centred and short. There is one thing to do here (two with Retry), and a page with one action
  * should not make somebody find it.
  */
+export type OutcomeTone = 'success' | 'waiting' | 'unavailable'
+
+const OUTCOME_ICON = {
+  success: { Icon: CheckCircle2, className: 'text-green-600 dark:text-green-500' },
+  waiting: { Icon: Clock, className: 'text-amber-600 dark:text-amber-400' },
+  unavailable: { Icon: XCircle, className: 'text-mono-400' },
+} as const
+
 export function Outcome({
   title,
   body,
   onDone,
   action,
+  tone,
 }: {
   title: string
   body: string
   onDone: () => void
   action?: { label: string; run: () => void }
+  /**
+   * Which of the four kinds of feedback this is. Carried by a glyph as well as
+   * the words, so "added", "still waiting" and "cannot be added" are told apart
+   * before anything is read, and still in greyscale. Optional: no glyph when a
+   * caller does not say.
+   */
+  tone?: OutcomeTone
 }) {
+  const icon = tone ? OUTCOME_ICON[tone] : null
   return (
     <Centered>
       {/* `materialize` because this arrives over a blank screen after a wait,
           and a plain cut reads as a page that failed to load and then did not.
           Reduced motion drops it through the shared rule in index.css. */}
-      <div className="materialize max-w-sm px-6 text-center">
-        <h1 className="text-[22px] font-semibold leading-tight tracking-[-0.02em]">{title}</h1>
-        <p className="mt-2 text-[15px] leading-relaxed text-mono-500">{body}</p>
+      <div className="materialize max-w-sm px-6 text-center" data-outcome={tone}>
+        {/* `role="status"`: the outcome replaces a "Checking…" or "Adding…"
+            screen with no user action in between, so without a live region a
+            screen-reader user hears nothing at all about how it ended. The
+            heading takes the primary ink explicitly: `Centered` sets mono-500
+            for its loading lines, and a grey title read as disabled. */}
+        <div role="status">
+          {icon && <icon.Icon className={`mx-auto mb-4 h-12 w-12 ${icon.className}`} aria-hidden />}
+          <h1 className="text-title font-semibold text-mono-900 dark:text-mono-50">{title}</h1>
+          <p className="mt-2 text-callout text-mono-500">{body}</p>
+        </div>
         {action && (
           <Button size="lg" className="mt-6 w-full" onClick={action.run}>
             {action.label}
