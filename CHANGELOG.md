@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-10-16
+
+The purchase issuer's card deliveries now discharge their purchase (imani-wallet#287 E2, U3, #291),
+and an Apple-design pass over the card-purchase and Cashlink screens (#283). No new configuration.
+**Deploy order:** gateway-core 0.28.0, then gateway-customer 0.31.0, then this purchase-issuer, then
+payment-adapter 0.22.0.
+
 ### Fixed
 
 - **purchase-issuer: a card coupon's DM names the voucher it carries, and a delivery only counts
