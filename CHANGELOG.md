@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Buy and Pay on a merchant's page; scanning a merchant opens it** (#280). `/merchants/:pubkey`
+  and a merchant's `/profile/:pubkey` share one `MerchantActions` component: **Buy** (card icon,
+  accessible name "Buy a voucher with card", gated on the stall's `acceptsCards` as before) and
+  **Pay** (enabled only with at least one unspent, unexpired voucher from that stall; opens the
+  existing send flow addressed to the stall, `/send?from=<stall>&to=<stall>`, which is a
+  redemption). Both are always drawn and disabled with a visible, screen-reader-linked reason,
+  where Buy used to be hidden. Logged out, Buy goes to login and returns to `/buy/:pubkey`
+  (`lib/afterLogin.ts`, purchase paths only); Pay is disabled. A merchant's own page shows the
+  own-profile note instead. Send stays as a secondary action beside Share. Scan routes an address
+  that resolves to a merchant (`merchantStatus`, the lookup SendPage already makes, 1.5 s
+  deadline) to its page; everyone else, or an unanswered lookup, keeps `/send?to=`.
+
 - **Card sales reach the stall's own ledger** (#275, card atomicity audit U9, gap D). In Stripe S1
   the merchant record of a card voucher read "No record of this voucher" until a row was seeded
   by hand. The stall's sale-record reader (`tillSales.ts`) now also files an
