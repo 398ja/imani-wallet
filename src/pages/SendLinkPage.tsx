@@ -99,7 +99,7 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
         )}
         {/* mono-500, not mono-400: the lighter grey is about 2.5:1 on the page,
             too faint for the sentence that says where the link lives now. */}
-        <p className="mb-4 text-sm text-mono-500">You can show it again, or take it back, from your history.</p>
+        <p className="mb-4 text-sm text-mono-500 dark:text-mono-400">You can show it again, or take it back, from your history.</p>
         <Button size="lg" className="w-full" onClick={() => navigate('/')}>
           Done
         </Button>
@@ -205,7 +205,7 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
           <p className="mt-2 text-sm text-mono-500">The link expires on {formatDate(x * 1000)}.</p>
         </Panel>
         {/* Spec 5.4: a handle binds the voucher to its recipient, a link does not. */}
-        <p className="mb-4 text-sm text-mono-500">
+        <p className="mb-4 text-sm text-mono-500 dark:text-mono-400">
           If you know their handle, send to them directly: nobody else can claim it.
         </p>
         {(status.step === 'failed' || status.step === 'unconfirmed') && <Alert>{status.message}</Alert>}

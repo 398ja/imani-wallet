@@ -281,7 +281,7 @@ function GiftPrompt({
     return (
       <Outcome
         tone={role === 'merchant' ? 'unavailable' : 'waiting'}
-            title={role === 'merchant' ? 'Not for a merchant account' : 'Voucher waiting'}
+        title={role === 'merchant' ? 'Not for a merchant account' : 'Voucher waiting'}
         body={role === 'merchant' ? MERCHANT_FOREIGN_VOUCHER : MERCHANT_STATUS_UNKNOWN}
         {...(role === 'unknown'
           ? { action: { label: 'Retry', run: retryRole } }
