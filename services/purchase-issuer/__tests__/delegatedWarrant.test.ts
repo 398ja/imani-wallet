@@ -58,7 +58,7 @@ async function mintedWarrant(p: Ports = ports()): Promise<{ warrant?: string; ca
           status: 201,
         })
       }
-      return new Response(JSON.stringify({ event_id: 'dm1' }), { status: 200 })
+      return new Response(JSON.stringify({ event_id: 'dm1', fulfilment_recorded: true }), { status: 200 })
     }),
   )
   await discharge('http://gw', OBLIGATION, p)

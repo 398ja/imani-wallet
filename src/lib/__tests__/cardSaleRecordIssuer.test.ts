@@ -59,7 +59,7 @@ describe('a discharge files the card sale into the stall ledger', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(reply(201, { voucher_id: '8027e345', issuer_id: STALL, token: 'cashuB1' }))
-      .mockResolvedValueOnce(reply(200, { event_id: 'e1' }))
+      .mockResolvedValueOnce(reply(200, { event_id: 'e1', fulfilment_recorded: true }))
     vi.stubGlobal('fetch', fetchMock)
     const sent: Array<{ sale: CardSale }> = []
     const sink = vi.fn()
@@ -118,7 +118,7 @@ describe('a discharge files the card sale into the stall ledger', () => {
       vi
         .fn()
         .mockResolvedValueOnce(reply(201, { voucher_id: 'v3', issuer_id: STALL, token: 'cashuB3' }))
-        .mockResolvedValueOnce(reply(200, { event_id: 'e3' })),
+        .mockResolvedValueOnce(reply(200, { event_id: 'e3', fulfilment_recorded: true })),
     )
     const outcome = await discharge('http://gw', OBLIGATION, {
       credentialFor: async () => CREDENTIAL,
@@ -138,7 +138,7 @@ describe('a discharge files the card sale into the stall ledger', () => {
       vi
         .fn()
         .mockResolvedValueOnce(reply(201, { voucher_id: 'v4', issuer_id: STALL, token: 'cashuB4' }))
-        .mockResolvedValueOnce(reply(200, { event_id: 'e4' })),
+        .mockResolvedValueOnce(reply(200, { event_id: 'e4', fulfilment_recorded: true })),
     )
     const outcome = await discharge('http://gw', OBLIGATION, {
       credentialFor: async () => CREDENTIAL,
@@ -158,7 +158,7 @@ describe('a discharge files the card sale into the stall ledger', () => {
       vi
         .fn()
         .mockResolvedValueOnce(reply(201, { voucher_id: 'v5', issuer_id: STALL, token: 'cashuB5' }))
-        .mockResolvedValueOnce(reply(200, { event_id: 'e5' })),
+        .mockResolvedValueOnce(reply(200, { event_id: 'e5', fulfilment_recorded: true })),
     )
     const sink = vi.fn().mockResolvedValue(new Response('{}'))
     await discharge('http://gw', OBLIGATION, {
@@ -206,7 +206,7 @@ describe('the pull fallback re-sends a missed card sale, and the stall files it 
       vi
         .fn()
         .mockResolvedValueOnce(reply(201, { voucher_id: 'v9', issuer_id: STALL, token: 'cashuB9' }))
-        .mockResolvedValueOnce(reply(200, { event_id: 'e9' })),
+        .mockResolvedValueOnce(reply(200, { event_id: 'e9', fulfilment_recorded: true })),
     )
     await discharge('http://gw', OBLIGATION, {
       credentialFor: async () => CREDENTIAL,
