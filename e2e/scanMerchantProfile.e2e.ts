@@ -32,7 +32,14 @@ async function page(browser: Browser): Promise<Page> {
 
 async function scanText(p: Page, text: string) {
   await p.goto(`${BASE}/scan`, { waitUntil: 'networkidle' })
-  await p.getByLabel('Code').fill(text)
+  // The typed field is only revealed once the camera is refused or the clipboard
+  // cannot be read. Headless Chromium leaves the camera prompt pending forever, so
+  // reveal it the way a user would: "Paste code" with no clipboard permission.
+  const field = p.getByLabel('Code')
+  if (!(await field.isVisible().catch(() => false))) {
+    await p.getByRole('button', { name: /Paste code/ }).click()
+  }
+  await field.fill(text)
   await p.getByRole('button', { name: 'Continue' }).click()
 }
 
