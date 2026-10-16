@@ -102,7 +102,10 @@ function Action({
     <div className="flex flex-col gap-1">
       <Button
         size="lg"
-        variant={variant}
+        // A disabled action drops to the quiet outline, whatever its enabled
+        // variant: a solid primary fill at half opacity still reads as pressable,
+        // and heavier than the disabled Pay beside it.
+        variant={state.enabled ? variant : 'outline'}
         className="w-full"
         disabled={!state.enabled}
         aria-label={accessibleName}

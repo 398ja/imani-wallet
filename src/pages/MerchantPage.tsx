@@ -217,10 +217,12 @@ export function MerchantPage({ viewerPubkey }: { viewerPubkey?: string }) {
             Pay: Pay hands this stall its own coupon back at the till, Send gives
             one to a friend. Paired with Share so the secondary actions take one
             row rather than stacking into a column of full-width buttons. Send
-            is hidden with nothing to send, as before. */}
-        <div className={couponCount > 0 && !isSelf ? 'grid grid-cols-2 gap-3' : 'grid'}>
+            is hidden with nothing to send, as before. A size down from Buy and
+            Pay, and a lone Share/Copy is not stretched to full width, so it
+            never competes with the main actions. */}
+        <div className={couponCount > 0 && !isSelf ? 'grid grid-cols-2 gap-3' : 'flex justify-center'}>
           {couponCount > 0 && !isSelf && (
-            <Button size="lg" variant="outline" onClick={() => navigate(`/send?from=${pubkey}`)}>
+            <Button size="md" variant="outline" onClick={() => navigate(`/send?from=${pubkey}`)}>
               <Send className="mr-2 h-5 w-5" /> Send
             </Button>
           )}
@@ -379,7 +381,7 @@ function ShareMerchant({ pubkey, nip05 }: { pubkey: string; nip05?: string }) {
   }
 
   return (
-    <Button size="lg" variant="outline" onClick={act}>
+    <Button size="md" variant="outline" onClick={act}>
       {shareable ? (
         <Share2 className="mr-2 h-5 w-5" />
       ) : copied ? (
