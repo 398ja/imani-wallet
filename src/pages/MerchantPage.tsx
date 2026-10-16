@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Check, Copy, CreditCard, Send, Share2 } from 'lucide-react'
+import { Check, Copy, Send, Share2 } from 'lucide-react'
 import { nip19 } from 'nostr-tools'
 
 import {
@@ -24,6 +24,7 @@ import { toMerchantPass, EMPTY_BRANDING, type MerchantBranding } from '../lib/pa
 import { useBranding } from '../hooks/useBranding'
 import { fetchMerchantRecord, type MerchantProfile } from '../lib/merchant'
 import { LocationMap } from '../components/LocationMap'
+import { MerchantActions } from '../components/MerchantActions'
 import type { WalletTransaction } from '../lib/transactions'
 import { entryKey, groupHistory } from '../lib/historyGroups'
 import { canShare, shareText } from '../lib/native'
@@ -61,7 +62,7 @@ const PREVIEW = 3
  * fact and not merely in type: a stranger's page must still be a page when the
  * only leg they can reach is the relay.
  */
-export function MerchantPage() {
+export function MerchantPage({ viewerPubkey }: { viewerPubkey?: string }) {
   const { pubkey = '' } = useParams()
   const navigate = useNavigate()
   const [merchant, setMerchant] = useState<Merchant | null | undefined>(undefined)
@@ -106,7 +107,10 @@ export function MerchantPage() {
       setTransactions(history)
     }
     load()
-    return onWalletChanged(load)
+    // Same guard as `load`: `onWalletChanged` goes through `getWallet` too, and
+    // threw on a visitor's mount, which blanked this page for everyone without a
+    // session (the shop-sign QR case, and #280's logged-out Buy).
+    return walletIsOpen() ? onWalletChanged(load) : undefined
   }, [pubkey, clock])
 
   useEffect(() => {
@@ -167,6 +171,7 @@ export function MerchantPage() {
 
   const name = branding.organizationName
   const acceptsCards = record?.acceptsCards === true
+  const isSelf = viewerPubkey !== undefined && viewerPubkey === pubkey
 
   return (
     <Screen>
@@ -193,40 +198,36 @@ export function MerchantPage() {
       )}
 
       <div className="mb-6 grid gap-3">
-        {/* Buying is offered to everyone who can be sold to, including someone
-            who already holds coupons and wants more — that is the top-up case,
-            and it needs no separate screen.
+        {/* Buy and Pay side by side, always drawn, disabled with a reason
+            when unavailable (#280). `acceptsCards` is still the gate for Buy
+            and still fails closed: imani-merchant is self-scoped, so the
+            stall's published flag is the only thing a stranger can ask, and an
+            unreachable record means no card offer.
 
-            This note used to say `/buy/:pubkey` was NOT BUILT and that no stall
-            published `acceptsCards`. Both are now false: BuyPage exists and is
-            routed, payment-adapter creates the Checkout Session on the stall's
-            connected account (so the stall is merchant of record, never Imani),
-            and Settings → Payments publishes the flag through
-            `reconcileCardOffer` on every connect, refresh and disconnect.
-
-            The gate stays, and it is the right one. `acceptsCards` is the only
-            channel a stranger has — imani-merchant is self-scoped, so nobody
-            can ask whether SOMEBODY ELSE takes cards — so a stall that has not
-            connected Stripe shows no Buy button rather than a button that can
-            only fail. Fails closed: an unreachable stall record means no offer,
-            never an offer we cannot honour. */}
-        {acceptsCards && (
-          <Button size="lg" onClick={() => navigate(`/buy/${pubkey}`)}>
-            <CreditCard className="mr-2 h-5 w-5" /> Buy a voucher
-          </Button>
+            The owner viewing their own stall gets the same note as their
+            public profile instead: buying from yourself charges your own
+            Stripe account for a coupon you already back. */}
+        {isSelf ? (
+          <p className="text-center text-sm text-mono-500">This is how your stall looks to a shopper.</p>
+        ) : (
+          <MerchantActions pubkey={pubkey} acceptsCards={acceptsCards} viewerPubkey={viewerPubkey} />
         )}
 
-        {/* The other way into /send: the voucher is already settled by being on
-            this page, so it opens on the recipient rather than on the picker.
-            Hidden with nothing to send — a button that can only refuse is worse
-            than no button. */}
-        {couponCount > 0 && (
-          <Button size="lg" variant={acceptsCards ? 'outline' : 'primary'} onClick={() => navigate(`/send?from=${pubkey}`)}>
-            <Send className="mr-2 h-5 w-5" /> Send
-          </Button>
-        )}
-
-        <ShareMerchant pubkey={pubkey} nip05={branding.nip05} />
+        {/* Send stays, one row down and quieter. It is a different errand from
+            Pay: Pay hands this stall its own coupon back at the till, Send gives
+            one to a friend. Paired with Share so the secondary actions take one
+            row rather than stacking into a column of full-width buttons. Send
+            is hidden with nothing to send, as before. A size down from Buy and
+            Pay, and a lone Share/Copy is not stretched to full width, so it
+            never competes with the main actions. */}
+        <div className={couponCount > 0 && !isSelf ? 'grid grid-cols-2 gap-3' : 'flex justify-center'}>
+          {couponCount > 0 && !isSelf && (
+            <Button size="md" variant="outline" onClick={() => navigate(`/send?from=${pubkey}`)}>
+              <Send className="mr-2 h-5 w-5" /> Send
+            </Button>
+          )}
+          <ShareMerchant pubkey={pubkey} nip05={branding.nip05} />
+        </div>
       </div>
 
       {/* Renders nothing when the stall has no location, which is the common
@@ -380,7 +381,7 @@ function ShareMerchant({ pubkey, nip05 }: { pubkey: string; nip05?: string }) {
   }
 
   return (
-    <Button size="lg" variant="outline" onClick={act}>
+    <Button size="md" variant="outline" onClick={act}>
       {shareable ? (
         <Share2 className="mr-2 h-5 w-5" />
       ) : copied ? (

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
-import { Banknote, Check, Copy, CreditCard, Info, QrCode, Tag } from 'lucide-react'
+import { useParams } from 'react-router-dom'
+import { Banknote, Check, Copy, Info, QrCode, Tag } from 'lucide-react'
 import QRCode from 'qrcode'
 import { nip19 } from 'nostr-tools'
 
-import { Avatar, BackLink, Button, Centered, RemoteImage, Screen } from '../components/ui'
+import { Avatar, BackLink, Centered, RemoteImage, Screen } from '../components/ui'
 import { LocationMap } from '../components/LocationMap'
+import { MerchantActions } from '../components/MerchantActions'
 import { merchantBranding } from '../lib/branding'
 import { handleLabel, shortPubkey } from '../lib/format'
 import { toRecipientPubkey } from '../lib/issue'
@@ -73,7 +74,6 @@ export function PublicProfilePage({ viewerPubkey }: { viewerPubkey?: string }) {
   */
   const { pubkey: param = '' } = useParams()
   const [resolved, setResolved] = useState<string | null>()
-  const navigate = useNavigate()
   const [copied, setCopied] = useState(false)
   const [showCode, setShowCode] = useState(false)
 
@@ -309,30 +309,19 @@ export function PublicProfilePage({ viewerPubkey }: { viewerPubkey?: string }) {
           opened somebody's profile, and burying it under prose they may not
           read is how a working feature goes unused.
 
-          Gated on `acceptsCards`, exactly as MerchantPage is: the flag is the
-          only channel a stranger has, because imani-merchant is self-scoped and
-          nobody can ask about someone else's charges_enabled. A stall that has
-          not connected Stripe shows no button rather than one that can only
-          fail. */}
-      {acceptsCards && (
-        <Button size="lg" className="mt-6 w-full" onClick={() => navigate(`/buy/${pubkey}`)}>
-          <CreditCard className="mr-2 h-5 w-5" aria-hidden /> Buy a voucher
-        </Button>
-      )}
-
-      {/* Your own profile says so, quietly, where the Buy button would be. A
-          stall owner who opens their own page and finds no purchase control has
-          been told nothing; this is the one case where the absence needs a word,
-          because it is the page they will check to see what shoppers see.
-
-          For every OTHER stall that takes no cards, nothing is said. "This stall
-          does not accept cards" is a sentence about a feature the shopper never
-          saw, and it would be the loudest thing on a page whose job is to
-          introduce somebody. */}
-      {isSelf && (
+          The same `MerchantActions` as MerchantPage (#280), so the two screens
+          cannot disagree about when Buy or Pay is available. Your own profile
+          says so instead, where the buttons would be: it is the page a stall
+          owner checks to see what shoppers see, and Buy/Pay against yourself
+          is not a thing. */}
+      {isSelf ? (
         <p className="mt-6 text-center text-sm text-mono-500">
           This is how your stall looks to a shopper.
         </p>
+      ) : (
+        <div className="mt-6">
+          <MerchantActions pubkey={pubkey} acceptsCards={acceptsCards} viewerPubkey={viewerPubkey} />
+        </div>
       )}
 
       {/* Leading is looser here than on the single-value rows below, because

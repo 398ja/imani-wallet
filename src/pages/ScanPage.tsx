@@ -5,6 +5,7 @@ import { PaymentRequestHandler, VoucherRedeemHandler } from 'imani-qr'
 
 import { Button, Screen, BackLink, PageHeader, Alert, Input } from '../components/ui'
 import { toRecipientPubkey } from '../lib/issue'
+import { routeForAddress } from '../lib/scanRoute'
 import { readClipboard } from '../lib/native'
 import { scannerBlocked } from '../lib/scannerSupport'
 import { CODES_RETIRED, isRetiredCashbackCode } from '../lib/cashlinkCopy'
@@ -89,7 +90,9 @@ export function ScanPage() {
           return
         }
         const hex = await toRecipientPubkey(text)
-        if (hex) navigate(`/send?to=${hex}`)
+        // A stall's own QR opens its profile, where Buy and Pay live (#280);
+        // anyone else keeps the send flow.
+        if (hex) navigate(await routeForAddress(hex))
         else setError('That is not a payment request, a voucher, or an account we can find.')
       } finally {
         resolving.current = false

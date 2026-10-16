@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Buy and Pay on a merchant's page; scanning a merchant opens it** (#280). `/merchants/:pubkey`
+  and a merchant's `/profile/:pubkey` share one `MerchantActions` component: **Buy** (card icon,
+  accessible name "Buy a voucher with card", gated on the stall's `acceptsCards` as before) and
+  **Pay** (enabled only with at least one unspent, unexpired voucher from that stall; opens the
+  existing send flow addressed to the stall, `/send?from=<stall>&to=<stall>`, which is a
+  redemption). Both are always drawn and disabled with a visible, screen-reader-linked reason,
+  where Buy used to be hidden. Logged out, Buy goes to login and returns to `/buy/:pubkey`
+  (`lib/afterLogin.ts`, purchase paths only); Pay is disabled. A merchant's own page shows the
+  own-profile note instead. Send stays as a secondary action beside Share. Scan routes an address
+  that resolves to a merchant (`merchantStatus`, the lookup SendPage already makes, 1.5 s
+  deadline) to its page; everyone else, or an unanswered lookup, keeps `/send?to=`.
+
 - **A card coupon is always delivered, or parked for a person** (#274, card atomicity audit U8).
   - **Key and nonce from the payment intent.** The mint's `Idempotency-Key` is `purchase:pi:<pi_>`
     and the warrant nonce `H("imani-purchase-warrant-v2:<pi_>")`, so any re-drive of one payment
