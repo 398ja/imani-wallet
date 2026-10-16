@@ -56,6 +56,11 @@ export interface OutboxEntry {
   /** Set once delivery is exhausted but the attention report has not landed yet. */
   exhausted?: boolean
   lastError?: string
+  /**
+   * The last attempt's DM went out but the gateway did not record it (imani-wallet#287/#289). Kept
+   * so a park after `maxAttempts` says "delivered, discharge never confirmed", not "delivery failed".
+   */
+  unconfirmed?: boolean
 }
 
 export interface OutboxStore {
@@ -210,12 +215,13 @@ export async function runDeliveryPass(deps: DeliveryDeps): Promise<DeliveryPassR
           next.lastError = error instanceof Error ? error.message : String(error)
           // Delivered, discharge not confirmed (imani-wallet#287/#289): re-sent like any failure,
           // but counted apart so a dashboard does not read it as "the buyer has nothing".
+          next.unconfirmed = error instanceof DeliveredUnconfirmed
           if (error instanceof DeliveredUnconfirmed) countAttempt('delivered_unconfirmed')
           // A permanent receipt refusal (core#163): park now, no retry loop.
           if (error instanceof DeliveryRefused) next.exhausted = true
         }
       }
-      if (next.deliver) {
+      if (next.deliver && !next.exhausted) {
         if (next.attempts >= outbox.options.maxAttempts) {
           next.exhausted = true
         } else {
@@ -230,7 +236,11 @@ export async function runDeliveryPass(deps: DeliveryDeps): Promise<DeliveryPassR
         voucherId: entry.voucherId,
         detail: (next.lastError?.includes('refused the discharge receipt permanently')
           ? next.lastError
-          : `delivery failed ${next.attempts} times: ${next.lastError ?? 'unknown'}`
+          : next.unconfirmed
+            ? // E4 (#289): the buyer HAS the coupon; only the gateway's record of it is missing
+              // (e.g. a gateway-customer without #287 U2 during a rolling deploy).
+              `delivered by DM ${next.attempts} times, discharge never confirmed: ${next.lastError ?? 'unknown'}`
+            : `delivery failed ${next.attempts} times: ${next.lastError ?? 'unknown'}`
         ).slice(0, 500),
         worker: deps.workerId,
       })

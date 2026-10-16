@@ -207,7 +207,9 @@ export async function deliver(
     // 502 / 503 (mint_unavailable) and everything else stay retryable.
     // gc#235 (final): a permanent refusal is HTTP 422 with `X-Imani-Issuance-Refused:
     // token_refused|untrusted_issuer|proofs_not_unspent|refused`. Every 422 parks; the header names why.
-    const header = response.headers.get('X-Imani-Issuance-Refused')?.trim().toLowerCase() || null
+    // Only a plain code goes into last_failure (gc#235 sends [a-z_]{1,40}); anything else reads `refused`.
+    const rawHeader = response.headers.get('X-Imani-Issuance-Refused')?.trim().toLowerCase() || null
+    const header = rawHeader === null ? null : /^[a-z_]{1,40}$/.test(rawHeader) ? rawHeader : 'refused'
     const code = response.status === 422 ? (header ?? refusalCode(raw) ?? 'refused') : refusalCode(raw)
     if (code !== null) throw new DeliveryRefused(voucherId, paymentRequestId, code, response.status)
     // Deliberately retryable even on a 400. The coupon EXISTS by this point:

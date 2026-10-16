@@ -409,6 +409,8 @@ describe('the delivery outbox (U8)', () => {
       [422, { error: 'refused' }, 'proofs_not_unspent', 'proofs_not_unspent'],
       [422, {}, 'refused', 'refused'],
       [422, {}, null, 'refused'],
+      // Review of #291: a header that is not a plain code never reaches last_failure verbatim.
+      [422, {}, 'cashuBsecret token here', 'refused'],
     ] as const) {
       const w = world()
       w.add('evt_1')
@@ -424,6 +426,7 @@ describe('the delivery outbox (U8)', () => {
       expect(w.rows.get('evt_1')!.status).toBe('NEEDS_ATTENTION')
       expect(w.rows.get('evt_1')!.attention).toMatchObject({ reason: 'delivery_exhausted', voucherId: 'v1' })
       expect(w.rows.get('evt_1')!.attention!.detail).toContain(`422 ${code}`)
+      expect(w.rows.get('evt_1')!.attention!.detail).not.toContain('cashuB')
       expect(await outbox.size()).toBe(0)
     }
   })
@@ -452,6 +455,28 @@ describe('the delivery outbox (U8)', () => {
     expect(new Set(w.sends.map((s) => s.voucherId))).toEqual(new Set(['v1']))
     expect(w.sends.filter((s) => s.recorded)).toHaveLength(1)
     expect(w.rows.get('evt_1')!.status).toBe('DISCHARGED')
+  })
+
+  // Review of #291 (E4 + rolling deploy): against a gc without U2 every DM is delivered but never
+  // recorded. That is bounded by maxAttempts, and the park must say DELIVERED, never "delivery failed".
+  it('parks an always-unconfirmed delivery after maxAttempts, saying it was delivered (#287, #289)', async () => {
+    const w = world()
+    w.add('evt_1')
+    vi.stubGlobal('fetch', w.fetchImpl)
+    const outbox = w.outboxOn()
+    w.gw.records = false
+    await runPass(w.worker('a', outbox))
+    for (let i = 0; i < 10; i++) {
+      w.advance(60_001)
+      await w.deliveryPass(outbox)
+    }
+
+    expect(w.sends).toHaveLength(4)
+    expect(w.rows.get('evt_1')!.status).toBe('NEEDS_ATTENTION')
+    const detail = w.rows.get('evt_1')!.attention!.detail as string
+    expect(detail).toMatch(/^delivered by DM 4 times, discharge never confirmed: voucher v1 DELIVERED/)
+    expect(detail).not.toContain('delivery failed')
+    expect(await outbox.size()).toBe(0)
   })
 
   it('parks the row delivery_exhausted, naming the voucher, after N attempts', async () => {
