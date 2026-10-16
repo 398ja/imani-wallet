@@ -31,7 +31,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
-import { deliver } from './delivery'
+import { DeliveredUnconfirmed, deliver } from './delivery'
 import type { Ports } from './discharge'
 import { countAttempt } from './metrics'
 import type { PurchasesApi } from './purchasesApi'
@@ -189,7 +189,16 @@ export async function runDeliveryPass(deps: DeliveryDeps): Promise<DeliveryPassR
       } else {
         try {
           const token = await ports.tokenFor(credential, entry.voucherId)
-          await deliver(deps.gatewayUrl, credential, { kind: 'pubkey', pubkey: entry.recipientPubkey }, token, entry.paymentRequestId)
+          await deliver(
+            deps.gatewayUrl,
+            credential,
+            { kind: 'pubkey', pubkey: entry.recipientPubkey },
+            token,
+            entry.paymentRequestId,
+            entry.voucherId,
+            fetch,
+            () => ports.now(),
+          )
           next.deliver = false
           result.delivered += 1
           countAttempt('delivered_late')
@@ -199,6 +208,9 @@ export async function runDeliveryPass(deps: DeliveryDeps): Promise<DeliveryPassR
         } catch (error) {
           next.attempts += 1
           next.lastError = error instanceof Error ? error.message : String(error)
+          // Delivered, discharge not confirmed (imani-wallet#287/#289): re-sent like any failure,
+          // but counted apart so a dashboard does not read it as "the buyer has nothing".
+          if (error instanceof DeliveredUnconfirmed) countAttempt('delivered_unconfirmed')
         }
       }
       if (next.deliver) {

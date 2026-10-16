@@ -152,7 +152,7 @@ describe('worker pass', () => {
   it('discharges what it issued', async () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't', issuer_id: 'i1' }))
-      .mockResolvedValueOnce(reply(200, { event_id: 'ev1' })))
+      .mockResolvedValueOnce(reply(200, { event_id: 'ev1', fulfilment_recorded: true })))
     const d = deps()
 
     const result = await runPass(d)
@@ -181,7 +181,7 @@ describe('worker pass', () => {
     // give two coupons for one payment, so this reports and moves on.
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't', issuer_id: 'i1' }))
-      .mockResolvedValueOnce(reply(200, {})))
+      .mockResolvedValueOnce(reply(200, { fulfilment_recorded: true })))
     const d = deps()
     ;(d.api.discharge as ReturnType<typeof vi.fn>).mockResolvedValue('refused')
 
@@ -223,7 +223,7 @@ describe('worker pass', () => {
     // 5000 and receiving a hundredth of it.
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't', issuer_id: 'i1' }))
-      .mockResolvedValueOnce(reply(200, {}))
+      .mockResolvedValueOnce(reply(200, { fulfilment_recorded: true }))
     vi.stubGlobal('fetch', fetchMock)
     const d = deps()
     ;(d.api.owed as ReturnType<typeof vi.fn>).mockResolvedValue([
@@ -240,7 +240,7 @@ describe('worker pass', () => {
   it('mints a two-decimal currency at its own scale', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't', issuer_id: 'i1' }))
-      .mockResolvedValueOnce(reply(200, {}))
+      .mockResolvedValueOnce(reply(200, { fulfilment_recorded: true }))
     vi.stubGlobal('fetch', fetchMock)
 
     await runPass(deps())

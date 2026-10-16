@@ -52,9 +52,10 @@ function world({ leaseMs = 60_000, attentionRoute = true } = {}) {
   const minted: { key: string | null; nonce: string; voucherId: string }[] = []
   const byNonce = new Map<string, string>()
   const unrecordedNonces = new Set<string>()
-  const sends: { ok: boolean; prid: string; token: string }[] = []
+  const sends: { ok: boolean; prid: string; token: string; voucherId?: string; recorded: boolean }[] = []
   const calls: string[] = []
-  const gw = { dmFail: false, tokenReads: 0, refuse: null as null | { status: number; code: string } }
+  // `records`: gc#287 U2. false models a gc that publishes the DM but does not (yet) record it in core.
+  const gw = { dmFail: false, records: true, tokenReads: 0, refuse: null as null | { status: number; code: string } }
 
   const add = (eventId: string, pi = `pi_${eventId}`) =>
     rows.set(eventId, {
@@ -100,8 +101,11 @@ function world({ leaseMs = 60_000, attentionRoute = true } = {}) {
         return json(200, { token: `cashuB-reread-${read[1]}` })
       }
       if (path === '/api/v1/dm/tokens/send') {
-        sends.push({ ok: !gw.dmFail, prid: body.payment_request_id, token: body.token })
-        return gw.dmFail ? json(502, { error: 'relay down' }) : json(200, { event_id: 'dm-1' })
+        // Like U2: gc records the delivery in core only when the send names the voucher it carries.
+        const recorded = !gw.dmFail && gw.records && typeof body.voucher_id === 'string'
+        sends.push({ ok: !gw.dmFail, prid: body.payment_request_id, token: body.token, voucherId: body.voucher_id, recorded })
+        if (gw.dmFail) return json(502, { error: 'relay down' })
+        return json(200, recorded ? { event_id: 'dm-1', fulfilment_recorded: true } : { event_id: 'dm-1' })
       }
       if (path === '/api/v1/nostr/events') return json(200, {})
       return json(404)
@@ -130,7 +134,8 @@ function world({ leaseMs = 60_000, attentionRoute = true } = {}) {
       return json(200)
     }
     if (action === 'discharge') {
-      const sent = sends.some((s) => s.ok && s.prid === row.paymentRequestId)
+      // Like gateway-core after #287: only a RECORDED delivery of this very voucher counts.
+      const sent = sends.some((s) => s.recorded && s.prid === row.paymentRequestId && s.voucherId === body.voucherId)
       if (!sent) return json(409)
       row.status = 'DISCHARGED'
       row.voucherId = body.voucherId
@@ -330,6 +335,78 @@ describe('the delivery outbox (U8)', () => {
     expect(w.rows.get('evt_1')).toMatchObject({ status: 'DISCHARGED', voucherId: 'v1' })
     expect(w.minted).toHaveLength(1)
     expect(await outbox.size()).toBe(0)
+  })
+
+  // imani-wallet#287 (U3), red on main: the DM body carried no voucher_id, so gc never recorded
+  // the delivery in gateway-core and every card discharge was refused (staging S2, E2).
+  it('names the voucher it carries in every delivery, inline and from the outbox (#287)', async () => {
+    const w = world()
+    w.add('evt_1')
+    vi.stubGlobal('fetch', w.fetchImpl)
+    const outbox = w.outboxOn()
+    w.gw.dmFail = true
+    await runPass(w.worker('a', outbox))
+    w.gw.dmFail = false
+    w.advance(10_001)
+    await w.deliveryPass(outbox)
+
+    expect(w.sends).toHaveLength(2)
+    expect(w.sends.map((s) => s.voucherId)).toEqual(['v1', 'v1'])
+    expect(w.rows.get('evt_1')).toMatchObject({ status: 'DISCHARGED', voucherId: 'v1' })
+  })
+
+  // imani-wallet#287 (U3), red on main: a 2xx WITHOUT fulfilment_recorded was taken as delivered,
+  // the outbox entry dropped, and the row sat ISSUED with nothing left to re-send it.
+  it('retries a 2xx without fulfilment_recorded, then discharges once gc records it (#287)', async () => {
+    const w = world()
+    w.add('evt_1')
+    vi.stubGlobal('fetch', w.fetchImpl)
+    const outbox = w.outboxOn()
+    w.gw.records = false
+
+    await runPass(w.worker('a', outbox))
+    expect(w.sends.filter((s) => s.ok)).toHaveLength(1)
+    expect(w.rows.get('evt_1')).toMatchObject({ status: 'ISSUED', voucherId: 'v1' })
+    expect(await outbox.size()).toBe(1)
+
+    w.advance(10_001)
+    await w.deliveryPass(outbox)
+    expect(await outbox.size()).toBe(1)
+    expect(w.rows.get('evt_1')!.status).toBe('ISSUED')
+
+    w.gw.records = true
+    w.advance(60_001)
+    const pass = await w.deliveryPass(outbox)
+
+    expect(pass.delivered).toBe(1)
+    expect(w.rows.get('evt_1')).toMatchObject({ status: 'DISCHARGED', voucherId: 'v1' })
+    expect(await outbox.size()).toBe(0)
+  })
+
+  // imani-wallet#287 (U3): the retry is idempotent. Re-sending the same voucher never mints, and
+  // every re-send carries the same voucher id and payment request (gc and core dedupe on those).
+  it('re-sends the same voucher under the same payment request, minting once (#287)', async () => {
+    const w = world()
+    w.add('evt_1')
+    vi.stubGlobal('fetch', w.fetchImpl)
+    const outbox = w.outboxOn()
+    w.gw.records = false
+    await runPass(w.worker('a', outbox))
+    for (let i = 0; i < 2; i++) {
+      w.advance(120_001)
+      await w.deliveryPass(outbox)
+    }
+    w.gw.records = true
+    w.advance(120_001)
+    await w.deliveryPass(outbox)
+    await runPass(w.worker('a', outbox))
+
+    expect(w.minted).toHaveLength(1)
+    const prids = new Set(w.sends.map((s) => s.prid))
+    expect(prids.size).toBe(1)
+    expect(new Set(w.sends.map((s) => s.voucherId))).toEqual(new Set(['v1']))
+    expect(w.sends.filter((s) => s.recorded)).toHaveLength(1)
+    expect(w.rows.get('evt_1')!.status).toBe('DISCHARGED')
   })
 
   it('parks the row delivery_exhausted, naming the voucher, after N attempts', async () => {
