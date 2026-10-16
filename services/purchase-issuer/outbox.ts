@@ -217,15 +217,19 @@ export async function runDeliveryPass(deps: DeliveryDeps): Promise<DeliveryPassR
         detail: `delivery failed ${next.attempts} times: ${next.lastError ?? 'unknown'}`.slice(0, 500),
         worker: deps.workerId,
       })
-      if (parked === 'parked' || parked === 'unsupported') {
+      if (parked === 'parked' || parked === 'unsupported' || parked === 'refused') {
         // Unsupported = a payment-adapter without #280. The row is already ISSUED with its voucher
         // (the inline failure report said so); the log line is the only signal left.
+        // Refused (409) = the row is closed: PA's recheck discharged it, or it was refunded. An
+        // ISSUED row has no live claim, so nothing else answers 409. Kept, it would ask again
+        // every hour forever (review of #279).
         console.error(
           JSON.stringify({
             event: 'purchase_delivery_exhausted',
             event_id: entry.eventId,
             voucher_id: entry.voucherId,
             parked: parked === 'parked',
+            ...(parked === 'refused' ? { closed: true } : {}),
           }),
         )
         next.deliver = false

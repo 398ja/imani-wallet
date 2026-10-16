@@ -54,7 +54,7 @@ function world({ leaseMs = 60_000, attentionRoute = true } = {}) {
   const unrecordedNonces = new Set<string>()
   const sends: { ok: boolean; prid: string; token: string }[] = []
   const calls: string[] = []
-  const gw = { dmFail: false, tokenReads: 0 }
+  const gw = { dmFail: false, tokenReads: 0, refuse: null as null | { status: number; code: string } }
 
   const add = (eventId: string, pi = `pi_${eventId}`) =>
     rows.set(eventId, {
@@ -83,6 +83,7 @@ function world({ leaseMs = 60_000, attentionRoute = true } = {}) {
       if (path === '/api/v1/wallet/vouchers' && init.method === 'POST') {
         const key = (init.headers as Record<string, string>)['Idempotency-Key'] ?? null
         const nonce = JSON.parse(body.issuance_warrant).nonce as string
+        if (gw.refuse) return json(gw.refuse.status, { error: { code: gw.refuse.code, message: 'refused' } })
         if (unrecordedNonces.has(nonce)) {
           return json(409, { error: { code: 'UNRECORDED', message: 'delegated warrant use never recorded' } })
         }
@@ -255,6 +256,39 @@ describe('gc 409 UNRECORDED (U8, gc#232)', () => {
     expect(w.minted).toHaveLength(0)
   })
 
+  // Review of #279: these answer every retry the same way, and the first attempt may have minted.
+  // Retryable before, so the row went back to OWED and looped forever without ever parking.
+  it.each([
+    [409, 'WARRANT_ALREADY_USED'],
+    [422, 'IDEMPOTENCY_KEY_REUSED'],
+    [409, 'IDEMPOTENCY_PREVIOUS_ATTEMPT_UNRECORDED'],
+  ])('parks gateway_unrecorded on gc %i %s, never back to OWED', async (status, code) => {
+    const w = world()
+    w.add('evt_1')
+    w.gw.refuse = { status, code }
+    vi.stubGlobal('fetch', w.fetchImpl)
+
+    await runPass(w.worker('a', w.outboxOn()))
+
+    expect(w.rows.get('evt_1')).toMatchObject({
+      status: 'NEEDS_ATTENTION',
+      attention: { reason: 'gateway_unrecorded' },
+    })
+    expect(w.minted).toHaveLength(0)
+  })
+
+  it('still retries a 409 IDEMPOTENCY_IN_PROGRESS (the first request is running)', async () => {
+    const w = world()
+    w.add('evt_1')
+    w.gw.refuse = { status: 409, code: 'IDEMPOTENCY_IN_PROGRESS' }
+    vi.stubGlobal('fetch', w.fetchImpl)
+
+    await runPass(w.worker('a', w.outboxOn()))
+
+    expect(w.rows.get('evt_1')!.status).toBe('OWED')
+    expect(w.calls).not.toContain('attention:evt_1')
+  })
+
   it('falls back to a permanent /failure on a payment-adapter without /attention (404)', async () => {
     const w = world({ attentionRoute: false })
     w.add('evt_1')
@@ -319,6 +353,52 @@ describe('the delivery outbox (U8)', () => {
     })
     expect(await outbox.size()).toBe(0)
     expect(w.minted).toHaveLength(1)
+  })
+
+  it('drops an exhausted entry whose row PA already closed (409), instead of asking hourly forever', async () => {
+    const w = world()
+    w.add('evt_1')
+    vi.stubGlobal('fetch', w.fetchImpl)
+    const outbox = w.outboxOn()
+    w.gw.dmFail = true
+
+    await runPass(w.worker('a', outbox))
+    // PA's recheck closed it meanwhile (the send was verified another way).
+    w.rows.get('evt_1')!.status = 'DISCHARGED'
+    for (let i = 0; i < 10; i++) {
+      w.advance(60_001)
+      await w.deliveryPass(outbox)
+    }
+
+    expect(w.calls.filter((c) => c === 'attention:evt_1')).toHaveLength(1)
+    expect(await outbox.size()).toBe(0)
+  })
+
+  it('never writes a token gc echoes in a refused send into the outbox file', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'outbox-'))
+    const path = join(dir, 'purchase-outbox.json')
+    const w = world()
+    w.add('evt_1')
+    const echoing = (async (input: string | URL, init: RequestInit = {}) => {
+      if (String(input).endsWith('/api/v1/dm/tokens/send')) {
+        const token = JSON.parse(String(init.body)).token as string
+        return new Response(
+          JSON.stringify({ error: { code: 'VALIDATION_FAILED', field_errors: [{ field: 'token', rejected_value: token }] } }),
+          { status: 400 },
+        )
+      }
+      return w.fetchImpl(input, init)
+    }) as typeof fetch
+    vi.stubGlobal('fetch', echoing)
+    const outbox = w.outboxOn(new FileOutboxStore(path))
+
+    await runPass(w.worker('a', outbox))
+    w.advance(10_001)
+    await w.deliveryPass(outbox)
+
+    const onDisk = await readFile(path, 'utf8')
+    expect(onDisk).toContain('v1')
+    expect(onDisk).not.toMatch(/cashuB-(fresh|reread)/)
   })
 
   it('backs off exponentially, capped', async () => {

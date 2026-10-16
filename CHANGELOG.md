@@ -16,6 +16,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     and the warrant nonce `H("imani-purchase-warrant-v2:<pi_>")`, so any re-drive of one payment
     (a second event, a lapsed claim, a reconciler) maps to one gc nonce, which gc#232 replays
     for the voucher's life. Deploy after gateway-customer with #232.
+  - **Upgrade precondition (key switch).** A row that an older issuer minted under the v1 event-id
+    key/nonce and that is re-claimed by this one would mint AGAIN under the pi_ key/nonce: gc
+    sees a new nonce. Only rows that are `ISSUING` at the switch can be in that state
+    (`OWED` never minted, `ISSUED`/`DISCHARGED`/`BLOCKED` are never re-minted). So before
+    deploying: stop the old issuer, wait out the lease (10 min), and check
+    `select count(*) from stripe_purchase where status = 'ISSUING'` is 0. For a non-zero
+    count, check each row's voucher at gc first. Per the 2026-10-15 card audit, staging had
+    none: purchase #1 BLOCKED (nothing minted, 401), #2 delivered by hand.
+  - **Every gc refusal that answers every retry the same way parks the row** (review of #279):
+    409 `UNRECORDED` (also the idempotency store's `IDEMPOTENCY_PREVIOUS_ATTEMPT_UNRECORDED`),
+    409 `WARRANT_ALREADY_USED` (the pi_ nonce was spent by different bytes, for example after a
+    delegation renewal), and 422 `IDEMPOTENCY_KEY_REUSED`. Before, the last two were
+    retryable and looped forever. 409 `IDEMPOTENCY_IN_PROGRESS` is still retried.
   - **gc 409 `UNRECORDED` is never retried.** The row is parked `gateway_unrecorded` via
     payment-adapter#280 `POST /api/v1/purchases/{eventId}/attention`. A payment-adapter without
     that route (404) gets the old permanent `/failure` instead, so the row still stops looping.
