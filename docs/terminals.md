@@ -385,14 +385,15 @@ and, with the *Sell and redeem* role, to **sell**. The plan is
    has confirmed, and lapses it after 24 hours. The app does this for you. If you
    mint one yourself, `scripts/mint-terminal-credential.mjs` confirms it as the
    stall. The card-purchase issuer (`services/purchase-issuer`) confirms each
-   credential at enrolment (`attachDelegation.ts`, when `PURCHASE_GATEWAY_URL`
-   is set) and again for every credential it holds when it starts, as its
+   credential at enrolment (the app's **Turn on card sales**, see below, or
+   `attachDelegation.ts` when `PURCHASE_GATEWAY_URL` is set) and again for every credential it holds when it starts, as its
    device. It does not wait for the first card sale: a stall may take none for
    days, and an unconfirmed credential lapses after 24 hours (imani-wallet#296).
    One that already lapsed is logged (`purchase_issuer_credential_expired`),
    counted in `imani_purchase_issuer_credentials{standing="expired"}`, and its
    card purchases stay owed with "re-enrol the purchase issuer" as the reason.
-   Mint a new credential and enrol again to fix it. Anything else
+   Settings › Card payments then reads **Card sales: needs setup**: tap **Set up
+   card sales again**. Anything else
    that mints a terminal credential must call
    `POST /api/v1/wallet/terminal-credentials/{id}/confirm` itself.
 2. **More than one terminal needs a subscription** (#197). One terminal is free.
@@ -407,6 +408,61 @@ notice, the dashboard guard, decommissioning, attribution on records (a till's
 sales reach your history and Vouchers list, named by till), renewal, the
 terminal list on all your phones, and revocation that genuinely spends at the
 mint. Subscriptions work end to end.
+
+## Card sales: the purchase issuer's terminal (imani-wallet#298)
+
+Connecting Stripe (Settings › Card payments) lets shoppers PAY you by card. The
+voucher they paid for is issued by Imani's purchase issuer, and it can only issue
+for your stall once you have given it a terminal of its own. That is the
+**Turn on card sales** step, under the Stripe card on the same screen. It
+appears once Stripe can take charges in your voucher currency.
+
+One tap does the whole enrolment, on your phone:
+
+1. The purchase issuer makes a fresh key for your stall and sends back only its
+   public half (`POST /api/v1/card-sales/enrolment/begin`, signed by you).
+2. Your phone mints an *issue-and-redeem* terminal credential locked to that key,
+   signed by your stall key with your owner attestation, exactly like Add
+   terminal, and checks the token it gets back.
+3. Your phone signs a `coupon:issue` delegation (kind 30078) naming that key for
+   380 days, enough to cover a 365-day voucher plus the 7-day margin.
+4. Your phone sends the credential id and the signed delegation
+   (`POST /api/v1/card-sales/enrolment`, signed by you). The purchase issuer
+   checks the delegation, **confirms the credential at the gateway at once**
+   (#296), seals it, and issues your next card sale without a restart (#290).
+
+**Your stall key never leaves your phone.** Everything sent is a signature or
+public data: NIP-98 headers, the credential id, the signed delegation event. The
+purchase issuer's key never leaves the purchase issuer either. Turning card sales
+on again replaces the old credential.
+
+The screen then reads **Card sales: on**, **Card sales: needs setup** (with the
+reason), or **Couldn't check card sales**. Until it reads on, your stall's Buy
+button is disabled with *Card sales aren't ready for this merchant yet* beside it,
+so nobody is charged for a voucher that cannot be issued. If the purchase issuer
+cannot be reached, Buy stays disabled: an unknown answer never sells.
+
+### For operators
+
+- purchase-issuer needs `PURCHASE_PUBLIC_ORIGIN` (the wallet's public origin, for
+  example `https://wallet.example`) to accept enrolments. Unset, enrolment answers
+  503 and Buy stays disabled for stalls that are not already enrolled.
+- The edge must route `/api/v1/card-sales/` to purchase-issuer (port 8791), with
+  the original `Host`, so the NIP-98 `u` tag matches.
+- `GET /api/v1/card-sales/ready/<stall>` is public and answers only
+  `{"ready": true|false}`.
+- The vault follows its file: a record sealed by the operator script
+  (`attachDelegation.ts`, the S1/S3 enrol scripts) is picked up on the next pass
+  and confirmed at once, with no restart. Those scripts are for TEST stalls whose
+  keys we already hold; a real merchant enrols from the app.
+- `imani_purchase_issuer_owed_unenrolled` is the number of paid card purchases,
+  at the last pass, for stalls with no enrolled issuer. Above zero for more than a
+  few minutes means a buyer has paid and holds nothing: alert on it.
+  `imani_purchase_issuer_attempts_total{outcome="no_credential"}` counts the same
+  thing per pass, and each such stall is logged once an hour as
+  `purchase_owed_stall_not_enrolled`.
+- `imani_purchase_issuer_enrolments_total{result}` counts enrolments
+  (`enrolled`, `refused`, `unauthenticated`).
 
 ## Common questions
 
