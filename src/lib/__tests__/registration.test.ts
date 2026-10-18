@@ -37,6 +37,12 @@ const conflict = () =>
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // A 409 here is a handle someone ELSE holds: the check behind it resolves to
+  // another key (claimIdempotency.test.ts covers the same-key and outage cases).
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => new Response(JSON.stringify({ hex_pubkey: 'b'.repeat(64) }), { status: 200 })),
+  )
 })
 
 describe('register', () => {

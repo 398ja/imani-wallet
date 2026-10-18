@@ -30,7 +30,7 @@ vi.mock('../nap', () => ({ keyStore: { save } }))
 vi.mock('../onboardingHandoff', () => ({ stashPendingBackup: vi.fn() }))
 vi.mock('../relay', () => ({ RELAY_URL: 'ws://localhost:27778', publish, allEvents: async () => [] }))
 
-const { claimHandle, register, HandleTakenError } = await import('../registration')
+const { claimHandle, register, HandleTakenError, HandleCheckUnavailableError } = await import('../registration')
 const { claimProfile, requireProfile, ProfileMissingError } = await import('../profileGate')
 const { createWalletSigner } = await import('../signer')
 
@@ -78,11 +78,34 @@ describe('claimHandle', () => {
     await expect(claimHandle('alice', PUBKEY, createWalletSigner(PRIV))).rejects.toBeInstanceOf(HandleTakenError)
   })
 
-  // Failing to check must never turn someone else's handle into ours.
-  it('a 409 that cannot be checked stays taken', async () => {
+  // Failing to check must never turn someone else's handle into ours, nor tell
+  // the customer their own handle is taken: it is a "try again".
+  it('a 409 whose check gets a server error is a retry, not success and not taken', async () => {
     signedFetch.mockResolvedValue(conflict())
     resolvesTo = 502
+    await expect(claimHandle('alice', PUBKEY, createWalletSigner(PRIV))).rejects.toBeInstanceOf(HandleCheckUnavailableError)
+  })
+
+  it('a 409 whose check cannot reach the directory is a retry, not success', async () => {
+    signedFetch.mockResolvedValue(conflict())
+    vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new TypeError('Failed to fetch'))))
+    await expect(claimHandle('alice', PUBKEY, createWalletSigner(PRIV))).rejects.toBeInstanceOf(HandleCheckUnavailableError)
+  })
+
+  it('a 409 for a handle that resolves to nobody stays taken', async () => {
+    signedFetch.mockResolvedValue(conflict())
+    resolvesTo = 404
     await expect(claimHandle('alice', PUBKEY, createWalletSigner(PRIV))).rejects.toBeInstanceOf(HandleTakenError)
+  })
+
+  it('the claim and its check are bounded in time', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout')
+    signedFetch.mockResolvedValue(conflict())
+    resolvesTo = PUBKEY
+    await claimHandle('alice', PUBKEY, createWalletSigner(PRIV))
+    expect(signedFetch.mock.calls[0][4]).toMatchObject({ signal: expect.anything() })
+    expect(timeout).toHaveBeenCalledTimes(2)
+    timeout.mockRestore()
   })
 })
 
