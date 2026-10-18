@@ -130,10 +130,14 @@ export interface Ports {
 
 /**
  * How many passes may find the stall's merchant record unreadable before the debt is parked for a
- * person (imani-wallet#312). Each failed pass is a retry the payment-adapter backs off, so a dozen
- * covers a gateway outage of a few hours; past that something is wrong that waiting will not fix.
+ * person (imani-wallet#312).
+ *
+ * Counted in PASSES, and nothing backs a pass off: payment-adapter lists an OWED row again at once
+ * (`findClaimable` has no retry-after), and the loop runs every `PURCHASE_INTERVAL_MS` (15 s by
+ * default). So this is about an hour at the default cadence. It was 12, which is three minutes:
+ * a gateway restart parked every paid card sale for an operator (review of #315).
  */
-export const VALIDITY_MAX_ATTEMPTS = 12
+export const VALIDITY_MAX_ATTEMPTS = 240
 
 /**
  * How long to wait for a token before giving up on this pass.
@@ -209,11 +213,24 @@ export async function discharge(
   // The coupon's life is the stall's OWN term, read now from its signed record (#312). Unreadable
   // is not a reason to guess: the debt stays OWED and the next pass asks again, up to a bound.
   const validity = await ports.validityFor(obligation.stallPubkey)
-  if (validity.kind === 'unreadable') {
+  // Review of #315: "no signed record" at MINT time is treated like unreadable, not as the stall's
+  // never-expires default. gc answers 200 with no events when its relay query fails and its cache
+  // has no copy (CachingNostrGatewayDecorator swallows the relay error), and `/ready` already
+  // refused a stall whose answer really is the default before anyone paid. So a paid sale that
+  // reads "no record" is far likelier a gateway miss than a stall that deleted its record, and
+  // parking it at once would send a paid buyer to an operator for a refund on a blip.
+  const unknown =
+    validity.kind === 'unreadable'
+      ? validity.reason
+      : validity.source === 'default'
+        ? 'the gateway returned no signed merchant record for the stall'
+        : null
+  if (unknown !== null || validity.kind !== 'days') {
+    const why = unknown ?? 'unreadable'
     if (obligation.attempts + 1 >= VALIDITY_MAX_ATTEMPTS) {
-      return { kind: 'attention', reason: `validity_unreadable: ${validity.reason}` }
+      return { kind: 'attention', reason: `validity_unreadable: ${why}` }
     }
-    return { kind: 'owed', reason: `stall validity unknown: ${validity.reason}`, ambiguous: false }
+    return { kind: 'owed', reason: `stall validity unknown: ${why}`, ambiguous: false }
   }
   const expiresInDays = validity.days
   const mintedAt = ports.now()
