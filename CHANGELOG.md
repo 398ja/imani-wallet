@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **purchase-issuer confirms stall credentials eagerly** (Closes #296). It used to confirm a
+  terminal credential the first time a card sale read it, and gateway-customer lapses one left
+  unconfirmed for 24 h, so a stall enrolled more than a day before its first sale had its paid
+  purchase BLOCKED as "credential burnt or replaced". It now confirms at enrolment
+  (`attachDelegation.ts`, with `PURCHASE_GATEWAY_URL`) and for every vault record at startup. An
+  expired credential (410) is logged as `purchase_issuer_credential_expired`, exported as the new
+  gauge `imani_purchase_issuer_credentials{standing}`, and its sales stay owed with a "re-enrol"
+  reason instead of being blocked.
+- **No NIP-98 replay on a confirm retry.** One confirm is in flight per credential, and every
+  signed request carries a random `nonce` tag, so two requests in one second are two events.
+
 ## [0.29.0] - 2026-10-16
 
 The purchase issuer's card deliveries now discharge their purchase (imani-wallet#287 E2, U3, #291),

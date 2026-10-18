@@ -152,6 +152,13 @@ export async function discharge(
     return { kind: 'manual' }
   }
 
+  // The credential can never be confirmed (imani-wallet#296: 410 EXPIRED). Minting would get a
+  // 403 that reads as "burnt or replaced", and BLOCK a paid purchase on the wrong reason. Left
+  // OWED instead, with the real reason: once the stall re-enrols, the next pass mints it.
+  if (credential.unusable) {
+    return { kind: 'owed', reason: credential.unusable, ambiguous: false }
+  }
+
   // A guest (no buyer pubkey) would take delivery by Cashlink, which is not
   // wired (delivery.ts). Minting first strands a paid coupon, retried forever.
   // Checkout refuses guests now; this blocks any debt that predates that.

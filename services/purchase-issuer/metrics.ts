@@ -37,6 +37,18 @@ export type PassResultLabel = (typeof PASS_RESULTS)[number]
 const attempts = new Map<Outcome, number>(OUTCOMES.map((o) => [o, 0]))
 const passes = new Map<PassResultLabel, number>(PASS_RESULTS.map((r) => [r, 0]))
 
+/**
+ * Credentials held, by their standing at the gateway (imani-wallet#296). A gauge, set by the
+ * confirmer. `expired` above zero means a stall must re-enrol before its card sales can mint.
+ */
+export const STANDINGS = ['confirmed', 'expired', 'unconfirmed'] as const
+export type Standing = (typeof STANDINGS)[number]
+const standings = new Map<Standing, number>(STANDINGS.map((s) => [s, 0]))
+
+export function setCredentialStandings(counts: Record<Standing, number>): void {
+  for (const s of STANDINGS) standings.set(s, counts[s])
+}
+
 export function countAttempt(outcome: Outcome): void {
   attempts.set(outcome, (attempts.get(outcome) ?? 0) + 1)
 }
@@ -52,6 +64,7 @@ export function attemptCount(outcome: Outcome): number {
 export function resetMetricsForTest(): void {
   for (const o of OUTCOMES) attempts.set(o, 0)
   for (const r of PASS_RESULTS) passes.set(r, 0)
+  for (const s of STANDINGS) standings.set(s, 0)
 }
 
 export function renderMetrics(): string {
@@ -65,5 +78,10 @@ export function renderMetrics(): string {
     '# TYPE imani_purchase_issuer_passes_total counter',
   )
   for (const r of PASS_RESULTS) lines.push(`imani_purchase_issuer_passes_total{result="${r}"} ${passes.get(r)}`)
+  lines.push(
+    '# HELP imani_purchase_issuer_credentials Stall credentials held, by standing at the gateway.',
+    '# TYPE imani_purchase_issuer_credentials gauge',
+  )
+  for (const s of STANDINGS) lines.push(`imani_purchase_issuer_credentials{standing="${s}"} ${standings.get(s)}`)
   return lines.join('\n') + '\n'
 }
