@@ -28,7 +28,12 @@ vi.mock('../nap', () => ({
     },
   }),
 }))
-vi.mock('../relay', () => ({ allEvents: async () => stubs.events, publish: async () => undefined }))
+vi.mock('../relay', () => ({
+  allEvents: async () => stubs.events,
+  // The gateway half is covered in restoreAfterLogout.test.ts.
+  allEventsWithGateway: async () => stubs.events,
+  publish: async () => undefined,
+}))
 vi.mock('../legacyBridge', () => ({
   legacyApi: async () => ({
     validateToken: async () => {
@@ -45,7 +50,7 @@ vi.mock('../wallet', () => ({
   notifyWalletChanged: () => undefined,
 }))
 
-import { pickLive, restoreVouchers, type TokenRecord } from '../voucherRecords'
+import { pickLive, restoreVouchers, RESTORE_FLAG_MINT_SPENT, type TokenRecord } from '../voucherRecords'
 
 const coupon = (tokenId: string): VoucherRow =>
   ({
@@ -173,16 +178,25 @@ describe('restoreVouchers', () => {
     expect(stubs.restored.map((r) => r.token_id)).toEqual(['a', 'b'])
   })
 
-  it('still drops a coupon the mint calls SPENT when the device lacks it', async () => {
+  it('never restores a coupon the mint calls SPENT as money, and never drops it silently', async () => {
     // The rule the restore stands on. Skipping the check for HELD coupons must
     // not weaken it for the ones actually being recovered.
+    //
+    // It used to DROP the row. With no tombstone, a SPENT verdict is either a
+    // lost tombstone or money lost between the swap and the backup, and a
+    // dropped row hid the second (2026-10-18). Kept as `spent`, which every
+    // balance reads as not-money, with the reason on the row.
     stubs.state = 'SPENT'
     stubs.stored = []
     stubs.events = [event(coupon('b'))]
+    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
-    await restoreVouchers('aa'.repeat(32))
+    expect(await restoreVouchers('aa'.repeat(32))).toBe(0)
 
-    expect(stubs.restored).toEqual([])
+    expect(stubs.restored).toHaveLength(1)
+    expect(stubs.restored[0]).toMatchObject({ token_id: 'b', status: 'spent', restore_flag: RESTORE_FLAG_MINT_SPENT })
+    expect(err).toHaveBeenCalled()
+    err.mockRestore()
   })
 
   it('counts only what it recovered, not what it re-wrote', async () => {
@@ -271,15 +285,20 @@ describe('restoreVouchers', () => {
     expect(stubs.restored.map((r) => r.token_id)).toEqual(['a'])
   })
 
-  it('keeps a redeemed coupon the mint calls SPENT, and drops a live one', async () => {
+  it('keeps a redeemed coupon the mint calls SPENT, and never counts an active one as money', async () => {
     // Being SPENT is what redeeming does (burn.ts) — the row is a receipt, not
     // money, and asking the mint would throw the merchant's record away. An
-    // 'active' row with the same verdict is a genuinely burnt coupon: it goes.
+    // 'active' row with the same verdict comes back flagged and spent.
     const receipt = { ...coupon('a'), status: 'redeemed' } as VoucherRow
     stubs.events = [event(receipt), event(coupon('b'))]
+    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
     expect(await restoreVouchers('bb'.repeat(32))).toBe(1)
-    expect(stubs.restored.map((r) => r.token_id)).toEqual(['a'])
+    expect(stubs.restored.map((r) => [r.token_id, r.status])).toEqual([
+      ['a', 'redeemed'],
+      ['b', 'spent'],
+    ])
+    err.mockRestore()
   })
 
   it('restores both once the mint says they are live', async () => {

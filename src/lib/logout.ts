@@ -5,6 +5,7 @@ import { stopIncomingNotifications } from './incomingNotifications'
 import { disableNotifications } from './notifications/manager'
 import { forgetResume } from './resume'
 import { wipeWallet } from './wallet'
+import { couponsWithoutBackup } from './voucherRecords'
 import { sweepAppStorage } from './appStorage'
 import { carryPendingClaimsAcrossLogout } from './pendingClaim'
 
@@ -21,9 +22,11 @@ import { carryPendingClaimsAcrossLogout } from './pendingClaim'
  * nothing here is unique to the device any more: the profile and the stall are
  * addressable events on the relay, and every sale is published there too,
  * NIP-44 encrypted to the merchant's own key (lib/issuedRecords.ts). Logging
- * back in with the nsec rebuilds all three. Held coupons are the exception —
- * they return through the DM pipeline as they are re-received, and a coupon
- * already spent does not come back, which is correct.
+ * back in with the nsec rebuilds all three. Held coupons come back from their
+ * kind-7375 records (voucherRecords.ts), NOT from the DM pipeline: a received
+ * coupon's DM carried a token the mint swap has already spent. A coupon whose
+ * record cannot be confirmed is money that exists only on this device, so
+ * logout checks first and says so (`couponsWithoutBackup`, 2026-10-18).
  *
  * Leaving the data behind was the older, weaker promise: a shared or borrowed
  * device kept a readable ledger of someone else's takings long after they had
@@ -38,11 +41,30 @@ export const LOGOUT_WARNING =
   'This erases your key AND all your data from this browser.\n\n' +
   'Your account, your business and your sales come back when you log in with your ' +
   'backup key (nsec) — they are stored under your key, not on this device. ' +
-  'Vouchers you are holding are restored from the relay as they are received ' +
-  'again.\n\nThe only way back in is your backup key, a backup file, or a Google ' +
+  'Vouchers you are holding are backed up to the relay under your key and come ' +
+  'back when you log in again.\n\nThe only way back in is your backup key, a backup file, or a Google ' +
   'Drive backup — you MAKE those under Settings → Backup, and you USE them from ' +
   'the screen this lands on. There is no password reset.\n\n' +
   'Log out anyway?'
+
+/**
+ * The warning when some held coupons have NO confirmed backup (2026-10-18).
+ *
+ * Logout deletes the device copy, and for these coupons that is the only copy:
+ * logging out loses them. The old wording ("restored from the relay as they are
+ * received again") was never true of a coupon already received: its DM is not
+ * replayed, and the mint swap has already spent the token it carried.
+ */
+export function unbackedWarning(count: number): string {
+  return (
+    `STOP: ${count} voucher${count === 1 ? ' you hold is' : 's you hold are'} NOT backed up yet ` +
+    '(the relay could not be reached to confirm a copy).\n\n' +
+    'Logging out now DELETES ' + (count === 1 ? 'it' : 'them') + ' from this browser, and ' +
+    (count === 1 ? 'it' : 'they') + ' cannot be restored from your backup key.\n\n' +
+    'Cancel, check your connection, and try again in a moment. ' +
+    'Log out anyway and lose ' + (count === 1 ? 'it' : 'them') + '?'
+  )
+}
 
 /**
  * @param confirm injected so tests can exercise both answers without a DOM.
@@ -53,8 +75,15 @@ export async function logout(
   pubkey: string,
   confirm: (message: string) => boolean = window.confirm.bind(window),
   reload: () => void = () => window.location.replace('/'),
+  /** Injected for tests; see `couponsWithoutBackup`. Never throws. */
+  checkBackups: (pubkey: string) => Promise<unknown[]> = couponsWithoutBackup,
 ): Promise<boolean> {
-  if (!confirm(LOGOUT_WARNING)) return false
+  // Before the confirmation, so the user is asked the question that is true.
+  // A held coupon with no readable backup is money that exists only here; the
+  // ordinary warning promises it comes back, which for it is false.
+  const unbacked = await checkBackups(pubkey).catch(() => [])
+  const warning = unbacked.length > 0 ? unbackedWarning(unbacked.length) : LOGOUT_WARNING
+  if (!confirm(warning)) return false
 
   // Order matters. Stop the poller first: it holds the unlocked key and writes
   // to the user-scoped IndexedDB, and letting it run past the session teardown

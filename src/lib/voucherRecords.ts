@@ -1,9 +1,9 @@
 import type { EventTemplate, Event } from 'nostr-tools'
 import type { VoucherRow } from '@imani/wallet-storage'
 
-import { isRedeemed } from './merchants'
+import { isRedeemed, spendable } from './merchants'
 import { getSigner } from './nap'
-import { allEvents, publish, type PublishResult } from './relay'
+import { allEvents, allEventsWithGateway, publish, type PublishResult } from './relay'
 import {
   buildRecordEvents,
   isChunkEvent,
@@ -46,6 +46,12 @@ import { addRestoredVoucher, getWallet, notifyWalletChanged } from './wallet'
  *   tab could leave a spent coupon looking live. NUT-07 checkstate, via the
  *   gateway's `/api/v1/wallet/token/validate`, is the authority on that.
  */
+
+/**
+ * `restore_flag` on a restored row the mint calls SPENT although no tombstone
+ * says this wallet spent it. See `restoreVouchers`.
+ */
+export const RESTORE_FLAG_MINT_SPENT = 'mint-spent-without-tombstone'
 
 /** NIP-60's token event. Regular kind, like 7376 — `d` is identity, not replacement. */
 export const NIP60_TOKEN_KIND = 7375
@@ -332,7 +338,13 @@ async function isStillLive(token: string): Promise<boolean> {
  */
 export async function restoreVouchers(pubkey: string): Promise<number> {
   try {
-    const candidates = await liveRecords(await allEvents(pubkey, NIP60_TOKEN_KIND), pubkey)
+    // Relay AND gateway (#2026-10-18 incident). Relay-only, a browser that
+    // could not open a socket to strfry read as "no coupons" and restored a
+    // zero balance over a coupon whose record was sitting on the relay.
+    const candidates = await liveRecords(
+      await allEventsWithGateway(pubkey, NIP60_TOKEN_KIND),
+      pubkey,
+    )
     if (candidates.length === 0) return 0
 
     // What this device already has, read once.
@@ -346,10 +358,17 @@ export async function restoreVouchers(pubkey: string): Promise<number> {
     // Measured before this: a returning customer with 120 coupons made 120
     // sequential gateway calls on every login and took 12.8s to finish, having
     // restored nothing it did not already have (#44).
+    const heldRows = await getWallet().getAllVouchers()
     const held = new Set(
-      (await getWallet().getAllVouchers())
-        .map((row) => row.token_id)
-        .filter((id): id is string => Boolean(id)),
+      heldRows.map((row) => row.token_id).filter((id): id is string => Boolean(id)),
+    )
+    // A row this device already flagged as SPENT-without-tombstone stays
+    // flagged: the relay copy says `active`, and re-writing it would turn a
+    // coupon the mint refuses back into a balance.
+    const flagged = new Set(
+      heldRows
+        .filter((row) => (row as { restore_flag?: string }).restore_flag === RESTORE_FLAG_MINT_SPENT)
+        .map((row) => row.token_id),
     )
 
     // Sequential on purpose: each check is a NIP-98-signed gateway request, and
@@ -363,6 +382,7 @@ export async function restoreVouchers(pubkey: string): Promise<number> {
       // token_id, so this is an overwrite — but with no mint call, which is
       // the expensive half.
       if (row.token_id && held.has(row.token_id)) {
+        if (flagged.has(row.token_id)) continue
         await addRestoredVoucher(row)
         // Counted as written, not as restored. `restored` drives the log line
         // and the change notification, and a relay copy that is newer than
@@ -375,7 +395,26 @@ export async function restoreVouchers(pubkey: string): Promise<number> {
       // A burnt coupon is SPENT at the mint BY DESIGN — that is what redeeming
       // one does (see burn.ts). Asking the mint about it would discard the
       // receipt the merchant is meant to keep, so the status answers first.
-      if (!isRedeemed(row) && !(await isStillLive(row.token))) continue
+      if (!isRedeemed(row) && !(await isStillLive(row.token))) {
+        // The mint says SPENT, yet no tombstone says THIS wallet spent it.
+        // That is either a spend whose tombstone was lost (benign) or a coupon
+        // whose backup holds proofs this wallet never got to keep — money
+        // lost on the way to the backup, the case this restore used to drop
+        // without a trace. Kept as a row the wallet does not count as money
+        // (`isSpent` reads 'spent' everywhere, wallet-core included), with a
+        // flag that says why, and reported loudly, so support can see it.
+        await addRestoredVoucher({
+          ...row,
+          status: 'spent',
+          restore_flag: RESTORE_FLAG_MINT_SPENT,
+        } as VoucherRow)
+        console.error(
+          '[voucherRecords] restored coupon is SPENT at the mint with no tombstone; kept as flagged',
+          { token_id: row.token_id, voucher_id: row.voucher_id },
+        )
+        written += 1
+        continue
+      }
       await addRestoredVoucher(row)
       restored += 1
     }
@@ -422,7 +461,11 @@ async function pruneSuperseded(
 
 export async function backfillVouchers(pubkey: string): Promise<number> {
   try {
-    const events = await allEvents(pubkey, NIP60_TOKEN_KIND)
+    // Both stores, for the same reason restore reads both: a relay read that
+    // failed would otherwise make every coupon look missing and republish all
+    // of them. Harmless (records are idempotent by `d`) but wasteful, and the
+    // republish would fail against the same unreachable relay anyway.
+    const events = await allEventsWithGateway(pubkey, NIP60_TOKEN_KIND)
     // A plain record counts by its `d`; a chunked one only once a snapshot
     // decrypts, validates and matches its payload hash, so a half-landed or
     // corrupt set is published again (#203, #206 review L4). Once per login.
@@ -445,4 +488,47 @@ export async function backfillVouchers(pubkey: string): Promise<number> {
     console.error('[voucherRecords] could not back-fill coupons to the relay', error)
     return 0
   }
+}
+
+/**
+ * The held coupons with NO confirmed backup: no live record on the relay or the
+ * gateway whose token is this row's CURRENT token. Each gap is re-published
+ * once and checked again; what is still missing is returned.
+ *
+ * "Confirmed" means readable back by the same path a restore uses, decrypted
+ * with this key, untombstoned, and carrying the same token bytes. Matching on
+ * the token and not only on `d` is what catches a record that holds an older
+ * token for the coupon (a pre-swap or pre-split copy), which a restore would
+ * find SPENT.
+ *
+ * For logout, which deletes the device copy: a coupon in this list is money
+ * that exists nowhere else, so logging out would lose it (2026-10-18 incident,
+ * and the logout warning promised the opposite). Never throws: a failure to
+ * check reports every held coupon as a gap, the safe direction.
+ */
+export async function couponsWithoutBackup(pubkey: string): Promise<VoucherRow[]> {
+  let held: VoucherRow[]
+  try {
+    held = spendable(await getWallet().getAllVouchers()).filter((row) => row.token)
+  } catch {
+    // No open store: nothing on this device to lose.
+    return []
+  }
+  if (held.length === 0) return []
+
+  const gaps = async (): Promise<VoucherRow[]> => {
+    try {
+      const live = await liveRecords(await allEventsWithGateway(pubkey, NIP60_TOKEN_KIND), pubkey)
+      const backed = new Set(live.map((row) => row.token))
+      return held.filter((row) => !backed.has(row.token))
+    } catch (error) {
+      console.error('[voucherRecords] could not confirm coupon backups', error)
+      return held
+    }
+  }
+
+  const missing = await gaps()
+  if (missing.length === 0) return []
+  for (const row of missing) await publishVoucher(row)
+  return gaps()
 }

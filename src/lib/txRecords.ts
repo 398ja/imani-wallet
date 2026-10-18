@@ -109,6 +109,18 @@ export type HistoryContent = Nip60HistoryContent & {
    */
   gift_link?: unknown
   /**
+   * What the wallet checked about a received coupon (the issuer signature and
+   * the warrant verdict), on `received` rows.
+   *
+   * Carried because it was NOT, and that read as a regression to the owner:
+   * a restored history showed every coupon "Not checked" (2026-10-18). The
+   * check was made once, at receive, against the PRE-swap token, which no
+   * longer exists anywhere after the swap, so it cannot be re-derived from the
+   * restored row. The record is the only copy. Inside the owner's own
+   * NIP-44-sealed payload, like everything else here.
+   */
+  validation?: unknown
+  /**
    * Filler that brings the plaintext to a size bucket (#99), so a record's
    * length does not say what it carries. Ignored on read: `toRow` never looks
    * at it, and a record written before it existed simply has none.
@@ -217,6 +229,7 @@ export function toContent(tx: WalletTransaction): HistoryContent {
     transfer_signature: tx.transferSignature,
     terminal_pubkey: tx.terminalPubkey,
     ...(tx.link ? { gift_link: tx.link } : {}),
+    ...(tx.validation ? { validation: tx.validation } : {}),
   }
 }
 
@@ -264,6 +277,9 @@ export function toRow(id: string, content: HistoryContent): TransactionRow {
     transferSignature: content.transfer_signature,
     ...(content.terminal_pubkey ? { terminalPubkey: content.terminal_pubkey } : {}),
     ...(asGiftLinkRecord(content.gift_link) ? { link: asGiftLinkRecord(content.gift_link) } : {}),
+    // Read back through `toTransaction`'s own `isValidation` guard, so a
+    // garbled value reads as "Not checked", never as a pass.
+    ...(content.validation ? { validation: content.validation } : {}),
   } as unknown as TransactionRow
 }
 

@@ -36,6 +36,7 @@ vi.mock('../nap', () => ({
 }))
 vi.mock('../relay', () => ({
   allEvents: async () => relay.events,
+  allEventsWithGateway: async () => relay.events,
   publish: async (event: Event) => {
     const size = new TextEncoder().encode(JSON.stringify(event)).length
     if (size > 65_536) {
