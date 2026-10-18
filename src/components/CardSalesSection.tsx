@@ -31,6 +31,14 @@ export interface CardSalesDeps {
 const defaultStatus = () => fetchCardSalesStatus(getSigner())
 const defaultTurnOn = () => turnOnCardSales({ signer: getSigner() })
 
+/** A service's lower-case reason, as a sentence: capitalised, one full stop. */
+function sentence(text: string): string {
+  const trimmed = text.trim()
+  if (trimmed === '') return 'Something went wrong.'
+  const capped = trimmed[0].toUpperCase() + trimmed.slice(1)
+  return /[.!?]$/.test(capped) ? capped : `${capped}.`
+}
+
 export function CardSalesSection({ deps = {} }: { deps?: CardSalesDeps }) {
   const status = deps.status ?? defaultStatus
   const turnOn = deps.turnOn ?? defaultTurnOn
@@ -44,7 +52,7 @@ export function CardSalesSection({ deps = {} }: { deps?: CardSalesDeps }) {
       setState(result.status)
       setError(null)
     } else {
-      setError(result.reason)
+      setError(sentence(result.reason))
     }
     setLoaded(true)
   }, [])

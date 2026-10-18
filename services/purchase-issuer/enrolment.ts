@@ -287,15 +287,15 @@ export class EnrolmentService {
         delegationExpiresAt: null,
         delegationValid: false,
         ready: false,
-        reason: 'card sales are not set up for this stall',
+        reason: 'Card sales are not set up for this stall.',
       }
     }
     const confirmation = this.deps.confirmer.standingOf(credential.credentialId) ?? 'unknown'
     const verdict = checkDelegation(credential, this.now() + DEFAULT_EXPIRES_IN_DAYS * 86_400_000)
     const delegationExpiresAt = expirationOf(credential.delegation)
     let reason: string | undefined
-    if (confirmation === 'expired') reason = 'the card-sales credential expired or was cancelled; turn card sales on again'
-    else if (!verdict.ok) reason = `the delegation needs renewing: ${verdict.reason}`
+    if (confirmation === 'expired') reason = 'The card-sales credential expired or was cancelled. Turn card sales on again.'
+    else if (!verdict.ok) reason = `Card sales need renewing (${verdict.reason}).`
     // `unconfirmed`/`unknown` stay ready: the confirm is retried before the first mint, and a
     // gateway blip must not take a working stall off sale.
     return {
