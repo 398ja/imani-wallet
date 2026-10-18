@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tests: `useTerminalIdentity` waits on the state, not a 10 ms sleep (#286)**, and the
   `terminalRosterSync` property tests (3000 cases each, unchanged) get a 60 s block timeout so a
   loaded full run does not time them out.
+- An owner-device till could stay "Waiting for payment" after the buyer paid (#300). A redemption
+  awaited `getTokenMetadata`, `inspectVoucher` and the receive pacer with no timeout, and a hung one
+  also blocked every later attempt at the same token, which joined the hung in-flight promise. Each
+  step is now bounded and logged: the opportunistic lookups fall through, and a stuck pacer defers
+  the receive (`RECEIVE_DEFERRED`) so the next poll retries it under the same idempotency key.
 
 ## [0.29.0] - 2026-10-16
 
