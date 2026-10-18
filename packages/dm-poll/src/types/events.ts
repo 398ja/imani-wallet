@@ -107,6 +107,13 @@ export interface RedemptionErrorEvent {
 
   /** Gift wrap event ID */
   eventId: string;
+
+  /**
+   * The payment request this coupon answered, when the DM named one (imani-wallet#300), so a
+   * till that already showed Paid on gateway-core's verdict can say the coupon did not arrive.
+   * Sender-written and display only.
+   */
+  requestId?: string;
 }
 
 /**
@@ -294,4 +301,6 @@ export interface RedemptionUnsavedEvent {
   receiveId: string | null;
   /** e.g. 'already-settled' | 'replay-without-token'. */
   reason: string | null;
+  /** The payment request this coupon answered, when the DM named one (imani-wallet#300). */
+  requestId?: string;
 }

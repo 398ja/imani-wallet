@@ -488,6 +488,7 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
           senderPubkey: tokenDm.senderPubkey,
           receiveId,
           reason,
+          ...(tokenDm.metadata?.requestId ? { requestId: tokenDm.metadata.requestId } : {}),
         });
         return null;
       }
@@ -568,6 +569,7 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
           error: error instanceof Error ? error : new Error(String(error)),
           token: tokenDm.token,
           eventId: tokenDm.eventId,
+          ...(tokenDm.metadata?.requestId ? { requestId: tokenDm.metadata.requestId } : {}),
         });
         return null;
       }
@@ -589,6 +591,7 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
         error: error instanceof Error ? error : new Error(String(error)),
         token: tokenDm.token,
         eventId: tokenDm.eventId,
+        ...(tokenDm.metadata?.requestId ? { requestId: tokenDm.metadata.requestId } : {}),
       });
       if (this.config.uiAdapter) {
         this.config.uiAdapter.showErrorNotification(

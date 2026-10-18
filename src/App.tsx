@@ -89,6 +89,16 @@ import { useTerminalIdentity } from './lib/useTerminalIdentity'
 import { ProfileEditPage } from './pages/ProfileEditPage'
 import { SecurityPage } from './pages/SecurityPage'
 import { BackupPage, RestorePage } from './pages/BackupPages'
+import { fulfilmentOf, registerRequestTerms } from './lib/terminalTill'
+
+/**
+ * The stall's own till asks gateway-core too (#300), through the same check a terminal uses, so
+ * a coupon receive that stalls cannot hold it on "Waiting for payment" after core counted the
+ * payment. Signed with the session's signer when it runs. Built once, so the Redeem screen's
+ * watch is not restarted on every render.
+ */
+const OWNER_FULFILMENT = fulfilmentOf()
+const OWNER_REGISTER = registerRequestTerms()
 
 /**
  * Everything behind the NAP session gate.
@@ -477,6 +487,8 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
                   pubkey={pubkey}
                   merchant={merchant}
                   actor={terminal.actor ?? undefined}
+                  fulfilment={OWNER_FULFILMENT}
+                  register={OWNER_REGISTER}
                 />
               }
             />
