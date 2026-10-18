@@ -20,7 +20,7 @@ vi.mock('../../lib/branding', () => ({
   merchantBranding: () => Promise.resolve({ organizationName: 'Rosa Green Farm' }),
 }))
 // The purchase issuer can issue for this stall (#298); without it Buy stays disabled.
-vi.mock('../../lib/cardSalesEnrolment', () => ({ cardSalesReady: async () => true }))
+vi.mock('../../lib/cardSalesEnrolment', () => ({ cardSalesReadiness: async () => 'ready' }))
 vi.mock('../../lib/merchant', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/merchant')>()),
   fetchMerchantRecord: () =>

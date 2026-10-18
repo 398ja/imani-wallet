@@ -5,8 +5,8 @@ import { CreditCard } from 'lucide-react'
 import { Button, Screen, BackLink, Centered, buttonClasses } from '../components/ui'
 import { startPurchase } from '../lib/purchase'
 import { GUEST_REFUSED, rememberPurchase } from '../lib/pendingPurchase'
-import { cardSalesReady } from '../lib/cardSalesEnrolment'
-import { CARD_SALES_CHECKING, CARD_SALES_NOT_READY, type CardSalesReadiness } from '../lib/merchantActions'
+import { cardSalesReadiness } from '../lib/cardSalesEnrolment'
+import { cardSalesReason, type CardSalesReadiness } from '../lib/merchantActions'
 
 
 /**
@@ -54,10 +54,10 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
   useEffect(() => {
     if (buyerPubkey === null) return
     let live = true
-    cardSalesReady(pubkey)
-      .catch(() => false)
+    cardSalesReadiness(pubkey)
+      .catch((): 'not-ready' => 'not-ready')
       .then((ready) => {
-        if (live) setCardSales(ready ? 'ready' : 'not-ready')
+        if (live) setCardSales(ready)
       })
     return () => {
       live = false
@@ -81,10 +81,11 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
 
     // Asked again at the tap (#298): the answer on screen may be minutes old, and this is the
     // last moment nothing has been charged.
-    if (!(await cardSalesReady(pubkey).catch(() => false))) {
-      setCardSales('not-ready')
+    const readiness = await cardSalesReadiness(pubkey).catch((): 'not-ready' => 'not-ready')
+    if (readiness !== 'ready') {
+      setCardSales(readiness)
       setBusy(false)
-      setError(`${CARD_SALES_NOT_READY}. Nothing was charged.`)
+      setError(`${cardSalesReason(readiness).replace(/\.$/, '')}. Nothing was charged.`)
       return
     }
 
@@ -194,7 +195,7 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
       {/* The reason sits under the button it disables (#281), and is announced with it. */}
       {cardSales !== 'ready' && (
         <p id={readinessId} className="mt-2 text-center text-xs text-mono-600 dark:text-mono-400">
-          {cardSales === 'checking' ? CARD_SALES_CHECKING : CARD_SALES_NOT_READY}
+          {cardSalesReason(cardSales)}
         </p>
       )}
 

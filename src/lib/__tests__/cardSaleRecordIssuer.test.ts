@@ -14,7 +14,7 @@ import type { Event } from 'nostr-tools'
 
 import { discharge, type Obligation, type Ports } from '../../../services/purchase-issuer/discharge'
 import { NOSTR_EVENTS_PATH, resendSaleRecords, sendSaleRecord, type CardSale } from '../../../services/purchase-issuer/saleRecord'
-import { STALL, STALL_SK, delegatedCredential } from '../../../services/purchase-issuer/__tests__/stallFixture'
+import { STALL, STALL_SK, delegatedCredential, ninetyDayTerm } from '../../../services/purchase-issuer/__tests__/stallFixture'
 import { collectTillSales, saleRowsFromRumor } from '../tillSales'
 import { unwrapSealed } from '../terminalDelivery'
 import { issuedVoucher } from '../issuedVoucher'
@@ -64,6 +64,7 @@ describe('a discharge files the card sale into the stall ledger', () => {
     const sent: Array<{ sale: CardSale }> = []
     const sink = vi.fn()
     const ports: Ports = {
+      validityFor: ninetyDayTerm,
       credentialFor: async () => CREDENTIAL,
       tokenFor: async () => '',
       now: () => NOW,
@@ -102,6 +103,7 @@ describe('a discharge files the card sale into the stall ledger', () => {
     )
     const fileSale = vi.fn().mockResolvedValue(true)
     const outcome = await discharge('http://gw', OBLIGATION, {
+      validityFor: ninetyDayTerm,
       credentialFor: async () => CREDENTIAL,
       tokenFor: async () => '',
       now: () => NOW,
@@ -121,6 +123,7 @@ describe('a discharge files the card sale into the stall ledger', () => {
         .mockResolvedValueOnce(reply(200, { event_id: 'e3', fulfilment_recorded: true })),
     )
     const outcome = await discharge('http://gw', OBLIGATION, {
+      validityFor: ninetyDayTerm,
       credentialFor: async () => CREDENTIAL,
       tokenFor: async () => '',
       now: () => NOW,
@@ -141,6 +144,7 @@ describe('a discharge files the card sale into the stall ledger', () => {
         .mockResolvedValueOnce(reply(200, { event_id: 'e4', fulfilment_recorded: true })),
     )
     const outcome = await discharge('http://gw', OBLIGATION, {
+      validityFor: ninetyDayTerm,
       credentialFor: async () => CREDENTIAL,
       tokenFor: async () => '',
       now: () => NOW,
@@ -162,6 +166,7 @@ describe('a discharge files the card sale into the stall ledger', () => {
     )
     const sink = vi.fn().mockResolvedValue(new Response('{}'))
     await discharge('http://gw', OBLIGATION, {
+      validityFor: ninetyDayTerm,
       credentialFor: async () => CREDENTIAL,
       tokenFor: async () => '',
       now: () => NOW,
@@ -171,14 +176,15 @@ describe('a discharge files the card sale into the stall ledger', () => {
     const [, init] = sink.mock.calls[0] as [string, RequestInit]
     const opened = unwrapSealed(postedWrap(init), hexToBytes(STALL_SK))!
     const tx = toTransaction(saleRowsFromRumor(opened.rumor, opened.sealer, STALL)!.rows[0])
-    // 365 days (DEFAULT_EXPIRES_IN_DAYS) from the mint, in ms on the row.
-    expect(tx.expiresAt).toBe((Math.floor(NOW / 1000) + 365 * 86_400) * 1000)
+    // The stall's own 90 days from the mint (#312), in ms on the row.
+    expect(tx.expiresAt).toBe((Math.floor(NOW / 1000) + 90 * 86_400) * 1000)
   })
 
   it('files nothing when nothing was minted', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(reply(400, { error: 'bad' })))
     const fileSale = vi.fn()
     await discharge('http://gw', OBLIGATION, {
+      validityFor: ninetyDayTerm,
       credentialFor: async () => CREDENTIAL,
       tokenFor: async () => '',
       now: () => NOW,
@@ -209,6 +215,7 @@ describe('the pull fallback re-sends a missed card sale, and the stall files it 
         .mockResolvedValueOnce(reply(200, { event_id: 'e9', fulfilment_recorded: true })),
     )
     await discharge('http://gw', OBLIGATION, {
+      validityFor: ninetyDayTerm,
       credentialFor: async () => CREDENTIAL,
       tokenFor: async () => '',
       now: () => NOW,

@@ -22,7 +22,8 @@ import { portsFor } from '../server'
 import { readConfig } from '../config'
 import { CredentialVault } from '../vault'
 import { runPass, type WorkerDeps } from '../worker'
-import { delegationJson, STALL, STALL_SK } from './stallFixture'
+import { delegationJson, ninetyDayTerm, STALL, STALL_SK } from './stallFixture'
+import type { StallValidity } from '../stallValidity'
 
 const ORIGIN = 'https://wallet.test'
 const GATEWAY = 'http://gateway:8082'
@@ -76,7 +77,7 @@ async function setup() {
   const vault = new CredentialVault(KEY, new FileCredentialStore(path))
   const gw = gateway()
   const confirmer = new CredentialConfirmer(GATEWAY, gw.fetchImpl)
-  const service = new EnrolmentService({ vault, confirmer, publicOrigin: ORIGIN })
+  const service = new EnrolmentService({ vault, confirmer, publicOrigin: ORIGIN, validityFor: ninetyDayTerm })
   const call = (method: string, p: string, body = '', authorization?: string) =>
     service.handle({ method, path: p, body, authorization: authorization ?? signed(method, p, body) })
   return { dir, path, vault, gw, confirmer, service, call }
@@ -126,7 +127,7 @@ function workerFor(vault: CredentialVault, confirmer: CredentialConfirmer, gw: G
   } as unknown as PurchasesApi
   // Issue and deliver use the global fetch; the confirmer was given the same fake.
   vi.stubGlobal('fetch', gw.fetchImpl)
-  return { api, ports: portsFor(config, gw.fetchImpl, vault, confirmer), gatewayUrl: GATEWAY, livemode: false }
+  return { api, ports: portsFor(config, gw.fetchImpl, vault, confirmer, ninetyDayTerm), gatewayUrl: GATEWAY, livemode: false }
 }
 
 beforeEach(() => resetMetricsForTest())
@@ -170,7 +171,7 @@ describe('who may enrol', () => {
   // Not configured with its public origin: refused, never guessed from the Host header.
   it('is off when the public origin is not configured', async () => {
     const { vault, confirmer } = await setup()
-    const service = new EnrolmentService({ vault, confirmer, publicOrigin: null })
+    const service = new EnrolmentService({ vault, confirmer, publicOrigin: null, validityFor: ninetyDayTerm })
     const answer = await service.handle({ method: 'POST', path: BEGIN_PATH, body: '', authorization: signed('POST', BEGIN_PATH) })
     expect(answer.status).toBe(503)
   })
@@ -203,7 +204,8 @@ describe('the delegation', () => {
     const { call } = await setup()
     const scope = await enrolAs(call, 'cred-0001', (lock) => delegationJson({ delegate: lock, scope: 'coupon:redeem' }))
     expect(scope.enrolled.status).toBe(422)
-    const soon = Math.floor(Date.now() / 1000) + 365 * 86_400 + 86_400
+    // One day past the stall's 90-day term, inside the week's margin (#312: the stall's term).
+    const soon = Math.floor(Date.now() / 1000) + 91 * 86_400
     const short = await enrolAs(call, 'cred-0002', (lock) => delegationJson({ delegate: lock, expiresAt: soon }))
     expect(short.enrolled.status).toBe(422)
     expect(String(short.enrolled.body.error)).toMatch(/outlive/)
@@ -286,7 +288,7 @@ describe('status', () => {
     await enrolAs(call)
     const expiring = new CredentialConfirmer(GATEWAY, (async () => new Response(null, { status: 410 })) as unknown as typeof fetch)
     await expiring.confirm((await vault.get(STALL))!)
-    const service = new EnrolmentService({ vault, confirmer: expiring, publicOrigin: ORIGIN })
+    const service = new EnrolmentService({ vault, confirmer: expiring, publicOrigin: ORIGIN, validityFor: ninetyDayTerm })
     expect(await service.status(STALL)).toMatchObject({ enrolled: true, confirmation: 'expired', ready: false })
     expect(confirmer.standingOf('cred-0001')).toBe('confirmed')
   })
@@ -321,5 +323,63 @@ describe('#290: issued with no restart', () => {
     expect(second.discharged).toBe(1)
     expect(gw.calls.some((c) => c === `POST ${GATEWAY}/api/v1/wallet/vouchers`)).toBe(true)
     expect(renderMetrics()).toContain('imani_purchase_issuer_owed_unenrolled 0')
+  })
+})
+
+describe('#312: readiness follows the stall\u2019s voucher validity', () => {
+  /** An enrolled stall whose readiness is judged against `validity`. */
+  async function enrolledWith(validity: StallValidity, delegation?: (lock: string) => string) {
+    const { call, vault, confirmer } = await setup()
+    expect((await enrolAs(call, 'cred-0001', delegation)).enrolled.status).toBe(200)
+    const service = new EnrolmentService({ vault, confirmer, publicOrigin: ORIGIN, validityFor: async () => validity })
+    const ready = await service.handle({ method: 'GET', path: `${READY_PREFIX}${STALL}`, body: '' })
+    return { service, ready: ready.body, status: await service.status(STALL) }
+  }
+  const days = (n: number): StallValidity => ({ kind: 'days', days: n, source: 'record' })
+
+  // A never-expiring stall is NOT ready, BEFORE anyone pays: Buy stays off, with a code it can show.
+  it('answers not ready for a never-expiring stall, with validity_never_expires', async () => {
+    const { ready, status } = await enrolledWith(days(0))
+    expect(ready).toEqual({ ready: false, reason: 'validity_never_expires' })
+    expect(status).toMatchObject({ ready: false, reasonCode: 'validity_never_expires', delegationValid: false })
+    expect(status.reason).toMatch(/voucher validity/)
+  })
+
+  // A term longer than the delegation less a week: not ready, with its own code.
+  it('answers not ready when the term outlives the delegation', async () => {
+    const soon = Math.floor(Date.now() / 1000) + 200 * 86_400
+    const short = (lock: string) => delegationJson({ delegate: lock, expiresAt: soon })
+    const { ready } = await enrolledWith(days(730), short)
+    expect(ready).toEqual({ ready: false, reason: 'validity_outlives_delegation' })
+  })
+
+  // 30, 60, 90 and the 730 maximum are all ready under the phone's long delegation.
+  it.each([30, 60, 90, 730])('answers ready for a %i-day stall', async (n) => {
+    const { ready } = await enrolledWith(days(n))
+    expect(ready).toEqual({ ready: true })
+  })
+
+  // An unreadable record is not ready either: fail safe, never a sale on a guess.
+  it('answers not ready when the record cannot be read', async () => {
+    const { ready } = await enrolledWith({ kind: 'unreadable', reason: 'down' })
+    expect(ready).toEqual({ ready: false, reason: 'validity_unknown' })
+  })
+
+  // Enrolment is judged against the stall's ACTUAL term: a never-expiring stall may still enrol
+  // (readiness then tells it what to change), but a delegation too short for its term is refused.
+  it('lets a never-expiring stall enrol, and refuses a delegation shorter than the stall\u2019s term', async () => {
+    const { vault, confirmer } = await setup()
+    const never = new EnrolmentService({ vault, confirmer, publicOrigin: ORIGIN, validityFor: async () => days(0) })
+    const callNever = (method: string, p: string, body = '') =>
+      never.handle({ method, path: p, body, authorization: signed(method, p, body) })
+    const ok = await enrolAs(callNever)
+    expect(ok.enrolled.status).toBe(200)
+
+    const long = new EnrolmentService({ vault, confirmer, publicOrigin: ORIGIN, validityFor: async () => days(730) })
+    const callLong = (method: string, p: string, body = '') =>
+      long.handle({ method, path: p, body, authorization: signed(method, p, body) })
+    const soon = Math.floor(Date.now() / 1000) + 400 * 86_400
+    const refused = await enrolAs(callLong, 'cred-0002', (lock) => delegationJson({ delegate: lock, expiresAt: soon }))
+    expect(refused.enrolled.status).toBe(422)
   })
 })

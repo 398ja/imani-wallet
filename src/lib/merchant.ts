@@ -2,6 +2,28 @@ import type { EventTemplate } from 'nostr-tools'
 
 import { newestAddressable } from './relay'
 import { str } from './branding'
+import {
+  DEFAULT_VALIDITY_DAYS,
+  MERCHANT_D_TAG,
+  MERCHANT_KIND,
+  NEVER_EXPIRES,
+  VALIDITY_DAYS,
+  validValidityDays,
+} from '@imani/merchant-record'
+
+// The record's kind and the validity rules live in `@imani/merchant-record`, shared with the
+// purchase issuer so a card coupon gets the same term as one sold over the counter (#312).
+export {
+  DEFAULT_VALIDITY_DAYS,
+  MAX_VALIDITY_DAYS,
+  MERCHANT_D_TAG,
+  MERCHANT_KIND,
+  MIN_VALIDITY_DAYS,
+  NEVER_EXPIRES,
+  VALIDITY_DAYS,
+  validValidityDays,
+  validityFromRecord,
+} from '@imani/merchant-record'
 
 /**
  * The merchant side of an identity.
@@ -91,10 +113,6 @@ export interface MerchantProfile {
   eventAt?: number
 }
 
-/** The kind and `d` tag that make an event a merchant record. */
-export const MERCHANT_KIND = 30078
-export const MERCHANT_D_TAG = 'imani:merchant'
-
 /**
  * Business categories, from possa-merchant's `BusinessStep.tsx`.
  *
@@ -134,68 +152,7 @@ export const CURRENCIES = [
   'XAF',
 ] as const
 
-/** Coupon validity options in days, from possa-merchant's `IssuanceStep.tsx`. */
-export const VALIDITY_DAYS = [30, 60, 90] as const
-
 export const DEFAULT_CURRENCY = 'EUR'
-
-/**
- * A coupon that never expires, as a validity.
- *
- * `null` was not available: it already means "not a validity" — the state a
- * half-typed custom term sits in — and SellPage disables its submit button on
- * exactly that. Zero is outside `MIN_VALIDITY_DAYS`, so nothing that reads a
- * day count can mistake it for one, and `issue.ts` drops `expiry_days` from the
- * request rather than sending it.
- */
-export const NEVER_EXPIRES = 0
-
-/**
- * What a stall issues when it has never said otherwise.
- *
- * Never expiring, because an expiry is a promise to a customer that the stall
- * has to keep track of, and a market stall that has not chosen a term has not
- * chosen to make that promise. A stall that wants one picks it.
- */
-export const DEFAULT_VALIDITY_DAYS: number = NEVER_EXPIRES
-
-/**
- * What a coupon's life may be set to, in whole days.
- *
- * A bound exists because the number is now typed rather than picked: `730` is
- * two years, past any market stall's horizon, and it is the difference between
- * a mistyped `3000` being caught here and a coupon dated to the next decade
- * being minted by a gateway that publishes no ceiling of its own.
- */
-export const MIN_VALIDITY_DAYS = 1
-export const MAX_VALIDITY_DAYS = 730
-
-/**
- * A validity, or null for anything that is not one.
- *
- * One gate for three callers that all reach `expiry_days` eventually: what a
- * merchant types into either form, and what an event off the relay claims —
- * and that last one is publishable by anyone, see `mergeMerchantEvent`.
- */
-export function validValidityDays(value: unknown): number | null {
-  if (value === '' || value === null || value === undefined) return null
-  // Shape before value, and this order is load-bearing. `Number()` maps `false`,
-  // `[]`, `' '`, `'\n'`, `'0.0'` and `'0x0'` ALL onto 0. That was harmless while
-  // 0 meant nothing — every one of them failed the `>= MIN_VALIDITY_DAYS` bound
-  // along with it. Now that 0 is a deliberate term, anything reaching the
-  // `=== NEVER_EXPIRES` test has to be a number or a plain run of digits
-  // first, or a relay event carrying `false` reads as a stall that chose
-  // never-expiring.
-  if (typeof value === 'string') {
-    if (!/^\s*\d+\s*$/.test(value)) return null
-  } else if (typeof value !== 'number') {
-    return null
-  }
-  const days = Number(value)
-  if (!Number.isInteger(days)) return null
-  if (days === NEVER_EXPIRES) return NEVER_EXPIRES
-  return days >= MIN_VALIDITY_DAYS && days <= MAX_VALIDITY_DAYS ? days : null
-}
 
 /**
  * The terms to offer as chips, this stall's own first.

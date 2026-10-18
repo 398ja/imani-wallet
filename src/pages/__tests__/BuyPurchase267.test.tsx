@@ -24,10 +24,15 @@ vi.mock('../../hooks/useBranding', () => ({
 
 // #298: whether the purchase issuer can issue for this stall. Ready unless a test says otherwise.
 let cardSalesReady = vi.fn(async () => true)
-vi.mock('../../lib/cardSalesEnrolment', () => ({ cardSalesReady: (...a: unknown[]) => cardSalesReady(...(a as [])) }))
+// #312: when set, the readiness answer itself (e.g. 'no-expiry'), overriding the boolean above.
+let readinessOverride: string | null = null
+vi.mock('../../lib/cardSalesEnrolment', () => ({
+  cardSalesReadiness: async (...a: unknown[]) =>
+    readinessOverride ?? ((await cardSalesReady(...(a as []))) ? 'ready' : 'not-ready'),
+}))
 
 import { BuyPage } from '../BuyPage'
-import { CARD_SALES_NOT_READY } from '../../lib/merchantActions'
+import { CARD_SALES_NEEDS_EXPIRY, CARD_SALES_NOT_READY } from '../../lib/merchantActions'
 import { BuyCancelledPage, BuyDonePage } from '../BuyReturnPages'
 import { PENDING_PURCHASE_KEY } from '../../lib/pendingPurchase'
 
@@ -38,6 +43,7 @@ afterEach(() => {
   cleanup()
   startPurchase.mockReset()
   cardSalesReady = vi.fn(async () => true)
+  readinessOverride = null
   sessionStorage.clear()
 })
 
@@ -94,6 +100,7 @@ describe('Buy page for a stall whose card sales are not ready (#298)', () => {
   // Ready when the page opened, not ready by the tap: refused with the reason, nothing charged.
   it('checks again at the tap and refuses', async () => {
     cardSalesReady = vi.fn(async () => true)
+  readinessOverride = null
     buy(BUYER)
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '25.00' } })
     const pay = screen.getByRole('button', { name: /pay by card/i }) as HTMLButtonElement
@@ -141,5 +148,20 @@ describe('Buy return pages (#267 item 3)', () => {
   it('says nothing was charged on cancel', () => {
     at('/buy/cancelled')
     expect(screen.getByText('Payment cancelled, nothing was charged')).toBeTruthy()
+  })
+})
+
+describe('Buy page for a stall whose vouchers never expire (#312)', () => {
+  // A card voucher must expire (its delegation is finite), so Buy is off with the reason a shopper
+  // can understand, and nothing is started.
+  it('disables Pay by card and says the shop sells by card only with an expiry date', async () => {
+    readinessOverride = 'no-expiry'
+    buy(BUYER)
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '25.00' } })
+    const reason = await screen.findByText(CARD_SALES_NEEDS_EXPIRY)
+    const pay = screen.getByRole('button', { name: /pay by card/i }) as HTMLButtonElement
+    expect(pay.disabled).toBe(true)
+    expect(pay.getAttribute('aria-describedby')).toContain(reason.id)
+    expect(startPurchase).not.toHaveBeenCalled()
   })
 })

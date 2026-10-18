@@ -18,12 +18,24 @@ export const LOG_IN_TO_PAY = 'Log in to pay with your vouchers'
  */
 export const CARD_SALES_NOT_READY = "Card sales aren't ready for this merchant yet"
 export const CARD_SALES_CHECKING = 'Checking card sales…'
+/**
+ * The stall's vouchers never expire, and a card voucher must (#312): its issuing delegation is
+ * finite, so one without an expiry would stop working at the till. Buy waits until the stall
+ * chooses a validity.
+ */
+export const CARD_SALES_NEEDS_EXPIRY = 'This shop sells by card only with an expiry date.'
 
 /**
  * Whether the purchase issuer can issue for this stall now (#298). `checking` and `not-ready`
  * both keep Buy disabled: an unknown answer never sells.
  */
-export type CardSalesReadiness = 'checking' | 'ready' | 'not-ready'
+export type CardSalesReadiness = 'checking' | 'ready' | 'not-ready' | 'no-expiry'
+
+/** The line under a disabled Buy for a readiness that is not `ready`. */
+export function cardSalesReason(readiness: Exclude<CardSalesReadiness, 'ready'>): string {
+  if (readiness === 'checking') return CARD_SALES_CHECKING
+  return readiness === 'no-expiry' ? CARD_SALES_NEEDS_EXPIRY : CARD_SALES_NOT_READY
+}
 
 export interface ActionState {
   enabled: boolean
@@ -57,7 +69,7 @@ export function merchantActions({
     ? { enabled: false, reason: NO_CARDS }
     : cardSales === 'ready'
       ? { enabled: true }
-      : { enabled: false, reason: cardSales === 'checking' ? CARD_SALES_CHECKING : CARD_SALES_NOT_READY }
+      : { enabled: false, reason: cardSalesReason(cardSales) }
   // Logged out says why in its own words. "No vouchers" would be a guess about
   // a wallet we cannot see.
   const pay: ActionState = !loggedIn

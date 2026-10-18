@@ -23,6 +23,13 @@ import { getSigner } from '../lib/nap'
  * - **Card sales: needs setup.** One primary button, which does the whole thing.
  * - **Couldn't check.** Said plainly, with Check again. Not "off": a blip is not a fact.
  */
+/** Where a stall sets its voucher validity: the shop settings (`MerchantEditPage`). */
+export const VALIDITY_SETTING_PATH = '/settings/merchant'
+
+/** What card sales need from the stall's validity (#312). */
+export const CARD_SALES_VALIDITY_NOTE =
+  'Card vouchers expire after your voucher validity, so card sales need one: 30, 60 or 90 days, or your own up to 730. Vouchers that never expire can\u2019t be sold by card.'
+
 export interface CardSalesDeps {
   status?: () => Promise<CardSalesResult>
   turnOn?: () => Promise<CardSalesResult>
@@ -132,6 +139,17 @@ export function CardSalesSection({ deps = {} }: { deps?: CardSalesDeps }) {
             </Button>
           )}
         </div>
+      )}
+
+      {/* #312: a card voucher carries the shop's own validity, and must have one. Said always,
+          not only when it bites, so a stall choosing "never expires" knows what it costs. */}
+      {loaded && (
+        <p className="mt-3 text-sm leading-relaxed text-mono-500">
+          {CARD_SALES_VALIDITY_NOTE}{' '}
+          <a href={VALIDITY_SETTING_PATH} className="font-medium text-mono-900 underline dark:text-mono-100">
+            Voucher validity
+          </a>
+        </p>
       )}
 
       {loaded && !on && state && (

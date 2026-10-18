@@ -425,9 +425,10 @@ One tap does the whole enrolment, on your phone:
    signed by your stall key with your owner attestation, exactly like Add
    terminal, and checks the token it gets back.
 3. Your phone signs a `coupon:issue` delegation (kind 30078) naming that key for
-   737 days. The purchase issuer only sells while the delegation outlives a
-   365-day voucher sold that day by a week, so this keeps card sales on for the
-   credential's whole year (365 + 365 + 7). 380 days, the operator script's
+   1,102 days. The purchase issuer only sells while the delegation outlives a
+   voucher sold that day, for your own validity, by a week. Your validity may be
+   up to 730 days, so this keeps card sales on for the credential's whole year
+   whatever term you choose (365 + 730 + 7). 380 days, the operator script's
    figure, kept a stall on sale for 8 days.
 4. Your phone sends the credential id and the signed delegation
    (`POST /api/v1/card-sales/enrolment`, signed by you). The purchase issuer
@@ -445,6 +446,30 @@ button is disabled with *Card sales aren't ready for this merchant yet* beside i
 so nobody is charged for a voucher that cannot be issued. If the purchase issuer
 cannot be reached, Buy stays disabled: an unknown answer never sells.
 
+### How long a card voucher lasts (imani-wallet#312)
+
+A voucher bought by card expires after **your voucher validity**, the one you set
+in your shop settings and that Sell uses: 30, 60 or 90 days, or your own up to
+730. The purchase issuer reads it from your signed public shop record at the
+moment it issues, so a change reaches the next card sale within a couple of
+minutes. (Before #312 every card voucher lasted a year whatever you had chosen.
+Vouchers already issued keep the year they were issued with.)
+
+**Vouchers that never expire can't be sold by card.** A card voucher is issued
+under your delegation, and a till checks that delegation at redemption; a
+voucher with no expiry would outlive it and stop working at the counter. So
+while your validity is "never expires", card sales read **needs setup** with that
+reason and a link to the setting, and your Buy button is disabled with *This shop
+sells by card only with an expiry date.* Nothing is charged. Choose a validity
+and Buy turns back on.
+
+The same applies if your validity is longer than your delegation has left (less
+a week): set up card sales again, or choose a shorter validity.
+
+If your validity changes to one of these between a shopper paying and the voucher
+being issued, nothing is issued and the purchase is parked for an operator
+(`NEEDS_ATTENTION`, `issue_blocked`) to refund or issue by hand.
+
 ### For operators
 
 - purchase-issuer needs `PURCHASE_PUBLIC_ORIGIN` (the wallet's public origin, for
@@ -452,8 +477,17 @@ cannot be reached, Buy stays disabled: an unknown answer never sells.
   503 and Buy stays disabled for stalls that are not already enrolled.
 - The edge must route `/api/v1/card-sales/` to purchase-issuer (port 8791), with
   the original `Host`, so the NIP-98 `u` tag matches.
-- `GET /api/v1/card-sales/ready/<stall>` is public and answers only
-  `{"ready": true|false}`.
+- `GET /api/v1/card-sales/ready/<stall>` is public and answers
+  `{"ready": true|false}`, plus `"reason"` when the cause is the stall's validity
+  (#312): `validity_never_expires`, `validity_outlives_delegation`, or
+  `validity_unknown` (its shop record could not be read).
+- The stall's validity is read through gateway-core's public
+  `POST /api/v1/nostr/query` (kind 30078, `d=imani:merchant`, authored by the
+  stall, signature verified, newest wins), cached two minutes per stall. If it
+  cannot be read, nothing is minted: the purchase stays OWED and is retried, and
+  after 12 failed passes it is parked `issue_blocked` with `validity_unreadable`
+  in the detail. A stall with no record, or no valid term, is "never expires",
+  exactly as the Sell screen reads it.
 - The vault follows its file: a record sealed by the operator script
   (`attachDelegation.ts`, the S1/S3 enrol scripts) is picked up on the next pass
   and confirmed at once, with no restart. Those scripts are for TEST stalls whose
