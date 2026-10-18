@@ -4,14 +4,14 @@ import { hexToBytes } from '@noble/hashes/utils'
 import { Link, useNavigate } from 'react-router-dom'
 import { Check, Cloud, CloudDownload, Copy, Download } from 'lucide-react'
 
-import { Screen, BackLink, PageHeader, Panel, Button, Input, Alert } from '../components/ui'
+import { Screen, BackLink, PageHeader, Panel, Button, Input, Alert, IdentityInline } from '../components/ui'
 import { applyBackup, backupFilename, createBackup, parseBackup, type ParsedBackup } from '../lib/backup'
 import { downloadText } from '../lib/download'
 import { getBackup } from '../lib/drive'
 import { useDriveBackup } from '../lib/useDriveBackup'
 import { handleLabel } from '../lib/format'
 import { keyStore } from '../lib/nap'
-import { profileName, refreshProfile, type Profile } from '../lib/profile'
+import { refreshProfile, type Profile } from '../lib/profile'
 
 /**
  * Save a copy of the account.
@@ -171,12 +171,57 @@ export function BackupPage({ profile, terminal }: { profile: Profile; terminal?:
   )
 }
 
+/** The backup's account as a hex pubkey: from the verified npub, else the profile. */
+function backupPubkey(backup: ParsedBackup): string | null {
+  if (backup.npub) {
+    try {
+      const decoded = nip19.decode(backup.npub)
+      if (decoded.type === 'npub') return decoded.data
+    } catch {
+      // parseBackup already rejected a bad npub; fall through to the profile.
+    }
+  }
+  return backup.profile?.pubkey ?? null
+}
+
+/**
+ * Whose account a backup holds, as the app shows a person everywhere else:
+ * avatar, name, NIP-05 — not a 63-character npub.
+ *
+ * Built from the profile stored IN the backup, so it names the account with no
+ * signal at all; a fresher relay answer replaces it when one lands. Not a link:
+ * leaving this screen would throw away the restore in progress.
+ *
+ * No key on this screen, not even behind a tap: customers should not meet
+ * protocol terms or raw keys. Two accounts are told apart by face, name and
+ * handle, and a backup with no profile falls back to the component's short form.
+ */
+function BackupAccount({ backup, refreshedName }: { backup: ParsedBackup; refreshedName: string | null }) {
+  const pubkey = backupPubkey(backup)
+  const stored = backup.profile
+  if (!pubkey) {
+    return <p className="mt-1 font-medium text-mono-900 dark:text-mono-50">Unnamed account</p>
+  }
+  return (
+    <div className="mt-2">
+      <IdentityInline
+        pubkey={pubkey}
+        size="md"
+        linkToProfile={false}
+        fallbackName={refreshedName ?? stored?.displayName}
+        fallbackHandle={stored?.nip05}
+        fallbackPicture={stored?.picture}
+      />
+    </div>
+  )
+}
+
 /**
  * Restore from the customer's own Google Drive.
  *
  * The order of the screen is the order the customer needs: sign in, then be
- * TOLD whose account this is before being asked for anything. The npub rides in
- * the clear precisely so this step can happen — someone who has lost a phone
+ * TOLD whose account this is before being asked for anything. The public
+ * profile rides in the clear precisely so this step can happen — someone who has lost a phone
  * should not have to recognise an account by whether a passphrase prompt
  * accepts their typing.
  *
@@ -194,14 +239,14 @@ function DriveRestorePanel({ onUnlock }: { onUnlock: (privkeyHex: string) => Pro
 
   // The stored profile is a snapshot from whenever the backup was written, so
   // the relay is asked for a fresher one. Best-effort: a customer standing in a
-  // shop with no signal must still be able to restore, and the npub below
-  // identifies the account on its own.
+  // shop with no signal must still be able to restore, and the
+  // stored profile identifies the account on its own.
   useEffect(() => {
     const pubkey = parsed?.profile?.pubkey
     if (!pubkey) return
     let live = true
     void refreshProfile(pubkey)
-      .then((p) => live && setName(profileName(p)))
+      .then((p) => live && setName(p.displayName ?? null))
       .catch(() => {})
     return () => {
       live = false
@@ -219,7 +264,7 @@ function DriveRestorePanel({ onUnlock }: { onUnlock: (privkeyHex: string) => Pro
       }
       const backup = parseBackup(text)
       setParsed(backup)
-      setName(backup.profile ? profileName(backup.profile) : null)
+      setName(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -254,14 +299,7 @@ function DriveRestorePanel({ onUnlock }: { onUnlock: (privkeyHex: string) => Pro
       {parsed && (
         <Panel className="p-4">
           <p className="text-sm text-mono-500">This backup holds the account</p>
-          <p className="mt-1 font-medium text-mono-900 dark:text-mono-50">
-            {name ?? 'Unnamed account'}
-          </p>
-          {/* Shown in full, not truncated. It is what a customer with two
-              accounts checks before overwriting one. */}
-          {parsed.npub && (
-            <p className="mt-1 break-all font-mono text-xs text-mono-500">{parsed.npub}</p>
-          )}
+          <BackupAccount backup={parsed} refreshedName={name} />
 
           <p className="mt-3 text-sm text-mono-600 dark:text-mono-300">
             Enter the passphrase for this account.
@@ -365,6 +403,12 @@ export function RestorePage({ onUnlock }: { onUnlock: (privkeyHex: string) => Pr
 
       {loaded && (
         <>
+          {parsed && (backupPubkey(parsed) || parsed.profile) ? (
+            <Panel className="p-4">
+              <p className="text-sm text-mono-500">This backup holds the account</p>
+              <BackupAccount backup={parsed} refreshedName={null} />
+            </Panel>
+          ) : null}
           <p className="text-sm text-mono-500">
             Loaded <span className="font-medium text-mono-900 dark:text-mono-50">{loaded}</span>.
             Enter the passphrase for this backup.

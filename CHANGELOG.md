@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Restore names the account with its profile, not its npub** (Closes #322). The passphrase
+  prompt after a Google Drive restore (and after picking a backup file) shows the identity row
+  used across the app: avatar, display name and handle, built from the profile stored in the
+  backup (picture included) so it works offline. No raw key is shown on the screen any more. A
+  backup with no profile falls back to a short form. The restore itself is unchanged.
+
 ## [0.31.0] - 2026-10-18
 
 Card vouchers carry the stall's own validity (#312, #315). Ships purchase-issuer AND the app.
