@@ -84,11 +84,13 @@ describe('the Drive restore passphrase prompt', () => {
     expect(container.textContent).not.toContain('npub1')
   })
 
-  // A backup with no profile at all still names the account, as a short key.
-  it('falls back to a short key when the backup has no profile', async () => {
+  // A backup with no profile at all: a neutral word, never a key fragment (#324).
+  // Every account has a profile, so this is an old or damaged file.
+  it('falls back to a neutral word, not a short key, when the backup has no profile', async () => {
     const { container } = await openDriveBackup(null)
 
-    expect(screen.getByText(`${PUBKEY.slice(0, 8)}…${PUBKEY.slice(-4)}`)).toBeTruthy()
+    expect(screen.getByText('Someone')).toBeTruthy()
+    expect(container.textContent).not.toContain(`${PUBKEY.slice(0, 8)}…`)
     expect(container.textContent).not.toContain(NPUB)
   })
 

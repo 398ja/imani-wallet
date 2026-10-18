@@ -65,8 +65,9 @@ describe('the header before the profile arrives', () => {
     draw({ ...emptyProfile(PUBKEY), updatedAt: Date.now() })
 
     expect(document.querySelector('[aria-busy="true"]')).toBeNull()
-    // The npub is the honest answer here: it is who they are, and it is final.
-    expect(screen.getByText(/^npub1/)).toBeTruthy()
+    // Never the npub (#324): plain words, and the generic avatar.
+    expect(screen.getByText('Your account')).toBeTruthy()
+    expect(screen.queryByText(/npub1/)).toBeNull()
   })
 
   /** A stored profile renders immediately — no flash of anything on a reload. */

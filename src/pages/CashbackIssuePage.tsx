@@ -16,6 +16,7 @@ import { NOTE_MAX_CHARS, clampNote } from '../lib/note'
 import { ownerActor, type Actor } from '../lib/actor'
 import type { TerminalSession } from '../lib/terminalSession'
 import { TERMINAL_CASHBACK_UNSUPPORTED, mayWarrantSale } from '../lib/warrantSigner'
+import { userMessage } from '../lib/userMessage'
 
 /**
  * Create a Cashlink (the stall's cashback): a coupon for someone who has not installed the app.
@@ -106,7 +107,7 @@ export function CashbackIssuePage({
       if (cashback) setIssued(cashback)
       else ran = false
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(userMessage(e))
     } finally {
       if (ran) setBusy(false)
     }

@@ -77,7 +77,7 @@ export function ReceivePage({ profile }: { profile: Profile }) {
         <div className="flex flex-col items-center gap-4">
           <img
             src={dataUrl}
-            alt={`QR code for ${code}`}
+            alt={profile.nip05 ? `QR code for ${profile.nip05}` : 'Your receive code'}
             className="w-full max-w-xs rounded-2xl bg-white p-4"
           />
           {profile.displayName && (
@@ -92,17 +92,15 @@ export function ReceivePage({ profile }: { profile: Profile }) {
             side needs both halves, while the half a person reads back across a
             stall is the one that is theirs.
 
-            Monospace only when it is the npub: a handle is a word, not a key.
+            Shown only when there is a handle. Every account has one; for an
+            older record without it the code above still scans, and the raw key
+            it carries is never printed under it (#324).
           */}
-          <p
-            className={`break-all text-center text-sm ${
-              profile.nip05
-                ? 'text-mono-900 dark:text-mono-50'
-                : 'font-mono text-mono-500'
-            }`}
-          >
-            {profile.nip05 ? handleLabel(profile.nip05) : code}
-          </p>
+          {profile.nip05 && (
+            <p className="break-all text-center text-sm text-mono-900 dark:text-mono-50">
+              {handleLabel(profile.nip05)}
+            </p>
+          )}
         </div>
       )}
 

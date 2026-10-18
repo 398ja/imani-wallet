@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { Button } from './ui'
 import { getVoucherRow } from '../lib/wallet'
 import { swapBackToSats } from '../lib/swapBack'
+import { userMessage } from '../lib/userMessage'
 
 /**
  * "Swap back to sats" for one coupon the mint refused as redeemed in full (cashu-mint#540).
@@ -39,7 +40,7 @@ export function SwapBackOffer({ tokenId, pubkey }: { tokenId: string; pubkey: st
             const { sats } = await swapBackToSats(row, pubkey)
             setState({ step: 'done', sats })
           } catch (e) {
-            setState({ step: 'failed', message: e instanceof Error ? e.message : 'The swap back failed.' })
+            setState({ step: 'failed', message: userMessage(e, 'The swap back failed.') })
           }
         }}
       >

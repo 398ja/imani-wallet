@@ -23,6 +23,7 @@ import { ValidityPicker } from '../components/ValidityPicker'
 import { useCashbackAvailable } from '../lib/cashback'
 import type { MerchantProfile } from '../lib/merchant'
 import { NOTE_MAX_CHARS, clampNote } from '../lib/note'
+import { userMessage } from '../lib/userMessage'
 
 /**
  * Sell: issue a coupon to a customer standing in front of you.
@@ -233,7 +234,7 @@ function IssueForm({
       setSent(deliveredValue)
       setShortfall(deliveredValue !== minor ? minor - deliveredValue : 0)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(userMessage(e))
     } finally {
       setStage(null)
     }

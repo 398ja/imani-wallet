@@ -165,7 +165,7 @@ describe('when the relay cannot be reached', () => {
     // apart, or a network blip reads as missing money.
     relayThrows = true
     paint()
-    await waitFor(() => expect(screen.getByText(/Could not reach the relay/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByText(/Could not reach the network/)).toBeTruthy())
     expect(screen.getByText(/records are unaffected/)).toBeTruthy()
   })
 })

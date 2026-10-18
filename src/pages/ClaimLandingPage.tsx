@@ -3,7 +3,7 @@ import { Navigate, useNavigate, useParams } from 'react-router-dom'
 import { CheckCircle2, Clock, XCircle } from 'lucide-react'
 
 import { fetchClaimSummary, redeemClaimRef, type ClaimSummary, type RedeemResult } from '../lib/cashback'
-import { currencyDecimals, formatFace, handleLabel, shortPubkey } from '../lib/format'
+import { currencyDecimals, formatFace, handleLabel } from '../lib/format'
 import { humanName, useIdentityState } from '../lib/identity'
 import { hasStoredKey } from '../lib/nap'
 import { loadProfile } from '../lib/profile'
@@ -385,7 +385,8 @@ function ConfirmPrompt({
             {verified ? '✓ verified stall' : 'We could not verify this voucher'}
           </p>
         )}
-        {!stallName && issuerWellFormed && <p className="text-xs text-mono-400">{shortPubkey(issuerKey)}</p>}
+        {/* No key fragment under an unnamed stall (#324): "Unknown stall" and the
+            unverified warning above already say what the reader needs to know. */}
         {face && <p className="mt-4 text-amount text-mono-900 dark:text-mono-50">{face}</p>}
         <p className="mt-1 text-sm text-mono-500">Cashlink from {stall}</p>
         {summary.memo && <p className="mt-1 text-sm text-mono-500">{summary.memo}</p>}

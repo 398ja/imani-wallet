@@ -1,0 +1,85 @@
+/**
+ * Guard for #324: users never see protocol jargon or raw keys.
+ *
+ * The owner's rule: no npub, nsec, hex pubkeys, "relay", "NIP-05"/"NIP-xx",
+ * "pubkey" or "Nostr" in anything a person reads. People are shown with the
+ * profile component (avatar, name, handle); a key appears only where the user
+ * must act on one (exporting or entering the backup key), and even there the
+ * words are plain: "backup key", "account key", "handle".
+ *
+ * This scans the copy in `src/pages` and `src/components` with the TypeScript
+ * parser (see `userFacingStrings.ts`): JSX text, text props such as
+ * placeholder / aria-label / title / alt / label, literals inside JSX
+ * expressions, message sinks (alert, confirm, toast*, set*Error, set*Status,
+ * set*Notice), `new Error(...)` messages, and prose held in constants. Comments,
+ * imports, identifiers, comparisons, console output and tests are not copy and
+ * are never read.
+ *
+ * Library errors that reach the screen are covered separately: every page sink
+ * goes through `userMessage`, whose own test lives beside it.
+ */
+import { describe, expect, it } from 'vitest'
+import { fileURLToPath } from 'node:url'
+
+import { collectUserStrings, type UserString } from './userFacingStrings'
+import { JARGON } from '../lib/userMessage'
+
+const ROOT = fileURLToPath(new URL('../..', import.meta.url))
+const SCANNED = ['src/pages', 'src/components']
+
+/**
+ * The ONLY places a term may appear, each with the reason and an exact text so a
+ * new string on the same screen is still caught. Keep this short: an entry is a
+ * decision that a user must see this word, not a way to silence the test.
+ *
+ * Every entry must still match something, so a fixed string cannot leave a
+ * stale exemption behind (see the last test).
+ */
+const ALLOWED: Array<{ file: string; text: string; why: string }> = [
+  {
+    file: 'src/pages/OnboardingPage.tsx',
+    text: 'nsec1… (your Nostr key)',
+    why:
+      'The onboarding "Log in" paste field. Owned by #325, which replaces this step ' +
+      '(Drive or file, then profile, then passphrase) and its placeholder. #325 removes this entry.',
+  },
+]
+
+const allowed = (s: UserString) => ALLOWED.some((a) => a.file === s.file && s.text.includes(a.text))
+
+describe('no protocol jargon in the UI (#324)', () => {
+  const strings = collectUserStrings(ROOT, SCANNED)
+
+  it('actually reads the copy (the scanner is not silently empty)', () => {
+    // A broken scanner reports zero violations and passes forever. These are
+    // ordinary strings that exist today in different positions: JSX text, a
+    // placeholder, and a message sink.
+    const texts = strings.map((s) => s.text)
+    expect(strings.length).toBeGreaterThan(500)
+    expect(texts).toContain('Receive')
+    expect(texts).toContain('Passphrase')
+    expect(texts.some((t) => t.includes('Paste the code'))).toBe(true)
+  })
+
+  it('finds no npub, nsec, nostr, relay, NIP-xx or pubkey in user-facing strings', () => {
+    const violations = strings
+      .filter((s) => JARGON.test(s.text) && !allowed(s))
+      .map((s) => `${s.file}:${s.line}  ${JSON.stringify(s.text)}`)
+    expect(violations).toEqual([])
+  })
+
+  it('names key-entry fields in plain words, never "nsec"', () => {
+    // The owner's note on #324: the login key field showed "nsec". Every field
+    // that takes a key says "key" / "backup key"; the input still ACCEPTS an
+    // nsec (lib/nap toPrivkeyHex), only the wording is constrained.
+    const keyFieldCopy = strings.filter(
+      (s) => /\bkey\b/i.test(s.text) && /paste|enter|your/i.test(s.text) && !allowed(s),
+    )
+    for (const s of keyFieldCopy) expect(s.text, `${s.file}:${s.line}`).not.toMatch(/nsec|npub|hex/i)
+  })
+
+  it('keeps no stale allow-list entries', () => {
+    const stale = ALLOWED.filter((a) => !strings.some((s) => s.file === a.file && s.text.includes(a.text)))
+    expect(stale.map((a) => `${a.file}: ${a.text}`)).toEqual([])
+  })
+})

@@ -123,7 +123,7 @@ export function PaymentsSettingsPage({
         const { ok } = await publish(signed)
         setNote(
           ok === 0
-            ? 'Saved on this device, but no relay accepted it. Shoppers may not see this yet.'
+            ? 'Saved on this device, but not sent yet. Shoppers may not see this for a while.'
             : change.merchant.acceptsCards === true
               ? 'Shoppers can now buy your vouchers by card.'
               : `Card payments are off: ${change.reason}.`,

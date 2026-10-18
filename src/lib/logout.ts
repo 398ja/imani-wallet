@@ -37,8 +37,8 @@ import { carryPendingClaimsAcrossLogout } from './pendingClaim'
 export const LOGOUT_WARNING =
   'This erases your key AND all your data from this browser.\n\n' +
   'Your account, your business and your sales come back when you log in with your ' +
-  'backup key (nsec) — they are stored under your key, not on this device. ' +
-  'Vouchers you are holding are restored from the relay as they are received ' +
+  'backup key: they are stored under your account, not on this device. ' +
+  'Vouchers you are holding come back as they are received ' +
   'again.\n\nThe only way back in is your backup key, a backup file, or a Google ' +
   'Drive backup — you MAKE those under Settings → Backup, and you USE them from ' +
   'the screen this lands on. There is no password reset.\n\n' +

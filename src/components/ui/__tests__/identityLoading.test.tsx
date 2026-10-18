@@ -75,17 +75,17 @@ describe('a name that has not arrived', () => {
   })
 
   /**
-   * A lookup that came back EMPTY is a settled answer, not a wait. The short key
-   * is the right thing to show — it is stable, it is unforgeable, and a blank
-   * row on "who is this coupon from" is worse. A spinner that never stops would
-   * be worse still.
+   * A lookup that came back EMPTY is a settled answer, not a wait. A neutral
+   * word and the generic avatar are the right thing to show (#324): never a
+   * fragment of the key, and never a spinner that does not stop.
    */
-  it('falls back to the short key once the lookup comes back empty', async () => {
+  it('falls back to a neutral word, not the key, once the lookup comes back empty', async () => {
     brandingFor = () => Promise.resolve({})
 
     draw(<IdentityInline pubkey={STALL} />)
 
-    await waitFor(() => expect(screen.getByText('aaaaaaaa…aaaa')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Someone')).toBeTruthy())
+    expect(screen.queryByText(/aaaa/)).toBeNull()
     expect(document.querySelector('[aria-busy="true"]')).toBeNull()
   })
 
