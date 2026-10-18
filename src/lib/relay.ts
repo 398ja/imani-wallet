@@ -1,5 +1,5 @@
 import { SimplePool, type Event } from 'nostr-tools'
-import { gatewayEvents, newestByD, unionWithGateway } from './gatewayNostr'
+import { gatewayAllEvents, gatewayEvents, newestByD, unionWithGateway } from './gatewayNostr'
 
 /**
  * Publishing to the Nostr relay.
@@ -304,9 +304,11 @@ export async function allEventsWithGateway(
 ): Promise<Event[]> {
   const [relayed, cached] = await Promise.all([
     allEvents(pubkey, kind, relays).catch(() => [] as Event[]),
-    gatewayEvents(pubkey, kind),
+    // PAGED (review of #326): a single 500-limit ask lost a big wallet's
+    // oldest coupons from the read that matters when the relay is down.
+    gatewayAllEvents(pubkey, kind),
   ])
-  return unionWithGateway(relayed, cached, pubkey, kind)
+  return unionWithGateway(relayed, cached ?? [], pubkey, kind)
 }
 
 /** strfry's default `maxFilterLimit`; a relay may cap lower, which only costs an extra page. */
