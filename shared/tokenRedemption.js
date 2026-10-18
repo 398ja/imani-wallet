@@ -1489,19 +1489,44 @@ const TokenRedemption = {
                     // #300: a gate that never frees a slot used to hang the
                     // redemption (and, through _inFlightRedemptions, every
                     // later attempt at this token) for the whole session.
+                    // #301 review: the signal tells the pacer this wait was
+                    // abandoned, so it does not book a slot for a call that
+                    // will never go out (a ghost slot delays every later call).
+                    const gateAbort = typeof AbortController === 'function' ? new AbortController() : null;
                     try {
                         await _withStepTimeout(
-                            this._receiveGate(), this._receiveGateTimeoutMs, 'receiveGate', fingerprint);
+                            this._receiveGate(gateAbort ? gateAbort.signal : undefined),
+                            this._receiveGateTimeoutMs, 'receiveGate', fingerprint);
                     } catch (gateErr) {
                         if (gateErr && gateErr.code === 'STEP_TIMEOUT') {
+                            if (gateAbort) gateAbort.abort(gateErr);
                             this._releaseReceiveCall(budgetKey);
                             const deferred = new Error('Receive pacer did not free a slot in time; a later poll will retry');
                             deferred.code = 'RECEIVE_DEFERRED';
+                            // Lets dmPoll schedule the retry: in SSE mode nothing
+                            // re-polls on a timer, so "the next poll" could be the
+                            // stream's ten-minute redial.
+                            deferred.deferredBy = 'receive-gate-timeout';
                             throw deferred;
                         }
                         throw gateErr;
                     }
-                    return api.receive(token, { idempotencyKey });
+                    // #301 review: api.receive is deliberately NOT timed out. A
+                    // receive that reached the gateway may have settled, and a
+                    // retry under the same key comes back as a token-less replay
+                    // ("settled, not saved"), not as the coupon. It is only
+                    // reported, so the next #300-shaped stall names its step.
+                    console.info('[tokenRedemption] receive gate passed', { fp: _fpTag(fingerprint) });
+                    const slow = this._receiveSlowWarnMs > 0 ? setTimeout(() => {
+                        console.warn('[tokenRedemption] #300 api.receive still pending', {
+                            fp: _fpTag(fingerprint), afterMs: this._receiveSlowWarnMs,
+                        });
+                    }, this._receiveSlowWarnMs) : null;
+                    try {
+                        return await api.receive(token, { idempotencyKey });
+                    } finally {
+                        if (slow) clearTimeout(slow);
+                    }
                 };
                 // #110 review D: the gateway's 409 "first call still in flight"
                 // (Retry-After, empty body) is a short wait and a retry under
@@ -2599,6 +2624,8 @@ const TokenRedemption = {
     // pacer window and more; past it the call defers to the next poll.
     _stepTimeoutMs: 15000,
     _receiveGateTimeoutMs: 180000,
+    // #301 review: warn (never abort) when api.receive has not answered by then.
+    _receiveSlowWarnMs: 20000,
     // Overridable by tests; the 409 in-flight wait.
     _inFlightSleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     // token fingerprint → timestamps of api.receive calls (review C).
