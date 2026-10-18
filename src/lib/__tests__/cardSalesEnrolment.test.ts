@@ -110,6 +110,30 @@ describe('turning on card sales', () => {
     expect(expiry - Math.floor(Date.now() / 1000)).toBeGreaterThanOrEqual(DELEGATION_LIFETIME_DAYS * 86_400 - 5)
   })
 
+  // Review of #302: the issuer mints (and `/ready` says yes) only while the delegation outlives a
+  // coupon minted that day by a week. The delegation the phone signs must keep the stall on sale
+  // for the credential's whole year, judged by the issuer's own `checkDelegation`. Red with 380
+  // days: the stall went off sale 8 days after it turned card sales on.
+  it('signs a delegation that keeps card sales on for the credential\u2019s whole year', async () => {
+    const { checkDelegation } = await import('../../../services/purchase-issuer/delegatedWarrant')
+    const { DEFAULT_EXPIRES_IN_DAYS } = await import('../../../services/purchase-issuer/issuer')
+    const { CREDENTIAL_LIFETIME_DAYS } = await import('../terminalMint')
+    await turnOnCardSales({ signer: stallSigner })
+    const enrol = JSON.parse(sent[3].body) as { delegation: unknown }
+    const lockKeyHex = 'ab'.repeat(32)
+    // The test's LOCK is a pubkey only; re-point it at a lock key we hold, keeping the stall's signature honest.
+    const resigned = await stallSigner.signEvent({
+      ...(enrol.delegation as { kind: number; created_at: number; content: string; tags: string[][] }),
+      tags: (enrol.delegation as { tags: string[][] }).tags.map((t) => (t[0] === 'p' ? ['p', getPublicKey(hexToBytes(lockKeyHex))] : t)),
+    })
+    const credential = { stallPubkey: STALL, credentialId: 'c', lockKeyHex, delegation: JSON.stringify(resigned) }
+    const day = 86_400_000
+    const sellsOn = (d: number) => checkDelegation(credential, Date.now() + d * day + DEFAULT_EXPIRES_IN_DAYS * day).ok
+    expect(sellsOn(0)).toBe(true)
+    // The credential's last full day (it expires at 365 days and a few minutes).
+    expect(sellsOn(CREDENTIAL_LIFETIME_DAYS - 1)).toBe(true)
+  })
+
   // THE OWNER'S RULE. Nothing that left this phone carries the stall's private key: not as hex,
   // not as an nsec, not as any 64-hex string that IS the key, and not the stored key backup.
   it('sends no private-key material, in any request', async () => {

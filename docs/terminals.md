@@ -425,7 +425,10 @@ One tap does the whole enrolment, on your phone:
    signed by your stall key with your owner attestation, exactly like Add
    terminal, and checks the token it gets back.
 3. Your phone signs a `coupon:issue` delegation (kind 30078) naming that key for
-   380 days, enough to cover a 365-day voucher plus the 7-day margin.
+   737 days. The purchase issuer only sells while the delegation outlives a
+   365-day voucher sold that day by a week, so this keeps card sales on for the
+   credential's whole year (365 + 365 + 7). 380 days, the operator script's
+   figure, kept a stall on sale for 8 days.
 4. Your phone sends the credential id and the signed delegation
    (`POST /api/v1/card-sales/enrolment`, signed by you). The purchase issuer
    checks the delegation, **confirms the credential at the gateway at once**
