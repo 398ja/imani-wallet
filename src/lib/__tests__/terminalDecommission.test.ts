@@ -108,6 +108,18 @@ describe('vouchers not confirmed as backed up (owner rule 2026-10-18, review of 
     expect(mint.receive).not.toHaveBeenCalled()
     expect(erased).toEqual([])
   })
+
+  it('an interrupted swap refuses too, before revoking (third check of #326)', async () => {
+    enrol()
+    localStorage.setItem(`imani-wallet:swap-intents:${PUBKEY}`, JSON.stringify([{ swapId: 'w', at: Date.now() }]))
+    const mint = api()
+
+    const out = await decommissionTerminal(mint, PUBKEY, () => {})
+
+    expect(out).toMatchObject({ done: false, reason: DECOMMISSION_REFUSAL.VOUCHERS_UNCONFIRMED })
+    expect(mint.receive).not.toHaveBeenCalled()
+    expect(erased).toEqual([])
+  })
 })
 
 describe('the order', () => {
