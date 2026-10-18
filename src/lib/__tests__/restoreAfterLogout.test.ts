@@ -294,6 +294,36 @@ describe('restore never silently drops a coupon the history says was received', 
   })
 })
 
+describe('a coupon swapped back to sats restores as it was (review of #326)', () => {
+  it('keeps status swapped_to_sats and the sats_token, without asking the mint about the spent original', async () => {
+    await openWallet(pk)
+    const original = buildVoucherToken({ faceValue: 1100 }, [1000, 900 + seq]).token
+    const satsToken = buildVoucherToken({ faceValue: 0 }, [64, 8 + seq]).token
+    // swapBack.keepSats: the coupon's own proofs are SPENT by the swap back,
+    // and its value now lives in `sats_token`.
+    await getWallet().saveVoucher({
+      token: original,
+      face_value: 1100,
+      face_unit: 'GBP',
+      status: 'swapped_to_sats',
+      sats_token: satsToken,
+      sats_amount: 72 + seq,
+    } as unknown as VoucherRow)
+    await logout()
+
+    net.mint.set(original, 'SPENT')
+    await login()
+
+    const rows = await getWallet().getAllVouchers()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.status).toBe('swapped_to_sats')
+    expect((rows[0] as { sats_token?: string }).sats_token).toBe(satsToken)
+    expect((rows[0] as { restore_flag?: string }).restore_flag).toBeUndefined()
+    // The original token is spent by design: asking the mint is what flipped it.
+    expect(net.validations).toBe(0)
+  })
+})
+
 describe('restored history keeps its checks', () => {
   it('a verified receive still reads verified after logout and restore', async () => {
     await openWallet(pk)

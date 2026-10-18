@@ -53,6 +53,11 @@ import { addRestoredVoucher, getWallet, notifyWalletChanged } from './wallet'
  */
 export const RESTORE_FLAG_MINT_SPENT = 'mint-spent-without-tombstone'
 
+/** swapBack.SWAPPED_TO_SATS_STATUS, compared here without importing swapBack's mint graph. */
+function isSwappedToSats(row: Pick<VoucherRow, 'status'>): boolean {
+  return (row.status ?? '').toLowerCase() === 'swapped_to_sats'
+}
+
 /** NIP-60's token event. Regular kind, like 7376 — `d` is identity, not replacement. */
 export const NIP60_TOKEN_KIND = 7375
 
@@ -395,7 +400,11 @@ export async function restoreVouchers(pubkey: string): Promise<number> {
       // A burnt coupon is SPENT at the mint BY DESIGN — that is what redeeming
       // one does (see burn.ts). Asking the mint about it would discard the
       // receipt the merchant is meant to keep, so the status answers first.
-      if (!isRedeemed(row) && !(await isStillLive(row.token))) {
+      // A coupon swapped back to sats is SPENT at the mint by design too: the
+      // swap back consumed its proofs, and its value lives in `sats_token`.
+      // Asking about the original token flipped it to 'spent' and hid the
+      // sats (review of #326), so its status and `sats_token` stand as backed up.
+      if (!isRedeemed(row) && !isSwappedToSats(row) && !(await isStillLive(row.token))) {
         // The mint says SPENT, yet no tombstone says THIS wallet spent it.
         // That is either a spend whose tombstone was lost (benign) or a coupon
         // whose backup holds proofs this wallet never got to keep — money
