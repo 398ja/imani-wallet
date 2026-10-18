@@ -10,10 +10,17 @@
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { FileCredentialStore } from '../adapters'
-import { CONFIRM_CONCURRENCY, CredentialConfirmer, confirmAll } from '../confirmation'
+import {
+  CONFIRM_CONCURRENCY,
+  CredentialConfirmer,
+  confirmAll,
+  RECONFIRM_INTERVAL_MS,
+  RECONFIRM_MAX_ROUNDS,
+  retryUnconfirmed,
+} from '../confirmation'
 import { discharge, type Ports } from '../discharge'
 import { renderMetrics, resetMetricsForTest } from '../metrics'
 import { CredentialVault } from '../vault'
@@ -211,5 +218,65 @@ describe('review of #299', () => {
     expect(await confirmer.confirm(delegatedCredential({ credentialId: 'new' }))).toBe('confirmed')
     expect(renderMetrics()).toContain('imani_purchase_issuer_credentials{standing="expired"} 0')
     expect(renderMetrics()).toContain('imani_purchase_issuer_credentials{standing="confirmed"} 1')
+  })
+})
+
+describe('retry of credentials left unconfirmed at startup (review of #299)', () => {
+  afterEach(() => vi.useRealTimers())
+
+  // gc down at boot, back later: confirmed on a later round, then the timer is gone.
+  it('confirms once the gateway is back, then stops', async () => {
+    vi.useFakeTimers()
+    const vault = await vaultWith('cred-a')
+    let status = 503
+    const { sent, fetchImpl } = gateway(async () => status)
+    const confirmer = new CredentialConfirmer(GATEWAY, fetchImpl)
+    expect(await confirmAll(vault, confirmer)).toEqual({ confirmed: 0, expired: 0, unconfirmed: 1 })
+    retryUnconfirmed(vault, confirmer, () => true, 1000, 10)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(sent).toHaveLength(2)
+    status = 204
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(sent).toHaveLength(3)
+    expect(renderMetrics()).toContain('imani_purchase_issuer_credentials{standing="confirmed"} 1')
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  // A pre-V27 legacy credential answers 404 for ever. It is asked at most maxRounds times, not
+  // every 5 minutes for the life of the process.
+  it('gives up after maxRounds on a credential that can never confirm', async () => {
+    vi.useFakeTimers()
+    const vault = await vaultWith('legacy')
+    const { sent, fetchImpl } = gateway(404)
+    const confirmer = new CredentialConfirmer(GATEWAY, fetchImpl)
+    await confirmAll(vault, confirmer)
+    retryUnconfirmed(vault, confirmer, () => true, 1000, 3)
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(sent).toHaveLength(1 + 3)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  // The real bound: one day of 5-minute rounds, the gateway's whole confirm window.
+  it('is bounded by the 24 h confirm window by default', () => {
+    expect(RECONFIRM_MAX_ROUNDS * RECONFIRM_INTERVAL_MS).toBe(24 * 60 * 60_000)
+  })
+
+  // Shutdown (SIGTERM sets running=false) ends it on the next tick, with no request sent.
+  it('stops on shutdown and leaves no timer', async () => {
+    vi.useFakeTimers()
+    const vault = await vaultWith('cred-a')
+    const { sent, fetchImpl } = gateway(503)
+    const confirmer = new CredentialConfirmer(GATEWAY, fetchImpl)
+    await confirmAll(vault, confirmer)
+    let running = true
+    retryUnconfirmed(vault, confirmer, () => running, 1000, 100)
+    running = false
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(sent).toHaveLength(1)
+    expect(vi.getTimerCount()).toBe(0)
+
+    const stop = retryUnconfirmed(vault, confirmer, () => true, 1000, 100)
+    stop()
+    expect(vi.getTimerCount()).toBe(0)
   })
 })

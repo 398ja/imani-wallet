@@ -87,6 +87,39 @@ export const CONFIRM_CONCURRENCY = 8
 /** How often the service retries credentials still unconfirmed after startup (gc was down). */
 export const RECONFIRM_INTERVAL_MS = 5 * 60_000
 
+/**
+ * How many retries before giving up: 24 h of them, the gateway's whole confirm window. Past it,
+ * a credential still unconfirmed can never be confirmed (410), or never needed it (a pre-V27
+ * legacy credential answers 404 for ever and still issues), so asking again is only log noise.
+ */
+export const RECONFIRM_MAX_ROUNDS = (24 * 60 * 60_000) / RECONFIRM_INTERVAL_MS
+
+/**
+ * Retry credentials left unconfirmed at startup (review of #299). One the gateway was down for at
+ * boot would otherwise wait for its first sale again, the lazy confirm #296 replaced. Every
+ * `intervalMs` until none is left, `keepGoing()` is false (shutdown), or `maxRounds` have run.
+ * Answered credentials are not asked again (the confirmer remembers). Returns a stop function.
+ */
+export function retryUnconfirmed(
+  vault: CredentialVault,
+  confirmer: CredentialConfirmer,
+  keepGoing: () => boolean,
+  intervalMs: number = RECONFIRM_INTERVAL_MS,
+  maxRounds: number = RECONFIRM_MAX_ROUNDS,
+): () => void {
+  let rounds = 0
+  const retry = setInterval(() => {
+    if (!keepGoing() || rounds >= maxRounds) return clearInterval(retry)
+    rounds += 1
+    void confirmAll(vault, confirmer).then((again) => {
+      if (again.unconfirmed === 0) clearInterval(retry)
+    })
+  }, intervalMs)
+  // Never what keeps the process alive: SIGTERM ends the loop, and the process exits.
+  retry.unref?.()
+  return () => clearInterval(retry)
+}
+
 export interface ConfirmSummary {
   confirmed: number
   expired: number
