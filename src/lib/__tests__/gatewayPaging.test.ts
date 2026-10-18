@@ -38,12 +38,26 @@ afterEach(() => {
   globalThis.fetch = realFetch
 })
 
+/**
+ * Unsigned shapes for the paging walk, which does not verify (the union does):
+ * signing 1,234 events per test made the suite time out under a full parallel
+ * run (#326 review, mushroom). The union test below signs its own.
+ */
 function events(n: number, sameSecondEvery = 1): Event[] {
+  return Array.from({ length: n }, (_, i) => ({
+    id: i.toString(16).padStart(64, '0'),
+    pubkey: pk,
+    kind: 7375,
+    created_at: 1_700_000_000 + Math.floor(i / sameSecondEvery),
+    tags: [['d', `t${i}`]],
+    content: `c${i}`,
+    sig: '',
+  }))
+}
+
+function signed(n: number): Event[] {
   return Array.from({ length: n }, (_, i) =>
-    finalizeEvent(
-      { kind: 7375, created_at: 1_700_000_000 + Math.floor(i / sameSecondEvery), tags: [['d', `t${i}`]], content: `c${i}` },
-      sk,
-    ),
+    finalizeEvent({ kind: 7375, created_at: 1_700_000_000 + i, tags: [['d', `t${i}`]], content: `c${i}` }, sk),
   )
 }
 
@@ -77,9 +91,10 @@ describe('the gateway coupon read pages past one response', () => {
     expect(await gatewayAllEvents(pk, 7375)).toBeNull()
   })
 
-  it('the union keeps every verified paged event', async () => {
-    store = events(800)
+  it('the union keeps every verified paged event, and drops the unsigned', async () => {
+    store = [...signed(520), ...events(30).map((e) => ({ ...e, created_at: 1 }))]
     const got = await gatewayAllEvents(pk, 7375)
-    expect(unionWithGateway([], got ?? [], pk, 7375)).toHaveLength(800)
-  })
+    expect(got).toHaveLength(550)
+    expect(unionWithGateway([], got ?? [], pk, 7375)).toHaveLength(520)
+  }, 20_000)
 })

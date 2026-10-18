@@ -336,7 +336,12 @@ describe('relay order (review M1)', () => {
     // strfry: created_at desc, then id. All chunks share created_at, so the
     // order is by event id, i.e. random. Reverse AND shuffle AND replay one.
     const sorted = [...relay.events].sort((a, b) => (a.id < b.id ? 1 : -1))
-    const shuffled = [sorted[sorted.length - 1], ...sorted.slice(0, -1)].reverse()
+    let shuffled = [sorted[sorted.length - 1], ...sorted.slice(0, -1)].reverse()
+    // Event ids are random, so that permutation can land on the publish order
+    // by chance (it flaked in a full run, #326 review). Rotate until it differs.
+    while (shuffled.map((e) => e.id).join() === relay.events.map((e) => e.id).join()) {
+      shuffled = [...shuffled.slice(1), shuffled[0]]
+    }
     expect(shuffled.map((e) => e.id)).not.toEqual(relay.events.map((e) => e.id))
     relay.events = [...shuffled, shuffled[1]]
     expect(await restoreVouchers(pk)).toBe(1)
