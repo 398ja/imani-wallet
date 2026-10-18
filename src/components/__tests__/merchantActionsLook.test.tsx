@@ -1,10 +1,14 @@
 /**
  * @vitest-environment jsdom
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { MerchantActions } from '../MerchantActions'
+
+// The purchase issuer says this stall's card sales are ready (#298), so Buy is enabled when the
+// stall takes cards. `merchantActionsCardSales.test.tsx` covers the not-ready states.
+vi.mock('../../lib/cardSalesEnrolment', () => ({ cardSalesReady: async () => true }))
+const { MerchantActions } = await import('../MerchantActions')
 
 /**
  * A disabled action must LOOK disabled, and both disabled actions must carry the same weight.
@@ -37,9 +41,9 @@ describe('Buy and Pay styling', () => {
     expect(buy.className).toBe(pay.className)
   })
 
-  it('keeps an enabled Buy as the primary action', () => {
+  it('keeps an enabled Buy as the primary action', async () => {
     const { buy } = buttons(true)
-    expect((buy as HTMLButtonElement).disabled).toBe(false)
+    await vi.waitFor(() => expect((buy as HTMLButtonElement).disabled).toBe(false))
     expect(buy.className).toContain('bg-mono-900')
   })
 })

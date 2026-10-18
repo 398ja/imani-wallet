@@ -22,7 +22,12 @@ vi.mock('../../hooks/useBranding', () => ({
   }),
 }))
 
+// #298: whether the purchase issuer can issue for this stall. Ready unless a test says otherwise.
+let cardSalesReady = vi.fn(async () => true)
+vi.mock('../../lib/cardSalesEnrolment', () => ({ cardSalesReady: (...a: unknown[]) => cardSalesReady(...(a as [])) }))
+
 import { BuyPage } from '../BuyPage'
+import { CARD_SALES_NOT_READY } from '../../lib/merchantActions'
 import { BuyCancelledPage, BuyDonePage } from '../BuyReturnPages'
 import { PENDING_PURCHASE_KEY } from '../../lib/pendingPurchase'
 
@@ -32,6 +37,7 @@ const BUYER = 'a'.repeat(64)
 afterEach(() => {
   cleanup()
   startPurchase.mockReset()
+  cardSalesReady = vi.fn(async () => true)
   sessionStorage.clear()
 })
 
@@ -58,10 +64,45 @@ describe('Buy page, guest refusal (#267 item 2)', () => {
     startPurchase.mockResolvedValue({ kind: 'error', reason: 'stop here' })
     buy(BUYER)
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '25.00' } })
-    fireEvent.click(screen.getByRole('button', { name: /pay by card/i }))
+    const pay = screen.getByRole('button', { name: /pay by card/i }) as HTMLButtonElement
+    await vi.waitFor(() => expect(pay.disabled).toBe(false))
+    fireEvent.click(pay)
     await screen.findByText('stop here')
     expect(startPurchase).toHaveBeenCalledWith({ stallPubkey: STALL, amountMinor: 2500, buyerPubkey: BUYER })
     expect(JSON.parse(sessionStorage.getItem(PENDING_PURCHASE_KEY) ?? '{}')).toEqual({ stallPubkey: STALL })
+  })
+})
+
+/**
+ * imani-wallet#298: a link straight to /buy/<stall> skips the stall page's Buy gate, so the Buy
+ * page asks too. A stall whose purchase issuer cannot issue is not charged: Pay by card stays
+ * disabled with the reason beside it, and is checked again at the tap.
+ */
+describe('Buy page for a stall whose card sales are not ready (#298)', () => {
+  // Not enrolled: the card button is disabled with the reason adjacent, and nothing is started.
+  it('disables Pay by card with the reason beside it', async () => {
+    cardSalesReady = vi.fn(async () => false)
+    buy(BUYER)
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '25.00' } })
+    const reason = await screen.findByText(CARD_SALES_NOT_READY)
+    const pay = screen.getByRole('button', { name: /pay by card/i }) as HTMLButtonElement
+    expect(pay.disabled).toBe(true)
+    expect(pay.getAttribute('aria-describedby')).toContain(reason.id)
+    expect(startPurchase).not.toHaveBeenCalled()
+  })
+
+  // Ready when the page opened, not ready by the tap: refused with the reason, nothing charged.
+  it('checks again at the tap and refuses', async () => {
+    cardSalesReady = vi.fn(async () => true)
+    buy(BUYER)
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '25.00' } })
+    const pay = screen.getByRole('button', { name: /pay by card/i }) as HTMLButtonElement
+    await vi.waitFor(() => expect(pay.disabled).toBe(false))
+    cardSalesReady = vi.fn(async () => false)
+    fireEvent.click(pay)
+    await screen.findByRole('alert')
+    expect(screen.getByRole('alert').textContent).toContain(CARD_SALES_NOT_READY)
+    expect(startPurchase).not.toHaveBeenCalled()
   })
 })
 
