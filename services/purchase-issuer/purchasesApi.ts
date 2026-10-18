@@ -312,14 +312,16 @@ export class PurchasesApi {
    *
    * `gateway_unrecorded`: gc refused the mint 409 UNRECORDED, so whether a coupon exists is
    * unknown and nothing automatic may retry it. `delivery_exhausted`: the outbox gave up, a coupon
-   * exists (`voucherId`). Uses the ISSUER token; `/resolve` is the operator's.
+   * exists (`voucherId`). `issue_blocked`: nothing minted and nothing automatic can (#312: the
+   * stall's validity cannot be honoured, or its record stayed unreadable); the detail says why,
+   * and the operator refunds or issues by hand. Uses the ISSUER token; `/resolve` is the operator's.
    *
    * `unsupported` is a 404 with no such row answer from a payment-adapter that predates #280: the
    * caller logs and falls back to `/failure`. Retried with the same backoff as failure reports.
    */
   async attention(
     eventId: string,
-    reason: 'gateway_unrecorded' | 'delivery_exhausted',
+    reason: 'gateway_unrecorded' | 'delivery_exhausted' | 'issue_blocked',
     { voucherId, detail, worker }: { voucherId?: string; detail?: string; worker?: string } = {},
   ): Promise<'parked' | 'unsupported' | 'refused' | 'unreachable'> {
     for (let attempt = 0; attempt <= this.reportBackoffsMs.length; attempt++) {

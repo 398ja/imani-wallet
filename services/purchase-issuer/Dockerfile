@@ -43,6 +43,9 @@ COPY services/purchase-issuer ./services/purchase-issuer
 # npm-installed because the package points `exports` at source and ships no
 # dist, which is this repo's convention; tsx compiles it on load.
 COPY packages/money ./node_modules/@imani/money
+# The stall's merchant-record rules (imani-wallet#312): the validity a card coupon is minted for
+# must be read exactly as the wallet's Sell screen reads it. Source-pointing, like licence.
+COPY packages/merchant-record ./node_modules/@imani/merchant-record
 
 # ...except `@imani/money` is the ONE package that does not follow that
 # convention. `wallet-core` and the rest point `exports` at `./src/index.ts`,
@@ -64,6 +67,7 @@ RUN node -e "const p='node_modules/@imani/money/package.json',j=require('./'+p);
 # entrypoint never loads them — but "absent" is a property of the image and
 # "inert" is a property of today's entrypoint.
 RUN rm -rf services/purchase-issuer/__tests__ node_modules/@imani/money/src/__tests__ \
+      node_modules/@imani/merchant-record/src/__tests__ \
       node_modules/@imani/money/tests
 
 # Derive the requirement from the source instead of trusting the COPY above to

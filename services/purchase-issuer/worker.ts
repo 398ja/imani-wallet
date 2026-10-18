@@ -231,6 +231,24 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
         )
         break
 
+      case 'attention': {
+        // #312: nothing minted, and the stall's term cannot be honoured (never expires, or longer
+        // than its delegation) or its record stayed unreadable. Parked for a person, who refunds
+        // or issues by hand; a silent BLOCKED would leave a paid buyer with nobody looking.
+        result.blocked += 1
+        countAttempt('blocked')
+        const parked = await deps.api.attention(purchase.eventId, 'issue_blocked', {
+          detail: outcome.reason.slice(0, 500),
+          worker,
+        })
+        if (parked !== 'parked') {
+          // A payment-adapter that cannot park it: the old permanent failure, which a person
+          // still sees in the BLOCKED queue. Nothing was minted, so closing it cannot strand value.
+          await deps.api.reportFailure(purchase.eventId, outcome.reason, true, undefined, { worker })
+        }
+        break
+      }
+
       case 'blocked':
         result.blocked += 1
         countAttempt('blocked')

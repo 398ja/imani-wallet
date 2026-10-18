@@ -7,7 +7,7 @@ import { discharge, type Obligation, type Ports } from '../discharge'
 import { checkDelegation } from '../delegatedWarrant'
 import { CredentialVault, type CredentialStore } from '../vault'
 import { parseIssuanceWarrant, verifyIssuanceWarrant } from '../../../src/lib/issuanceWarrant'
-import { LOCK, STALL, delegatedCredential, delegationJson } from './stallFixture'
+import { LOCK, STALL, delegatedCredential, delegationJson, ninetyDayTerm } from './stallFixture'
 
 /**
  * A card purchase's coupon is accepted at the till (#152).
@@ -38,6 +38,7 @@ const NOW = 1_800_000_000_000
 
 function ports(over: Partial<Ports> = {}): Ports {
   return {
+    validityFor: ninetyDayTerm,
     credentialFor: async () => delegatedCredential(),
     tokenFor: async () => '',
     now: () => NOW,
@@ -105,11 +106,15 @@ describe('the issuer refuses to mint what the till would refuse', () => {
   })
 
   // A delegation that lapses before the coupon would leave a coupon that dies
-  // at the till part-way through its life. Refused before minting.
-  it('blocks when the delegation expires before the coupon would', async () => {
+  // at the till part-way through its life. Refused before minting, and parked for a person
+  // (#312): the buyer has paid, and the stall's 90-day term is longer than its delegation.
+  it('parks for a person when the delegation expires before the coupon would', async () => {
     const short = delegationJson({ expiresAt: Math.floor(NOW / 1000) + 30 * 86_400 })
     const p = ports({ credentialFor: async () => delegatedCredential({ delegation: short }) })
-    expect(await discharge('http://gw', OBLIGATION, p)).toMatchObject({ kind: 'blocked' })
+    const outcome = await discharge('http://gw', OBLIGATION, p)
+    expect(outcome).toMatchObject({ kind: 'attention' })
+    expect((outcome as { reason: string }).reason).toMatch(/^validity_outlives_delegation/)
+    expect((await mintedWarrant(p)).calls).toBe(0)
   })
 
   // A delegation signed by some other stall cannot authorise this one.

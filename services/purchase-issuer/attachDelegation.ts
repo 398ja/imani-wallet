@@ -25,7 +25,7 @@ import { readFile } from 'node:fs/promises'
 
 import { confirmStanding, FileCredentialStore } from './adapters'
 import { checkDelegation } from './delegatedWarrant'
-import { DEFAULT_EXPIRES_IN_DAYS } from './issuer'
+import { MAX_VALIDITY_DAYS } from '@imani/merchant-record'
 import { CredentialVault } from './vault'
 
 async function main(): Promise<void> {
@@ -43,7 +43,9 @@ async function main(): Promise<void> {
   await vault.attachDelegation(
     stallPubkey.toLowerCase(),
     delegation,
-    Date.now() + DEFAULT_EXPIRES_IN_DAYS * 86_400_000,
+    // The operator script has no stall term to hand, so it checks the longest one a stall may
+    // choose (#312): a delegation attached here then backs whatever term the stall picks today.
+    Date.now() + MAX_VALIDITY_DAYS * 86_400_000,
     checkDelegation,
   )
   console.log(`delegation attached for ${stallPubkey.slice(0, 12)}…`)

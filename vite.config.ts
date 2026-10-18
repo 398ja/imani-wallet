@@ -537,6 +537,7 @@ export default defineConfig({
       // The money decisions the app and the future wallet API share (#4).
       '@imani/wallet-core': imani('wallet-core'),
       '@imani/licence': imani('licence'),
+      '@imani/merchant-record': imani('merchant-record'),
       '@imani/redemption': imani('redemption'),
       '@imani/reports': imani('reports'),
       '@imani/payment-requests': imani('payment-requests'),

@@ -7,7 +7,7 @@ import { MemoryRouter } from 'react-router-dom'
 
 // The purchase issuer says this stall's card sales are ready (#298), so Buy is enabled when the
 // stall takes cards. `merchantActionsCardSales.test.tsx` covers the not-ready states.
-vi.mock('../../lib/cardSalesEnrolment', () => ({ cardSalesReady: async () => true }))
+vi.mock('../../lib/cardSalesEnrolment', () => ({ cardSalesReadiness: async () => 'ready' }))
 const { MerchantActions } = await import('../MerchantActions')
 
 /**

@@ -8,7 +8,7 @@ import { PurchasesApi, ReportLostError, type OwedPurchase } from '../purchasesAp
 import { haltReason, loop, resetForTest, server } from '../server'
 import { runPass, type WorkerDeps } from '../worker'
 import type { Ports } from '../discharge'
-import { STALL, delegatedCredential } from './stallFixture'
+import { STALL, delegatedCredential, ninetyDayTerm } from './stallFixture'
 
 /**
  * imani-wallet#96: one payment, one coupon, whatever happens to the worker.
@@ -130,6 +130,7 @@ function world({ leaseMs = 600_000 } = {}) {
 
   const ports: Ports = {
     // A real stall's delegation: since #152 nothing mints without one.
+    validityFor: ninetyDayTerm,
     credentialFor: async () => delegatedCredential({ credentialId: 'c1' }),
     tokenFor: async () => '',
     now: () => clock,

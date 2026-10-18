@@ -10,7 +10,7 @@ import { attemptCount, renderMetrics, resetMetricsForTest } from '../metrics'
 import { runPass, type WorkerDeps } from '../worker'
 import type { PurchasesApi, OwedPurchase } from '../purchasesApi'
 import type { Ports } from '../discharge'
-import { delegatedCredential } from './stallFixture'
+import { delegatedCredential, ninetyDayTerm } from './stallFixture'
 
 function owed(over: Partial<OwedPurchase> = {}): OwedPurchase {
   return {
@@ -35,6 +35,7 @@ function deps(): WorkerDeps & { api: PurchasesApi } {
     reportFailure: vi.fn().mockResolvedValue(undefined),
   } as unknown as PurchasesApi
   const ports: Ports = {
+    validityFor: ninetyDayTerm,
     credentialFor: async () => delegatedCredential({ credentialId: 'c1' }),
     tokenFor: async () => '',
     now: () => Date.now(),

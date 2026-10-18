@@ -82,3 +82,29 @@ describe('the card-sales step', () => {
     expect(screen.getByRole('button', { name: 'Set up card sales again' })).toBeTruthy()
   })
 })
+
+describe('#312: card sales need a voucher validity', () => {
+  // The rule is said plainly, with a link to the validity setting, so a stall is never surprised.
+  it('says card sales need a validity, and links to the setting', async () => {
+    render(<CardSalesSection deps={{ status: async () => ({ kind: 'ok', status: NEVER }) }} />)
+    expect(await screen.findByText(/Vouchers that never expire can.t be sold by card/)).toBeTruthy()
+    const link = screen.getByRole('link', { name: 'Voucher validity' }) as HTMLAnchorElement
+    expect(link.getAttribute('href')).toBe('/settings/merchant')
+  })
+
+  // A never-expiring stall reads why Buy is off, in the issuer's words.
+  it('shows the issuer\u2019s reason for a never-expiring stall', async () => {
+    render(<CardSalesSection deps={{ status: async () => ({ kind: 'ok', status: NEVER }) }} />)
+    expect(await screen.findByText(/need a voucher validity/)).toBeTruthy()
+  })
+})
+
+const NEVER: CardSalesStatus = {
+  enrolled: true,
+  confirmation: 'confirmed',
+  delegationExpiresAt: 4_000_000_000,
+  delegationValid: false,
+  ready: false,
+  reason: 'Card sales need a voucher validity: vouchers that never expire can\u2019t be sold by card.',
+  reasonCode: 'validity_never_expires',
+}

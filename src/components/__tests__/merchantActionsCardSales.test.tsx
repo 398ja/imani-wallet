@@ -14,7 +14,9 @@ import { MemoryRouter } from 'react-router-dom'
 
 const STALL = 'b'.repeat(64)
 let ready: () => Promise<boolean> = async () => true
-vi.mock('../../lib/cardSalesEnrolment', () => ({ cardSalesReady: () => ready() }))
+vi.mock('../../lib/cardSalesEnrolment', () => ({
+  cardSalesReadiness: async () => ((await ready()) ? 'ready' : 'not-ready'),
+}))
 
 const { MerchantActions } = await import('../MerchantActions')
 const { CARD_SALES_NOT_READY } = await import('../../lib/merchantActions')
