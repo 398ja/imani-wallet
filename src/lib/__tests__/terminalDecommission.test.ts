@@ -96,6 +96,18 @@ describe('vouchers not confirmed as backed up (owner rule 2026-10-18, review of 
     expect(erased).toEqual([])
     expect(localStorage.getItem(ENROLMENT_KEY)).toContain(TOKEN)
   })
+
+  it('a send still in flight refuses too, before revoking (second check of #326)', async () => {
+    enrol()
+    localStorage.setItem(`imani-wallet:pending-sends:${PUBKEY}`, JSON.stringify([{ sendId: 's', at: Date.now() }]))
+    const mint = api()
+
+    const out = await decommissionTerminal(mint, PUBKEY, () => {})
+
+    expect(out).toMatchObject({ done: false, reason: DECOMMISSION_REFUSAL.VOUCHERS_UNCONFIRMED })
+    expect(mint.receive).not.toHaveBeenCalled()
+    expect(erased).toEqual([])
+  })
 })
 
 describe('the order', () => {

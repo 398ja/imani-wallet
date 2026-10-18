@@ -2,6 +2,7 @@ import { storedTerminal } from './terminalEnrol'
 import { revokeCredential, type CredentialMintApi } from './credentialRevocation'
 import { logout } from './logout'
 import { confirmBackups, type BackupCheck } from './voucherRecords'
+import { moneyInFlight } from './inFlightMoney'
 import { credentialFromToken } from './terminalLogin'
 
 /**
@@ -128,7 +129,8 @@ export async function decommissionTerminal(
   const backups = await checkBackups(pubkey).catch(
     (): BackupCheck => ({ ok: false, reason: 'store-unreadable', unconfirmed: [], fingerprint: '' }),
   )
-  if (!backups.ok) {
+  const inFlight = moneyInFlight(pubkey)
+  if (!backups.ok || inFlight.sends > 0 || inFlight.swaps > 0) {
     return {
       done: false,
       reason: DECOMMISSION_REFUSAL.VOUCHERS_UNCONFIRMED,

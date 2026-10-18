@@ -44,7 +44,7 @@ vi.mock('../voucherRecords', () => ({
   heldFingerprint: () => '',
 }))
 
-globalThis.localStorage = { removeItem: () => {} } as unknown as Storage
+globalThis.localStorage = { removeItem: () => {}, getItem: () => null } as unknown as Storage
 
 const { attemptLogout, logout, LOGOUT_WARNING, LOGOUT_BLOCKED_COPY } = await import('../logout')
 
@@ -240,5 +240,74 @@ describe('no override path', () => {
     for (const copy of [text, LOGOUT_BLOCKED_COPY.locked, LOGOUT_BLOCKED_COPY.unreadable, LOGOUT_BLOCKED_COPY.changed, LOGOUT_WARNING]) {
       expect(copy).not.toMatch(/\b(nsec|npub|relay|nostr)\b/i)
     }
+  })
+})
+
+describe('money in flight outside the coupon rows (second check of #326)', () => {
+  const none = () => ({ sends: 0, swaps: 0 })
+
+  it('a pending send blocks even when every row is confirmed: no confirm, nothing stopped or erased', async () => {
+    const asked: string[] = []
+    const settle = vi.fn(async () => undefined)
+    const out = await attemptLogout(PK, (m) => (asked.push(m), true), noReload, {
+      checkBackups: async () => OK('A'),
+      inFlight: () => ({ sends: 1, swaps: 0 }),
+      settleInFlight: settle,
+    })
+    expect(out).toEqual({ status: 'blocked', reason: 'in-flight', unconfirmed: [] })
+    // It first tried to finish the send, so one that has settled does not block.
+    expect(settle).toHaveBeenCalledWith(PK)
+    expect(asked).toEqual([])
+    expect(calls).toEqual([])
+  })
+
+  it('an interrupted swap back to sats blocks', async () => {
+    const out = await attemptLogout(PK, yes, noReload, {
+      checkBackups: async () => OK('A'),
+      inFlight: () => ({ sends: 0, swaps: 1 }),
+      settleInFlight: async () => undefined,
+    })
+    expect(out).toMatchObject({ status: 'blocked', reason: 'in-flight' })
+    expect(calls).not.toContain('wipe')
+  })
+
+  it('one that starts after the confirmation (another tab) blocks at the end and restarts the writers', async () => {
+    let state = none()
+    const out = await attemptLogout(PK, () => ((state = { sends: 1, swaps: 0 }), true), noReload, {
+      checkBackups: async () => OK('A'),
+      heldNow: async () => 'A',
+      writeCount: () => 1,
+      inFlight: () => state,
+      settleInFlight: async () => undefined,
+    })
+    expect(out).toMatchObject({ status: 'blocked', reason: 'in-flight' })
+    expect(calls).toEqual(['stop-dm', 'stop-roster', 'stop-incoming', 'start-dm', 'start-roster', 'start-incoming'])
+  })
+
+  it('a ledger that cannot be read blocks; a settled one does not', async () => {
+    const unreadable = await attemptLogout(PK, yes, noReload, {
+      checkBackups: async () => OK('A'),
+      inFlight: () => {
+        throw new Error('storage denied')
+      },
+      settleInFlight: async () => undefined,
+    })
+    expect(unreadable).toMatchObject({ status: 'blocked', reason: 'in-flight' })
+    const clear = await attemptLogout(PK, yes, noReload, {
+      checkBackups: async () => OK('A'),
+      heldNow: async () => 'A',
+      writeCount: () => 1,
+      inFlight: none,
+      settleInFlight: async () => undefined,
+    })
+    expect(clear.status).toBe('done')
+  })
+
+  it('says so in plain words', async () => {
+    const { blockedMessage } = await import('../logoutBlockedCopy')
+    const text = blockedMessage({ status: 'blocked', reason: 'in-flight', unconfirmed: [] })
+    expect(text).toBe(LOGOUT_BLOCKED_COPY.inFlight)
+    expect(text).toMatch(/Nothing has been erased/)
+    expect(text).not.toMatch(/\b(nsec|npub|relay|nostr|anyway)\b/i)
   })
 })
