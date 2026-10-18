@@ -255,13 +255,13 @@ function RequestDisplay({
 }) {
   const [qr, setQr] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
-  /** Minor units of this request's coupons that have landed in this wallet so far. */
+  /** Minor units received against this request so far, when it is not yet paid. */
   const [received, setReceived] = useState(0)
   /** Receives of this request's coupons that failed after core counted the payment (#300). */
   const [troubles, setTroubles] = useState<ReceiveTrouble[]>([])
-  // Paid on core's verdict, and the coupons are not all in this wallet yet (#300).
+  // Paid on core's verdict, and no arrival covering it has been filed against it yet (#300).
   const awaitingCoupons =
-    ownWallet && request.status === 'fulfilled' && request.confirmedBy === 'core' && received < request.amount
+    ownWallet && request.status === 'fulfilled' && request.confirmedBy === 'core' && !request.settledBy
   // From the request rather than the stall: a request already carries the unit
   // it was created with, and re-reading the merchant record here would relabel
   // an open request if the currency were changed in settings mid-sale.
@@ -319,7 +319,7 @@ function RequestDisplay({
   // The stall's own device: watch the wallet. While the request is open this is how a payment
   // is seen when core cannot be asked; once core has said Paid it is how the till learns the
   // coupons themselves arrived (#300). A terminal's wallet never receives them.
-  const watchWallet = ownWallet && (request.status === 'pending' || request.confirmedBy === 'core')
+  const watchWallet = ownWallet && (request.status === 'pending' || awaitingCoupons)
   useEffect(() => {
     if (!watchWallet) return
 
@@ -334,15 +334,15 @@ function RequestDisplay({
         const { requests, arrivals } = await reconcileRequests(pubkey)
         if (!live) return
         const mine = requests.find((r) => r.paymentId === request.paymentId)
-        if (request.status === 'pending' && mine && mine.status !== 'pending') {
+        // Settled by the wallet while open, or (after a Paid from core) its coupons filed
+        // against it by the reconcile: either way, the stored record is the truth.
+        if (mine && (request.status === 'pending' ? mine.status !== 'pending' : !!mine.settledBy)) {
           onChange(mine)
           return
         }
         // Nothing settles it yet. If part of it has landed, say so — the
         // alternative is a screen that looks identical to no payment at all
-        // while the merchant is holding half the money. After a Paid from core,
-        // the same figure says whether the coupons are all in. Display only:
-        // it never settles or re-counts anything.
+        // while the merchant is holding half the money.
         setReceived(partialFor(request, arrivals))
       } catch {
         // A wallet read that fails leaves the request pending, which is the

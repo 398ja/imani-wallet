@@ -130,7 +130,20 @@ describe('matchPayment', () => {
   it('never hands a payment naming a closed request to another open one', () => {
     const paidByCore = request({ paymentId: 'req1', status: 'fulfilled', confirmedBy: 'core', receivedAmount: 500 })
     const open = request({ paymentId: 'req2' })
-    expect(matchPayment([paidByCore, open], payment({ paymentId: 'req1' }))).toBeNull()
+    const filed = matchPayment([paidByCore, open], payment({ paymentId: 'req1' }))
+    // Filed against req1, the sale core counted, at the amount core counted: never req2.
+    expect(filed).toMatchObject({ paymentId: 'req1', status: 'fulfilled', settledBy: 'tx1', receivedAmount: 500 })
+  })
+
+  // #300: the same, for coupons that arrive WITHOUT a request id stamped on the row. They may be
+  // req1's, which core already counted, so the amount fallback has two plausible owners and must
+  // guess neither: req2 stays waiting rather than being marked paid with req1's money.
+  it('treats a core-paid request still awaiting its coupons as a rival in the amount fallback', () => {
+    const paidByCore = request({ paymentId: 'req1', status: 'fulfilled', confirmedBy: 'core', receivedAmount: 500 })
+    const open = request({ paymentId: 'req2' })
+    expect(matchPayment([paidByCore, open], payment())).toBeNull()
+    // Once req1's coupons have been filed against it, the fallback is unambiguous again.
+    expect(matchPayment([{ ...paidByCore, settledBy: 'tx0' }, open], payment())?.paymentId).toBe('req2')
   })
 
   it('ignores non-pending requests', () => {
@@ -375,5 +388,33 @@ describe('reconcileRequests', () => {
     const { settled, requests } = await reconcileRequests(pubkey)
     expect(settled).toBe(0)
     expect(requests[0].status).toBe('pending')
+  })
+})
+
+describe('reconcileRequests after a Paid from core (#300)', () => {
+  const pubkey = 'n'.repeat(64)
+  const key = `imani-wallet:payment-requests:${pubkey}`
+  const read = () => JSON.parse(stored.get(key)!) as VoucherPaymentRequest[]
+
+  beforeEach(() => {
+    stored.clear()
+    wallet.rows = []
+  })
+
+  // The coupons of a sale core already counted land in the wallet. They are filed against that
+  // sale and counted once: it stays Paid at what core counted, and the other open request for
+  // the same amount stays waiting.
+  it('files the late coupons against the sale core counted, and settles nothing else', async () => {
+    const createdAt = Date.now() - 60_000
+    const paidByCore = request({ paymentId: 'req1', createdAt, status: 'fulfilled', confirmedBy: 'core', receivedAmount: 500 })
+    const open = request({ paymentId: 'req2', createdAt })
+    stored.set(key, JSON.stringify([paidByCore, open]))
+    wallet.rows = [{ id: 'tx1', type: 'received', timestamp: createdAt + 1000, amount: 500, unit: 'EUR', requestId: 'req1' }]
+
+    await reconcileRequests(pubkey)
+    await reconcileRequests(pubkey)
+
+    expect(read()[0]).toMatchObject({ paymentId: 'req1', status: 'fulfilled', settledBy: 'tx1', receivedAmount: 500 })
+    expect(read()[1].status).toBe('pending')
   })
 })
