@@ -877,6 +877,27 @@ function _alreadyRedeemedHere() {
     return new Error('This token has already been redeemed');
 }
 
+/**
+ * #300: every await between the metadata fetch and api.receive is bounded, so
+ * a request or pacer that never settles cannot hang a redemption. Rejects with
+ * code STEP_TIMEOUT (and logs) when `promise` has not settled in `ms`.
+ */
+function _withStepTimeout(promise, ms, step, fingerprint) {
+    if (!(ms > 0)) return promise;
+    let timer;
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+            console.warn('[tokenRedemption] #300 redemption step timed out', {
+                step, timeoutMs: ms, fp: _fpTag(fingerprint),
+            });
+            const err = new Error(`${step} did not answer within ${ms} ms`);
+            err.code = 'STEP_TIMEOUT';
+            reject(err);
+        }, ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 const TokenRedemption = {
     // Single-flight in-memory map: token fingerprint → in-flight redemption
     // promise. When two callers race on the SAME token (e.g., dmPoll +
@@ -1314,7 +1335,8 @@ const TokenRedemption = {
             let apiMetadata = null;
             try {
                 if (typeof api !== 'undefined' && api.getTokenMetadata) {
-                    apiMetadata = await api.getTokenMetadata(token);
+                    apiMetadata = await _withStepTimeout(
+                        api.getTokenMetadata(token), this._stepTimeoutMs, 'getTokenMetadata', fingerprint);
                 }
             } catch (e) {
                 console.log('[tokenRedemption] Could not fetch token metadata:', e.message);
@@ -1359,7 +1381,8 @@ const TokenRedemption = {
                     );
                 }
                 try {
-                    inspectResult = await api.inspectVoucher(token);
+                    inspectResult = await _withStepTimeout(
+                        api.inspectVoucher(token), this._stepTimeoutMs, 'inspectVoucher', fingerprint);
                 } catch (e) {
                     console.warn('[tokenRedemption] inspect-before-save failed (fail-closed):', e?.message);
                     throw new ProvenanceVerificationError(
@@ -1403,7 +1426,8 @@ const TokenRedemption = {
                 if (__needInspect) {
                     try {
                         if (typeof api !== 'undefined' && typeof api.inspectVoucher === 'function') {
-                            inspectResult = await api.inspectVoucher(token);
+                            inspectResult = await _withStepTimeout(
+                                api.inspectVoucher(token), this._stepTimeoutMs, 'inspectVoucher', fingerprint);
                         }
                     } catch (e) {
                         console.warn('[tokenRedemption] inspectVoucher failed, continuing with fallback chain:', e?.message);
@@ -1462,8 +1486,47 @@ const TokenRedemption = {
                     }
                     // Paced per CALL (dmPoll installs the page's pacer here),
                     // so inner retries spend from the same budget as first tries.
-                    await this._receiveGate();
-                    return api.receive(token, { idempotencyKey });
+                    // #300: a gate that never frees a slot used to hang the
+                    // redemption (and, through _inFlightRedemptions, every
+                    // later attempt at this token) for the whole session.
+                    // #301 review: the signal tells the pacer this wait was
+                    // abandoned, so it does not book a slot for a call that
+                    // will never go out (a ghost slot delays every later call).
+                    const gateAbort = typeof AbortController === 'function' ? new AbortController() : null;
+                    try {
+                        await _withStepTimeout(
+                            this._receiveGate(gateAbort ? gateAbort.signal : undefined),
+                            this._receiveGateTimeoutMs, 'receiveGate', fingerprint);
+                    } catch (gateErr) {
+                        if (gateErr && gateErr.code === 'STEP_TIMEOUT') {
+                            if (gateAbort) gateAbort.abort(gateErr);
+                            this._releaseReceiveCall(budgetKey);
+                            const deferred = new Error('Receive pacer did not free a slot in time; a later poll will retry');
+                            deferred.code = 'RECEIVE_DEFERRED';
+                            // Lets dmPoll schedule the retry: in SSE mode nothing
+                            // re-polls on a timer, so "the next poll" could be the
+                            // stream's ten-minute redial.
+                            deferred.deferredBy = 'receive-gate-timeout';
+                            throw deferred;
+                        }
+                        throw gateErr;
+                    }
+                    // #301 review: api.receive is deliberately NOT timed out. A
+                    // receive that reached the gateway may have settled, and a
+                    // retry under the same key comes back as a token-less replay
+                    // ("settled, not saved"), not as the coupon. It is only
+                    // reported, so the next #300-shaped stall names its step.
+                    console.info('[tokenRedemption] receive gate passed', { fp: _fpTag(fingerprint) });
+                    const slow = this._receiveSlowWarnMs > 0 ? setTimeout(() => {
+                        console.warn('[tokenRedemption] #300 api.receive still pending', {
+                            fp: _fpTag(fingerprint), afterMs: this._receiveSlowWarnMs,
+                        });
+                    }, this._receiveSlowWarnMs) : null;
+                    try {
+                        return await api.receive(token, { idempotencyKey });
+                    } finally {
+                        if (slow) clearTimeout(slow);
+                    }
                 };
                 // #110 review D: the gateway's 409 "first call still in flight"
                 // (Retry-After, empty body) is a short wait and a retry under
@@ -2557,6 +2620,12 @@ const TokenRedemption = {
     _ackGate: async () => {},
     /** Gate every api.receive goes through; dmPoll installs its pacer. */
     _receiveGate: async () => {},
+    // #300: bounds on the awaits before api.receive. The gate's covers a full
+    // pacer window and more; past it the call defers to the next poll.
+    _stepTimeoutMs: 15000,
+    _receiveGateTimeoutMs: 180000,
+    // #301 review: warn (never abort) when api.receive has not answered by then.
+    _receiveSlowWarnMs: 20000,
     // Overridable by tests; the 409 in-flight wait.
     _inFlightSleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     // token fingerprint → timestamps of api.receive calls (review C).
@@ -2575,6 +2644,11 @@ const TokenRedemption = {
             this._receiveCalls.delete(this._receiveCalls.keys().next().value);
         }
         return true;
+    },
+    /** Return a booked call that never went out (#300 gate timeout). */
+    _releaseReceiveCall(key) {
+        const recent = this._receiveCalls.get(key);
+        if (recent && recent.length) recent.pop();
     },
     RECEIVE_CALLS_PER_TOKEN,
     // Last flush start, so catch-ups cannot flush more than once a minute.

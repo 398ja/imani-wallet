@@ -1223,6 +1223,13 @@ function redemptionAdapter(): RedemptionAdapter {
           },
           )) as unknown as Voucher
         } catch (failure) {
+          // #301 review: the redemption gave up on the receive pacer (#300). dm-poll
+          // keeps the delivery unprocessed, but in SSE mode nothing re-polls on a
+          // timer, so without this the retry waited for the stream's ten-minute
+          // redial. One catch-up, shortly after, offers it again.
+          if ((failure as { deferredBy?: unknown } | null)?.deferredBy === 'receive-gate-timeout') {
+            scheduleDeferredCatchUpFor(token)
+          }
           // cashu-mint#540: gateway-customer declared this home-coming coupon and the mint refused
           // it as redeemed in full (400 VOUCHER_FULLY_REDEEMED). Nothing was swapped. Terminal: as
           // a typed refusal, dm-poll marks the delivery handled and announces it, rather than
@@ -1242,6 +1249,7 @@ function redemptionAdapter(): RedemptionAdapter {
         return voucher
       }
       const voucher = lockName ? await withWebLock(lockName, checkSwapAndWrite) : await checkSwapAndWrite()
+      deferredRetries.delete(token)
 
       // tokenRedemption wrote straight into IndexedDB, and this tab does not
       // hear its own BroadcastChannel post — see notifyWalletChanged.
@@ -1480,6 +1488,42 @@ function catchUp(): void {
   void flushUnacknowledgedEscrows()
 }
 
+/** How long after a receive-gate deferral the coupon is offered again (#301 review). */
+export const DEFERRED_RETRY_MS = 5_000
+/**
+ * How many early catch-ups one token may schedule (#301 second check). A pacer
+ * that never frees would otherwise re-defer the same coupon every gate timeout
+ * plus 5 s for the whole session. Past the cap the coupon waits for the
+ * ordinary offers (SSE reopen, online, visibility), as before #301.
+ */
+export const MAX_DEFERRED_RETRIES_PER_TOKEN = 3
+let deferredRetryTimer: ReturnType<typeof setTimeout> | undefined
+/** token → early catch-ups it has scheduled. Per poller: cleared by stopDmPoll. */
+const deferredRetries = new Map<string, number>()
+
+/** Schedules the early catch-up unless this token has used its share. */
+function scheduleDeferredCatchUpFor(token: string): void {
+  const used = deferredRetries.get(token) ?? 0
+  if (used >= MAX_DEFERRED_RETRIES_PER_TOKEN) return
+  deferredRetries.set(token, used + 1)
+  scheduleDeferredCatchUp()
+}
+
+/**
+ * One catch-up shortly after a redemption deferred on the receive pacer. The
+ * deferral returned its pacer wait, so the retry queues afresh; coalesced, so a
+ * bundle of deferred parts costs one query. Scoped to the poller that was
+ * running, so a logout in between cannot re-poll under the next account.
+ */
+function scheduleDeferredCatchUp(): void {
+  if (deferredRetryTimer !== undefined) return
+  const polling = service
+  deferredRetryTimer = setTimeout(() => {
+    deferredRetryTimer = undefined
+    if (polling !== undefined && service === polling) catchUp()
+  }, DEFERRED_RETRY_MS)
+}
+
 /**
  * The trusted mints changed: the gateway answered after a failure, or named a
  * mint it did not name before (#133 review, MEDIUM-2). Every deferred delivery is
@@ -1529,8 +1573,10 @@ let stopMintListener: (() => void) | undefined
  * so `_ackGate` stays tokenRedemption's no-op.
  */
 function installPacingGates(redemption: object): void {
-  const r = redemption as { _receiveGate?: () => Promise<void> }
-  r._receiveGate = () => receivePacer().acquire(CALLS_PER_RECEIVE)
+  const r = redemption as { _receiveGate?: (signal?: AbortSignal) => Promise<void> }
+  // The signal is #301's: tokenRedemption aborts it when its step timeout gives
+  // up on the gate, so the abandoned wait never books a slot.
+  r._receiveGate = (signal?: AbortSignal) => receivePacer().acquire(CALLS_PER_RECEIVE, signal)
 }
 
 async function flushUnacknowledgedEscrows(): Promise<void> {
@@ -1728,6 +1774,9 @@ function onVisible(): void {
  */
 export function stopDmPoll(): void {
   onSseOpen = undefined
+  if (deferredRetryTimer !== undefined) clearTimeout(deferredRetryTimer)
+  deferredRetryTimer = undefined
+  deferredRetries.clear()
   stopMintListener?.()
   stopMintListener = undefined
   document.removeEventListener('visibilitychange', onVisible)
