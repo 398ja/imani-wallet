@@ -130,23 +130,43 @@ export async function isHandleAvailable(handle: string): Promise<boolean> {
 }
 
 /**
+ * How long the claim, or the check behind a 409, may take. A hung gateway must
+ * end in "try again", not a Finish button spinning for ever. Retrying is safe:
+ * a claim is idempotent for the same key.
+ */
+const CLAIM_TIMEOUT_MS = 15_000
+
+/** A 409 whose owner could not be checked. Not success, and not "taken" either. */
+export class HandleCheckUnavailableError extends Error {
+  constructor() {
+    super('Could not finish just now. Check your connection and try again.')
+    this.name = 'HandleCheckUnavailableError'
+  }
+}
+
+/**
  * Whether `handle` on this stack's domain already resolves, forwards, to
- * `pubkey`. Any failure to ask is "no": the caller then reports the handle as
- * taken, which is what it reported before this check existed, so a directory
- * hiccup can never turn someone else's handle into ours.
+ * `pubkey`. A directory that answers about the handle (it resolves to someone
+ * else, or to nobody) is "no". A directory that could not be asked (network
+ * error, timeout, 5xx) throws HandleCheckUnavailableError: never success, so a
+ * hiccup cannot turn someone else's handle into ours, and never "taken", which
+ * would send the customer off to claim a second handle for their own key.
  */
 async function handleIsOurs(handle: string, pubkey: string): Promise<boolean> {
+  let response: Response
   try {
     const { nip05Domain } = await gatewayConfig()
-    const response = await fetch(`/api/v1/resolve/${encodeURIComponent(`${handle}@${nip05Domain}`)}`, {
+    response = await fetch(`/api/v1/resolve/${encodeURIComponent(`${handle}@${nip05Domain}`)}`, {
       credentials: 'include',
+      signal: AbortSignal.timeout(CLAIM_TIMEOUT_MS),
     })
-    if (!response.ok) return false
-    const body = (await response.json()) as { hex_pubkey?: unknown }
-    return typeof body.hex_pubkey === 'string' && body.hex_pubkey.toLowerCase() === pubkey.toLowerCase()
   } catch {
-    return false
+    throw new HandleCheckUnavailableError()
   }
+  if (response.status >= 500) throw new HandleCheckUnavailableError()
+  if (!response.ok) return false
+  const body = (await response.json().catch(() => null)) as { hex_pubkey?: unknown } | null
+  return typeof body?.hex_pubkey === 'string' && body.hex_pubkey.toLowerCase() === pubkey.toLowerCase()
 }
 
 /**
@@ -169,6 +189,7 @@ export async function claimHandle(
     'POST',
     { username: handle, pubkey, relays: [RELAY_URL] },
     signer,
+    { signal: AbortSignal.timeout(CLAIM_TIMEOUT_MS) },
   )
 
   if (response.ok) return

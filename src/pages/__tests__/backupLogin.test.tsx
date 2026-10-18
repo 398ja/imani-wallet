@@ -308,6 +308,33 @@ describe('no account without a profile', () => {
     expect(stored.nip05).toBe('amina@imani.africa')
   })
 
+  // A claim whose kind-0 never reached the relay: the directory holds
+  // amina -> this key, no kind-0 names it. The backup's own handle is checked
+  // (forwards), so the customer logs straight in instead of being asked for a
+  // second handle on a fresh device.
+  it('a backup whose kind-0 never published logs in by the handle the backup names', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url === '/api/v1/nostr/query') return new Response(JSON.stringify({ events: [], count: 0 }))
+        if (url === `/api/v1/resolve/${encodeURIComponent('amina@imani.africa')}`) {
+          return new Response(JSON.stringify({ nip05: 'amina@imani.africa', hex_pubkey: PUBKEY }))
+        }
+        return new Response('{}', { status: 404 })
+      }),
+    )
+    const { container } = openLogIn()
+    pickFile(container, backupText())
+    await screen.findByText('Amina')
+
+    await logInWith(PASSPHRASE)
+
+    await screen.findByText('Home screen')
+    expect(screen.queryByText('Finish your profile')).toBeNull()
+    expect(claimHandle).not.toHaveBeenCalled()
+    expect(onUnlock).toHaveBeenCalledWith(PRIV)
+  })
+
   // The claim went through but logging in failed: the customer is told, stays
   // on the step with the button live, and pressing it again finishes. The
   // retry re-sends the claim, which is safe because a claim is idempotent for
