@@ -100,3 +100,27 @@ describe('the Drive restore passphrase prompt', () => {
     expect(container.textContent).not.toMatch(/npub|nsec|nostr|relay|nip-?05/i)
   })
 })
+
+describe('the file restore passphrase prompt', () => {
+  it('shows the profile from the file, and no npub', async () => {
+    const { container } = render(
+      <MemoryRouter>
+        <RestorePage onUnlock={async () => {}} />
+      </MemoryRouter>,
+    )
+    const text = file({ pubkey: PUBKEY, npub: NPUB, displayName: 'Amina', nip05: 'amina@imani.africa', picture: 'https://example.com/amina.png', updatedAt: 1 })
+    const picked = new File([text], 'backup.json', { type: 'application/json' })
+    Object.defineProperty(picked, 'text', { value: async () => text })
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [picked] } })
+    await screen.findByText('This backup holds the account')
+
+    expect(screen.getByRole('img', { name: 'Amina' }).getAttribute('src')).toBe('https://example.com/amina.png')
+    expect(container.textContent).not.toMatch(/npub|nsec|nostr|relay|nip-?05/i)
+  })
+
+  it('drops a javascript: picture from the backup', async () => {
+    await openDriveBackup({ pubkey: PUBKEY, npub: NPUB, displayName: 'Amina', picture: 'javascript:alert(1)', updatedAt: 1 })
+    expect(screen.queryByRole('img', { name: 'Amina' })).toBeNull()
+  })
+})

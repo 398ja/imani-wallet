@@ -220,8 +220,8 @@ function BackupAccount({ backup, refreshedName }: { backup: ParsedBackup; refres
  * Restore from the customer's own Google Drive.
  *
  * The order of the screen is the order the customer needs: sign in, then be
- * TOLD whose account this is before being asked for anything. The npub rides in
- * the clear precisely so this step can happen — someone who has lost a phone
+ * TOLD whose account this is before being asked for anything. The public
+ * profile rides in the clear precisely so this step can happen — someone who has lost a phone
  * should not have to recognise an account by whether a passphrase prompt
  * accepts their typing.
  *
@@ -239,7 +239,7 @@ function DriveRestorePanel({ onUnlock }: { onUnlock: (privkeyHex: string) => Pro
 
   // The stored profile is a snapshot from whenever the backup was written, so
   // the relay is asked for a fresher one. Best-effort: a customer standing in a
-  // shop with no signal must still be able to restore, and the npub below
+  // shop with no signal must still be able to restore, and the
   // stored profile identifies the account on its own.
   useEffect(() => {
     const pubkey = parsed?.profile?.pubkey
