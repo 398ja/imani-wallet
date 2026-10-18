@@ -51,6 +51,12 @@ export class ProfileMissingError extends Error {
   }
 }
 
+/**
+ * How long one directory question may take. A gateway that hangs must end in
+ * "try again" (fail closed), not a Log in button spinning for ever.
+ */
+const DIRECTORY_TIMEOUT_MS = 15_000
+
 interface Kind0 {
   content: string
   createdAt: number
@@ -72,6 +78,7 @@ async function newestKind0(pubkey: string): Promise<Kind0 | null> {
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify({ kinds: [0], authors: [pubkey], limit: 10 }),
+      signal: AbortSignal.timeout(DIRECTORY_TIMEOUT_MS),
     })
     if (!response.ok) throw new Error(`gateway ${response.status}`)
     const body = (await response.json()) as {
@@ -104,11 +111,14 @@ async function newestKind0(pubkey: string): Promise<Kind0 | null> {
   return b.createdAt > a.createdAt ? b : a
 }
 
+function normaliseNip05(value: unknown): string | null {
+  const nip05 = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(nip05) ? nip05 : null
+}
+
 function nip05Of(content: string): string | null {
   try {
-    const parsed = JSON.parse(content) as { nip05?: unknown }
-    const nip05 = typeof parsed.nip05 === 'string' ? parsed.nip05.trim().toLowerCase() : ''
-    return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(nip05) ? nip05 : null
+    return normaliseNip05((JSON.parse(content) as { nip05?: unknown }).nip05)
   } catch {
     return null
   }
@@ -123,7 +133,10 @@ function nip05Of(content: string): string | null {
 async function resolveForward(nip05: string): Promise<string | null> {
   let response: Response
   try {
-    response = await fetch(`/api/v1/resolve/${encodeURIComponent(nip05)}`, { credentials: 'include' })
+    response = await fetch(`/api/v1/resolve/${encodeURIComponent(nip05)}`, {
+      credentials: 'include',
+      signal: AbortSignal.timeout(DIRECTORY_TIMEOUT_MS),
+    })
   } catch {
     throw new DirectoryUnavailableError()
   }
@@ -142,25 +155,53 @@ async function resolveForward(nip05: string): Promise<string | null> {
  *
  * @throws DirectoryUnavailableError when nothing could be asked
  */
-export async function verifiedHandle(pubkey: string): Promise<string | null> {
+export async function verifiedHandle(pubkey: string, alsoTry: Array<string | undefined> = []): Promise<string | null> {
   const key = pubkey.toLowerCase()
-  const kind0 = await newestKind0(key)
-  const nip05 = kind0 ? nip05Of(kind0.content) : null
-  if (!nip05) return null
-  const resolved = await resolveForward(nip05)
-  return resolved === key ? nip05 : null
+  // The kind-0 is asked first, but it is not the only place a handle can be
+  // known. A claim whose kind-0 never reached the relay (the publish is
+  // best-effort, as in registration) leaves a handle the directory holds and no
+  // kind-0 names; the backup or this device may still know it. Every candidate
+  // is verified FORWARDS, so a wrong or spoofed one simply fails.
+  let kind0: Kind0 | null = null
+  let outage: unknown = null
+  try {
+    kind0 = await newestKind0(key)
+  } catch (e) {
+    outage = e
+  }
+  const candidates = [kind0 ? nip05Of(kind0.content) : null, ...alsoTry.map(normaliseNip05)]
+  const seen = new Set<string>()
+  for (const nip05 of candidates) {
+    if (!nip05 || seen.has(nip05)) continue
+    seen.add(nip05)
+    try {
+      if ((await resolveForward(nip05)) === key) return nip05
+    } catch (e) {
+      outage = e
+    }
+  }
+  // Nothing verified. If any question went unanswered, that is an outage, not
+  // "no profile": failing closed keeps a reachable-later account out of
+  // "Finish your profile".
+  if (outage) throw outage
+  return null
 }
 
 /**
  * Check a key that has just been opened. Writes nothing.
  *
+ * @param knownHandle a handle believed to be this account's (the backup's
+ *        stored profile): tried, and verified, when the kind-0 names none
+ *
  * @returns the account's verified handle
  * @throws ProfileMissingError when it has none
  * @throws DirectoryUnavailableError when nothing could be asked
  */
-export async function requireProfile(privkeyHex: string): Promise<string> {
+export async function requireProfile(privkeyHex: string, knownHandle?: string): Promise<string> {
   const pubkey = getPublicKey(hexToBytes(privkeyHex))
-  const nip05 = await verifiedHandle(pubkey)
+  // Besides the kind-0: the handle a backup file names (passed in), and the one
+  // this device already holds for the key. Both verified forwards like the rest.
+  const nip05 = await verifiedHandle(pubkey, [knownHandle, loadProfile(pubkey)?.nip05])
   if (!nip05) throw new ProfileMissingError(privkeyHex)
   return nip05
 }

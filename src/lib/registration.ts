@@ -130,7 +130,30 @@ export async function isHandleAvailable(handle: string): Promise<boolean> {
 }
 
 /**
+ * Whether `handle` on this stack's domain already resolves, forwards, to
+ * `pubkey`. Any failure to ask is "no": the caller then reports the handle as
+ * taken, which is what it reported before this check existed, so a directory
+ * hiccup can never turn someone else's handle into ours.
+ */
+async function handleIsOurs(handle: string, pubkey: string): Promise<boolean> {
+  try {
+    const { nip05Domain } = await gatewayConfig()
+    const response = await fetch(`/api/v1/resolve/${encodeURIComponent(`${handle}@${nip05Domain}`)}`, {
+      credentials: 'include',
+    })
+    if (!response.ok) return false
+    const body = (await response.json()) as { hex_pubkey?: unknown }
+    return typeof body.hex_pubkey === 'string' && body.hex_pubkey.toLowerCase() === pubkey.toLowerCase()
+  } catch {
+    return false
+  }
+}
+
+/**
  * Claim the handle for the already-authenticated pubkey.
+ *
+ * Idempotent for the same key: claiming a handle this key already holds
+ * succeeds (see the 409 branch), so every caller may simply retry.
  *
  * The pubkey is sent in the body AND proven by the NIP-98 signature; the gateway
  * rejects a mismatch with 403. This is the non-custodial "raw pubkey" mode —
@@ -149,7 +172,17 @@ export async function claimHandle(
   )
 
   if (response.ok) return
-  if (response.status === 409) throw new HandleTakenError(handle)
+  if (response.status === 409) {
+    // The directory answers 409 for ANY existing record, including one that
+    // already maps this handle to THIS key (bottin's `create` checks only
+    // username@domain). That is the retry case: a claim whose response was
+    // lost to a timeout, or a claim that succeeded before a later step failed.
+    // Reading it as "taken" told people their own handle was taken and sent
+    // them off to claim a second one for the same key. So a 409 is only a
+    // HandleTakenError once the handle is known to belong to someone else.
+    if (await handleIsOurs(handle, pubkey)) return
+    throw new HandleTakenError(handle)
+  }
 
   // Surface the gateway's own message. Its failures here are specific and
   // actionable (DOMAIN_NOT_FOUND, DOMAIN_NOT_VERIFIED are stack-setup problems,

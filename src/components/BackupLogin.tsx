@@ -123,7 +123,7 @@ export function BackupLogin({
           try {
             const { privkeyHex } = await applyBackup(parsed, async () => {
               const hex = await keyStore.loadKey(passphrase)
-              nip05 = await requireProfile(hex)
+              nip05 = await requireProfile(hex, parsed.profile?.nip05)
               return hex
             })
             rememberHandle(privkeyHex, nip05)
