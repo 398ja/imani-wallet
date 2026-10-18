@@ -36,6 +36,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The credential vault follows its file** (Closes #290). A stall enrolled through the API, or
   sealed by the operator script, is issued for on the next pass with no restart. An externally
   added record is confirmed at once.
+- **The stall's own till shows Paid on gateway-core's verdict (Closes #300).** The owner-device
+  Redeem screen learned Paid only from its wallet receiving the DM'd coupon, so a receive that
+  stalled held it on "Waiting for payment" after core had counted the payment (Stripe S3 run 1).
+  It now registers the request's terms and watches core's fulfilment verdict through the same
+  path a terminal uses (`fulfilmentOf` + `paidForStall`: fulfilled, the stall as recipient and
+  issuer, the request's unit, at least its amount). Paid shows as soon as core counts it, with
+  "Still receiving the coupons" until they land. The receive carries on in the background. If it
+  fails (`redemption:error` / `redemption:unsaved`, which now carry the DM's `requestId`), the
+  sale says the coupons have not reached this wallet, and Paid stays. Core's polling backs off
+  (3 s for a minute, then up to once a minute) and stops on Paid, expiry and unmount, on
+  terminals too. An arrival naming a request already paid never settles a different one, so a
+  payment is counted once. If the terms cannot be registered, the owner's till still shows the
+  code and relies on its wallet, as before.
 
 - **purchase-issuer confirms stall credentials eagerly** (Closes #296). It used to confirm a
   terminal credential the first time a card sale read it, and gateway-customer lapses one left
