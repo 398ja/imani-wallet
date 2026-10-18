@@ -1,10 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { CreditCard } from 'lucide-react'
 
 import { Button, Screen, BackLink, Centered, buttonClasses } from '../components/ui'
 import { startPurchase } from '../lib/purchase'
 import { GUEST_REFUSED, rememberPurchase } from '../lib/pendingPurchase'
+import { cardSalesReady } from '../lib/cardSalesEnrolment'
+import { CARD_SALES_CHECKING, CARD_SALES_NOT_READY, type CardSalesReadiness } from '../lib/merchantActions'
 
 
 /**
@@ -41,6 +43,26 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
   const [amount, setAmount] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [cardSales, setCardSales] = useState<CardSalesReadiness>('checking')
+  const readinessId = useId()
+
+  /*
+   * #298: can the purchase issuer issue for this stall? A link straight here skips the stall
+   * page's Buy gate, so this page asks too. Fails safe: no answer is "not ready", and a stall that
+   * cannot issue is never sent to Checkout, because the card would be charged for nothing.
+   */
+  useEffect(() => {
+    if (buyerPubkey === null) return
+    let live = true
+    cardSalesReady(pubkey)
+      .catch(() => false)
+      .then((ready) => {
+        if (live) setCardSales(ready ? 'ready' : 'not-ready')
+      })
+    return () => {
+      live = false
+    }
+  }, [pubkey, buyerPubkey])
 
   const minor = toMinorUnits(amount)
   /**
@@ -56,6 +78,15 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
     if (minor === null) return
     setBusy(true)
     setError(null)
+
+    // Asked again at the tap (#298): the answer on screen may be minutes old, and this is the
+    // last moment nothing has been charged.
+    if (!(await cardSalesReady(pubkey).catch(() => false))) {
+      setCardSales('not-ready')
+      setBusy(false)
+      setError(`${CARD_SALES_NOT_READY}. Nothing was charged.`)
+      return
+    }
 
     // Remembered on THIS device so the return page can name the stall without
     // trusting anything Stripe puts in the URL. Before the call, so a slow
@@ -154,11 +185,18 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
       <Button
         size="lg"
         className="mt-4 w-full"
-        disabled={minor === null}
+        disabled={minor === null || cardSales !== 'ready'}
+        aria-describedby={cardSales !== 'ready' ? readinessId : undefined}
         onClick={buy}
       >
         <CreditCard className="mr-2 h-5 w-5" aria-hidden /> Pay by card
       </Button>
+      {/* The reason sits under the button it disables (#281), and is announced with it. */}
+      {cardSales !== 'ready' && (
+        <p id={readinessId} className="mt-2 text-center text-xs text-mono-600 dark:text-mono-400">
+          {cardSales === 'checking' ? CARD_SALES_CHECKING : CARD_SALES_NOT_READY}
+        </p>
+      )}
 
       {/* A text button, not a second heavy one. Cancelling is the quiet path
           and should not compete with the thing they came here to do. */}

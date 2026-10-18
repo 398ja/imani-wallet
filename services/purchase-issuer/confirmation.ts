@@ -74,6 +74,14 @@ export class CredentialConfirmer {
     return standing === 'expired' ? { ...credential, unusable: EXPIRED_REASON } : credential
   }
 
+  /**
+   * What the gateway last said about this credential, without asking it (imani-wallet#298: the
+   * status GET must not cost a gateway call). Undefined when this process never asked.
+   */
+  standingOf(credentialId: string): ConfirmStanding | undefined {
+    return this.answers.get(credentialId)
+  }
+
   private publish(): void {
     const counts = { confirmed: 0, expired: 0, unconfirmed: 0 }
     for (const standing of this.byStall.values()) counts[standing] += 1

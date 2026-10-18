@@ -12,6 +12,7 @@ import {
   type StripeResult,
 } from '../lib/stripeAccount'
 import { reconcileCardOffer } from '../lib/cardOffer'
+import { CardSalesSection, type CardSalesDeps } from '../components/CardSalesSection'
 import { buildMerchantEvent, saveMerchant, type MerchantProfile } from '../lib/merchant'
 import { getSigner } from '../lib/nap'
 import { publish } from '../lib/relay'
@@ -45,9 +46,12 @@ import { publish } from '../lib/relay'
 export function PaymentsSettingsPage({
   merchant,
   onSaved,
+  cardSales,
 }: {
   merchant: MerchantProfile
   onSaved: (next: MerchantProfile) => void
+  /** Test seam for the card-sales step (#298). */
+  cardSales?: CardSalesDeps
 }) {
   const [params, setParams] = useSearchParams()
   const [status, setStatus] = useState<StripeAccountStatus | null>(null)
@@ -270,6 +274,11 @@ export function PaymentsSettingsPage({
           </p>
         </div>
       )}
+
+      {/* #298: Stripe pays the stall; this lets Imani issue the voucher that was paid for. Shown
+          once Stripe can charge, because before that there is nothing to issue. Beside Connect
+          Stripe, so the two halves of "selling by card" read as one setup. */}
+      {live && !currencyMismatch && <CardSalesSection deps={cardSales} />}
 
       <div className="grid gap-3">
         {!connected && (

@@ -9,7 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Turn on card sales, from the merchant's phone** (Closes #298). Settings › Card payments has a
+  new step under the Stripe card: one tap mints the purchase issuer's terminal credential, signs
+  the `coupon:issue` delegation, and enrols it. The stall key never leaves the phone: every
+  signature (NIP-98, owner attestation, delegation) is made on the device, and purchase-issuer
+  receives only signed artefacts and public data. The issuer's lock key is generated inside
+  purchase-issuer and only its public half is sent out. The screen reads "Card sales: on", "needs
+  setup" or "Couldn't check".
+- **purchase-issuer enrolment API** (#298): `POST /api/v1/card-sales/enrolment/begin`,
+  `POST /api/v1/card-sales/enrolment` and `GET /api/v1/card-sales/enrolment` (NIP-98 by the
+  stall, single-use signatures), and the public `GET /api/v1/card-sales/ready/<stall>`. It checks
+  the delegation as the mint does, confirms the credential at once (#296), and seals it. New env
+  `PURCHASE_PUBLIC_ORIGIN` (required for enrolment; unset answers 503).
+- **Metrics** (#298): `imani_purchase_issuer_owed_unenrolled` (paid purchases for stalls with no
+  enrolled issuer, last pass), `attempts_total{outcome="no_credential"}` (was counted as
+  `skipped`) and `enrolments_total{result}`.
+
 ### Fixed
+
+- **Buy refuses a stall that cannot issue** (#298). The stall page's Buy and the Buy page's Pay by
+  card ask purchase-issuer whether it can issue for the stall, and stay disabled with "Card sales
+  aren't ready for this merchant yet" beside them otherwise. It fails safe: no answer is no. The
+  Buy page asks again at the tap.
+- **The credential vault follows its file** (Closes #290). A stall enrolled through the API, or
+  sealed by the operator script, is issued for on the next pass with no restart. An externally
+  added record is confirmed at once.
 
 - **purchase-issuer confirms stall credentials eagerly** (Closes #296). It used to confirm a
   terminal credential the first time a card sale read it, and gateway-customer lapses one left
