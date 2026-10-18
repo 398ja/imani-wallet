@@ -60,6 +60,7 @@ beforeEach(() => {
   // The module clears every `imani-wallet:*` key; the test env has no DOM.
   globalThis.localStorage = { 'imani-wallet:x': '1' } as unknown as Storage
   globalThis.localStorage.removeItem = () => {}
+  globalThis.localStorage.getItem = () => null
 })
 
 describe('logout', () => {

@@ -35,6 +35,8 @@ export function blockedMessage(outcome: BlockedLogout): string {
       return LOGOUT_BLOCKED_COPY.unreadable
     case 'changed':
       return LOGOUT_BLOCKED_COPY.changed
+    case 'in-flight':
+      return LOGOUT_BLOCKED_COPY.inFlight
     default:
       return LOGOUT_BLOCKED_COPY.unconfirmed(outcome.unconfirmed.length, unconfirmedValue(outcome.unconfirmed))
   }

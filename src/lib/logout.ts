@@ -14,6 +14,7 @@ import {
 } from './voucherRecords'
 import { sweepAppStorage } from './appStorage'
 import { carryPendingClaimsAcrossLogout } from './pendingClaim'
+import { moneyInFlight } from './inFlightMoney'
 
 /**
  * Log out: end the session and erase the key from this browser.
@@ -76,6 +77,9 @@ export const LOGOUT_BLOCKED_COPY = {
   changed:
     'A voucher arrived while you were logging out. It is not confirmed as backed up yet, so ' +
     'logging out stays off. Nothing has been erased. Try again in a moment.',
+  inFlight:
+    'A payment or a swap is still going through. Logging out now could lose its change, so ' +
+    'logging out stays off until it finishes. Nothing has been erased. Try again in a moment.',
   retry: 'Try again',
   close: 'Not now',
 } as const
@@ -86,7 +90,7 @@ export type LogoutOutcome =
   | { status: 'cancelled' }
   | {
       status: 'blocked'
-      reason: 'unconfirmed' | 'locked' | 'store-unreadable' | 'changed'
+      reason: 'unconfirmed' | 'locked' | 'store-unreadable' | 'changed' | 'in-flight'
       unconfirmed: UnconfirmedCoupon[]
     }
 
@@ -101,6 +105,42 @@ export interface LogoutDeps {
   heldNow?: (pubkey: string) => Promise<string>
   /** Bumped on every coupon write; the race check compares it. */
   writeCount?: () => number
+  /**
+   * Live entries in the pending-send and swap-intent ledgers, which hold value
+   * no coupon row describes and which the sweep below would delete.
+   */
+  inFlight?: (pubkey: string) => { sends: number; swaps: number }
+  /** Try to finish pending sends first, so a settled one does not block. Bounded, never throws. */
+  settleInFlight?: (pubkey: string) => Promise<void>
+}
+
+/** How long logout gives the pending sends to settle before it checks them. */
+export const SETTLE_IN_FLIGHT_TIMEOUT_MS = 20_000
+
+async function defaultSettleInFlight(pubkey: string): Promise<void> {
+  if (moneyInFlight(pubkey).sends === 0) return
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await openWallet(pubkey)
+    const { reconcilePendingSends } = await import('./pay')
+    await Promise.race([
+      reconcilePendingSends(pubkey),
+      new Promise((resolve) => (timer = setTimeout(resolve, SETTLE_IN_FLIGHT_TIMEOUT_MS))),
+    ])
+  } catch {
+    // The ledger is read again below; whatever is left in it refuses the logout.
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function hasMoneyInFlight(read: (pubkey: string) => { sends: number; swaps: number }, pubkey: string): boolean {
+  try {
+    const { sends, swaps } = read(pubkey)
+    return sends > 0 || swaps > 0
+  } catch {
+    return true
+  }
 }
 
 /** How long to wait for a redemption already inside the mint swap to write. */
@@ -150,10 +190,19 @@ export async function attemptLogout(
   const drain = deps.drainWriters ?? drainDmPoll
   const heldNow = deps.heldNow ?? defaultHeldNow
   const writes = deps.writeCount ?? voucherWriteCount
+  const inFlight = deps.inFlight ?? moneyInFlight
+  const settleInFlight = deps.settleInFlight ?? defaultSettleInFlight
+
+  // 0. A pending send that has finished at the gateway is settled now, so it
+  // does not refuse the logout for no reason (second check of #326).
+  await settleInFlight(pubkey).catch(() => undefined)
 
   // 1. Before anything is asked or stopped.
   const first = await safeCheck(check, pubkey)
   if (!first.ok) return blocked(first)
+  // A send or swap still in flight holds value outside every coupon row, and
+  // the sweep below would delete its only record (second check of #326).
+  if (hasMoneyInFlight(inFlight, pubkey)) return { status: 'blocked', reason: 'in-flight', unconfirmed: [] }
   const writesAtConfirm = writes()
 
   // 2.
@@ -192,6 +241,13 @@ export async function attemptLogout(
       restart(pubkey)
       return { status: 'blocked', reason: 'changed', unconfirmed: [] }
     }
+  }
+
+  // Last, with the writers stopped: nothing may have started a send or a swap
+  // since step 1 (a second tab can). From here on nothing is checked again.
+  if (hasMoneyInFlight(inFlight, pubkey)) {
+    restart(pubkey)
+    return { status: 'blocked', reason: 'in-flight', unconfirmed: [] }
   }
 
   // And cancel the push subscription, which is the one piece of this account's
