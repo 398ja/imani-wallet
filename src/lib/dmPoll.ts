@@ -1025,11 +1025,28 @@ export function refuseIfAnotherStalls(
  */
 let redemptionsInFlight = 0
 const drainWaiters = new Set<() => void>()
+/**
+ * Bumped by `stopDmPoll`. An adapter refuses every redeem once its poller has
+ * been stopped (second check of #326): `DmPollService.stop()` does not end a
+ * catch-up batch already looping, so without this the batch's NEXT gift wrap
+ * swapped at the mint after the drain had answered "nothing in flight", and
+ * after the wipe, burning proofs that were then written nowhere.
+ */
+let pollerGeneration = 0
 
 function countingInFlight(adapter: RedemptionAdapter): RedemptionAdapter {
+  const generation = pollerGeneration
   return {
     ...adapter,
     async redeem(...args: Parameters<RedemptionAdapter['redeem']>) {
+      if (generation !== pollerGeneration) {
+        // Before anything is swapped, so the delivery stays the sender's and
+        // unprocessed: the next poller (this account after a refused logout,
+        // or the next login) offers it again.
+        throw Object.assign(new Error('redemption deferred: the poller was stopped'), {
+          code: 'RECEIVE_DEFERRED',
+        })
+      }
       redemptionsInFlight++
       try {
         return await adapter.redeem(...args)
@@ -1826,6 +1843,9 @@ function onVisible(): void {
  * failed, and are retried after dm-poll's cooldown.
  */
 export function stopDmPoll(): void {
+  // First, and synchronously: from here no redeem of this poller can start,
+  // so `drainDmPoll` waiting for the ones already started is enough.
+  pollerGeneration++
   onSseOpen = undefined
   if (deferredRetryTimer !== undefined) clearTimeout(deferredRetryTimer)
   deferredRetryTimer = undefined
