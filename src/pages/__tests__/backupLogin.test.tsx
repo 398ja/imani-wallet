@@ -283,6 +283,31 @@ describe('no account without a profile', () => {
     expect(stored.nip05).toBe('amina@imani.africa')
   })
 
+  // The claim went through but logging in failed: the customer is told, stays
+  // on the step with the button live, and pressing it again finishes. The
+  // retry re-sends the claim, which is safe because a claim is idempotent for
+  // the same key (claimIdempotency.test.ts).
+  it('Finish your profile can be retried after a failure, and finishes', async () => {
+    directory.status = 404
+    onUnlock.mockRejectedValueOnce(new Error('Could not log in just now. Try again.'))
+    const { container } = openLogIn()
+    pickFile(container, backupText())
+    await screen.findByText('Amina')
+    await logInWith(PASSPHRASE)
+    await screen.findByText('Finish your profile')
+
+    fireEvent.change(screen.getByLabelText('Handle'), { target: { value: 'amina' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Finish and log in' }))
+    expect((await screen.findByRole('alert')).textContent).toMatch(/Could not log in just now/)
+    expect(screen.getByText('Finish your profile')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Finish and log in' }))
+    await screen.findByText('Home screen')
+    expect(claimHandle).toHaveBeenCalledTimes(2)
+    expect(onUnlock).toHaveBeenLastCalledWith(PRIV)
+    expect(localStorage.getItem(KEY_SLOT)).toContain(`sealed:${PASSPHRASE}`)
+  })
+
   // A directory that cannot be reached is not read as "no profile": the
   // customer is told to try again and nothing is written.
   it('fails closed when the directory cannot be asked', async () => {
