@@ -4,25 +4,38 @@ import { hexToBytes } from '@noble/hashes/utils'
 import { gatewayConfig } from './config'
 import { claimHandle } from './registration'
 import { buildProfileEvent, emptyProfile, loadProfile, saveProfile, type Profile } from './profile'
-import { publish } from './relay'
+import { allEvents, publish } from './relay'
 import { createWalletSigner } from './signer'
 
 /**
  * No account without a profile (owner rule, 2026-10-18, #325).
  *
- * Every account on the service has a directory record: a handle, claimed at
- * registration through `POST /api/v1/nip05`. A key brought to a fresh device
- * (from a backup, or pasted) is only let in once the directory confirms that
- * record exists for its public key. The profile cached inside a backup file
- * is not enough: it is whatever the file says, and the directory is the
- * authority.
+ * Every account on the service has a directory handle (bottin). A key brought
+ * to a fresh device, from a backup or pasted, is only let in once that handle
+ * is VERIFIED for its public key. The profile cached inside a backup file is
+ * not enough: it is whatever the file says.
  *
- * A key with no record is not logged in as an anonymous account. The caller
- * stops before writing anything and asks for a handle, which `claimProfile`
- * claims exactly as registration does. Only then is the key installed.
+ * How it is verified is standard NIP-05, and that choice is load-bearing. The
+ * obvious shortcut, the gateway's reverse lookup `GET /api/v1/resolve/pubkey/
+ * {hex}`, only knows gateway-core's own records: on staging it answers 404 for
+ * a real bottin account (samson) whose forward lookup resolves fine. Using it
+ * would have pushed every bottin user into "Finish your profile". So:
+ *
+ *   1. read the account's newest kind-0 (gateway cache AND relay, newest wins,
+ *      as everywhere else in the app) and take its `nip05`;
+ *   2. resolve that handle forwards (`GET /api/v1/resolve/{nip05}`, which reads
+ *      the directory and the domain's nostr.json);
+ *   3. it counts only if the handle resolves to THIS public key.
+ *
+ * A key that fails is not logged in as an anonymous account. The caller stops
+ * before writing anything and asks for a handle, which `claimProfile` claims
+ * exactly as registration does. Only then is the key installed.
+ *
+ * Fails closed ONLY when nothing could be asked at all. A store that does not
+ * know the account is an answer ("no profile"), never an outage.
  */
 
-/** The directory could not be asked. Never treated as "no profile". */
+/** Nothing could be asked. Never treated as "no profile". */
 export class DirectoryUnavailableError extends Error {
   constructor() {
     super('Could not check your profile just now. Check your connection and try again.')
@@ -30,7 +43,7 @@ export class DirectoryUnavailableError extends Error {
   }
 }
 
-/** The key opened, but its account has no profile yet. Nothing has been written. */
+/** The key opened, but its account has no verified profile. Nothing has been written. */
 export class ProfileMissingError extends Error {
   constructor(readonly privkeyHex: string) {
     super('This account needs a profile before it can be used.')
@@ -38,52 +51,121 @@ export class ProfileMissingError extends Error {
   }
 }
 
+interface Kind0 {
+  content: string
+  createdAt: number
+}
+
 /**
- * The handle the directory holds for this public key, or null when it holds
- * none.
+ * The newest kind-0 for a pubkey from BOTH stores, or null when neither holds
+ * one.
  *
- * Fails CLOSED on anything but a clear answer: a gateway hiccup must not be
- * read as "no profile" (that would push someone with a perfectly good account
- * into claiming a second handle), nor as "has a profile" (that would let an
- * anonymous key in).
- *
- * @throws DirectoryUnavailableError when the directory gives no clear answer
+ * Throws DirectoryUnavailableError when the gateway could not be asked and the
+ * relay found nothing. One store answering while the other is down is still an
+ * answer when it holds a kind-0 (the gateway cache, for one, never sees a
+ * kind-0 published straight to the relay).
  */
-export async function directoryHandle(pubkey: string): Promise<string | null> {
+async function newestKind0(pubkey: string): Promise<Kind0 | null> {
+  const fromGateway = (async (): Promise<Kind0 | null> => {
+    const response = await fetch('/api/v1/nostr/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ kinds: [0], authors: [pubkey], limit: 10 }),
+    })
+    if (!response.ok) throw new Error(`gateway ${response.status}`)
+    const body = (await response.json()) as {
+      events?: Array<{ pubkey?: string; content?: string; createdAt?: number; created_at?: number }>
+    }
+    let best: Kind0 | null = null
+    for (const e of body.events ?? []) {
+      if (e.pubkey !== undefined && e.pubkey !== pubkey) continue
+      const at = e.createdAt ?? e.created_at ?? 0
+      if (typeof e.content === 'string' && (!best || at > best.createdAt)) best = { content: e.content, createdAt: at }
+    }
+    return best
+  })()
+
+  const fromRelay = allEvents(pubkey, 0).then((events) => {
+    const newest = events.filter((e) => e.pubkey === pubkey).sort((a, b) => b.created_at - a.created_at)[0]
+    return newest ? { content: newest.content, createdAt: newest.created_at } : null
+  })
+
+  const [gateway, relay] = await Promise.allSettled([fromGateway, fromRelay])
+  const a = gateway.status === 'fulfilled' ? gateway.value : null
+  const b = relay.status === 'fulfilled' ? relay.value : null
+  // The relay read cannot tell "unreachable" from "nothing here" (an
+  // unreachable relay resolves empty), so only the gateway can say "no
+  // profile". If it could not be asked and the relay found nothing, that is an
+  // outage, not an answer.
+  if (gateway.status === 'rejected' && !b) throw new DirectoryUnavailableError()
+  if (!a) return b
+  if (!b) return a
+  return b.createdAt > a.createdAt ? b : a
+}
+
+function nip05Of(content: string): string | null {
+  try {
+    const parsed = JSON.parse(content) as { nip05?: unknown }
+    const nip05 = typeof parsed.nip05 === 'string' ? parsed.nip05.trim().toLowerCase() : ''
+    return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(nip05) ? nip05 : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The public key a handle resolves to, forwards, or null when it resolves to
+ * nobody.
+ *
+ * @throws DirectoryUnavailableError when the directory could not be asked
+ */
+async function resolveForward(nip05: string): Promise<string | null> {
   let response: Response
   try {
-    response = await fetch(`/api/v1/resolve/pubkey/${encodeURIComponent(pubkey)}`, {
-      credentials: 'include',
-    })
+    response = await fetch(`/api/v1/resolve/${encodeURIComponent(nip05)}`, { credentials: 'include' })
   } catch {
     throw new DirectoryUnavailableError()
   }
   if (response.status === 404) return null
-  if (!response.ok) throw new DirectoryUnavailableError()
+  // A 4xx is the directory's answer about this handle (malformed, refused):
+  // the handle does not verify. Only a server or proxy failure is an outage.
+  if (response.status >= 500) throw new DirectoryUnavailableError()
+  if (!response.ok) return null
+  const body = (await response.json().catch(() => null)) as { hex_pubkey?: unknown } | null
+  const hex = typeof body?.hex_pubkey === 'string' ? body.hex_pubkey.toLowerCase() : ''
+  return /^[0-9a-f]{64}$/.test(hex) ? hex : null
+}
 
-  const body = (await response.json().catch(() => null)) as { nip05?: unknown; hex_pubkey?: unknown } | null
-  const nip05 = typeof body?.nip05 === 'string' ? body.nip05.trim() : ''
-  const hex = typeof body?.hex_pubkey === 'string' ? body.hex_pubkey.toLowerCase() : pubkey
-  // An answer about someone else is no answer.
-  if (hex !== pubkey.toLowerCase()) throw new DirectoryUnavailableError()
-  return nip05 === '' ? null : nip05
+/**
+ * The account's verified handle, or null when it has none.
+ *
+ * @throws DirectoryUnavailableError when nothing could be asked
+ */
+export async function verifiedHandle(pubkey: string): Promise<string | null> {
+  const key = pubkey.toLowerCase()
+  const kind0 = await newestKind0(key)
+  const nip05 = kind0 ? nip05Of(kind0.content) : null
+  if (!nip05) return null
+  const resolved = await resolveForward(nip05)
+  return resolved === key ? nip05 : null
 }
 
 /**
  * Check a key that has just been opened. Writes nothing.
  *
- * @returns the account's handle, when it has a profile
+ * @returns the account's verified handle
  * @throws ProfileMissingError when it has none
- * @throws DirectoryUnavailableError when the directory could not say
+ * @throws DirectoryUnavailableError when nothing could be asked
  */
 export async function requireProfile(privkeyHex: string): Promise<string> {
   const pubkey = getPublicKey(hexToBytes(privkeyHex))
-  const nip05 = await directoryHandle(pubkey)
+  const nip05 = await verifiedHandle(pubkey)
   if (!nip05) throw new ProfileMissingError(privkeyHex)
   return nip05
 }
 
-/** Store the directory's handle on the local profile, so the header has it at once. */
+/** Store the verified handle on the local profile, so the header has it at once. */
 export function rememberHandle(privkeyHex: string, nip05: string): void {
   const pubkey = getPublicKey(hexToBytes(privkeyHex))
   const current = loadProfile(pubkey) ?? emptyProfile(pubkey)

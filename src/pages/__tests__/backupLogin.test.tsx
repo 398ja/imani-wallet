@@ -25,6 +25,9 @@ const KEY_SLOT = 'imani-wallet-key'
 const PASSPHRASE = 'correct horse battery'
 
 const drive = vi.hoisted(() => ({ text: null as string | null }))
+// The directory as staging behaves: the account's kind-0 names a handle, and
+// that handle resolves forwards to this same key. `status: 404` = no kind-0 and
+// no handle (an account that never finished its profile).
 const directory = vi.hoisted(() => ({ status: 200 as number, nip05: 'amina@imani.africa' }))
 const claimHandle = vi.hoisted(() => vi.fn(async () => {}))
 
@@ -53,6 +56,8 @@ vi.mock('../../lib/registration', async (orig) => ({
 vi.mock('../../lib/relay', async (orig) => ({
   ...(await orig<typeof import('../../lib/relay')>()),
   publish: async () => ({ ok: 1, total: 1, errors: [] }),
+  // The relay holds nothing; the gateway's answer decides.
+  allEvents: async () => [],
 }))
 vi.mock('../../lib/config', () => ({ gatewayConfig: async () => ({ nip05Domain: 'imani.africa' }) }))
 // Offline: the relay never answers, so only the backup's own profile can name the account.
@@ -133,9 +138,17 @@ beforeEach(() => {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
-      if (url === `/api/v1/resolve/pubkey/${PUBKEY}`) {
-        if (directory.status !== 200) return new Response('{}', { status: directory.status })
-        return new Response(JSON.stringify({ nip05: directory.nip05, hex_pubkey: PUBKEY }), { status: 200 })
+      if (url === '/api/v1/nostr/query') {
+        if (directory.status >= 500) return new Response('{}', { status: directory.status })
+        const events =
+          directory.status === 200
+            ? [{ pubkey: PUBKEY, kind: 0, createdAt: 1, content: JSON.stringify({ name: 'amina', nip05: directory.nip05 }) }]
+            : []
+        return new Response(JSON.stringify({ events, count: events.length }), { status: 200 })
+      }
+      if (url === `/api/v1/resolve/${encodeURIComponent(directory.nip05)}`) {
+        if (directory.status !== 200) return new Response('{}', { status: 404 })
+        return new Response(JSON.stringify({ nip05: directory.nip05, hex_pubkey: PUBKEY, source: 'EXTERNAL' }), { status: 200 })
       }
       return new Response('{}', { status: 404 })
     }),

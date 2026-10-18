@@ -20,11 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   protocol wording. `/restore` redirects to the Log in step, the Restore links on the first screen
   and on `/login` are removed, and the re-auth dialog now says to choose Log in after logging out.
   The `/login` unlock and Settings › Backup are unchanged.
-- **No account without a profile** (owner rule, #325). Every way in (backup or pasted key) asks
-  the directory (`GET /api/v1/resolve/pubkey/{hex}`) for the account's handle before the key is
-  kept. An account with none is not let in anonymously: nothing is written, and "Finish your
-  profile" claims a handle (display name defaults to the handle) before the wallet opens. A
-  directory that cannot be reached fails closed with a retry message.
+- **No account without a profile** (owner rule, #325). Every way in (backup or pasted key) verifies
+  the account's handle before the key is kept, by standard NIP-05: the newest kind-0 (gateway
+  cache and relay, newest wins) names a handle, and `GET /api/v1/resolve/{nip05}` must resolve it
+  to the same key. (The reverse lookup `/api/v1/resolve/pubkey/{hex}` is not used: it does not see
+  bottin handles.) An account that fails is not let in anonymously: nothing is written, and
+  "Finish your profile" claims a handle (display name defaults to the handle) before the wallet
+  opens. Only an unreachable directory fails closed, with a retry message.
 
 - **Restore names the account with its profile, not its npub** (Closes #322). The passphrase
   prompt after a Google Drive restore (and after picking a backup file) shows the identity row
