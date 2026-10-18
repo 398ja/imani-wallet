@@ -19,18 +19,27 @@ vi.mock('../nap', () => ({
   keyStore: { clear: vi.fn().mockResolvedValue(undefined) },
   resetSession: vi.fn(),
 }))
-vi.mock('../dmPoll', () => ({ stopDmPoll: vi.fn() }))
-vi.mock('../incomingNotifications', () => ({ stopIncomingNotifications: vi.fn() }))
+vi.mock('../dmPoll', () => ({ stopDmPoll: vi.fn(), startDmPoll: vi.fn(), drainDmPoll: vi.fn(async () => true) }))
+vi.mock('../incomingNotifications', () => ({ stopIncomingNotifications: vi.fn(), startIncomingNotifications: vi.fn() }))
+vi.mock('../terminalRosterSyncNet', () => ({ stopRosterSync: vi.fn(), startRosterSync: vi.fn() }))
 vi.mock('../notifications/manager', () => ({ disableNotifications: vi.fn(async () => undefined) }))
 import { disableNotifications } from '../notifications/manager'
 const forgetResume = vi.fn(() => {
   order.push('forget-resume')
 })
+// Every held voucher confirmed: these pin the teardown. The BLOCK is pinned in
+// logoutUnbackedCoupons.test.ts and end to end in restoreAfterLogout.test.ts.
+vi.mock('../voucherRecords', () => ({
+  confirmBackups: vi.fn(async () => ({ ok: true, confirmed: 0, fingerprint: '' })),
+  heldFingerprint: () => '',
+}))
 vi.mock('../resume', () => ({ forgetResume: () => forgetResume() }))
 vi.mock('../wallet', () => ({
   wipeWallet: vi.fn(async () => {
     order.push('wipe')
   }),
+  openWallet: async () => ({ getAllVouchers: async () => [] }),
+  voucherWriteCount: () => 0,
 }))
 
 const { logout } = await import('../logout')
@@ -51,6 +60,7 @@ beforeEach(() => {
   // The module clears every `imani-wallet:*` key; the test env has no DOM.
   globalThis.localStorage = { 'imani-wallet:x': '1' } as unknown as Storage
   globalThis.localStorage.removeItem = () => {}
+  globalThis.localStorage.getItem = () => null
 })
 
 describe('logout', () => {

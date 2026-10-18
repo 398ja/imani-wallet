@@ -1,12 +1,20 @@
 import { getSession, keyStore, resetSession } from './nap'
-import { stopDmPoll } from './dmPoll'
-import { stopRosterSync } from './terminalRosterSyncNet'
-import { stopIncomingNotifications } from './incomingNotifications'
+import { drainDmPoll, startDmPoll, stopDmPoll } from './dmPoll'
+import { startRosterSync, stopRosterSync } from './terminalRosterSyncNet'
+import { startIncomingNotifications, stopIncomingNotifications } from './incomingNotifications'
 import { disableNotifications } from './notifications/manager'
 import { forgetResume } from './resume'
-import { wipeWallet } from './wallet'
+import { openWallet, voucherWriteCount, wipeWallet } from './wallet'
+import {
+  confirmBackups,
+  heldFingerprint,
+  type BackupCheck,
+  type ConfirmOptions,
+  type UnconfirmedCoupon,
+} from './voucherRecords'
 import { sweepAppStorage } from './appStorage'
 import { carryPendingClaimsAcrossLogout } from './pendingClaim'
+import { moneyInFlight } from './inFlightMoney'
 
 /**
  * Log out: end the session and erase the key from this browser.
@@ -21,9 +29,12 @@ import { carryPendingClaimsAcrossLogout } from './pendingClaim'
  * nothing here is unique to the device any more: the profile and the stall are
  * addressable events on the relay, and every sale is published there too,
  * NIP-44 encrypted to the merchant's own key (lib/issuedRecords.ts). Logging
- * back in with the nsec rebuilds all three. Held coupons are the exception —
- * they return through the DM pipeline as they are re-received, and a coupon
- * already spent does not come back, which is correct.
+ * back in with the nsec rebuilds all three. Held coupons come back from their
+ * kind-7375 records (voucherRecords.ts), NOT from the DM pipeline: a received
+ * coupon's DM carried a token the mint swap has already spent. A coupon whose
+ * record cannot be READ BACK is money that exists only on this device, so
+ * logout is refused until every one is confirmed (`attemptLogout`, owner rule
+ * 2026-10-18).
  *
  * Leaving the data behind was the older, weaker promise: a shared or borrowed
  * device kept a readable ledger of someone else's takings long after they had
@@ -37,34 +48,207 @@ import { carryPendingClaimsAcrossLogout } from './pendingClaim'
 export const LOGOUT_WARNING =
   'This erases your key AND all your data from this browser.\n\n' +
   'Your account, your business and your sales come back when you log in with your ' +
-  'backup key (nsec) — they are stored under your key, not on this device. ' +
-  'Vouchers you are holding are restored from the relay as they are received ' +
-  'again.\n\nThe only way back in is your backup key, a backup file, or a Google ' +
+  'backup key: they are stored under your account, not on this device. ' +
+  'Vouchers you are holding are backed up under your account and come back when ' +
+  'you log in again. This wallet has just checked every one of them.\n\nThe only way back in is your backup key, a backup file, or a Google ' +
   'Drive backup — you MAKE those under Settings → Backup, and you USE them from ' +
   'the screen this lands on. There is no password reset.\n\n' +
-  'Log out anyway?'
+  'Log out?'
 
 /**
- * @param confirm injected so tests can exercise both answers without a DOM.
- * @param reload injected for the same reason — a test cannot navigate.
- * @returns whether the user went through with it
+ * Why logout is refused, in plain words (owner rule 2026-10-18 17:52Z, review
+ * of #326). Shown with the count and value of what is not confirmed and a
+ * Retry. There is NO "log out anyway": this is a refusal, not a warning.
  */
-export async function logout(
+export const LOGOUT_BLOCKED_COPY = {
+  title: 'You can’t log out yet',
+  unconfirmed: (count: number, value: string) =>
+    `${count} voucher${count === 1 ? '' : 's'} worth ${value} ${count === 1 ? 'is' : 'are'} not ` +
+    'confirmed as backed up. Logging out would delete ' +
+    (count === 1 ? 'it' : 'them') +
+    ' from this browser for good, so logging out stays off until every voucher is safe. ' +
+    'Nothing has been erased. Check your connection and try again.',
+  locked:
+    'Unlock your wallet first. Your vouchers can only be checked and backed up while it is unlocked, ' +
+    'and logging out stays off until every voucher is confirmed safe. Nothing has been erased.',
+  unreadable:
+    'This wallet could not read its vouchers to check them, so logging out stays off. ' +
+    'Nothing has been erased. Reload the page and try again.',
+  changed:
+    'A voucher arrived while you were logging out. It is not confirmed as backed up yet, so ' +
+    'logging out stays off. Nothing has been erased. Try again in a moment.',
+  inFlight:
+    'A payment or a swap is still going through. Logging out now could lose its change, so ' +
+    'logging out stays off until it finishes. Nothing has been erased. Try again in a moment.',
+  retry: 'Try again',
+  close: 'Not now',
+} as const
+
+/** What a logout attempt did. `blocked` erased NOTHING. */
+export type LogoutOutcome =
+  | { status: 'done' }
+  | { status: 'cancelled' }
+  | {
+      status: 'blocked'
+      reason: 'unconfirmed' | 'locked' | 'store-unreadable' | 'changed' | 'in-flight'
+      unconfirmed: UnconfirmedCoupon[]
+    }
+
+export interface LogoutDeps {
+  /** The read-back check. Injected for tests. Must never answer ok on a failure. */
+  checkBackups?: (pubkey: string, options?: ConfirmOptions) => Promise<BackupCheck>
+  /** Restart what logout stopped, when the final check refuses. */
+  restartWriters?: (pubkey: string) => void
+  /** Wait for in-flight redemptions after the poller stops. Resolves whether drained. */
+  drainWriters?: (timeoutMs: number) => Promise<boolean>
+  /** The current held set's fingerprint, for the race check. */
+  heldNow?: (pubkey: string) => Promise<string>
+  /** Bumped on every coupon write; the race check compares it. */
+  writeCount?: () => number
+  /**
+   * Live entries in the pending-send and swap-intent ledgers, which hold value
+   * no coupon row describes and which the sweep below would delete.
+   */
+  inFlight?: (pubkey: string) => { sends: number; swaps: number }
+  /** Try to finish pending sends first, so a settled one does not block. Bounded, never throws. */
+  settleInFlight?: (pubkey: string) => Promise<void>
+}
+
+/** How long logout gives the pending sends to settle before it checks them. */
+export const SETTLE_IN_FLIGHT_TIMEOUT_MS = 20_000
+
+async function defaultSettleInFlight(pubkey: string): Promise<void> {
+  if (moneyInFlight(pubkey).sends === 0) return
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await openWallet(pubkey)
+    const { reconcilePendingSends } = await import('./pay')
+    await Promise.race([
+      reconcilePendingSends(pubkey),
+      new Promise((resolve) => (timer = setTimeout(resolve, SETTLE_IN_FLIGHT_TIMEOUT_MS))),
+    ])
+  } catch {
+    // The ledger is read again below; whatever is left in it refuses the logout.
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function hasMoneyInFlight(read: (pubkey: string) => { sends: number; swaps: number }, pubkey: string): boolean {
+  try {
+    const { sends, swaps } = read(pubkey)
+    return sends > 0 || swaps > 0
+  } catch {
+    return true
+  }
+}
+
+/** How long to wait for a redemption already inside the mint swap to write. */
+export const DRAIN_TIMEOUT_MS = 20_000
+
+function defaultRestart(pubkey: string): void {
+  startDmPoll(pubkey)
+  startRosterSync(pubkey)
+  startIncomingNotifications(pubkey)
+}
+
+async function defaultHeldNow(pubkey: string): Promise<string> {
+  return heldFingerprint(await (await openWallet(pubkey)).getAllVouchers())
+}
+
+function blocked(check: Extract<BackupCheck, { ok: false }>): LogoutOutcome {
+  return { status: 'blocked', reason: check.reason, unconfirmed: check.unconfirmed }
+}
+
+/**
+ * Log out, ONLY once every held voucher is verifiably backed up (owner rule
+ * 2026-10-18 17:52Z: "Never allow a logout until we have verifiable
+ * confirmation that the vouchers were backed up").
+ *
+ * 1. `confirmBackups` reads each held voucher's record BACK (relay ∪ gateway),
+ *    checks it is signed by this user, decrypts it, and requires the token
+ *    bytes to equal IndexedDB's. Gaps are re-published and re-read, bounded.
+ *    Not confirmed: BLOCKED, nothing stopped, nothing erased, key kept.
+ * 2. The ordinary confirmation. Declined: cancelled, nothing touched.
+ * 3. Stop the DM poller and the other writers, and wait (bounded) for a
+ *    redemption already past the mint swap to write its coupon.
+ * 4. If the held set or the write counter moved since step 1, check again.
+ * 5. That check refuses: restart what step 3 stopped and return BLOCKED.
+ *    Otherwise, and only then, tear down and wipe.
+ *
+ * There is no override parameter, flag or path: the terminal decommission
+ * runs the same check before it revokes anything (terminalDecommission.ts).
+ */
+export async function attemptLogout(
   pubkey: string,
   confirm: (message: string) => boolean = window.confirm.bind(window),
   reload: () => void = () => window.location.replace('/'),
-): Promise<boolean> {
-  if (!confirm(LOGOUT_WARNING)) return false
+  deps: LogoutDeps = {},
+): Promise<LogoutOutcome> {
+  const check = deps.checkBackups ?? confirmBackups
+  const restart = deps.restartWriters ?? defaultRestart
+  const drain = deps.drainWriters ?? drainDmPoll
+  const heldNow = deps.heldNow ?? defaultHeldNow
+  const writes = deps.writeCount ?? voucherWriteCount
+  const inFlight = deps.inFlight ?? moneyInFlight
+  const settleInFlight = deps.settleInFlight ?? defaultSettleInFlight
 
-  // Order matters. Stop the poller first: it holds the unlocked key and writes
-  // to the user-scoped IndexedDB, and letting it run past the session teardown
-  // means a write landing after the identity it belongs to is gone.
+  // 0. A pending send that has finished at the gateway is settled now, so it
+  // does not refuse the logout for no reason (second check of #326).
+  await settleInFlight(pubkey).catch(() => undefined)
+
+  // 1. Before anything is asked or stopped.
+  const first = await safeCheck(check, pubkey)
+  if (!first.ok) return blocked(first)
+  // A send or swap still in flight holds value outside every coupon row, and
+  // the sweep below would delete its only record (second check of #326).
+  if (hasMoneyInFlight(inFlight, pubkey)) return { status: 'blocked', reason: 'in-flight', unconfirmed: [] }
+  const writesAtConfirm = writes()
+
+  // 2.
+  if (!confirm(LOGOUT_WARNING)) return { status: 'cancelled' }
+
+  // 3. Order matters. Stop the poller first: it holds the unlocked key and
+  // writes to the user-scoped IndexedDB, and letting it run past the session
+  // teardown means a write landing after the identity it belongs to is gone.
   stopDmPoll()
   // A debounced roster publish must not fire after the key is gone (#160 phase 6).
   stopRosterSync()
   // Same reason: the drain loop signs NIP-98 with the session key and would keep
   // polling for payments addressed to the account being torn down.
   stopIncomingNotifications()
+  const drained = await drain(DRAIN_TIMEOUT_MS).catch(() => false)
+
+  // A redemption that did not finish inside the bound may still write a
+  // coupon after any check made now, so no check made now can be final.
+  if (!drained) {
+    restart(pubkey)
+    return { status: 'blocked', reason: 'changed', unconfirmed: [] }
+  }
+
+  // 4. Re-verify only if the held set changed since step 1.
+  if ((await safeHeld(() => heldNow(pubkey))) !== first.fingerprint || writes() !== writesAtConfirm) {
+    const writesBeforeFinal = writes()
+    const final = await safeCheck(check, pubkey)
+    // 5. Refused, or something still wrote DURING the check (the writers are
+    // stopped, so that would be a writer this list does not know about):
+    // restart what was stopped, erase nothing.
+    if (!final.ok) {
+      restart(pubkey)
+      return blocked(final)
+    }
+    if (writes() !== writesBeforeFinal || (await safeHeld(() => heldNow(pubkey))) !== final.fingerprint) {
+      restart(pubkey)
+      return { status: 'blocked', reason: 'changed', unconfirmed: [] }
+    }
+  }
+
+  // Last, with the writers stopped: nothing may have started a send or a swap
+  // since step 1 (a second tab can). From here on nothing is checked again.
+  if (hasMoneyInFlight(inFlight, pubkey)) {
+    restart(pubkey)
+    return { status: 'blocked', reason: 'in-flight', unconfirmed: [] }
+  }
 
   // And cancel the push subscription, which is the one piece of this account's
   // state that localStorage cannot reach: it lives in the browser's push
@@ -133,8 +317,8 @@ export async function logout(
   carryPendingClaimsAcrossLogout(sweepAppStorage)
 
   // And the coupons, the transaction history and the issued-coupon records.
-  // Recoverable: sales come back from the relay via restoreIssued(), and held
-  // coupons arrive again through the DM pipeline.
+  // Recoverable: sales come back via restoreIssued(), and every held coupon was
+  // read back from its backup above before anything here ran.
   await wipeWallet(pubkey)
 
   // Without this, createSession() hands the next login the shut-down session.
@@ -165,5 +349,40 @@ export async function logout(
   // one identity does not host the next one — the reload is what makes "erases
   // all your data from this browser" true of memory as well as of disk.
   reload()
-  return true
+  return { status: 'done' }
+}
+
+/** The held fingerprint, or null when the store cannot be read (never equal to a real one). */
+async function safeHeld(heldNow: () => Promise<string>): Promise<string | null> {
+  try {
+    return await heldNow()
+  } catch {
+    return null
+  }
+}
+
+/** A check that throws is a check that did not confirm. */
+async function safeCheck(
+  check: NonNullable<LogoutDeps['checkBackups']>,
+  pubkey: string,
+): Promise<BackupCheck> {
+  try {
+    return await check(pubkey)
+  } catch {
+    return { ok: false, reason: 'store-unreadable', unconfirmed: [], fingerprint: '' }
+  }
+}
+
+/**
+ * `attemptLogout` as a yes/no, for callers that only need to know whether the
+ * page is going away. A BLOCKED logout is `false`, exactly like a cancelled
+ * one: nothing was erased either way.
+ */
+export async function logout(
+  pubkey: string,
+  confirm?: (message: string) => boolean,
+  reload?: () => void,
+  deps?: LogoutDeps,
+): Promise<boolean> {
+  return (await attemptLogout(pubkey, confirm, reload, deps)).status === 'done'
 }

@@ -1,5 +1,5 @@
 import { SimplePool, type Event } from 'nostr-tools'
-import { gatewayEvents, newestByD } from './gatewayNostr'
+import { gatewayAllEvents, gatewayEvents, newestByD, unionWithGateway } from './gatewayNostr'
 
 /**
  * Publishing to the Nostr relay.
@@ -274,6 +274,41 @@ export async function allEvents(
   } finally {
     pool.close(relays)
   }
+}
+
+/**
+ * Every event of one kind for a pubkey from the relay AND the gateway, as a
+ * raw UNION by event id, with each gateway event's signature re-checked.
+ *
+ * The coupon counterpart of `allAddressable`, and the fix for the 2026-10-18
+ * staging incident: a restored wallet showed its history and a zero balance.
+ * The coupon's kind-7375 record WAS on the relay, but the browser's websocket
+ * reads to strfry failed, and `querySync` RESOLVES `[]` on a socket that never
+ * opens. `restoreVouchers` read the relay alone, so "unreachable" read as "no
+ * coupons", silently. `restoreTx` read through `allAddressable`, which also
+ * asks the gateway, and its history came back from the same login.
+ *
+ * Not `newestByD`: coupon records need every event (a tombstone must win over
+ * a same-second record, and every chunk of a snapshot shares one `d` family),
+ * so the reduction stays with `voucherRecords`. Deduped by id only.
+ *
+ * Signatures are checked on the gateway's copies because the gateway is a
+ * relay of last resort here and the rows it hands back become MONEY; a
+ * relay's own events are signature-checked by nostr-tools on the way in.
+ * `stripCachedVerdict` is moot for JSON, which carries no symbol.
+ */
+export async function allEventsWithGateway(
+  pubkey: string,
+  kind: number,
+  relays: string[] = [RELAY_URL],
+): Promise<Event[]> {
+  const [relayed, cached] = await Promise.all([
+    allEvents(pubkey, kind, relays).catch(() => [] as Event[]),
+    // PAGED (review of #326): a single 500-limit ask lost a big wallet's
+    // oldest coupons from the read that matters when the relay is down.
+    gatewayAllEvents(pubkey, kind),
+  ])
+  return unionWithGateway(relayed, cached ?? [], pubkey, kind)
 }
 
 /** strfry's default `maxFilterLimit`; a relay may cap lower, which only costs an extra page. */
