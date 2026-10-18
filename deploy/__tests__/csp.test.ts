@@ -42,7 +42,33 @@ describe('deploy/nginx.conf Content-Security-Policy', () => {
     // The blob allowance is only safe while this holds: no 'unsafe-inline' and
     // no blob: in script-src, so nothing an attacker injects can run or be
     // packaged into the worker.
+    // The one addition is Google Identity Services' library, by full URL, for the Drive
+    // backup (#311): a single file Google serves, not a host or a wildcard.
     const scriptSrc = /script-src ([^;]+)/.exec(policies[i])?.[1]
-    expect(scriptSrc).toBe("'self'")
+    expect(scriptSrc).toBe("'self' https://accounts.google.com/gsi/client")
+  })
+
+  it.each([0, 1])('admits Google Identity Services frames and nothing else (policy %i)', (i) => {
+    // default-src 'none' would refuse the GIS iframe; frame-src names only its /gsi/ path.
+    const frameSrc = /frame-src ([^;]+)/.exec(policies[i])?.[1]
+    expect(frameSrc).toBe('https://accounts.google.com/gsi/')
+  })
+
+  it.each([0, 1])('reaches the Drive API (policy %i)', (i) => {
+    // src/lib/drive.ts fetches www.googleapis.com; connect-src https: covers it.
+    const connectSrc = /connect-src ([^;]+)/.exec(policies[i])?.[1]
+    expect(connectSrc?.split(' ')).toContain('https:')
+  })
+})
+
+describe('deploy/nginx.conf Cross-Origin-Opener-Policy', () => {
+  // The GIS token flow watches the account chooser it opened with window.open. Under
+  // `same-origin` that handle is severed and GIS reports popup_closed at once (#311).
+  const coops = [...conf.matchAll(/add_header Cross-Origin-Opener-Policy "([^"]+)"/g)].map(
+    (m) => m[1],
+  )
+
+  it('lets the Google account chooser popup report back, on every app location', () => {
+    expect(coops).toEqual(['same-origin-allow-popups', 'same-origin-allow-popups'])
   })
 })
