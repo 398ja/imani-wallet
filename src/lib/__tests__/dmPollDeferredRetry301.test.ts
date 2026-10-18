@@ -49,7 +49,8 @@ vi.mock('@imani/dm-poll', async (orig) => ({
 vi.stubGlobal('document', { addEventListener: () => {}, removeEventListener: () => {} })
 vi.stubGlobal('window', { addEventListener: () => {}, removeEventListener: () => {} })
 
-const { startDmPoll, stopDmPoll, DEFERRED_RETRY_MS } = await import('../dmPoll')
+const { startDmPoll, stopDmPoll, DEFERRED_RETRY_MS, MAX_DEFERRED_RETRIES_PER_TOKEN } = await import('../dmPoll')
+const { _setReceivePacerForTests } = await import('../receivePacer')
 
 const redeem = vi.fn()
 const gateTimeout = () =>
@@ -72,9 +73,9 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-async function deferOnce(): Promise<unknown> {
+async function deferOnce(token = 'cashuAtoken'): Promise<unknown> {
   redeem.mockRejectedValueOnce(gateTimeout())
-  return captured.redemptionAdapter!.redeem('cashuAtoken', { metadata: {} }).catch((e: unknown) => e)
+  return captured.redemptionAdapter!.redeem(token, { metadata: {} }).catch((e: unknown) => e)
 }
 
 describe('#301 review: a receive-gate deferral is retried soon, not at the next SSE redial', () => {
@@ -101,7 +102,10 @@ describe('#301 review: a receive-gate deferral is retried soon, not at the next 
     await vi.advanceTimersByTimeAsync(0)
     fetchRecentDms.mockClear()
     await deferOnce()
+    const armed = vi.getTimerCount()
     stopDmPoll()
+    // The timer itself is cleared, not just made harmless by the poller guard.
+    expect(vi.getTimerCount()).toBeLessThan(armed)
     await vi.advanceTimersByTimeAsync(DEFERRED_RETRY_MS * 2)
     expect(fetchRecentDms).not.toHaveBeenCalled()
   })
@@ -114,5 +118,52 @@ describe('#301 review: a receive-gate deferral is retried soon, not at the next 
     await captured.redemptionAdapter!.redeem('cashuAtoken', { metadata: {} }).catch(() => {})
     await vi.advanceTimersByTimeAsync(DEFERRED_RETRY_MS * 2)
     expect(fetchRecentDms).not.toHaveBeenCalled()
+  })
+
+  it('is bounded per token: a pacer that never frees cannot re-poll forever (#301 second check)', async () => {
+    startDmPoll('f'.repeat(64))
+    await vi.advanceTimersByTimeAsync(0)
+    fetchRecentDms.mockClear()
+    for (let i = 0; i < MAX_DEFERRED_RETRIES_PER_TOKEN + 3; i++) {
+      await deferOnce('cashuAstuck')
+      await vi.advanceTimersByTimeAsync(DEFERRED_RETRY_MS)
+    }
+    expect(fetchRecentDms).toHaveBeenCalledTimes(MAX_DEFERRED_RETRIES_PER_TOKEN)
+    // Another token still gets its own early retry.
+    await deferOnce('cashuAother')
+    await vi.advanceTimersByTimeAsync(DEFERRED_RETRY_MS)
+    expect(fetchRecentDms).toHaveBeenCalledTimes(MAX_DEFERRED_RETRIES_PER_TOKEN + 1)
+  })
+
+  it('a logout resets the per-token count for the next session', async () => {
+    startDmPoll('f'.repeat(64))
+    await vi.advanceTimersByTimeAsync(0)
+    for (let i = 0; i < MAX_DEFERRED_RETRIES_PER_TOKEN; i++) {
+      await deferOnce('cashuAstuck')
+      await vi.advanceTimersByTimeAsync(DEFERRED_RETRY_MS)
+    }
+    stopDmPoll()
+    startDmPoll('f'.repeat(64))
+    await vi.advanceTimersByTimeAsync(0)
+    fetchRecentDms.mockClear()
+    await deferOnce('cashuAstuck')
+    await vi.advanceTimersByTimeAsync(DEFERRED_RETRY_MS)
+    expect(fetchRecentDms).toHaveBeenCalledTimes(1)
+  })
+
+  it('the installed receive gate hands the abort signal to the pacer (no ghost slot)', async () => {
+    const acquire = vi.fn(async () => {})
+    const previous = _setReceivePacerForTests({ acquire, reset: () => {} })
+    try {
+      startDmPoll('f'.repeat(64))
+      const win = window as unknown as { TokenRedemption: { _receiveGate?: (s?: AbortSignal) => Promise<void> } }
+      redeem.mockResolvedValueOnce({ id: 'v' })
+      await captured.redemptionAdapter!.redeem('cashuAok', { metadata: {} }).catch(() => {})
+      const signal = new AbortController().signal
+      await win.TokenRedemption._receiveGate!(signal)
+      expect(acquire).toHaveBeenCalledWith(expect.any(Number), signal)
+    } finally {
+      _setReceivePacerForTests(previous)
+    }
   })
 })

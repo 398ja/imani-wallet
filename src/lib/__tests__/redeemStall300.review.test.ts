@@ -63,6 +63,8 @@ describe('#301 review: no double receive', () => {
 
     const first = await settle(r.redeem(TOKEN, { skipDuplicateCheck: true, source: 'dm-poll' }))
     expect((first as { e?: { code?: string } }).e?.code).toBe('RECEIVE_DEFERRED')
+    // dmPoll keys its early catch-up on this tag (#301 second check: pin the contract).
+    expect((first as { e?: { deferredBy?: string } }).e?.deferredBy).toBe('receive-gate-timeout')
 
     // The original step completes late. Nothing may follow it.
     release()
