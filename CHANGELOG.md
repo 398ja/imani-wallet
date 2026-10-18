@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-10-18
+
+Merchants turn on card sales from the app, and purchase-issuer enrols without a restart (#298,
+#290). Credentials are confirmed eagerly (#296), and the stall's own till shows Paid on
+gateway-core's verdict (#300). New purchase-issuer env `PURCHASE_PUBLIC_ORIGIN`.
+**Deploy order:** imani-deploy#229 (edge `/api/v1/card-sales/` route and `PURCHASE_PUBLIC_ORIGIN`)
+live with or before this build, or Buy is disabled for every stall.
+
 ### Added
 
 - **Turn on card sales, from the merchant's phone** (Closes #298). Settings › Card payments has a
