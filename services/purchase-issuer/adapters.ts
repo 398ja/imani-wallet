@@ -9,6 +9,7 @@
 
 import { mkdir, readFile, writeFile, rename, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { randomBytes } from 'node:crypto'
 
 import { authorization, IssuanceFailed, ISSUE_PATH, type StallCredential } from './issuer'
 import type { CredentialStore } from './vault'
@@ -42,17 +43,22 @@ export class FileCredentialStore implements CredentialStore {
   }
 
   async read(): Promise<never[]> {
+    let raw: string
     try {
-      const raw = await readFile(this.path, 'utf8')
-      const decoded: unknown = JSON.parse(raw)
-      return (Array.isArray(decoded) ? decoded : []) as never[]
-    } catch {
+      raw = await readFile(this.path, 'utf8')
+    } catch (error) {
       // A missing file is the ORDINARY state of a fresh deployment: no stall
-      // has enrolled yet. Indistinguishable here from a corrupt one, and both
-      // land where the design already sends a stall with no credential, which
-      // is issuing by hand.
-      return [] as never[]
+      // has enrolled yet.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [] as never[]
+      throw error
     }
+    // A file that is there but is not a JSON array is NOT "no stalls" (review of #302). Read as
+    // empty, it wiped every stall from a running service the moment the file was hand-edited or
+    // copied in non-atomically (#290 reloads on change), and the next enrolment then wrote that
+    // empty list back over everyone. Thrown, so the vault keeps what it holds and refuses to write.
+    const decoded: unknown = JSON.parse(raw)
+    if (!Array.isArray(decoded)) throw new Error('the credential store is not a JSON array')
+    return decoded as never[]
   }
 
   /**
@@ -70,7 +76,9 @@ export class FileCredentialStore implements CredentialStore {
 
   async write(records: readonly unknown[]): Promise<void> {
     await mkdir(dirname(this.path), { recursive: true })
-    const temporary = `${this.path}.tmp`
+    // Unique per write (review of #302): a fixed `.tmp` name let two writers (two enrolments at
+    // once, or this service and the operator script) rename each other's file away (ENOENT).
+    const temporary = `${this.path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
     await writeFile(temporary, JSON.stringify(records, null, 2), {
       // 0600. These are sealed, but the sealing key sits in the environment of
       // this same process, so a world-readable file plus a leaked environment
