@@ -124,6 +124,15 @@ describe('matchPayment', () => {
     expect(matchPayment([request(), already], payment({ id: 'tx1' }))).toBeNull()
   })
 
+  // #300: the till marked req1 paid on gateway-core's verdict while its coupons were still being
+  // received. When they land they name req1, and must not fall through to the amount fallback
+  // and settle req2, an open request for the same amount: one payment, counted once.
+  it('never hands a payment naming a closed request to another open one', () => {
+    const paidByCore = request({ paymentId: 'req1', status: 'fulfilled', confirmedBy: 'core', receivedAmount: 500 })
+    const open = request({ paymentId: 'req2' })
+    expect(matchPayment([paidByCore, open], payment({ paymentId: 'req1' }))).toBeNull()
+  })
+
   it('ignores non-pending requests', () => {
     expect(matchPayment([request({ status: 'expired' })], payment({ paymentId: 'p1' }))).toBeNull()
   })

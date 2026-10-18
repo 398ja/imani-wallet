@@ -39,6 +39,12 @@ export interface VoucherPaymentRequest {
   /** Set once paid: which wallet transaction settled it. */
   settledBy?: string
   receivedAmount?: number
+  /**
+   * `core` when the request was marked paid on gateway-core's fulfilment verdict rather than on
+   * a wallet arrival (imani-wallet#300): the money is counted, and the coupons may still be on
+   * their way into this wallet. Absent for a request the wallet settled itself.
+   */
+  confirmedBy?: 'core'
 }
 
 /**
@@ -134,6 +140,17 @@ export function matchPayment(
 
   const settled = new Set(requests.map((r) => r.settledBy).filter(Boolean))
   if (settled.has(transaction.id)) return null
+
+  // A payment that names a request already closed belongs to THAT request (imani-wallet#300).
+  // The till can mark a request paid on gateway-core's verdict before its coupons arrive; when
+  // they do land, the amount fallback below would otherwise hand them to another open request
+  // of the same value, and one payment would settle two sales.
+  if (
+    transaction.paymentId &&
+    requests.some((r) => r.paymentId === transaction.paymentId && r.status !== 'pending')
+  ) {
+    return null
+  }
 
   const pending = requests.filter(
     (r) => r.status === 'pending' && transaction.at >= r.createdAt,

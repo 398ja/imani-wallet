@@ -24,6 +24,7 @@ import { announceQueued, settleQueued, type QueuedBundleSeed } from './queuedToa
 import { announceRefusal } from './refusalToast'
 import { recordRefusal } from './refusedCoupons'
 import { heldCoupons, recordHeld, releaseHeld } from './heldCoupons'
+import { clearReceiveTrouble, fromRedemptionError, fromRedemptionUnsaved } from './receiveTrouble'
 import { announceHeld } from './heldToast'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { bytesToHex } from '@noble/hashes/utils'
@@ -1719,6 +1720,12 @@ export function startDmPoll(pubkey: string): DmPollService {
     })
     service.on('redemption:released', (event) => releaseHeld(owner ?? '', event?.eventId))
     service.on('redemption:success', (event) => releaseHeld(owner ?? '', event?.eventId))
+    // A coupon that answered a payment request and then failed to arrive (#300). The till may
+    // already show that sale Paid on gateway-core's verdict, so the failure is kept against the
+    // request for it to show. A later success of the same delivery clears it.
+    service.on('redemption:error', (event) => fromRedemptionError(owner ?? '', event))
+    service.on('redemption:unsaved', (event) => fromRedemptionUnsaved(owner ?? '', event))
+    service.on('redemption:success', (event) => clearReceiveTrouble(owner ?? '', event?.eventId))
   }
 
   // Re-offer held and deferred coupons whenever the trusted mints change. The
