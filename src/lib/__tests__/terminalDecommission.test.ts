@@ -27,6 +27,15 @@ vi.mock('../logout', () => ({
   LOGOUT_WARNING: 'the customer wording',
 }))
 
+const backup = vi.hoisted(() => ({ ok: true }))
+vi.mock('../voucherRecords', () => ({
+  confirmBackups: vi.fn(async () =>
+    backup.ok
+      ? { ok: true, confirmed: 0, fingerprint: '' }
+      : { ok: false, reason: 'unconfirmed', unconfirmed: [{ token_id: 't' }], fingerprint: 'x' },
+  ),
+}))
+
 const { decommissionTerminal, DECOMMISSION_COPY, DECOMMISSION_REFUSAL } = await import(
   '../terminalDecommission'
 )
@@ -69,8 +78,25 @@ beforeEach(() => {
   vi.stubEnv('VITE_VOUCHER_ISSUER_PUBKEYS', parseVoucherToken(TOKEN).voucher.issuerPublicKey)
   localStorage.clear()
   erased.length = 0
+  backup.ok = true
 })
 afterEach(() => vi.unstubAllEnvs())
+
+describe('vouchers not confirmed as backed up (owner rule 2026-10-18, review of #326)', () => {
+  it('refuses BEFORE revoking: nothing revoked, nothing erased', async () => {
+    enrol()
+    backup.ok = false
+    const mint = api()
+
+    const out = await decommissionTerminal(mint, PUBKEY, () => {})
+
+    expect(out).toMatchObject({ done: false, reason: DECOMMISSION_REFUSAL.VOUCHERS_UNCONFIRMED })
+    expect(mint.receive).not.toHaveBeenCalled()
+    expect(mint.validateToken).not.toHaveBeenCalled()
+    expect(erased).toEqual([])
+    expect(localStorage.getItem(ENROLMENT_KEY)).toContain(TOKEN)
+  })
+})
 
 describe('the order', () => {
   it('revokes before erasing anything', async () => {

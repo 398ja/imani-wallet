@@ -39,6 +39,8 @@ const net = vi.hoisted(() => ({
   relay: [] as Event[],
   /** The browser cannot reach strfry (the staging failure). */
   relayDown: false,
+  /** The relay serves reads but refuses every publish. */
+  refuseWrites: false,
   /** The gateway's `/nostr/query` is reachable. */
   gatewayUp: true,
   /** Mint answer per token. Default UNSPENT. */
@@ -78,7 +80,7 @@ vi.mock('../relay', async () => {
       return newestByD(match(await relayRead(author, kind)), match(await gatewayEvents(author, kind)))
     },
     publish: async (event: Event) => {
-      if (net.relayDown) return { ok: 0, total: 1, errors: ['connection failure'] }
+      if (net.relayDown || net.refuseWrites) return { ok: 0, total: 1, errors: ['connection failure'] }
       net.relay.push(event)
       return { ok: 1, total: 1, errors: [] }
     },
@@ -212,6 +214,7 @@ async function tokenIdOf(token: string): Promise<string> {
 beforeEach(async () => {
   net.relay = []
   net.relayDown = false
+  net.refuseWrites = false
   net.gatewayUp = true
   net.mint = new Map()
   net.validations = 0
@@ -338,32 +341,61 @@ describe('restored history keeps its checks', () => {
   })
 })
 
-describe('couponsWithoutBackup, which logout asks before deleting', () => {
-  it('is empty once the post-swap record is readable back', async () => {
-    const { couponsWithoutBackup } = await import('../voucherRecords')
+describe('confirmBackups: logout needs every held voucher READ BACK with the same token (owner rule 2026-10-18)', () => {
+  const fast = { settleMs: 0, deadlineMs: 10_000 }
+
+  it('confirms once the post-swap record is readable back', async () => {
+    const { confirmBackups } = await import('../voucherRecords')
     await openWallet(pk)
     await PATHS['gift link'](buildVoucherToken({ faceValue: 1100 }, [1000, 600 + seq]).token)
     await settle()
-    expect(await couponsWithoutBackup(pk)).toEqual([])
+    expect(await confirmBackups(pk, fast)).toMatchObject({ ok: true, confirmed: 1 })
   })
 
-  it('reports a held coupon when no backup can be confirmed or re-published', async () => {
-    const { couponsWithoutBackup } = await import('../voucherRecords')
+  it('relay AND gateway down: not confirmed, with the value, and nothing erased', async () => {
+    const { confirmBackups } = await import('../voucherRecords')
     await openWallet(pk)
     const fresh = buildVoucherToken({ faceValue: 1100 }, [1000, 700 + seq]).token
     await PATHS['gift link'](fresh)
     await settle()
-    // The relay and the gateway both down: nothing can be confirmed or
-    // re-published, so the held coupon is reported.
     net.relayDown = true
     net.gatewayUp = false
-    expect(await couponsWithoutBackup(pk)).toHaveLength(1)
+    const check = await confirmBackups(pk, fast)
+    expect(check).toMatchObject({ ok: false, reason: 'unconfirmed' })
+    expect(!check.ok && check.unconfirmed).toEqual([
+      expect.objectContaining({ face_value: 1100, face_unit: 'GBP' }),
+    ])
+    // The UI gets no token.
+    expect(JSON.stringify(check)).not.toContain(fresh)
+    expect(await balance()).toBe(1100)
   })
 
-  it('re-publishes a missing record and then reports nothing', async () => {
-    const { couponsWithoutBackup } = await import('../voucherRecords')
+  it('a backup holding an OLDER token (pre-swap) is not confirmation', async () => {
+    const { confirmBackups } = await import('../voucherRecords')
     await openWallet(pk)
-    // Written while the relay refused every publish.
+    const old = buildVoucherToken({ faceValue: 1100 }, [1000, 750 + seq]).token
+    const fresh = buildVoucherToken({ faceValue: 1100 }, [1000, 760 + seq]).token
+    // A record of the old token under the fresh coupon's `d`, signed by the
+    // owner: published, readable, decryptable, and WRONG.
+    await getWallet().saveVoucher({ token: fresh, face_value: 1100, face_unit: 'GBP', status: 'active' } as VoucherRow)
+    await settle()
+    const id = await tokenIdOf(fresh)
+    net.relay = net.relay.filter((e) => e.kind !== 7375)
+    const content = nip44.v2.encrypt(JSON.stringify({ voucher: { token_id: id, token: old, face_value: 1100 } }), key)
+    net.relay.push(finalizeEvent({ kind: 7375, created_at: 10, tags: [['d', id], ['spent', 'false']], content }, sk))
+    // Readable, but re-publishing cannot fix it: the relay refuses writes and
+    // the gateway is down, so the only record anywhere is the stale one.
+    net.refuseWrites = true
+    net.gatewayUp = false
+    expect(await confirmBackups(pk, fast)).toMatchObject({ ok: false, reason: 'unconfirmed' })
+    // Once a write lands, the current token is read back and it confirms.
+    net.refuseWrites = false
+    expect(await confirmBackups(pk, fast)).toMatchObject({ ok: true })
+  })
+
+  it('re-publishes a missing record and then confirms it by reading it back', async () => {
+    const { confirmBackups } = await import('../voucherRecords')
+    await openWallet(pk)
     net.relayDown = true
     await PATHS['DM auto-receive (customer to customer)'](
       buildVoucherToken({ faceValue: 1100 }, [1000, 800 + seq]).token,
@@ -372,8 +404,71 @@ describe('couponsWithoutBackup, which logout asks before deleting', () => {
     expect(net.relay.filter((e) => e.kind === 7375)).toHaveLength(0)
 
     net.relayDown = false
-    expect(await couponsWithoutBackup(pk)).toEqual([])
+    expect(await confirmBackups(pk, fast)).toMatchObject({ ok: true })
     expect(net.relay.filter((e) => e.kind === 7375)).toHaveLength(1)
+  })
+
+  it('a record forged by another key, served by the gateway, is not confirmation', async () => {
+    const { confirmBackups } = await import('../voucherRecords')
+    await openWallet(pk)
+    const fresh = buildVoucherToken({ faceValue: 1100 }, [1000, 850 + seq]).token
+    net.relayDown = true
+    await getWallet().saveVoucher({ token: fresh, face_value: 1100, face_unit: 'GBP', status: 'active' } as VoucherRow)
+    await settle()
+    // Same `d`, same sealed content shape, wrong author.
+    const other = generateSecretKey()
+    const content = nip44.v2.encrypt(JSON.stringify({ voucher: { token_id: await tokenIdOf(fresh), token: fresh } }), key)
+    net.relay.push(finalizeEvent({ kind: 7375, created_at: 10, tags: [['d', await tokenIdOf(fresh)]], content }, other))
+    expect(await confirmBackups(pk, fast)).toMatchObject({ ok: false })
+  })
+
+  it('a swapped_to_sats row needs its sats_token backed up, not just the spent original', async () => {
+    const { confirmBackups } = await import('../voucherRecords')
+    await openWallet(pk)
+    const original = buildVoucherToken({ faceValue: 1100 }, [1000, 870 + seq]).token
+    await getWallet().saveVoucher({ token: original, face_value: 1100, face_unit: 'GBP', status: 'fully_redeemed' } as VoucherRow)
+    await settle()
+    // The swap back lands while the relay refuses: only the fully_redeemed
+    // record is out there.
+    net.relayDown = true
+    const sats = buildVoucherToken({ faceValue: 0 }, [64, 870 + seq]).token
+    await getWallet().saveVoucher({
+      token: original, face_value: 1100, face_unit: 'GBP', status: 'swapped_to_sats', sats_token: sats, sats_amount: 64,
+    } as unknown as VoucherRow)
+    await settle()
+    net.gatewayUp = false
+    expect(await confirmBackups(pk, fast)).toMatchObject({ ok: false, unconfirmed: [expect.objectContaining({ status: 'swapped_to_sats', sats_amount: 64 })] })
+    net.relayDown = false
+    expect(await confirmBackups(pk, fast)).toMatchObject({ ok: true })
+  })
+
+  it('opens the store to count when it is not open: "nothing open" is not "nothing held"', async () => {
+    const { confirmBackups } = await import('../voucherRecords')
+    await openWallet(pk)
+    net.relayDown = true
+    await PATHS['gift link'](buildVoucherToken({ faceValue: 1100 }, [1000, 880 + seq]).token)
+    await settle()
+    // The handle is someone else's (an account switch, or no wallet opened
+    // yet behind the "Session expired" dialog); this user's DB is on disk.
+    await openWallet('ee'.repeat(32))
+    net.gatewayUp = false
+    const check = await confirmBackups(pk, fast)
+    expect(check).toMatchObject({ ok: false, reason: 'unconfirmed' })
+    expect(!check.ok && check.unconfirmed).toHaveLength(1)
+    await wipeWallet('ee'.repeat(32))
+  })
+
+  it('never hangs: a gateway that never answers is bounded by the deadline', async () => {
+    const { confirmBackups } = await import('../voucherRecords')
+    await openWallet(pk)
+    net.relayDown = true
+    await PATHS['gift link'](buildVoucherToken({ faceValue: 1100 }, [1000, 890 + seq]).token)
+    await settle()
+    globalThis.fetch = (() => new Promise(() => undefined)) as typeof fetch
+    const started = Date.now()
+    const check = await confirmBackups(pk, { settleMs: 0, deadlineMs: 600 })
+    expect(Date.now() - started).toBeLessThan(3_000)
+    expect(check.ok).toBe(false)
   })
 })
 
