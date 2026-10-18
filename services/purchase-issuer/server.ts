@@ -39,7 +39,8 @@
 
 import { createServer } from 'node:http'
 
-import { confirmCredential, tokenFor, FileCredentialStore } from './adapters'
+import { tokenFor, FileCredentialStore } from './adapters'
+import { confirmAll, CredentialConfirmer, retryUnconfirmed } from './confirmation'
 import { readConfig, ConfigError, type IssuerConfig } from './config'
 import type { Ports } from './discharge'
 import { countPass, renderMetrics } from './metrics'
@@ -50,24 +51,20 @@ import { CredentialVault } from './vault'
 import { runPass, type WorkerDeps } from './worker'
 
 /** Build the real ports from config. Exported so a test can see the wiring. */
-export function portsFor(config: IssuerConfig, fetchImpl: typeof fetch = fetch): Ports {
-  const vault = new CredentialVault(
-    config.vaultKeyHex,
-    new FileCredentialStore(config.credentialsPath),
-  )
-  // Credential ids confirmed by this process. A credential is confirmed before its first use
-  // (gateway-customer V27: an unconfirmed credential may not issue), and only retried while
-  // the gateway has not said yes.
-  const confirmed = new Set<string>()
+export function portsFor(
+  config: IssuerConfig,
+  fetchImpl: typeof fetch = fetch,
+  vault: CredentialVault = vaultFor(config),
+  confirmer: CredentialConfirmer = new CredentialConfirmer(config.gatewayUrl, fetchImpl),
+): Ports {
+  // Credentials are confirmed EAGERLY, at enrolment and at startup (`confirmAll`, #296). This is
+  // the backstop for one written while the service runs or one the gateway was down for at boot.
+  // The confirmer sends one request per credential at a time and remembers the answer, and an
+  // expired credential comes back marked so the sale fails fast with the real reason.
   return {
     credentialFor: async (stallPubkey) => {
       const credential = await vault.get(stallPubkey)
-      if (credential && !confirmed.has(credential.credentialId)) {
-        if (await confirmCredential(config.gatewayUrl, credential, fetchImpl)) {
-          confirmed.add(credential.credentialId)
-        }
-      }
-      return credential
+      return credential ? confirmer.annotate(credential) : null
     },
     tokenFor: (credential, voucherId) => tokenFor(config.gatewayUrl, credential, voucherId),
     now: () => Date.now(),
@@ -77,7 +74,15 @@ export function portsFor(config: IssuerConfig, fetchImpl: typeof fetch = fetch):
   }
 }
 
-export function depsFor(config: IssuerConfig): WorkerDeps {
+function vaultFor(config: IssuerConfig): CredentialVault {
+  return new CredentialVault(config.vaultKeyHex, new FileCredentialStore(config.credentialsPath))
+}
+
+export function depsFor(
+  config: IssuerConfig,
+  vault: CredentialVault = vaultFor(config),
+  confirmer: CredentialConfirmer = new CredentialConfirmer(config.gatewayUrl),
+): WorkerDeps {
   return {
     api: new PurchasesApi(config.purchasesUrl, config.purchasesToken, fetch, (row) => {
       // IW-07: a refused debt row must be loud. It means either the upstream is emitting
@@ -93,7 +98,7 @@ export function depsFor(config: IssuerConfig): WorkerDeps {
         }),
       )
     }),
-    ports: portsFor(config),
+    ports: portsFor(config, fetch, vault, confirmer),
     gatewayUrl: config.gatewayUrl,
     livemode: config.livemode,
     outbox: new DeliveryOutbox(new FileOutboxStore(config.outboxPath), {
@@ -258,7 +263,9 @@ function main(): void {
     throw error
   }
 
-  const deps = depsFor(config)
+  const vault = vaultFor(config)
+  const confirmer = new CredentialConfirmer(config.gatewayUrl)
+  const deps = depsFor(config, vault, confirmer)
 
   server.listen(config.port, () => {
     console.log(
@@ -267,7 +274,18 @@ function main(): void {
     )
   })
 
-  void loop(deps, config.intervalMs)
+  // Confirm every held credential BEFORE the first pass (imani-wallet#296). The gateway lapses
+  // one left unconfirmed for 24 h, so waiting for its first sale is how a quiet stall dies.
+  void confirmAll(vault, confirmer).then((summary) => {
+    console.log(
+      `[purchase-issuer] credentials: ${summary.confirmed} confirmed, ` +
+        `${summary.expired} expired (re-enrol), ${summary.unconfirmed} not yet confirmed`,
+    )
+    // Review of #299: one the gateway was down for at boot is retried every 5 min, for at most
+    // the 24 h confirm window, rather than waiting for its first sale.
+    if (summary.unconfirmed > 0) retryUnconfirmed(vault, confirmer, () => running)
+    return loop(deps, config.intervalMs)
+  })
 
   // A pass in flight is minting or delivering somebody's coupon. Stopping the
   // LOOP rather than the process lets it finish: `docker stop` sends SIGTERM

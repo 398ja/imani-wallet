@@ -385,7 +385,14 @@ and, with the *Sell and redeem* role, to **sell**. The plan is
    has confirmed, and lapses it after 24 hours. The app does this for you. If you
    mint one yourself, `scripts/mint-terminal-credential.mjs` confirms it as the
    stall. The card-purchase issuer (`services/purchase-issuer`) confirms each
-   credential it holds, as its device, the first time it reads it. Anything else
+   credential at enrolment (`attachDelegation.ts`, when `PURCHASE_GATEWAY_URL`
+   is set) and again for every credential it holds when it starts, as its
+   device. It does not wait for the first card sale: a stall may take none for
+   days, and an unconfirmed credential lapses after 24 hours (imani-wallet#296).
+   One that already lapsed is logged (`purchase_issuer_credential_expired`),
+   counted in `imani_purchase_issuer_credentials{standing="expired"}`, and its
+   card purchases stay owed with "re-enrol the purchase issuer" as the reason.
+   Mint a new credential and enrol again to fix it. Anything else
    that mints a terminal credential must call
    `POST /api/v1/wallet/terminal-credentials/{id}/confirm` itself.
 2. **More than one terminal needs a subscription** (#197). One terminal is free.

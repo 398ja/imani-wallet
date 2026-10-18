@@ -43,7 +43,7 @@
  */
 
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure'
-import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
+import { bytesToHex, hexToBytes, randomBytes } from '@noble/hashes/utils'
 import { sha256 } from '@noble/hashes/sha256'
 
 /** The header the gateway reads a terminal credential from. */
@@ -102,6 +102,12 @@ export interface StallCredential {
    * See `delegatedWarrant.ts`.
    */
   delegation?: string
+  /**
+   * Set, in memory only, when the gateway will never accept this credential and the stall must
+   * re-enrol it (imani-wallet#296: confirm answered 410 EXPIRED). A sale fails fast with this as
+   * its reason instead of minting into a 403 that reads as "burnt or replaced". Never sealed.
+   */
+  unusable?: string
 }
 
 export interface IssuePlan {
@@ -187,6 +193,10 @@ export function authorization(
         ['u', url],
         ['method', method.toUpperCase()],
         ['payload', bytesToHex(sha256(new TextEncoder().encode(body)))],
+        // A random nonce so two requests signed in the same second are two events (#296). Without
+        // it a retry inside one second re-sent the identical event, and the gateway refused it as
+        // an event-id replay (401). NIP-98 allows extra tags; the filter ignores this one.
+        ['nonce', bytesToHex(randomBytes(16))],
       ],
       content: '',
     },
@@ -316,7 +326,13 @@ function explain(status: number, raw: string): string {
     return 'the gateway did not accept this credential’s signature'
   }
   if (status === 403) {
-    return 'the stall no longer authorises this issuer (credential burnt or replaced)'
+    // Also what an UNCONFIRMED credential gets (gc `issuer_not_permitted`), e.g. one that expired
+    // before it was confirmed (#296). Confirming at enrolment and startup makes that rare, and an
+    // expired one is caught before the mint with its own reason (`confirmation.ts`).
+    return (
+      'the stall no longer authorises this issuer (credential burnt, replaced, or never ' +
+      'confirmed; check imani_purchase_issuer_credentials and re-enrol if expired)'
+    )
   }
   const detail = raw.trim().slice(0, 200)
   return detail === ''

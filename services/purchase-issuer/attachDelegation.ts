@@ -13,10 +13,17 @@
  *
  * Refuses, writing nothing, if the delegation would not be accepted for a
  * coupon minted today (`checkDelegation`).
+ *
+ * Then CONFIRMS the credential at the gateway (imani-wallet#296), when
+ * `PURCHASE_GATEWAY_URL` is set. gateway-customer lapses a terminal credential
+ * left unconfirmed for 24 hours, and a stall's first card sale may come much
+ * later than that. Exits non-zero if the gateway answers 410 (expired: mint a
+ * new credential and enrol again) or does not confirm. The service also
+ * confirms every credential it holds at startup.
  */
 import { readFile } from 'node:fs/promises'
 
-import { FileCredentialStore } from './adapters'
+import { confirmStanding, FileCredentialStore } from './adapters'
 import { checkDelegation } from './delegatedWarrant'
 import { DEFAULT_EXPIRES_IN_DAYS } from './issuer'
 import { CredentialVault } from './vault'
@@ -40,6 +47,26 @@ async function main(): Promise<void> {
     checkDelegation,
   )
   console.log(`delegation attached for ${stallPubkey.slice(0, 12)}…`)
+
+  const gatewayUrl = (process.env.PURCHASE_GATEWAY_URL ?? '').trim()
+  if (gatewayUrl === '') {
+    console.warn(
+      'PURCHASE_GATEWAY_URL is not set: credential NOT confirmed. Restart purchase-issuer within ' +
+        '24 h of minting it (it confirms at startup), or the gateway lapses it.',
+    )
+    return
+  }
+  const credential = await vault.get(stallPubkey.toLowerCase())
+  const standing = credential ? await confirmStanding(gatewayUrl, credential) : 'unconfirmed'
+  if (standing === 'expired') {
+    throw new Error(
+      'the gateway says this credential EXPIRED unconfirmed (410): mint a new one and enrol again',
+    )
+  }
+  if (standing !== 'confirmed') {
+    throw new Error('the gateway did not confirm this credential; run this again, or restart purchase-issuer')
+  }
+  console.log('confirmed: in service at the gateway')
 }
 
 main().catch((error) => {

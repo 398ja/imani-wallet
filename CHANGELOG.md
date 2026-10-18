@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **purchase-issuer confirms stall credentials eagerly** (Closes #296). It used to confirm a
+  terminal credential the first time a card sale read it, and gateway-customer lapses one left
+  unconfirmed for 24 h, so a stall enrolled more than a day before its first sale had its paid
+  purchase BLOCKED as "credential burnt or replaced". It now confirms at enrolment
+  (`attachDelegation.ts`, with `PURCHASE_GATEWAY_URL`) and for every vault record at startup. An
+  expired credential (410) is logged as `purchase_issuer_credential_expired`, exported as the new
+  gauge `imani_purchase_issuer_credentials{standing}`, and its sales stay owed with a "re-enrol"
+  reason instead of being blocked.
+- **No NIP-98 replay on a confirm retry.** One confirm is in flight per credential, and every
+  signed request carries a random `nonce` tag, so two requests in one second are two events.
 - **Receive: the QR code no longer sets state after the page is gone (#285).** The async
   `QRCode.toDataURL` result is dropped once the page unmounts or the address changes. In the test
   suite it landed after jsdom teardown, so `CashbackCodeRetired.test.tsx` left an unhandled
