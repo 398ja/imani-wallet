@@ -268,19 +268,29 @@ export const server = createServer((req, res) => {
   }
   if (enrolment !== null && (req.url ?? '').startsWith(ENROLMENT_PREFIX + '/')) {
     const service = enrolment
-    void readBody(req).then(async (body) => {
-      const answer =
-        body === null
-          ? { status: 413, body: { error: 'request too large' } }
-          : await service.handle({
-              method: req.method ?? 'GET',
-              path: req.url ?? '',
-              authorization: req.headers.authorization,
-              body,
-            })
-      res.writeHead(answer.status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
-      res.end(JSON.stringify(answer.body))
-    })
+    // `.catch`, review of #302: a client that drops mid-body makes `for await` reject ("aborted"),
+    // and an unhandled rejection takes the whole purchase issuer down, mid-pass, for everyone. A
+    // public endpoint must not be one TCP reset away from stopping every stall's card sales.
+    void readBody(req)
+      .then(async (body) => {
+        const answer =
+          body === null
+            ? { status: 413, body: { error: 'request too large' } }
+            : await service.handle({
+                method: req.method ?? 'GET',
+                path: req.url ?? '',
+                authorization: req.headers.authorization,
+                body,
+              })
+        res.writeHead(answer.status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
+        res.end(JSON.stringify(answer.body))
+      })
+      .catch(() => {
+        if (!res.headersSent && !res.destroyed) {
+          res.writeHead(400, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ error: 'the request did not arrive whole' }))
+        }
+      })
     return
   }
   res.writeHead(404, { 'Content-Type': 'application/json' })
@@ -307,8 +317,19 @@ function main(): void {
   const deps = depsFor(config, vault, confirmer)
   mountEnrolment(new EnrolmentService({ vault, confirmer, publicOrigin: config.publicOrigin }))
   // #290: a record sealed by somebody else (the operator script) is picked up on the next read,
-  // and confirmed at once (#296) rather than at its first sale.
-  vault.onReload(() => void confirmAll(vault, confirmer))
+  // and confirmed at once (#296) rather than at its first sale. One the gateway could not confirm
+  // then is retried like a boot-time one (second review of #299). A new reload REPLACES the reload
+  // retry rather than adding one, so a file that keeps changing never stacks timers, and each
+  // retry stays bounded to the 24 h confirm window.
+  let stopRetry: (() => void) | null = null
+  vault.onReload(
+    () =>
+      void confirmAll(vault, confirmer).then((summary) => {
+        if (summary.unconfirmed === 0) return
+        stopRetry?.()
+        stopRetry = retryUnconfirmed(vault, confirmer, () => running)
+      }),
+  )
   if (config.publicOrigin === null) {
     console.warn('[purchase-issuer] PURCHASE_PUBLIC_ORIGIN unset: self-service card-sales enrolment is OFF')
   }
