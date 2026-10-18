@@ -104,6 +104,7 @@ export function RedeemPage({
           pubkey={pubkey}
           stallPubkey={actor?.stallPubkey ?? pubkey}
           fulfilment={coreHeld ? fulfilment : undefined}
+          coreUnavailable={ownWallet && !!fulfilment && !coreHeld}
           ownWallet={ownWallet}
           request={request}
           onChange={setRequest}
@@ -175,6 +176,11 @@ function RequestForm({
           setError('This payment request could not be set up. Check the connection and try again.')
           return
         }
+        if (!held) {
+          console.warn(
+            '[redeem] #300 gateway-core does not hold this request; Paid will come from this wallet alone',
+          )
+        }
       }
       // Persisted before it is shown: a request the merchant is looking at but
       // that was never stored cannot be matched against an incoming payment
@@ -236,6 +242,7 @@ function RequestDisplay({
   pubkey,
   stallPubkey,
   fulfilment,
+  coreUnavailable,
   ownWallet,
   request,
   onChange,
@@ -246,6 +253,11 @@ function RequestDisplay({
   stallPubkey: string
   /** Given only when gateway-core holds this request's terms. */
   fulfilment?: FulfilmentCheck
+  /**
+   * The stall's own device could not register the terms (#307 review), so Paid can only come from
+   * this wallet receiving the coupons, as before #300. Said quietly on the till.
+   */
+  coreUnavailable: boolean
   /** The payment reaches this device's wallet: the stall's own device, not a terminal. */
   ownWallet: boolean
   request: VoucherPaymentRequest
@@ -435,6 +447,15 @@ function RequestDisplay({
             pending={request.status === 'pending'}
             className="mt-3 text-left"
           />
+
+          {/* Core could not be asked about this request (#307 review): the till still works, but
+              only through this wallet's receive, so a stalled receive would hold it. A fact, in
+              the same quiet caption as the "still receiving" note. */}
+          {request.status === 'pending' && coreUnavailable && (
+            <p className="mt-3 text-xs text-mono-500">
+              Paid will show once the coupons reach this wallet.
+            </p>
+          )}
 
           {/* Only while pending: a QR for a paid or dead request is a trap — it
               still scans, and the customer would be paying a second time. */}
