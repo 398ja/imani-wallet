@@ -25,7 +25,13 @@
  * its public half), the same shape the operator script used. So nothing on this phone, or on the
  * wire, could sign as the issuer either.
  */
-import { attestEnrolment, mintTerminalCredential, ownerTransport, type MintTransport } from './terminalMint'
+import {
+  attestEnrolment,
+  CREDENTIAL_LIFETIME_DAYS,
+  mintTerminalCredential,
+  ownerTransport,
+  type MintTransport,
+} from './terminalMint'
 import { issuerDelegationTemplate } from './issuerDelegation'
 import { grantFor, TERMINAL_ROLES } from './terminalRole'
 import { signedFetch, type RequestSigner } from './nip98'
@@ -39,10 +45,17 @@ export const ENROL_PATH = `${CARD_SALES_PREFIX}/enrolment`
 export const readyPath = (stallPubkey: string) => `${CARD_SALES_PREFIX}/ready/${encodeURIComponent(stallPubkey)}`
 
 /**
- * The delegation's life: a 365-day coupon plus the issuer's 7-day skew margin
- * (`DELEGATION_SKEW_MARGIN_MS`), plus slack. The same 380 days the operator script signed.
+ * The delegation's life (review of #302).
+ *
+ * The issuer refuses to mint, and `/ready` answers false, unless the delegation outlives a coupon
+ * minted NOW (365 days) by `DELEGATION_SKEW_MARGIN_MS` (7 days): `expiration >= now + 372 days`.
+ * The operator script's 380 days therefore kept a stall on sale for only EIGHT days after it
+ * enrolled; then Buy turned itself off and every sale read "needs renewing". So it must cover the
+ * whole time the stall wants to sell, plus that 372: the credential sells for a year
+ * (`CREDENTIAL_LIFETIME_DAYS`), so 365 + 365 + 7. Card sales then stay on for the credential's
+ * life, and both are renewed together by Set up card sales again.
  */
-export const DELEGATION_LIFETIME_DAYS = 380
+export const DELEGATION_LIFETIME_DAYS = CREDENTIAL_LIFETIME_DAYS + 365 + 7
 
 /** The till name the credential carries, shown on the owner's own records. */
 export const CARD_SALES_TERMINAL_NAME = 'Card sales'
