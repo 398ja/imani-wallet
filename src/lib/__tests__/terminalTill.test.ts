@@ -4,6 +4,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  FULFILMENT_FAST_MS,
+  FULFILMENT_MAX_MS,
+  fulfilmentDelayMs,
+  watchFulfilment,
   fulfilmentOf,
   idleLockMinutesFor,
   idleLockMs,
@@ -209,5 +213,121 @@ describe('the idle lock (decision 2)', () => {
     vi.advanceTimersByTime(48 * 3600_000)
     expect(onLock).not.toHaveBeenCalled()
     stop()
+  })
+})
+
+describe('watching a request until core says Paid (#300)', () => {
+  const STALL_REQ = { amount: 500, unit: 'EUR' }
+  const PAID = { fulfilled: true, sendId: 's1', issuerId: STALL, recipientPubkey: STALL, amount: 500, unit: 'EUR' }
+
+  // Polling is bounded: quick while the customer is at the counter, then backing off to a cap,
+  // so a request nobody pays does not hammer gateway-core every 3 s for its whole day.
+  it('backs off from quick checks to a capped interval', () => {
+    const delays = Array.from({ length: 40 }, (_, i) => fulfilmentDelayMs(i))
+    expect(delays[0]).toBe(FULFILMENT_FAST_MS)
+    expect(delays.every((d, i) => i === 0 || d >= delays[i - 1])).toBe(true)
+    expect(Math.max(...delays)).toBe(FULFILMENT_MAX_MS)
+  })
+
+  // Stops on Paid: one verdict that covers the request ends the watch, and nothing asks again.
+  it('stops after Paid, and asks one at a time', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    let inFlight = 0
+    let maxInFlight = 0
+    let paidAt = 3
+    const paid: unknown[] = []
+    watchFulfilment({
+      paymentId: 'pr-0123456789abcdef',
+      check: async () => {
+        calls += 1
+        inFlight += 1
+        maxInFlight = Math.max(maxInFlight, inFlight)
+        await Promise.resolve()
+        inFlight -= 1
+        return calls >= paidAt ? PAID : { fulfilled: false }
+      },
+      isPaid: (a) => paidForStall(a, STALL, STALL_REQ),
+      expiresAtMs: Date.now() + 3_600_000,
+      onPaid: (a) => paid.push(a),
+      onExpired: () => {},
+    })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(paid).toEqual([PAID])
+    expect(calls).toBe(3)
+    expect(maxInFlight).toBe(1)
+    paidAt = 0
+  })
+
+  // Stops when told to (the screen unmounted), including while an answer is still in flight:
+  // a late "paid" for a till nobody is looking at must not fire.
+  it('stops on cancel, and drops an answer that lands after it', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    let release: (v: unknown) => void = () => {}
+    const paid: unknown[] = []
+    const stop = watchFulfilment({
+      paymentId: 'pr-0123456789abcdef',
+      check: () => {
+        calls += 1
+        return new Promise((r) => (release = r as never))
+      },
+      isPaid: (a) => paidForStall(a, STALL, STALL_REQ),
+      expiresAtMs: Date.now() + 3_600_000,
+      onPaid: (a) => paid.push(a),
+      onExpired: () => {},
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toBe(1)
+    stop()
+    release(PAID)
+    await vi.advanceTimersByTimeAsync(600_000)
+    expect(paid).toEqual([])
+    expect(calls).toBe(1)
+  })
+
+  // Stops at the request's expiry: an expired request is a terminal state, not something to poll.
+  it('stops at expiry and says so', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    let expired = 0
+    watchFulfilment({
+      paymentId: 'pr-0123456789abcdef',
+      check: async () => {
+        calls += 1
+        return { fulfilled: false }
+      },
+      isPaid: () => false,
+      expiresAtMs: Date.now() + 10_000,
+      onPaid: () => {},
+      onExpired: () => (expired += 1),
+    })
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    const after = calls
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    expect(expired).toBe(1)
+    expect(calls).toBe(after)
+    expect(calls).toBeLessThanOrEqual(6)
+  })
+
+  // An error is "still waiting", and the watch carries on: never Paid on an error path.
+  it('keeps waiting through a failed check', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    const paid: unknown[] = []
+    watchFulfilment({
+      paymentId: 'pr-0123456789abcdef',
+      check: async () => {
+        calls += 1
+        if (calls === 1) throw new Error('offline')
+        return calls === 2 ? null : PAID
+      },
+      isPaid: (a) => paidForStall(a, STALL, STALL_REQ),
+      expiresAtMs: Date.now() + 3_600_000,
+      onPaid: (a) => paid.push(a),
+      onExpired: () => {},
+    })
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(paid).toEqual([PAID])
   })
 })
