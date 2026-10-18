@@ -37,7 +37,7 @@
  * becomes two coupons. A person restarts it once payment-adapter is back.
  */
 
-import { createServer } from 'node:http'
+import { createServer, type IncomingMessage } from 'node:http'
 
 import { tokenFor, FileCredentialStore } from './adapters'
 import { confirmAll, CredentialConfirmer, retryUnconfirmed } from './confirmation'
@@ -47,6 +47,7 @@ import { countPass, renderMetrics } from './metrics'
 import { DEFAULT_OUTBOX_OPTIONS, DeliveryOutbox, FileOutboxStore, runDeliveryPass } from './outbox'
 import { PurchasesApi, ReportLostError } from './purchasesApi'
 import { sendSaleRecord } from './saleRecord'
+import { ENROLMENT_PREFIX, EnrolmentService, MAX_BODY_BYTES } from './enrolment'
 import { CredentialVault } from './vault'
 import { runPass, type WorkerDeps } from './worker'
 
@@ -216,6 +217,27 @@ export function resetForTest(): void {
 }
 
 /**
+ * Self-service card-sales enrolment (imani-wallet#298), mounted by `main()` with the SAME vault
+ * and confirmer the worker uses, so a stall enrolled here is minted for on the next pass.
+ */
+let enrolment: EnrolmentService | null = null
+export function mountEnrolment(service: EnrolmentService | null): void {
+  enrolment = service
+}
+
+/** The body, or null when it is larger than any enrolment request could be. */
+async function readBody(req: IncomingMessage): Promise<string | null> {
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length
+    if (size > MAX_BODY_BYTES) return null
+    chunks.push(chunk as Buffer)
+  }
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+/**
  * Liveness only, and it does NOT report the queue.
  *
  * Two reasons. A probe that fails when the gateway is down would restart a
@@ -244,6 +266,23 @@ export const server = createServer((req, res) => {
     res.end(renderMetrics())
     return
   }
+  if (enrolment !== null && (req.url ?? '').startsWith(ENROLMENT_PREFIX + '/')) {
+    const service = enrolment
+    void readBody(req).then(async (body) => {
+      const answer =
+        body === null
+          ? { status: 413, body: { error: 'request too large' } }
+          : await service.handle({
+              method: req.method ?? 'GET',
+              path: req.url ?? '',
+              authorization: req.headers.authorization,
+              body,
+            })
+      res.writeHead(answer.status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
+      res.end(JSON.stringify(answer.body))
+    })
+    return
+  }
   res.writeHead(404, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify({ error: 'not found' }))
 })
@@ -266,6 +305,13 @@ function main(): void {
   const vault = vaultFor(config)
   const confirmer = new CredentialConfirmer(config.gatewayUrl)
   const deps = depsFor(config, vault, confirmer)
+  mountEnrolment(new EnrolmentService({ vault, confirmer, publicOrigin: config.publicOrigin }))
+  // #290: a record sealed by somebody else (the operator script) is picked up on the next read,
+  // and confirmed at once (#296) rather than at its first sale.
+  vault.onReload(() => void confirmAll(vault, confirmer))
+  if (config.publicOrigin === null) {
+    console.warn('[purchase-issuer] PURCHASE_PUBLIC_ORIGIN unset: self-service card-sales enrolment is OFF')
+  }
 
   server.listen(config.port, () => {
     console.log(

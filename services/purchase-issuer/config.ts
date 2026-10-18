@@ -52,6 +52,12 @@ export interface IssuerConfig {
   intervalMs: number
   /** Liveness port. */
   port: number
+  /**
+   * The public origin a stall signs its enrolment NIP-98 for (imani-wallet#298), e.g.
+   * https://wallet.example. Null leaves self-service enrolment OFF (503), never guessed from a
+   * Host header: a signature is bound to one URL, and accepting any origin defeats that.
+   */
+  publicOrigin: string | null
 }
 
 /** Refused at boot, naming everything that is wrong rather than the first thing. */
@@ -143,6 +149,18 @@ export function readConfig(env: NodeJS.ProcessEnv): IssuerConfig {
     livemode,
     intervalMs: positive(env.PURCHASE_INTERVAL_MS, 15_000),
     port: positive(env.PURCHASE_ISSUER_PORT, 8791),
+    publicOrigin: origin(env.PURCHASE_PUBLIC_ORIGIN),
+  }
+}
+
+/** An origin with no path, or null when unset or unparseable. */
+function origin(raw: string | undefined): string | null {
+  const value = (raw ?? '').trim()
+  if (value === '') return null
+  try {
+    return new URL(value).origin
+  } catch {
+    return null
   }
 }
 
