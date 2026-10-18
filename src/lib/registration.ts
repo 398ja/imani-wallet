@@ -136,7 +136,7 @@ export async function isHandleAvailable(handle: string): Promise<boolean> {
  * rejects a mismatch with 403. This is the non-custodial "raw pubkey" mode —
  * no bunker, no server-held key.
  */
-async function claimHandle(
+export async function claimHandle(
   handle: string,
   pubkey: string,
   signer: RequestSigner,
