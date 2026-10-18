@@ -46,9 +46,20 @@ export function ReceivePage({ profile }: { profile: Profile }) {
 
   useEffect(() => {
     if (!code) return
-    QRCode.toDataURL(code, { width: 512, margin: 1 }).then(setDataUrl, (e: Error) =>
-      setQrError(e.message),
+    // The render is async: drop its result once the page is gone (or the code changed), or the
+    // late setState lands after unmount (#285: after jsdom teardown, an unhandled rejection).
+    let live = true
+    QRCode.toDataURL(code, { width: 512, margin: 1 }).then(
+      (url) => {
+        if (live) setDataUrl(url)
+      },
+      (e: Error) => {
+        if (live) setQrError(e.message)
+      },
     )
+    return () => {
+      live = false
+    }
   }, [code])
 
   // Derived, not stored: "no address at all" is a fact about the profile, known

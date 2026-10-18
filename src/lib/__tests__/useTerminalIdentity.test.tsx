@@ -310,9 +310,8 @@ describe('#160 review (LOW): a record for another device does not lock the owner
       useTerminalIdentity({ devicePubkey: STALL, ...mint('UNSPENT') }),
     )
 
-    // Give the deferred update a chance to land before asserting on it.
-    await new Promise((resolve) => setTimeout(resolve, 10))
-    expect(result.current.ready).toBe(true)
+    // Wait on the deferred update itself, not the clock (#286).
+    await waitFor(() => expect(result.current.ready).toBe(true))
     expect(result.current.actor).toBeNull()
     expect(result.current.refusal).toBeNull()
   })
@@ -325,7 +324,8 @@ describe('#160 review (LOW): a record for another device does not lock the owner
       useTerminalIdentity({ devicePubkey: null, ...mint('UNSPENT') }),
     )
 
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    // Settle first (#286), so a refusal set by the deferred update would be seen.
+    await waitFor(() => expect(result.current.ready).toBe(true))
     expect(result.current.refusal).toBeNull()
   })
 })
