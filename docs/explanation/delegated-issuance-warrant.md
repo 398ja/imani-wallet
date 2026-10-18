@@ -55,7 +55,12 @@ before relying on delegated warrants in production.
 
 ## Operating it
 
-Attach a stall's signed delegation to its credential with:
+A merchant enrols the purchase issuer from the app: Settings › Card payments ›
+**Turn on card sales** (imani-wallet#298, see `docs/terminals.md`). The phone
+signs the delegation with the stall key, which never leaves it, and
+purchase-issuer verifies it with the same `checkDelegation` before sealing.
+
+For a TEST stall whose key we hold, attach a delegation by hand with:
 
     npx tsx services/purchase-issuer/attachDelegation.ts <stall-pubkey> <event.json>
 

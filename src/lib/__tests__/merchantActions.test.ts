@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest'
 import type { VoucherRow } from '@imani/wallet-storage'
 
-import { LOG_IN_TO_PAY, NO_CARDS, NO_VOUCHERS, merchantActions, payPath, validVoucherCount } from '../merchantActions'
+import { CARD_SALES_CHECKING, CARD_SALES_NOT_READY, LOG_IN_TO_PAY, NO_CARDS, NO_VOUCHERS, merchantActions, payPath, validVoucherCount } from '../merchantActions'
 import { rememberAfterLogin, takeAfterLogin } from '../afterLogin'
 
 /** Buy and Pay enablement, exactly as #280's acceptance table states it. */
@@ -20,7 +20,7 @@ function row(over: Partial<VoucherRow>): VoucherRow {
 
 describe('merchantActions', () => {
   it('Stripe and no vouchers: Buy enabled, Pay disabled with its reason', () => {
-    const { buy, pay } = merchantActions({ acceptsCards: true, validVouchers: 0, loggedIn: true })
+    const { buy, pay } = merchantActions({ acceptsCards: true, cardSales: 'ready', validVouchers: 0, loggedIn: true })
     expect(buy).toEqual({ enabled: true })
     expect(pay).toEqual({ enabled: false, reason: NO_VOUCHERS })
   })
@@ -32,9 +32,34 @@ describe('merchantActions', () => {
   })
 
   it('logged out: Buy still enabled (it leads through login), Pay disabled', () => {
-    const { buy, pay } = merchantActions({ acceptsCards: true, validVouchers: 0, loggedIn: false })
+    const { buy, pay } = merchantActions({ acceptsCards: true, cardSales: 'ready', validVouchers: 0, loggedIn: false })
     expect(buy.enabled).toBe(true)
     expect(pay).toEqual({ enabled: false, reason: LOG_IN_TO_PAY })
+  })
+})
+
+/**
+ * imani-wallet#298: a stall can take card payments (Stripe, `acceptsCards`) without being able to
+ * ISSUE what was paid for (the purchase issuer not enrolled). Buy must not take that money. It
+ * fails safe: only an explicit "ready" from the issuer enables it, and the reason sits beside it.
+ */
+describe('Buy for a stall whose card sales are not ready (#298)', () => {
+  // Stripe connected, issuer not enrolled: Buy disabled, with the reason adjacent.
+  it('is disabled when the issuer is not enrolled', () => {
+    const { buy } = merchantActions({ acceptsCards: true, cardSales: 'not-ready', validVouchers: 0, loggedIn: true })
+    expect(buy).toEqual({ enabled: false, reason: CARD_SALES_NOT_READY })
+  })
+
+  // Still asking: disabled (unknown never sells), with a quiet reason.
+  it('is disabled while readiness is unknown', () => {
+    const { buy } = merchantActions({ acceptsCards: true, cardSales: 'checking', validVouchers: 0, loggedIn: true })
+    expect(buy).toEqual({ enabled: false, reason: CARD_SALES_CHECKING })
+  })
+
+  // No Stripe at all still says so, whatever the issuer would say.
+  it('keeps the no-cards reason when the stall takes no cards', () => {
+    const { buy } = merchantActions({ acceptsCards: false, cardSales: 'ready', validVouchers: 0, loggedIn: true })
+    expect(buy).toEqual({ enabled: false, reason: NO_CARDS })
   })
 })
 

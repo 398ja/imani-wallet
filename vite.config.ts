@@ -236,6 +236,16 @@ export const proxy = {
    */
   '/api/v1/checkout': { target: 'http://localhost:28087', changeOrigin: true },
   /*
+   * Card-sales enrolment and readiness (imani-wallet#298), on purchase-issuer. NOT in the local
+   * compose stack: run it from this repo (`npx tsx services/purchase-issuer/server.ts`, default
+   * port 8791, with PURCHASE_PUBLIC_ORIGIN=http://localhost:5173). With it down, readiness reads
+   * as "not ready" and Buy is disabled, which is the fail-safe answer.
+   *
+   * changeOrigin false: the stall signs NIP-98 for the browser origin, and purchase-issuer
+   * checks it against PURCHASE_PUBLIC_ORIGIN.
+   */
+  '/api/v1/card-sales': { target: 'http://localhost:8791', changeOrigin: false },
+  /*
    * A stall's own Stripe account, on merchant-service.
    *
    * Without a rule this falls into the '/api' catch-all and reaches

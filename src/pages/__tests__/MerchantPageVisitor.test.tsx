@@ -19,6 +19,8 @@ vi.mock('../../lib/branding', () => ({
   onBrandingChanged: () => () => {},
   merchantBranding: () => Promise.resolve({ organizationName: 'Rosa Green Farm' }),
 }))
+// The purchase issuer can issue for this stall (#298); without it Buy stays disabled.
+vi.mock('../../lib/cardSalesEnrolment', () => ({ cardSalesReady: async () => true }))
 vi.mock('../../lib/merchant', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/merchant')>()),
   fetchMerchantRecord: () =>
@@ -41,7 +43,7 @@ describe('a stall page opened with no wallet', () => {
       </MemoryRouter>,
     )
     const buy = (await screen.findByRole('button', { name: 'Buy a voucher with card' })) as HTMLButtonElement
-    expect(buy.disabled).toBe(false)
+    await vi.waitFor(() => expect(buy.disabled).toBe(false))
     const pay = screen.getByRole('button', { name: 'Pay with your vouchers' }) as HTMLButtonElement
     expect(pay.disabled).toBe(true)
     expect(screen.getByText('Log in to pay with your vouchers')).toBeTruthy()

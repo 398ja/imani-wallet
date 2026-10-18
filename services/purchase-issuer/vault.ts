@@ -66,6 +66,12 @@ interface SealedCredential {
 export interface CredentialStore {
   read(): Promise<SealedCredential[]>
   write(records: SealedCredential[]): Promise<void>
+  /**
+   * Something that changes whenever the stored records do (imani-wallet#290), e.g. the file's
+   * mtime, size and inode. Optional: a store without it is read once, as before, and only this
+   * process's own writes refresh the cache.
+   */
+  version?(): Promise<string>
 }
 
 /**
@@ -92,6 +98,12 @@ export class CredentialVault {
   private readonly store: CredentialStore
   /** Decrypted keys, held only for the life of the process. */
   private cache: Map<string, StallCredential> | null = null
+  /** The store's `version()` the cache was built from (#290). */
+  private cacheVersion: string | null = null
+  /** The store version last found unreadable, so it is logged once (review of #302). */
+  private unreadableVersion: string | null = null
+  /** Called after the cache is rebuilt from a store that changed underneath it (#290). */
+  private reloaded: (() => void) | null = null
 
   constructor(serviceKeyHex: string, store: CredentialStore) {
     const key = Buffer.from(serviceKeyHex, 'hex')
@@ -123,20 +135,37 @@ export class CredentialVault {
     ])
     const sealed = Buffer.concat([ciphertext, cipher.getAuthTag()])
 
-    const records = await this.store.read()
-    // Replace rather than append. A stall that re-enrols has one current
-    // credential, and keeping the old one would leave a burnt key on disk
-    // looking exactly like a live one.
-    const without = records.filter((r) => r.stallPubkey !== credential.stallPubkey)
-    without.push({
-      stallPubkey: credential.stallPubkey,
-      credentialId: credential.credentialId,
-      iv: iv.toString('base64'),
-      sealed: sealed.toString('base64'),
-      ...(credential.delegation ? { delegation: credential.delegation } : {}),
+    await this.serialised(async () => {
+      // Throws on a store that cannot be read (review of #302), so a corrupt file is never
+      // overwritten with this one record and every other stall's credential lost.
+      const records = await this.store.read()
+      // Replace rather than append. A stall that re-enrols has one current
+      // credential, and keeping the old one would leave a burnt key on disk
+      // looking exactly like a live one.
+      const without = records.filter((r) => r.stallPubkey !== credential.stallPubkey)
+      without.push({
+        stallPubkey: credential.stallPubkey,
+        credentialId: credential.credentialId,
+        iv: iv.toString('base64'),
+        sealed: sealed.toString('base64'),
+        ...(credential.delegation ? { delegation: credential.delegation } : {}),
+      })
+      await this.store.write(without)
+      this.cache = null
     })
-    await this.store.write(without)
-    this.cache = null
+  }
+
+  /**
+   * One read-modify-write at a time in this process (review of #302). Self-service enrolment made
+   * concurrent `put`s ordinary: two stalls enrolling at once each read the same list, each added
+   * itself, and the second rename dropped the first stall's fresh credential (it was confirmed at
+   * the gateway, and the phone was told "on").
+   */
+  private writes: Promise<void> = Promise.resolve()
+  private serialised(work: () => Promise<void>): Promise<void> {
+    const next = this.writes.then(work, work)
+    this.writes = next.catch(() => undefined)
+    return next
   }
 
   /**
@@ -146,25 +175,21 @@ export class CredentialVault {
    * the caller treats it as "issue by hand" rather than as a failure.
    */
   async get(stallPubkey: string): Promise<StallCredential | null> {
-    if (this.cache === null) {
-      this.cache = await this.load()
-    }
-    return this.cache.get(stallPubkey.toLowerCase()) ?? null
+    return (await this.cached()).get(stallPubkey.toLowerCase()) ?? null
   }
 
   /** Every credential that unseals, for the startup confirm (imani-wallet#296). */
   async all(): Promise<StallCredential[]> {
-    if (this.cache === null) {
-      this.cache = await this.load()
-    }
-    return [...this.cache.values()]
+    return [...(await this.cached()).values()]
   }
 
   /** Forget a stall's credential, e.g. after the stall burnt it. */
   async forget(stallPubkey: string): Promise<void> {
-    const records = await this.store.read()
-    await this.store.write(records.filter((r) => r.stallPubkey !== stallPubkey))
-    this.cache = null
+    await this.serialised(async () => {
+      const records = await this.store.read()
+      await this.store.write(records.filter((r) => r.stallPubkey !== stallPubkey))
+      this.cache = null
+    })
   }
 
   /**
@@ -187,6 +212,49 @@ export class CredentialVault {
     const verdict = check(candidate, minimumUntilMs)
     if (!verdict.ok) throw new Error(`delegation refused: ${verdict.reason}`)
     await this.put(candidate)
+  }
+
+  /**
+   * The decrypted records, reloaded when the store changed underneath us (imani-wallet#290).
+   *
+   * The cache used to be built once and only dropped by this process's own writes, so a stall
+   * enrolled by the operator script (or by a second process) was invisible until a restart, and
+   * its paid purchases sat OWED. Now every read asks the store for its version first: a `stat`,
+   * cheap beside a pass that talks to two services, and no watcher to leak or miss an event.
+   */
+  private async cached(): Promise<Map<string, StallCredential>> {
+    const version = this.store.version ? await this.store.version() : null
+    if (this.cache === null || (version !== null && version !== this.cacheVersion)) {
+      const external = this.cache !== null
+      let loaded: Map<string, StallCredential>
+      try {
+        loaded = await this.load()
+      } catch (error) {
+        // Review of #302: a file that cannot be read (corrupt, half-copied) must not take every
+        // stall off sale. Keep serving what we hold, and try again on the next read: the version
+        // is NOT advanced, so a fixed file is picked up, and a still-broken one is not a loop
+        // (one stat and one failed parse per read, the cost of a read that succeeded).
+        if (this.cache === null) throw error
+        // Once per bad version, not once per read (a pass and every readiness GET read).
+        if (this.unreadableVersion !== version) {
+          this.unreadableVersion = version
+          console.error(JSON.stringify({ event: 'credential_vault_unreadable_kept_cache' }))
+        }
+        return this.cache
+      }
+      this.cache = loaded
+      this.cacheVersion = version
+      if (external) this.reloaded?.()
+    }
+    return this.cache
+  }
+
+  /**
+   * Be told when records written by somebody else were picked up (#290), so a credential sealed by
+   * the operator script is confirmed at once (#296) rather than at its first sale.
+   */
+  onReload(listener: () => void): void {
+    this.reloaded = listener
   }
 
   private async load(): Promise<Map<string, StallCredential>> {

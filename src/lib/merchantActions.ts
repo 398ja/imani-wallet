@@ -11,6 +11,19 @@ import type { VoucherRow } from '@imani/wallet-storage'
 export const NO_CARDS = "Card payments aren't set up for this merchant"
 export const NO_VOUCHERS = 'You have no vouchers from this merchant yet'
 export const LOG_IN_TO_PAY = 'Log in to pay with your vouchers'
+/**
+ * The stall takes cards but its vouchers cannot be issued yet (imani-wallet#298): the purchase
+ * issuer is not enrolled, its credential expired, or its delegation lapsed. Paying now would take
+ * money for a voucher nothing would mint, so Buy waits.
+ */
+export const CARD_SALES_NOT_READY = "Card sales aren't ready for this merchant yet"
+export const CARD_SALES_CHECKING = 'Checking card sales…'
+
+/**
+ * Whether the purchase issuer can issue for this stall now (#298). `checking` and `not-ready`
+ * both keep Buy disabled: an unknown answer never sells.
+ */
+export type CardSalesReadiness = 'checking' | 'ready' | 'not-ready'
 
 export interface ActionState {
   enabled: boolean
@@ -21,18 +34,30 @@ export interface ActionState {
 export interface MerchantActionInput {
   /** The stall's published flag. Anything but `true` fails closed. */
   acceptsCards: boolean
+  /** The purchase issuer's answer for this stall. Absent is `checking`: fail safe. */
+  cardSales?: CardSalesReadiness
   /** Coupons from this stall that can still be spent: unspent and unexpired. */
   validVouchers: number
   loggedIn: boolean
 }
 
-export function merchantActions({ acceptsCards, validVouchers, loggedIn }: MerchantActionInput): {
+export function merchantActions({
+  acceptsCards,
+  cardSales = 'checking',
+  validVouchers,
+  loggedIn,
+}: MerchantActionInput): {
   buy: ActionState
   pay: ActionState
 } {
   // Logged out does not disable Buy: the button leads through login and back
   // (guest card purchase is not supported, so that detour IS the purchase).
-  const buy: ActionState = acceptsCards ? { enabled: true } : { enabled: false, reason: NO_CARDS }
+  // No cards at all says so first: it is the reason a shopper can act on (try another stall).
+  const buy: ActionState = !acceptsCards
+    ? { enabled: false, reason: NO_CARDS }
+    : cardSales === 'ready'
+      ? { enabled: true }
+      : { enabled: false, reason: cardSales === 'checking' ? CARD_SALES_CHECKING : CARD_SALES_NOT_READY }
   // Logged out says why in its own words. "No vouchers" would be a guess about
   // a wallet we cannot see.
   const pay: ActionState = !loggedIn

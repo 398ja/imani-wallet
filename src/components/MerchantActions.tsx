@@ -5,7 +5,8 @@ import { CreditCard, Wallet } from 'lucide-react'
 import { Button } from './ui'
 import { listVouchers, onWalletChanged, walletIsOpen } from '../lib/wallet'
 import { withoutInFlight } from '../lib/pay'
-import { merchantActions, payPath, validVoucherCount, type ActionState } from '../lib/merchantActions'
+import { merchantActions, payPath, validVoucherCount, type ActionState, type CardSalesReadiness } from '../lib/merchantActions'
+import { cardSalesReady } from '../lib/cardSalesEnrolment'
 import { rememberAfterLogin } from '../lib/afterLogin'
 
 /**
@@ -32,6 +33,24 @@ export function MerchantActions({
   const navigate = useNavigate()
   const loggedIn = viewerPubkey !== undefined
   const [valid, setValid] = useState(0)
+  // #298: can the purchase issuer actually issue for this stall? Asked only when the stall says
+  // it takes cards. Fails safe: an error or no answer is `not-ready`, never a sale. The answer is
+  // kept WITH the stall it is for, so a stale answer for another stall reads as `checking`.
+  const [answer, setAnswer] = useState<{ stall: string; ready: boolean } | null>(null)
+  useEffect(() => {
+    if (!acceptsCards) return
+    let live = true
+    cardSalesReady(pubkey)
+      .catch(() => false)
+      .then((ready) => {
+        if (live) setAnswer({ stall: pubkey, ready })
+      })
+    return () => {
+      live = false
+    }
+  }, [pubkey, acceptsCards])
+  const cardSales: CardSalesReadiness =
+    answer === null || answer.stall !== pubkey ? 'checking' : answer.ready ? 'ready' : 'not-ready'
 
   useEffect(() => {
     // `listVouchers` throws with no wallet open, and a visitor has nothing to
@@ -47,7 +66,7 @@ export function MerchantActions({
     return onWalletChanged(() => void load())
   }, [pubkey, loggedIn, viewerPubkey])
 
-  const { buy, pay } = merchantActions({ acceptsCards, validVouchers: valid, loggedIn })
+  const { buy, pay } = merchantActions({ acceptsCards, cardSales, validVouchers: valid, loggedIn })
 
   const onBuy = () => {
     if (loggedIn) {

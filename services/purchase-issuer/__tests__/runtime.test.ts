@@ -192,10 +192,14 @@ describe('the credential file', () => {
     expect(await new FileCredentialStore(await tempPath()).read()).toEqual([])
   })
 
-  it('reads a corrupt file as no credentials rather than crashing', async () => {
+  // Review of #302: a corrupt file is NOT "no credentials". Read as [], it wiped every stall from a
+  // running service (#290 follows the file), and the next enrolment wrote [one record] over them
+  // all. It throws: the vault keeps its cache, and `put` refuses (`vaultSafety.test.ts`). At boot
+  // the pass fails and says so on /health, and nothing mints, as before.
+  it('refuses a corrupt file rather than reading it as no credentials', async () => {
     const path = await tempPath()
     await writeFile(path, 'not json at all')
-    expect(await new FileCredentialStore(path).read()).toEqual([])
+    await expect(new FileCredentialStore(path).read()).rejects.toThrow()
   })
 
   it('creates the directory it was pointed at', async () => {
