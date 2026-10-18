@@ -144,6 +144,24 @@ export async function confirmCredential(
   credential: StallCredential,
   fetchImpl: typeof fetch = fetch,
 ): Promise<boolean> {
+  return (await confirmStanding(gatewayUrl, credential, fetchImpl)) === 'confirmed'
+}
+
+/**
+ * What the gateway said to a confirm (imani-wallet#296).
+ *
+ *  - `confirmed`: 200/204, in service.
+ *  - `expired`: 410. The credential sat unconfirmed past the gateway's 24 h window and can never be
+ *    confirmed now. The stall must re-enrol this issuer; nothing retried here can fix it.
+ *  - `unconfirmed`: anything else (network, 5xx, 401). Worth trying again later.
+ */
+export type ConfirmStanding = 'confirmed' | 'expired' | 'unconfirmed'
+
+export async function confirmStanding(
+  gatewayUrl: string,
+  credential: StallCredential,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ConfirmStanding> {
   const url = `${gatewayUrl.replace(/\/$/, '')}${CONFIRM_PATH(credential.credentialId)}`
   // The same request the wallet sends: an empty JSON object, signed in the `payload` tag. The
   // gateway reads nothing from it. An empty body signed as sha256('') passes the filter too, but
@@ -153,12 +171,14 @@ export async function confirmCredential(
     const response = await fetchImpl(url, {
       method: 'POST',
       headers: {
+        // Signed afresh on every call: `authorization` adds a random nonce, so a retry is never a
+        // replay of an earlier event (#296).
         Authorization: authorization('POST', url, body, credential.lockKeyHex),
         'Content-Type': 'application/json',
       },
       body,
     })
-    if (response.status === 204 || response.status === 200) return true
+    if (response.status === 204 || response.status === 200) return 'confirmed'
     console.warn(
       JSON.stringify({
         event: 'credential_confirm_refused',
@@ -166,8 +186,8 @@ export async function confirmCredential(
         status: response.status,
       }),
     )
-    return false
+    return response.status === 410 ? 'expired' : 'unconfirmed'
   } catch {
-    return false
+    return 'unconfirmed'
   }
 }

@@ -152,6 +152,14 @@ export class CredentialVault {
     return this.cache.get(stallPubkey.toLowerCase()) ?? null
   }
 
+  /** Every credential that unseals, for the startup confirm (imani-wallet#296). */
+  async all(): Promise<StallCredential[]> {
+    if (this.cache === null) {
+      this.cache = await this.load()
+    }
+    return [...this.cache.values()]
+  }
+
   /** Forget a stall's credential, e.g. after the stall burnt it. */
   async forget(stallPubkey: string): Promise<void> {
     const records = await this.store.read()
