@@ -42,7 +42,7 @@ import { catchUpMerchantGrant } from './lib/merchantGrantCatchUp'
 import { Centered, Fatal } from './components/ui'
 import { Header } from './components/ui/Header'
 import { LoginPage } from './pages/LoginPage'
-import { OnboardingPage } from './pages/OnboardingPage'
+import { OnboardingPage, RestoreRedirect } from './pages/OnboardingPage'
 import { TerminalSetupPage } from './pages/TerminalSetupPage'
 import { TerminalApp } from './pages/TerminalApp'
 import { isTerminalDevice } from './lib/terminalEnrol'
@@ -88,7 +88,7 @@ import { TerminalEnrolPage } from './pages/TerminalEnrolPage'
 import { useTerminalIdentity } from './lib/useTerminalIdentity'
 import { ProfileEditPage } from './pages/ProfileEditPage'
 import { SecurityPage } from './pages/SecurityPage'
-import { BackupPage, RestorePage } from './pages/BackupPages'
+import { BackupPage } from './pages/BackupPages'
 import { fulfilmentOf, registerRequestTerms } from './lib/terminalTill'
 
 /**
@@ -825,7 +825,10 @@ function PublicRoutes({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<
           device has no key and no session yet. `completeEnrolment` refuses on a
           device that already holds one, so this cannot overwrite a wallet. */}
       <Route path="/terminal/setup" element={<TerminalSetupGate />} />
-      <Route path="/restore" element={<RestorePage onUnlock={onUnlock} />} />
+      {/* Restoring IS logging in now (#325): the onboarding "Log in" step opens
+          a Google Drive backup or a backup file. Old links, bookmarks and the
+          advice people were given still say /restore, so it lands there. */}
+      <Route path="/restore" element={<RestoreRedirect />} />
       {/* A bearer claim link, which is opened by people who have no wallet yet
           BY DESIGN. It cannot fall through to `Entry` with everything else:
           losing the ref and the key here used to mean losing the voucher. The
