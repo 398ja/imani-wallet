@@ -1,4 +1,4 @@
-import type { Event } from 'nostr-tools'
+import { verifyEvent, type Event } from 'nostr-tools'
 
 /**
  * Reading Nostr events through the GATEWAY rather than from the browser.
@@ -174,4 +174,33 @@ export function newestByD(...sources: Event[][]): Event[] {
     }
   }
   return [...newest.values()]
+}
+
+/**
+ * The relay's events plus the gateway's, as a raw union by event id: no
+ * newest-per-`d` reduction, because coupon records need every event (see
+ * `relay.allEventsWithGateway`).
+ *
+ * A gateway event joins only if it is by `author`, of `kind`, and its signature
+ * verifies. The rows built from these become a balance, and the gateway is a
+ * second source, not a trusted one. Events arrive as JSON, so no cached
+ * verification verdict can ride along (see `audit.stripCachedVerdict`); the
+ * copy below makes sure of it for in-memory callers too.
+ */
+export function unionWithGateway(
+  relayed: Event[],
+  cached: Event[],
+  author: string,
+  kind: number,
+): Event[] {
+  const byId = new Map<string, Event>()
+  for (const event of relayed) byId.set(event.id, event)
+  for (const event of cached) {
+    if (byId.has(event.id)) continue
+    if (event.pubkey !== author || event.kind !== kind) continue
+    const { id, pubkey, created_at, tags, content, sig } = event
+    if (!verifyEvent({ id, pubkey, created_at, kind, tags, content, sig })) continue
+    byId.set(event.id, event)
+  }
+  return [...byId.values()]
 }
