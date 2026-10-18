@@ -4,6 +4,7 @@ import { Button, Screen, BackLink, PageHeader, Alert, Switch, Panel } from '../c
 import { MerchantFieldset } from '../components/MerchantFieldset'
 import { getSigner } from '../lib/nap'
 import { publish } from '../lib/relay'
+import { userMessage } from '../lib/userMessage'
 import {
   buildMerchantEvent,
   DEFAULT_VALIDITY_DAYS,
@@ -89,14 +90,15 @@ export function MerchantEditPage({
       saveMerchant(published)
       onSaved(published)
 
-      const { ok, total } = await publish(signed)
+      // No server counts in the copy (#324), same as the profile editor.
+      const { ok } = await publish(signed)
       setStatus(
         ok === 0
-          ? 'Saved on this device, but no relay accepted it. Customers may not see the change yet.'
-          : `Saved and published to ${ok}/${total} relay${total === 1 ? '' : 's'}.`,
+          ? 'Saved on this device, but not sent yet. Customers may not see the change for a while.'
+          : 'Saved.',
       )
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(userMessage(e))
     } finally {
       setBusy(false)
     }

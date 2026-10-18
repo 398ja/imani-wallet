@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
-import { currencyDecimals, formatFace, handleLabel, shortPubkey } from '../lib/format'
+import { currencyDecimals, formatFace, handleLabel } from '../lib/format'
 import {
   linkPubOf,
   parseGiftFragment,
@@ -27,6 +27,7 @@ import { isTerminalDevice } from '../lib/terminalEnrol'
 import { Button } from '../components/ui'
 import { Centered } from '../components/ui/layout'
 import { Outcome } from './ClaimLandingPage'
+import { userMessage } from '../lib/userMessage'
 
 /**
  * A gift link arriving at the wallet: `/g#v=1&k=<linkSecret>&x=<expiry>` (claim links phase 4,
@@ -170,7 +171,7 @@ function GiftPrompt({
   const stallName = humanName(stallIdentity?.name)
   const senderName = humanName(senderIdentity?.name)
     ?? (senderIdentity?.nip05 ? handleLabel(senderIdentity.nip05) : undefined)
-    ?? (summary?.senderPubkey ? shortPubkey(summary.senderPubkey) : 'someone')
+    ?? 'someone'
   const [ownHandle] = useState(() => {
     const nip05 = pubkey ? loadProfile(pubkey)?.nip05 : undefined
     return nip05 ? handleLabel(nip05) : null
@@ -207,7 +208,7 @@ function GiftPrompt({
       },
       (error: unknown) => {
         stashPendingClaim(arrival.ref, arrival.key, { kind: 'gift', x: arrival.x })
-        setState({ step: 'done', outcome: { kind: 'failed', message: String(error) }, summary: verified })
+        setState({ step: 'done', outcome: { kind: 'failed', message: userMessage(error) }, summary: verified })
       },
     )
   }, [arrival, state])
@@ -315,7 +316,7 @@ function GiftPrompt({
             3.6:1 on the page background, under the 4.5:1 small text needs, on
             the one line that says this voucher can be trusted. */}
         <p className="text-sm text-green-700 dark:text-green-400">✓ verified stall</p>
-        {!stallName && <p className="text-xs text-mono-500">{shortPubkey(s.issuer)}</p>}
+        {/* No key fragment under an unnamed stall (#324). */}
         <p className="mt-4 text-amount text-mono-900 dark:text-mono-50">{face}</p>
         <p className="mt-1 text-sm text-mono-500">Cashlink from {senderName}</p>
         <p className="mt-1 text-sm text-mono-500">

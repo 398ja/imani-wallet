@@ -197,20 +197,23 @@ export function LedgerPage({ stallPubkey }: { stallPubkey: string }) {
               Share this with an auditor or a coupon issuer so they can check your record. It is
               not your account key, and it does not reveal what you redeemed or for how much.
             </p>
-            {/* Wrapped, not truncated. An earlier review caught a raw 64-char
-                hexpub overflowing the settlement receipt; the fix there was to
-                shorten it, but this one exists to be COPIED, so it has to be
-                shown in full and made selectable.
+            {/* Behind a deliberate step (#324). The merchant does have to act on
+                this value (copy it, or read it out to an auditor), so it is
+                kept, but the Copy button is the intended path and the raw
+                characters stay collapsed until asked for.
 
-                `break-all` rather than the default: seen in a real browser, a
-                64-char hash breaks wherever the line happens to end, which
-                splits it mid-character-run and makes reading it back to an
-                auditor by eye error-prone. `select-all` means a tap still takes
-                the whole value regardless of where it wrapped, and the Copy
-                button remains the intended path. */}
-            <p className="mt-3 break-all font-mono text-xs leading-relaxed text-mono-600 dark:text-mono-300 select-all">
-              {pubkey}
-            </p>
+                Wrapped, not truncated, once shown: it exists to be COPIED, so
+                it has to be shown in full and made selectable. `break-all`
+                because a 64-char hash otherwise breaks mid-run, and
+                `select-all` so a tap takes the whole value. */}
+            <details className="mt-3">
+              <summary className="pressable inline-block cursor-pointer py-1 text-sm text-mono-500">
+                Show ledger ID
+              </summary>
+              <p className="mt-2 break-all font-mono text-xs leading-relaxed text-mono-600 dark:text-mono-300 select-all">
+                {pubkey}
+              </p>
+            </details>
             <Button variant="secondary" className="mt-3" onClick={copy}>
               {copied ? (
                 <>
@@ -238,7 +241,7 @@ export function LedgerPage({ stallPubkey }: { stallPubkey: string }) {
           <div className="min-w-0 flex-1">
             <p className="font-medium text-mono-900 dark:text-mono-50">Your published record</p>
             <p className="mt-1 text-sm text-mono-500">
-              Read back from the relay the same way an auditor reads it — not from this device.
+              Read back from the network the same way an auditor reads it, not from this device.
             </p>
 
             {reading && !ledger ? (
@@ -282,7 +285,7 @@ export function LedgerPage({ stallPubkey }: { stallPubkey: string }) {
               </dl>
             ) : (
               <p className="mt-3 text-sm text-mono-500">
-                Could not reach the relay. Your records are unaffected — this screen only reads.
+                Could not reach the network. Your records are unaffected: this screen only reads.
               </p>
             )}
 

@@ -123,7 +123,7 @@ function parseConfig(raw: RawConfig): GatewayConfig {
   // `default_domain` is the documented fallback: both fields are populated on
   // this stack, but only nip05_domain is named for this purpose.
   const domain = str(raw.nip05_domain) ?? str(raw.default_domain)
-  if (!domain) throw new Error('The gateway did not report a NIP-05 domain.')
+  if (!domain) throw new Error('The service did not say which address domain to use. Try again in a moment.')
 
   return {
     nip05Domain: domain,

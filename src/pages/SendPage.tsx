@@ -36,6 +36,7 @@ import {
   withoutInFlight,
   type SendResult,
 } from '../lib/pay'
+import { userMessage } from '../lib/userMessage'
 
 /**
  * Send a voucher to someone — a friend, or a merchant redeeming it.
@@ -471,7 +472,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
               } catch (e) {
                 setStatus({
                   step: e instanceof SendOutcomeUnknownError ? 'unconfirmed' : 'failed',
-                  message: e instanceof Error ? e.message : 'Send failed.',
+                  message: userMessage(e, 'Send failed.'),
                   swapBackTokenId: e instanceof VoucherFullyRedeemedError ? e.tokenId : undefined,
                 })
               }

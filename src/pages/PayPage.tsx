@@ -30,6 +30,7 @@ import {
   BackLink,
   Panel,
 } from '../components/ui'
+import { userMessage } from '../lib/userMessage'
 
 type Status =
   | { step: 'review' }
@@ -64,7 +65,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
     try {
       return { ok: true, request: nut.parse(raw) }
     } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : 'Unreadable payment request.' }
+      return { ok: false, error: userMessage(e, 'Unreadable payment request.') }
     }
   }, [raw])
 
@@ -266,7 +267,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
           } catch (e) {
             setStatus({
               step: e instanceof SendOutcomeUnknownError ? 'unconfirmed' : 'failed',
-              message: e instanceof Error ? e.message : 'Payment failed.',
+              message: userMessage(e, 'Payment failed.'),
               // cashu-mint#540: terminal, not retried; the holder is offered the coupon's sats.
               swapBackTokenId: e instanceof VoucherFullyRedeemedError ? e.tokenId : undefined,
             })

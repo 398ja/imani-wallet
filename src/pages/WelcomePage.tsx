@@ -7,6 +7,7 @@ import { backupFilename, createBackup } from '../lib/backup'
 import { downloadText } from '../lib/download'
 import { handleLabel } from '../lib/format'
 import { useDriveBackup } from '../lib/useDriveBackup'
+import { userMessage } from '../lib/userMessage'
 
 /**
  * Save your key. The only screen in the app that cannot be undone by trying
@@ -43,7 +44,7 @@ export function WelcomePage({
       downloadText(backupFilename(profile), createBackup(profile.pubkey))
       setDownloaded(true)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(userMessage(e))
     }
   }
 
@@ -81,6 +82,7 @@ export function WelcomePage({
         <div className="mt-3 flex items-center gap-2">
           <input
             readOnly
+            aria-label="Your backup key"
             type={revealed ? 'text' : 'password'}
             value={nsec}
             // Selecting on focus makes a manual copy one gesture rather than a
@@ -91,7 +93,7 @@ export function WelcomePage({
           <button
             type="button"
             onClick={() => setRevealed((r) => !r)}
-            aria-label={revealed ? 'Hide key' : 'Show key'}
+            aria-label={revealed ? 'Hide backup key' : 'Show backup key'}
             className="pressable shrink-0 rounded-xl border border-mono-200 p-2 text-mono-500 hover:bg-mono-100 dark:border-mono-700 dark:hover:bg-mono-800"
           >
             {revealed ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -104,7 +106,7 @@ export function WelcomePage({
         <div className="mt-2 grid grid-cols-3 gap-2">
           <Button variant="secondary" className="flex-col px-2 py-2 text-xs" onClick={copy}>
             {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-            <span className="mt-1">{copied ? 'Copied' : 'Copy key'}</span>
+            <span className="mt-1">{copied ? 'Copied' : 'Copy backup key'}</span>
           </Button>
 
           {/* The account FILE, not the nsec as text. One artifact for both
