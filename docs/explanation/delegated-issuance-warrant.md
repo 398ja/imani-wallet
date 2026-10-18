@@ -61,3 +61,8 @@ Attach a stall's signed delegation to its credential with:
 
 It refuses a delegation the till would refuse, or one that would not outlive
 a coupon minted today by the margin.
+
+With `PURCHASE_GATEWAY_URL` set it then confirms the credential at the
+gateway, which lapses one left unconfirmed for 24 hours (imani-wallet#296).
+Run it within a day of minting the credential. The service also confirms
+every credential it holds at startup.
