@@ -328,7 +328,10 @@ function AccountStep({
             fallbackPicture={stored?.picture}
           />
         ) : (
-          <p className="font-medium text-mono-900 dark:text-mono-50">Unnamed account</p>
+          // An older backup that names no key and carries no profile. It is the
+          // customer's OWN account, so it is never "Unnamed" (owner rule): the
+          // gate below gives it its profile before the wallet opens.
+          <p className="font-medium text-mono-900 dark:text-mono-50">Your account</p>
         )}
       </Panel>
 
