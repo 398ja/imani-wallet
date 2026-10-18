@@ -7,7 +7,7 @@
  * interesting decisions stay in the module that has tests for them.
  */
 
-import { mkdir, readFile, writeFile, rename } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, rename, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 import { authorization, IssuanceFailed, ISSUE_PATH, type StallCredential } from './issuer'
@@ -52,6 +52,19 @@ export class FileCredentialStore implements CredentialStore {
       // land where the design already sends a stall with no credential, which
       // is issuing by hand.
       return [] as never[]
+    }
+  }
+
+  /**
+   * mtime, size and inode (imani-wallet#290). `write` renames a new file into place, so every
+   * write changes the inode even within one mtime tick. A missing file is its own version.
+   */
+  async version(): Promise<string> {
+    try {
+      const s = await stat(this.path, { bigint: true })
+      return `${s.ino}:${s.size}:${s.mtimeNs}`
+    } catch {
+      return 'absent'
     }
   }
 

@@ -12,7 +12,7 @@ import { hostname } from 'node:os'
 import { getDecimals } from '@imani/money'
 
 import { discharge, type Obligation, type Outcome, type Ports } from './discharge'
-import { countAttempt } from './metrics'
+import { countAttempt, setOwedUnenrolled } from './metrics'
 import type { DeliveryOutbox } from './outbox'
 import type { PurchasesApi, OwedPurchase } from './purchasesApi'
 
@@ -67,6 +67,7 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
   const result: PassResult = { discharged: 0, deferred: 0, blocked: 0, skipped: 0 }
   const worker = deps.workerId ?? DEFAULT_WORKER_ID
   const owed = await deps.api.owed()
+  let owedUnenrolled = 0
 
   for (const purchase of owed) {
     if (purchase.stallPubkey === null) {
@@ -89,9 +90,27 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
     // A stall with no enrolled issuer is issued by hand. Checked BEFORE the
     // claim, so that ordinary case never holds a lease on a row it will not
     // work, and never writes a note on every pass.
+    //
+    // Counted and logged DISTINCTLY (imani-wallet#290/#298). Every row here is a card purchase
+    // somebody has PAID for, so "no credential" is money taken that nothing will issue. It used to
+    // read as an ordinary `skipped`, which is how three paid purchases sat OWED unseen. One log
+    // line per stall per hour (a pass runs every 15 s), with a stall prefix only: no amount, no id.
     if ((await deps.ports.credentialFor(purchase.stallPubkey)) === null) {
       result.skipped += 1
-      countAttempt('skipped')
+      owedUnenrolled += 1
+      countAttempt('no_credential')
+      const stall = purchase.stallPubkey.slice(0, 16)
+      const now = Date.now()
+      if ((warnedAt.get(stall) ?? 0) + UNENROLLED_WARN_EVERY_MS <= now) {
+        warnedAt.set(stall, now)
+        console.warn(
+          JSON.stringify({
+            event: 'purchase_owed_stall_not_enrolled',
+            stall,
+            detail: 'a paid card purchase for a stall with no enrolled issuer; the stall must turn on card sales',
+          }),
+        )
+      }
       continue
     }
 
@@ -240,8 +259,13 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
     }
   }
 
+  setOwedUnenrolled(owedUnenrolled)
   return result
 }
+
+/** How often one stall's "paid but not enrolled" line is repeated. */
+const UNENROLLED_WARN_EVERY_MS = 60 * 60_000
+const warnedAt = new Map<string, number>()
 
 /** Queue what a minted coupon still owes. False when it could not be made durable. */
 async function enqueue(
