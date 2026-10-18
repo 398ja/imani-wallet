@@ -156,7 +156,7 @@ export function BackupLogin({
         <Choice
           icon={<CloudDownload className="h-5 w-5" aria-hidden />}
           title="Google Drive"
-          caption={loading === 'drive' ? 'Checking Google Drive…' : 'The copy saved to your Google account'}
+          caption={loading === 'drive' ? 'Checking Google Drive…' : 'Saved to your Google account'}
           busy={loading === 'drive'}
           disabled={busy}
           onClick={() => void fromDrive()}
@@ -164,7 +164,7 @@ export function BackupLogin({
         <Choice
           icon={<FileText className="h-5 w-5" aria-hidden />}
           title="A backup file"
-          caption="A file you downloaded from the wallet"
+          caption="Downloaded from the wallet"
           disabled={busy}
           onClick={() => fileInput.current?.click()}
         />
