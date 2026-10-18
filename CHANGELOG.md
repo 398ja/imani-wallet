@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Log in opens your backup; the Restore page is gone** (Closes #325). The onboarding "Log in"
+  step and `/restore` are one flow: "Where is your backup?" offers **Google Drive** and **A backup
+  file** as equals, then shows whose account it is (avatar, name, handle, no keys), then asks for
+  the passphrase. A wrong passphrase says so inline and writes nothing (`applyBackup` still rolls
+  back); an empty Google account or an unreadable file each say so, with the choices still on
+  screen. Pasting the key is now a small secondary link, "Use your backup key instead", with no
+  protocol wording. `/restore` redirects to the Log in step, the Restore links on the first screen
+  and on `/login` are removed, and the re-auth dialog now says to choose Log in after logging out.
+  The `/login` unlock and Settings › Backup are unchanged.
+- **No account without a profile** (owner rule, #325). Every way in (backup or pasted key) asks
+  the directory (`GET /api/v1/resolve/pubkey/{hex}`) for the account's handle before the key is
+  kept. An account with none is not let in anonymously: nothing is written, and "Finish your
+  profile" claims a handle (display name defaults to the handle) before the wallet opens. A
+  directory that cannot be reached fails closed with a retry message.
+
 - **Restore names the account with its profile, not its npub** (Closes #322). The passphrase
   prompt after a Google Drive restore (and after picking a backup file) shows the identity row
   used across the app: avatar, display name and handle, built from the profile stored in the
