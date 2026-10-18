@@ -1,11 +1,14 @@
 import { useEffect, useReducer, useState } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { getPublicKey } from 'nostr-tools'
 import { hexToBytes } from '@noble/hashes/utils'
 
 import { Button, Input, Alert, Switch } from '../components/ui'
+import { BackupLogin } from '../components/BackupLogin'
+import { FinishProfileStep } from '../components/FinishProfileStep'
 import { gatewayConfig } from '../lib/config'
 import { toPrivkeyHex, keyStore, hasStoredKey } from '../lib/nap'
+import { claimProfile, ProfileMissingError, rememberHandle, requireProfile } from '../lib/profileGate'
 import { HandleTakenError, isHandleAvailable, register } from '../lib/registration'
 import { refreshProfile } from '../lib/profile'
 import {
@@ -50,8 +53,23 @@ import {
  * the router's location state. Android's back gesture is the platform's primary
  * navigation, and a WebView with nothing to pop exits the app: without this,
  * back from three screens into registration means goodbye rather than back.
+ *
+ * "Log in" (#325) opens a backup: Google Drive or a backup file, then the
+ * account, then the passphrase. Pasting the key itself is the secondary 'key'
+ * step behind a small link on that screen, for someone who only ever saved it.
+ * `/restore` redirects to the 'login' step, so old links still land here.
  */
-type Step = 'start' | 'account' | 'profile' | 'merchant' | 'import'
+export type OnboardingStep = 'start' | 'account' | 'profile' | 'merchant' | 'login' | 'key'
+type Step = OnboardingStep
+
+/**
+ * Where `/restore` goes now (#325): the onboarding Log in step, which is where
+ * a backup is opened. Old links, bookmarks and the advice people were given
+ * still say /restore, so it must land somewhere that does the job.
+ */
+export function RestoreRedirect() {
+  return <Navigate to="/onboarding" replace state={{ step: 'login' satisfies Step }} />
+}
 
 export function OnboardingPage({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<void> }) {
   // The step lives in history rather than in `useState`, so back walks the flow
@@ -61,7 +79,15 @@ export function OnboardingPage({ onUnlock }: { onUnlock: (privkeyHex: string) =>
   const navigate = useNavigate()
   const step = (location.state as { step?: Step } | null)?.step ?? 'start'
   const push = (next: Step) => navigate('.', { state: { step: next } })
-  const back = () => navigate(-1)
+  // Back walks history, except where there is none to walk: `/restore`
+  // redirects straight onto the Log in step with `replace`, and a fresh tab
+  // opened on it has nothing behind it. Popping there would leave the app, so
+  // it goes to the first screen instead.
+  const back = () => {
+    const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0
+    if (idx > 0) navigate(-1)
+    else navigate('.', { replace: true, state: { step: 'start' } })
+  }
   const walletHere = useWalletOnDeviceWithParkedClaim()
 
   return (
@@ -98,7 +124,7 @@ export function OnboardingPage({ onUnlock }: { onUnlock: (privkeyHex: string) =>
             size="lg"
             variant="outline"
             className="w-full"
-            onClick={() => push('import')}
+            onClick={() => push('login')}
           >
             Log in
           </Button>
@@ -113,26 +139,10 @@ export function OnboardingPage({ onUnlock }: { onUnlock: (privkeyHex: string) =>
             </Link>
           </p>
 
-          {/* The restore link has to be HERE, not only on /login.
-
-              This is where someone who has just logged out arrives: logout
-              erases the key and reloads the document, so `Entry` finds no
-              stored key and sends them to /onboarding rather than /login. That
-              is also the exact path the re-auth dialog now points at — its
-              disclosure tells a user who has forgotten their passphrase to log
-              out and restore — and without this link that journey ended on a
-              screen offering only "Register" and "Log in", with the backup file
-              they were told to use unreachable.
-
-              "Log in" (the import step) takes an nsec, so one of the three
-              backup kinds was reachable from here. A backup FILE and a Drive
-              backup were not. */}
-          <p className="text-center text-sm text-mono-500">
-            Have a backup file or a Google Drive backup?{' '}
-            <Link to="/restore" className="pressable underline hover:text-mono-900 dark:hover:text-mono-50">
-              Restore
-            </Link>
-          </p>
+          {/* No separate Restore link any more (#325): "Log in" IS restoring,
+              from Google Drive or a backup file. This is still where logging
+              out lands (logout erases the key, so `Entry` routes here), and the
+              re-auth dialog points people at "Log in" on this screen. */}
 
           {/* #160 phase 2: the way in for a stall's extra device. A terminal has
               no account, so it does not register or log in. */}
@@ -151,7 +161,11 @@ export function OnboardingPage({ onUnlock }: { onUnlock: (privkeyHex: string) =>
         <CreateForm step={step} onStep={push} onUnlock={onUnlock} onBack={back} />
       )}
 
-      {step === 'import' && <ImportForm onUnlock={onUnlock} onBack={back} />}
+      {step === 'login' && (
+        <BackupLogin onUnlock={onUnlock} onBack={back} onUseKey={() => push('key')} />
+      )}
+
+      {step === 'key' && <KeyForm onUnlock={onUnlock} onBack={back} />}
     </div>
   )
 }
@@ -529,47 +543,63 @@ function StrengthBar({ strength }: { strength: Strength }) {
 }
 
 /**
- * Bring an existing key.
+ * Bring the backup key itself: the secondary way in (#325).
  *
- * This is the old LoginPage's enrol branch. It gains a profile fetch: a key that
- * has been used elsewhere usually already has a kind-0, and pulling it means the
- * header has a name and a face on the very first screen.
+ * The main "Log in" opens a backup. This stays, behind a small link, for
+ * someone who only ever saved the key: they paste it and choose a passphrase
+ * for this device.
+ *
+ * The account must have a profile (owner rule, #325). The directory is asked
+ * BEFORE anything is stored, so a key with no profile writes nothing and goes
+ * to "Finish your profile" instead of being let in anonymously.
  */
-function ImportForm({
+function KeyForm({
   onUnlock,
   onBack,
 }: {
   onUnlock: (privkeyHex: string) => Promise<void>
   onBack: () => void
 }) {
-  const [nsec, setNsec] = useState('')
+  const [key, setKey] = useState('')
   const [passphrase, setPassphrase] = useState('')
   const [confirm, setConfirm] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // A key whose account has no profile yet: in memory only, until a handle is claimed.
+  const [missing, setMissing] = useState<string | null>(null)
   const navigate = useNavigate()
 
   const passphraseError = passphrase === '' ? undefined : validatePassphrase(passphrase)
   const confirmError = confirm === '' ? undefined : validateConfirmation(passphrase, confirm)
-  const complete = nsec !== '' && passphrase !== '' && confirm !== '' && !passphraseError && !confirmError
+  const complete = key !== '' && passphrase !== '' && confirm !== '' && !passphraseError && !confirmError
+
+  // Only once the account is known to have a profile is the key worth keeping.
+  const install = async (hex: string) => {
+    await keyStore.save(hex, passphrase)
+    await onUnlock(hex)
+    // No `saveProfile(emptyProfile(...))` here. Writing a blank record first
+    // erases whatever this browser already knew about the key. refreshProfile
+    // keeps any existing record and merges onto it.
+    await refreshProfile(getPublicKey(hexToBytes(hex)))
+    navigate('/', { replace: true })
+  }
 
   const submit = async () => {
     setBusy(true)
     setError(null)
     try {
       // Throws a readable message on a mistyped key, before anything is stored.
-      const hex = toPrivkeyHex(nsec)
-      await keyStore.save(hex, passphrase)
-      await onUnlock(hex)
-
-      // No `saveProfile(emptyProfile(...))` here. Writing a blank record first
-      // erases whatever this browser already knew about the key — handle,
-      // display name, eventAt — and re-entering your own nsec, or importing
-      // after a restore, is an ordinary thing to do. refreshProfile keeps any
-      // existing record and merges onto it, so a cold gateway cache costs
-      // nothing instead of losing the profile.
-      await refreshProfile(getPublicKey(hexToBytes(hex)))
-      navigate('/', { replace: true })
+      const hex = toPrivkeyHex(key)
+      try {
+        rememberHandle(hex, await requireProfile(hex))
+      } catch (e) {
+        if (e instanceof ProfileMissingError) {
+          setMissing(hex)
+          return
+        }
+        throw e
+      }
+      await install(hex)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -577,22 +607,35 @@ function ImportForm({
     }
   }
 
+  if (missing) {
+    return (
+      <FinishProfileStep
+        onCancel={() => setMissing(null)}
+        onClaim={async (handle) => {
+          await claimProfile(missing, handle)
+          await install(missing)
+        }}
+      />
+    )
+  }
+
   return (
     <div className="space-y-3">
       <div className="text-center">
-        <h2 className="text-lg font-semibold text-mono-900 dark:text-mono-50">Log in</h2>
-        {/* Says what "log in" means here, because it is not a password prompt:
-            this browser holds no key, so one has to be brought to it. */}
+        <h2 className="text-lg font-semibold text-mono-900 dark:text-mono-50">Use your backup key</h2>
+        {/* Says what this means, because it is not a password prompt: this
+            browser holds no key, so one has to be brought to it. */}
         <p className="mt-0.5 text-sm text-mono-500">
-          Enter the backup key from an account you already have.
+          Paste the backup key you saved, then choose a passphrase for this device.
         </p>
       </div>
 
       <Input
         type="password"
-        placeholder="nsec1… (your Nostr key)"
-        value={nsec}
-        onChange={(e) => setNsec(e.target.value)}
+        placeholder="Paste your backup key"
+        aria-label="Backup key"
+        value={key}
+        onChange={(e) => setKey(e.target.value)}
         autoComplete="off"
       />
       <div>
@@ -622,7 +665,7 @@ function ImportForm({
       </div>
 
       <Button size="lg" className="w-full" disabled={busy || !complete} onClick={submit}>
-        {busy ? 'Unlocking…' : 'Add key and unlock'}
+        {busy ? 'Logging in…' : 'Log in'}
       </Button>
 
       <BackButton disabled={busy} onClick={onBack} />
