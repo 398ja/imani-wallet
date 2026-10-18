@@ -233,6 +233,22 @@ function parseRecord(event: Event): { id: string; record: TokenRecord } | null {
 }
 
 /**
+ * Two records of one coupon in the SAME second: which is newer? (review of #326)
+ *
+ * `created_at` is seconds, and swapBack writes `fully_redeemed` then
+ * `swapped_to_sats` around one mint round trip, so both records often share a
+ * second. First-seen used to win, so the relay's replay order decided whether
+ * a restore showed the sats. The row's own millisecond `updated_at` decides,
+ * then the serialised row, so the answer never depends on order.
+ */
+function laterRow(candidate: VoucherRow, current: VoucherRow): boolean {
+  const a = String(candidate.updated_at ?? '')
+  const b = String(current.updated_at ?? '')
+  if (a !== b) return a > b
+  return JSON.stringify(candidate) > JSON.stringify(current)
+}
+
+/**
  * Newest record per `token_id`, with any tombstone winning outright.
  *
  * Exported for tests: "a tombstone always wins" is the rule standing between a
@@ -251,7 +267,9 @@ export function pickLive(entries: { id: string; at: number; record: TokenRecord 
     const row = entry.record.voucher
     if (!row?.token) continue
     const seen = newest.get(entry.id)
-    if (!seen || entry.at > seen.at) newest.set(entry.id, { at: entry.at, row })
+    if (!seen || entry.at > seen.at || (entry.at === seen.at && laterRow(row, seen.row))) {
+      newest.set(entry.id, { at: entry.at, row })
+    }
   }
 
   return [...newest.entries()].filter(([id]) => !spent.has(id)).map(([, v]) => v.row)
