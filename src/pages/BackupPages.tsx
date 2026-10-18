@@ -192,13 +192,12 @@ function backupPubkey(backup: ParsedBackup): string | null {
  * signal at all; a fresher relay answer replaces it when one lands. Not a link:
  * leaving this screen would throw away the restore in progress.
  *
- * The full npub is still one tap away. It is what someone with two accounts
- * checks before overwriting one, so it is kept, just not led with.
+ * No key on this screen, not even behind a tap: customers should not meet
+ * protocol terms or raw keys. Two accounts are told apart by face, name and
+ * handle, and a backup with no profile falls back to the component's short form.
  */
 function BackupAccount({ backup, refreshedName }: { backup: ParsedBackup; refreshedName: string | null }) {
-  const [showKey, setShowKey] = useState(false)
   const pubkey = backupPubkey(backup)
-  const npub = backup.npub ?? (pubkey ? nip19.npubEncode(pubkey) : null)
   const stored = backup.profile
   if (!pubkey) {
     return <p className="mt-1 font-medium text-mono-900 dark:text-mono-50">Unnamed account</p>
@@ -211,20 +210,8 @@ function BackupAccount({ backup, refreshedName }: { backup: ParsedBackup; refres
         linkToProfile={false}
         fallbackName={refreshedName ?? stored?.displayName}
         fallbackHandle={stored?.nip05}
+        fallbackPicture={stored?.picture}
       />
-      {npub && (
-        <div className="mt-3">
-          <button
-            type="button"
-            className="pressable text-xs text-mono-500 underline hover:text-mono-900 dark:hover:text-mono-50"
-            aria-expanded={showKey}
-            onClick={() => setShowKey((v) => !v)}
-          >
-            {showKey ? 'Hide account key' : 'Show account key'}
-          </button>
-          {showKey && <p className="mt-1 break-all font-mono text-xs text-mono-500">{npub}</p>}
-        </div>
-      )}
     </div>
   )
 }
