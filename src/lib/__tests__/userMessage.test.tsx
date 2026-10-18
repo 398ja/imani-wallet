@@ -8,7 +8,7 @@ import { generateSecretKey, nip19 } from 'nostr-tools'
 
 import { GENERIC_ERROR, userMessage } from '../userMessage'
 import { toPrivkeyHex } from '../nap'
-import { LOGOUT_WARNING } from '../logout'
+import { LOGOUT_BLOCKED_COPY, LOGOUT_WARNING } from '../logout'
 import { Avatar } from '../../components/ui/Avatar'
 import { OWN_ACCOUNT, UNKNOWN_PERSON, UNKNOWN_STALL } from '../format'
 
@@ -75,6 +75,19 @@ describe('the logout warning', () => {
   it('names the backup key plainly, with no protocol terms', () => {
     expect(LOGOUT_WARNING).toMatch(/backup key/)
     expect(LOGOUT_WARNING).not.toMatch(/nsec|npub|relay|nostr/i)
+  })
+
+  it('the logout block (including a payment still going through) has no protocol terms', () => {
+    const copy = [
+      LOGOUT_BLOCKED_COPY.title,
+      LOGOUT_BLOCKED_COPY.locked,
+      LOGOUT_BLOCKED_COPY.unreadable,
+      LOGOUT_BLOCKED_COPY.changed,
+      LOGOUT_BLOCKED_COPY.inFlight,
+      LOGOUT_BLOCKED_COPY.unconfirmed(2, '£10.00'),
+    ]
+    for (const text of copy) expect(text).not.toMatch(/nsec|npub|relay|nostr|\bNIP/i)
+    expect(LOGOUT_BLOCKED_COPY.inFlight).toMatch(/still going through/)
   })
 })
 

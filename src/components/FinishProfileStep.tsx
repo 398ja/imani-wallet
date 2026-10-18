@@ -4,6 +4,7 @@ import { Alert, Button, Input } from './ui'
 import { gatewayConfig } from '../lib/config'
 import { HandleTakenError } from '../lib/registration'
 import { validateHandle } from '../lib/validate'
+import { userMessage } from '../lib/userMessage'
 
 /**
  * The step a key with no profile meets before it is let in (#325).
@@ -48,9 +49,7 @@ export function FinishProfileStep({
       setError(
         e instanceof HandleTakenError
           ? `@${handle} is taken. Try another.`
-          : e instanceof Error
-            ? e.message
-            : String(e),
+          : userMessage(e),
       )
     } finally {
       setBusy(false)

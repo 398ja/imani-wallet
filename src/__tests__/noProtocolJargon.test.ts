@@ -23,6 +23,8 @@ import { fileURLToPath } from 'node:url'
 
 import { collectUserStrings, type UserString } from './userFacingStrings'
 import { JARGON } from '../lib/userMessage'
+import { LOGOUT_BLOCKED_COPY, LOGOUT_WARNING } from '../lib/logout'
+import { blockedMessage } from '../lib/logoutBlockedCopy'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const SCANNED = ['src/pages', 'src/components']
@@ -35,15 +37,7 @@ const SCANNED = ['src/pages', 'src/components']
  * Every entry must still match something, so a fixed string cannot leave a
  * stale exemption behind (see the last test).
  */
-const ALLOWED: Array<{ file: string; text: string; why: string }> = [
-  {
-    file: 'src/pages/OnboardingPage.tsx',
-    text: 'nsec1… (your Nostr key)',
-    why:
-      'The onboarding "Log in" paste field. Owned by #325, which replaces this step ' +
-      '(Drive or file, then profile, then passphrase) and its placeholder. #325 removes this entry.',
-  },
-]
+const ALLOWED: Array<{ file: string; text: string; why: string }> = []
 
 const allowed = (s: UserString) => ALLOWED.some((a) => a.file === s.file && s.text.includes(a.text))
 
@@ -81,5 +75,37 @@ describe('no protocol jargon in the UI (#324)', () => {
   it('keeps no stale allow-list entries', () => {
     const stale = ALLOWED.filter((a) => !strings.some((s) => s.file === a.file && s.text.includes(a.text)))
     expect(stale.map((a) => `${a.file}: ${a.text}`)).toEqual([])
+  })
+
+  // The screens #326 and #327 added. Their copy must be read by the scanner
+  // (so a jargon word there fails the test above), and the logout copy that
+  // lives in src/lib, outside the scanned folders, is checked directly.
+  it.each([
+    ['src/components/LogoutBlocked.tsx', 'Logout block'],
+    ['src/components/BackupLogin.tsx', 'Where is your backup?'],
+    ['src/components/FinishProfileStep.tsx', 'Finish your profile'],
+  ])('scans %s (%s)', (file, text) => {
+    const own = strings.filter((s) => s.file === file)
+    expect(own.length).toBeGreaterThan(0)
+    if (text !== 'Logout block') expect(own.some((s) => s.text.includes(text))).toBe(true)
+    for (const s of own) expect(s.text, `${s.file}:${s.line}`).not.toMatch(JARGON)
+  })
+
+  it('the logout block and warning say "key" but no Nostr, npub, nsec, relay or NIP words', () => {
+    const coupon = { status: 'spendable', face_value: 500, face_unit: 'GBP', face_decimals: 2 } as never
+    const copy = [
+      LOGOUT_WARNING,
+      ...Object.values(LOGOUT_BLOCKED_COPY).filter((v): v is string => typeof v === 'string'),
+      LOGOUT_BLOCKED_COPY.unconfirmed(1, '£5.00'),
+      LOGOUT_BLOCKED_COPY.unconfirmed(3, '£15.00'),
+      ...(['unconfirmed', 'locked', 'store-unreadable', 'changed', 'in-flight'] as const).map((reason) =>
+        blockedMessage({ status: 'blocked', reason, unconfirmed: [coupon] }),
+      ),
+    ]
+    for (const text of copy) {
+      expect(text).not.toMatch(JARGON)
+      expect(text).not.toMatch(/nostr|npub|nsec|relay|\bNIP/i)
+    }
+    expect(LOGOUT_WARNING).toMatch(/backup key/)
   })
 })
