@@ -157,6 +157,12 @@ export async function confirmCredential(
  */
 export type ConfirmStanding = 'confirmed' | 'expired' | 'unconfirmed'
 
+/**
+ * How long one confirm may take (review of #299). Without a bound, a gateway that accepts the
+ * connection and never answers held the startup confirm, and so the first pass, forever.
+ */
+export const CONFIRM_TIMEOUT_MS = 10_000
+
 export async function confirmStanding(
   gatewayUrl: string,
   credential: StallCredential,
@@ -177,6 +183,7 @@ export async function confirmStanding(
         'Content-Type': 'application/json',
       },
       body,
+      signal: AbortSignal.timeout(CONFIRM_TIMEOUT_MS),
     })
     if (response.status === 204 || response.status === 200) return 'confirmed'
     console.warn(
