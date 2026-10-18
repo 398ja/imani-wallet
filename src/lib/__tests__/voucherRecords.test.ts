@@ -67,6 +67,26 @@ const coupon = (tokenId: string): VoucherRow =>
 
 const record = (id: string, at: number, r: TokenRecord) => ({ id, at, record: r })
 
+describe('pickLive orderings (review of #326)', () => {
+  // swapBack saves the row twice around one mint round trip: `fully_redeemed`
+  // then `swapped_to_sats`, often inside one second. Same `d`, same created_at.
+  const before = { ...coupon('a'), status: 'fully_redeemed', updated_at: '2026-10-18T10:00:00.100Z' }
+  const after = { ...coupon('a'), status: 'swapped_to_sats', sats_token: 'cashuBsats', updated_at: '2026-10-18T10:00:00.900Z' } as VoucherRow
+
+  it('a same-second pair resolves to the later record in EITHER replay order', () => {
+    expect(pickLive([record('a', 100, { voucher: before }), record('a', 100, { voucher: after })])[0]?.status).toBe('swapped_to_sats')
+    expect(pickLive([record('a', 100, { voucher: after }), record('a', 100, { voucher: before })])[0]?.status).toBe('swapped_to_sats')
+  })
+
+  it('an old record replayed after a tombstone, from either source, cannot resurrect the coupon', () => {
+    const live = record('a', 50, { voucher: coupon('a') })
+    const dead = record('a', 60, { spent: true })
+    for (const order of [[live, dead], [dead, live], [dead, live, live], [live, dead, live]]) {
+      expect(pickLive(order)).toEqual([])
+    }
+  })
+})
+
 describe('pickLive', () => {
   it('restores a voucher that was never spent', () => {
     expect(pickLive([record('a', 100, { voucher: coupon('a') })]).map((v) => v.token_id)).toEqual([
