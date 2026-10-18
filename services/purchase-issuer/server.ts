@@ -40,7 +40,7 @@
 import { createServer } from 'node:http'
 
 import { tokenFor, FileCredentialStore } from './adapters'
-import { confirmAll, CredentialConfirmer } from './confirmation'
+import { confirmAll, CredentialConfirmer, RECONFIRM_INTERVAL_MS } from './confirmation'
 import { readConfig, ConfigError, type IssuerConfig } from './config'
 import type { Ports } from './discharge'
 import { countPass, renderMetrics } from './metrics'
@@ -281,6 +281,18 @@ function main(): void {
       `[purchase-issuer] credentials: ${summary.confirmed} confirmed, ` +
         `${summary.expired} expired (re-enrol), ${summary.unconfirmed} not yet confirmed`,
     )
+    // Review of #299: one the gateway was down for at boot would otherwise wait for its first
+    // sale again, which is the lazy confirm this replaces. Retried until none is left, every
+    // RECONFIRM_INTERVAL_MS, well inside the 24 h window. Answered ones are not asked again.
+    if (summary.unconfirmed > 0) {
+      const retry = setInterval(() => {
+        if (!running) return clearInterval(retry)
+        void confirmAll(vault, confirmer).then((again) => {
+          if (again.unconfirmed === 0) clearInterval(retry)
+        })
+      }, RECONFIRM_INTERVAL_MS)
+      retry.unref()
+    }
     return loop(deps, config.intervalMs)
   })
 

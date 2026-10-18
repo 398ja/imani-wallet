@@ -84,6 +84,9 @@ export class CredentialConfirmer {
 /** How many startup confirms may be in flight at once. */
 export const CONFIRM_CONCURRENCY = 8
 
+/** How often the service retries credentials still unconfirmed after startup (gc was down). */
+export const RECONFIRM_INTERVAL_MS = 5 * 60_000
+
 export interface ConfirmSummary {
   confirmed: number
   expired: number
