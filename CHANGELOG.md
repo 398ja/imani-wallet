@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Receive: the QR code no longer sets state after the page is gone (#285).** The async
+  `QRCode.toDataURL` result is dropped once the page unmounts or the address changes. In the test
+  suite it landed after jsdom teardown, so `CashbackCodeRetired.test.tsx` left an unhandled
+  rejection and vitest exited 1 with every test passing.
+- **Tests: `useTerminalIdentity` waits on the state, not a 10 ms sleep (#286)**, and the
+  `terminalRosterSync` property tests (3000 cases each, unchanged) get a 60 s block timeout so a
+  loaded full run does not time them out.
+
 ## [0.29.0] - 2026-10-16
 
 The purchase issuer's card deliveries now discharge their purchase (imani-wallet#287 E2, U3, #291),
