@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-10-18
+
+Card vouchers carry the stall's own validity (#312, #315). Ships purchase-issuer AND the app.
+**Deploy:** purchase-issuer first (its `/ready` gains reason codes), then the app, then
+payment-adapter 0.23.0 (it asks `/ready` before checkout). No migrations, no new configuration.
+A stall whose record says its vouchers never expire stops being ready for card sales until it
+picks a validity.
+
 ### Fixed
 
 - **Card vouchers carry the stall's own validity, not a year** (Closes #312). purchase-issuer
