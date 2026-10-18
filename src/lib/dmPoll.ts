@@ -1016,6 +1016,69 @@ export function refuseIfAnotherStalls(
 }
 
 /**
+ * Redemptions under way: swapped (or about to be) and not yet written.
+ *
+ * For logout (review of #326, owner rule 2026-10-18): stopping the poller ends
+ * NEW deliveries but not one already inside `redeem`, which swaps at the mint
+ * and THEN writes the coupon. Logout must see that write before its final
+ * backup check, or it deletes a coupon that exists only in IndexedDB.
+ */
+let redemptionsInFlight = 0
+const drainWaiters = new Set<() => void>()
+/**
+ * Bumped by `stopDmPoll`. An adapter refuses every redeem once its poller has
+ * been stopped (second check of #326): `DmPollService.stop()` does not end a
+ * catch-up batch already looping, so without this the batch's NEXT gift wrap
+ * swapped at the mint after the drain had answered "nothing in flight", and
+ * after the wipe, burning proofs that were then written nowhere.
+ */
+let pollerGeneration = 0
+
+function countingInFlight(adapter: RedemptionAdapter): RedemptionAdapter {
+  const generation = pollerGeneration
+  return {
+    ...adapter,
+    async redeem(...args: Parameters<RedemptionAdapter['redeem']>) {
+      if (generation !== pollerGeneration) {
+        // Before anything is swapped, so the delivery stays the sender's and
+        // unprocessed: the next poller (this account after a refused logout,
+        // or the next login) offers it again.
+        throw Object.assign(new Error('redemption deferred: the poller was stopped'), {
+          code: 'RECEIVE_DEFERRED',
+        })
+      }
+      redemptionsInFlight++
+      try {
+        return await adapter.redeem(...args)
+      } finally {
+        redemptionsInFlight--
+        if (redemptionsInFlight === 0) for (const wake of [...drainWaiters]) wake()
+      }
+    },
+  }
+}
+
+/**
+ * Resolve once no redemption is in flight, or after `timeoutMs`. Returns
+ * whether it drained. Never throws.
+ */
+export function drainDmPoll(timeoutMs: number): Promise<boolean> {
+  if (redemptionsInFlight === 0) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    const wake = () => {
+      clearTimeout(timer)
+      drainWaiters.delete(wake)
+      resolve(true)
+    }
+    const timer = setTimeout(() => {
+      drainWaiters.delete(wake)
+      resolve(redemptionsInFlight === 0)
+    }, timeoutMs)
+    drainWaiters.add(wake)
+  })
+}
+
+/**
  * Redemption, delegated to imani-apps' canonical coordinator.
  *
  * This is the only caller of `saveVoucher` in dm-poll's flow — without a
@@ -1682,7 +1745,7 @@ export function startDmPoll(pubkey: string): DmPollService {
     nostrdbAdapter: nostrdbAdapter(),
     cryptoAdapter: createDmCryptoAdapter(),
     storageAdapter: storageAdapter(),
-    redemptionAdapter: redemptionAdapter(),
+    redemptionAdapter: countingInFlight(redemptionAdapter()),
     // Without this the adapter above is never called: dm-poll only redeems when
     // auto-redemption is on AND an adapter exists.
     enableAutoRedemption: true,
@@ -1780,6 +1843,9 @@ function onVisible(): void {
  * failed, and are retried after dm-poll's cooldown.
  */
 export function stopDmPoll(): void {
+  // First, and synchronously: from here no redeem of this poller can start,
+  // so `drainDmPoll` waiting for the ones already started is enough.
+  pollerGeneration++
   onSseOpen = undefined
   if (deferredRetryTimer !== undefined) clearTimeout(deferredRetryTimer)
   deferredRetryTimer = undefined

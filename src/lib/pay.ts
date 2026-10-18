@@ -16,6 +16,7 @@ import { FULLY_REDEEMED_STATUS, VoucherFullyRedeemedError, isVoucherFullyRedeeme
 import type { NUT18VRequest } from './nap'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
 import { carryExpiryReminders } from './expiryReminders'
+import { PENDING_SEND_LIFETIME_MS as SEND_LIFETIME, pendingSendsKey } from './inFlightMoney'
 
 /**
  * The money decisions now live in `@imani/wallet-core`.
@@ -320,13 +321,14 @@ export interface PendingSend {
 
 // Same `imani-wallet:` prefix and pubkey scoping as the profile, merchant and
 // payment-request records.
-const pendingKey = (pubkey: string) => `imani-wallet:pending-sends:${pubkey}`
+// Defined in inFlightMoney.ts, which logout reads to refuse while one is live.
+const pendingKey = pendingSendsKey
 
 /**
  * How long an unconfirmed send is still taken to be in flight. The saga's own expiry is well
  * inside it, so a send still unanswered after this is one that is never going to answer (#127).
  */
-const PENDING_SEND_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000
+const PENDING_SEND_LIFETIME_MS = SEND_LIFETIME
 
 function isStillInFlight(send: PendingSend): boolean {
   return Date.now() - send.at < PENDING_SEND_LIFETIME_MS

@@ -1,9 +1,9 @@
-import type { EventTemplate, Event } from 'nostr-tools'
+import { verifyEvent, type EventTemplate, type Event } from 'nostr-tools'
 import type { VoucherRow } from '@imani/wallet-storage'
 
-import { isRedeemed } from './merchants'
+import { isRedeemed, spendable } from './merchants'
 import { getSigner } from './nap'
-import { allEvents, publish, type PublishResult } from './relay'
+import { allEvents, allEventsWithGateway, publish, type PublishResult } from './relay'
 import {
   buildRecordEvents,
   isChunkEvent,
@@ -14,7 +14,8 @@ import {
   type Sealer,
 } from './chunkedRecord'
 import { legacyApi } from './legacyBridge'
-import { addRestoredVoucher, getWallet, notifyWalletChanged } from './wallet'
+import { addRestoredVoucher, getWallet, notifyWalletChanged, openWallet } from './wallet'
+import { signedFetch } from './nip98'
 
 /**
  * The coupons themselves, backed by the key instead of the browser.
@@ -46,6 +47,17 @@ import { addRestoredVoucher, getWallet, notifyWalletChanged } from './wallet'
  *   tab could leave a spent coupon looking live. NUT-07 checkstate, via the
  *   gateway's `/api/v1/wallet/token/validate`, is the authority on that.
  */
+
+/**
+ * `restore_flag` on a restored row the mint calls SPENT although no tombstone
+ * says this wallet spent it. See `restoreVouchers`.
+ */
+export const RESTORE_FLAG_MINT_SPENT = 'mint-spent-without-tombstone'
+
+/** swapBack.SWAPPED_TO_SATS_STATUS, compared here without importing swapBack's mint graph. */
+function isSwappedToSats(row: Pick<VoucherRow, 'status'>): boolean {
+  return (row.status ?? '').toLowerCase() === 'swapped_to_sats'
+}
 
 /** NIP-60's token event. Regular kind, like 7376 — `d` is identity, not replacement. */
 export const NIP60_TOKEN_KIND = 7375
@@ -222,6 +234,22 @@ function parseRecord(event: Event): { id: string; record: TokenRecord } | null {
 }
 
 /**
+ * Two records of one coupon in the SAME second: which is newer? (review of #326)
+ *
+ * `created_at` is seconds, and swapBack writes `fully_redeemed` then
+ * `swapped_to_sats` around one mint round trip, so both records often share a
+ * second. First-seen used to win, so the relay's replay order decided whether
+ * a restore showed the sats. The row's own millisecond `updated_at` decides,
+ * then the serialised row, so the answer never depends on order.
+ */
+function laterRow(candidate: VoucherRow, current: VoucherRow): boolean {
+  const a = String(candidate.updated_at ?? '')
+  const b = String(current.updated_at ?? '')
+  if (a !== b) return a > b
+  return JSON.stringify(candidate) > JSON.stringify(current)
+}
+
+/**
  * Newest record per `token_id`, with any tombstone winning outright.
  *
  * Exported for tests: "a tombstone always wins" is the rule standing between a
@@ -240,7 +268,9 @@ export function pickLive(entries: { id: string; at: number; record: TokenRecord 
     const row = entry.record.voucher
     if (!row?.token) continue
     const seen = newest.get(entry.id)
-    if (!seen || entry.at > seen.at) newest.set(entry.id, { at: entry.at, row })
+    if (!seen || entry.at > seen.at || (entry.at === seen.at && laterRow(row, seen.row))) {
+      newest.set(entry.id, { at: entry.at, row })
+    }
   }
 
   return [...newest.entries()].filter(([id]) => !spent.has(id)).map(([, v]) => v.row)
@@ -332,7 +362,13 @@ async function isStillLive(token: string): Promise<boolean> {
  */
 export async function restoreVouchers(pubkey: string): Promise<number> {
   try {
-    const candidates = await liveRecords(await allEvents(pubkey, NIP60_TOKEN_KIND), pubkey)
+    // Relay AND gateway (#2026-10-18 incident). Relay-only, a browser that
+    // could not open a socket to strfry read as "no coupons" and restored a
+    // zero balance over a coupon whose record was sitting on the relay.
+    const candidates = await liveRecords(
+      await allEventsWithGateway(pubkey, NIP60_TOKEN_KIND),
+      pubkey,
+    )
     if (candidates.length === 0) return 0
 
     // What this device already has, read once.
@@ -346,10 +382,17 @@ export async function restoreVouchers(pubkey: string): Promise<number> {
     // Measured before this: a returning customer with 120 coupons made 120
     // sequential gateway calls on every login and took 12.8s to finish, having
     // restored nothing it did not already have (#44).
+    const heldRows = await getWallet().getAllVouchers()
     const held = new Set(
-      (await getWallet().getAllVouchers())
-        .map((row) => row.token_id)
-        .filter((id): id is string => Boolean(id)),
+      heldRows.map((row) => row.token_id).filter((id): id is string => Boolean(id)),
+    )
+    // A row this device already flagged as SPENT-without-tombstone stays
+    // flagged: the relay copy says `active`, and re-writing it would turn a
+    // coupon the mint refuses back into a balance.
+    const flagged = new Set(
+      heldRows
+        .filter((row) => (row as { restore_flag?: string }).restore_flag === RESTORE_FLAG_MINT_SPENT)
+        .map((row) => row.token_id),
     )
 
     // Sequential on purpose: each check is a NIP-98-signed gateway request, and
@@ -363,6 +406,7 @@ export async function restoreVouchers(pubkey: string): Promise<number> {
       // token_id, so this is an overwrite — but with no mint call, which is
       // the expensive half.
       if (row.token_id && held.has(row.token_id)) {
+        if (flagged.has(row.token_id)) continue
         await addRestoredVoucher(row)
         // Counted as written, not as restored. `restored` drives the log line
         // and the change notification, and a relay copy that is newer than
@@ -375,7 +419,30 @@ export async function restoreVouchers(pubkey: string): Promise<number> {
       // A burnt coupon is SPENT at the mint BY DESIGN — that is what redeeming
       // one does (see burn.ts). Asking the mint about it would discard the
       // receipt the merchant is meant to keep, so the status answers first.
-      if (!isRedeemed(row) && !(await isStillLive(row.token))) continue
+      // A coupon swapped back to sats is SPENT at the mint by design too: the
+      // swap back consumed its proofs, and its value lives in `sats_token`.
+      // Asking about the original token flipped it to 'spent' and hid the
+      // sats (review of #326), so its status and `sats_token` stand as backed up.
+      if (!isRedeemed(row) && !isSwappedToSats(row) && !(await isStillLive(row.token))) {
+        // The mint says SPENT, yet no tombstone says THIS wallet spent it.
+        // That is either a spend whose tombstone was lost (benign) or a coupon
+        // whose backup holds proofs this wallet never got to keep — money
+        // lost on the way to the backup, the case this restore used to drop
+        // without a trace. Kept as a row the wallet does not count as money
+        // (`isSpent` reads 'spent' everywhere, wallet-core included), with a
+        // flag that says why, and reported loudly, so support can see it.
+        await addRestoredVoucher({
+          ...row,
+          status: 'spent',
+          restore_flag: RESTORE_FLAG_MINT_SPENT,
+        } as VoucherRow)
+        console.error(
+          '[voucherRecords] restored coupon is SPENT at the mint with no tombstone; kept as flagged',
+          { token_id: row.token_id, voucher_id: row.voucher_id },
+        )
+        written += 1
+        continue
+      }
       await addRestoredVoucher(row)
       restored += 1
     }
@@ -422,7 +489,11 @@ async function pruneSuperseded(
 
 export async function backfillVouchers(pubkey: string): Promise<number> {
   try {
-    const events = await allEvents(pubkey, NIP60_TOKEN_KIND)
+    // Both stores, for the same reason restore reads both: a relay read that
+    // failed would otherwise make every coupon look missing and republish all
+    // of them. Harmless (records are idempotent by `d`) but wasteful, and the
+    // republish would fail against the same unreachable relay anyway.
+    const events = await allEventsWithGateway(pubkey, NIP60_TOKEN_KIND)
     // A plain record counts by its `d`; a chunked one only once a snapshot
     // decrypts, validates and matches its payload hash, so a half-landed or
     // corrupt set is published again (#203, #206 review L4). Once per login.
@@ -444,5 +515,287 @@ export async function backfillVouchers(pubkey: string): Promise<number> {
   } catch (error) {
     console.error('[voucherRecords] could not back-fill coupons to the relay', error)
     return 0
+  }
+}
+
+/**
+ * The rows logout must see backed up (owner rule 2026-10-18, review of #326):
+ * money (`spendable`), and the two statuses that are not money to spend but
+ * still carry value. `fully_redeemed` proofs are still the holder's (they are
+ * offered "Swap back to sats"), and a `swapped_to_sats` row's value lives in
+ * its `sats_token`. A licence or a terminal credential is not a held coupon.
+ */
+export function rowsNeedingBackup(rows: VoucherRow[]): VoucherRow[] {
+  return rows.filter((row) => {
+    if (!row.token) return false
+    if (spendable([row]).length === 1) return true
+    const status = (row.status ?? '').toLowerCase()
+    return status === 'fully_redeemed' || status === 'swapped_to_sats'
+  })
+}
+
+/**
+ * Does this backed-up row hold what the device holds?
+ *
+ * The token BYTES must be equal: a record of an older token (pre-swap,
+ * pre-split) restores as SPENT. For the value-carrying statuses the status
+ * must match too, and a `swapped_to_sats` row's `sats_token` must be equal,
+ * because that token IS the value: a backup of the row as `fully_redeemed`
+ * would restore proofs the swap back has already spent.
+ */
+function sameValue(backed: VoucherRow, held: VoucherRow): boolean {
+  if (backed.token !== held.token) return false
+  const status = (held.status ?? '').toLowerCase()
+  if (status === 'fully_redeemed' || status === 'swapped_to_sats') {
+    if ((backed.status ?? '').toLowerCase() !== status) return false
+  }
+  if (status === 'swapped_to_sats') {
+    const a = (backed as { sats_token?: string }).sats_token
+    const b = (held as { sats_token?: string }).sats_token
+    if (!b || a !== b) return false
+  }
+  return true
+}
+
+/** One held coupon whose backup could not be confirmed. No token: it goes to the UI. */
+export interface UnconfirmedCoupon {
+  token_id: string
+  face_value?: number
+  face_unit?: string
+  face_decimals?: number
+  status?: string
+  /** For a coupon swapped back to sats, its value. */
+  sats_amount?: number
+}
+
+export type BackupCheck =
+  | {
+      ok: true
+      /** How many held coupons were confirmed. */
+      confirmed: number
+      /** Identity of the confirmed set: logout's race check compares it. */
+      fingerprint: string
+    }
+  | {
+      ok: false
+      /** 'locked': the key is not unlocked, so no backup can be read back or made. */
+      reason: 'unconfirmed' | 'locked' | 'store-unreadable'
+      unconfirmed: UnconfirmedCoupon[]
+      fingerprint: string
+    }
+
+/** Bounds for `confirmBackups`. Every one is a ceiling, so the UI never hangs. */
+export interface ConfirmOptions {
+  /** Re-publish-and-re-read rounds after the first read. Default 2. */
+  rounds?: number
+  /** The whole check, publishes included. Default 45 s. */
+  deadlineMs?: number
+  /** Let a fresh publish reach the gateway's cache before reading back. Default 1.5 s. */
+  settleMs?: number
+}
+
+const CONFIRM_DEFAULTS: Required<ConfirmOptions> = { rounds: 2, deadlineMs: 45_000, settleMs: 1_500 }
+
+/** The held set's identity: token_id, token hash and status per row, sorted. */
+export function heldFingerprint(rows: VoucherRow[]): string {
+  return rowsNeedingBackup(rows)
+    .map((row) => {
+      const sats = (row as { sats_token?: string }).sats_token ?? ''
+      return `${row.token_id}:${row.status ?? ''}:${row.token.length}:${hashish(row.token)}:${hashish(sats)}`
+    })
+    .sort()
+    .join('|')
+}
+
+/** A cheap, non-cryptographic digest: the fingerprint compares, it does not protect. */
+function hashish(text: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(16)
+}
+
+function describeCoupon(row: VoucherRow): UnconfirmedCoupon {
+  return {
+    token_id: row.token_id,
+    face_value: row.face_value,
+    face_unit: row.face_unit,
+    face_decimals: row.face_decimals,
+    status: row.status,
+    ...(typeof (row as { sats_amount?: number }).sats_amount === 'number'
+      ? { sats_amount: (row as { sats_amount?: number }).sats_amount }
+      : {}),
+  }
+}
+
+/**
+ * Read every coupon record back from the relay AND the gateway and keep only
+ * what this user signed (review of #326).
+ *
+ * `allEventsWithGateway` already checks the gateway's copies. The relay's are
+ * checked here as well: for logout this read is the only thing standing
+ * between a delete and the money, so it does not lean on the relay library
+ * having verified what it handed over.
+ */
+async function readBackRecords(pubkey: string): Promise<VoucherRow[]> {
+  const events = (await allEventsWithGateway(pubkey, NIP60_TOKEN_KIND)).filter((event) => {
+    if (event.pubkey !== pubkey || event.kind !== NIP60_TOKEN_KIND) return false
+    const { id, created_at, kind, tags, content, sig } = event
+    return verifyEvent({ id, pubkey, created_at, kind, tags, content, sig })
+  })
+  return liveRecords(events, pubkey)
+}
+
+/** The held rows with no read-back record of the same value. */
+function gapsIn(held: VoucherRow[], backed: VoucherRow[]): VoucherRow[] {
+  const byId = new Map<string, VoucherRow[]>()
+  for (const row of backed) {
+    const list = byId.get(row.token_id) ?? []
+    list.push(row)
+    byId.set(row.token_id, list)
+  }
+  // Also by token: `d` is the store's token_id, but match on the bytes either way.
+  const byToken = new Map<string, VoucherRow[]>()
+  for (const row of backed) {
+    const list = byToken.get(row.token) ?? []
+    list.push(row)
+    byToken.set(row.token, list)
+  }
+  return held.filter((row) => {
+    const candidates = [...(byId.get(row.token_id) ?? []), ...(byToken.get(row.token) ?? [])]
+    return !candidates.some((backedRow) => sameValue(backedRow, row))
+  })
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** `promise`, or `fallback` once `ms` has passed. Never rejects. */
+async function within<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise.catch(() => fallback),
+      new Promise<T>((resolve) => (timer = setTimeout(() => resolve(fallback), Math.max(0, ms)))),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * VERIFIABLE confirmation that every held coupon is backed up (owner rule
+ * 2026-10-18 17:52Z: "Never allow a logout until we have verifiable
+ * confirmation that the vouchers were backed up").
+ *
+ * For each row in `rowsNeedingBackup`, a record must be READ BACK from the
+ * relay ∪ the gateway, signed by this user, decrypted with this key, not
+ * tombstoned, and holding the SAME token bytes (and status / `sats_token` for
+ * the value-carrying statuses). A relay saying OK to a publish is not
+ * confirmation; only reading it back is.
+ *
+ * Gaps are re-published and read back again, up to `rounds` times, inside one
+ * overall deadline. NEVER THROWS, and never answers `ok` on a failure to
+ * check: an unreadable store, a locked key, a deadline or an exception all
+ * answer "not confirmed", the direction that keeps the money.
+ *
+ * Opens the store if it is not open: logout from the "Session expired" dialog
+ * runs with no wallet open, and "nothing open" is NOT "nothing held".
+ */
+export async function confirmBackups(pubkey: string, options: ConfirmOptions = {}): Promise<BackupCheck> {
+  const { rounds, deadlineMs, settleMs } = { ...CONFIRM_DEFAULTS, ...options }
+  const deadline = Date.now() + deadlineMs
+  const left = () => deadline - Date.now()
+
+  let held: VoucherRow[]
+  try {
+    // THIS user's store, whatever is open: `openWallet` is a no-op for the
+    // identity already open, and logout erases `imani-wallet-<pubkey>`, so
+    // that is the store whose rows must be counted. Reading whatever handle
+    // happened to be open could count another account's (empty) coupons.
+    const ws = await openWallet(pubkey)
+    held = rowsNeedingBackup(await ws.getAllVouchers())
+  } catch (error) {
+    console.error('[voucherRecords] could not read the coupons to confirm their backup', errorName(error))
+    return { ok: false, reason: 'store-unreadable', unconfirmed: [], fingerprint: '' }
+  }
+  const fingerprint = heldFingerprint(held)
+  if (held.length === 0) return { ok: true, confirmed: 0, fingerprint }
+
+  // Reading back needs the key (NIP-44), and so does re-publishing.
+  // An idle lock keeps the signer object and zeroes its key (`clearKey`), so
+  // "no signer" alone misses the common case (second check of #326).
+  let unlocked: boolean
+  try {
+    const signer = getSigner() as { hasKey?: () => boolean }
+    unlocked = typeof signer.hasKey !== 'function' || signer.hasKey()
+  } catch {
+    unlocked = false
+  }
+  if (!unlocked) return { ok: false, reason: 'locked', unconfirmed: held.map(describeCoupon), fingerprint }
+
+  let missing = held
+  for (let round = 0; round <= rounds && left() > 0; round++) {
+    if (round > 0) {
+      for (const row of missing) {
+        if (left() <= 0) break
+        await within(publishVoucher(row), left(), undefined)
+        await within(mirrorRecordToGateway(row), left(), undefined)
+      }
+      await sleep(Math.min(settleMs, Math.max(0, left())))
+    }
+    const backed = await within(readBackRecords(pubkey), left(), null)
+    if (backed === null) continue
+    missing = gapsIn(held, backed)
+    if (missing.length === 0) return { ok: true, confirmed: held.length, fingerprint }
+  }
+  console.warn('[voucherRecords] coupon backups not confirmed', { count: missing.length })
+  return { ok: false, reason: 'unconfirmed', unconfirmed: missing.map(describeCoupon), fingerprint }
+}
+
+/** An error's NAME only: messages from the store or a relay can quote a row. */
+function errorName(error: unknown): string {
+  return error instanceof Error ? error.name : typeof error
+}
+
+/**
+ * Store a coupon's record in the gateway's cache as well (review of #326).
+ * NEVER THROWS.
+ *
+ * The 2026-10-18 incident was a browser that could not reach the relay. A
+ * re-publish to that same relay fails the same way, so logout could never
+ * confirm. `POST /api/v1/nostr/events` (NIP-98, signature re-checked by the
+ * gateway) puts the signed event where `/nostr/query` reads, which is the
+ * read the restore falls back on. The event is NIP-44 sealed to this user;
+ * the gateway learns no more than it already serves.
+ */
+async function mirrorRecordToGateway(row: VoucherRow): Promise<void> {
+  try {
+    if (!row.token_id) return
+    const signer = getSigner()
+    for (const template of await buildRecords(row.token_id, { voucher: row })) {
+      const event = await signer.signEvent(template)
+      const response = await signedFetch(
+        '/api/v1/nostr/events',
+        'POST',
+        {
+          id: event.id,
+          pubkey: event.pubkey,
+          createdAt: event.created_at,
+          kind: event.kind,
+          tags: event.tags,
+          content: event.content,
+          sig: event.sig,
+        },
+        undefined,
+        { signal: AbortSignal.timeout(8_000) },
+      )
+      if (!response.ok) return
+    }
+  } catch {
+    // Best effort; the read-back is the verdict either way.
   }
 }
