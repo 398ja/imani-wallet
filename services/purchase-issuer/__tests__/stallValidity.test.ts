@@ -191,6 +191,28 @@ describe('reading the stall\u2019s signed record', () => {
     expect(read).toEqual({ kind: 'days', days: 0, source: 'default' })
   })
 
+  // Review of #315: the stall's OWN signed kind-30078s include other `d` records (its issuer
+  // delegation, roster, settings). gc has ignored `#d` before (gatewayNostr.ts), so a newer one of
+  // those must not be read as the merchant record, nor one of another kind with the merchant `d`.
+  it.each([
+    ['another d tag', { tags: [['d', 'imani:issuer-delegation']] }],
+    ['two d tags', { tags: [['d', 'imani:merchant'], ['d', 'other']] }],
+    ['another kind', { kind: 30079 }],
+  ])('ignores the stall\u2019s own signed event with %s', async (_name, over) => {
+    const odd = finalizeEvent(
+      {
+        kind: 30078,
+        created_at: 1_700_000_900,
+        tags: [['d', 'imani:merchant']],
+        content: JSON.stringify({ voucherValidityDays: 30 }),
+        ...over,
+      },
+      hexToBytes(STALL_SK),
+    )
+    const read = await readStallValidity('http://gw', STALL, gatewayWith([odd, record({ voucherValidityDays: 90 })]))
+    expect(read).toMatchObject({ days: 90 })
+  })
+
   // A stall that never chose a term, or whose term is not one: the wallet's default, never-expires,
   // which is what Sell would issue for the same stall (merchant.ts DEFAULT_VALIDITY_DAYS).
   it.each([
@@ -229,6 +251,18 @@ describe('the cache', () => {
     const cached = cachedValidityReader(read, () => 0)
     expect((await cached(STALL)).kind).toBe('unreadable')
     expect(await cached(STALL)).toMatchObject({ days: 60 })
+  })
+
+  // Review of #315: the cache is shared by every stall, so one stall's term must never be served
+  // for another. Keyed by stall, case-insensitively.
+  it('keeps each stall\u2019s term apart', async () => {
+    const other = 'c'.repeat(64)
+    const read = vi.fn(async (stall: string): Promise<StallValidity> => days(stall === STALL ? 90 : 30))
+    const cached = cachedValidityReader(read, () => 0)
+    expect(await cached(STALL)).toMatchObject({ days: 90 })
+    expect(await cached(other)).toMatchObject({ days: 30 })
+    expect(await cached(STALL.toUpperCase())).toMatchObject({ days: 90 })
+    expect(read).toHaveBeenCalledTimes(2)
   })
 })
 
