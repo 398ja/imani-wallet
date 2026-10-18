@@ -154,6 +154,77 @@ export async function gatewayEvents(
   }
 }
 
+/** The gateway's page size for `gatewayAllEvents`; it also caps lower reads at 500 upstream. */
+export const GATEWAY_PAGE_LIMIT = 500
+/** Backstop against a gateway that ignores `until`: 100 pages, the relay walk's own bound. */
+const GATEWAY_MAX_PAGES = 100
+/** Per page. A gateway that accepts the socket and never answers must not hang a logout. */
+export const GATEWAY_PAGE_TIMEOUT_MS = 8_000
+
+/**
+ * EVERY event of one kind for one author from the gateway, paged with `until`
+ * (review of #326). NEVER THROWS.
+ *
+ * `gatewayEvents` asks once with `limit: 500`, and the gateway (like strfry)
+ * answers the NEWEST 500 and says nothing about the rest. For coupon records
+ * that silently dropped a big wallet's OLDEST coupons from the very read that
+ * exists for when the relay is unreachable. Same walk as `relay.allEvents`:
+ * an inclusive cursor (several events share a second), dedup by id, and a
+ * page with nothing new ends it.
+ *
+ * Returns `null` when the gateway did not answer at all, so a caller can tell
+ * "unreachable" from "no events" (the confusion behind the 2026-10-18
+ * incident). A later page failing returns what was read: partial is only ever
+ * LESS, and every caller treats a missing record as "not confirmed".
+ */
+export async function gatewayAllEvents(pubkey: string, kind: number): Promise<Event[] | null> {
+  const seen = new Map<string, Event>()
+  let until: number | undefined
+  let answered = false
+  for (let page = 0; page < GATEWAY_MAX_PAGES; page++) {
+    let batch: Event[]
+    try {
+      const response = await fetch(`${GATEWAY}/api/v1/nostr/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        signal: AbortSignal.timeout(GATEWAY_PAGE_TIMEOUT_MS),
+        body: JSON.stringify({
+          kinds: [kind],
+          authors: [pubkey],
+          limit: GATEWAY_PAGE_LIMIT,
+          ...(until === undefined ? {} : { until }),
+        }),
+      })
+      if (!response.ok) break
+      const body = (await response.json()) as { events?: GatewayEvent[] }
+      batch = (body.events ?? []).map(toEvent).filter((e): e is Event => e !== null)
+    } catch {
+      break
+    }
+    answered = true
+    let fresh = 0
+    for (const event of batch) {
+      if (!seen.has(event.id)) {
+        seen.set(event.id, event)
+        fresh++
+      }
+    }
+    if (batch.length === 0) break
+    const oldest = Math.min(...batch.map((e) => e.created_at))
+    if (fresh === 0) {
+      if (batch.length < GATEWAY_PAGE_LIMIT) break
+      // A full page all in one second: step past that second rather than loop.
+      until = oldest - 1
+      continue
+    }
+    // A SHORT page is not taken as the end (the gateway may cap below the ask):
+    // only a page with nothing new ends the walk.
+    until = oldest
+  }
+  return answered ? [...seen.values()] : null
+}
+
 /**
  * Merge two reads of the same query, newest copy of each `d` winning.
  *
