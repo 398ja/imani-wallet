@@ -24,11 +24,18 @@ import type { CredentialVault } from './vault'
 
 /** The reason a sale for an expired credential reports. Names the fix, not a guess. */
 export const EXPIRED_REASON =
-  'the stall’s purchase-issuer credential expired unconfirmed at the gateway (410); ' +
+  'the stall’s purchase-issuer credential expired unconfirmed or was cancelled at the gateway (410); ' +
   're-enrol the purchase issuer for this stall. Nothing minted; the purchase stays owed'
 
 export class CredentialConfirmer {
-  private readonly standings = new Map<string, ConfirmStanding>()
+  /** Final or last answers, by credential id: what `confirm` remembers. */
+  private readonly answers = new Map<string, ConfirmStanding>()
+  /**
+   * The last answer for each STALL, for the gauge only. Keyed by stall, not by credential id
+   * (review of #299): a stall that re-enrols replaces its entry, so the gauge stops counting the
+   * dead credential instead of reading `expired` 1 until the next restart.
+   */
+  private readonly byStall = new Map<string, ConfirmStanding>()
   private readonly inFlight = new Map<string, Promise<ConfirmStanding>>()
 
   private readonly gatewayUrl: string
@@ -45,13 +52,14 @@ export class CredentialConfirmer {
    */
   async confirm(credential: StallCredential): Promise<ConfirmStanding> {
     const id = credential.credentialId
-    const known = this.standings.get(id)
+    const known = this.answers.get(id)
     if (known === 'confirmed' || known === 'expired') return known
     const pending = this.inFlight.get(id)
     if (pending) return pending
     const attempt = confirmStanding(this.gatewayUrl, credential, this.fetchImpl)
       .then((standing) => {
-        this.standings.set(id, standing)
+        this.answers.set(id, standing)
+        this.byStall.set(credential.stallPubkey.toLowerCase(), standing)
         this.publish()
         return standing
       })
@@ -68,10 +76,13 @@ export class CredentialConfirmer {
 
   private publish(): void {
     const counts = { confirmed: 0, expired: 0, unconfirmed: 0 }
-    for (const standing of this.standings.values()) counts[standing] += 1
+    for (const standing of this.byStall.values()) counts[standing] += 1
     setCredentialStandings(counts)
   }
 }
+
+/** How many startup confirms may be in flight at once. */
+export const CONFIRM_CONCURRENCY = 8
 
 export interface ConfirmSummary {
   confirmed: number
@@ -94,7 +105,18 @@ export async function confirmAll(
   } catch {
     return summary
   }
-  const standings = await Promise.all(credentials.map((c) => confirmer.confirm(c)))
+  // At most CONFIRM_CONCURRENCY confirms at once (review of #299). A vault of hundreds of stalls
+  // fired every POST in the same instant, and enough of them meet the gateway's per-address limit
+  // (429), which reads as `unconfirmed` and leaves those stalls to their first sale again.
+  const standings: ConfirmStanding[] = new Array(credentials.length)
+  let next = 0
+  const lane = async (): Promise<void> => {
+    while (next < credentials.length) {
+      const i = next++
+      standings[i] = await confirmer.confirm(credentials[i])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONFIRM_CONCURRENCY, credentials.length) }, lane))
   standings.forEach((standing, i) => {
     summary[standing] += 1
     if (standing === 'expired') {

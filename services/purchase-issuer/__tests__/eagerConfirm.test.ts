@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import { FileCredentialStore } from '../adapters'
-import { CredentialConfirmer, confirmAll } from '../confirmation'
+import { CONFIRM_CONCURRENCY, CredentialConfirmer, confirmAll } from '../confirmation'
 import { discharge, type Ports } from '../discharge'
 import { renderMetrics, resetMetricsForTest } from '../metrics'
 import { CredentialVault } from '../vault'
@@ -153,5 +153,63 @@ describe('concurrent confirms', () => {
     expect(sent).toHaveLength(2)
     expect(eventId(sent[1].authorization)).not.toBe(eventId(sent[0].authorization))
     expect(nip98Refusal({ ...sent[1], method: 'POST' })).toBeNull()
+  })
+})
+
+describe('review of #299', () => {
+  // Hundreds of stalls at startup: never more than CONFIRM_CONCURRENCY confirms at once, and all
+  // of them are confirmed.
+  it('bounds startup confirms in flight', async () => {
+    const ids = Array.from({ length: 40 }, (_, i) => `cred-${i}`)
+    const vault = await vaultWith(...ids)
+    let live = 0
+    let peak = 0
+    const { sent, fetchImpl } = gateway(async () => {
+      live += 1
+      peak = Math.max(peak, live)
+      await new Promise((resolve) => setTimeout(resolve, 1))
+      live -= 1
+      return 204
+    })
+    const summary = await confirmAll(vault, new CredentialConfirmer(GATEWAY, fetchImpl))
+    expect(summary).toEqual({ confirmed: 40, expired: 0, unconfirmed: 0 })
+    expect(sent).toHaveLength(40)
+    expect(peak).toBeLessThanOrEqual(CONFIRM_CONCURRENCY)
+  })
+
+  // A gateway that is down at startup leaves records unconfirmed and does not throw, so the
+  // service still starts and serves every other stall.
+  it('survives a gateway that is down at startup', async () => {
+    const vault = await vaultWith('cred-a')
+    const fetchImpl = (async () => {
+      throw new TypeError('fetch failed')
+    }) as unknown as typeof fetch
+    const summary = await confirmAll(vault, new CredentialConfirmer(GATEWAY, fetchImpl))
+    expect(summary).toEqual({ confirmed: 0, expired: 0, unconfirmed: 1 })
+  })
+
+  // A confirm is bounded in time, so a gateway that never answers cannot hold the first pass.
+  it('sends every confirm with an abort signal', async () => {
+    let signal: AbortSignal | null | undefined
+    const fetchImpl = (async (_url: string, init: RequestInit = {}) => {
+      signal = init.signal
+      return new Response(null, { status: 204 })
+    }) as unknown as typeof fetch
+    await new CredentialConfirmer(GATEWAY, fetchImpl).confirm(delegatedCredential())
+    expect(signal).toBeInstanceOf(AbortSignal)
+  })
+
+  // A stall that re-enrols after its credential expired: the gauge counts the stall's current
+  // credential, so `expired` goes back to 0 instead of staying up until a restart.
+  it('stops counting a replaced expired credential', async () => {
+    let status = 410
+    const { fetchImpl } = gateway(async () => status)
+    const confirmer = new CredentialConfirmer(GATEWAY, fetchImpl)
+    expect(await confirmer.confirm(delegatedCredential({ credentialId: 'old' }))).toBe('expired')
+    expect(renderMetrics()).toContain('imani_purchase_issuer_credentials{standing="expired"} 1')
+    status = 204
+    expect(await confirmer.confirm(delegatedCredential({ credentialId: 'new' }))).toBe('confirmed')
+    expect(renderMetrics()).toContain('imani_purchase_issuer_credentials{standing="expired"} 0')
+    expect(renderMetrics()).toContain('imani_purchase_issuer_credentials{standing="confirmed"} 1')
   })
 })
