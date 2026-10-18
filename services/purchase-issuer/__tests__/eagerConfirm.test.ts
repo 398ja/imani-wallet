@@ -23,7 +23,7 @@ import {
 } from '../confirmation'
 import { discharge, type Ports } from '../discharge'
 import { renderMetrics, resetMetricsForTest } from '../metrics'
-import { CredentialVault } from '../vault'
+import { CredentialVault, type CredentialStore } from '../vault'
 import { nip98Refusal } from '../../../src/lib/__tests__/nip98ServerCheck'
 import { delegatedCredential, STALL } from './stallFixture'
 
@@ -53,6 +53,22 @@ function gateway(status: number | (() => Promise<number>)) {
 
 function eventId(authorization: string): string {
   return (JSON.parse(atob(authorization.slice('Nostr '.length))) as { id: string }).id
+}
+
+/** As `vaultWith`, in memory: no file I/O, so fake timers alone drive a retry round. */
+async function memoryVaultWith(...credentialIds: string[]): Promise<CredentialVault> {
+  let records: Parameters<CredentialStore['write']>[0] = []
+  const store: CredentialStore = {
+    read: async () => records,
+    write: async (next) => {
+      records = next
+    },
+  }
+  const vault = new CredentialVault(KEY, store)
+  for (const [i, id] of credentialIds.entries()) {
+    await vault.put({ ...delegatedCredential({ credentialId: id }), stallPubkey: String(i).repeat(64) })
+  }
+  return vault
 }
 
 async function vaultWith(...credentialIds: string[]): Promise<CredentialVault> {
@@ -227,7 +243,7 @@ describe('retry of credentials left unconfirmed at startup (review of #299)', ()
   // gc down at boot, back later: confirmed on a later round, then the timer is gone.
   it('confirms once the gateway is back, then stops', async () => {
     vi.useFakeTimers()
-    const vault = await vaultWith('cred-a')
+    const vault = await memoryVaultWith('cred-a')
     let status = 503
     const { sent, fetchImpl } = gateway(async () => status)
     const confirmer = new CredentialConfirmer(GATEWAY, fetchImpl)
@@ -246,7 +262,7 @@ describe('retry of credentials left unconfirmed at startup (review of #299)', ()
   // every 5 minutes for the life of the process.
   it('gives up after maxRounds on a credential that can never confirm', async () => {
     vi.useFakeTimers()
-    const vault = await vaultWith('legacy')
+    const vault = await memoryVaultWith('legacy')
     const { sent, fetchImpl } = gateway(404)
     const confirmer = new CredentialConfirmer(GATEWAY, fetchImpl)
     await confirmAll(vault, confirmer)
@@ -264,7 +280,7 @@ describe('retry of credentials left unconfirmed at startup (review of #299)', ()
   // Shutdown (SIGTERM sets running=false) ends it on the next tick, with no request sent.
   it('stops on shutdown and leaves no timer', async () => {
     vi.useFakeTimers()
-    const vault = await vaultWith('cred-a')
+    const vault = await memoryVaultWith('cred-a')
     const { sent, fetchImpl } = gateway(503)
     const confirmer = new CredentialConfirmer(GATEWAY, fetchImpl)
     await confirmAll(vault, confirmer)
