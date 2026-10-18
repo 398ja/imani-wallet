@@ -102,7 +102,9 @@ function entries(roster: Roster) {
 
 const CASES = 3000
 
-describe('mergeRosters is a join (property tests, R1)', () => {
+// 3000 seeded cases each finish in about a second alone, but take 10 s under a loaded full run
+// (#285), so this block gets its own timeout rather than fewer cases.
+describe('mergeRosters is a join (property tests, R1)', { timeout: 60_000 }, () => {
   it('is commutative', () => {
     for (let seed = 1; seed <= CASES; seed++) {
       const r = rng(seed)
