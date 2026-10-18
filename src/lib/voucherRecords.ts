@@ -726,11 +726,16 @@ export async function confirmBackups(pubkey: string, options: ConfirmOptions = {
   if (held.length === 0) return { ok: true, confirmed: 0, fingerprint }
 
   // Reading back needs the key (NIP-44), and so does re-publishing.
+  // An idle lock keeps the signer object and zeroes its key (`clearKey`), so
+  // "no signer" alone misses the common case (second check of #326).
+  let unlocked: boolean
   try {
-    getSigner()
+    const signer = getSigner() as { hasKey?: () => boolean }
+    unlocked = typeof signer.hasKey !== 'function' || signer.hasKey()
   } catch {
-    return { ok: false, reason: 'locked', unconfirmed: held.map(describeCoupon), fingerprint }
+    unlocked = false
   }
+  if (!unlocked) return { ok: false, reason: 'locked', unconfirmed: held.map(describeCoupon), fingerprint }
 
   let missing = held
   for (let round = 0; round <= rounds && left() > 0; round++) {
