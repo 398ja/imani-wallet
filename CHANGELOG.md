@@ -40,6 +40,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `d` tag) moved to a new source package, `@imani/merchant-record`, shared by the wallet
   (`src/lib/merchant.ts` re-exports it) and purchase-issuer.
 
+## [0.30.1] - 2026-10-18
+
+Google Drive key backup and restore can run (#311). App image only; purchase-issuer unchanged.
+**Deploy:** build with `VITE_GOOGLE_CLIENT_ID` (imani-deploy passes it) and with imani-deploy's edge
+CSP that admits Google Identity Services. Without the client id the Drive buttons say "not set up",
+as before.
+
+### Fixed
+
+- **The wallet container's own CSP blocked Google Identity Services** (#311, #316). `deploy/nginx.conf`
+  had `script-src 'self'` and `default-src 'none'`, and the edge cannot loosen it (two CSPs
+  intersect), so the Drive backup could not start even with a client id. It now admits only GIS:
+  `script-src https://accounts.google.com/gsi/client`, `style-src .../gsi/style`,
+  `frame-src https://accounts.google.com/gsi/` (Google's GIS CSP guide). `connect-src https:` already
+  reached the Drive API. Cross-Origin-Opener-Policy is `same-origin-allow-popups`, so the account
+  chooser popup can report back. `csp.test.ts` pins all of it.
+- `docs/customers.md` says what the Drive backup sends: the passphrase-locked file, browser to
+  Google, into the app's hidden folder only; Imani never sees the file, key or Google sign-in.
+
 ## [0.30.0] - 2026-10-18
 
 Merchants turn on card sales from the app, and purchase-issuer enrols without a restart (#298,
