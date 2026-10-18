@@ -31,6 +31,15 @@ it with them later, all or part at a time. This guide walks you through it.
    Three ways to keep the same key: copy it, download the encrypted file, or put
    that file in your Google Drive. One is enough.
 
+   **Google Drive** opens Google's own account chooser. The app asks only for its
+   own hidden app folder in your Drive (it cannot see your files), and uploads the
+   same file the download gives you, still locked with your passphrase. It goes
+   from your browser straight to Google: Imani never sees the file, the key or your
+   Google sign-in. To restore on another device, choose **Restore** on the first
+   screen, then **Restore from Google Drive**, pick the same Google account, and
+   type your passphrase. You can delete the backup any time in Google Drive
+   (Settings › Manage apps).
+
 Already have a key from before? Choose **enrol an existing key** instead and
 paste it in.
 
