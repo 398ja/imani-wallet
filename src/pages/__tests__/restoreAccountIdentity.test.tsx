@@ -55,13 +55,25 @@ afterEach(() => {
 })
 
 describe('the Drive restore passphrase prompt', () => {
-  // The account is named by the identity component, from the profile stored in
-  // the backup: name and NIP-05, with no relay answer needed.
-  it('shows the profile with the backup name and handle', async () => {
-    await openDriveBackup({ pubkey: PUBKEY, npub: NPUB, displayName: 'Amina', nip05: 'amina@imani.africa', updatedAt: 1 })
+  // The account is named by the full profile component, from the profile stored
+  // in the backup: avatar, display name and handle, with no relay answer needed,
+  // and no npub anywhere on screen until asked for.
+  it('shows the avatar, display name and handle, and no npub', async () => {
+    const { container } = await openDriveBackup({
+      pubkey: PUBKEY,
+      npub: NPUB,
+      displayName: 'Amina',
+      nip05: 'amina@imani.africa',
+      picture: 'https://example.com/amina.png',
+      updatedAt: 1,
+    })
 
+    const avatar = screen.getByRole('img', { name: 'Amina' })
+    expect(avatar.getAttribute('src')).toBe('https://example.com/amina.png')
     expect(screen.getByText('Amina')).toBeTruthy()
     expect(screen.getByText('@amina')).toBeTruthy()
+    expect(container.textContent).not.toContain(NPUB)
+    expect(container.textContent).not.toContain('npub1')
   })
 
   // The raw npub is no longer led with: it is not on screen until asked for.
@@ -69,6 +81,7 @@ describe('the Drive restore passphrase prompt', () => {
     const { container } = await openDriveBackup({ pubkey: PUBKEY, npub: NPUB, displayName: 'Amina', updatedAt: 1 })
 
     expect(container.textContent).not.toContain(NPUB)
+    expect(container.textContent).not.toContain('npub1')
   })
 
   // A backup with no profile at all still names the account, as a short key.
@@ -79,14 +92,11 @@ describe('the Drive restore passphrase prompt', () => {
     expect(container.textContent).not.toContain(NPUB)
   })
 
-  // Two accounts stay tellable apart: the full npub is one tap away, and hides again.
-  it('reveals the full npub behind "Show account key"', async () => {
+  // No way to reveal a raw key here: customers never meet protocol terms or keys.
+  it('offers no key disclosure and no protocol wording', async () => {
     const { container } = await openDriveBackup({ pubkey: PUBKEY, npub: NPUB, displayName: 'Amina', updatedAt: 1 })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show account key' }))
-    expect(screen.getByText(NPUB)).toBeTruthy()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Hide account key' }))
-    expect(container.textContent).not.toContain(NPUB)
+    expect(screen.queryByRole('button', { name: /account key/i })).toBeNull()
+    expect(container.textContent).not.toMatch(/npub|nsec|nostr|relay|nip-?05/i)
   })
 })
