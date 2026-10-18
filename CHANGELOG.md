@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   authored by the stall, newest wins, cached two minutes. The voucher, the merchant's sale record
   and its `expiresAt` all use the same term. Already-issued vouchers keep their year.
 - **Fail safe when the term cannot be read** (#312): nothing is minted on a guess. The purchase
-  stays OWED and is retried; after 12 passes it is parked `NEEDS_ATTENTION` (`issue_blocked`,
+  stays OWED and is retried; after 240 passes (about an hour at the default interval) it is parked `NEEDS_ATTENTION` (`issue_blocked`,
   detail `validity_unreadable`). A stall with no record or no valid term is "never expires", as
   Sell reads it.
 

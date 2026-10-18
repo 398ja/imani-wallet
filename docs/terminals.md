@@ -485,7 +485,8 @@ being issued, nothing is issued and the purchase is parked for an operator
   `POST /api/v1/nostr/query` (kind 30078, `d=imani:merchant`, authored by the
   stall, signature verified, newest wins), cached two minutes per stall. If it
   cannot be read, nothing is minted: the purchase stays OWED and is retried, and
-  after 12 failed passes it is parked `issue_blocked` with `validity_unreadable`
+  after `VALIDITY_MAX_ATTEMPTS` (240) failed passes, about an hour at the default
+  15-second interval, it is parked `issue_blocked` with `validity_unreadable`
   in the detail. A stall with no record, or no valid term, is "never expires",
   exactly as the Sell screen reads it.
 - The vault follows its file: a record sealed by the operator script

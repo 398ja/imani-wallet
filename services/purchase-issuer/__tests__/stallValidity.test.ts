@@ -143,6 +143,26 @@ describe('when the stall\u2019s term cannot be read', () => {
     expect(outcome).toMatchObject({ kind: 'attention', reason: expect.stringMatching(/^validity_unreadable/) })
   })
 
+  // Review of #315: gc answers 200 with NO events when its relay query fails and its cache has no
+  // copy. At mint time that is a miss, not the stall's never-expires default (which `/ready`
+  // refused before payment): the paid sale stays OWED and is asked again, rather than parked.
+  it('treats no signed record at mint time as unknown, not as never-expires', async () => {
+    const { outcome, body } = await mintWith({ kind: 'days', days: 0, source: 'default' })
+    expect(body).toBeUndefined()
+    expect(outcome).toEqual({ kind: 'owed', reason: expect.stringMatching(/no signed merchant record/), ambiguous: false })
+  })
+
+  // A record the stall really signed with "never expires" is still refused and parked at once.
+  it('still parks a signed never-expires record at once', async () => {
+    const { outcome } = await mintWith({ kind: 'days', days: 0, source: 'record' })
+    expect(outcome).toMatchObject({ kind: 'attention', reason: expect.stringMatching(/^validity_never_expires/) })
+  })
+
+  // The bound is time, not a handful of 15-second passes (review of #315).
+  it('waits about an hour of passes before parking', () => {
+    expect(VALIDITY_MAX_ATTEMPTS * 15_000).toBeGreaterThanOrEqual(60 * 60_000)
+  })
+
   // A gateway error, a network failure and a malformed answer are all "unreadable": never a guess.
   it('reads a failed or malformed query as unreadable', async () => {
     const fail = (async () => new Response('', { status: 502 })) as unknown as typeof fetch
