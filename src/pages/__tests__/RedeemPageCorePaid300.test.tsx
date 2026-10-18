@@ -16,20 +16,11 @@ import { MemoryRouter } from 'react-router-dom'
  * underneath; if it fails, the merchant is told, and Paid stays.
  */
 
-// The owner's wallet, stuck: the coupon never arrives, so reconcile always reads "pending".
-const wallet = vi.hoisted(() => ({ arrivals: [] as unknown[], listeners: [] as Array<() => void> }))
-vi.mock('../../lib/vreq', async (importOriginal) => {
-  const real = await importOriginal<typeof import('../../lib/vreq')>()
-  return {
-    ...real,
-    reconcileRequests: async (pubkey: string) => ({
-      requests: real.loadRequests(pubkey),
-      arrivals: wallet.arrivals,
-      settled: 0,
-    }),
-  }
-})
+// The owner's wallet, stuck: the coupon never arrives until a test puts a row in it. The real
+// reconcile runs over these rows, so filing and double-counting are the production rules.
+const wallet = vi.hoisted(() => ({ rows: [] as unknown[], listeners: [] as Array<() => void> }))
 vi.mock('../../lib/wallet', () => ({
+  listTransactions: async () => wallet.rows,
   onWalletChanged: (fn: () => void) => {
     wallet.listeners.push(fn)
     return () => {
@@ -55,7 +46,7 @@ let fetchCalls: string[] = []
 
 beforeEach(() => {
   localStorage.clear()
-  wallet.arrivals = []
+  wallet.rows = []
   wallet.listeners = []
   fetchCalls = []
   ;(window as unknown as { NUT18V: unknown }).NUT18V = {
@@ -201,13 +192,14 @@ describe('the stall’s own till shows Paid on gateway-core’s verdict (#300)',
     await ownerAsks(async () => PAID)
     expect(await screen.findByText('Paid', {}, { timeout: 5_000 })).toBeTruthy()
 
-    wallet.arrivals = [{ id: 'tx1', amount: 650, unit: 'GBP', at: Date.now() + 1, direction: 'in', paymentId: ID, parts: 1 }]
+    wallet.rows = [{ id: 'tx1', type: 'received', timestamp: Date.now() + 1, amount: 650, unit: 'GBP', requestId: ID }]
     await act(async () => wallet.listeners.forEach((l) => l()))
 
     await vi.waitFor(() => expect(screen.queryByText(/receiving the coupons/i)).toBeNull())
     expect(screen.getByText('Paid')).toBeTruthy()
     const stored = JSON.parse(localStorage.getItem(`imani-wallet:payment-requests:${STALL}`)!)
     expect(stored.filter((r: { status: string }) => r.status === 'fulfilled')).toHaveLength(1)
+    expect(stored[0]).toMatchObject({ paymentId: ID, settledBy: 'tx1', receivedAmount: 650 })
   })
 
   // The receive fails after core counted the payment. The money is counted (Paid stays), but the
