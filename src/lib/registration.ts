@@ -130,13 +130,56 @@ export async function isHandleAvailable(handle: string): Promise<boolean> {
 }
 
 /**
+ * How long the claim, or the check behind a 409, may take. A hung gateway must
+ * end in "try again", not a Finish button spinning for ever. Retrying is safe:
+ * a claim is idempotent for the same key.
+ */
+const CLAIM_TIMEOUT_MS = 15_000
+
+/** A 409 whose owner could not be checked. Not success, and not "taken" either. */
+export class HandleCheckUnavailableError extends Error {
+  constructor() {
+    super('Could not finish just now. Check your connection and try again.')
+    this.name = 'HandleCheckUnavailableError'
+  }
+}
+
+/**
+ * Whether `handle` on this stack's domain already resolves, forwards, to
+ * `pubkey`. A directory that answers about the handle (it resolves to someone
+ * else, or to nobody) is "no". A directory that could not be asked (network
+ * error, timeout, 5xx) throws HandleCheckUnavailableError: never success, so a
+ * hiccup cannot turn someone else's handle into ours, and never "taken", which
+ * would send the customer off to claim a second handle for their own key.
+ */
+async function handleIsOurs(handle: string, pubkey: string): Promise<boolean> {
+  let response: Response
+  try {
+    const { nip05Domain } = await gatewayConfig()
+    response = await fetch(`/api/v1/resolve/${encodeURIComponent(`${handle}@${nip05Domain}`)}`, {
+      credentials: 'include',
+      signal: AbortSignal.timeout(CLAIM_TIMEOUT_MS),
+    })
+  } catch {
+    throw new HandleCheckUnavailableError()
+  }
+  if (response.status >= 500) throw new HandleCheckUnavailableError()
+  if (!response.ok) return false
+  const body = (await response.json().catch(() => null)) as { hex_pubkey?: unknown } | null
+  return typeof body?.hex_pubkey === 'string' && body.hex_pubkey.toLowerCase() === pubkey.toLowerCase()
+}
+
+/**
  * Claim the handle for the already-authenticated pubkey.
+ *
+ * Idempotent for the same key: claiming a handle this key already holds
+ * succeeds (see the 409 branch), so every caller may simply retry.
  *
  * The pubkey is sent in the body AND proven by the NIP-98 signature; the gateway
  * rejects a mismatch with 403. This is the non-custodial "raw pubkey" mode —
  * no bunker, no server-held key.
  */
-async function claimHandle(
+export async function claimHandle(
   handle: string,
   pubkey: string,
   signer: RequestSigner,
@@ -146,10 +189,21 @@ async function claimHandle(
     'POST',
     { username: handle, pubkey, relays: [RELAY_URL] },
     signer,
+    { signal: AbortSignal.timeout(CLAIM_TIMEOUT_MS) },
   )
 
   if (response.ok) return
-  if (response.status === 409) throw new HandleTakenError(handle)
+  if (response.status === 409) {
+    // The directory answers 409 for ANY existing record, including one that
+    // already maps this handle to THIS key (bottin's `create` checks only
+    // username@domain). That is the retry case: a claim whose response was
+    // lost to a timeout, or a claim that succeeded before a later step failed.
+    // Reading it as "taken" told people their own handle was taken and sent
+    // them off to claim a second one for the same key. So a 409 is only a
+    // HandleTakenError once the handle is known to belong to someone else.
+    if (await handleIsOurs(handle, pubkey)) return
+    throw new HandleTakenError(handle)
+  }
 
   // Surface the gateway's own message. Its failures here are specific and
   // actionable (DOMAIN_NOT_FOUND, DOMAIN_NOT_VERIFIED are stack-setup problems,

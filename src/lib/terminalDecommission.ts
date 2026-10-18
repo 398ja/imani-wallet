@@ -1,6 +1,8 @@
 import { storedTerminal } from './terminalEnrol'
 import { revokeCredential, type CredentialMintApi } from './credentialRevocation'
 import { logout } from './logout'
+import { confirmBackups, type BackupCheck } from './voucherRecords'
+import { moneyInFlight } from './inFlightMoney'
 import { credentialFromToken } from './terminalLogin'
 
 /**
@@ -34,6 +36,13 @@ export const DECOMMISSION_REFUSAL = {
   NOT_A_TERMINAL: 'not-a-terminal',
   /** The revocation did not land. Nothing was erased — see above. */
   REVOKE_FAILED: 'revoke-failed',
+  /**
+   * Vouchers on this device are not confirmed as backed up (owner rule
+   * 2026-10-18, review of #326). Checked BEFORE revoking: the wipe at the end
+   * goes through `logout`, which would refuse, and a device revoked but not
+   * wiped is the one state this file exists to avoid.
+   */
+  VOUCHERS_UNCONFIRMED: 'vouchers-unconfirmed',
 } as const
 
 export type DecommissionRefusal =
@@ -71,6 +80,10 @@ export const DECOMMISSION_COPY = {
   failed:
     'Could not hand back this terminal’s authority, so nothing has been erased. ' +
     'Check the connection and try again, or ask the stall owner to revoke it.',
+  /** Shown when this device holds vouchers that are not confirmed as backed up. */
+  vouchersUnconfirmed:
+    'This device holds vouchers that are not confirmed as backed up, so nothing has been ' +
+    'erased and the terminal is still in service. Check the connection and try again.',
 } as const
 
 /**
@@ -92,6 +105,8 @@ export async function decommissionTerminal(
    * the thing that asks.
    */
   reload: () => void = () => window.location.replace('/'),
+  /** Injected for tests. The same read-back check logout makes. */
+  checkBackups: (pubkey: string) => Promise<BackupCheck> = confirmBackups,
 ): Promise<DecommissionOutcome> {
   const stored = storedTerminal()
 
@@ -105,6 +120,21 @@ export async function decommissionTerminal(
       done: false,
       reason: DECOMMISSION_REFUSAL.NOT_A_TERMINAL,
       message: 'This device is not a terminal.',
+    }
+  }
+
+  // Before revoking (see VOUCHERS_UNCONFIRMED). A terminal holds no coupons
+  // in the normal case, so this is one empty read; if it ever does hold some,
+  // they are money and the owner rule applies to them as to anyone's.
+  const backups = await checkBackups(pubkey).catch(
+    (): BackupCheck => ({ ok: false, reason: 'store-unreadable', unconfirmed: [], fingerprint: '' }),
+  )
+  const inFlight = moneyInFlight(pubkey)
+  if (!backups.ok || inFlight.sends > 0 || inFlight.swaps > 0) {
+    return {
+      done: false,
+      reason: DECOMMISSION_REFUSAL.VOUCHERS_UNCONFIRMED,
+      message: DECOMMISSION_COPY.vouchersUnconfirmed,
     }
   }
 
@@ -134,10 +164,10 @@ export async function decommissionTerminal(
   // that a terminal's holder does not have.
   const wiped = await logout(pubkey, () => true, reload)
   if (!wiped) {
-    // `logout` only returns false when its confirmation is declined, and ours
-    // always accepts — so this is unreachable by construction. Reported rather
-    // than ignored, because "unreachable" changing quietly is how a device
-    // ends up revoked and not wiped.
+    // `logout` returns false when declined (ours always accepts) or when its
+    // backup check refuses, which the check above makes unlikely but cannot
+    // rule out (a voucher arriving in between). Reported, never ignored:
+    // the device is revoked but its vouchers are kept, which is the safe half.
     return {
       done: false,
       reason: DECOMMISSION_REFUSAL.REVOKE_FAILED,

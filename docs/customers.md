@@ -35,13 +35,20 @@ it with them later, all or part at a time. This guide walks you through it.
    own hidden app folder in your Drive (it cannot see your files), and uploads the
    same file the download gives you, still locked with your passphrase. It goes
    from your browser straight to Google: Imani never sees the file, the key or your
-   Google sign-in. To restore on another device, choose **Restore** on the first
-   screen, then **Restore from Google Drive**, pick the same Google account, and
-   type your passphrase. You can delete the backup any time in Google Drive
+   Google sign-in. To get back in on another device, choose **Log in** on the
+   first screen, then **Google Drive**, pick the same Google account, check it's
+   your account, and type your passphrase. You can delete the backup any time in Google Drive
    (Settings › Manage apps).
 
-Already have a key from before? Choose **enrol an existing key** instead and
-paste your backup key in.
+Already have an account? Choose **Log in**, then say where your backup is:
+**Google Drive** or **A backup file**. The app shows whose account it is (picture,
+name and handle) before it asks for anything, then you type your passphrase. If
+you only ever saved the backup key itself, tap **Use your backup key instead** at
+the bottom, paste it, and choose a passphrase for this device.
+
+Every account needs a profile. If the account you open doesn't have one yet, the
+app asks you to pick a handle before it lets you in (your display name starts as
+that handle, and you can change it in Settings).
 
 ## Your wallet at a glance
 
@@ -178,8 +185,8 @@ can recover your account for you. If you lose both your key and your backup file
 the coupons in that wallet are gone. This is the trade-off for holding your own
 value.
 
-To move to a new phone: install the app, choose **restore from backup**, open
-your backup file, and unlock it with your passphrase.
+To move to a new phone: install the app, choose **Log in**, open your backup
+(Google Drive or the file), check it's your account, and type your passphrase.
 
 **Logging out wipes this device.** It erases your key from this phone (the
 coupons stay in place but become unusable without the key). Only log out if you
@@ -222,7 +229,8 @@ Codes are no longer used. Ask the shop to show you the Cashlink QR again, and sc
 phone camera (or open the link they send you).
 
 **What if I get a new phone?**
-Restore from your backup file and passphrase. Your coupons come back from the
+Choose **Log in**, open your backup (Google Drive or the file) and type your
+passphrase. Your coupons come back from the
 network. (Any coupon you'd already spent stays spent, which is correct.)
 
 **Someone sent me a coupon but it hasn't shown up.**
