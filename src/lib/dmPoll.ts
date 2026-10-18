@@ -1228,7 +1228,7 @@ function redemptionAdapter(): RedemptionAdapter {
           // timer, so without this the retry waited for the stream's ten-minute
           // redial. One catch-up, shortly after, offers it again.
           if ((failure as { deferredBy?: unknown } | null)?.deferredBy === 'receive-gate-timeout') {
-            scheduleDeferredCatchUp()
+            scheduleDeferredCatchUpFor(token)
           }
           // cashu-mint#540: gateway-customer declared this home-coming coupon and the mint refused
           // it as redeemed in full (400 VOUCHER_FULLY_REDEEMED). Nothing was swapped. Terminal: as
@@ -1249,6 +1249,7 @@ function redemptionAdapter(): RedemptionAdapter {
         return voucher
       }
       const voucher = lockName ? await withWebLock(lockName, checkSwapAndWrite) : await checkSwapAndWrite()
+      deferredRetries.delete(token)
 
       // tokenRedemption wrote straight into IndexedDB, and this tab does not
       // hear its own BroadcastChannel post — see notifyWalletChanged.
@@ -1489,7 +1490,24 @@ function catchUp(): void {
 
 /** How long after a receive-gate deferral the coupon is offered again (#301 review). */
 export const DEFERRED_RETRY_MS = 5_000
+/**
+ * How many early catch-ups one token may schedule (#301 second check). A pacer
+ * that never frees would otherwise re-defer the same coupon every gate timeout
+ * plus 5 s for the whole session. Past the cap the coupon waits for the
+ * ordinary offers (SSE reopen, online, visibility), as before #301.
+ */
+export const MAX_DEFERRED_RETRIES_PER_TOKEN = 3
 let deferredRetryTimer: ReturnType<typeof setTimeout> | undefined
+/** token → early catch-ups it has scheduled. Per poller: cleared by stopDmPoll. */
+const deferredRetries = new Map<string, number>()
+
+/** Schedules the early catch-up unless this token has used its share. */
+function scheduleDeferredCatchUpFor(token: string): void {
+  const used = deferredRetries.get(token) ?? 0
+  if (used >= MAX_DEFERRED_RETRIES_PER_TOKEN) return
+  deferredRetries.set(token, used + 1)
+  scheduleDeferredCatchUp()
+}
 
 /**
  * One catch-up shortly after a redemption deferred on the receive pacer. The
@@ -1758,6 +1776,7 @@ export function stopDmPoll(): void {
   onSseOpen = undefined
   if (deferredRetryTimer !== undefined) clearTimeout(deferredRetryTimer)
   deferredRetryTimer = undefined
+  deferredRetries.clear()
   stopMintListener?.()
   stopMintListener = undefined
   document.removeEventListener('visibilitychange', onVisible)
