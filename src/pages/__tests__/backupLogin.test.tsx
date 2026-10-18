@@ -244,6 +244,21 @@ describe('logging in from a backup', () => {
     expect(localStorage.getItem(KEY_SLOT)).toBeNull()
   })
 
+  // An older backup carries no npub and no profile. It is still the
+  // customer's own account, so it is never shown as "Unnamed account".
+  it('an older backup with no profile is "Your account", never "Unnamed"', async () => {
+    const old = JSON.stringify({
+      format: 'imani-wallet-backup',
+      version: 1,
+      createdAt: '2026-01-01T00:00:00Z',
+      key: { ciphertext: `sealed:${PASSPHRASE}`, kdf: 'k', iv: 'i' },
+    })
+    const { container } = openLogIn()
+    pickFile(container, old)
+    await screen.findByText('Your account')
+    expect(container.textContent).not.toMatch(/Unnamed/i)
+  })
+
   // "Choose another backup" goes back to the two choices from the account step.
   it('goes back to the choice from the account step', async () => {
     const { container } = openLogIn()
