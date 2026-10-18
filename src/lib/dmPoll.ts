@@ -1016,6 +1016,52 @@ export function refuseIfAnotherStalls(
 }
 
 /**
+ * Redemptions under way: swapped (or about to be) and not yet written.
+ *
+ * For logout (review of #326, owner rule 2026-10-18): stopping the poller ends
+ * NEW deliveries but not one already inside `redeem`, which swaps at the mint
+ * and THEN writes the coupon. Logout must see that write before its final
+ * backup check, or it deletes a coupon that exists only in IndexedDB.
+ */
+let redemptionsInFlight = 0
+const drainWaiters = new Set<() => void>()
+
+function countingInFlight(adapter: RedemptionAdapter): RedemptionAdapter {
+  return {
+    ...adapter,
+    async redeem(...args: Parameters<RedemptionAdapter['redeem']>) {
+      redemptionsInFlight++
+      try {
+        return await adapter.redeem(...args)
+      } finally {
+        redemptionsInFlight--
+        if (redemptionsInFlight === 0) for (const wake of [...drainWaiters]) wake()
+      }
+    },
+  }
+}
+
+/**
+ * Resolve once no redemption is in flight, or after `timeoutMs`. Returns
+ * whether it drained. Never throws.
+ */
+export function drainDmPoll(timeoutMs: number): Promise<boolean> {
+  if (redemptionsInFlight === 0) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    const wake = () => {
+      clearTimeout(timer)
+      drainWaiters.delete(wake)
+      resolve(true)
+    }
+    const timer = setTimeout(() => {
+      drainWaiters.delete(wake)
+      resolve(redemptionsInFlight === 0)
+    }, timeoutMs)
+    drainWaiters.add(wake)
+  })
+}
+
+/**
  * Redemption, delegated to imani-apps' canonical coordinator.
  *
  * This is the only caller of `saveVoucher` in dm-poll's flow — without a
@@ -1682,7 +1728,7 @@ export function startDmPoll(pubkey: string): DmPollService {
     nostrdbAdapter: nostrdbAdapter(),
     cryptoAdapter: createDmCryptoAdapter(),
     storageAdapter: storageAdapter(),
-    redemptionAdapter: redemptionAdapter(),
+    redemptionAdapter: countingInFlight(redemptionAdapter()),
     // Without this the adapter above is never called: dm-poll only redeems when
     // auto-redemption is on AND an adapter exists.
     enableAutoRedemption: true,
