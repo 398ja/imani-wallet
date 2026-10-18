@@ -74,14 +74,6 @@ export const DELIVER_PATH = '/api/v1/dm/tokens/send'
  */
 export const ISSUE_TIMEOUT_MS = 30_000
 
-/**
- * How long a coupon bought by card stays spendable.
- *
- * A year, matching the gateway's default for merchant issuance and `imani-woo`.
- * Long enough that a gift bought at Christmas is still good the next one.
- */
-export const DEFAULT_EXPIRES_IN_DAYS = 365
-
 /** One stall's authority to be issued for, held on its behalf. */
 export interface StallCredential {
   /** The stall this issues as. */
@@ -115,6 +107,7 @@ export interface IssuePlan {
   faceUnit: string
   faceDecimals: number
   memo: string
+  /** The stall's term in days (#312). 0 is never-expires: `expires_in_days` is then omitted. */
   expiresInDays: number
   /**
    * Sent as `Idempotency-Key` (imani-wallet#96). The same purchase always
@@ -233,7 +226,9 @@ export function issueBody(plan: IssuePlan): string {
      */
     backing_strategy: 'PROPORTIONAL',
     memo: plan.memo,
-    expires_in_days: plan.expiresInDays,
+    // 0 is the stall's "never expires" (`NEVER_EXPIRES`): omitted, as the wallet's `issue.ts`
+    // omits `expiry_days`, rather than sent as a zero-day coupon (#312).
+    ...(plan.expiresInDays > 0 ? { expires_in_days: plan.expiresInDays } : {}),
     ...(plan.issuanceWarrant ? { issuance_warrant: plan.issuanceWarrant } : {}),
   })
 }

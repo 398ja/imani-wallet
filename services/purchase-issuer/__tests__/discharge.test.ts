@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { discharge, type Obligation, type Ports } from '../discharge'
 import { CREDENTIAL_HEADER, IssuanceFailed, issueBody } from '../issuer'
-import { STALL, delegatedCredential } from './stallFixture'
+import { STALL, delegatedCredential, ninetyDayTerm } from './stallFixture'
 
 /**
  * What happens when issuing a paid-for coupon goes wrong.
@@ -37,6 +37,7 @@ const OBLIGATION: Obligation = {
 
 function ports(over: Partial<Ports> = {}): Ports {
   return {
+    validityFor: ninetyDayTerm,
     credentialFor: async () => CREDENTIAL,
     tokenFor: async () => '',
     now: () => Date.now(),
@@ -269,6 +270,7 @@ describe('discharging a purchase', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const outcome = await discharge('http://gw', OBLIGATION, ports({
+      validityFor: ninetyDayTerm,
       credentialFor: async () => null,
     }))
 

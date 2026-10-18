@@ -48,6 +48,7 @@ import { DEFAULT_OUTBOX_OPTIONS, DeliveryOutbox, FileOutboxStore, runDeliveryPas
 import { PurchasesApi, ReportLostError } from './purchasesApi'
 import { sendSaleRecord } from './saleRecord'
 import { ENROLMENT_PREFIX, EnrolmentService, MAX_BODY_BYTES } from './enrolment'
+import { cachedValidityReader, readStallValidity, type ValidityReader } from './stallValidity'
 import { CredentialVault } from './vault'
 import { runPass, type WorkerDeps } from './worker'
 
@@ -57,6 +58,7 @@ export function portsFor(
   fetchImpl: typeof fetch = fetch,
   vault: CredentialVault = vaultFor(config),
   confirmer: CredentialConfirmer = new CredentialConfirmer(config.gatewayUrl, fetchImpl),
+  validityFor: ValidityReader = validityReaderFor(config, fetchImpl),
 ): Ports {
   // Credentials are confirmed EAGERLY, at enrolment and at startup (`confirmAll`, #296). This is
   // the backstop for one written while the service runs or one the gateway was down for at boot.
@@ -72,7 +74,14 @@ export function portsFor(
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     // #275: card sales into the stall's ledger. Tried inline once; the outbox owns retries (#274).
     fileSale: (credential, sale) => sendSaleRecord(config.gatewayUrl, credential, sale, fetchImpl),
+    // #312: the stall's own term, from its signed merchant record, cached for minutes.
+    validityFor,
   }
+}
+
+/** The stall-validity reader, one per process so the mint and `/ready` share its cache (#312). */
+export function validityReaderFor(config: IssuerConfig, fetchImpl: typeof fetch = fetch): ValidityReader {
+  return cachedValidityReader((stall) => readStallValidity(config.gatewayUrl, stall, fetchImpl))
 }
 
 function vaultFor(config: IssuerConfig): CredentialVault {
@@ -83,6 +92,7 @@ export function depsFor(
   config: IssuerConfig,
   vault: CredentialVault = vaultFor(config),
   confirmer: CredentialConfirmer = new CredentialConfirmer(config.gatewayUrl),
+  validityFor: ValidityReader = validityReaderFor(config),
 ): WorkerDeps {
   return {
     api: new PurchasesApi(config.purchasesUrl, config.purchasesToken, fetch, (row) => {
@@ -99,7 +109,7 @@ export function depsFor(
         }),
       )
     }),
-    ports: portsFor(config, fetch, vault, confirmer),
+    ports: portsFor(config, fetch, vault, confirmer, validityFor),
     gatewayUrl: config.gatewayUrl,
     livemode: config.livemode,
     outbox: new DeliveryOutbox(new FileOutboxStore(config.outboxPath), {
@@ -314,8 +324,9 @@ function main(): void {
 
   const vault = vaultFor(config)
   const confirmer = new CredentialConfirmer(config.gatewayUrl)
-  const deps = depsFor(config, vault, confirmer)
-  mountEnrolment(new EnrolmentService({ vault, confirmer, publicOrigin: config.publicOrigin }))
+  const validityFor = validityReaderFor(config)
+  const deps = depsFor(config, vault, confirmer, validityFor)
+  mountEnrolment(new EnrolmentService({ vault, confirmer, publicOrigin: config.publicOrigin, validityFor }))
   // #290: a record sealed by somebody else (the operator script) is picked up on the next read,
   // and confirmed at once (#296) rather than at its first sale. One the gateway could not confirm
   // then is retried like a boot-time one (second review of #299). A new reload REPLACES the reload

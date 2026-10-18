@@ -51,14 +51,19 @@ import { getPublicKey } from 'nostr-tools/pure'
 
 import type { ConfirmStanding } from './adapters'
 import type { CredentialConfirmer } from './confirmation'
-import { checkDelegation } from './delegatedWarrant'
-import { DEFAULT_EXPIRES_IN_DAYS, type StallCredential } from './issuer'
+import { checkDelegation, couponExpiresAtMs, type DelegationCheck } from './delegatedWarrant'
+import type { StallCredential } from './issuer'
+import type { StallValidity } from './stallValidity'
 import { countEnrolment } from './metrics'
 import { ReplayGuard, verifyNip98 } from './nip98Auth'
 import type { CredentialVault } from './vault'
 
 /** Where the stall calls. Under `/api/v1` so the edge can route this prefix and nothing else. */
 export const ENROLMENT_PREFIX = '/api/v1/card-sales'
+
+/** Why a never-expiring stall cannot sell by card. Mirrors the wallet's Settings copy (#312). */
+export const CARD_SALES_NEED_VALIDITY =
+  'Card sales need a voucher validity: vouchers that never expire can’t be sold by card. Choose 30, 60 or 90 days, or your own up to 730, in your shop settings.'
 export const BEGIN_PATH = `${ENROLMENT_PREFIX}/enrolment/begin`
 export const ENROL_PATH = `${ENROLMENT_PREFIX}/enrolment`
 /** Public: may shoppers be sold a card purchase for this stall? `/ready/<stall pubkey>`. */
@@ -105,7 +110,19 @@ export interface EnrolmentStatus {
   ready: boolean
   /** The plain reason when not ready. */
   reason?: string
+  /**
+   * A stable code for the reasons the stall fixes in its own settings rather than by re-enrolling
+   * (imani-wallet#312). Also on the public `/ready` answer, so Buy can say why.
+   *
+   * - `validity_never_expires`: the stall's coupons never expire; a card coupon cannot outlive
+   *   its delegation, so card sales need a voucher validity.
+   * - `validity_outlives_delegation`: the stall's term ends after the delegation (less a week).
+   * - `validity_unknown`: the stall's merchant record could not be read just now.
+   */
+  reasonCode?: ReadinessCode
 }
+
+export type ReadinessCode = 'validity_never_expires' | 'validity_outlives_delegation' | 'validity_unknown'
 
 interface Pending {
   lockKeyHex: string
@@ -118,6 +135,11 @@ export interface EnrolmentDeps {
   /** The public origin the stall signs NIP-98 for, e.g. https://app.example. Null: not configured. */
   publicOrigin: string | null
   now?: () => number
+  /**
+   * The stall's current coupon validity (#312, `stallValidity.ts`). Readiness depends on it: a
+   * stall whose term no delegated card coupon can honour is not ready, BEFORE anyone pays.
+   */
+  validityFor: (stallPubkey: string) => Promise<StallValidity>
 }
 
 export class EnrolmentService {
@@ -247,8 +269,18 @@ export class EnrolmentService {
     // signed by THIS stall (the NIP-98 caller), `coupon:issue`, the `imani:issuer-delegation`
     // record, naming the lock key made in step 1, outliving a coupon minted now by
     // DELEGATION_SKEW_MARGIN_MS.
-    const verdict = checkDelegation(candidate, this.now() + DEFAULT_EXPIRES_IN_DAYS * 86_400_000)
-    if (!verdict.ok) return refuse(422, `delegation refused: ${verdict.reason}`)
+    //
+    // Against the stall's ACTUAL term, not the 730-day maximum (#312). The maximum cannot be the
+    // test: the phone signs for 737 days, which covers 730 + 7 only at the very second it is
+    // signed, so every enrolment would be refused a moment later. And the actual term is what the
+    // next sale mints. A term the delegation cannot back (never expires, unreadable) does not stop
+    // the stall enrolling: the delegation itself is checked as for a same-day coupon, and
+    // readiness then says what the stall must change, so Buy stays off until it does.
+    const verdict = this.coversTerm(candidate, await this.deps.validityFor(stall))
+    if (!verdict.ok && verdict.code === undefined) return refuse(422, `delegation refused: ${verdict.reason}`)
+    if (!verdict.ok && verdict.code === 'outlives_delegation') {
+      return refuse(422, `delegation refused: ${verdict.reason}`)
+    }
 
     // CONFIRM before sealing (#296). Also the proof that this id is a credential locked to the
     // key made in step 1 (see the module header).
@@ -291,21 +323,46 @@ export class EnrolmentService {
       }
     }
     const confirmation = this.deps.confirmer.standingOf(credential.credentialId) ?? 'unknown'
-    const verdict = checkDelegation(credential, this.now() + DEFAULT_EXPIRES_IN_DAYS * 86_400_000)
+    // Judged against the stall's CURRENT term, read the same way the mint reads it (#312).
+    const validity = await this.deps.validityFor(stall)
+    const verdict = this.coversTerm(credential, validity)
     const delegationExpiresAt = expirationOf(credential.delegation)
     let reason: string | undefined
+    let reasonCode: ReadinessCode | undefined
     if (confirmation === 'expired') reason = 'The card-sales credential expired or was cancelled. Turn card sales on again.'
-    else if (!verdict.ok) reason = `Card sales need renewing (${verdict.reason}).`
+    else if (!verdict.ok && verdict.code === undefined) reason = `Card sales need renewing (${verdict.reason}).`
+    else if (validity.kind === 'unreadable') {
+      reason = 'Your voucher validity could not be checked just now. Try again in a minute.'
+      reasonCode = 'validity_unknown'
+    } else if (!verdict.ok && verdict.code === 'never_expires') {
+      reason = CARD_SALES_NEED_VALIDITY
+      reasonCode = 'validity_never_expires'
+    } else if (!verdict.ok && verdict.code === 'outlives_delegation') {
+      reason = `Your voucher validity (${validity.days} days) is longer than card sales are set up for. Choose a shorter validity, or set up card sales again.`
+      reasonCode = 'validity_outlives_delegation'
+    }
     // `unconfirmed`/`unknown` stay ready: the confirm is retried before the first mint, and a
     // gateway blip must not take a working stall off sale.
     return {
       enrolled: true,
       confirmation,
       delegationExpiresAt,
+      // A delegation that cannot back this term is not "valid" for card sales, whatever its date.
       delegationValid: verdict.ok,
       ready: reason === undefined,
       ...(reason ? { reason } : {}),
+      ...(reasonCode ? { reasonCode } : {}),
     }
+  }
+
+  /**
+   * Does this credential's delegation back a coupon minted now for the stall's term? An
+   * unreadable term is checked as a same-day coupon, so the delegation's own faults still show.
+   */
+  private coversTerm(credential: StallCredential, validity: StallValidity): DelegationCheck {
+    const now = this.now()
+    if (validity.kind === 'unreadable') return checkDelegation(credential, now)
+    return checkDelegation(credential, couponExpiresAtMs(now, validity.days))
   }
 
   /** Public readiness, for the Buy button. Says nothing a stall's `acceptsCards` does not. */
@@ -313,7 +370,11 @@ export class EnrolmentService {
     const stall = decodeURIComponent(stallRaw).toLowerCase()
     if (!HEX64.test(stall)) return { status: 400, body: { error: 'that is not a stall address' } }
     const status = await this.status(stall)
-    return { status: 200, body: { ready: status.ready } }
+    // The code only, never the free-text reason: this answer is public (#312).
+    return {
+      status: 200,
+      body: { ready: status.ready, ...(status.reasonCode ? { reason: status.reasonCode } : {}) },
+    }
   }
 
   private sweep(): void {

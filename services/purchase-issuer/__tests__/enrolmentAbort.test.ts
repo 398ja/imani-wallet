@@ -10,6 +10,7 @@ import { connect } from 'node:net'
 import { describe, expect, it } from 'vitest'
 
 import { EnrolmentService } from '../enrolment'
+import { ninetyDayTerm } from './stallFixture'
 import { mountEnrolment, server } from '../server'
 
 describe('a client that drops mid-body', () => {
@@ -17,7 +18,7 @@ describe('a client that drops mid-body', () => {
     const unhandled: unknown[] = []
     const record = (e: unknown) => unhandled.push(e)
     process.on('unhandledRejection', record)
-    mountEnrolment(new EnrolmentService({ vault: {} as never, confirmer: {} as never, publicOrigin: 'https://x' }))
+    mountEnrolment(new EnrolmentService({ vault: {} as never, confirmer: {} as never, publicOrigin: 'https://x', validityFor: ninetyDayTerm }))
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as { port: number }).port
     try {

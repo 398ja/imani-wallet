@@ -7,7 +7,7 @@ import { CredentialVault, type CredentialStore } from '../vault'
 import { runPass, type WorkerDeps } from '../worker'
 import type { PurchasesApi, OwedPurchase } from '../purchasesApi'
 import type { Ports } from '../discharge'
-import { delegatedCredential } from './stallFixture'
+import { delegatedCredential, ninetyDayTerm } from './stallFixture'
 
 const KEY = 'a'.repeat(64)
 const LOCK = '11'.repeat(32)
@@ -130,6 +130,7 @@ function deps(over: Partial<WorkerDeps> = {}): WorkerDeps & { api: PurchasesApi 
   } as unknown as PurchasesApi
   const ports: Ports = {
     // A real stall's delegation: since #152 nothing mints without one.
+    validityFor: ninetyDayTerm,
     credentialFor: async () => delegatedCredential({ credentialId: 'c1' }),
     tokenFor: async () => '',
     now: () => Date.now(),
@@ -259,5 +260,39 @@ describe('worker pass', () => {
 
     expect(result.skipped).toBe(1)
     expect(d.api.reportFailure).not.toHaveBeenCalled()
+  })
+})
+
+describe('#312: a sale the stall\u2019s term cannot back', () => {
+  // The backstop: the term changed to never-expires between checkout and mint. Nothing is minted
+  // and the row is parked NEEDS_ATTENTION (`issue_blocked`) for an operator to refund, not BLOCKED.
+  it('parks the row for a person, with the reason, and mints nothing', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const d = deps()
+    const attention = vi.fn().mockResolvedValue('parked')
+    ;(d.api as unknown as { attention: typeof attention }).attention = attention
+    d.ports.validityFor = async () => ({ kind: 'days', days: 0, source: 'record' })
+    const result = await runPass(d)
+    expect(result.blocked).toBe(1)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(attention).toHaveBeenCalledWith(
+      'evt_1',
+      'issue_blocked',
+      expect.objectContaining({ detail: expect.stringMatching(/^validity_never_expires/) }),
+    )
+    expect(d.api.reportFailure).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+
+  // A payment-adapter that cannot park it: the permanent failure, so a person still sees it.
+  it('falls back to a permanent failure when it cannot park', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    const d = deps()
+    ;(d.api as unknown as { attention: () => Promise<string> }).attention = async () => 'unsupported'
+    d.ports.validityFor = async () => ({ kind: 'days', days: 0, source: 'record' })
+    await runPass(d)
+    expect(d.api.reportFailure).toHaveBeenCalledWith('evt_1', expect.stringMatching(/^validity_never_expires/), true, undefined, expect.anything())
+    vi.unstubAllGlobals()
   })
 })

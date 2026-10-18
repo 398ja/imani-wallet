@@ -89,7 +89,24 @@ export function purchaseNonce(paymentIntent: string): string {
   )
 }
 
-export type DelegationCheck = { ok: true; event: Event } | { ok: false; reason: string }
+/**
+ * Why a delegation cannot back a coupon. `code` is set only for the two that are about the
+ * coupon's LIFE rather than the delegation itself (imani-wallet#312), because those need a
+ * different answer: nothing is wrong with the delegation, the stall's term is longer than it.
+ *
+ * - `never_expires`: the stall's coupons never expire, and no finite delegation outlives one. The
+ *   till checks the delegation against its own clock at redemption (`verifyIssuerDelegation`), so
+ *   such a coupon would die at the counter the day the delegation lapses.
+ * - `outlives_delegation`: a finite term that ends after the delegation (less the margin).
+ */
+export type DelegationCheck =
+  | { ok: true; event: Event }
+  | { ok: false; reason: string; code?: 'never_expires' | 'outlives_delegation' }
+
+/** Epoch ms a coupon minted at `nowMs` for `days` expires, or null for never (`days === 0`). */
+export function couponExpiresAtMs(nowMs: number, days: number): number | null {
+  return days === 0 ? null : nowMs + days * 86_400_000
+}
 
 /**
  * Is this credential's delegation one the till will accept, for a coupon that
@@ -110,7 +127,8 @@ export type DelegationCheck = { ok: true; event: Event } | { ok: false; reason: 
  */
 export function checkDelegation(
   credential: StallCredential,
-  couponExpiresAtMs: number,
+  /** Epoch ms the coupon would expire, or null for a coupon that never expires. */
+  couponExpiresAtMs: number | null,
 ): DelegationCheck {
   const refuse = (reason: string): DelegationCheck => ({ ok: false, reason })
   if (!credential.delegation) return refuse('the stall has not delegated coupon:issue to this issuer')
@@ -155,10 +173,20 @@ export function checkDelegation(
   if (expirations.length !== 1 || !Number.isSafeInteger(expiresAt)) {
     return refuse('the stored delegation carries no single expiry')
   }
+  if (couponExpiresAtMs === null) {
+    return {
+      ok: false,
+      code: 'never_expires',
+      reason:
+        'the stall\u2019s coupons never expire, and a delegated card coupon cannot outlive its delegation; the stall must set a voucher validity',
+    }
+  }
   if (expiresAt * 1000 < couponExpiresAtMs + DELEGATION_SKEW_MARGIN_MS) {
-    return refuse(
-      'the stored delegation does not outlive the coupon by a week; the stall must renew it',
-    )
+    return {
+      ok: false,
+      code: 'outlives_delegation',
+      reason: 'the stored delegation does not outlive the coupon by a week; the stall must renew it',
+    }
   }
   return { ok: true, event }
 }

@@ -24,11 +24,11 @@ import {
   IssuanceFailed,
   issueAsStall,
   purchaseIdempotencyKey,
-  DEFAULT_EXPIRES_IN_DAYS,
   type IssuedCoupon,
   type StallCredential,
 } from './issuer'
-import { checkDelegation, delegatedWarrant } from './delegatedWarrant'
+import { checkDelegation, couponExpiresAtMs, delegatedWarrant } from './delegatedWarrant'
+import type { StallValidity } from './stallValidity'
 import { DeliveredUnconfirmed, DeliveryRefused, deliver, type Recipient } from './delivery'
 import type { CardSale } from './saleRecord'
 
@@ -102,6 +102,13 @@ export type Outcome =
   | { kind: 'blocked'; reason: string }
   /** No credential for this stall. Ordinary, not an error. */
   | { kind: 'manual' }
+  /**
+   * Nothing minted, and nothing automatic should try again: the stall's term cannot be honoured by
+   * a delegated card coupon (never expires, or outlives the delegation), or its record stayed
+   * unreadable past `VALIDITY_MAX_ATTEMPTS` (imani-wallet#312). Parked NEEDS_ATTENTION so an
+   * operator refunds or issues by hand, rather than BLOCKED with nobody looking.
+   */
+  | { kind: 'attention'; reason: string }
 
 export interface Ports {
   credentialFor(stallPubkey: string): Promise<StallCredential | null>
@@ -114,7 +121,23 @@ export interface Ports {
    * absent, nothing is filed. Must never throw; its result never changes the outcome.
    */
   fileSale?(credential: StallCredential, sale: CardSale): Promise<boolean>
+  /**
+   * The stall's CURRENT coupon validity, from its signed public merchant record (imani-wallet#312,
+   * `stallValidity.ts`). Must never throw.
+   */
+  validityFor(stallPubkey: string): Promise<StallValidity>
 }
+
+/**
+ * How many passes may find the stall's merchant record unreadable before the debt is parked for a
+ * person (imani-wallet#312).
+ *
+ * Counted in PASSES, and nothing backs a pass off: payment-adapter lists an OWED row again at once
+ * (`findClaimable` has no retry-after), and the loop runs every `PURCHASE_INTERVAL_MS` (15 s by
+ * default). So this is about an hour at the default cadence. It was 12, which is three minutes:
+ * a gateway restart parked every paid card sale for an operator (review of #315).
+ */
+export const VALIDITY_MAX_ATTEMPTS = 240
 
 /**
  * How long to wait for a token before giving up on this pass.
@@ -186,9 +209,41 @@ export async function discharge(
   // credential without a live delegation from the stall must not mint at all.
   // BLOCKED rather than owed: retrying cannot help until the stall signs a new
   // delegation, which needs a person, and nothing was minted.
-  const expiresInDays = DEFAULT_EXPIRES_IN_DAYS
-  const delegation = checkDelegation(credential, ports.now() + expiresInDays * 86_400_000)
+  //
+  // The coupon's life is the stall's OWN term, read now from its signed record (#312). Unreadable
+  // is not a reason to guess: the debt stays OWED and the next pass asks again, up to a bound.
+  const validity = await ports.validityFor(obligation.stallPubkey)
+  // Review of #315: "no signed record" at MINT time is treated like unreadable, not as the stall's
+  // never-expires default. gc answers 200 with no events when its relay query fails and its cache
+  // has no copy (CachingNostrGatewayDecorator swallows the relay error), and `/ready` already
+  // refused a stall whose answer really is the default before anyone paid. So a paid sale that
+  // reads "no record" is far likelier a gateway miss than a stall that deleted its record, and
+  // parking it at once would send a paid buyer to an operator for a refund on a blip.
+  const unknown =
+    validity.kind === 'unreadable'
+      ? validity.reason
+      : validity.source === 'default'
+        ? 'the gateway returned no signed merchant record for the stall'
+        : null
+  if (unknown !== null || validity.kind !== 'days') {
+    const why = unknown ?? 'unreadable'
+    if (obligation.attempts + 1 >= VALIDITY_MAX_ATTEMPTS) {
+      return { kind: 'attention', reason: `validity_unreadable: ${why}` }
+    }
+    return { kind: 'owed', reason: `stall validity unknown: ${why}`, ambiguous: false }
+  }
+  const expiresInDays = validity.days
+  const mintedAt = ports.now()
+  const delegation = checkDelegation(credential, couponExpiresAtMs(mintedAt, expiresInDays))
   if (!delegation.ok) {
+    // The readiness check refuses these before payment (#312); reaching here means the stall
+    // changed its term between checkout and mint. A person decides: refund or issue by hand.
+    if (delegation.code === 'never_expires') {
+      return { kind: 'attention', reason: `validity_never_expires: ${delegation.reason}` }
+    }
+    if (delegation.code === 'outlives_delegation') {
+      return { kind: 'attention', reason: `validity_outlives_delegation: ${delegation.reason}` }
+    }
     return { kind: 'blocked', reason: delegation.reason }
   }
 
@@ -257,7 +312,8 @@ export async function discharge(
       // The gateway counts `expires_in_days` from its own mint instant, so this is
       // the coupon's expiry to within the mint's latency. Without it the merchant
       // record reads "No expiry" for a coupon that expires (S1 showed the date).
-      expiresAt: Math.floor(at / 1000) + expiresInDays * 86_400,
+      // The same `expiresInDays` the mint was sent, so the two cannot disagree (#312).
+      expiresAt: expiresInDays === 0 ? undefined : Math.floor(at / 1000) + expiresInDays * 86_400,
       issuanceWarrant,
     }
     // try/await, not `.catch`: a port that throws synchronously must not escape

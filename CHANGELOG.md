@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Card vouchers carry the stall's own validity, not a year** (Closes #312). purchase-issuer
+  read no stall setting and minted every card voucher for 365 days. It now reads the stall's
+  current `voucherValidityDays` from its signed public merchant record (kind 30078,
+  `d=imani:merchant`) through gateway-core's public event query at mint time: signature checked,
+  authored by the stall, newest wins, cached two minutes. The voucher, the merchant's sale record
+  and its `expiresAt` all use the same term. Already-issued vouchers keep their year.
+- **Fail safe when the term cannot be read** (#312): nothing is minted on a guess. The purchase
+  stays OWED and is retried; after 240 passes (about an hour at the default interval) it is parked `NEEDS_ATTENTION` (`issue_blocked`,
+  detail `validity_unreadable`). A stall with no record or no valid term is "never expires", as
+  Sell reads it.
+
+### Changed
+
+- **Card sales need a voucher validity** (#312). A delegated card voucher cannot outlive its
+  delegation at the till, so a never-expiring one cannot be backed. `/api/v1/card-sales/ready`
+  answers not ready with `reason: "validity_never_expires"` (or `validity_outlives_delegation`,
+  `validity_unknown`); Buy is disabled with *This shop sells by card only with an expiry date*,
+  and Settings › Card payments says card sales need a validity and links to it. A term changed
+  between checkout and mint is parked `issue_blocked` for an operator rather than minted.
+- **Delegations cover the longest validity** (#312): new card-sales delegations last 365 + 730 + 7
+  days, so card sales stay on for the credential's year at any term up to 730 days. Enrolment
+  checks the delegation against the stall's ACTUAL term (the maximum would refuse every
+  enrolment a moment after signing). Delegations signed before this (737 days) keep working while
+  their remaining life exceeds the stall's term plus a week; past that, readiness answers
+  `validity_outlives_delegation` and the stall sets card sales up again.
+- The validity rules (`validValidityDays`, `NEVER_EXPIRES`, `MAX_VALIDITY_DAYS`, the record's kind
+  and `d` tag) moved to a new source package, `@imani/merchant-record`, shared by the wallet
+  (`src/lib/merchant.ts` re-exports it) and purchase-issuer.
+
 ## [0.30.1] - 2026-10-18
 
 Google Drive key backup and restore can run (#311). App image only; purchase-issuer unchanged.

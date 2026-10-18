@@ -6,7 +6,7 @@ import { Button } from './ui'
 import { listVouchers, onWalletChanged, walletIsOpen } from '../lib/wallet'
 import { withoutInFlight } from '../lib/pay'
 import { merchantActions, payPath, validVoucherCount, type ActionState, type CardSalesReadiness } from '../lib/merchantActions'
-import { cardSalesReady } from '../lib/cardSalesEnrolment'
+import { cardSalesReadiness } from '../lib/cardSalesEnrolment'
 import { rememberAfterLogin } from '../lib/afterLogin'
 
 /**
@@ -36,12 +36,12 @@ export function MerchantActions({
   // #298: can the purchase issuer actually issue for this stall? Asked only when the stall says
   // it takes cards. Fails safe: an error or no answer is `not-ready`, never a sale. The answer is
   // kept WITH the stall it is for, so a stale answer for another stall reads as `checking`.
-  const [answer, setAnswer] = useState<{ stall: string; ready: boolean } | null>(null)
+  const [answer, setAnswer] = useState<{ stall: string; ready: Exclude<CardSalesReadiness, 'checking'> } | null>(null)
   useEffect(() => {
     if (!acceptsCards) return
     let live = true
-    cardSalesReady(pubkey)
-      .catch(() => false)
+    cardSalesReadiness(pubkey)
+      .catch((): 'not-ready' => 'not-ready')
       .then((ready) => {
         if (live) setAnswer({ stall: pubkey, ready })
       })
@@ -50,7 +50,7 @@ export function MerchantActions({
     }
   }, [pubkey, acceptsCards])
   const cardSales: CardSalesReadiness =
-    answer === null || answer.stall !== pubkey ? 'checking' : answer.ready ? 'ready' : 'not-ready'
+    answer === null || answer.stall !== pubkey ? 'checking' : answer.ready
 
   useEffect(() => {
     // `listVouchers` throws with no wallet open, and a visitor has nothing to

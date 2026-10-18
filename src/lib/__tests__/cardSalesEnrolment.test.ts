@@ -29,7 +29,7 @@ const STORED_ENVELOPE = JSON.stringify({ v: 1, iv: 'c3RvcmVkLWl2', ciphertext: '
 const stallSigner = createWalletSigner(STALL_HEX)
 vi.mock('../nap', () => ({ getSigner: () => stallSigner }))
 
-const { turnOnCardSales, fetchCardSalesStatus, cardSalesReady, BEGIN_PATH, ENROL_PATH, DELEGATION_LIFETIME_DAYS } =
+const { turnOnCardSales, fetchCardSalesStatus, cardSalesReady, cardSalesReadiness, BEGIN_PATH, ENROL_PATH, DELEGATION_LIFETIME_DAYS } =
   await import('../cardSalesEnrolment')
 
 let sent: (WireRequest & { headers: Headers })[] = []
@@ -116,7 +116,8 @@ describe('turning on card sales', () => {
   // days: the stall went off sale 8 days after it turned card sales on.
   it('signs a delegation that keeps card sales on for the credential\u2019s whole year', async () => {
     const { checkDelegation } = await import('../../../services/purchase-issuer/delegatedWarrant')
-    const { DEFAULT_EXPIRES_IN_DAYS } = await import('../../../services/purchase-issuer/issuer')
+    // The longest term a stall may choose (#312): card sales must stay on for it all year.
+    const { MAX_VALIDITY_DAYS } = await import('@imani/merchant-record')
     const { CREDENTIAL_LIFETIME_DAYS } = await import('../terminalMint')
     await turnOnCardSales({ signer: stallSigner })
     const enrol = JSON.parse(sent[3].body) as { delegation: unknown }
@@ -128,7 +129,7 @@ describe('turning on card sales', () => {
     })
     const credential = { stallPubkey: STALL, credentialId: 'c', lockKeyHex, delegation: JSON.stringify(resigned) }
     const day = 86_400_000
-    const sellsOn = (d: number) => checkDelegation(credential, Date.now() + d * day + DEFAULT_EXPIRES_IN_DAYS * day).ok
+    const sellsOn = (d: number) => checkDelegation(credential, Date.now() + d * day + MAX_VALIDITY_DAYS * day).ok
     expect(sellsOn(0)).toBe(true)
     // The credential's last full day (it expires at 365 days and a few minutes).
     expect(sellsOn(CREDENTIAL_LIFETIME_DAYS - 1)).toBe(true)
@@ -204,5 +205,15 @@ describe('readiness for a shopper (fail safe)', () => {
       throw new TypeError('offline')
     }) as unknown as typeof fetch
     expect(await cardSalesReady(STALL, down)).toBe(false)
+  })
+
+  // #312: the one reason a shopper is told. A never-expiring stall reads `no-expiry`; any other
+  // refusal (including the other validity codes) stays plain `not-ready`, failing safe.
+  it('reads validity_never_expires as no-expiry, and every other refusal as not-ready', async () => {
+    const answer = (status: number, body: unknown) => (async () => respond(status, body)) as unknown as typeof fetch
+    expect(await cardSalesReadiness(STALL, answer(200, { ready: false, reason: 'validity_never_expires' }))).toBe('no-expiry')
+    expect(await cardSalesReadiness(STALL, answer(200, { ready: false, reason: 'validity_unknown' }))).toBe('not-ready')
+    expect(await cardSalesReadiness(STALL, answer(200, { ready: true }))).toBe('ready')
+    expect(await cardSalesReady(STALL, answer(200, { ready: false, reason: 'validity_never_expires' }))).toBe(false)
   })
 })
