@@ -16,6 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   used across the app: avatar, display name and handle, built from the profile stored in the
   backup (picture included) so it works offline. No raw key is shown on the screen any more. A
   backup with no profile falls back to a short form. The restore itself is unchanged.
+- **No protocol jargon or raw keys anywhere in the app** (Closes #324). People and stalls are
+  shown only by picture, name and handle. Where nothing is known yet, the app says **Someone**,
+  **Unknown stall** or **Your account** with a generic avatar, never a hex or npub fragment
+  (Receive, Profile, a stall's public page and share button, claim and gift links, coupon
+  cards, merchant record details). The ledger ID is folded under **Show ledger ID**, beside
+  **Copy ledger ID**. "relay", "nsec" and "pubkey" are gone from the copy ("Saved." / "not sent
+  yet" / "network" / "backup key"), and error messages from libraries that use those words are
+  replaced by a plain one. Pasting a key still accepts an nsec or hex; only the wording changed.
+  A guard test fails the build if a user-facing string in `src/pages` or `src/components` says
+  npub, nsec, Nostr, relay, NIP-xx or pubkey.
 
 ## [0.31.0] - 2026-10-18
 

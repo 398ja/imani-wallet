@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Check, Copy, RefreshCw, ShieldCheck, ShieldAlert } from 'lucide-react'
+import { Check, ChevronDown, Copy, RefreshCw, ShieldCheck, ShieldAlert } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, Panel, Button } from '../components/ui'
 import { ATTESTATION_KIND } from '../lib/attestationKind'
@@ -197,23 +197,16 @@ export function LedgerPage({ stallPubkey }: { stallPubkey: string }) {
               Share this with an auditor or a coupon issuer so they can check your record. It is
               not your account key, and it does not reveal what you redeemed or for how much.
             </p>
-            {/* Behind a deliberate step (#324). The merchant does have to act on
-                this value (copy it, or read it out to an auditor), so it is
-                kept, but the Copy button is the intended path and the raw
-                characters stay collapsed until asked for.
+            {/* Copy is the intended path, so it comes first (#324). The raw
+                characters stay folded under a deliberate step below it: the
+                merchant does have to act on this value (an auditor needs it),
+                but nobody needs to read 64 characters by default.
 
                 Wrapped, not truncated, once shown: it exists to be COPIED, so
                 it has to be shown in full and made selectable. `break-all`
                 because a 64-char hash otherwise breaks mid-run, and
-                `select-all` so a tap takes the whole value. */}
-            <details className="mt-3">
-              <summary className="pressable inline-block cursor-pointer py-1 text-sm text-mono-500">
-                Show ledger ID
-              </summary>
-              <p className="mt-2 break-all font-mono text-xs leading-relaxed text-mono-600 dark:text-mono-300 select-all">
-                {pubkey}
-              </p>
-            </details>
+                `select-all` so a tap takes the whole value. Same chevron and
+                curve as the record screens' disclosure (`records.tsx`). */}
             <Button variant="secondary" className="mt-3" onClick={copy}>
               {copied ? (
                 <>
@@ -227,6 +220,18 @@ export function LedgerPage({ stallPubkey }: { stallPubkey: string }) {
                 </>
               )}
             </Button>
+            <details className="group mt-2">
+              <summary className="pressable flex min-h-11 cursor-pointer list-none items-center gap-1 text-sm text-mono-500 [&::-webkit-details-marker]:hidden">
+                Show ledger ID
+                <ChevronDown
+                  aria-hidden
+                  className="h-4 w-4 shrink-0 text-mono-400 transition-transform duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] group-open:rotate-180 motion-reduce:transition-none"
+                />
+              </summary>
+              <p className="break-all font-mono text-xs leading-relaxed text-mono-600 dark:text-mono-300 select-all">
+                {pubkey}
+              </p>
+            </details>
           </div>
         </div>
       </Panel>
