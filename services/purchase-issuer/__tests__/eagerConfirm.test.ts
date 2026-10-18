@@ -25,7 +25,7 @@ import { discharge, type Ports } from '../discharge'
 import { renderMetrics, resetMetricsForTest } from '../metrics'
 import { CredentialVault, type CredentialStore } from '../vault'
 import { nip98Refusal } from '../../../src/lib/__tests__/nip98ServerCheck'
-import { delegatedCredential, STALL } from './stallFixture'
+import { delegatedCredential, STALL, ninetyDayTerm } from './stallFixture'
 
 const GATEWAY = 'http://gateway:8082'
 const KEY = 'a'.repeat(64)
@@ -118,6 +118,7 @@ describe('an expired credential', () => {
 
     const credential = delegatedCredential({ credentialId: 'cred-x' })
     const ports: Ports = {
+      validityFor: ninetyDayTerm,
       credentialFor: async () => confirmer.annotate(credential),
       tokenFor: async () => {
         throw new Error('must not mint')

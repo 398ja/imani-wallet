@@ -14,6 +14,7 @@
  * Lives under `src/` because the receipt gate pulls browser modules that the
  * services typecheck project cannot load.
  */
+import { ninetyDayTerm } from '../../../services/purchase-issuer/__tests__/stallFixture'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure'
 import { hexToBytes } from '@noble/hashes/utils'
@@ -73,6 +74,7 @@ async function mintedWarrant(): Promise<string> {
     }),
   )
   await discharge('http://gw', OBLIGATION, {
+    validityFor: ninetyDayTerm,
     credentialFor: async () => ({
       stallPubkey: STALL,
       credentialId: 'cred-1',

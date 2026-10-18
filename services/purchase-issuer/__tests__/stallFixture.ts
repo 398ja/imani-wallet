@@ -75,3 +75,9 @@ export function delegatedCredential(over: { credentialId?: string; delegation?: 
 }
 
 export { bytesToHex }
+
+/**
+ * A stall whose signed merchant record says 90 days (#312): the owner's own term, and the default
+ * for every test that is not about validity.
+ */
+export const ninetyDayTerm = async () => ({ kind: 'days' as const, days: 90, source: 'record' as const })

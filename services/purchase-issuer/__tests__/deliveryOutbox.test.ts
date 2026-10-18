@@ -12,7 +12,7 @@ import { PurchasesApi } from '../purchasesApi'
 import { runPass, type WorkerDeps } from '../worker'
 import type { Ports } from '../discharge'
 import { DeliveryOutbox, FileOutboxStore, MemoryOutboxStore, runDeliveryPass, type OutboxStore } from '../outbox'
-import { STALL, delegatedCredential } from './stallFixture'
+import { STALL, delegatedCredential, ninetyDayTerm } from './stallFixture'
 
 /**
  * imani-wallet#274 (card atomicity audit U8): a card purchase's coupon is ALWAYS eventually
@@ -168,6 +168,7 @@ function world({ leaseMs = 60_000, attentionRoute = true } = {}) {
   }) as typeof fetch
 
   const ports: Ports = {
+    validityFor: ninetyDayTerm,
     credentialFor: async () => delegatedCredential({ credentialId: 'c1' }),
     tokenFor: async (_credential, voucherId) => {
       const r = await fetchImpl(`${GATEWAY}/api/v1/wallet/vouchers/${voucherId}`, { method: 'GET' })

@@ -32,6 +32,7 @@ import {
   ownerTransport,
   type MintTransport,
 } from './terminalMint'
+import { MAX_VALIDITY_DAYS } from '@imani/merchant-record'
 import { issuerDelegationTemplate } from './issuerDelegation'
 import { grantFor, TERMINAL_ROLES } from './terminalRole'
 import { signedFetch, type RequestSigner } from './nip98'
@@ -48,14 +49,16 @@ export const readyPath = (stallPubkey: string) => `${CARD_SALES_PREFIX}/ready/${
  * The delegation's life (review of #302).
  *
  * The issuer refuses to mint, and `/ready` answers false, unless the delegation outlives a coupon
- * minted NOW (365 days) by `DELEGATION_SKEW_MARGIN_MS` (7 days): `expiration >= now + 372 days`.
- * The operator script's 380 days therefore kept a stall on sale for only EIGHT days after it
- * enrolled; then Buy turned itself off and every sale read "needs renewing". So it must cover the
- * whole time the stall wants to sell, plus that 372: the credential sells for a year
- * (`CREDENTIAL_LIFETIME_DAYS`), so 365 + 365 + 7. Card sales then stay on for the credential's
- * life, and both are renewed together by Set up card sales again.
+ * minted NOW for the stall's own term by `DELEGATION_SKEW_MARGIN_MS` (7 days). The operator
+ * script's 380 days once kept a stall on sale for only EIGHT days after it enrolled, so the
+ * delegation must cover the whole time the stall wants to sell plus the longest coupon minted at
+ * its end: the credential sells for a year (`CREDENTIAL_LIFETIME_DAYS`), and since #312 a coupon's
+ * life is the stall's term, which may be up to `MAX_VALIDITY_DAYS` (730). So 365 + 730 + 7.
+ * Card sales then stay on for the credential's life whatever finite term the stall picks, and both
+ * are renewed together by Set up card sales again. (A never-expiring term cannot be backed by any
+ * finite delegation: `/ready` says so instead, `validity_never_expires`.)
  */
-export const DELEGATION_LIFETIME_DAYS = CREDENTIAL_LIFETIME_DAYS + 365 + 7
+export const DELEGATION_LIFETIME_DAYS = CREDENTIAL_LIFETIME_DAYS + MAX_VALIDITY_DAYS + 7
 
 /** The till name the credential carries, shown on the owner's own records. */
 export const CARD_SALES_TERMINAL_NAME = 'Card sales'
@@ -68,6 +71,8 @@ export interface CardSalesStatus {
   delegationValid: boolean
   ready: boolean
   reason?: string
+  /** Set for the reasons the stall fixes in its shop settings (#312). */
+  reasonCode?: 'validity_never_expires' | 'validity_outlives_delegation' | 'validity_unknown'
 }
 
 export type CardSalesResult =
@@ -185,12 +190,26 @@ export async function cardSalesReady(
   fetchImpl: typeof fetch = fetch,
   timeoutMs = 5000,
 ): Promise<boolean> {
+  return (await cardSalesReadiness(stallPubkey, fetchImpl, timeoutMs)) === 'ready'
+}
+
+/**
+ * The same question, keeping the one reason a shopper can be told (#312): the stall's vouchers
+ * never expire, and card sales need an expiry. Everything else that is not `ready` is plain
+ * `not-ready`, failing safe exactly as `cardSalesReady` does.
+ */
+export async function cardSalesReadiness(
+  stallPubkey: string,
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs = 5000,
+): Promise<'ready' | 'not-ready' | 'no-expiry'> {
   try {
     const response = await fetchImpl(readyPath(stallPubkey), { signal: AbortSignal.timeout(timeoutMs) })
-    if (!response.ok) return false
-    const body = (await response.json()) as { ready?: unknown }
-    return body.ready === true
+    if (!response.ok) return 'not-ready'
+    const body = (await response.json()) as { ready?: unknown; reason?: unknown }
+    if (body.ready === true) return 'ready'
+    return body.reason === 'validity_never_expires' ? 'no-expiry' : 'not-ready'
   } catch {
-    return false
+    return 'not-ready'
   }
 }
