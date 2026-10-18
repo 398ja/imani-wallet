@@ -84,12 +84,16 @@ describe('leaving the dialog to restore a backup', () => {
 })
 
 describe('leaving the dialog to log out', () => {
-  it('goes through runLogout, which confirms and erases', async () => {
-    const handler = handlerBody(await appSource(), 'onLogout', 'NOTHING_FOLLOWS')
+  it('goes through useLogout -> attemptLogout, which checks the backups, confirms and erases', async () => {
+    const source = await appSource()
+    const handler = handlerBody(source, 'onLogout', 'NOTHING_FOLLOWS')
 
-    // Logout is the destructive exit and must keep its confirmation. Calling
-    // the teardown pieces directly here would erase the key with no prompt.
-    expect(handler).toContain('runLogout(')
+    // Logout is the destructive exit and must keep its backup check and its
+    // confirmation (review of #326). Calling the teardown pieces directly here
+    // would erase the key with neither.
+    expect(handler).toContain('dialogLogout.logout')
+    expect(source).toMatch(/const dialogLogout = useLogout\(known, onLoggedOut\)/)
+    expect(source).not.toMatch(/\b(wipeWallet|keyStore\.clear)\(/)
   })
 })
 

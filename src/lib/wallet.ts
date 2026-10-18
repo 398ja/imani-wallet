@@ -101,6 +101,20 @@ interface RawWriters {
   saveVoucher(row: VoucherRow): Promise<VoucherRow>
 }
 
+/**
+ * How many coupon writes this tab has made (review of #326).
+ *
+ * Logout's race check: it confirms every held coupon is backed up, stops the
+ * writers, and then needs to know whether anything changed IN BETWEEN. A
+ * fingerprint of the rows catches content changes; this catches a write that
+ * landed and was undone, and is cheap to compare.
+ */
+let voucherWrites = 0
+
+export function voucherWriteCount(): number {
+  return voucherWrites
+}
+
 /** Exported for tests: `openWallet` needs IndexedDB, this needs only a double. */
 export function backUpWrites(ws: WalletStorage): RawWriters {
   const rawAdd = ws.addTransaction.bind(ws)
@@ -118,6 +132,7 @@ export function backUpWrites(ws: WalletStorage): RawWriters {
 
   ws.atomicallyWrite = async (input: Parameters<WalletStorage['atomicallyWrite']>[0]) => {
     await rawAtomic(input)
+    if ((input.vouchers ?? []).length > 0) voucherWrites++
     for (const row of input.transactions ?? []) void publishTx(row)
     // Transaction rows can go straight back out — they carry their own `id`.
     // Voucher rows cannot, hence `mirrorWritten`. See its doc comment.
@@ -129,6 +144,7 @@ export function backUpWrites(ws: WalletStorage): RawWriters {
     // token and fills `created_at`/`updated_at`. Publishing the argument would
     // back up a coupon with no primary key, and `d` is that key.
     const saved = await rawSave(row)
+    voucherWrites++
     void publishVoucher(saved)
     void burnIfSelfIssued(saved, currentUserId ?? '')
     return saved
@@ -136,12 +152,14 @@ export function backUpWrites(ws: WalletStorage): RawWriters {
 
   ws.removeVoucher = async (tokenId: string) => {
     const removed = await rawRemove(tokenId)
+    voucherWrites++
     if (removed) void tombstoneVoucher(tokenId)
     return removed
   }
 
   ws.removeVouchers = async (tokenIds: string[]) => {
     const count = await rawRemoveMany(tokenIds)
+    voucherWrites++
     for (const tokenId of tokenIds) void tombstoneVoucher(tokenId)
     return count
   }
@@ -151,6 +169,7 @@ export function backUpWrites(ws: WalletStorage): RawWriters {
     // the replacement set is a removal and needs its tombstone.
     const before = await ws.getAllVouchers()
     await rawReplaceAll(rows)
+    voucherWrites++
     const kept = new Set(rows.map((row) => row.token_id))
     for (const row of before) {
       if (row.token_id && !kept.has(row.token_id)) void tombstoneVoucher(row.token_id)
@@ -211,6 +230,7 @@ export async function addRestoredTransaction(row: TransactionRow): Promise<Trans
 /** The coupon counterpart of `addRestoredTransaction`. Same reason. */
 export async function addRestoredVoucher(row: VoucherRow): Promise<VoucherRow> {
   if (!raw) throw new Error('Wallet not opened yet — call openWallet(userId) first.')
+  voucherWrites++
   return raw.saveVoucher(row)
 }
 

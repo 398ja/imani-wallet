@@ -1,5 +1,6 @@
 import type { TokenProof } from './voucherToken'
 import type { BlindedOutput } from './walletSwap'
+import { SWAP_INTENT_LIFETIME_MS as LIFETIME, swapIntentsKey } from './inFlightMoney'
 
 /**
  * What the wallet writes down before it asks the mint to swap.
@@ -84,7 +85,8 @@ export interface SwapIntent {
 // Same `imani-wallet:` prefix and pubkey scoping as pending sends, the profile
 // and payment requests. An intent holds live secrets, so two accounts on one
 // device must never read each other's.
-const intentsKey = (pubkey: string) => `imani-wallet:swap-intents:${pubkey}`
+// Defined in inFlightMoney.ts, which logout reads to refuse while one is live.
+const intentsKey = swapIntentsKey
 
 /**
  * How long an unfinished swap is still worth trying to recover.
@@ -99,7 +101,7 @@ const intentsKey = (pubkey: string) => `imani-wallet:swap-intents:${pubkey}`
  * send waits on a gateway saga that may genuinely take days, while a swap waits
  * on one HTTP request that either answered or did not.
  */
-export const SWAP_INTENT_LIFETIME_MS = 60 * 60 * 1000
+export const SWAP_INTENT_LIFETIME_MS = LIFETIME
 
 /**
  * How many unfinished swaps to keep.

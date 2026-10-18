@@ -31,10 +31,9 @@ import { userMessage } from '../../lib/userMessage'
  *
  * Logout reaches the same screens, but note WHICH one: it erases the key and
  * reloads the document, so `Entry` finds no stored key and routes to
- * `/onboarding`, not `/login`. The restore link this dialog promises therefore
- * has to be on the onboarding screen, and it is (OnboardingPage) — it was added
- * with this change, because pointing at logout without it would have sent
- * someone with a backup file to a screen that could not open one.
+ * `/onboarding`, not `/login`. Its "Log in" step is where a backup is opened
+ * (Google Drive, a backup file, or the backup key behind a small link, #325),
+ * which is why this dialog sends people to "Log in" after logging out.
  *
  * **The passphrase is never stored.** It lives in this component's state while
  * the user types, goes straight to `onSubmit`, and is cleared on success. It is
@@ -242,9 +241,9 @@ export function ReauthDialog({
                 someone with no backup must not learn the cost after tapping.
               */}
               <p className="text-[12px] leading-relaxed text-mono-600 dark:text-mono-300">
-                To use one, log out first: that clears this device, then offers
-                Restore on the next screen. Make sure you have your backup
-                before you do.
+                To use one, log out first: that clears this device. Then choose
+                Log in on the next screen and open your backup. Make sure you
+                have your backup before you do.
               </p>
               {/*
                 Last, separated, and in the warning ink. It is the only
