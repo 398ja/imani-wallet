@@ -224,8 +224,13 @@ export function registerRequestTerms(
         { recipientPubkey: issuerId, issuerId, amount, unit },
         signer,
       )
-      return res.status === 200 || res.status === 201
-    } catch {
+      if (res.status === 200 || res.status === 201) return true
+      // Said out loud (#307 review): the till carries on without core's verdict, so the console
+      // must say why. 409 is someone else's terms on this id; 401 is a signature core refused.
+      console.warn(`[till] gateway-core did not take the request's terms: HTTP ${res.status}`)
+      return false
+    } catch (e) {
+      console.warn("[till] could not register the request's terms with gateway-core:", e)
       return false
     }
   }
