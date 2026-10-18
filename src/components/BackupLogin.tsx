@@ -323,7 +323,9 @@ function AccountStep({
             pubkey={pubkey}
             size="md"
             linkToProfile={false}
-            fallbackName={stored?.displayName}
+            // The customer's OWN account: with nothing better known it is
+            // "Your account", never a key fragment or a stranger's "Someone".
+            fallbackName={stored?.displayName ?? (stored?.nip05 ? undefined : 'Your account')}
             fallbackHandle={stored?.nip05}
             fallbackPicture={stored?.picture}
           />

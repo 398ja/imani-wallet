@@ -259,6 +259,16 @@ describe('logging in from a backup', () => {
     expect(container.textContent).not.toMatch(/Unnamed/i)
   })
 
+  // A backup that names its account but carries no profile: still "Your
+  // account", and no fragment of the key.
+  it('a backup with no profile shows no key fragment', async () => {
+    const { container } = openLogIn()
+    pickFile(container, backupText(null))
+    await screen.findByText('Your account')
+    expect(container.textContent).not.toContain(PUBKEY.slice(0, 8))
+    expect(container.textContent).not.toMatch(/Unnamed|npub/i)
+  })
+
   // "Choose another backup" goes back to the two choices from the account step.
   it('goes back to the choice from the account step', async () => {
     const { container } = openLogIn()
