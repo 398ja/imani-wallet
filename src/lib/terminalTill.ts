@@ -110,6 +110,85 @@ export function fulfilmentOf(
   }
 }
 
+/** The first checks, while the customer is most likely still at the counter. */
+export const FULFILMENT_FAST_MS = 3_000
+/** How many checks run at the fast pace before backing off: the first minute. */
+const FULFILMENT_FAST_CHECKS = 20
+/** The slowest a till ever checks, however long the request has been open. */
+export const FULFILMENT_MAX_MS = 60_000
+
+/**
+ * How long to wait before check `n` (0-based) of one request (imani-wallet#300).
+ *
+ * A till used to ask every 3 s until the request expired, a day later. Now it asks every 3 s for
+ * the first minute, when a payment usually lands, then doubles up to once a minute. A stuck or
+ * forgotten request costs gateway-core about one call a minute, and a till left open still
+ * notices a late payment within a minute.
+ */
+export function fulfilmentDelayMs(n: number): number {
+  if (n < FULFILMENT_FAST_CHECKS) return FULFILMENT_FAST_MS
+  const doublings = n - FULFILMENT_FAST_CHECKS + 1
+  return Math.min(FULFILMENT_MAX_MS, FULFILMENT_FAST_MS * 2 ** Math.min(doublings, 10))
+}
+
+/**
+ * Ask gateway-core about one request until it is paid or expires, then stop (imani-wallet#300).
+ *
+ * The till's one trust path, shared by a terminal and by the stall's own device: `check` is
+ * `fulfilmentOf`, and `isPaid` is `paidForStall` against THIS request, so Paid only ever comes
+ * from core's verdict with the right recipient, issuer, unit and at least the amount.
+ *
+ * - One check at a time, each scheduled after the last answer, so a slow gateway is never asked
+ *   twice in parallel.
+ * - An error or a null answer is "still waiting", and the watch carries on.
+ * - Ends on the first answer `isPaid` accepts (calls `onPaid` once), at the request's expiry
+ *   (calls `onExpired` once), or when the returned function is called. An answer that lands
+ *   after that is dropped, so a closed screen never hears a late Paid.
+ */
+export function watchFulfilment(opts: {
+  paymentId: string
+  check: FulfilmentCheck
+  isPaid: (answer: Fulfilment | null) => boolean
+  /** Epoch ms. */
+  expiresAtMs: number
+  onPaid: (answer: Fulfilment) => void
+  onExpired: () => void
+}): () => void {
+  let live = true
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let n = 0
+
+  const run = async () => {
+    if (!live) return
+    if (opts.expiresAtMs <= Date.now()) {
+      live = false
+      opts.onExpired()
+      return
+    }
+    let answer: Fulfilment | null = null
+    try {
+      answer = await opts.check(opts.paymentId)
+    } catch {
+      answer = null
+    }
+    if (!live) return
+    if (answer && opts.isPaid(answer)) {
+      live = false
+      opts.onPaid(answer)
+      return
+    }
+    // Never past the expiry: the last wake-up is the one that notices it.
+    const wait = Math.min(fulfilmentDelayMs(n++), Math.max(0, opts.expiresAtMs - Date.now()))
+    timer = setTimeout(() => void run(), wait)
+  }
+
+  void run()
+  return () => {
+    live = false
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 /** What a till asks for, registered with gateway-core before the QR code is shown. */
 export interface RequestTerms {
   paymentId: string
