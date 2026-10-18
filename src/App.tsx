@@ -23,7 +23,8 @@ import { restoreTx, backfillTx } from './lib/txRecords'
 import { collectTillSalesForOwner } from './lib/tillSalesNet'
 import { startRosterSync, syncRosterNow } from './lib/terminalRosterSyncNet'
 import { restoreVouchers, backfillVouchers } from './lib/voucherRecords'
-import { logout as runLogout } from './lib/logout'
+import { useLogout } from './lib/useLogout'
+import { LogoutBlockedDialog } from './components/LogoutBlocked'
 import { emptyProfile, loadProfile, refreshProfile, type Profile } from './lib/profile'
 import { handleLabel } from './lib/format'
 import { reauthenticate } from './lib/reauth'
@@ -386,9 +387,10 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
     }
   }, [pubkey])
 
-  const onLogout = useCallback(() => {
-    void runLogout(pubkey).then((done) => done && onLoggedOut())
-  }, [pubkey, onLoggedOut])
+  // Refused, with a dialog, until every held voucher is read back from its
+  // backup (owner rule 2026-10-18; lib/logout.ts `attemptLogout`).
+  const logoutFlow = useLogout(pubkey, onLoggedOut)
+  const onLogout = logoutFlow.logout
 
   if (error) return <Fatal title="Could not open the wallet" detail={error.message} />
   if (!ready) return <Centered>Opening wallet…</Centered>
@@ -701,6 +703,14 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      {logoutFlow.blocked && (
+        <LogoutBlockedDialog
+          outcome={logoutFlow.blocked}
+          busy={logoutFlow.checking}
+          onRetry={logoutFlow.logout}
+          onClose={logoutFlow.dismiss}
+        />
+      )}
     </>
   )
 }
@@ -753,21 +763,32 @@ function Gate({ session, onLoggedOut }: { session: NapSession; onLoggedOut: () =
   const greeting =
     knownProfile?.displayName ??
     (knownProfile?.nip05 ? handleLabel(knownProfile.nip05) : undefined)
+  // The same refusal as the header's logout. Here the key is LOCKED, so a
+  // wallet holding vouchers is refused until it is unlocked: no backup can be
+  // read back or made without the key (review of #326).
+  const dialogLogout = useLogout(known, onLoggedOut)
 
   const dialog = expired ? (
-    <ReauthDialog
-      name={greeting}
-      onSubmit={async (passphrase) => {
-        await reauthenticate(passphrase)
-        dismiss()
-      }}
-      onLogout={() => {
-        // `runLogout` confirms first — it erases the key and every trace of the
-        // account from this browser, and it reloads the document on success, so
-        // nothing after this needs to tidy up.
-        if (known) void runLogout(known).then((done) => done && onLoggedOut())
-      }}
-    />
+    <>
+      <ReauthDialog
+        name={greeting}
+        onSubmit={async (passphrase) => {
+          await reauthenticate(passphrase)
+          dismiss()
+        }}
+        // `attemptLogout` checks the backups, then confirms; it erases the key
+        // and every trace of the account, and reloads the document on success.
+        onLogout={dialogLogout.logout}
+      />
+      {dialogLogout.blocked && (
+        <LogoutBlockedDialog
+          outcome={dialogLogout.blocked}
+          busy={dialogLogout.checking}
+          onRetry={dialogLogout.logout}
+          onClose={dialogLogout.dismiss}
+        />
+      )}
+    </>
   ) : null
 
   // The dialog renders OVER the app rather than instead of it. That is the whole
