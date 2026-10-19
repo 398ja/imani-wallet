@@ -9,6 +9,7 @@ import type { VoucherRow } from '@imani/wallet-storage'
 const stubs = vi.hoisted(() => ({
   rows: new Map<string, Record<string, unknown>>(),
   notified: { count: 0 },
+  onSave: null as null | ((row: Record<string, unknown>) => void),
 }))
 
 vi.mock('../wallet', () => ({
@@ -16,6 +17,7 @@ vi.mock('../wallet', () => ({
     getVoucher: async (id: string) => stubs.rows.get(id) ?? null,
     getAllVouchers: async () => [...stubs.rows.values()],
     saveVoucher: async (row: Record<string, unknown>) => {
+      stubs.onSave?.(row)
       stubs.rows.set(String(row.token_id), row)
       return row
     },
@@ -265,5 +267,24 @@ describe('Swap back and logout (fourth check of #334, D2)', () => {
     await swapBackToSats(row, PUBKEY, createMintTransport())
     expect(seen).toBe(1)
     expect(gate.receivesInFlight()).toBe(0)
+  })
+
+  it('both saves, the swap tag and the sats, are made while counted (second check of #334)', async () => {
+    const gate = await import('../receiveGate')
+    const mint = await signingMint()
+    vi.stubGlobal('fetch', mint.fetchMock)
+    const row = couponRow()
+    stubs.rows.set(row.token_id, row as unknown as Record<string, unknown>)
+    const counted: Array<[string, number]> = []
+    stubs.onSave = (r) => counted.push([r.sats_token ? 'sats' : r.swap_back_id ? 'tag' : 'other', gate.receivesInFlight()])
+    try {
+      await swapBackToSats(row, PUBKEY, createMintTransport())
+    } finally {
+      stubs.onSave = null
+    }
+    expect(counted).toEqual([
+      ['tag', 1],
+      ['sats', 1],
+    ])
   })
 })

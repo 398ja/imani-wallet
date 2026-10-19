@@ -4,6 +4,7 @@ import { getSigner } from './nap'
 import { allEventsWithGateway, publish } from './relay'
 import { mirrorToGateway } from './transferSignature'
 import { buildRecordEvents, isChunkEvent, reassembleRecords, recordIdOf, type Sealer } from './chunkedRecord'
+import { tokenState, type ProofState } from './giftLink'
 
 /**
  * The backup of the cashback stash (#331, owner decision 2026-10-19: "back it up first").
@@ -114,14 +115,58 @@ export async function readBackStash(pubkey: string): Promise<string[] | null> {
   // The NEWEST record is the stash (a replaceable record), so a token banked
   // since an older one is not brought back by a restore.
   candidates.sort((a, b) => b.at - a.at)
+  // Seen events count too: a record from a device whose clock runs ahead must
+  // not outrank the next one this tab publishes.
+  for (const e of unique) newestStashAt = Math.max(newestStashAt, e.created_at)
   return candidates[0]?.tokens ?? []
 }
+
+/** NUT-07 for one token. Injected by tests; the default asks the token's (trusted) mint. */
+export type StashTokenState = (token: string) => Promise<ProofState>
+
+/**
+ * What the record should hold: the stash, plus every token the record names
+ * that is not PROVEN spent (second check of #334). Null when that is what the
+ * record already holds, so nothing need be published.
+ *
+ * A token the record names and this device's stash does not is NOT necessarily
+ * banked. It may be another device's cashback that this device never restored
+ * (the restore at login is fire-and-forget, and an unreachable store reads as
+ * empty). The record is then its only copy, so it is dropped only when the mint
+ * says SPENT: a spent token holds no value for anyone. UNSPENT, PENDING, UNKNOWN,
+ * a mint that is down or untrusted, a throw: all keep it. Kept for nothing costs a
+ * phantom "waiting" entry; dropped for nothing costs the money.
+ */
+async function recordFor(
+  held: readonly string[],
+  backed: readonly string[],
+  state: StashTokenState,
+): Promise<string[] | null> {
+  const extras = stashValue(backed).filter((t) => !held.includes(t))
+  if (extras.length === 0) return null
+  const states = await Promise.all(extras.map((t) => state(t).catch((): ProofState => 'UNKNOWN')))
+  const kept = extras.filter((_, i) => states[i] !== 'SPENT')
+  if (kept.length === extras.length) return null
+  return stashValue([...held, ...kept])
+}
+
+/**
+ * The newest `created_at` this tab has published or read for the stash record.
+ * Every publish goes strictly after it (second check of #334): a record is
+ * replaceable, so two in one second (an empty one, then the stash that arrived a
+ * moment later) left "which is newest" to a relay's tie-break, and NIP-01 keeps
+ * the LOWEST id, not the later write.
+ */
+let newestStashAt = 0
 
 async function publishStash(tokens: string[]): Promise<void> {
   const signer = getSigner()
   const plaintext = JSON.stringify({ v: 1, tokens })
   const templates = await buildRecordEvents(STASH_KIND, STASH_D_TAG, plaintext, [], selfSealer())
+  const at = Math.max(templates[0]?.created_at ?? 0, newestStashAt + 1)
+  newestStashAt = at
   for (const template of templates) {
+    template.created_at = at
     const event = (await signer.signEvent(template)) as Event
     await Promise.all([publish(event).catch(() => undefined), mirrorToGateway(event).catch(() => false)])
   }
@@ -130,13 +175,20 @@ async function publishStash(tokens: string[]): Promise<void> {
 /** How long an empty stash may spend clearing a stale record at logout. */
 const EMPTY_CLEAR_MS = 5_000
 
-/** Replace a non-empty record with an empty one. Best effort, never throws. */
-async function clearStaleStash(pubkey: string): Promise<void> {
+/**
+ * Drop the record's PROVEN-spent tokens when the stash is empty. Best effort,
+ * never throws, and never publishes once `live()` is false: a clear that
+ * outlived its bound would otherwise land AFTER a later check had backed up a
+ * token stashed in the meantime, and replace that backup (second check of #334).
+ */
+async function clearStaleStash(pubkey: string, state: StashTokenState, live: () => boolean): Promise<void> {
   // Locked or no session: nothing could be signed, so do not even ask the network.
   const signer = getSigner() as { hasKey?: () => boolean }
   if (typeof signer.hasKey === 'function' && !signer.hasKey()) return
   const backed = await readBackStash(pubkey)
-  if (backed && stashValue(backed).length > 0) await publishStash([])
+  if (!backed || !live()) return
+  const next = await recordFor([], backed, state)
+  if (next && live()) await publishStash(next)
 }
 
 export type StashCheck =
@@ -147,6 +199,8 @@ export interface StashCheckOptions {
   rounds?: number
   deadlineMs?: number
   settleMs?: number
+  /** NUT-07, for dropping a record token this stash no longer holds. Default: ask its mint. */
+  tokenState?: StashTokenState
 }
 
 function within<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
@@ -164,7 +218,7 @@ function within<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
  * never answers ok on a failure to check.
  */
 export async function confirmStashBackup(pubkey: string, options: StashCheckOptions = {}): Promise<StashCheck> {
-  const { rounds = 2, deadlineMs = 30_000, settleMs = 1_500 } = options
+  const { rounds = 2, deadlineMs = 30_000, settleMs = 1_500, tokenState: state = (t) => tokenState(t) } = options
   const deadline = Date.now() + deadlineMs
   const left = () => deadline - Date.now()
 
@@ -178,9 +232,16 @@ export async function confirmStashBackup(pubkey: string, options: StashCheckOpti
   if (held.length === 0) {
     // Nothing to back up, so nothing blocks. But a record left from an earlier
     // logout still names tokens banked since, and the next login's restore would
-    // bring them back as phantom "waiting" cashback (review of #334, D1). Cleared
-    // best effort, in a short bound: an unreachable relay must not slow logout.
-    await within(clearStaleStash(pubkey), Math.min(left(), EMPTY_CLEAR_MS), undefined)
+    // bring them back as phantom "waiting" cashback (review of #334, D1). Its
+    // spent tokens are dropped best effort, in a short bound: an unreachable
+    // relay must not slow logout. Only SPENT ones (see `recordFor`).
+    let live = true
+    await within(
+      clearStaleStash(pubkey, state, () => live),
+      Math.min(left(), EMPTY_CLEAR_MS),
+      undefined,
+    )
+    live = false
     return { ok: true, fingerprint, count: 0 }
   }
 
@@ -195,21 +256,38 @@ export async function confirmStashBackup(pubkey: string, options: StashCheckOpti
 
   let missing = held.length
   // Every token is in the newest record: the money is safe. If that record also
-  // names tokens banked since, it is republished so a restore does not bring
-  // them back (D1); failing that is not a reason to block.
+  // names tokens since PROVEN spent, it is republished without them so a restore
+  // does not bring them back (D1); failing that is not a reason to block.
   let covered = false
+  // What is published: the stash, plus whatever the record holds that is not
+  // proven spent. Publishing the stash alone would replace another device's
+  // unrestored cashback, whose only copy is that record (second check of #334).
+  let target = held
+  // Nothing is published before the record has been read once: a read that
+  // never answered says nothing about what a blind publish would replace.
+  let read = false
   for (let round = 0; round <= rounds && left() > 0; round++) {
-    if (round > 0) {
-      await within(publishStash(held), left(), undefined)
+    if (round > 0 && read) {
+      await within(publishStash(target), left(), undefined)
       await new Promise((resolve) => setTimeout(resolve, Math.min(settleMs, Math.max(0, left()))))
     }
     const backed = await within(readBackStash(pubkey), left(), null)
     if (backed === null) continue
+    read = true
     const have = new Set(backed)
     missing = held.filter((t) => !have.has(t)).length
     if (missing === 0) {
       covered = true
       if (stashValue(backed).length === held.length) return { ok: true, fingerprint, count: held.length }
+      const next = await within(recordFor(held, backed, state), left(), null)
+      // Nothing proven spent: the record already holds exactly what it should.
+      if (next === null) return { ok: true, fingerprint, count: held.length }
+      target = next
+    } else {
+      // Never publish less than the record holds, short of a proven spend.
+      target = stashValue([...held, ...stashValue(backed)])
+      const next = await within(recordFor(held, backed, state), left(), null)
+      if (next !== null) target = next
     }
   }
   if (covered) return { ok: true, fingerprint, count: held.length }
