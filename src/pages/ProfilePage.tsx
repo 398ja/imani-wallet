@@ -19,6 +19,7 @@ import { formatDate, handleLabel } from "../lib/format";
 import { profileName, profileUnknown, type Profile } from "../lib/profile";
 import { canShare, shareText } from "../lib/native";
 import { LocationMap } from "../components/LocationMap";
+import { FinishProfileStep } from "../components/FinishProfileStep";
 import type { MerchantProfile } from "../lib/merchant";
 
 /**
@@ -73,6 +74,7 @@ import type { MerchantProfile } from "../lib/merchant";
 export function ProfilePage({
   profile,
   merchant,
+  onFinishProfile,
 }: {
   profile: Profile;
   /**
@@ -84,8 +86,19 @@ export function ProfilePage({
    * customer's profile do relay work to discover it has no stall.
    */
   merchant: MerchantProfile | null;
+  /**
+   * Claim a handle for this (logged-in) account and put the new profile into
+   * the caller's state (#332). Every account must have a profile, so an older
+   * record without a handle gets a way in from its own card instead of a dead
+   * "no handle" line. Absent in tests that only draw the card.
+   */
+  onFinishProfile?: (handle: string) => Promise<void>;
 }) {
   const [enlarged, setEnlarged] = useState(false);
+  const [finishing, setFinishing] = useState(false);
+  // Only once the record has landed: a loading card is not a handle-less one.
+  const canFinish =
+    !!onFinishProfile && !profile.nip05 && !profileUnknown(profile);
 
   // Same fallback chain as Receive: accounts registered before handles existed
   // have no NIP-05, and on a dev machine nothing resolves one anyway, so the
@@ -103,11 +116,33 @@ export function ProfilePage({
     <Screen>
       <BackLink to="/" label="Wallet" />
 
-      <IdentityCard
-        profile={profile}
-        handle={handle}
-        onEnlarge={() => setEnlarged(true)}
-      />
+      {finishing && onFinishProfile ? (
+        /*
+          In place of the card, not a modal over it: this is the card's own
+          errand, so it happens where the card was and returns there. Handle
+          only; the display name is set later in Settings, and the claim is
+          #327's (`claimProfileWith`), idempotent on retry.
+        */
+        <div className="rounded-2xl border border-mono-200 bg-white p-5 dark:border-mono-800 dark:bg-mono-900">
+          <FinishProfileStep
+            intro="Every account has a handle, so people can find and pay you. Pick yours. You can add a name and photo later in Settings."
+            submitLabel="Finish"
+            cancelLabel="Not now"
+            onCancel={() => setFinishing(false)}
+            onClaim={async (h) => {
+              await onFinishProfile(h);
+              setFinishing(false);
+            }}
+          />
+        </div>
+      ) : (
+        <IdentityCard
+          profile={profile}
+          handle={handle}
+          onEnlarge={() => setEnlarged(true)}
+          onFinish={canFinish ? () => setFinishing(true) : undefined}
+        />
+      )}
 
       {handle && <HandleActions profile={profile} handle={handle} />}
 
@@ -206,10 +241,13 @@ function IdentityLines({
   profile,
   shown,
   className,
+  onFinish,
 }: {
   profile: Profile;
   shown: string;
   className?: string;
+  /** Offered in place of the handle line when the account has none (#332). */
+  onFinish?: () => void;
 }) {
   /*
     Waiting, not nameless. `App` seeds its state with `emptyProfile` and then
@@ -241,15 +279,31 @@ function IdentityLines({
           {profile.displayName}
         </p>
       )}
-      <p
-        className={
-          profile.displayName
-            ? "break-words text-sm text-mono-500"
-            : "break-words text-lg font-semibold text-mono-900 dark:text-mono-50"
-        }
-      >
-        {shown}
-      </p>
+      {onFinish ? (
+        /*
+          Where the handle goes, the way to get one (#332). Not "No handle yet"
+          over a link: a line that states a lack and then a control that fixes
+          it is two things saying one. The control is the second line itself,
+          in the handle's place, so the card reads the same shape either way.
+        */
+        <button
+          type="button"
+          onClick={onFinish}
+          className="pressable -mx-1 rounded-md px-1 text-left text-sm font-medium text-mono-900 underline decoration-mono-300 underline-offset-4 outline-none ring-mono-400 hover:decoration-mono-900 focus-visible:ring-2 dark:text-mono-50 dark:decoration-mono-700 dark:hover:decoration-mono-50"
+        >
+          Finish your profile
+        </button>
+      ) : (
+        <p
+          className={
+            profile.displayName
+              ? "break-words text-sm text-mono-500"
+              : "break-words text-lg font-semibold text-mono-900 dark:text-mono-50"
+          }
+        >
+          {shown}
+        </p>
+      )}
     </div>
   );
 }
@@ -307,10 +361,12 @@ function IdentityCard({
   profile,
   handle,
   onEnlarge,
+  onFinish,
 }: {
   profile: Profile;
   handle: string | null;
   onEnlarge: () => void;
+  onFinish?: () => void;
 }) {
   const navigate = useNavigate();
 
@@ -343,6 +399,7 @@ function IdentityCard({
             profile={profile}
             shown={handleShown(profile)}
             className="min-w-0 flex-1"
+            onFinish={onFinish}
           />
           {/* Both controls belong on the card, next to what they act on — not
               as full-width buttons below the fold. 44px targets, 16px glyphs,

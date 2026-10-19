@@ -185,3 +185,27 @@ describe('Finish your profile (claimProfile)', () => {
     await expect(requireProfile(PRIV, 'alice@imani.local')).rejects.toBeInstanceOf(ProfileMissingError)
   })
 })
+
+describe('Finish your profile from the logged-in card (claimProfileWith, #332)', () => {
+  it('uses the session signer, keeps the display name, and is idempotent on retry', async () => {
+    const { claimProfileWith } = await import('../profileGate')
+    const signer = createWalletSigner(PRIV)
+    signedFetch.mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError')).mockResolvedValueOnce(conflict())
+    resolvesTo = PUBKEY
+    const { emptyProfile } = await import('../profile')
+    const base = { ...emptyProfile(PUBKEY), displayName: 'Amina', updatedAt: 1 }
+
+    await expect(claimProfileWith(signer, 'alice', base)).rejects.toThrow('timed out')
+    const profile = await claimProfileWith(signer, 'alice', base)
+    expect(profile).toMatchObject({ nip05: 'alice@imani.local', displayName: 'Amina' })
+    expect(signedFetch.mock.calls[0][3]).toBe(signer)
+  })
+
+  it('a handle held by someone else is HandleTakenError and writes nothing', async () => {
+    const { claimProfileWith } = await import('../profileGate')
+    signedFetch.mockResolvedValue(conflict())
+    resolvesTo = OTHER
+    await expect(claimProfileWith(createWalletSigner(PRIV), 'alice')).rejects.toBeInstanceOf(HandleTakenError)
+    expect(localStorage.getItem(`imani-wallet:profile:${PUBKEY}`)).toBeNull()
+  })
+})
