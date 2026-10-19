@@ -232,3 +232,38 @@ describe('encodePlainTokenV4', () => {
     expect(tokenProofs(token)).toEqual(proofs)
   })
 })
+
+describe('Swap back and logout (fourth check of #334, D2)', () => {
+  it('once logout has started, nothing is swapped and the row is untouched', async () => {
+    const gate = await import('../receiveGate')
+    const { SWAP_BACK_PAUSED_MESSAGE } = await import('../swapBack')
+    const mint = await signingMint()
+    vi.stubGlobal('fetch', mint.fetchMock)
+    const row = couponRow()
+    stubs.rows.set(row.token_id, row as unknown as Record<string, unknown>)
+    gate.closeReceives()
+    try {
+      await expect(swapBackToSats(row, PUBKEY, createMintTransport())).rejects.toThrow(SWAP_BACK_PAUSED_MESSAGE)
+    } finally {
+      gate.openReceives()
+    }
+    expect(mint.requests.some((r) => r.url.endsWith('/v1/swap'))).toBe(false)
+    expect(stubs.rows.get('row-1')).toEqual(row)
+    expect(loadSwapIntents(PUBKEY)).toEqual([])
+  })
+
+  it('a swap back is counted until its sats are saved, so logout waits for it', async () => {
+    const gate = await import('../receiveGate')
+    const mint = await signingMint()
+    let seen = -1
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      if (String(url).endsWith('/v1/swap')) seen = gate.receivesInFlight()
+      return mint.fetchMock(url, init)
+    })
+    const row = couponRow()
+    stubs.rows.set(row.token_id, row as unknown as Record<string, unknown>)
+    await swapBackToSats(row, PUBKEY, createMintTransport())
+    expect(seen).toBe(1)
+    expect(gate.receivesInFlight()).toBe(0)
+  })
+})

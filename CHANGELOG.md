@@ -26,6 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decrypted, like vouchers. Not confirmed (offline, locked, unreadable storage): logout stays
   blocked, "N cashback vouchers waiting to be added... not confirmed as backed up", nothing erased.
   Login merges the newest record back into the stash. Garbage entries are not value and never block.
+- **A banked cashback token is not brought back by the next login** (review of #334). The stash
+  record was only ever written when the stash held tokens, so an older record naming tokens banked
+  since survived later logouts, and the restore put them back as phantom waiting cashback that
+  then blocked every logout. Logout now replaces the record when it names more than the stash
+  (an empty one when the stash is empty, best effort, bounded to 5 s). That never blocks: the
+  tokens actually waiting are still confirmed as before.
+- **"Swap back to sats" goes through the receive gate** (review of #334). It is a mint swap whose
+  sats are saved afterwards, so like the other receives it is refused once logout has started
+  (nothing swapped, the coupon untouched), and one already running is waited for.
 
 ### Tests
 
