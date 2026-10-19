@@ -603,6 +603,43 @@ describe('sendVouchers and payRequest', () => {
     localStorage.removeItem(`imani-wallet:pending-sends:${PAYER}`)
   })
 
+  // Review of #340: every send is counted by the spend gate, and refused once a
+  // logout (here or in another tab) has closed it, before the gateway is asked.
+  it('a send and a payment are refused while logout has spends closed, and nothing moves', async () => {
+    const gate = await import('../receiveGate')
+    stubs.rows = [row()]
+    const sent = gateway()
+    wallet([row()])
+    gate.closeSpends()
+    try {
+      await expect(
+        sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 250 }),
+      ).rejects.toThrow(gate.SPEND_PAUSED_MESSAGE)
+      await expect(
+        payRequest({ request: request(250, { issuerId: ISSUER, unit: 'EUR' }), raw: 'vreqA', merchant, payer: PAYER }),
+      ).rejects.toThrow(gate.SPEND_PAUSED_MESSAGE)
+      expect(sent).toEqual([])
+    } finally {
+      gate.openSpends()
+    }
+  })
+
+  it('a send is counted by the spend gate while it runs', async () => {
+    const gate = await import('../receiveGate')
+    stubs.rows = [row()]
+    let during = -1
+    gateway()
+    const initiate = stubs.api.initiateAtomicSend as (p: Record<string, unknown>) => Promise<unknown>
+    stubs.api.initiateAtomicSend = async (p: Record<string, unknown>) => {
+      during = gate.spendsInFlight()
+      return initiate(p)
+    }
+    wallet([row()])
+    await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 250 })
+    expect(during).toBe(1)
+    expect(gate.spendsInFlight()).toBe(0)
+  })
+
   it('refuses to send to yourself', async () => {
     // Not a no-op: the saga burns the source voucher and hands back an equal
     // one, costing a round trip and a mint fee to end up where you started.

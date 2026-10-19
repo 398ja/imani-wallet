@@ -433,6 +433,17 @@ export async function attemptLogout(
     // the moment the browser subscription is gone.
   }
 
+  // Asked AGAIN, after the network teardown above and before anything that
+  // cannot be undone (review of #335). `disableNotifications` can await a
+  // gateway for as long as it takes, and a tab opened during it is a tab the
+  // first re-ping never saw: it would be receiving and sending while the store
+  // is deleted under it. Nothing local is gone yet, so refusing here still
+  // erases nothing and keeps the key (the push subscription, at worst, is off).
+  if (!(await others.stillPaused().catch(() => false))) {
+    wiping = false
+    return { status: 'blocked', reason: 'other-tab', unconfirmed: [] }
+  }
+
   try {
     // Zeroes the decrypted key, POSTs /auth/logout, and broadcasts to other tabs
     // so a second window does not keep acting as the logged-out user.

@@ -42,6 +42,15 @@ configuration.
   with "This device already holds another wallet. Open it and log out first…", and the device is
   left exactly as it was. Logout, with its full backed-up check, is the only way past. The same
   account logging in again is still allowed. Terminal setup already refused a taken slot.
+- **Review of #340.** Three fixes:
+  - A tab opened while logout was turning off push notifications (a gateway call that can take
+    any time) was never asked about, so it kept receiving and sending while the key and the store
+    were erased. Logout now asks the other tabs again just before the key is cleared, and refuses
+    with nothing erased.
+  - A paused tab whose screen was torn down (a session that lapsed mid-logout) lost its fallback,
+    so its receiving and sending stayed off until a reload. The fallback now survives.
+  - "Finish your profile" asks whether another wallet is on the device before the handle is
+    claimed, not only after it.
 
 ## [0.33.0] - 2026-10-19
 

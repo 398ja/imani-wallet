@@ -376,8 +376,15 @@ export function listenForLogout(pubkey: string, deps: ListenDeps = {}): () => vo
     }
   }
   return () => {
-    clearTimeout(orphanTimer)
     channel.onmessage = null
     channel.close()
+    // Stopped while paused (the session lapsed and the authed tree unmounted,
+    // say): nothing can hear RESUME or DONE any more, so the orphan fallback is
+    // the only way out. Cancelling its timer here, as this did, left the gates
+    // closed and the writers stopped for the rest of the page's life, even
+    // after the tab was unlocked again (review of #335). It is kept, and still
+    // resumes only once the wait is over: resuming sooner would restart a tab
+    // the logout can no longer ask about.
+    if (pausedFor === null) clearTimeout(orphanTimer)
   }
 }
