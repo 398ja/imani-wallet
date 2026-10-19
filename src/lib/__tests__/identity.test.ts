@@ -7,6 +7,7 @@ import {
   identitySubLabel,
   nameOrNothing,
   resolveNip05,
+  UNKNOWN_PERSON,
 } from '../identity'
 import { toRecipientPubkey } from '../issue'
 import { clearConfigCache } from '../config'
@@ -41,12 +42,13 @@ describe('humanName', () => {
 })
 
 describe('identityLabel', () => {
-  it('prefers the display name, then the handle, then a short key', () => {
+  it('prefers the display name, then the handle, then a neutral word, never a key (#324)', () => {
     expect(identityLabel(HEX, { name: 'Rosa Green Farm', nip05: 'rosa@x.test' })).toBe(
       'Rosa Green Farm',
     )
     expect(identityLabel(HEX, { nip05: 'rosa@x.test' })).toBe('@rosa')
-    expect(identityLabel(HEX, undefined)).toBe('aaaaaaaa…aaaa')
+    expect(identityLabel(HEX, undefined)).toBe(UNKNOWN_PERSON)
+    expect(identityLabel(HEX, {})).not.toMatch(/[0-9a-f]{4}|npub/i)
   })
 
   it('does not treat a pubkey standing in for a name as a name', () => {
@@ -54,7 +56,7 @@ describe('identityLabel', () => {
     // unbranded merchant's "name" is 64 hex characters. Passing it through would
     // put back exactly the string this module exists to remove.
     expect(identityLabel(HEX, { name: HEX, nip05: 'rosa@x.test' })).toBe('@rosa')
-    expect(identityLabel(HEX, { name: HEX })).toBe('aaaaaaaa…aaaa')
+    expect(identityLabel(HEX, { name: HEX })).toBe(UNKNOWN_PERSON)
   })
 
   it('shows the handle under the name, and never under itself', () => {
@@ -150,11 +152,11 @@ describe('toRecipientPubkey', () => {
 /**
  * The settlement toast showed `b233db85…de1e` where a sender's name belongs.
  *
- * `identityLabel` ends its ladder at `shortPubkey`, which is right for a list
- * row — a stable identifier beats an empty cell there — and wrong for a toast,
- * where a hex fragment beside an amount names nobody. The sending wallet on
- * staging had published no kind-0, so every rung missed and the key fell out
- * of the bottom. The pending toast never showed this because its envelope
+ * `identityLabel` used to end its ladder at `shortPubkey`; it now ends at a
+ * neutral word (#324), which is right for a list row and still wrong for a
+ * toast, where "Someone" beside an amount names nobody either. The sending
+ * wallet on staging had published no kind-0, so every rung missed. The pending
+ * toast never showed this because its envelope
  * carries a `displayName` to fall back on; the DM payload behind the
  * settlement toast carries no such field.
  */
@@ -163,8 +165,8 @@ describe('nameOrNothing', () => {
     expect(nameOrNothing(HEX, undefined)).toBeUndefined()
     // The exact staging shape: a fetch that came back with no name and no handle.
     expect(nameOrNothing(HEX, {})).toBeUndefined()
-    // And it must not be the key by any route.
-    expect(identityLabel(HEX, undefined)).toContain('…')
+    // And the list-row ladder is not the key by any route either (#324).
+    expect(identityLabel(HEX, undefined)).toBe(UNKNOWN_PERSON)
   })
 
   it('is nothing when there is no counterparty at all', () => {

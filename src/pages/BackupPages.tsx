@@ -9,6 +9,7 @@ import { downloadText } from '../lib/download'
 import { useDriveBackup } from '../lib/useDriveBackup'
 import { keyStore } from '../lib/nap'
 import { type Profile } from '../lib/profile'
+import { userMessage } from '../lib/userMessage'
 
 /**
  * Save a copy of the account.
@@ -32,7 +33,7 @@ export function BackupPage({ profile, terminal }: { profile: Profile; terminal?:
       downloadText(backupFilename(profile), createBackup(profile.pubkey))
       setDownloaded(true)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(userMessage(e))
     }
   }
 
@@ -44,7 +45,7 @@ export function BackupPage({ profile, terminal }: { profile: Profile; terminal?:
       setNsec(nip19.nsecEncode(hexToBytes(hex)))
       setPassphrase('')
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(userMessage(e))
     } finally {
       setBusy(false)
     }
@@ -99,7 +100,7 @@ export function BackupPage({ profile, terminal }: { profile: Profile; terminal?:
           {canReveal && nsec && (
             <Button variant="secondary" className="flex-col px-2 py-2 text-xs" onClick={() => void copy()}>
               {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-              <span className="mt-1">{copied ? 'Copied' : 'Copy key'}</span>
+              <span className="mt-1">{copied ? 'Copied' : 'Copy backup key'}</span>
             </Button>
           )}
 
@@ -125,7 +126,7 @@ export function BackupPage({ profile, terminal }: { profile: Profile; terminal?:
 
         {canReveal && nsec && (
           <Button variant="ghost" className="mt-2 w-full" onClick={() => setNsec(null)}>
-            Hide key
+            Hide backup key
           </Button>
         )}
 

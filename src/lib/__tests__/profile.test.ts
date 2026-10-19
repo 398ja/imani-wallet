@@ -32,10 +32,11 @@ describe('emptyProfile', () => {
 })
 
 describe('profileName', () => {
-  it('prefers the display name, then the handle, then a short npub', () => {
+  it('prefers the display name, then the handle, then plain words, never the npub (#324)', () => {
     expect(profileName(base({ displayName: 'Alice', nip05: 'alice@imani.local' }))).toBe('Alice')
     expect(profileName(base({ nip05: 'alice@imani.local' }))).toBe('@alice')
-    expect(profileName(base())).toBe('npub1gu50m…')
+    expect(profileName(base())).toBe('Your account')
+    expect(profileName(base())).not.toMatch(/npub/)
   })
 
   it('always returns something — Avatar derives initials from it', () => {

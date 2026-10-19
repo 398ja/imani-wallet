@@ -11,6 +11,7 @@ import { toPrivkeyHex, keyStore, hasStoredKey } from '../lib/nap'
 import { claimProfile, ProfileMissingError, rememberHandle, requireProfile } from '../lib/profileGate'
 import { HandleTakenError, isHandleAvailable, register } from '../lib/registration'
 import { refreshProfile } from '../lib/profile'
+import { userMessage } from '../lib/userMessage'
 import {
   DEFAULT_CURRENCY,
   DEFAULT_VALIDITY_DAYS,
@@ -307,7 +308,7 @@ function CreateForm({
         setError(`${handle} is taken. Try another.`)
         setAvailability('taken')
       } else {
-        setError(e instanceof Error ? e.message : String(e))
+        setError(userMessage(e))
       }
     } finally {
       setBusy(false)
@@ -601,7 +602,7 @@ function KeyForm({
       }
       await install(hex)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(userMessage(e))
     } finally {
       setBusy(false)
     }

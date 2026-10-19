@@ -25,6 +25,7 @@ import {
   type RequestRegistration,
 } from '../lib/terminalTill'
 import { RECEIVE_TROUBLE_CHANGED, receiveTroubleFor, type ReceiveTrouble } from '../lib/receiveTrouble'
+import { userMessage } from '../lib/userMessage'
 
 /**
  * Redeem: take a customer's coupons as payment.
@@ -189,7 +190,7 @@ function RequestForm({
       saveRequests(issuerPubkey, [created, ...stored].slice(0, 50))
       onCreated(created, held)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(userMessage(e))
     } finally {
       setBusy(false)
     }

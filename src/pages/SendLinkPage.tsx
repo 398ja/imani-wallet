@@ -19,6 +19,7 @@ import { toMerchants, type Merchant } from '../lib/merchants'
 import { SendOutcomeUnknownError, splitObstacle, withoutInFlight } from '../lib/pay'
 import { listVouchers } from '../lib/wallet'
 import { toEpochMs } from '../lib/format'
+import { userMessage } from '../lib/userMessage'
 
 /**
  * Send by link (claim links phase 4, spec 4.2): "Anyone, by link".
@@ -229,7 +230,7 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
               } catch (e) {
                 setStatus({
                   step: e instanceof SendOutcomeUnknownError ? 'unconfirmed' : 'failed',
-                  message: e instanceof Error ? e.message : 'Send failed.',
+                  message: userMessage(e, 'Send failed.'),
                 })
               }
             }}

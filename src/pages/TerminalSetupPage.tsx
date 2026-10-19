@@ -27,6 +27,7 @@ import { formatCheckCode } from '../lib/terminalMint'
 import { refreshProfile, profileName, type Profile } from '../lib/profile'
 import { TERMINAL_ROLE_LABELS, grantFor } from '../lib/terminalRole'
 import type { Event } from 'nostr-tools'
+import { userMessage } from '../lib/userMessage'
 
 /**
  * A fresh device becomes a terminal (#160 phase 2, spec 2.2).
@@ -233,7 +234,7 @@ export function TerminalSetupPage({
       )
       setDone(true)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not finish setting up this terminal.')
+      setError(userMessage(e, 'Could not finish setting up this terminal.'))
     } finally {
       setBusy(false)
     }

@@ -490,9 +490,8 @@ export function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
           // Kept even when absent, unlike the rest: "expires 3 Sep" and "never
           // expires" are different facts, and a missing row reads as the second.
           ['Expires', formatDate(row.expiresAt) || 'No expiry'],
-          // Who they are, not their key: face, name, handle. The key itself
-          // is one tap away in the raw details below, where a merchant
-          // chasing a specific customer can still find it.
+          // Who they are, not their key: face, name, handle (#324: the key
+          // is not shown anywhere on this screen).
           ['Customer', row.counterparty ? <IdentityInline pubkey={row.counterparty} /> : undefined],
           ['Voucher id', row.voucherId],
         ]).map(([label, value]) => (
@@ -622,7 +621,9 @@ export function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
           // The link back to the movement, in the record itself rather than
           // only in the nav — this is the pairing the two screens are built on.
           ['Transaction id', row.id],
-          ['Customer pubkey', row.counterparty],
+          // The customer is named above as a person (#324). The raw key that
+          // used to sit here as "Customer pubkey" was the one place a merchant
+          // saw it, and nobody matches a sale by reading 64 characters.
           ['Face decimals', String(row.decimals)],
           ['Unit', row.unit],
           // The sale's own identity, from inside the signature. It is what

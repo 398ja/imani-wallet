@@ -148,7 +148,7 @@ describe('the account named in a backup', () => {
     // NPUB is readable and decodes cleanly; only the pubkey beside it is wrong.
     expect(parseBackup(file({ npub: NPUB })).npub).toBe(NPUB)
     expect(() => parseBackup(file({ npub: NPUB, pubkey: 'f'.repeat(64) }))).toThrow(
-      /npub and public key disagree/,
+      /the account it names does not match itself/,
     )
   })
 

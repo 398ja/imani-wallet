@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { Button, Input, Alert } from './index'
+import { userMessage } from '../../lib/userMessage'
 
 /**
  * The passphrase dialog that appears when the session lapses.
@@ -98,7 +99,7 @@ export function ReauthDialog({
       // typo is one backspace away rather than a retype.
       setPassphrase('')
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(userMessage(e))
       setFailures((n) => n + 1)
     } finally {
       setBusy(false)
@@ -228,8 +229,8 @@ export function ReauthDialog({
             <div className="expand-row mt-3 space-y-3">
               <p className="text-[12px] leading-relaxed text-mono-600 dark:text-mono-300">
                 There is no passphrase reset — your key is encrypted with it, and
-                nothing on our side can read it. You can get back in with a
-                backup key (nsec), a backup file, or a Google Drive backup.
+                nothing on our side can read it. You can get back in with your
+                backup key, a backup file, or a Google Drive backup.
               </p>
               {/*
                 Says the order out loud, because the button below does not look

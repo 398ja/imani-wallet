@@ -145,7 +145,7 @@ export function parseBackup(text: string): ParsedBackup {
       throw new BackupError('That backup names an account that cannot be read.')
     }
     if (parsed.pubkey !== undefined && parsed.pubkey !== decoded) {
-      throw new BackupError('That backup is damaged: its npub and public key disagree.')
+      throw new BackupError('That backup is damaged: the account it names does not match itself.')
     }
     npub = parsed.npub
   }

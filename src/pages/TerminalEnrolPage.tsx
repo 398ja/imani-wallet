@@ -48,6 +48,7 @@ import {
   readEnrolmentCode,
 } from '../lib/terminalEnrolProof'
 import { CredentialMintError } from '../lib/terminalMint'
+import { userMessage } from '../lib/userMessage'
 
 /**
  * The gateway's refusals of the KEY, in the owner's words (inv-terminal-not-merchant). Everything
@@ -59,7 +60,7 @@ function ownerMessageFor(e: unknown): string {
     if (e.code === 'TERMINAL_KEY_IS_MERCHANT') return ENROLMENT_CODE_MESSAGES.merchant
     if (e.code === 'TERMINAL_KEY_CHECK_UNAVAILABLE') return TERMINAL_KEY_CHECK_UNAVAILABLE_MESSAGE
   }
-  return e instanceof Error ? e.message : 'Could not set up the terminal.'
+  return userMessage(e, 'Could not set up the terminal.')
 }
 
 /** The stall's key, lent for one wrap, as `signer.withPrivkey` lends it everywhere else. */
@@ -270,7 +271,7 @@ export function TerminalEnrolPage({
         waitingUntil: startedAt + WAITING_TTL_MS,
       })
     } catch (e) {
-      setFailure(e instanceof Error ? e.message : 'Could not set up the terminal.')
+      setFailure(userMessage(e, 'Could not set up the terminal.'))
       setBusy(false)
       return
     }
