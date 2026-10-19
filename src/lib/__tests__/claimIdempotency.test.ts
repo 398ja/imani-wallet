@@ -185,3 +185,42 @@ describe('Finish your profile (claimProfile)', () => {
     await expect(requireProfile(PRIV, 'alice@imani.local')).rejects.toBeInstanceOf(ProfileMissingError)
   })
 })
+
+describe('Finish your profile from the logged-in card (claimProfileWith, #332)', () => {
+  it('uses the session signer, keeps the display name, and is idempotent on retry', async () => {
+    const { claimProfileWith } = await import('../profileGate')
+    const signer = createWalletSigner(PRIV)
+    signedFetch.mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError')).mockResolvedValueOnce(conflict())
+    resolvesTo = PUBKEY
+    const { emptyProfile } = await import('../profile')
+    const base = { ...emptyProfile(PUBKEY), displayName: 'Amina', updatedAt: 1 }
+
+    await expect(claimProfileWith(signer, 'alice', base)).rejects.toThrow('timed out')
+    const profile = await claimProfileWith(signer, 'alice', base)
+    expect(profile).toMatchObject({ nip05: 'alice@imani.local', displayName: 'Amina' })
+    expect(signedFetch.mock.calls[0][3]).toBe(signer)
+    // The failed attempt published nothing, the finished one exactly one kind-0.
+    expect(publish).toHaveBeenCalledOnce()
+  })
+
+  // The key claimed for is the signer's, never one named by the profile passed
+  // in: a stale or foreign record cannot steer the claim to another account.
+  it('claims for the signer\'s own key, whatever key the base profile names', async () => {
+    const { claimProfileWith } = await import('../profileGate')
+    const { emptyProfile } = await import('../profile')
+    signedFetch.mockResolvedValue(created())
+    const profile = await claimProfileWith(createWalletSigner(PRIV), 'alice', { ...emptyProfile(OTHER), displayName: 'Mallory', updatedAt: 1 })
+    expect(signedFetch.mock.calls[0][2]).toMatchObject({ username: 'alice', pubkey: PUBKEY })
+    expect(profile).toMatchObject({ pubkey: PUBKEY, nip05: 'alice@imani.local', displayName: 'alice' })
+    expect(localStorage.getItem(`imani-wallet:profile:${OTHER}`)).toBeNull()
+  })
+
+  it('a handle held by someone else is HandleTakenError and writes nothing', async () => {
+    const { claimProfileWith } = await import('../profileGate')
+    signedFetch.mockResolvedValue(conflict())
+    resolvesTo = OTHER
+    await expect(claimProfileWith(createWalletSigner(PRIV), 'alice')).rejects.toBeInstanceOf(HandleTakenError)
+    expect(localStorage.getItem(`imani-wallet:profile:${PUBKEY}`)).toBeNull()
+    expect(publish).not.toHaveBeenCalled()
+  })
+})
