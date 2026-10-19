@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-10-19
+
+Logout no longer loses cashback. It waits for cashback, gift links and "Swap back to sats" that
+are still arriving, refuses new ones once it starts, and backs up cashback that is not yet added
+to your wallet so the next login brings it back. Cashback already added is not brought back
+twice, and cashback from another device is never dropped from the backup unless it was really
+spent (#331, #334). App only. No migrations, no new configuration.
+
 ### Fixed
 
 - **Logout waits for cashback and gift-link receives, and refuses new ones** (Closes #331). These
