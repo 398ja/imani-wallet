@@ -618,6 +618,9 @@ function KeyForm({
       <FinishProfileStep
         onCancel={() => setMissing(null)}
         onClaim={async (handle) => {
+          // Before the claim, not only at install: a claim spends the handle at
+          // the directory, and the slot may have been taken since the paste (#330).
+          await refuseIfAnotherWallet(missing)
           await claimProfile(missing, handle)
           await install(missing)
         }}

@@ -72,6 +72,24 @@ describe('the guard', () => {
     localStorage.setItem(`imani-wallet:identity:${pk(B)}`, '{}')
     await expect(refuseIfAnotherWallet(A)).resolves.toBeUndefined()
   })
+
+  // Review of #340: data for this account AND another one is not "the same account".
+  it('two accounts found, one of them this one, is refused', async () => {
+    await holdWallet(A)
+    localStorage.setItem(`imani-wallet:pending-sends:${pk(B)}`, '[]')
+    await expect(refuseIfAnotherWallet(A)).rejects.toBeInstanceOf(OtherWalletOnDeviceError)
+  })
+
+  it('a key slot that cannot be read counts as taken', async () => {
+    localStorage.setItem(`imani-wallet:profile:${pk(B)}`, JSON.stringify({ pubkey: pk(B) }))
+    await expect(
+      refuseIfAnotherWallet(A, {
+        slotTaken: async () => {
+          throw new Error('storage denied')
+        },
+      }),
+    ).rejects.toBeInstanceOf(OtherWalletOnDeviceError)
+  })
 })
 
 describe('opening a backup (BackupLogin, applyBackup)', () => {
