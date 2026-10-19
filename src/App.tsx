@@ -23,6 +23,7 @@ import { restoreTx, backfillTx } from './lib/txRecords'
 import { collectTillSalesForOwner } from './lib/tillSalesNet'
 import { startRosterSync, syncRosterNow } from './lib/terminalRosterSyncNet'
 import { restoreVouchers, backfillVouchers } from './lib/voucherRecords'
+import { restoreCashbackStash } from './lib/cashbackStash'
 import { useLogout } from './lib/useLogout'
 import { LogoutBlockedDialog } from './components/LogoutBlocked'
 import { emptyProfile, loadProfile, refreshProfile, type Profile } from './lib/profile'
@@ -222,6 +223,11 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         // customer screen — the shop list is built from what the wallet holds,
         // so until they are back the app reads "No coupons yet" no matter how
         // much history has been restored behind it.
+        // The cashback stash logout backed up (#331): merged back, banked by the
+        // redeem screen's replay as before. Never throws.
+        void restoreCashbackStash(pubkey).then((n) => {
+          if (n > 0) console.info(`[app] restored ${n} pending cashback token(s)`)
+        })
         void restoreVouchers(pubkey)
           .then((coupons) => {
             if (coupons > 0) console.info(`[app] restored ${coupons} coupon(s) from the relay`)

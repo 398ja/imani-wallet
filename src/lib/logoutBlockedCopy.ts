@@ -37,6 +37,8 @@ export function blockedMessage(outcome: BlockedLogout): string {
       return LOGOUT_BLOCKED_COPY.changed
     case 'in-flight':
       return LOGOUT_BLOCKED_COPY.inFlight
+    case 'cashback-unconfirmed':
+      return LOGOUT_BLOCKED_COPY.cashbackUnconfirmed(outcome.cashback ?? 1)
     default:
       return LOGOUT_BLOCKED_COPY.unconfirmed(outcome.unconfirmed.length, unconfirmedValue(outcome.unconfirmed))
   }

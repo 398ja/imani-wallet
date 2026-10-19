@@ -89,3 +89,42 @@ describe('gift links under the merchant rule', () => {
     expect(h.sent).toBe(0)
   })
 })
+
+describe('logging out (#331): no gift swap once logout has started', () => {
+  it('is deferred before any swap, so the gift stays on its link', async () => {
+    const gate = await import('../receiveGate')
+    const { RECEIVE_PAUSED_MESSAGE } = await import('../giftLinks')
+    h.account = getPublicKey(generateSecretKey())
+    const { token } = buildVoucherToken({}, [8], {}, STALL_B_KEY)
+    gate.closeReceives()
+    try {
+      const out = await redeemGiftTokens([{ token, sentAt: 1_800_000_000 }], 'gift_link')
+      expect(out).toEqual({ kind: 'failed', message: RECEIVE_PAUSED_MESSAGE })
+    } finally {
+      gate.openReceives()
+    }
+    expect(h.redeemed).toEqual([])
+    expect(RECEIVE_PAUSED_MESSAGE).not.toMatch(/nsec|npub|relay|nostr|\bNIP|token|mint/i)
+  })
+})
+
+describe('a gift swap is counted until it ends (fourth check of #334: GL2)', () => {
+  it('counted while it swaps, released after, even when the swap throws', async () => {
+    const gate = await import('../receiveGate')
+    h.account = getPublicKey(generateSecretKey())
+    const { token } = buildVoucherToken({}, [8], {}, STALL_B_KEY)
+    let seen = -1
+    vi.stubGlobal('window', {
+      location: { origin: 'https://wallet.example' },
+      TokenRedemption: {
+        redeem: async () => {
+          seen = gate.receivesInFlight()
+          throw new Error('mint down')
+        },
+      },
+    })
+    await redeemGiftTokens([{ token, sentAt: 1_800_000_000 }], 'gift_link').catch(() => undefined)
+    expect(seen).toBe(1)
+    expect(gate.receivesInFlight()).toBe(0)
+  })
+})
