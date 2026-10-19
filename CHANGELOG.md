@@ -9,9 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+## [0.32.0] - 2026-10-19
 
-- **Log in opens your backup; the Restore page is gone** (Closes #325). The onboarding "Log in"
+Log in now restores your wallet from a backup, logout refuses to erase coupons that are not
+backed up, and the app no longer shows protocol jargon or raw keys (#325, #326, #327, #328, #324).
+App only. No migrations, no new configuration.
+
+### Added
+
+- **Log in opens your backup; the Restore page is gone** (Closes #325, #327). The onboarding "Log in"
   step and `/restore` are one flow: "Where is your backup?" offers **Google Drive** and **A backup
   file** as equals, then shows whose account it is (avatar, name, handle, no keys), then asks for
   the passphrase. A wrong passphrase says so inline and writes nothing (`applyBackup` still rolls
@@ -27,13 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bottin handles.) An account that fails is not let in anonymously: nothing is written, and
   "Finish your profile" claims a handle (display name defaults to the handle) before the wallet
   opens. Only an unreachable directory fails closed, with a retry message.
+- **Logout will not erase coupons it cannot restore** (#326). Before logging out, the wallet checks
+  that every coupon you hold is backed up, re-sends any that are missing, and checks again. If any
+  coupon is still not backed up, or a payment or swap is still in progress, or the wallet's data
+  cannot be read, logout is refused and nothing is erased. The message says how many coupons and
+  how much money are at risk, in plain words.
 
-- **Restore names the account with its profile, not its npub** (Closes #322). The passphrase
-  prompt after a Google Drive restore (and after picking a backup file) shows the identity row
-  used across the app: avatar, display name and handle, built from the profile stored in the
-  backup (picture included) so it works offline. No raw key is shown on the screen any more. A
-  backup with no profile falls back to a short form. The restore itself is unchanged.
-- **No protocol jargon or raw keys anywhere in the app** (Closes #324). People and stalls are
+### Changed
+
+- **No protocol jargon or raw keys anywhere in the app** (Closes #324, #328). People and stalls are
   shown only by picture, name and handle. Where nothing is known yet, the app says **Someone**,
   **Unknown stall** or **Your account** with a generic avatar, never a hex or npub fragment
   (Receive, Profile, a stall's public page and share button, claim and gift links, coupon
@@ -43,6 +51,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replaced by a plain one. Pasting a key still accepts an nsec or hex; only the wording changed.
   A guard test fails the build if a user-facing string in `src/pages` or `src/components` says
   npub, nsec, Nostr, relay, NIP-xx or pubkey.
+- **Restore names the account with its profile, not its npub** (Closes #322). The passphrase
+  prompt after a Google Drive restore (and after picking a backup file) shows the identity row
+  used across the app: avatar, display name and handle, built from the profile stored in the
+  backup (picture included) so it works offline. No raw key is shown on the screen any more. A
+  backup with no profile falls back to a short form. The restore itself is unchanged.
+
+### Fixed
+
+- **A restored wallet shows its coupons even when the network is flaky** (#326). Restoring used to
+  read coupon backups from one source only, so a dropped connection looked like "no coupons" and the
+  balance read 0 while the history came back. Coupons are now read from both sources (each record
+  is signature-checked), and a coupon the mint reports as spent without a record of this wallet
+  spending it is kept and flagged instead of silently dropped.
+- **Checks survive a restore** (#326). A received payment that was checked no longer reads "Not
+  checked" after logging out and back in.
 
 ## [0.31.0] - 2026-10-18
 
