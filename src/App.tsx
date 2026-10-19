@@ -92,6 +92,7 @@ import { ProfileEditPage } from './pages/ProfileEditPage'
 import { SecurityPage } from './pages/SecurityPage'
 import { BackupPage } from './pages/BackupPages'
 import { fulfilmentOf, registerRequestTerms } from './lib/terminalTill'
+import { listenForLogout } from './lib/logoutTabs'
 
 /**
  * The stall's own till asks gateway-core too (#300), through the same check a terminal uses, so
@@ -392,6 +393,10 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
       live = false
     }
   }, [pubkey])
+
+  // A logout in another tab pauses this one first, and this tab answers it
+  // only once nothing here is mid receive or mid send (#335, lib/logoutTabs.ts).
+  useEffect(() => listenForLogout(pubkey), [pubkey])
 
   // Refused, with a dialog, until every held voucher is read back from its
   // backup (owner rule 2026-10-18; lib/logout.ts `attemptLogout`).

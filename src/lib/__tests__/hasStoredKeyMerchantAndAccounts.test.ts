@@ -42,10 +42,12 @@ describe('hasStoredKey after a real registration', () => {
     expect(await hasStoredKey()).toBe(true)
   })
 
-  it('several accounts registered on one device: still detected, and the latest one unlocks', async () => {
+  // #330: a second account may no longer replace the first one's key while it is still on the
+  // device (that orphaned its vouchers). The first wallet is kept and still unlocks.
+  it('a second registration on a device holding a wallet is refused, and the first one still unlocks', async () => {
     await register('first', 'pass-one-one', async () => {})
-    await register('second', 'pass-two-two', async () => {})
+    await expect(register('second', 'pass-two-two', async () => {})).rejects.toThrow(/already holds another wallet/)
     expect(await hasStoredKey()).toBe(true)
-    await expect(keyStore.loadKey('pass-two-two')).resolves.toMatch(/^[0-9a-f]{64}$/)
+    await expect(keyStore.loadKey('pass-one-one')).resolves.toMatch(/^[0-9a-f]{64}$/)
   })
 })

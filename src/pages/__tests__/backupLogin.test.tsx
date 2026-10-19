@@ -39,6 +39,7 @@ vi.mock('../../lib/nap', async (orig) => ({
   ...(await orig<typeof import('../../lib/nap')>()),
   hasStoredKey: async () => localStorage.getItem('imani-wallet-key') !== null,
   keyStore: {
+    hasKey: async () => localStorage.getItem('imani-wallet-key') !== null,
     loadKey: async (passphrase: string) => {
       const env = JSON.parse(localStorage.getItem('imani-wallet-key') ?? 'null') as { ciphertext?: string } | null
       if (!env || env.ciphertext !== `sealed:${passphrase}`) throw new Error('Invalid passphrase')
@@ -494,5 +495,55 @@ describe('wording', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Use your backup key instead' }))
     clean()
     expect(placeholders()).not.toMatch(/npub|nsec|nostr/i)
+  })
+})
+
+describe('another wallet on this device (#330)', () => {
+  const OTHER = 'f'.repeat(64)
+  function otherWalletHere() {
+    localStorage.setItem(KEY_SLOT, JSON.stringify({ ciphertext: 'sealed:their-passphrase', kdf: 'k', iv: 'i' }))
+    localStorage.setItem(`imani-wallet:profile:${OTHER}`, JSON.stringify({ pubkey: OTHER }))
+  }
+
+  it('pasting a different account key is refused in plain words, and the other key stays', async () => {
+    otherWalletHere()
+    const before = localStorage.getItem(KEY_SLOT)
+    openLogIn()
+    fireEvent.click(screen.getByRole('button', { name: 'Use your backup key instead' }))
+    fireEvent.change(screen.getByLabelText('Backup key'), { target: { value: NSEC } })
+    fireEvent.change(screen.getByPlaceholderText('Choose a passphrase'), { target: { value: PASSPHRASE } })
+    fireEvent.change(screen.getByPlaceholderText('Confirm passphrase'), { target: { value: PASSPHRASE } })
+    fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+
+    await screen.findByText(/already holds another wallet/)
+    expect(onUnlock).not.toHaveBeenCalled()
+    expect(localStorage.getItem(KEY_SLOT)).toBe(before)
+  })
+
+  it('opening a different account backup is refused, and the other key stays', async () => {
+    otherWalletHere()
+    const before = localStorage.getItem(KEY_SLOT)
+    const { container } = openLogIn()
+    pickFile(container, backupText())
+    await screen.findByLabelText('Passphrase')
+    await logInWith(PASSPHRASE)
+
+    await screen.findByText(/already holds another wallet/)
+    expect(onUnlock).not.toHaveBeenCalled()
+    expect(localStorage.getItem(KEY_SLOT)).toBe(before)
+  })
+
+  it('the same account, already on this device, logs in again', async () => {
+    localStorage.setItem(KEY_SLOT, JSON.stringify({ ciphertext: 'sealed:old', kdf: 'k', iv: 'i' }))
+    localStorage.setItem(`imani-wallet:profile:${PUBKEY}`, JSON.stringify({ pubkey: PUBKEY }))
+    openLogIn()
+    fireEvent.click(screen.getByRole('button', { name: 'Use your backup key instead' }))
+    fireEvent.change(screen.getByLabelText('Backup key'), { target: { value: NSEC } })
+    fireEvent.change(screen.getByPlaceholderText('Choose a passphrase'), { target: { value: PASSPHRASE } })
+    fireEvent.change(screen.getByPlaceholderText('Confirm passphrase'), { target: { value: PASSPHRASE } })
+    fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+
+    await screen.findByText('Home screen')
+    expect(onUnlock).toHaveBeenCalledWith(PRIV)
   })
 })

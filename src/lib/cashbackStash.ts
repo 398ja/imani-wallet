@@ -298,12 +298,25 @@ export async function confirmStashBackup(pubkey: string, options: StashCheckOpti
  * Bring a backed-up stash back after login: merge its tokens into the local
  * stash. Never throws, never removes a local entry. Returns how many were added.
  */
-export async function restoreCashbackStash(pubkey: string): Promise<number> {
+export async function restoreCashbackStash(
+  pubkey: string,
+  /** NUT-07, so a token proven spent is not brought back (#335). Default: ask its mint. */
+  state: StashTokenState = (t) => tokenState(t),
+): Promise<number> {
   try {
     const backed = await readBackStash(pubkey)
     if (!backed || backed.length === 0) return 0
+    const candidates = stashValue(backed).filter((t) => !readRawStash().includes(t))
+    if (candidates.length === 0) return 0
+    // A token the record still names but the mint says is SPENT was banked
+    // before a logout whose record clear never landed (an offline logout).
+    // Brought back, it would show as cashback "waiting" for ever (#335). Only
+    // SPENT is dropped: any other answer, or none, brings it back.
+    const states = await Promise.all(candidates.map((t) => state(t).catch((): ProofState => 'UNKNOWN')))
+    const kept = candidates.filter((_, i) => states[i] !== 'SPENT')
+    // Read again after the awaits, so an entry stashed meanwhile is not lost.
     const local = readRawStash()
-    const add = stashValue(backed).filter((t) => !local.includes(t))
+    const add = kept.filter((t) => !local.includes(t))
     if (add.length === 0) return 0
     localStorage.setItem(PENDING_KEY, JSON.stringify([...local, ...add]))
     return add.length

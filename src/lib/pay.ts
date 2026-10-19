@@ -16,6 +16,7 @@ import { FULLY_REDEEMED_STATUS, VoucherFullyRedeemedError, isVoucherFullyRedeeme
 import type { NUT18VRequest } from './nap'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
 import { carryExpiryReminders } from './expiryReminders'
+import { withSpend } from './receiveGate'
 import { PENDING_SEND_LIFETIME_MS as SEND_LIFETIME, pendingSendsKey } from './inFlightMoney'
 
 /**
@@ -1505,7 +1506,16 @@ export async function refuseIfWrongMerchant(recipient: string, issuer: string): 
  * `vouchers` to one unit — this cannot check that, and adding coupons of two
  * currencies is how a request settles for a fraction of what was asked.
  */
-async function deliver(
+/**
+ * Every send goes through here, counted by the spend gate (#335): once logout
+ * has closed it (in this tab, or another tab's logout has paused this one) a
+ * send is refused before anything moves, and logout waits for one already running.
+ */
+function deliver(ctx: SendContext, vouchers: Voucher[], amount: number, unitLabel?: string): Promise<SendResult> {
+  return withSpend(() => deliverCounted(ctx, vouchers, amount, unitLabel))
+}
+
+async function deliverCounted(
   ctx: SendContext,
   vouchers: Voucher[],
   amount: number,
