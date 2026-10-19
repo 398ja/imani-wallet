@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Finish your profile reminder shows on Home only and can be hidden** (Closes #339). The
+  quiet reminder from #332 no longer appears on Pay, Send, Receive, coupons or any other screen.
+  A close button ("Hide this reminder", 44px) hides it, and the choice is remembered per account
+  in localStorage (`imani-wallet:finish-profile-dismissed:<pubkey>`), so another account on the
+  same device still sees its own. Hiding it never hides **Finish your profile** on the own
+  profile card, so every account can still get a handle. The card's Finish control now has a
+  44px tap target too.
+
 - **An account with no handle can finish its profile from its own card** (Closes #332). The
   profile card said "No handle yet" with no way forward. It now offers **Finish your profile**
   in the handle's place, which opens the same handle-only step login uses (#327) and the same
