@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An account with no handle can finish its profile from its own card** (Closes #332). The
+  profile card said "No handle yet" with no way forward. It now offers **Finish your profile**
+  in the handle's place, which opens the same handle-only step login uses (#327) and the same
+  idempotent claim (`claimProfileWith`, the signer-based core of `claimProfile`: 409
+  forward-resolve, 15 s timeouts). The card shows the avatar, name and handle on success with no
+  reload. A quiet, non-blocking **Finish your profile** link also shows under the header at app
+  start for such an account; it is a link, not a dialog, so payments, receives and coupons are
+  never held behind it. The noProtocolJargon guard reads the new copy.
+
 ## [0.33.0] - 2026-10-19
 
 Logout no longer loses cashback. It waits for cashback, gift links and "Swap back to sats" that
