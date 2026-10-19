@@ -483,3 +483,38 @@ describe('the cashback commit is gated on where the value is', () => {
     }
   }
 })
+
+describe('the stash replay and the receive gate (fourth check of #334: C2, C4)', () => {
+  it('once logout has started, the replay swaps nothing and the stash is kept', async () => {
+    const gate = await import('../receiveGate')
+    stubFetch({})
+    store.set('imani:cashback:pending', JSON.stringify([STRANDED_TOKEN]))
+    gate.closeReceives()
+    try {
+      expect(await replayPendingCashback()).toBe(false)
+    } finally {
+      gate.openReceives()
+    }
+    expect(redeemed).toEqual([])
+    expect(pendingCashbackCount()).toBe(1)
+  })
+
+  it('a replay is counted while it runs and released when it ends', async () => {
+    const gate = await import('../receiveGate')
+    stubFetch({})
+    store.set('imani:cashback:pending', JSON.stringify([STRANDED_TOKEN]))
+    let seen = -1
+    vi.stubGlobal('window', {
+      TokenRedemption: {
+        async redeem(token: string) {
+          seen = gate.receivesInFlight()
+          redeemed.push(token)
+          return {}
+        },
+      },
+    })
+    expect(await replayPendingCashback()).toBe(true)
+    expect(seen).toBe(1)
+    expect(gate.receivesInFlight()).toBe(0)
+  })
+})

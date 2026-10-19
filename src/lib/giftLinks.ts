@@ -36,6 +36,7 @@ import { creditableFaceValue, parseVoucherToken } from './voucherToken'
 import { getWallet, notifyWalletChanged } from './wallet'
 import type { Merchant } from './merchants'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
+import { beginReceive, isReceiveDeferred } from './receiveGate'
 
 // ─── Limits (Q5) ─────────────────────────────────────────────────────────────
 
@@ -333,6 +334,31 @@ export async function redeemGiftTokens(
   await legacyApi()
   const redemption = window.TokenRedemption
   if (!redemption) return { kind: 'failed', message: 'This wallet could not start the receive.' }
+  // The receive gate (#331), before the first swap: once logout has started,
+  // nothing is swapped and the gift stays on its link for the next try.
+  let endReceive: () => void
+  try {
+    endReceive = beginReceive()
+  } catch (e) {
+    if (isReceiveDeferred(e)) return { kind: 'failed', message: RECEIVE_PAUSED_MESSAGE }
+    throw e
+  }
+  try {
+    return await swapGiftTokens(tokens, source, redemption)
+  } finally {
+    endReceive()
+  }
+}
+
+/** Shown when a gift is opened while this wallet is logging out. Nothing was taken from the link. */
+export const RECEIVE_PAUSED_MESSAGE =
+  'This wallet is logging out, so the gift was not added. It is still on its link. Try again after you log in.'
+
+async function swapGiftTokens(
+  tokens: GiftToken[],
+  source: 'gift_link' | 'gift_link_reclaim',
+  redemption: NonNullable<Window['TokenRedemption']>,
+): Promise<GiftRedeemOutcome> {
   let added = 0
   let spent = 0
   let failure: string | undefined

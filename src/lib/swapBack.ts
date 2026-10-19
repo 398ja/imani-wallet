@@ -15,6 +15,7 @@ import { checkMintAndUnit, readTokenBacking } from './trustedMint'
 import { tokenProofs } from './voucherToken'
 import { buildWitnesses } from './witness'
 import { getWallet, notifyWalletChanged } from './wallet'
+import { beginReceive, isReceiveDeferred } from './receiveGate'
 
 /**
  * "Swap back to sats": a coupon the mint refused as redeemed in full, turned into plain ecash.
@@ -85,20 +86,39 @@ export async function swapBackToSats(
     return witness ? { ...proof, witness: JSON.stringify({ signatures: witness }) } : proof
   })
 
-  const wallet = getWallet()
-  const swapId = receiveSwapId(receivable)
-  // Tagged first: from the swap onwards the recovery sweep may be the one to finish this.
-  await wallet.saveVoucher({ ...row, swap_back_id: swapId, updated_at: new Date().toISOString() })
+  // The receive gate (review of #334, D2): this is a mint swap whose fresh proofs
+  // are saved afterwards, so once logout has started it must not begin, and one
+  // that began first is counted until it has saved. Before the tag write, so a
+  // deferred swap back changes nothing.
+  let endReceive: () => void
+  try {
+    endReceive = beginReceive()
+  } catch (e) {
+    if (isReceiveDeferred(e)) throw new SwapBackNotPossible(SWAP_BACK_PAUSED_MESSAGE)
+    throw e
+  }
+  try {
+    const wallet = getWallet()
+    const swapId = receiveSwapId(receivable)
+    // Tagged first: from the swap onwards the recovery sweep may be the one to finish this.
+    await wallet.saveVoucher({ ...row, swap_back_id: swapId, updated_at: new Date().toISOString() })
 
-  const result = await receiveByOwnSwap(
-    { pubkey, mintUrl: backing.mintUrl, proofs: receivable, releaseVoucher: true },
-    transport,
-  )
-  const saved = await keepSats(row, backing.mintUrl, result)
-  settleReceive(pubkey, result.swapId)
-  notifyWalletChanged()
-  return saved
+    const result = await receiveByOwnSwap(
+      { pubkey, mintUrl: backing.mintUrl, proofs: receivable, releaseVoucher: true },
+      transport,
+    )
+    const saved = await keepSats(row, backing.mintUrl, result)
+    settleReceive(pubkey, result.swapId)
+    notifyWalletChanged()
+    return saved
+  } finally {
+    endReceive()
+  }
 }
+
+/** Shown when a swap back is asked for while this wallet is logging out. Nothing was swapped. */
+export const SWAP_BACK_PAUSED_MESSAGE =
+  'This wallet is logging out, so nothing was swapped. The coupon is still here. Try again after you log in.'
 
 /**
  * The recovery sweep's save for a swap back interrupted after the mint signed.

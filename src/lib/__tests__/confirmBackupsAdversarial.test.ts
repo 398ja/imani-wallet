@@ -245,6 +245,15 @@ describe('failures to check never read as confirmed', () => {
     expect(await confirmBackups(pk, fast)).toMatchObject({ ok: false, reason: 'locked', unconfirmed: [expect.anything()] })
   })
 
+  it('no signer at all (never unlocked) is LOCKED too (third check of #326)', async () => {
+    await holdOnly({})
+    const nap = await import('../nap')
+    vi.spyOn(nap, 'getSigner').mockImplementationOnce(() => {
+      throw new Error('No signer')
+    })
+    expect(await confirmBackups(pk, fast)).toMatchObject({ ok: false, reason: 'locked', unconfirmed: [expect.anything()] })
+  })
+
   it('a store that cannot be read is "unreadable", never "nothing held"', async () => {
     const wallet = await import('../wallet')
     vi.spyOn(wallet, 'openWallet').mockRejectedValueOnce(new Error('QuotaExceededError'))

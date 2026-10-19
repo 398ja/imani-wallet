@@ -915,6 +915,12 @@ const TokenRedemption = {
     // check.
     _inFlightRedemptions: new Map(),
 
+    // How many redemptions are in flight in this tab, from the fingerprint step
+    // through the save. Logout's drain waits for this to reach 0 (#331).
+    inFlightCount() {
+        return this._inFlightRedemptions.size;
+    },
+
     // Exposed so tests can stub or inspect the claim layer.
     _localClaim: LocalRedemptionClaim,
     _tabId: REDEMPTION_TAB_ID,
