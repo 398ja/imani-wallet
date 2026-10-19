@@ -289,7 +289,7 @@ function IdentityLines({
         <button
           type="button"
           onClick={onFinish}
-          className="pressable -mx-1 rounded-md px-1 text-left text-sm font-medium text-mono-900 underline decoration-mono-300 underline-offset-4 outline-none ring-mono-400 hover:decoration-mono-900 focus-visible:ring-2 dark:text-mono-50 dark:decoration-mono-700 dark:hover:decoration-mono-50"
+          className="pressable -mx-1 inline-flex min-h-11 items-center self-start rounded-md px-1 text-left text-sm font-medium text-mono-900 underline decoration-mono-300 underline-offset-4 outline-none ring-mono-400 hover:decoration-mono-900 focus-visible:ring-2 dark:text-mono-50 dark:decoration-mono-700 dark:hover:decoration-mono-50"
         >
           Finish your profile
         </button>
