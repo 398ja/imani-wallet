@@ -44,9 +44,9 @@ import { userMessage } from '../lib/userMessage'
 
 const STAGE_LABEL: Record<IssueStage, string> = {
   issuing: 'Issuing the voucher…',
-  // Named for what is actually happening: the coupon exists but has no Cashu
-  // token yet, because its Lightning backing is still settling.
-  minting: 'Waiting for the voucher to be backed…',
+  // The coupon exists but has no Cashu token yet: this is the mint step, which
+  // for a quote-backed coupon includes waiting for its Lightning backing to settle.
+  minting: 'Minting the voucher…',
   delivering: 'Delivering to the customer…',
 }
 
