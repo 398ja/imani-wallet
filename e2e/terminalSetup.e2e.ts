@@ -754,10 +754,12 @@ async function phase6(browser: Browser, owner: Page, customer: Page, customerPub
   restored.on('pageerror', (e) => errors.push(`A': ${e.message}`))
   await restored.goto(`${BASE}/onboarding`, { waitUntil: 'networkidle' })
   await restored.getByRole('button', { name: /^Log in$/ }).first().click()
-  await restored.locator('input[placeholder^="nsec1"]').fill(nsec)
+  // #325: Log in opens the backup chooser; the key form is the secondary link.
+  await restored.getByRole('button', { name: 'Use your backup key instead' }).click()
+  await restored.locator('input[aria-label="Backup key"]').fill(nsec)
   await restored.locator('input[placeholder="Choose a passphrase"]').fill(TEST_PASSPHRASE)
   await restored.locator('input[placeholder="Confirm passphrase"]').fill(TEST_PASSPHRASE)
-  await restored.getByRole('button', { name: /^Add key and unlock$/ }).last().click()
+  await restored.getByRole('button', { name: /^Log in$/ }).last().click()
   await restored.waitForFunction(() => !location.pathname.startsWith('/onboarding'), undefined, { timeout: 60_000 }).catch(() => {})
   // In-app navigation, not a reload: a reload right after the login can land before the unlocked
   // session is kept, and the app opens at home, never at the list (found by the local gate).
@@ -804,10 +806,12 @@ async function phase6(browser: Browser, owner: Page, customer: Page, customerPub
   check('E6 logout wiped the roster from this device', wiped)
   await owner.goto(`${BASE}/onboarding`, { waitUntil: 'networkidle' })
   await owner.getByRole('button', { name: /^Log in$/ }).first().click()
-  await owner.locator('input[placeholder^="nsec1"]').fill(nsec)
+  // #325: Log in opens the backup chooser; the key form is the secondary link.
+  await owner.getByRole('button', { name: 'Use your backup key instead' }).click()
+  await owner.locator('input[aria-label="Backup key"]').fill(nsec)
   await owner.locator('input[placeholder="Choose a passphrase"]').fill(TEST_PASSPHRASE)
   await owner.locator('input[placeholder="Confirm passphrase"]').fill(TEST_PASSPHRASE)
-  await owner.getByRole('button', { name: /^Add key and unlock$/ }).last().click()
+  await owner.getByRole('button', { name: /^Log in$/ }).last().click()
   await owner.waitForFunction(() => !location.pathname.startsWith('/onboarding'), undefined, { timeout: 60_000 }).catch(() => {})
   const back = await waitRosterRow(owner, 'Sales counter', () => true)
   const backB4 = await waitRosterRow(owner, 'Back counter', (r) => typeof r.revokedAt === 'number')
