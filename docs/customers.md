@@ -192,6 +192,15 @@ To move to a new phone: install the app, choose **Log in**, open your backup
 coupons stay in place but become unusable without the key). Only log out if you
 have your backup. The app warns you before it does this.
 
+Logging out stays off until everything of value is confirmed backed up under your
+account: every voucher you hold, and any cashback you have claimed that is still
+waiting to be added to the wallet. If something can't be confirmed (no connection,
+or the wallet is locked), you'll see **You can't log out yet**. Nothing is erased and
+your key stays. Check your connection and tap **Try again**. Cashback that was waiting
+comes back when you log in again, and is added the next time you open the cashback
+screen. A cashback or gift link opened while logging out is not taken: it stays on
+its link for you to open again after you log in.
+
 ## Common questions
 
 **Is this cryptocurrency?**

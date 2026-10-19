@@ -43,7 +43,9 @@ describe('logout and the parked claim', () => {
     localStorage.setItem('imani-wallet:profile:' + 'a'.repeat(64), '{"name":"X"}')
     localStorage.setItem('imani:cashback:pending', '["cashuBxyz"]')
 
-    await expect(logout('a'.repeat(64), () => true, () => {})).resolves.toBe(true)
+    // The stash is backed up and confirmed first (#331); this pins the teardown after that.
+    const checkStash = async () => ({ ok: true as const, fingerprint: 'cashuBxyz', count: 1 })
+    await expect(logout('a'.repeat(64), () => true, () => {}, { checkStash, stashNow: () => 'cashuBxyz' })).resolves.toBe(true)
 
     expect(listPendingClaims().map((c) => [c.ref, c.key])).toEqual([[REF, KEY]])
     expect(localStorage.getItem('imani-wallet:profile:' + 'a'.repeat(64))).toBeNull()

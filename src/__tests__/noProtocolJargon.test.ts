@@ -25,6 +25,7 @@ import { collectUserStrings, type UserString } from './userFacingStrings'
 import { JARGON } from '../lib/userMessage'
 import { LOGOUT_BLOCKED_COPY, LOGOUT_WARNING } from '../lib/logout'
 import { blockedMessage } from '../lib/logoutBlockedCopy'
+import { RECEIVE_PAUSED_MESSAGE } from '../lib/giftLinks'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const SCANNED = ['src/pages', 'src/components']
@@ -98,9 +99,13 @@ describe('no protocol jargon in the UI (#324)', () => {
       ...Object.values(LOGOUT_BLOCKED_COPY).filter((v): v is string => typeof v === 'string'),
       LOGOUT_BLOCKED_COPY.unconfirmed(1, '£5.00'),
       LOGOUT_BLOCKED_COPY.unconfirmed(3, '£15.00'),
-      ...(['unconfirmed', 'locked', 'store-unreadable', 'changed', 'in-flight'] as const).map((reason) =>
-        blockedMessage({ status: 'blocked', reason, unconfirmed: [coupon] }),
-      ),
+      // #331: the cashback stash block, and the gift paused while logging out.
+      LOGOUT_BLOCKED_COPY.cashbackUnconfirmed(1),
+      LOGOUT_BLOCKED_COPY.cashbackUnconfirmed(2),
+      RECEIVE_PAUSED_MESSAGE,
+      ...(
+        ['unconfirmed', 'locked', 'store-unreadable', 'changed', 'in-flight', 'cashback-unconfirmed'] as const
+      ).map((reason) => blockedMessage({ status: 'blocked', reason, unconfirmed: [coupon], cashback: 1 })),
     ]
     for (const text of copy) {
       expect(text).not.toMatch(JARGON)

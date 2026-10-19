@@ -97,7 +97,22 @@ describe('the default settle step (third check of #326)', () => {
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('SecurityError')
     })
-    expect(await attemptLogout(PK, () => true, () => {})).toMatchObject({ status: 'blocked', reason: 'in-flight' })
+    // The stash check (#331) would block on this too; it is passed here so the
+    // ledger's own default reader is what refuses.
+    const checkStash = async () => ({ ok: true as const, fingerprint: '', count: 0 })
+    expect(await attemptLogout(PK, () => true, () => {}, { checkStash })).toMatchObject({
+      status: 'blocked',
+      reason: 'in-flight',
+    })
+    expect(calls).toEqual([])
+  })
+
+  it('and with the default stash check, unreadable storage blocks there first (#331)', async () => {
+    reconcile.impl = async () => 0
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('SecurityError')
+    })
+    expect(await attemptLogout(PK, () => true, () => {})).toMatchObject({ status: 'blocked', reason: 'store-unreadable' })
     expect(calls).toEqual([])
   })
 })

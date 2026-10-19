@@ -166,3 +166,43 @@ describe('everyone else is unchanged', () => {
     expect((await redeemClaimRef(CLAIM_REF, seal.key)).kind).toBe('ok')
   })
 })
+
+describe('logging out (#331): no claim once logout has started', () => {
+  it('a claim opened while logging out is deferred BEFORE the destructive claim, and nothing is stashed', async () => {
+    const gate = await import('../receiveGate')
+    h.account = getPublicKey(generateSecretKey())
+    const token = buildVoucherToken({}, [8], {}, STALL_B_KEY).token
+    const seal = await sealed(token)
+    const calls = stub({ amountMinor: 500, unit: 'EUR', issuerPubkey: STALL_B }, seal)
+    gate.closeReceives()
+    try {
+      expect(await redeemClaimRef(CLAIM_REF, seal.key)).toEqual({ kind: 'unreachable', reason: 'deferred' })
+    } finally {
+      gate.openReceives()
+    }
+    expect(calls.some((u) => u.includes('/ciphertext'))).toBe(false)
+    expect(h.redeemed).toEqual([])
+    expect(pendingCashbackCount()).toBe(0)
+  })
+
+  it('a claim in progress is counted until it has banked', async () => {
+    const gate = await import('../receiveGate')
+    h.account = getPublicKey(generateSecretKey())
+    const token = buildVoucherToken({}, [8], {}, STALL_B_KEY).token
+    const seal = await sealed(token)
+    stub({ amountMinor: 500, unit: 'EUR', issuerPubkey: STALL_B }, seal)
+    let seen = -1
+    vi.stubGlobal('window', {
+      TokenRedemption: {
+        async redeem(t: string) {
+          seen = gate.receivesInFlight()
+          h.redeemed.push(t)
+          return {}
+        },
+      },
+    })
+    expect((await redeemClaimRef(CLAIM_REF, seal.key)).kind).toBe('ok')
+    expect(seen).toBe(1)
+    expect(gate.receivesInFlight()).toBe(0)
+  })
+})

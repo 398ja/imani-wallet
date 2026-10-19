@@ -37,6 +37,7 @@ import { checkTokenBacking, loadTrustedMints, trustedMintUrls } from './trustedM
 import { getSigner } from './nap'
 import { ForeignVoucherRefusedError, isServerForeignRefusal, refuseForeignIssuer, refuseForeignVouchers, sessionAccount } from './merchantVouchers'
 import { notifyWalletChanged, recordCashbackStatus } from './wallet'
+import { beginReceive, isReceiveDeferred } from './receiveGate'
 
 /**
  * Whether to offer cashback at all on this deployment.
@@ -858,6 +859,22 @@ export async function replayPendingCashback(): Promise<boolean> {
   // token is kept rather than swapped.
   await loadTrustedMints()
 
+  // Once logout has started, nothing is replayed: the stash stays as it is (#331).
+  let endReceive: () => void
+  try {
+    endReceive = beginReceive()
+  } catch (e) {
+    if (isReceiveDeferred(e)) return false
+    throw e
+  }
+  try {
+    return await replayStash(tokens)
+  } finally {
+    endReceive()
+  }
+}
+
+async function replayStash(tokens: string[]): Promise<boolean> {
   let recovered = false
   for (const token of tokens) {
     try {
@@ -1196,6 +1213,26 @@ async function redeemParsedClaim(parsed: ParsedClaimUrl): Promise<RedeemResult> 
     }
   }
 
+  // The receive gate (#331), BEFORE the destructive claim: once logout has
+  // started, nothing is claimed and the link stays as it was for the next try.
+  let endReceive: () => void
+  try {
+    endReceive = beginReceive()
+  } catch (e) {
+    if (isReceiveDeferred(e)) return { kind: 'unreachable', reason: 'deferred' }
+    throw e
+  }
+  try {
+    return await claimAndCommit(parsed, metadata)
+  } finally {
+    endReceive()
+  }
+}
+
+async function claimAndCommit(
+  parsed: ParsedClaimUrl,
+  metadata: Awaited<ReturnType<typeof fetchPublicMetadata>>,
+): Promise<RedeemResult> {
   const claimed = await claimCiphertext(parsed)
   if ('kind' in claimed) return claimed
 
