@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Logout waits for cashback and gift-link receives, and refuses new ones** (Closes #331). These
+  receives call the redeem coordinator directly, so logout's drain did not count them, and a coupon
+  saved after the final backup check could be wiped. A new receive gate (`receiveGate.ts`) closes
+  when logout starts, before the poller stops: a cashback claim, a stash replay or a gift link
+  opened after that is deferred before anything is claimed or swapped. The drain now also waits for
+  every receive inside the gate and for the coordinator's in-flight redeems
+  (`TokenRedemption.inFlightCount()`, a new accessor), within the same 20 s bound, and a last
+  synchronous check blocks if any receive is still running. A blocked logout reopens the gate.
+- **The pending cashback stash is backed up before logout** (Closes #331, owner decision
+  2026-10-19). `imani:cashback:pending` holds claimed cashback not yet banked. Logout now
+  publishes it as an encrypted record (kind 30078, `d=imani:cashback-stash`, sealed to the
+  account's own key, relay and gateway) and confirms it by reading it back, signature-checked and
+  decrypted, like vouchers. Not confirmed (offline, locked, unreadable storage): logout stays
+  blocked, "N cashback vouchers waiting to be added... not confirmed as backed up", nothing erased.
+  Login merges the newest record back into the stash. Garbage entries are not value and never block.
+
+### Tests
+
+- Third-check hardening of #326 landed (7ddfe29): the settle bound, the default ledger reader,
+  swap refusal on decommission, a missing signer reads as locked.
+
 ## [0.32.0] - 2026-10-19
 
 Log in now restores your wallet from a backup, logout refuses to erase coupons that are not

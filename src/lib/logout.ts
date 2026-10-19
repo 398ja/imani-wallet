@@ -15,6 +15,15 @@ import {
 import { sweepAppStorage } from './appStorage'
 import { carryPendingClaimsAcrossLogout } from './pendingClaim'
 import { moneyInFlight } from './inFlightMoney'
+import { confirmStashBackup, stashFingerprint, type StashCheck } from './cashbackStash'
+import {
+  closeReceives,
+  drainReceives,
+  drainTokenRedemptions,
+  openReceives,
+  receivesInFlight,
+  tokenRedemptionsInFlight,
+} from './receiveGate'
 
 /**
  * Log out: end the session and erase the key from this browser.
@@ -77,6 +86,10 @@ export const LOGOUT_BLOCKED_COPY = {
   changed:
     'A voucher arrived while you were logging out. It is not confirmed as backed up yet, so ' +
     'logging out stays off. Nothing has been erased. Try again in a moment.',
+  cashbackUnconfirmed: (count: number) =>
+    `${count} cashback voucher${count === 1 ? '' : 's'} waiting to be added to this wallet ` +
+    `${count === 1 ? 'is' : 'are'} not confirmed as backed up, so logging out stays off until ` +
+    `${count === 1 ? 'it is' : 'they are'} safe. Nothing has been erased. Check your connection and try again.`,
   inFlight:
     'A payment or a swap is still going through. Logging out now could lose its change, so ' +
     'logging out stays off until it finishes. Nothing has been erased. Try again in a moment.',
@@ -90,8 +103,10 @@ export type LogoutOutcome =
   | { status: 'cancelled' }
   | {
       status: 'blocked'
-      reason: 'unconfirmed' | 'locked' | 'store-unreadable' | 'changed' | 'in-flight'
+      reason: 'unconfirmed' | 'locked' | 'store-unreadable' | 'changed' | 'in-flight' | 'cashback-unconfirmed'
       unconfirmed: UnconfirmedCoupon[]
+      /** For 'cashback-unconfirmed': how many stashed cashback tokens are not confirmed. */
+      cashback?: number
     }
 
 export interface LogoutDeps {
@@ -112,6 +127,17 @@ export interface LogoutDeps {
   inFlight?: (pubkey: string) => { sends: number; swaps: number }
   /** Try to finish pending sends first, so a settled one does not block. Bounded, never throws. */
   settleInFlight?: (pubkey: string) => Promise<void>
+  /** The read-back check of the cashback stash (#331). Must never answer ok on a failure. */
+  checkStash?: (pubkey: string) => Promise<StashCheck>
+  /** The stash's current identity, for the race check. */
+  stashNow?: () => string
+  /**
+   * Wait for receives that do not go through dm-poll (cashback, gift links) and
+   * for every redeem the coordinator has in flight (#331). Resolves whether drained.
+   */
+  drainReceives?: (timeoutMs: number) => Promise<boolean>
+  /** Receives still running anywhere in this tab, read synchronously just before the wipe. */
+  receivesNow?: () => number
 }
 
 /** How long logout gives the pending sends to settle before it checks them. */
@@ -148,12 +174,37 @@ export const DRAIN_TIMEOUT_MS = 20_000
 
 function defaultRestart(pubkey: string): void {
   startDmPoll(pubkey)
+  openReceives()
   startRosterSync(pubkey)
   startIncomingNotifications(pubkey)
 }
 
 async function defaultHeldNow(pubkey: string): Promise<string> {
   return heldFingerprint(await (await openWallet(pubkey)).getAllVouchers())
+}
+
+async function defaultDrainReceives(timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  if (!(await drainReceives(timeoutMs))) return false
+  return drainTokenRedemptions(Math.max(0, deadline - Date.now()))
+}
+
+function defaultReceivesNow(): number {
+  return receivesInFlight() + tokenRedemptionsInFlight()
+}
+
+function stashBlocked(check: Extract<StashCheck, { ok: false }>): LogoutOutcome {
+  if (check.reason === 'locked') return { status: 'blocked', reason: 'locked', unconfirmed: [] }
+  if (check.reason === 'store-unreadable') return { status: 'blocked', reason: 'store-unreadable', unconfirmed: [] }
+  return { status: 'blocked', reason: 'cashback-unconfirmed', unconfirmed: [], cashback: check.count }
+}
+
+async function safeStash(check: NonNullable<LogoutDeps['checkStash']>, pubkey: string): Promise<StashCheck> {
+  try {
+    return await check(pubkey)
+  } catch {
+    return { ok: false, reason: 'store-unreadable', count: 0, fingerprint: '\u0000unreadable' }
+  }
 }
 
 function blocked(check: Extract<BackupCheck, { ok: false }>): LogoutOutcome {
@@ -192,6 +243,10 @@ export async function attemptLogout(
   const writes = deps.writeCount ?? voucherWriteCount
   const inFlight = deps.inFlight ?? moneyInFlight
   const settleInFlight = deps.settleInFlight ?? defaultSettleInFlight
+  const checkStash = deps.checkStash ?? confirmStashBackup
+  const stashNow = deps.stashNow ?? stashFingerprint
+  const drainOthers = deps.drainReceives ?? defaultDrainReceives
+  const receivesNow = deps.receivesNow ?? defaultReceivesNow
 
   // 0. A pending send that has finished at the gateway is settled now, so it
   // does not refuse the logout for no reason (second check of #326).
@@ -200,6 +255,10 @@ export async function attemptLogout(
   // 1. Before anything is asked or stopped.
   const first = await safeCheck(check, pubkey)
   if (!first.ok) return blocked(first)
+  // 1b. The cashback stash, backed up and read back (#331, owner decision
+  // 2026-10-19). Claimed cashback not yet banked is money too.
+  const firstStash = await safeStash(checkStash, pubkey)
+  if (!firstStash.ok) return stashBlocked(firstStash)
   // A send or swap still in flight holds value outside every coupon row, and
   // the sweep below would delete its only record (second check of #326).
   if (hasMoneyInFlight(inFlight, pubkey)) return { status: 'blocked', reason: 'in-flight', unconfirmed: [] }
@@ -211,19 +270,40 @@ export async function attemptLogout(
   // 3. Order matters. Stop the poller first: it holds the unlocked key and
   // writes to the user-scoped IndexedDB, and letting it run past the session
   // teardown means a write landing after the identity it belongs to is gone.
+  // Close the receive gate first, synchronously with the poller's own
+  // (#331): from here a cashback claim, a stash replay or a gift link is
+  // refused BEFORE anything is claimed or swapped, and stays for the next try.
+  closeReceives()
   stopDmPoll()
   // A debounced roster publish must not fire after the key is gone (#160 phase 6).
   stopRosterSync()
   // Same reason: the drain loop signs NIP-98 with the session key and would keep
   // polling for payments addressed to the account being torn down.
   stopIncomingNotifications()
-  const drained = await drain(DRAIN_TIMEOUT_MS).catch(() => false)
+  const drainStart = Date.now()
+  const drained =
+    (await drain(DRAIN_TIMEOUT_MS).catch(() => false)) &&
+    (await drainOthers(Math.max(0, DRAIN_TIMEOUT_MS - (Date.now() - drainStart))).catch(() => false))
 
   // A redemption that did not finish inside the bound may still write a
   // coupon after any check made now, so no check made now can be final.
   if (!drained) {
     restart(pubkey)
     return { status: 'blocked', reason: 'changed', unconfirmed: [] }
+  }
+
+  // 4b. The stash: a receive that ran before the gate closed may have stashed
+  // or banked a token. Checked again (published and read back) if it moved.
+  if (stashNow() !== firstStash.fingerprint) {
+    const finalStash = await safeStash(checkStash, pubkey)
+    if (!finalStash.ok) {
+      restart(pubkey)
+      return stashBlocked(finalStash)
+    }
+    if (stashNow() !== finalStash.fingerprint) {
+      restart(pubkey)
+      return { status: 'blocked', reason: 'changed', unconfirmed: [] }
+    }
   }
 
   // 4. Re-verify only if the held set changed since step 1.
@@ -248,6 +328,19 @@ export async function attemptLogout(
   if (hasMoneyInFlight(inFlight, pubkey)) {
     restart(pubkey)
     return { status: 'blocked', reason: 'in-flight', unconfirmed: [] }
+  }
+  // And no receive is running (#331). With the gate closed and the poller's
+  // generation bumped none can START, so this only catches one this list does
+  // not know about. Synchronous, and nothing below awaits a receive.
+  let busy: number
+  try {
+    busy = receivesNow()
+  } catch {
+    busy = 1
+  }
+  if (busy > 0) {
+    restart(pubkey)
+    return { status: 'blocked', reason: 'changed', unconfirmed: [] }
   }
 
   // And cancel the push subscription, which is the one piece of this account's
