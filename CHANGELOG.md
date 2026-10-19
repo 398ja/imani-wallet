@@ -32,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   then blocked every logout. Logout now replaces the record when it names more than the stash
   (an empty one when the stash is empty, best effort, bounded to 5 s). That never blocks: the
   tokens actually waiting are still confirmed as before.
+- **Logout never drops a cashback token from the stash record unless its mint says it is spent**
+  (second check of #334). The fix above dropped every token the record named and this device's
+  stash did not. That could be another device's cashback that this device never restored (the
+  login restore is best effort), and then the record was its only copy. Now a token leaves the
+  record only when NUT-07 answers SPENT: unspent, pending, unknown or an unreachable mint all keep
+  it. A clear that outlives its 5 s bound no longer publishes late, nothing is published before the
+  record has been read, and each new record is stamped after the newest one seen, so a write in
+  the same second is not lost to a relay's tie-break.
 - **"Swap back to sats" goes through the receive gate** (review of #334). It is a mint swap whose
   sats are saved afterwards, so like the other receives it is refused once logout has started
   (nothing swapped, the coupon untouched), and one already running is waited for.

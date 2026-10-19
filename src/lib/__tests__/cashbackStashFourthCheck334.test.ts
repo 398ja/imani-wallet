@@ -53,7 +53,10 @@ vi.mock('../relay', () => ({
 vi.mock('../transferSignature', () => ({ mirrorToGateway: async () => true }))
 
 const stash = await import('../cashbackStash')
-const FAST = { settleMs: 0, deadlineMs: 2_000 }
+// A banked token's proofs are spent at the mint; that is what lets logout drop it
+// from the record (second check of #334). Any other token's state is unknown.
+const spentWhenBanked = async (t: string) => (t === 'cashuBbanked' ? ('SPENT' as const) : ('UNKNOWN' as const))
+const FAST = { settleMs: 0, deadlineMs: 2_000, tokenState: spentWhenBanked }
 
 function record(at: number, tokens: string[], key = sk, to = PK): Event {
   return finalizeEvent(
