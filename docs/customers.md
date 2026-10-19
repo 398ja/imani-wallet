@@ -24,7 +24,7 @@ it with them later, all or part at a time. This guide walks you through it.
    [below](#keeping-your-account-safe), and it matters more than anything else here.
 
    <img src="screenshots/welcome-three-buttons.png" alt="The end of onboarding: one
-   'Back up your account' panel holding the hidden key and three buttons — Copy key,
+   'Back up your account' panel holding the hidden key and three buttons: Copy backup key,
    Download file, Google Drive — above a checkbox confirming you have saved it, and a
    Continue button that stays disabled until you do." width="320">
 
@@ -76,6 +76,11 @@ To let a merchant send to you, show them your code:
 
 - Tap **Receive**. The app shows a QR code of your handle.
 - The merchant scans it, types the amount, and sends.
+
+People and stalls are always shown by their picture, name and handle, never by
+a code or a key. If a name has not loaded yet you will briefly see a grey circle;
+if it cannot be found the app says **Someone** (or **Unknown stall**) rather
+than showing a string of letters and numbers.
 
 That's the whole flow. If a coupon seems slow to arrive, give it a moment: the
 "on its way" message means it's already been sent to you.
@@ -167,8 +172,10 @@ responsibility for the key is yours.
 
 **Your backup key is the master key to your wallet.**
 
-- It's shown once, when you sign up. Write it down. Store it somewhere safe and
-  private, not in a photo on the same phone.
+- It's shown once, when you sign up, behind **Show backup key**. Write it down.
+  Store it somewhere safe and private, not in a photo on the same phone. You can
+  see it again under **Settings → Backup → Show my backup key** after typing
+  your passphrase.
 - You can also download an **encrypted backup file** from **Settings → Backup**.
   It's protected by your passphrase, so it's safe to keep in cloud storage.
 - Anyone who has your key can spend your coupons. Treat it like cash.

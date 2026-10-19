@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom'
 import QRCode from 'qrcode'
 
 import type { PassField, PassJson } from '../../lib/pass'
-import { formatDate, formatFace, handleLabel, shortPubkey } from '../../lib/format'
+import { formatDate, formatFace, handleLabel, UNKNOWN_STALL } from '../../lib/format'
 import { Avatar } from './Avatar'
 import { RemoteImage } from './RemoteImage'
 import { SkeletonLine } from './Skeleton'
@@ -57,9 +57,13 @@ interface PassProps {
   loadingIssuer?: boolean
 }
 
-/** A raw 64-char hex pubkey standing in for a name would overflow the card. */
+/**
+ * A raw 64-char hex pubkey standing in for a name. It used to be shortened,
+ * which is still a key on screen (#324); the stall's own words replace it as
+ * soon as its profile loads, and until then the card says so plainly.
+ */
 function displayName(name: string): string {
-  return /^[0-9a-f]{64}$/i.test(name) ? shortPubkey(name) : name
+  return /^[0-9a-f]{64}$/i.test(name) ? UNKNOWN_STALL : name
 }
 
 function fieldValue(field: PassField): string {
@@ -189,9 +193,9 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
                 <p className="truncate text-xs" style={{ color: pass.labelColor, opacity: 0.7 }}>
                   {pass.description}
                 </p>
-                {/* Unlike IdentityInline, a second bar here is honest: on a
-                    card with an issuer this line always renders, falling back to
-                    the short key when there is no handle. */}
+                {/* Unlike IdentityInline, a second bar here is honest: every
+                    stall has a profile, so on a card with an issuer the handle
+                    line is about to render. */}
                 <SkeletonLine text="text-[0.625rem]" width="w-24" />
               </>
             ) : (
@@ -206,20 +210,19 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
               are per-issuer, so a customer paying the wrong "Rosa Green Farm" is
               a real outcome — the card has to say which one this is.
 
-              Their NIP-05 handle when they have one, because a short pubkey is
-              unreadable and nobody compares one. The handle is weaker evidence
-              (also self-published, and not checked against its domain here), but
-              a name a person can actually read is a disambiguator they will use.
-              Falls back to the short pubkey, which is still the unforgeable one.
-              Skipped when the name IS the pubkey — unbranded, it is on screen
-              already.
+              Their handle, because a name a person can actually read is a
+              disambiguator they will use. It is weaker evidence than the key
+              (also self-published, and not checked against its domain here),
+              but the key is not shown at all any more (#324): every stall has a
+              profile, so a missing handle is a profile still loading, and the
+              line simply waits for it rather than printing a key fragment.
             */}
-            {issuer && issuer !== pass.organizationName && (
+            {issuer && nip05 && issuer !== pass.organizationName && (
               <p
-                className={`truncate text-[0.625rem] ${nip05 ? '' : 'font-mono'}`}
+                className="truncate text-[0.625rem]"
                 style={{ color: pass.labelColor, opacity: 0.55 }}
               >
-                {nip05 ? handleLabel(nip05) : shortPubkey(issuer)}
+                {handleLabel(nip05)}
               </p>
             )}
               </>

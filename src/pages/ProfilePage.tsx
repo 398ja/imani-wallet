@@ -15,7 +15,7 @@ import QRCode from "qrcode";
 import { nip19 } from "nostr-tools";
 
 import { Avatar, RemoteImage, Screen, BackLink, SkeletonLine } from "../components/ui";
-import { formatDate, handleLabel, shortPubkey } from "../lib/format";
+import { formatDate, handleLabel } from "../lib/format";
 import { profileName, profileUnknown, type Profile } from "../lib/profile";
 import { canShare, shareText } from "../lib/native";
 import { LocationMap } from "../components/LocationMap";
@@ -182,11 +182,15 @@ export function ProfilePage({
  * places: the noun goes in button copy, the label goes where the value would.
  */
 function handleNoun(profile: Profile): string {
-  return profile.nip05 ? "handle" : "key";
+  // "account key", not "key" or "npub" (#324): the plain name for what is
+  // copied when there is no handle. It is never printed, only copied.
+  return profile.nip05 ? "handle" : "account key";
 }
 
-function handleShown(profile: Profile, handle: string): string {
-  return profile.nip05 ? handleLabel(profile.nip05) : shortPubkey(handle);
+function handleShown(profile: Profile): string {
+  // No key fragment where the handle would go (#324). Every account has a
+  // handle; an older record without one says so in words.
+  return profile.nip05 ? handleLabel(profile.nip05) : "No handle yet";
 }
 
 /**
@@ -337,7 +341,7 @@ function IdentityCard({
               handle to a shortened npub — see `IdentityLines`. */}
           <IdentityLines
             profile={profile}
-            shown={handle ? handleShown(profile, handle) : "No handle yet"}
+            shown={handleShown(profile)}
             className="min-w-0 flex-1"
           />
           {/* Both controls belong on the card, next to what they act on — not
@@ -530,7 +534,7 @@ function HandleDialog({
           <CodeWithFace
             profile={profile}
             dataUrl={dataUrl}
-            shown={handleShown(profile, handle)}
+            shown={handleShown(profile)}
             className="w-full rounded-2xl bg-white p-4"
           />
         ) : (
@@ -540,7 +544,7 @@ function HandleDialog({
         )}
         <IdentityLines
           profile={profile}
-          shown={handleShown(profile, handle)}
+          shown={handleShown(profile)}
           className="w-full text-center"
         />
         <button

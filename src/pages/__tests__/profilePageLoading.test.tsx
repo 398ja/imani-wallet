@@ -63,11 +63,12 @@ describe('the profile page before the record arrives', () => {
    * kind-0 is allowed, and a page that pulsed forever for those accounts would
    * be a worse bug than the one this fixes, because it would never resolve.
    */
-  it('shows the npub for an account that genuinely has no name', () => {
+  it('never shows the npub, even for a record with no name or handle (#324)', () => {
     draw({ ...emptyProfile(PUBKEY), updatedAt: Date.now() })
 
     expect(document.querySelector('[aria-busy="true"]')).toBeNull()
-    expect(screen.getByText(NPUB.slice(0, 8), { exact: false })).toBeTruthy()
+    expect(screen.getByText('No handle yet')).toBeTruthy()
+    expect(screen.queryByText(NPUB.slice(0, 8), { exact: false })).toBeNull()
   })
 
   /** A stored handle renders at once — no flash on a reload. */

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Check, Copy, Send, Share2 } from 'lucide-react'
-import { nip19 } from 'nostr-tools'
 
 import {
   Button,
@@ -226,7 +225,7 @@ export function MerchantPage({ viewerPubkey }: { viewerPubkey?: string }) {
               <Send className="mr-2 h-5 w-5" /> Send
             </Button>
           )}
-          <ShareMerchant pubkey={pubkey} nip05={branding.nip05} />
+          <ShareMerchant nip05={branding.nip05} />
         </div>
       </div>
 
@@ -350,20 +349,14 @@ function StallHeader({
  * Copy stands in where there is no share sheet, so the slot is never dead in a
  * desktop browser. Either way it is one button doing one job, and it says which.
  */
-function ShareMerchant({ pubkey, nip05 }: { pubkey: string; nip05?: string }) {
+function ShareMerchant({ nip05 }: { nip05?: string }) {
   const [copied, setCopied] = useState(false)
 
-  // Encoding is fallible on a malformed key; without either form there is
-  // nothing to hand over, so the button does not appear.
-  const handle =
-    nip05 ??
-    (() => {
-      try {
-        return nip19.npubEncode(pubkey)
-      } catch {
-        return null
-      }
-    })()
+  // The handle only (#324). Sharing the npub used to be the fallback for a stall
+  // with no handle, but every stall has a profile, and a raw key is nothing a
+  // shopper can read back. Without a handle there is nothing to hand over, so
+  // the button does not appear.
+  const handle = nip05 ?? null
 
   if (handle === null) return null
 

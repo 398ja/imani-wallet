@@ -24,7 +24,7 @@ anything. If a customer or a coupon issuer asks "did that stall really honour
 the coupons it accepted?", an encrypted history cannot answer.
 
 The redemption ledger is the other half. One small unencrypted record per
-redemption, published to a public relay, carrying only what an audit needs:
+redemption, published to a public network, carrying only what an audit needs:
 
 | Published | Not published |
 |---|---|
@@ -47,7 +47,8 @@ issued.
 
 Share it with an auditor, a coupon issuer, or anyone who needs to check your
 record. Copy it with the **Copy ledger ID** button rather than reading it out,
-since one wrong character points at a different stall entirely.
+since one wrong character points at a different stall entirely. The code itself
+stays folded away under **Show ledger ID** until you ask for it.
 
 Two things worth knowing:
 
@@ -63,14 +64,14 @@ unlock and come back.
 
 ## Your published record
 
-The same screen shows what your stream looks like **read back from the relay**,
+The same screen shows what your stream looks like **read back from the network**,
 not from your phone. This matters: you are being shown exactly what an outside
 auditor sees about you, using the same reader they would use. A screen that ran
 a gentler check would be reassurance about nothing.
 
 | Row | Meaning |
 |---|---|
-| **Redemptions published** | How many records are on the relay under your ledger ID |
+| **Redemptions published** | How many records are on the network under your ledger ID |
 | **Currencies** | The units you have traded in |
 | **Most recent** | When your last record was published |
 | **Conflicting records** | Only ever shown when non-zero — see below |
@@ -85,13 +86,13 @@ twice with different details, which should never happen from normal trading.
 Contact support with your ledger ID.
 
 **"Unreadable records" is usually harmless.** Anyone can publish to a public
-relay, so junk under your ID may simply be junk. It can also mean a newer app
+network, so junk under your ID may simply be junk. It can also mean a newer app
 version is publishing in a format this one predates.
 
 ## Checking for gaps
 
 A record can fail to publish. The app closed mid-send, the network dropped, the
-relay was briefly unreachable. Your customer got their goods and your books are
+network was briefly unreachable. Your customer got their goods and your books are
 correct, but the public record has a hole in it.
 
 **Settings → Redemption ledger → Check now.**

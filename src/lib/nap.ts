@@ -51,16 +51,29 @@ export function hasStoredKey(): Promise<boolean> {
   return keyStore.hasKey()
 }
 
-/** Accepts an nsec or raw hex, and normalises to hex. */
+/**
+ * Accepts a backup key (nsec) or raw hex, and normalises to hex.
+ *
+ * The messages say "backup key", never "nsec" (#324): they are shown under the
+ * field where someone pasted theirs, and that is the name the app gives it
+ * everywhere else. The FORMATS accepted do not change.
+ */
 export function toPrivkeyHex(input: string): string {
   const trimmed = input.trim()
   if (trimmed.startsWith('nsec')) {
-    const decoded = nip19.decode(trimmed)
-    if (decoded.type !== 'nsec') throw new Error('That is not an nsec.')
+    // The decoder's own message ("Invalid checksum in nsec1…") is protocol
+    // talk and echoes part of the key back; a typo gets the plain sentence.
+    let decoded: ReturnType<typeof nip19.decode>
+    try {
+      decoded = nip19.decode(trimmed)
+    } catch {
+      throw new Error('That does not look like a backup key. Paste it exactly as you saved it.')
+    }
+    if (decoded.type !== 'nsec') throw new Error('That is not a backup key.')
     return bytesToHex(decoded.data)
   }
   if (!/^[0-9a-f]{64}$/i.test(trimmed)) {
-    throw new Error('Expected an nsec or a 64-character hex key.')
+    throw new Error('That does not look like a backup key. Paste it exactly as you saved it.')
   }
   return trimmed.toLowerCase()
 }

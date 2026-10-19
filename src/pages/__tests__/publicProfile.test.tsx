@@ -193,19 +193,16 @@ describe('a stall’s public profile', () => {
    * can still take the stall away with them, and every key has one — so the
    * assertion moved to what gets copied rather than whether the control exists.
    */
-  it('falls back to the npub when a stall publishes no handle', async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined)
-    vi.stubGlobal('navigator', { clipboard: { writeText } })
-
+  it('never shows or shares the npub when a stall has no handle (#324)', async () => {
     draw(UNREACHABLE)
     await waitFor(() => expect(screen.queryByText(/Loading/)).toBeNull())
-    screen.getByLabelText(/^Copy npub1/).click()
 
-    // The FULL npub, not the shortened display form: an ellipsis in the middle
-    // pastes as a string that resolves to nobody.
-    await waitFor(() =>
-      expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/^npub1[a-z0-9]{58}$/)),
-    )
+    // Plain words for the name, no key on screen, and no Copy/Show-code
+    // buttons offering a raw key to hand over.
+    expect(screen.getByText('Unknown stall')).toBeTruthy()
+    expect(document.body.textContent).not.toMatch(/npub1|cccccccc/)
+    expect(screen.queryByLabelText(/^Copy /)).toBeNull()
+    expect(screen.queryByLabelText(/^Show code/)).toBeNull()
   })
 
   /**

@@ -5,6 +5,7 @@ import { ChevronRight, CloudDownload, FileText, Loader2 } from 'lucide-react'
 
 import { Alert, Button, IdentityInline, Input, Panel } from './ui'
 import { applyBackup, parseBackup, type ParsedBackup } from '../lib/backup'
+import { userMessage } from '../lib/userMessage'
 import { getBackup } from '../lib/drive'
 import { keyStore } from '../lib/nap'
 import { claimProfile, ProfileMissingError, rememberHandle, requireProfile } from '../lib/profileGate'
@@ -62,7 +63,7 @@ export function BackupLogin({
       setParsed(parseBackup(text))
       setSource('drive')
     } catch (e) {
-      setProblem(e instanceof Error ? e.message : String(e))
+      setProblem(userMessage(e))
     } finally {
       setLoading(null)
     }
@@ -77,7 +78,7 @@ export function BackupLogin({
     } catch (e) {
       // parseBackup's own sentences ("That file is not a wallet backup.") are
       // already the plain answer, so they are shown as they are.
-      setProblem(e instanceof Error ? e.message : String(e))
+      setProblem(userMessage(e))
     } finally {
       // Let the same file be picked again after a fix, or after "Choose another".
       if (fileInput.current) fileInput.current.value = ''
@@ -296,9 +297,7 @@ function AccountStep({
       setError(
         isWrongPassphrase(e)
           ? 'That passphrase does not open this backup. Check it and try again.'
-          : e instanceof Error
-            ? e.message
-            : String(e),
+          : userMessage(e),
       )
     } finally {
       setBusy(false)

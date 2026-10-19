@@ -8,6 +8,7 @@ import { ParkedClaimBanner } from '../components/ParkedClaimBanner'
 import { keyStore, hasStoredKey } from '../lib/nap'
 import { handleLabel } from '../lib/format'
 import { loadProfile, profileName, refreshProfile, type Profile } from '../lib/profile'
+import { userMessage } from '../lib/userMessage'
 
 /**
  * Unlock a key this browser already holds.
@@ -58,7 +59,7 @@ export function LoginPage({ onUnlock }: { onUnlock: (privkeyHex: string) => Prom
       // on another device should be current here before the header renders.
       void refreshProfile(getPublicKey(hexToBytes(hex)))
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(userMessage(e))
     } finally {
       setBusy(false)
     }

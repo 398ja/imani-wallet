@@ -1,7 +1,7 @@
 import { nip19, type EventTemplate } from 'nostr-tools'
 
 import { fetchNewestKind0, imageUrl, str } from './branding'
-import { handleLabel } from './format'
+import { handleLabel, OWN_ACCOUNT } from './format'
 
 /**
  * The current user's own profile.
@@ -116,13 +116,14 @@ export function emptyProfile(pubkey: string): Profile {
 /**
  * What to show when there is no display name.
  *
- * Falls back through the handle to a shortened npub, so the header and the login
- * card always have something to render — and `Avatar` always has something to
- * derive initials from.
+ * Falls back through the handle to {@link OWN_ACCOUNT}, so the header and the
+ * login card always have something to render without ever printing a key
+ * (#324). Every account has a profile, so the last rung is only reached in the
+ * moment before it is read, which the header covers with a skeleton anyway.
  */
 export function profileName(profile: Profile): string {
   const nip05 = profile.nip05
-  return profile.displayName ?? (nip05 ? handleLabel(nip05) : undefined) ?? `${profile.npub.slice(0, 10)}…`
+  return profile.displayName ?? (nip05 ? handleLabel(nip05) : undefined) ?? OWN_ACCOUNT
 }
 
 /**
