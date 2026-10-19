@@ -382,10 +382,12 @@ async function importCustomer(page: Page, secretKey: Uint8Array): Promise<string
     await goto(page, `${BASE}/onboarding`)
     if (!page.url().includes('onboarding')) break
     await page.getByRole('button', { name: /^Log in$/ }).first().click()
-    await page.locator('input[placeholder^="nsec1"]').fill(nip19.nsecEncode(secretKey))
+    // #325: Log in opens the backup chooser; the key form is the secondary link.
+    await page.getByRole('button', { name: 'Use your backup key instead' }).click()
+    await page.locator('input[aria-label="Backup key"]').fill(nip19.nsecEncode(secretKey))
     await page.locator('input[placeholder="Choose a passphrase"]').fill(PASSPHRASE)
     await page.locator('input[placeholder="Confirm passphrase"]').fill(PASSPHRASE)
-    await page.getByRole('button', { name: /^Add key and unlock$/ }).last().click()
+    await page.getByRole('button', { name: /^Log in$/ }).last().click()
     for (let i = 0; i < 30 && page.url().includes('onboarding'); i++) await page.waitForTimeout(1000)
     if (!page.url().includes('onboarding')) break
   }
