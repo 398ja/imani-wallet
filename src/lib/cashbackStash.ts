@@ -127,6 +127,18 @@ async function publishStash(tokens: string[]): Promise<void> {
   }
 }
 
+/** How long an empty stash may spend clearing a stale record at logout. */
+const EMPTY_CLEAR_MS = 5_000
+
+/** Replace a non-empty record with an empty one. Best effort, never throws. */
+async function clearStaleStash(pubkey: string): Promise<void> {
+  // Locked or no session: nothing could be signed, so do not even ask the network.
+  const signer = getSigner() as { hasKey?: () => boolean }
+  if (typeof signer.hasKey === 'function' && !signer.hasKey()) return
+  const backed = await readBackStash(pubkey)
+  if (backed && stashValue(backed).length > 0) await publishStash([])
+}
+
 export type StashCheck =
   | { ok: true; fingerprint: string; count: number }
   | { ok: false; reason: 'locked' | 'unconfirmed' | 'store-unreadable'; count: number; fingerprint: string }
@@ -163,7 +175,14 @@ export async function confirmStashBackup(pubkey: string, options: StashCheckOpti
     return { ok: false, reason: 'store-unreadable', count: 0, fingerprint: '\u0000unreadable' }
   }
   const fingerprint = held.join('|')
-  if (held.length === 0) return { ok: true, fingerprint, count: 0 }
+  if (held.length === 0) {
+    // Nothing to back up, so nothing blocks. But a record left from an earlier
+    // logout still names tokens banked since, and the next login's restore would
+    // bring them back as phantom "waiting" cashback (review of #334, D1). Cleared
+    // best effort, in a short bound: an unreachable relay must not slow logout.
+    await within(clearStaleStash(pubkey), Math.min(left(), EMPTY_CLEAR_MS), undefined)
+    return { ok: true, fingerprint, count: 0 }
+  }
 
   let unlocked: boolean
   try {
@@ -175,6 +194,10 @@ export async function confirmStashBackup(pubkey: string, options: StashCheckOpti
   if (!unlocked) return { ok: false, reason: 'locked', count: held.length, fingerprint }
 
   let missing = held.length
+  // Every token is in the newest record: the money is safe. If that record also
+  // names tokens banked since, it is republished so a restore does not bring
+  // them back (D1); failing that is not a reason to block.
+  let covered = false
   for (let round = 0; round <= rounds && left() > 0; round++) {
     if (round > 0) {
       await within(publishStash(held), left(), undefined)
@@ -184,8 +207,12 @@ export async function confirmStashBackup(pubkey: string, options: StashCheckOpti
     if (backed === null) continue
     const have = new Set(backed)
     missing = held.filter((t) => !have.has(t)).length
-    if (missing === 0) return { ok: true, fingerprint, count: held.length }
+    if (missing === 0) {
+      covered = true
+      if (stashValue(backed).length === held.length) return { ok: true, fingerprint, count: held.length }
+    }
   }
+  if (covered) return { ok: true, fingerprint, count: held.length }
   return { ok: false, reason: 'unconfirmed', count: missing, fingerprint }
 }
 
