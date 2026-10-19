@@ -28,10 +28,12 @@ page.on('console', (m) => logs.push(`${m.type()}: ${m.text()}`))
 
 await page.goto(`${BASE}/onboarding`, { waitUntil: 'networkidle' })
 await page.getByRole('button', { name: /^Log in$/ }).first().click()
-await page.locator('input[placeholder^="nsec1"]').fill(nsec)
+// #325: Log in opens the backup chooser; the key form is the secondary link.
+await page.getByRole('button', { name: 'Use your backup key instead' }).click()
+await page.locator('input[aria-label="Backup key"]').fill(nsec)
 await page.locator('input[placeholder="Choose a passphrase"]').fill('correct horse battery')
 await page.locator('input[placeholder="Confirm passphrase"]').fill('correct horse battery')
-await page.getByRole('button', { name: /^Add key and unlock$/ }).last().click()
+await page.getByRole('button', { name: /^Log in$/ }).last().click()
 for (let i = 0; i < 30 && page.url().includes('onboarding'); i++) await page.waitForTimeout(1000)
 
 let tokens: string[] = []
