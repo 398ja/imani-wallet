@@ -428,7 +428,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
       <Header profile={profile} merchant={trading} terminal={terminal.actor !== null} onLogout={onLogout} />
       {/* Coupons the trusted-mint gate is holding, so a wait is never mistaken for a loss (#133). */}
       <HeldCouponsNotice pubkey={pubkey} className="mt-2" />
-      {/* #332: a quiet link for an account with no handle. Never a gate: money screens stay open. */}
+      {/* #332, #339: a quiet, dismissible link for an account with no handle, on Home only. Never a gate. */}
       <FinishProfilePrompt profile={profile} />
       <Routes>
         {/*
