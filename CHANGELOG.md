@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Logout across tabs, and one wallet per device (#335, #330). App only. No migrations, no new
+configuration.
+
+### Fixed
+
+- **A logout in one tab no longer wipes while another tab is receiving or sending** (Closes #335,
+  item 4). Logout takes an exclusive Web Lock and pauses every other tab over a BroadcastChannel
+  (`logoutTabs.ts`): each closes its receive and send gates, stops its writers, waits (bounded) for
+  what it has running, and answers. A tab that is busy, does not answer, opened since, or cannot
+  be reached at all (no BroadcastChannel) blocks the logout with plain words ("This wallet is open
+  in another tab…"). Nothing is erased. The paused tabs resume on a refusal and reload once the
+  logout is done. A paused tab whose logging-out tab vanished resumes if the key is still there.
+- **Sends are counted, and refused once logout starts** (#335, item 4). A new spend gate beside the
+  receive gate (`beginSpend`/`withSpend`) wraps every send and payment (`pay.ts` `deliver`). Logout
+  closes it, waits for a send already running within the same 20 s bound, and blocks if one is
+  still running.
+- **A stop that throws mid-logout no longer leaves receiving paused until a reload** (#335, item 2).
+  Everything after the confirmation runs in a `try/finally` that re-opens the receive and send
+  gates, restarts each writer on its own (one that throws does not stop the others) and resumes
+  the other tabs.
+- **A spent cashback-stash token is dropped, not shown as "waiting" for ever** (#335, item 1). The
+  redeem screen's replay and the restore at login ask the token's (trusted) mint (NUT-07, the same
+  `tokenState` the record cleanup uses). Only a SPENT answer drops a token: unspent, pending,
+  unknown, a mint that is down or untrusted, or a throw all keep it.
+- **Taking a terminal out of service checks the cashback stash first** (#335, item 3). An
+  unconfirmed stash now shows the plain backup-blocked words before anything is revoked, instead
+  of "Could not hand back this terminal's authority" after the revoke.
+- **Logging in to another account no longer orphans the wallet already on the device** (Closes
+  #330). Every writer of the single key slot (opening a backup, pasting a key, registering) asks
+  `refuseIfAnotherWallet` first. While the slot holds a different account's key, it is refused
+  with "This device already holds another wallet. Open it and log out first…", and the device is
+  left exactly as it was. Logout, with its full backed-up check, is the only way past. The same
+  account logging in again is still allowed. Terminal setup already refused a taken slot.
+
 ## [0.33.0] - 2026-10-19
 
 Logout no longer loses cashback. It waits for cashback, gift links and "Swap back to sats" that

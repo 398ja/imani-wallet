@@ -430,6 +430,30 @@ describe('the cashback commit is gated on where the value is', () => {
     expect(pendingCashbackCount()).toBe(1)
   })
 
+  /**
+   * #335 item 1: a stashed token the mint says is SPENT (banked before an
+   * offline logout whose record clear never landed) is dropped, not shown as
+   * "waiting" for ever. Only SPENT drops it: every other answer keeps it.
+   */
+  it('drops a stashed token only when the mint says it is SPENT', async () => {
+    const spent = buildPlainToken('https://rogue-mint.example.test', 'sat', [4])
+    const kept = ['UNSPENT', 'PENDING', 'UNKNOWN', 'throws'].map((_, i) =>
+      buildPlainToken('https://rogue-mint.example.test', 'sat', [64 << i]),
+    )
+    store.set('imani:cashback:pending', JSON.stringify([spent, ...kept]))
+    stubFetch({ config: trustedConfig })
+    const answers = new Map<string, string>([[spent, 'SPENT'], [kept[0], 'UNSPENT'], [kept[1], 'PENDING'], [kept[2], 'UNKNOWN']])
+    const state = async (t: string) => {
+      const a = answers.get(t)
+      if (!a) throw new Error('mint down')
+      return a as 'SPENT'
+    }
+
+    expect(await replayPendingCashback(state)).toBe(false)
+    expect(redeemed).toEqual([])
+    expect(JSON.parse(store.get('imani:cashback:pending')!)).toEqual(kept)
+  })
+
   /** The replay path is gated too: a stashed rogue token is never swapped on a later visit. */
   it('does not swap a stashed token at an untrusted mint on replay', async () => {
     const token = buildPlainToken('https://rogue-mint.example.test')

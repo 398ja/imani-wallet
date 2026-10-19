@@ -20,7 +20,7 @@ const stashPendingBackup = vi.fn()
 vi.mock('../config', () => ({
   gatewayConfig: async () => ({ nip05Domain: 'imani.local', blossomServerUrl: null }),
 }))
-vi.mock('../nap', () => ({ keyStore: { save } }))
+vi.mock('../nap', () => ({ keyStore: { save, hasKey: async () => false } }))
 vi.mock('../nip98', () => ({ signedFetch }))
 vi.mock('../relay', () => ({ RELAY_URL: 'ws://localhost:27778', publish }))
 vi.mock('../onboardingHandoff', () => ({ stashPendingBackup }))

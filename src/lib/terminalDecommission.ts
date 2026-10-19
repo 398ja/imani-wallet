@@ -3,6 +3,7 @@ import { revokeCredential, type CredentialMintApi } from './credentialRevocation
 import { logout } from './logout'
 import { confirmBackups, type BackupCheck } from './voucherRecords'
 import { moneyInFlight } from './inFlightMoney'
+import { confirmStashBackup, type StashCheck } from './cashbackStash'
 import { credentialFromToken } from './terminalLogin'
 
 /**
@@ -107,6 +108,8 @@ export async function decommissionTerminal(
   reload: () => void = () => window.location.replace('/'),
   /** Injected for tests. The same read-back check logout makes. */
   checkBackups: (pubkey: string) => Promise<BackupCheck> = confirmBackups,
+  /** Injected for tests. The same cashback stash check logout makes (#335). */
+  checkStash: (pubkey: string) => Promise<StashCheck> = confirmStashBackup,
 ): Promise<DecommissionOutcome> {
   const stored = storedTerminal()
 
@@ -129,8 +132,21 @@ export async function decommissionTerminal(
   const backups = await checkBackups(pubkey).catch(
     (): BackupCheck => ({ ok: false, reason: 'store-unreadable', unconfirmed: [], fingerprint: '' }),
   )
-  const inFlight = moneyInFlight(pubkey)
-  if (!backups.ok || inFlight.sends > 0 || inFlight.swaps > 0) {
+  // And the cashback stash (#335): logout refuses an unconfirmed one, and
+  // finding that out only after the revoke showed the "could not hand back"
+  // words for what is really a backup that is not confirmed.
+  const stash = backups.ok
+    ? await checkStash(pubkey).catch(
+        (): StashCheck => ({ ok: false, reason: 'store-unreadable', count: 0, fingerprint: '' }),
+      )
+    : null
+  let inFlight: { sends: number; swaps: number }
+  try {
+    inFlight = moneyInFlight(pubkey)
+  } catch {
+    inFlight = { sends: 1, swaps: 0 }
+  }
+  if (!backups.ok || !stash?.ok || inFlight.sends > 0 || inFlight.swaps > 0) {
     return {
       done: false,
       reason: DECOMMISSION_REFUSAL.VOUCHERS_UNCONFIRMED,

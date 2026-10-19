@@ -26,7 +26,7 @@ const save = vi.fn(async () => undefined)
 
 vi.mock('../config', () => ({ gatewayConfig: async () => ({ nip05Domain: 'imani.local' }) }))
 vi.mock('../nip98', () => ({ signedFetch }))
-vi.mock('../nap', () => ({ keyStore: { save } }))
+vi.mock('../nap', () => ({ keyStore: { save, hasKey: async () => false } }))
 vi.mock('../onboardingHandoff', () => ({ stashPendingBackup: vi.fn() }))
 vi.mock('../relay', () => ({ RELAY_URL: 'ws://localhost:27778', publish, allEvents: async () => [] }))
 

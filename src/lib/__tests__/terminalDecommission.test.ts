@@ -122,6 +122,47 @@ describe('vouchers not confirmed as backed up (owner rule 2026-10-18, review of 
   })
 })
 
+describe('the cashback stash (#335 item 3)', () => {
+  it('an unconfirmed stash refuses BEFORE revoking, with the backup words, not "could not hand back"', async () => {
+    enrol()
+    const mint = api()
+    const checkStash = vi.fn(async () => ({ ok: false as const, reason: 'unconfirmed' as const, count: 1, fingerprint: 'x' }))
+
+    const out = await decommissionTerminal(mint, PUBKEY, () => {}, undefined, checkStash)
+
+    expect(checkStash).toHaveBeenCalledWith(PUBKEY)
+    expect(out).toMatchObject({
+      done: false,
+      reason: DECOMMISSION_REFUSAL.VOUCHERS_UNCONFIRMED,
+      message: DECOMMISSION_COPY.vouchersUnconfirmed,
+    })
+    expect(mint.receive).not.toHaveBeenCalled()
+    expect(mint.validateToken).not.toHaveBeenCalled()
+    expect(erased).toEqual([])
+  })
+
+  it('a stash check that throws refuses too, before revoking', async () => {
+    enrol()
+    const mint = api()
+    const out = await decommissionTerminal(mint, PUBKEY, () => {}, undefined, async () => {
+      throw new Error('boom')
+    })
+    expect(out).toMatchObject({ done: false, reason: DECOMMISSION_REFUSAL.VOUCHERS_UNCONFIRMED })
+    expect(mint.receive).not.toHaveBeenCalled()
+  })
+
+  it('a confirmed stash goes on to revoke', async () => {
+    enrol()
+    const mint = api()
+    const out = await decommissionTerminal(mint, PUBKEY, () => {}, undefined, async () => ({
+      ok: true as const,
+      count: 0,
+      fingerprint: '',
+    }))
+    expect(out.done).toBe(true)
+  })
+})
+
 describe('the order', () => {
   it('revokes before erasing anything', async () => {
     /**

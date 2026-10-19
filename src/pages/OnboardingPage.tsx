@@ -8,6 +8,7 @@ import { BackupLogin } from '../components/BackupLogin'
 import { FinishProfileStep } from '../components/FinishProfileStep'
 import { gatewayConfig } from '../lib/config'
 import { toPrivkeyHex, keyStore, hasStoredKey } from '../lib/nap'
+import { refuseIfAnotherWallet } from '../lib/keySlotGuard'
 import { claimProfile, ProfileMissingError, rememberHandle, requireProfile } from '../lib/profileGate'
 import { HandleTakenError, isHandleAvailable, register } from '../lib/registration'
 import { refreshProfile } from '../lib/profile'
@@ -576,6 +577,8 @@ function KeyForm({
 
   // Only once the account is known to have a profile is the key worth keeping.
   const install = async (hex: string) => {
+    // Another account's key in the slot would be overwritten, orphaning its vouchers (#330).
+    await refuseIfAnotherWallet(hex)
     await keyStore.save(hex, passphrase)
     await onUnlock(hex)
     // No `saveProfile(emptyProfile(...))` here. Writing a blank record first
@@ -591,6 +594,8 @@ function KeyForm({
     try {
       // Throws a readable message on a mistyped key, before anything is stored.
       const hex = toPrivkeyHex(key)
+      // Before the profile is even asked for: nothing is written for a refused key (#330).
+      await refuseIfAnotherWallet(hex)
       try {
         rememberHandle(hex, await requireProfile(hex))
       } catch (e) {
