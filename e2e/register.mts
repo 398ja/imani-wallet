@@ -16,7 +16,7 @@ export async function registerMerchant(p: Page, base: string): Promise<string> {
   await p.goto(`${base}/onboarding`, { waitUntil: 'networkidle' })
   await p.getByRole('button', { name: /^Register$/i }).first().click()
   await p.waitForTimeout(400)
-  await p.locator('input[placeholder="your-handle"]').fill(handle)
+  await p.locator('input[placeholder="your_handle"]').fill(handle)
   await p.locator('input[placeholder="Passphrase"]').fill(TEST_PASSPHRASE)
   await p.locator('input[placeholder="Confirm passphrase"]').fill(TEST_PASSPHRASE)
   await p.getByText('I am a merchant').click()
@@ -54,7 +54,7 @@ export async function registerCustomer(p: Page, base: string): Promise<string> {
   await p.goto(`${base}/onboarding`, { waitUntil: 'networkidle' })
   await p.getByRole('button', { name: /^Register$/i }).first().click()
   await p.waitForTimeout(400)
-  await p.locator('input[placeholder="your-handle"]').fill(handle)
+  await p.locator('input[placeholder="your_handle"]').fill(handle)
   await p.locator('input[placeholder="Passphrase"]').fill(TEST_PASSPHRASE)
   await p.locator('input[placeholder="Confirm passphrase"]').fill(TEST_PASSPHRASE)
   // No "I am a merchant": the customer path skips the stall steps entirely
