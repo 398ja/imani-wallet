@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-10-20
+
+Logging back in while the wallet is open in another tab no longer hangs on "Opening wallet…"
+(#352, #353). App only. No migrations, no new configuration.
+
+### Fixed
+
+- **Logging in again no longer sticks on "Opening wallet…" while another tab is open** (Closes
+  #352). After a logout in one tab, the other wallet tabs kept the stored wallet open, so the next
+  login in the first tab waited for them forever with nothing on screen. Now the other tab finishes
+  any receive or send it has running, stops, and lets go of the wallet ("This wallet changed in
+  another tab", with Reload), and the login carries on. If another tab still cannot let go, the
+  screen says so in plain words ("Close your other wallet tabs to continue", with Try again) and
+  carries on by itself once they close, and a slow open stops after a time limit with an
+  explanation instead of spinning. Nothing is logged out or erased from any of these screens.
+  While vouchers are restored after login the screen shows "Bringing back your vouchers…".
+
+### Tests
+
+- The end-to-end tests use the new handle placeholder `your_handle` (#350, selectors only).
+
 ## [0.34.0] - 2026-10-20
 
 Logout now works safely across tabs: it pauses the other tabs, refuses new sends once it starts,
