@@ -783,20 +783,46 @@ export function lockedCanonicalBytes(dataHex: string, nonce: string, rows: unkno
  * picks. Dropping the Java face-value clamp is what that buys.
  *
  * So a voucher whose bytes only became canonical BECAUSE we normalised them is
- * refused. Mirrors `VoucherCanonicalBytes.hasCanonicalNumericTags` on the Java
- * side, and the two must stay in step. cashu-voucher#48.
+ * refused. Mirrors `VoucherCanonicalBytes.hasVerifiableNumericTags` on the Java
+ * side (the verify-time rule, with the one legacy `issuance_ratio` spelling of
+ * cashu-voucher#59), and the two must stay in step. cashu-voucher#48.
  */
 export function hasCanonicalNumericTags(rows: unknown[][]): boolean {
   const NUMERIC = ['face_value', 'expires_at', 'face_decimals', 'issuance_ratio']
   return rows.every((row) => {
-    if (!NUMERIC.includes(String(row[0]))) return true
+    const key = String(row[0])
+    if (!NUMERIC.includes(key)) return true
     return row.slice(1).every((value) => {
       const wire = String(value)
       const parsed = Number(wire)
       if (!Number.isFinite(parsed)) return false
-      return appendNumber(parsed, false) === wire
+      const canonical = appendNumber(parsed, false)
+      if (canonical === wire) return true
+      // cashu-voucher#59: the one legacy spelling, for issuance_ratio only.
+      return key === 'issuance_ratio' && wire === legacyWholeRatioSpelling(canonical)
     })
   })
+}
+
+/**
+ * What cashu-lib up to 0.30.6 wrote for a whole-number ratio: Java's
+ * `Double.toString` of it, so `"50.0"` for 50 and `"1.0E7"` for ten million.
+ * Undefined for a fractional canonical form, which has no legacy spelling.
+ *
+ * Those vouchers are live and their proof secret cannot be rewritten, and every
+ * reader of the ratio parses it as a number, so `"50"` and `"50.0"` mean 50 to all
+ * of them and hash to the same signed bytes. That is why this one spelling is
+ * accepted for `issuance_ratio` and nothing else is: `"50.00"`, `"5e1"` and the
+ * like were never written by an issuer, and the integral tags are read with
+ * `Long.parseLong` in Java, where a decimal point means no value at all (#48).
+ * Mirrors `VoucherCanonicalBytes.hasVerifiableNumericTags`.
+ */
+function legacyWholeRatioSpelling(canonical: string): string | undefined {
+  if (!/^-?\d+$/.test(canonical)) return undefined
+  const n = Number(canonical)
+  // Java's Double.toString for an integral double: plain with ".0" on [1e-3, 1e7),
+  // otherwise E notation, which javaDoubleToString already reproduces.
+  return Math.abs(n) < 1e7 ? `${canonical}.0` : javaDoubleToString(n)
 }
 
 /** Whether `key` of a decoded CBOR map arrived as a float, integral or not (#194). */
