@@ -9,8 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Logout across tabs, and one wallet per device (#335, #330). App only. No migrations, no new
-configuration.
+## [0.34.0] - 2026-10-20
+
+Logout now works safely across tabs: it pauses the other tabs, refuses new sends once it starts,
+and a device holds one wallet at a time (#335, #330, #340). Handles are trimmed and lowercased as
+you type, and a bad handle gets a plain field error (#342, #344). An account with no handle can
+finish its profile from the No-handle card (#332, #338), and the reminder to do so shows on Home
+only and can be hidden (#339, #341). The merchant dashboard shows Today, 7 days and 30 days, each
+counted from local midnight (#345, #346). App only. No migrations, no new configuration.
 
 ### Changed
 
