@@ -3,6 +3,8 @@ import { hexToBytes } from '@noble/hashes/utils'
 
 import { gatewayConfig } from './config'
 import { claimHandle } from './registration'
+import { normaliseHandle } from './validate'
+import type { RequestSigner } from './nip98'
 import { buildProfileEvent, emptyProfile, loadProfile, saveProfile, type Profile } from './profile'
 import { allEvents, publish } from './relay'
 import { createWalletSigner } from './signer'
@@ -226,8 +228,21 @@ export function rememberHandle(privkeyHex: string, nip05: string): void {
  *        becomes the display name, as a customer registration does
  */
 export async function claimProfile(privkeyHex: string, handle: string, base?: Profile | null): Promise<Profile> {
-  const pubkey = getPublicKey(hexToBytes(privkeyHex))
-  const signer = createWalletSigner(privkeyHex)
+  return claimProfileWith(createWalletSigner(privkeyHex), handle, base)
+}
+
+/**
+ * `claimProfile` for a key that is already unlocked (#332): the logged-in
+ * account finishing its profile from its own profile card. Same claim, same
+ * order, same idempotent retry; only where the signer comes from differs.
+ */
+export async function claimProfileWith(
+  signer: RequestSigner & { readonly pubkey: string },
+  typed: string,
+  base?: Profile | null,
+): Promise<Profile> {
+  const handle = normaliseHandle(typed)
+  const pubkey = signer.pubkey
   const { nip05Domain } = await gatewayConfig()
 
   await claimHandle(handle, pubkey, signer)

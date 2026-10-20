@@ -23,6 +23,7 @@ import { MerchantFieldset } from '../components/MerchantFieldset'
 import { ParkedClaimBanner } from '../components/ParkedClaimBanner'
 import { peekPendingClaim } from '../lib/pendingClaim'
 import {
+  normaliseHandle,
   passphraseStrength,
   validateConfirmation,
   validateHandle,
@@ -416,9 +417,9 @@ function CreateForm({
         <div className="flex items-center gap-2">
           <span className="text-mono-400">@</span>
           <Input
-            placeholder="your-handle"
+            placeholder="your_handle"
             value={handle}
-            onChange={(e) => setHandle(e.target.value.toLowerCase())}
+            onChange={(e) => setHandle(normaliseHandle(e.target.value))}
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
@@ -435,7 +436,7 @@ function CreateForm({
           ) : availability === 'free' ? (
             <span className="text-green-700 dark:text-green-500">Looks available.</span>
           ) : domain ? (
-            `You will be @${handle || 'your-handle'}`
+            `You will be @${handle || 'your_handle'}`
           ) : (
             ' '
           )}

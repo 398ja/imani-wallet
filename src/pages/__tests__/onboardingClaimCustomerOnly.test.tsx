@@ -47,7 +47,7 @@ describe('onboarding with a parked claim is customer-only', () => {
     )
 
   const fill = () => {
-    fireEvent.change(screen.getByPlaceholderText('your-handle'), { target: { value: 'alice' } })
+    fireEvent.change(screen.getByPlaceholderText('your_handle'), { target: { value: 'alice' } })
     fireEvent.change(screen.getByPlaceholderText('Passphrase'), { target: { value: 'correct horse battery staple' } })
     fireEvent.change(screen.getByPlaceholderText('Confirm passphrase'), { target: { value: 'correct horse battery staple' } })
   }
@@ -100,7 +100,7 @@ describe('onboarding with a parked claim is customer-only', () => {
     expect(screen.getByRole('button', { name: 'Continue' })).toBeTruthy()
     // A second tab parks a claim; the next render and the submit must refuse merchant.
     stashPendingClaim('ref-late', 'k1')
-    fireEvent.change(screen.getByPlaceholderText('your-handle'), { target: { value: 'alicia' } })
+    fireEvent.change(screen.getByPlaceholderText('your_handle'), { target: { value: 'alicia' } })
     expect(screen.queryByText('I am a merchant')).toBeNull()
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Create account' }))

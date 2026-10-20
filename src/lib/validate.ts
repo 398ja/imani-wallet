@@ -19,6 +19,16 @@
 const HANDLE = /^[a-z0-9_]+$/
 const HANDLE_MAX = 64
 
+/**
+ * The one form of a handle that is sent, published or stored (#342): trimmed
+ * and lowercased. The form checks a trimmed value, so sending anything else
+ * (a keyboard's trailing space, autofill padding) failed the gateway's
+ * `^[a-z0-9_]+$` after the form had said yes.
+ */
+export function normaliseHandle(value: string): string {
+  return value.trim().toLowerCase()
+}
+
 export function validateHandle(value: string): string | undefined {
   const handle = value.trim()
   if (handle === '') return 'Choose a handle.'

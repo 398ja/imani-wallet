@@ -5,7 +5,7 @@ import { CheckCircle2, Loader2, XCircle } from 'lucide-react'
 import { NapProvider, useNapSession, useNapCallbacks } from '@imani/nap-react'
 import type { NapSession } from '@imani/nap-client-web'
 
-import { createSession, resetSession } from './lib/nap'
+import { createSession, getSigner, resetSession } from './lib/nap'
 import { openWallet, onWalletChanged } from './lib/wallet'
 import { startDmPoll } from './lib/dmPoll'
 import { startIncomingNotifications } from './lib/incomingNotifications'
@@ -82,6 +82,8 @@ import { SendLinkPage } from './pages/SendLinkPage'
 import { ReceivePage } from './pages/ReceivePage'
 import { CashbackCodeRetiredPage } from './pages/CashbackCodeRetiredPage'
 import { ProfilePage } from './pages/ProfilePage'
+import { FinishProfilePrompt } from './components/FinishProfilePrompt'
+import { claimProfileWith } from './lib/profileGate'
 import { SettingsPage } from './pages/SettingsPage'
 import { LedgerPage } from './pages/LedgerPage'
 import { SubscriptionPage } from './pages/SubscriptionPage'
@@ -431,6 +433,8 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
       <Header profile={profile} merchant={trading} terminal={terminal.actor !== null} onLogout={onLogout} />
       {/* Coupons the trusted-mint gate is holding, so a wait is never mistaken for a loss (#133). */}
       <HeldCouponsNotice pubkey={pubkey} className="mt-2" />
+      {/* #332, #339: a quiet, dismissible link for an account with no handle, on Home only. Never a gate. */}
+      <FinishProfilePrompt profile={profile} />
       <Routes>
         {/*
           The role split. A merchant gets a different home and the two money
@@ -580,7 +584,19 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           path="/transaction/:id"
           element={<TransactionPage pubkey={pubkey} trading={trading} />}
         />
-        <Route path="/profile" element={<ProfilePage profile={profile} merchant={merchant} />} />
+        <Route
+          path="/profile"
+          element={
+            <ProfilePage
+              profile={profile}
+              merchant={merchant}
+              // #332: the logged-in key finishes its own profile. The same
+              // idempotent claim as login's Finish your profile (#327), signed
+              // by the session's signer; the card updates from state, no reload.
+              onFinishProfile={async (handle) => setProfile(await claimProfileWith(getSigner(), handle, profile))}
+            />
+          }
+        />
         {/* Somebody ELSE's profile. `/profile` with no key is still your own —
             the two are one route family on purpose, because "whose profile am I
             looking at" is the only difference between them.
