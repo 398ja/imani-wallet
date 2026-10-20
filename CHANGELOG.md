@@ -51,6 +51,13 @@ configuration.
     so its receiving and sending stayed off until a reload. The fallback now survives.
   - "Finish your profile" asks whether another wallet is on the device before the handle is
     claimed, not only after it.
+- **Second check of #340.** Two more fixes:
+  - A tab that logged in while logout was ending the session at the gateway (a call that can
+    take any time) was never asked about. Logout now asks the other tabs once more just before
+    the key is cleared, and refuses with nothing erased.
+  - A screen torn down while paused kept its fallback (above), but that fallback could later
+    reopen receiving and sending while a newer logout had paused the tab again. Only the latest
+    pause may now resume the tab on its own.
 
 ## [0.33.0] - 2026-10-19
 
