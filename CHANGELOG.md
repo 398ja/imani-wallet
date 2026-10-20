@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A handle with a stray space no longer fails at "Create account" with "Request validation
+  failed"** (Closes #342). The form checked a trimmed handle but sent the untrimmed one, so a
+  keyboard's trailing space or autofill padding passed the check and was rejected by the gateway,
+  two screens later on a merchant signup. Handles are now trimmed and lowercased as they are typed
+  (onboarding and Finish your profile), and again inside `register`, `claimHandle`,
+  `claimProfileWith` and the availability probe, so every caller sends the same string the form
+  checked. Owner rule: a handle is always stored lowercase, so the profile cache (`saveProfile`,
+  backup import via `sanitiseProfile`, kind-0 reads via `mergeKind0`) and the published kind-0
+  (`buildProfileEvent`) lowercase and trim `nip05` too. A 400 VALIDATION_001 from the claim now
+  shows its first field error in plain words ("That handle can only use lowercase letters,
+  numbers and underscores. Check for spaces and try again.") instead of the bare top-level
+  message. The handle placeholder is `your_handle` (a hyphen is not allowed).
+
 - **The Finish your profile reminder shows on Home only and can be hidden** (Closes #339). The
   quiet reminder from #332 no longer appears on Pay, Send, Receive, coupons or any other screen.
   A close button ("Hide this reminder", 44px) hides it, and the choice is remembered per account

@@ -80,7 +80,19 @@ export function sanitiseProfile(profile: Profile): Profile {
     picture: imageUrl(profile.picture),
     banner: imageUrl(profile.banner),
     website: webUrl(profile.website),
+    nip05: lowerNip05(profile.nip05),
   }
+}
+
+/**
+ * Owner rule (#342): a handle is always stored and published lowercase and
+ * trimmed. The directory folds case anyway, so this loses nothing, and one form
+ * everywhere means a cached handle always equals the one that resolves.
+ */
+function lowerNip05(nip05: string | undefined): string | undefined {
+  if (typeof nip05 !== 'string') return nip05
+  const v = nip05.trim().toLowerCase()
+  return v === '' ? undefined : v
 }
 
 // Matches the `imani-wallet:` prefix dmPoll.ts already established. Keyed by
@@ -101,7 +113,8 @@ export function loadProfile(pubkey: string): Profile | null {
 }
 
 export function saveProfile(profile: Profile): void {
-  localStorage.setItem(key(profile.pubkey), JSON.stringify(profile))
+  const stored = profile.nip05 === undefined ? profile : { ...profile, nip05: lowerNip05(profile.nip05) }
+  localStorage.setItem(key(profile.pubkey), JSON.stringify(stored))
 }
 
 export function clearProfile(pubkey: string): void {
@@ -198,7 +211,7 @@ export function mergeKind0(profile: Profile, content: string, createdAt = 0): Pr
     picture: imageUrl(parsed.picture) ?? profile.picture,
     banner: imageUrl(parsed.banner) ?? profile.banner,
     website: webUrl(parsed.website) ?? profile.website,
-    nip05: str(parsed.nip05) ?? profile.nip05,
+    nip05: lowerNip05(str(parsed.nip05)) ?? profile.nip05,
     updatedAt: Date.now(),
     eventAt: createdAt > 0 ? createdAt : profile.eventAt,
   }
@@ -282,7 +295,7 @@ export function buildProfileEvent(profile: Profile): EventTemplate {
   put('picture', profile.picture)
   put('banner', profile.banner)
   put('website', profile.website)
-  put('nip05', profile.nip05)
+  put('nip05', lowerNip05(profile.nip05))
 
   return {
     kind: 0,
