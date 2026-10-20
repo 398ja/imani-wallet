@@ -107,6 +107,13 @@ import { listenForLogout } from './lib/logoutTabs'
 const OWNER_FULFILMENT = fulfilmentOf()
 const OWNER_REGISTER = registerRequestTerms()
 
+// Another tab's logout (or a newer version) asks for the store: stop the
+// writers and let a receive in flight land, then let go (lib/walletHandover).
+// For the life of the document, not of AuthedApp (review of #353): the store
+// and the poller outlive an unmount (a lapsed session shows the passphrase
+// dialog with AuthedApp gone), and a release then must still drain first.
+setBeforeWalletRelease(() => releaseWalletForOtherTab())
+
 /**
  * Everything behind the NAP session gate.
  *
@@ -131,12 +138,6 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
   const [restoring, setRestoring] = useState(false)
 
   useEffect(() => onWalletOpenStatus(setOpenStatus), [])
-  // Another tab's logout (or a newer version) asks for the store: stop the
-  // writers and let a receive in flight land, then let go (lib/walletHandover).
-  useEffect(() => {
-    setBeforeWalletRelease(() => releaseWalletForOtherTab())
-    return () => setBeforeWalletRelease(undefined)
-  }, [])
   const [profile, setProfile] = useState<Profile>(() => loadProfile(pubkey) ?? emptyProfile(pubkey))
   // Null is a real answer, not "not loaded yet": it means this key has published
   // no merchant record, which is what makes an account a customer. Seeded from
@@ -425,10 +426,15 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
   const logoutFlow = useLogout(pubkey, onLoggedOut)
   const onLogout = logoutFlow.logout
 
+  // Released first (review of #353): once this tab has let go of the store, the
+  // open refuses, and that refusal is not a fault to show as one.
+  if (openStatus === 'released') {
+    return <WalletOpening status={openStatus} onRetry={() => setOpenAttempt((n) => n + 1)} />
+  }
   if (error) return <Fatal title="Could not open the wallet" detail={error.message} />
   // Not a dead screen any more (#352): it spins, says why it waits, and offers
   // Try again; once another tab has taken the store, it asks for a reload.
-  if (!ready || openStatus === 'released') {
+  if (!ready) {
     return <WalletOpening status={openStatus} onRetry={() => setOpenAttempt((n) => n + 1)} />
   }
 

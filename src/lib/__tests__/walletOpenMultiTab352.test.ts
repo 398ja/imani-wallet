@@ -25,6 +25,7 @@ import {
   PENDING_DELETE_GRACE_MS,
   onWalletOpenStatus,
   openWallet,
+  resetReleaseForTests,
   retryOpenWallet,
   setBeforeWalletRelease,
   walletOpenStatus,
@@ -32,6 +33,7 @@ import {
   type WalletOpenStatus,
 } from '../wallet'
 import { releaseWalletForOtherTab } from '../walletHandover'
+import { beginReceive, beginSpend, gatesSealed, openReceives, openSpends } from '../receiveGate'
 
 vi.mock('../voucherRecords', () => ({
   publishVoucher: vi.fn().mockResolvedValue(undefined),
@@ -67,6 +69,9 @@ const cleanup: Array<() => unknown> = []
 afterEach(async () => {
   for (const fn of cleanup.splice(0)) await fn()
   setBeforeWalletRelease(undefined)
+  resetReleaseForTests()
+  openReceives()
+  openSpends()
   localStorage.clear()
 })
 
@@ -152,5 +157,63 @@ describe('opening the wallet with other tabs open (#352)', () => {
     expect(a).toBe(b)
     expect(await b.getAllVouchers()).toEqual([])
     cleanup.push(() => wipeWallet(userId))
+  })
+
+  // ── Review of #353 ────────────────────────────────────────────────────────
+
+  it('never lets go while a receive is still running, however long it takes: no coupon to a closed store', async () => {
+    const userId = crypto.randomUUID()
+    let landed = false
+    let drains = 0
+    setBeforeWalletRelease(() =>
+      releaseWalletForOtherTab(
+        {
+          stop: () => {},
+          // The first wait runs out with the redemption still past the mint swap.
+          drain: async () => {
+            drains += 1
+            if (drains === 1) return false
+            landed = true
+            return true
+          },
+        },
+        5,
+        5,
+      ),
+    )
+    await openWallet(userId)
+    expect(await within(deleteFromOtherTab(userId), 1000)).toBe('deleted')
+    expect(drains).toBe(2)
+    expect(landed).toBe(true)
+  })
+
+  it('once released, the gates stay shut for good and the store is never opened again', async () => {
+    const userId = crypto.randomUUID()
+    setBeforeWalletRelease(() => releaseWalletForOtherTab({ stop: () => {}, drain: async () => true }))
+    await openWallet(userId)
+    expect(await within(deleteFromOtherTab(userId), 1000)).toBe('deleted')
+    expect(walletOpenStatus()).toBe('released')
+
+    // A resume from a refused logout in another tab cannot reopen them.
+    openReceives()
+    openSpends()
+    expect(gatesSealed()).toBe(true)
+    expect(() => beginReceive()).toThrow()
+    expect(() => beginSpend()).toThrow()
+    // Nor can anything open the store again behind the other tab's delete.
+    await expect(openWallet(userId)).rejects.toThrow(/another tab/)
+    await expect(retryOpenWallet(userId)).rejects.toThrow(/another tab/)
+  })
+
+  it("an open of one account does not forget another account's held-up delete", async () => {
+    const a = crypto.randomUUID()
+    const b = crypto.randomUUID()
+    const old = await oldTab(a)
+    await wipeWallet(a)
+    expect(localStorage.getItem('imani-wallet:delete-pending')).toBe(a)
+    await openWallet(b)
+    expect(localStorage.getItem('imani-wallet:delete-pending')).toBe(a)
+    old.close()
+    cleanup.push(() => wipeWallet(b))
   })
 })

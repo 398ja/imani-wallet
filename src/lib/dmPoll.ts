@@ -21,6 +21,7 @@ import {
   type ArrivedVoucher,
 } from './arrivalToast'
 import { announceQueued, settleQueued, type QueuedBundleSeed } from './queuedToast'
+import { gatesSealed } from './receiveGate'
 import { announceRefusal } from './refusalToast'
 import { recordRefusal } from './refusedCoupons'
 import { heldCoupons, recordHeld, releaseHeld } from './heldCoupons'
@@ -1039,10 +1040,12 @@ function countingInFlight(adapter: RedemptionAdapter): RedemptionAdapter {
   return {
     ...adapter,
     async redeem(...args: Parameters<RedemptionAdapter['redeem']>) {
-      if (generation !== pollerGeneration) {
+      if (generation !== pollerGeneration || gatesSealed()) {
         // Before anything is swapped, so the delivery stays the sender's and
         // unprocessed: the next poller (this account after a refused logout,
-        // or the next login) offers it again.
+        // or the next login) offers it again. Sealed: this tab let go of the
+        // store for another tab (#353), and a poller restarted since (a resume
+        // from a refused logout elsewhere) must not swap into a closed store.
         throw Object.assign(new Error('redemption deferred: the poller was stopped'), {
           code: 'RECEIVE_DEFERRED',
         })
