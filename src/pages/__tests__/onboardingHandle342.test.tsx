@@ -61,7 +61,7 @@ function gateway(_path: string, _method: string, body: { username: string }) {
 }
 
 const sent = () => signedFetch.mock.calls.map((c) => (c[2] as { username: string }).username)
-const fetchMock = vi.fn(async (_url: string) => new Response('{}', { status: 404 }))
+const fetchMock = vi.fn<(url: string) => Promise<Response>>(async () => new Response('{}', { status: 404 }))
 
 beforeEach(() => {
   localStorage.clear()

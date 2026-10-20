@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { Alert, Button, Input } from './ui'
 import { gatewayConfig } from '../lib/config'
 import { HandleTakenError } from '../lib/registration'
-import { validateHandle } from '../lib/validate'
+import { normaliseHandle, validateHandle } from '../lib/validate'
 import { userMessage } from '../lib/userMessage'
 
 /**
@@ -86,11 +86,11 @@ export function FinishProfileStep({
               @
             </span>
             <Input
-              placeholder="your-handle"
+              placeholder="your_handle"
               aria-label="Handle"
               value={handle}
               onChange={(e) => {
-                setHandle(e.target.value.toLowerCase())
+                setHandle(normaliseHandle(e.target.value))
                 if (error) setError(null)
               }}
               autoCapitalize="none"
@@ -105,7 +105,7 @@ export function FinishProfileStep({
             {handleError ? (
               <span className="text-red-600 dark:text-red-400">{handleError}</span>
             ) : domain ? (
-              `You will be @${handle || 'your-handle'}`
+              `You will be @${handle || 'your_handle'}`
             ) : (
               ' '
             )}
