@@ -46,6 +46,12 @@ name and handle) before it asks for anything, then you type your passphrase. If
 you only ever saved the backup key itself, tap **Use your backup key instead** at
 the bottom, paste it, and choose a passphrase for this device.
 
+One wallet per device at a time. If this device already holds a different account,
+logging in with another one (by backup, by key, or by registering) is refused with
+**This device already holds another wallet**, and nothing is changed. Open that
+wallet and log out first: logging out checks that every voucher in it is backed up.
+Logging back in to the same account is always allowed.
+
 Every account needs a profile. If the account you open doesn't have one yet, the
 app asks you to pick a handle before it lets you in (your display name starts as
 that handle, and you can change it in Settings).
@@ -205,6 +211,14 @@ your key stays. Check your connection and tap **Try again**. Cashback that was w
 comes back when you log in again, and is added the next time you open the cashback
 screen. A cashback or gift link opened while logging out is not taken: it stays on
 its link for you to open again after you log in.
+
+If the wallet is open in more than one tab or window, logging out first pauses the
+others: they stop receiving and sending, finish what they were doing, and reload
+once the logout is done. If another tab is still busy, or can't be reached, logging
+out stays off and says so. Nothing is erased. Close the other tabs, or wait a
+moment, and try again. A send started while logging out is refused before anything
+moves. If logging out stops part way for any reason, receiving and sending carry on
+straight away, without a reload.
 
 ## Common questions
 

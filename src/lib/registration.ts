@@ -20,6 +20,7 @@ import {
   type MerchantProfile,
 } from './merchant'
 import { keyStore } from './nap'
+import { refuseIfAnotherWallet } from './keySlotGuard'
 import { createWalletSigner } from './signer'
 import { stashPendingBackup } from './onboardingHandoff'
 import { normaliseHandle } from './validate'
@@ -274,6 +275,9 @@ export async function register(
   const handle = normaliseHandle(typed)
   const minted = mintKey()
   const { privkeyHex, pubkey } = minted
+  // A new account always differs from the one in the slot (#330): refused
+  // before the handle is claimed, so nothing is written anywhere.
+  await refuseIfAnotherWallet(privkeyHex)
   const { nip05Domain } = await gatewayConfig()
 
   // A signer over the fresh key, independent of the session that does not exist

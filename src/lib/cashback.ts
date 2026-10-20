@@ -38,6 +38,8 @@ import { getSigner } from './nap'
 import { ForeignVoucherRefusedError, isServerForeignRefusal, refuseForeignIssuer, refuseForeignVouchers, sessionAccount } from './merchantVouchers'
 import { notifyWalletChanged, recordCashbackStatus } from './wallet'
 import { beginReceive, isReceiveDeferred } from './receiveGate'
+import { tokenState } from './giftLink'
+import type { StashTokenState } from './cashbackStash'
 
 /**
  * Whether to offer cashback at all on this deployment.
@@ -852,7 +854,10 @@ export function pendingCashbackCount(): number {
  * A token the trusted-mint gate still holds is kept, not swapped (#133 review).
  * Returns true when something was recovered, so the screen can say so.
  */
-export async function replayPendingCashback(): Promise<boolean> {
+export async function replayPendingCashback(
+  /** NUT-07 for one token, to drop a proven-spent one (#335). Default: ask its (trusted) mint. */
+  state: StashTokenState = (t) => tokenState(t),
+): Promise<boolean> {
   const tokens = readStash()
   if (tokens.length === 0) return false
   // Learn the trusted mints first: until they are known the gate defers, and a
@@ -868,13 +873,13 @@ export async function replayPendingCashback(): Promise<boolean> {
     throw e
   }
   try {
-    return await replayStash(tokens)
+    return await replayStash(tokens, state)
   } finally {
     endReceive()
   }
 }
 
-async function replayStash(tokens: string[]): Promise<boolean> {
+async function replayStash(tokens: string[], state: StashTokenState): Promise<boolean> {
   let recovered = false
   for (const token of tokens) {
     try {
@@ -882,13 +887,18 @@ async function replayStash(tokens: string[]): Promise<boolean> {
       if (outcome.kind === 'banked') {
         clearStashedToken(token)
         recovered = true
+        continue
       }
-      // Held or refused: kept. Nothing is ever dropped from the stash except by
-      // banking it, because the claim that produced it cannot be repeated.
+      // Held or refused: kept. The claim that produced it cannot be repeated.
     } catch {
-      // Keep it. The next visit tries again — this is the whole point of the
-      // stash, and dropping it here would be the loss it exists to prevent.
+      // Keep it, unless proven spent below. The next visit tries again.
     }
+    // A token whose proofs the mint says are SPENT holds nothing for anyone:
+    // it was banked already (before an offline logout, say, whose record clear
+    // never landed) and would otherwise sit here as phantom "waiting" cashback
+    // for ever (#335). Dropped ONLY on that answer: UNSPENT, PENDING, UNKNOWN,
+    // an untrusted mint or one that is down, a throw, all keep it.
+    if ((await state(token).catch(() => 'UNKNOWN' as const)) === 'SPENT') clearStashedToken(token)
   }
   return recovered
 }

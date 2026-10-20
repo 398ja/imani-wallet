@@ -27,6 +27,8 @@ import { LOGOUT_BLOCKED_COPY, LOGOUT_WARNING } from '../lib/logout'
 import { blockedMessage } from '../lib/logoutBlockedCopy'
 import { RECEIVE_PAUSED_MESSAGE } from '../lib/giftLinks'
 import { SWAP_BACK_PAUSED_MESSAGE } from '../lib/swapBack'
+import { SPEND_PAUSED_MESSAGE } from '../lib/receiveGate'
+import { OTHER_WALLET_COPY } from '../lib/keySlotGuard'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const SCANNED = ['src/pages', 'src/components']
@@ -108,6 +110,9 @@ describe('no protocol jargon in the UI (#324)', () => {
       LOGOUT_BLOCKED_COPY.cashbackUnconfirmed(2),
       RECEIVE_PAUSED_MESSAGE,
       SWAP_BACK_PAUSED_MESSAGE,
+      SPEND_PAUSED_MESSAGE,
+      OTHER_WALLET_COPY,
+      blockedMessage({ status: 'blocked', reason: 'other-tab', unconfirmed: [] }),
       ...(
         ['unconfirmed', 'locked', 'store-unreadable', 'changed', 'in-flight', 'cashback-unconfirmed'] as const
       ).map((reason) => blockedMessage({ status: 'blocked', reason, unconfirmed: [coupon], cashback: 1 })),
