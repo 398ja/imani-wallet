@@ -454,6 +454,17 @@ export async function attemptLogout(
     // protects them, so it happens either way.
   }
 
+  // And once more, after the POST and before the first local erase (second
+  // check of #340, F). `session.logout()` awaits POST /auth/logout with no
+  // timeout and only broadcasts nap's `logout` once it answers, so a tab that
+  // logged in during that POST is fully live and was never asked. Refusing here
+  // still erases nothing and keeps the key: the sessions are ended, so the
+  // tabs ask for the passphrase again, and the wallet is all still here.
+  if (!(await others.stillPaused().catch(() => false))) {
+    wiping = false
+    return { status: 'blocked', reason: 'other-tab', unconfirmed: [] }
+  }
+
   // The point of the whole operation. session.logout() zeroes the key held in
   // memory, but the encrypted copy at rest outlives it — without this the
   // passphrase would still unlock the wallet after "logging out", which is the

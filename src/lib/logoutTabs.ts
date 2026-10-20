@@ -280,6 +280,16 @@ async function defaultDrain(timeoutMs: number): Promise<boolean> {
 }
 
 /**
+ * The latest pause in this document, across every listener it has had. A stopped
+ * listener keeps its orphan fallback (review of #340, C), and the authed tree can
+ * remount and be paused again by a NEWER logout before that fallback comes due.
+ * The gates and writers are per document, so the stale fallback must not resume
+ * them under the newer logout (second check of #340, E): only the listener that
+ * paused last may resume on its own.
+ */
+let latestPause = 0
+
+/**
  * Answer other tabs' logouts, for the life of this tab's session. Returns the
  * stop function. Never throws.
  */
@@ -310,6 +320,7 @@ export function listenForLogout(pubkey: string, deps: ListenDeps = {}): () => vo
   const drainMs = deps.drainMs ?? TAB_DRAIN_MS
 
   let pausedFor: string | null = null
+  let myPause = 0
   let orphanTimer: ReturnType<typeof setTimeout> | undefined
 
   const safely = (fn: () => void) => {
@@ -330,7 +341,11 @@ export function listenForLogout(pubkey: string, deps: ListenDeps = {}): () => vo
   }
   const settleOrphan = async (run: string) => {
     if (pausedFor !== run) return
-    if (await keyStillHere()) doResume()
+    const here = await keyStillHere()
+    // After the await: a newer pause, by this listener or a later one, owns the
+    // document now, and resuming or reloading under it is that logout's call.
+    if (pausedFor !== run || myPause !== latestPause) return
+    if (here) doResume()
     else reload()
   }
 
@@ -348,6 +363,7 @@ export function listenForLogout(pubkey: string, deps: ListenDeps = {}): () => vo
       reply({ t: 'pong', run: m.run, from: tabId, paused: pausedFor === m.run })
     } else if (m.t === 'pause') {
       pausedFor = m.run
+      myPause = ++latestPause
       safely(pause)
       void drain(drainMs)
         .catch(() => false)
