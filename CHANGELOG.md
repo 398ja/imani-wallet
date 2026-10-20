@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+> **Release gate (owner decision D10, cashu-mint#540):** do not release or deploy until the mint's
+> redemption cap is in ENFORCE mode. Ship with cashu-voucher#59, whose Java verifier this mirrors.
+
+### Fixed
+
+- **Locked coupons with a whole-number issuance ratio verify again** (cashu-voucher#59). Coupons
+  issued with a ratio such as 50 carry `issuance_ratio` as `"50.0"` (what cashu-lib up to 0.30.6
+  wrote), and since cashu-voucher#48 the wallet refused that spelling as non-canonical, although the
+  issuer's signature over it is good. The wallet now accepts exactly that spelling for
+  `issuance_ratio` only (Java `Double.toString`: `"50.0"`, `"1.0E7"`), as the Java verifier does.
+  Every other spelling, and `face_value`, `expires_at` and `face_decimals`, keep the strict rule.
+  Replays cashu-voucher's golden vectors for ratios 2, 50 and 700.
+
 ## [0.35.0] - 2026-10-20
 
 Logging back in while the wallet is open in another tab no longer hangs on "Opening wallet…"
