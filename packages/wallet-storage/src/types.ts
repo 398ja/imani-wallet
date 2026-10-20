@@ -209,4 +209,21 @@ export interface WalletStorageConfig {
    * The wallet uses it to store `expires_at` as epoch seconds (#157).
    */
   normaliseVoucher?: (row: VoucherRow) => VoucherRow;
+  /**
+   * Another connection wants this database gone or upgraded (`versionchange`:
+   * another tab's `deleteDatabase` on logout, or a newer schema). Only for a DB
+   * this instance opened itself (`userId`), never a `db` it was handed.
+   *
+   * The connection is ALWAYS closed afterwards: one that ignores the event
+   * keeps the other tab's delete blocked, and every later open of the same DB
+   * queues behind that delete with no event at all (#352). Awaited first, so
+   * the caller can stop its writers and let a write already in flight land
+   * before the handle goes. A rejection is ignored; the close still happens.
+   */
+  onVersionChange?: () => Promise<void> | void;
+  /**
+   * The open is waiting on other connections that have not closed (`blocked`).
+   * The open carries on by itself once they do; this is for telling the user.
+   */
+  onBlocked?: () => void;
 }
