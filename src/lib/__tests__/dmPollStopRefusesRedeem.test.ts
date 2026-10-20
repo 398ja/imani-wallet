@@ -99,3 +99,22 @@ describe('a stopped poller cannot swap (second check of #326)', () => {
     expect(redeem).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('a tab that let go of the store for another tab (review of #353)', () => {
+  it('a poller started again afterwards (a resume from a refused logout) swaps nothing', async () => {
+    const gate = await import('../receiveGate')
+    try {
+      gate.sealGates()
+      startDmPoll(PK)
+      const err = (await captured.redemptionAdapter!.redeem('cashuAlate', { metadata: {} }).catch((e: unknown) => e)) as {
+        code?: string
+      }
+      expect(err.code).toBe('RECEIVE_DEFERRED')
+      expect(redeem).not.toHaveBeenCalled()
+    } finally {
+      gate.unsealGatesForTests()
+      gate.openReceives()
+      gate.openSpends()
+    }
+  })
+})

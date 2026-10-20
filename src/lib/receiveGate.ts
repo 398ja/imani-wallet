@@ -57,7 +57,32 @@ export function closeReceives(): void {
   open = false
 }
 
+/**
+ * Shut both gates for the rest of this document (review of #353). Set when this
+ * tab lets go of the store for another tab: nothing may receive or spend into a
+ * store that is closed or being deleted, and no later resume (a refused logout
+ * elsewhere, a paused tab's orphan timer) may open them again. Only a reload
+ * clears it.
+ */
+let sealed = false
+
+export function sealGates(): void {
+  sealed = true
+  open = false
+  spendsOpen = false
+}
+
+export function gatesSealed(): boolean {
+  return sealed
+}
+
+/** Tests only: a fresh document. */
+export function unsealGatesForTests(): void {
+  sealed = false
+}
+
 export function openReceives(): void {
+  if (sealed) return
   open = true
 }
 
@@ -150,6 +175,7 @@ export function closeSpends(): void {
 }
 
 export function openSpends(): void {
+  if (sealed) return
   spendsOpen = true
 }
 

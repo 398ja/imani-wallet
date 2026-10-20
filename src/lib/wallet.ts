@@ -5,6 +5,7 @@ import { burnIfSelfIssued } from './burn'
 import { mayFileAttestation } from './cashAttestation'
 import { recheckCashbackRow } from './cashbackValidation'
 import { migrateStoredExpiries, normaliseExpiry } from './expiryStorage'
+import { sealGates, unsealGatesForTests } from './receiveGate'
 import { toTransaction, type WalletTransaction } from './transactions'
 import { publishTx } from './txRecords'
 import { publishVoucher, tombstoneVoucher } from './voucherRecords'
@@ -73,9 +74,26 @@ export function setBeforeWalletRelease(fn: (() => Promise<void>) | undefined): v
  * with `identityChange`, so the switch really does re-run this.
  */
 export function openWallet(userId: string): Promise<WalletStorage> {
+  if (status === 'released') return Promise.reject(releasedError())
   if (storage && currentUserId === userId) return Promise.resolve(storage)
   if (opening && currentUserId === userId) return opening
   return startOpen(userId)
+}
+
+/**
+ * Once this tab has let go of the store for another tab, it never opens it
+ * again (review of #353). The other tab is deleting or upgrading it: a fresh
+ * open here would queue behind that, then come up on an EMPTY store and put the
+ * app back on screen with its receiving stopped. Only a reload starts over.
+ */
+function releasedError(): Error {
+  return new Error('This wallet changed in another tab. Reload to see it as it is now.')
+}
+
+/** Tests only: a fresh document, as a reload gives the app. */
+export function resetReleaseForTests(): void {
+  status = 'opening'
+  unsealGatesForTests()
 }
 
 /**
@@ -86,6 +104,7 @@ export function openWallet(userId: string): Promise<WalletStorage> {
  * second handle. Returns the already-open store when there is one.
  */
 export function retryOpenWallet(userId: string): Promise<WalletStorage> {
+  if (status === 'released') return Promise.reject(releasedError())
   if (storage && currentUserId === userId) return Promise.resolve(storage)
   return startOpen(userId)
 }
@@ -124,6 +143,9 @@ function startOpen(userId: string): Promise<WalletStorage> {
     // until it was closed (#352). WalletStorage closes the handle after this.
     onVersionChange: async () => {
       if (!current()) return
+      // First, and for good: nothing receives or spends into a store that is
+      // going, and no resume from a logout elsewhere may reopen the gates.
+      sealGates()
       await (beforeRelease?.() ?? Promise.resolve()).catch(() => undefined)
       if (!current()) return
       storage = undefined
@@ -158,7 +180,7 @@ function startOpen(userId: string): Promise<WalletStorage> {
       if (current()) {
         storage = ws
         raw = rawWriters
-        clearDeletePending()
+        clearDeletePending(userId)
         if (status === 'blocked') setStatus('opening')
       } else if (currentUserId === userId) {
         void ws.close().catch(() => undefined)
@@ -410,9 +432,10 @@ function deletePending(userId: string): boolean {
   }
 }
 
-function clearDeletePending(): void {
+function clearDeletePending(userId: string): void {
   try {
-    localStorage.removeItem(DELETE_PENDING_KEY)
+    // Only this account's: another account's delete may still be held up.
+    if (localStorage.getItem(DELETE_PENDING_KEY) === userId) localStorage.removeItem(DELETE_PENDING_KEY)
   } catch {
     /* nothing stored */
   }
