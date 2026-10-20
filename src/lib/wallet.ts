@@ -24,6 +24,46 @@ let opening: Promise<WalletStorage> | undefined
 let currentUserId: string | undefined
 
 /**
+ * Why the wallet is not open, for the waiting screen (#352).
+ *
+ * - `opening`: the open is under way.
+ * - `blocked`: another tab holds the store at an older version; the open carries
+ *   on by itself once that tab closes.
+ * - `released`: another tab asked for the store (a logout's delete, or a newer
+ *   version of the wallet) and this tab let go of it. Reloading is the only
+ *   honest way on: the data this tab was showing may be gone.
+ */
+export type WalletOpenStatus = 'opening' | 'blocked' | 'released'
+
+let status: WalletOpenStatus = 'opening'
+const statusListeners = new Set<(s: WalletOpenStatus) => void>()
+
+function setStatus(next: WalletOpenStatus): void {
+  status = next
+  for (const listener of [...statusListeners]) listener(next)
+}
+
+export function walletOpenStatus(): WalletOpenStatus {
+  return status
+}
+
+export function onWalletOpenStatus(listener: (s: WalletOpenStatus) => void): () => void {
+  statusListeners.add(listener)
+  return () => statusListeners.delete(listener)
+}
+
+/**
+ * What to do before this tab lets go of the store for another tab: stop the
+ * writers and let a write already in flight land. Set by the app (App.tsx) so
+ * this module does not import the pollers, which import it.
+ */
+let beforeRelease: (() => Promise<void>) | undefined
+
+export function setBeforeWalletRelease(fn: (() => Promise<void>) | undefined): void {
+  beforeRelease = fn
+}
+
+/**
  * Open (or reuse) the store for one user.
  *
  * The identity check is the point. This used to be `if (storage) return storage`,
@@ -35,6 +75,27 @@ let currentUserId: string | undefined
 export function openWallet(userId: string): Promise<WalletStorage> {
   if (storage && currentUserId === userId) return Promise.resolve(storage)
   if (opening && currentUserId === userId) return opening
+  return startOpen(userId)
+}
+
+/**
+ * Start the open again, for the waiting screen's Try again (#352).
+ *
+ * An IndexedDB open cannot be cancelled, so the stuck one is abandoned rather
+ * than stopped: if it ever completes it closes itself instead of installing a
+ * second handle. Returns the already-open store when there is one.
+ */
+export function retryOpenWallet(userId: string): Promise<WalletStorage> {
+  if (storage && currentUserId === userId) return Promise.resolve(storage)
+  return startOpen(userId)
+}
+
+/** Bumped by every open, so a slower, abandoned open can tell it lost. */
+let generation = 0
+
+function startOpen(userId: string): Promise<WalletStorage> {
+  const mine = ++generation
+  const current = () => generation === mine && currentUserId === userId
 
   // Close the previous user's DB rather than leaving it open behind the new
   // handle: it holds an IndexedDB connection and a BroadcastChannel, and a live
@@ -48,8 +109,38 @@ export function openWallet(userId: string): Promise<WalletStorage> {
   currentUserId = userId
   // WalletStorage composes the user-scoped DB name itself (imani-wallet-{userId}).
   // `normaliseVoucher` keeps `expires_at` in one stored format at every writer (#157).
-  const ws = new WalletStorage({ userId, normaliseVoucher: normaliseExpiry })
+  setStatus('opening')
+  const ws: WalletStorage = new WalletStorage({
+    userId,
+    normaliseVoucher: normaliseExpiry,
+    // A tab still on an older version holds the store open. The open resumes by
+    // itself when that tab closes; until then the user is told why (#352).
+    onBlocked: () => {
+      if (current()) setStatus('blocked')
+    },
+    // Another tab is deleting (logout) or upgrading the store. Hold on to it
+    // just long enough to stop our writers, then let go: a tab that ignored
+    // this kept every later login of the same account on "Opening wallet…"
+    // until it was closed (#352). WalletStorage closes the handle after this.
+    onVersionChange: async () => {
+      if (!current()) return
+      await (beforeRelease?.() ?? Promise.resolve()).catch(() => undefined)
+      if (!current()) return
+      storage = undefined
+      opening = undefined
+      raw = undefined
+      currentUserId = undefined
+      setStatus('released')
+    },
+  })
   const rawWriters = backUpWrites(ws)
+  // A delete of this store that another tab was holding up: the open below waits
+  // behind it silently. Say so after a moment, rather than at the time limit.
+  if (deletePending(userId)) {
+    setTimeout(() => {
+      if (current() && storage !== ws) setStatus('blocked')
+    }, PENDING_DELETE_GRACE_MS)
+  }
   opening = ws
     .init()
     // Repair rows stored before the format was enforced, before anything reads
@@ -62,10 +153,16 @@ export function openWallet(userId: string): Promise<WalletStorage> {
     )
     .then(() => {
       // Guard against an interleaved switch: a slower init for an identity we have
-      // since moved on from must not install itself over the newer one.
-      if (currentUserId === userId) {
+      // since moved on from must not install itself over the newer one. Nor may an
+      // open abandoned by Try again: it closes, and the newer one is the handle.
+      if (current()) {
         storage = ws
         raw = rawWriters
+        clearDeletePending()
+        if (status === 'blocked') setStatus('opening')
+      } else if (currentUserId === userId) {
+        void ws.close().catch(() => undefined)
+        return opening ?? ws
       }
       return ws
     })
@@ -270,6 +367,7 @@ export async function wipeWallet(userId: string): Promise<void> {
   const open = storage
   storage = undefined
   opening = undefined
+  generation++
   currentUserId = undefined
   raw = undefined
   if (open) await open.close().catch(() => undefined)
@@ -280,8 +378,44 @@ export async function wipeWallet(userId: string): Promise<void> {
     request.onerror = () => resolve()
     // Another tab still has it open. Nothing useful to do from here, and the
     // delete completes once that tab lets go.
-    request.onblocked = () => resolve()
+    //
+    // Remembered, though (#352): until it completes, the next open of this
+    // account's store queues behind it and fires no event of its own, so the
+    // waiting screen could not otherwise tell "another tab is in the way" from
+    // a slow disk. A tab still on 0.33.0 never lets go by itself.
+    request.onblocked = () => {
+      markDeletePending(userId)
+      resolve()
+    }
   })
+}
+
+const DELETE_PENDING_KEY = 'imani-wallet:delete-pending'
+/** How soon a queued open is called blocked when a delete is known to be pending. */
+export const PENDING_DELETE_GRACE_MS = 1500
+
+function markDeletePending(userId: string): void {
+  try {
+    localStorage.setItem(DELETE_PENDING_KEY, userId)
+  } catch {
+    // Storage denied: the waiting screen's time limit still covers it.
+  }
+}
+
+function deletePending(userId: string): boolean {
+  try {
+    return localStorage.getItem(DELETE_PENDING_KEY) === userId
+  } catch {
+    return false
+  }
+}
+
+function clearDeletePending(): void {
+  try {
+    localStorage.removeItem(DELETE_PENDING_KEY)
+  } catch {
+    /* nothing stored */
+  }
 }
 
 /**

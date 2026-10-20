@@ -65,8 +65,9 @@ export class WalletStorage {
           'WalletStorage.init: either config.db or config.userId must be provided'
         );
       }
-      this.db = await openOwnDatabase(`${DEFAULT_DB_BASE_NAME}-${userId}`);
+      this.db = await openOwnDatabase(`${DEFAULT_DB_BASE_NAME}-${userId}`, this.config.onBlocked);
       this.ownsDb = true;
+      this.watchVersionChange(this.db);
     }
 
     // Sanity check — required stores must exist (the shared-DB owner is
@@ -694,6 +695,30 @@ export class WalletStorage {
 
   // === Internals ===
 
+  /**
+   * Let go of the DB when another connection asks for it (#352).
+   *
+   * Without this handler a connection ignores `versionchange`, so another
+   * tab's `deleteDatabase` (logout's wipe) stays blocked for as long as this
+   * tab lives, and every later `open` of the same DB queues behind that delete
+   * with NO event: the next login sat on "Opening wallet…" until every other
+   * wallet tab was closed. Observed on staging 0.33.0 with two other tabs.
+   */
+  private watchVersionChange(db: IDBDatabase): void {
+    db.onversionchange = () => {
+      db.onversionchange = null;
+      void (async () => {
+        try {
+          await this.config.onVersionChange?.();
+        } catch {
+          // The close below still has to happen, or the other tab stays stuck.
+        }
+        if (this.db === db) await this.close();
+        else db.close();
+      })();
+    };
+  }
+
   private ensureInitialized(operation: string): void {
     if (!this.initialized || !this.db) {
       throw new WalletStorageNotInitializedError(operation);
@@ -855,7 +880,7 @@ async function upsertRow<T extends Record<string, unknown>>(
  * `createSharedDatabase`. Mirrors the upgrade flow there but only
  * creates wallet-storage stores (doesn't touch nostr-vouchers').
  */
-function openOwnDatabase(dbName: string): Promise<IDBDatabase> {
+function openOwnDatabase(dbName: string, onBlocked?: () => void): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     if (typeof indexedDB === 'undefined') {
       reject(new Error('WalletStorage: indexedDB is not available in this realm'));
@@ -863,6 +888,15 @@ function openOwnDatabase(dbName: string): Promise<IDBDatabase> {
     }
     const req = indexedDB.open(dbName, DEFAULT_DB_VERSION);
     req.onerror = () => reject(req.error);
+    // Other connections still hold the DB at an older version. The open goes
+    // ahead by itself once they close; the caller only needs to know why it waits.
+    req.onblocked = () => {
+      try {
+        onBlocked?.();
+      } catch {
+        // A listener error must not break the open.
+      }
+    };
     req.onupgradeneeded = () => {
       const db = req.result;
       for (const def of WALLET_STORAGE_STORE_DEFINITIONS) {
