@@ -56,7 +56,9 @@ A merchant's home screen is the **till**:
   shown when there are some).
 
 **Stats** live in the account menu (top-right): coupons issued, value issued, how
-many came back, and daily activity over the last 7, 30, or 90 days.
+many came back, for today, the last 7 days or the last 30 days. Each range starts at midnight
+your time, so "Today" is everything since midnight. The 7 and 30 day views add a bar per day;
+Today shows just the totals.
 
 ## Selling a coupon
 
