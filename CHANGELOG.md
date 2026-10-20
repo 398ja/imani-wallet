@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The merchant dashboard's ranges are now Today, 7 days and 30 days** (Closes #345). 90 days is
+  gone. Every range starts at midnight in the merchant's own time zone, so "Today" is midnight to
+  now and "7 days" is today plus the six days before, also on the days the clocks change. The daily
+  bars are counted the same way (they were split at UTC midnight before). Today shows the totals
+  without a chart, since a single bar adds nothing. 30 days is still the default.
+
 ### Fixed
 
 - **A handle with a stray space no longer fails at "Create account" with "Request validation
