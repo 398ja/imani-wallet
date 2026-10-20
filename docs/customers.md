@@ -56,6 +56,11 @@ Every account needs a profile. If the account you open doesn't have one yet, the
 app asks you to pick a handle before it lets you in (your display name starts as
 that handle, and you can change it in Settings).
 
+If you are already logged in to an older account that has no handle, the app
+shows a small **Finish your profile** line at the top. It never stops you paying
+or receiving. Tap it (or **Finish your profile** on your profile card), pick a
+handle, and your card shows your picture, name and handle straight away.
+
 ## Your wallet at a glance
 
 The home screen shows:

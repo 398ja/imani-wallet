@@ -22,6 +22,7 @@ import {
 } from '../lib/stats'
 import { currencyDecimals, formatDate, formatFace } from '../lib/format'
 import type { MerchantProfile } from '../lib/merchant'
+import { DEFAULT_RANGE_DAYS, RANGES, rangeFrom } from '../lib/dashboardRange'
 
 /**
  * Dashboard — possa-merchant's, on data this wallet can actually stand behind.
@@ -42,14 +43,6 @@ import type { MerchantProfile } from '../lib/merchant'
  * Swap in a charting library the day this needs axes, tooltips and zoom.
  */
 
-const RANGES = [
-  { label: '7 days', days: 7 },
-  { label: '30 days', days: 30 },
-  { label: '90 days', days: 90 },
-] as const
-
-const DAY_MS = 86_400_000
-
 /**
  * How many expiring vouchers the dashboard shows before linking out.
  *
@@ -65,7 +58,7 @@ export function MerchantDashboardPage({
   pubkey: string
   merchant: MerchantProfile
 }) {
-  const [days, setDays] = useState<number>(30)
+  const [days, setDays] = useState<number>(DEFAULT_RANGE_DAYS)
   const [stats, setStats] = useState<MerchantStats | null>(null)
   const [owed, setOwed] = useState(0)
   /**
@@ -95,9 +88,9 @@ export function MerchantDashboardPage({
           pubkey,
           unit: merchant.issuanceCurrency,
           decimals: currencyDecimals(merchant.issuanceCurrency),
-          // days - 1: the window includes today, so "7 days" is today
+          // From local midnight: "Today" is midnight to now, "7 days" is today
           // plus the six before it, and the chart gets exactly 7 columns.
-          from: now - (days - 1) * DAY_MS,
+          from: rangeFrom(days, now),
           now,
         }),
       )
@@ -252,21 +245,28 @@ export function MerchantDashboardPage({
             */}
           </ListSection>
 
-          <ListSection title="Activity">
-            <div className="p-4">
-              <ActivityChart activity={stats.activity} />
-              <div className="mt-3 flex items-center justify-center gap-4 text-xs text-mono-500">
-                <span className="flex items-center gap-1.5">
-                  <span className="inline-block h-2 w-2 rounded-full bg-mono-900 dark:bg-mono-50" />
-                  Issued
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="inline-block h-2 w-2 rounded-full bg-green-600" />
-                  Came back
-                </span>
+          {/* No chart for Today. One day is one bar, and a single bar says
+              nothing the "Vouchers issued" and "Came back" tiles above do not
+              already say in plain numbers. Hourly bars were the alternative;
+              they would need a second bucketing mode in merchantStats for a
+              chart a till-side glance does not need. */}
+          {days > 1 && (
+            <ListSection title="Activity">
+              <div className="p-4">
+                <ActivityChart activity={stats.activity} />
+                <div className="mt-3 flex items-center justify-center gap-4 text-xs text-mono-500">
+                  <span className="flex items-center gap-1.5">
+                    <span className="inline-block h-2 w-2 rounded-full bg-mono-900 dark:bg-mono-50" />
+                    Issued
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="inline-block h-2 w-2 rounded-full bg-green-600" />
+                    Came back
+                  </span>
+                </div>
               </div>
-            </div>
-          </ListSection>
+            </ListSection>
+          )}
 
           {stats.otherCurrencyCount > 0 && (
             <p className="text-center text-xs text-mono-400">

@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Logout across tabs, and one wallet per device (#335, #330). App only. No migrations, no new
 configuration.
 
+### Changed
+
+- **The merchant dashboard's ranges are now Today, 7 days and 30 days** (Closes #345). 90 days is
+  gone. Every range starts at midnight in the merchant's own time zone, so "Today" is midnight to
+  now and "7 days" is today plus the six days before, also on the days the clocks change. The daily
+  bars are counted the same way (they were split at UTC midnight before). Today shows the totals
+  without a chart, since a single bar adds nothing. 30 days is still the default.
+
 ### Fixed
 
 - **A logout in one tab no longer wipes while another tab is receiving or sending** (Closes #335,
@@ -58,6 +66,36 @@ configuration.
   - A screen torn down while paused kept its fallback (above), but that fallback could later
     reopen receiving and sending while a newer logout had paused the tab again. Only the latest
     pause may now resume the tab on its own.
+
+- **A handle with a stray space no longer fails at "Create account" with "Request validation
+  failed"** (Closes #342). The form checked a trimmed handle but sent the untrimmed one, so a
+  keyboard's trailing space or autofill padding passed the check and was rejected by the gateway,
+  two screens later on a merchant signup. Handles are now trimmed and lowercased as they are typed
+  (onboarding and Finish your profile), and again inside `register`, `claimHandle`,
+  `claimProfileWith` and the availability probe, so every caller sends the same string the form
+  checked. Owner rule: a handle is always stored lowercase, so the profile cache (`saveProfile`,
+  backup import via `sanitiseProfile`, kind-0 reads via `mergeKind0`) and the published kind-0
+  (`buildProfileEvent`) lowercase and trim `nip05` too. A 400 VALIDATION_001 from the claim now
+  shows its first field error in plain words ("That handle can only use lowercase letters,
+  numbers and underscores. Check for spaces and try again.") instead of the bare top-level
+  message. The handle placeholder is `your_handle` (a hyphen is not allowed).
+
+- **The Finish your profile reminder shows on Home only and can be hidden** (Closes #339). The
+  quiet reminder from #332 no longer appears on Pay, Send, Receive, coupons or any other screen.
+  A close button ("Hide this reminder", 44px) hides it, and the choice is remembered per account
+  in localStorage (`imani-wallet:finish-profile-dismissed:<pubkey>`), so another account on the
+  same device still sees its own. Hiding it never hides **Finish your profile** on the own
+  profile card, so every account can still get a handle. The card's Finish control now has a
+  44px tap target too.
+
+- **An account with no handle can finish its profile from its own card** (Closes #332). The
+  profile card said "No handle yet" with no way forward. It now offers **Finish your profile**
+  in the handle's place, which opens the same handle-only step login uses (#327) and the same
+  idempotent claim (`claimProfileWith`, the signer-based core of `claimProfile`: 409
+  forward-resolve, 15 s timeouts). The card shows the avatar, name and handle on success with no
+  reload. A quiet, non-blocking **Finish your profile** link also shows under the header at app
+  start for such an account; it is a link, not a dialog, so payments, receives and coupons are
+  never held behind it. The noProtocolJargon guard reads the new copy.
 
 ## [0.33.0] - 2026-10-19
 

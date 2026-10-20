@@ -57,6 +57,9 @@ describe('no protocol jargon in the UI (#324)', () => {
     expect(texts).toContain('Receive')
     expect(texts).toContain('Passphrase')
     expect(texts.some((t) => t.includes('Paste the code'))).toBe(true)
+    // #332's prompt and the profile card's Finish copy are read too.
+    expect(strings.some((s) => s.file.endsWith('FinishProfilePrompt.tsx'))).toBe(true)
+    expect(texts.some((t) => t.includes('Every account has a handle'))).toBe(true)
   })
 
   it('finds no npub, nsec, nostr, relay, NIP-xx or pubkey in user-facing strings', () => {
