@@ -6,7 +6,9 @@ import { NapProvider, useNapSession, useNapCallbacks } from '@imani/nap-react'
 import type { NapSession } from '@imani/nap-client-web'
 
 import { createSession, getSigner, resetSession } from './lib/nap'
-import { openWallet, onWalletChanged } from './lib/wallet'
+import { openWallet, onWalletChanged, onWalletOpenStatus, retryOpenWallet, setBeforeWalletRelease, walletOpenStatus, type WalletOpenStatus } from './lib/wallet'
+import { releaseWalletForOtherTab } from './lib/walletHandover'
+import { RestoringVouchers, WalletOpening } from './components/WalletOpening'
 import { startDmPoll } from './lib/dmPoll'
 import { startIncomingNotifications } from './lib/incomingNotifications'
 import { startPaymentReceipts, stopPaymentReceipts } from './lib/paymentReceiptDrain'
@@ -105,6 +107,13 @@ import { listenForLogout } from './lib/logoutTabs'
 const OWNER_FULFILMENT = fulfilmentOf()
 const OWNER_REGISTER = registerRequestTerms()
 
+// Another tab's logout (or a newer version) asks for the store: stop the
+// writers and let a receive in flight land, then let go (lib/walletHandover).
+// For the life of the document, not of AuthedApp (review of #353): the store
+// and the poller outlive an unmount (a lapsed session shows the passphrase
+// dialog with AuthedApp gone), and a release then must still drain first.
+setBeforeWalletRelease(() => releaseWalletForOtherTab())
+
 /**
  * Everything behind the NAP session gate.
  *
@@ -119,6 +128,16 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
   const { permissions } = useNapSession()
   const [ready, setReady] = useState(false)
   const [error, setError] = useState<Error | null>(null)
+  // Why the store is not open yet, or that another tab took it (#352). Seeded
+  // from the module so a remount does not flash back to "opening".
+  const [openStatus, setOpenStatus] = useState<WalletOpenStatus>(() => walletOpenStatus())
+  // Bumped by the waiting screen's Try again, which re-runs the open below.
+  const [openAttempt, setOpenAttempt] = useState(0)
+  // The coupons coming back from their backup after login: said quietly, on
+  // the home screen, so an empty list is not mistaken for an empty wallet.
+  const [restoring, setRestoring] = useState(false)
+
+  useEffect(() => onWalletOpenStatus(setOpenStatus), [])
   const [profile, setProfile] = useState<Profile>(() => loadProfile(pubkey) ?? emptyProfile(pubkey))
   // Null is a real answer, not "not loaded yet": it means this key has published
   // no merchant record, which is what makes an account a customer. Seeded from
@@ -133,7 +152,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
 
   useEffect(() => {
     let live = true
-    openWallet(pubkey).then(
+    ;(openAttempt === 0 ? openWallet : retryOpenWallet)(pubkey).then(
       () => {
         if (!live) return
         setReady(true)
@@ -231,7 +250,9 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         void restoreCashbackStash(pubkey).then((n) => {
           if (n > 0) console.info(`[app] restored ${n} pending cashback token(s)`)
         })
+        setRestoring(true)
         void restoreVouchers(pubkey)
+          .finally(() => live && setRestoring(false))
           .then((coupons) => {
             if (coupons > 0) console.info(`[app] restored ${coupons} coupon(s) from the relay`)
             // After the restore, so a coupon that came back from the relay is
@@ -344,7 +365,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
       // claims into the wrong inbox.
       stopPaymentReceipts()
     }
-  }, [pubkey])
+  }, [pubkey, openAttempt])
 
 
   /**
@@ -405,8 +426,17 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
   const logoutFlow = useLogout(pubkey, onLoggedOut)
   const onLogout = logoutFlow.logout
 
+  // Released first (review of #353): once this tab has let go of the store, the
+  // open refuses, and that refusal is not a fault to show as one.
+  if (openStatus === 'released') {
+    return <WalletOpening status={openStatus} onRetry={() => setOpenAttempt((n) => n + 1)} />
+  }
   if (error) return <Fatal title="Could not open the wallet" detail={error.message} />
-  if (!ready) return <Centered>Opening wallet…</Centered>
+  // Not a dead screen any more (#352): it spins, says why it waits, and offers
+  // Try again; once another tab has taken the store, it asks for a reload.
+  if (!ready) {
+    return <WalletOpening status={openStatus} onRetry={() => setOpenAttempt((n) => n + 1)} />
+  }
 
   // The backup screen takes over the whole app rather than sitting on a route:
   // it is the only chance to save a key that cannot be recovered, so it must not
@@ -433,6 +463,8 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
       <Header profile={profile} merchant={trading} terminal={terminal.actor !== null} onLogout={onLogout} />
       {/* Coupons the trusted-mint gate is holding, so a wait is never mistaken for a loss (#133). */}
       <HeldCouponsNotice pubkey={pubkey} className="mt-2" />
+      {/* #352: the wallet opens first and the vouchers fill in as they come back. */}
+      {restoring && <RestoringVouchers />}
       {/* #332, #339: a quiet, dismissible link for an account with no handle, on Home only. Never a gate. */}
       <FinishProfilePrompt profile={profile} />
       <Routes>
