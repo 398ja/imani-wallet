@@ -17,7 +17,17 @@ const publish = vi.fn<(e: { content: string }) => Promise<{ ok: number; total: n
 
 vi.mock('../config', () => ({ gatewayConfig: async () => ({ nip05Domain: 'imani.local' }) }))
 vi.mock('../nip98', () => ({ signedFetch }))
-vi.mock('../nap', () => ({ keyStore: { save: vi.fn(async () => undefined) } }))
+// The key slot, as the #330 guard (`refuseIfAnotherWallet`) reads it: empty
+// until `save`, so a fresh device registers and a held slot refuses.
+const slot = vi.hoisted(() => ({ held: false }))
+vi.mock('../nap', () => ({
+  keyStore: {
+    save: vi.fn(async () => {
+      slot.held = true
+    }),
+    hasKey: async () => slot.held,
+  },
+}))
 vi.mock('../onboardingHandoff', () => ({ stashPendingBackup: vi.fn() }))
 vi.mock('../relay', () => ({ RELAY_URL: 'ws://localhost:27778', publish, allEvents: async () => [] }))
 
@@ -51,6 +61,7 @@ const publishedNip05 = () => publish.mock.calls.map((c) => (JSON.parse(c[0].cont
 beforeEach(() => {
   vi.clearAllMocks()
   localStorage.clear()
+  slot.held = false
   signedFetch.mockImplementation(gateway)
   vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 404 })))
 })
@@ -64,6 +75,21 @@ describe('register normalises the typed handle (#342)', () => {
     expect(outcome.profile.nip05).toBe('alice@imani.local')
     expect(outcome.profile.displayName).toBe('alice')
     expect(loadProfile(outcome.profile.pubkey)?.nip05).toBe('alice@imani.local')
+  })
+})
+
+describe('register with a padded handle still honours the one-wallet guard (#330 with #342)', () => {
+  it('another wallet in the slot: " Alice " is refused before anything is claimed, published or cached', async () => {
+    const { OtherWalletOnDeviceError } = await import('../keySlotGuard')
+    const other = 'b'.repeat(64)
+    slot.held = true
+    localStorage.setItem(`imani-wallet:profile:${other}`, JSON.stringify({ pubkey: other }))
+    await expect(register(' Alice ', 'correct horse battery staple', async () => {})).rejects.toBeInstanceOf(
+      OtherWalletOnDeviceError,
+    )
+    expect(signedFetch).not.toHaveBeenCalled()
+    expect(publish).not.toHaveBeenCalled()
+    expect(Object.keys(localStorage)).toEqual([`imani-wallet:profile:${other}`])
   })
 })
 

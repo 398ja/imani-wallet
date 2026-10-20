@@ -18,12 +18,17 @@ import { moneyInFlight } from './inFlightMoney'
 import { confirmStashBackup, stashFingerprint, type StashCheck } from './cashbackStash'
 import {
   closeReceives,
+  closeSpends,
   drainReceives,
+  drainSpends,
   drainTokenRedemptions,
   openReceives,
+  openSpends,
   receivesInFlight,
+  spendsInFlight,
   tokenRedemptionsInFlight,
 } from './receiveGate'
+import { pauseOtherTabs, type PauseResult } from './logoutTabs'
 
 /**
  * Log out: end the session and erase the key from this browser.
@@ -93,6 +98,9 @@ export const LOGOUT_BLOCKED_COPY = {
   inFlight:
     'A payment or a swap is still going through. Logging out now could lose its change, so ' +
     'logging out stays off until it finishes. Nothing has been erased. Try again in a moment.',
+  otherTab:
+    'This wallet is open in another tab or window, and it could not be paused safely. ' +
+    'Close the other tabs of this wallet, or wait for them to finish, then try again. Nothing has been erased.',
   retry: 'Try again',
   close: 'Not now',
 } as const
@@ -103,7 +111,14 @@ export type LogoutOutcome =
   | { status: 'cancelled' }
   | {
       status: 'blocked'
-      reason: 'unconfirmed' | 'locked' | 'store-unreadable' | 'changed' | 'in-flight' | 'cashback-unconfirmed'
+      reason:
+        | 'unconfirmed'
+        | 'locked'
+        | 'store-unreadable'
+        | 'changed'
+        | 'in-flight'
+        | 'cashback-unconfirmed'
+        | 'other-tab'
       unconfirmed: UnconfirmedCoupon[]
       /** For 'cashback-unconfirmed': how many stashed cashback tokens are not confirmed. */
       cashback?: number
@@ -138,6 +153,11 @@ export interface LogoutDeps {
   drainReceives?: (timeoutMs: number) => Promise<boolean>
   /** Receives still running anywhere in this tab, read synchronously just before the wipe. */
   receivesNow?: () => number
+  /**
+   * Take the logout lock and pause every other tab of this wallet (#335). A
+   * tab that is busy, does not answer, or cannot be reached refuses the logout.
+   */
+  pauseTabs?: () => Promise<PauseResult>
 }
 
 /** How long logout gives the pending sends to settle before it checks them. */
@@ -172,11 +192,20 @@ function hasMoneyInFlight(read: (pubkey: string) => { sends: number; swaps: numb
 /** How long to wait for a redemption already inside the mint swap to write. */
 export const DRAIN_TIMEOUT_MS = 20_000
 
+/**
+ * Re-open what logout closed. The gates first, and each writer on its own: one
+ * that throws must not leave receiving or sending paused until a reload (#335).
+ */
 function defaultRestart(pubkey: string): void {
-  startDmPoll(pubkey)
   openReceives()
-  startRosterSync(pubkey)
-  startIncomingNotifications(pubkey)
+  openSpends()
+  for (const start of [startDmPoll, startRosterSync, startIncomingNotifications]) {
+    try {
+      start(pubkey)
+    } catch {
+      // The next login starts it again. The gates are open either way.
+    }
+  }
 }
 
 async function defaultHeldNow(pubkey: string): Promise<string> {
@@ -185,12 +214,14 @@ async function defaultHeldNow(pubkey: string): Promise<string> {
 
 async function defaultDrainReceives(timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
+  const left = () => Math.max(0, deadline - Date.now())
   if (!(await drainReceives(timeoutMs))) return false
-  return drainTokenRedemptions(Math.max(0, deadline - Date.now()))
+  if (!(await drainTokenRedemptions(left()))) return false
+  return drainSpends(left())
 }
 
 function defaultReceivesNow(): number {
-  return receivesInFlight() + tokenRedemptionsInFlight()
+  return receivesInFlight() + tokenRedemptionsInFlight() + spendsInFlight()
 }
 
 function stashBlocked(check: Extract<StashCheck, { ok: false }>): LogoutOutcome {
@@ -247,6 +278,7 @@ export async function attemptLogout(
   const stashNow = deps.stashNow ?? stashFingerprint
   const drainOthers = deps.drainReceives ?? defaultDrainReceives
   const receivesNow = deps.receivesNow ?? defaultReceivesNow
+  const pauseTabs = deps.pauseTabs ?? (() => pauseOtherTabs())
 
   // 0. A pending send that has finished at the gateway is settled now, so it
   // does not refuse the logout for no reason (second check of #326).
@@ -267,6 +299,43 @@ export async function attemptLogout(
   // 2.
   if (!confirm(LOGOUT_WARNING)) return { status: 'cancelled' }
 
+  // 2b. Every other tab of this wallet pauses first, or nothing happens (#335).
+  // Asked after the confirmation, so a declined logout never disturbs them.
+  const tabs = await pauseTabs().catch((): PauseResult => ({ ok: false }))
+  if (!tabs.ok) return { status: 'blocked', reason: 'other-tab', unconfirmed: [] }
+  const others = tabs.tabs
+
+  // From here on anything that refuses, or throws, re-opens what was closed:
+  // the gates, the writers, and the other tabs (#335). Only once the wipe has
+  // begun is nothing restarted.
+  let wiping = false
+  let completed = false
+  let restarted = false
+  const reopen = () => {
+    if (restarted) return
+    restarted = true
+    try {
+      restart(pubkey)
+    } catch {
+      // An injected restart that throws: the gates still open below.
+    }
+    openReceives()
+    openSpends()
+    others.resume()
+  }
+  try {
+    const outcome = await stopCheckAndWipe()
+    if (outcome.status !== 'done') reopen()
+    return outcome
+  } finally {
+    // A wipe that threw part way: nothing is restarted, but the paused tabs
+    // are told, so they reload rather than wait on a wallet that is half gone.
+    if (!wiping) reopen()
+    else if (!completed) others.done()
+  }
+
+  async function stopCheckAndWipe(): Promise<LogoutOutcome> {
+
   // 3. Order matters. Stop the poller first: it holds the unlocked key and
   // writes to the user-scoped IndexedDB, and letting it run past the session
   // teardown means a write landing after the identity it belongs to is gone.
@@ -274,6 +343,7 @@ export async function attemptLogout(
   // (#331): from here a cashback claim, a stash replay or a gift link is
   // refused BEFORE anything is claimed or swapped, and stays for the next try.
   closeReceives()
+  closeSpends()
   stopDmPoll()
   // A debounced roster publish must not fire after the key is gone (#160 phase 6).
   stopRosterSync()
@@ -288,7 +358,6 @@ export async function attemptLogout(
   // A redemption that did not finish inside the bound may still write a
   // coupon after any check made now, so no check made now can be final.
   if (!drained) {
-    restart(pubkey)
     return { status: 'blocked', reason: 'changed', unconfirmed: [] }
   }
 
@@ -297,11 +366,9 @@ export async function attemptLogout(
   if (stashNow() !== firstStash.fingerprint) {
     const finalStash = await safeStash(checkStash, pubkey)
     if (!finalStash.ok) {
-      restart(pubkey)
       return stashBlocked(finalStash)
     }
     if (stashNow() !== finalStash.fingerprint) {
-      restart(pubkey)
       return { status: 'blocked', reason: 'changed', unconfirmed: [] }
     }
   }
@@ -314,11 +381,9 @@ export async function attemptLogout(
     // stopped, so that would be a writer this list does not know about):
     // restart what was stopped, erase nothing.
     if (!final.ok) {
-      restart(pubkey)
       return blocked(final)
     }
     if (writes() !== writesBeforeFinal || (await safeHeld(() => heldNow(pubkey))) !== final.fingerprint) {
-      restart(pubkey)
       return { status: 'blocked', reason: 'changed', unconfirmed: [] }
     }
   }
@@ -326,7 +391,6 @@ export async function attemptLogout(
   // Last, with the writers stopped: nothing may have started a send or a swap
   // since step 1 (a second tab can). From here on nothing is checked again.
   if (hasMoneyInFlight(inFlight, pubkey)) {
-    restart(pubkey)
     return { status: 'blocked', reason: 'in-flight', unconfirmed: [] }
   }
   // And no receive is running (#331). With the gate closed and the poller's
@@ -339,9 +403,14 @@ export async function attemptLogout(
     busy = 1
   }
   if (busy > 0) {
-    restart(pubkey)
     return { status: 'blocked', reason: 'changed', unconfirmed: [] }
   }
+  // And every other tab is still the one this logout paused: a tab opened
+  // since, or one that resumed on its own, refuses the wipe.
+  if (!(await others.stillPaused().catch(() => false))) {
+    return { status: 'blocked', reason: 'other-tab', unconfirmed: [] }
+  }
+  wiping = true
 
   // And cancel the push subscription, which is the one piece of this account's
   // state that localStorage cannot reach: it lives in the browser's push
@@ -364,6 +433,17 @@ export async function attemptLogout(
     // the moment the browser subscription is gone.
   }
 
+  // Asked AGAIN, after the network teardown above and before anything that
+  // cannot be undone (review of #335). `disableNotifications` can await a
+  // gateway for as long as it takes, and a tab opened during it is a tab the
+  // first re-ping never saw: it would be receiving and sending while the store
+  // is deleted under it. Nothing local is gone yet, so refusing here still
+  // erases nothing and keeps the key (the push subscription, at worst, is off).
+  if (!(await others.stillPaused().catch(() => false))) {
+    wiping = false
+    return { status: 'blocked', reason: 'other-tab', unconfirmed: [] }
+  }
+
   try {
     // Zeroes the decrypted key, POSTs /auth/logout, and broadcasts to other tabs
     // so a second window does not keep acting as the logged-out user.
@@ -372,6 +452,17 @@ export async function attemptLogout(
     // A gateway that will not answer must not strand the user in a session they
     // asked to leave. The local teardown below is the part that actually
     // protects them, so it happens either way.
+  }
+
+  // And once more, after the POST and before the first local erase (second
+  // check of #340, F). `session.logout()` awaits POST /auth/logout with no
+  // timeout and only broadcasts nap's `logout` once it answers, so a tab that
+  // logged in during that POST is fully live and was never asked. Refusing here
+  // still erases nothing and keeps the key: the sessions are ended, so the
+  // tabs ask for the passphrase again, and the wallet is all still here.
+  if (!(await others.stillPaused().catch(() => false))) {
+    wiping = false
+    return { status: 'blocked', reason: 'other-tab', unconfirmed: [] }
   }
 
   // The point of the whole operation. session.logout() zeroes the key held in
@@ -441,8 +532,12 @@ export async function attemptLogout(
   // voucher cache full of the previous account's rows. A document that has held
   // one identity does not host the next one — the reload is what makes "erases
   // all your data from this browser" true of memory as well as of disk.
+  // The paused tabs reload too: the wallet they were showing is gone.
+  completed = true
+  others.done()
   reload()
   return { status: 'done' }
+  }
 }
 
 /** The held fingerprint, or null when the store cannot be read (never equal to a real one). */

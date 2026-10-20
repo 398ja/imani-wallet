@@ -5,6 +5,7 @@ import { ChevronRight, CloudDownload, FileText, Loader2 } from 'lucide-react'
 
 import { Alert, Button, IdentityInline, Input, Panel } from './ui'
 import { applyBackup, parseBackup, type ParsedBackup } from '../lib/backup'
+import { refuseIfAnotherWallet } from '../lib/keySlotGuard'
 import { userMessage } from '../lib/userMessage'
 import { getBackup } from '../lib/drive'
 import { keyStore } from '../lib/nap'
@@ -97,6 +98,10 @@ export function BackupLogin({
       <FinishProfileStep
         onCancel={() => setMissing(null)}
         onClaim={async (handle) => {
+          // Another wallet on the device refuses BEFORE the handle is claimed
+          // (#330): applyBackup below would refuse too, but only after the claim
+          // had written this account's handle and profile.
+          await refuseIfAnotherWallet(missing)
           // Claim first, write second: a taken handle leaves the device as it was.
           const profile = await claimProfile(missing, handle, parsed.profile)
           // The passphrase already opened this envelope, so the proven key is

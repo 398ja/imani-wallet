@@ -105,3 +105,71 @@ export async function drainTokenRedemptions(timeoutMs: number, pollMs = 50): Pro
   }
   return true
 }
+
+/*
+ * The same gate for SPENDS (#335). A send started in this tab, or in another tab
+ * that logout has paused, must not be half done when the wipe runs: its change
+ * and its pending-send record live in this browser. `beginSpend` refuses once
+ * logout has closed spends, and logout waits for one already running.
+ */
+let spendsOpen = true
+let spending = 0
+const spendWaiters = new Set<() => void>()
+
+export const SPEND_DEFERRED = 'SPEND_DEFERRED'
+
+/** Shown when a send is refused because the wallet is logging out. Nothing has moved. */
+export const SPEND_PAUSED_MESSAGE =
+  'This wallet is logging out, so nothing was sent and your vouchers are still here. Try again in a moment.'
+
+/** Start a spend, or throw (with SPEND_PAUSED_MESSAGE) once logout has closed spends. */
+export function beginSpend(): () => void {
+  if (!spendsOpen) throw Object.assign(new Error(SPEND_PAUSED_MESSAGE), { code: SPEND_DEFERRED })
+  spending++
+  let ended = false
+  return () => {
+    if (ended) return
+    ended = true
+    spending--
+    if (spending === 0) for (const wake of [...spendWaiters]) wake()
+  }
+}
+
+/** Run `work` as a counted spend. */
+export async function withSpend<T>(work: () => Promise<T>): Promise<T> {
+  const end = beginSpend()
+  try {
+    return await work()
+  } finally {
+    end()
+  }
+}
+
+export function closeSpends(): void {
+  spendsOpen = false
+}
+
+export function openSpends(): void {
+  spendsOpen = true
+}
+
+export function spendsInFlight(): number {
+  return spending
+}
+
+/** Resolve once no spend is running, or after `timeoutMs`. Whether it drained. Never throws. */
+export function drainSpends(timeoutMs: number): Promise<boolean> {
+  if (spending === 0) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    const wake = () => {
+      clearTimeout(timer)
+      spendWaiters.delete(wake)
+      resolve(true)
+    }
+    const timer = setTimeout(() => {
+      spendWaiters.delete(wake)
+      resolve(spending === 0)
+    }, timeoutMs)
+    spendWaiters.add(wake)
+  })
+}

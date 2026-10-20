@@ -1,3 +1,4 @@
+import { refuseIfAnotherWallet } from './keySlotGuard'
 import { nip19 } from 'nostr-tools'
 
 import { loadProfile, sanitiseProfile, saveProfile, type Profile } from './profile'
@@ -189,6 +190,17 @@ export async function applyBackup(
     if (previous === null) localStorage.removeItem(KEYSTORE_STORAGE_KEY)
     else localStorage.setItem(KEYSTORE_STORAGE_KEY, previous)
     throw e
+  }
+
+  // The slot held another account's key (#330): writing this one would orphan
+  // that wallet's vouchers. Put the device back exactly as it was and refuse.
+  if (previous !== null && previous !== localStorage.getItem(KEYSTORE_STORAGE_KEY)) {
+    try {
+      await refuseIfAnotherWallet(privkeyHex, { slotTaken: async () => true })
+    } catch (e) {
+      localStorage.setItem(KEYSTORE_STORAGE_KEY, previous)
+      throw e
+    }
   }
 
   // Only once the key is proven usable is it safe to touch anything else.

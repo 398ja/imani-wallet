@@ -161,3 +161,27 @@ describe('partial and slow answers (survivors S9, S13)', () => {
     expect(outcome).toMatchObject({ ok: false, reason: 'unconfirmed' })
   })
 })
+
+describe('the restore at login skips a token proven spent (#335 item 1)', () => {
+  // An offline logout could not clear the record, so it still names a token banked
+  // before. Brought back, it would show as cashback "waiting" for ever.
+  it('a SPENT token is not brought back; every other answer, or none, brings it back', async () => {
+    relay.events = [record(100, ['cashuBbanked', 'cashuBunspent', 'cashuBunknown', 'cashuBthrows'])]
+    const state = async (t: string) => {
+      if (t === 'cashuBthrows') throw new Error('mint down')
+      return t === 'cashuBbanked' ? ('SPENT' as const) : t === 'cashuBunspent' ? ('UNSPENT' as const) : ('UNKNOWN' as const)
+    }
+    expect(await stash.restoreCashbackStash(PK, state)).toBe(3)
+    expect(JSON.parse(localStorage.getItem(stash.PENDING_KEY)!)).toEqual(['cashuBthrows', 'cashuBunknown', 'cashuBunspent'])
+  })
+
+  it('an entry stashed while the mint was being asked is kept', async () => {
+    relay.events = [record(100, ['cashuBrestored'])]
+    const state = async () => {
+      localStorage.setItem(stash.PENDING_KEY, JSON.stringify(['cashuBarrived']))
+      return 'UNSPENT' as const
+    }
+    expect(await stash.restoreCashbackStash(PK, state)).toBe(1)
+    expect(JSON.parse(localStorage.getItem(stash.PENDING_KEY)!)).toEqual(['cashuBarrived', 'cashuBrestored'])
+  })
+})
