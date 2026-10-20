@@ -21,7 +21,8 @@ vi.mock('../../lib/nip98', async (importOriginal) => ({
 vi.mock('../../lib/config', () => ({ gatewayConfig: async () => ({ nip05Domain: 'example.test' }) }))
 vi.mock('../../lib/nap', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/nap')>()),
-  keyStore: { save: vi.fn(async () => undefined) },
+  // An empty key slot, so the #330 guard in `register` lets a fresh device through.
+  keyStore: { save: vi.fn(async () => undefined), hasKey: async () => false },
 }))
 vi.mock('../../lib/onboardingHandoff', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/onboardingHandoff')>()),
