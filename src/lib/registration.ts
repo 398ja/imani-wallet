@@ -22,6 +22,7 @@ import {
 import { keyStore } from './nap'
 import { createWalletSigner } from './signer'
 import { stashPendingBackup } from './onboardingHandoff'
+import { normaliseHandle } from './validate'
 
 /**
  * Creating an account: mint a key, claim a handle, then keep both.
@@ -113,7 +114,8 @@ export interface RegistrationOutcome {
  *
  * The authoritative answer is the 409 from the claim itself.
  */
-export async function isHandleAvailable(handle: string): Promise<boolean> {
+export async function isHandleAvailable(typed: string): Promise<boolean> {
+  const handle = normaliseHandle(typed)
   const { nip05Domain } = await gatewayConfig()
   const response = await fetch(`/api/v1/resolve/${encodeURIComponent(`${handle}@${nip05Domain}`)}`, {
     credentials: 'include',
@@ -180,10 +182,12 @@ async function handleIsOurs(handle: string, pubkey: string): Promise<boolean> {
  * no bunker, no server-held key.
  */
 export async function claimHandle(
-  handle: string,
+  typed: string,
   pubkey: string,
   signer: RequestSigner,
 ): Promise<void> {
+  // Every caller is covered here, whatever its input did (#342).
+  const handle = normaliseHandle(typed)
   const response = await signedFetch(
     '/api/v1/nip05',
     'POST',
@@ -209,11 +213,40 @@ export async function claimHandle(
   // actionable (DOMAIN_NOT_FOUND, DOMAIN_NOT_VERIFIED are stack-setup problems,
   // not user errors) and flattening them to "registration failed" has already
   // cost one debugging round.
+  // A 400 VALIDATION_001 says only "Request validation failed" at the top; the
+  // reason is in its field errors (#342). Prefer the first, in plain words.
   const detail = await response
     .json()
-    .then((body: { error?: { message?: string } }) => body.error?.message)
+    .then((body: ClaimErrorBody) => fieldErrorMessage(body) ?? body.error?.message)
     .catch(() => undefined)
   throw new Error(detail ?? `Could not claim ${handle} (${response.status}).`)
+}
+
+interface ClaimErrorBody {
+  error?: {
+    message?: string
+    field_errors?: Array<{ field?: unknown; message?: unknown }>
+  }
+}
+
+/**
+ * The first field error of a claim's 400, worded for a person. The server's
+ * own wording names its fields ("Username must contain only lowercase
+ * alphanumeric characters..."), which reads oddly on a form that says
+ * "handle", so the field this form types is mapped to known sentences.
+ */
+function fieldErrorMessage(body: ClaimErrorBody): string | undefined {
+  const first = body?.error?.field_errors?.find((f) => f && typeof f === 'object')
+  if (!first) return undefined
+  const field = typeof first.field === 'string' ? first.field : ''
+  const message = typeof first.message === 'string' ? first.message : ''
+  if (field === 'username') {
+    if (/required|blank|empty/i.test(message)) return 'Choose a handle.'
+    if (/between|size|length/i.test(message)) return 'That handle is too long. Use at most 64 characters.'
+    return 'That handle can only use lowercase letters, numbers and underscores. Check for spaces and try again.'
+  }
+  // Any other field is not the user's to fix. userMessage still filters jargon.
+  return message || undefined
 }
 
 /**
@@ -232,12 +265,13 @@ export async function claimHandle(
  *                 fills the rest in later at /profile.
  */
 export async function register(
-  handle: string,
+  typed: string,
   passphrase: string,
   login: (privkeyHex: string) => Promise<void>,
   merchant?: MerchantFields,
   profileFields?: ProfileFields,
 ): Promise<RegistrationOutcome> {
+  const handle = normaliseHandle(typed)
   const minted = mintKey()
   const { privkeyHex, pubkey } = minted
   const { nip05Domain } = await gatewayConfig()

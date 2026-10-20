@@ -3,6 +3,7 @@ import { hexToBytes } from '@noble/hashes/utils'
 
 import { gatewayConfig } from './config'
 import { claimHandle } from './registration'
+import { normaliseHandle } from './validate'
 import type { RequestSigner } from './nip98'
 import { buildProfileEvent, emptyProfile, loadProfile, saveProfile, type Profile } from './profile'
 import { allEvents, publish } from './relay'
@@ -237,9 +238,10 @@ export async function claimProfile(privkeyHex: string, handle: string, base?: Pr
  */
 export async function claimProfileWith(
   signer: RequestSigner & { readonly pubkey: string },
-  handle: string,
+  typed: string,
   base?: Profile | null,
 ): Promise<Profile> {
+  const handle = normaliseHandle(typed)
   const pubkey = signer.pubkey
   const { nip05Domain } = await gatewayConfig()
 
