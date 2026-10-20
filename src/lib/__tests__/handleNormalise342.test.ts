@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const PRIV = '3'.repeat(64)
 
 const signedFetch = vi.fn()
-const publish = vi.fn(async (_e: { content: string }) => ({ ok: 1, total: 1, errors: [] as string[] }))
+const publish = vi.fn<(e: { content: string }) => Promise<{ ok: number; total: number; errors: string[] }>>(async () => ({ ok: 1, total: 1, errors: [] as string[] }))
 
 vi.mock('../config', () => ({ gatewayConfig: async () => ({ nip05Domain: 'imani.local' }) }))
 vi.mock('../nip98', () => ({ signedFetch }))
