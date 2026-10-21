@@ -92,8 +92,8 @@ describe('no protocol jargon in the UI (#324)', () => {
     ['src/components/LogoutBlocked.tsx', 'Logout block'],
     ['src/components/BackupLogin.tsx', 'Where is your backup?'],
     ['src/components/FinishProfileStep.tsx', 'Finish your profile'],
-    // #357: the Terms and Conditions checkbox on the account step.
-    ['src/pages/OnboardingPage.tsx', 'Terms and Conditions'],
+    // #357: the Terms and Conditions checkbox (account step and Finish your profile).
+    ['src/components/TermsCheckbox.tsx', 'Terms and Conditions'],
   ])('scans %s (%s)', (file, text) => {
     const own = strings.filter((s) => s.file === file)
     expect(own.length).toBeGreaterThan(0)

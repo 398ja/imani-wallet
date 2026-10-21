@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { useState } from 'react'
@@ -9,6 +9,7 @@ import { useState } from 'react'
 import { ProfilePage } from '../ProfilePage'
 import { FinishProfilePrompt } from '../../components/FinishProfilePrompt'
 import { emptyProfile, type Profile } from '../../lib/profile'
+import type { TermsAcceptance } from '../../lib/terms'
 
 /**
  * #332: an account with no handle met "No handle yet" on its own profile and had
@@ -25,20 +26,25 @@ vi.mock('../../lib/config', () => ({ gatewayConfig: async () => ({ nip05Domain: 
 const PUBKEY = 'e'.repeat(64)
 const handleless: Profile = { ...emptyProfile(PUBKEY), updatedAt: Date.now() }
 
-function Harness({ onClaim }: { onClaim: (h: string) => Promise<Profile> }) {
+function Harness({ onClaim }: { onClaim: (h: string, terms: TermsAcceptance) => Promise<Profile> }) {
   const [profile, setProfile] = useState(handleless)
   return (
     <MemoryRouter>
       <ProfilePage
         profile={profile}
         merchant={null}
-        onFinishProfile={async (h) => setProfile(await onClaim(h))}
+        onFinishProfile={async (h, terms) => setProfile(await onClaim(h, terms))}
       />
     </MemoryRouter>
   )
 }
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.unstubAllEnvs()
+})
+// Review of #358: Finish your profile claims the first handle, so it asks for the terms.
+beforeEach(() => vi.stubEnv('VITE_WEBSITE_BASE_URL', 'https://www.imani.casa'))
 
 describe('own profile with no handle (#332)', () => {
   it('offers Finish your profile instead of a dead "No handle yet"', () => {
@@ -57,12 +63,19 @@ describe('own profile with no handle (#332)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /finish your profile/i }))
     const inputs = document.querySelectorAll('input')
-    expect(inputs).toHaveLength(1)
+    // The handle, and the Terms and Conditions box (review of #358).
+    expect(inputs).toHaveLength(2)
     fireEvent.change(screen.getByLabelText('Handle'), { target: { value: 'amina' } })
+    // Disabled until the box is ticked.
+    expect((screen.getByRole('button', { name: /^finish$/i }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('checkbox', { name: /I accept the Terms and Conditions/ }))
     fireEvent.click(screen.getByRole('button', { name: /^finish$/i }))
 
     await waitFor(() => expect(screen.getByText('@amina')).toBeTruthy())
-    expect(onClaim).toHaveBeenCalledWith('amina')
+    expect(onClaim).toHaveBeenCalledWith('amina', {
+      url: 'https://www.imani.casa/terms.html',
+      acceptedAt: expect.any(Number),
+    })
     expect(screen.getByText('amina')).toBeTruthy()
     expect(screen.queryByLabelText('Handle')).toBeNull()
     expect(screen.queryByRole('button', { name: /finish your profile/i })).toBeNull()

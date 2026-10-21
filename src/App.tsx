@@ -625,7 +625,9 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
               // #332: the logged-in key finishes its own profile. The same
               // idempotent claim as login's Finish your profile (#327), signed
               // by the session's signer; the card updates from state, no reload.
-              onFinishProfile={async (handle) => setProfile(await claimProfileWith(getSigner(), handle, profile))}
+              onFinishProfile={async (handle, terms) =>
+                setProfile(await claimProfileWith(getSigner(), handle, profile, terms))
+              }
             />
           }
         />

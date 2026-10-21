@@ -97,13 +97,13 @@ export function BackupLogin({
     return (
       <FinishProfileStep
         onCancel={() => setMissing(null)}
-        onClaim={async (handle) => {
+        onClaim={async (handle, terms) => {
           // Another wallet on the device refuses BEFORE the handle is claimed
           // (#330): applyBackup below would refuse too, but only after the claim
           // had written this account's handle and profile.
           await refuseIfAnotherWallet(missing)
           // Claim first, write second: a taken handle leaves the device as it was.
-          const profile = await claimProfile(missing, handle, parsed.profile)
+          const profile = await claimProfile(missing, handle, parsed.profile, terms)
           // The passphrase already opened this envelope, so the proven key is
           // the unlock; the claimed profile replaces the backup's snapshot.
           const { privkeyHex } = await applyBackup({ ...parsed, profile }, async () => missing)

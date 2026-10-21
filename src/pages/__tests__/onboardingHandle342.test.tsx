@@ -117,8 +117,8 @@ describe('Finish your profile with a padded handle (#342)', () => {
     let claimed: string | undefined
     render(
       <FinishProfileStep
-        onClaim={async (h) => {
-          claimed = (await claimProfile(PRIV, h)).nip05
+        onClaim={async (h, terms) => {
+          claimed = (await claimProfile(PRIV, h, null, terms)).nip05
         }}
         onCancel={() => {}}
       />,
@@ -127,6 +127,7 @@ describe('Finish your profile with a padded handle (#342)', () => {
     expect(input.placeholder).toBe('your_handle')
     fireEvent.change(input, { target: { value: 'Alice ' } })
     expect(input.value).toBe('alice')
+    fireEvent.click(screen.getByRole('checkbox', { name: /I accept the Terms and Conditions/ }))
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Finish and log in' }))
     })
@@ -136,8 +137,9 @@ describe('Finish your profile with a padded handle (#342)', () => {
 
   it('a server rejection reads as a plain reason about the handle', async () => {
     signedFetch.mockImplementation(() => gateway('', '', { username: 'x y' }))
-    render(<FinishProfileStep onClaim={(h) => claimProfile('4'.repeat(64), h).then(() => undefined)} onCancel={() => {}} />)
+    render(<FinishProfileStep onClaim={(h, terms) => claimProfile('4'.repeat(64), h, null, terms).then(() => undefined)} onCancel={() => {}} />)
     fireEvent.change(screen.getByLabelText('Handle'), { target: { value: 'alice' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /I accept the Terms and Conditions/ }))
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Finish and log in' }))
     })

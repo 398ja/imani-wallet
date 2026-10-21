@@ -51,9 +51,11 @@ export class TermsNotAcceptedError extends Error {
 
 /**
  * The website base URL this build was given, normalised (no trailing slash), or
- * null when it is missing or unusable. Only an absolute http(s) URL with a host
- * and no userinfo, query or fragment counts: anything else would make a broken
- * or misleading link, so it is treated as not configured at all.
+ * null when it is missing or unusable. Only an absolute https URL with a host
+ * and no userinfo, query or fragment counts (owner rule, review of #358: https
+ * only, so the link cannot be downgraded or pointed at a plain-http page):
+ * anything else would make a broken, misleading or hijackable link, so it is
+ * treated as not configured at all.
  *
  * Read on every call, not once at module load, so tests can stub the env.
  */
@@ -67,7 +69,7 @@ export function websiteBaseUrl(raw: unknown = import.meta.env.VITE_WEBSITE_BASE_
   } catch {
     return null
   }
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') return null
+  if (url.protocol !== 'https:') return null
   if (!url.hostname || url.username || url.password || url.search || url.hash) return null
   return `${url.origin}${url.pathname}`.replace(/\/+$/, '')
 }
@@ -108,7 +110,7 @@ export function requireTermsAccepted(acceptance: unknown): TermsAcceptance {
  * A stored or restored acceptance, or undefined when it is not one.
  *
  * The profile record comes back out of backup files the user was handed, so
- * this is a trust boundary: only an http(s) URL and a positive, finite time are
+ * this is a trust boundary: only an https URL and a positive, finite time are
  * kept, and nothing else rides along.
  */
 export function readTermsAcceptance(value: unknown): TermsAcceptance | undefined {
@@ -118,7 +120,7 @@ export function readTermsAcceptance(value: unknown): TermsAcceptance | undefined
   if (!Number.isFinite(acceptedAt) || acceptedAt <= 0) return undefined
   try {
     const parsed = new URL(url)
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return undefined
+    if (parsed.protocol !== 'https:') return undefined
   } catch {
     return undefined
   }
