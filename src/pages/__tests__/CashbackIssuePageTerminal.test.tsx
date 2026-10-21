@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
 /**
@@ -16,13 +16,14 @@ import { MemoryRouter } from 'react-router-dom'
  * around the screen.
  */
 
-const submitted = vi.hoisted(() => ({ calls: 0 }))
+const submitted = vi.hoisted(() => ({ calls: 0, args: undefined as unknown }))
 
 vi.mock('../../lib/cashbackIssue', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/cashbackIssue')>()),
   createCashbackIssuer: () => ({
-    submit: async () => {
+    submit: async (args: unknown) => {
       submitted.calls += 1
+      submitted.args = args
       return null
     },
   }),
@@ -58,11 +59,11 @@ const till: TerminalActor = {
   attested: true,
 }
 
-function show(actor?: TerminalActor, kind: 'full' | 'reduced' | null = null) {
+function show(actor?: TerminalActor, kind: 'full' | 'reduced' | null = null, stall: MerchantProfile = merchant) {
   const session = actor && kind ? openSession(actor, kind, Date.now()) : null
   return render(
     <MemoryRouter>
-      <CashbackIssuePage merchant={merchant} actor={actor} session={session} />
+      <CashbackIssuePage merchant={stall} actor={actor} session={session} />
     </MemoryRouter>,
   )
 }
@@ -102,5 +103,29 @@ describe('the owner’s own device', () => {
 
     expect(screen.getByPlaceholderText('0.00')).toBeTruthy()
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+})
+
+// #359: every issuance path carries the STALL's own validity. A Cashlink coupon ages out on the
+// stall's `voucherValidityDays`, from the owner's phone or a till; the claim window is separate.
+describe('the term a Cashlink coupon is given', () => {
+  async function create(actor?: TerminalActor, stall: MerchantProfile = merchant) {
+    show(actor, actor ? SESSION_KIND.FULL : null, stall)
+    fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '5' } })
+    fireEvent.click(screen.getByRole('button', { name: /Create Cashlink/ }))
+    await waitFor(() => expect(submitted.calls).toBe(1))
+    return (submitted.args as { voucherValidityDays: number }).voucherValidityDays
+  }
+
+  it('is the stall\u2019s 90-day validity on the owner\u2019s own phone', async () => {
+    expect(await create()).toBe(90)
+  })
+
+  it('is the stall\u2019s 90-day validity on a till', async () => {
+    expect(await create(till)).toBe(90)
+  })
+
+  it.each([30, 0])('follows a stall whose validity is %i', async (days) => {
+    expect(await create(undefined, { ...merchant, voucherValidityDays: days } as MerchantProfile)).toBe(days)
   })
 })

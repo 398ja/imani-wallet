@@ -234,7 +234,7 @@ function isActiveStall(event: Event): boolean {
  * established FIRST and explicitly, and only a live relay is queried. Now an
  * empty result genuinely means "asked, holds nothing".
  */
-async function queryRelay(pubkey: string): Promise<Event[]> {
+export async function queryRelay(pubkey: string): Promise<Event[]> {
   const pool = new SimplePool()
   try {
     return await withTimeout(

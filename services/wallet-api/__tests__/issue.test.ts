@@ -74,10 +74,22 @@ describe('what to sign to mint', () => {
     expect(parse({ faceUnit: undefined }).ok).toBe(false)
   })
 
-  it('defaults the expiry to a month', () => {
+  // #359: no fixed default. An omitted term is the STALL's validity, resolved by the server from
+  // its signed record, so the parser must not invent one (it used to stamp 30).
+  it('invents no expiry when none is named, leaving it to the stall\u2019s own validity', () => {
     const r = parse()
     expect(r.ok).toBe(true)
-    if (r.ok) expect(r.value.expiresInDays).toBe(30)
+    if (r.ok) expect(r.value.expiresInDays).toBeUndefined()
+  })
+
+  it('keeps a per-sale term the caller names', () => {
+    const r = parse({ expiresInDays: 7 })
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value.expiresInDays).toBe(7)
+  })
+
+  it('refuses a named term that is not a whole number of days above zero', () => {
+    for (const bad of [0, -1, 1.5, 'soon']) expect(parse({ expiresInDays: bad }).ok).toBe(false)
   })
 })
 
@@ -85,8 +97,13 @@ describe('the body it tells a caller to sign', () => {
   const body = () => {
     const r = parseIssueRequest({ faceValue: 1500, faceUnit: 'EUR', faceDecimals: 2, memo: ' hi ' }, CALLER)
     if (!r.ok) throw new Error('setup failed')
-    return JSON.parse(issueBody(r.value)) as Record<string, unknown>
+    // The server resolves the stall's term before building the body (#359); 90 stands in for it.
+    return JSON.parse(issueBody({ ...r.value, expiresInDays: 90 })) as Record<string, unknown>
   }
+
+  it('carries the term it is given', () => {
+    expect(body().expires_in_days).toBe(90)
+  })
 
   it('speaks the gateway\u2019s snake_case', () => {
     expect(body()).toMatchObject({ face_value: 1500, face_unit: 'EUR', face_decimals: 2 })
@@ -101,7 +118,8 @@ describe('the body it tells a caller to sign', () => {
     // two ways, a caller could sign one and send the other.
     const r = parseIssueRequest({ faceValue: 1500, faceUnit: 'EUR' }, CALLER)
     if (!r.ok) throw new Error('setup failed')
-    expect(issueBody(r.value)).toBe(issueBody(r.value))
+    const plan = { ...r.value, expiresInDays: 90 }
+    expect(issueBody(plan)).toBe(issueBody(plan))
   })
 
   it('points at the wallet path, not the portal one', () => {
