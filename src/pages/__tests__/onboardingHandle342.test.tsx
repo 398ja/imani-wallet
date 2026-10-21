@@ -66,6 +66,7 @@ const fetchMock = vi.fn<(url: string) => Promise<Response>>(async () => new Resp
 
 beforeEach(() => {
   localStorage.clear()
+  vi.stubEnv('VITE_WEBSITE_BASE_URL', 'https://www.imani.casa')
   signedFetch.mockReset()
   signedFetch.mockImplementation(gateway)
   fetchMock.mockClear()
@@ -74,6 +75,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
 })
 
 describe('onboarding with a padded handle (#342)', () => {
@@ -90,6 +92,8 @@ describe('onboarding with a padded handle (#342)', () => {
     expect(input.value).toBe('alice')
     fireEvent.change(screen.getByPlaceholderText('Passphrase'), { target: { value: 'correct horse battery staple' } })
     fireEvent.change(screen.getByPlaceholderText('Confirm passphrase'), { target: { value: 'correct horse battery staple' } })
+    // #357: nothing is created without the Terms and Conditions.
+    fireEvent.click(screen.getByRole('checkbox', { name: /Terms and Conditions/ }))
 
     // The advisory probe asks about the same string the claim will send.
     await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u).startsWith('/api/v1/resolve/'))).toBe(true), {

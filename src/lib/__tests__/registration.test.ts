@@ -31,6 +31,10 @@ vi.mock('../profile', async (importOriginal) => ({
 
 const { register, HandleTakenError } = await import('../registration')
 
+// #357: register refuses without an accepted Terms and Conditions, so every call here brings one.
+vi.stubEnv('VITE_WEBSITE_BASE_URL', 'https://www.imani.casa')
+const TERMS = { terms: { url: 'https://www.imani.casa/terms.html', acceptedAt: 1 } }
+
 const ok = () => new Response(JSON.stringify({ nip05: 'alice@imani.local' }), { status: 201 })
 const conflict = () =>
   new Response(JSON.stringify({ error: { message: 'NIP-05 already exists' } }), { status: 409 })
@@ -59,7 +63,7 @@ describe('register', () => {
       order.push('login')
     })
 
-    await register('alice', 'a-passphrase', login)
+    await register('alice', 'a-passphrase', login, TERMS)
 
     expect(order).toEqual(['claim', 'save', 'login'])
   })
@@ -72,7 +76,7 @@ describe('register', () => {
       order.push('login')
     })
 
-    await register('alice', 'a-passphrase', login)
+    await register('alice', 'a-passphrase', login, TERMS)
 
     expect(order).toEqual(['stash', 'login'])
   })
@@ -81,7 +85,7 @@ describe('register', () => {
     signedFetch.mockResolvedValue(conflict())
     const login = vi.fn()
 
-    await expect(register('alice', 'a-passphrase', login)).rejects.toBeInstanceOf(HandleTakenError)
+    await expect(register('alice', 'a-passphrase', login, TERMS)).rejects.toBeInstanceOf(HandleTakenError)
 
     expect(save).not.toHaveBeenCalled()
     expect(saveProfile).not.toHaveBeenCalled()
@@ -94,8 +98,8 @@ describe('register', () => {
     signedFetch.mockResolvedValueOnce(conflict()).mockResolvedValueOnce(ok())
     const login = vi.fn(async () => undefined)
 
-    await expect(register('taken', 'a-passphrase', login)).rejects.toBeInstanceOf(HandleTakenError)
-    await register('free', 'a-passphrase', login)
+    await expect(register('taken', 'a-passphrase', login, TERMS)).rejects.toBeInstanceOf(HandleTakenError)
+    await register('free', 'a-passphrase', login, TERMS)
 
     const pubkeys = signedFetch.mock.calls.map((c) => (c[2] as { pubkey: string }).pubkey)
     expect(pubkeys[0]).toBe(pubkeys[1])
@@ -107,7 +111,7 @@ describe('register', () => {
     signedFetch.mockResolvedValue(ok())
     publish.mockRejectedValueOnce(new Error('no relay'))
 
-    const outcome = await register('alice', 'a-passphrase', vi.fn(async () => undefined))
+    const outcome = await register('alice', 'a-passphrase', vi.fn(async () => undefined), TERMS)
 
     expect(outcome.published).toBe(0)
     expect(outcome.nsec).toMatch(/^nsec1/)
@@ -125,10 +129,10 @@ describe('register', () => {
       .mockRejectedValueOnce(new Error('gateway down'))
       .mockResolvedValueOnce(undefined)
 
-    await expect(register('alice', 'a-passphrase', login)).rejects.toThrow('gateway down')
+    await expect(register('alice', 'a-passphrase', login, TERMS)).rejects.toThrow('gateway down')
     const afterFirst = signedFetch.mock.calls.length
 
-    await expect(register('alice', 'a-passphrase', login)).resolves.toMatchObject({
+    await expect(register('alice', 'a-passphrase', login, TERMS)).resolves.toMatchObject({
       profile: { nip05: 'alice@imani.local' },
     })
     expect(signedFetch.mock.calls.length).toBe(afterFirst)
@@ -141,7 +145,7 @@ describe('register', () => {
       }),
     )
 
-    await expect(register('alice', 'a-passphrase', vi.fn())).rejects.toThrow(
+    await expect(register('alice', 'a-passphrase', vi.fn(), TERMS)).rejects.toThrow(
       'Domain not verified: imani.local',
     )
   })

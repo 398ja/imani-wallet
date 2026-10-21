@@ -34,6 +34,10 @@ const { claimHandle, register, HandleTakenError, HandleCheckUnavailableError } =
 const { claimProfile, requireProfile, ProfileMissingError } = await import('../profileGate')
 const { createWalletSigner } = await import('../signer')
 
+// #357: register refuses without an accepted Terms and Conditions, so every call here brings one.
+vi.stubEnv('VITE_WEBSITE_BASE_URL', 'https://www.imani.casa')
+const TERMS = { terms: { url: 'https://www.imani.casa/terms.html', acceptedAt: 1 } }
+
 const created = () => new Response('{}', { status: 201 })
 const conflict = () => new Response(JSON.stringify({ error: { message: 'NIP-05 already exists' } }), { status: 409 })
 
@@ -116,13 +120,13 @@ describe('register, after a lost claim response', () => {
     signedFetch.mockRejectedValueOnce(new TypeError('Failed to fetch')).mockResolvedValueOnce(conflict())
     const login = vi.fn(async () => {})
 
-    await expect(register('alice', 'a-passphrase', login)).rejects.toThrow('Failed to fetch')
+    await expect(register('alice', 'a-passphrase', login, TERMS)).rejects.toThrow('Failed to fetch')
     expect(save).not.toHaveBeenCalled()
     expect(login).not.toHaveBeenCalled()
     // The server did write it: the handle now resolves to the minted key.
     resolvesTo = signedFetch.mock.calls[0][2].pubkey as string
 
-    const outcome = await register('alice', 'a-passphrase', login)
+    const outcome = await register('alice', 'a-passphrase', login, TERMS)
     expect(outcome.profile.nip05).toBe('alice@imani.local')
     expect(outcome.profile.pubkey).toBe(signedFetch.mock.calls[1][2].pubkey)
     expect(signedFetch.mock.calls[0][2].pubkey).toBe(signedFetch.mock.calls[1][2].pubkey)
