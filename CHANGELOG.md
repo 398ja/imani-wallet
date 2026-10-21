@@ -59,6 +59,19 @@ link record without the new `noticedAt` field still reads.
   entry is filed for it.
 - wallet-api README: `POST /v1/links/status`.
 
+### Fixed (review of #367)
+
+- **A Cashlink whose coupon has itself expired no longer holds the expired limit for ever.** The
+  mint refuses an expired coupon to everyone, so the take-back failed on every run and the link
+  stayed counted; ten of them would have blocked Cashlinks permanently. The reconcile now closes
+  such a link as **Expired** (an hour's grace for a fast clock) instead of trying.
+- **Settling never overwrites a newer answer.** Status and `noticedAt` writes re-read the record
+  first, so two settles at once (start-up and Send) cannot turn "Taken back" into "Claimed", and
+  filing the notice cannot undo a take-back that landed meanwhile.
+- **Send waits at most 8 s for the settle** before counting; it carries on in the background.
+- `/v1/links/status`: a key used as a field **name** is refused as a key and named by a
+  placeholder (the unknown-field refusal echoed it back before).
+
 ## [0.36.0] - 2026-10-21
 
 Every new account accepts the Terms and Conditions (#357, #358), and a coupon issued through
