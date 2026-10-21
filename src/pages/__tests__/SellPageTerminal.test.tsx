@@ -181,3 +181,33 @@ describe('the Note on a sale', () => {
     expect((issued.args as { memo?: string }).memo).toBe('漢'.repeat(NOTE_MAX_CHARS))
   })
 })
+
+// #359: every issuance path carries the STALL's own validity. The over-the-counter sale (owner or
+// till) hands `issueAndDeliver` the stall's `voucherValidityDays` unless the merchant picks a
+// different term for this one sale.
+describe('the term a sale is given', () => {
+  async function sellAs(props: Partial<Parameters<typeof SellPage>[0]> = {}) {
+    issued.impl = async () => {
+      throw new UnwarrantedSaleError('stop here')
+    }
+    show(props)
+    fireEvent.click(screen.getByText('fake-scan'))
+    fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '5' } })
+    fireEvent.click(screen.getByRole('button', { name: /Send voucher/ }))
+    await waitFor(() => expect(issued.calls).toBe(1))
+    return (issued.args as { expiryDays: number }).expiryDays
+  }
+
+  it('is the stall\u2019s 90-day validity on the owner\u2019s own phone', async () => {
+    expect(await sellAs()).toBe(90)
+  })
+
+  it('is the stall\u2019s 90-day validity on a till', async () => {
+    const session = openSession(till, SESSION_KIND.FULL, Date.now())
+    expect(await sellAs({ actor: till, session })).toBe(90)
+  })
+
+  it.each([30, 60, 400, 0])('follows a stall whose validity is %i', async (days) => {
+    expect(await sellAs({ merchant: { ...merchant, voucherValidityDays: days } as MerchantProfile })).toBe(days)
+  })
+})
