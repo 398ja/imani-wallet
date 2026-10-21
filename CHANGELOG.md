@@ -9,9 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Every new account accepts the Terms and Conditions (#357). **New build configuration:**
-`VITE_WEBSITE_BASE_URL` (e.g. `https://www.imani.casa`) is REQUIRED, and the image build fails
-without it. No migrations: an older profile or backup without the new field still reads.
+## [0.36.0] - 2026-10-21
+
+Every new account accepts the Terms and Conditions (#357, #358), and a coupon issued through
+wallet-api without a named term now lasts as long as the stall says, not a fixed 30 days (#359,
+#360). App and wallet-api. **New build configuration:** `VITE_WEBSITE_BASE_URL` (e.g.
+`https://www.imani.casa`) is REQUIRED, and the image build fails without it. No migrations: an
+older profile or backup without the new field still reads.
 
 ### Added
 
@@ -50,8 +54,23 @@ without it. No migrations: an older profile or backup without the new field stil
   says "New accounts can't be created in this version of the app…", and `register` refuses with
   the same words. imani-deploy passes `https://www.imani.casa` for staging and beta.
 
+### Fixed
+
+- **wallet-api: a headless coupon carries the stall's own validity** (Closes #359, #360). `POST
+  /v1/issue/gateway-request` stamped a fixed 30 days when the request named no term, so a 90-day
+  stall got 30-day coupons and a never-expiring stall got coupons that expired. A request with no
+  `expiresInDays` now uses the term in the signer's own signed merchant record (the same rule the
+  Sell screen and purchase-issuer use). A key with no merchant record answers **422**
+  `no-merchant-record` and asks for `expiresInDays` instead of minting on a default. A record that
+  cannot be read (a relay refusal or timeout) answers **503** and mints nothing. A named
+  `expiresInDays` is still honoured as a per-sale choice, and must be between 1 and 730 days.
+  The wallet-api image now also ships `@imani/merchant-record`.
+
 ### Tests
 
+- wallet-api: the stall's term on every issuing path (`stallValidity`, `issue`, `server`,
+  `queryRelay`: relay refusals, timeouts and dropped sockets read as unreadable), and the Sell
+  screen and Cashlink for owner and till. The e2e issue probe's recordless stall names its term.
 - `terms357.test.ts` (the URL from the env, refusal when unset or malformed, the acceptance record,
   the build check script), `registerTerms357.test.ts` (the real `register`, key store and backup:
   refusal before anything is claimed or stored, the record on the profile for customers and
