@@ -18,6 +18,8 @@
  * into that, which is why it is named here and in the README.
  */
 
+import { MAX_VALIDITY_DAYS } from '@imani/merchant-record'
+
 type Parsed<T> = { ok: true; value: T } | { ok: false; error: { field: string; detail: string } }
 
 const fail = (field: string, detail: string): Parsed<never> => ({ ok: false, error: { field, detail } })
@@ -74,13 +76,21 @@ export interface IssuePlan {
   faceDecimals: number
   issuerId: string
   memo?: string
+  /** Days, or `NEVER_EXPIRES` (0) when the stall's own validity says so. */
   expiresInDays: number
 }
 
-/** A month, matching what the Sell screen offers by default. */
-const DEFAULT_EXPIRY_DAYS = 30
+/**
+ * A parsed request. `expiresInDays` is undefined when the caller named no term: the coupon then
+ * takes the STALL's own validity, read from its signed merchant record (`stallValidity.ts`).
+ *
+ * There used to be a fixed default here (30 days, "what the Sell screen offers"). It was not: the
+ * Sell screen offers the stall's `voucherValidityDays`, so a 90-day stall issuing headless got
+ * 30-day coupons, and a never-expiring stall got coupons that expired (imani-wallet#359).
+ */
+export type IssueRequest = Omit<IssuePlan, 'expiresInDays'> & { expiresInDays?: number }
 
-export function parseIssueRequest(body: unknown, callerPubkey: string): Parsed<IssuePlan> {
+export function parseIssueRequest(body: unknown, callerPubkey: string): Parsed<IssueRequest> {
   if (body === null || typeof body !== 'object' || Array.isArray(body)) {
     return fail('body', `expected a JSON object, got ${describe(body)}`)
   }
@@ -128,9 +138,16 @@ export function parseIssueRequest(body: unknown, callerPubkey: string): Parsed<I
     return fail('authorization', 'the signing key is not a 64-character hex pubkey')
   }
 
-  const expiresInDays = Number(b.expiresInDays ?? b.expires_in_days ?? DEFAULT_EXPIRY_DAYS)
-  if (!Number.isInteger(expiresInDays) || expiresInDays <= 0) {
-    return fail('expiresInDays', 'expected a whole number of days greater than zero')
+  // A per-sale override, as the Sell screen offers one. Absent means the stall's own term.
+  const rawDays = b.expiresInDays ?? b.expires_in_days
+  const expiresInDays = rawDays === undefined ? undefined : Number(rawDays)
+  // Bounded as the Sell screen and the portal bound it (`MAX_VALIDITY_DAYS`, 730): the gateway
+  // publishes no ceiling of its own, so a mistyped 3000 would mint a coupon for the next decade.
+  if (
+    expiresInDays !== undefined &&
+    (!Number.isInteger(expiresInDays) || expiresInDays <= 0 || expiresInDays > MAX_VALIDITY_DAYS)
+  ) {
+    return fail('expiresInDays', `expected a whole number of days from 1 to ${MAX_VALIDITY_DAYS}`)
   }
 
   const memo = typeof b.memo === 'string' ? b.memo.trim() : ''
@@ -143,7 +160,7 @@ export function parseIssueRequest(body: unknown, callerPubkey: string): Parsed<I
       faceDecimals,
       issuerId: callerPubkey,
       memo: memo || undefined,
-      expiresInDays,
+      ...(expiresInDays !== undefined ? { expiresInDays } : {}),
     },
   }
 }

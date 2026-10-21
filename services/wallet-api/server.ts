@@ -75,7 +75,8 @@ import {
 } from './issue.js'
 import { parsePrepareRequest, requestSplit, buildRumor, splitUrl, splitBody } from './prepare.js'
 import { createGuards, requestFingerprint, type StoredResponse } from './guards.js'
-import { createStallLookup } from './stallLookup.js'
+import { createStallLookup, queryRelay } from './stallLookup.js'
+import { createValidityReader, type ValidityReader } from './stallValidity.js'
 
 const PORT = Number(process.env.PORT ?? 8788)
 
@@ -179,6 +180,20 @@ export function setStallLookup(lookup: ReturnType<typeof createStallLookup>): vo
 
 export function resetStallLookup(): void {
   stalls = createStallLookup()
+}
+
+/**
+ * The stall's own coupon validity, for an issue request that names no term (#359). A seam for the
+ * same reason as the lookup: the branch that matters, an unreadable record, needs a failure.
+ */
+let stallValidity: ValidityReader = createValidityReader(queryRelay)
+
+export function setStallValidity(reader: ValidityReader): void {
+  stallValidity = reader
+}
+
+export function resetStallValidity(): void {
+  stallValidity = createValidityReader(queryRelay)
 }
 
 /**
@@ -803,16 +818,45 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const parsed = readJson(body)
     if (!parsed.ok) return json(res, 400, parsed.problem)
 
-    const plan = parseIssueRequest(parsed.value, auth.pubkey)
-    if (!plan.ok) {
+    const request = parseIssueRequest(parsed.value, auth.pubkey)
+    if (!request.ok) {
       metrics.validationErrors++
-      return json(res, 400, { error: 'invalid-request', field: plan.error.field, detail: plan.error.detail })
+      return json(res, 400, { error: 'invalid-request', field: request.error.field, detail: request.error.detail })
+    }
+
+    // No term named: the coupon lives as long as the STALL says, as it would from the Sell
+    // screen, the till or a card sale (#359). Never a fixed default: that is how a 90-day stall
+    // got 30-day coupons here. Unreadable mints nothing on a guess.
+    let expiresInDays = request.value.expiresInDays
+    if (expiresInDays === undefined) {
+      const validity = await stallValidity(auth.pubkey)
+      if (validity.kind !== 'days') {
+        return json(res, 503, {
+          error: 'validity-unknown',
+          detail:
+            'Your voucher validity could not be read just now. Try again in a minute, or name expiresInDays.',
+        })
+      }
+      // No signed record at all is not the stall choosing never-expires: it is a key the relay
+      // knows nothing about (never registered, or its record lives on another relay). Minting on
+      // the stall default there would stamp never-expires silently, the guess this endpoint exists
+      // to refuse. purchase-issuer refuses the same case at mint (`discharge.ts`). A record that
+      // exists but names no valid term IS the stall's own default, as the Sell screen reads it.
+      if (validity.source === 'default') {
+        return json(res, 422, {
+          error: 'no-merchant-record',
+          detail:
+            'No signed merchant record was found for your key, so your voucher validity is unknown. ' +
+            'Name expiresInDays, or publish your merchant record and try again.',
+        })
+      }
+      expiresInDays = validity.days
     }
 
     return answer(200, {
       url: issueUrl(),
       method: 'POST',
-      body: issueBody(plan.value),
+      body: issueBody({ ...request.value, expiresInDays }),
       // Said here rather than left to be discovered: minting answers PENDING
       // behind a bolt11 top-up and carries a token seconds later. The caller
       // polls, because a held connection is a timeout waiting to happen — and
