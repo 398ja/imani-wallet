@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 
+import { runCashlinkExpiryNoticesIfSettled } from '../lib/cashlinkExpiryNotice'
 import { runExpiryReminders } from '../lib/expiryReminders'
 import { listVouchers, onWalletChanged } from '../lib/wallet'
 
@@ -23,6 +24,9 @@ export function useExpiryReminders(pubkey: string, ready: boolean): void {
         },
         () => undefined,
       )
+      // #295 phase 0: "Your Cashlink expired. Open Imani to take it back." Same clock, same
+      // triggers: a link's expiry is crossed by time, not by an event. Never throws.
+      if (live) void runCashlinkExpiryNoticesIfSettled(pubkey)
     }
     check()
     const timer = setInterval(check, RECHECK_MS)

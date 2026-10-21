@@ -71,6 +71,7 @@ import { ClaimLandingPage, ResumeParkedClaim } from './pages/ClaimLandingPage'
 import { takeAfterLogin } from './lib/afterLogin'
 import { GiftLandingPage } from './pages/GiftLandingPage'
 import { reconcileGiftLinks, restoreScan } from './lib/giftLinks'
+import { runCashlinkExpiryNoticesAfterReconcile } from './lib/cashlinkExpiryNotice'
 import { BuyPage } from './pages/BuyPage'
 import { BuyCancelledPage, BuyDonePage } from './pages/BuyReturnPages'
 import { PublicProfilePage } from './pages/PublicProfilePage'
@@ -339,6 +340,9 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           })
           .then(({ claimed, reclaimed }) => {
             if (claimed + reclaimed > 0) console.info(`[app] gift links: ${claimed} claimed, ${reclaimed} taken back`)
+            // #295 phase 0: tell the sender about each Cashlink that expired, once. After the
+            // reconcile, so a link it just took back says so instead of "open Imani".
+            return runCashlinkExpiryNoticesAfterReconcile(pubkey)
           })
           .catch(() => {
             // Never blocks start-up; logged inside.

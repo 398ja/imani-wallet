@@ -50,6 +50,20 @@ export function tooManyLinksMessage(n = MAX_OUTSTANDING_LINKS): string {
   return `You have ${n} links waiting to be claimed. Take one back or wait for it to be claimed.`
 }
 
+/**
+ * #295 phase 0: at most this many links past their expiry that have not come back yet.
+ *
+ * A link past `x` no longer counts against `MAX_OUTSTANDING_LINKS`, so an expired link that the
+ * wallet could not take back (the voucher service was unreachable, say) stops blocking new ones.
+ * Until the take-back is automatic (#295 phase 1 onwards) such a link can still be opened by whoever
+ * holds it, which is exactly what the limit bounds (spec 6.7), so these are capped on their own.
+ */
+export const MAX_EXPIRED_UNRETURNED = 10
+
+export function tooManyExpiredMessage(n = MAX_EXPIRED_UNRETURNED): string {
+  return `${n} of your Cashlinks have expired and have not come back yet. Keep Imani open for a minute so it can take them back, then try again.`
+}
+
 // ─── The counter ─────────────────────────────────────────────────────────────
 
 const counterKey = (pubkey: string) => `imani-wallet:gift-link-next:${pubkey}`
@@ -180,21 +194,77 @@ export function distinctLinks(rows: LinkRow[]): Map<string, LinkRow[]> {
   return byKey
 }
 
-export async function outstandingLinkCount(): Promise<number> {
-  const links = distinctLinks(await linkRows())
-  let n = 0
-  for (const parts of links.values()) if (parts.some((p) => p.link.status === 'outstanding')) n += 1
-  return n
+export interface LinkCounts {
+  /** Outstanding and before `x`: can still be claimed. What `MAX_OUTSTANDING_LINKS` limits. */
+  waiting: number
+  /** Outstanding but past `x`: not taken back yet. What `MAX_EXPIRED_UNRETURNED` limits. */
+  expiredUnreturned: number
 }
 
-async function setLinkStatus(rows: LinkRow[], status: GiftLinkStatus, at = Date.now()): Promise<void> {
+/** The two counts the limits read (#295 phase 0), from rows already loaded. */
+export function countLinks(rows: LinkRow[], nowMs = Date.now()): LinkCounts {
+  const now = Math.floor(nowMs / 1000)
+  let waiting = 0
+  let expiredUnreturned = 0
+  for (const parts of distinctLinks(rows).values()) {
+    if (!parts.some((p) => p.link.status === 'outstanding')) continue
+    if (now < parts[0].link.x) waiting += 1
+    else expiredUnreturned += 1
+  }
+  return { waiting, expiredUnreturned }
+}
+
+export async function linkCounts(nowMs = Date.now()): Promise<LinkCounts> {
+  return countLinks(await linkRows(), nowMs)
+}
+
+/** Links that can still be claimed: outstanding and before their expiry. */
+export async function outstandingLinkCount(nowMs = Date.now()): Promise<number> {
+  return (await linkCounts(nowMs)).waiting
+}
+
+/** Why a new link is refused right now, or null when one may be made. */
+export function linkLimitMessage(counts: LinkCounts): string | null {
+  if (counts.waiting >= MAX_OUTSTANDING_LINKS) return tooManyLinksMessage()
+  if (counts.expiredUnreturned >= MAX_EXPIRED_UNRETURNED) return tooManyExpiredMessage()
+  return null
+}
+
+/**
+ * What opening Send by link runs (#295 phase 0): settle every link (claimed ones marked, expired ones
+ * taken back), then count. So a sender whose ten links have all expired can make an eleventh as soon
+ * as the screen opens, not only after a restart. Never throws: the reconcile swallows its own errors.
+ */
+export async function settleAndCountLinks(
+  nowMs = Date.now(),
+  state: (token: string) => Promise<ProofState> = tokenState,
+): Promise<LinkCounts> {
+  await reconcileGiftLinks(nowMs, state)
+  return linkCounts(nowMs)
+}
+
+async function setLinkStatus(rows: LinkRow[], status: GiftLinkStatus, at = Date.now(), extra: Partial<GiftLinkRecord> = {}): Promise<void> {
   const wallet = getWallet()
   for (const r of rows) {
-    const link: GiftLinkRecord = { ...r.link, status, closedAt: at }
+    const link: GiftLinkRecord = { ...r.link, ...extra, status, closedAt: at }
     const merged = await wallet.updateTransaction(r.id, { link } as unknown as Partial<TransactionRow>)
     if (merged) void publishTx(merged)
   }
   notifyWalletChanged()
+}
+
+/**
+ * Record that the "Cashlink expired" notice was filed (#295 phase 0), on the link's own record so the
+ * encrypted history carries it to a restored or second device. Status and close time are untouched.
+ */
+export async function markLinksNoticed(rows: LinkRow[], at = Date.now()): Promise<void> {
+  const wallet = getWallet()
+  for (const r of rows) {
+    if (r.link.noticedAt !== undefined) continue
+    const link: GiftLinkRecord = { ...r.link, noticedAt: at }
+    const merged = await wallet.updateTransaction(r.id, { link } as unknown as Partial<TransactionRow>)
+    if (merged) void publishTx(merged)
+  }
 }
 
 // ─── Send ────────────────────────────────────────────────────────────────────
@@ -219,6 +289,8 @@ export async function sendGift({
   memo,
   x,
   walletOrigin = window.location.origin,
+  nowMs = Date.now(),
+  state = tokenState,
 }: {
   payer: string
   merchant: Merchant
@@ -228,6 +300,9 @@ export async function sendGift({
   /** The link's expiry, unix seconds, already capped (`giftExpiry`). */
   x: number
   walletOrigin?: string
+  /** The clock and the NUT-07 check the reconcile uses; seams for tests. */
+  nowMs?: number
+  state?: (token: string) => Promise<ProofState>
 }): Promise<GiftSent & { delivered: boolean }> {
   // Owner rule 2026-10-13: a merchant account takes only its own stall's vouchers, so it could never
   // take a link of another stall's coupon back (reclaim is a receive). Refused before anything moves.
@@ -236,9 +311,12 @@ export async function sendGift({
   if (issuer && issuer !== payer.toLowerCase()) {
     await refuseForeignIssuerForGift(issuer, payer)
   }
+  // #295 phase 0: settle every link first. A link that was claimed is marked, and one past its
+  // expiry is taken back, so neither blocks this send. Never throws.
+  await reconcileGiftLinks(nowMs, state)
   const rows = await linkRows()
-  const outstanding = [...distinctLinks(rows).values()].filter((p) => p.some((r) => r.link.status === 'outstanding')).length
-  if (outstanding >= MAX_OUTSTANDING_LINKS) throw new Error(tooManyLinksMessage())
+  const refusal = linkLimitMessage(countLinks(rows, nowMs))
+  if (refusal) throw new Error(refusal)
 
   const used = new Set(rows.map((r) => r.link.i).filter((i): i is number => i !== undefined))
   const allocated = await unusedLink(payer, used)
@@ -430,14 +508,16 @@ export async function takeBack(k: string): Promise<TakeBackOutcome> {
   tokens = giftCandidates(tokens)
   if (tokens.length === 0) return { kind: 'not_found' }
   const states = await Promise.all(tokens.map((t) => tokenState(t.token)))
+  // Taken back (or found claimed) by hand: the sender already knows, so no "expired" notice follows.
+  const told = { noticedAt: Date.now() }
   if (combinedState(states) === 'SPENT') {
-    await setLinkStatus(rows, 'claimed')
+    await setLinkStatus(rows, 'claimed', Date.now(), told)
     return { kind: 'claimed' }
   }
   const unspent = tokens.filter((_, n) => states[n] !== 'SPENT')
   const outcome = await redeemGiftTokens(unspent, 'gift_link_reclaim')
-  if (outcome.kind === 'ok') await setLinkStatus(rows, 'reclaimed')
-  else if (outcome.kind === 'claimed') await setLinkStatus(rows, 'claimed')
+  if (outcome.kind === 'ok') await setLinkStatus(rows, 'reclaimed', Date.now(), told)
+  else if (outcome.kind === 'claimed') await setLinkStatus(rows, 'claimed', Date.now(), told)
   return outcome
 }
 
@@ -477,10 +557,10 @@ export async function reconcileGiftLinks(
       if (Math.floor(nowMs / 1000) >= parts[0].link.x) {
         const outcome = await redeemGiftTokens(tokens.filter((_, n) => states[n] === 'UNSPENT'), 'gift_link_reclaim')
         if (outcome.kind === 'ok') {
-          await setLinkStatus(parts, 'reclaimed')
+          await setLinkStatus(parts, 'reclaimed', nowMs)
           reclaimed += 1
         } else if (outcome.kind === 'claimed') {
-          await setLinkStatus(parts, 'claimed')
+          await setLinkStatus(parts, 'claimed', nowMs)
           claimed += 1
         }
       }

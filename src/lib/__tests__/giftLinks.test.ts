@@ -75,9 +75,15 @@ vi.mock('../giftLink', async (orig) => {
 
 import { deriveLinkSecret, linkPubOf, secretToText, type ProofState } from '../giftLink'
 import {
+  MAX_EXPIRED_UNRETURNED,
   MAX_OUTSTANDING_LINKS,
   RESTORE_GAP,
   allocateLink,
+  linkCounts,
+  linkLimitMessage,
+  settleAndCountLinks,
+  outstandingLinkCount,
+  tooManyExpiredMessage,
   nextLinkIndex,
   reconcileGiftLinks,
   restoreScan,
@@ -266,5 +272,75 @@ describe('the restore scan (spec 3.3: i = 0 … last + 20)', () => {
     h.signerKey = null
     expect(await restoreScan(PUB, probeFor(new Set([0])))).toBe(0)
     expect(probeSeen).toHaveLength(0)
+  })
+})
+
+describe('#295 phase 0: the limit counts only links that can still be claimed', () => {
+  const token = buildVoucherToken({}, [8]).token
+  const NOW = 1_850_000_000_000
+  const PAST = 1_840_000_000
+  const FUTURE = 1_900_000_000
+
+  it('counts outstanding links before x as waiting, and expired ones separately', async () => {
+    h.rows = [
+      ...Array.from({ length: 4 }, (_, i) => linkRow(i, 'outstanding', FUTURE)),
+      ...Array.from({ length: 3 }, (_, i) => linkRow(10 + i, 'outstanding', PAST)),
+      linkRow(20, 'claimed', FUTURE),
+      linkRow(21, 'reclaimed', PAST),
+    ]
+    expect(await linkCounts(NOW)).toEqual({ waiting: 4, expiredUnreturned: 3 })
+    expect(await outstandingLinkCount(NOW)).toBe(4)
+  })
+
+  it('takes expired links back BEFORE counting, so ten expired links leave room for an eleventh', async () => {
+    h.rows = Array.from({ length: 10 }, (_, i) => linkRow(i, 'outstanding', PAST))
+    for (let i = 0; i < 10; i++) h.wraps.set(linkPubOf(deriveLinkSecret(ID, i)), [token])
+    h.deliverTo = linkPubOf(deriveLinkSecret(ID, 10))
+    const out = await sendGift({
+      payer: PUB, merchant: {} as never, unit: 'EUR', amount: 100, x: FUTURE,
+      nowMs: NOW, state: async () => 'UNSPENT',
+    })
+    expect(out.delivered).toBe(true)
+    // All ten came back through the ordinary reclaim first, then the send went out.
+    expect(h.redeemed.filter((r) => r.source === 'gift_link_reclaim')).toHaveLength(10)
+    expect(h.rows.slice(0, 10).every((r) => (r.link as { status: string }).status === 'reclaimed')).toBe(true)
+    expect(h.sent).toHaveLength(1)
+  })
+
+  it('does not count an expired link that could not be taken back against the ten waiting', async () => {
+    h.rows = [
+      ...Array.from({ length: 9 }, (_, i) => linkRow(i, 'outstanding', FUTURE)),
+      linkRow(9, 'outstanding', PAST),
+    ]
+    h.deliverTo = linkPubOf(deriveLinkSecret(ID, 10))
+    // The mint cannot answer, so nothing is taken back, yet the expired link no longer counts.
+    await sendGift({ payer: PUB, merchant: {} as never, unit: 'EUR', amount: 100, x: FUTURE, nowMs: NOW, state: async () => 'UNKNOWN' })
+    expect(h.sent).toHaveLength(1)
+  })
+
+  it('caps expired links that have not come back at ten, so they cannot pile up', async () => {
+    h.rows = Array.from({ length: MAX_EXPIRED_UNRETURNED }, (_, i) => linkRow(i, 'outstanding', PAST))
+    await expect(
+      sendGift({ payer: PUB, merchant: {} as never, unit: 'EUR', amount: 100, x: FUTURE, nowMs: NOW, state: async () => 'UNKNOWN' }),
+    ).rejects.toThrow(tooManyExpiredMessage())
+    expect(h.sent).toHaveLength(0)
+    expect(MAX_EXPIRED_UNRETURNED).toBe(10)
+    expect(tooManyExpiredMessage()).not.toMatch(/mint|proof|token|relay|nostr|key/i)
+  })
+
+  it('opening Send settles first: ten expired links leave the screen free for an eleventh', async () => {
+    h.rows = Array.from({ length: 10 }, (_, i) => linkRow(i, 'outstanding', PAST))
+    for (let i = 0; i < 10; i++) h.wraps.set(linkPubOf(deriveLinkSecret(ID, i)), [token])
+    const counts = await settleAndCountLinks(NOW, async () => 'UNSPENT')
+    expect(counts).toEqual({ waiting: 0, expiredUnreturned: 0 })
+    expect(linkLimitMessage(counts)).toBeNull()
+  })
+
+  it('still refuses an eleventh link that can be claimed', async () => {
+    h.rows = Array.from({ length: MAX_OUTSTANDING_LINKS }, (_, i) => linkRow(i, 'outstanding', FUTURE))
+    await expect(
+      sendGift({ payer: PUB, merchant: {} as never, unit: 'EUR', amount: 100, x: FUTURE, nowMs: NOW, state: async () => 'UNSPENT' }),
+    ).rejects.toThrow(tooManyLinksMessage())
+    expect(h.sent).toHaveLength(0)
   })
 })
