@@ -820,6 +820,10 @@ export function hasCanonicalNumericTags(rows: unknown[][]): boolean {
 function legacyWholeRatioSpelling(canonical: string): string | undefined {
   if (!/^-?\d+$/.test(canonical)) return undefined
   const n = Number(canonical)
+  // Java renders a whole double through `long`, which saturates at ±2^63, so it
+  // has no legacy spelling for anything larger: "1.0E19" reads as 2^63-1 there and
+  // is refused. Without this the wallet accepted it and the mint did not.
+  if (Math.abs(n) > 2 ** 63) return undefined
   // Java's Double.toString for an integral double: plain with ".0" on [1e-3, 1e7),
   // otherwise E notation, which javaDoubleToString already reproduces.
   return Math.abs(n) < 1e7 ? `${canonical}.0` : javaDoubleToString(n)

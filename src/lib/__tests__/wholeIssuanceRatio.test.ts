@@ -149,6 +149,11 @@ describe('whole-number issuance ratio vectors (cashu-voucher#59)', () => {
     ['10000000.0', false],
     ['1.0e7', false],
     ['1E7', false],
+    // Java's long saturates at 2^63, so it has no legacy spelling past it.
+    ['9.223372036854776E18', true],
+    ['1.0E19', false],
+    ['1.8446744073709552E19', false],
+    ['-1.0E19', false],
   ])('treats an issuance_ratio of %j as verifiable: %s', (wire, accepted) => {
     expect(hasCanonicalNumericTags([['issuance_ratio', wire]])).toBe(accepted)
     // A whole number with a decimal point is never acceptable for face_value.
