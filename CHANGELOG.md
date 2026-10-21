@@ -40,7 +40,9 @@ without it. No migrations: an older profile or backup without the new field stil
   them (no CORS), so the URL and time pin which text was live. The profile record is what the
   backup file and the Drive backup carry, so a restored account keeps it. The field is optional
   (older records and backups still read), local only (never published), and checked on restore: a
-  malformed value in a backup file is dropped.
+  malformed value in a backup file is dropped. A restore keeps the EARLIEST acceptance known for
+  the account: a backup written before it accepted (or carrying a later one) no longer erases or
+  replaces the one this device holds (second review of #358).
 - **`VITE_WEBSITE_BASE_URL`**, the public website, as a Dockerfile build arg and in the new
   `.env.example`. `scripts/check-website-base-url-build.sh` fails the image build when it is unset
   or not a plain **https** URL (https only, review of #358; plain http is refused, as is any other
