@@ -200,18 +200,18 @@ describe('ReauthDialog', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /Forgotten your passphrase/ }))
 
-      // `/restore` is declared in `PublicRoutes`, so it does not exist while
-      // this authed tree is mounted: a button navigating there fell through to
-      // the authed catch-all and dumped the user on `/login`. Logout is the
-      // step that hands the app back to the public routes, and the login screen
-      // it lands on links to `/restore`, so the route is still reachable — it is
-      // just reached honestly, through the exit that actually ends the session.
+      // `/restore` is gone (#325): restoring IS the onboarding "Log in" step,
+      // which is where logging out lands. So this dialog has no restore button,
+      // and it points at "Log in" on the next screen, reached honestly through
+      // the exit that actually ends the session.
       expect(screen.queryByRole('button', { name: /Restore/ })).toBeNull()
       // And it says so in the order the app actually works, naming the erase.
       // "Log out to restore" on its own reads as a soft continue, and the one
       // person who must not misread it is someone with no backup.
       expect(screen.getByText(/log out first/)).toBeTruthy()
       expect(screen.getByText(/clears this device/)).toBeTruthy()
+      expect(screen.getByText(/choose\s+Log in on the next screen/)).toBeTruthy()
+      expect(screen.queryByText(/offers\s+Restore/)).toBeNull()
       expect(screen.getByText(/Make sure you have your backup/)).toBeTruthy()
     })
 

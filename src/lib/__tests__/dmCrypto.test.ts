@@ -15,10 +15,16 @@ import { hexToBytes } from '@noble/hashes/utils'
  * `vi.hoisted` because `vi.mock` is hoisted above the imports, so its factory
  * cannot close over an ordinary `const` declared below it.
  */
-const signerState = vi.hoisted(() => ({ privkey: null as string | null }))
+const signerState = vi.hoisted(() => ({ privkey: null as string | null, pubkey: '' }))
+const collectEnrolled = vi.hoisted(() => vi.fn(async () => 0))
+
+vi.mock('../terminalDeliveryNet', () => ({ collectEnrolled }))
 
 vi.mock('../nap', () => ({
   getSigner: () => ({
+    get pubkey() {
+      return signerState.pubkey
+    },
     privkeyHex() {
       if (!signerState.privkey) throw new Error('The wallet is locked.')
       return signerState.privkey
@@ -127,6 +133,22 @@ describe('dm-poll CryptoAdapter', () => {
       expect(await createDmCryptoAdapter().unwrapNip17Dm(wrap as never, '')).toBeNull()
     })
 
+    // #160 phase 6, found by the local gate (B5, E4). A till's "enrolled" DM was read only by the
+    // Terminals screen's poll, so an owner on any other screen, or on a restored phone, kept the
+    // till Waiting. dm-poll opening one must ask the owner's app to collect it now.
+    it('asks for the enrolled notices to be collected when a till says it is enrolled', async () => {
+      const stallSk = generateSecretKey()
+      const tillSk = generateSecretKey()
+      signerState.privkey = bytesToHex(stallSk)
+      signerState.pubkey = getPublicKey(stallSk)
+      const content = JSON.stringify({ type: 'imani-terminal-enrolled/1', voucher_id: 'v1', terminal_pubkey: getPublicKey(tillSk) })
+      const wrap = nip17.wrapEvent(tillSk, { publicKey: getPublicKey(stallSk) }, content)
+
+      await createDmCryptoAdapter().unwrapNip17Dm(wrap as never, '')
+
+      await vi.waitFor(() => expect(collectEnrolled).toHaveBeenCalledWith(getPublicKey(stallSk)))
+    })
+
     /**
      * A coupon too big for one DM, through the real gift-wrap path.
      *
@@ -156,9 +178,12 @@ describe('dm-poll CryptoAdapter', () => {
         const wraps = chunkWraps(recipientSk, javaChunks as unknown[])
         const adapter = createDmCryptoAdapter()
 
-        // The first wrap is a real DM that is not yet a coupon. Null keeps it
-        // unconsumed so the poll re-offers it; anything else loses the money.
-        expect(await adapter.unwrapNip17Dm(wraps[0] as never, '')).toBeNull()
+        // The first wrap is a real DM that is not yet a coupon. HELD keeps it
+        // unconsumed (and out of the failed tracker) so the poll re-offers it;
+        // anything that consumes it loses the money.
+        const first = await adapter.unwrapNip17Dm(wraps[0] as never, '')
+        expect(first?.hold).toBe(true)
+        expect(adapter.extractToken(first!.content)).toBeNull()
 
         const done = await adapter.unwrapNip17Dm(wraps[1] as never, '')
         expect(done?.content).toBe(JSON.stringify(javaPayload))
@@ -419,6 +444,52 @@ describe('voucher metadata comes from the token, not the envelope', () => {
 
     expect(crypto.extractToken(dmEnvelope(token))).toBe(token)
     expect(crypto.extractToken(dmEnvelope('cashuBnotavoucher'))).toBe('cashuBnotavoucher')
+  })
+
+  /**
+   * #131/#133 review (HIGH-2): a voucher at a mint the wallet does not list is
+   * HANDED OVER here, not dropped. Returning no token marks the delivery processed
+   * for good, so a mere mismatch between two services' mint settings would lose
+   * every coupon. The redemption gate holds it instead: nothing is swapped, the
+   * delivery stays unconsumed, and the wallet shows it as waiting to be verified.
+   */
+  it('hands over a voucher at an unlisted mint, for the redemption gate to hold', () => {
+    vi.stubEnv('VITE_TRUSTED_MINT_URLS', 'https://mint.staging.398ja.xyz')
+    try {
+      const { token } = buildVoucherToken() // stamped `http://mint.test`
+      expect(crypto.extractToken(dmEnvelope(token))).toBe(token)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  /**
+   * And the same voucher at the trusted mint is handed over: the refusal above
+   * is the mint, not anything else about the fixture.
+   */
+  it('hands over the same voucher when its mint is trusted', () => {
+    vi.stubEnv('VITE_TRUSTED_MINT_URLS', 'http://mint.test/')
+    try {
+      const { token } = buildVoucherToken()
+      expect(crypto.extractToken(dmEnvelope(token))).toBe(token)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  /**
+   * A voucher that arrives before the trusted list has loaded must not be refused
+   * HERE: no token marks the delivery processed for good, which lost the coupon.
+   * It is handed over, and the redemption gate defers it until the list is known.
+   */
+  it('hands over a voucher while the trusted list is still unknown, for the redemption gate to defer', () => {
+    vi.stubEnv('VITE_TRUSTED_MINT_URLS', '')
+    try {
+      const { token } = buildVoucherToken()
+      expect(crypto.extractToken(dmEnvelope(token))).toBe(token)
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   it('clamps a value inflated past the signed face value', () => {

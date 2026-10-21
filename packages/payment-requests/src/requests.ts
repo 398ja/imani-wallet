@@ -39,6 +39,12 @@ export interface VoucherPaymentRequest {
   /** Set once paid: which wallet transaction settled it. */
   settledBy?: string
   receivedAmount?: number
+  /**
+   * `core` when the request was marked paid on gateway-core's fulfilment verdict rather than on
+   * a wallet arrival (imani-wallet#300): the money is counted, and the coupons may still be on
+   * their way into this wallet. Absent for a request the wallet settled itself.
+   */
+  confirmedBy?: 'core'
 }
 
 /**
@@ -135,6 +141,19 @@ export function matchPayment(
   const settled = new Set(requests.map((r) => r.settledBy).filter(Boolean))
   if (settled.has(transaction.id)) return null
 
+  // A payment that names a request already closed belongs to THAT request (imani-wallet#300).
+  // The till can mark a request paid on gateway-core's verdict before its coupons arrive; when
+  // they do land, the amount fallback below would otherwise hand them to another open request
+  // of the same value, and one payment would settle two sales. They are filed against the
+  // request core already counted (`settledBy`), and nothing about its Paid changes. Only once
+  // they cover it: a bundle whose first part has landed is still on its way.
+  const closed = transaction.paymentId
+    ? requests.find((r) => r.paymentId === transaction.paymentId && r.status !== 'pending')
+    : undefined
+  if (closed) {
+    return awaitingCoupons(closed) && transaction.amount >= closed.amount ? fileAgainst(closed, transaction) : null
+  }
+
   const pending = requests.filter(
     (r) => r.status === 'pending' && transaction.at >= r.createdAt,
   )
@@ -143,14 +162,23 @@ export function matchPayment(
     ? pending.find((r) => r.paymentId === transaction.paymentId)
     : undefined
 
+  if (!byId) {
+    // The amount fallback. A request core counted whose coupons have not landed is a rival here
+    // (#300): an unstamped arrival of its value may well be its coupons, so two plausible owners
+    // is ambiguity, and ambiguity settles nothing.
+    const sameValue = [
+      ...pending,
+      ...requests.filter((r) => awaitingCoupons(r) && transaction.at >= r.createdAt),
+    ].filter((r) => r.unit === transaction.unit && transaction.amount >= r.amount)
+    if (sameValue.length !== 1) return null
+    if (sameValue[0].status !== 'pending') return fileAgainst(sameValue[0], transaction)
+  }
+
   const candidate =
     byId ??
-    (() => {
-      const sameValue = pending.filter(
-        (r) => r.unit === transaction.unit && transaction.amount >= r.amount,
-      )
-      return sameValue.length === 1 ? sameValue[0] : undefined
-    })()
+    pending.find(
+      (r) => r.unit === transaction.unit && transaction.amount >= r.amount,
+    )
 
   if (!candidate) return null
   if (transaction.amount < candidate.amount) return null
@@ -161,6 +189,26 @@ export function matchPayment(
     settledBy: transaction.id,
     receivedAmount: transaction.amount,
   }
+}
+
+/**
+ * Paid on gateway-core's verdict, with no wallet transaction filed against it yet (#300): its
+ * coupons may still be on their way into this wallet.
+ */
+function awaitingCoupons(request: VoucherPaymentRequest): boolean {
+  return request.status === 'fulfilled' && request.confirmedBy === 'core' && !request.settledBy
+}
+
+/**
+ * Files an arriving payment against the request core already counted. Status and the amount
+ * core counted stay as they are: nothing is counted twice, and Paid is never taken back. The
+ * row is recorded in `settledBy` so rule 1 stops it settling anything else.
+ */
+function fileAgainst(
+  request: VoucherPaymentRequest,
+  transaction: { id: string },
+): VoucherPaymentRequest {
+  return { ...request, settledBy: transaction.id }
 }
 
 

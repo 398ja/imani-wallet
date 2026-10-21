@@ -15,6 +15,9 @@ import {
   IdentityInline,
 } from '../components/ui'
 import { ScanRecipient } from '../components/ScanRecipient'
+import { SendByLinkOption } from './SendLinkPage'
+import { SwapBackOffer } from '../components/SwapBackOffer'
+import { VoucherFullyRedeemedError } from '../lib/fullyRedeemed'
 import { listVouchers } from '../lib/wallet'
 import { merchantStatus, type MerchantStatus } from '../lib/merchant'
 import { toMerchants, type Merchant } from '../lib/merchants'
@@ -33,6 +36,7 @@ import {
   withoutInFlight,
   type SendResult,
 } from '../lib/pay'
+import { userMessage } from '../lib/userMessage'
 
 /**
  * Send a voucher to someone — a friend, or a merchant redeeming it.
@@ -100,7 +104,7 @@ function sendOptions(merchants: Merchant[]): SendOption[] {
 type Status =
   | { step: 'idle' }
   | { step: 'sending' }
-  | { step: 'failed'; message: string }
+  | { step: 'failed'; message: string; swapBackTokenId?: string }
   | { step: 'unconfirmed'; message: string }
 
 export function SendPage({ pubkey }: { pubkey: string }) {
@@ -351,6 +355,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
           }}
           selfPubkey={pubkey}
         />
+        <SendByLinkOption from={from} unit={from ? chosen?.unit : undefined} />
       </Screen>
     )
   }
@@ -370,7 +375,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
               key={key(option)}
               type="button"
               onClick={() => setPicked(key(option))}
-              className="flex w-full items-center justify-between rounded-2xl bg-white p-4 text-left dark:bg-mono-900"
+              className="pressable flex w-full items-center justify-between rounded-2xl bg-white p-4 text-left dark:bg-mono-900"
             >
               <div className="min-w-0">
                 <MerchantName merchant={option.merchant} />
@@ -379,7 +384,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
                   {option.vouchers.length === 1 ? '1 voucher' : `${option.vouchers.length} vouchers`}
                 </p>
               </div>
-              <ChevronRight className="h-5 w-5 text-mono-400" />
+              <ChevronRight className="h-5 w-5 text-mono-400" aria-hidden />
             </button>
           ))}
         </div>
@@ -436,6 +441,9 @@ export function SendPage({ pubkey }: { pubkey: string }) {
         </p>
 
         {(status.step === 'failed' || status.step === 'unconfirmed') && <Alert>{status.message}</Alert>}
+        {status.step === 'failed' && status.swapBackTokenId && (
+          <SwapBackOffer tokenId={status.swapBackTokenId} pubkey={pubkey} />
+        )}
 
         <div className="space-y-2">
           <Button
@@ -464,7 +472,8 @@ export function SendPage({ pubkey }: { pubkey: string }) {
               } catch (e) {
                 setStatus({
                   step: e instanceof SendOutcomeUnknownError ? 'unconfirmed' : 'failed',
-                  message: e instanceof Error ? e.message : 'Send failed.',
+                  message: userMessage(e, 'Send failed.'),
+                  swapBackTokenId: e instanceof VoucherFullyRedeemedError ? e.tokenId : undefined,
                 })
               }
             }}
@@ -555,7 +564,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
               {' · '}
               <button
                 type="button"
-                className="underline"
+                className="pressable -my-3 inline-block py-3 underline"
                 onClick={() => {
                   setPicked(null)
                   setAmount('')

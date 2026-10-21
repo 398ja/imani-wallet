@@ -16,6 +16,7 @@ import { parseIssuanceWarrant, verifyIssuanceWarrant } from '../issuanceWarrant'
 import { parseVoucherToken, verifyVoucher, creditableFaceValue } from '../voucherToken'
 import { buildVoucherToken } from './voucherFixtures'
 import type { Actor } from '../actor'
+import { UnwarrantedSaleError } from '../warrantSigner'
 
 const STALL_SK = 'a'.repeat(63) + '7'
 const STALL = bytesToHex(schnorr.getPublicKey(hexToBytes(STALL_SK)))
@@ -273,26 +274,23 @@ describe('a retry of the same issue', () => {
   })
 
   /**
-   * A press while locked sends no warrant. That attempt must not be reused
-   * after unlocking, or the coupon is minted unwarranted and refused at the till.
+   * A press while locked is refused before anything is minted (#159): with
+   * no warrant the coupon would be refused at the till. After unlocking, the
+   * next press signs and mints once.
    */
-  it('signs a fresh warrant on the retry after the wallet is unlocked', async () => {
+  it('refuses a press while locked without minting, then signs after unlocking', async () => {
     // Arrange
     const issuer = createCashbackIssuer()
     calls.signerKey = null
-    calls.respond = () => {
-      throw new TypeError('network down')
-    }
-    await expect(issuer.submit(request)).rejects.toThrow()
+    await expect(issuer.submit(request)).rejects.toThrow(/locked/)
     calls.signerKey = STALL_SK
-    calls.respond = null
 
     // Act
     await issuer.submit(request)
 
     // Assert
-    expect(calls.bodies[0].issuanceWarrant).toBeUndefined()
-    const warrant = calls.bodies[1].issuanceWarrant as string
+    expect(calls.bodies).toHaveLength(1)
+    const warrant = calls.bodies[0].issuanceWarrant as string
     expect(verifyIssuanceWarrant(parseIssuanceWarrant(warrant), STALL, {
       faceValueMinor: 1500,
       unit: 'EUR',
@@ -300,32 +298,25 @@ describe('a retry of the same issue', () => {
     })).toEqual({ verdict: 'verified' })
   })
 
-  /**
-   * An attempt with no warrant is never kept while there is an actor, even if
-   * the signer key reads the same both times (here, still locked on retry).
-   */
-  it('does not keep an unwarranted attempt for the next press', async () => {
+  /** Locked twice: nothing is ever sent, so no unwarranted coupon exists. */
+  it('never mints an unwarranted coupon however often it is pressed', async () => {
     // Arrange
     const issuer = createCashbackIssuer()
     calls.signerKey = null
-    calls.respond = () => {
-      throw new TypeError('network down')
-    }
-    await expect(issuer.submit(request)).rejects.toThrow()
-    calls.respond = null
 
     // Act
-    await issuer.submit(request)
+    await expect(issuer.submit(request)).rejects.toThrow()
+    await expect(issuer.submit(request)).rejects.toThrow()
 
     // Assert
-    expect(calls.bodies[1].idempotencyKey).not.toBe(calls.bodies[0].idempotencyKey)
+    expect(calls.order).not.toContain('generate')
   })
 
   /**
-   * The signing key is part of the attempt. A different key under the same
-   * stall (a restored session) gets a new key and warrant.
+   * A session key that is not the stall's can only sign `none`, which the
+   * till refuses. Refused before minting (#159), even mid-retry.
    */
-  it('starts a new attempt when the signing key changes under the same stall', async () => {
+  it('refuses when the signing key changes to one that is not the stall', async () => {
     // Arrange
     const issuer = createCashbackIssuer()
     calls.respond = () => {
@@ -336,33 +327,36 @@ describe('a retry of the same issue', () => {
     calls.signerKey = OTHER_SK
 
     // Act
-    await issuer.submit(request)
+    const run = issuer.submit(request)
 
     // Assert
-    expect(calls.bodies[1].idempotencyKey).not.toBe(calls.bodies[0].idempotencyKey)
+    await expect(run).rejects.toBeInstanceOf(UnwarrantedSaleError)
+    expect(calls.bodies).toHaveLength(1)
   })
 
   /**
-   * A terminal signs with its own key, not the stall's. Re-paired to another
-   * stall, the signer is unchanged, so the stall must be part of the attempt.
+   * A terminal issues cashback only in a live FULL session with a selling role (#160 phase 5).
+   * Without one (no session, or a REDUCED one that never reached the mint) it is refused before
+   * anything is signed or minted, for any stall.
    */
-  it('starts a new attempt when the same terminal key issues for another stall', async () => {
+  it('refuses a terminal outside a FULL session before signing or minting', async () => {
     // Arrange
     const issuer = createCashbackIssuer()
     const terminalFor = (stallPubkey: string) =>
       ({ kind: 'terminal', stallPubkey, terminalPubkey: OTHER, role: 'issue-and-redeem' }) as Actor
+    const reduced = { kind: 'reduced', openedAt: Date.now(), expiresAt: Date.now() + 3600_000 } as never
     calls.signerKey = OTHER_SK
-    calls.respond = () => {
-      throw new TypeError('network down')
-    }
-    await expect(issuer.submit({ ...request, actor: terminalFor(STALL) })).rejects.toThrow()
-    calls.respond = null
 
     // Act
-    await issuer.submit({ ...request, actor: terminalFor(OTHER) })
+    const first = await issuer.submit({ ...request, actor: terminalFor(STALL) }).catch((e: Error) => e)
+    const second = await issuer
+      .submit({ ...request, actor: terminalFor(OTHER), session: reduced })
+      .catch((e: Error) => e)
 
     // Assert
-    expect(calls.bodies[1].idempotencyKey).not.toBe(calls.bodies[0].idempotencyKey)
+    expect(String(first)).toMatch(/cannot create a Cashlink right now/)
+    expect(String(second)).toMatch(/full session/)
+    expect(calls.order).toEqual([])
   })
 
   /** Signing in as another stall with the same amount is a different sale: new key and warrant. */
@@ -498,5 +492,82 @@ describe('the stall\'s voucher validity travels with the generate request', () =
 
     expect(calls.bodies[1].idempotencyKey).not.toBe(calls.bodies[0].idempotencyKey)
     expect(calls.bodies[1].voucherValidityDays).toBe(7)
+  })
+})
+
+describe('a terminal cannot issue cashback (#159)', () => {
+  const terminal = {
+    kind: 'terminal',
+    stallPubkey: STALL,
+    terminalPubkey: OTHER,
+    role: 'issue-and-redeem',
+  } as Actor
+  const request = { actor: terminal, amountMinor: 1500, unit: 'EUR', decimals: 2, expiryDays: 30, voucherValidityDays: 90 }
+
+  it('prepareCashbackAttempt refuses before signing', async () => {
+    // Act
+    const run = prepareCashbackAttempt(request)
+
+    // Assert
+    await expect(run).rejects.toBeInstanceOf(UnwarrantedSaleError)
+    expect(calls.order).toEqual([])
+  })
+
+  it('issueCashback refuses a hand-built attempt rather than minting it', async () => {
+    // Arrange: an attempt carrying the `none` a terminal would have signed.
+    const attempt = { idempotencyKey: 'k-1', warrant: JSON.stringify({ form: 'none' }) }
+
+    // Act
+    const run = issueCashback(request, attempt)
+
+    // Assert
+    await expect(run).rejects.toBeInstanceOf(UnwarrantedSaleError)
+    expect(calls.order).not.toContain('generate')
+  })
+
+  it('issueCashback refuses an owner attempt that carries no signed warrant', async () => {
+    // Arrange
+    const attempt = { idempotencyKey: 'k-2', warrant: JSON.stringify({ form: 'none' }) }
+
+    // Act
+    const run = issueCashback({ ...request, actor: owner }, attempt)
+
+    // Assert
+    await expect(run).rejects.toBeInstanceOf(UnwarrantedSaleError)
+    expect(calls.order).not.toContain('generate')
+  })
+})
+
+/**
+ * A till's cashback reaches the stall's books (#160 phase 6, plan F1). `record` wrote it through
+ * `getWallet()`, which a till does not have, so the code it read out at the counter was in nobody's
+ * history. Now it goes to the stall as a sealed sale record, attributed to the till.
+ */
+describe("a till's cashback is recorded with its stall, never in a wallet it does not have", () => {
+  it('sends the cashback row to the till sale sink, attributed to the till', async () => {
+    const { setTillSaleSink } = await import('../tillSales')
+    const { openSession, SESSION_KIND } = await import('../terminalSession')
+    const { grantFor } = await import('../terminalRole')
+    const till = {
+      kind: 'terminal', stallPubkey: STALL, terminalPubkey: OTHER, role: 'issue-and-redeem',
+      permissions: grantFor('issue-and-redeem', STALL), attested: true,
+    } as Actor
+    const warrant = JSON.stringify({
+      form: 'terminal', sale_total: 1500, face_decimals: 2, unit: 'EUR', nonce: 'n', signature: 'ab'.repeat(64), credential: 'c',
+    })
+    const sent: Array<Record<string, unknown>> = []
+    setTillSaleSink(async (rows) => (sent.push(...(rows as unknown as Array<Record<string, unknown>>)), true))
+    calls.rows.length = 0
+    try {
+      await issueCashback(
+        { actor: till, session: openSession(till as never, SESSION_KIND.FULL, Date.now()), amountMinor: 1500, unit: 'EUR', decimals: 2, expiryDays: 30, voucherValidityDays: 90 },
+        { idempotencyKey: 'k-till', warrant },
+      )
+    } finally {
+      setTillSaleSink(null)
+    }
+    expect(calls.rows).toEqual([])
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({ id: 'cashback:cb-1', type: 'cashback', terminalPubkey: OTHER, merchantId: STALL, issuanceWarrant: warrant })
   })
 })

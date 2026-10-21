@@ -1,4 +1,5 @@
 import type { MerchantGroup } from '@imani/voucher-send'
+import { toEpochMs as sharedToEpochMs } from '@imani/wallet-core'
 
 /**
  * Render a face value in its own unit and decimals.
@@ -221,6 +222,36 @@ export function shortPubkey(pubkey: string): string {
 }
 
 /**
+ * What another person is called while we know nothing about them (#324).
+ *
+ * Name ladders used to end at `shortPubkey`, so somebody whose profile had not
+ * loaded, or could not be fetched, read as `a7a7a7a7…a7a7`. That is still a
+ * raw key, and users never see one. Every account on the service has a
+ * profile, so for anyone else this is a TRANSIENT state: a neutral word holds
+ * the place, `Avatar` draws its generic person glyph for it, and the real
+ * name replaces both when it lands.
+ *
+ * Here rather than in `identity.ts` so `Avatar` can compare against it
+ * without pulling the identity fetcher (and the tests that mock it) in.
+ */
+export const UNKNOWN_PERSON = 'Someone'
+
+/**
+ * The signed-in user's own account, in the instant before its profile is read.
+ *
+ * Every account has a profile, so no screen is designed around this: the header
+ * and the profile card show a skeleton while `profileUnknown` holds. It exists
+ * so the bottom of `profileName`'s ladder is words, not the npub it used to be.
+ */
+export const OWN_ACCOUNT = 'Your account'
+
+/**
+ * A stall whose profile we do not have yet, in the words the claim and gift
+ * landings already used for it. Never a key fragment (#324).
+ */
+export const UNKNOWN_STALL = 'Unknown stall'
+
+/**
  * Any timestamp the wallet stores, as epoch milliseconds.
  *
  * Takes epoch milliseconds, epoch seconds, or an ISO string, because the wallet
@@ -230,19 +261,18 @@ export function shortPubkey(pubkey: string): string {
  * (`shared/tokenRedemption.js` `_persistRedeemed`) stores the ISO string
  * `/inspect` returned. Reading only the declared type made `expires_at * 1000`
  * NaN, so a coupon with a real expiry sorted as expired and disappeared.
- * The magnitude test is the same one `toTransaction` uses — below 1e11 can only
- * be seconds.
+ * Delegates to wallet-core's parser, which tells seconds from milliseconds at
+ * 1e12 (see expiry.ts for why not 1e11).
  *
  * Absent, null, '' and 0 all collapse to undefined: for an expiry they mean "no
  * expiry" (the gateway populates the field asynchronously — see `toVoucher`),
  * and no other caller has a meaningful use for the epoch itself.
  */
 export function toEpochMs(value: number | string | undefined | null): number | undefined {
-  if (value === undefined || value === null || value === '' || value === 0) return undefined
-
-  const ms =
-    typeof value === 'number' ? (value < 1e11 ? value * 1000 : value) : Date.parse(value)
-  return Number.isFinite(ms) ? ms : undefined
+  // One parser for the whole wallet, in wallet-core (#157). This used to be a
+  // copy of it, and the copies drifted: a numeric-string expiry parsed here and
+  // not there.
+  return sharedToEpochMs(value)
 }
 
 /**
@@ -267,4 +297,3 @@ export function formatDate(value: number | string | undefined | null): string {
     minute: '2-digit',
   }).format(new Date(ms))
 }
-

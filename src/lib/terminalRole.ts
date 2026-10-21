@@ -77,7 +77,9 @@ export const TERMINAL_ROLE_LABELS: Record<TerminalRole, { name: string; hint: st
   },
   [TERMINAL_ROLES.ISSUE_AND_REDEEM]: {
     name: 'Sell and redeem',
-    hint: 'A full till: sells and honours',
+    // Sells under the `terminal` warrant form since #160 phase 5. Noun phrase, no terminal
+    // punctuation, and no "delegate" (see the vocabulary test).
+    hint: 'A full till: sells and honours your coupons',
   },
 }
 

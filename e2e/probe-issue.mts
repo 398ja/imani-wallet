@@ -76,6 +76,8 @@ const plan = await ask('/v1/issue/gateway-request', {
   faceUnit: 'EUR',
   faceDecimals: 2,
   memo: 'issue probe',
+  // This stall has no merchant record, so it names its term (#360 second review).
+  expiresInDays: 7,
 })
 check('the courier answers', plan.status === 200, `HTTP ${plan.status}`)
 check(

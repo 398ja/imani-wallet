@@ -85,10 +85,10 @@ const device = (() => {
 
 execFileSync('node', [
   'scripts/mint-terminal-credential.mjs', '--stall-name', 'imani-terminals',
-  '--device', device, '--name', 'Front counter', '--out', 'revocation-probe.token',
+  '--device', device, '--name', 'Front counter', '--out', 'probe-out/revocation-probe.token',
 ], { stdio: 'pipe' })
 
-const TOKEN = readFileSync('src/lib/__tests__/fixtures/revocation-probe.token', 'utf8').trim()
+const TOKEN = readFileSync('src/lib/__tests__/fixtures/probe-out/revocation-probe.token', 'utf8').trim()
 console.log(
   `  credential for ${device.slice(0, 12)}… issued by ` +
     `${parseVoucherToken(TOKEN).voucher.issuerId.slice(0, 12)}…`,

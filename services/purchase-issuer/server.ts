@@ -37,30 +37,63 @@
  * becomes two coupons. A person restarts it once payment-adapter is back.
  */
 
-import { createServer } from 'node:http'
+import { createServer, type IncomingMessage } from 'node:http'
 
 import { tokenFor, FileCredentialStore } from './adapters'
+import { confirmAll, CredentialConfirmer, retryUnconfirmed } from './confirmation'
 import { readConfig, ConfigError, type IssuerConfig } from './config'
 import type { Ports } from './discharge'
+import { countPass, renderMetrics } from './metrics'
+import { DEFAULT_OUTBOX_OPTIONS, DeliveryOutbox, FileOutboxStore, runDeliveryPass } from './outbox'
 import { PurchasesApi, ReportLostError } from './purchasesApi'
+import { sendSaleRecord } from './saleRecord'
+import { ENROLMENT_PREFIX, EnrolmentService, MAX_BODY_BYTES } from './enrolment'
+import { cachedValidityReader, readStallValidity, type ValidityReader } from './stallValidity'
 import { CredentialVault } from './vault'
 import { runPass, type WorkerDeps } from './worker'
 
 /** Build the real ports from config. Exported so a test can see the wiring. */
-export function portsFor(config: IssuerConfig): Ports {
-  const vault = new CredentialVault(
-    config.vaultKeyHex,
-    new FileCredentialStore(config.credentialsPath),
-  )
+export function portsFor(
+  config: IssuerConfig,
+  fetchImpl: typeof fetch = fetch,
+  vault: CredentialVault = vaultFor(config),
+  confirmer: CredentialConfirmer = new CredentialConfirmer(config.gatewayUrl, fetchImpl),
+  validityFor: ValidityReader = validityReaderFor(config, fetchImpl),
+): Ports {
+  // Credentials are confirmed EAGERLY, at enrolment and at startup (`confirmAll`, #296). This is
+  // the backstop for one written while the service runs or one the gateway was down for at boot.
+  // The confirmer sends one request per credential at a time and remembers the answer, and an
+  // expired credential comes back marked so the sale fails fast with the real reason.
   return {
-    credentialFor: (stallPubkey) => vault.get(stallPubkey),
+    credentialFor: async (stallPubkey) => {
+      const credential = await vault.get(stallPubkey)
+      return credential ? confirmer.annotate(credential) : null
+    },
     tokenFor: (credential, voucherId) => tokenFor(config.gatewayUrl, credential, voucherId),
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    // #275: card sales into the stall's ledger. Tried inline once; the outbox owns retries (#274).
+    fileSale: (credential, sale) => sendSaleRecord(config.gatewayUrl, credential, sale, fetchImpl),
+    // #312: the stall's own term, from its signed merchant record, cached for minutes.
+    validityFor,
   }
 }
 
-export function depsFor(config: IssuerConfig): WorkerDeps {
+/** The stall-validity reader, one per process so the mint and `/ready` share its cache (#312). */
+export function validityReaderFor(config: IssuerConfig, fetchImpl: typeof fetch = fetch): ValidityReader {
+  return cachedValidityReader((stall) => readStallValidity(config.gatewayUrl, stall, fetchImpl))
+}
+
+function vaultFor(config: IssuerConfig): CredentialVault {
+  return new CredentialVault(config.vaultKeyHex, new FileCredentialStore(config.credentialsPath))
+}
+
+export function depsFor(
+  config: IssuerConfig,
+  vault: CredentialVault = vaultFor(config),
+  confirmer: CredentialConfirmer = new CredentialConfirmer(config.gatewayUrl),
+  validityFor: ValidityReader = validityReaderFor(config),
+): WorkerDeps {
   return {
     api: new PurchasesApi(config.purchasesUrl, config.purchasesToken, fetch, (row) => {
       // IW-07: a refused debt row must be loud. It means either the upstream is emitting
@@ -76,9 +109,15 @@ export function depsFor(config: IssuerConfig): WorkerDeps {
         }),
       )
     }),
-    ports: portsFor(config),
+    ports: portsFor(config, fetch, vault, confirmer, validityFor),
     gatewayUrl: config.gatewayUrl,
     livemode: config.livemode,
+    outbox: new DeliveryOutbox(new FileOutboxStore(config.outboxPath), {
+      ...DEFAULT_OUTBOX_OPTIONS,
+      maxAttempts: config.deliveryMaxAttempts,
+      baseBackoffMs: config.deliveryBaseBackoffMs,
+      now: () => Date.now(),
+    }),
   }
 }
 
@@ -118,7 +157,25 @@ export async function loop(deps: WorkerDeps, intervalMs: number): Promise<void> 
   while (running) {
     try {
       const result = await runPass(deps)
+      // Then the outbox (imani-wallet#274): coupons that exist and still owe a delivery or a
+      // sale record. A store that cannot be read throws here, and the pass is reported failed.
+      if (deps.outbox) {
+        const delivery = await runDeliveryPass({
+          outbox: deps.outbox,
+          api: deps.api,
+          ports: deps.ports,
+          gatewayUrl: deps.gatewayUrl,
+          workerId: deps.workerId,
+        })
+        if (delivery.delivered > 0 || delivery.exhausted > 0) {
+          console.log(
+            `[purchase-issuer] outbox delivered ${delivery.delivered}, exhausted ${delivery.exhausted}, ` +
+              `retrying ${delivery.retried}, sales filed ${delivery.salesFiled}`,
+          )
+        }
+      }
       lastPass = { at: Date.now(), ...result }
+      countPass('ok')
       if (result.discharged > 0 || result.blocked > 0) {
         // Quiet on the ordinary case, loud on the two that matter. A line per
         // pass would be 5,760 lines a day saying nothing happened, and
@@ -136,6 +193,7 @@ export async function loop(deps: WorkerDeps, intervalMs: number): Promise<void> 
         // Fail closed (imani-wallet#96). Loud, structured, and the loop stops.
         halted = message
         running = false
+        countPass('halted')
         console.error(
           JSON.stringify({
             event: 'purchase_issuer_halted',
@@ -150,6 +208,7 @@ export async function loop(deps: WorkerDeps, intervalMs: number): Promise<void> 
       // Recorded on the health endpoint as well as logged, so a persistently
       // failing pass is visible to a probe rather than only to whoever reads
       // container output.
+      countPass('failed')
       console.error('[purchase-issuer] pass failed', error)
     }
 
@@ -165,6 +224,27 @@ export function resetForTest(): void {
   halted = null
   running = true
   lastPass = null
+}
+
+/**
+ * Self-service card-sales enrolment (imani-wallet#298), mounted by `main()` with the SAME vault
+ * and confirmer the worker uses, so a stall enrolled here is minted for on the next pass.
+ */
+let enrolment: EnrolmentService | null = null
+export function mountEnrolment(service: EnrolmentService | null): void {
+  enrolment = service
+}
+
+/** The body, or null when it is larger than any enrolment request could be. */
+async function readBody(req: IncomingMessage): Promise<string | null> {
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length
+    if (size > MAX_BODY_BYTES) return null
+    chunks.push(chunk as Buffer)
+  }
+  return Buffer.concat(chunks).toString('utf8')
 }
 
 /**
@@ -189,6 +269,40 @@ export const server = createServer((req, res) => {
     res.end(JSON.stringify({ status: 'ok', lastPass }))
     return
   }
+  if (req.url === '/metrics') {
+    // Counts by closed outcome only (imani-deploy#210): no id, stall or amount.
+    // Scraped on the internal network; the edge does not route here.
+    res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4' })
+    res.end(renderMetrics())
+    return
+  }
+  if (enrolment !== null && (req.url ?? '').startsWith(ENROLMENT_PREFIX + '/')) {
+    const service = enrolment
+    // `.catch`, review of #302: a client that drops mid-body makes `for await` reject ("aborted"),
+    // and an unhandled rejection takes the whole purchase issuer down, mid-pass, for everyone. A
+    // public endpoint must not be one TCP reset away from stopping every stall's card sales.
+    void readBody(req)
+      .then(async (body) => {
+        const answer =
+          body === null
+            ? { status: 413, body: { error: 'request too large' } }
+            : await service.handle({
+                method: req.method ?? 'GET',
+                path: req.url ?? '',
+                authorization: req.headers.authorization,
+                body,
+              })
+        res.writeHead(answer.status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
+        res.end(JSON.stringify(answer.body))
+      })
+      .catch(() => {
+        if (!res.headersSent && !res.destroyed) {
+          res.writeHead(400, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ error: 'the request did not arrive whole' }))
+        }
+      })
+    return
+  }
   res.writeHead(404, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify({ error: 'not found' }))
 })
@@ -208,7 +322,28 @@ function main(): void {
     throw error
   }
 
-  const deps = depsFor(config)
+  const vault = vaultFor(config)
+  const confirmer = new CredentialConfirmer(config.gatewayUrl)
+  const validityFor = validityReaderFor(config)
+  const deps = depsFor(config, vault, confirmer, validityFor)
+  mountEnrolment(new EnrolmentService({ vault, confirmer, publicOrigin: config.publicOrigin, validityFor }))
+  // #290: a record sealed by somebody else (the operator script) is picked up on the next read,
+  // and confirmed at once (#296) rather than at its first sale. One the gateway could not confirm
+  // then is retried like a boot-time one (second review of #299). A new reload REPLACES the reload
+  // retry rather than adding one, so a file that keeps changing never stacks timers, and each
+  // retry stays bounded to the 24 h confirm window.
+  let stopRetry: (() => void) | null = null
+  vault.onReload(
+    () =>
+      void confirmAll(vault, confirmer).then((summary) => {
+        if (summary.unconfirmed === 0) return
+        stopRetry?.()
+        stopRetry = retryUnconfirmed(vault, confirmer, () => running)
+      }),
+  )
+  if (config.publicOrigin === null) {
+    console.warn('[purchase-issuer] PURCHASE_PUBLIC_ORIGIN unset: self-service card-sales enrolment is OFF')
+  }
 
   server.listen(config.port, () => {
     console.log(
@@ -217,7 +352,18 @@ function main(): void {
     )
   })
 
-  void loop(deps, config.intervalMs)
+  // Confirm every held credential BEFORE the first pass (imani-wallet#296). The gateway lapses
+  // one left unconfirmed for 24 h, so waiting for its first sale is how a quiet stall dies.
+  void confirmAll(vault, confirmer).then((summary) => {
+    console.log(
+      `[purchase-issuer] credentials: ${summary.confirmed} confirmed, ` +
+        `${summary.expired} expired (re-enrol), ${summary.unconfirmed} not yet confirmed`,
+    )
+    // Review of #299: one the gateway was down for at boot is retried every 5 min, for at most
+    // the 24 h confirm window, rather than waiting for its first sale.
+    if (summary.unconfirmed > 0) retryUnconfirmed(vault, confirmer, () => running)
+    return loop(deps, config.intervalMs)
+  })
 
   // A pass in flight is minting or delivering somebody's coupon. Stopping the
   // LOOP rather than the process lets it finish: `docker stop` sends SIGTERM

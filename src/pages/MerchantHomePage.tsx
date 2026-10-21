@@ -11,6 +11,7 @@ import {
   sessionState,
   type TerminalSession,
 } from '../lib/terminalSession'
+import { mayWarrantSale } from '../lib/warrantSigner'
 
 /**
  * Home, for a merchant: the till.
@@ -90,7 +91,16 @@ export function MerchantHomePage({
     return <NotTrading message={lapse.message} reason={lapse.reason} />
   }
 
-  const mayIssue = actor ? canIssueNow(actor, session ?? null) : true
+  /*
+    Sell needs BOTH the role and session (`canIssueNow`) and a key that can
+    sign a warrant the customer's wallet accepts (`mayWarrantSale`). No
+    terminal has the second until the `delegated` warrant form ships (#159),
+    and `issueAndDeliver` refuses the sale for that reason, so the button is
+    not offered rather than offered and then refused. A till that WOULD be
+    allowed by role says so in one line, so staff know it is not broken.
+  */
+  const roleMayIssue = actor ? canIssueNow(actor, session ?? null) : true
+  const mayIssue = roleMayIssue && (actor ? mayWarrantSale(actor, session ?? null) : true)
   const mayRedeem = actor ? canRedeemNow(actor, session ?? null) : true
 
   return (
@@ -133,7 +143,7 @@ export function MerchantHomePage({
  * holding the device: it will not serve, and the owner is the answer. Two
  * screens would drift, and the one seen less often would drift further.
  */
-function NotTrading({ message, reason }: { message: string; reason: LapseReason }) {
+export function NotTrading({ message, reason }: { message: string; reason: LapseReason }) {
   return (
     <Screen>
       <div className="flex min-h-[calc(100svh-9rem)] flex-col justify-center">

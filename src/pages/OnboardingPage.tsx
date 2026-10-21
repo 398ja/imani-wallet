@@ -1,13 +1,20 @@
-import { useEffect, useState } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { useEffect, useReducer, useState } from 'react'
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { getPublicKey } from 'nostr-tools'
 import { hexToBytes } from '@noble/hashes/utils'
 
 import { Button, Input, Alert, Switch } from '../components/ui'
+import { BackupLogin } from '../components/BackupLogin'
+import { FinishProfileStep } from '../components/FinishProfileStep'
 import { gatewayConfig } from '../lib/config'
-import { toPrivkeyHex, keyStore } from '../lib/nap'
+import { toPrivkeyHex, keyStore, hasStoredKey } from '../lib/nap'
+import { refuseIfAnotherWallet } from '../lib/keySlotGuard'
+import { claimProfile, ProfileMissingError, rememberHandle, requireProfile } from '../lib/profileGate'
 import { HandleTakenError, isHandleAvailable, register } from '../lib/registration'
+import { acceptTerms, termsUrl } from '../lib/terms'
+import { TermsCheckbox } from '../components/TermsCheckbox'
 import { refreshProfile } from '../lib/profile'
+import { userMessage } from '../lib/userMessage'
 import {
   DEFAULT_CURRENCY,
   DEFAULT_VALIDITY_DAYS,
@@ -15,7 +22,10 @@ import {
   type MerchantFields,
 } from '../lib/merchant'
 import { MerchantFieldset } from '../components/MerchantFieldset'
+import { ParkedClaimBanner } from '../components/ParkedClaimBanner'
+import { peekPendingClaim } from '../lib/pendingClaim'
 import {
+  normaliseHandle,
   passphraseStrength,
   validateConfirmation,
   validateHandle,
@@ -48,8 +58,23 @@ import {
  * the router's location state. Android's back gesture is the platform's primary
  * navigation, and a WebView with nothing to pop exits the app: without this,
  * back from three screens into registration means goodbye rather than back.
+ *
+ * "Log in" (#325) opens a backup: Google Drive or a backup file, then the
+ * account, then the passphrase. Pasting the key itself is the secondary 'key'
+ * step behind a small link on that screen, for someone who only ever saved it.
+ * `/restore` redirects to the 'login' step, so old links still land here.
  */
-type Step = 'start' | 'account' | 'profile' | 'merchant' | 'import'
+export type OnboardingStep = 'start' | 'account' | 'profile' | 'merchant' | 'login' | 'key'
+type Step = OnboardingStep
+
+/**
+ * Where `/restore` goes now (#325): the onboarding Log in step, which is where
+ * a backup is opened. Old links, bookmarks and the advice people were given
+ * still say /restore, so it must land somewhere that does the job.
+ */
+export function RestoreRedirect() {
+  return <Navigate to="/onboarding" replace state={{ step: 'login' satisfies Step }} />
+}
 
 export function OnboardingPage({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<void> }) {
   // The step lives in history rather than in `useState`, so back walks the flow
@@ -59,7 +84,16 @@ export function OnboardingPage({ onUnlock }: { onUnlock: (privkeyHex: string) =>
   const navigate = useNavigate()
   const step = (location.state as { step?: Step } | null)?.step ?? 'start'
   const push = (next: Step) => navigate('.', { state: { step: next } })
-  const back = () => navigate(-1)
+  // Back walks history, except where there is none to walk: `/restore`
+  // redirects straight onto the Log in step with `replace`, and a fresh tab
+  // opened on it has nothing behind it. Popping there would leave the app, so
+  // it goes to the first screen instead.
+  const back = () => {
+    const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0
+    if (idx > 0) navigate(-1)
+    else navigate('.', { replace: true, state: { step: 'start' } })
+  }
+  const walletHere = useWalletOnDeviceWithParkedClaim()
 
   return (
     <div className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-6 p-6">
@@ -72,14 +106,30 @@ export function OnboardingPage({ onUnlock }: { onUnlock: (privkeyHex: string) =>
 
       {step === 'start' && (
         <div className="space-y-3">
-          <Button size="lg" className="w-full" onClick={() => push('account')}>
+          {/* A claim link parked on the way here (claim links phase 3, spec 4.4). Above the
+              buttons. Register stays primary on a fresh device, and it never blocks anything. */}
+          <ParkedClaimBanner />
+          {/* A voucher is waiting AND this device already holds a wallet (reached via "Use a
+              different account", or a stale tab): the likely intent is the wallet they have, so
+              unlocking it is primary and registering a second account is not (spec 4.4). */}
+          {walletHere && (
+            <Button size="lg" className="w-full" onClick={() => navigate('/login')}>
+              I already have an account
+            </Button>
+          )}
+          <Button
+            size="lg"
+            variant={walletHere ? 'outline' : undefined}
+            className="w-full"
+            onClick={() => push('account')}
+          >
             Register
           </Button>
           <Button
             size="lg"
             variant="outline"
             className="w-full"
-            onClick={() => push('import')}
+            onClick={() => push('login')}
           >
             Log in
           </Button>
@@ -94,24 +144,19 @@ export function OnboardingPage({ onUnlock }: { onUnlock: (privkeyHex: string) =>
             </Link>
           </p>
 
-          {/* The restore link has to be HERE, not only on /login.
+          {/* No separate Restore link any more (#325): "Log in" IS restoring,
+              from Google Drive or a backup file. This is still where logging
+              out lands (logout erases the key, so `Entry` routes here), and the
+              re-auth dialog points people at "Log in" on this screen. */}
 
-              This is where someone who has just logged out arrives: logout
-              erases the key and reloads the document, so `Entry` finds no
-              stored key and sends them to /onboarding rather than /login. That
-              is also the exact path the re-auth dialog now points at — its
-              disclosure tells a user who has forgotten their passphrase to log
-              out and restore — and without this link that journey ended on a
-              screen offering only "Register" and "Log in", with the backup file
-              they were told to use unreachable.
-
-              "Log in" (the import step) takes an nsec, so one of the three
-              backup kinds was reachable from here. A backup FILE and a Drive
-              backup were not. */}
+          {/* #160 phase 2: the way in for a stall's extra device. A terminal has
+              no account, so it does not register or log in. */}
           <p className="text-center text-sm text-mono-500">
-            Have a backup file or a Google Drive backup?{' '}
-            <Link to="/restore" className="pressable underline hover:text-mono-900 dark:hover:text-mono-50">
-              Restore
+            <Link
+              to="/terminal/setup"
+              className="pressable underline hover:text-mono-900 dark:hover:text-mono-50"
+            >
+              Set this device up as a terminal
             </Link>
           </p>
         </div>
@@ -121,7 +166,11 @@ export function OnboardingPage({ onUnlock }: { onUnlock: (privkeyHex: string) =>
         <CreateForm step={step} onStep={push} onUnlock={onUnlock} onBack={back} />
       )}
 
-      {step === 'import' && <ImportForm onUnlock={onUnlock} onBack={back} />}
+      {step === 'login' && (
+        <BackupLogin onUnlock={onUnlock} onBack={back} onUseKey={() => push('key')} />
+      )}
+
+      {step === 'key' && <KeyForm onUnlock={onUnlock} onBack={back} />}
     </div>
   )
 }
@@ -155,11 +204,31 @@ function CreateForm({
   const [availability, setAvailability] = useState<Availability>('idle')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // #357: the Terms and Conditions. Unticked to start; nothing is created until it is ticked.
+  // `terms` is null on a build that names no website: then there is no link to show and no
+  // account to create, and the form says so in plain words instead.
+  const terms = termsUrl()
+  const [termsTicked, setTermsTicked] = useState(false)
+  const termsOk = terms !== null && termsTicked
 
   // A merchant signup is the customer one plus a second screen. `step` only ever
   // reaches 'merchant' while the switch is on, so a customer never meets the
   // stall questions at all.
-  const [isMerchant, setIsMerchant] = useState(false)
+  const [merchantChosen, setIsMerchant] = useState(false)
+  // A registration that starts from a claim link (cashback or gift) is a customer one: only
+  // customers redeem. Read on every render, with the banner's rule (a live, unexpired entry), so
+  // a claim parked after the switch was turned on (back navigation, a second tab) still wins, and
+  // `isMerchant` cannot be true here whatever the switch state says.
+  const claimDriven = peekPendingClaim() !== null
+  const isMerchant = merchantChosen && !claimDriven
+  // A claim parked by another tab fires `storage` here: re-render so the switch and the merchant
+  // steps go at once rather than on the next keystroke (review of #254).
+  const [, rerender] = useReducer((n: number) => n + 1, 0)
+  useEffect(() => {
+    const onStorage = () => rerender()
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
   const [displayName, setDisplayName] = useState('')
   const [about, setAbout] = useState('')
   const [merchant, setMerchant] = useState<MerchantFields>(() => ({
@@ -212,24 +281,36 @@ function CreateForm({
   // Reloading restores the step from history but not the draft above it, which
   // would leave a merchant screen ready to submit an empty account. Only the
   // step you could have reached honestly renders.
-  const current = complete ? step : 'account'
+  // A claim-driven registration never reaches the merchant screens, whatever history holds.
+  const current = complete && termsOk && isMerchant ? step : 'account'
 
   const submit = async () => {
+    // Re-read at the moment of submitting: `isMerchant` is from the last render, and a claim parked
+    // since then (another tab, no render in between) must still win. Refuse rather than silently
+    // create a customer from the merchant screen: the re-render shows the customer-only form.
+    if (isMerchant && peekPendingClaim() !== null) {
+      rerender()
+      return
+    }
+    // The button is disabled without it, but a stale render must not slip past (#357).
+    if (!termsOk) return
     setBusy(true)
     setError(null)
     try {
       // register() stashes the backup key and logs in as its last two steps, in
       // that order — the login remounts the app, and the backup screen is what
       // the remount renders.
-      await register(
-        handle,
-        passphrase,
-        onUnlock,
-        isMerchant ? merchant : undefined,
-        isMerchant
+      //
+      // The acceptance is stamped NOW, at submit: a merchant ticks on the first screen and
+      // submits two screens later, and the record says when the account was actually made
+      // with the box still ticked. register() refuses without it (#357).
+      await register(handle, passphrase, onUnlock, {
+        terms: acceptTerms(),
+        merchant: isMerchant ? merchant : undefined,
+        profileFields: isMerchant
           ? { displayName: displayName.trim() || undefined, about: about.trim() || undefined }
           : undefined,
-      )
+      })
     } catch (e) {
       // A taken handle is a field problem, not a failed registration: the key is
       // kept, nothing was persisted, and changing one word fixes it.
@@ -241,7 +322,7 @@ function CreateForm({
         setError(`${handle} is taken. Try another.`)
         setAvailability('taken')
       } else {
-        setError(e instanceof Error ? e.message : String(e))
+        setError(userMessage(e))
       }
     } finally {
       setBusy(false)
@@ -348,9 +429,9 @@ function CreateForm({
         <div className="flex items-center gap-2">
           <span className="text-mono-400">@</span>
           <Input
-            placeholder="your-handle"
+            placeholder="your_handle"
             value={handle}
-            onChange={(e) => setHandle(e.target.value.toLowerCase())}
+            onChange={(e) => setHandle(normaliseHandle(e.target.value))}
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
@@ -367,7 +448,7 @@ function CreateForm({
           ) : availability === 'free' ? (
             <span className="text-green-700 dark:text-green-500">Looks available.</span>
           ) : domain ? (
-            `You will be @${handle || 'your-handle'}`
+            `You will be @${handle || 'your_handle'}`
           ) : (
             ' '
           )}
@@ -403,13 +484,26 @@ function CreateForm({
 
       {/* Last, under the fields it does not change: everything above is asked of
           both roles, and this only decides whether there is a second screen. */}
-      <Switch
-        label="I am a merchant"
-        hint="Issue vouchers and take them as payment."
-        checked={isMerchant}
-        disabled={busy}
-        onChange={setIsMerchant}
-      />
+      {/* Hidden, not disabled, when a claim link brought them here: a disabled switch invites
+          "why can't I?". Selling is chosen only at registration (see SettingsPage), so this
+          does not promise a later way to become a merchant. */}
+      {claimDriven ? (
+        <p className="text-center text-sm text-mono-500">
+          You're redeeming a voucher, so this is a customer account.
+        </p>
+      ) : (
+        <Switch
+          label="I am a merchant"
+          hint="Issue vouchers and take them as payment."
+          checked={isMerchant}
+          disabled={busy}
+          onChange={setIsMerchant}
+        />
+      )}
+
+      {/* #357. Above the button it unlocks, below everything it applies to. Ticked here once,
+          for both roles: a merchant accepts before the business screens, which do not ask again. */}
+      <TermsCheckbox url={terms} checked={termsTicked} disabled={busy} onChange={setTermsTicked} />
 
       {/* A merchant does not submit from here — the account details are only
           half of what registration needs, so this advances to step two and
@@ -417,7 +511,7 @@ function CreateForm({
       <Button
         size="lg"
         className="w-full"
-        disabled={busy || !complete}
+        disabled={busy || !complete || !termsOk}
         onClick={
           isMerchant
             ? () => {
@@ -468,70 +562,106 @@ function StrengthBar({ strength }: { strength: Strength }) {
 }
 
 /**
- * Bring an existing key.
+ * Bring the backup key itself: the secondary way in (#325).
  *
- * This is the old LoginPage's enrol branch. It gains a profile fetch: a key that
- * has been used elsewhere usually already has a kind-0, and pulling it means the
- * header has a name and a face on the very first screen.
+ * The main "Log in" opens a backup. This stays, behind a small link, for
+ * someone who only ever saved the key: they paste it and choose a passphrase
+ * for this device.
+ *
+ * The account must have a profile (owner rule, #325). The directory is asked
+ * BEFORE anything is stored, so a key with no profile writes nothing and goes
+ * to "Finish your profile" instead of being let in anonymously.
  */
-function ImportForm({
+function KeyForm({
   onUnlock,
   onBack,
 }: {
   onUnlock: (privkeyHex: string) => Promise<void>
   onBack: () => void
 }) {
-  const [nsec, setNsec] = useState('')
+  const [key, setKey] = useState('')
   const [passphrase, setPassphrase] = useState('')
   const [confirm, setConfirm] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // A key whose account has no profile yet: in memory only, until a handle is claimed.
+  const [missing, setMissing] = useState<string | null>(null)
   const navigate = useNavigate()
 
   const passphraseError = passphrase === '' ? undefined : validatePassphrase(passphrase)
   const confirmError = confirm === '' ? undefined : validateConfirmation(passphrase, confirm)
-  const complete = nsec !== '' && passphrase !== '' && confirm !== '' && !passphraseError && !confirmError
+  const complete = key !== '' && passphrase !== '' && confirm !== '' && !passphraseError && !confirmError
+
+  // Only once the account is known to have a profile is the key worth keeping.
+  const install = async (hex: string) => {
+    // Another account's key in the slot would be overwritten, orphaning its vouchers (#330).
+    await refuseIfAnotherWallet(hex)
+    await keyStore.save(hex, passphrase)
+    await onUnlock(hex)
+    // No `saveProfile(emptyProfile(...))` here. Writing a blank record first
+    // erases whatever this browser already knew about the key. refreshProfile
+    // keeps any existing record and merges onto it.
+    await refreshProfile(getPublicKey(hexToBytes(hex)))
+    navigate('/', { replace: true })
+  }
 
   const submit = async () => {
     setBusy(true)
     setError(null)
     try {
       // Throws a readable message on a mistyped key, before anything is stored.
-      const hex = toPrivkeyHex(nsec)
-      await keyStore.save(hex, passphrase)
-      await onUnlock(hex)
-
-      // No `saveProfile(emptyProfile(...))` here. Writing a blank record first
-      // erases whatever this browser already knew about the key — handle,
-      // display name, eventAt — and re-entering your own nsec, or importing
-      // after a restore, is an ordinary thing to do. refreshProfile keeps any
-      // existing record and merges onto it, so a cold gateway cache costs
-      // nothing instead of losing the profile.
-      await refreshProfile(getPublicKey(hexToBytes(hex)))
-      navigate('/', { replace: true })
+      const hex = toPrivkeyHex(key)
+      // Before the profile is even asked for: nothing is written for a refused key (#330).
+      await refuseIfAnotherWallet(hex)
+      try {
+        rememberHandle(hex, await requireProfile(hex))
+      } catch (e) {
+        if (e instanceof ProfileMissingError) {
+          setMissing(hex)
+          return
+        }
+        throw e
+      }
+      await install(hex)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(userMessage(e))
     } finally {
       setBusy(false)
     }
   }
 
+  if (missing) {
+    return (
+      <FinishProfileStep
+        onCancel={() => setMissing(null)}
+        onClaim={async (handle, terms) => {
+          // Before the claim, not only at install: a claim spends the handle at
+          // the directory, and the slot may have been taken since the paste (#330).
+          await refuseIfAnotherWallet(missing)
+          await claimProfile(missing, handle, null, terms)
+          await install(missing)
+        }}
+      />
+    )
+  }
+
   return (
     <div className="space-y-3">
       <div className="text-center">
-        <h2 className="text-lg font-semibold text-mono-900 dark:text-mono-50">Log in</h2>
-        {/* Says what "log in" means here, because it is not a password prompt:
-            this browser holds no key, so one has to be brought to it. */}
+        <h2 className="text-lg font-semibold text-mono-900 dark:text-mono-50">Use your backup key</h2>
+        {/* Says what this means, because it is not a password prompt: this
+            browser holds no key, so one has to be brought to it. */}
         <p className="mt-0.5 text-sm text-mono-500">
-          Enter the backup key from an account you already have.
+          Paste the backup key you saved, then choose a passphrase for this device.
         </p>
       </div>
 
       <Input
         type="password"
-        placeholder="nsec1… (your Nostr key)"
-        value={nsec}
-        onChange={(e) => setNsec(e.target.value)}
+        placeholder="Paste your backup key"
+        aria-label="Backup key"
+        value={key}
+        onChange={(e) => setKey(e.target.value)}
         autoComplete="off"
       />
       <div>
@@ -561,7 +691,7 @@ function ImportForm({
       </div>
 
       <Button size="lg" className="w-full" disabled={busy || !complete} onClick={submit}>
-        {busy ? 'Unlocking…' : 'Add key and unlock'}
+        {busy ? 'Logging in…' : 'Log in'}
       </Button>
 
       <BackButton disabled={busy} onClick={onBack} />
@@ -573,4 +703,24 @@ function ImportForm({
       </p>
     </div>
   )
+}
+
+/**
+ * True when a voucher link is parked AND this device already holds a wallet (spec 4.4). Then the
+ * start step offers the existing wallet first rather than pushing a second registration.
+ */
+function useWalletOnDeviceWithParkedClaim(): boolean {
+  const [walletHere, setWalletHere] = useState(false)
+  useEffect(() => {
+    if (!peekPendingClaim()) return
+    let live = true
+    void hasStoredKey().then(
+      (has) => live && setWalletHere(has),
+      () => {},
+    )
+    return () => {
+      live = false
+    }
+  }, [])
+  return walletHere
 }

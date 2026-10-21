@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { LOGIN_REFUSAL, loginTerminal } from '../terminalLogin'
+import { LOGIN_REFUSAL, UNATTESTED_TILL_NOTICE, loginTerminal } from '../terminalLogin'
 import { SESSION_KIND, SESSION_HOURS, canIssueNow, canRedeemNow } from '../terminalSession'
 import { parseVoucherToken } from '../voucherToken'
 import { TERMINAL_ROLES, grantFor } from '../terminalRole'
@@ -152,7 +152,8 @@ describe('degraded login is redeem-only', () => {
      * only thing standing between this terminal and minting money is the
      * reduced session, which is exactly the claim.
      */
-    const out = loginTill({ unspent: null })
+    // Attested, so the reduced session is the only thing refusing issuance.
+    const out = loginTill({ unspent: null, attested: true })
     if (!out.admitted) throw new Error('expected admission')
     expect(canRedeemNow(out.actor, out.session)).toBe(true)
     expect(canIssueNow(out.actor, out.session)).toBe(false)
@@ -161,9 +162,31 @@ describe('degraded login is redeem-only', () => {
   it('lets the same full till issue once the mint confirms it', () => {
     // The other direction, so the check above cannot pass by the till being
     // unable to issue in any circumstance.
-    const out = loginTill({ unspent: true })
+    const out = loginTill({ unspent: true, attested: true })
     if (!out.admitted) throw new Error('expected admission')
     expect(canIssueNow(out.actor, out.session)).toBe(true)
+  })
+})
+
+describe('a till the stall never attested (#160 decision 5, spec 4.6.5)', () => {
+  // The live till fixture predates owner attestation. It opens, FULL, and redeems, but it
+  // cannot sell until the owner sets it up again: missing means Redeem only, not refused.
+  it('opens for Redeem only, even in a FULL session', () => {
+    const out = loginTill({ unspent: true })
+    if (!out.admitted) throw new Error('expected admission')
+    expect(out.actor.attested).toBe(false)
+    expect(out.session.kind).toBe(SESSION_KIND.FULL)
+    expect(canRedeemNow(out.actor, out.session)).toBe(true)
+    expect(canIssueNow(out.actor, out.session)).toBe(false)
+  })
+
+  // The till's own words for that state: ask the owner, who renews in one tap (#160 phase 6).
+  // The four re-enrol steps are gone, with their new passphrase and setup code.
+  it('tells the operator to ask for a renewal, which is one tap for the owner', () => {
+    expect(UNATTESTED_TILL_NOTICE).toMatch(/Ask the owner to renew this terminal to sell/)
+    expect(UNATTESTED_TILL_NOTICE).toMatch(/one tap/)
+    expect(UNATTESTED_TILL_NOTICE).not.toMatch(/take it out of service/)
+    expect(UNATTESTED_TILL_NOTICE).not.toMatch(/adds it again/)
   })
 })
 

@@ -166,6 +166,22 @@ describe('toCouponPass', () => {
     expect(pass.voided).toBe(true)
     expect(pass.barcodes).toBeUndefined()
   })
+
+  // #265: an expired coupon's detail page said "Status active" over a live QR code.
+  it('carries no redemption code once past its expiry, and is marked expired (not voided)', () => {
+    const now = Date.UTC(2026, 10, 11)
+    const pass = toCouponPass(row({ expires_at: 1794346639 }), undefined, now)
+    expect(pass.expired).toBe(true)
+    expect(pass.voided).toBe(false)
+    expect(pass.barcodes).toBeUndefined()
+  })
+
+  it('keeps the code on a coupon not yet expired', () => {
+    const now = Date.UTC(2026, 10, 9)
+    const pass = toCouponPass(row({ expires_at: 1794346639 }), undefined, now)
+    expect(pass.expired).toBe(false)
+    expect(pass.barcodes).toHaveLength(1)
+  })
 })
 
 describe('toMerchantPass', () => {

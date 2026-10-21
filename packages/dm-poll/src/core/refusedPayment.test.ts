@@ -60,6 +60,7 @@ describe('redemption:refused names its payment (#145)', () => {
       nostrdbAdapter: { getProfile: vi.fn(async () => null) } as unknown as NostrdbAdapter,
       cryptoAdapter: cryptoAdapter(),
       redemptionAdapter: {
+        checkBacking: vi.fn(() => ({ outcome: 'accept' as const })),
         redeem: vi.fn(async () => {
           throw new RedemptionRefusedError('spent', '19c4fed1', 89, 100);
         }),

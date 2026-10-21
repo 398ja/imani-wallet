@@ -34,6 +34,10 @@ Selling coupons up front is an old market trick with real benefits:
 1. Open the app and choose **Create an account**.
 2. Turn on the **"I am a merchant"** switch during sign-up. (Already a shopper?
    You can start selling later, see [below](#opening-and-closing-your-stall).)
+   On this first screen, tick **I accept the Terms and Conditions** (the words open them in
+   a new tab). **Continue** stays greyed out until you do, and the stall screens that follow
+   don't ask again. The app keeps a note of which terms you accepted and when, and it travels
+   with your backup.
 3. Fill in your **stall details**: business name, a short description, categories,
    and how long the coupons you issue stay valid.
 
@@ -56,7 +60,9 @@ A merchant's home screen is the **till**:
   shown when there are some).
 
 **Stats** live in the account menu (top-right): coupons issued, value issued, how
-many came back, and daily activity over the last 7, 30, or 90 days.
+many came back, for today, the last 7 days or the last 30 days. Each range starts at midnight
+your time, so "Today" is everything since midnight. The 7 and 30 day views add a bar per day;
+Today shows just the totals.
 
 ## Selling a coupon
 
@@ -80,6 +86,33 @@ flowchart LR
 Keep the customer there until it confirms. If a delivery fails, it's better to
 know while they're still at the stall.
 
+## A Cashlink for a customer without the app (link or QR)
+
+A **Cashlink** is your stall's cashback, sent as a link or QR. (Typed codes are no longer used:
+the screen shows no code.)
+
+1. Tap **Sell → Create a Cashlink instead**, type the amount, and tap **Create Cashlink**.
+2. The screen says **Cashlink ready** and shows:
+   - the **QR**: the customer scans it with their phone camera;
+   - **Share link** (or **Copy link**): send the same voucher by message.
+
+   Anyone with the link or the QR can claim it **once**, until the date on screen.
+3. Leave the screen open: it changes to *"Claimed just now"* by itself when the customer adds it.
+4. **Cancel Cashlink** takes it back while it is unclaimed. The customer can no longer claim it,
+   and the value is **not** returned to you.
+
+**A Cashlink nobody claims does not come back to your stall.** After the date on screen it simply
+expires: the customer can no longer claim it, and the value is not returned to you. That is on
+purpose, and it is different from a customer's own Cashlink, which goes back to the customer who
+sent it. Your bell does not tell you when one of your stall's Cashlinks expires.
+
+Lost the QR? Open the Cashlink in **Transactions** and tap **Show QR again**. The app asks the
+gateway for the link, signed as your stall (nobody else can); it never keeps the link itself on
+your phone.
+
+A customer who still holds an old `CB-…` code is told *"Codes are no longer used. Ask the shop to
+show you the Cashlink QR again."* Open it in **Transactions** and tap **Show QR again**.
+
 ## Taking payment (Redeem)
 
 When a customer pays you back with a coupon they hold from you:
@@ -93,6 +126,25 @@ When a customer pays you back with a coupon they hold from you:
 You don't need to press anything to detect the payment: your till is already
 listening, and the coupon arrives through the same channel any coupon does. If
 the customer pays less than a whole coupon, they keep the change automatically.
+
+### Your stall takes only its own coupons
+
+A merchant account can only take vouchers **your stall issued**. That is what Redeem is for, and it
+keeps working exactly as before: a customer paying you with your own coupon, a coupon locked to your
+stall, your till's sales coming home, and your own Cashlinks all go through.
+
+Another stall's voucher is refused, whichever way it arrives (a customer sending it to you, a
+Cashlink, a pasted token), with *"Merchant accounts can only take their
+own stall's vouchers. To use a voucher from another stall, use a customer account."* Nothing is
+spent when it is refused: the voucher stays with whoever sent it. The gateway refuses it too
+(`FOREIGN_VOUCHER_FOR_MERCHANT`), so the rule holds however the request is made.
+
+Not money, and so not affected: your terminal licence from the subscriptions seller and your own
+terminals' credentials.
+
+**To use another stall's coupons yourself, use a separate customer account.** Register a second
+handle without the merchant profile and keep your shopping there. Your stall's key stays your
+stall's.
 
 ## History, stats, and what's expiring
 
@@ -194,7 +246,8 @@ spent twice. There's no separate pot of money behind a coupon, which is also why
 it's only ever worth something at your stall.
 
 **Can a customer spend my coupon somewhere else?**
-No. Coupons are tied to you. They can only be redeemed back with your stall.
+No. Coupons are tied to you. They can only be redeemed back with your stall. Another stall's
+account cannot even receive it: merchant accounts take only their own stall's vouchers.
 
 **Can a coupon be spent twice?**
 No. Once a coupon comes back to you it's used up. Partial payments leave the

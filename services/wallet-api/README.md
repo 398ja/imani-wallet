@@ -518,6 +518,82 @@ ordering that leaves the coupon whole. A refusal is 200 with `prepared: null`:
 { "prepared": null, "refusal": { "reason": "wrong-stall", "detail": "…" }, "holdingUnchanged": true }
 ```
 
+### `POST /v1/redeem/prepare`
+
+Taking a coupon a customer presents, at your own stall. The service verifies the
+coupon (yours, unexpired, signature intact) and answers what to sign to accept it:
+
+```json
+{ "ok": true, "voucher": { "…": "…" }, "url": "https://…/api/v1/wallet/receive", "method": "POST", "body": "{\"token\":\"cashuB…\"}" }
+```
+
+You sign that request (NIP-98, the `body` string verbatim) and send it to `url`
+yourself. The swap that takes the coupon is **gateway-customer's**, not this
+service's: wallet-api never swaps and holds no mint credential, so it holds no
+voucher redeemer token either (cashu-mint#540).
+
+#### Redeemed in full: `VOUCHER_FULLY_REDEEMED`
+
+gateway-customer declares your stall's coupon credit to the mint's per-coupon
+redemption cap. If the coupon's value has already been redeemed (most likely
+through a copy of it), the mint refuses (`voucher_not_accepted`, 90025) and the
+receive answers **400**:
+
+```json
+{ "error": { "code": "VOUCHER_FULLY_REDEEMED", "details": "1b6f3e2a",
+  "message": "This coupon has already been redeemed in full. If you believe this is wrong, contact the stall, quoting reference 1b6f3e2a." } }
+```
+
+- **Terminal. Do not retry**: every retry is refused the same way.
+- **Nothing was taken.** The mint signed nothing; the customer still holds the
+  coupon, and their wallet can swap it back to sats.
+- `details` is the reference (the voucher id's first 8 characters). Support is
+  keyed on it: quote it when the customer disputes the refusal.
+
+### `POST /v1/links/status`
+
+Where your Cashlinks stand (#295). Send the link records you already keep, and
+the service asks the mint (NUT-07 `checkstate`) and answers per link. Read-only:
+nothing is stored, signed or spent.
+
+```json
+{ "links": [
+  { "id": "gift-7", "kind": "customer", "x": 1850000000, "ys": ["02ab…", "03cd…"] },
+  { "id": "sale-12", "kind": "merchant", "x": 1850000000, "tokens": ["cashuB…"] }
+] }
+```
+
+- `x` is the link's expiry in unix **seconds**.
+- `ys` are the proofs' `Y` points (`hash_to_curve(secret)`, 33-byte compressed,
+  hex). Or send `tokens`, the coupons on the link, and the service works the
+  `Y`s out itself. Coupons must be from the mint this service checks
+  (`WALLET_API_MINT_URL`); the service never asks a mint you name.
+- `kind` is `customer` (default) or `merchant`. It only labels the answer.
+- `id` is your own label, echoed back. At most 50 links and 1000 proofs.
+
+```json
+{ "links": [
+  { "id": "gift-7", "kind": "customer", "status": "expired_unreturned", "comesBack": true, "x": 1850000000, "proofs": 2 },
+  { "id": "sale-12", "kind": "merchant", "status": "expired", "comesBack": false, "x": 1850000000, "proofs": 1 }
+] }
+```
+
+| `status` | means |
+|---|---|
+| `claimed` | Every coupon has left the link. The mint cannot tell a claim from you taking it back. |
+| `outstanding` | Still on the link, before `x`. Anyone with the link can claim it. |
+| `expired_unreturned` | A customer's link past `x`, still on the link. Take it back (it can still be claimed until you do). |
+| `expired` | A stall's Cashlink past `x`. It does not come back to the stall, by design. |
+| `pending` | A coupon is in the middle of a swap. Ask again shortly. |
+| `unknown` | The mint gave no answer for at least one coupon. Ask again. |
+
+**It never takes a key.** A Cashlink's secret spends the gift, so any field
+named like a key (`k`, `key`, `secret`, `nsec`, `privkey`, …), or any value
+shaped like one (an `nsec1…`, 64 hex characters, a 43-character link secret, a
+link URL with `k=`), is refused with **400** and the field named, before the
+mint is asked. The value is never echoed. **502** when the mint does not answer,
+**503** when `WALLET_API_MINT_URL` is unset (there is no default).
+
 ### `GET /metrics`
 
 Unauthenticated counters: requests, errors, refusals by reason, validation

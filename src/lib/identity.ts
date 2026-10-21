@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import { knownBranding, merchantBranding, onBrandingChanged } from './branding'
-import { handleLabel, shortPubkey } from './format'
+import { handleLabel, UNKNOWN_PERSON } from './format'
+
+export { UNKNOWN_PERSON }
 
 /**
  * Who a pubkey is, in words a customer can read.
@@ -26,13 +28,13 @@ export interface Identity {
 /**
  * The one line to show for someone, best available.
  *
- * Never empty: a pubkey with no profile at all still renders as a short key
- * rather than a blank, because "who is this coupon from" with no answer is
- * worse than an ugly answer.
+ * Never empty, and never a key: with no name and no handle it is
+ * {@link UNKNOWN_PERSON}. `pubkey` stays in the signature so every caller
+ * keeps saying WHO it is asking about.
  */
-export function identityLabel(pubkey: string, identity: Identity | undefined): string {
+export function identityLabel(_pubkey: string, identity: Identity | undefined): string {
   const nip05 = identity?.nip05
-  return humanName(identity?.name) ?? (nip05 ? handleLabel(nip05) : undefined) ?? shortPubkey(pubkey)
+  return humanName(identity?.name) ?? (nip05 ? handleLabel(nip05) : undefined) ?? UNKNOWN_PERSON
 }
 
 /**
@@ -68,9 +70,9 @@ export function identitySubLabel(identity: Identity | undefined): string | undef
  * The name to show for a counterparty, or nothing when we cannot name them.
  *
  * The difference from {@link identityLabel} is the whole point: that one ends
- * its fallback ladder at `shortPubkey`, which is right for a list row where a
- * stable per-row identifier beats an empty cell. It is wrong for a toast, where
- * a 64-bit hex fragment beside an amount reads as noise and names nobody.
+ * its fallback ladder at {@link UNKNOWN_PERSON}, which is right for a list row
+ * where an empty cell would look broken. It is wrong for a toast, where
+ * "Someone" beside an amount says nothing the caller's own words would not.
  *
  * The settlement toast printed `b233db85…de1e` for exactly this reason: the
  * sending wallet had published no kind-0, so every rung of the ladder missed
@@ -116,8 +118,8 @@ export function nameOrNothing(
 export function useMerchantLabel(merchant: { pubkey: string; name?: string }): string {
   const fetched = useIdentity(merchant.pubkey)
   // `humanName` on the stored name too, so the hex placeholder never becomes
-  // the answer — it must fall through to `shortPubkey` like any other unnamed
-  // key rather than printing 64 characters into a row.
+  // the answer — it must fall through to the neutral word like any other
+  // unnamed key rather than printing 64 characters into a row.
   const identity: Identity = {
     ...fetched,
     name: fetched?.name ?? humanName(merchant.name),
@@ -174,7 +176,7 @@ export async function resolveNip05(address: string): Promise<string | null> {
  * Someone's name and handle, fetched once per pubkey.
  *
  * Returns `undefined` until it arrives, so callers render `identityLabel`'s
- * short-key fallback for a moment rather than an empty gap. Matches the
+ * neutral fallback (or a skeleton) for a moment rather than an empty gap. Matches the
  * `merchantBranding(pubkey).then(setState)` pattern the merchant pages already
  * use; `pubkey` may be empty, for the screens that name a counterparty which
  * some rows do not have.

@@ -174,10 +174,14 @@ export function isExpired(row: WalletTransaction, now: number): boolean {
 export function paymentRail(warrant: IssuanceWarrant): PaymentRail {
   if (warrant.state !== 'present') return { kind: 'unknown' }
   if (warrant.form === 'processor') return { kind: 'card', reference: warrant.reference }
-  // `merchant` only. A `delegated` warrant is not verifiable in this build
-  // (`verifyIssuanceWarrant` refuses it rather than half-checking), so naming a
-  // rail for it would assert more than the verifier is willing to.
-  return warrant.form === 'merchant' ? { kind: 'counter' } : { kind: 'unknown' }
+  // A `delegated` warrant is how a card purchase is signed since #152: the
+  // purchase issuer signs as the stall's delegate and carries the processor's
+  // reference inside the signed bytes. A delegated warrant WITHOUT a reference
+  // is some other delegate, so naming a rail for it would be a guess.
+  if (warrant.form === 'delegated') {
+    return warrant.reference ? { kind: 'card', reference: warrant.reference } : { kind: 'unknown' }
+  }
+  return { kind: 'counter' }
 }
 
 /**
@@ -256,11 +260,16 @@ export function issuedVoucher(
   )
 
   const warrant = parseIssuanceWarrant(row.issuanceWarrant)
-  const warrantVerdict = verifyIssuanceWarrant(warrant, stallPubkey, {
-    faceValueMinor: row.amount,
-    unit: row.unit,
-    faceDecimals: row.decimals,
-  })
+  // Judged at the moment the sale was recorded, not today: a card sale made
+  // under a live delegation stays authorised in the stall's ledger after the
+  // delegation lapses (#176 review). A row with no recorded time (0) falls
+  // back to the current clock.
+  const warrantVerdict = verifyIssuanceWarrant(
+    warrant,
+    stallPubkey,
+    { faceValueMinor: row.amount, unit: row.unit, faceDecimals: row.decimals },
+    row.at > 0 ? { issuedAt: row.at } : {},
+  )
 
   const attestation = parseCashAttestation(row.cashAttestation)
   // Checked against the SALE the warrant describes rather than against this

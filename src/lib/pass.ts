@@ -91,6 +91,12 @@ export interface PassJson {
   /** ISO-8601 instant, or undefined. */
   expirationDate?: string
   voided: boolean
+  /**
+   * Past its expiry (#265). Separate from `voided` on purpose, as the Java mapper keeps it: a void
+   * is a redemption or a revocation, which happened TO the coupon, while expiry is the clock. Both
+   * withdraw the redemption code; the card says which one it is.
+   */
+  expired?: boolean
   storeCard: StoreCard
   barcodes?: Barcode[]
   userInfo: Record<string, string>
@@ -298,10 +304,16 @@ function expirationDate(row: VoucherRow): string | undefined {
  * malformed row is a blank screen instead of a slightly wrong card. Every such
  * check degrades here instead.
  */
-export function toCouponPass(row: VoucherRow, branding: MerchantBranding = EMPTY_BRANDING): PassJson {
+export function toCouponPass(
+  row: VoucherRow,
+  branding: MerchantBranding = EMPTY_BRANDING,
+  now = Date.now(),
+): PassJson {
   const voucherId = voucherIdOf(row)
   const expires = expirationDate(row)
   const foreground = orDefault(branding.foregroundColor, DEFAULT_FOREGROUND_COLOR)
+  const expiresMs = toEpochMs(row.expires_at)
+  const expired = expiresMs !== undefined && expiresMs <= now
 
   return {
     formatVersion: FORMAT_VERSION,
@@ -318,6 +330,7 @@ export function toCouponPass(row: VoucherRow, branding: MerchantBranding = EMPTY
     labelColor: foreground,
     expirationDate: expires,
     voided: isVoided(row.status),
+    expired,
     storeCard: {
       primaryFields: [
         balanceField(
@@ -333,8 +346,10 @@ export function toCouponPass(row: VoucherRow, branding: MerchantBranding = EMPTY
     },
     // A voided coupon carries NO redemption code. Its proofs are burnt, so a
     // cashier scanning it would be reading a code for a sale that already
-    // happened — the one thing this screen must not invite twice.
-    barcodes: isVoided(row.status) ? undefined : [barcode(voucherId)],
+    // happened — the one thing this screen must not invite twice. An EXPIRED one
+    // carries none either (#265): the stall refuses it, and a live-looking code
+    // on it invited exactly that refusal at the counter.
+    barcodes: isVoided(row.status) || expired ? undefined : [barcode(voucherId)],
     userInfo: userInfo(branding, voucherId, row.issuer_id),
   }
 }

@@ -5,7 +5,7 @@ import type { TransactionRow } from '@imani/wallet-storage'
 import { getSigner } from './nap'
 import { allAddressable, publish } from './relay'
 import { addRestoredTransaction, getWallet, notifyWalletChanged } from './wallet'
-import { toTransaction, type WalletTransaction } from './transactions'
+import { asGiftLinkRecord, toTransaction, type WalletTransaction } from './transactions'
 
 /**
  * The wallet's ledger, backed by the key instead of the browser.
@@ -44,7 +44,7 @@ import { toTransaction, type WalletTransaction } from './transactions'
  * expiry, receive rows with no token id (and therefore no way back to the same
  * row key), and bundles that no longer know they were bundles.
  */
-type HistoryContent = Nip60HistoryContent & {
+export type HistoryContent = Nip60HistoryContent & {
   /** Epoch SECONDS, as the gateway reports it. */
   expires_at?: number
   /** The content-derived coupon key, for rows that have one. */
@@ -96,6 +96,30 @@ type HistoryContent = Nip60HistoryContent & {
    */
   transfer_id?: string
   transfer_signature?: string
+  /**
+   * The till that handled this row, on the stall's own `issued` and `cashback` rows only
+   * (terminals ticket 09). Carried since #160 phase 6 (F2): without it a restored stall read
+   * every till sale as "Your device", the same defect class as the issuance evidence above.
+   */
+  terminal_pubkey?: string
+  /**
+   * A gift link on a `sent` row (claim links phase 4): its secret, index, expiry and status, so a
+   * restored or second device can show it again, watch it and take it back. Inside the sender's
+   * own NIP-44-encrypted record, like everything else here.
+   */
+  gift_link?: unknown
+  /**
+   * What the wallet checked about a received coupon (the issuer signature and
+   * the warrant verdict), on `received` rows.
+   *
+   * Carried because it was NOT, and that read as a regression to the owner:
+   * a restored history showed every coupon "Not checked" (2026-10-18). The
+   * check was made once, at receive, against the PRE-swap token, which no
+   * longer exists anywhere after the swap, so it cannot be re-derived from the
+   * restored row. The record is the only copy. Inside the owner's own
+   * NIP-44-sealed payload, like everything else here.
+   */
+  validation?: unknown
   /**
    * Filler that brings the plaintext to a size bucket (#99), so a record's
    * length does not say what it carries. Ignored on read: `toRow` never looks
@@ -203,6 +227,9 @@ export function toContent(tx: WalletTransaction): HistoryContent {
     exact_value: tx.exactValue,
     transfer_id: tx.transferId,
     transfer_signature: tx.transferSignature,
+    terminal_pubkey: tx.terminalPubkey,
+    ...(tx.link ? { gift_link: tx.link } : {}),
+    ...(tx.validation ? { validation: tx.validation } : {}),
   }
 }
 
@@ -248,6 +275,11 @@ export function toRow(id: string, content: HistoryContent): TransactionRow {
     exactValue: content.exact_value,
     transferId: content.transfer_id,
     transferSignature: content.transfer_signature,
+    ...(content.terminal_pubkey ? { terminalPubkey: content.terminal_pubkey } : {}),
+    ...(asGiftLinkRecord(content.gift_link) ? { link: asGiftLinkRecord(content.gift_link) } : {}),
+    // Read back through `toTransaction`'s own `isValidation` guard, so a
+    // garbled value reads as "Not checked", never as a pass.
+    ...(content.validation ? { validation: content.validation } : {}),
   } as unknown as TransactionRow
 }
 
@@ -285,7 +317,12 @@ export async function publishTx(row: TransactionRow): Promise<void> {
   try {
     const template = buildTxEvent(toTransaction(row))
     if (!template) return
-    await publish(await getSigner().signEvent(template))
+    const result = await publish(await getSigner().signEvent(template))
+    // `publish` never throws; a relay's `OK false` comes back as ok 0 with its
+    // reason. Ignoring the result is how #203's coupon backups failed in silence.
+    if (result.ok === 0) {
+      throw new Error(`relay refused the record: ${result.errors.join('; ') || 'no reason given'}`)
+    }
   } catch (error) {
     console.error('[txRecords] transaction not backed up to the relay', error)
   }

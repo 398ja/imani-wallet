@@ -15,11 +15,13 @@ import QRCode from "qrcode";
 import { nip19 } from "nostr-tools";
 
 import { Avatar, RemoteImage, Screen, BackLink, SkeletonLine } from "../components/ui";
-import { formatDate, handleLabel, shortPubkey } from "../lib/format";
+import { formatDate, handleLabel } from "../lib/format";
 import { profileName, profileUnknown, type Profile } from "../lib/profile";
 import { canShare, shareText } from "../lib/native";
 import { LocationMap } from "../components/LocationMap";
+import { FinishProfileStep } from "../components/FinishProfileStep";
 import type { MerchantProfile } from "../lib/merchant";
+import type { TermsAcceptance } from "../lib/terms";
 
 /**
  * Your own profile, as others see it.
@@ -73,6 +75,7 @@ import type { MerchantProfile } from "../lib/merchant";
 export function ProfilePage({
   profile,
   merchant,
+  onFinishProfile,
 }: {
   profile: Profile;
   /**
@@ -84,8 +87,20 @@ export function ProfilePage({
    * customer's profile do relay work to discover it has no stall.
    */
   merchant: MerchantProfile | null;
+  /**
+   * Claim a handle for this (logged-in) account and put the new profile into
+   * the caller's state (#332). Every account must have a profile, so an older
+   * record without a handle gets a way in from its own card instead of a dead
+   * "no handle" line. Absent in tests that only draw the card. `terms` is the
+   * Terms and Conditions acceptance the step collected (review of #358).
+   */
+  onFinishProfile?: (handle: string, terms: TermsAcceptance) => Promise<void>;
 }) {
   const [enlarged, setEnlarged] = useState(false);
+  const [finishing, setFinishing] = useState(false);
+  // Only once the record has landed: a loading card is not a handle-less one.
+  const canFinish =
+    !!onFinishProfile && !profile.nip05 && !profileUnknown(profile);
 
   // Same fallback chain as Receive: accounts registered before handles existed
   // have no NIP-05, and on a dev machine nothing resolves one anyway, so the
@@ -103,11 +118,33 @@ export function ProfilePage({
     <Screen>
       <BackLink to="/" label="Wallet" />
 
-      <IdentityCard
-        profile={profile}
-        handle={handle}
-        onEnlarge={() => setEnlarged(true)}
-      />
+      {finishing && onFinishProfile ? (
+        /*
+          In place of the card, not a modal over it: this is the card's own
+          errand, so it happens where the card was and returns there. Handle
+          only; the display name is set later in Settings, and the claim is
+          #327's (`claimProfileWith`), idempotent on retry.
+        */
+        <div className="rounded-2xl border border-mono-200 bg-white p-5 dark:border-mono-800 dark:bg-mono-900">
+          <FinishProfileStep
+            intro="Every account has a handle, so people can find and pay you. Pick yours. You can add a name and photo later in Settings."
+            submitLabel="Finish"
+            cancelLabel="Not now"
+            onCancel={() => setFinishing(false)}
+            onClaim={async (h, terms) => {
+              await onFinishProfile(h, terms);
+              setFinishing(false);
+            }}
+          />
+        </div>
+      ) : (
+        <IdentityCard
+          profile={profile}
+          handle={handle}
+          onEnlarge={() => setEnlarged(true)}
+          onFinish={canFinish ? () => setFinishing(true) : undefined}
+        />
+      )}
 
       {handle && <HandleActions profile={profile} handle={handle} />}
 
@@ -182,11 +219,15 @@ export function ProfilePage({
  * places: the noun goes in button copy, the label goes where the value would.
  */
 function handleNoun(profile: Profile): string {
-  return profile.nip05 ? "handle" : "key";
+  // "account key", not "key" or "npub" (#324): the plain name for what is
+  // copied when there is no handle. It is never printed, only copied.
+  return profile.nip05 ? "handle" : "account key";
 }
 
-function handleShown(profile: Profile, handle: string): string {
-  return profile.nip05 ? handleLabel(profile.nip05) : shortPubkey(handle);
+function handleShown(profile: Profile): string {
+  // No key fragment where the handle would go (#324). Every account has a
+  // handle; an older record without one says so in words.
+  return profile.nip05 ? handleLabel(profile.nip05) : "No handle yet";
 }
 
 /**
@@ -202,10 +243,13 @@ function IdentityLines({
   profile,
   shown,
   className,
+  onFinish,
 }: {
   profile: Profile;
   shown: string;
   className?: string;
+  /** Offered in place of the handle line when the account has none (#332). */
+  onFinish?: () => void;
 }) {
   /*
     Waiting, not nameless. `App` seeds its state with `emptyProfile` and then
@@ -237,15 +281,31 @@ function IdentityLines({
           {profile.displayName}
         </p>
       )}
-      <p
-        className={
-          profile.displayName
-            ? "break-words text-sm text-mono-500"
-            : "break-words text-lg font-semibold text-mono-900 dark:text-mono-50"
-        }
-      >
-        {shown}
-      </p>
+      {onFinish ? (
+        /*
+          Where the handle goes, the way to get one (#332). Not "No handle yet"
+          over a link: a line that states a lack and then a control that fixes
+          it is two things saying one. The control is the second line itself,
+          in the handle's place, so the card reads the same shape either way.
+        */
+        <button
+          type="button"
+          onClick={onFinish}
+          className="pressable -mx-1 inline-flex min-h-11 items-center self-start rounded-md px-1 text-left text-sm font-medium text-mono-900 underline decoration-mono-300 underline-offset-4 outline-none ring-mono-400 hover:decoration-mono-900 focus-visible:ring-2 dark:text-mono-50 dark:decoration-mono-700 dark:hover:decoration-mono-50"
+        >
+          Finish your profile
+        </button>
+      ) : (
+        <p
+          className={
+            profile.displayName
+              ? "break-words text-sm text-mono-500"
+              : "break-words text-lg font-semibold text-mono-900 dark:text-mono-50"
+          }
+        >
+          {shown}
+        </p>
+      )}
     </div>
   );
 }
@@ -303,10 +363,12 @@ function IdentityCard({
   profile,
   handle,
   onEnlarge,
+  onFinish,
 }: {
   profile: Profile;
   handle: string | null;
   onEnlarge: () => void;
+  onFinish?: () => void;
 }) {
   const navigate = useNavigate();
 
@@ -337,8 +399,9 @@ function IdentityCard({
               handle to a shortened npub — see `IdentityLines`. */}
           <IdentityLines
             profile={profile}
-            shown={handle ? handleShown(profile, handle) : "No handle yet"}
+            shown={handleShown(profile)}
             className="min-w-0 flex-1"
+            onFinish={onFinish}
           />
           {/* Both controls belong on the card, next to what they act on — not
               as full-width buttons below the fold. 44px targets, 16px glyphs,
@@ -530,7 +593,7 @@ function HandleDialog({
           <CodeWithFace
             profile={profile}
             dataUrl={dataUrl}
-            shown={handleShown(profile, handle)}
+            shown={handleShown(profile)}
             className="w-full rounded-2xl bg-white p-4"
           />
         ) : (
@@ -540,7 +603,7 @@ function HandleDialog({
         )}
         <IdentityLines
           profile={profile}
-          shown={handleShown(profile, handle)}
+          shown={handleShown(profile)}
           className="w-full text-center"
         />
         <button

@@ -665,10 +665,9 @@ class GatewayAPI {
     if (path.startsWith('/api/v1/dm/')) {
       return true;
     }
-    // Atomic send/purchase require NIP-98 for ALL methods (ownership verification).
-    // /api/v1/atomic/* covers atomic-purchase aliases and the voucher-inspect endpoint.
+    // Atomic send and /api/v1/atomic/* (voucher inspect, fulfilment) require NIP-98 for ALL
+    // methods (ownership verification). The atomic purchase is removed from gateway-core.
     if (path.startsWith('/api/v1/atomic-send')
-            || path.startsWith('/api/v1/atomic-purchase')
             || path.startsWith('/api/v1/atomic/')) {
       return true;
     }
@@ -737,7 +736,6 @@ class GatewayAPI {
            path.startsWith('/api/v1/identities/') ||
            path.startsWith('/api/v1/nip05') ||
            path.startsWith('/api/v1/atomic-send') ||
-           path.startsWith('/api/v1/atomic-purchase') ||
            path.startsWith('/api/v1/cash/');
   }
 
@@ -2271,157 +2269,6 @@ class GatewayAPI {
     return this.request('GET', '/api/v1/profiles/payment-methods');
   }
 
-  // ============================================================================
-  // Atomic Purchase API (Escrow-based flow)
-  // ============================================================================
-
-  /**
-   * Create a quote for an atomic voucher purchase.
-   * The quote locks in the exchange rate and merchant details.
-   * @param {Object} params - Quote parameters
-   * @param {string} params.merchantId - Merchant's NIP-05 or pubkey (hex)
-   * @param {number} params.faceValue - Face value in minor units (e.g., cents)
-   * @param {string} params.faceUnit - Currency code (e.g., 'EUR', 'KES')
-   * @param {string} params.paymentMethod - Payment method ('balance' or 'lightning')
-   * @returns {Object} - { quoteId, merchantId, faceValue, faceUnit, amountSats, paymentMethod, expiresAt }
-   */
-  async createAtomicQuote(params) {
-    const body = {
-      merchant_id: params.merchantId,
-      face_value: params.faceValue,
-      face_unit: params.faceUnit,
-      payment_method: params.paymentMethod,
-      backing_strategy: params.backingStrategy || 'PROPORTIONAL'
-    };
-    if (params.voucherValidityDays != null) {
-      body.voucher_validity_days = params.voucherValidityDays;
-    }
-    return this.request('POST', '/api/v1/atomic-purchase/quote', body);
-  }
-
-  /**
-   * Initiate an atomic voucher purchase with escrow protection.
-   * This starts the saga: escrow hold → mint voucher → release payment → deliver.
-   * @param {Object} params - Initiation parameters
-   * @param {string} params.quoteId - Quote ID from createAtomicQuote
-   * @param {string} params.customerPubkey - Customer's Nostr pubkey (hex)
-   * @param {string} [params.customerLnbitsAdminKey] - Customer's LNbits admin key for balance transfer (optional)
-   * @param {string} [idempotencyKey] - Idempotency key for retry safety
-   * @returns {Object} - { purchaseId, status, escrow, progress, canCancel, expiresAt }
-   */
-  async initiateAtomicPurchase(params, idempotencyKey = null) {
-    const headers = {};
-    if (idempotencyKey) {
-      headers['Idempotency-Key'] = idempotencyKey;
-    }
-    const body = {
-      quote_id: params.quoteId,
-      customer_pubkey: params.customerPubkey
-    };
-    // Include LNbits admin key if provided (for actual balance transfer)
-    if (params.customerLnbitsAdminKey) {
-      body.customer_lnbits_admin_key = params.customerLnbitsAdminKey;
-    }
-    return this.requestWithHeaders('POST', '/api/v1/atomic-purchase', body, headers);
-  }
-
-  /**
-   * Get the status of an atomic purchase.
-   * Returns full progress information including current saga step.
-   * @param {string} purchaseId - Purchase ID from initiateAtomicPurchase
-   * @returns {Object} - { purchaseId, status, quote, merchant, escrow, progress, voucher, refund, canCancel, canClaim }
-   */
-  async getAtomicPurchaseStatus(purchaseId) {
-    return this.requestWithHeaders('GET', `/api/v1/atomic-purchase/${purchaseId}`);
-  }
-
-  /**
-   * Confirm escrow payment (for Lightning flow).
-   * Called after customer pays the escrow invoice.
-   * @param {string} purchaseId - Purchase ID
-   * @param {string} [idempotencyKey] - Idempotency key for retry safety
-   * @returns {Object} - { purchaseId, status, progress }
-   */
-  async confirmAtomicEscrow(purchaseId, idempotencyKey = null) {
-    const headers = {};
-    if (idempotencyKey) {
-      headers['Idempotency-Key'] = idempotencyKey;
-    }
-    return this.requestWithHeaders('POST', `/api/v1/atomic-purchase/${purchaseId}/escrow-confirm`, {}, headers);
-  }
-
-  /**
-   * Cancel an atomic purchase (before escrow is held).
-   * @param {string} purchaseId - Purchase ID
-   * @param {string} [idempotencyKey] - Idempotency key for retry safety
-   * @returns {Object} - { purchaseId, status: 'CANCELLED' }
-   */
-  async cancelAtomicPurchase(purchaseId, idempotencyKey = null) {
-    const headers = {};
-    if (idempotencyKey) {
-      headers['Idempotency-Key'] = idempotencyKey;
-    }
-    return this.requestWithHeaders('POST', `/api/v1/atomic-purchase/${purchaseId}/cancel`, {}, headers);
-  }
-
-  /**
-   * Request a refund for an atomic purchase.
-   * Only available if purchase is in a refundable state.
-   * @param {string} purchaseId - Purchase ID
-   * @param {string} [reason] - Optional reason for refund
-   * @param {string} [customerLud16] - Customer's Lightning address for refund
-   * @param {string} [idempotencyKey] - Idempotency key for retry safety
-   * @returns {Object} - { purchaseId, status, refund }
-   */
-  async refundAtomicPurchase(purchaseId, reason = null, customerLud16 = null, idempotencyKey = null) {
-    const headers = {};
-    if (idempotencyKey) {
-      headers['Idempotency-Key'] = idempotencyKey;
-    }
-    const body = {};
-    if (reason) body.reason = reason;
-    if (customerLud16) body.customer_lud16 = customerLud16;
-    return this.requestWithHeaders('POST', `/api/v1/atomic-purchase/${purchaseId}/refund`, body, headers);
-  }
-
-  /**
-   * Claim a voucher that failed automatic delivery.
-   * Available when purchase is in DELIVERY_PENDING state.
-   * @param {string} purchaseId - Purchase ID
-   * @param {string} customerPubkey - Customer's Nostr pubkey (for authorization)
-   * @param {string} [idempotencyKey] - Idempotency key for retry safety
-   * @returns {Object} - { purchaseId, status: 'DELIVERED', voucher }
-   */
-  async claimAtomicVoucher(purchaseId, customerPubkey, idempotencyKey = null) {
-    const headers = {};
-    if (idempotencyKey) {
-      headers['Idempotency-Key'] = idempotencyKey;
-    }
-    return this.requestWithHeaders('POST', `/api/v1/atomic-purchase/${purchaseId}/claim`, {
-      customer_pubkey: customerPubkey
-    }, headers);
-  }
-
-  /**
-   * Claim a refund for a purchase in REFUND_READY state.
-   * Used when auto-refund via lud16 wasn't possible.
-   * @param {string} purchaseId - Purchase ID
-   * @param {string} [customerLnbitsAdminKey] - Customer's LNbits admin key for receiving refund
-   * @param {string} [idempotencyKey] - Idempotency key for retry safety
-   * @returns {Object} - { purchaseId, status: 'REFUNDED', refund }
-   */
-  async claimAtomicRefund(purchaseId, customerLnbitsAdminKey = null, idempotencyKey = null) {
-    const headers = {};
-    if (idempotencyKey) {
-      headers['Idempotency-Key'] = idempotencyKey;
-    }
-    const body = {};
-    if (customerLnbitsAdminKey) {
-      body.customer_lnbits_admin_key = customerLnbitsAdminKey;
-    }
-    return this.requestWithHeaders('POST', `/api/v1/atomic-purchase/${purchaseId}/claim-refund`, body, headers);
-  }
-
   // ==================== ATOMIC SEND OPERATIONS ====================
 
   /**
@@ -3303,19 +3150,6 @@ class GatewayAPI {
     startPollBackstop();
 
     return { close: () => controller.abort() };
-  }
-
-  /**
-   * Subscribe to real-time atomic purchase status updates via SSE with NIP-98 auth.
-   * @param {string} purchaseId - Purchase ID
-   * @param {function} onUpdate - Callback for status updates
-   * @param {function} [onError] - Callback for errors
-   * @returns {{ close: function }} Controller with close() method
-   */
-  subscribeAtomicPurchaseEvents(purchaseId, onUpdate, onError = null) {
-    const url = `${this.baseUrl}/api/v1/atomic-purchase/${purchaseId}/events`;
-    return this._subscribeSSE(url, onUpdate, onError,
-      ['COMPLETED', 'REFUNDED', 'CANCELLED', 'FAILED', 'EXPIRED']);
   }
 
   /**

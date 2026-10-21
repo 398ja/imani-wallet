@@ -26,6 +26,8 @@ export interface AccountStore<T> {
   get(pubkey: string, id: string): T | undefined
   /** Insert or replace by id, then trim to the limit. */
   put(pubkey: string, item: T): void
+  /** Drop one item by id. Returns whether there was one to drop. */
+  remove(pubkey: string, id: string): boolean
 }
 
 export function createAccountStore<T>(opts: {
@@ -66,5 +68,16 @@ export function createAccountStore<T>(opts: {
     list,
     get: (pubkey, id) => list(pubkey).find((item) => opts.idOf(item) === id),
     put,
+    remove(pubkey, id) {
+      const current = list(pubkey)
+      const next = current.filter((item) => opts.idOf(item) !== id)
+      if (next.length === current.length) return false
+      try {
+        localStorage.setItem(key(pubkey), JSON.stringify(next))
+      } catch (e) {
+        console.warn(`[${opts.name}] could not persist:`, e)
+      }
+      return true
+    },
   }
 }

@@ -5,9 +5,13 @@ import {
   normaliseTypedClaimCode,
   toCanonicalClaimCode,
   redeemCashbackCode,
+  resolveClaimLinkByCode,
   replayPendingCashback,
+  pendingCashbackCount,
 } from '../cashback'
 import { clearConfigCache } from '../config'
+import { resetGate } from './trustedMintKit'
+import { buildPlainToken } from './voucherFixtures'
 
 /**
  * The legacy redemption coordinator, which is where the money actually moves.
@@ -28,8 +32,27 @@ vi.mock('../wallet', () => ({
 vi.mock('../nip98', () => ({
   signedFetch: async () => new Response('{}', { status: 200 }),
 }))
+/**
+ * The edge bot check (lib/captcha.ts has its own tests). Here only: does the lookup carry
+ * whatever token it is handed, and go ahead without one.
+ */
+let captchaToken: string | null = null
+vi.mock('../captcha', () => ({
+  CASHBACK_LOOKUP_ACTION: 'cashback_lookup',
+  captchaHeaders: async () => (captchaToken ? { 'X-Imani-Captcha': captchaToken } : {}),
+  prewarmCaptcha: () => {},
+}))
 
 const ORIGIN = 'cashback.example.test'
+/**
+ * The mint the portal stamps into cashback tokens, served as `token_mint_urls`.
+ * The commit is gated on it (#133 review), so every token below is a real plain
+ * token at this mint rather than an opaque string the gate could not read.
+ */
+const CASHBACK_MINT = 'https://mint.staging.398ja.xyz'
+const REAL_TOKEN = buildPlainToken(CASHBACK_MINT, 'sat', [8, 2])
+const CURRENT_TOKEN = buildPlainToken(CASHBACK_MINT, 'sat', [16])
+const STRANDED_TOKEN = buildPlainToken(CASHBACK_MINT, 'sat', [32])
 const CLAIM_REF = 'abcd1234efgh5678'
 /** 43 base64url characters — the 32-byte AES-256 key the claim URL carries. */
 const KEY = 'A'.repeat(43)
@@ -48,8 +71,10 @@ const fakeLocalStorage = {
 }
 
 beforeEach(() => {
+  resetGate()
   redeemed.length = 0
   redeemFails = false
+  captchaToken = null
   clearConfigCache()
   store.clear()
   vi.stubGlobal('localStorage', fakeLocalStorage)
@@ -66,6 +91,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  resetGate()
 })
 
 /**
@@ -104,14 +130,18 @@ function stubFetch(routes: {
   byCode?: { status: number; body?: unknown }
   ciphertext?: { status: number; body?: unknown }
   meta?: unknown
-}) {
+}, headersSeen?: Record<string, Record<string, string>>) {
   const calls: string[] = []
-  vi.stubGlobal('fetch', async (input: string) => {
+  vi.stubGlobal('fetch', async (input: string, init?: RequestInit) => {
     const url = String(input)
     calls.push(url)
+    if (headersSeen) headersSeen[url] = { ...((init?.headers ?? {}) as Record<string, string>) }
 
     if (url.startsWith('/api/v1/config')) {
-      return json(200, routes.config ?? { default_domain: 'x.test', cashback_origins: [ORIGIN] })
+      return json(
+        200,
+        routes.config ?? { default_domain: 'x.test', cashback_origins: [ORIGIN], token_mint_urls: [CASHBACK_MINT] },
+      )
     }
     if (url.includes('/cashback/by-code/')) {
       const r = routes.byCode ?? { status: 404 }
@@ -185,7 +215,7 @@ describe('typed claim codes', () => {
 
 describe('redeeming a code', () => {
   it('claims, decrypts, and banks the token', async () => {
-    const seal = await sealed('cashuBrealtoken')
+    const seal = await sealed(REAL_TOKEN)
     const calls = stubFetch({
       byCode: {
         status: 200,
@@ -197,7 +227,7 @@ describe('redeeming a code', () => {
     const result = await redeemCashbackCode('CB-A1B2-C3')
 
     expect(result).toEqual({ kind: 'ok', amountMinor: 500, unit: 'EUR', memo: 'thanks' })
-    expect(redeemed).toEqual(['cashuBrealtoken'])
+    expect(redeemed).toEqual([REAL_TOKEN])
     // The read-only metadata must be fetched BEFORE the destructive claim, or a
     // success screen for a coupon that committed offline has no amount to show.
     expect(calls.findIndex((c) => c.includes('/public/'))).toBeLessThan(
@@ -210,7 +240,7 @@ describe('redeeming a code', () => {
   it('looks up a current ten-character code, not just a legacy one', async () => {
     // Every code the portal has issued since GP-02 has this shape. Refusing it here
     // would answer "not found" without ever asking the gateway.
-    const seal = await sealed('cashuBcurrentcode')
+    const seal = await sealed(CURRENT_TOKEN)
     const calls = stubFetch({
       byCode: {
         status: 200,
@@ -257,7 +287,7 @@ describe('redeeming a code', () => {
     // This is the money case. The claim is already spent by the time the swap
     // runs, so dropping the token here loses the coupon permanently — the
     // holding store answers 410 for the rest of time.
-    const seal = await sealed('cashuBstranded')
+    const seal = await sealed(STRANDED_TOKEN)
     stubFetch({
       byCode: {
         status: 200,
@@ -268,12 +298,12 @@ describe('redeeming a code', () => {
     redeemFails = true
 
     expect(await redeemCashbackCode('CB-A1B2-C3')).toMatchObject({ kind: 'unreachable' })
-    expect(store.get('imani:cashback:pending') ?? null).toBe('cashuBstranded')
+    expect(pendingCashbackCount()).toBe(1)
 
     // ...and the next visit to the screen recovers it.
     redeemFails = false
     expect(await replayPendingCashback()).toBe(true)
-    expect(redeemed).toEqual(['cashuBstranded'])
+    expect(redeemed).toEqual([STRANDED_TOKEN])
     expect(store.get('imani:cashback:pending') ?? null).toBeNull()
   })
 
@@ -299,6 +329,49 @@ describe('redeeming a code', () => {
     expect(await redeemCashbackCode('CB-A1B2-C3')).toEqual({ kind: 'not_found' })
   })
 
+  it('sends the bot-check token with the lookup, and only with the lookup', async () => {
+    captchaToken = 'tok-1'
+    const headersSeen: Record<string, Record<string, string>> = {}
+    stubFetch({ byCode: { status: 404 } }, headersSeen)
+
+    await redeemCashbackCode('CB-A1B2-C3')
+
+    const lookup = Object.keys(headersSeen).find((u) => u.includes('/by-code/'))
+    expect(lookup).toBeDefined()
+    expect(headersSeen[lookup!]['X-Imani-Captcha']).toBe('tok-1')
+    expect(Object.entries(headersSeen).filter(([u, h]) => !u.includes('/by-code/') && 'X-Imani-Captcha' in h)).toEqual([])
+  })
+
+  it('still looks the code up when no token came (the edge decides, not the app)', async () => {
+    const headersSeen: Record<string, Record<string, string>> = {}
+    stubFetch({ byCode: { status: 404 } }, headersSeen)
+
+    expect(await redeemCashbackCode('CB-A1B2-C3')).toEqual({ kind: 'not_found' })
+    const lookup = Object.keys(headersSeen).find((u) => u.includes('/by-code/'))
+    expect(lookup).toBeDefined()
+    expect('X-Imani-Captcha' in headersSeen[lookup!]).toBe(false)
+  })
+
+  it('reads the edge bot check refusing as a throttle: wait, try again, the code is still good', async () => {
+    stubFetch({ byCode: { status: 403, body: { error: 'captcha_required', reason: 'missing' } } })
+    expect(await redeemCashbackCode('CB-A1B2-C3')).toEqual({ kind: 'throttled', retryAfterSeconds: null })
+  })
+
+  it('does not mistake any other 403 for the bot check', async () => {
+    stubFetch({ byCode: { status: 403, body: { error: 'forbidden' } } })
+    expect(await redeemCashbackCode('CB-A1B2-C3')).toEqual({ kind: 'unreachable', reason: 'http_403' })
+  })
+
+  it('Show QR again carries the token too (it shares the lookup)', async () => {
+    captchaToken = 'tok-qr'
+    const headersSeen: Record<string, Record<string, string>> = {}
+    stubFetch({ byCode: { status: 404 } }, headersSeen)
+
+    expect(await resolveClaimLinkByCode('CB-A1B2-C3')).toEqual({ kind: 'not_found' })
+    const lookup = Object.keys(headersSeen).find((u) => u.includes('/by-code/'))
+    expect(headersSeen[lookup!]['X-Imani-Captcha']).toBe('tok-qr')
+  })
+
   it('stays off entirely when the deployment lists no trusted origin', async () => {
     // Empty is the gateway's default and means "cashback is not configured
     // here". Proceeding would mean trusting whatever host the lookup named.
@@ -312,5 +385,160 @@ describe('redeeming a code', () => {
     const calls = stubFetch({})
     expect(await redeemCashbackCode('nonsense')).toEqual({ kind: 'not_found' })
     expect(calls.some((c) => c.includes('by-code'))).toBe(false)
+  })
+})
+
+/**
+ * #133 review, MEDIUM-1: the cashback commit swapped and credited with no
+ * backing check. These run the real trusted-mint gate, fed by the same
+ * `/api/v1/config` stub the redemption uses.
+ */
+describe('the cashback commit is gated on where the value is', () => {
+  const MINT = 'https://mint.staging.398ja.xyz'
+  const trustedConfig = { default_domain: 'x.test', cashback_origins: [ORIGIN], token_mint_urls: [MINT] }
+
+  async function claimable(token: string) {
+    const seal = await sealed(token)
+    stubFetch({
+      config: trustedConfig,
+      byCode: { status: 200, body: { claimUrl: `https://${ORIGIN}/c/${CLAIM_REF}#k=${seal.key}` } },
+      ciphertext: { status: 200, body: { ciphertext: seal.ciphertext, iv: seal.iv } },
+    })
+  }
+
+
+  /** The control: a cashback token at the trusted mint is banked as before. */
+  it('banks a cashback token whose proofs are at the trusted mint', async () => {
+    const token = buildPlainToken(MINT)
+    await claimable(token)
+
+    expect(await redeemCashbackCode('CB-A1B2-C3')).toMatchObject({ kind: 'ok' })
+    expect(redeemed).toEqual([token])
+  })
+
+  /**
+   * A token at a mint the wallet does not trust is NOT swapped. The claim is
+   * already spent, so the token is kept in the stash and the customer is told it
+   * is waiting to be verified, rather than losing it or banking rogue proofs.
+   */
+  it('does not swap a cashback token at an untrusted mint, and keeps it', async () => {
+    const token = buildPlainToken('https://rogue-mint.example.test')
+    await claimable(token)
+
+    expect(await redeemCashbackCode('CB-A1B2-C3')).toEqual({ kind: 'held', reason: 'untrusted-mint' })
+    expect(redeemed).toEqual([])
+    expect(pendingCashbackCount()).toBe(1)
+  })
+
+  /**
+   * #335 item 1: a stashed token the mint says is SPENT (banked before an
+   * offline logout whose record clear never landed) is dropped, not shown as
+   * "waiting" for ever. Only SPENT drops it: every other answer keeps it.
+   */
+  it('drops a stashed token only when the mint says it is SPENT', async () => {
+    const spent = buildPlainToken('https://rogue-mint.example.test', 'sat', [4])
+    const kept = ['UNSPENT', 'PENDING', 'UNKNOWN', 'throws'].map((_, i) =>
+      buildPlainToken('https://rogue-mint.example.test', 'sat', [64 << i]),
+    )
+    store.set('imani:cashback:pending', JSON.stringify([spent, ...kept]))
+    stubFetch({ config: trustedConfig })
+    const answers = new Map<string, string>([[spent, 'SPENT'], [kept[0], 'UNSPENT'], [kept[1], 'PENDING'], [kept[2], 'UNKNOWN']])
+    const state = async (t: string) => {
+      const a = answers.get(t)
+      if (!a) throw new Error('mint down')
+      return a as 'SPENT'
+    }
+
+    expect(await replayPendingCashback(state)).toBe(false)
+    expect(redeemed).toEqual([])
+    expect(JSON.parse(store.get('imani:cashback:pending')!)).toEqual(kept)
+  })
+
+  /** The replay path is gated too: a stashed rogue token is never swapped on a later visit. */
+  it('does not swap a stashed token at an untrusted mint on replay', async () => {
+    const token = buildPlainToken('https://rogue-mint.example.test')
+    store.set('imani:cashback:pending', token)
+    stubFetch({ config: trustedConfig })
+
+    expect(await replayPendingCashback()).toBe(false)
+    expect(redeemed).toEqual([])
+    expect(pendingCashbackCount()).toBe(1)
+  })
+
+  /**
+   * When no trusted mint is known at all the token is held as well, and banked
+   * by a later visit once the gateway names the mint.
+   */
+  it('holds while no mint is known, and banks on a later visit once one is', async () => {
+    const token = buildPlainToken(MINT)
+    stubFetch({ config: { default_domain: 'x.test', cashback_origins: [ORIGIN] }, ...(await claimRoute(token)) })
+
+    expect(await redeemCashbackCode('CB-A1B2-C3')).toEqual({ kind: 'held', reason: 'no-trusted-mint' })
+    expect(redeemed).toEqual([])
+
+    resetGate()
+    stubFetch({ config: trustedConfig })
+    expect(await replayPendingCashback()).toBe(true)
+    expect(redeemed).toEqual([token])
+    expect(pendingCashbackCount()).toBe(0)
+  })
+
+  /**
+   * Two claims held one after the other are both kept. The stash used to be one
+   * slot, so a second claim would have overwritten, and lost, the first.
+   */
+  it('keeps every held claim, not just the last', async () => {
+    const first = buildPlainToken('https://rogue-mint.example.test', 'sat', [4])
+    const second = buildPlainToken('https://rogue-mint.example.test', 'sat', [16])
+    await claimable(first)
+    await redeemCashbackCode('CB-A1B2-C3')
+    resetGate()
+    await claimable(second)
+    await redeemCashbackCode('CB-A1B2-C3')
+
+    expect(pendingCashbackCount()).toBe(2)
+  })
+
+  async function claimRoute(token: string) {
+    const seal = await sealed(token)
+    return {
+      byCode: { status: 200, body: { claimUrl: `https://${ORIGIN}/c/${CLAIM_REF}#k=${seal.key}` } },
+      ciphertext: { status: 200, body: { ciphertext: seal.ciphertext, iv: seal.iv } },
+    }
+  }
+})
+
+describe('the stash replay and the receive gate (fourth check of #334: C2, C4)', () => {
+  it('once logout has started, the replay swaps nothing and the stash is kept', async () => {
+    const gate = await import('../receiveGate')
+    stubFetch({})
+    store.set('imani:cashback:pending', JSON.stringify([STRANDED_TOKEN]))
+    gate.closeReceives()
+    try {
+      expect(await replayPendingCashback()).toBe(false)
+    } finally {
+      gate.openReceives()
+    }
+    expect(redeemed).toEqual([])
+    expect(pendingCashbackCount()).toBe(1)
+  })
+
+  it('a replay is counted while it runs and released when it ends', async () => {
+    const gate = await import('../receiveGate')
+    stubFetch({})
+    store.set('imani:cashback:pending', JSON.stringify([STRANDED_TOKEN]))
+    let seen = -1
+    vi.stubGlobal('window', {
+      TokenRedemption: {
+        async redeem(token: string) {
+          seen = gate.receivesInFlight()
+          redeemed.push(token)
+          return {}
+        },
+      },
+    })
+    expect(await replayPendingCashback()).toBe(true)
+    expect(seen).toBe(1)
+    expect(gate.receivesInFlight()).toBe(0)
   })
 })

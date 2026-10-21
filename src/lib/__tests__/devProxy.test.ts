@@ -47,6 +47,8 @@ const TEST_STACK: Record<number, string> = {
   28088: 'merchant-service',
   28186: 'cashback-claim',
   27777: 'imani-mint-rest',
+  // Not in the compose stack: purchase-issuer is run from this repo on its own default port.
+  8791: 'purchase-issuer (npx tsx services/purchase-issuer/server.ts)',
 }
 
 function targets(): { rule: string; target: string; port: number }[] {
@@ -77,6 +79,7 @@ describe('the dev proxy table', () => {
   it.each([
     ['/api/v1/checkout', 28087, 'payment-adapter'],
     ['/api/v1/merchant/stripe', 28088, 'merchant-service'],
+    ['/api/v1/card-sales', 8791, 'purchase-issuer (npx tsx services/purchase-issuer/server.ts)'],
   ])('routes %s to %i, which is %s', (rule, port, service) => {
     const found = targets().find((t) => t.rule === rule)
     expect(found, `${rule} has no proxy rule`).toBeDefined()
@@ -91,7 +94,7 @@ describe('the dev proxy table', () => {
    * as a bad signature and nothing in that message mentions a proxy. The file's
    * own header comment warns about this, so it is asserted rather than trusted.
    */
-  it.each(['/api/v1/atomic-send', '/api/v1/nip05', '/api/v1/merchant/stripe'])(
+  it.each(['/api/v1/atomic-send', '/api/v1/atomic/fulfilment', '/api/v1/nip05', '/api/v1/merchant/stripe', '/api/v1/card-sales'])(
     'keeps changeOrigin off for the origin-sensitive route %s',
     (rule) => {
       const entry = (proxy as Record<string, { changeOrigin?: boolean }>)[rule]
@@ -124,6 +127,8 @@ describe('the dev proxy table', () => {
     // when the wallet starts calling a new one.
     const GATEWAY_CORE_PATHS = [
       '/api/v1/atomic-send',
+      // A terminal's Redeem screen asks here whether it was paid (#160 phase 3).
+      '/api/v1/atomic/fulfilment/0123456789abcdef',
       '/api/v1/incoming-notifications',
       '/api/v1/payment-receipts',
       '/api/v1/nip05',

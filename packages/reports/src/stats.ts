@@ -49,9 +49,22 @@ export interface MerchantStats {
 
 const DAY_MS = 86_400_000
 
-/** Midnight UTC for the day a timestamp falls in, so buckets line up. */
+/**
+ * Local midnight for the day a timestamp falls in, so buckets line up with the
+ * merchant's own days. UTC midnight put a sale at 00:30 in Tokyo on yesterday's
+ * bar, and made the columns disagree with a window that starts at local midnight.
+ */
 function dayOf(at: number): number {
-  return Math.floor(at / DAY_MS) * DAY_MS
+  const d = new Date(at)
+  d.setHours(0, 0, 0, 0)
+  return d.getTime()
+}
+
+/** The next local midnight. Calendar steps, because a DST day is 23 or 25 hours. */
+function nextDay(day: number): number {
+  const d = new Date(day)
+  d.setDate(d.getDate() + 1)
+  return d.getTime()
 }
 
 /**
@@ -105,10 +118,11 @@ export function merchantStats(
   // Inclusive of BOTH ends. Counting `ceil((now - from) / DAY)` buckets forward
   // from the first day stops one short: today's rows then land past the last
   // bucket and vanish from the chart, which is how a busy afternoon can render
-  // as an empty series. Callers pass `from = now - (days - 1) * DAY` to get
-  // exactly `days` columns.
+  // as an empty series. A `from` anywhere in the first day gives exactly one
+  // column per local calendar day; the dashboard passes local midnight
+  // (`rangeFrom` in the app).
   const buckets = new Map<number, { day: number; issued: number; redeemed: number }>()
-  for (let day = dayOf(from); day <= dayOf(now); day += DAY_MS) {
+  for (let day = dayOf(from); day <= dayOf(now); day = nextDay(day)) {
     buckets.set(day, { day, issued: 0, redeemed: 0 })
   }
   for (const tx of matching) {

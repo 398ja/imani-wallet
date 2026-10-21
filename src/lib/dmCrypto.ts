@@ -10,13 +10,16 @@ import type { CryptoAdapter, GiftWrapEvent, UnwrappedDm, TokenMetadata } from '@
 import { checkIssuer } from './issuerAllowlist'
 import { checkMintAndUnit } from './trustedMint'
 import { getSigner } from './nap'
+import { isTillSaleMessage } from './tillSales'
 import { buildValidationRecord } from './voucherValidationRecord'
-import { asChunk, looksLikeChunk, offerChunk } from './dmChunks'
+import { terminalCredentialFromToken } from './notMoney'
+import { asChunk, looksLikeChunk, offerChunkFrom } from './dmChunks'
 import {
   heldWrapDecision,
   holdTransferSignatureWrap,
   parseTransferSignature,
   sealAuthorOf,
+  TRANSFER_SIGNATURE_TYPE,
 } from './transferSignature'
 import {
   parseVoucherToken,
@@ -24,6 +27,44 @@ import {
   type ParsedVoucherToken,
   type VoucherValidation,
 } from './voucherToken'
+
+/** `terminalDelivery.ENROLLED_DM_TYPE`, matched here without loading the delivery module. */
+function isEnrolledMessage(content: string): boolean {
+  try {
+    return (JSON.parse(content) as { type?: unknown })?.type === 'imani-terminal-enrolled/1'
+  } catch {
+    return false
+  }
+}
+
+/** `terminalDelivery.CREDENTIAL_DM_TYPE` (a renewal is one too, with `renews`). */
+function isCredentialMessage(content: string): boolean {
+  try {
+    return (JSON.parse(content) as { type?: unknown })?.type === 'imani-terminal-credential/1'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * One of the app's OWN non-payment messages: a terminal credential, renewal, renew request, sale
+ * record or enrolled notice (`imani-terminal-*`), or a transfer signature. None of them is a
+ * payment, and the text regex must not be let loose on one.
+ *
+ * A deny-list of types this app writes, not "any type but a token transfer" (review of #236): a
+ * DM with no token is marked PROCESSED by dm-poll and never offered again, so a real coupon in
+ * JSON of a type this build does not know would be lost for good. Before #236 the regex redeemed
+ * it, and it still does. A credential is refused in every envelope by `extractToken` itself.
+ */
+function typedAppMessage(content: string): boolean {
+  try {
+    const parsed = JSON.parse(content) as { type?: unknown } | null
+    const type = parsed && typeof parsed === 'object' ? parsed.type : undefined
+    return typeof type === 'string' && (type.startsWith('imani-terminal-') || type === TRANSFER_SIGNATURE_TYPE)
+  } catch {
+    return false
+  }
+}
 
 /**
  * The JSON payload the gateway actually sends.
@@ -201,14 +242,18 @@ function verifiedVoucherFrom(token: string | undefined):
   // not a field we record but the address we send money to. See
   // `docs/explanation/the-wallet-swaps-its-own-receives.md`.
   const backing = checkMintAndUnit(parsed)
-  // `not-ready` is refused too, not waved through. It means the gateway's config
-  // has not arrived, so the trusted set is unknown. Treating unknown as permitted
-  // would let anyone who can merely DELAY /api/v1/config disable this check.
-  // Refusing is safe here: the caller retries a DM, so a coupon refused during
-  // start-up is received moments later rather than lost.
-  if (backing === 'untrusted-mint' || backing === 'wrong-unit' || backing === 'not-ready') {
+  // Only a foreign UNIT is refused here. A REJECTED voucher makes `extractToken`
+  // return null, and dm-poll marks a wrap with no token PROCESSED, so it is never
+  // offered again. That is right for a unit, which no configuration can change,
+  // and wrong for anything about the MINT: a list that has not loaded, a
+  // deployment that names no mint, or a mint the two services' settings disagree
+  // on would each have dropped genuine coupons for good (imani-wallet#133 review,
+  // HIGH-2). Those are answered at redemption instead, where the adapter's
+  // `checkBacking` defers or HOLDS the delivery: nothing is swapped, nothing is
+  // consumed, and the coupon is shown as waiting to be verified.
+  if (backing === 'wrong-unit') {
     console.warn(
-      '[dmCrypto] rejecting voucher whose proofs are not at a trusted mint in sat:',
+      '[dmCrypto] rejecting voucher whose proofs are not in sat:',
       parsed.voucher.voucherId,
       backing,
       parsed.mintUrl,
@@ -345,25 +390,50 @@ export function createDmCryptoAdapter(): CryptoAdapter {
          */
         const chunk = asChunk(rumor.content)
         if (chunk) {
-          const whole = await offerChunk(chunk)
-          if (!whole) {
-            console.log('[dmCrypto] holding chunk', {
-              transfer: chunk.transfer_id.slice(0, 8),
-              index: chunk.chunk_index,
-              of: chunk.chunk_total,
-            })
-            return null
-          }
-          console.log('[dmCrypto] reassembled a chunked coupon', {
+          const offer = await offerChunkFrom(chunk, event.id)
+          const tag = {
             transfer: chunk.transfer_id.slice(0, 8),
-            chunks: chunk.chunk_total,
-            bytes: whole.length,
-          })
-          return {
-            eventId: event.id,
-            senderPubkey: rumor.pubkey,
-            content: whole,
-            createdAt: rumor.created_at,
+            index: chunk.chunk_index,
+            of: chunk.chunk_total,
+          }
+          switch (offer.kind) {
+            case 'complete':
+              console.log(
+                offer.redelivery
+                  ? '[dmCrypto] offering a reassembled coupon again (its last attempt did not finish)'
+                  : '[dmCrypto] reassembled a chunked coupon',
+                { transfer: tag.transfer, chunks: chunk.chunk_total, bytes: offer.payload.length },
+              )
+              return {
+                eventId: event.id,
+                senderPubkey: rumor.pubkey,
+                content: offer.payload,
+                createdAt: rumor.created_at,
+              }
+            case 'done':
+              // A straggler from a transfer whose coupon is durably handled
+              // (#204: only ever recorded once the completing event is
+              // processed). An empty non-token DM, so dm-poll marks it
+              // processed and stops re-reading it.
+              console.log('[dmCrypto] chunk of a transfer already received; releasing it', tag)
+              return { eventId: event.id, senderPubkey: rumor.pubkey, content: '', createdAt: rumor.created_at }
+            case 'pending':
+            case 'in_delivery':
+              // HELD, not failed and not processed: the wrap stays on the relay
+              // and is offered again. `in_delivery` is a sibling of a coupon
+              // being redeemed right now, or waiting on a retry; consuming it
+              // would be the #204 tombstone by another route.
+              console.log(
+                offer.kind === 'pending'
+                  ? '[dmCrypto] holding chunk until its siblings arrive'
+                  : '[dmCrypto] holding chunk while its coupon is redeemed',
+                tag,
+              )
+              return { eventId: event.id, senderPubkey: rumor.pubkey, content: '', createdAt: rumor.created_at, hold: true }
+            case 'refused':
+              // Did not verify. Null, so dm-poll records a retryable failure
+              // and the relay's copies can be tried again.
+              return null
           }
         }
 
@@ -415,6 +485,37 @@ export function createDmCryptoAdapter(): CryptoAdapter {
          * payload's own identity `sig`, and what binds it to the COUPON is the
          * sender check in `transferSignature.queueIfPaired`.
          */
+        /**
+         * A till's sale record (#160 phase 6, wallet#202). It carries no token: dm-poll marks it
+         * processed as a non-token DM, which is fine, because filing it is the collector's job and
+         * the collector reads the inbox itself, from its own cursor, verifying every row against
+         * this stall's attestation. This only makes the sale show up now rather than at next login.
+         */
+        if (isTillSaleMessage(rumor.content)) {
+          const stall = getSigner().pubkey
+          void import('./tillSalesNet').then((m) => m.collectTillSalesForOwner(stall)).catch(() => 0)
+        }
+        /**
+         * A till saying it holds its credential (#160 phase 6, found by the local gate). Read only
+         * by the Terminals screen's poll before, so an owner on any other screen, or on a restored
+         * phone, kept the till Waiting. The collector verifies the notice against the roster.
+         */
+        if (isEnrolledMessage(rumor.content)) {
+          const stall = getSigner().pubkey
+          void import('./terminalDeliveryNet').then((m) => m.collectEnrolled(stall)).catch(() => 0)
+        }
+
+        /**
+         * A terminal credential or renewal that reached THIS wallet (#160 owner report). It is
+         * never redeemed (`extractToken` returns null for it); it is announced as what it is,
+         * "Terminal setup request from <stall>", from its signed metadata. A personal wallet
+         * only gets one when its key was enrolled as a till, which is the wrong path.
+         */
+        if (isCredentialMessage(rumor.content)) {
+          const me = getSigner().pubkey
+          void import('./notMoneyNotice').then((m) => m.announceTerminalDm(rumor.content, me)).catch(() => false)
+        }
+
         const transferSignature = parseTransferSignature(rumor.content)
         if (transferSignature) {
           const sealAuthor = getSigner().withPrivkey((key) => sealAuthorOf(event as never, key))
@@ -522,7 +623,18 @@ export function createDmCryptoAdapter(): CryptoAdapter {
      */
     extractToken(content: string): string | null {
       const payload = asPayload(content)
-      if (!payload) return extractTokenFromText(content)
+      if (!payload) {
+        // An app message of another type (a terminal credential, a renewal, a till's renew
+        // request, a sale record, an enrolled notice) is never a payment. dm-poll's text regex
+        // would otherwise find the `cashuB…` credential token inside one and swap it at the mint:
+        // the 1 sat in a personal wallet's balance when its npub was enrolled as a till (#160).
+        if (typedAppMessage(content)) return null
+        const found = extractTokenFromText(content)
+        // Nor from a legacy text DM or untyped JSON: a credential is authority, never value.
+        return found && terminalCredentialFromToken(found) ? null : found
+      }
+      // A terminal credential is authority, not value, whatever envelope it arrives in.
+      if (terminalCredentialFromToken(payload.token)) return null
       return verifiedVoucherFrom(payload.token) === REJECTED ? null : payload.token
     },
 

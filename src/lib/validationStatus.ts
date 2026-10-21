@@ -82,10 +82,15 @@ export function validationStatus(v: VoucherValidation | undefined): ValidationSt
   // strictly safer than forging one, because a forgery showed red and an
   // absence showed green.
   //
-  // `claimed` is NOT here. A processor warrant is a real external claim that
-  // this build cannot check offline; it is reconciled against the processor
-  // out of band. Failing it would refuse every card-funded coupon.
-  if (v.warrant === 'failed' || v.warrant === 'unwarranted' || v.warrant === 'absent') {
+  // `claimed` is here too (#152). An unsigned processor warrant is the issuing
+  // service's word alone, nothing on this device can check it, and every
+  // wallet refuses it on receipt (`refuseIfUnwarranted`). The badge agrees.
+  if (
+    v.warrant === 'failed' ||
+    v.warrant === 'unwarranted' ||
+    v.warrant === 'absent' ||
+    v.warrant === 'claimed'
+  ) {
     return 'failed'
   }
 

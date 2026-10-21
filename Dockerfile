@@ -1,45 +1,19 @@
 # syntax=docker/dockerfile:1.7
 #
-# Two build contexts, because the five nap packages are still a sibling repo
-# consumed straight from source — vite.config.ts and tsconfig.app.json both alias
-# `../nap/packages/*/src/index.ts`:
+# One build context. The five @imani/nap-* packages are ordinary npm
+# dependencies (published as @398ja/nap-*, aliased to their import names in
+# package.json), so `npm ci` installs them like anything else (#212):
 #
-#   docker build --build-context nap=../nap \
+#   docker build \
 #     --build-arg VITE_RELAY_URL=wss://relay.staging.398ja.xyz \
 #     --build-arg VITE_INTERNAL_RELAY_URL=ws://nostr-relay:7777 \
 #     --build-arg VITE_GOOGLE_CLIENT_ID=<oauth-client-id>.apps.googleusercontent.com \
 #     --build-arg VITE_TRUSTED_MINT_URLS=https://mint.staging.398ja.xyz \
+#     --build-arg VITE_WEBSITE_BASE_URL=https://www.imani.casa \
 #     -t imani-wallet .
 #
-# The /build/{imani-wallet,nap} layout below reproduces the on-disk sibling shape
-# exactly, so neither config file needs a Docker-only variant to drift out of
-# sync with the one developers use.
-#
-# The 11 @imani/* packages need no such trick: they live in ./packages now.
+# The 11 @imani/* wallet packages live in ./packages and are aliased to source.
 FROM node:20-alpine AS builder
-WORKDIR /build
-
-# nap first — its own workspace install, its own cache layer, and it changes far
-# less often than the app.
-#
-# This install is NOT optional. nap's sources bare-import nostr-tools,
-# @noble/hashes and react, and Node resolution from /build/nap/packages never
-# reaches /build/imani-wallet/node_modules.
-#
-# It is also what reintroduces react 19.2.4 alongside the wallet's 19.2.3 — the
-# exact duplicate that `resolve.dedupe` in vite.config.ts exists to collapse.
-# Delete that dedupe and this image builds cleanly and serves a BLANK PAGE, with
-# a 200 and a well-formed index.html. Nothing but a browser catches it.
-# `packages` is copied BEFORE the install, not after: nap is an npm WORKSPACES
-# root (`workspaces: ["packages/*"]`), so react, @types/react and nostr-tools are
-# declared by the workspace packages, not the root. Install with packages/ absent
-# and npm happily installs the root's five devDeps and nothing else — then `tsc`
-# fails with "Cannot find module 'react'" pointing at ../nap sources, which reads
-# like a tsconfig problem and is not one.
-COPY --from=nap package.json package-lock.json ./nap/
-COPY --from=nap packages ./nap/packages
-RUN cd nap && npm ci --ignore-scripts
-
 WORKDIR /build/imani-wallet
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -63,18 +37,52 @@ ARG VITE_GOOGLE_CLIENT_ID
 ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
 
 # The mints this build credits coupons from, comma-separated (src/lib/trustedMint.ts).
-# Not a secret: it is a URL the browser already talks to. It must be set per environment,
-# because the only other source is the gateway's config, and a wallet that has not received
-# that config, or is pointed at a gateway that names no mint, then trusts nothing in
-# particular and credits from anywhere (imani-wallet#133). Setting it here makes the
-# trusted mint a property of the build rather than of whatever the network said.
+# Not a secret: it is a URL the browser already talks to. Set per environment, as
+# the PUBLIC mint URL tokens carry in `m` (e.g. https://mint.staging.398ja.xyz).
+#
+# REQUIRED (#133 review, HIGH-1). This image is always a production bundle, and a
+# production bundle that names no mint relies on /api/v1/config alone, which on
+# beta and prod named none: the gate then had nothing to compare against. The
+# wallet now holds coupons in that state rather than crediting them, so an image
+# built without this would credit nothing until the gateway's env is fixed. The
+# build fails instead (scripts/check-trusted-mint-build.sh). A throwaway local
+# image may pass ALLOW_UNTRUSTED_MINT_BUILD=true, which is announced and must
+# never be deployed.
 ARG VITE_TRUSTED_MINT_URLS
 ENV VITE_TRUSTED_MINT_URLS=$VITE_TRUSTED_MINT_URLS
+ARG ALLOW_UNTRUSTED_MINT_BUILD=false
+COPY scripts/check-trusted-mint-build.sh /tmp/check-trusted-mint-build.sh
+RUN ALLOW_UNTRUSTED_MINT_BUILD="$ALLOW_UNTRUSTED_MINT_BUILD" sh /tmp/check-trusted-mint-build.sh
+
+# The keys that sign vouchers this build believes, comma-separated 64-hex x-only keys
+# (src/lib/issuerAllowlist.ts): the customer gateway's voucher issuing key. Not a secret.
+# Coupons are refused offline when signed by any other key. Terminal credentials are
+# refused outright unless their signer is listed, and with this EMPTY no terminal opens
+# (#160 review, IW-15). Optional for the build so a wallet-only image still builds; a
+# deployment with terminals must set it.
+ARG VITE_VOUCHER_ISSUER_PUBKEYS=
+ENV VITE_VOUCHER_ISSUER_PUBKEYS=$VITE_VOUCHER_ISSUER_PUBKEYS
+
+# The licence SELLER's stall key, 64-hex x-only (src/lib/licenceStatus.ts licenceSellerPubkey): the
+# signed `issuer` a licence must name, so a licence-shaped voucher another stall minted through the
+# gateway and DM'd here grants nothing in this wallet and is never reported (imani-wallet#197 review,
+# MEDIUM-3). Not a secret. Empty does not pin (logged once); the server pins regardless.
+ARG VITE_LICENCE_SELLER_PUBKEY=
+ENV VITE_LICENCE_SELLER_PUBKEY=$VITE_LICENCE_SELLER_PUBKEY
+
+# The public website, without a trailing path (src/lib/terms.ts): every new account accepts the
+# Terms and Conditions at <this>/terms.html, today https://www.imani.casa/terms.html. Not a secret.
+# REQUIRED (#357): a bundle without it cannot link to the terms, so it refuses to create any
+# account. The build fails instead (scripts/check-website-base-url-build.sh). No escape hatch.
+ARG VITE_WEBSITE_BASE_URL
+ENV VITE_WEBSITE_BASE_URL=$VITE_WEBSITE_BASE_URL
+COPY scripts/check-website-base-url-build.sh /tmp/check-website-base-url-build.sh
+RUN sh /tmp/check-website-base-url-build.sh
 
 COPY . .
-# `tsc -b && vite build`. The tsc half typechecks ./packages AND ../nap through
-# the paths mirror in tsconfig.app.json, so drift in either fails the build here
-# rather than at runtime.
+# `tsc -b && vite build`. The tsc half typechecks ./packages through the paths
+# mirror in tsconfig.app.json, and the nap packages through their published
+# .d.ts, so drift in either fails the build here rather than at runtime.
 RUN npm run build
 
 FROM nginx:alpine

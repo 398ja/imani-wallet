@@ -98,10 +98,12 @@ function deviceKey(offCurve: boolean): string {
 }
 
 
-const LOCKED = 'src/lib/__tests__/fixtures/witness-test.token'
-const CONTROL = 'src/lib/__tests__/fixtures/control-unlocked.token'
-mintArm('witness-test.token')
-mintArm('control-unlocked.token', ['--allow-unlocked'])
+// Fresh arms go to the gitignored probe-out/, never over the tracked fixtures
+// the unit tests read (see src/lib/__tests__/fixtures/README.md).
+const LOCKED = 'src/lib/__tests__/fixtures/probe-out/witness-test.token'
+const CONTROL = 'src/lib/__tests__/fixtures/probe-out/control-unlocked.token'
+mintArm('probe-out/witness-test.token')
+mintArm('probe-out/control-unlocked.token', ['--allow-unlocked'])
 
 const locked = await attempt(LOCKED, 'LOCKED, no witness:')
 

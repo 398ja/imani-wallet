@@ -45,6 +45,7 @@ import {
   receiveBody,
 } from './redeem.js'
 import { parseLicenceRequest, checkLicence, licenceIssuerPubkey } from './licence.js'
+import { parseLinksStatusRequest, linksStatus, linksMintUrl } from './links.js'
 import {
   parseGenerateRequest,
   generateBody,
@@ -75,7 +76,8 @@ import {
 } from './issue.js'
 import { parsePrepareRequest, requestSplit, buildRumor, splitUrl, splitBody } from './prepare.js'
 import { createGuards, requestFingerprint, type StoredResponse } from './guards.js'
-import { createStallLookup } from './stallLookup.js'
+import { createStallLookup, queryRelay } from './stallLookup.js'
+import { createValidityReader, type ValidityReader } from './stallValidity.js'
 
 const PORT = Number(process.env.PORT ?? 8788)
 
@@ -182,6 +184,20 @@ export function resetStallLookup(): void {
 }
 
 /**
+ * The stall's own coupon validity, for an issue request that names no term (#359). A seam for the
+ * same reason as the lookup: the branch that matters, an unreadable record, needs a failure.
+ */
+let stallValidity: ValidityReader = createValidityReader(queryRelay)
+
+export function setStallValidity(reader: ValidityReader): void {
+  stallValidity = reader
+}
+
+export function resetStallValidity(): void {
+  stallValidity = createValidityReader(queryRelay)
+}
+
+/**
  * How the gateway is called.
  *
  * A seam for the same reason the lookup has one, and a more important one: the
@@ -202,6 +218,20 @@ export function setGatewayFetch(impl: typeof fetch): void {
 
 export function resetGatewayFetch(): void {
   gatewayFetch = fetch
+}
+
+/**
+ * How the mint is asked (`/v1/links/status`, NUT-07). A seam for the same reason as the gateway's:
+ * the answers that matter most here (a mint down, a mint saying "pending") only happen on failure.
+ */
+let mintFetch: typeof fetch = fetch
+
+export function setMintFetch(impl: typeof fetch): void {
+  mintFetch = impl
+}
+
+export function resetMintFetch(): void {
+  mintFetch = fetch
 }
 
 /** One header, lower-cased and de-duplicated, or undefined. */
@@ -758,6 +788,37 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
    * me?" BEFORE it tries, rather than discovering a lapse through a failure in
    * the middle of a workflow.
    */
+  /**
+   * Where a caller's Cashlinks stand (#295 phase 0): claimed, outstanding, or expired and not
+   * taken back yet. NUT-07 over the link records the caller keeps (the proofs' Y points, or the
+   * coupons). Read-only, and it never takes a key: anything shaped like one is refused by field
+   * before the mint is asked (`links.ts`). The mint is this service's configured one, never one
+   * a caller names.
+   */
+  if (path === '/v1/links/status' && method === 'POST') {
+    const mint = linksMintUrl()
+    if (!mint) {
+      return json(res, 503, { error: 'not-configured', detail: 'WALLET_API_MINT_URL is unset, so no link can be checked' })
+    }
+
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const input = parseLinksStatusRequest(parsed.value, mint, Math.floor(Date.now() / 1000))
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+
+    try {
+      return answer(200, await linksStatus(input.value, mint, mintFetch))
+    } catch {
+      // 502: the request was fine and the mint did not answer. Nothing is guessed, and nothing
+      // about the caller's links is logged.
+      return json(res, 502, { error: 'mint-unavailable', detail: 'the mint did not answer; nothing was changed, try again' })
+    }
+  }
+
   if (path === '/v1/licence/status' && method === 'POST') {
     const issuer = licenceIssuerPubkey()
     if (!issuer) {
@@ -803,16 +864,45 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const parsed = readJson(body)
     if (!parsed.ok) return json(res, 400, parsed.problem)
 
-    const plan = parseIssueRequest(parsed.value, auth.pubkey)
-    if (!plan.ok) {
+    const request = parseIssueRequest(parsed.value, auth.pubkey)
+    if (!request.ok) {
       metrics.validationErrors++
-      return json(res, 400, { error: 'invalid-request', field: plan.error.field, detail: plan.error.detail })
+      return json(res, 400, { error: 'invalid-request', field: request.error.field, detail: request.error.detail })
+    }
+
+    // No term named: the coupon lives as long as the STALL says, as it would from the Sell
+    // screen, the till or a card sale (#359). Never a fixed default: that is how a 90-day stall
+    // got 30-day coupons here. Unreadable mints nothing on a guess.
+    let expiresInDays = request.value.expiresInDays
+    if (expiresInDays === undefined) {
+      const validity = await stallValidity(auth.pubkey)
+      if (validity.kind !== 'days') {
+        return json(res, 503, {
+          error: 'validity-unknown',
+          detail:
+            'Your voucher validity could not be read just now. Try again in a minute, or name expiresInDays.',
+        })
+      }
+      // No signed record at all is not the stall choosing never-expires: it is a key the relay
+      // knows nothing about (never registered, or its record lives on another relay). Minting on
+      // the stall default there would stamp never-expires silently, the guess this endpoint exists
+      // to refuse. purchase-issuer refuses the same case at mint (`discharge.ts`). A record that
+      // exists but names no valid term IS the stall's own default, as the Sell screen reads it.
+      if (validity.source === 'default') {
+        return json(res, 422, {
+          error: 'no-merchant-record',
+          detail:
+            'No signed merchant record was found for your key, so your voucher validity is unknown. ' +
+            'Name expiresInDays, or publish your merchant record and try again.',
+        })
+      }
+      expiresInDays = validity.days
     }
 
     return answer(200, {
       url: issueUrl(),
       method: 'POST',
-      body: issueBody(plan.value),
+      body: issueBody({ ...request.value, expiresInDays }),
       // Said here rather than left to be discovered: minting answers PENDING
       // behind a bolt11 top-up and carries a token seconds later. The caller
       // polls, because a held connection is a timeout waiting to happen — and

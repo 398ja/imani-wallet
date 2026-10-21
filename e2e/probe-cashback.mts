@@ -13,6 +13,7 @@
  *   npx tsx e2e/probe-cashback.mts
  */
 import { finalizeEvent } from 'nostr-tools'
+import { captchaBypassHeaders } from './captchaBypass.mts'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
 import { secp256k1, schnorr } from '@noble/curves/secp256k1.js'
@@ -190,7 +191,8 @@ check('an amount of zero', zero.status === 400 && zero.body.field === 'amountMin
  * distinctions a caller acts on, and the courier cannot invent them.
  */
 console.log('\nWhat the portal says about a code')
-const unknown = await fetch(String(lookup.body.url).replace(/by-code\/.*$/, 'by-code/CB-ZZZZ-99'))
+// Through the edge's bot check with the e2e bypass (E2E_CAPTCHA_BYPASS), a no-op when unset.
+const unknown = await fetch(String(lookup.body.url).replace(/by-code\/.*$/, 'by-code/CB-ZZZZ-99'), { headers: captchaBypassHeaders() })
 const unknownBody = (await unknown.json().catch(() => ({}))) as { code?: string }
 check('an unknown code is 404 not_found', unknown.status === 404 && unknownBody.code === 'not_found', `HTTP ${unknown.status} ${JSON.stringify(unknownBody)}`)
 
