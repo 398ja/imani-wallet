@@ -91,6 +91,14 @@ describe('what to sign to mint', () => {
   it('refuses a named term that is not a whole number of days above zero', () => {
     for (const bad of [0, -1, 1.5, 'soon']) expect(parse({ expiresInDays: bad }).ok).toBe(false)
   })
+
+  it('refuses a named term past two years, as the Sell screen and the portal do (#359 review)', () => {
+    expect(parse({ expiresInDays: 730 }).ok).toBe(true)
+    for (const bad of [731, 3000, 1e9]) {
+      expect(parse({ expiresInDays: bad }).ok).toBe(false)
+      expect(parse({ expires_in_days: bad }).ok).toBe(false)
+    }
+  })
 })
 
 describe('the body it tells a caller to sign', () => {

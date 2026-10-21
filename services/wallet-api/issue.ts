@@ -18,6 +18,8 @@
  * into that, which is why it is named here and in the README.
  */
 
+import { MAX_VALIDITY_DAYS } from '@imani/merchant-record'
+
 type Parsed<T> = { ok: true; value: T } | { ok: false; error: { field: string; detail: string } }
 
 const fail = (field: string, detail: string): Parsed<never> => ({ ok: false, error: { field, detail } })
@@ -139,8 +141,13 @@ export function parseIssueRequest(body: unknown, callerPubkey: string): Parsed<I
   // A per-sale override, as the Sell screen offers one. Absent means the stall's own term.
   const rawDays = b.expiresInDays ?? b.expires_in_days
   const expiresInDays = rawDays === undefined ? undefined : Number(rawDays)
-  if (expiresInDays !== undefined && (!Number.isInteger(expiresInDays) || expiresInDays <= 0)) {
-    return fail('expiresInDays', 'expected a whole number of days greater than zero')
+  // Bounded as the Sell screen and the portal bound it (`MAX_VALIDITY_DAYS`, 730): the gateway
+  // publishes no ceiling of its own, so a mistyped 3000 would mint a coupon for the next decade.
+  if (
+    expiresInDays !== undefined &&
+    (!Number.isInteger(expiresInDays) || expiresInDays <= 0 || expiresInDays > MAX_VALIDITY_DAYS)
+  ) {
+    return fail('expiresInDays', `expected a whole number of days from 1 to ${MAX_VALIDITY_DAYS}`)
   }
 
   const memo = typeof b.memo === 'string' ? b.memo.trim() : ''
