@@ -418,3 +418,128 @@ describe('review of #367', () => {
     expect((h.rows[0].link as { noticedAt?: number }).noticedAt).toEqual(expect.any(Number))
   })
 })
+
+describe('second check of #367', () => {
+  const NOW = 1_850_000_000_000
+  const PAST = 1_840_000_000
+
+  it('a wallet clock more than the grace fast never closes a link the mint would still give back', async () => {
+    // The coupon expires in an hour by the mint's clock, but this device runs 3 h fast.
+    const live = buildVoucherToken({ expiresAt: NOW / 1000 + 3600 }, [8]).token
+    h.rows = [linkRow(0, 'outstanding', PAST)]
+    h.wraps.set(linkPubOf(deriveLinkSecret(ID, 0)), [live])
+    await reconcileGiftLinks(NOW + 3 * 3600_000, async () => 'UNSPENT')
+    expect(h.redeemed).toHaveLength(1)
+    expect((h.rows[0].link as { status: string }).status).toBe('reclaimed')
+  })
+
+  it('closes a link of lapsed coupons only after the mint refused the take-back', async () => {
+    const lapsed = buildVoucherToken({ expiresAt: PAST + 3600 }, [8]).token
+    h.rows = [linkRow(0, 'outstanding', PAST)]
+    h.wraps.set(linkPubOf(deriveLinkSecret(ID, 0)), [lapsed])
+    h.redeemFails = 'voucher_expired: Voucher has expired and cannot be redeemed'
+    await reconcileGiftLinks(NOW, async () => 'UNSPENT')
+    expect((h.rows[0].link as { status: string }).status).toBe('expired')
+  })
+
+  it('a link whose live coupon came back and whose other coupon lapsed is closed, not held until the live one expires', async () => {
+    const lapsed = buildVoucherToken({ expiresAt: PAST + 3600 }, [8]).token
+    const live = buildVoucherToken({ expiresAt: 1_900_000_000 }, [8]).token
+    h.rows = [linkRow(0, 'outstanding', PAST)]
+    h.wraps.set(linkPubOf(deriveLinkSecret(ID, 0)), [live, lapsed])
+    h.redeemFails = 'voucher_expired: Voucher has expired and cannot be redeemed'
+    // The live coupon already came back on an earlier run; only the lapsed one is unspent.
+    await reconcileGiftLinks(NOW, async (t) => (t === live ? 'SPENT' : 'UNSPENT'))
+    expect((h.rows[0].link as { status: string }).status).toBe('expired')
+    expect(await linkCounts(NOW)).toEqual({ waiting: 0, expiredUnreturned: 0 })
+  })
+
+  it('a notice filed while a take-back lands loses neither (no read-then-write window)', async () => {
+    const token = buildVoucherToken({ expiresAt: 1_900_000_000 }, [8]).token
+    h.rows = [linkRow(0, 'outstanding', PAST)]
+    h.wraps.set(linkPubOf(deriveLinkSecret(ID, 0)), [token])
+    const snapshot = await linkRows()
+    let notice: Promise<void> | undefined
+    vi.stubGlobal('window', {
+      location: { origin: 'https://wallet.example' },
+      TokenRedemption: {
+        redeem: async () => {
+          // The notice pass starts while the take-back is at the mint, and reads the link then.
+          notice = markLinksNoticed(snapshot, NOW)
+          return {}
+        },
+      },
+    })
+    await reconcileGiftLinks(NOW, async () => 'UNSPENT')
+    await notice
+    expect(h.rows[0].link).toMatchObject({ status: 'reclaimed', noticedAt: NOW })
+  })
+  it('a failed take-back that is not the mint saying "expired" keeps the link open for a week', async () => {
+    const lapsed = buildVoucherToken({ expiresAt: NOW / 1000 - 3 * 3600 }, [8]).token
+    h.rows = [linkRow(0, 'outstanding', PAST)]
+    h.wraps.set(linkPubOf(deriveLinkSecret(ID, 0)), [lapsed])
+    h.redeemFails = 'Failed to fetch'
+    await reconcileGiftLinks(NOW, async () => 'UNSPENT')
+    expect((h.rows[0].link as { status: string }).status).toBe('outstanding')
+    // A week past the coupon's own expiry it is closed whatever the failure was.
+    await reconcileGiftLinks(NOW + 8 * 86_400_000, async () => 'UNSPENT')
+    expect((h.rows[0].link as { status: string }).status).toBe('expired')
+  })
+
+  it('two settles at once (start-up and Send): the take-back that won is not relabelled Claimed', async () => {
+    const token = buildVoucherToken({ expiresAt: 1_900_000_000 }, [8]).token
+    h.rows = [linkRow(0, 'outstanding', PAST)]
+    h.wraps.set(linkPubOf(deriveLinkSecret(ID, 0)), [token])
+    let calls = 0
+    vi.stubGlobal('window', {
+      location: { origin: 'https://wallet.example' },
+      TokenRedemption: {
+        redeem: async () => {
+          calls += 1
+          if (calls === 1) return {}
+          throw new Error('Token already spent (11001)')
+        },
+      },
+    })
+    await Promise.all([reconcileGiftLinks(NOW, async () => 'UNSPENT'), reconcileGiftLinks(NOW, async () => 'UNSPENT')])
+    expect(calls).toBe(2)
+    expect((h.rows[0].link as { status: string }).status).toBe('reclaimed')
+  })
+  it('two settles at once, the loser answering first: Taken back still wins', async () => {
+    const token = buildVoucherToken({ expiresAt: 1_900_000_000 }, [8]).token
+    h.rows = [linkRow(0, 'outstanding', PAST)]
+    h.wraps.set(linkPubOf(deriveLinkSecret(ID, 0)), [token])
+    let calls = 0
+    vi.stubGlobal('window', {
+      location: { origin: 'https://wallet.example' },
+      TokenRedemption: {
+        redeem: async () => {
+          calls += 1
+          // The winner's swap is slow to save; the loser's "already redeemed" comes back at once.
+          if (calls === 1) return new Promise((resolve) => setTimeout(() => resolve({}), 30))
+          throw new Error('This voucher was already redeemed in another session')
+        },
+      },
+    })
+    await Promise.all([reconcileGiftLinks(NOW, async () => 'UNSPENT'), reconcileGiftLinks(NOW, async () => 'UNSPENT')])
+    expect((h.rows[0].link as { status: string }).status).toBe('reclaimed')
+  })
+
+  it('a settle cut off by the budget finishes in the background, and the next one has nothing left', async () => {
+    const token = buildVoucherToken({ expiresAt: 1_900_000_000 }, [8]).token
+    h.rows = [linkRow(0, 'outstanding', PAST)]
+    h.wraps.set(linkPubOf(deriveLinkSecret(ID, 0)), [token])
+    let release!: (s: ProofState) => void
+    const slow = new Promise<ProofState>((r) => (release = r))
+    const counts = await settleAndCountLinks(NOW, () => slow, 20)
+    // Cut off: nothing written, the link still counts against its own cap.
+    expect(counts).toEqual({ waiting: 0, expiredUnreturned: 1 })
+    expect((h.rows[0].link as { status: string }).status).toBe('outstanding')
+    release('UNSPENT')
+    await vi.waitFor(() => expect((h.rows[0].link as { status: string }).status).toBe('reclaimed'))
+    expect(h.redeemed).toHaveLength(1)
+    await reconcileGiftLinks(NOW, async () => 'SPENT')
+    expect((h.rows[0].link as { status: string }).status).toBe('reclaimed')
+    expect(h.redeemed).toHaveLength(1)
+  })
+})
