@@ -27,6 +27,23 @@ if (!/-test$/.test(DB_CONTAINER)) {
   console.log(`  FAIL  refusing to write to ${DB_CONTAINER}: this probe only runs against a *-test database`)
   process.exit(1)
 }
+// The container name alone is not enough: a DOCKER_HOST/DOCKER_CONTEXT would aim `docker exec` at
+// another daemon, and PORTAL_URL is a write too (it generates a real cashback). Local stack only.
+if (process.env.DOCKER_HOST || process.env.DOCKER_CONTEXT) {
+  console.log('  FAIL  refusing to run with DOCKER_HOST/DOCKER_CONTEXT set: this probe only runs against the local daemon')
+  process.exit(1)
+}
+// `docker context use <remote>` is not in the environment, so ask docker which endpoint it would use.
+const dockerEndpoint = execFileSync('docker', ['context', 'inspect', '--format', '{{.Endpoints.docker.Host}}'])
+  .toString().trim()
+if (!dockerEndpoint.startsWith('unix://')) {
+  console.log(`  FAIL  refusing docker endpoint ${dockerEndpoint}: this probe only runs against the local daemon`)
+  process.exit(1)
+}
+if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(PORTAL).hostname)) {
+  console.log(`  FAIL  refusing PORTAL_URL ${PORTAL}: this probe only runs against a loopback portal`)
+  process.exit(1)
+}
 
 let failures = 0
 function check(what: string, ok: boolean, detail = ''): void {
@@ -71,6 +88,7 @@ const gen = await portal('POST', '/api/v1/portal/cashback/generate', {
   amountMinor: 123, unit: 'EUR', idempotencyKey: randomUUID(), voucherValidityDays: 30,
 })
 const cashbackId = String(gen.json.cashbackId ?? '')
+const voucherId = String(gen.json.voucherId ?? '')
 check('the portal generates it', gen.status === 200 && uuid.test(cashbackId), `HTTP ${gen.status}`)
 if (!uuid.test(cashbackId)) process.exit(1)
 
@@ -93,8 +111,12 @@ check('#56 the record is parked, not expired', row === 'ManualAttention|claim_mi
 
 const logs = execFileSync('docker', ['logs', '--since', since, PORTAL_CONTAINER], { stdio: ['ignore', 'pipe', 'pipe'] })
 const all = logs.toString()
-check('#56 no burn was attempted', !/walletPort\.revokeVoucher|cashback\.expire walletPort/.test(all))
-check('#56 the park was logged', /claim_missing/.test(all))
+// Since portal#62 the burn is by swap and logs `cashback.burn [refused|unavailable] voucherId=<id>`
+// or `cashback.expire burn_<outcome> cashbackId=<id>`; walletPort.revokeVoucher is gone.
+const burnLog = new RegExp(
+  `cashback\\.burn (?:refused |unavailable )?voucherId=${voucherId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)|cashback\\.expire burn_\\w+ cashbackId=${cashbackId}`)
+check('#56 no burn was attempted', voucherId.length > 0 && !burnLog.test(all), voucherId ? '' : 'no voucherId in the generate answer')
+check('#56 the park was logged', all.includes(`cashback.expire claim_missing cashbackId=${cashbackId}`))
 
 const metrics = await fetch(`${process.env.PORTAL_METRICS_URL ?? 'http://localhost:29084'}/actuator/prometheus`).then((r) => r.text()).catch(() => '')
 if (metrics) {
