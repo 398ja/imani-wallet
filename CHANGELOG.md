@@ -77,6 +77,10 @@ link record without the new `noticedAt` field still reads.
   give back. Only the coupons still on the link are read, so one that already came back cannot
   hold the link open. Link-record writes run one at a time, so two settles that finish in the
   "wrong" order still leave **Taken back**, never Claimed.
+- **Third check.** The expired refusal a Cashlink coupon actually meets is the **gateway's**, made
+  before the swap reaches the mint ("Voucher token expired. Reason: voucher expiry exceeded."), not
+  the mint's `voucher_expired`. It is now recognised too, so such a link closes on that run, not
+  only a week later. `90016` is matched as a whole number only.
 
 ## [0.36.0] - 2026-10-21
 
