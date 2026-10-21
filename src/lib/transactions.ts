@@ -311,6 +311,11 @@ export interface GiftLinkRecord {
   status: GiftLinkStatus
   /** When it was claimed or taken back, ms. */
   closedAt?: number
+  /**
+   * When the "Your Cashlink expired" bell entry was filed for it, ms (#295 phase 0). On the record,
+   * not only on this device, so a restored or second device does not tell the sender twice.
+   */
+  noticedAt?: number
 }
 
 /** The words for a link's status in History (spec 4.2 step 6). */
@@ -326,7 +331,7 @@ const LINK_STATUSES: readonly GiftLinkStatus[] = ['outstanding', 'claimed', 'rec
 /** A stored link record, or undefined for anything malformed (never trusted as-is). */
 export function asGiftLinkRecord(value: unknown): GiftLinkRecord | undefined {
   if (!value || typeof value !== 'object') return undefined
-  const { k, i, x, status, closedAt } = value as Record<string, unknown>
+  const { k, i, x, status, closedAt, noticedAt } = value as Record<string, unknown>
   if (typeof k !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(k)) return undefined
   if (typeof x !== 'number' || !Number.isFinite(x)) return undefined
   if (typeof status !== 'string' || !LINK_STATUSES.includes(status as GiftLinkStatus)) return undefined
@@ -336,6 +341,7 @@ export function asGiftLinkRecord(value: unknown): GiftLinkRecord | undefined {
     status: status as GiftLinkStatus,
     ...(typeof i === 'number' && Number.isSafeInteger(i) && i >= 0 ? { i } : {}),
     ...(typeof closedAt === 'number' && Number.isFinite(closedAt) ? { closedAt } : {}),
+    ...(typeof noticedAt === 'number' && Number.isFinite(noticedAt) ? { noticedAt } : {}),
   }
 }
 

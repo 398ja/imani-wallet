@@ -151,8 +151,9 @@ with no account yet. (A stall's cashback arrives as a Cashlink too.)
 
 1. Tap **Send**, then **Anyone, as a Cashlink**.
 2. Pick the coupon and the amount. Choose how long the link lasts: **1 day**,
-   **7 days** (the usual) or **30 days**. It never lasts longer than the coupon
-   itself.
+   **7 days** (the usual) or **30 days**. A link always ends at least a day before
+   the coupon itself expires, so you have time to take it back. A choice that
+   would end later is greyed out, and the screen says why.
 3. Check the confirm screen: *"Anyone with the link can claim it. You can take it
    back until it is claimed."* Tap **Make Cashlink**.
 4. Tap **Show QR**, **Share link** or **Copy link**, and send it however you like.
@@ -169,15 +170,28 @@ Things worth knowing:
 - **You can take it back.** Open the send in your history (it has a **Cashlink**
   badge) and tap **Take it back**. The coupon comes back to your wallet and the
   link stops working.
-- **Unclaimed links come back on their own.** After the link expires, your wallet
-  takes the coupon back the next time you open it, and the history says
-  **Taken back**. Once someone claims it, the history says **Claimed**.
+- **When a link expires, your wallet takes the coupon back the next time Imani
+  opens.** It cannot happen while Imani is closed: only your wallet can take it
+  back. Until then the link still works, so whoever has it can still claim it. Your
+  bell says *"Your Cashlink expired. Open Imani to take it back."* Open Imani and
+  the history says **Taken back** (or **Claimed**, if someone got there first).
+  Opening **Send** also takes back any expired links first.
+- **The expiry is checked by the app of the person opening the link.** Their
+  wallet refuses a link past its date. A taken-back link stops working for
+  everyone.
+- **Coming soon: links that come back on their own,** without you opening Imani.
+  The coupon will leave the link soon after it expires, and turn back into your
+  coupon the next time Imani opens.
 - **Lost your phone?** Restore your account and your wallet finds the links you
   sent that are still waiting, so it can still take them back.
-- At most **10 links** can wait to be claimed at once. A link never asks for your
-  key or passphrase; if a page that looks like this wallet does, close it.
+- At most **10 links** can wait to be claimed at once. Expired links don't count,
+  but no more than 10 expired links can be waiting to come back: open Imani for a
+  moment so it can take them back. A link never asks for your key or passphrase;
+  if a page that looks like this wallet does, close it.
 - A stall can't send its own coupons this way (it creates a Cashlink from **Sell** instead), a
-  subscription, or a terminal pass.
+  subscription, or a terminal pass. Some coupons can't be sent as a Cashlink yet, and
+  coupons expiring within two days can't either. The screen says so. You can still
+  spend them, or send them to someone's handle.
 
 ## Keeping your account safe
 
