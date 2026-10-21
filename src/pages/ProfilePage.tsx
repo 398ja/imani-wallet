@@ -21,6 +21,7 @@ import { canShare, shareText } from "../lib/native";
 import { LocationMap } from "../components/LocationMap";
 import { FinishProfileStep } from "../components/FinishProfileStep";
 import type { MerchantProfile } from "../lib/merchant";
+import type { TermsAcceptance } from "../lib/terms";
 
 /**
  * Your own profile, as others see it.
@@ -90,9 +91,10 @@ export function ProfilePage({
    * Claim a handle for this (logged-in) account and put the new profile into
    * the caller's state (#332). Every account must have a profile, so an older
    * record without a handle gets a way in from its own card instead of a dead
-   * "no handle" line. Absent in tests that only draw the card.
+   * "no handle" line. Absent in tests that only draw the card. `terms` is the
+   * Terms and Conditions acceptance the step collected (review of #358).
    */
-  onFinishProfile?: (handle: string) => Promise<void>;
+  onFinishProfile?: (handle: string, terms: TermsAcceptance) => Promise<void>;
 }) {
   const [enlarged, setEnlarged] = useState(false);
   const [finishing, setFinishing] = useState(false);
@@ -129,8 +131,8 @@ export function ProfilePage({
             submitLabel="Finish"
             cancelLabel="Not now"
             onCancel={() => setFinishing(false)}
-            onClaim={async (h) => {
-              await onFinishProfile(h);
+            onClaim={async (h, terms) => {
+              await onFinishProfile(h, terms);
               setFinishing(false);
             }}
           />

@@ -26,18 +26,25 @@ vi.mock('../onboardingHandoff', async (importOriginal) => ({
 const { register } = await import('../registration')
 const { hasStoredKey, keyStore } = await import('../nap')
 
+// #357: register refuses without an accepted Terms and Conditions, so every call here brings one.
+vi.stubEnv('VITE_WEBSITE_BASE_URL', 'https://www.imani.casa')
+const TERMS = { terms: { url: 'https://www.imani.casa/terms.html', acceptedAt: 1 } }
+
 beforeEach(() => localStorage.clear())
 
 describe('hasStoredKey after a real registration', () => {
   it('a merchant registration leaves a wallet the claim landing detects', async () => {
     expect(await hasStoredKey()).toBe(false)
     const out = await register('stall', 'merchant-passphrase', async () => {}, {
-      active: true,
-      categories: ['food'],
-      location: undefined,
-      issuanceCurrency: 'EUR',
-      voucherValidityDays: 30,
-    } as Parameters<typeof register>[3])
+      ...TERMS,
+      merchant: {
+        active: true,
+        categories: ['food'],
+        location: undefined,
+        issuanceCurrency: 'EUR',
+        voucherValidityDays: 30,
+      },
+    })
     expect(out.merchant).toBeDefined()
     expect(await hasStoredKey()).toBe(true)
   })
@@ -45,8 +52,8 @@ describe('hasStoredKey after a real registration', () => {
   // #330: a second account may no longer replace the first one's key while it is still on the
   // device (that orphaned its vouchers). The first wallet is kept and still unlocks.
   it('a second registration on a device holding a wallet is refused, and the first one still unlocks', async () => {
-    await register('first', 'pass-one-one', async () => {})
-    await expect(register('second', 'pass-two-two', async () => {})).rejects.toThrow(/already holds another wallet/)
+    await register('first', 'pass-one-one', async () => {}, TERMS)
+    await expect(register('second', 'pass-two-two', async () => {}, TERMS)).rejects.toThrow(/already holds another wallet/)
     expect(await hasStoredKey()).toBe(true)
     await expect(keyStore.loadKey('pass-one-one')).resolves.toMatch(/^[0-9a-f]{64}$/)
   })

@@ -37,6 +37,10 @@ const { createWalletSigner } = await import('../signer')
 const { loadProfile, mergeKind0, emptyProfile, buildProfileEvent } = await import('../profile')
 const { userMessage } = await import('../userMessage')
 
+// #357: register refuses without an accepted Terms and Conditions, so every call here brings one.
+vi.stubEnv('VITE_WEBSITE_BASE_URL', 'https://www.imani.casa')
+const TERMS = { terms: { url: 'https://www.imani.casa/terms.html', acceptedAt: 1 } }
+
 /** The gateway's own rule for `username`, so the mock answers as staging does. */
 function gateway(_path: string, _method: string, body: { username: string }) {
   if (/^[a-z0-9_]+$/.test(body.username)) return Promise.resolve(new Response('{}', { status: 201 }))
@@ -69,7 +73,7 @@ afterEach(() => vi.unstubAllGlobals())
 
 describe('register normalises the typed handle (#342)', () => {
   it.each(['alice ', ' alice', 'Alice ', ' ALICE\t'])('%j is claimed, published and cached as "alice"', async (typed) => {
-    const outcome = await register(typed, 'correct horse battery staple', async () => {})
+    const outcome = await register(typed, 'correct horse battery staple', async () => {}, TERMS)
     expect(sentUsernames()).toEqual(['alice'])
     expect(publishedNip05()).toEqual(['alice@imani.local'])
     expect(outcome.profile.nip05).toBe('alice@imani.local')
@@ -84,7 +88,7 @@ describe('register with a padded handle still honours the one-wallet guard (#330
     const other = 'b'.repeat(64)
     slot.held = true
     localStorage.setItem(`imani-wallet:profile:${other}`, JSON.stringify({ pubkey: other }))
-    await expect(register(' Alice ', 'correct horse battery staple', async () => {})).rejects.toBeInstanceOf(
+    await expect(register(' Alice ', 'correct horse battery staple', async () => {}, TERMS)).rejects.toBeInstanceOf(
       OtherWalletOnDeviceError,
     )
     expect(signedFetch).not.toHaveBeenCalled()
@@ -95,7 +99,7 @@ describe('register with a padded handle still honours the one-wallet guard (#330
 
 describe('claimProfile (Finish your profile) normalises the typed handle (#342)', () => {
   it('"Alice " is claimed, published and cached as "alice"', async () => {
-    const profile = await claimProfile(PRIV, 'Alice ')
+    const profile = await claimProfile(PRIV, 'Alice ', null, TERMS.terms)
     expect(sentUsernames()).toEqual(['alice'])
     expect(publishedNip05()).toEqual(['alice@imani.local'])
     expect(profile.nip05).toBe('alice@imani.local')

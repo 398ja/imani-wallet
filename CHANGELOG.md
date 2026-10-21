@@ -9,6 +9,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Every new account accepts the Terms and Conditions (#357). **New build configuration:**
+`VITE_WEBSITE_BASE_URL` (e.g. `https://www.imani.casa`) is REQUIRED, and the image build fails
+without it. No migrations: an older profile or backup without the new field still reads.
+
+### Added
+
+- **Creating an account requires accepting the Terms and Conditions** (Closes #357). The account
+  step has an unticked "I accept the Terms and Conditions" box. The words link to
+  `<VITE_WEBSITE_BASE_URL>/terms.html` in a new tab (`rel="noopener noreferrer"`), and the whole
+  row is at least 44px tall. **Create account** (customer) and **Continue** (merchant, on the first
+  step, before the business screens, which do not ask again) stay disabled until it is ticked. A
+  registration that starts from a voucher or gift link goes through the same form and needs it too.
+  Logging in to or restoring an existing account that already has a handle does not ask.
+- **Finish your profile asks too (review of #358).** It claims the FIRST handle for a key that has
+  none (a pasted key, a backup of an unfinished account, or the profile card, #332), and that claim
+  is what creates the account on the service. It shows the same unticked box, its button stays
+  disabled until ticked, and `claimProfile` / `claimProfileWith` now take a required acceptance
+  and refuse before claiming anything. The claimed profile records it, and an acceptance the
+  record already holds is never overwritten. The box is now one shared component,
+  `components/TermsCheckbox.tsx`.
+- **`register()` refuses without an acceptance.** Its fourth argument is now a required options
+  object, `{ terms, merchant?, profileFields? }`, and `register` checks `terms` before it mints a
+  key, claims a handle or stores anything, so no caller can create an account that skipped it. A
+  terminal does not register: it has no account or handle of its own and works for its stall's
+  account, which accepted when it was created.
+- **The acceptance is recorded with the account**, as `termsAccepted: { url, acceptedAt }` on the
+  profile record: the exact terms URL that was linked, and when the account was created with the
+  box ticked. The page carries its own version and date, but the website does not let the app read
+  them (no CORS), so the URL and time pin which text was live. The profile record is what the
+  backup file and the Drive backup carry, so a restored account keeps it. The field is optional
+  (older records and backups still read), local only (never published), and checked on restore: a
+  malformed value in a backup file is dropped. A restore keeps the EARLIEST acceptance known for
+  the account: a backup written before it accepted (or carrying a later one) no longer erases or
+  replaces the one this device holds (second review of #358).
+- **`VITE_WEBSITE_BASE_URL`**, the public website, as a Dockerfile build arg and in the new
+  `.env.example`. `scripts/check-website-base-url-build.sh` fails the image build when it is unset
+  or not a plain **https** URL (https only, review of #358; plain http is refused, as is any other
+  scheme). A bundle built some other way without it shows no link and no box,
+  says "New accounts can't be created in this version of the app…", and `register` refuses with
+  the same words. imani-deploy passes `https://www.imani.casa` for staging and beta.
+
+### Tests
+
+- `terms357.test.ts` (the URL from the env, refusal when unset or malformed, the acceptance record,
+  the build check script), `registerTerms357.test.ts` (the real `register`, key store and backup:
+  refusal before anything is claimed or stored, the record on the profile for customers and
+  merchants, and through a backup and restore), `onboardingTerms357.test.tsx` (unticked, the link,
+  disabled until ticked, the merchant first step, a claim-driven registration, the 44px target,
+  and no link with no config). The jargon guard scans the new copy. Existing registration tests
+  pass an acceptance, and the e2e registration helpers tick the box.
+- Review of #358: `finishProfileTerms358.test.tsx` (`claimProfile` refuses before claiming, records
+  the acceptance and keeps an existing one; the kind-0 from `register` and `claimProfile` never
+  carries it; Finish your profile is unticked, links to the terms and stays disabled until ticked),
+  a plain-http case for the URL rules and the build script, and onboarding cases for the link not
+  ticking the box and history not skipping the account step.
+
 ## [0.35.0] - 2026-10-20
 
 Logging back in while the wallet is open in another tab no longer hangs on "Opening wallet…"

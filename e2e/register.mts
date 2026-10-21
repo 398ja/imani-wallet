@@ -21,6 +21,8 @@ export async function registerMerchant(p: Page, base: string): Promise<string> {
   await p.locator('input[placeholder="Confirm passphrase"]').fill(TEST_PASSPHRASE)
   await p.getByText('I am a merchant').click()
   await p.waitForTimeout(400)
+  // #357: the Terms and Conditions, accepted on the first step.
+  await p.getByRole('checkbox', { name: /I accept the Terms and Conditions/ }).check()
   await p.getByRole('button', { name: 'Continue' }).click()
   await p.waitForTimeout(600)
   await p.locator('input:visible').first().fill(TEST_STALL_NAME)
@@ -59,6 +61,8 @@ export async function registerCustomer(p: Page, base: string): Promise<string> {
   await p.locator('input[placeholder="Confirm passphrase"]').fill(TEST_PASSPHRASE)
   // No "I am a merchant": the customer path skips the stall steps entirely
   // and its submit button says "Create account", not "Continue".
+  // #357: the Terms and Conditions, or the button stays disabled.
+  await p.getByRole('checkbox', { name: /I accept the Terms and Conditions/ }).check()
   await p.getByRole('button', { name: /Create account/i }).click()
   await p.waitForTimeout(1500)
 
