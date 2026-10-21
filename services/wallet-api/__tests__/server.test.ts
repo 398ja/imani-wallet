@@ -2031,10 +2031,27 @@ describe('the term of a coupon issued headless', () => {
   })
 
   it('carries never-expires (0) for a stall that never expires, as the Sell screen would', async () => {
-    setStallValidity(async () => ({ kind: 'days', days: 0, source: 'default' }))
+    setStallValidity(async () => ({ kind: 'days', days: 0, source: 'record' }))
     const r = await ask({ faceValue: 500, faceUnit: 'GBP', faceDecimals: 2 })
     expect(r.status).toBe(200)
     expect(signed(r).expires_in_days).toBe(0)
+  })
+
+  // Second review of #360: no signed record at all is not a never-expiring stall. Minting on the
+  // default there stamped never-expires silently, the guess this endpoint exists to refuse.
+  it('mints nothing on the default when the key has no signed merchant record', async () => {
+    setStallValidity(async () => ({ kind: 'days', days: 0, source: 'default' }))
+    const r = await ask({ faceValue: 500, faceUnit: 'GBP', faceDecimals: 2 })
+    expect(r.status).toBe(422)
+    expect(r.body.error).toBe('no-merchant-record')
+    expect(r.body.body).toBeUndefined()
+  })
+
+  it('still honours a named term for a key with no signed merchant record', async () => {
+    setStallValidity(async () => ({ kind: 'days', days: 0, source: 'default' }))
+    const r = await ask({ faceValue: 500, faceUnit: 'GBP', faceDecimals: 2, expiresInDays: 30 })
+    expect(r.status).toBe(200)
+    expect(signed(r).expires_in_days).toBe(30)
   })
 
   it('keeps a per-sale term the caller names, without asking for the stall\u2019s', async () => {

@@ -13,7 +13,7 @@ import { hexToBytes } from '@noble/hashes/utils'
 
 const SK = '7'.repeat(63) + '1'
 
-type Mode = 'eose' | 'closed' | 'silent'
+type Mode = 'eose' | 'closed' | 'silent' | 'partial-closed' | 'partial-drop'
 
 async function relay(mode: Mode, events: unknown[] = []) {
   const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' })
@@ -23,6 +23,11 @@ async function relay(mode: Mode, events: unknown[] = []) {
       const [type, id] = JSON.parse(String(raw)) as [string, string]
       if (type !== 'REQ') return
       if (mode === 'closed') ws.send(JSON.stringify(['CLOSED', id, 'error: rate-limited']))
+      if (mode === 'partial-closed' || mode === 'partial-drop') {
+        for (const e of events) ws.send(JSON.stringify(['EVENT', id, e]))
+        if (mode === 'partial-closed') ws.send(JSON.stringify(['CLOSED', id, 'error: shutting down']))
+        else setTimeout(() => ws.terminate(), 20)
+      }
       if (mode === 'eose') {
         for (const e of events) ws.send(JSON.stringify(['EVENT', id, e]))
         ws.send(JSON.stringify(['EOSE', id]))
@@ -68,6 +73,21 @@ describe('asking the relay for a stall record', () => {
     expect(await r.createValidityReader(r.queryRelay)('ab'.repeat(32))).toMatchObject({ kind: 'unreadable' })
     expect(await r.createStallLookup(r.queryRelay).role('ab'.repeat(32))).toBe('unknown')
   })
+
+  // Second review of #360: what arrived before a refusal is not the whole answer.
+  it.each(['partial-closed', 'partial-drop'] as const)(
+    'reads %s (some events, then no EOSE) as unreadable, not as the events it got',
+    async (mode) => {
+      const record = finalizeEvent(
+        { kind: 30078, created_at: 1_700_000_000, tags: [['d', 'imani:merchant']], content: '{"voucherValidityDays":90}' },
+        hexToBytes(SK),
+      )
+      const r = await relay(mode, [record])
+      open = r.wss
+      expect(await r.createValidityReader(r.queryRelay)(record.pubkey)).toMatchObject({ kind: 'unreadable' })
+      expect(await r.createStallLookup(r.queryRelay).role(record.pubkey)).toBe('unknown')
+    },
+  )
 
   it('reads a relay that never answers as unreadable, not as an empty answer', async () => {
     const r = await relay('silent')
