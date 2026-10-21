@@ -45,6 +45,7 @@ import {
   receiveBody,
 } from './redeem.js'
 import { parseLicenceRequest, checkLicence, licenceIssuerPubkey } from './licence.js'
+import { parseLinksStatusRequest, linksStatus, linksMintUrl } from './links.js'
 import {
   parseGenerateRequest,
   generateBody,
@@ -217,6 +218,20 @@ export function setGatewayFetch(impl: typeof fetch): void {
 
 export function resetGatewayFetch(): void {
   gatewayFetch = fetch
+}
+
+/**
+ * How the mint is asked (`/v1/links/status`, NUT-07). A seam for the same reason as the gateway's:
+ * the answers that matter most here (a mint down, a mint saying "pending") only happen on failure.
+ */
+let mintFetch: typeof fetch = fetch
+
+export function setMintFetch(impl: typeof fetch): void {
+  mintFetch = impl
+}
+
+export function resetMintFetch(): void {
+  mintFetch = fetch
 }
 
 /** One header, lower-cased and de-duplicated, or undefined. */
@@ -773,6 +788,37 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
    * me?" BEFORE it tries, rather than discovering a lapse through a failure in
    * the middle of a workflow.
    */
+  /**
+   * Where a caller's Cashlinks stand (#295 phase 0): claimed, outstanding, or expired and not
+   * taken back yet. NUT-07 over the link records the caller keeps (the proofs' Y points, or the
+   * coupons). Read-only, and it never takes a key: anything shaped like one is refused by field
+   * before the mint is asked (`links.ts`). The mint is this service's configured one, never one
+   * a caller names.
+   */
+  if (path === '/v1/links/status' && method === 'POST') {
+    const mint = linksMintUrl()
+    if (!mint) {
+      return json(res, 503, { error: 'not-configured', detail: 'WALLET_API_MINT_URL is unset, so no link can be checked' })
+    }
+
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+
+    const input = parseLinksStatusRequest(parsed.value, mint, Math.floor(Date.now() / 1000))
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+
+    try {
+      return answer(200, await linksStatus(input.value, mint, mintFetch))
+    } catch {
+      // 502: the request was fine and the mint did not answer. Nothing is guessed, and nothing
+      // about the caller's links is logged.
+      return json(res, 502, { error: 'mint-unavailable', detail: 'the mint did not answer; nothing was changed, try again' })
+    }
+  }
+
   if (path === '/v1/licence/status' && method === 'POST') {
     const issuer = licenceIssuerPubkey()
     if (!issuer) {

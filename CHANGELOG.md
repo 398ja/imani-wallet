@@ -9,6 +9,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Honest limits for Cashlinks nobody claims (#295 phase 0, Refs #295). Wallet-only, no protocol
+change: a customer's expired Cashlink still comes back only when the sender's wallet runs. Phases
+1 to 4 make it come back on its own. **New wallet-api configuration:** `WALLET_API_MINT_URL` (the
+mint `/v1/links/status` checks; no default, the endpoint answers 503 without it). No migrations: a
+link record without the new `noticedAt` field still reads.
+
+### Changed
+
+- **Expired Cashlinks no longer block new ones.** Making a Cashlink, and opening **Send → Anyone,
+  as a Cashlink**, first takes back links that have expired and marks claimed ones
+  (`reconcileGiftLinks`), then counts. Only links that can still be claimed (`outstanding` and
+  before their expiry) count toward the 10. Links past their expiry that could not be taken back
+  yet are capped at 10 on their own, with *"10 of your Cashlinks have expired and have not come
+  back yet. Keep Imani open for a minute so it can take them back, then try again."* So a sender
+  with ten expired links can make an eleventh as soon as Send opens.
+- **A Cashlink ends at least 24 hours before its coupon** (owner decision Q8). The 1 / 7 / 30 day
+  choices stay; a choice that would end later is shown disabled, the longest allowed one is
+  picked, and the screen says why in plain words. `giftExpiry` clamps to the coupon's expiry
+  minus 24 h as a backstop; `expiryChoices` is the new rule.
+- **The Cashlink picker leaves out coupons it cannot send safely:** whole-number-ratio coupons
+  (2, 50, 700; cashu-voucher#59, which fail the issuer check today, so a gift could be neither
+  claimed nor taken back) and coupons expiring within two days. Plain words say why and what
+  still works (spend them, or send them to a handle). `pay.ts` applies the same rule at the send.
+
+### Added
+
+- **"Your Cashlink expired. Open Imani to take it back."** in the bell when a customer's Cashlink
+  expires unclaimed (or *"Your Cashlink expired, so its voucher came back to you."* when the open
+  app has just taken it back). One entry per link: the inbox id is the row id (never the link
+  secret), and the link's own history record gets `noticedAt`, so a restored or second device does
+  not tell the sender again. A link taken back by hand gets no notice. **A stall's Cashlink (Sell,
+  till) gets none:** it is not returned to the stall by design, and a merchant account is skipped.
+  Runs after start-up's reconcile, then hourly and on focus with the coupon-expiry reminders.
+- **wallet-api `POST /v1/links/status`:** NUT-07 `checkstate` over link records the caller keeps
+  (the proofs' `Y` points, or the coupons), answering per link `claimed`, `outstanding`,
+  `expired_unreturned` (a customer link, `comesBack: true`) or `expired` (a stall's Cashlink,
+  `comesBack: false`), plus `pending` / `unknown`. NIP-98 and the usual guards. **It never takes a
+  key:** a field named like one or a value shaped like one (nsec, 64 hex, a link secret, a link URL
+  with `k=`) is refused by field before the mint is asked, without echoing it. Only the configured
+  mint is asked, never one a caller names.
+
+### Docs
+
+- `docs/customers.md` "Sending a Cashlink" says exactly what happens today: the coupon comes back
+  the next time Imani opens, the link works until then, the expiry is checked by the opener's app,
+  and automatic return is coming (owner decision Q1).
+- `docs/merchants.md`: a stall's Cashlink nobody claims does not come back, on purpose, and no bell
+  entry is filed for it.
+- wallet-api README: `POST /v1/links/status`.
+
 ## [0.36.0] - 2026-10-21
 
 Every new account accepts the Terms and Conditions (#357, #358), and a coupon issued through
