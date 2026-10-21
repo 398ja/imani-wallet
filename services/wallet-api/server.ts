@@ -837,6 +837,19 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
             'Your voucher validity could not be read just now. Try again in a minute, or name expiresInDays.',
         })
       }
+      // No signed record at all is not the stall choosing never-expires: it is a key the relay
+      // knows nothing about (never registered, or its record lives on another relay). Minting on
+      // the stall default there would stamp never-expires silently, the guess this endpoint exists
+      // to refuse. purchase-issuer refuses the same case at mint (`discharge.ts`). A record that
+      // exists but names no valid term IS the stall's own default, as the Sell screen reads it.
+      if (validity.source === 'default') {
+        return json(res, 422, {
+          error: 'no-merchant-record',
+          detail:
+            'No signed merchant record was found for your key, so your voucher validity is unknown. ' +
+            'Name expiresInDays, or publish your merchant record and try again.',
+        })
+      }
       expiresInDays = validity.days
     }
 
