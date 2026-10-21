@@ -2,6 +2,7 @@ import { nip19, type EventTemplate } from 'nostr-tools'
 
 import { fetchNewestKind0, imageUrl, str } from './branding'
 import { handleLabel, OWN_ACCOUNT } from './format'
+import { readTermsAcceptance, type TermsAcceptance } from './terms'
 
 /**
  * The current user's own profile.
@@ -42,6 +43,15 @@ export interface Profile {
    * unrelated clocks and meanings.
    */
   eventAt?: number
+  /**
+   * Which Terms and Conditions this account accepted, and when (#357). Set once, at registration.
+   *
+   * Local only: never published in the kind-0 (it is not profile metadata, and another client
+   * would drop it), and never overwritten by a kind-0 merge. It lives here because this record is
+   * what the backup file and the Drive backup carry, so a restored account keeps it. Optional, so
+   * a record or backup written before #357 still reads; absent means "no acceptance on record".
+   */
+  termsAccepted?: TermsAcceptance
 }
 
 /** The user-editable subset. `nip05` is excluded — it is claimed, not typed. */
@@ -75,12 +85,16 @@ function webUrl(value: unknown): string | undefined {
 
 /** Strip anything unsafe from a profile that came from outside this app. */
 export function sanitiseProfile(profile: Profile): Profile {
+  const { termsAccepted, ...rest } = profile
+  const terms = readTermsAcceptance(termsAccepted)
   return {
-    ...profile,
+    ...rest,
     picture: imageUrl(profile.picture),
     banner: imageUrl(profile.banner),
     website: webUrl(profile.website),
     nip05: lowerNip05(profile.nip05),
+    // A backup file is a trust boundary: only a well-formed acceptance comes back in (#357).
+    ...(terms ? { termsAccepted: terms } : {}),
   }
 }
 

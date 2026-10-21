@@ -19,7 +19,12 @@ it with them later, all or part at a time. This guide walks you through it.
    send you coupons, so pick something you don't mind sharing. It works like an
    email address for your wallet.
 3. Choose a **passphrase**. You'll type it to unlock the wallet on this device.
-4. **Save your backup key.** The app shows it once, on a screen you can't skip.
+4. Tick **I accept the Terms and Conditions**. The words open the terms in a new tab, so you
+   can read them first. **Create account** stays greyed out until the box is ticked: every
+   account accepts them, including one you make to redeem a voucher someone sent you. The app
+   keeps a note of which terms you accepted and when, and that note travels with your backup.
+   You aren't asked again when you log in to an account you already have.
+5. **Save your backup key.** The app shows it once, on a screen you can't skip.
    Write it down and keep it somewhere safe. This is covered in detail
    [below](#keeping-your-account-safe), and it matters more than anything else here.
 

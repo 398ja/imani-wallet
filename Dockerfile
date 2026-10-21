@@ -9,6 +9,7 @@
 #     --build-arg VITE_INTERNAL_RELAY_URL=ws://nostr-relay:7777 \
 #     --build-arg VITE_GOOGLE_CLIENT_ID=<oauth-client-id>.apps.googleusercontent.com \
 #     --build-arg VITE_TRUSTED_MINT_URLS=https://mint.staging.398ja.xyz \
+#     --build-arg VITE_WEBSITE_BASE_URL=https://www.imani.casa \
 #     -t imani-wallet .
 #
 # The 11 @imani/* wallet packages live in ./packages and are aliased to source.
@@ -68,6 +69,15 @@ ENV VITE_VOUCHER_ISSUER_PUBKEYS=$VITE_VOUCHER_ISSUER_PUBKEYS
 # MEDIUM-3). Not a secret. Empty does not pin (logged once); the server pins regardless.
 ARG VITE_LICENCE_SELLER_PUBKEY=
 ENV VITE_LICENCE_SELLER_PUBKEY=$VITE_LICENCE_SELLER_PUBKEY
+
+# The public website, without a trailing path (src/lib/terms.ts): every new account accepts the
+# Terms and Conditions at <this>/terms.html, today https://www.imani.casa/terms.html. Not a secret.
+# REQUIRED (#357): a bundle without it cannot link to the terms, so it refuses to create any
+# account. The build fails instead (scripts/check-website-base-url-build.sh). No escape hatch.
+ARG VITE_WEBSITE_BASE_URL
+ENV VITE_WEBSITE_BASE_URL=$VITE_WEBSITE_BASE_URL
+COPY scripts/check-website-base-url-build.sh /tmp/check-website-base-url-build.sh
+RUN sh /tmp/check-website-base-url-build.sh
 
 COPY . .
 # `tsc -b && vite build`. The tsc half typechecks ./packages through the paths

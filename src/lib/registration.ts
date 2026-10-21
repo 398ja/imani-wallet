@@ -24,6 +24,7 @@ import { refuseIfAnotherWallet } from './keySlotGuard'
 import { createWalletSigner } from './signer'
 import { stashPendingBackup } from './onboardingHandoff'
 import { normaliseHandle } from './validate'
+import { requireTermsAccepted, type TermsAcceptance } from './terms'
 
 /**
  * Creating an account: mint a key, claim a handle, then keep both.
@@ -250,6 +251,27 @@ function fieldErrorMessage(body: ClaimErrorBody): string | undefined {
   return message || undefined
 }
 
+/** What `register` needs beyond the handle, passphrase and login. */
+export interface RegisterOptions {
+  /**
+   * The person's acceptance of the Terms and Conditions (#357), from `acceptTerms()` when they
+   * ticked the box. REQUIRED: `register` refuses without it, before anything is claimed or stored,
+   * so no caller can create an account that never accepted. Stored on the profile record.
+   */
+  terms: TermsAcceptance
+  /**
+   * When present, this account trades as a merchant: the extra metadata is published as a
+   * kind-30078 record beside the kind-0. Absent means a customer, which is the whole of the role
+   * model (see lib/merchant.ts).
+   */
+  merchant?: MerchantFields
+  /**
+   * What goes in the first kind-0. Only the merchant signup asks for it; a customer gets the
+   * handle as a display name and fills the rest in later at /profile.
+   */
+  profileFields?: ProfileFields
+}
+
 /**
  * Register a brand-new account.
  *
@@ -257,21 +279,19 @@ function fieldErrorMessage(body: ClaimErrorBody): string | undefined {
  * @param passphrase encrypts the key at rest
  * @param login    performs the NAP handshake; supplied by the caller because
  *                 building a session needs React's nap callbacks
- * @param merchant when present, this account trades as a merchant: the extra
- *                 metadata is published as a kind-30078 record beside the
- *                 kind-0. Absent means a customer, which is the whole of the
- *                 role model — see lib/merchant.ts.
- * @param profileFields what goes in the first kind-0. Only the merchant signup
- *                 asks for it; a customer gets the handle as a display name and
- *                 fills the rest in later at /profile.
+ * @param options  the Terms and Conditions acceptance (required), and the merchant extras
+ * @throws TermsNotAcceptedError / TermsNotConfiguredError before anything is claimed or stored
  */
 export async function register(
   typed: string,
   passphrase: string,
   login: (privkeyHex: string) => Promise<void>,
-  merchant?: MerchantFields,
-  profileFields?: ProfileFields,
+  options: RegisterOptions,
 ): Promise<RegistrationOutcome> {
+  // First, before a key is minted or a handle claimed (#357): an account that did not accept the
+  // terms is never created, whoever calls this. Also refuses on a build that names no terms page.
+  const termsAccepted = requireTermsAccepted(options?.terms)
+  const { merchant, profileFields } = options
   const handle = normaliseHandle(typed)
   const minted = mintKey()
   const { privkeyHex, pubkey } = minted
@@ -302,6 +322,9 @@ export async function register(
     // The handle is the fallback, not the default: a merchant who cleared the
     // name field still gets something the header and every coupon can render.
     displayName: profileFields?.displayName?.trim() || handle,
+    // Which terms, and when (#357). On the profile record because that is what the backup file
+    // and the Drive backup carry: a restored account still shows what it accepted.
+    termsAccepted,
     updatedAt: Date.now(),
   }
   saveProfile(profile)

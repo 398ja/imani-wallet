@@ -66,6 +66,7 @@ const fetchMock = vi.fn<(url: string) => Promise<Response>>(async () => new Resp
 
 beforeEach(() => {
   localStorage.clear()
+  vi.stubEnv('VITE_WEBSITE_BASE_URL', 'https://www.imani.casa')
   signedFetch.mockReset()
   signedFetch.mockImplementation(gateway)
   fetchMock.mockClear()
@@ -74,6 +75,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
 })
 
 describe('onboarding with a padded handle (#342)', () => {
@@ -90,6 +92,8 @@ describe('onboarding with a padded handle (#342)', () => {
     expect(input.value).toBe('alice')
     fireEvent.change(screen.getByPlaceholderText('Passphrase'), { target: { value: 'correct horse battery staple' } })
     fireEvent.change(screen.getByPlaceholderText('Confirm passphrase'), { target: { value: 'correct horse battery staple' } })
+    // #357: nothing is created without the Terms and Conditions.
+    fireEvent.click(screen.getByRole('checkbox', { name: /Terms and Conditions/ }))
 
     // The advisory probe asks about the same string the claim will send.
     await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u).startsWith('/api/v1/resolve/'))).toBe(true), {
@@ -113,8 +117,8 @@ describe('Finish your profile with a padded handle (#342)', () => {
     let claimed: string | undefined
     render(
       <FinishProfileStep
-        onClaim={async (h) => {
-          claimed = (await claimProfile(PRIV, h)).nip05
+        onClaim={async (h, terms) => {
+          claimed = (await claimProfile(PRIV, h, null, terms)).nip05
         }}
         onCancel={() => {}}
       />,
@@ -123,6 +127,7 @@ describe('Finish your profile with a padded handle (#342)', () => {
     expect(input.placeholder).toBe('your_handle')
     fireEvent.change(input, { target: { value: 'Alice ' } })
     expect(input.value).toBe('alice')
+    fireEvent.click(screen.getByRole('checkbox', { name: /I accept the Terms and Conditions/ }))
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Finish and log in' }))
     })
@@ -132,8 +137,9 @@ describe('Finish your profile with a padded handle (#342)', () => {
 
   it('a server rejection reads as a plain reason about the handle', async () => {
     signedFetch.mockImplementation(() => gateway('', '', { username: 'x y' }))
-    render(<FinishProfileStep onClaim={(h) => claimProfile('4'.repeat(64), h).then(() => undefined)} onCancel={() => {}} />)
+    render(<FinishProfileStep onClaim={(h, terms) => claimProfile('4'.repeat(64), h, null, terms).then(() => undefined)} onCancel={() => {}} />)
     fireEvent.change(screen.getByLabelText('Handle'), { target: { value: 'alice' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /I accept the Terms and Conditions/ }))
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Finish and log in' }))
     })

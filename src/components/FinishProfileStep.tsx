@@ -3,8 +3,10 @@ import { useEffect, useState } from 'react'
 import { Alert, Button, Input } from './ui'
 import { gatewayConfig } from '../lib/config'
 import { HandleTakenError } from '../lib/registration'
+import { acceptTerms, termsUrl, type TermsAcceptance } from '../lib/terms'
 import { normaliseHandle, validateHandle } from '../lib/validate'
 import { userMessage } from '../lib/userMessage'
+import { TermsCheckbox } from './TermsCheckbox'
 
 /**
  * The step a key with no profile meets before it is let in (#325).
@@ -16,6 +18,10 @@ import { userMessage } from '../lib/userMessage'
  *
  * Nothing has been written to the device when this shows: the caller checked
  * the directory before installing the key.
+ *
+ * Claiming a key's FIRST handle is what creates its account on the service, so
+ * this asks for the Terms and Conditions exactly as registration does (review
+ * of #358): an unticked box, and the button stays disabled until it is ticked.
  */
 export function FinishProfileStep({
   onClaim,
@@ -24,8 +30,11 @@ export function FinishProfileStep({
   submitLabel = 'Finish and log in',
   cancelLabel = 'Back',
 }: {
-  /** Claim this handle for the key, then log in. Throws HandleTakenError on a taken handle. */
-  onClaim: (handle: string) => Promise<void>
+  /**
+   * Claim this handle for the key, then log in. Throws HandleTakenError on a taken handle. `terms`
+   * is the acceptance, stamped at submit; `claimProfile` refuses without it.
+   */
+  onClaim: (handle: string, terms: TermsAcceptance) => Promise<void>
   onCancel: () => void
   /**
    * The words around the form. Login uses the defaults; the logged-in profile
@@ -39,6 +48,10 @@ export function FinishProfileStep({
   const [domain, setDomain] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Review of #358: unticked to start; null on a build that names no website.
+  const terms = termsUrl()
+  const [termsTicked, setTermsTicked] = useState(false)
+  const termsOk = terms !== null && termsTicked
 
   useEffect(() => {
     gatewayConfig().then(
@@ -50,11 +63,11 @@ export function FinishProfileStep({
   const handleError = handle === '' ? undefined : validateHandle(handle)
 
   const submit = async () => {
-    if (busy || handle === '' || handleError) return
+    if (busy || handle === '' || handleError || !termsOk) return
     setBusy(true)
     setError(null)
     try {
-      await onClaim(handle)
+      await onClaim(handle, acceptTerms())
     } catch (e) {
       setError(
         e instanceof HandleTakenError
@@ -114,7 +127,14 @@ export function FinishProfileStep({
 
         {error && <Alert>{error}</Alert>}
 
-        <Button type="submit" size="lg" className="w-full" disabled={busy || handle === '' || !!handleError}>
+        <TermsCheckbox url={terms} checked={termsTicked} disabled={busy} onChange={setTermsTicked} />
+
+        <Button
+          type="submit"
+          size="lg"
+          className="w-full"
+          disabled={busy || handle === '' || !!handleError || !termsOk}
+        >
           {busy ? 'Finishing…' : submitLabel}
         </Button>
       </form>
