@@ -600,8 +600,18 @@ export const COUPON_LAPSE_GRACE_S = 60 * 60
  */
 export const COUPON_LAPSE_HARD_S = 7 * 24 * 60 * 60
 
-/** The mint's own refusal of an expired voucher, as the receive surfaces it (see `pay.ts`). */
-const EXPIRED_REFUSAL = /voucher[_ ]expired|voucher has expired|90016/i
+/**
+ * A server's refusal of an expired voucher, as the receive surfaces it. Two servers can say it:
+ * - gateway-customer refuses it FIRST, before the swap reaches the mint, by its own (server) clock:
+ *   `JdbcWalletPort.inspectVoucherReceiveMetadata`, "Voucher token expired. Reason: voucher expiry
+ *   exceeded." (400 WALLET_003). This is the one a gift coupon actually meets, since every gift
+ *   coupon is unlocked and the gateway reads its blob (third check of #367).
+ * - the mint (`voucher_expired`, code 90016, "Voucher has expired and cannot be redeemed"), for a
+ *   voucher the gateway could not read.
+ * The HTTP code (WALLET_003) is shared with every invalid token, so the text is all there is. A
+ * reworded refusal is not lost: it falls to the one-week rule.
+ */
+const EXPIRED_REFUSAL = /voucher[_ ]expired|voucher has expired|voucher token expired|voucher expiry exceeded|\b90016\b/i
 
 /**
  * Whether a link whose take-back did not succeed is past saving: every coupon still on it is past

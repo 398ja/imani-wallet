@@ -474,6 +474,45 @@ describe('second check of #367', () => {
     await notice
     expect(h.rows[0].link).toMatchObject({ status: 'reclaimed', noticedAt: NOW })
   })
+  it('closes on the gateway\'s own expiry refusal, which comes before the swap reaches the mint (third check)', async () => {
+    // gateway-customer JdbcWalletPort.inspectVoucherReceiveMetadata, verbatim, as api.js surfaces it.
+    // Lapsed 3 h ago: inside the week, so only recognising the refusal closes it.
+    const lapsed = buildVoucherToken({ expiresAt: NOW / 1000 - 3 * 3600 }, [8]).token
+    h.rows = [linkRow(0, 'outstanding', PAST)]
+    h.wraps.set(linkPubOf(deriveLinkSecret(ID, 0)), [lapsed])
+    h.redeemFails = 'Voucher token expired. Reason: voucher expiry exceeded. Suggestion: request a new voucher.'
+    await reconcileGiftLinks(NOW, async () => 'UNSPENT')
+    expect((h.rows[0].link as { status: string }).status).toBe('expired')
+  })
+
+  it('a number that merely contains 90016 is not the mint\'s expiry code (third check)', async () => {
+    const lapsed = buildVoucherToken({ expiresAt: NOW / 1000 - 3 * 3600 }, [8]).token
+    h.rows = [linkRow(0, 'outstanding', PAST)]
+    h.wraps.set(linkPubOf(deriveLinkSecret(ID, 0)), [lapsed])
+    h.redeemFails = 'HTTP 503 upstream request 1900163 failed'
+    await reconcileGiftLinks(NOW, async () => 'UNSPENT')
+    expect((h.rows[0].link as { status: string }).status).toBe('outstanding')
+  })
+
+  it('a link write that throws does not hold up the next one (third check)', async () => {
+    h.rows = [linkRow(0, 'outstanding', PAST)]
+    const snapshot = await linkRows()
+    // The store fails the first write once (IndexedDB quota, say); the chain must not stay rejected.
+    let failures = 1
+    const store = (await import('../wallet')).getWallet()
+    const real = store.updateTransaction
+    vi.spyOn(await import('../wallet'), 'getWallet').mockReturnValue({
+      ...store,
+      updateTransaction: async (id: string, patch: Record<string, unknown>) => {
+        if (failures-- > 0) throw new Error('QuotaExceededError')
+        return real(id, patch as never)
+      },
+    } as never)
+    await expect(markLinksNoticed(snapshot, NOW)).rejects.toThrow('QuotaExceededError')
+    await markLinksNoticed(snapshot, NOW + 1)
+    expect(h.rows[0].link).toMatchObject({ status: 'outstanding', noticedAt: NOW + 1 })
+  })
+
   it('a failed take-back that is not the mint saying "expired" keeps the link open for a week', async () => {
     const lapsed = buildVoucherToken({ expiresAt: NOW / 1000 - 3 * 3600 }, [8]).token
     h.rows = [linkRow(0, 'outstanding', PAST)]
