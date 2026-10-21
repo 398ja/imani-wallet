@@ -35,7 +35,7 @@ vi.mock('../../lib/giftLink', async (importOriginal) => ({
 
 vi.mock('../../lib/giftLinks', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/giftLinks')>()),
-  outstandingLinkCount: () => Promise.resolve(0),
+  settleAndCountLinks: () => Promise.resolve({ waiting: 0, expiredUnreturned: 0 }),
 }))
 
 const row = (id: string, merchant: string, unit: string, face: number) => ({
