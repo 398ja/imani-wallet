@@ -9,6 +9,7 @@ import { handleLabel } from '../lib/format'
 import { publish } from '../lib/relay'
 import { ACCEPT_ATTRIBUTE, blossomServer, uploadImage } from '../lib/blossom'
 import { validateWebsite } from '../lib/validate'
+import { userMessage } from '../lib/userMessage'
 
 /**
  * Edit your account details.
@@ -78,15 +79,17 @@ export function ProfileEditPage({
       saveProfile(published)
       onSaved(published)
 
-      const { ok, total } = await publish(signed)
+      // No server counts in the copy (#324): "published to 1/1 relay" names
+      // machinery a person has no reason to know about. Saved is saved.
+      const { ok } = await publish(signed)
       setStatus(
         ok === 0
-          ? 'Saved on this device, but no relay accepted it. Others may not see the change yet.'
-          : `Saved and published to ${ok}/${total} relay${total === 1 ? '' : 's'}.`,
+          ? 'Saved on this device, but not sent yet. Others may not see the change for a while.'
+          : 'Saved.',
       )
     } catch (e) {
-      setStatus('Saved on this device. Publishing failed.')
-      setError(e instanceof Error ? e.message : String(e))
+      setStatus('Saved on this device, but not sent yet.')
+      setError(userMessage(e))
     } finally {
       setBusy(false)
     }
@@ -239,7 +242,7 @@ function ImagePicker({
       // The package raises typed BlossomUploadErrors whose messages name the
       // actual problem (too large, wrong type, server refused). Passing them
       // through beats "upload failed".
-      setError(e instanceof Error ? e.message : String(e))
+      setError(userMessage(e))
     } finally {
       setBusy(false)
       // Clear the input so re-picking the same file fires change again.

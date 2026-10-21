@@ -1,6 +1,8 @@
 import { useState } from 'react';
+import { User } from 'lucide-react';
 
 import { cn, getInitials } from '../../lib/utils';
+import { OWN_ACCOUNT, UNKNOWN_PERSON, UNKNOWN_STALL } from '../../lib/format';
 import { useIsMerchant } from '../../hooks/useIsMerchant';
 import { Skeleton } from './Skeleton';
 
@@ -135,7 +137,14 @@ export function Avatar({ src, name, pubkey, loading, size = 'md', className }: A
           className
         )}
       >
-        {getInitials(name)}
+        {/* The neutral fallback gets the generic person glyph, not an "S":
+            initials of a placeholder word are no more a person than initials
+            of a key were (#324). */}
+        {name === UNKNOWN_PERSON || name === OWN_ACCOUNT || name === UNKNOWN_STALL ? (
+          <User className="h-1/2 w-1/2" aria-hidden="true" />
+        ) : (
+          getInitials(name)
+        )}
       </div>
     );
 

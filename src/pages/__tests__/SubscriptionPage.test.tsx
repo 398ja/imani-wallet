@@ -45,7 +45,7 @@ import type { LicenceTerms } from '../../lib/licenceIssue'
 
 const { SubscriptionPage } = await import('../SubscriptionPage')
 const { licenceIssueParams } = await import('../../lib/licenceIssue')
-const { buildVoucherToken } = await import('../../lib/__tests__/voucherFixtures')
+const { buildLicenceVoucherToken: buildVoucherToken } = await import('../../lib/__tests__/voucherFixtures')
 const { forgetLicenceParses } = await import('../../lib/licences')
 const { forgetVerification } = await import('../../lib/licenceStatus')
 
@@ -303,6 +303,27 @@ describe('what a person reads', () => {
       for (const code of ['wrong-issuer', 'wrong-key', 'grace-elapsed', 'never-verified', 'absent']) {
         expect(screen.queryByText(new RegExp(code))).toBeNull()
       }
+    }
+  })
+})
+
+describe('a subscription the seller revoked (review of imani-wallet#226, W-1)', () => {
+  it('says "Not active" and "revoked by the seller", and keeps the subscription id for support', async () => {
+    const { rememberRevocation, forgetRevocations } = await import('../../lib/licenceRevocations')
+    const { row, issuerPublicKey } = mintRow(terms(), SOLD_AT + YEAR)
+    rows = [row]
+    vi.stubEnv('VITE_LICENCE_ISSUER_PUBKEY', issuerPublicKey)
+    // The fixture's licence names its gateway key as the seller (issuer_id).
+    rememberRevocation(CUSTOMER, 'sub_9f2c11', issuerPublicKey, SOLD_AT)
+
+    try {
+      renderPage()
+
+      expect(await screen.findByText('Not active')).toBeTruthy()
+      expect(screen.getByText(/revoked by the seller/)).toBeTruthy()
+      expect(screen.getByText('sub_9f2c11')).toBeTruthy()
+    } finally {
+      forgetRevocations(CUSTOMER)
     }
   })
 })

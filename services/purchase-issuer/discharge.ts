@@ -24,11 +24,13 @@ import {
   IssuanceFailed,
   issueAsStall,
   purchaseIdempotencyKey,
-  processorWarrant,
   type IssuedCoupon,
   type StallCredential,
 } from './issuer'
-import { deliver, type Recipient } from './delivery'
+import { checkDelegation, couponExpiresAtMs, delegatedWarrant } from './delegatedWarrant'
+import type { StallValidity } from './stallValidity'
+import { DeliveredUnconfirmed, DeliveryRefused, deliver, type Recipient } from './delivery'
+import type { CardSale } from './saleRecord'
 
 /** One coupon a stall owes because a card payment cleared. */
 export interface Obligation {
@@ -50,14 +52,43 @@ export interface Obligation {
   recipient: Recipient
   /** How many times issuance has already been tried. */
   attempts: number
-  /** The processor's record of the payment, for the coupon's warrant. */
+  /**
+   * The processor's record of the payment. Carried inside the coupon's signed
+   * warrant as `ref` so the stall can reconcile it; not evidence.
+   */
   processorReference?: string | null
 }
 
+/**
+ * What a minted coupon still owes after this pass, for the delivery outbox (imani-wallet#274):
+ * the sale record, when it did not land inline.
+ */
+export interface Minted {
+  issuerId: string
+  /** The sale record, or null when it was filed inline (or there is no `fileSale` port). */
+  pendingSale: CardSale | null
+}
+
 export type Outcome =
-  | { kind: 'discharged'; voucherId: string; issuerId: string; eventId?: string }
+  | ({ kind: 'discharged'; voucherId: string; eventId?: string } & Minted)
   /** Issued but not delivered: value exists and has not reached anyone. */
-  | { kind: 'undelivered'; voucherId: string; reason: string }
+  | ({
+      kind: 'undelivered'
+      voucherId: string
+      reason: string
+      /**
+       * The DM DID go out, but the gateway did not confirm it recorded the delivery
+       * (imani-wallet#287/#289). Still owed to the outbox: the discharge is not confirmed.
+       */
+      delivered?: true
+      /** gateway-core refused the receipt for good (core#163): park, never retry. */
+      refused?: true
+    } & Minted)
+  /**
+   * gc refused 409 UNRECORDED (gc#232): this payment's warrant nonce was spent by a run that never
+   * recorded its voucher. Unknown whether a coupon exists, so never retried: parked for a person.
+   */
+  | { kind: 'unrecorded'; reason: string }
   /**
    * Nothing minted as far as we know. The debt stands and can be tried again.
    *
@@ -71,6 +102,13 @@ export type Outcome =
   | { kind: 'blocked'; reason: string }
   /** No credential for this stall. Ordinary, not an error. */
   | { kind: 'manual' }
+  /**
+   * Nothing minted, and nothing automatic should try again: the stall's term cannot be honoured by
+   * a delegated card coupon (never expires, or outlives the delegation), or its record stayed
+   * unreadable past `VALIDITY_MAX_ATTEMPTS` (imani-wallet#312). Parked NEEDS_ATTENTION so an
+   * operator refunds or issues by hand, rather than BLOCKED with nobody looking.
+   */
+  | { kind: 'attention'; reason: string }
 
 export interface Ports {
   credentialFor(stallPubkey: string): Promise<StallCredential | null>
@@ -78,7 +116,28 @@ export interface Ports {
   tokenFor(credential: StallCredential, voucherId: string): Promise<string>
   now(): number
   sleep(ms: number): Promise<void>
+  /**
+   * File the card sale into the stall's own ledger (imani-wallet#275, `saleRecord.ts`). Optional:
+   * absent, nothing is filed. Must never throw; its result never changes the outcome.
+   */
+  fileSale?(credential: StallCredential, sale: CardSale): Promise<boolean>
+  /**
+   * The stall's CURRENT coupon validity, from its signed public merchant record (imani-wallet#312,
+   * `stallValidity.ts`). Must never throw.
+   */
+  validityFor(stallPubkey: string): Promise<StallValidity>
 }
+
+/**
+ * How many passes may find the stall's merchant record unreadable before the debt is parked for a
+ * person (imani-wallet#312).
+ *
+ * Counted in PASSES, and nothing backs a pass off: payment-adapter lists an OWED row again at once
+ * (`findClaimable` has no retry-after), and the loop runs every `PURCHASE_INTERVAL_MS` (15 s by
+ * default). So this is about an hour at the default cadence. It was 12, which is three minutes:
+ * a gateway restart parked every paid card sale for an operator (review of #315).
+ */
+export const VALIDITY_MAX_ATTEMPTS = 240
 
 /**
  * How long to wait for a token before giving up on this pass.
@@ -116,6 +175,91 @@ export async function discharge(
     return { kind: 'manual' }
   }
 
+  // The credential can never be confirmed (imani-wallet#296: 410 EXPIRED). Minting would get a
+  // 403 that reads as "burnt or replaced", and BLOCK a paid purchase on the wrong reason. Left
+  // OWED instead, with the real reason: once the stall re-enrols, the next pass mints it.
+  if (credential.unusable) {
+    return { kind: 'owed', reason: credential.unusable, ambiguous: false }
+  }
+
+  // A guest (no buyer pubkey) would take delivery by Cashlink, which is not
+  // wired (delivery.ts). Minting first strands a paid coupon, retried forever.
+  // Checkout refuses guests now; this blocks any debt that predates that.
+  if (obligation.recipient.kind === 'claim') {
+    return {
+      kind: 'blocked',
+      reason: 'guest purchase: Cashlink delivery is not wired yet; nothing minted, refund or deliver by hand',
+    }
+  }
+
+  // Every debt this service works is a CARD purchase, and its warrant is the
+  // only place the stall can reconcile it against Stripe. A delegated warrant
+  // with no `ref` would mint and then read as rail "unknown" (#267). Checkout
+  // in payment mode always yields a payment_intent, so a missing one is an
+  // upstream defect: refuse before minting and leave the debt for a person.
+  // BLOCKED, not owed: retrying the same row cannot produce a reference.
+  if (!obligation.processorReference) {
+    return {
+      kind: 'blocked',
+      reason: 'card purchase has no processor reference (pi_…); refusing to mint an unreconcilable coupon',
+    }
+  }
+
+  // The till refuses any coupon this service cannot warrant (#152), so a
+  // credential without a live delegation from the stall must not mint at all.
+  // BLOCKED rather than owed: retrying cannot help until the stall signs a new
+  // delegation, which needs a person, and nothing was minted.
+  //
+  // The coupon's life is the stall's OWN term, read now from its signed record (#312). Unreadable
+  // is not a reason to guess: the debt stays OWED and the next pass asks again, up to a bound.
+  const validity = await ports.validityFor(obligation.stallPubkey)
+  // Review of #315: "no signed record" at MINT time is treated like unreadable, not as the stall's
+  // never-expires default. gc answers 200 with no events when its relay query fails and its cache
+  // has no copy (CachingNostrGatewayDecorator swallows the relay error), and `/ready` already
+  // refused a stall whose answer really is the default before anyone paid. So a paid sale that
+  // reads "no record" is far likelier a gateway miss than a stall that deleted its record, and
+  // parking it at once would send a paid buyer to an operator for a refund on a blip.
+  const unknown =
+    validity.kind === 'unreadable'
+      ? validity.reason
+      : validity.source === 'default'
+        ? 'the gateway returned no signed merchant record for the stall'
+        : null
+  if (unknown !== null || validity.kind !== 'days') {
+    const why = unknown ?? 'unreadable'
+    if (obligation.attempts + 1 >= VALIDITY_MAX_ATTEMPTS) {
+      return { kind: 'attention', reason: `validity_unreadable: ${why}` }
+    }
+    return { kind: 'owed', reason: `stall validity unknown: ${why}`, ambiguous: false }
+  }
+  const expiresInDays = validity.days
+  const mintedAt = ports.now()
+  const delegation = checkDelegation(credential, couponExpiresAtMs(mintedAt, expiresInDays))
+  if (!delegation.ok) {
+    // The readiness check refuses these before payment (#312); reaching here means the stall
+    // changed its term between checkout and mint. A person decides: refund or issue by hand.
+    if (delegation.code === 'never_expires') {
+      return { kind: 'attention', reason: `validity_never_expires: ${delegation.reason}` }
+    }
+    if (delegation.code === 'outlives_delegation') {
+      return { kind: 'attention', reason: `validity_outlives_delegation: ${delegation.reason}` }
+    }
+    return { kind: 'blocked', reason: delegation.reason }
+  }
+
+  const issuanceWarrant = delegatedWarrant({
+    // The nonce derives from the PAYMENT, not the event (imani-wallet#274): any re-drive of one
+    // pi_ is the same warrant use at gc, which replays the recorded voucher (gc#232).
+    paymentIntent: obligation.processorReference,
+    issuerId: credential.stallPubkey.toLowerCase(),
+    saleTotalMinor: obligation.faceValue,
+    faceDecimals: obligation.faceDecimals,
+    unit: obligation.faceUnit,
+    reference: obligation.processorReference ?? null,
+    lockKeyHex: credential.lockKeyHex,
+    delegation: delegation.event,
+  })
+
   let coupon: IssuedCoupon
   try {
     coupon = await issueAsStall(baseUrl, credential, {
@@ -123,21 +267,20 @@ export async function discharge(
       faceUnit: obligation.faceUnit,
       faceDecimals: obligation.faceDecimals,
       memo: obligation.memo,
-      expiresInDays: 365,
-      // The purchase's own id, so every attempt at this debt (including one
-      // after a lapsed claim) mints under one key (imani-wallet#96).
-      idempotencyKey: purchaseIdempotencyKey(obligation.id),
-      // A card purchase is warranted by the processor that took the money,
-      // so the stall can reconcile it against its own account.
-      issuanceWarrant: processorWarrant({
-        eventId: obligation.id,
-        saleTotalMinor: obligation.faceValue,
-        faceDecimals: obligation.faceDecimals,
-        unit: obligation.faceUnit,
-        reference: obligation.processorReference ?? null,
-      }),
+      expiresInDays,
+      // The payment intent, so every attempt at this PAYMENT (a lapsed claim,
+      // a second event, a reconciler re-drive) mints under one key
+      // (imani-wallet#96, #274).
+      idempotencyKey: purchaseIdempotencyKey(obligation.processorReference),
+      // Signed as the stall's delegate, with the stall's own delegation inside,
+      // so the till verifies it offline (#152). The processor reference rides
+      // along inside the signed bytes for reconciliation.
+      issuanceWarrant,
     })
   } catch (error) {
+    if (error instanceof IssuanceFailed && error.unrecorded) {
+      return { kind: 'unrecorded', reason: error.message }
+    }
     if (error instanceof IssuanceFailed) {
       // A burnt credential will never mint. Retrying it forever would bury the
       // one case that needs a human in a log of identical failures.
@@ -150,6 +293,41 @@ export async function discharge(
 
   // From here a coupon EXISTS. Nothing below may report the debt as unminted,
   // because a second pass would mint a second coupon for one payment.
+
+  // The sale goes into the stall's ledger as soon as the coupon exists, delivered
+  // or not: an undelivered card coupon is still the stall's sale (#275, gap D).
+  // Tried once inline; one that does not land is returned as `pendingSale`, and the
+  // delivery outbox owns its retries (imani-wallet#274, U8).
+  let pendingSale: CardSale | null = null
+  if (ports.fileSale) {
+    const at = ports.now()
+    const sale: CardSale = {
+      voucherId: coupon.voucherId,
+      faceValue: obligation.faceValue,
+      faceUnit: obligation.faceUnit,
+      faceDecimals: obligation.faceDecimals,
+      memo: obligation.memo,
+      recipientPubkey: obligation.recipient.kind === 'pubkey' ? obligation.recipient.pubkey : undefined,
+      at,
+      // The gateway counts `expires_in_days` from its own mint instant, so this is
+      // the coupon's expiry to within the mint's latency. Without it the merchant
+      // record reads "No expiry" for a coupon that expires (S1 showed the date).
+      // The same `expiresInDays` the mint was sent, so the two cannot disagree (#312).
+      expiresAt: expiresInDays === 0 ? undefined : Math.floor(at / 1000) + expiresInDays * 86_400,
+      issuanceWarrant,
+    }
+    // try/await, not `.catch`: a port that throws synchronously must not escape
+    // either, because the coupon already exists (review of #278).
+    let filed = false
+    try {
+      filed = await ports.fileSale(credential, sale)
+    } catch {
+      filed = false
+    }
+    if (!filed) pendingSale = sale
+  }
+  const minted: Minted = { issuerId: coupon.issuerId, pendingSale }
+
   let token = coupon.token
   if (token === '') {
     token = await waitForToken(credential, coupon.voucherId, ports)
@@ -160,6 +338,7 @@ export async function discharge(
       kind: 'undelivered',
       voucherId: coupon.voucherId,
       reason: 'the mint has not produced a token yet',
+      ...minted,
     }
   }
 
@@ -170,18 +349,24 @@ export async function discharge(
       obligation.recipient,
       token,
       obligation.paymentRequestId,
+      coupon.voucherId,
+      fetch,
+      () => ports.now(),
     )
     return {
       kind: 'discharged',
       voucherId: coupon.voucherId,
-      issuerId: coupon.issuerId,
       eventId: delivered.eventId,
+      ...minted,
     }
   } catch (error) {
     return {
       kind: 'undelivered',
       voucherId: coupon.voucherId,
       reason: error instanceof Error ? error.message : describe(error),
+      ...(error instanceof DeliveredUnconfirmed || error instanceof DeliveryRefused ? { delivered: true as const } : {}),
+      ...(error instanceof DeliveryRefused ? { refused: true as const } : {}),
+      ...minted,
     }
   }
 }

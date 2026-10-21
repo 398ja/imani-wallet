@@ -20,8 +20,11 @@ import {
   type MerchantProfile,
 } from './merchant'
 import { keyStore } from './nap'
+import { refuseIfAnotherWallet } from './keySlotGuard'
 import { createWalletSigner } from './signer'
 import { stashPendingBackup } from './onboardingHandoff'
+import { normaliseHandle } from './validate'
+import { requireTermsAccepted, type TermsAcceptance } from './terms'
 
 /**
  * Creating an account: mint a key, claim a handle, then keep both.
@@ -113,7 +116,8 @@ export interface RegistrationOutcome {
  *
  * The authoritative answer is the 409 from the claim itself.
  */
-export async function isHandleAvailable(handle: string): Promise<boolean> {
+export async function isHandleAvailable(typed: string): Promise<boolean> {
+  const handle = normaliseHandle(typed)
   const { nip05Domain } = await gatewayConfig()
   const response = await fetch(`/api/v1/resolve/${encodeURIComponent(`${handle}@${nip05Domain}`)}`, {
     credentials: 'include',
@@ -130,36 +134,142 @@ export async function isHandleAvailable(handle: string): Promise<boolean> {
 }
 
 /**
+ * How long the claim, or the check behind a 409, may take. A hung gateway must
+ * end in "try again", not a Finish button spinning for ever. Retrying is safe:
+ * a claim is idempotent for the same key.
+ */
+const CLAIM_TIMEOUT_MS = 15_000
+
+/** A 409 whose owner could not be checked. Not success, and not "taken" either. */
+export class HandleCheckUnavailableError extends Error {
+  constructor() {
+    super('Could not finish just now. Check your connection and try again.')
+    this.name = 'HandleCheckUnavailableError'
+  }
+}
+
+/**
+ * Whether `handle` on this stack's domain already resolves, forwards, to
+ * `pubkey`. A directory that answers about the handle (it resolves to someone
+ * else, or to nobody) is "no". A directory that could not be asked (network
+ * error, timeout, 5xx) throws HandleCheckUnavailableError: never success, so a
+ * hiccup cannot turn someone else's handle into ours, and never "taken", which
+ * would send the customer off to claim a second handle for their own key.
+ */
+async function handleIsOurs(handle: string, pubkey: string): Promise<boolean> {
+  let response: Response
+  try {
+    const { nip05Domain } = await gatewayConfig()
+    response = await fetch(`/api/v1/resolve/${encodeURIComponent(`${handle}@${nip05Domain}`)}`, {
+      credentials: 'include',
+      signal: AbortSignal.timeout(CLAIM_TIMEOUT_MS),
+    })
+  } catch {
+    throw new HandleCheckUnavailableError()
+  }
+  if (response.status >= 500) throw new HandleCheckUnavailableError()
+  if (!response.ok) return false
+  const body = (await response.json().catch(() => null)) as { hex_pubkey?: unknown } | null
+  return typeof body?.hex_pubkey === 'string' && body.hex_pubkey.toLowerCase() === pubkey.toLowerCase()
+}
+
+/**
  * Claim the handle for the already-authenticated pubkey.
+ *
+ * Idempotent for the same key: claiming a handle this key already holds
+ * succeeds (see the 409 branch), so every caller may simply retry.
  *
  * The pubkey is sent in the body AND proven by the NIP-98 signature; the gateway
  * rejects a mismatch with 403. This is the non-custodial "raw pubkey" mode —
  * no bunker, no server-held key.
  */
-async function claimHandle(
-  handle: string,
+export async function claimHandle(
+  typed: string,
   pubkey: string,
   signer: RequestSigner,
 ): Promise<void> {
+  // Every caller is covered here, whatever its input did (#342).
+  const handle = normaliseHandle(typed)
   const response = await signedFetch(
     '/api/v1/nip05',
     'POST',
     { username: handle, pubkey, relays: [RELAY_URL] },
     signer,
+    { signal: AbortSignal.timeout(CLAIM_TIMEOUT_MS) },
   )
 
   if (response.ok) return
-  if (response.status === 409) throw new HandleTakenError(handle)
+  if (response.status === 409) {
+    // The directory answers 409 for ANY existing record, including one that
+    // already maps this handle to THIS key (bottin's `create` checks only
+    // username@domain). That is the retry case: a claim whose response was
+    // lost to a timeout, or a claim that succeeded before a later step failed.
+    // Reading it as "taken" told people their own handle was taken and sent
+    // them off to claim a second one for the same key. So a 409 is only a
+    // HandleTakenError once the handle is known to belong to someone else.
+    if (await handleIsOurs(handle, pubkey)) return
+    throw new HandleTakenError(handle)
+  }
 
   // Surface the gateway's own message. Its failures here are specific and
   // actionable (DOMAIN_NOT_FOUND, DOMAIN_NOT_VERIFIED are stack-setup problems,
   // not user errors) and flattening them to "registration failed" has already
   // cost one debugging round.
+  // A 400 VALIDATION_001 says only "Request validation failed" at the top; the
+  // reason is in its field errors (#342). Prefer the first, in plain words.
   const detail = await response
     .json()
-    .then((body: { error?: { message?: string } }) => body.error?.message)
+    .then((body: ClaimErrorBody) => fieldErrorMessage(body) ?? body.error?.message)
     .catch(() => undefined)
   throw new Error(detail ?? `Could not claim ${handle} (${response.status}).`)
+}
+
+interface ClaimErrorBody {
+  error?: {
+    message?: string
+    field_errors?: Array<{ field?: unknown; message?: unknown }>
+  }
+}
+
+/**
+ * The first field error of a claim's 400, worded for a person. The server's
+ * own wording names its fields ("Username must contain only lowercase
+ * alphanumeric characters..."), which reads oddly on a form that says
+ * "handle", so the field this form types is mapped to known sentences.
+ */
+function fieldErrorMessage(body: ClaimErrorBody): string | undefined {
+  const first = body?.error?.field_errors?.find((f) => f && typeof f === 'object')
+  if (!first) return undefined
+  const field = typeof first.field === 'string' ? first.field : ''
+  const message = typeof first.message === 'string' ? first.message : ''
+  if (field === 'username') {
+    if (/required|blank|empty/i.test(message)) return 'Choose a handle.'
+    if (/between|size|length/i.test(message)) return 'That handle is too long. Use at most 64 characters.'
+    return 'That handle can only use lowercase letters, numbers and underscores. Check for spaces and try again.'
+  }
+  // Any other field is not the user's to fix. userMessage still filters jargon.
+  return message || undefined
+}
+
+/** What `register` needs beyond the handle, passphrase and login. */
+export interface RegisterOptions {
+  /**
+   * The person's acceptance of the Terms and Conditions (#357), from `acceptTerms()` when they
+   * ticked the box. REQUIRED: `register` refuses without it, before anything is claimed or stored,
+   * so no caller can create an account that never accepted. Stored on the profile record.
+   */
+  terms: TermsAcceptance
+  /**
+   * When present, this account trades as a merchant: the extra metadata is published as a
+   * kind-30078 record beside the kind-0. Absent means a customer, which is the whole of the role
+   * model (see lib/merchant.ts).
+   */
+  merchant?: MerchantFields
+  /**
+   * What goes in the first kind-0. Only the merchant signup asks for it; a customer gets the
+   * handle as a display name and fills the rest in later at /profile.
+   */
+  profileFields?: ProfileFields
 }
 
 /**
@@ -169,23 +279,25 @@ async function claimHandle(
  * @param passphrase encrypts the key at rest
  * @param login    performs the NAP handshake; supplied by the caller because
  *                 building a session needs React's nap callbacks
- * @param merchant when present, this account trades as a merchant: the extra
- *                 metadata is published as a kind-30078 record beside the
- *                 kind-0. Absent means a customer, which is the whole of the
- *                 role model — see lib/merchant.ts.
- * @param profileFields what goes in the first kind-0. Only the merchant signup
- *                 asks for it; a customer gets the handle as a display name and
- *                 fills the rest in later at /profile.
+ * @param options  the Terms and Conditions acceptance (required), and the merchant extras
+ * @throws TermsNotAcceptedError / TermsNotConfiguredError before anything is claimed or stored
  */
 export async function register(
-  handle: string,
+  typed: string,
   passphrase: string,
   login: (privkeyHex: string) => Promise<void>,
-  merchant?: MerchantFields,
-  profileFields?: ProfileFields,
+  options: RegisterOptions,
 ): Promise<RegistrationOutcome> {
+  // First, before a key is minted or a handle claimed (#357): an account that did not accept the
+  // terms is never created, whoever calls this. Also refuses on a build that names no terms page.
+  const termsAccepted = requireTermsAccepted(options?.terms)
+  const { merchant, profileFields } = options
+  const handle = normaliseHandle(typed)
   const minted = mintKey()
   const { privkeyHex, pubkey } = minted
+  // A new account always differs from the one in the slot (#330): refused
+  // before the handle is claimed, so nothing is written anywhere.
+  await refuseIfAnotherWallet(privkeyHex)
   const { nip05Domain } = await gatewayConfig()
 
   // A signer over the fresh key, independent of the session that does not exist
@@ -210,6 +322,9 @@ export async function register(
     // The handle is the fallback, not the default: a merchant who cleared the
     // name field still gets something the header and every coupon can render.
     displayName: profileFields?.displayName?.trim() || handle,
+    // Which terms, and when (#357). On the profile record because that is what the backup file
+    // and the Drive backup carry: a restored account still shows what it accepted.
+    termsAccepted,
     updatedAt: Date.now(),
   }
   saveProfile(profile)
@@ -256,7 +371,9 @@ export async function register(
       const signed = await signer.signEvent(buildMerchantEvent(merchantRecord))
       merchantRecord.eventAt = signed.created_at
       saveMerchant(merchantRecord)
-      await publish(signed)
+      const { ok, errors } = await publish(signed)
+      // Not fatal (see below), but not silent either (#203).
+      if (ok === 0) console.warn('[registration] no relay accepted the merchant record', errors)
     } catch {
       // Same contract as the profile above: reported by absence, never thrown.
       // The handle is claimed and the key is saved; this is not a failed signup.

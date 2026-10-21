@@ -233,3 +233,40 @@ describe('issuance evidence survives the relay round trip', () => {
     expect((restored as { cashAttestation?: string }).cashAttestation).toBeUndefined()
   })
 })
+
+describe('till attribution survives the relay round trip (#160 phase 6, F2)', () => {
+  // A restored stall read every till sale as "Your device": `toContent` had no
+  // `terminal_pubkey`, and `toTransaction` never read `terminalPubkey` back at all.
+  const TILL = 'ab'.repeat(32)
+  const tillSale = buildIssueTransaction({
+    voucherId: 'aa11bb22-1111-2222-3333-444455556666',
+    amount: 400,
+    unit: 'EUR',
+    decimals: 2,
+    recipientPubkey: 'cc'.repeat(32),
+    at: 1786891362412,
+    terminalPubkey: TILL,
+  })
+
+  it('reads the till back from a local row', () => {
+    expect(toTransaction(tillSale).terminalPubkey).toBe(TILL)
+  })
+
+  it('carries terminal_pubkey to the relay and back', () => {
+    const content = toContent(toTransaction(tillSale))
+    expect((content as { terminal_pubkey?: string }).terminal_pubkey).toBe(TILL)
+    expect(toTransaction(toRow(tillSale.id, content)).terminalPubkey).toBe(TILL)
+  })
+
+  it('carries a cashback issued on a till too', () => {
+    const cashback = buildCashbackTransaction({
+      cashbackId: 'cb-1', claimCode: 'ABCD', amount: 100, unit: 'EUR', decimals: 2, at: 1, terminalPubkey: TILL,
+    })
+    expect(toTransaction(toRow(cashback.id, toContent(toTransaction(cashback)))).terminalPubkey).toBe(TILL)
+  })
+
+  it("leaves the owner's own sale unattributed", () => {
+    const restored = toTransaction(toRow(issued.id, toContent(toTransaction(issued))))
+    expect(restored.terminalPubkey).toBeUndefined()
+  })
+})

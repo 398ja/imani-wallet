@@ -3,16 +3,21 @@ import type { TransactionRow, VoucherRow } from '@imani/wallet-storage'
 
 import { getWallet, listVouchers, notifyWalletChanged } from './wallet'
 import { legacyApi } from './legacyBridge'
-import { couponsFor, issuerKey, toVoucher, type Merchant } from './merchants'
+import { couponsFor, issuerKey, toMerchants, toVoucher, type Merchant } from './merchants'
 import { merchantStatus } from './merchant'
 import { getSigner } from './nap'
 import { spentTokenIds, withoutSpent } from './spentCoupons'
-import { buildPaymentTransaction, buildSentTransaction } from './transactions'
+import { buildPaymentTransaction, buildSentTransaction, type GiftLinkRecord } from './transactions'
 import { sendTransferSignature } from './transferSignature'
 import { creditableFaceValue, parseVoucherToken } from './voucherToken'
 import { publishTx } from './txRecords'
+import { OWN_STALL_COPY, giftExclusion } from './giftLink'
+import { FULLY_REDEEMED_STATUS, VoucherFullyRedeemedError, isVoucherFullyRedeemed } from './fullyRedeemed'
 import type { NUT18VRequest } from './nap'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
+import { carryExpiryReminders } from './expiryReminders'
+import { withSpend } from './receiveGate'
+import { PENDING_SEND_LIFETIME_MS as SEND_LIFETIME, pendingSendsKey } from './inFlightMoney'
 
 /**
  * The money decisions now live in `@imani/wallet-core`.
@@ -29,11 +34,12 @@ export {
   selectVouchers,
   planParts,
   splitObstacle,
+  passedOver,
   type SplitCheck,
   type SendPart,
   type SendPlan,
 } from '@imani/wallet-core'
-import { planParts, selectVouchers, splitObstacle } from '@imani/wallet-core'
+import { passedOver, planParts, selectVouchers, splitObstacle } from '@imani/wallet-core'
 
 /**
  * Paying a merchant's voucher payment request.
@@ -90,6 +96,35 @@ type SendStatus = {
   sent_voucher_id?: string
   error?: string
   error_message?: string
+  /** Why a FAILED send failed. `VOUCHER_FULLY_REDEEMED` is the mint's 90025 (cashu-mint#540). */
+  error_code?: string
+}
+
+/**
+ * The send failed because the mint's redemption cap refused the coupon (cashu-mint#540, 90025).
+ *
+ * Not reclaimed: the mint signed nothing, so the source row still holds the holder's proofs, and
+ * the reclaim endpoint refuses a FAILED send anyway. The row is marked `fully_redeemed` so it is
+ * never offered for a payment again (a retry is refused the same way) and is listed for "Swap back
+ * to sats" instead. Never throws: the caller's job is to report the refusal, which a failed write
+ * must not replace.
+ */
+async function markFullyRedeemed(
+  wallet: ReturnType<typeof getWallet>,
+  pending: Pick<PendingSend, 'tokenId' | 'sendId' | 'voucherId'>,
+): Promise<void> {
+  try {
+    const row = await wallet.getVoucher(pending.tokenId)
+    if (!row) return
+    await wallet.saveVoucher({
+      ...row,
+      status: FULLY_REDEEMED_STATUS,
+      updated_at: new Date().toISOString(),
+    } as Parameters<typeof wallet.saveVoucher>[0])
+    notifyWalletChanged()
+  } catch (error) {
+    console.error('[pay] could not mark a fully redeemed coupon', pending.sendId, error)
+  }
 }
 
 /**
@@ -174,9 +209,10 @@ export async function replaceVoucherToken(
       ? Math.round(row.token_amount * (faceValue / row.face_value))
       : row?.token_amount)
 
+  const newTokenId = await tokenIdFrom(token)
   await wallet.saveVoucher({
     ...row,
-    token_id: await tokenIdFrom(token),
+    token_id: newTokenId,
     // No `voucher_id` override. The spread already carries the row's own, and
     // the old override wrote whatever id the caller happened to hold — which,
     // for a row without one, was a token_id masquerading as a voucher_id.
@@ -186,6 +222,9 @@ export async function replaceVoucherToken(
     status: 'active',
     updated_at: new Date().toISOString(),
   } as Parameters<typeof wallet.saveVoucher>[0])
+  // #265/#269 review: the change keeps the coupon's expiry, so it keeps what the customer was
+  // already told about it: no second "expires in N days" entry and no banner back. Never throws.
+  carryExpiryReminders(tokenId, newTokenId)
 }
 
 /**
@@ -273,17 +312,24 @@ export interface PendingSend {
   /** Source coupon's face, for the change when the gateway omits keep_face_value. */
   sourceFaceValue: number
   at: number
+  /**
+   * Set on a send to a gift LINK key (claim links phase 4, spec 3.3). Stored on the pending send so a
+   * send settled late by `reconcilePendingSends` still writes the link onto its row, and still
+   * skips the ADR 0014 transfer signature (Q7).
+   */
+  link?: GiftLinkRecord
 }
 
 // Same `imani-wallet:` prefix and pubkey scoping as the profile, merchant and
 // payment-request records.
-const pendingKey = (pubkey: string) => `imani-wallet:pending-sends:${pubkey}`
+// Defined in inFlightMoney.ts, which logout reads to refuse while one is live.
+const pendingKey = pendingSendsKey
 
 /**
  * How long an unconfirmed send is still taken to be in flight. The saga's own expiry is well
  * inside it, so a send still unanswered after this is one that is never going to answer (#127).
  */
-const PENDING_SEND_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000
+const PENDING_SEND_LIFETIME_MS = SEND_LIFETIME
 
 function isStillInFlight(send: PendingSend): boolean {
   return Date.now() - send.at < PENDING_SEND_LIFETIME_MS
@@ -484,6 +530,7 @@ async function settleSend(
             // What the transfer signature below is keyed on, kept so it can
             // be rebuilt after a wipe (its nonce derives from our key and this).
             transferId: status.sent_voucher_id,
+            link: pending.link,
           })
         : buildPaymentTransaction({ ...common, bundleId: pending.bundleId }),
     )
@@ -503,7 +550,10 @@ async function settleSend(
   // neither call throws, and nothing they do can change the outcome of a send
   // the mint has already completed. Here rather than in the live path so a
   // send finished late by `reconcilePendingSends` is signed too.
-  if (pending.recipientPubkey) {
+  // NOT on a send to a gift link key (spec 3.3, Q7, pre-check build item 1): the signature's
+  // `recipient` would name the link key, not whoever finally claims it, and its wrap is a second
+  // message addressed to the link that the claimer would only have to ignore.
+  if (pending.recipientPubkey && !pending.link) {
     const recipient = pending.recipientPubkey
     const sign = (transfer: string | undefined) =>
       merchantStatus(recipient).then((role) =>
@@ -611,6 +661,14 @@ async function reconcileOnce(pubkey: string): Promise<number> {
 
       if (status.status === 'COMPLETED') {
         if (await settleSend(api, wallet, send, status)) settled += 1
+        continue
+      }
+
+      // cashu-mint#540: refused by the mint's redemption cap. Nothing moved, so there is
+      // nothing to reclaim: the coupon is marked and offered for a swap back to sats.
+      if (isVoucherFullyRedeemed(status)) {
+        await markFullyRedeemed(wallet, send)
+        console.warn(`[pay] pending send ${send.sendId} refused: coupon redeemed in full`)
         continue
       }
 
@@ -759,7 +817,7 @@ async function spendableFrom(merchantPubkey: string, payer: string): Promise<{
   let spendableRows = rows
   try {
     const signer = getSigner()
-    spendableRows = withoutSpent(rows, await spentTokenIds(signer.pubkey))
+    spendableRows = await withoutTombstoned(rows, signer.pubkey)
   } catch (error) {
     // A locked wallet has no pubkey to scope the read by. Not an error worth
     // failing a send over — the caller is mid-payment and the local filters
@@ -774,6 +832,21 @@ async function spendableFrom(merchantPubkey: string, payer: string): Promise<{
     return voucher
   })
   return { mine, rowOf }
+}
+
+/**
+ * Drop every coupon this wallet has tombstoned on the relay (#45).
+ *
+ * The one filter `payRequest` spends through and the Pay screen describes
+ * through (#169 review), so the screen's "a sooner voucher is not used" note
+ * never names a coupon already spent on another device. Only ever subtracts:
+ * an unreachable relay leaves the rows unchanged.
+ */
+export async function withoutTombstoned<T extends { token_id?: string }>(
+  rows: T[],
+  pubkey: string,
+): Promise<T[]> {
+  return withoutSpent(rows, await spentTokenIds(pubkey))
 }
 
 /**
@@ -840,11 +913,32 @@ async function initiateOnFirstFree(
       return { sendId, status: initiated.status, voucher: candidate, sourceRow }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      if (!message.includes('active send already exists')) throw error
-      lastRefusal = error instanceof Error ? error : new Error(message)
-      console.warn('[pay] coupon busy, trying the next one:', candidate.voucher_id)
+      if (message.includes('active send already exists')) {
+        lastRefusal = error instanceof Error ? error : new Error(message)
+        console.warn('[pay] coupon busy, trying the next one:', candidate.voucher_id)
+        continue
+      }
+      // A coupon whose stored expiry could not be read is offered FIRST, in
+      // case it is about to lapse (#157). If a gateway refuses it as expired
+      // at initiate, nothing has moved yet (no send row exists), so trying the
+      // next coupon is safe and cannot double-send: each candidate has its own
+      // idempotency key. Defensive only: gateway-core's initiate does not
+      // check voucher expiry today (the mint refuses at the async split), and
+      // such a coupon is now rare, since storage repairs an unreadable expiry
+      // from the one signed into the token (expiryStorage.ts).
+      if (/voucher has expired/i.test(message)) {
+        lastRefusal = error instanceof Error ? error : new Error(message)
+        console.warn('[pay] coupon refused as expired, trying the next one:', candidate.voucher_id)
+        continue
+      }
+      throw error
     }
   }
+
+  // Every candidate refused. If the last said "expired", say that: calling an
+  // expired coupon "tied up in an unfinished send" would send the customer
+  // looking for a send that does not exist.
+  if (lastRefusal && /voucher has expired/i.test(lastRefusal.message)) throw lastRefusal
 
   // A bundle part is offered exactly one coupon — the plan's arithmetic is tied
   // to that coupon's face value, so there is nothing to walk on to. Saying
@@ -1000,6 +1094,14 @@ async function awaitAndSettle(
     )
   }
 
+  // cashu-mint#540: the mint's redemption cap refused this coupon (90025). Terminal, never
+  // retried: the holder is told it is redeemed in full and offered a swap back to sats.
+  if (status.status !== 'COMPLETED' && isVoucherFullyRedeemed(status)) {
+    await markFullyRedeemed(wallet, pending)
+    forgetPendingSend(payer, pending.sendId)
+    throw new VoucherFullyRedeemedError(pending.voucherId, pending.tokenId, pending.merchantName)
+  }
+
   if (status.status !== 'COMPLETED') {
     // The saga has already burned the source coupon's proofs by this point and
     // is holding the replacement (TOKEN_HELD). Failing without reclaiming would
@@ -1049,6 +1151,8 @@ export async function payRequest({
     ? mine.filter((v) => (v.face_unit ?? '').toUpperCase() === request.unit!.toUpperCase())
     : mine
 
+  await logPassedOver(payer, request)
+
   return deliver(
     {
       api,
@@ -1069,6 +1173,35 @@ export async function payRequest({
     request.amount,
     request.unit,
   )
+}
+
+/**
+ * Record in the `[pay]` log any sooner-expiring voucher this payment leaves,
+ * and why (#157). The pay screen says the same in one line; the log keeps the
+ * ids and raw expiries a support check needs. Never blocks a payment.
+ */
+async function logPassedOver(payer: string, request: NUT18VRequest): Promise<void> {
+  try {
+    // The pay screen's holding: live, unspent, not behind an unconfirmed send.
+    const holding = toMerchants(withoutInFlight(await listVouchers(), payer)).flatMap((m) =>
+      m.groups.flatMap((g) => g.vouchers),
+    )
+    const notes = passedOver(holding, request.amount, {
+      issuer: request.issuerId,
+      unit: request.unit,
+    })
+    for (const note of notes) {
+      console.info(
+        '[pay] sooner-expiring voucher passed over:',
+        note.voucher.voucher_id,
+        note.voucher.expires_at,
+        note.reason,
+        note.detail ?? '',
+      )
+    }
+  } catch (error) {
+    console.warn('[pay] could not explain voucher order', error)
+  }
 }
 
 /**
@@ -1105,6 +1238,8 @@ type SendContext = {
   rowOf: Map<Voucher, VoucherRow>
   /** Fallback for a coupon with no `face_unit` — the unit being spent. */
   unit?: string
+  /** Set on a send to a gift link key; see `PendingSend.link`. */
+  link?: GiftLinkRecord
   /**
    * Set when this is a merchant redemption. Two things hang off it: the
    * gateway gets `paymentRequestId`, and the local row is a payment rather
@@ -1191,6 +1326,7 @@ async function sendPart(
       ...(ctx.paymentRequestId
         ? { paymentRequestId: ctx.paymentRequestId }
         : { recipientPubkey: ctx.recipient.pubkey, recipientName: ctx.recipient.name }),
+      ...(ctx.link ? { link: ctx.link } : {}),
       voucherId: voucher.voucher_id,
       memo: ctx.memo,
       sourceFaceValue: voucher.face_value ?? 0,
@@ -1265,6 +1401,7 @@ export async function sendVouchers({
   unit,
   amount,
   memo,
+  link,
 }: {
   payer: string
   /** Who gets it. `name` is stored on the row; see `buildSentTransaction`. */
@@ -1281,6 +1418,11 @@ export async function sendVouchers({
   /** Minor units, as `parseAmountToMinor` produces. */
   amount: number
   memo?: string
+  /**
+   * A send to a gift link key (claim links phase 4). `recipient.pubkey` must be that link's public
+   * key. The rows this writes carry the link, and no ADR 0014 transfer signature is sent (Q7).
+   */
+  link?: GiftLinkRecord
 }): Promise<SendResult> {
   // Refused here and not only on the screen, for the same reason the expiry
   // check lives in `payRequest`: this is the door money leaves by. A send to
@@ -1295,8 +1437,13 @@ export async function sendVouchers({
   const inUnit = mine.filter(
     (v) => (v.face_unit ?? '').toUpperCase() === unit.toUpperCase(),
   )
+  // A gift link carries only money anyone can hold: no licence, terminal credential or locked
+  // voucher, and never the sender's own stall's coupons (spec 4.2 step 2, 3.2). Refused here as well
+  // as on the picker, because this is the door money leaves by.
+  if (link && issuerKey(merchant.pubkey) === issuerKey(payer)) throw new Error(OWN_STALL_COPY)
+  const sendable = link ? inUnit.filter((v) => giftExclusion(v.token, v.issuer_id, payer) === null) : inUnit
 
-  return deliver({ api, payer, recipient, merchant, memo, rowOf, unit }, inUnit, amount, unit)
+  return deliver({ api, payer, recipient, merchant, memo, rowOf, unit, link }, sendable, amount, unit)
 }
 
 /**
@@ -1359,7 +1506,16 @@ export async function refuseIfWrongMerchant(recipient: string, issuer: string): 
  * `vouchers` to one unit — this cannot check that, and adding coupons of two
  * currencies is how a request settles for a fraction of what was asked.
  */
-async function deliver(
+/**
+ * Every send goes through here, counted by the spend gate (#335): once logout
+ * has closed it (in this tab, or another tab's logout has paused this one) a
+ * send is refused before anything moves, and logout waits for one already running.
+ */
+function deliver(ctx: SendContext, vouchers: Voucher[], amount: number, unitLabel?: string): Promise<SendResult> {
+  return withSpend(() => deliverCounted(ctx, vouchers, amount, unitLabel))
+}
+
+async function deliverCounted(
   ctx: SendContext,
   vouchers: Voucher[],
   amount: number,

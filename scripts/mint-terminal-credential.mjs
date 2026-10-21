@@ -30,7 +30,7 @@ import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
 import { secp256k1 } from '@noble/curves/secp256k1.js'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -121,6 +121,21 @@ async function mint(stall, metadata) {
   return JSON.parse(text)
 }
 
+/**
+ * Put the credential in service (imani-wallet#160 round 2).
+ *
+ * Since gateway-customer V27 a terminal credential minted after the migration is
+ * refused for Sell until its device or its stall confirms it, and lapses
+ * unconfirmed after 24 hours. This script is the stall, so it confirms as the
+ * stall. 204 is the only success; anything else fails the run, because a
+ * fixture that cannot sell is worse than no fixture.
+ */
+export async function confirmCredential(stall, voucherId, fetchImpl = fetch) {
+  const url = `${WALLET}/api/v1/wallet/terminal-credentials/${encodeURIComponent(voucherId)}/confirm`
+  const r = await fetchImpl(url, { method: 'POST', headers: authHeaders(stall, url, 'POST') })
+  if (r.status !== 204) throw new Error(`confirm failed ${r.status}: ${await r.text()}`)
+}
+
 async function waitForToken(stall, voucherId, timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs
   let last = {}
@@ -191,8 +206,13 @@ async function main() {
   console.log(`minting a ${role} credential for ${device.slice(0, 12)}… issued by ${stall.pk.slice(0, 12)}…`)
   const created = await mint(stall, metadata)
   const ready = await waitForToken(stall, created.voucher_id)
+  await confirmCredential(stall, created.voucher_id)
+  console.log('confirmed: in service at the gateway')
 
   const out = join(HERE, '..', 'src', 'lib', '__tests__', 'fixtures', arg('--out', 'live-terminal-credential.token'))
+  // `--out probe-out/<name>` is how the throwaway probe arms stay out of the
+  // tracked fixtures (see fixtures/README.md). The directory is gitignored.
+  mkdirSync(dirname(out), { recursive: true })
   writeFileSync(out, ready.token.trim() + '\n')
   console.log(`wrote ${out}`)
 
@@ -216,7 +236,8 @@ async function main() {
   console.log(`locked to ${device}`)
 }
 
-main().catch((e) => {
+// Only when run, so a test can import confirmCredential without minting.
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) main().catch((e) => {
   console.error(e.message)
   process.exit(1)
 })

@@ -6,7 +6,9 @@ import { vouchers } from '../../lib/bundleWording'
 import { formatFace, formatDate, displayDecimals } from '../../lib/format'
 import { worstValidation, type HistoryEntry } from '../../lib/historyGroups'
 import { isRedeemed } from '../../lib/merchants'
-import { transactionLabel, type WalletTransaction } from '../../lib/transactions'
+import { expiryState } from '../../lib/couponExpiry'
+import { ExpiryBadge } from './ExpiryBadge'
+import { giftStatusLabel, transactionLabel, type WalletTransaction } from '../../lib/transactions'
 import { hasValidationClaim } from '../../lib/validationStatus'
 import { ValidationBadge } from './ValidationBadge'
 
@@ -25,33 +27,47 @@ import { ValidationBadge } from './ValidationBadge'
  * A redeemed one is dimmed and says so. It is a receipt, not money — the value
  * behind it was burnt when it came back (burn.ts) — and one row that looks like
  * every other is exactly how a used coupon gets handed out a second time.
+ *
+ * An expired one (#265) is dimmed the same way and says when it ran out, in place of when it
+ * arrived: that is the date that explains why it no longer counts. A live one inside a week of
+ * its expiry carries the badge beside its value.
+ *
+ * `now` is a seam for tests; screens pass nothing.
  */
-export function CouponListItem({ row }: { row: VoucherRow }) {
+export function CouponListItem({ row, now }: { row: VoucherRow; now?: number }) {
   const redeemed = isRedeemed(row)
+  const expiry = expiryState(row, now)
+  const expired = !redeemed && expiry.kind === 'expired'
+  const dimmed = redeemed || expired
   return (
     <Link
       to={`/coupon/${encodeURIComponent(row.token_id)}`}
       className={`flex items-center gap-3 p-4 press-row ${
-        redeemed ? 'opacity-60' : ''
+        dimmed ? 'opacity-60' : ''
       }`}
     >
       <div className="min-w-0 flex-1">
-        <p
-          className={
-            redeemed
-              ? 'font-medium text-mono-500 line-through'
-              : 'font-medium text-mono-900 dark:text-mono-50'
-          }
-        >
-          {formatFace(row.face_value ?? 0, {
-            unit: row.face_unit ?? '',
-            // Currency first, stored row second: pre-DEV-238 rows say 2 for XAF.
-            decimals: displayDecimals(row.face_unit, row.face_decimals),
-          })}
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span
+            className={
+              redeemed
+                ? 'font-medium text-mono-500 line-through'
+                : expired
+                  ? 'font-medium text-mono-500'
+                  : 'font-medium text-mono-900 dark:text-mono-50'
+            }
+          >
+            {formatFace(row.face_value ?? 0, {
+              unit: row.face_unit ?? '',
+              // Currency first, stored row second: pre-DEV-238 rows say 2 for XAF.
+              decimals: displayDecimals(row.face_unit, row.face_decimals),
+            })}
+          </span>
+          {!redeemed && <ExpiryBadge state={expiry} />}
         </p>
         <p className="text-sm text-mono-500">
           {redeemed ? 'Redeemed · ' : ''}
-          {formatDate(row.created_at)}
+          {expired && expiry.kind === 'expired' ? `Expired ${expiry.dateText}` : formatDate(row.created_at)}
         </p>
       </div>
       <ChevronRight className="h-4 w-4 shrink-0 text-mono-400" />
@@ -188,9 +204,15 @@ export function TransactionListItem({ tx }: { tx: WalletTransaction }) {
             signal that matters gets ignored.
           */}
           {hasValidationClaim(tx) ? <ValidationBadge validation={tx.validation} /> : null}
+          {tx.link ? (
+            <span className="shrink-0 rounded-full border border-mono-300 px-1.5 text-[11px] font-medium text-mono-500 dark:border-mono-600">
+              Cashlink
+            </span>
+          ) : null}
         </p>
         <p className="truncate text-sm text-mono-500">
           {formatDate(tx.at)}
+          {tx.link ? ` · ${giftStatusLabel(tx.link)}` : ''}
           {tx.memo ? ` · ${tx.memo}` : ''}
         </p>
       </div>

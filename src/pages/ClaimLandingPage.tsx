@@ -1,8 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Navigate, useNavigate, useParams } from 'react-router-dom'
+import { CheckCircle2, Clock, XCircle } from 'lucide-react'
 
-import { redeemClaimRef, type RedeemResult } from '../lib/cashback'
-import { peekPendingClaim, stashPendingClaim, takePendingClaim } from '../lib/pendingClaim'
+import { fetchClaimSummary, redeemClaimRef, type ClaimSummary, type RedeemResult } from '../lib/cashback'
+import { currencyDecimals, formatFace, handleLabel } from '../lib/format'
+import { humanName, useIdentityState } from '../lib/identity'
+import { hasStoredKey } from '../lib/nap'
+import { loadProfile } from '../lib/profile'
+import { forgetPendingClaim, listPendingClaims, markPendingClaimOffered, pendingClaimToResume, stashPendingClaim } from '../lib/pendingClaim'
+import { isTerminalDevice } from '../lib/terminalEnrol'
+import { MERCHANT_FOREIGN_VOUCHER, MERCHANT_STATUS_UNKNOWN } from '../lib/merchantVouchers'
+import { useForeignVoucherRole } from '../lib/useForeignVoucherRole'
 import { Button } from '../components/ui'
 import { Centered } from '../components/ui/layout'
 
@@ -18,157 +26,500 @@ type Arrival =
   | { kind: 'resumed'; ref: string; key: string }
   | { kind: 'incomplete' }
 
+/** The pattern a cashback claim key has: 32 bytes, base64url, unpadded. */
+const KEY_IN_FRAGMENT = /[#&]k=([A-Za-z0-9_-]+)/
+/** A whole key, as `redeemClaimRef` requires it (`CLAIM_KEY_RE`). */
+const WHOLE_KEY = /^[A-Za-z0-9_-]{43}$/
+/** An x-only public key, as the portal returns the issuer. */
+const PUBKEY_HEX = /^[0-9a-f]{64}$/
+
 /**
- * Landing a bearer claim link, with or without a wallet.
+ * Read the arrival ONCE, synchronously, and take the key out of the address bar before anything
+ * else happens (claim links phase 1). The key then lives only in this component's memory (and in
+ * the parked claim, for a resume): never in a URL query, never in a log line, never in a request.
+ */
+function readArrival(ref: string | undefined, pubkey: string | undefined): Arrival {
+  const match = KEY_IN_FRAGMENT.exec(window.location.hash)
+  scrubFragment()
+  if (ref && match) {
+    // A key of the wrong length is a truncated link, not a claim: never park it or offer Add.
+    return WHOLE_KEY.test(match[1]) ? { kind: 'link', ref, key: match[1] } : { kind: 'incomplete' }
+  }
+
+  // A claim parked before onboarding or login arrives with no fragment at all, so a bare visit is
+  // not necessarily a broken link.
+  // The same one `/` chose (`ResumeParkedClaim`): the newest this account has not been shown.
+  // A direct visit to `/c` (a second tab) with every claim already shown gets the newest one.
+  // Never visit a ref twice: on a storage that refuses writes the forget below is a no-op, and the
+  // next read returned the same entry, which spun this loop forever and froze the tab during the
+  // first render (review of #245, F3).
+  // A bad ref is also marked offered, and the fallback skips what was tried: on such a storage the
+  // newest entry stays the bad one, which hid an older whole claim behind "incomplete" and left `/`
+  // bouncing back here (second check of #245). Each pass adds a ref, so the loop is bounded.
+  const tried = new Set<string>()
+  const next = () => pendingClaimToResume(pubkey, 'cashback')
+    ?? listPendingClaims().reverse().find((e) => e.kind === 'cashback' && !tried.has(e.ref))
+    ?? null
+  for (let pending = next(); pending && !tried.has(pending.ref); pending = next()) {
+    if (WHOLE_KEY.test(pending.key)) return { kind: 'resumed', ref: pending.ref, key: pending.key }
+    tried.add(pending.ref)
+    markPendingClaimOffered(pending.ref, pubkey)
+    // Parked before this check existed. `/` would bounce back here for as long as it is parked.
+    forgetPendingClaim(pending.ref)
+  }
+
+  return { kind: 'incomplete' }
+}
+
+/**
+ * Forget the parked claim for THIS ref only: every other parked claim is left alone (F4-1).
  *
- * The hosted claim page no longer redeems anything: it hands over the claim
- * reference and the key from its fragment and lets the wallet do it. This is
- * where that hand-off arrives.
+ * Every dead end (claimed, expired, revoked, own cashback, not found, a bad key) must call this
+ * before going home, because `/` sends a device with a parked claim straight back to `/c`. Left
+ * parked, a dead claim held the customer on this screen until it aged out (24 h).
+ */
+function forgetIfParked(ref: string): void {
+  forgetPendingClaim(ref)
+}
+
+/**
+ * `/`: a parked claim first, otherwise the home screen (`children`).
  *
- * Two arrivals, one screen:
+ * A component rather than a condition in `App.tsx`'s route table, because a route's `element` is
+ * built when the PARENT renders, and `AuthedApp` does not re-render on navigation. As a condition,
+ * the answer was whatever it had been at `AuthedApp`'s last render: "Open my wallet" from the prompt
+ * bounced back to `/c` (and, after a successful Accept, to a "link is incomplete" screen) until
+ * something unrelated re-rendered the app. Here it is decided each time `/` is entered.
  *
- * - **With a wallet.** Redeem straight away and show the result.
- * - **Without one.** Park the claim, send them to onboarding, and pick it up
- *   afterwards. Nothing is spent in the meantime, so leaving to install the app
- *   costs them nothing.
+ * Once per page session and account (`pendingClaimToResume`): the prompt's own way home must reach
+ * home. A claim still waiting is offered again on the next launch or unlock.
+ */
+export function ResumeParkedClaim({ pubkey, children }: { pubkey: string; children: ReactNode }) {
+  const parked = pendingClaimToResume(pubkey)
+  // A gift (phase 4) resumes on `/g`, a cashback on `/c`: each screen resumes only its own kind.
+  return parked ? <Navigate to={parked.kind === 'gift' ? '/g' : '/c'} replace /> : <>{children}</>
+}
+
+/**
+ * Landing a bearer claim link, with or without a session.
+ *
+ * The hosted claim page never redeems anything: it hands over the claim reference and the key
+ * from its fragment and lets the wallet do it. This is where that hand-off arrives.
+ *
+ * - **With a session: the confirm prompt** (docs/spec-claim-links.md 4.3, phase 1). Opening the
+ *   link NEVER redeems it. The page reads the portal's public metadata, which is not destructive,
+ *   and shows the stall (resolved from the issuer), the face value and the claim-by date, and what
+ *   it could verify. Only **Add to my wallet** spends, exactly once. **Decline** forgets the parked
+ *   claim on this device and leaves the voucher unclaimed for its funder to revoke or let lapse.
+ *   It used to redeem on load, so a prefetch, a link preview, a tab restore or a mis-tap in a
+ *   logged-in browser spent the voucher.
+ * - **Without a session.** Park the claim, scrub the fragment, and send them to Login if this
+ *   device holds a key (a returning customer) or to onboarding if it does not; a terminal goes to
+ *   its till. `/` resumes the parked claim, to this same prompt, once the session opens.
  *
  * ## The key is read from the fragment and then removed
  *
- * A fragment never reaches a server, which is why the key travels there. It is
- * stripped from the address bar once read so it does not survive in history or
- * get shoulder-read off a URL bar. The redeem is single-use at the server
- * anyway, so a leaked key after the fact buys nothing; this is tidiness rather
- * than the security boundary.
+ * A fragment never reaches a server, which is why the key travels there. It is stripped from the
+ * address bar with `history.replaceState` in the first render, before any await, so it does not
+ * survive in history, a bookmark, a screenshot of the URL bar or a referrer. Pinned by
+ * `ClaimLandingPrompt.test.tsx`, which also asserts it never reaches a log line or a request URL.
  */
-export function ClaimLandingPage({ authed }: { authed: boolean }) {
+export function ClaimLandingPage({
+  authed,
+  pubkey,
+  onSwitchAccount,
+}: {
+  authed: boolean
+  pubkey?: string
+  /** "Not you? Switch account" (spec 4.3): the app's own logout, which keeps parked claims. */
+  onSwitchAccount?: () => void
+}) {
   const { ref } = useParams<{ ref: string }>()
   const navigate = useNavigate()
-  const [result, setResult] = useState<RedeemResult | null>(null)
-  /**
-   * Redeeming is DESTRUCTIVE, and React runs effects twice in StrictMode. A
-   * second call would meet a claimed claim and tell a customer their voucher
-   * was already taken, moments after taking it for them.
-   */
+
+  // Read once per mount, in the first render: React may render twice (StrictMode) and the second
+  // read would find the fragment already scrubbed.
+  const [arrival] = useState<Arrival>(() => readArrival(ref, pubkey))
   const started = useRef(false)
 
-  /**
-   * What this visit is, decided during render rather than in the effect.
-   *
-   * The fragment and the parked claim are both readable synchronously, so the
-   * kind of arrival is a property of the render, not a state transition. Doing
-   * it here keeps the effect to the one thing that genuinely is a side effect:
-   * spending the claim.
-   */
-  const arrival = useMemo((): Arrival => {
-    const match = /[#&]k=([A-Za-z0-9_-]+)/.exec(window.location.hash)
-    if (ref && match) return { kind: 'link', ref, key: match[1] }
-
-    // A claim parked before onboarding arrives with no fragment at all, so a
-    // bare visit is not necessarily a broken link.
-    const pending = peekPendingClaim()
-    if (pending) return { kind: 'resumed', ref: pending.ref, key: pending.key }
-
-    return { kind: 'incomplete' }
-  }, [ref])
-
   useEffect(() => {
-    if (arrival.kind === 'incomplete') return
+    if (authed || arrival.kind === 'incomplete') return
     if (started.current) return
     started.current = true
 
-    if (!authed) {
-      // Park it and go and get a wallet. Nothing is spent by doing this.
-      stashPendingClaim(arrival.ref, arrival.key)
-      navigate('/onboarding', { replace: true })
+    // A terminal is not a customer: it never parks a claim, and its key must never reach
+    // /login, where it would open a customer session (#160 spec 2.3). Its till, as `Entry`.
+    if (isTerminalDevice()) {
+      navigate('/terminal/unlock', { replace: true })
       return
     }
-
-    /*
-     * Redeem FIRST, then forget.
-     *
-     * The previous order consumed the parked claim and stripped the fragment
-     * before the redeem was attempted, so a network failure destroyed both
-     * copies of the key while the screen told the customer their voucher was
-     * still waiting. It was not: nothing could reach it again.
-     *
-     * The claim itself is unharmed by a failed redeem — the server only spends
-     * it on a successful ciphertext fetch — so the key is the only thing worth
-     * protecting, and it is dropped only once it is no longer needed.
-     */
-    void redeemClaimRef(arrival.ref, arrival.key).then((outcome) => {
-      if (outcome.kind === 'ok' || outcome.kind === 'not_found') {
-        // Spent, or gone for good. Either way there is nothing left to resume,
-        // and keeping it would offer a dead claim to the next visit.
-        takePendingClaim()
-        window.history.replaceState(null, '', window.location.pathname)
-      } else if (arrival.kind === 'link') {
-        // Failed, and the key came from the URL rather than the store. Park it
-        // so a retry has something to work from: the customer may close this
-        // tab and come back to a link whose fragment they no longer have.
-        stashPendingClaim(arrival.ref, arrival.key)
-      }
-      setResult(outcome)
-    })
+    // Park it before the first await. Nothing is spent by any of this (claim links, phase 0).
+    stashPendingClaim(arrival.ref, arrival.key)
+    // Route by DEVICE (spec 1.6, 2.5). A device that holds a key belongs to someone with an
+    // account whose session ended: they unlock, they do not register again. Anyone else gets
+    // a wallet first. Either way `/` resumes the parked claim after the session opens.
+    void hasStoredKey().then(
+      (has) => navigate(has ? '/login' : '/onboarding', { replace: true }),
+      () => navigate('/onboarding', { replace: true }),
+    )
   }, [arrival, authed, navigate])
+
+  const goHome = useCallback(() => navigate('/', { replace: true }), [navigate])
 
   if (arrival.kind === 'incomplete') {
     return (
       <Outcome
-        title="Voucher unavailable"
-        body="This link is missing part of itself. Make sure the whole QR was scanned."
-        onDone={() => navigate('/', { replace: true })}
+        tone="unavailable" title="Voucher unavailable"
+        body="This link is incomplete. Ask for it again, or scan the whole QR."
+        onDone={goHome}
+      />
+    )
+  }
+  if (!authed) return <Centered>Opening your voucher…</Centered>
+
+  return <ConfirmPrompt arrival={arrival} pubkey={pubkey} onDone={goHome} onSwitchAccount={onSwitchAccount} />
+}
+
+type PromptState =
+  | { step: 'loading' }
+  | { step: 'summary'; summary: ClaimSummary }
+  | { step: 'redeeming' }
+  | { step: 'done'; result: RedeemResult }
+
+/**
+ * The confirm prompt: what the voucher is, who it is from, what could be verified, and the one
+ * button that spends it.
+ */
+function ConfirmPrompt({
+  arrival,
+  pubkey,
+  onDone,
+  onSwitchAccount,
+}: {
+  arrival: Extract<Arrival, { ref: string }>
+  pubkey: string | undefined
+  onDone: () => void
+  onSwitchAccount?: () => void
+}) {
+  const [state, setState] = useState<PromptState>({ step: 'loading' })
+  /** Redeeming is DESTRUCTIVE: a second tap, or a re-render, must never start a second claim. */
+  const spending = useRef(false)
+
+  // Shown now, so `/` does not send the customer back here when they leave it this session.
+  useEffect(() => markPendingClaimOffered(arrival.ref, pubkey), [arrival.ref, pubkey])
+
+  const fetchSummary = useCallback(() => {
+    let live = true
+    void fetchClaimSummary(arrival.ref).then(
+      (summary) => live && setState({ step: 'summary', summary }),
+      () => live && setState({ step: 'summary', summary: { kind: 'unreachable' } }),
+    )
+    return () => {
+      live = false
+    }
+  }, [arrival.ref])
+
+  // The state starts at `loading`, so the first read only fetches. Retry resets it first.
+  useEffect(() => fetchSummary(), [fetchSummary])
+  const load = useCallback(() => {
+    setState({ step: 'loading' })
+    fetchSummary()
+  }, [fetchSummary])
+
+  const issuer = state.step === 'summary' && state.summary.kind === 'ok' ? state.summary.issuerPubkey : null
+  // Owner rule 2026-10-13: whether this account is a merchant, asked only for ANOTHER stall's
+  // voucher (own cashback has its own refusal below; a customer is never asked twice).
+  const { role, retry: retryRole } = useForeignVoucherRole(pubkey, issuer)
+  const { identity, loading: stallLoading } = useIdentityState(issuer && PUBKEY_HEX.test(issuer) ? issuer : undefined)
+  const stallName = humanName(identity?.name)
+  const [ownHandle] = useState(() => {
+    const nip05 = pubkey ? loadProfile(pubkey)?.nip05 : undefined
+    return nip05 ? handleLabel(nip05) : null
+  })
+
+  const accept = useCallback(() => {
+    if (spending.current) return
+    spending.current = true
+    setState({ step: 'redeeming' })
+    void redeemClaimRef(arrival.ref, arrival.key).then((result) => {
+      if (result.kind === 'ok' || result.kind === 'not_found' || result.kind === 'terminal'
+        || result.kind === 'held' || result.kind === 'refused') {
+        // Spent, or gone for good. Either way there is nothing left to resume, and keeping it
+        // would offer a dead claim to the next visit. (`held` and `refused` keep the TOKEN in the
+        // cashback stash; the claim itself is spent.) Only THIS claim: a different one parked on
+        // this device is still unspent, and its key exists nowhere else.
+        forgetIfParked(arrival.ref)
+      } else if (result.kind === 'invalid' && result.reason !== 'untrusted_claim_url') {
+        // Spent, but the answer was unusable (decrypt or payload failure): nothing a retry could
+        // fix, so drop it if it was parked. `untrusted_claim_url` is refused BEFORE the spend (no
+        // claim host configured), so it is kept like any other failure a retry may fix.
+        forgetIfParked(arrival.ref)
+      } else if (arrival.kind === 'link') {
+        // Failed before the claim was spent, and the key came from the URL rather than the
+        // store. Park it so a retry has something to work from. Parked claims are keyed by ref
+        // (F4-1), so this never displaces a different one.
+        stashPendingClaim(arrival.ref, arrival.key)
+      }
+      setState({ step: 'done', result })
+    })
+  }, [arrival])
+
+  /** A dead end: nothing here can ever be added, so it must not stay parked (see `forgetIfParked`). */
+  const finish = useCallback(() => {
+    forgetIfParked(arrival.ref)
+    onDone()
+  }, [arrival.ref, onDone])
+
+  const decline = useCallback(() => {
+    // On this device only. The voucher is untouched at the server: its funder can still revoke
+    // it, or it lapses at its expiry. Nobody is told anything. Only THIS claim is forgotten.
+    forgetIfParked(arrival.ref)
+    onDone()
+  }, [arrival.ref, onDone])
+
+  if (state.step === 'loading') return <Centered>Checking your voucher…</Centered>
+  if (state.step === 'redeeming') return <Centered>Adding your voucher…</Centered>
+
+  if (state.step === 'done') {
+    const { result } = state
+    if (result.kind === 'ok') {
+      const face = result.amountMinor !== null && result.unit
+        ? formatFace(result.amountMinor, { unit: result.unit, decimals: currencyDecimals(result.unit) })
+        : null
+      return (
+        <Outcome
+          tone="success" title="Voucher added"
+          body={face ? `${face}${stallName ? ` from ${stallName}` : ''} is in your wallet.` : 'It is in your wallet now.'}
+          onDone={onDone}
+        />
+      )
+    }
+    return <Outcome tone="unavailable" title="Voucher unavailable" body={describe(result)} onDone={onDone} />
+  }
+
+  const { summary } = state
+  if (summary.kind === 'unreachable') {
+    return (
+      <Outcome
+        tone="waiting" title="Voucher waiting"
+        body="We could not reach the voucher service. Your voucher is still waiting."
+        action={{ label: 'Retry', run: load }}
+        onDone={onDone}
+      />
+    )
+  }
+  if (summary.kind === 'not_found') {
+    return <Outcome tone="unavailable" title="Voucher unavailable" body="We could not find this voucher. Check the link is complete." onDone={finish} />
+  }
+  if (summary.kind === 'disabled') {
+    return <Outcome tone="unavailable" title="Voucher unavailable" body="This wallet cannot claim vouchers yet." onDone={onDone} />
+  }
+
+  const issuerKey = summary.issuerPubkey
+  const issuerWellFormed = issuerKey !== null && PUBKEY_HEX.test(issuerKey)
+  // While the stall's profile is still on its way, say so rather than flash "Unknown stall" and an
+  // unverified warning at a voucher that is about to verify.
+  const stall = stallName ?? (stallLoading ? 'Checking the stall…' : 'Unknown stall')
+  const closed = closedState(summary, stall)
+  if (closed) return <Outcome tone="unavailable" title="Voucher unavailable" body={closed} onDone={finish} />
+
+  // The merchant's own cashback (spec 3.2): receiving it would declare a credit for a coupon that
+  // never left home. Refused before the tap, so nothing is redeemed.
+  if (pubkey && issuerKey && pubkey.toLowerCase() === issuerKey) {
+    return (
+      <Outcome
+        tone="unavailable" title="Your own Cashlink"
+        body="This is your stall's own Cashlink. Give it to a customer, or cancel it."
+        onDone={finish}
       />
     )
   }
 
-  if (!result) return <Centered>Adding your voucher…</Centered>
+  // Owner rule 2026-10-13: a merchant account takes only its own stall's vouchers. Shown instead of
+  // Add, before anything is spent; the claim stays with the voucher service for a customer account.
+  if (role === 'checking') return <Centered>Checking your voucher…</Centered>
+  if (role === 'merchant' || role === 'unknown') {
+    return (
+      <Outcome
+        tone={role === 'merchant' ? 'unavailable' : 'waiting'}
+        title={role === 'merchant' ? 'Not for a merchant account' : 'Voucher waiting'}
+        body={role === 'merchant' ? MERCHANT_FOREIGN_VOUCHER : MERCHANT_STATUS_UNKNOWN}
+        {...(role === 'unknown'
+          ? { action: { label: 'Retry', run: retryRole } }
+          : onSwitchAccount
+            ? {
+                action: {
+                  label: 'Switch account',
+                  run: () => {
+                    // Kept parked, as the prompt's own Switch account does: it resumes on the
+                    // customer account after the next login. Nothing was spent.
+                    stashPendingClaim(arrival.ref, arrival.key)
+                    onSwitchAccount()
+                  },
+                },
+              }
+            : {})}
+        onDone={onDone}
+      />
+    )
+  }
 
-  return result.kind === 'ok' ? (
-    <Outcome
-      title="Voucher added"
-      body="It is in your wallet now."
-      onDone={() => navigate('/', { replace: true })}
-    />
-  ) : (
-    <Outcome
-      title="Voucher unavailable"
-      body={describe(result)}
-      onDone={() => navigate('/', { replace: true })}
-    />
+  // What can be verified before the tap (spec 4.3). The metadata came from this deployment's own
+  // portal; the issuer must be a well-formed key that resolves to a published stall; and this
+  // wallet must trust a mint. The voucher's signature and its mint are checked on Accept by the
+  // redeem, which holds a token at a mint it does not trust rather than crediting it.
+  const verified = issuerWellFormed && stallName !== undefined
+  const canAdd = issuerWellFormed && summary.mintTrusted
+  const face = summary.amountMinor !== null && summary.unit
+    ? formatFace(summary.amountMinor, { unit: summary.unit, decimals: summary.decimals ?? currencyDecimals(summary.unit) })
+    : null
+
+  return (
+    <Centered>
+      <div className="materialize w-full max-w-sm px-6 text-center" data-testid="claim-prompt">
+        <p className="text-[15px] font-medium text-mono-900 dark:text-mono-50">{stall}</p>
+        {stallLoading && !stallName ? (
+          <p className="text-sm text-mono-400">Checking who issued this voucher…</p>
+        ) : (
+          <p className={verified ? 'text-sm text-emerald-600' : 'text-sm text-amber-600'}>
+            {verified ? '✓ verified stall' : 'We could not verify this voucher'}
+          </p>
+        )}
+        {/* No key fragment under an unnamed stall (#324): "Unknown stall" and the
+            unverified warning above already say what the reader needs to know. */}
+        {face && <p className="mt-4 text-amount text-mono-900 dark:text-mono-50">{face}</p>}
+        <p className="mt-1 text-sm text-mono-500">Cashlink from {stall}</p>
+        {summary.memo && <p className="mt-1 text-sm text-mono-500">{summary.memo}</p>}
+        {summary.expiresAt && <p className="mt-1 text-sm text-mono-500">Claim by {formatDate(summary.expiresAt)}</p>}
+        {/* Spec 4.3: "Adding to: {your handle}". The account's own handle, so a shared device shows
+            WHICH account is about to receive it, next to the way to switch (review of #245, F2). */}
+        <p className="mt-3 text-sm text-mono-500">Adding to {ownHandle ?? 'your wallet'}</p>
+        {onSwitchAccount && (
+          <p className="mt-1 text-sm text-mono-500">
+            Not you?{' '}
+            <button
+              type="button"
+              className="pressable underline hover:text-mono-900 dark:hover:text-mono-50"
+              onClick={() => {
+                // Keeps this claim parked (logout carries parked claims across): it resumes after
+                // the next login, on whichever account that is (spec 4.3, CL-SWITCH).
+                stashPendingClaim(arrival.ref, arrival.key)
+                onSwitchAccount()
+              }}
+            >
+              Switch account
+            </button>
+          </p>
+        )}
+        {!summary.mintTrusted && (
+          <p className="mt-3 text-sm text-amber-600">
+            This wallet has no trusted mint yet, so it cannot add vouchers. Your voucher is still waiting.
+          </p>
+        )}
+        <Button size="lg" className="mt-6 w-full" disabled={!canAdd} onClick={accept}>
+          Add to my wallet
+        </Button>
+        <Button size="lg" variant="ghost" className="mt-2 w-full" onClick={decline}>
+          Decline
+        </Button>
+      </div>
+    </Centered>
   )
+}
+
+/** The copy for a voucher that can no longer be added, or null while it can (spec 4.3). */
+function closedState(summary: Extract<ClaimSummary, { kind: 'ok' }>, stall: string): string | null {
+  switch (summary.status) {
+    case 'Claimed':
+      return summary.claimedAt
+        ? `This voucher was already added to a wallet on ${formatDate(summary.claimedAt)}. If that was you on another device, it is there.`
+        : 'This voucher was already added to a wallet. If that was you on another device, it is there.'
+    case 'Expired':
+      return summary.expiresAt ? `This voucher expired on ${formatDate(summary.expiresAt)}.` : 'This voucher has expired.'
+    case 'Revoked':
+      return `${stall} cancelled this voucher.`
+    case 'Unclaimed':
+      if (summary.expiresAt && Date.parse(summary.expiresAt) <= Date.now()) {
+        return `This voucher expired on ${formatDate(summary.expiresAt)}.`
+      }
+      return null
+    default:
+      return 'This voucher is no longer claimable.'
+  }
+}
+
+function formatDate(iso: string): string {
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) return iso
+  return at.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })
+}
+
+/** Drop the fragment (the claim key) from the address bar and from this history entry. */
+function scrubFragment(): void {
+  if (window.location.hash) {
+    window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search)
+  }
 }
 
 /**
  * The end of the journey, whichever end it is.
  *
- * One component for both outcomes rather than three near-identical blocks: a
- * customer who succeeds and one who does not are looking at the same screen
- * with different words, and building them separately is how the failure case
- * ends up with the unstyled heading nobody noticed.
+ * One component for every outcome rather than near-identical blocks: a customer who succeeds and
+ * one who does not are looking at the same screen with different words.
  *
- * Centred and short. There is exactly one thing to do here, and a page with one
- * action should not make somebody find it.
+ * Centred and short. There is one thing to do here (two with Retry), and a page with one action
+ * should not make somebody find it.
  */
-function Outcome({
+export type OutcomeTone = 'success' | 'waiting' | 'unavailable'
+
+const OUTCOME_ICON = {
+  success: { Icon: CheckCircle2, className: 'text-green-600 dark:text-green-500' },
+  waiting: { Icon: Clock, className: 'text-amber-600 dark:text-amber-400' },
+  unavailable: { Icon: XCircle, className: 'text-mono-400' },
+} as const
+
+export function Outcome({
   title,
   body,
   onDone,
+  action,
+  tone,
 }: {
   title: string
   body: string
   onDone: () => void
+  action?: { label: string; run: () => void }
+  /**
+   * Which of the four kinds of feedback this is. Carried by a glyph as well as
+   * the words, so "added", "still waiting" and "cannot be added" are told apart
+   * before anything is read, and still in greyscale. Optional: no glyph when a
+   * caller does not say.
+   */
+  tone?: OutcomeTone
 }) {
+  const icon = tone ? OUTCOME_ICON[tone] : null
   return (
     <Centered>
       {/* `materialize` because this arrives over a blank screen after a wait,
           and a plain cut reads as a page that failed to load and then did not.
           Reduced motion drops it through the shared rule in index.css. */}
-      <div className="materialize max-w-sm px-6 text-center">
-        {/* Tracking tightened, leading pulled in: both are size-specific, and a
-            heading set with body defaults reads loose and airy. */}
-        <h1 className="text-[22px] font-semibold leading-tight tracking-[-0.02em]">{title}</h1>
-        <p className="mt-2 text-[15px] leading-relaxed text-mono-500">{body}</p>
-        <Button size="lg" className="mt-6 w-full" onClick={onDone}>
+      <div className="materialize max-w-sm px-6 text-center" data-outcome={tone}>
+        {/* `role="status"`: the outcome replaces a "Checking…" or "Adding…"
+            screen with no user action in between, so without a live region a
+            screen-reader user hears nothing at all about how it ended. The
+            heading takes the primary ink explicitly: `Centered` sets mono-500
+            for its loading lines, and a grey title read as disabled. */}
+        <div role="status">
+          {icon && <icon.Icon className={`mx-auto mb-4 h-12 w-12 ${icon.className}`} aria-hidden />}
+          <h1 className="text-title font-semibold text-mono-900 dark:text-mono-50">{title}</h1>
+          <p className="mt-2 text-callout text-mono-500">{body}</p>
+        </div>
+        {action && (
+          <Button size="lg" className="mt-6 w-full" onClick={action.run}>
+            {action.label}
+          </Button>
+        )}
+        <Button size="lg" variant={action ? 'ghost' : 'primary'} className={action ? 'mt-2 w-full' : 'mt-6 w-full'} onClick={onDone}>
           Open my wallet
         </Button>
       </div>
@@ -189,10 +540,22 @@ function describe(result: Exclude<RedeemResult, { kind: 'ok' }>): string {
     case 'not_found':
       return 'We could not find this voucher. Check the link is complete.'
     case 'invalid':
-      return 'This link is missing part of itself. Make sure the whole QR was scanned.'
+      return 'This link is incomplete. Ask for it again, or scan the whole QR.'
     case 'disabled':
       return 'This wallet cannot claim vouchers yet.'
-    default:
-      return 'This voucher is no longer claimable.'
+    case 'terminal':
+      return result.code === 'claimed'
+        ? 'This voucher was already added to a wallet. If that was you on another device, it is there.'
+        : result.code === 'expired'
+          ? 'This voucher has expired.'
+          : 'The stall cancelled this voucher.'
+    case 'throttled':
+      return 'Too many attempts from this network. Your voucher is still waiting; try again shortly.'
+    case 'held':
+      return 'Your voucher is saved on this phone and waiting to be verified. Nothing was lost: it is added once its mint is confirmed.'
+    case 'refused':
+      return 'Your voucher is saved on this phone but could not be added to this wallet. Nothing was lost.'
+    case 'merchant_refused':
+      return result.reason === 'merchant' ? MERCHANT_FOREIGN_VOUCHER : MERCHANT_STATUS_UNKNOWN
   }
 }

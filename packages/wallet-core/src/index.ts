@@ -16,11 +16,22 @@ export {
   selectVouchers,
   planParts,
   splitObstacle,
-  toEpochMs,
+  passedOver,
+  issuerKey,
+  type PassedOver,
+  type PassedOverReason,
   type SplitCheck,
   type SendPart,
   type SendPlan,
 } from './spend'
+
+export {
+  readExpiry,
+  toEpochMs,
+  toEpochSeconds,
+  canonicalExpiresAt,
+  type Expiry,
+} from './expiry'
 
 export {
   valueHolding,

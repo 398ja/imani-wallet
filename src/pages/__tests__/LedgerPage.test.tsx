@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { finalizeEvent, type Event } from 'nostr-tools'
-import { hexToBytes } from '@noble/hashes/utils'
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
+import { schnorr } from '@noble/curves/secp256k1.js'
 
 /**
  * The merchant's view of their own published ledger.
@@ -159,13 +160,34 @@ describe('conflicts', () => {
   })
 })
 
+describe('the ledger ID (#324)', () => {
+  /**
+   * The merchant must be able to hand this to an auditor, so it stays, but the
+   * 64 characters are folded behind a deliberate step and Copy is the path.
+   */
+  it('keeps the raw ID folded until asked for, and Copy takes the whole value', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    const id = bytesToHex(schnorr.getPublicKey(LEDGER_SK))
+
+    paint()
+    const value = await waitFor(() => screen.getByText(id))
+    expect(value.closest('details')?.open).toBe(false)
+    expect(screen.getByText('Show ledger ID').tagName).toBe('SUMMARY')
+
+    fireEvent.click(screen.getByRole('button', { name: /Copy ledger ID/ }))
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(id))
+    vi.unstubAllGlobals()
+  })
+})
+
 describe('when the relay cannot be reached', () => {
   it('says so without implying the merchant has lost anything', async () => {
     // A read failure is not a fault in the books. The wording has to keep those
     // apart, or a network blip reads as missing money.
     relayThrows = true
     paint()
-    await waitFor(() => expect(screen.getByText(/Could not reach the relay/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByText(/Could not reach the network/)).toBeTruthy())
     expect(screen.getByText(/records are unaffected/)).toBeTruthy()
   })
 })

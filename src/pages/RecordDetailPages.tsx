@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { Info } from 'lucide-react'
+import { AlarmClock, CalendarX, Clock, Info } from 'lucide-react'
 import type { VoucherRow } from '@imani/wallet-storage'
 
 import { handlerFor } from '../lib/terminalAttribution'
@@ -16,6 +16,7 @@ import {
   Pass,
   IdentityInline,
   ValidationBadge,
+  Button,
 } from '../components/ui'
 import { present } from '../lib/detailRows'
 import {
@@ -23,11 +24,14 @@ import {
   getTransactionRow,
   onWalletChanged,
   recheckCashbackRowOnOpen,
+  recordCashbackStatus,
 } from '../lib/wallet'
-import { issuanceRatioOf } from '../lib/merchants'
+import { issuanceRatioOf, isSpent } from '../lib/merchants'
+import { countdown, expiryState, isExpiringSoon } from '../lib/couponExpiry'
 import { formatFace, formatDate, formatSats } from '../lib/format'
 import { toCouponPass, TERMS, EMPTY_BRANDING } from '../lib/pass'
 import { useBranding } from '../hooks/useBranding'
+import { useExpiryClock } from '../hooks/useExpiryReminders'
 import { humanName } from '../lib/identity'
 import {
   VALIDATION_SUMMARY,
@@ -38,7 +42,10 @@ import {
 } from '../lib/validationStatus'
 import { otherParty, toTransaction, transactionLabel, type WalletTransaction } from '../lib/transactions'
 import { RefusedCouponsNote } from '../components/ui/RefusedCouponsNote'
-import { useCashbackStatus } from '../lib/cashback'
+import { fetchCashbackLink, useCashbackStatus } from '../lib/cashback'
+import { formatCashbackLink } from '../lib/claimLink'
+import { CancelCashback, ClaimLinkPanel } from '../components/CashbackClaimLink'
+import { GiftLinkSection } from '../components/GiftLinkSection'
 
 /**
  * One record, in full.
@@ -79,6 +86,8 @@ export function CouponPage() {
     `merchantBranding().then(setBranding)` that started every visit at empty.
   */
   const { branding, loading: loadingIssuer } = useBranding(row?.issuer_id)
+  // The countdown, the callout and the expired state are functions of the clock (#265).
+  useExpiryClock()
 
   useEffect(() => {
     const load = async () => {
@@ -94,6 +103,21 @@ export function CouponPage() {
   if (row === null) return <Centered>This voucher is no longer in your wallet.</Centered>
 
   const backTo = row.issuer_id ? `/merchants/${row.issuer_id}` : '/'
+  // #265: read once per render from the clock. An expired coupon is not "active" whatever its
+  // stored status says: storage keeps the status of the proofs, and they are unspent; what ended
+  // is the stall's promise to honour them.
+  const expiry = expiryState(row)
+  // `isSpent`, not `isRedeemed`: a coupon swapped back to sats, spent or refused as redeemed in
+  // full is not money either, so it is neither "expired" nor told to "use it before" (#269 review).
+  const spent = isSpent(row)
+  const expired = expiry.kind === 'expired' && !spent
+  const status = expired ? 'Expired' : (row.status ?? 'active')
+  const expiresValue =
+    expiry.kind === 'live'
+      ? `${expiry.dateText} · ${countdown(expiry.msLeft)}`
+      : expiry.kind === 'expired'
+        ? `Expired on ${expiry.dateText}`
+        : formatDate(row.expires_at) || 'No expiry'
 
   return (
     <Screen>
@@ -130,15 +154,44 @@ export function CouponPage() {
         />
       </div>
 
+      {expired && expiry.kind === 'expired' && (
+        <p
+          role="status"
+          className="mb-6 flex items-start gap-3 rounded-2xl bg-mono-100 p-4 text-[15px] leading-snug text-mono-700 dark:bg-mono-900 dark:text-mono-300"
+        >
+          <CalendarX className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+          This voucher expired on {expiry.dateText}. It can no longer be spent.
+        </p>
+      )}
+      {!spent && isExpiringSoon(expiry) && (
+        <p
+          role="status"
+          data-expiry-tone={expiry.tone}
+          className={`mb-6 flex items-start gap-3 rounded-2xl p-4 text-[15px] font-medium leading-snug ring-1 ring-inset ${
+            expiry.tone === 'urgent'
+              ? 'bg-red-50 text-red-800 ring-red-300 dark:bg-red-950/50 dark:text-red-300 dark:ring-red-800'
+              : 'bg-amber-50 text-amber-900 ring-amber-300 dark:bg-amber-950/50 dark:text-amber-200 dark:ring-amber-800'
+          }`}
+        >
+          {expiry.tone === 'urgent' ? (
+            <AlarmClock className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+          ) : (
+            <Clock className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+          )}
+          Use it before {expiry.dateText}
+        </p>
+      )}
+
       <ListSection title="Voucher">
         {present([
-          ['Status', row.status ?? 'active'],
+          ['Status', status],
           ['Received', formatDate(row.created_at)],
           // Exempt from the drop-empty rule the rest of this list follows:
           // "expires 3 Sep" and "never expires" are different facts, and an
           // absent row reads as the second while meaning the first is unknown.
           // Whether a coupon runs out is the thing a holder needs to know.
-          ['Expires', formatDate(row.expires_at) || 'No expiry'],
+          // #265: with a countdown beside the date, so nobody has to subtract.
+          ['Expires', expiresValue],
           // The id identifies the record, so it stays visible rather than
           // collapsing into Details with the derived and diagnostic fields.
           ['Voucher id', row.token_id],
@@ -406,13 +459,16 @@ function CashbackSection({ tx }: { tx: WalletTransaction }) {
     cachedClaimedAt: tx.claimedAt,
   })
 
+  const [cancelled, setCancelled] = useState(false)
+
   if (!tx.cashbackId) return null
 
-  const status = reading?.status
+  const status = cancelled ? 'Revoked' : reading?.status
   const redeemed = status === 'Claimed'
+  const open = status === 'Unclaimed'
 
   return (
-    <ListSection title="Cashback">
+    <ListSection title="Cashlink">
       <DetailRow
         label="Redeemed"
         value={
@@ -441,21 +497,76 @@ function CashbackSection({ tx }: { tx: WalletTransaction }) {
       {redeemed && reading?.claimedAt ? (
         <DetailRow label="Redeemed on" value={formatDate(reading.claimedAt)} />
       ) : null}
-      {/* What the customer was told to type. The one string that identifies
-          this cashback to the person holding the receipt. */}
-      {tx.claimCode ? (
-        <DetailRow
-          label="Code"
-          value={<span className="font-mono tracking-wider">{tx.claimCode}</span>}
-        />
-      ) : null}
       {/* Kept even when absent, but NOT as "never expires": the gateway applies
           its own term to every cashback whether or not it echoed one back, so
           an unrecorded expiry is an unknown, not an absent one. Telling a
           merchant at a counter that a code lasts forever is the one wrong
           answer here. */}
       <DetailRow label="Expires" value={formatDate(tx.expiresAt) || 'Not recorded'} />
+      {/* Only while the gateway says it is still open: a claimed, cancelled or expired code has
+          no link worth showing, and an unchecked one is not offered a destructive Cancel. */}
+      {open ? (
+        <div className="space-y-2 py-3">
+          <ShowQrAgain cashbackId={tx.cashbackId} expiresAt={tx.expiresAt} />
+          <CancelCashback
+            cashbackId={tx.cashbackId}
+            onCancelled={() => {
+              setCancelled(true)
+              void recordCashbackStatus(tx.id, { status: 'Revoked' })
+            }}
+          />
+        </div>
+      ) : null}
     </ListSection>
+  )
+}
+
+/** Why the link could not be rebuilt, in the merchant's words. */
+const REBUILD_FAILURE: Record<string, string> = {
+  terminal: 'This Cashlink is no longer open, so there is no link to show.',
+  not_found: 'The gateway did not find this Cashlink just now. Try again in a minute.',
+  throttled: 'Too many tries. Wait a minute and try again.',
+}
+
+/**
+ * Show QR again (spec 4.1): rebuild the link through the portal's authenticated, owner-scoped
+ * `GET /cashback/{id}/link` (wallet#268), which spends nothing. The key comes back in memory only
+ * and is dropped with this component: it is never written to the row or anywhere else.
+ */
+function ShowQrAgain({ cashbackId, expiresAt }: { cashbackId: string; expiresAt?: number }) {
+  const [state, setState] = useState<
+    { kind: 'idle' } | { kind: 'loading' } | { kind: 'ok'; link: string } | { kind: 'failed'; message: string }
+  >({ kind: 'idle' })
+
+  const rebuild = async () => {
+    setState({ kind: 'loading' })
+    const result = await fetchCashbackLink(cashbackId)
+    const link = result.kind === 'ok' ? formatCashbackLink(window.location.origin, result.ref, result.key) : null
+    if (link) {
+      setState({ kind: 'ok', link })
+      return
+    }
+    setState({
+      kind: 'failed',
+      message: REBUILD_FAILURE[result.kind] ?? 'Could not rebuild the link just now. Try again.',
+    })
+  }
+
+  if (state.kind === 'ok') {
+    return <ClaimLinkPanel link={state.link} expiresAt={expiresAt} initiallyShown />
+  }
+  return (
+    <>
+      {state.kind === 'failed' && <p className="text-sm text-mono-500">{state.message}</p>}
+      <Button
+        variant="secondary"
+        className="w-full"
+        disabled={state.kind === 'loading'}
+        onClick={() => void rebuild()}
+      >
+        {state.kind === 'loading' ? 'Rebuilding the link…' : 'Show QR again'}
+      </Button>
+    </>
   )
 }
 
@@ -469,9 +580,9 @@ function CashbackSection({ tx }: { tx: WalletTransaction }) {
  */
 const REDEMPTION: Record<string, string> = {
   Claimed: 'Yes, redeemed by the customer',
-  Unclaimed: 'Not yet — the code is still good',
-  Expired: 'No, and the code has expired',
-  Revoked: 'No, the code was cancelled',
+  Unclaimed: 'Not yet — the Cashlink is still open',
+  Expired: 'No, and the Cashlink has expired',
+  Revoked: 'No, the Cashlink was cancelled',
   ManualAttention: 'Unresolved — ask support about this one',
   checking: 'Checking…',
   unknown: 'Could not check just now',
@@ -611,6 +722,8 @@ export function TransactionPage({
       </ListSection>
 
       <CashbackSection tx={tx} />
+
+      <GiftLinkSection link={tx.link} />
 
       <ValidationSection tx={tx} />
 

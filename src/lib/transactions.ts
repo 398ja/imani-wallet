@@ -51,6 +51,8 @@ export interface WalletTransaction {
    * `describeHandler` reads the absence as "your device".
    */
   terminalPubkey?: string
+  /** A gift link this `sent` row went to (claim links phase 4). */
+  link?: GiftLinkRecord
   /**
    * What was actually checked about this coupon when it arrived.
    *
@@ -281,6 +283,65 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     // Either spelling, as for the issuance evidence above.
     transferId: str(r.transferId) ?? str(r.transfer_id),
     transferSignature: str(r.transferSignature) ?? str(r.transfer_signature),
+    // Which till handled it (terminals ticket 09). Read back since #160 phase 6: it was written
+    // on the stall's rows and never read, so even a local row lost its till on the way to a
+    // screen. Either spelling, as for the evidence above.
+    terminalPubkey: str(r.terminalPubkey) ?? str(r.terminal_pubkey),
+    link: asGiftLinkRecord(r.link),
+  }
+}
+
+/** Where a gift link stands (spec 4.2 step 6). */
+export type GiftLinkStatus = 'outstanding' | 'claimed' | 'reclaimed' | 'expired'
+
+/**
+ * The gift link a `sent` row went to (claim links phase 4, spec 3.3).
+ *
+ * `k` is the link SECRET. It is a bearer secret on the sender's own device, the same class of thing
+ * as the coupon it replaced (spec 3.3 allows it), so the sender can show the link again and take it
+ * back. It is never logged and never leaves this device except inside the sender's own
+ * NIP-44-encrypted history record. `i` is the derivation index, absent for a random secret (an
+ * account whose key this wallet cannot read).
+ */
+export interface GiftLinkRecord {
+  k: string
+  i?: number
+  /** The link's expiry, unix seconds. */
+  x: number
+  status: GiftLinkStatus
+  /** When it was claimed or taken back, ms. */
+  closedAt?: number
+  /**
+   * When the "Your Cashlink expired" bell entry was filed for it, ms (#295 phase 0). On the record,
+   * not only on this device, so a restored or second device does not tell the sender twice.
+   */
+  noticedAt?: number
+}
+
+/** The words for a link's status in History (spec 4.2 step 6). */
+export function giftStatusLabel(link: Pick<GiftLinkRecord, 'status' | 'x'>, nowMs = Date.now()): string {
+  if (link.status === 'claimed') return 'Claimed'
+  if (link.status === 'reclaimed') return 'Taken back'
+  if (link.status === 'expired' || nowMs / 1000 >= link.x) return 'Expired'
+  return 'Waiting to be claimed'
+}
+
+const LINK_STATUSES: readonly GiftLinkStatus[] = ['outstanding', 'claimed', 'reclaimed', 'expired']
+
+/** A stored link record, or undefined for anything malformed (never trusted as-is). */
+export function asGiftLinkRecord(value: unknown): GiftLinkRecord | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const { k, i, x, status, closedAt, noticedAt } = value as Record<string, unknown>
+  if (typeof k !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(k)) return undefined
+  if (typeof x !== 'number' || !Number.isFinite(x)) return undefined
+  if (typeof status !== 'string' || !LINK_STATUSES.includes(status as GiftLinkStatus)) return undefined
+  return {
+    k,
+    x,
+    status: status as GiftLinkStatus,
+    ...(typeof i === 'number' && Number.isSafeInteger(i) && i >= 0 ? { i } : {}),
+    ...(typeof closedAt === 'number' && Number.isFinite(closedAt) ? { closedAt } : {}),
+    ...(typeof noticedAt === 'number' && Number.isFinite(noticedAt) ? { noticedAt } : {}),
   }
 }
 
@@ -514,6 +575,8 @@ export function buildSentTransaction(input: {
    * sender's transfer signature (#91) can be rebuilt; see `transferId` above.
    */
   transferId?: string
+  /** Set on a send to a gift link (claim links phase 4); see `GiftLinkRecord`. */
+  link?: GiftLinkRecord
   at: number
 }): TransactionRow {
   return {
@@ -533,6 +596,7 @@ export function buildSentTransaction(input: {
     tokenId: input.tokenId,
     bundleId: input.bundleId,
     ...(input.transferId ? { transferId: input.transferId } : {}),
+    ...(input.link ? { link: input.link } : {}),
     memo: input.memo || 'Voucher sent',
   } as unknown as TransactionRow
 }
@@ -582,6 +646,8 @@ export function buildCashbackTransaction(input: {
   issuanceWarrant?: string
   /** The stall this was issued for, so an audit has something to check against. */
   merchantId?: string
+  /** The till that issued it, when it was not the stall's own device (#160 phase 6). */
+  terminalPubkey?: string
 }): TransactionRow {
   return {
     id: `cashback:${input.cashbackId}`,
@@ -595,7 +661,7 @@ export function buildCashbackTransaction(input: {
     cashbackId: input.cashbackId,
     claimCode: input.claimCode,
     ...(input.voucherId ? { voucherId: input.voucherId } : {}),
-    memo: input.memo || 'Cashback issued',
+    memo: input.memo || 'Cashlink issued',
     expiresAt: input.expiresAt,
     // Deliberately no status. The gateway has just minted it, so `Unclaimed` is
     // what it would say — but writing that here would make an unfetched row
@@ -603,6 +669,7 @@ export function buildCashbackTransaction(input: {
     // to tell "not checked" from "not claimed".
     ...(input.issuanceWarrant ? { issuanceWarrant: input.issuanceWarrant } : {}),
     ...(input.merchantId ? { merchantId: input.merchantId } : {}),
+    ...(input.terminalPubkey ? { terminalPubkey: input.terminalPubkey } : {}),
   } as unknown as TransactionRow
 }
 
@@ -627,6 +694,8 @@ export function otherParty(
   pubkey?: string,
 ): { pubkey: string; label: string } | undefined {
   const ownStall = pubkey !== undefined && tx.merchantId === pubkey
+  // A gift link's counterparty is the link key, which names nobody: the Link section says who it is.
+  if (tx.link && !ownStall) return undefined
   const who = ownStall || tx.type === 'sent' ? tx.counterparty : (tx.merchantId ?? tx.counterparty)
   if (!who) return undefined
   // Only one kind of person is ever across the counter from your own stall.
@@ -650,6 +719,6 @@ export function isVoucherIssuance(row: Pick<WalletTransaction, 'type'>): boolean
 export function transactionLabel(tx: WalletTransaction): string {
   if (tx.type === 'payment') return 'Paid'
   if (tx.type === 'sent') return 'Sent'
-  if (tx.type === 'cashback') return 'Cashback'
+  if (tx.type === 'cashback') return 'Cashlink'
   return tx.type === 'issued' ? 'Issued' : 'Received'
 }

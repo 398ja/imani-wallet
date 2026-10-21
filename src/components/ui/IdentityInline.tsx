@@ -25,6 +25,7 @@ export function IdentityInline({
   size = 'sm',
   fallbackName,
   fallbackHandle,
+  fallbackPicture,
   linkToProfile = true,
 }: {
   pubkey: string
@@ -51,12 +52,18 @@ export function IdentityInline({
    * only name the row will ever have for someone who published no kind-0.
    */
   fallbackHandle?: string
+  /**
+   * A picture known without a fetch. Restore passes the one stored in the
+   * backup, so the account shows its own face with no signal.
+   */
+  fallbackPicture?: string
 }) {
   const { identity: fetched, loading: pending } = useIdentityState(pubkey)
   const identity = {
     ...fetched,
     name: fetched?.name ?? fallbackName,
     nip05: fetched?.nip05 ?? fallbackHandle,
+    picture: fetched?.picture ?? fallbackPicture,
   }
   /*
     Only a lookup with NOTHING to show is a loading state.

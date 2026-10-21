@@ -79,7 +79,7 @@ export interface VoucherRow {
    * the old custodial path" from "this is a receive" without having
    * to infer it from absence.
    */
-  source_transport?: 'sse' | 'catchup' | 'manual' | 'cashback' | 'escrow_recovery' | 'client_mint' | 'gateway_mint';
+  source_transport?: 'sse' | 'catchup' | 'manual' | 'cashback' | 'escrow_recovery' | 'client_mint' | 'gateway_mint' | 'gift_link' | 'gift_link_reclaim';
   // ---------- Spec 041 SA-006 — client-mint provenance fields ----------
   // All optional (TS-level `?`) so receive-side and gateway-mint rows
   // stay unchanged — absence ≡ "not a client-mint row" and downstream
@@ -201,4 +201,29 @@ export interface WalletStorageConfig {
   channelName?: string;
   /** Inject a custom now() for tests. */
   now?: () => number;
+  /**
+   * Applied to every voucher row before it is written, by EVERY voucher writer
+   * (`saveVoucher`, `atomicallyWrite`, `clearAndReplaceAllVouchers`). The one
+   * place a stored shape can be enforced, because the callers are not all ours:
+   * imani-apps' tokenRedemption writes through `atomicallyWrite` directly.
+   * The wallet uses it to store `expires_at` as epoch seconds (#157).
+   */
+  normaliseVoucher?: (row: VoucherRow) => VoucherRow;
+  /**
+   * Another connection wants this database gone or upgraded (`versionchange`:
+   * another tab's `deleteDatabase` on logout, or a newer schema). Only for a DB
+   * this instance opened itself (`userId`), never a `db` it was handed.
+   *
+   * The connection is ALWAYS closed afterwards: one that ignores the event
+   * keeps the other tab's delete blocked, and every later open of the same DB
+   * queues behind that delete with no event at all (#352). Awaited first, so
+   * the caller can stop its writers and let a write already in flight land
+   * before the handle goes. A rejection is ignored; the close still happens.
+   */
+  onVersionChange?: () => Promise<void> | void;
+  /**
+   * The open is waiting on other connections that have not closed (`blocked`).
+   * The open carries on by itself once they do; this is for telling the user.
+   */
+  onBlocked?: () => void;
 }

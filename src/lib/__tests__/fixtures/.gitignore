@@ -1,12 +1,11 @@
 
-# Throwaway probe arms, re-minted on every run of e2e/probe-witness.mts.
-# Committing them would commit a SPENT proof: a swap consumes what it is given,
-# so these are single-use and a checked-in copy is worse than none.
-witness-test.token
-witness-test.json
-control-unlocked.token
-control-unlocked.json
-witness-positive.token
-witness-positive.json
-revocation-probe.token
-revocation-probe.json
+# Throwaway probe arms. e2e/probe-witness.mts, e2e/probe-witness-positive.mts
+# and e2e/revocation-reaches-mint.e2e.ts re-mint these on every run, and a swap
+# consumes what it is given, so a fresh arm is a single-use proof that must
+# never be committed.
+#
+# They used to be written straight into this directory and ignored by name,
+# which hid the 2026-09-07 captures the unit tests read. Every clean clone then
+# failed 30 tests with ENOENT. The probes now write here instead, and the
+# captures the tests read are tracked (see README.md).
+probe-out/

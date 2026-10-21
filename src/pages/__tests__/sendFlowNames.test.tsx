@@ -97,11 +97,11 @@ describe('the merchant’s name in the send flow', () => {
     await waitFor(() => expect(screen.getByTestId('label').textContent).toBe('Corner Shop'))
   })
 
-  it('falls back to a short key when nothing names them at all', async () => {
+  it('falls back to a neutral word, never a short key, when nothing names them (#324)', async () => {
     const other = 'c'.repeat(64)
     draw(<Label pubkey={other} name={other} />)
 
-    await waitFor(() => expect(screen.getByTestId('label').textContent).toMatch(/^cccccccc…cccc$/))
+    await waitFor(() => expect(screen.getByTestId('label').textContent).toBe('Someone'))
   })
 })
 
