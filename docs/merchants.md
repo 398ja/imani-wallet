@@ -101,6 +101,11 @@ the screen shows no code.)
 4. **Cancel Cashlink** takes it back while it is unclaimed. The customer can no longer claim it,
    and the value is **not** returned to you.
 
+**A Cashlink nobody claims does not come back to your stall.** After the date on screen it simply
+expires: the customer can no longer claim it, and the value is not returned to you. That is on
+purpose, and it is different from a customer's own Cashlink, which goes back to the customer who
+sent it. Your bell does not tell you when one of your stall's Cashlinks expires.
+
 Lost the QR? Open the Cashlink in **Transactions** and tap **Show QR again**. The app asks the
 gateway for the link, signed as your stall (nobody else can); it never keeps the link itself on
 your phone.
