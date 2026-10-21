@@ -3,7 +3,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { useEffect } from 'react'
+import { MemoryRouter, useNavigate, type NavigateFunction } from 'react-router-dom'
 
 const register = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {})
 vi.mock('../../lib/registration', async (importOriginal) => ({
@@ -136,6 +137,41 @@ describe('the Terms and Conditions on the account step (#357)', () => {
     renderAccount()
     const label = termsBox().closest('label') as HTMLElement
     expect(label.className).toMatch(/min-h-11/)
+  })
+
+  it('opening the terms does not tick the box (review of #358)', () => {
+    renderAccount()
+    fireEvent.click(screen.getByRole('link', { name: 'Terms and Conditions' }))
+    expect(termsBox().checked).toBe(false)
+  })
+
+  it('history cannot skip it: going forward to the business screens with the box unticked stays on the first step (review of #358)', () => {
+    const navRef: { current?: NavigateFunction } = {}
+    const Grab = ({ intoRef }: { intoRef: { current?: NavigateFunction } }) => {
+      const navigate = useNavigate()
+      useEffect(() => {
+        intoRef.current = navigate
+      })
+      return null
+    }
+    render(
+      <MemoryRouter
+        initialEntries={[
+          { pathname: '/onboarding', state: { step: 'account' } },
+          { pathname: '/onboarding', state: { step: 'profile' } },
+        ]}
+        initialIndex={0}
+      >
+        <Grab intoRef={navRef} />
+        <OnboardingPage onUnlock={async () => {}} />
+      </MemoryRouter>,
+    )
+    fill()
+    fireEvent.click(screen.getByRole('switch'))
+    act(() => navRef.current!(1))
+    // Still the account step: the box is there, unticked, and Continue is disabled.
+    expect(termsBox().checked).toBe(false)
+    expect(button('Continue').disabled).toBe(true)
   })
 
   it('with no base URL: no link, no box, the button stays disabled, and the copy is plain', () => {

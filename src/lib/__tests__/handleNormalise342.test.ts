@@ -99,7 +99,7 @@ describe('register with a padded handle still honours the one-wallet guard (#330
 
 describe('claimProfile (Finish your profile) normalises the typed handle (#342)', () => {
   it('"Alice " is claimed, published and cached as "alice"', async () => {
-    const profile = await claimProfile(PRIV, 'Alice ')
+    const profile = await claimProfile(PRIV, 'Alice ', null, TERMS.terms)
     expect(sentUsernames()).toEqual(['alice'])
     expect(publishedNip05()).toEqual(['alice@imani.local'])
     expect(profile.nip05).toBe('alice@imani.local')

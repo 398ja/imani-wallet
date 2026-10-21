@@ -139,24 +139,24 @@ describe('Finish your profile (claimProfile)', () => {
     signedFetch.mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError')).mockResolvedValueOnce(conflict())
     resolvesTo = PUBKEY
 
-    await expect(claimProfile(PRIV, 'alice')).rejects.toThrow('timed out')
+    await expect(claimProfile(PRIV, 'alice', null, TERMS.terms)).rejects.toThrow('timed out')
     expect(localStorage.getItem(`imani-wallet:profile:${PUBKEY}`)).toBeNull()
 
-    const profile = await claimProfile(PRIV, 'alice')
+    const profile = await claimProfile(PRIV, 'alice', null, TERMS.terms)
     expect(profile).toMatchObject({ nip05: 'alice@imani.local', displayName: 'alice' })
   })
 
   it('claiming the same handle twice with the same key succeeds both times', async () => {
     signedFetch.mockResolvedValueOnce(created()).mockResolvedValueOnce(conflict())
     resolvesTo = PUBKEY
-    await claimProfile(PRIV, 'alice')
-    await expect(claimProfile(PRIV, 'alice')).resolves.toMatchObject({ nip05: 'alice@imani.local' })
+    await claimProfile(PRIV, 'alice', null, TERMS.terms)
+    await expect(claimProfile(PRIV, 'alice', null, TERMS.terms)).resolves.toMatchObject({ nip05: 'alice@imani.local' })
   })
 
   it('a handle taken by another key writes nothing', async () => {
     signedFetch.mockResolvedValue(conflict())
     resolvesTo = OTHER
-    await expect(claimProfile(PRIV, 'alice')).rejects.toBeInstanceOf(HandleTakenError)
+    await expect(claimProfile(PRIV, 'alice', null, TERMS.terms)).rejects.toBeInstanceOf(HandleTakenError)
     expect(localStorage.getItem(`imani-wallet:profile:${PUBKEY}`)).toBeNull()
     expect(publish).not.toHaveBeenCalled()
   })
@@ -168,7 +168,7 @@ describe('Finish your profile (claimProfile)', () => {
   it('a kind-0 publish that fails after the claim still leaves a loggable-in account', async () => {
     signedFetch.mockResolvedValue(created())
     publish.mockRejectedValueOnce(new Error('relay down'))
-    const profile = await claimProfile(PRIV, 'alice')
+    const profile = await claimProfile(PRIV, 'alice', null, TERMS.terms)
     expect(profile).toMatchObject({ nip05: 'alice@imani.local', displayName: 'alice' })
 
     // No kind-0 anywhere, but the directory holds alice -> this key.
@@ -199,8 +199,8 @@ describe('Finish your profile from the logged-in card (claimProfileWith, #332)',
     const { emptyProfile } = await import('../profile')
     const base = { ...emptyProfile(PUBKEY), displayName: 'Amina', updatedAt: 1 }
 
-    await expect(claimProfileWith(signer, 'alice', base)).rejects.toThrow('timed out')
-    const profile = await claimProfileWith(signer, 'alice', base)
+    await expect(claimProfileWith(signer, 'alice', base, TERMS.terms)).rejects.toThrow('timed out')
+    const profile = await claimProfileWith(signer, 'alice', base, TERMS.terms)
     expect(profile).toMatchObject({ nip05: 'alice@imani.local', displayName: 'Amina' })
     expect(signedFetch.mock.calls[0][3]).toBe(signer)
     // The failed attempt published nothing, the finished one exactly one kind-0.
@@ -213,7 +213,7 @@ describe('Finish your profile from the logged-in card (claimProfileWith, #332)',
     const { claimProfileWith } = await import('../profileGate')
     const { emptyProfile } = await import('../profile')
     signedFetch.mockResolvedValue(created())
-    const profile = await claimProfileWith(createWalletSigner(PRIV), 'alice', { ...emptyProfile(OTHER), displayName: 'Mallory', updatedAt: 1 })
+    const profile = await claimProfileWith(createWalletSigner(PRIV), 'alice', { ...emptyProfile(OTHER), displayName: 'Mallory', updatedAt: 1 }, TERMS.terms)
     expect(signedFetch.mock.calls[0][2]).toMatchObject({ username: 'alice', pubkey: PUBKEY })
     expect(profile).toMatchObject({ pubkey: PUBKEY, nip05: 'alice@imani.local', displayName: 'alice' })
     expect(localStorage.getItem(`imani-wallet:profile:${OTHER}`)).toBeNull()
@@ -223,7 +223,7 @@ describe('Finish your profile from the logged-in card (claimProfileWith, #332)',
     const { claimProfileWith } = await import('../profileGate')
     signedFetch.mockResolvedValue(conflict())
     resolvesTo = OTHER
-    await expect(claimProfileWith(createWalletSigner(PRIV), 'alice')).rejects.toBeInstanceOf(HandleTakenError)
+    await expect(claimProfileWith(createWalletSigner(PRIV), 'alice', null, TERMS.terms)).rejects.toBeInstanceOf(HandleTakenError)
     expect(localStorage.getItem(`imani-wallet:profile:${PUBKEY}`)).toBeNull()
     expect(publish).not.toHaveBeenCalled()
   })

@@ -21,7 +21,14 @@ without it. No migrations: an older profile or backup without the new field stil
   row is at least 44px tall. **Create account** (customer) and **Continue** (merchant, on the first
   step, before the business screens, which do not ask again) stay disabled until it is ticked. A
   registration that starts from a voucher or gift link goes through the same form and needs it too.
-  Logging in to or restoring an existing account does not ask.
+  Logging in to or restoring an existing account that already has a handle does not ask.
+- **Finish your profile asks too (review of #358).** It claims the FIRST handle for a key that has
+  none (a pasted key, a backup of an unfinished account, or the profile card, #332), and that claim
+  is what creates the account on the service. It shows the same unticked box, its button stays
+  disabled until ticked, and `claimProfile` / `claimProfileWith` now take a required acceptance
+  and refuse before claiming anything. The claimed profile records it, and an acceptance the
+  record already holds is never overwritten. The box is now one shared component,
+  `components/TermsCheckbox.tsx`.
 - **`register()` refuses without an acceptance.** Its fourth argument is now a required options
   object, `{ terms, merchant?, profileFields? }`, and `register` checks `terms` before it mints a
   key, claims a handle or stores anything, so no caller can create an account that skipped it. A
@@ -36,7 +43,8 @@ without it. No migrations: an older profile or backup without the new field stil
   malformed value in a backup file is dropped.
 - **`VITE_WEBSITE_BASE_URL`**, the public website, as a Dockerfile build arg and in the new
   `.env.example`. `scripts/check-website-base-url-build.sh` fails the image build when it is unset
-  or not a plain http(s) URL. A bundle built some other way without it shows no link and no box,
+  or not a plain **https** URL (https only, review of #358; plain http is refused, as is any other
+  scheme). A bundle built some other way without it shows no link and no box,
   says "New accounts can't be created in this version of the app…", and `register` refuses with
   the same words. imani-deploy passes `https://www.imani.casa` for staging and beta.
 
@@ -49,6 +57,11 @@ without it. No migrations: an older profile or backup without the new field stil
   disabled until ticked, the merchant first step, a claim-driven registration, the 44px target,
   and no link with no config). The jargon guard scans the new copy. Existing registration tests
   pass an acceptance, and the e2e registration helpers tick the box.
+- Review of #358: `finishProfileTerms358.test.tsx` (`claimProfile` refuses before claiming, records
+  the acceptance and keeps an existing one; the kind-0 from `register` and `claimProfile` never
+  carries it; Finish your profile is unticked, links to the terms and stays disabled until ticked),
+  a plain-http case for the URL rules and the build script, and onboarding cases for the link not
+  ticking the box and history not skipping the account step.
 
 ## [0.35.0] - 2026-10-20
 

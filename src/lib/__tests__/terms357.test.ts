@@ -43,6 +43,7 @@ describe('the terms URL comes from VITE_WEBSITE_BASE_URL', () => {
     ['not a URL', 'www.imani.casa'],
     ['a javascript: URL', 'javascript:alert(1)'],
     ['a non-http scheme', 'ftp://imani.casa'],
+    ['plain http (https only, review of #358)', 'http://www.imani.casa'],
     ['userinfo', 'https://u:p@imani.casa'],
     ['a query', 'https://imani.casa/?x=1'],
     ['a fragment', 'https://imani.casa/#x'],
@@ -91,6 +92,7 @@ describe('acceptance', () => {
       acceptedAt: 3,
     })
     expect(readTermsAcceptance({ url: 'javascript:alert(1)', acceptedAt: 3 })).toBeUndefined()
+    expect(readTermsAcceptance({ url: 'http://a.test/terms.html', acceptedAt: 3 })).toBeUndefined()
     expect(readTermsAcceptance({ url: 'https://a.test', acceptedAt: -1 })).toBeUndefined()
     expect(readTermsAcceptance({ url: 'https://a.test', acceptedAt: Number.NaN })).toBeUndefined()
     expect(readTermsAcceptance('yes')).toBeUndefined()
@@ -118,6 +120,7 @@ describe('scripts/check-website-base-url-build.sh', () => {
   it.each([
     ['no scheme', 'www.imani.casa'],
     ['a non-http scheme', 'ftp://imani.casa'],
+    ['plain http (https only, review of #358)', 'http://www.imani.casa'],
     ['userinfo', 'https://u@imani.casa'],
     ['a query', 'https://imani.casa/?x'],
     ['a fragment', 'https://imani.casa/#x'],

@@ -7,7 +7,7 @@
 # any account at all (src/lib/terms.ts): an image that cannot sign anyone up is
 # a broken deploy, and the place to catch it is here, before it ships.
 #
-# The value must be an http(s) URL with a host and no userinfo, query or
+# The value must be an https URL with a host and no userinfo, query or
 # fragment, matching what `websiteBaseUrl` in src/lib/terms.ts accepts: a value
 # the wallet would treat as unset is as bad as no value.
 #
@@ -30,8 +30,8 @@ fi
 fail() { echo "ERROR: VITE_WEBSITE_BASE_URL '$base' $1 (imani-wallet#357)." >&2; exit 1; }
 
 case "$base" in
-  http://*|https://*) ;;
-  *) fail "is not an http(s) URL" ;;
+  https://*) ;;
+  *) fail "is not an https URL" ;;
 esac
 rest=${base#*://}
 authority=${rest%%/*}
