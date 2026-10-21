@@ -34,6 +34,10 @@ Selling coupons up front is an old market trick with real benefits:
 1. Open the app and choose **Create an account**.
 2. Turn on the **"I am a merchant"** switch during sign-up. (Already a shopper?
    You can start selling later, see [below](#opening-and-closing-your-stall).)
+   On this first screen, tick **I accept the Terms and Conditions** (the words open them in
+   a new tab). **Continue** stays greyed out until you do, and the stall screens that follow
+   don't ask again. The app keeps a note of which terms you accepted and when, and it travels
+   with your backup.
 3. Fill in your **stall details**: business name, a short description, categories,
    and how long the coupons you issue stay valid.
 

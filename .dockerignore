@@ -35,6 +35,8 @@ scripts
 # Except the build-time trusted-mint check the Dockerfile copies in and runs
 # (#133). Ignoring it fails every image build at that COPY.
 !scripts/check-trusted-mint-build.sh
+# And the website base URL check (#357), for the same reason.
+!scripts/check-website-base-url-build.sh
 deploy/compose.override.yml
 deploy/blossom.yml
 deploy/strfry.conf

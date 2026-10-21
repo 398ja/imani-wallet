@@ -33,10 +33,12 @@ describe('onboarding with a parked claim is customer-only', () => {
   beforeEach(() => {
     localStorage.clear()
     register.mockClear()
+    vi.stubEnv('VITE_WEBSITE_BASE_URL', 'https://www.imani.casa')
   })
   afterEach(() => {
     cleanup()
     vi.useRealTimers()
+    vi.unstubAllEnvs()
   })
 
   const renderAccount = () =>
@@ -50,7 +52,13 @@ describe('onboarding with a parked claim is customer-only', () => {
     fireEvent.change(screen.getByPlaceholderText('your_handle'), { target: { value: 'alice' } })
     fireEvent.change(screen.getByPlaceholderText('Passphrase'), { target: { value: 'correct horse battery staple' } })
     fireEvent.change(screen.getByPlaceholderText('Confirm passphrase'), { target: { value: 'correct horse battery staple' } })
+    // #357: nothing is created without the Terms and Conditions.
+    const terms = screen.getByRole('checkbox', { name: /Terms and Conditions/ }) as HTMLInputElement
+    if (!terms.checked) fireEvent.click(terms)
   }
+
+  type Options = { merchant?: unknown; profileFields?: unknown }
+  const options = (i = 0) => register.mock.calls[i][3] as Options
 
   const submitAndExpectCustomer = async () => {
     fill()
@@ -58,8 +66,8 @@ describe('onboarding with a parked claim is customer-only', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Create account' }))
     })
     expect(register).toHaveBeenCalledTimes(1)
-    expect(register.mock.calls[0][3]).toBeUndefined()
-    expect(register.mock.calls[0][4]).toBeUndefined()
+    expect(options().merchant).toBeUndefined()
+    expect(options().profileFields).toBeUndefined()
   }
 
   it('hides the switch for a parked cashback and creates a customer', async () => {
@@ -106,7 +114,7 @@ describe('onboarding with a parked claim is customer-only', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Create account' }))
     })
     expect(register).toHaveBeenCalledTimes(1)
-    expect(register.mock.calls[0][3]).toBeUndefined()
+    expect(options().merchant).toBeUndefined()
   })
 
   it('renders the account form, not the merchant steps, when history holds a merchant step', () => {
@@ -158,6 +166,6 @@ describe('onboarding with a parked claim is customer-only', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Create merchant account' }))
     })
     expect(register).toHaveBeenCalledTimes(1)
-    expect(register.mock.calls[0][3]).toBeTruthy()
+    expect(options().merchant).toBeTruthy()
   })
 })
