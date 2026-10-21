@@ -266,7 +266,23 @@ async function settleWithin(nowMs: number, state: (token: string) => Promise<Pro
   }
 }
 
-async function setLinkStatus(rows: LinkRow[], status: GiftLinkStatus, at = Date.now(), extra: Partial<GiftLinkRecord> = {}): Promise<void> {
+/**
+ * One link-record write at a time in this tab (second check of #367). Each write re-reads the record
+ * and then writes it; two of those interleaved (both read `outstanding`, both write) let the last
+ * one win whatever it says. The chain makes each read-then-write atomic against the others.
+ */
+let linkWrites: Promise<unknown> = Promise.resolve()
+function serialised<T>(run: () => Promise<T>): Promise<T> {
+  const next = linkWrites.then(run, run)
+  linkWrites = next.catch(() => undefined)
+  return next
+}
+
+function setLinkStatus(rows: LinkRow[], status: GiftLinkStatus, at = Date.now(), extra: Partial<GiftLinkRecord> = {}): Promise<void> {
+  return serialised(() => writeLinkStatus(rows, status, at, extra))
+}
+
+async function writeLinkStatus(rows: LinkRow[], status: GiftLinkStatus, at: number, extra: Partial<GiftLinkRecord>): Promise<void> {
   const wallet = getWallet()
   const fresh = await currentLinks()
   for (const r of rows) {
@@ -275,7 +291,11 @@ async function setLinkStatus(rows: LinkRow[], status: GiftLinkStatus, at = Date.
     // its answer stands. Otherwise a take-back lost to our own earlier take-back reads "already
     // redeemed" and would relabel "Taken back" as "Claimed".
     const now = fresh.get(r.id) ?? r.link
-    if (now.status !== 'outstanding') continue
+    // Second check of #367: the order the two settles finish in is not the order they won in. The
+    // loser's "already redeemed in another session" can come back before the winner has saved, so
+    // a `claimed` may land first. `reclaimed` is the one answer that is certain (this wallet holds
+    // the value), so it corrects any other close; nothing else overwrites a closed link.
+    if (now.status !== 'outstanding' && !(status === 'reclaimed' && now.status !== 'reclaimed')) continue
     const link: GiftLinkRecord = { ...now, ...extra, status, closedAt: at }
     const merged = await wallet.updateTransaction(r.id, { link } as unknown as Partial<TransactionRow>)
     if (merged) void publishTx(merged)
@@ -293,7 +313,11 @@ async function currentLinks(): Promise<Map<string, GiftLinkRecord>> {
  * encrypted history carries it to a restored or second device. Status and close time are untouched:
  * the record is re-read first, so a take-back that landed while the notice was filed is kept.
  */
-export async function markLinksNoticed(rows: LinkRow[], at = Date.now()): Promise<void> {
+export function markLinksNoticed(rows: LinkRow[], at = Date.now()): Promise<void> {
+  return serialised(() => writeLinksNoticed(rows, at))
+}
+
+async function writeLinksNoticed(rows: LinkRow[], at: number): Promise<void> {
   const wallet = getWallet()
   const fresh = await currentLinks()
   for (const r of rows) {
@@ -569,14 +593,39 @@ export async function takeBack(k: string): Promise<TakeBackOutcome> {
  */
 export const COUPON_LAPSE_GRACE_S = 60 * 60
 
-function couponsLapsed(tokens: GiftToken[], nowMs: number): boolean {
+/**
+ * How long past every coupon's expiry (by this device's clock) a link is closed even when the
+ * take-back failed for another reason (offline, a gateway that rewords the refusal). Long enough
+ * that no realistic clock error closes a live coupon (second check of #367).
+ */
+export const COUPON_LAPSE_HARD_S = 7 * 24 * 60 * 60
+
+/** The mint's own refusal of an expired voucher, as the receive surfaces it (see `pay.ts`). */
+const EXPIRED_REFUSAL = /voucher[_ ]expired|voucher has expired|90016/i
+
+/**
+ * Whether a link whose take-back did not succeed is past saving: every coupon still on it is past
+ * its own expiry, AND either the mint said so or the device clock is a week past it. A failed
+ * take-back alone, with the device clock just past the expiry, is not enough: the device clock may
+ * run fast, and the failure may be the network. Then the link stays outstanding and is retried.
+ */
+function lapseConfirmed(outcome: GiftRedeemOutcome, unspent: GiftToken[], nowMs: number): boolean {
+  if (!couponsLapsed(unspent, nowMs)) return false
+  if (outcome.kind === 'failed' && EXPIRED_REFUSAL.test(outcome.message)) return true
+  return couponsLapsed(unspent, nowMs, COUPON_LAPSE_HARD_S)
+}
+
+function couponsLapsed(tokens: GiftToken[], nowMs: number, graceS = COUPON_LAPSE_GRACE_S): boolean {
   const now = Math.floor(nowMs / 1000)
+  if (tokens.length === 0) return false
   return tokens.every(({ token }) => {
     try {
       const exp = parseVoucherToken(token).voucher.expiresAt
       if (typeof exp !== 'number' || !Number.isFinite(exp) || exp <= 0) return false
-      const expS = exp > 1e12 ? Math.floor(exp / 1000) : exp
-      return now > expS + COUPON_LAPSE_GRACE_S
+      // Seconds, exactly as the mint reads the tag (`VoucherMetadata.expiresAt`). The wallet's 1e12
+      // seconds-or-milliseconds guess must not be used here: a value the guess calls milliseconds
+      // is, to the mint, a date thousands of years away, so the coupon is live there.
+      return now > exp + graceS
     } catch {
       return false
     }
@@ -617,22 +666,24 @@ export async function reconcileGiftLinks(
       }
       if (overall !== 'UNSPENT') continue
       if (Math.floor(nowMs / 1000) >= parts[0].link.x) {
-        // Review of #367: once the coupon itself is past its expiry the mint refuses it to everyone,
-        // the sender included, so the take-back below would fail on every run and the link would
-        // count against MAX_EXPIRED_UNRETURNED for ever. Nobody can open it now: it is closed as
-        // expired. The grace keeps a wallet clock running fast from closing a link the mint would
-        // still let come back.
-        if (couponsLapsed(tokens, nowMs)) {
-          await setLinkStatus(parts, 'expired', nowMs)
-          continue
-        }
-        const outcome = await redeemGiftTokens(tokens.filter((_, n) => states[n] === 'UNSPENT'), 'gift_link_reclaim')
+        const unspent = tokens.filter((_, n) => states[n] === 'UNSPENT')
+        // The take-back is always tried first: the mint's clock, not this device's, decides whether a
+        // coupon has lapsed (second check of #367). A wallet clock running fast must never close a
+        // link the mint would still let come back.
+        const outcome = await redeemGiftTokens(unspent, 'gift_link_reclaim')
         if (outcome.kind === 'ok') {
           await setLinkStatus(parts, 'reclaimed', nowMs)
           reclaimed += 1
         } else if (outcome.kind === 'claimed') {
           await setLinkStatus(parts, 'claimed', nowMs)
           claimed += 1
+        } else if (lapseConfirmed(outcome, unspent, nowMs)) {
+          // Review of #367: once every coupon still on the link is past its own expiry the mint
+          // refuses it to everyone, the sender included, so the take-back fails on every run and the
+          // link would count against MAX_EXPIRED_UNRETURNED for ever. It is closed as expired. Only
+          // the UNSPENT coupons are read: one that already came back (or was claimed) must not hold
+          // the link open until its own, later, expiry.
+          await setLinkStatus(parts, 'expired', nowMs)
         }
       }
     }

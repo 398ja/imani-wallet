@@ -71,6 +71,12 @@ link record without the new `noticedAt` field still reads.
 - **Send waits at most 8 s for the settle** before counting; it carries on in the background.
 - `/v1/links/status`: a key used as a field **name** is refused as a key and named by a
   placeholder (the unknown-field refusal echoed it back before).
+- **Second check of the above.** A lapsed link is closed only after the take-back was tried and the
+  mint refused it as expired (or a week past the coupon's expiry by this device's clock), so a
+  device clock running more than an hour fast can no longer hide a coupon the mint would still
+  give back. Only the coupons still on the link are read, so one that already came back cannot
+  hold the link open. Link-record writes run one at a time, so two settles that finish in the
+  "wrong" order still leave **Taken back**, never Claimed.
 
 ## [0.36.0] - 2026-10-21
 
