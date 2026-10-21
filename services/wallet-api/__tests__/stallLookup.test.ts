@@ -221,7 +221,9 @@ describe('an unreachable relay is not an empty relay', () => {
       .join('\n')
 
     const ensureAt = code.indexOf('ensureRelay')
-    const queryAt = code.indexOf('querySync')
+    // `subscribeEose`, not `querySync`: the latter resolves on a relay CLOSED (queryRelay.test.ts).
+    const queryAt = code.indexOf('subscribeEose')
+    expect(code).not.toContain('querySync(')
 
     expect(ensureAt).toBeGreaterThan(-1)
     expect(queryAt).toBeGreaterThan(ensureAt)

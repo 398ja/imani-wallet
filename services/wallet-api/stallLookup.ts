@@ -125,6 +125,9 @@ export const STALL_D_TAG = 'imani:merchant'
  */
 const LOOKUP_TIMEOUT_MS = 5_000
 
+/** The reason nostr-tools' `subscribeEose` closes with after a REAL end-of-stored-events. */
+const EOSE_CLOSE_REASON = 'closed automatically on eose'
+
 /**
  * How long a POSITIVE answer is cached.
  *
@@ -246,10 +249,27 @@ export async function queryRelay(pubkey: string): Promise<Event[]> {
         // reports itself disconnected would query to `[]` just as silently.
         if (!relay.connected) throw new Error('relay is not connected')
 
-        return pool.querySync([RELAY_URL], {
-          authors: [pubkey],
-          kinds: [STALL_KIND],
-          '#d': [STALL_D_TAG],
+        // Not `querySync`: it resolves with whatever it holds when the relay answers CLOSED
+        // (rate-limited, auth-required, error) or when its own EOSE timer (4.4s, inside
+        // LOOKUP_TIMEOUT_MS) fires, so a refusal read as "asked, holds nothing". For a stall's
+        // validity that is "never expires" on a 90-day stall's coupon (#359 review). Only a real
+        // EOSE resolves here; anything else throws. `maxWait` is past LOOKUP_TIMEOUT_MS so a
+        // silent relay hits the timeout below rather than a fake EOSE.
+        return await new Promise<Event[]>((resolve, reject) => {
+          const events: Event[] = []
+          pool.subscribeEose(
+            [RELAY_URL],
+            { authors: [pubkey], kinds: [STALL_KIND], '#d': [STALL_D_TAG] },
+            {
+              maxWait: LOOKUP_TIMEOUT_MS + 1_000,
+              onevent: (event) => events.push(event),
+              onclose: (reasons) => {
+                const refused = reasons.find((r) => r.reason !== EOSE_CLOSE_REASON)
+                if (refused) reject(new Error(`relay closed the query: ${refused.reason}`))
+                else resolve(events)
+              },
+            },
+          )
         })
       })(),
       LOOKUP_TIMEOUT_MS,
