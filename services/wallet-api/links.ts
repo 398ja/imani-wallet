@@ -85,17 +85,23 @@ const HEX64 = /^(0x)?[0-9a-f]{64}$/i
 const LINK_SECRET = /^[A-Za-z0-9_-]{43}$/
 const LINK_URL_KEY = /[#?&]k=/
 
+function keyShaped(text: string): boolean {
+  const s = text.trim()
+  return NSEC.test(s) || HEX64.test(s) || LINK_SECRET.test(s) || LINK_URL_KEY.test(s)
+}
+
+/** Stands in for a field NAME that is itself shaped like a key, so the refusal never echoes it. */
+export const KEY_SHAPED_NAME = '(a field whose name looks like a key)'
+
 /**
  * The first place in `value` that looks like a key, as a field path, or null. Walks every object
- * and array, so a key cannot hide in a nested or unknown field.
+ * and array, so a key cannot hide in a nested or unknown field. A key used as a field NAME is
+ * refused too, and the path names it by a placeholder: the unknown-field refusal below would
+ * otherwise echo it back.
  */
 export function keyLikeField(value: unknown, path = 'body', depth = 0): string | null {
   if (depth > 8) return path
-  if (typeof value === 'string') {
-    const s = value.trim()
-    if (NSEC.test(s) || HEX64.test(s) || LINK_SECRET.test(s) || LINK_URL_KEY.test(s)) return path
-    return null
-  }
+  if (typeof value === 'string') return keyShaped(value) ? path : null
   if (Array.isArray(value)) {
     for (let i = 0; i < value.length; i++) {
       const hit = keyLikeField(value[i], `${path}[${i}]`, depth + 1)
@@ -105,6 +111,7 @@ export function keyLikeField(value: unknown, path = 'body', depth = 0): string |
   }
   if (value && typeof value === 'object') {
     for (const [name, inner] of Object.entries(value)) {
+      if (keyShaped(name)) return path === 'body' ? KEY_SHAPED_NAME : `${path}.${KEY_SHAPED_NAME}`
       const at = path === 'body' ? name : `${path}.${name}`
       if (KEY_FIELD.test(name)) return at
       const hit = keyLikeField(inner, at, depth + 1)

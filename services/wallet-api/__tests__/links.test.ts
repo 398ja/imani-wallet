@@ -5,7 +5,10 @@ import { hashToCurve } from '@cashu/crypto/modules/common'
 
 import {
   KEY_REFUSAL,
+  KEY_SHAPED_NAME,
   MAX_LINKS,
+  MAX_YS_PER_LINK,
+  MAX_YS_TOTAL,
   hashToCurveHex,
   keyLikeField,
   linkStatus,
@@ -66,6 +69,24 @@ describe('refusing anything that looks like a key', () => {
   it('does not mistake a Y point (33 bytes) for a key (32 bytes)', () => {
     expect(keyLikeField({ links: [{ x: NOW, ys: [Y1, Y2] }] })).toBeNull()
   })
+
+  // Review of #367: a key used as a field NAME reached the unknown-field refusal, which echoed it
+  // back verbatim in `field`. It is refused as a key, and named by a placeholder.
+  it.each([
+    ['a 64-hex key', sk],
+    ['an nsec', 'nsec1' + 'q'.repeat(58)],
+    ['a Cashlink secret', linkSecret],
+  ])('refuses %s used as a field name, at the top or nested, without echoing it', (_name, key) => {
+    for (const body of [{ [key]: 1, links: [{ x: NOW, ys: [Y1] }] }, { links: [{ x: NOW, ys: [Y1], [key]: 1 }] }]) {
+      const r = parse(body)
+      expect(r.ok).toBe(false)
+      if (!r.ok) {
+        expect(r.error.detail).toBe(KEY_REFUSAL)
+        expect(r.error.field).toContain(KEY_SHAPED_NAME)
+        expect(JSON.stringify(r.error)).not.toContain(key)
+      }
+    }
+  })
 })
 
 describe('reading the request', () => {
@@ -90,6 +111,19 @@ describe('reading the request', () => {
     const r = parse(body)
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error.field).toBe(field)
+  })
+
+  // Review of #367 (mutant A15 survived): the per-request proof cap bounds one checkstate.
+  it('caps proofs per link and per request', () => {
+    const many = (n: number) => Array.from({ length: n }, (_, i) => hashToCurveHex(`s${i}`))
+    const perLink = parse({ links: [{ x: NOW, ys: many(MAX_YS_PER_LINK + 1) }] })
+    expect(!perLink.ok && perLink.error.field).toBe('links[0].ys')
+    const pool = many(MAX_YS_PER_LINK)
+    const atCap = Array.from({ length: MAX_YS_TOTAL / MAX_YS_PER_LINK }, () => ({ x: NOW, ys: pool }))
+    expect(parse({ links: atCap }).ok).toBe(true)
+    const over = parse({ links: [...atCap, { x: NOW, ys: [Y1] }] })
+    expect(over.ok).toBe(false)
+    if (!over.ok) expect(over.error).toMatchObject({ field: 'links', detail: `at most ${MAX_YS_TOTAL} proofs per request` })
   })
 
   it('ignores a caller clock unless test seams are on', () => {

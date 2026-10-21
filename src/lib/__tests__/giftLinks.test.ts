@@ -81,6 +81,8 @@ import {
   allocateLink,
   linkCounts,
   linkLimitMessage,
+  linkRows,
+  markLinksNoticed,
   settleAndCountLinks,
   outstandingLinkCount,
   tooManyExpiredMessage,
@@ -276,7 +278,7 @@ describe('the restore scan (spec 3.3: i = 0 … last + 20)', () => {
 })
 
 describe('#295 phase 0: the limit counts only links that can still be claimed', () => {
-  const token = buildVoucherToken({}, [8]).token
+  const token = buildVoucherToken({ expiresAt: 1_900_000_000 }, [8]).token
   const NOW = 1_850_000_000_000
   const PAST = 1_840_000_000
   const FUTURE = 1_900_000_000
@@ -342,5 +344,77 @@ describe('#295 phase 0: the limit counts only links that can still be claimed', 
       sendGift({ payer: PUB, merchant: {} as never, unit: 'EUR', amount: 100, x: FUTURE, nowMs: NOW, state: async () => 'UNSPENT' }),
     ).rejects.toThrow(tooManyLinksMessage())
     expect(h.sent).toHaveLength(0)
+  })
+})
+
+describe('review of #367', () => {
+  const NOW = 1_850_000_000_000
+  const PAST = 1_840_000_000
+
+  it('closes a link whose coupon has itself expired, so it cannot hold the expired limit for ever', async () => {
+    // The coupon lapsed before now: the mint refuses it to everyone, the sender included.
+    const lapsed = buildVoucherToken({ expiresAt: PAST + 3600 }, [8]).token
+    h.rows = Array.from({ length: MAX_EXPIRED_UNRETURNED }, (_, i) => linkRow(i, 'outstanding', PAST))
+    for (let i = 0; i < MAX_EXPIRED_UNRETURNED; i++) h.wraps.set(linkPubOf(deriveLinkSecret(ID, i)), [lapsed])
+    h.redeemFails = 'voucher_expired: Voucher has expired and cannot be redeemed'
+    const counts = await settleAndCountLinks(NOW, async () => 'UNSPENT')
+    expect(counts).toEqual({ waiting: 0, expiredUnreturned: 0 })
+    expect(h.rows.every((r) => (r.link as { status: string }).status === 'expired')).toBe(true)
+    // Nothing was even tried at the mint.
+    expect(h.redeemed).toHaveLength(0)
+  })
+
+  it('still takes back a link whose coupon expired only within the grace (a fast wallet clock)', async () => {
+    const recent = buildVoucherToken({ expiresAt: NOW / 1000 - 60 }, [8]).token
+    h.rows = [linkRow(0, 'outstanding', PAST)]
+    h.wraps.set(linkPubOf(deriveLinkSecret(ID, 0)), [recent])
+    await reconcileGiftLinks(NOW, async () => 'UNSPENT')
+    expect(h.redeemed).toHaveLength(1)
+    expect((h.rows[0].link as { status: string }).status).toBe('reclaimed')
+  })
+
+  it('never relabels a link another settle already closed (Taken back stays Taken back)', async () => {
+    const token = buildVoucherToken({ expiresAt: 1_900_000_000 }, [8]).token
+    h.rows = [linkRow(0, 'outstanding', PAST)]
+    h.wraps.set(linkPubOf(deriveLinkSecret(ID, 0)), [token])
+    // A second settle (start-up and Send at once) wins the take-back while this one is at the mint;
+    // this one then reads "already spent", which alone would say Claimed.
+    vi.stubGlobal('window', {
+      location: { origin: 'https://wallet.example' },
+      TokenRedemption: {
+        redeem: async () => {
+          Object.assign(h.rows[0], { link: { ...(h.rows[0].link as object), status: 'reclaimed', closedAt: NOW } })
+          throw new Error('Token already spent (11001)')
+        },
+      },
+    })
+    await reconcileGiftLinks(NOW, async () => 'UNSPENT')
+    expect((h.rows[0].link as { status: string }).status).toBe('reclaimed')
+  })
+
+  it('marking a notice keeps a take-back that landed meanwhile', async () => {
+    h.rows = [linkRow(0, 'outstanding', PAST)]
+    const snapshot = (await linkRows()).map((r) => ({ ...r, link: { ...r.link } }))
+    Object.assign(h.rows[0], { link: { ...(h.rows[0].link as object), status: 'reclaimed', closedAt: NOW } })
+    await markLinksNoticed(snapshot, NOW)
+    expect(h.rows[0].link).toMatchObject({ status: 'reclaimed', noticedAt: NOW })
+  })
+
+  it('opening Send waits at most the budget for a settle that hangs', async () => {
+    h.rows = [linkRow(0, 'outstanding', PAST)]
+    h.wraps.set(linkPubOf(deriveLinkSecret(ID, 0)), [buildVoucherToken({ expiresAt: 1_900_000_000 }, [8]).token])
+    const started = Date.now()
+    const counts = await settleAndCountLinks(NOW, () => new Promise<ProofState>(() => {}), 50)
+    expect(Date.now() - started).toBeLessThan(2000)
+    expect(counts).toEqual({ waiting: 0, expiredUnreturned: 1 })
+  })
+
+  it('a take-back by hand marks the link noticed, so no expiry notice follows', async () => {
+    const token = buildVoucherToken({}, [8]).token
+    h.rows = [linkRow(0, 'outstanding', 2_000_000_000)]
+    h.wraps.set(linkPubOf(deriveLinkSecret(ID, 0)), [token])
+    vi.stubGlobal('fetch', async () => Response.json({ states: [{ state: 'UNSPENT' }] }))
+    await takeBack(String((h.rows[0].link as { k: string }).k))
+    expect((h.rows[0].link as { noticedAt?: number }).noticedAt).toEqual(expect.any(Number))
   })
 })
