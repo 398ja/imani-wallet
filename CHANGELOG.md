@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-10-22
+
+Relay reads survive a slow link (imani-deploy#235, #374), and a receive delayed past the NIP-98
+window recovers in the same session (#314, #373). App only: wallet-api, purchase-issuer and
+audit-api are byte-identical to 0.37.0 over their image COPY paths, so they are not rebuilt. No
+configuration change, no migration.
+
 ### Fixed
 
 - **Relay reads no longer give up on a slow link** (imani-deploy#235). Reads capped the relay
