@@ -114,6 +114,13 @@ export interface RedemptionErrorEvent {
    * Sender-written and display only.
    */
   requestId?: string;
+
+  /**
+   * Whether this service will offer the delivery again (imani-wallet#314). False only when it
+   * has given up on it for good (a token the mint can never accept), so a listener can stop
+   * promising "will keep trying". Absent from older emitters: treat that as retryable.
+   */
+  retryable?: boolean;
 }
 
 /**

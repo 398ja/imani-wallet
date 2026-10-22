@@ -86,6 +86,11 @@ export function openReceives(): void {
   open = true
 }
 
+/** Whether a receive may start now: false from the moment logout closes the gate (#314). */
+export function receivesOpen(): boolean {
+  return open && !sealed
+}
+
 export function receivesInFlight(): number {
   return inFlight
 }
