@@ -6,6 +6,7 @@ import {
   type NostrdbAdapter,
   type Profile,
   type RedemptionAdapter,
+  type RedemptionErrorEvent,
   type RedemptionOptions,
   type StorageAdapter,
   type SubscriptionHandle,
@@ -21,7 +22,7 @@ import {
   type ArrivedVoucher,
 } from './arrivalToast'
 import { announceQueued, settleQueued, type QueuedBundleSeed } from './queuedToast'
-import { gatesSealed } from './receiveGate'
+import { gatesSealed, receivesOpen } from './receiveGate'
 import { announceRefusal } from './refusalToast'
 import { recordRefusal } from './refusedCoupons'
 import { heldCoupons, recordHeld, releaseHeld } from './heldCoupons'
@@ -1555,6 +1556,84 @@ function catchUp(): void {
   void flushUnacknowledgedEscrows()
 }
 
+/**
+ * In-session recovery for a receive that failed (#314).
+ *
+ * dm-poll keeps a failed delivery for a retry, but behind its one-hour
+ * cooldown, and in SSE mode nothing re-polls on a timer anyway. So a coupon
+ * whose receive failed was in practice picked up only by the merchant's NEXT
+ * session, while the till's strip said the wallet "will keep trying". This is
+ * the keeping-trying: the same delivery is offered again on a short backoff,
+ * a bounded number of times, for as long as this poller runs.
+ *
+ * Safe to repeat: every try reuses the token's idempotency key
+ * (`rcv_<fingerprint>`, tokenRedemption), spends from its per-token call budget
+ * and waits in the pacer. A receive the gateway already settled comes back as
+ * that settlement, never as a second receive.
+ *
+ * Logout (#331/#340/#353): no try starts once the receive gate is closed or the
+ * poller is stopped. `stopDmPoll` clears the timers, and the adapter refuses a
+ * redeem from a stopped poller as RECEIVE_DEFERRED in any case. The delivery
+ * stays unprocessed, so the next session still receives it: deferred, not lost.
+ */
+export const RECEIVE_RETRY_BACKOFFS_MS: readonly number[] = [10_000, 30_000, 90_000, 300_000]
+/** gift wrap id → its pending in-session retry. Per poller: cleared by stopDmPoll. */
+const receiveRetries = new Map<string, { attempt: number; timer: ReturnType<typeof setTimeout> }>()
+
+function scheduleReceiveRetry(polling: DmPollService, eventId: string, attempt = 0): void {
+  if (!eventId || attempt >= RECEIVE_RETRY_BACKOFFS_MS.length) return
+  // Only for the poller that is running now (review of #314): a stopped poller's in-flight
+  // redeem can still report its failure after stopDmPoll cleared the timers, and must not
+  // arm a new one, let alone one bound to the next account's poller.
+  if (service !== polling) return
+  const pending = receiveRetries.get(eventId)
+  if (pending) {
+    // One chain per delivery: a failure reported by the chain's own try (or by
+    // a catch-up of the same wrap) does not start a second, faster one.
+    if (pending.attempt >= attempt) return
+    clearTimeout(pending.timer)
+  }
+  const timer = setTimeout(() => {
+    void retryReceive(polling, eventId, attempt)
+  }, RECEIVE_RETRY_BACKOFFS_MS[attempt])
+  receiveRetries.set(eventId, { attempt, timer })
+}
+
+async function retryReceive(polling: DmPollService | undefined, eventId: string, attempt: number): Promise<void> {
+  // Logout started, or this tab let go of the store: nothing is tried. The
+  // delivery is still unprocessed and the next session offers it again.
+  if (polling === undefined || service !== polling || !receivesOpen() || gatesSealed()) {
+    receiveRetries.delete(eventId)
+    return
+  }
+  console.info('[dmPoll] trying a failed receive again', { eventId: eventId.substring(0, 8), attempt: attempt + 1 })
+  let received = false
+  try {
+    received = (await polling.replayEvent(eventId)) === true
+  } catch (error) {
+    console.warn('[dmPoll] retry of a failed receive did not complete', error)
+  }
+  if (receiveRetries.get(eventId)?.attempt === attempt) receiveRetries.delete(eventId)
+  if (received || service !== polling) return
+  // Still waiting in dm-poll's failed list (a deferral emits no error, so the
+  // chain is carried on from here rather than by the next error event).
+  const stillFailed =
+    typeof polling.getFailedEvents !== 'function' ||
+    polling.getFailedEvents().some((f) => f.eventId === eventId)
+  if (stillFailed) scheduleReceiveRetry(polling, eventId, attempt + 1)
+}
+
+/** dm-poll's `redemption:error`: start the in-session retry unless it has given up for good. */
+function onReceiveFailed(polling: DmPollService, event: RedemptionErrorEvent | undefined): void {
+  if (!event?.eventId || event.retryable === false) return
+  scheduleReceiveRetry(polling, event.eventId)
+}
+
+function clearReceiveRetries(): void {
+  for (const { timer } of receiveRetries.values()) clearTimeout(timer)
+  receiveRetries.clear()
+}
+
 /** How long after a receive-gate deferral the coupon is offered again (#301 review). */
 export const DEFERRED_RETRY_MS = 5_000
 /**
@@ -1790,6 +1869,9 @@ export function startDmPoll(pubkey: string): DmPollService {
     // already show that sale Paid on gateway-core's verdict, so the failure is kept against the
     // request for it to show. A later success of the same delivery clears it.
     service.on('redemption:error', (event) => fromRedemptionError(owner ?? '', event))
+    // And try it again in this session, so the strip's "will keep trying" is kept (#314).
+    const emitter = service
+    service.on('redemption:error', (event) => onReceiveFailed(emitter, event))
     service.on('redemption:unsaved', (event) => fromRedemptionUnsaved(owner ?? '', event))
     service.on('redemption:success', (event) => clearReceiveTrouble(owner ?? '', event?.eventId))
   }
@@ -1853,6 +1935,9 @@ export function stopDmPoll(): void {
   if (deferredRetryTimer !== undefined) clearTimeout(deferredRetryTimer)
   deferredRetryTimer = undefined
   deferredRetries.clear()
+  // #314: no in-session retry of a failed receive survives the poller. The
+  // deliveries stay unprocessed for the next session.
+  clearReceiveRetries()
   stopMintListener?.()
   stopMintListener = undefined
   document.removeEventListener('visibilitychange', onVisible)

@@ -215,6 +215,30 @@ describe('the stall’s own till shows Paid on gateway-core’s verdict (#300)',
     expect(await screen.findByText(/not reached this wallet/i)).toBeTruthy()
     expect(screen.getByText('Paid')).toBeTruthy()
   })
+
+  // #314: "will keep trying" is now a promise the wallet keeps, so it is said for a failure it
+  // will retry, and only then.
+  it('says the wallet will keep trying for a failure it retries', async () => {
+    await ownerAsks(async () => PAID)
+    expect(await screen.findByText('Paid', {}, { timeout: 5_000 })).toBeTruthy()
+    await act(async () => {
+      recordReceiveTrouble(STALL, { eventId: 'e1', requestId: ID, kind: 'failed', retryable: true })
+    })
+    expect(await screen.findByText(/will keep trying/i)).toBeTruthy()
+  })
+
+  // #307 review / #314: a permanent refusal (a coupon the mint will never accept) is not
+  // retried, so the strip must not promise it. Red on main: it said "will keep trying".
+  it('a permanent refusal shows the other message, never "will keep trying"', async () => {
+    await ownerAsks(async () => PAID)
+    expect(await screen.findByText('Paid', {}, { timeout: 5_000 })).toBeTruthy()
+    await act(async () => {
+      recordReceiveTrouble(STALL, { eventId: 'e1', requestId: ID, kind: 'failed', retryable: false })
+    })
+    expect(await screen.findByText(/could not be added to this wallet/i)).toBeTruthy()
+    expect(screen.queryByText(/keep trying/i)).toBeNull()
+    expect(screen.getByText('Paid')).toBeTruthy()
+  })
 })
 
 describe('the app gives the stall’s own Redeem screen the core check (#300)', () => {

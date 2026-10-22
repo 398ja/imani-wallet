@@ -868,6 +868,27 @@ function _isInFlightConflict(err) {
 }
 
 /**
+ * #314: gateway-customer's NIP-98 filter refused the receive because its auth
+ * event's `created_at` was outside the window (60 s by default): the request
+ * spent over a minute in transit (a slow link, a held or backgrounded tab).
+ * Shape, from imani-security `Nip98AuthFilter`: 401, `error.code` AUTH_002,
+ * message "Auth event timestamp outside acceptable window". AUTH_002 covers
+ * EVERY NIP-98 failure (bad signature, wrong url, replay), so the message is
+ * what names this one, and only this one is cured by signing again.
+ *
+ * The filter runs before the controller, so nothing was received: the same
+ * request with a fresh signature is safe, and it carries the same
+ * Idempotency-Key, so the gateway still sees one receive.
+ */
+function _isStaleNip98Auth(err) {
+    if (!err || err.status !== 401) return false;
+    return /timestamp outside acceptable window/i.test(String(err.message || ''));
+}
+
+/** #314: fresh signatures after a stale-auth refusal, per receive attempt. */
+const STALE_AUTH_RESIGNS = 1;
+
+/**
  * The receive was already SAVED in this wallet (ledger state saved/acked): a
  * redelivery of a coupon we hold. Reported with the old "already redeemed"
  * wording so dm-poll takes its idempotent path (mark received, bundle success)
@@ -1534,12 +1555,32 @@ const TokenRedemption = {
                         if (slow) clearTimeout(slow);
                     }
                 };
+                // #314: the NIP-98 header is signed inside api.receive
+                // (api.js requestWithHeaders), per call, AFTER the gate above:
+                // a wait in the pacer never ages the signature. A call that
+                // then sat in transit past gateway-customer's 60 s window is
+                // refused at auth, before anything is received. One more call,
+                // through the same gate and per-token budget, signs afresh and
+                // carries the SAME idempotency key (`idempotencyKey` above is
+                // fixed for this token), so the gateway sees one receive.
+                const receiveSigned = async () => {
+                    for (let resign = 0; ; resign++) {
+                        try {
+                            return await receiveOnce();
+                        } catch (authErr) {
+                            if (!_isStaleNip98Auth(authErr) || resign >= STALE_AUTH_RESIGNS) throw authErr;
+                            console.warn('[tokenRedemption] #314 receive auth expired in transit; signing again', {
+                                fp: _fpTag(fingerprint),
+                            });
+                        }
+                    }
+                };
                 // #110 review D: the gateway's 409 "first call still in flight"
                 // (Retry-After, empty body) is a short wait and a retry under
                 // the same key, not a failure.
                 for (let inFlight = 0; ; inFlight++) {
                     try {
-                        result = await _withReceiveRetry(receiveOnce);
+                        result = await _withReceiveRetry(receiveSigned);
                         break;
                     } catch (e) {
                         if (!_isInFlightConflict(e) || inFlight >= IN_FLIGHT_RETRIES) throw e;

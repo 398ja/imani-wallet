@@ -14,7 +14,8 @@ import { createAccountStore } from './accountStore'
  * Display only, like the refused and held lists beside it. Keyed on the gift wrap, so one delivery
  * is one record however many times dm-poll reports it.
  *
- * - `failed`: the receive gave up (a permanent mint error, or a failure dm-poll will retry later).
+ * - `failed`: the receive gave up, either for good (`retryable: false`, a token the mint will
+ *   never accept) or for now (the wallet tries again in this session, #314).
  * - `unsaved`: the gateway settled the receive but the proofs did not reach this wallet; it needs
  *   reconciliation, and `receiveId` names the escrow.
  *
@@ -25,6 +26,11 @@ export interface ReceiveTrouble {
   eventId: string
   requestId: string
   kind: 'failed' | 'unsaved'
+  /**
+   * `failed` only: false when dm-poll gave up on the delivery for good (#314), so the till must
+   * not promise another try. Absent on older records: read as retryable.
+   */
+  retryable?: boolean
   receiveId?: string
   /** Epoch ms. */
   at: number
@@ -86,7 +92,13 @@ export function receiveTroubleFor(pubkey: string, requestId: string): ReceiveTro
 /** From dm-poll's `redemption:error`, when the delivery named a request. */
 export function fromRedemptionError(pubkey: string, event: RedemptionErrorEvent | undefined): void {
   if (!event?.requestId) return
-  recordReceiveTrouble(pubkey, { eventId: event.eventId, requestId: event.requestId, kind: 'failed' })
+  recordReceiveTrouble(pubkey, {
+    eventId: event.eventId,
+    requestId: event.requestId,
+    kind: 'failed',
+    // #314: only a refusal dm-poll will never retry is permanent.
+    retryable: event.retryable !== false,
+  })
 }
 
 /** From dm-poll's `redemption:unsaved`, when the delivery named a request. */
