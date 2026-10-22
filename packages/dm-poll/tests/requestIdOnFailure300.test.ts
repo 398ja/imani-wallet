@@ -63,3 +63,28 @@ describe('a failed receive carries its request id (#300)', () => {
     ]);
   });
 });
+
+describe('redemption:error says whether it will be retried (imani-wallet#314)', () => {
+  // A failure kept for a retry: the till may say "will keep trying".
+  it('a transient failure is retryable', async () => {
+    const s = service(vi.fn(async () => {
+      throw new Error('Network timeout');
+    }));
+    const seen: unknown[] = [];
+    s.on('redemption:error', (e) => seen.push(e));
+    await s.processGiftWrap(createMockGiftWrap({ id: 'e3' }));
+    expect(seen).toEqual([expect.objectContaining({ eventId: 'e3', retryable: true })]);
+  });
+
+  // A token the mint can never accept is marked processed and never offered again: the till
+  // must not promise another try.
+  it('a permanently unredeemable token is not retryable', async () => {
+    const s = service(vi.fn(async () => {
+      throw new Error('mint_error_code=11007 Duplicate inputs provided');
+    }));
+    const seen: unknown[] = [];
+    s.on('redemption:error', (e) => seen.push(e));
+    await s.processGiftWrap(createMockGiftWrap({ id: 'e4' }));
+    expect(seen).toEqual([expect.objectContaining({ eventId: 'e4', retryable: false })]);
+  });
+});
