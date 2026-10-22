@@ -9,11 +9,16 @@ import { formatFace, parseAmountToMinor, formatDate } from '../lib/format'
 import {
   DEFAULT_EXPIRY_DAYS,
   EXPIRY_CHOICES_DAYS,
+  GIFT_EXPIRES_SOON_COPY,
+  GIFT_NOT_YET_COPY,
   OWN_STALL_COPY,
+  expiryChoices,
+  expiryLimitCopy,
   giftExclusion,
   giftExpiry,
+  type GiftExclusion,
 } from '../lib/giftLink'
-import { MAX_OUTSTANDING_LINKS, outstandingLinkCount, sendGift, tooManyLinksMessage } from '../lib/giftLinks'
+import { linkLimitMessage, sendGift, settleAndCountLinks, type LinkCounts } from '../lib/giftLinks'
 import { useMerchantLabel } from '../lib/identity'
 import { toMerchants, type Merchant } from '../lib/merchants'
 import { SendOutcomeUnknownError, splitObstacle, withoutInFlight } from '../lib/pay'
@@ -24,21 +29,26 @@ import { userMessage } from '../lib/userMessage'
 /**
  * Send by link (claim links phase 4, spec 4.2): "Anyone, by link".
  *
- * Pick a voucher (licences, terminal credentials, locked vouchers and the sender's own stall's
- * coupons excluded), an amount and how long the link lasts (Q3: 1, 7 or 30 days, default 7, never
- * past the coupon's own expiry), confirm, and get a link and QR. At most ten links may wait at once
- * (Q5). The link is shown here and in History, and never logged.
+ * Pick a voucher (licences, terminal credentials, locked vouchers, the sender's own stall's coupons,
+ * coupons that cannot be checked yet and coupons about to expire excluded), an amount and how long
+ * the link lasts (Q3: 1, 7 or 30 days, default 7; #295 Q8: only the choices that end at least a day
+ * before the coupon), confirm, and get a link and QR. At most ten links may wait at once (Q5), and
+ * opening this screen first takes back any that have expired (#295 phase 0). The link is shown here
+ * and in History, and never logged.
  */
 type Option = { merchant: Merchant; unit: string; decimals: number; total: number; vouchers: Voucher[] }
 
-function options(merchants: Merchant[], sender: string): { usable: Option[]; ownStall: boolean } {
+/** Why some coupons are not offered, so the picker can say so in plain words. */
+type Left = Partial<Record<GiftExclusion, boolean>>
+
+function options(merchants: Merchant[], sender: string, nowMs: number): { usable: Option[]; ownStall: boolean; left: Left } {
   const byKey = new Map<string, Option>()
-  let ownStall = false
+  const left: Left = {}
   for (const merchant of merchants) {
     for (const group of merchant.groups) {
       const vouchers = group.vouchers.filter((v) => {
-        const why = giftExclusion(v.token, v.issuer_id ?? merchant.pubkey, sender)
-        if (why === 'own_stall') ownStall = true
+        const why = giftExclusion(v.token, v.issuer_id ?? merchant.pubkey, sender, nowMs)
+        if (why) left[why] = true
         return why === null
       })
       if (vouchers.length === 0) continue
@@ -53,7 +63,16 @@ function options(merchants: Merchant[], sender: string): { usable: Option[]; own
       }
     }
   }
-  return { usable: [...byKey.values()].sort((a, b) => b.total - a.total), ownStall }
+  return { usable: [...byKey.values()].sort((a, b) => b.total - a.total), ownStall: !!left.own_stall, left }
+}
+
+/** The plain-words reasons for what the picker left out, own stall first (it says where to go). */
+function leftOutCopy(left: Left): string[] {
+  const out: string[] = []
+  if (left.own_stall) out.push(OWN_STALL_COPY)
+  if (left.not_yet) out.push(GIFT_NOT_YET_COPY)
+  if (left.expires_soon) out.push(GIFT_EXPIRES_SOON_COPY)
+  return out
 }
 
 export function SendLinkPage({ pubkey }: { pubkey: string }) {
@@ -67,7 +86,9 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
   const unit = params.get('unit')
   const back = params.get('from') ? `/send?from=${encodeURIComponent(params.get('from')!)}` : '/send'
   const [merchants, setMerchants] = useState<Merchant[] | null>(null)
-  const [waiting, setWaiting] = useState<number | null>(null)
+  const [counts, setCounts] = useState<LinkCounts | null>(null)
+  /** When the screen opened, ms: what "about to expire" is measured from on the picker. */
+  const [openedAt] = useState(() => Date.now())
   const [picked, setPicked] = useState<string | null>(null)
   const [amount, setAmount] = useState('')
   const [memo, setMemo] = useState('')
@@ -80,10 +101,12 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
 
   useEffect(() => {
     listVouchers().then((rows) => setMerchants(toMerchants(withoutInFlight(rows, pubkey))))
-    void outstandingLinkCount().then(setWaiting, () => setWaiting(0))
+    // #295 phase 0: take back expired links and mark claimed ones BEFORE counting, so links that
+    // have expired never block a new one.
+    void settleAndCountLinks().then(setCounts, () => setCounts({ waiting: 0, expiredUnreturned: 0 }))
   }, [pubkey])
 
-  if (merchants === null || waiting === null) return <Centered>Checking your vouchers…</Centered>
+  if (merchants === null || counts === null) return <Centered>Checking your vouchers…</Centered>
 
   if (sent) {
     return (
@@ -108,20 +131,21 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
     )
   }
 
-  if (waiting >= MAX_OUTSTANDING_LINKS) {
+  const limit = linkLimitMessage(counts)
+  if (limit) {
     return (
       <Screen>
         <BackLink to={back} label="Back" />
         <PageHeader title="Send a Cashlink" />
-        <Alert>{tooManyLinksMessage()}</Alert>
+        <Alert>{limit}</Alert>
       </Screen>
     )
   }
 
-  const { usable: all, ownStall } = options(merchants, pubkey)
+  const { usable: all, left } = options(merchants, pubkey, openedAt)
   if (from !== null) {
     const theirs = merchants.filter((m) => m.pubkey.toLowerCase() === from.toLowerCase())
-    const mine = options(theirs, pubkey)
+    const mine = options(theirs, pubkey, openedAt)
     if (mine.usable.length === 0) {
       // Say why for THIS merchant, rather than the whole picker or "no vouchers" (which may be untrue).
       const held = theirs.some((m) => m.groups.some((g) => g.vouchers.length > 0))
@@ -132,9 +156,13 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
           <Alert>
             {mine.ownStall
               ? OWN_STALL_COPY
-              : held
-                ? 'None of your vouchers from this merchant can be sent as a Cashlink.'
-                : 'You have no vouchers left from this merchant to send.'}
+              : mine.left.not_yet
+                ? GIFT_NOT_YET_COPY
+                : mine.left.expires_soon
+                  ? GIFT_EXPIRES_SOON_COPY
+                  : held
+                    ? 'None of your vouchers from this merchant can be sent as a Cashlink.'
+                    : 'You have no vouchers left from this merchant to send.'}
           </Alert>
           {all.length > 0 && (
             <Button variant="secondary" className="w-full" onClick={() => setFrom(null)}>
@@ -153,7 +181,7 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
       <Screen>
         <BackLink to={back} label="Back" />
         <PageHeader title="Send a Cashlink" />
-        <Alert>{ownStall ? OWN_STALL_COPY : 'You have no vouchers to send.'}</Alert>
+        <Alert>{leftOutCopy(left)[0] ?? 'You have no vouchers to send.'}</Alert>
       </Screen>
     )
   }
@@ -165,7 +193,11 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
       <Screen>
         <BackLink to={back} label="Back" />
         <PageHeader title="Which voucher?" subtitle="Send to anyone, as a Cashlink" />
-        {ownStall && <p className="mb-3 text-sm text-mono-500">{OWN_STALL_COPY}</p>}
+        {leftOutCopy(left).map((line) => (
+          <p key={line} className="mb-3 text-sm text-mono-500 dark:text-mono-400">
+            {line}
+          </p>
+        ))}
         <div className="space-y-2">
           {usable.map((o) => (
             <button
@@ -189,7 +221,14 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
   const minor = parseAmountToMinor(amount, chosen.decimals)
   const obstacle = minor === null || minor <= 0 ? null : splitObstacle(chosen.vouchers, minor)
   const short = minor !== null && minor > chosen.total
-  const x = giftExpiry(confirmedAt ?? 0, days, chosen.vouchers.map((v) => toEpochMs(v.expires_at)))
+  const expiries = chosen.vouchers.map((v) => toEpochMs(v.expires_at))
+  // #295 Q8: only the choices that end at least a day before the voucher. The others stay on screen,
+  // dimmed, with the reason underneath, so the three familiar choices never move about.
+  const allowed = expiryChoices(openedAt, expiries)
+  const soonest = expiries.reduce<number | undefined>((s, e) => (e === undefined ? s : s === undefined ? e : Math.min(s, e)), undefined)
+  // A remembered choice that this voucher does not allow falls back to the longest it does.
+  const effectiveDays = allowed.includes(days) ? days : allowed[allowed.length - 1] ?? days
+  const x = giftExpiry(confirmedAt ?? 0, effectiveDays, expiries)
 
   if (confirming && minor !== null) {
     const face = formatFace(minor, chosen)
@@ -284,20 +323,29 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
         <div>
           <p className="mb-2 text-sm font-medium text-mono-700 dark:text-mono-200">Link expires in</p>
           <div className="flex gap-2" role="radiogroup" aria-label="Link expires in">
-            {EXPIRY_CHOICES_DAYS.map((d) => (
-              <Button
-                key={d}
-                type="button"
-                role="radio"
-                aria-checked={days === d}
-                variant={days === d ? 'primary' : 'secondary'}
-                size="sm"
-                onClick={() => setDays(d)}
-              >
-                {d === 1 ? '1 day' : `${d} days`}
-              </Button>
-            ))}
+            {EXPIRY_CHOICES_DAYS.map((d) => {
+              const ok = allowed.includes(d)
+              return (
+                <Button
+                  key={d}
+                  type="button"
+                  role="radio"
+                  aria-checked={effectiveDays === d}
+                  aria-disabled={!ok || undefined}
+                  disabled={!ok}
+                  variant={effectiveDays === d ? 'primary' : 'secondary'}
+                  size="sm"
+                  className={ok ? undefined : 'opacity-40'}
+                  onClick={() => setDays(d)}
+                >
+                  {d === 1 ? '1 day' : `${d} days`}
+                </Button>
+              )
+            })}
           </div>
+          {allowed.length < EXPIRY_CHOICES_DAYS.length && soonest !== undefined && (
+            <p className="mt-2 text-sm text-mono-500 dark:text-mono-400">{expiryLimitCopy(soonest, formatDate)}</p>
+          )}
         </div>
         <Input label="Note (optional)" placeholder="Happy birthday" value={memo} onChange={(e) => setMemo(e.target.value)} />
         {short && <Alert>Short by {formatFace(minor - chosen.total, chosen)}.</Alert>}
@@ -306,7 +354,10 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
           size="lg"
           className="w-full"
           disabled={minor === null || minor <= 0 || short || !!obstacle}
-          onClick={() => setConfirmedAt(Date.now())}
+          onClick={() => {
+            setDays(effectiveDays)
+            setConfirmedAt(Date.now())
+          }}
         >
           Continue
         </Button>

@@ -2,6 +2,7 @@ import { refuseIfAnotherWallet } from './keySlotGuard'
 import { nip19 } from 'nostr-tools'
 
 import { loadProfile, sanitiseProfile, saveProfile, type Profile } from './profile'
+import { readTermsAcceptance } from './terms'
 
 /**
  * The account identity file — one format, two destinations.
@@ -204,6 +205,21 @@ export async function applyBackup(
   }
 
   // Only once the key is proven usable is it safe to touch anything else.
-  if (backup.profile) saveProfile(backup.profile)
-  return { privkeyHex, profile: backup.profile }
+  const profile = backup.profile ? keepEarliestTerms(backup.profile) : null
+  if (profile) saveProfile(profile)
+  return { privkeyHex, profile }
+}
+
+/**
+ * The backup's profile, carrying the EARLIEST Terms and Conditions acceptance known for the
+ * account (second review of #358). A restore replaces the device's record with the file's, and a
+ * file written before the account accepted (a legacy account that finished its profile later)
+ * has none: without this the acceptance held here was erased, and the next Drive backup uploaded
+ * the record without it. The original acceptance is never overwritten, wherever it came from.
+ */
+function keepEarliestTerms(incoming: Profile): Profile {
+  const held = readTermsAcceptance(loadProfile(incoming.pubkey)?.termsAccepted)
+  const given = incoming.termsAccepted
+  if (!held || (given && given.acceptedAt <= held.acceptedAt)) return incoming
+  return { ...incoming, termsAccepted: held }
 }

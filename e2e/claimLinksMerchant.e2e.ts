@@ -1,5 +1,5 @@
 /**
- * Claim links phase 2: the merchant's link and QR (docs/spec-claim-links.md, sections 4.1, 5.1 and
+ * Claim links phase 2: the merchant's link and QR (imani-docs/wallet/spec-claim-links.md, sections 4.1, 5.1 and
  * 7: CL-A, CL-RACE, CL-OWN), real browsers against a full stack: the local gate (imani-deploy
  * scripts/local-terminal-gate, E2E_SCRIPT=claimLinksMerchant.e2e.ts) or staging.
  *

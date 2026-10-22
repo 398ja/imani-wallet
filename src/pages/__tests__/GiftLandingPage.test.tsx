@@ -6,7 +6,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
 /**
- * Claim links phase 4: the gift prompt at `/g` (docs/spec-claim-links.md 3.3 claim, 4.3, 5.3, 5.4).
+ * Claim links phase 4: the gift prompt at `/g` (imani-docs/wallet/spec-claim-links.md 3.3 claim, 4.3, 5.3, 5.4).
  *
  * - The fragment is scrubbed in the first render, before any await, parked or not.
  * - Without a session the gift is parked (kind `gift`, keyed by the link's PUBLIC key) and the

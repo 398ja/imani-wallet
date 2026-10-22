@@ -240,7 +240,7 @@ function verifiedVoucherFrom(token: string | undefined):
   // receiving one and a stall taking one back. It is also a precondition of the
   // wallet swapping its own receives, because from that point the mint URL is
   // not a field we record but the address we send money to. See
-  // `docs/explanation/the-wallet-swaps-its-own-receives.md`.
+  // `imani-docs/wallet/explanation/the-wallet-swaps-its-own-receives.md`.
   const backing = checkMintAndUnit(parsed)
   // Only a foreign UNIT is refused here. A REJECTED voucher makes `extractToken`
   // return null, and dm-poll marks a wrap with no token PROCESSED, so it is never

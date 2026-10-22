@@ -23,7 +23,7 @@ import { bytesToHex, randomBytes } from '@noble/hashes/utils'
  * step rather than holding custody: it may see an output secret, and it still
  * cannot spend the proof, because `r` never leaves here.
  *
- * See `docs/explanation/the-wallet-swaps-its-own-receives.md`.
+ * See `imani-docs/wallet/explanation/the-wallet-swaps-its-own-receives.md`.
  *
  * ## What this module is not
  *

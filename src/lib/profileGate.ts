@@ -8,6 +8,7 @@ import type { RequestSigner } from './nip98'
 import { buildProfileEvent, emptyProfile, loadProfile, saveProfile, type Profile } from './profile'
 import { allEvents, publish } from './relay'
 import { createWalletSigner } from './signer'
+import { requireTermsAccepted, type TermsAcceptance } from './terms'
 
 /**
  * No account without a profile (owner rule, 2026-10-18, #325).
@@ -226,9 +227,18 @@ export function rememberHandle(privkeyHex: string, nip05: string): void {
  * @param base what is already known about the account (the backup's stored
  *        profile): its display name and picture are kept, else the handle
  *        becomes the display name, as a customer registration does
+ * @param terms the Terms and Conditions acceptance (review of #358). REQUIRED:
+ *        the first handle a key claims is what creates its account on the
+ *        service, so this refuses, before the claim, exactly as `register` does
+ * @throws TermsNotAcceptedError / TermsNotConfiguredError before anything is claimed
  */
-export async function claimProfile(privkeyHex: string, handle: string, base?: Profile | null): Promise<Profile> {
-  return claimProfileWith(createWalletSigner(privkeyHex), handle, base)
+export async function claimProfile(
+  privkeyHex: string,
+  handle: string,
+  base: Profile | null | undefined,
+  terms: TermsAcceptance,
+): Promise<Profile> {
+  return claimProfileWith(createWalletSigner(privkeyHex), handle, base, terms)
 }
 
 /**
@@ -239,8 +249,12 @@ export async function claimProfile(privkeyHex: string, handle: string, base?: Pr
 export async function claimProfileWith(
   signer: RequestSigner & { readonly pubkey: string },
   typed: string,
-  base?: Profile | null,
+  base: Profile | null | undefined,
+  terms: TermsAcceptance,
 ): Promise<Profile> {
+  // First, before the handle is claimed (review of #358): a key with no handle has no account on
+  // the service yet, and claiming one creates it. Same gate, same order as `register`.
+  const termsAccepted = requireTermsAccepted(terms)
   const handle = normaliseHandle(typed)
   const pubkey = signer.pubkey
   const { nip05Domain } = await gatewayConfig()
@@ -252,6 +266,9 @@ export async function claimProfileWith(
     ...current,
     nip05: `${handle}@${nip05Domain}`,
     displayName: current.displayName?.trim() || handle,
+    // Kept if this record already holds one (the original acceptance is never overwritten),
+    // else the one just given. Travels with backups, as registration's does.
+    termsAccepted: current.termsAccepted ?? termsAccepted,
     updatedAt: Date.now(),
   }
   // A relay that will not take the kind-0 is not a failed claim: the handle is

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Honest limits for Cashlinks nobody claims (#295 phase 0, Refs #295). Wallet-only, no protocol
+change: a customer's expired Cashlink still comes back only when the sender's wallet runs. Phases
+1 to 4 make it come back on its own. **New wallet-api configuration:** `WALLET_API_MINT_URL` (the
+mint `/v1/links/status` checks; no default, the endpoint answers 503 without it). No migrations: a
+link record without the new `noticedAt` field still reads.
+
 > **Release gate (owner decision D10, cashu-mint#540):** do not release or deploy until the mint's
 > redemption cap is in ENFORCE mode. Ship with cashu-voucher#59, whose Java verifier this mirrors.
 
@@ -21,6 +27,156 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `issuance_ratio` only (Java `Double.toString`: `"50.0"`, `"1.0E7"`), as the Java verifier does.
   Every other spelling, and `face_value`, `expires_at` and `face_decimals`, keep the strict rule.
   Replays cashu-voucher's golden vectors for ratios 2, 50 and 700.
+
+### Changed
+
+- **The guides, explanations, specs and design notes moved to imani-docs, under `wallet/`**
+  (#161). Synced from this main first, including spec-claim-links, spec-terminals-in-service,
+  design-226 and the two newer explanations. `docs/adr/` and `docs/research/` stay here.
+  `docs/README.md` maps each old path to its new one. From now on, a PR that changes what a
+  shopper or merchant sees updates `imani-docs/wallet/customers.md` (or merchants.md,
+  terminals.md), not `docs/customers.md`. Code comments name the new paths; no code changed.
+  Older entries below keep the paths that were true when they were written.
+
+- **Expired Cashlinks no longer block new ones.** Making a Cashlink, and opening **Send → Anyone,
+  as a Cashlink**, first takes back links that have expired and marks claimed ones
+  (`reconcileGiftLinks`), then counts. Only links that can still be claimed (`outstanding` and
+  before their expiry) count toward the 10. Links past their expiry that could not be taken back
+  yet are capped at 10 on their own, with *"10 of your Cashlinks have expired and have not come
+  back yet. Keep Imani open for a minute so it can take them back, then try again."* So a sender
+  with ten expired links can make an eleventh as soon as Send opens.
+- **A Cashlink ends at least 24 hours before its coupon** (owner decision Q8). The 1 / 7 / 30 day
+  choices stay; a choice that would end later is shown disabled, the longest allowed one is
+  picked, and the screen says why in plain words. `giftExpiry` clamps to the coupon's expiry
+  minus 24 h as a backstop; `expiryChoices` is the new rule.
+- **The Cashlink picker leaves out coupons it cannot send safely:** whole-number-ratio coupons
+  (2, 50, 700; cashu-voucher#59, which fail the issuer check today, so a gift could be neither
+  claimed nor taken back) and coupons expiring within two days. Plain words say why and what
+  still works (spend them, or send them to a handle). `pay.ts` applies the same rule at the send.
+
+### Added
+
+- **"Your Cashlink expired. Open Imani to take it back."** in the bell when a customer's Cashlink
+  expires unclaimed (or *"Your Cashlink expired, so its voucher came back to you."* when the open
+  app has just taken it back). One entry per link: the inbox id is the row id (never the link
+  secret), and the link's own history record gets `noticedAt`, so a restored or second device does
+  not tell the sender again. A link taken back by hand gets no notice. **A stall's Cashlink (Sell,
+  till) gets none:** it is not returned to the stall by design, and a merchant account is skipped.
+  Runs after start-up's reconcile, then hourly and on focus with the coupon-expiry reminders.
+- **wallet-api `POST /v1/links/status`:** NUT-07 `checkstate` over link records the caller keeps
+  (the proofs' `Y` points, or the coupons), answering per link `claimed`, `outstanding`,
+  `expired_unreturned` (a customer link, `comesBack: true`) or `expired` (a stall's Cashlink,
+  `comesBack: false`), plus `pending` / `unknown`. NIP-98 and the usual guards. **It never takes a
+  key:** a field named like one or a value shaped like one (nsec, 64 hex, a link secret, a link URL
+  with `k=`) is refused by field before the mint is asked, without echoing it. Only the configured
+  mint is asked, never one a caller names.
+
+### Docs
+
+- `docs/customers.md` "Sending a Cashlink" says exactly what happens today: the coupon comes back
+  the next time Imani opens, the link works until then, the expiry is checked by the opener's app,
+  and automatic return is coming (owner decision Q1).
+- `docs/merchants.md`: a stall's Cashlink nobody claims does not come back, on purpose, and no bell
+  entry is filed for it.
+- wallet-api README: `POST /v1/links/status`.
+
+### Fixed (review of #367)
+
+- **A Cashlink whose coupon has itself expired no longer holds the expired limit for ever.** The
+  mint refuses an expired coupon to everyone, so the take-back failed on every run and the link
+  stayed counted; ten of them would have blocked Cashlinks permanently. The reconcile now closes
+  such a link as **Expired** (an hour's grace for a fast clock) instead of trying.
+- **Settling never overwrites a newer answer.** Status and `noticedAt` writes re-read the record
+  first, so two settles at once (start-up and Send) cannot turn "Taken back" into "Claimed", and
+  filing the notice cannot undo a take-back that landed meanwhile.
+- **Send waits at most 8 s for the settle** before counting; it carries on in the background.
+- `/v1/links/status`: a key used as a field **name** is refused as a key and named by a
+  placeholder (the unknown-field refusal echoed it back before).
+- **Second check of the above.** A lapsed link is closed only after the take-back was tried and the
+  mint refused it as expired (or a week past the coupon's expiry by this device's clock), so a
+  device clock running more than an hour fast can no longer hide a coupon the mint would still
+  give back. Only the coupons still on the link are read, so one that already came back cannot
+  hold the link open. Link-record writes run one at a time, so two settles that finish in the
+  "wrong" order still leave **Taken back**, never Claimed.
+- **Third check.** The expired refusal a Cashlink coupon actually meets is the **gateway's**, made
+  before the swap reaches the mint ("Voucher token expired. Reason: voucher expiry exceeded."), not
+  the mint's `voucher_expired`. It is now recognised too, so such a link closes on that run, not
+  only a week later. `90016` is matched as a whole number only.
+
+## [0.36.0] - 2026-10-21
+
+Every new account accepts the Terms and Conditions (#357, #358), and a coupon issued through
+wallet-api without a named term now lasts as long as the stall says, not a fixed 30 days (#359,
+#360). App and wallet-api. **New build configuration:** `VITE_WEBSITE_BASE_URL` (e.g.
+`https://www.imani.casa`) is REQUIRED, and the image build fails without it. No migrations: an
+older profile or backup without the new field still reads.
+
+### Added
+
+- **Creating an account requires accepting the Terms and Conditions** (Closes #357). The account
+  step has an unticked "I accept the Terms and Conditions" box. The words link to
+  `<VITE_WEBSITE_BASE_URL>/terms.html` in a new tab (`rel="noopener noreferrer"`), and the whole
+  row is at least 44px tall. **Create account** (customer) and **Continue** (merchant, on the first
+  step, before the business screens, which do not ask again) stay disabled until it is ticked. A
+  registration that starts from a voucher or gift link goes through the same form and needs it too.
+  Logging in to or restoring an existing account that already has a handle does not ask.
+- **Finish your profile asks too (review of #358).** It claims the FIRST handle for a key that has
+  none (a pasted key, a backup of an unfinished account, or the profile card, #332), and that claim
+  is what creates the account on the service. It shows the same unticked box, its button stays
+  disabled until ticked, and `claimProfile` / `claimProfileWith` now take a required acceptance
+  and refuse before claiming anything. The claimed profile records it, and an acceptance the
+  record already holds is never overwritten. The box is now one shared component,
+  `components/TermsCheckbox.tsx`.
+- **`register()` refuses without an acceptance.** Its fourth argument is now a required options
+  object, `{ terms, merchant?, profileFields? }`, and `register` checks `terms` before it mints a
+  key, claims a handle or stores anything, so no caller can create an account that skipped it. A
+  terminal does not register: it has no account or handle of its own and works for its stall's
+  account, which accepted when it was created.
+- **The acceptance is recorded with the account**, as `termsAccepted: { url, acceptedAt }` on the
+  profile record: the exact terms URL that was linked, and when the account was created with the
+  box ticked. The page carries its own version and date, but the website does not let the app read
+  them (no CORS), so the URL and time pin which text was live. The profile record is what the
+  backup file and the Drive backup carry, so a restored account keeps it. The field is optional
+  (older records and backups still read), local only (never published), and checked on restore: a
+  malformed value in a backup file is dropped. A restore keeps the EARLIEST acceptance known for
+  the account: a backup written before it accepted (or carrying a later one) no longer erases or
+  replaces the one this device holds (second review of #358).
+- **`VITE_WEBSITE_BASE_URL`**, the public website, as a Dockerfile build arg and in the new
+  `.env.example`. `scripts/check-website-base-url-build.sh` fails the image build when it is unset
+  or not a plain **https** URL (https only, review of #358; plain http is refused, as is any other
+  scheme). A bundle built some other way without it shows no link and no box,
+  says "New accounts can't be created in this version of the app…", and `register` refuses with
+  the same words. imani-deploy passes `https://www.imani.casa` for staging and beta.
+
+### Fixed
+
+- **wallet-api: a headless coupon carries the stall's own validity** (Closes #359, #360). `POST
+  /v1/issue/gateway-request` stamped a fixed 30 days when the request named no term, so a 90-day
+  stall got 30-day coupons and a never-expiring stall got coupons that expired. A request with no
+  `expiresInDays` now uses the term in the signer's own signed merchant record (the same rule the
+  Sell screen and purchase-issuer use). A key with no merchant record answers **422**
+  `no-merchant-record` and asks for `expiresInDays` instead of minting on a default. A record that
+  cannot be read (a relay refusal or timeout) answers **503** and mints nothing. A named
+  `expiresInDays` is still honoured as a per-sale choice, and must be between 1 and 730 days.
+  The wallet-api image now also ships `@imani/merchant-record`.
+
+### Tests
+
+- wallet-api: the stall's term on every issuing path (`stallValidity`, `issue`, `server`,
+  `queryRelay`: relay refusals, timeouts and dropped sockets read as unreadable), and the Sell
+  screen and Cashlink for owner and till. The e2e issue probe's recordless stall names its term.
+- `terms357.test.ts` (the URL from the env, refusal when unset or malformed, the acceptance record,
+  the build check script), `registerTerms357.test.ts` (the real `register`, key store and backup:
+  refusal before anything is claimed or stored, the record on the profile for customers and
+  merchants, and through a backup and restore), `onboardingTerms357.test.tsx` (unticked, the link,
+  disabled until ticked, the merchant first step, a claim-driven registration, the 44px target,
+  and no link with no config). The jargon guard scans the new copy. Existing registration tests
+  pass an acceptance, and the e2e registration helpers tick the box.
+- Review of #358: `finishProfileTerms358.test.tsx` (`claimProfile` refuses before claiming, records
+  the acceptance and keeps an existing one; the kind-0 from `register` and `claimProfile` never
+  carries it; Finish your profile is unticked, links to the terms and stays disabled until ticked),
+  a plain-http case for the URL rules and the build script, and onboarding cases for the link not
+  ticking the box and history not skipping the account step.
 
 ## [0.35.0] - 2026-10-20
 

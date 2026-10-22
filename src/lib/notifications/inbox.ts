@@ -30,11 +30,14 @@
 
 import type { NotMoneyNoticeType, NotificationTypeOrGeneric } from './types'
 
+/** Bell rows the wallet files itself about its own Cashlinks (#295 phase 0). Never on the push wire. */
+export type WalletNoticeType = 'cashlink_expired'
+
 /** One line in the inbox. */
 export interface InboxItem {
   /** Stable identity, used to dedupe and to mark read. */
   id: string
-  type: NotificationTypeOrGeneric | NotMoneyNoticeType
+  type: NotificationTypeOrGeneric | NotMoneyNoticeType | WalletNoticeType
   title: string
   body: string
   /** Wallet-relative route to open on tap. */

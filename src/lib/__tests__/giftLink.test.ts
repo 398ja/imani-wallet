@@ -12,6 +12,10 @@ import {
   formatGiftLink,
   giftExclusion,
   giftExpiry,
+  expiryChoices,
+  GIFT_EXPIRY_MARGIN_S,
+  GIFT_NOT_YET_COPY,
+  GIFT_EXPIRES_SOON_COPY,
   giftTokensFrom,
   linkPubOf,
   parseGiftFragment,
@@ -26,7 +30,7 @@ import { gatewayAnswers, resetGate } from './trustedMintKit'
 import { buildLicenceVoucherToken, buildPlainToken, buildVoucherToken } from './voucherFixtures'
 
 /**
- * Claim links phase 4 (docs/spec-claim-links.md 3.3, 4.2, 4.3): the link key, the link, the gift
+ * Claim links phase 4 (imani-docs/wallet/spec-claim-links.md 3.3, 4.2, 4.3): the link key, the link, the gift
  * fetch, and every check made BEFORE anything is spent.
  */
 
@@ -111,9 +115,40 @@ describe('gift expiry = min(chosen, coupon expiry, 30 d) (pre-check build item 3
     expect(giftExpiry(now, 30, [])).toBe(s + 30 * 86400)
     expect(giftExpiry(now, 400, [])).toBe(s + 7 * 86400)
   })
-  it('never outlives the coupon', () => {
-    expect(giftExpiry(now, 30, [now + 3 * 86400_000])).toBe(s + 3 * 86400)
-    expect(giftExpiry(now, 30, [undefined, now + 10 * 86400_000, now + 5 * 86400_000])).toBe(s + 5 * 86400)
+  it('ends at least 24 h before the coupon itself (#295 Q8)', () => {
+    expect(giftExpiry(now, 30, [now + 3 * 86400_000])).toBe(s + 2 * 86400)
+    expect(giftExpiry(now, 30, [undefined, now + 10 * 86400_000, now + 5 * 86400_000])).toBe(s + 4 * 86400)
+    // A choice that fits is left alone.
+    expect(giftExpiry(now, 7, [now + 8 * 86400_000])).toBe(s + 7 * 86400)
+    expect(GIFT_EXPIRY_MARGIN_S).toBe(86400)
+  })
+})
+
+describe('which expiry choices a coupon allows (#295 Q8)', () => {
+  const now = Date.UTC(2026, 9, 13)
+  const day = 86400_000
+  it('offers 1, 7 and 30 days for a coupon with no expiry or a far one', () => {
+    expect(expiryChoices(now, [])).toEqual([1, 7, 30])
+    expect(expiryChoices(now, [undefined, now + 400 * day])).toEqual([1, 7, 30])
+  })
+  it('drops a choice that would end within 24 h of the coupon', () => {
+    expect(expiryChoices(now, [now + 31 * day])).toEqual([1, 7, 30])
+    expect(expiryChoices(now, [now + 31 * day - 1000])).toEqual([1, 7])
+    expect(expiryChoices(now, [now + 8 * day])).toEqual([1, 7])
+    expect(expiryChoices(now, [now + 5 * day])).toEqual([1])
+    expect(expiryChoices(now, [now + 2 * day])).toEqual([1])
+    expect(expiryChoices(now, [now + 2 * day - 1000])).toEqual([])
+  })
+  it('uses the soonest coupon', () => {
+    expect(expiryChoices(now, [now + 100 * day, now + 5 * day])).toEqual([1])
+  })
+  it('every offered choice really keeps the margin', () => {
+    for (const exp of [2, 3, 7.5, 8, 9, 30, 31, 32].map((d) => now + d * day)) {
+      for (const d of expiryChoices(now, [exp])) {
+        expect(giftExpiry(now, d, [exp]) * 1000 + GIFT_EXPIRY_MARGIN_S * 1000).toBeLessThanOrEqual(exp)
+        expect(giftExpiry(now, d, [exp])).toBe(now / 1000 + d * 86400)
+      }
+    }
   })
 })
 
@@ -250,5 +285,26 @@ describe('the picker (spec 4.2 step 2)', () => {
     const licence = buildLicenceVoucherToken({ merchantMetadata: meta })
     expect(giftExclusion(licence.token, licence.voucher.issuerPublicKey, sender)).not.toBeNull()
     expect(giftExclusion(undefined, 'x', sender)).toBe('not_money')
+  })
+
+  it('excludes a coupon with a whole-number ratio other than 1 (cashu-voucher#59), in plain words', () => {
+    for (const ratio of [2, 50, 700]) {
+      const c = buildVoucherToken({ issuanceRatio: ratio }, [8])
+      expect(giftExclusion(c.token, c.voucher.issuerId, sender)).toBe('not_yet')
+    }
+    for (const ratio of [1, 0.5, 50.5, 0.05611672278338945]) {
+      const c = buildVoucherToken({ issuanceRatio: ratio }, [8])
+      expect(giftExclusion(c.token, c.voucher.issuerId, sender)).toBeNull()
+    }
+    expect(GIFT_NOT_YET_COPY).not.toMatch(/ratio|issuance|mint|proof|token|verif|#59/i)
+  })
+
+  it('excludes a coupon that expires too soon to leave a day-long link and a day to take it back', () => {
+    const now = 1_800_000_000_000
+    const soon = buildVoucherToken({ expiresAt: now / 1000 + 2 * 86400 - 1 }, [8])
+    const fine = buildVoucherToken({ expiresAt: now / 1000 + 2 * 86400 }, [8])
+    expect(giftExclusion(soon.token, soon.voucher.issuerId, sender, now)).toBe('expires_soon')
+    expect(giftExclusion(fine.token, fine.voucher.issuerId, sender, now)).toBeNull()
+    expect(GIFT_EXPIRES_SOON_COPY).not.toMatch(/mint|proof|token|margin|x\b/i)
   })
 })
