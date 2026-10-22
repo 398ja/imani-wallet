@@ -11,6 +11,8 @@ import { toPrivkeyHex, keyStore, hasStoredKey } from '../lib/nap'
 import { refuseIfAnotherWallet } from '../lib/keySlotGuard'
 import { claimProfile, ProfileMissingError, rememberHandle, requireProfile } from '../lib/profileGate'
 import { HandleTakenError, isHandleAvailable, register } from '../lib/registration'
+import { acceptTerms, termsUrl } from '../lib/terms'
+import { TermsCheckbox } from '../components/TermsCheckbox'
 import { refreshProfile } from '../lib/profile'
 import { userMessage } from '../lib/userMessage'
 import {
@@ -202,6 +204,12 @@ function CreateForm({
   const [availability, setAvailability] = useState<Availability>('idle')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // #357: the Terms and Conditions. Unticked to start; nothing is created until it is ticked.
+  // `terms` is null on a build that names no website: then there is no link to show and no
+  // account to create, and the form says so in plain words instead.
+  const terms = termsUrl()
+  const [termsTicked, setTermsTicked] = useState(false)
+  const termsOk = terms !== null && termsTicked
 
   // A merchant signup is the customer one plus a second screen. `step` only ever
   // reaches 'merchant' while the switch is on, so a customer never meets the
@@ -274,7 +282,7 @@ function CreateForm({
   // would leave a merchant screen ready to submit an empty account. Only the
   // step you could have reached honestly renders.
   // A claim-driven registration never reaches the merchant screens, whatever history holds.
-  const current = complete && isMerchant ? step : 'account'
+  const current = complete && termsOk && isMerchant ? step : 'account'
 
   const submit = async () => {
     // Re-read at the moment of submitting: `isMerchant` is from the last render, and a claim parked
@@ -284,21 +292,25 @@ function CreateForm({
       rerender()
       return
     }
+    // The button is disabled without it, but a stale render must not slip past (#357).
+    if (!termsOk) return
     setBusy(true)
     setError(null)
     try {
       // register() stashes the backup key and logs in as its last two steps, in
       // that order — the login remounts the app, and the backup screen is what
       // the remount renders.
-      await register(
-        handle,
-        passphrase,
-        onUnlock,
-        isMerchant ? merchant : undefined,
-        isMerchant
+      //
+      // The acceptance is stamped NOW, at submit: a merchant ticks on the first screen and
+      // submits two screens later, and the record says when the account was actually made
+      // with the box still ticked. register() refuses without it (#357).
+      await register(handle, passphrase, onUnlock, {
+        terms: acceptTerms(),
+        merchant: isMerchant ? merchant : undefined,
+        profileFields: isMerchant
           ? { displayName: displayName.trim() || undefined, about: about.trim() || undefined }
           : undefined,
-      )
+      })
     } catch (e) {
       // A taken handle is a field problem, not a failed registration: the key is
       // kept, nothing was persisted, and changing one word fixes it.
@@ -489,13 +501,17 @@ function CreateForm({
         />
       )}
 
+      {/* #357. Above the button it unlocks, below everything it applies to. Ticked here once,
+          for both roles: a merchant accepts before the business screens, which do not ask again. */}
+      <TermsCheckbox url={terms} checked={termsTicked} disabled={busy} onChange={setTermsTicked} />
+
       {/* A merchant does not submit from here — the account details are only
           half of what registration needs, so this advances to step two and
           `register` is called once, with everything. */}
       <Button
         size="lg"
         className="w-full"
-        disabled={busy || !complete}
+        disabled={busy || !complete || !termsOk}
         onClick={
           isMerchant
             ? () => {
@@ -618,11 +634,11 @@ function KeyForm({
     return (
       <FinishProfileStep
         onCancel={() => setMissing(null)}
-        onClaim={async (handle) => {
+        onClaim={async (handle, terms) => {
           // Before the claim, not only at install: a claim spends the handle at
           // the directory, and the slot may have been taken since the paste (#330).
           await refuseIfAnotherWallet(missing)
-          await claimProfile(missing, handle)
+          await claimProfile(missing, handle, null, terms)
           await install(missing)
         }}
       />

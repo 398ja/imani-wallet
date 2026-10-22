@@ -50,6 +50,20 @@ export function tooManyLinksMessage(n = MAX_OUTSTANDING_LINKS): string {
   return `You have ${n} links waiting to be claimed. Take one back or wait for it to be claimed.`
 }
 
+/**
+ * #295 phase 0: at most this many links past their expiry that have not come back yet.
+ *
+ * A link past `x` no longer counts against `MAX_OUTSTANDING_LINKS`, so an expired link that the
+ * wallet could not take back (the voucher service was unreachable, say) stops blocking new ones.
+ * Until the take-back is automatic (#295 phase 1 onwards) such a link can still be opened by whoever
+ * holds it, which is exactly what the limit bounds (spec 6.7), so these are capped on their own.
+ */
+export const MAX_EXPIRED_UNRETURNED = 10
+
+export function tooManyExpiredMessage(n = MAX_EXPIRED_UNRETURNED): string {
+  return `${n} of your Cashlinks have expired and have not come back yet. Keep Imani open for a minute so it can take them back, then try again.`
+}
+
 // ─── The counter ─────────────────────────────────────────────────────────────
 
 const counterKey = (pubkey: string) => `imani-wallet:gift-link-next:${pubkey}`
@@ -180,21 +194,139 @@ export function distinctLinks(rows: LinkRow[]): Map<string, LinkRow[]> {
   return byKey
 }
 
-export async function outstandingLinkCount(): Promise<number> {
-  const links = distinctLinks(await linkRows())
-  let n = 0
-  for (const parts of links.values()) if (parts.some((p) => p.link.status === 'outstanding')) n += 1
-  return n
+export interface LinkCounts {
+  /** Outstanding and before `x`: can still be claimed. What `MAX_OUTSTANDING_LINKS` limits. */
+  waiting: number
+  /** Outstanding but past `x`: not taken back yet. What `MAX_EXPIRED_UNRETURNED` limits. */
+  expiredUnreturned: number
 }
 
-async function setLinkStatus(rows: LinkRow[], status: GiftLinkStatus, at = Date.now()): Promise<void> {
+/** The two counts the limits read (#295 phase 0), from rows already loaded. */
+export function countLinks(rows: LinkRow[], nowMs = Date.now()): LinkCounts {
+  const now = Math.floor(nowMs / 1000)
+  let waiting = 0
+  let expiredUnreturned = 0
+  for (const parts of distinctLinks(rows).values()) {
+    if (!parts.some((p) => p.link.status === 'outstanding')) continue
+    if (now < parts[0].link.x) waiting += 1
+    else expiredUnreturned += 1
+  }
+  return { waiting, expiredUnreturned }
+}
+
+export async function linkCounts(nowMs = Date.now()): Promise<LinkCounts> {
+  return countLinks(await linkRows(), nowMs)
+}
+
+/** Links that can still be claimed: outstanding and before their expiry. */
+export async function outstandingLinkCount(nowMs = Date.now()): Promise<number> {
+  return (await linkCounts(nowMs)).waiting
+}
+
+/** Why a new link is refused right now, or null when one may be made. */
+export function linkLimitMessage(counts: LinkCounts): string | null {
+  if (counts.waiting >= MAX_OUTSTANDING_LINKS) return tooManyLinksMessage()
+  if (counts.expiredUnreturned >= MAX_EXPIRED_UNRETURNED) return tooManyExpiredMessage()
+  return null
+}
+
+/**
+ * What opening Send by link runs (#295 phase 0): settle every link (claimed ones marked, expired ones
+ * taken back), then count. So a sender whose ten links have all expired can make an eleventh as soon
+ * as the screen opens, not only after a restart. Never throws: the reconcile swallows its own errors.
+ */
+export async function settleAndCountLinks(
+  nowMs = Date.now(),
+  state: (token: string) => Promise<ProofState> = tokenState,
+  budgetMs = SETTLE_BUDGET_MS,
+): Promise<LinkCounts> {
+  await settleWithin(nowMs, state, budgetMs)
+  return linkCounts(nowMs)
+}
+
+/**
+ * How long Send waits for the settle before counting what is stored (review of #367). Each link is a
+ * relay query, a mint check and maybe a receive, none with its own deadline, so a slow gateway
+ * would otherwise hold "Checking your vouchers…" (and the send) for as long as the browser waits.
+ * The settle carries on in the background; only the wait is cut short.
+ */
+export const SETTLE_BUDGET_MS = 8_000
+
+async function settleWithin(nowMs: number, state: (token: string) => Promise<ProofState>, budgetMs: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      reconcileGiftLinks(nowMs, state),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, budgetMs)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * One link-record write at a time in this tab (second check of #367). Each write re-reads the record
+ * and then writes it; two of those interleaved (both read `outstanding`, both write) let the last
+ * one win whatever it says. The chain makes each read-then-write atomic against the others.
+ */
+let linkWrites: Promise<unknown> = Promise.resolve()
+function serialised<T>(run: () => Promise<T>): Promise<T> {
+  const next = linkWrites.then(run, run)
+  linkWrites = next.catch(() => undefined)
+  return next
+}
+
+function setLinkStatus(rows: LinkRow[], status: GiftLinkStatus, at = Date.now(), extra: Partial<GiftLinkRecord> = {}): Promise<void> {
+  return serialised(() => writeLinkStatus(rows, status, at, extra))
+}
+
+async function writeLinkStatus(rows: LinkRow[], status: GiftLinkStatus, at: number, extra: Partial<GiftLinkRecord>): Promise<void> {
   const wallet = getWallet()
+  const fresh = await currentLinks()
   for (const r of rows) {
-    const link: GiftLinkRecord = { ...r.link, status, closedAt: at }
+    // Review of #367: `rows` is a snapshot taken before a relay query, a mint check and a receive.
+    // Another settle (start-up, Send, the hourly pass, History) may have closed the link meanwhile;
+    // its answer stands. Otherwise a take-back lost to our own earlier take-back reads "already
+    // redeemed" and would relabel "Taken back" as "Claimed".
+    const now = fresh.get(r.id) ?? r.link
+    // Second check of #367: the order the two settles finish in is not the order they won in. The
+    // loser's "already redeemed in another session" can come back before the winner has saved, so
+    // a `claimed` may land first. `reclaimed` is the one answer that is certain (this wallet holds
+    // the value), so it corrects any other close; nothing else overwrites a closed link.
+    if (now.status !== 'outstanding' && !(status === 'reclaimed' && now.status !== 'reclaimed')) continue
+    const link: GiftLinkRecord = { ...now, ...extra, status, closedAt: at }
     const merged = await wallet.updateTransaction(r.id, { link } as unknown as Partial<TransactionRow>)
     if (merged) void publishTx(merged)
   }
   notifyWalletChanged()
+}
+
+/** Every link record as stored right now, by row id. */
+async function currentLinks(): Promise<Map<string, GiftLinkRecord>> {
+  return new Map((await linkRows()).map((r) => [r.id, r.link]))
+}
+
+/**
+ * Record that the "Cashlink expired" notice was filed (#295 phase 0), on the link's own record so the
+ * encrypted history carries it to a restored or second device. Status and close time are untouched:
+ * the record is re-read first, so a take-back that landed while the notice was filed is kept.
+ */
+export function markLinksNoticed(rows: LinkRow[], at = Date.now()): Promise<void> {
+  return serialised(() => writeLinksNoticed(rows, at))
+}
+
+async function writeLinksNoticed(rows: LinkRow[], at: number): Promise<void> {
+  const wallet = getWallet()
+  const fresh = await currentLinks()
+  for (const r of rows) {
+    const now = fresh.get(r.id) ?? r.link
+    if (now.noticedAt !== undefined) continue
+    const link: GiftLinkRecord = { ...now, noticedAt: at }
+    const merged = await wallet.updateTransaction(r.id, { link } as unknown as Partial<TransactionRow>)
+    if (merged) void publishTx(merged)
+  }
 }
 
 // ─── Send ────────────────────────────────────────────────────────────────────
@@ -219,6 +351,9 @@ export async function sendGift({
   memo,
   x,
   walletOrigin = window.location.origin,
+  nowMs = Date.now(),
+  state = tokenState,
+  settleBudgetMs = SETTLE_BUDGET_MS,
 }: {
   payer: string
   merchant: Merchant
@@ -228,6 +363,10 @@ export async function sendGift({
   /** The link's expiry, unix seconds, already capped (`giftExpiry`). */
   x: number
   walletOrigin?: string
+  /** The clock and the NUT-07 check the reconcile uses; seams for tests. */
+  nowMs?: number
+  state?: (token: string) => Promise<ProofState>
+  settleBudgetMs?: number
 }): Promise<GiftSent & { delivered: boolean }> {
   // Owner rule 2026-10-13: a merchant account takes only its own stall's vouchers, so it could never
   // take a link of another stall's coupon back (reclaim is a receive). Refused before anything moves.
@@ -236,9 +375,13 @@ export async function sendGift({
   if (issuer && issuer !== payer.toLowerCase()) {
     await refuseForeignIssuerForGift(issuer, payer)
   }
+  // #295 phase 0: settle every link first. A link that was claimed is marked, and one past its
+  // expiry is taken back, so neither blocks this send. Never throws, and waits at most
+  // `settleBudgetMs`.
+  await settleWithin(nowMs, state, settleBudgetMs)
   const rows = await linkRows()
-  const outstanding = [...distinctLinks(rows).values()].filter((p) => p.some((r) => r.link.status === 'outstanding')).length
-  if (outstanding >= MAX_OUTSTANDING_LINKS) throw new Error(tooManyLinksMessage())
+  const refusal = linkLimitMessage(countLinks(rows, nowMs))
+  if (refusal) throw new Error(refusal)
 
   const used = new Set(rows.map((r) => r.link.i).filter((i): i is number => i !== undefined))
   const allocated = await unusedLink(payer, used)
@@ -430,15 +573,73 @@ export async function takeBack(k: string): Promise<TakeBackOutcome> {
   tokens = giftCandidates(tokens)
   if (tokens.length === 0) return { kind: 'not_found' }
   const states = await Promise.all(tokens.map((t) => tokenState(t.token)))
+  // Taken back (or found claimed) by hand: the sender already knows, so no "expired" notice follows.
+  const told = { noticedAt: Date.now() }
   if (combinedState(states) === 'SPENT') {
-    await setLinkStatus(rows, 'claimed')
+    await setLinkStatus(rows, 'claimed', Date.now(), told)
     return { kind: 'claimed' }
   }
   const unspent = tokens.filter((_, n) => states[n] !== 'SPENT')
   const outcome = await redeemGiftTokens(unspent, 'gift_link_reclaim')
-  if (outcome.kind === 'ok') await setLinkStatus(rows, 'reclaimed')
-  else if (outcome.kind === 'claimed') await setLinkStatus(rows, 'claimed')
+  if (outcome.kind === 'ok') await setLinkStatus(rows, 'reclaimed', Date.now(), told)
+  else if (outcome.kind === 'claimed') await setLinkStatus(rows, 'claimed', Date.now(), told)
   return outcome
+}
+
+/**
+ * Whether every coupon on a link is past its own expiry (plus a grace for a wallet clock that runs
+ * fast). The mint refuses an expired voucher to everyone (`voucher_expired`), so such a link can be
+ * neither claimed nor taken back. A coupon with no expiry, or one that cannot be read, never lapses.
+ */
+export const COUPON_LAPSE_GRACE_S = 60 * 60
+
+/**
+ * How long past every coupon's expiry (by this device's clock) a link is closed even when the
+ * take-back failed for another reason (offline, a gateway that rewords the refusal). Long enough
+ * that no realistic clock error closes a live coupon (second check of #367).
+ */
+export const COUPON_LAPSE_HARD_S = 7 * 24 * 60 * 60
+
+/**
+ * A server's refusal of an expired voucher, as the receive surfaces it. Two servers can say it:
+ * - gateway-customer refuses it FIRST, before the swap reaches the mint, by its own (server) clock:
+ *   `JdbcWalletPort.inspectVoucherReceiveMetadata`, "Voucher token expired. Reason: voucher expiry
+ *   exceeded." (400 WALLET_003). This is the one a gift coupon actually meets, since every gift
+ *   coupon is unlocked and the gateway reads its blob (third check of #367).
+ * - the mint (`voucher_expired`, code 90016, "Voucher has expired and cannot be redeemed"), for a
+ *   voucher the gateway could not read.
+ * The HTTP code (WALLET_003) is shared with every invalid token, so the text is all there is. A
+ * reworded refusal is not lost: it falls to the one-week rule.
+ */
+const EXPIRED_REFUSAL = /voucher[_ ]expired|voucher has expired|voucher token expired|voucher expiry exceeded|\b90016\b/i
+
+/**
+ * Whether a link whose take-back did not succeed is past saving: every coupon still on it is past
+ * its own expiry, AND either the mint said so or the device clock is a week past it. A failed
+ * take-back alone, with the device clock just past the expiry, is not enough: the device clock may
+ * run fast, and the failure may be the network. Then the link stays outstanding and is retried.
+ */
+function lapseConfirmed(outcome: GiftRedeemOutcome, unspent: GiftToken[], nowMs: number): boolean {
+  if (!couponsLapsed(unspent, nowMs)) return false
+  if (outcome.kind === 'failed' && EXPIRED_REFUSAL.test(outcome.message)) return true
+  return couponsLapsed(unspent, nowMs, COUPON_LAPSE_HARD_S)
+}
+
+function couponsLapsed(tokens: GiftToken[], nowMs: number, graceS = COUPON_LAPSE_GRACE_S): boolean {
+  const now = Math.floor(nowMs / 1000)
+  if (tokens.length === 0) return false
+  return tokens.every(({ token }) => {
+    try {
+      const exp = parseVoucherToken(token).voucher.expiresAt
+      if (typeof exp !== 'number' || !Number.isFinite(exp) || exp <= 0) return false
+      // Seconds, exactly as the mint reads the tag (`VoucherMetadata.expiresAt`). The wallet's 1e12
+      // seconds-or-milliseconds guess must not be used here: a value the guess calls milliseconds
+      // is, to the mint, a date thousands of years away, so the coupon is live there.
+      return now > exp + graceS
+    } catch {
+      return false
+    }
+  })
 }
 
 /**
@@ -475,13 +676,24 @@ export async function reconcileGiftLinks(
       }
       if (overall !== 'UNSPENT') continue
       if (Math.floor(nowMs / 1000) >= parts[0].link.x) {
-        const outcome = await redeemGiftTokens(tokens.filter((_, n) => states[n] === 'UNSPENT'), 'gift_link_reclaim')
+        const unspent = tokens.filter((_, n) => states[n] === 'UNSPENT')
+        // The take-back is always tried first: the mint's clock, not this device's, decides whether a
+        // coupon has lapsed (second check of #367). A wallet clock running fast must never close a
+        // link the mint would still let come back.
+        const outcome = await redeemGiftTokens(unspent, 'gift_link_reclaim')
         if (outcome.kind === 'ok') {
-          await setLinkStatus(parts, 'reclaimed')
+          await setLinkStatus(parts, 'reclaimed', nowMs)
           reclaimed += 1
         } else if (outcome.kind === 'claimed') {
-          await setLinkStatus(parts, 'claimed')
+          await setLinkStatus(parts, 'claimed', nowMs)
           claimed += 1
+        } else if (lapseConfirmed(outcome, unspent, nowMs)) {
+          // Review of #367: once every coupon still on the link is past its own expiry the mint
+          // refuses it to everyone, the sender included, so the take-back fails on every run and the
+          // link would count against MAX_EXPIRED_UNRETURNED for ever. It is closed as expired. Only
+          // the UNSPENT coupons are read: one that already came back (or was claimed) must not hold
+          // the link open until its own, later, expiry.
+          await setLinkStatus(parts, 'expired', nowMs)
         }
       }
     }

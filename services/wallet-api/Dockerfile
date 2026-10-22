@@ -71,6 +71,8 @@ COPY packages/reports ./node_modules/@imani/reports
 COPY packages/payment-requests ./node_modules/@imani/payment-requests
 COPY packages/licence ./node_modules/@imani/licence
 COPY packages/wallet-storage ./node_modules/@imani/wallet-storage
+# The stall's validity rules, shared with the Sell screen and purchase-issuer (#359).
+COPY packages/merchant-record ./node_modules/@imani/merchant-record
 
 # The tests are not runtime, and more than that: this service's safety argument
 # is that it holds no code path which can sign. The suite necessarily imports

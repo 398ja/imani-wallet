@@ -131,6 +131,8 @@ async function logInWith(passphrase: string) {
 
 beforeEach(() => {
   localStorage.clear()
+  // Review of #358: Finish your profile claims the first handle, so it asks for the terms.
+  vi.stubEnv('VITE_WEBSITE_BASE_URL', 'https://www.imani.casa')
   drive.text = null
   directory.status = 200
   directory.nip05 = 'amina@imani.africa'
@@ -159,6 +161,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
 })
 
 describe('logging in from a backup', () => {
@@ -299,6 +302,7 @@ describe('no account without a profile', () => {
     expect(localStorage.getItem(KEY_SLOT)).toBeNull()
 
     fireEvent.change(screen.getByLabelText('Handle'), { target: { value: 'amina' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /I accept the Terms and Conditions/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Finish and log in' }))
 
     await screen.findByText('Home screen')
@@ -350,6 +354,7 @@ describe('no account without a profile', () => {
     await screen.findByText('Finish your profile')
 
     fireEvent.change(screen.getByLabelText('Handle'), { target: { value: 'amina' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /I accept the Terms and Conditions/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Finish and log in' }))
     expect((await screen.findByRole('alert')).textContent).toMatch(/Could not log in just now/)
     expect(screen.getByText('Finish your profile')).toBeTruthy()
@@ -394,6 +399,7 @@ describe('no account without a profile', () => {
     expect(onUnlock).not.toHaveBeenCalled()
 
     fireEvent.change(screen.getByLabelText('Handle'), { target: { value: 'amina' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /I accept the Terms and Conditions/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Finish and log in' }))
 
     await screen.findByText('Home screen')
@@ -548,6 +554,7 @@ describe('another wallet on this device (#330)', () => {
     otherWalletHere()
     const before = localStorage.getItem(KEY_SLOT)
     fireEvent.change(screen.getByLabelText('Handle'), { target: { value: 'amina' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /I accept the Terms and Conditions/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Finish and log in' }))
 
     await screen.findByText(/already holds another wallet/)
@@ -568,6 +575,7 @@ describe('another wallet on this device (#330)', () => {
     otherWalletHere()
     const before = localStorage.getItem(KEY_SLOT)
     fireEvent.change(screen.getByLabelText('Handle'), { target: { value: 'amina' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /I accept the Terms and Conditions/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Finish and log in' }))
 
     await screen.findByText(/already holds another wallet/)

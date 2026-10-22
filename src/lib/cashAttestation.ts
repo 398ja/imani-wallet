@@ -10,7 +10,7 @@
  * only witnesses are the two people at the counter, so the only signature that
  * can attest payment is the customer's own.
  *
- * `docs/reply-issuance-warrant.md` §3 calls these two claims *authorisation*
+ * `imani-docs/wallet/reply-issuance-warrant.md` §3 calls these two claims *authorisation*
  * and *consideration*. A warrant supplies the first. This supplies the second,
  * for the one rail where nothing else can.
  *
@@ -297,7 +297,7 @@ export function serialiseCashAttestation(attestation: CashAttestation): string {
  *
  * On the CUSTOMER's device, at the moment a coupon is redeemed, beside the
  * receipt the wallet already posts to the sender. Not at a counter: see
- * `docs/attestation-ui-gap.md` for why a prompt during the sale would cost a
+ * `imani-docs/wallet/attestation-ui-gap.md` for why a prompt during the sale would cost a
  * queue, be skipped under pressure, and be worse than useless against the
  * disputes it targets.
  *

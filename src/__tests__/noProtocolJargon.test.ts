@@ -29,6 +29,10 @@ import { RECEIVE_PAUSED_MESSAGE } from '../lib/giftLinks'
 import { SWAP_BACK_PAUSED_MESSAGE } from '../lib/swapBack'
 import { SPEND_PAUSED_MESSAGE } from '../lib/receiveGate'
 import { OTHER_WALLET_COPY } from '../lib/keySlotGuard'
+import { TERMS_NOT_ACCEPTED_COPY, TERMS_NOT_CONFIGURED_COPY } from '../lib/terms'
+import { CASHLINK_EXPIRED_RETURNED_BODY, CASHLINK_EXPIRED_TITLE, CASHLINK_EXPIRED_WAITING_BODY } from '../lib/cashlinkExpiryNotice'
+import { GIFT_EXPIRES_SOON_COPY, GIFT_NOT_YET_COPY, expiryLimitCopy } from '../lib/giftLink'
+import { tooManyExpiredMessage, tooManyLinksMessage } from '../lib/giftLinks'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const SCANNED = ['src/pages', 'src/components']
@@ -91,6 +95,8 @@ describe('no protocol jargon in the UI (#324)', () => {
     ['src/components/LogoutBlocked.tsx', 'Logout block'],
     ['src/components/BackupLogin.tsx', 'Where is your backup?'],
     ['src/components/FinishProfileStep.tsx', 'Finish your profile'],
+    // #357: the Terms and Conditions checkbox (account step and Finish your profile).
+    ['src/components/TermsCheckbox.tsx', 'Terms and Conditions'],
   ])('scans %s (%s)', (file, text) => {
     const own = strings.filter((s) => s.file === file)
     expect(own.length).toBeGreaterThan(0)
@@ -112,6 +118,18 @@ describe('no protocol jargon in the UI (#324)', () => {
       SWAP_BACK_PAUSED_MESSAGE,
       SPEND_PAUSED_MESSAGE,
       OTHER_WALLET_COPY,
+      // #357: the Terms and Conditions refusals, rendered from src/lib.
+      TERMS_NOT_CONFIGURED_COPY,
+      TERMS_NOT_ACCEPTED_COPY,
+      // #295 phase 0: the Cashlink limits, picker reasons, expiry choices and the bell entry.
+      CASHLINK_EXPIRED_TITLE,
+      CASHLINK_EXPIRED_WAITING_BODY,
+      CASHLINK_EXPIRED_RETURNED_BODY,
+      GIFT_NOT_YET_COPY,
+      GIFT_EXPIRES_SOON_COPY,
+      expiryLimitCopy(Date.UTC(2026, 10, 1), () => '1 November 2026'),
+      tooManyLinksMessage(),
+      tooManyExpiredMessage(),
       blockedMessage({ status: 'blocked', reason: 'other-tab', unconfirmed: [] }),
       ...(
         ['unconfirmed', 'locked', 'store-unreadable', 'changed', 'in-flight', 'cashback-unconfirmed'] as const

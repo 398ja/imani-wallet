@@ -1,5 +1,5 @@
 /**
- * Gift links (claim links phase 4, docs/spec-claim-links.md 3.3, 4.2, 4.3, 5.3, 5.4).
+ * Gift links (claim links phase 4, imani-docs/wallet/spec-claim-links.md 3.3, 4.2, 4.3, 5.3, 5.4).
  *
  *   https://<wallet-origin>/g#v=1&k=<linkSecret>&x=<expiresAtUnix>
  *
@@ -157,19 +157,57 @@ const DAY_S = 24 * 60 * 60
 export const MAX_EXPIRY_S = 30 * DAY_S
 
 /**
- * `x = min(chosen, the coupon's own expiry, 30 d)` in unix seconds.
+ * #295 Q8 (owner, 2026-10-21): a link ends at least this long before the coupon itself.
+ *
+ * Once the link expires the coupon has to come back to the sender, and a coupon past its own expiry
+ * is refused by everyone, the sender included. A link ending at the coupon's last second would leave
+ * nothing to take back.
+ */
+export const GIFT_EXPIRY_MARGIN_S = DAY_S
+
+/** The soonest coupon expiry, unix seconds, or undefined when none expires. */
+function soonestExpiryS(couponExpiriesMs: Array<number | undefined>): number | undefined {
+  let soonest: number | undefined
+  for (const ms of couponExpiriesMs) {
+    if (typeof ms === 'number' && Number.isFinite(ms)) {
+      const s = Math.floor(ms / 1000)
+      soonest = soonest === undefined ? s : Math.min(soonest, s)
+    }
+  }
+  return soonest
+}
+
+/**
+ * `x = min(chosen, the coupon's own expiry − 24 h, 30 d)` in unix seconds.
  *
  * A gift that outlives its coupon would be offered to a recipient after the coupon itself lapsed,
- * and the sender's reclaim would come too late to be worth anything.
+ * and the sender's reclaim would come too late to be worth anything. The 24 h margin (#295 Q8)
+ * leaves a day to take it back. The screen offers only the choices `expiryChoices` allows, so the
+ * clamp here is a backstop, not the usual path.
  */
 export function giftExpiry(nowMs: number, chosenDays: number, couponExpiriesMs: Array<number | undefined>): number {
   const now = Math.floor(nowMs / 1000)
   const days = (EXPIRY_CHOICES_DAYS as readonly number[]).includes(chosenDays) ? chosenDays : DEFAULT_EXPIRY_DAYS
   let x = Math.min(now + days * DAY_S, now + MAX_EXPIRY_S)
-  for (const ms of couponExpiriesMs) {
-    if (typeof ms === 'number' && Number.isFinite(ms)) x = Math.min(x, Math.floor(ms / 1000))
-  }
+  const soonest = soonestExpiryS(couponExpiriesMs)
+  if (soonest !== undefined) x = Math.min(x, soonest - GIFT_EXPIRY_MARGIN_S)
   return x
+}
+
+/**
+ * The expiry choices (in days) these coupons allow: those that end at least 24 h before the soonest
+ * coupon's own expiry (#295 Q8). Empty when even one day does not fit; the picker already leaves
+ * such coupons out (`giftExclusion`, `'expires_soon'`).
+ */
+export function expiryChoices(nowMs: number, couponExpiriesMs: Array<number | undefined>): number[] {
+  const now = Math.floor(nowMs / 1000)
+  const soonest = soonestExpiryS(couponExpiriesMs)
+  return EXPIRY_CHOICES_DAYS.filter((d) => soonest === undefined || now + d * DAY_S + GIFT_EXPIRY_MARGIN_S <= soonest)
+}
+
+/** Shown under the choices when some are not offered. Plain words, no internals. */
+export function expiryLimitCopy(couponExpiresMs: number, formatDate: (ms: number) => string): string {
+  return `This voucher expires on ${formatDate(couponExpiresMs)}. A Cashlink has to end at least a day before that, so you have time to take it back if nobody claims it.`
 }
 
 // ─── Fetching the gift ──────────────────────────────────────────────────────
@@ -494,29 +532,64 @@ function toSeconds(value: number): number {
 
 // ─── What may go in a gift (spec 4.2 step 2) ─────────────────────────────────
 
-export type GiftExclusion = 'not_money' | 'locked' | 'own_stall'
+export type GiftExclusion = 'not_money' | 'locked' | 'own_stall' | 'not_yet' | 'expires_soon'
 
 /** The picker's copy for a sender's own coupons (spec 3.2, 4.2). */
 export const OWN_STALL_COPY = 'To give away your own stall’s vouchers, create a Cashlink from Sell.'
 
 /**
- * Why this coupon may not go in a gift link, or null when it may. Licences and terminal credentials
- * are not money; a locked voucher is bound to a key the link holder does not have; and a coupon the
- * sender issued is cashback, which has its own flow (spec 3.2).
+ * The picker's copy for coupons that cannot go in a Cashlink yet (#295 phase 0, cashu-voucher#59).
+ * Plain words: the reason is a fault in how some stalls' coupons are checked, which the customer
+ * cannot act on, so it says what still works instead.
  */
-export function giftExclusion(token: string | undefined, issuerId: string | undefined, sender: string): GiftExclusion | null {
+export const GIFT_NOT_YET_COPY =
+  'Some of your vouchers can’t be sent as a Cashlink yet. You can still spend them, or send them to someone’s handle.'
+
+/** The picker's copy for coupons too close to their own expiry to leave in a link (#295 Q8). */
+export const GIFT_EXPIRES_SOON_COPY =
+  'Vouchers that expire within two days can’t be sent as a Cashlink: there would be no time to take one back. Spend them, or send them to someone’s handle.'
+
+/**
+ * A whole-number ratio other than 1 (2, 50, 700): cashu-voucher#59. These coupons fail the issuer
+ * signature check at the mint and at the re-sign route today, so a gift of one could be neither
+ * claimed nor taken back. Excluded until #59 lands (design-295 §6). 1 and fractional ratios are fine.
+ */
+function wholeNumberRatio(ratio: number): boolean {
+  return Number.isInteger(ratio) && ratio !== 1
+}
+
+/**
+ * Why this coupon may not go in a gift link, or null when it may. Licences and terminal credentials
+ * are not money; a locked voucher is bound to a key the link holder does not have; a coupon the
+ * sender issued is cashback, which has its own flow (spec 3.2); a whole-number-ratio coupon cannot be
+ * checked today (cashu-voucher#59); and a coupon expiring within two days leaves no room for a
+ * one-day link that ends a day before it (#295 Q8).
+ */
+export function giftExclusion(
+  token: string | undefined,
+  issuerId: string | undefined,
+  sender: string,
+  nowMs = Date.now(),
+): GiftExclusion | null {
   if (!token) return 'not_money'
   if (licenceFromToken(token) || terminalCredentialFromToken(token)) return 'not_money'
   if ((issuerId ?? '').toLowerCase() === sender.toLowerCase()) return 'own_stall'
+  let parsed: ParsedVoucherToken | undefined
   try {
-    if (parseVoucherToken(token).voucher.lockKey) return 'locked'
+    parsed = parseVoucherToken(token)
   } catch {
-    // Plain ecash or unreadable: no voucher lock to speak of.
+    // Plain ecash or unreadable: no voucher lock, ratio or expiry to speak of.
   }
+  if (parsed?.voucher.lockKey) return 'locked'
   try {
     if (tokenProofs(token).some((p) => /^\["P2PK/.test(p.secret))) return 'locked'
   } catch {
     // Unreadable: the send itself refuses it at the gateway, as for any other send.
+  }
+  if (parsed && wholeNumberRatio(parsed.voucher.issuanceRatio)) return 'not_yet'
+  const exp = parsed?.voucher.expiresAt
+  if (typeof exp === 'number' && Number.isFinite(exp) && exp > 0) {
+    if (expiryChoices(nowMs, [toSeconds(exp) * 1000]).length === 0) return 'expires_soon'
   }
   return null
 }

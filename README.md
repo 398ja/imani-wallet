@@ -8,14 +8,15 @@ It lands in your wallet in seconds. Later you spend it back with that same
 merchant, in full or in part, and your change comes back as a smaller coupon.
 No bank account, no card reader, no app store sign-in with an email and password.
 
-> **New here?** Jump to the guide for your side of the counter:
+> **New here?** The guides live in the **imani-docs** repository, under `wallet/`
+> (see [docs/README.md](docs/README.md) for the full list):
 >
-> - **[I'm a shopper](docs/customers.md)** — receive coupons and pay with them.
-> - **[I sell things](docs/merchants.md)** — issue coupons and take payment.
-> - **[I run more than one till](docs/terminals.md)** — set up, limit, and revoke terminals.
-> - **[I need to prove I honoured a coupon](docs/redemption-ledger-user-guide.md)** — your ledger ID, gaps, and audits.
-> - **[How it actually works](docs/how-it-works.md)** — the ideas behind it, in plain terms.
-> - **[The decentralised posture](docs/decentralised-posture.md)** — why there's no honeypot to raid.
+> - **I'm a shopper**: `imani-docs/wallet/customers.md`. Receive coupons and pay with them.
+> - **I sell things**: `imani-docs/wallet/merchants.md`. Issue coupons and take payment.
+> - **I run more than one till**: `imani-docs/wallet/terminals.md`. Set up, limit, and revoke terminals.
+> - **I need to prove I honoured a coupon**: `imani-docs/wallet/redemption-ledger-user-guide.md`. Your ledger ID, gaps, and audits.
+> - **How it actually works**: `imani-docs/wallet/how-it-works.md`. The ideas behind it, in plain terms.
+> - **The decentralised posture**: `imani-docs/wallet/decentralised-posture.md`. Why there's no honeypot to raid.
 > - **[For developers](#for-developers)** — run and build the app.
 
 ---
@@ -71,7 +72,7 @@ flowchart LR
 4. **Change.** If the shopper paid less than the coupon was worth, the leftover
    returns as a new, smaller coupon.
 
-The [how-it-works guide](docs/how-it-works.md) explains what a coupon really is,
+The how-it-works guide (`imani-docs/wallet/how-it-works.md`) explains what a coupon really is,
 why it can't be forged, and why your key matters so much.
 
 ## What you need
@@ -103,7 +104,7 @@ flows to work. See `deploy/` for the compose override and nginx config.
 
 Card payments run against `stripe-mock` by default, so Settings → Payments works
 with no Stripe account and no key. See
-[running the card flows locally](docs/card-payments-locally.md) for where the
+running the card flows locally (`imani-docs/wallet/card-payments-locally.md`) for where the
 mock stops and how to switch to a real test key.
 
 ### Common tasks
@@ -132,20 +133,25 @@ npm run android    # build + sync the Capacitor Android project
 
 ### Deeper design notes
 
-Start with [`docs/how-it-works.md`](docs/how-it-works.md) for the concepts, and
-[`docs/decentralised-posture.md`](docs/decentralised-posture.md) for why the
+The guides, explanations, specs and design notes live in **imani-docs** under
+`wallet/`. The architecture decision records ([docs/adr](docs/adr)) and research
+notes ([docs/research](docs/research)) stay here, beside the code. See
+[docs/README.md](docs/README.md).
+
+Start with `imani-docs/wallet/how-it-works.md` for the concepts, and
+`imani-docs/wallet/decentralised-posture.md` for why the
 architecture is shaped the way it is.
 
 For the public redemption ledger — kind-7377 attestations, the pseudonymous
 ledger key, Pedersen commitments, and the hosted audit API in `services/` —
-see [`docs/redemption-ledger-technical-guide.md`](docs/redemption-ledger-technical-guide.md).
+see `imani-docs/wallet/redemption-ledger-technical-guide.md`.
 
 For how a terminal is put into service end to end (enrolment, delivery, login,
 revocation, and the work still to build), see
-[`docs/spec-terminals-in-service.md`](docs/spec-terminals-in-service.md).
+`imani-docs/wallet/spec-terminals-in-service.md`.
 
 For claiming cashback and gifts by link or QR, including a recipient with no account (accepted
-2026-10-11, owner decisions in section 9), see [`docs/spec-claim-links.md`](docs/spec-claim-links.md).
+2026-10-11, owner decisions in section 9), see `imani-docs/wallet/spec-claim-links.md`.
 
 The original design record was retired once the code became the authority. It is
 still in git history (`docs/superpowers/specs/2026-08-11-farmer-coupon-wallet-design.md`,
