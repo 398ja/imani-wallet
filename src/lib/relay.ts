@@ -75,19 +75,46 @@ export interface PublishResult {
  * has gone to sleep, a container on an address that no longer routes — where
  * nothing answers and only a timer ends the wait.
  *
- * 1200ms is far above a healthy connect (single-digit ms on a LAN, tens over
- * the internet) and far below the default, so it cannot fail a relay that was
- * going to answer. Deliberately NOT as aggressive as branding.ts' 150ms grace:
- * that one has a second store holding the same answer and a correction path if
- * it guesses wrong. These reads decide whether a merchant HAS a stall at all —
- * `newestAddressable` returning null takes away the merchant role, the home
- * screen and Stats — so the bias here is towards giving the relay its say.
+ * IT WAS 1200ms, AND THAT FAILED A RELAY THAT WAS GOING TO ANSWER (imani-deploy#235).
+ * "Tens of ms over the internet" was the TCP connect only. A `wss://` open is
+ * DNS + TCP + TLS + the HTTP upgrade, about four round trips, before a REQ can
+ * be sent. Measured to `wss://relay.staging.398ja.xyz` from a well-connected
+ * laptop: TLS done at 0.38-0.56s, upgrade answered at 0.6-0.9s. That leaves
+ * almost no margin, and a phone link with a 350ms round trip crosses 1200ms. Then
+ * the read resolved `[]`, which callers cannot tell from "no records". It is how
+ * samson's restore showed a 0 balance: twelve sockets opened, never sent a REQ,
+ * and died on the relay's ping as 1006 a minute later. nostr-tools 2.24.1
+ * abandons a timed-out socket without closing it. Real Chromium through a
+ * delaying proxy, the wallet's pool, the real relay:
+ *
+ *   round trip   cap 1200            cap 4000
+ *   0-200ms      4 events            4 events
+ *   350ms        0 (0 frames sent)   4 events, 2.2s
+ *   500ms        0 (0 frames sent)   4 events, 2.7s
+ *
+ * So the cap is SimplePool's own 3000ms, the budget the publish path has always
+ * had, which is why the same user's WRITES kept working. A dead relay now costs
+ * 3s rather than 1.2s on a read that runs in parallel with the gateway's. A cap
+ * that fails a healthy relay on an ordinary mobile link costs a silently empty
+ * read, and that is worse. These reads decide whether a merchant HAS a stall
+ * (`newestAddressable` null takes away the merchant role) and whether a restore
+ * finds the user's coupons, so the bias stays towards giving the relay its say.
  *
  * PUBLISHING IS NOT CAPPED. A read that gives up early costs a slower answer
  * from the other store; a publish that gives up early is an event the user
  * believes they sent and nobody has.
  */
-const READ_CONNECT_TIMEOUT_MS = 1200
+const READ_CONNECT_TIMEOUT_MS = 3000
+
+/**
+ * How long a READ waits for EOSE once its REQ is sent (`querySync`'s `maxWait`).
+ *
+ * Was the same 1200ms, and on a slow link the first EVENT is a round trip away:
+ * at a 0.8s round trip a 1200ms wait handed back half a page. A healthy relay
+ * answers EOSE in well under a second, so this only costs time when the relay
+ * is connected and slow, which is exactly when waiting is right.
+ */
+const READ_EOSE_TIMEOUT_MS = 3000
 
 /**
  * A pool for reads, with the connection wait bounded.
@@ -247,7 +274,7 @@ export async function allEvents(
       const batch = await pool.querySync(
         relays,
         { authors: [pubkey], kinds: [kind], limit: RELAY_PAGE_LIMIT, ...(until === undefined ? {} : { until }) },
-        { maxWait: READ_CONNECT_TIMEOUT_MS },
+        { maxWait: READ_EOSE_TIMEOUT_MS },
       )
       let fresh = 0
       for (const event of batch) {
@@ -333,7 +360,7 @@ export async function newestAddressable(
         .querySync(
           relays,
           { authors: [pubkey], kinds: [kind], '#d': [d] },
-          { maxWait: READ_CONNECT_TIMEOUT_MS },
+          { maxWait: READ_EOSE_TIMEOUT_MS },
         )
         .catch(() => [] as Event[]),
       gatewayEvents(pubkey, kind, d),
