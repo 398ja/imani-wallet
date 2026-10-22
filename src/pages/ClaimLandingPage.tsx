@@ -106,7 +106,7 @@ export function ResumeParkedClaim({ pubkey, children }: { pubkey: string; childr
  * The hosted claim page never redeems anything: it hands over the claim reference and the key
  * from its fragment and lets the wallet do it. This is where that hand-off arrives.
  *
- * - **With a session: the confirm prompt** (docs/spec-claim-links.md 4.3, phase 1). Opening the
+ * - **With a session: the confirm prompt** (imani-docs/wallet/spec-claim-links.md 4.3, phase 1). Opening the
  *   link NEVER redeems it. The page reads the portal's public metadata, which is not destructive,
  *   and shows the stall (resolved from the issuer), the face value and the claim-by date, and what
  *   it could verify. Only **Add to my wallet** spends, exactly once. **Decline** forgets the parked

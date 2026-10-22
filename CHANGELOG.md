@@ -17,6 +17,14 @@ link record without the new `noticedAt` field still reads.
 
 ### Changed
 
+- **The guides, explanations, specs and design notes moved to imani-docs, under `wallet/`**
+  (#161). Synced from this main first, including spec-claim-links, spec-terminals-in-service,
+  design-226 and the two newer explanations. `docs/adr/` and `docs/research/` stay here.
+  `docs/README.md` maps each old path to its new one. From now on, a PR that changes what a
+  shopper or merchant sees updates `imani-docs/wallet/customers.md` (or merchants.md,
+  terminals.md), not `docs/customers.md`. Code comments name the new paths; no code changed.
+  Older entries below keep the paths that were true when they were written.
+
 - **Expired Cashlinks no longer block new ones.** Making a Cashlink, and opening **Send → Anyone,
   as a Cashlink**, first takes back links that have expired and marks claimed ones
   (`reconcileGiftLinks`), then counts. Only links that can still be claimed (`outstanding` and
