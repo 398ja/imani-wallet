@@ -1,5 +1,5 @@
 /**
- * Claim links phase 4: gifts by link (docs/spec-claim-links.md 3.3, 4.2, 4.3, 5.3, 5.4, section 7),
+ * Claim links phase 4: gifts by link (imani-docs/wallet/spec-claim-links.md 3.3, 4.2, 4.3, 5.3, 5.4, section 7),
  * real browsers against a full stack (the local gate: imani-deploy scripts/local-terminal-gate,
  * E2E_SCRIPT=giftLinks.e2e.ts). Two or more browser contexts throughout.
  *
