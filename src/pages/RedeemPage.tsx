@@ -554,5 +554,18 @@ function troubleLine(troubles: readonly ReceiveTrouble[]): string {
   if (troubles.some((t) => t.kind === 'unsaved')) {
     return 'Paid, but the coupons have not reached this wallet. The payment is safe at the gateway and needs reconciling: check Transactions later.'
   }
-  return 'Paid, but the coupons have not reached this wallet yet. The wallet will keep trying. If they do not appear, check Transactions later.'
+  // #314: "will keep trying" is a promise, so it is made only when the wallet will try again (it
+  // does, in this session). A coupon that can never be received gets the plain fact instead.
+  if (troubles.some((t) => t.kind === 'failed' && t.retryable === false)) {
+    return PERMANENT_RECEIVE_FAILURE
+  }
+  return RETRYING_RECEIVE_FAILURE
 }
+
+/** The receive will be tried again (#314). */
+const RETRYING_RECEIVE_FAILURE =
+  'Paid, but the coupons have not reached this wallet yet. The wallet will keep trying. If they do not appear, check Transactions later.'
+
+/** The receive will not be tried again (#307 review, #314). The customer still paid. */
+const PERMANENT_RECEIVE_FAILURE =
+  'Paid, but these coupons could not be added to this wallet, and trying again will not help. The customer has paid. Check Transactions, and contact support if you need help.'

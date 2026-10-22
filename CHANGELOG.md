@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A receive delayed by more than a minute now goes through in the same session** (#314). The
+  Stripe S5 till e2e held a receive 61 s in transit, and gateway-customer refused it as outside the
+  NIP-98 time window (401 `Auth event timestamp outside acceptable window`). The till kept Paid but
+  the coupon only arrived in the merchant's next session.
+  - The receive's NIP-98 event is signed at send time, per call, after the receive gate and pacer
+    (inside `api.receive`), never when the attempt starts. A test pins that a slow pacer cannot age
+    it.
+  - On that exact 401 the receive is signed again and retried **once**, through the same gate and
+    per-token budget, with the **same idempotency key** (`rcv_<fingerprint>`), so gateway-customer
+    still sees one receive. Any other 401 is not retried.
+  - The till's "will keep trying" is now kept: a failed receive is offered again in this session on
+    a bounded backoff (10 s, 30 s, 90 s, 5 min). No retry runs once logout has closed the receive
+    gate or stopped the poller (#331/#340/#353); the delivery stays unprocessed for the next
+    session, deferred and never lost.
+- **The till no longer says "will keep trying" when it will not** (#307 review, #314). dm-poll's
+  `redemption:error` now says whether the delivery will be retried (`retryable`), and a coupon the
+  mint can never accept shows a different, plain message: the customer has paid, the coupons could
+  not be added, check Transactions or contact support.
+
 ## [0.37.0] - 2026-10-22
 
 Locked whole-number-ratio coupons verify again (cashu-voucher#59, #356), and honest limits for

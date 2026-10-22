@@ -570,6 +570,8 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
           token: tokenDm.token,
           eventId: tokenDm.eventId,
           ...(tokenDm.metadata?.requestId ? { requestId: tokenDm.metadata.requestId } : {}),
+          // Marked processed just below: nothing here will offer it again (imani-wallet#314).
+          retryable: false,
         });
         return null;
       }
@@ -592,6 +594,8 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
         token: tokenDm.token,
         eventId: tokenDm.eventId,
         ...(tokenDm.metadata?.requestId ? { requestId: tokenDm.metadata.requestId } : {}),
+        // Rethrown below and kept unprocessed, so a later offer tries it again (imani-wallet#314).
+        retryable: true,
       });
       if (this.config.uiAdapter) {
         this.config.uiAdapter.showErrorNotification(
