@@ -9,14 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Honest limits for Cashlinks nobody claims (#295 phase 0, Refs #295). Wallet-only, no protocol
-change: a customer's expired Cashlink still comes back only when the sender's wallet runs. Phases
-1 to 4 make it come back on its own. **New wallet-api configuration:** `WALLET_API_MINT_URL` (the
-mint `/v1/links/status` checks; no default, the endpoint answers 503 without it). No migrations: a
-link record without the new `noticedAt` field still reads.
+## [0.37.0] - 2026-10-22
 
-> **Release gate (owner decision D10, cashu-mint#540):** do not release or deploy until the mint's
-> redemption cap is in ENFORCE mode. Ship with cashu-voucher#59, whose Java verifier this mirrors.
+Locked whole-number-ratio coupons verify again (cashu-voucher#59, #356), and honest limits for
+Cashlinks nobody claims (#295 phase 0, #367), with the wallet-api `POST /v1/links/status` endpoint.
+App and wallet-api. Wallet-only, no protocol change: a customer's expired Cashlink still comes back
+only when the sender's wallet runs. Phases 1 to 4 make it come back on its own. **New wallet-api
+configuration:** `WALLET_API_MINT_URL` (the mint `/v1/links/status` checks; no default, the
+endpoint answers 503 without it). No migrations: a link record without the new `noticedAt` field
+still reads. The guides and specs moved to imani-docs (#371).
+
+> **Deploy gate (owner decision D10, cashu-mint#540):** deploy only where the mint's redemption cap
+> is in ENFORCE mode (staging); not to prod while it is LOG. Pairs with cashu-voucher 0.17.1 on the
+> Java side (gateway-customer 0.32.0, cashu-mint 0.45.0), whose verifier this mirrors.
 
 ### Fixed
 
@@ -27,6 +32,8 @@ link record without the new `noticedAt` field still reads.
   `issuance_ratio` only (Java `Double.toString`: `"50.0"`, `"1.0E7"`), as the Java verifier does.
   Every other spelling, and `face_value`, `expires_at` and `face_decimals`, keep the strict rule.
   Replays cashu-voucher's golden vectors for ratios 2, 50 and 700.
+- **Sell: the mint stage reads "Minting the voucher…"** (#343), not "Waiting for the voucher to be
+  backed…", which merchants read as jargon.
 
 ### Changed
 
@@ -79,6 +86,15 @@ link record without the new `noticedAt` field still reads.
 - `docs/merchants.md`: a stall's Cashlink nobody claims does not come back, on purpose, and no bell
   entry is filed for it.
 - wallet-api README: `POST /v1/links/status`.
+
+### Tests
+
+- `e2e/probe-cashback-claim-missing.mts` (#168, imani-gateway-portal#56): a cashback whose claim
+  is missing is parked, not burnt. It refuses a non-local docker or portal target.
+
+### Chores
+
+- The local `.npm` cache directory is git-ignored (#370).
 
 ### Fixed (review of #367)
 
