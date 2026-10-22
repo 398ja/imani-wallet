@@ -157,6 +157,22 @@ describe('no retry once logout has started (#331/#340/#353)', () => {
     expect(replayEvent).not.toHaveBeenCalled()
   })
 
+  // Review of #314: a redeem already in flight when the poller stopped can report its failure
+  // AFTER stopDmPoll cleared the timers. That late error must not arm a retry, and above all not
+  // one that runs on the next account's poller. Red when the chain binds to whichever poller is
+  // current at schedule time instead of the one that emitted the error.
+  it('a late failure from a stopped poller does not arm a retry under the next one', async () => {
+    startDmPoll(PUBKEY)
+    const previous = [...(listeners.get('redemption:error') ?? [])]
+    stopDmPoll()
+    listeners.clear()
+    startDmPoll('e'.repeat(64))
+    failed.add('e1')
+    for (const fn of previous) fn({ eventId: 'e1', message: 'x', error: new Error('x'), token: 't' })
+    await vi.advanceTimersByTimeAsync(RECEIVE_RETRY_BACKOFFS_MS.reduce((a, b) => a + b, 0))
+    expect(replayEvent).not.toHaveBeenCalled()
+  })
+
   it('a retry from the previous session never runs under the next one', async () => {
     startDmPoll(PUBKEY)
     emitError('e1')

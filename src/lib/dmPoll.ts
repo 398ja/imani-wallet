@@ -1580,8 +1580,12 @@ export const RECEIVE_RETRY_BACKOFFS_MS: readonly number[] = [10_000, 30_000, 90_
 /** gift wrap id → its pending in-session retry. Per poller: cleared by stopDmPoll. */
 const receiveRetries = new Map<string, { attempt: number; timer: ReturnType<typeof setTimeout> }>()
 
-function scheduleReceiveRetry(eventId: string, attempt = 0): void {
+function scheduleReceiveRetry(polling: DmPollService, eventId: string, attempt = 0): void {
   if (!eventId || attempt >= RECEIVE_RETRY_BACKOFFS_MS.length) return
+  // Only for the poller that is running now (review of #314): a stopped poller's in-flight
+  // redeem can still report its failure after stopDmPoll cleared the timers, and must not
+  // arm a new one, let alone one bound to the next account's poller.
+  if (service !== polling) return
   const pending = receiveRetries.get(eventId)
   if (pending) {
     // One chain per delivery: a failure reported by the chain's own try (or by
@@ -1589,7 +1593,6 @@ function scheduleReceiveRetry(eventId: string, attempt = 0): void {
     if (pending.attempt >= attempt) return
     clearTimeout(pending.timer)
   }
-  const polling = service
   const timer = setTimeout(() => {
     void retryReceive(polling, eventId, attempt)
   }, RECEIVE_RETRY_BACKOFFS_MS[attempt])
@@ -1617,13 +1620,13 @@ async function retryReceive(polling: DmPollService | undefined, eventId: string,
   const stillFailed =
     typeof polling.getFailedEvents !== 'function' ||
     polling.getFailedEvents().some((f) => f.eventId === eventId)
-  if (stillFailed) scheduleReceiveRetry(eventId, attempt + 1)
+  if (stillFailed) scheduleReceiveRetry(polling, eventId, attempt + 1)
 }
 
 /** dm-poll's `redemption:error`: start the in-session retry unless it has given up for good. */
-function onReceiveFailed(event: RedemptionErrorEvent | undefined): void {
+function onReceiveFailed(polling: DmPollService, event: RedemptionErrorEvent | undefined): void {
   if (!event?.eventId || event.retryable === false) return
-  scheduleReceiveRetry(event.eventId)
+  scheduleReceiveRetry(polling, event.eventId)
 }
 
 function clearReceiveRetries(): void {
@@ -1867,7 +1870,8 @@ export function startDmPoll(pubkey: string): DmPollService {
     // request for it to show. A later success of the same delivery clears it.
     service.on('redemption:error', (event) => fromRedemptionError(owner ?? '', event))
     // And try it again in this session, so the strip's "will keep trying" is kept (#314).
-    service.on('redemption:error', onReceiveFailed)
+    const emitter = service
+    service.on('redemption:error', (event) => onReceiveFailed(emitter, event))
     service.on('redemption:unsaved', (event) => fromRedemptionUnsaved(owner ?? '', event))
     service.on('redemption:success', (event) => clearReceiveTrouble(owner ?? '', event?.eventId))
   }
