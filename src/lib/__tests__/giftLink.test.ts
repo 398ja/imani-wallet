@@ -30,7 +30,7 @@ import { gatewayAnswers, resetGate } from './trustedMintKit'
 import { buildLicenceVoucherToken, buildPlainToken, buildVoucherToken } from './voucherFixtures'
 
 /**
- * Claim links phase 4 (docs/spec-claim-links.md 3.3, 4.2, 4.3): the link key, the link, the gift
+ * Claim links phase 4 (imani-docs/wallet/spec-claim-links.md 3.3, 4.2, 4.3): the link key, the link, the gift
  * fetch, and every check made BEFORE anything is spent.
  */
 

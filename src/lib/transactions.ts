@@ -65,7 +65,7 @@ export interface WalletTransaction {
    * The warrant this stall signed when issuing, verbatim, on `issued` rows.
    *
    * The merchant's own copy of what they authorised. See
-   * `docs/cash-warrant-reconciliation.md` for why storing it turns "trust my
+   * `imani-docs/wallet/cash-warrant-reconciliation.md` for why storing it turns "trust my
    * ledger" into "verify my ledger", and for the limit that remains: it proves
    * the stall meant to issue this value, never that cash arrived.
    */

@@ -1,5 +1,5 @@
 /**
- * Gift links (claim links phase 4, docs/spec-claim-links.md 3.3, 4.2, 4.3, 5.3, 5.4).
+ * Gift links (claim links phase 4, imani-docs/wallet/spec-claim-links.md 3.3, 4.2, 4.3, 5.3, 5.4).
  *
  *   https://<wallet-origin>/g#v=1&k=<linkSecret>&x=<expiresAtUnix>
  *

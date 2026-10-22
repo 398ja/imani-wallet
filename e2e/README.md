@@ -224,7 +224,7 @@ database reproduced the incident exactly, landing the browser on a real
 
 ## `claimLinks.e2e.ts` — a claim link never redeems on open (claim links phases 0 and 1)
 
-[docs/spec-claim-links.md](../docs/spec-claim-links.md), section 7. A merchant issues cashback; the
+`imani-docs/wallet/spec-claim-links.md`, section 7. A merchant issues cashback; the
 harness builds the link from the portal's own generate response (`claimUrl#k=claimKey`) and checks:
 a headless GET, a prefetch and a sessionless browser spend nothing (CL-BOT); the prompt names the
 stall, the face and the claim-by date and redeems nothing while open; Decline leaves it unclaimed;
@@ -243,7 +243,7 @@ so a local run never reaches the real staging claim host. Omit it against stagin
 
 ## `claimLinksMerchant.e2e.ts` — the merchant's link and QR (claim links phase 2)
 
-[docs/spec-claim-links.md](../docs/spec-claim-links.md), sections 4.1 and 7. The link is taken from
+`imani-docs/wallet/spec-claim-links.md`, sections 4.1 and 7. The link is taken from
 the merchant's own screen (Share link), never from the generate response:
 
 - **CL-A**: the code stays beside the link, the QR is hidden until Show QR, a logged-in customer

@@ -1,5 +1,5 @@
 /**
- * Claim links, phases 0, 1 and 3 (docs/spec-claim-links.md, section 7, CL-BOT, CL-OWN, CL-RACE, CL-B, CL-B2, CL-SWITCH and the
+ * Claim links, phases 0, 1 and 3 (imani-docs/wallet/spec-claim-links.md, section 7, CL-BOT, CL-OWN, CL-RACE, CL-B, CL-B2, CL-SWITCH and the
  * closed states), real browsers against a full stack: the local gate (imani-deploy
  * scripts/local-terminal-gate, E2E_SCRIPT=claimLinks.e2e.ts) or staging.
  *

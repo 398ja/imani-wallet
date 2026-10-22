@@ -74,7 +74,7 @@ effort than tracing, and most of the day-to-day incident value.
 
 ## Where it must not go
 
-`docs/decentralised-posture.md` is not decoration; it constrains this decision.
+`imani-docs/wallet/decentralised-posture.md` is not decoration; it constrains this decision.
 Telemetry is a data collection programme, and the default OTel posture (collect
 broadly, decide later) is the honeypot mindset applied to observability.
 

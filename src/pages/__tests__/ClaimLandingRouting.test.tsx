@@ -6,7 +6,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
 /**
- * Claim links, phase 0 (docs/spec-claim-links.md, sections 1.6, 2.5 and 8): opening a claim link
+ * Claim links, phase 0 (imani-docs/wallet/spec-claim-links.md, sections 1.6, 2.5 and 8): opening a claim link
  * with NO session must route by DEVICE, not always to registration.
  *
  * - A device that holds a key (a returning customer whose session ended) goes to /login, to

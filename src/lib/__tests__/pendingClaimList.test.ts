@@ -21,7 +21,7 @@ import {
 import { sweepAppStorage } from '../appStorage'
 
 /**
- * Claim links phase 3 (docs/spec-claim-links.md 2.5, 8; review of #239, F4-1): parked claims are a
+ * Claim links phase 3 (imani-docs/wallet/spec-claim-links.md 2.5, 8; review of #239, F4-1): parked claims are a
  * short LIST keyed by ref, each with its own 24 h age, and they survive logout.
  */
 const A = 'aaaa1111bbbb2222'
