@@ -7,7 +7,7 @@ import { buildPlainToken } from './voucherFixtures'
 
 /**
  * Claim links phase 1, at the library level: the prompt's read is non-destructive, and the claim
- * key never leaves the device (docs/spec-claim-links.md, sections 2.4 and 6.7).
+ * key never leaves the device (imani-docs/wallet/spec-claim-links.md, sections 2.4 and 6.7).
  *
  * The page test mocks this module, so the guarantees it states about requests are proved here,
  * against the real functions and a recording `fetch`.

@@ -6,7 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
 /**
- * Claim links, phase 1: the confirm prompt (docs/spec-claim-links.md, section 4.3 and phase 1).
+ * Claim links, phase 1: the confirm prompt (imani-docs/wallet/spec-claim-links.md, section 4.3 and phase 1).
  * This is the security fix: opening a claim link must NEVER redeem it.
  *
  * Before this, `/c/:ref` with a session called `redeemClaimRef` on load, so anything that rendered
