@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Relay reads no longer give up on a slow link** (imani-deploy#235). Reads capped the relay
+  socket open at 1200 ms, but a `wss://` open is about four round trips, so on a 350 ms phone link
+  the read returned an empty list. That is what left samson's restore at a 0 balance. Those
+  sockets never sent a REQ and closed 1006 a minute later. Reads now get 3000 ms to connect and
+  3000 ms for EOSE, the same budget as publishing. A dead relay costs 3 s rather than 1.2 s, and
+  that read runs in parallel with the gateway's.
+  - `relayReadSlowLink.test.ts` reads through a proxy with a 1.6 s round trip. It failed on the
+    old cap (`[]`) and passes now.
+
 - **A receive delayed by more than a minute now goes through in the same session** (#314). The
   Stripe S5 till e2e held a receive 61 s in transit, and gateway-customer refused it as outside the
   NIP-98 time window (401 `Auth event timestamp outside acceptable window`). The till kept Paid but
