@@ -581,3 +581,37 @@ describe('value is conserved on every path', () => {
     expect(keptSats()).toBe(48)
   })
 })
+
+// --- Reviewer (rev-wallet377): value kept as sats is ONE row per token -------------
+
+describe('rev-wallet377 H1: sats kept against one coupon token are never overwritten', () => {
+  it('a two-proof gift refused AFTER both burns keeps BOTH proofs\u2019 sats (one row per token in the real store)', async () => {
+    // The real `keep` writes one voucher row per tokenIdFrom(token): a second keepAsSats under the
+    // same coupon token MERGES over the first, so the first proof's sats vanish.
+    const gift = giftOn(w, [32, 16])
+    const call = w.gateway.call.bind(w.gateway)
+    let locksSeen = 0
+    w.gateway.call = async (m, p, b, s) => {
+      // Two dry runs pass (409), both real locks refuse after their burns.
+      if (p === LOCK_PATH && ++locksSeen > 2) return { status: 422, body: { refusal: 'SAT_BOUND_EXCEEDED' } }
+      return call(m, p, b, s)
+    }
+    expect((await armGift(armCtx(gift))).kind).toBe('kept_as_sats')
+    expect(keptSats()).toBe(48)
+  })
+
+  it('a two-proof gift whose re-sign is refused on return keeps BOTH proofs\u2019 sats', async () => {
+    await armGift(armCtx(giftOn(w, [32, 16])))
+    w.gateway.routes = false
+    expect((await settleLockedGift(returnCtx({ takeBackNow: true }))).kind).toBe('returned')
+    expect(keptSats()).toBe(48)
+  })
+
+  it('a two-proof claim whose re-sign is refused keeps BOTH proofs\u2019 sats for the recipient', async () => {
+    await armGift(armCtx(giftOn(w, [32, 16])))
+    w.gateway.routes = false
+    const out = await claimLockedGift({ ports: w.ports, pubkey: RECIPIENT, linkSecret: LINK, k: secretToText(LINK), lockedTokens: [{ token: lockedToken(), sentAt: NOW }] })
+    expect(out.kind).toBe('ok')
+    expect(keptSats()).toBe(48)
+  })
+})

@@ -520,7 +520,11 @@ export function world(nowS = 1_800_000_000): World {
       return true
     },
     keep: async (row) => {
-      kept.push(row)
+      // As the real port does: one voucher row per `tokenIdFrom(row.token)`, merged on a second
+      // write (WalletStorage.saveVoucher). Two keeps under the same token are ONE row, the last.
+      const same = kept.findIndex((k) => k.token === row.token)
+      if (same >= 0) kept[same] = row
+      else kept.push(row)
     },
     sleep: async () => {},
     now: () => clock.now * 1000,

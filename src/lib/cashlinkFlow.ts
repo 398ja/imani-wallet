@@ -211,8 +211,16 @@ const refusalOf = (a: GatewayAnswer): string => (typeof a.body?.refusal === 'str
 /** The token a set of proofs makes, carrying their DLEQs (the next holder proves the amount with them). */
 const tokenOf = (mintUrl: string, proofs: UnblindedProof[]): string => encodePlainTokenV4(mintUrl, 'sat', proofs)
 
-/** Keep plain sats against the coupon they came from: the value is never lost. */
-async function keepAsSats(ports: CashlinkPorts, couponToken: string, mintUrl: string, proofs: UnblindedProof[], why: KeptCoupon['why']): Promise<void> {
+/**
+ * Keep plain sats against the ONE coupon proof they came from: the value is never lost.
+ *
+ * Keyed by that proof alone (a one-proof token), never by the whole gift token: the app's `keep`
+ * writes one voucher row per `tokenIdFrom(token)` and MERGES a second write over the first, so two
+ * proofs of one gift kept under the same token would leave only the last proof's sats
+ * (rev-wallet377 H1).
+ */
+async function keepAsSats(ports: CashlinkPorts, mintUrl: string, source: TokenProof, proofs: UnblindedProof[], why: KeptCoupon['why']): Promise<void> {
+  const couponToken = tokenOf(mintUrl, [{ amount: source.amount, id: source.id, secret: source.secret, C: source.C }])
   await ports.keep({ token: couponToken, satsToken: tokenOf(mintUrl, proofs), sats: proofs.reduce((n, p) => n + p.amount, 0), why })
 }
 
@@ -311,11 +319,11 @@ async function arm(ctx: ArmContext): Promise<ArmOutcome> {
   // 1-3, per proof.
   const locked: UnblindedProof[] = []
   let gone = 0
-  for (const { token, proof } of proofs) {
+  for (const { proof } of proofs) {
     const step = await lockOne(ctx, mintUrl, proof, burnKeyset, linkPub, refundPub)
     if (step.kind === 'locked') locked.push(step.proof)
     else if (step.kind === 'gone') gone += 1
-    else await keepAsSats(ports, token, mintUrl, step.proofs, 'returned')
+    else await keepAsSats(ports, mintUrl, proof, step.proofs, 'returned')
   }
   if (locked.length === 0) return gone === proofs.length ? { kind: 'claimed' } : { kind: 'kept_as_sats' }
 
@@ -723,7 +731,7 @@ async function reform(
   }
   if (answer.status === 409 || answer.status >= 500) return 'pending'
   // A definite refusal after the sats came back (422, or 404: the routes are gone): keep them.
-  await keepAsSats(ports, ctx.lockedToken, mintUrl, plain, 'returned')
+  await keepAsSats(ports, mintUrl, locked, plain, 'returned')
   return 'returned'
 }
 
@@ -929,7 +937,7 @@ async function finishClaim(ports: CashlinkPorts, pubkey: string, linkSecret: Uin
   }
   if (answer.status === 409 || answer.status >= 500) return PARTLY
   // A definite refusal after the burn: the value is kept as sats, in this wallet. Never lost.
-  await keepAsSats(ports, tokenOf(mintUrl, [proof]), mintUrl, plain, 'claimed')
+  await keepAsSats(ports, mintUrl, proof, plain, 'claimed')
   forget()
   return 'ok'
 }
@@ -1024,7 +1032,7 @@ export async function recoverOrphanBurn(ports: CashlinkPorts, refundSecret: Uint
       if (mine.length !== burn.length) continue
       const states = await ports.mint.states(mintUrl, mine.map((m) => m.secret))
       if (!states.every((s) => s === 'UNSPENT')) continue
-      await keepAsSats(ports, bearer.token, mintUrl, mine, 'returned')
+      await keepAsSats(ports, mintUrl, p, mine, 'returned')
       kept = true
     }
     return kept
