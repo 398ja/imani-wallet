@@ -615,3 +615,22 @@ describe('rev-wallet377 H1: sats kept against one coupon token are never overwri
     expect(keptSats()).toBe(48)
   })
 })
+
+describe('rev-wallet377 M2: a resumed arm never sticks on a burn the mint will never sign', () => {
+  it('the recorded burn keyset was archived before the burn landed: the burn is re-made in the active one, and it arms', async () => {
+    const gift = giftOn(w)
+    const recorded = w.mint.active().id
+    w.mint.rotate()
+    // A page that died after onArming and before the burn: the run resumes with the old keyset.
+    expect((await armGift(armCtx(gift, { burnKeyset: recorded }))).kind).toBe('armed')
+  })
+
+  it('a resumed burn the mint refuses outright (nothing burnt) leaves the link as an ordinary gift, not "arming" for ever', async () => {
+    const gift = giftOn(w)
+    const swap = w.mint.swap.bind(w.mint)
+    w.mint.swap = async (m, i, o) => (i[0]?.secret.startsWith('["VOUCHER"') ? { kind: 'refused', code: 11005 } : swap(m, i, o))
+    const out = await armGift(armCtx(gift, { burnKeyset: w.mint.active().id }))
+    expect(out).toEqual({ kind: 'unarmed', why: 'burn_refused' })
+    expect(await w.mint.states(MINT_URL, [tokenProofs(gift.token)[0].secret])).toEqual(['UNSPENT'])
+  })
+})

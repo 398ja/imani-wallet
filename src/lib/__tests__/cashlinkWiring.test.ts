@@ -346,3 +346,14 @@ describe('rev-wallet377 M1: a stranger\u2019s locked coupon on the link freezes 
     expect(verdict.kind).toBe('ok')
   })
 })
+
+describe('rev-wallet377 M2: a burn the mint refuses outright is not "arming" for ever', () => {
+  it('the link goes back to an ordinary gift and nothing holds the logout', async () => {
+    const swap = w.mint.swap.bind(w.mint)
+    w.mint.swap = async (m, i, o) => (i[0]?.secret.startsWith('["VOUCHER"') ? { kind: 'refused', code: 11005 } : swap(m, i, o))
+    const out = await send()
+    expect(out.returnsOnItsOwn).toBe(false)
+    expect(link().arm).toBeUndefined()
+    expect(moneyInFlight(PUB).cashlinks).toBe(0)
+  })
+})
