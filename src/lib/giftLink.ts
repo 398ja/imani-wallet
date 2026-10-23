@@ -434,23 +434,25 @@ export async function verifyGift(
   // that passes (review of #247, F1). Only when NOTHING passes is the refusal explained.
   const usable = giftCandidates(found, linkPub)
   if (usable.length === 0) return explainRefusal(found)
-  // A locked gift's own locktime is the mint's expiry for the claim: the earlier of the two counts.
-  for (const t of usable) {
-    const lock = (() => {
-      try {
-        return readLinkLock(tokenProofs(t.token)[0].secret)
-      } catch {
-        return null
-      }
-    })()
-    if (lock && lock.locktime < x) x = lock.locktime
+  // A locked gift's own locktime is the mint's expiry for ITS claim (after it the sender's refund
+  // can take it): it ends that token, never the others. Lowering `x` for the whole link would let a
+  // stranger who locks a coupon of their own to this public key with a near locktime make the real
+  // gift read "expired" (rev-wallet377 M1).
+  const lockEnd = (t: GiftToken): number | undefined => {
+    try {
+      return readLinkLock(tokenProofs(t.token)[0].secret)?.locktime
+    } catch {
+      return undefined
+    }
   }
 
   const now = Math.floor(nowMs / 1000)
   const parsedOf = new Map(usable.map((t) => [t.token, parseVoucherToken(t.token)]))
   const expiryOf = (t: GiftToken) => {
     const e = parsedOf.get(t.token)!.voucher.expiresAt
-    return typeof e === 'number' && e > 0 ? toSeconds(e) : undefined
+    const coupon = typeof e === 'number' && e > 0 ? toSeconds(e) : undefined
+    const lock = lockEnd(t)
+    return lock === undefined ? coupon : coupon === undefined ? lock : Math.min(coupon, lock)
   }
   const live = usable.filter((t) => {
     const e = expiryOf(t)

@@ -32,12 +32,12 @@ import { publishTx } from './txRecords'
 import { cashbackValidation } from './cashbackValidation'
 import { checkTokenBacking, loadTrustedMints } from './trustedMint'
 import { asGiftLinkRecord, buildSentTransaction, type GiftLinkRecord, type GiftLinkStatus } from './transactions'
-import { creditableFaceValue, parseVoucherToken } from './voucherToken'
+import { creditableFaceValue, parseVoucherToken, tokenProofs } from './voucherToken'
 import { getWallet, notifyWalletChanged } from './wallet'
 import type { Merchant } from './merchants'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
 import { beginReceive, isReceiveDeferred } from './receiveGate'
-import { deriveRefundSecret } from './cashlinkLock'
+import { deriveRefundSecret, readLinkLock, xOnlyPub } from './cashlinkLock'
 import {
   armGift,
   claimLockedGift,
@@ -94,6 +94,31 @@ function rememberLock(pubkey: string, giftSecret: string, signed: string): void 
     localStorage.setItem(locksKey(pubkey), JSON.stringify(Object.fromEntries(entries)))
   } catch {
     // A full store: the gateway's replay finds it instead.
+  }
+}
+
+/**
+ * The gift on this link locked to it with THIS wallet's refund key: the sender's own Cashlink.
+ *
+ * The link's public key is public (a wrap's p tag), and the lock route takes any link key, so a
+ * stranger can lock a coupon of their own to this link with their own refund key and wrap it onto
+ * it. Picking the first locked token would then settle the stranger's (refused as "not this
+ * wallet's Cashlink" for ever) and the sender's own gift would never be settled or taken back
+ * (rev-wallet377 M1). Empty when this wallet has no refund key for the link.
+ */
+function ownLockedOnLink(link: Pick<GiftLinkRecord, 'i'>, linkSecret: Uint8Array, tokens: GiftToken[]): GiftToken[] {
+  const refundSecret = refundSecretFor(link)
+  if (!refundSecret) return []
+  try {
+    const refundPub = xOnlyPub(refundSecret)
+    const linkPub = linkPubOf(linkSecret)
+    return lockedOnLink(giftCandidates(tokens, linkPub), linkPub).filter(({ token }) =>
+      tokenProofs(token).every((p) => readLinkLock(p.secret)?.refundPub === refundPub),
+    )
+  } catch {
+    return []
+  } finally {
+    refundSecret.fill(0)
   }
 }
 
@@ -782,7 +807,7 @@ export async function takeBack(k: string): Promise<TakeBackOutcome> {
   // Taken back (or found claimed) by hand: the sender already knows, so no "expired" notice follows.
   const told = { noticedAt: Date.now() }
   // #295 phase 4: a gift locked to its link comes back by this wallet's own swap.
-  const locked = lockedOnLink(giftCandidates(tokens, linkPubOf(secret)), linkPubOf(secret))
+  const locked = rows[0] ? ownLockedOnLink(rows[0].link, secret, tokens) : []
   if (locked.length > 0 && rows[0]) {
     const outcome = await settleLocked(rows, secret, locked[0].token, true)
     if (outcome.kind === 'returned') return { kind: 'ok' }
@@ -936,8 +961,7 @@ export async function reconcileGiftLinks(
         await armLink(sessionAccount(getSigner) ?? '', k, secret, link.i, link.x)
         continue
       }
-      const linkPub = linkPubOf(secret)
-      const locked = lockedOnLink(giftCandidates(tokens, linkPub), linkPub)
+      const locked = ownLockedOnLink(link, secret, tokens)
       if (locked.length > 0) {
         const outcome = await settleLocked(parts, secret, locked[0].token)
         if (outcome.kind === 'returned') reclaimed += 1
