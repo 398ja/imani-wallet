@@ -14,9 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **An unclaimed Cashlink comes back on its own** (#295, phase 4). When the voucher service
   supports it, Send by link now hands the gift over locked to the link: the recipient can open it
   until the expiry, and after that only the sender can, with a return the service posts for the
-  sender even when this app is closed (gateway-core#255 lock and re-sign, #262 return relay). The
+  sender even when this app is closed (imani-gateway-customer#255 lock and re-sign, #262 return relay). The
   sender sees "If nobody claims it in time, it comes back to you on its own." On the next open
   the link reads **Taken back** and the voucher is in the wallet. App only, no configuration.
+  - **Dormant for now:** gateway-core's send tokens do not yet carry the mint proof (NUT-12 DLEQ
+    with `r`, imani-gateway-core#185), so no link is locked today and every Cashlink behaves as
+    before. It switches on once that lands, with no wallet change.
   - It degrades to today's behaviour: with the return relay off (as it ships), the routes missing,
     the service unreachable, a merchant account (its expired Cashlinks lapse, by owner rule), a
     remote-signer account, or a token without a mint proof, nothing is locked and the wallet takes
