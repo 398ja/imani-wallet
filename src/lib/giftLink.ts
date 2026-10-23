@@ -25,6 +25,7 @@ import { finalizeEvent, getPublicKey, nip17 } from 'nostr-tools'
 import { asChunk, offerChunkFrom } from './dmChunks'
 import { nip98Header, type RequestSigner } from './nip98'
 import { checkTokenBacking } from './trustedMint'
+import { readLinkLock } from './cashlinkLock'
 import { checkIssuer } from './issuerAllowlist'
 import { licenceFromToken } from './licences'
 import { terminalCredentialFromToken } from './notMoney'
@@ -423,20 +424,35 @@ export async function verifyGift(
   x: number,
   nowMs: number,
   state: (token: string) => Promise<ProofState> = (t) => tokenState(t),
+  /** The link's own key, so a gift locked to this link (#295 phase 4) is read as the gift. */
+  linkPub?: string,
 ): Promise<GiftVerdict> {
   if (found.length === 0) return { kind: 'unreachable' }
   // Anyone can gift-wrap something to a link's PUBLIC key (the gateway learns it from the send, and
   // the wrap's p tag is public). So a token that fails its own checks, or that is already spent or
   // past its own expiry (free for anyone to wrap), is noise and never a reason to refuse the coupon
   // that passes (review of #247, F1). Only when NOTHING passes is the refusal explained.
-  const usable = giftCandidates(found)
+  const usable = giftCandidates(found, linkPub)
   if (usable.length === 0) return explainRefusal(found)
+  // A locked gift's own locktime is the mint's expiry for ITS claim (after it the sender's refund
+  // can take it): it ends that token, never the others. Lowering `x` for the whole link would let a
+  // stranger who locks a coupon of their own to this public key with a near locktime make the real
+  // gift read "expired" (rev-wallet377 M1).
+  const lockEnd = (t: GiftToken): number | undefined => {
+    try {
+      return readLinkLock(tokenProofs(t.token)[0].secret)?.locktime
+    } catch {
+      return undefined
+    }
+  }
 
   const now = Math.floor(nowMs / 1000)
   const parsedOf = new Map(usable.map((t) => [t.token, parseVoucherToken(t.token)]))
   const expiryOf = (t: GiftToken) => {
     const e = parsedOf.get(t.token)!.voucher.expiresAt
-    return typeof e === 'number' && e > 0 ? toSeconds(e) : undefined
+    const coupon = typeof e === 'number' && e > 0 ? toSeconds(e) : undefined
+    const lock = lockEnd(t)
+    return lock === undefined ? coupon : coupon === undefined ? lock : Math.min(coupon, lock)
   }
   const live = usable.filter((t) => {
     const e = expiryOf(t)
@@ -505,14 +521,20 @@ function explainRefusal(tokens: GiftToken[]): GiftVerdict {
  * a known issuer, money (not a licence, credential or locked voucher), at a trusted mint. Used to
  * drop what a third party gift-wrapped to the link's public key (review of #247, F1).
  */
-export function giftCandidates(tokens: GiftToken[]): GiftToken[] {
+export function giftCandidates(tokens: GiftToken[], linkPub?: string): GiftToken[] {
   return tokens.filter(({ token }) => {
     try {
       if (licenceFromToken(token) || terminalCredentialFromToken(token)) return false
       const p = parseVoucherToken(token)
       if (!verifyVoucher(p.voucher).signatureValid || checkIssuer(p) === 'unknown-issuer') return false
-      if (p.voucher.lockKey) return false
-      if (tokenProofs(token).some((proof) => /^\["P2PK/.test(proof.secret))) return false
+      // #295 phase 4: a gift locked to THIS link (the Cashlink shape, one refund key, SIG_ALL) is
+      // the link's own coupon: whoever holds the link key can claim it. Any other lock is not.
+      const proofs = tokenProofs(token)
+      const lockedHere = linkPub !== undefined && proofs.length > 0 && proofs.every((proof) => readLinkLock(proof.secret)?.linkPub === linkPub)
+      if (!lockedHere) {
+        if (p.voucher.lockKey) return false
+        if (proofs.some((proof) => /^\["P2PK/.test(proof.secret))) return false
+      }
       return checkTokenBacking(token).outcome === 'accept'
     } catch {
       return false

@@ -134,7 +134,8 @@ describe('opening a gift link', () => {
     open(true)
     fireEvent.click(await screen.findByRole('button', { name: 'Add to my wallet' }))
     await settle()
-    expect(redeemGiftTokens).toHaveBeenCalledWith(TOKENS, 'gift_link')
+    // The link's key goes with them: a gift locked to its link (#295 phase 4) is claimed with it.
+    expect(redeemGiftTokens).toHaveBeenCalledWith(TOKENS, 'gift_link', expect.stringMatching(/^[A-Za-z0-9_-]{43}$/))
   })
 
   it('spends once on Add, however many taps, with source gift_link', async () => {
@@ -150,7 +151,8 @@ describe('opening a gift link', () => {
     finish({ kind: 'ok' })
     await screen.findByText('Voucher added')
     expect(redeemGiftTokens).toHaveBeenCalledTimes(1)
-    expect(redeemGiftTokens).toHaveBeenCalledWith(TOKENS, 'gift_link')
+    // The link's key goes with them: a gift locked to its link (#295 phase 4) is claimed with it.
+    expect(redeemGiftTokens).toHaveBeenCalledWith(TOKENS, 'gift_link', expect.stringMatching(/^[A-Za-z0-9_-]{43}$/))
   })
 
   // Third check of #247 (5798be4): `failed` can now come back after a genuine coupon WAS added (a
