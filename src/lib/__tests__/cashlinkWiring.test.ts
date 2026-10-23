@@ -409,3 +409,21 @@ describe('second check of rev-wallet377: mutant killers', () => {
     expect(moneyInFlight(PUB).cashlinks).toBe(1)
   })
 })
+
+describe('second check of rev-wallet377: option A, arming dormant (send tokens carry no DLEQ, B1)', () => {
+  it('a DLEQ-less send token is never burnt; the link is an ordinary gift, logout is free, and Take it back works as today', async () => {
+    const { dleq: _d, ...bare } = w.mint.issue(bearerSecret({}, 'nodleq'), 64)
+    void _d
+    sent.token = tokenOf([bare])
+    const out = await send()
+    expect(out.returnsOnItsOwn).toBe(false)
+    expect(link().arm).toBeUndefined()
+    expect(w.mint.log.swaps).toHaveLength(0)
+    expect(w.gateway.calls.filter((c) => c.path.includes('/cashlink/'))).toHaveLength(0)
+    expect(moneyInFlight(PUB).cashlinks).toBe(0)
+    await giftLinks.reconcileGiftLinks(NOW * 1000)
+    expect(link().status).toBe('outstanding')
+    expect(await giftLinks.takeBack(link().k)).toEqual({ kind: 'ok' })
+    expect(h.redeemed).toEqual([sent.token])
+  })
+})
