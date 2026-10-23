@@ -81,6 +81,7 @@ vi.mock('../pay', () => ({
 const { world, at, bearerSecret, tokenOf } = await import('./cashlinkWorld')
 const giftLinks = await import('../giftLinks')
 const { deriveLinkSecret, linkPubOf, secretToText } = await import('../giftLink')
+const { tokenProofs } = await import('../voucherToken')
 const { attemptLogout } = await import('../logout')
 const { moneyInFlight } = await import('../inFlightMoney')
 
@@ -288,5 +289,60 @@ describe('the words the sender sees (owner rule: no protocol words)', () => {
       expect(line).not.toMatch(JARGON)
       expect(line).not.toMatch(/\b(lock(ed)?|refund|witness|relay|locktime|swap|mint|keyset|sats?)\b/i)
     }
+  })
+})
+
+// --- Reviewer (rev-wallet377 M1): a stranger's lock on the same link ----------------
+//
+// The link's PUBLIC key is public (the wrap's p tag), and gc's lock route takes any linkPub. So a
+// stranger can lock a coupon of their own to this link with THEIR refund key and wrap it onto it.
+describe('rev-wallet377 M1: a stranger\u2019s locked coupon on the link freezes nothing', () => {
+  async function plantForeignLockFirst() {
+    const { armGift } = await import('../cashlinkFlow')
+    const linkSecret = deriveLinkSecret(ID, 0)
+    const ours = h.wraps.get(linkPubOf(linkSecret))!.slice()
+    const foreign = { token: tokenOf([w.mint.issue(bearerSecret({}, 'stranger'), 8)]), sentAt: NOW }
+    const out = await armGift({
+      ports: w.ports,
+      linkSecret,
+      refundSecret: hexToBytes('44'.repeat(32)),
+      x: NOW + 2 * 3600,
+      gifts: [foreign],
+      merchant: false,
+      onArming: async () => {},
+      onLocked: async () => {},
+    })
+    expect(out.kind).toBe('armed')
+    const planted = h.wraps.get(linkPubOf(linkSecret))!.filter((t) => !ours.includes(t))
+    h.wraps.set(linkPubOf(linkSecret), [...planted, ...ours])
+  }
+
+  it('after expiry, the sender\u2019s own locked gift still comes back', async () => {
+    await send()
+    expect(link().arm?.s).toBe('armed')
+    await plantForeignLockFirst()
+    at(w, X + 61)
+    vi.setSystemTime((X + 61) * 1000)
+    await w.gateway.runRelay(X + 61)
+    await giftLinks.reconcileGiftLinks((X + 61) * 1000)
+    expect(link().status).toBe('reclaimed')
+  })
+
+  it('"Take it back" takes the sender\u2019s own locked gift, not the stranger\u2019s', async () => {
+    await send()
+    await plantForeignLockFirst()
+    expect(await giftLinks.takeBack(link().k)).toEqual({ kind: 'ok' })
+    expect(link().status).toBe('reclaimed')
+  })
+
+  it('the recipient\u2019s prompt is not shown as expired because the stranger\u2019s lock ends sooner', async () => {
+    await send()
+    await plantForeignLockFirst()
+    const { verifyGift } = await import('../giftLink')
+    const linkSecret = deriveLinkSecret(ID, 0)
+    const found = h.wraps.get(linkPubOf(linkSecret))!.map((token) => ({ token, sentAt: NOW }))
+    const states = async (t: string) => (await w.mint.states('', tokenProofs(t).map((p) => p.secret)))[0]
+    const verdict = await verifyGift(found, X, (NOW + 3 * 3600) * 1000, states, linkPubOf(linkSecret))
+    expect(verdict.kind).toBe('ok')
   })
 })
