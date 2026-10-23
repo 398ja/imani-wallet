@@ -633,6 +633,30 @@ describe('rev-wallet377 M2: a resumed arm never sticks on a burn the mint will n
     expect(out).toEqual({ kind: 'unarmed', why: 'burn_refused' })
     expect(await w.mint.states(MINT_URL, [tokenProofs(gift.token)[0].secret])).toEqual(['UNSPENT'])
   })
+
+  // rev-wallet377 N1: on a resumed arm our gift was already burnt by the earlier run; a stranger's
+  // forged coupon placed first is refused, so this run moved nothing. The link must stay "arming"
+  // (logout held, burnt value recovered by the next run), never fall back to an ordinary gift.
+  it('a resumed arm whose own gift was already burnt never reads "nothing moved" because a stranger coupon was refused first', async () => {
+    const gift = giftOn(w)
+    const call = w.gateway.call.bind(w.gateway)
+    let lockCalls = 0
+    w.gateway.call = async (m, p, b, s) => {
+      if (p === LOCK_PATH && ++lockCalls === 2) throw new Error('page died after the burn')
+      return call(m, p, b, s)
+    }
+    expect((await armGift(armCtx(gift))).kind).toBe('arming')
+    const recordedKeyset = armState[0].slice('arming:'.length)
+    w.gateway.call = call
+    const forged = { ...w.mint.issue(bearerSecret({}, 'junk'), 8) }
+    forged.C = '02' + '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'
+    const stranger = { token: tokenOf([forged]), sentAt: NOW }
+    expect(giftCandidates([stranger])).toHaveLength(1)
+
+    const resumed = armGift(armCtx(gift, { gifts: [stranger, gift], burnKeyset: recordedKeyset }))
+
+    await expect(resumed).resolves.not.toEqual({ kind: 'unarmed', why: 'burn_refused' })
+  })
 })
 
 describe('rev-wallet377: reviewer tests that kill surviving mutants', () => {

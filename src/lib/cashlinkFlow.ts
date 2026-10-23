@@ -302,6 +302,11 @@ export async function armGift(ctx: ArmContext): Promise<ArmOutcome> {
   }
 }
 
+async function allStillUnspent(ports: ArmContext['ports'], mintUrl: string, proofs: { proof: { secret: string } }[]): Promise<boolean> {
+  const states = await ports.mint.states(mintUrl, proofs.map((p) => p.proof.secret))
+  return states.length === proofs.length && states.every((s) => s === 'UNSPENT')
+}
+
 async function arm(ctx: ArmContext): Promise<ArmOutcome> {
   const { ports } = ctx
   if (ctx.merchant) return { kind: 'unarmed', why: 'merchant' }
@@ -330,8 +335,10 @@ async function arm(ctx: ArmContext): Promise<ArmOutcome> {
     if (step.kind === 'unburnt') {
       // Nothing burnt yet on any proof: the link is exactly the ordinary gift it was, and must not
       // stay 'arming' for ever (rev-wallet377 M2). Part way through a multi-proof gift, the next
-      // run tries again (the burnt proofs are found by NUT-09).
-      if (moved === 0) return { kind: 'unarmed', why: 'burn_refused' }
+      // run tries again (the burnt proofs are found by NUT-09). On a resumed run "nothing moved in
+      // this run" is not "nothing burnt": an earlier run may have burnt ours (rev-wallet377 N1), so
+      // only the mint saying every proof is still UNSPENT lets the link go back to an ordinary gift.
+      if (moved === 0 && (await allStillUnspent(ports, mintUrl, proofs))) return { kind: 'unarmed', why: 'burn_refused' }
       throw new Error(`the burn was refused (${step.why}); left for the next run`)
     }
     moved += 1
