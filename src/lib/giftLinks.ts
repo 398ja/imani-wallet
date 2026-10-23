@@ -32,11 +32,107 @@ import { publishTx } from './txRecords'
 import { cashbackValidation } from './cashbackValidation'
 import { checkTokenBacking, loadTrustedMints } from './trustedMint'
 import { asGiftLinkRecord, buildSentTransaction, type GiftLinkRecord, type GiftLinkStatus } from './transactions'
-import { creditableFaceValue, parseVoucherToken } from './voucherToken'
+import { creditableFaceValue, parseVoucherToken, tokenProofs } from './voucherToken'
 import { getWallet, notifyWalletChanged } from './wallet'
 import type { Merchant } from './merchants'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
 import { beginReceive, isReceiveDeferred } from './receiveGate'
+import { deriveRefundSecret, readLinkLock, xOnlyPub } from './cashlinkLock'
+import {
+  armGift,
+  claimLockedGift,
+  lockedOnLink,
+  recoverOrphanBurn,
+  restoreFinding,
+  retryDeposit,
+  settleLockedGift,
+  type ArmOutcome,
+  type CashlinkPorts,
+  type ReturnOutcome,
+} from './cashlinkFlow'
+import type { GiftLinkArm } from './transactions'
+import { loadMerchant } from './merchant'
+
+// --- #295 phase 4 seams -----------------------------------------------------
+
+/**
+ * What the Cashlink return needs from the outside, behind one seam so tests drive every failure.
+ * Loaded lazily: the real ports reach the relay and the mint, which a send that never arms (a
+ * merchant, a remote signer) has no reason to load.
+ */
+export const cashlinkSeam = {
+  ports: async (): Promise<CashlinkPorts> => (await import('./cashlinkPorts')).appCashlinkPorts(),
+  markMoving: async (pubkey: string, id: string): Promise<void> => (await import('./cashlinkPorts')).markMoving(pubkey, id),
+  clearMoving: async (pubkey: string, id: string): Promise<void> => (await import('./cashlinkPorts')).clearMoving(pubkey, id),
+  isMerchant: (pubkey: string): boolean => {
+    try {
+      return loadMerchant(pubkey) !== null
+    } catch {
+      return false
+    }
+  },
+}
+
+const locksKey = (pubkey: string) => `imani-wallet:cashlink-locks:${pubkey}`
+
+/** Signed link locks this device has seen, by gift secret. Not value: a lock is locked. */
+function knownLocks(pubkey: string): Map<string, string> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(locksKey(pubkey)) ?? '{}') as Record<string, unknown>
+    return new Map(Object.entries(parsed).filter((e): e is [string, string] => typeof e[1] === 'string'))
+  } catch {
+    return new Map()
+  }
+}
+
+function rememberLock(pubkey: string, giftSecret: string, signed: string): void {
+  try {
+    const all = Object.fromEntries(knownLocks(pubkey))
+    all[giftSecret] = signed
+    // Bounded: the gateway replays a lock to the identical request, so this is a convenience.
+    const entries = Object.entries(all).slice(-50)
+    localStorage.setItem(locksKey(pubkey), JSON.stringify(Object.fromEntries(entries)))
+  } catch {
+    // A full store: the gateway's replay finds it instead.
+  }
+}
+
+/**
+ * The gift on this link locked to it with THIS wallet's refund key: the sender's own Cashlink.
+ *
+ * The link's public key is public (a wrap's p tag), and the lock route takes any link key, so a
+ * stranger can lock a coupon of their own to this link with their own refund key and wrap it onto
+ * it. Picking the first locked token would then settle the stranger's (refused as "not this
+ * wallet's Cashlink" for ever) and the sender's own gift would never be settled or taken back
+ * (rev-wallet377 M1). Empty when this wallet has no refund key for the link.
+ */
+function ownLockedOnLink(link: Pick<GiftLinkRecord, 'i'>, linkSecret: Uint8Array, tokens: GiftToken[]): GiftToken[] {
+  const refundSecret = refundSecretFor(link)
+  if (!refundSecret) return []
+  try {
+    const refundPub = xOnlyPub(refundSecret)
+    const linkPub = linkPubOf(linkSecret)
+    return lockedOnLink(giftCandidates(tokens, linkPub), linkPub).filter(({ token }) =>
+      tokenProofs(token).every((p) => readLinkLock(p.secret)?.refundPub === refundPub),
+    )
+  } catch {
+    return []
+  } finally {
+    refundSecret.fill(0)
+  }
+}
+
+/** The refund key of a link, for an account whose key this wallet can read. Only those are armed. */
+function refundSecretFor(link: Pick<GiftLinkRecord, 'i'>): Uint8Array | null {
+  if (link.i === undefined) return null
+  const id = identitySecret()
+  if (!id) return null
+  try {
+    return deriveRefundSecret(id, link.i)
+  } finally {
+    id.fill(0)
+  }
+}
 
 // ─── Limits (Q5) ─────────────────────────────────────────────────────────────
 
@@ -209,6 +305,9 @@ export function countLinks(rows: LinkRow[], nowMs = Date.now()): LinkCounts {
   for (const parts of distinctLinks(rows).values()) {
     if (!parts.some((p) => p.link.status === 'outstanding')) continue
     if (now < parts[0].link.x) waiting += 1
+    // #295 phase 4: past its expiry, an armed link is already on its way back without this wallet
+    // (and the mint refuses a late claim once it has), so it bounds nothing and is not counted.
+    else if (parts[0].link.arm?.s === 'armed' || parts[0].link.arm?.s === 'returning') continue
     else expiredUnreturned += 1
   }
   return { waiting, expiredUnreturned }
@@ -282,6 +381,24 @@ function setLinkStatus(rows: LinkRow[], status: GiftLinkStatus, at = Date.now(),
   return serialised(() => writeLinkStatus(rows, status, at, extra))
 }
 
+/** Record a link's return state (#295 phase 4) without closing it. Only on a link still open. */
+function setLinkArm(rows: LinkRow[], arm: GiftLinkArm | undefined): Promise<void> {
+  return serialised(async () => {
+    const wallet = getWallet()
+    const fresh = await currentLinks()
+    for (const r of rows) {
+      const now = fresh.get(r.id) ?? r.link
+      if (now.status !== 'outstanding') continue
+      const { arm: _old, ...rest } = now
+      void _old
+      const link: GiftLinkRecord = arm ? { ...rest, arm } : rest
+      const merged = await wallet.updateTransaction(r.id, { link } as unknown as Partial<TransactionRow>)
+      if (merged) void publishTx(merged)
+    }
+    notifyWalletChanged()
+  })
+}
+
 async function writeLinkStatus(rows: LinkRow[], status: GiftLinkStatus, at: number, extra: Partial<GiftLinkRecord>): Promise<void> {
   const wallet = getWallet()
   const fresh = await currentLinks()
@@ -335,6 +452,11 @@ export interface GiftSent {
   result: SendResult
   link: string
   x: number
+  /**
+   * #295 phase 4: whether the link comes back on its own if nobody claims it. False means it comes
+   * back the next time this wallet runs after its expiry, as before (the service may be off).
+   */
+  returnsOnItsOwn?: boolean
 }
 
 /**
@@ -414,7 +536,87 @@ export async function sendGift({
     }
     if (!delivered) await new Promise((r) => setTimeout(r, 1500))
   }
-  return { result, link, x, delivered }
+  // #295 phase 4: lock the gift to its link and leave its take-back with the voucher service, so it
+  // comes back on its own. Only once it is on the link, only for an account whose key this wallet
+  // can read (the refund key is derived from it), and never for a merchant (owner scope: a stall's
+  // expired Cashlinks lapse). Anything that stops it leaves the link exactly as it is.
+  let returnsOnItsOwn = false
+  if (delivered && allocated.i !== undefined && !cashlinkSeam.isMerchant(payer)) {
+    returnsOnItsOwn = (await armLink(payer, k, allocated.secret, allocated.i, x)).kind === 'armed'
+  }
+  return { result, link, x, delivered, returnsOnItsOwn }
+}
+
+/**
+ * Arm (or resume arming) one link, recording each step on its row. Never throws.
+ */
+async function armLink(pubkey: string, k: string, linkSecret: Uint8Array, i: number, x: number): Promise<ArmOutcome> {
+  const refundSecret = refundSecretFor({ i })
+  if (!refundSecret) return { kind: 'unarmed', why: 'not_lockable' }
+  try {
+    const rowsNow = () => linkRows().then((all) => all.filter((r) => r.link.k === k))
+    const rows = await rowsNow()
+    if (rows.length === 0) return { kind: 'unarmed', why: 'no_gift' }
+    const id = rows[0].id
+    const tokens = giftCandidates(await giftTokensForSecret(linkSecret))
+    const ports = await cashlinkSeam.ports()
+    const resuming = rows[0].link.arm?.s === 'arming' ? rows[0].link.arm.ks : undefined
+    const outcome = await armGift({
+      ports,
+      linkSecret,
+      refundSecret,
+      x,
+      gifts: tokens,
+      merchant: cashlinkSeam.isMerchant(pubkey),
+      knownLocks: knownLocks(pubkey),
+      ...(resuming ? { burnKeyset: resuming } : {}),
+      onArming: async (ks) => {
+        // Written before the burn, and logout stays off until it is cleared: from the burn on, the
+        // value is moving and only this wallet (or its restore) finishes it.
+        await cashlinkSeam.markMoving(pubkey, id)
+        await setLinkArm(await rowsNow(), { s: 'arming', ks })
+      },
+      onLocked: async (giftSecret, signed) => rememberLock(pubkey, giftSecret, signed),
+    })
+    const fresh = await rowsNow()
+    switch (outcome.kind) {
+      case 'armed':
+        await setLinkArm(fresh, { s: 'armed', ks: outcome.keyset })
+        await cashlinkSeam.clearMoving(pubkey, id)
+        break
+      case 'not_armed':
+        // Locked to the link, but nothing waits at the voucher service: this wallet takes it back.
+        await setLinkArm(fresh, { s: 'not_armed', ...(outcome.keyset ? { ks: outcome.keyset } : {}) })
+        await cashlinkSeam.clearMoving(pubkey, id)
+        break
+      case 'claimed':
+        await setLinkStatus(fresh, 'claimed')
+        await cashlinkSeam.clearMoving(pubkey, id)
+        break
+      case 'kept_as_sats':
+        // The gift could not be locked after it was burnt; its value is back in this wallet.
+        await setLinkStatus(fresh, 'reclaimed', Date.now(), { noticedAt: Date.now() })
+        await cashlinkSeam.clearMoving(pubkey, id)
+        break
+      case 'arming':
+        // Part way: left as it is, and finished on the next run.
+        break
+      case 'unarmed':
+        // The mint refused the burn outright after `onArming` (rev-wallet377 M2): nothing moved,
+        // so the link is the ordinary gift it was. Clear `arming`, or every run would retry it.
+        if (outcome.why === 'burn_refused') {
+          await setLinkArm(fresh, undefined)
+          await cashlinkSeam.clearMoving(pubkey, id)
+        }
+        break
+    }
+    return outcome
+  } catch (error) {
+    console.warn('[gift] could not finish arming a Cashlink yet', error instanceof Error ? error.name : 'error')
+    return { kind: 'arming', why: 'error' }
+  } finally {
+    refundSecret.fill(0)
+  }
 }
 
 async function refuseForeignIssuerForGift(issuer: string, payer: string): Promise<void> {
@@ -458,6 +660,8 @@ export type GiftRedeemOutcome =
 export async function redeemGiftTokens(
   tokens: GiftToken[],
   source: 'gift_link' | 'gift_link_reclaim',
+  /** The link's key, text form. Needed for a gift locked to its link (#295 phase 4). */
+  key?: string,
 ): Promise<GiftRedeemOutcome> {
   await loadTrustedMints()
   for (const { token } of tokens) {
@@ -487,11 +691,27 @@ export async function redeemGiftTokens(
     throw e
   }
   try {
+    // #295 phase 4: a gift locked to its link is claimed by this wallet's own swap with the link key
+    // and re-signed unlocked; the gateway's receive cannot open it. Everything else as before.
+    const linkSecret = key ? secretFromText(key) : null
+    const locked = linkSecret ? lockedOnLink(tokens, linkPubOf(linkSecret)) : []
+    if (linkSecret && locked.length > 0 && source === 'gift_link') {
+      const outcome = await claimLockedGift({ ports: await cashlinkSeam.ports(), pubkey: account ?? '', linkSecret, k: key!, lockedTokens: locked })
+      notifyWalletChanged()
+      if (outcome.kind === 'own_coupon') return { kind: 'failed', message: OWN_COUPON_MESSAGE }
+      if (outcome.kind !== 'ok') return outcome
+      const rest = tokens.filter((t) => !locked.includes(t))
+      return rest.length === 0 ? outcome : await swapGiftTokens(rest, source, redemption)
+    }
     return await swapGiftTokens(tokens, source, redemption)
   } finally {
     endReceive()
   }
 }
+
+/** A stall opening a Cashlink of its own coupon (owner decision Q3: no self-swap). Nothing moved. */
+export const OWN_COUPON_MESSAGE =
+  'This Cashlink holds a voucher from your own stall, so it can’t be added here. Ask the sender to send it to your handle instead.'
 
 /** Shown when a gift is opened while this wallet is logging out. Nothing was taken from the link. */
 export const RECEIVE_PAUSED_MESSAGE =
@@ -538,6 +758,28 @@ export async function giftTokensForSecret(secret: Uint8Array): Promise<GiftToken
   return giftTokensFrom(secret, await fetchGiftWraps(secret))
 }
 
+/**
+ * Start-up (#295 phase 4): finish every Cashlink claim this wallet began and did not finish (the
+ * page died after the burn). Behind the receive gate, like every receive. Never throws.
+ */
+export async function finishPendingCashlinkClaims(pubkey: string): Promise<number> {
+  const { finishCashlinkClaims, loadClaims } = await import('./cashlinkFlow')
+  if (loadClaims(pubkey).length === 0) return 0
+  let endReceive: () => void
+  try {
+    endReceive = beginReceive()
+  } catch {
+    return 0
+  }
+  try {
+    return await finishCashlinkClaims(await cashlinkSeam.ports(), pubkey)
+  } catch {
+    return 0
+  } finally {
+    endReceive()
+  }
+}
+
 /** Read and verify a gift for the prompt or the banner. Never spends. */
 export async function readGift(key: string, x: number, nowMs = Date.now()): Promise<{ verdict: GiftVerdict; tokens: GiftToken[] }> {
   const secret = secretFromText(key)
@@ -550,7 +792,7 @@ export async function readGift(key: string, x: number, nowMs = Date.now()): Prom
     return { verdict: { kind: 'unreachable' }, tokens: [] }
   }
   if (tokens.length === 0) return { verdict: { kind: 'unreachable' }, tokens }
-  return { verdict: await verifyGift(tokens, x, nowMs), tokens }
+  return { verdict: await verifyGift(tokens, x, nowMs, undefined, linkPubOf(secret)), tokens }
 }
 
 // ─── Status, take back, reclaim after x (spec 3.3) ───────────────────────────
@@ -568,13 +810,23 @@ export async function takeBack(k: string): Promise<TakeBackOutcome> {
   } catch (error) {
     return { kind: 'failed', message: error instanceof Error ? error.message : String(error) }
   }
+  // Taken back (or found claimed) by hand: the sender already knows, so no "expired" notice follows.
+  const told = { noticedAt: Date.now() }
+  // #295 phase 4: a gift locked to its link comes back by this wallet's own swap.
+  const locked = rows[0] ? ownLockedOnLink(rows[0].link, secret, tokens) : []
+  if (locked.length > 0 && rows[0]) {
+    const outcome = await settleLocked(rows, secret, locked[0].token, true)
+    if (outcome.kind === 'returned') return { kind: 'ok' }
+    if (outcome.kind === 'claimed') return { kind: 'claimed' }
+    return { kind: 'failed', message: 'Could not take it back just now. Try again.' }
+  }
+  // An armed link whose locked gift cannot be read right now: never read its spent bearer as claimed.
+  if (rows[0]?.link.arm) return { kind: 'not_found' }
   // Only coupons that pass their own checks: anything else was wrapped to the link's public key by
   // someone else and must not block the take-back (review of #247, F1).
   tokens = giftCandidates(tokens)
   if (tokens.length === 0) return { kind: 'not_found' }
   const states = await Promise.all(tokens.map((t) => tokenState(t.token)))
-  // Taken back (or found claimed) by hand: the sender already knows, so no "expired" notice follows.
-  const told = { noticedAt: Date.now() }
   if (combinedState(states) === 'SPENT') {
     await setLinkStatus(rows, 'claimed', Date.now(), told)
     return { kind: 'claimed' }
@@ -584,6 +836,49 @@ export async function takeBack(k: string): Promise<TakeBackOutcome> {
   if (outcome.kind === 'ok') await setLinkStatus(rows, 'reclaimed', Date.now(), told)
   else if (outcome.kind === 'claimed') await setLinkStatus(rows, 'claimed', Date.now(), told)
   return outcome
+}
+
+/**
+ * One run for a locked link (#295 phase 4), recording what it found. `takeBackNow` is "Take it back"
+ * before the link expires. Never throws.
+ */
+async function settleLocked(rows: LinkRow[], linkSecret: Uint8Array, lockedToken: string, takeBackNow = false): Promise<ReturnOutcome> {
+  const link = rows[0].link
+  const refundSecret = refundSecretFor(link)
+  if (!refundSecret) return { kind: 'unknown', why: 'no refund key here' }
+  const pubkey = sessionAccount(getSigner) ?? ''
+  try {
+    const ports = await cashlinkSeam.ports()
+    const outcome = await settleLockedGift({
+      ports,
+      linkSecret,
+      refundSecret,
+      lockedToken,
+      ...(link.arm?.ks ? { depositKeyset: link.arm.ks } : {}),
+      takeBackNow,
+      onReturning: async () => {
+        // Before anything leaves the link: logout stays off until it is back as a voucher.
+        await cashlinkSeam.markMoving(pubkey, rows[0].id)
+        if (link.arm?.s !== 'returning') await setLinkArm(rows, { s: 'returning', ...(link.arm?.ks ? { ks: link.arm.ks } : {}) })
+      },
+    })
+    const told = takeBackNow ? { noticedAt: Date.now() } : {}
+    if (outcome.kind === 'returned') {
+      await setLinkStatus(rows, 'reclaimed', Date.now(), told)
+      await cashlinkSeam.clearMoving(pubkey, rows[0].id)
+    } else if (outcome.kind === 'claimed') {
+      await setLinkStatus(rows, 'claimed', Date.now(), told)
+      await cashlinkSeam.clearMoving(pubkey, rows[0].id)
+    } else if (outcome.kind === 'waiting' && link.arm?.s === 'not_armed' && Math.floor(ports.now() / 1000) < link.x) {
+      // Not armed yet and still before its expiry: leave the take-back with the service again (the
+      // same derivation, so one it already holds replays). Off or refused: stays as it is.
+      const again = await retryDeposit(ports, linkSecret, refundSecret, lockedToken)
+      if (again.kind === 'armed') await setLinkArm(rows, { s: 'armed', ks: again.keyset })
+    }
+    return outcome
+  } finally {
+    refundSecret.fill(0)
+  }
 }
 
 /**
@@ -664,6 +959,22 @@ export async function reconcileGiftLinks(
       } catch {
         continue
       }
+      // #295 phase 4, first: a link part way through being locked is finished, and a link whose gift
+      // is locked to it is settled by its own rules. Its original bearer gift, spent by the lock,
+      // must never be read below as "claimed".
+      const link = parts[0].link
+      if (link.arm?.s === 'arming' && link.i !== undefined) {
+        await armLink(sessionAccount(getSigner) ?? '', k, secret, link.i, link.x)
+        continue
+      }
+      const locked = ownLockedOnLink(link, secret, tokens)
+      if (locked.length > 0) {
+        const outcome = await settleLocked(parts, secret, locked[0].token)
+        if (outcome.kind === 'returned') reclaimed += 1
+        else if (outcome.kind === 'claimed') claimed += 1
+        continue
+      }
+      if (link.arm) continue
       // As in takeBack: a third party's wrap to the link key must not freeze it (review of #247, F1).
       tokens = giftCandidates(tokens)
       if (tokens.length === 0) continue
@@ -738,6 +1049,27 @@ export async function restoreScan(
       if (i > last) last = i
       advanceLinkIndex(pubkey, i)
       if (known.has(k)) continue
+      // #295 phase 4: a gift of ours locked to this link, or one on its way back, is adopted with
+      // its exact expiry (the lock's locktime) so the normal run finishes it.
+      const refundSecret = deriveRefundSecret(id, i)
+      try {
+        const found = await restoreFinding(await cashlinkSeam.ports(), secret, refundSecret, giftCandidates(tokens, linkPubOf(secret)))
+        if (found.kind === 'locked' || found.kind === 'returning') {
+          const arm: GiftLinkArm = { s: found.kind === 'locked' ? 'not_armed' : 'returning' }
+          await adoptLink(k, i, [{ token: found.lockedToken, sentAt: tokens[0].sentAt }], nowMs, { x: found.x, arm })
+          known.add(k)
+          adopted += 1
+          continue
+        }
+        if (found.kind === 'arming') {
+          // Burnt for a lock that never reached the link, and the record of it is gone with the
+          // device: the burn's sats are this wallet's and are kept, never left behind.
+          if (await recoverOrphanBurn(await cashlinkSeam.ports(), refundSecret, found.bearer)) adopted += 1
+          continue
+        }
+      } finally {
+        refundSecret.fill(0)
+      }
       tokens = giftCandidates(tokens)
       if (tokens.length === 0) continue
       const states = await Promise.all(tokens.map((t) => state(t.token)))
@@ -752,7 +1084,13 @@ export async function restoreScan(
   }
 }
 
-async function adoptLink(k: string, i: number, tokens: GiftToken[], nowMs: number): Promise<void> {
+async function adoptLink(
+  k: string,
+  i: number,
+  tokens: GiftToken[],
+  nowMs: number,
+  locked?: { x: number; arm: GiftLinkArm },
+): Promise<void> {
   const wallet = getWallet()
   for (const { token, sentAt } of tokens) {
     let parsed
@@ -763,7 +1101,7 @@ async function adoptLink(k: string, i: number, tokens: GiftToken[], nowMs: numbe
     }
     const exp = parsed.voucher.expiresAt
     const expS = exp ? (exp > 1e12 ? Math.floor(exp / 1000) : exp) : undefined
-    const x = Math.min(Math.floor(nowMs / 1000) + 30 * 86400, expS ?? Infinity)
+    const x = locked?.x ?? Math.min(Math.floor(nowMs / 1000) + 30 * 86400, expS ?? Infinity)
     const row = buildSentTransaction({
       tokenId: `gift-${await tokenIdFrom(token)}`,
       amount: creditableFaceValue(parsed).faceValue,
@@ -773,7 +1111,7 @@ async function adoptLink(k: string, i: number, tokens: GiftToken[], nowMs: numbe
       recipientPubkey: linkPubOf(secretFromText(k)!),
       recipientName: 'Link',
       voucherId: parsed.voucher.voucherId,
-      link: { k, i, x, status: 'outstanding' },
+      link: { k, i, x, status: 'outstanding', ...(locked ? { arm: locked.arm } : {}) },
       at: sentAt * 1000,
     })
     await wallet.addTransaction(row)

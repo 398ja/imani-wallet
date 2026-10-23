@@ -140,13 +140,13 @@ export async function decommissionTerminal(
         (): StashCheck => ({ ok: false, reason: 'store-unreadable', count: 0, fingerprint: '' }),
       )
     : null
-  let inFlight: { sends: number; swaps: number }
+  let inFlight: { sends: number; swaps: number; cashlinks?: number }
   try {
     inFlight = moneyInFlight(pubkey)
   } catch {
     inFlight = { sends: 1, swaps: 0 }
   }
-  if (!backups.ok || !stash?.ok || inFlight.sends > 0 || inFlight.swaps > 0) {
+  if (!backups.ok || !stash?.ok || inFlight.sends > 0 || inFlight.swaps > 0 || (inFlight.cashlinks ?? 0) > 0) {
     return {
       done: false,
       reason: DECOMMISSION_REFUSAL.VOUCHERS_UNCONFIRMED,

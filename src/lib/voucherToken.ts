@@ -461,6 +461,22 @@ export interface TokenProof {
   secret: string
   /** The unblinded signature, hex. */
   C: string
+  /**
+   * The mint's NUT-12 DLEQ proof with its blinding factor, hex, when the token carries one.
+   *
+   * A Cashlink lock or re-sign proves the burnt proof's amount with it (imani-gateway-customer#141),
+   * so it is read when present and never invented. Absent on most tokens, which is fine everywhere
+   * else: nothing but the Cashlink routes asks for it.
+   */
+  dleq?: { e: string; s: string; r: string }
+}
+
+function dleqOf(raw: unknown): TokenProof['dleq'] {
+  if (!raw || typeof raw !== 'object') return undefined
+  const { e, s, r } = raw as Record<string, unknown>
+  const hex = (v: unknown) => (v instanceof Uint8Array ? bytesToHex(v) : typeof v === 'string' ? v : undefined)
+  const [he, hs, hr] = [hex(e), hex(s), hex(r)]
+  return he && hs && hr ? { e: he, s: hs, r: hr } : undefined
 }
 
 /**
@@ -486,11 +502,13 @@ export function tokenProofs(token: string): TokenProof[] {
     return ((entry.p ?? []) as Array<Record<string, unknown>>).map((p) => {
       if (typeof p.s !== 'string') throw new Error('proof has no NUT-10 secret')
       const c = p.c
+      const dleq = dleqOf(p.d)
       return {
         amount: Number(p.a ?? 0),
         id,
         secret: p.s,
         C: c instanceof Uint8Array ? bytesToHex(c) : String(c ?? ''),
+        ...(dleq ? { dleq } : {}),
       }
     })
   })
@@ -673,6 +691,22 @@ function creditableSatsOf(amount: number, secret: string, first: SignedVoucherFi
  */
 function creditedSats(parsed: ParsedVoucherToken): number {
   return Math.min(parsed.tokenAmount, parsed.creditableSats ?? parsed.tokenAmount)
+}
+
+/**
+ * The voucher a single proof secret carries, in either shape, or null when it is not a voucher.
+ * Exported for the Cashlink lock (#295 phase 4), which re-forms a gift proof's terms into the
+ * link-locked successor and back, and must read them exactly as `parseVoucherToken` does.
+ */
+export function voucherOfSecret(secret: string): SignedVoucherFields | null {
+  try {
+    const locked = lockedVoucherFrom(secret)
+    if (locked) return locked
+    const dataHex = voucherBlobHex(secret)
+    return dataHex === null ? null : readVoucherFields(decodeCbor(hexToBytes(dataHex)) as Record<string, unknown>)
+  } catch {
+    return null
+  }
 }
 
 /**

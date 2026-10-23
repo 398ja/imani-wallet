@@ -96,7 +96,7 @@ export const LOGOUT_BLOCKED_COPY = {
     `${count === 1 ? 'is' : 'are'} not confirmed as backed up, so logging out stays off until ` +
     `${count === 1 ? 'it is' : 'they are'} safe. Nothing has been erased. Check your connection and try again.`,
   inFlight:
-    'A payment or a swap is still going through. Logging out now could lose its change, so ' +
+    'A payment or a Cashlink is still going through. Logging out now could lose it, so ' +
     'logging out stays off until it finishes. Nothing has been erased. Try again in a moment.',
   otherTab:
     'This wallet is open in another tab or window, and it could not be paused safely. ' +
@@ -139,7 +139,7 @@ export interface LogoutDeps {
    * Live entries in the pending-send and swap-intent ledgers, which hold value
    * no coupon row describes and which the sweep below would delete.
    */
-  inFlight?: (pubkey: string) => { sends: number; swaps: number }
+  inFlight?: (pubkey: string) => { sends: number; swaps: number; cashlinks?: number }
   /** Try to finish pending sends first, so a settled one does not block. Bounded, never throws. */
   settleInFlight?: (pubkey: string) => Promise<void>
   /** The read-back check of the cashback stash (#331). Must never answer ok on a failure. */
@@ -180,10 +180,12 @@ async function defaultSettleInFlight(pubkey: string): Promise<void> {
   }
 }
 
-function hasMoneyInFlight(read: (pubkey: string) => { sends: number; swaps: number }, pubkey: string): boolean {
+function hasMoneyInFlight(read: (pubkey: string) => { sends: number; swaps: number; cashlinks?: number }, pubkey: string): boolean {
   try {
-    const { sends, swaps } = read(pubkey)
-    return sends > 0 || swaps > 0
+    const { sends, swaps, cashlinks } = read(pubkey)
+    // #295 phase 4: a Cashlink claim part way, or a Cashlink whose value is moving, is value no
+    // coupon row describes yet, and the sweep below would delete its only record.
+    return sends > 0 || swaps > 0 || (cashlinks ?? 0) > 0
   } catch {
     return true
   }
