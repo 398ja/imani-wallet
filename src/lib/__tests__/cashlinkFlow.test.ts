@@ -657,3 +657,49 @@ describe('rev-wallet377: reviewer tests that kill surviving mutants', () => {
     expect(w.mint.log.swaps.length).toBe(swaps)
   })
 })
+
+describe('second check of rev-wallet377: mutant killers', () => {
+  const satsIn = (t: string) => tokenProofs(t).reduce((n, p) => n + p.amount, 0)
+
+  it('H1: each kept row\u2019s sats token carries exactly the sats it records (no output dropped)', async () => {
+    const gift = giftOn(w, [32, 16])
+    const call = w.gateway.call.bind(w.gateway)
+    let locksSeen = 0
+    w.gateway.call = async (m, p, b, s) => {
+      if (p === LOCK_PATH && ++locksSeen > 2) return { status: 422, body: { refusal: 'SAT_BOUND_EXCEEDED' } }
+      return call(m, p, b, s)
+    }
+    expect((await armGift(armCtx(gift))).kind).toBe('kept_as_sats')
+    expect(w.kept).toHaveLength(2)
+    for (const k of w.kept) expect(satsIn(k.satsToken!)).toBe(k.sats)
+    expect(w.kept.reduce((n, k) => n + satsIn(k.satsToken!), 0)).toBe(48)
+  })
+
+  it('H1: a two-proof orphan burn (no record of the link) keeps BOTH proofs\u2019 sats', async () => {
+    const { derivedOutputs, sigAllWitness } = await import('../cashlinkLock')
+    const gift = giftOn(w, [32, 16])
+    for (const p of tokenProofs(gift.token)) {
+      const outs = derivedOutputs(REFUND, 'burn', p.secret, p.amount, p.id)
+      expect((await w.mint.swap(MINT_URL, [{ ...p, witness: sigAllWitness(REFUND, p.secret, p.C, outs) }], outs)).kind).toBe('signed')
+    }
+    expect(await recoverOrphanBurn(w.ports, REFUND, gift)).toBe(true)
+    expect(w.kept).toHaveLength(2)
+    expect(keptSats()).toBe(48)
+  })
+
+  it('M2: a resumed burn answered 11002 (in flight) stays "arming", never "nothing moved"', async () => {
+    const gift = giftOn(w)
+    const swap = w.mint.swap.bind(w.mint)
+    w.mint.swap = async (m, i, o) => (i[0]?.secret.startsWith('["VOUCHER"') ? { kind: 'refused', code: 11002 } : swap(m, i, o))
+    expect((await armGift(armCtx(gift, { burnKeyset: w.mint.active().id }))).kind).toBe('arming')
+  })
+
+  it('M2: the second proof\u2019s burn refused after the first moved stays "arming" (the first proof\u2019s value is moving)', async () => {
+    const gift = giftOn(w, [32, 16])
+    const second = tokenProofs(gift.token)[1].secret
+    const swap = w.mint.swap.bind(w.mint)
+    w.mint.swap = async (m, i, o) => (i[0]?.secret === second ? { kind: 'refused', code: 11005 } : swap(m, i, o))
+    expect((await armGift(armCtx(gift))).kind).toBe('arming')
+    expect(await w.mint.states(MINT_URL, [tokenProofs(gift.token)[0].secret])).toEqual(['SPENT'])
+  })
+})
