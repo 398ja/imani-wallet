@@ -634,3 +634,26 @@ describe('rev-wallet377 M2: a resumed arm never sticks on a burn the mint will n
     expect(await w.mint.states(MINT_URL, [tokenProofs(gift.token)[0].secret])).toEqual(['UNSPENT'])
   })
 })
+
+describe('rev-wallet377: reviewer tests that kill surviving mutants', () => {
+  it('a relay answer with FORGED signatures (a DLEQ that does not verify) is never unblinded; NUT-09 recovers the real ones', async () => {
+    // The existing DLEQ test changes only the DLEQ, so the C_ it trusts is genuine either way. Here
+    // the C_ itself is forged: trusting it would mint from garbage and leave the gift 'returning'.
+    await armGift(armCtx(giftOn(w)))
+    at(w, X + 61)
+    await w.gateway.runRelay(X + 61)
+    const d = [...w.gateway.deposits.values()][0]
+    const forged = d.signatures!.map((s) => ({ ...s, C_: '02' + '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798' }))
+    w.gateway.fetchAnswer = { status: 200, body: { state: 'REFUNDED', signatures: forged } }
+    expect((await settleLockedGift(returnCtx())).kind).toBe('returned')
+    expect(keptSats()).toBe(64)
+  })
+
+  it('a lock that is not this wallet\u2019s (another refund key) is never settled, not even by "Take it back"', async () => {
+    await armGift(armCtx(giftOn(w)))
+    const swaps = w.mint.log.swaps.length
+    const out = await settleLockedGift(returnCtx({ refundSecret: hexToBytes('55'.repeat(32)), takeBackNow: true }))
+    expect(out).toEqual({ kind: 'unknown', why: expect.any(String) })
+    expect(w.mint.log.swaps.length).toBe(swaps)
+  })
+})
