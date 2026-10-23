@@ -602,6 +602,12 @@ async function armLink(pubkey: string, k: string, linkSecret: Uint8Array, i: num
         // Part way: left as it is, and finished on the next run.
         break
       case 'unarmed':
+        // The mint refused the burn outright after `onArming` (rev-wallet377 M2): nothing moved,
+        // so the link is the ordinary gift it was. Clear `arming`, or every run would retry it.
+        if (outcome.why === 'burn_refused') {
+          await setLinkArm(fresh, undefined)
+          await cashlinkSeam.clearMoving(pubkey, id)
+        }
         break
     }
     return outcome

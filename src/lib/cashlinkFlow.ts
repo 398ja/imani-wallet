@@ -226,7 +226,10 @@ async function keepAsSats(ports: CashlinkPorts, mintUrl: string, source: TokenPr
 
 // --- Sending: arming --------------------------------------------------------
 
-/** Why a link was left as an ordinary bearer gift. Nothing was burnt in any of these. */
+/**
+ * Why a link was left as an ordinary bearer gift. Nothing was burnt in any of these; all but
+ * `burn_refused` are decided before `onArming`.
+ */
 export type UnarmedReason =
   | 'merchant'
   | 'no_gift'
@@ -237,6 +240,8 @@ export type UnarmedReason =
   | 'lock_refused'
   | 'relay_unavailable'
   | 'unreachable'
+  /** The mint refused the burn itself (nothing moved). The only one that can follow `onArming`. */
+  | 'burn_refused'
 
 export type ArmOutcome =
   /** Locked, and the take-back is waiting at the relay: it comes back on its own. */
@@ -319,8 +324,17 @@ async function arm(ctx: ArmContext): Promise<ArmOutcome> {
   // 1-3, per proof.
   const locked: UnblindedProof[] = []
   let gone = 0
+  let moved = 0
   for (const { proof } of proofs) {
     const step = await lockOne(ctx, mintUrl, proof, burnKeyset, linkPub, refundPub)
+    if (step.kind === 'unburnt') {
+      // Nothing burnt yet on any proof: the link is exactly the ordinary gift it was, and must not
+      // stay 'arming' for ever (rev-wallet377 M2). Part way through a multi-proof gift, the next
+      // run tries again (the burnt proofs are found by NUT-09).
+      if (moved === 0) return { kind: 'unarmed', why: 'burn_refused' }
+      throw new Error(`the burn was refused (${step.why}); left for the next run`)
+    }
+    moved += 1
     if (step.kind === 'locked') locked.push(step.proof)
     else if (step.kind === 'gone') gone += 1
     else await keepAsSats(ports, mintUrl, proof, step.proofs, 'returned')
@@ -393,20 +407,40 @@ function lockBody(ctx: ArmContext, proof: TokenProof, linkPub: string, refundPub
   }
 }
 
-type LockStep = { kind: 'locked'; proof: UnblindedProof } | { kind: 'gone' } | { kind: 'sats'; proofs: UnblindedProof[] }
+type LockStep =
+  | { kind: 'locked'; proof: UnblindedProof }
+  | { kind: 'gone' }
+  | { kind: 'sats'; proofs: UnblindedProof[] }
+  /** The mint refused the burn outright: nothing of this proof moved. */
+  | { kind: 'unburnt'; why: string }
 
 async function lockOne(ctx: ArmContext, mintUrl: string, proof: TokenProof, burnKeyset: string, linkPub: string, refundPub: string): Promise<LockStep> {
   const { ports } = ctx
-  const burnOuts = derivedOutputs(ctx.refundSecret, 'burn', proof.secret, proof.amount, burnKeyset)
+  let burnOuts = derivedOutputs(ctx.refundSecret, 'burn', proof.secret, proof.amount, burnKeyset)
 
   // 1. Burn, or find our earlier burn.
   const [giftState] = await ports.mint.states(mintUrl, [proof.secret])
   let burnt: UnblindedProof[]
   if (giftState === 'UNSPENT') {
-    const witness = sigAllWitness(ctx.refundSecret, proof.secret, proof.C, burnOuts)
-    const done = await swapOrRestore(ports.mint, mintUrl, [{ ...proof, witness }], burnOuts)
+    let witness = sigAllWitness(ctx.refundSecret, proof.secret, proof.C, burnOuts)
+    let done = await swapOrRestore(ports.mint, mintUrl, [{ ...proof, witness }], burnOuts)
+    if (done.kind === 'refused' && done.answer.kind === 'inactive') {
+      // The keyset recorded before the burn was archived since (a resumed run, or a rotation in
+      // between): nothing was signed. The same B_ in the active keyset (rev-wallet377 M2), so a
+      // later restore still finds them; the witness covers amounts and B_ only.
+      burnOuts = derivedOutputs(ctx.refundSecret, 'burn', proof.secret, proof.amount, await ports.mint.activeKeysetId(mintUrl))
+      witness = sigAllWitness(ctx.refundSecret, proof.secret, proof.C, burnOuts)
+      done = await swapOrRestore(ports.mint, mintUrl, [{ ...proof, witness }], burnOuts)
+    }
     if (done.kind === 'gone') return { kind: 'gone' }
-    if (done.kind === 'refused') throw new Error(`the burn was refused (${done.answer.kind})`)
+    if (done.kind === 'refused') {
+      // 11002/11004: an operation on it is in flight (possibly our own burn from another tab), so
+      // the next run looks again. Anything else refused outright: nothing was burnt, and the gift
+      // is still the bearer gift on the link.
+      const code = done.answer.kind === 'refused' ? done.answer.code : undefined
+      if (code === 11002 || code === 11004) throw new Error(`the burn is pending (${code}); left for the next run`)
+      return { kind: 'unburnt', why: done.answer.kind }
+    }
     burnt = done.proofs
   } else if (giftState === 'SPENT') {
     burnt = await restoreMine(ports.mint, mintUrl, burnOuts)
