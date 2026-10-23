@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-10-23
+
+Unclaimed Cashlinks come back on their own (#295 phase 4, #377), **dormant** until
+imani-gateway-core#185 gives send tokens their mint proof: until then every Cashlink behaves as in
+0.38.0. Needs imani-gateway-customer 0.33.0 for the lock and re-sign routes (the return relay can
+stay off). wallet-api is rebuilt: its image copies `src/lib/voucherToken.ts`, which gained the
+optional `dleq` read in `tokenProofs` and `voucherOfSecret` (additive; wallet-api's own code is
+unchanged). purchase-issuer and audit-api are byte-identical to 0.38.0 over their image COPY
+paths, so they are not rebuilt. No configuration change, no migration.
+
 ### Added
 
 - **An unclaimed Cashlink comes back on its own** (#295, phase 4). When the voucher service
