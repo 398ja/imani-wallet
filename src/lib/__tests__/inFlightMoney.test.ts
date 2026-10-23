@@ -30,7 +30,7 @@ beforeEach(() => localStorage.clear())
 
 describe('moneyInFlight', () => {
   it('sees a swap intent the receive path wrote, and stops seeing it once forgotten', () => {
-    expect(moneyInFlight(PK)).toEqual({ sends: 0, swaps: 0 })
+    expect(moneyInFlight(PK)).toEqual({ sends: 0, swaps: 0, cashlinks: 0 })
     rememberSwapIntent(PK, intent('one') as never)
     expect(moneyInFlight(PK).swaps).toBe(1)
     forgetSwapIntent(PK, 'one')
@@ -56,8 +56,21 @@ describe('moneyInFlight', () => {
     expect(moneyInFlight(PK).sends).toBe(0)
   })
 
+  it('#295 phase 4: counts a Cashlink claim part way and a Cashlink whose value is moving, however old', () => {
+    // Neither expires (the value does not), so an entry from a year ago still holds logout.
+    localStorage.setItem(`imani-wallet:cashlink-claims:${PK}`, JSON.stringify([{ at: 0 }]))
+    localStorage.setItem(`imani-wallet:cashlink-moving:${PK}`, JSON.stringify(['sent:a', 'sent:b']))
+    expect(moneyInFlight(PK).cashlinks).toBe(3)
+  })
+
+  it('#295 phase 4: an unreadable Cashlink ledger counts as one, never as empty', () => {
+    // Unreadable is not "nothing there": the value it describes may be real.
+    localStorage.setItem(`imani-wallet:cashlink-moving:${PK}`, '{not json')
+    expect(moneyInFlight(PK).cashlinks).toBe(1)
+  })
+
   it('is per account', () => {
     rememberSwapIntent(PK, intent('mine') as never)
-    expect(moneyInFlight('cd'.repeat(32))).toEqual({ sends: 0, swaps: 0 })
+    expect(moneyInFlight('cd'.repeat(32))).toEqual({ sends: 0, swaps: 0, cashlinks: 0 })
   })
 })

@@ -32,13 +32,27 @@ export function encodePlainTokenV4(mintUrl: string, unit: string, proofs: Unblin
       head(4, group.length),
       ...group.map((proof) =>
         concat(
-          head(5, 3),
+          head(5, proof.dleq ? 4 : 3),
           text('a'),
           head(0, proof.amount),
           text('s'),
           text(proof.secret),
           text('c'),
           byteString(hexToBytes(proof.C)),
+          // NUT-12 `d: {e, s, r}`, only when the proof has one: a Cashlink coupon needs it so the
+          // next holder can prove its amount to the re-sign route (#295 phase 4).
+          ...(proof.dleq
+            ? [
+                text('d'),
+                head(5, 3),
+                text('e'),
+                byteString(hexToBytes(proof.dleq.e)),
+                text('s'),
+                byteString(hexToBytes(proof.dleq.s)),
+                text('r'),
+                byteString(hexToBytes(proof.dleq.r.padStart(64, '0'))),
+              ]
+            : []),
         ),
       ),
     ),

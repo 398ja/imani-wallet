@@ -6,6 +6,7 @@ import { ClaimLinkPanel } from './CashbackClaimLink'
 import { formatDate } from '../lib/format'
 import { linkFor, reconcileGiftLinks, takeBack, type TakeBackOutcome } from '../lib/giftLinks'
 import { giftStatusLabel, type GiftLinkRecord, type GiftLinkStatus } from '../lib/transactions'
+import { RETURN_STATUS_COPY } from '../lib/cashlinkCopy'
 
 const TAKE_BACK_FAILURE: Record<Exclude<TakeBackOutcome['kind'], 'ok'>, string> = {
   claimed: 'It was already claimed, so there is nothing to take back.',
@@ -33,8 +34,17 @@ export function GiftLinkSection({ link }: { link: GiftLinkRecord | undefined }) 
 
   if (!link) return null
   const status: GiftLinkStatus = link.status
-  const open = status === 'outstanding'
+  // #295 phase 4: on its way back, it is no longer on the link and can no longer be shown or taken.
+  const returning = status === 'outstanding' && link.arm?.s === 'returning'
+  const open = status === 'outstanding' && !returning
   const url = open ? linkFor(link) : null
+  const comesBack = returning
+    ? RETURN_STATUS_COPY.returning
+    : open
+      ? link.arm?.s === 'armed'
+        ? RETURN_STATUS_COPY.onItsOwn
+        : RETURN_STATUS_COPY.whenOpened
+      : null
 
   const run = async () => {
     if (busy) return
@@ -50,6 +60,7 @@ export function GiftLinkSection({ link }: { link: GiftLinkRecord | undefined }) 
     <ListSection title="Cashlink">
       <DetailRow label="Status" value={giftStatusLabel(link)} />
       <DetailRow label="Expires" value={formatDate(link.x * 1000)} />
+      {comesBack && <DetailRow label="If unclaimed" value={comesBack} />}
       {open && url && (
         <div className="space-y-2 p-4">
           <ClaimLinkPanel link={url} expiresAt={link.x * 1000} qrAlt="QR code to claim this Cashlink" />

@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **An unclaimed Cashlink comes back on its own** (#295, phase 4). When the voucher service
+  supports it, Send by link now hands the gift over locked to the link: the recipient can open it
+  until the expiry, and after that only the sender can, with a return the service posts for the
+  sender even when this app is closed (gateway-core#255 lock and re-sign, #262 return relay). The
+  sender sees "If nobody claims it in time, it comes back to you on its own." On the next open
+  the link reads **Taken back** and the voucher is in the wallet. App only, no configuration.
+  - It degrades to today's behaviour: with the return relay off (as it ships), the routes missing,
+    the service unreachable, a merchant account (its expired Cashlinks lapse, by owner rule), a
+    remote-signer account, or a token without a mint proof, nothing is locked and the wallet takes
+    the gift back itself after the expiry, as before. No value moves until every pre-check passes.
+  - A lock is never made without the sender's return key (a hard rule with a test). The return key
+    is derived from the account key per link (`imani-gift-refund/v1/i`), so a restored wallet can
+    take back what the relay has not, by asking the mint (NUT-09) and re-forming through the service.
+  - Opening a locked Cashlink re-forms it for the recipient through the service; the recipient's
+    claim is saved before any value moves, and is finished on the next start if interrupted.
+  - Logout stays off while a Cashlink is being locked, returned or claimed.
+
+### Changed
+
+- The logout hold message reads "A payment or a Cashlink is still going through" (no "swap").
+
 ## [0.38.0] - 2026-10-22
 
 Relay reads survive a slow link (imani-deploy#235, #374), and a receive delayed past the NIP-98
