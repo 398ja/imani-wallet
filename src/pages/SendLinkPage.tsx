@@ -25,6 +25,7 @@ import { SendOutcomeUnknownError, splitObstacle, withoutInFlight } from '../lib/
 import { listVouchers } from '../lib/wallet'
 import { toEpochMs } from '../lib/format'
 import { userMessage } from '../lib/userMessage'
+import { RETURN_PROMISE_COPY, RETURNS_ON_ITS_OWN_COPY, RETURNS_WHEN_OPENED_COPY } from '../lib/cashlinkCopy'
 
 /**
  * Send by link (claim links phase 4, spec 4.2): "Anyone, by link".
@@ -97,7 +98,7 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
   const [confirmedAt, setConfirmedAt] = useState<number | null>(null)
   const confirming = confirmedAt !== null
   const [status, setStatus] = useState<{ step: 'idle' | 'sending' } | { step: 'failed' | 'unconfirmed'; message: string }>({ step: 'idle' })
-  const [sent, setSent] = useState<{ link: string; x: number; face: string; delivered: boolean } | null>(null)
+  const [sent, setSent] = useState<{ link: string; x: number; face: string; delivered: boolean; onItsOwn: boolean } | null>(null)
 
   useEffect(() => {
     listVouchers().then((rows) => setMerchants(toMerchants(withoutInFlight(rows, pubkey))))
@@ -123,7 +124,9 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
         )}
         {/* mono-500, not mono-400: the lighter grey is about 2.5:1 on the page,
             too faint for the sentence that says where the link lives now. */}
-        <p className="mb-4 text-sm text-mono-500 dark:text-mono-400">You can show it again, or take it back, from your history.</p>
+        <p className="mb-4 text-sm text-mono-500 dark:text-mono-400">
+          {sent.onItsOwn ? RETURNS_ON_ITS_OWN_COPY : RETURNS_WHEN_OPENED_COPY} You can show it again, or take it back, from your history.
+        </p>
         <Button size="lg" className="w-full" onClick={() => navigate('/')}>
           Done
         </Button>
@@ -242,7 +245,9 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
             Anyone with the link can claim {face} from <MerchantText merchant={chosen.merchant} />. You can take it back until it is
             claimed.
           </p>
-          <p className="mt-2 text-sm text-mono-500">The link expires on {formatDate(x * 1000)}.</p>
+          <p className="mt-2 text-sm text-mono-500">
+            The link expires on {formatDate(x * 1000)}. {RETURN_PROMISE_COPY}
+          </p>
         </Panel>
         {/* Spec 5.4: a handle binds the voucher to its recipient, a link does not. */}
         <p className="mb-4 text-sm text-mono-500 dark:text-mono-400">
@@ -265,7 +270,7 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
                   memo: memo.trim() || undefined,
                   x,
                 })
-                setSent({ link: out.link, x: out.x, face: formatFace(out.result.delivered, chosen), delivered: out.delivered })
+                setSent({ link: out.link, x: out.x, face: formatFace(out.result.delivered, chosen), delivered: out.delivered, onItsOwn: out.returnsOnItsOwn === true })
               } catch (e) {
                 setStatus({
                   step: e instanceof SendOutcomeUnknownError ? 'unconfirmed' : 'failed',

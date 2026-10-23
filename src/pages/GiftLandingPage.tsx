@@ -196,7 +196,7 @@ function GiftPrompt({
     const { tokens } = state.verdict
     const verified = state.verdict.summary
     setState({ step: 'redeeming' })
-    void redeemGiftTokens(tokens, 'gift_link').then(
+    void redeemGiftTokens(tokens, 'gift_link', arrival.key).then(
       (outcome) => {
         if (outcome.kind === 'failed') {
           // Nothing a retry could not fix may have been spent; keep it parked so a retry can start.

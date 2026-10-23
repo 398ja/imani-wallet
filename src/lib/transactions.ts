@@ -312,16 +312,54 @@ export interface GiftLinkRecord {
   /** When it was claimed or taken back, ms. */
   closedAt?: number
   /**
-   * When the "Your Cashlink expired" bell entry was filed for it, ms (#295 phase 0). On the record,
+   * When the "Your Cashlink expired" bell entry was filed for it, ms (#295 phase 4). On the record,
    * not only on this device, so a restored or second device does not tell the sender twice.
    */
   noticedAt?: number
+  /**
+   * Whether the link comes back on its own (#295 phase 4). Absent on links made before it existed
+   * and on links that were never armed: those come back the old way, when this wallet next runs.
+   */
+  arm?: GiftLinkArm
+}
+
+/**
+ * A Cashlink's return state (#295 phase 4).
+ *
+ * - `arming`: the gift is being locked to its link; a run that finds this finishes the job.
+ * - `armed`: locked, and the take-back is signed and waiting at the voucher service. It comes back
+ *   at its expiry without this wallet running.
+ * - `not_armed`: nothing waits at the voucher service (it was off, refused, or unreachable). The
+ *   gift may still be locked; this wallet takes it back itself when it next runs.
+ * - `returning`: it has left the link and is on its way back as a voucher; the next run finishes it.
+ *
+ * `ks` is the keyset the take-back's outputs were made in (while `arming`, the burn's). Not shown.
+ * The refund key itself is never stored: it is derived from this wallet's key and the link's index,
+ * which is why only a link with an index (an account whose key this wallet can read) is armed.
+ */
+export interface GiftLinkArm {
+  s: 'arming' | 'armed' | 'not_armed' | 'returning'
+  ks?: string
+}
+
+const ARM_STATES: readonly GiftLinkArm['s'][] = ['arming', 'armed', 'not_armed', 'returning']
+
+function asArm(value: unknown): GiftLinkArm | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const { s, ks } = value as Record<string, unknown>
+  if (typeof s !== 'string' || !ARM_STATES.includes(s as GiftLinkArm['s'])) return undefined
+  return {
+    s: s as GiftLinkArm['s'],
+    ...(typeof ks === 'string' && /^[0-9a-f]{16}$/i.test(ks) ? { ks } : {}),
+  }
 }
 
 /** The words for a link's status in History (spec 4.2 step 6). */
-export function giftStatusLabel(link: Pick<GiftLinkRecord, 'status' | 'x'>, nowMs = Date.now()): string {
+export function giftStatusLabel(link: Pick<GiftLinkRecord, 'status' | 'x' | 'arm'>, nowMs = Date.now()): string {
   if (link.status === 'claimed') return 'Claimed'
   if (link.status === 'reclaimed') return 'Taken back'
+  // #295 phase 4: off the link and on its way back. Safe, and only this wallet can finish it.
+  if (link.status === 'outstanding' && link.arm?.s === 'returning') return 'Taken back'
   if (link.status === 'expired' || nowMs / 1000 >= link.x) return 'Expired'
   return 'Waiting to be claimed'
 }
@@ -331,10 +369,11 @@ const LINK_STATUSES: readonly GiftLinkStatus[] = ['outstanding', 'claimed', 'rec
 /** A stored link record, or undefined for anything malformed (never trusted as-is). */
 export function asGiftLinkRecord(value: unknown): GiftLinkRecord | undefined {
   if (!value || typeof value !== 'object') return undefined
-  const { k, i, x, status, closedAt, noticedAt } = value as Record<string, unknown>
+  const { k, i, x, status, closedAt, noticedAt, arm } = value as Record<string, unknown>
   if (typeof k !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(k)) return undefined
   if (typeof x !== 'number' || !Number.isFinite(x)) return undefined
   if (typeof status !== 'string' || !LINK_STATUSES.includes(status as GiftLinkStatus)) return undefined
+  const parsedArm = asArm(arm)
   return {
     k,
     x,
@@ -342,6 +381,7 @@ export function asGiftLinkRecord(value: unknown): GiftLinkRecord | undefined {
     ...(typeof i === 'number' && Number.isSafeInteger(i) && i >= 0 ? { i } : {}),
     ...(typeof closedAt === 'number' && Number.isFinite(closedAt) ? { closedAt } : {}),
     ...(typeof noticedAt === 'number' && Number.isFinite(noticedAt) ? { noticedAt } : {}),
+    ...(parsedArm ? { arm: parsedArm } : {}),
   }
 }
 
