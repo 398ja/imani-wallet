@@ -357,3 +357,17 @@ describe('rev-wallet377 M2: a burn the mint refuses outright is not "arming" for
     expect(moneyInFlight(PUB).cashlinks).toBe(0)
   })
 })
+
+describe('rev-wallet377: logout stays held while a return is part way', () => {
+  it('off the link, re-sign not answered yet: the link reads on its way back and logout is held', async () => {
+    await send()
+    expect(moneyInFlight(PUB).cashlinks).toBe(0)
+    at(w, X + 61)
+    vi.setSystemTime((X + 61) * 1000)
+    await w.gateway.runRelay(X + 61)
+    w.gateway.override.set('/api/v1/wallet/vouchers/cashlink/resign', { status: 503, body: null })
+    await giftLinks.reconcileGiftLinks((X + 61) * 1000)
+    expect(link().arm?.s).toBe('returning')
+    expect(moneyInFlight(PUB).cashlinks).toBe(1)
+  })
+})
