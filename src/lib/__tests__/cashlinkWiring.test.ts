@@ -371,3 +371,41 @@ describe('rev-wallet377: logout stays held while a return is part way', () => {
     expect(moneyInFlight(PUB).cashlinks).toBe(1)
   })
 })
+
+describe('second check of rev-wallet377: mutant killers', () => {
+  it('M1: a stranger\u2019s lock past its own locktime is not offered to the recipient; the real gift is', async () => {
+    await send()
+    const linkSecret = deriveLinkSecret(ID, 0)
+    const ours = h.wraps.get(linkPubOf(linkSecret))!.slice()
+    const { armGift } = await import('../cashlinkFlow')
+    const foreign = { token: tokenOf([w.mint.issue(bearerSecret({}, 'stranger'), 8)]), sentAt: NOW }
+    expect(
+      (await armGift({ ports: w.ports, linkSecret, refundSecret: hexToBytes('44'.repeat(32)), x: NOW + 2 * 3600, gifts: [foreign], merchant: false, onArming: async () => {}, onLocked: async () => {} })).kind,
+    ).toBe('armed')
+    const stranger = h.wraps.get(linkPubOf(linkSecret))!.filter((t) => !ours.includes(t))
+    const { verifyGift } = await import('../giftLink')
+    const found = [...stranger, ...ours].map((token) => ({ token, sentAt: NOW }))
+    const states = async (t: string) => (await w.mint.states('', tokenProofs(t).map((p) => p.secret)))[0]
+    const verdict = await verifyGift(found, X, (NOW + 3 * 3600) * 1000, states, linkPubOf(linkSecret))
+    expect(verdict.kind).toBe('ok')
+    const offered = verdict.kind === 'ok' ? verdict.tokens.map((t) => t.token) : []
+    expect(offered.some((t) => stranger.includes(t))).toBe(false)
+    expect(offered).toHaveLength(1)
+  })
+
+  it('M2: a resumed arm that now reads as a merchant\u2019s (after the burn) never clears arming or the moving ledger', async () => {
+    const call = w.gateway.call.bind(w.gateway)
+    let locks = 0
+    w.gateway.call = async (m, p, b, s) => {
+      if (p.endsWith('/cashlink/lock') && ++locks === 2) throw new Error('page died')
+      return call(m, p, b, s)
+    }
+    await send()
+    expect(link().arm?.s).toBe('arming')
+    w.gateway.call = call
+    h.merchant = true
+    await giftLinks.reconcileGiftLinks(NOW * 1000)
+    expect(link().arm?.s).toBe('arming')
+    expect(moneyInFlight(PUB).cashlinks).toBe(1)
+  })
+})
