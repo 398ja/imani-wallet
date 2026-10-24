@@ -1122,7 +1122,8 @@ export async function reconcileGiftLinks(
         continue
       }
       if (overall !== 'UNSPENT') continue
-      if (Math.floor(nowMs / 1000) >= parts[0].link.x) {
+      // Review of #380: the send's own row's expiry, never an adopted duplicate's 30-day guess.
+      if (Math.floor(nowMs / 1000) >= link.x) {
         const unspent = tokens.filter((_, n) => states[n] === 'UNSPENT')
         // The take-back is always tried first: the mint's clock, not this device's, decides whether a
         // coupon has lapsed (second check of #367). A wallet clock running fast must never close a
@@ -1170,13 +1171,17 @@ const isAdoptedRow = (r: LinkRow): boolean => r.id.startsWith('sent:gift-')
 
 /**
  * #379: whether a link's spent bearer gift went into this wallet's own burn outputs (an arm), which
- * is never a claim. False for a link with no refund key here; 'unknown' when the mint cannot say.
+ * is never a claim. False for a link with no index (never armed); 'unknown' when the mint, or this
+ * session's key, cannot say.
  */
 async function spentByOurBurn(link: Pick<GiftLinkRecord, 'i'>, gifts: GiftToken[]): Promise<boolean | 'unknown'> {
   // Only a gift with its amount proof could ever have been burnt by an arm (see burntByThisWallet).
   if (!gifts.some(({ token }) => hasAmountProof(token))) return false
+  // A link with no index was never armed (an arm needs `i`), so its spend is no burn of ours. One
+  // with an index whose key this session cannot read is undecided: never a claim (review of #380).
+  if (link.i === undefined) return false
   const refundSecret = refundSecretFor(link)
-  if (!refundSecret) return false
+  if (!refundSecret) return 'unknown'
   try {
     return await burntByThisWallet(await cashlinkSeam.ports(), refundSecret, gifts)
   } catch {
