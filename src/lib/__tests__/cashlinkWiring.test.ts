@@ -259,6 +259,8 @@ describe('logout is held while a Cashlink\u2019s value is moving', () => {
     settleInFlight: async () => {},
     writeCount: () => 0,
     heldNow: async () => '',
+    // #379: the History rows hold no stranded Cashlink in these cases.
+    strandedLinks: async () => 0,
   }
 
   it('a sender\u2019s Cashlink on its way back (or being locked) refuses the logout, and erases nothing', async () => {
