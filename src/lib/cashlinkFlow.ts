@@ -278,6 +278,11 @@ export interface ArmContext {
   knownLocks?: ReadonlyMap<string, string>
   /** Set when resuming: the burn keyset recorded before the first burn. */
   burnKeyset?: string
+  /**
+   * Resuming an arm `onArming` already recorded, whether or not its burn keyset is known (#379: a
+   * record that lost it must still never re-run the pre-check, which reads our own burn as a claim).
+   */
+  resuming?: boolean
 }
 
 /** The relay is on when a deliberately empty deposit is refused for its shape (422), not 503/404. */
@@ -302,6 +307,30 @@ export async function armGift(ctx: ArmContext): Promise<ArmOutcome> {
   }
 }
 
+/** Whether the mint signed our derived burn outputs for any of these proofs (NUT-09). */
+async function burntByUs(ports: CashlinkPorts, refundSecret: Uint8Array, mintUrl: string, proofs: { proof: TokenProof }[]): Promise<boolean> {
+  for (const { proof } of proofs) {
+    const burn = derivedOutputs(refundSecret, 'burn', proof.secret, proof.amount, proof.id)
+    if ((await restoreMine(ports.mint, mintUrl, burn)).length > 0) return true
+  }
+  return false
+}
+
+/**
+ * #379: whether a bearer gift on the link was spent by THIS wallet's own burn (the first step of
+ * arming), which is never a claim. Throws when the mint cannot be read: unknown is not "claimed".
+ */
+export async function burntByThisWallet(ports: CashlinkPorts, refundSecret: Uint8Array, gifts: GiftToken[]): Promise<boolean> {
+  for (const g of gifts) {
+    // Only a proof with its amount proof (NUT-12 DLEQ) was ever burnt by an arm: the pre-check
+    // refuses to burn without one. So a gift without one never costs a mint round trip here.
+    const proofs = safeProofs(g.token).filter((p) => p.dleq)
+    if (proofs.length === 0 || readLinkLock(proofs[0].secret)) continue
+    if (await burntByUs(ports, refundSecret, mintOf(g.token), proofs.map((proof) => ({ proof })))) return true
+  }
+  return false
+}
+
 async function allStillUnspent(ports: ArmContext['ports'], mintUrl: string, proofs: { proof: { secret: string } }[]): Promise<boolean> {
   const states = await ports.mint.states(mintUrl, proofs.map((p) => p.proof.secret))
   return states.length === proofs.length && states.every((s) => s === 'UNSPENT')
@@ -315,12 +344,14 @@ async function arm(ctx: ArmContext): Promise<ArmOutcome> {
   const proofs = ctx.gifts.flatMap((g) => tokenProofs(g.token).map((p) => ({ token: g.token, proof: p })))
   if (proofs.length === 0) return { kind: 'unarmed', why: 'no_gift' }
   const mintUrl = mintOf(proofs[0].token)
-  const resuming = ctx.burnKeyset !== undefined
+  const resuming = ctx.resuming === true || ctx.burnKeyset !== undefined
 
   // 0. Before anything moves. A resumed arm has already passed these and may have burnt.
   if (!resuming) {
     const refusal = await preflight(ctx, proofs, mintUrl, linkPub, refundPub)
-    if (refusal) return refusal
+    // #379: a gift spent into OUR burn outputs was burnt by this wallet (another run of this arm
+    // whose record is not visible here), never claimed. It is finished like a resumed arm.
+    if (refusal && !(refusal.kind === 'claimed' && (await burntByUs(ports, ctx.refundSecret, mintUrl, proofs)))) return refusal
   }
 
   const burnKeyset = ctx.burnKeyset ?? (await ports.mint.activeKeysetId(mintUrl))
@@ -1080,6 +1111,22 @@ export async function recoverOrphanBurn(ports: CashlinkPorts, refundSecret: Uint
   } catch {
     return false
   }
+}
+
+/** NUT-07 for every proof of a token, at its own mint. Never throws: unknown when unreadable. */
+export async function tokenStates(ports: CashlinkPorts, token: string): Promise<ProofState[]> {
+  try {
+    return await ports.mint.states(mintOf(token), tokenProofs(token).map((p) => p.secret))
+  } catch {
+    return ['UNKNOWN']
+  }
+}
+
+/** The locktime of a link-locked token (its soonest proof), or null when it is not one. */
+export function lockedLocktime(token: string): number | null {
+  const times = safeProofs(token).map((p) => readLinkLock(p.secret)?.locktime)
+  if (times.length === 0 || times.some((t) => typeof t !== 'number')) return null
+  return Math.min(...(times as number[]))
 }
 
 /** The tokens on a link that are locked to it (its link key in `data`, the exact link-lock shape). */

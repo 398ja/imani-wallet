@@ -55,7 +55,7 @@ vi.mock('../notifications/manager', () => ({
 vi.mock('../resume', () => ({ forgetResume: vi.fn(() => void calls.push('forget-resume')) }))
 vi.mock('../wallet', () => ({
   wipeWallet: vi.fn(async () => void calls.push('wipe')),
-  openWallet: vi.fn(async () => ({ getAllVouchers: async () => [] })),
+  openWallet: vi.fn(async () => ({ getAllVouchers: async () => [], getAllTransactions: async () => [] })),
   voucherWriteCount: () => 0,
 }))
 vi.mock('../voucherRecords', () => ({
