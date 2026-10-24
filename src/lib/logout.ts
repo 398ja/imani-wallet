@@ -15,6 +15,7 @@ import {
 import { sweepAppStorage } from './appStorage'
 import { carryPendingClaimsAcrossLogout } from './pendingClaim'
 import { moneyInFlight } from './inFlightMoney'
+import { strandedCashlinks } from './transactions'
 import { confirmStashBackup, stashFingerprint, type StashCheck } from './cashbackStash'
 import {
   closeReceives,
@@ -147,6 +148,11 @@ export interface LogoutDeps {
   /** The stash's current identity, for the race check. */
   stashNow?: () => string
   /**
+   * #379: Cashlinks whose value only this wallet can still bring back (an unconfirmed "claimed", one
+   * being locked or on its way back, one locked to its expired link). Must count unreadable as one.
+   */
+  strandedLinks?: (pubkey: string) => Promise<number>
+  /**
    * Wait for receives that do not go through dm-poll (cashback, gift links) and
    * for every redeem the coordinator has in flight (#331). Resolves whether drained.
    */
@@ -193,6 +199,20 @@ function hasMoneyInFlight(read: (pubkey: string) => { sends: number; swaps: numb
 
 /** How long to wait for a redemption already inside the mint swap to write. */
 export const DRAIN_TIMEOUT_MS = 20_000
+
+async function defaultStrandedLinks(pubkey: string): Promise<number> {
+  const wallet = await openWallet(pubkey)
+  return strandedCashlinks(await wallet.getAllTransactions())
+}
+
+async function safeStranded(read: (pubkey: string) => Promise<number>, pubkey: string): Promise<number> {
+  try {
+    return await read(pubkey)
+  } catch {
+    // Rows that cannot be read cannot be shown to hold no such link.
+    return 1
+  }
+}
 
 /**
  * Re-open what logout closed. The gates first, and each writer on its own: one
@@ -296,6 +316,11 @@ export async function attemptLogout(
   // A send or swap still in flight holds value outside every coupon row, and
   // the sweep below would delete its only record (second check of #326).
   if (hasMoneyInFlight(inFlight, pubkey)) return { status: 'blocked', reason: 'in-flight', unconfirmed: [] }
+  // #379: and no Cashlink whose gift only this wallet can still take back. Its only record is the
+  // History row and this device's key; a logout before the next run would leave it at the mint.
+  if ((await safeStranded(deps.strandedLinks ?? defaultStrandedLinks, pubkey)) > 0) {
+    return { status: 'blocked', reason: 'in-flight', unconfirmed: [] }
+  }
   const writesAtConfirm = writes()
 
   // 2.

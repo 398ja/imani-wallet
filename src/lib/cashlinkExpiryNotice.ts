@@ -141,7 +141,9 @@ export async function runCashlinkExpiryNoticesIfSettled(pubkey: string, nowMs = 
   if (loadMerchant(pubkey) === null) {
     const now = Math.floor(nowMs / 1000)
     const due = [...distinctLinks(await linkRows().catch(() => [])).values()].some(
-      (parts) => now >= parts[0].link.x && parts.some((p) => p.link.status === 'outstanding'),
+      // Review of #380: any row of the link (a 0.39.0 restore-scan duplicate may sort first with a
+      // 30-day guess), so the hourly pass never waits past the send's own expiry.
+      (parts) => parts.some((p) => now >= p.link.x) && parts.some((p) => p.link.status === 'outstanding'),
     )
     if (due) await reconcileGiftLinks(nowMs)
   }
