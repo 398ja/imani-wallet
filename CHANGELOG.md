@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.39.1] - 2026-10-24
+
+A **patch**: a Cashlink whose return could not be set up is never shown as "Claimed", its expiry
+is its lock's expiry, and the sender's wallet takes it back after that expiry; older rows are
+repaired on the next start (#380, fixes #379). Pairs with imani-gateway-customer 0.33.1 (#265),
+which lets the return be set up on a mint with v2 keyset ids. wallet-api, purchase-issuer and
+audit-api are byte-identical to 0.39.0 over their image COPY paths, so they are not rebuilt. No
+configuration change, no migration.
+
 ### Fixed
 
 - **A Cashlink whose return could not be set up is no longer shown as "Claimed", and comes back
