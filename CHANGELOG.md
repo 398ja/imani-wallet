@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A Cashlink whose return could not be set up is no longer shown as "Claimed", and comes back
+  after its expiry** (#379, money path). On staging (0.39.0) the voucher service refused the return
+  (imani-gateway-customer#265) after the gift was already locked to its link. Start-up's checks ran
+  while the send was still locking it: one read the link's spent original as a claim and closed it
+  as "Claimed", another added a second History row with a made-up expiry 30 days out. A closed link
+  is never checked again, so the locked gift sat unspent at the mint past its expiry and never came
+  back. Now:
+  - a link this tab is sending or locking is left alone by every other check until it is done;
+  - a gift spent by this wallet's own lock is never read as claimed;
+  - a keyset id in the newer, longer form is kept, so a lock part way is resumed, not restarted;
+  - a link's expiry is its lock's expiry, on every row;
+  - **repair on the next start:** a link an older build closed as "Claimed" while it was being
+    locked is checked again with the mint. If its locked gift is still unspent it opens again, and
+    after the expiry the wallet takes it back itself with the link's own return key (derived per
+    link, `imani-gift-refund/v1/i`), as for any link the service did not take. "Claimed" stays only
+    when the mint says someone else spent it. No manual step.
+  - logout stays off while such a link holds value only this wallet can bring back.
+
+  App only, no configuration, no migration.
+
 ## [0.39.0] - 2026-10-23
 
 Unclaimed Cashlinks come back on their own (#295 phase 4, #377), **dormant** until

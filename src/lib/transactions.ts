@@ -321,6 +321,12 @@ export interface GiftLinkRecord {
    * and on links that were never armed: those come back the old way, when this wallet next runs.
    */
   arm?: GiftLinkArm
+  /**
+   * #379: when this wallet confirmed a `claimed` link really was claimed by someone else (the mint
+   * says its gift is spent, and not into this wallet's own outputs), ms. A `claimed` record without
+   * it was written by an older build, which could read its own burn as a claim, and is checked again.
+   */
+  verifiedAt?: number
 }
 
 /**
@@ -344,13 +350,19 @@ export interface GiftLinkArm {
 
 const ARM_STATES: readonly GiftLinkArm['s'][] = ['arming', 'armed', 'not_armed', 'returning']
 
+/** A NUT-02 keyset id: v1 (`00` + 14 hex) or v2 (`01` + 64 hex). */
+const KEYSET_ID = /^(?:[0-9a-f]{16}|[0-9a-f]{66})$/i
+
 function asArm(value: unknown): GiftLinkArm | undefined {
   if (!value || typeof value !== 'object') return undefined
   const { s, ks } = value as Record<string, unknown>
   if (typeof s !== 'string' || !ARM_STATES.includes(s as GiftLinkArm['s'])) return undefined
   return {
     s: s as GiftLinkArm['s'],
-    ...(typeof ks === 'string' && /^[0-9a-f]{16}$/i.test(ks) ? { ks } : {}),
+    // #379: a v1 keyset id (16 hex) or a v2 one (66 hex, as staging's mint has). Dropping a v2 id
+    // made every resumed arm read as a fresh one, whose pre-check found our own burnt gift SPENT
+    // and closed the link as "claimed".
+    ...(typeof ks === 'string' && KEYSET_ID.test(ks) ? { ks } : {}),
   }
 }
 
@@ -369,7 +381,7 @@ const LINK_STATUSES: readonly GiftLinkStatus[] = ['outstanding', 'claimed', 'rec
 /** A stored link record, or undefined for anything malformed (never trusted as-is). */
 export function asGiftLinkRecord(value: unknown): GiftLinkRecord | undefined {
   if (!value || typeof value !== 'object') return undefined
-  const { k, i, x, status, closedAt, noticedAt, arm } = value as Record<string, unknown>
+  const { k, i, x, status, closedAt, noticedAt, arm, verifiedAt } = value as Record<string, unknown>
   if (typeof k !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(k)) return undefined
   if (typeof x !== 'number' || !Number.isFinite(x)) return undefined
   if (typeof status !== 'string' || !LINK_STATUSES.includes(status as GiftLinkStatus)) return undefined
@@ -382,7 +394,46 @@ export function asGiftLinkRecord(value: unknown): GiftLinkRecord | undefined {
     ...(typeof closedAt === 'number' && Number.isFinite(closedAt) ? { closedAt } : {}),
     ...(typeof noticedAt === 'number' && Number.isFinite(noticedAt) ? { noticedAt } : {}),
     ...(parsedArm ? { arm: parsedArm } : {}),
+    ...(typeof verifiedAt === 'number' && Number.isFinite(verifiedAt) ? { verifiedAt } : {}),
   }
+}
+
+/**
+ * #379: a Cashlink an older build closed as "claimed" while it was being locked (an `arm` on any of
+ * its rows, the claim never confirmed). Its gift may still be locked to the link, unspent, and only
+ * this wallet's return key can bring it back after the expiry. The next run checks it again; until
+ * then logout stays off. By link key, over every row of each link.
+ */
+export function unconfirmedClaimLinks(links: ReadonlyArray<Pick<GiftLinkRecord, 'k' | 'status' | 'arm' | 'verifiedAt'>>): Set<string> {
+  const armed = new Set(links.filter((l) => l.arm !== undefined).map((l) => l.k))
+  return new Set(links.filter((l) => armed.has(l.k) && isUnverifiedClaim(l)).map((l) => l.k))
+}
+
+/** A `claimed` record the mint was never asked about (see `verifiedAt`). */
+export function isUnverifiedClaim(link: Pick<GiftLinkRecord, 'status' | 'verifiedAt'>): boolean {
+  return link.status === 'claimed' && link.verifiedAt === undefined
+}
+
+/**
+ * #379, logout's check: the links whose value only this wallet can still bring back, from the stored
+ * `sent` rows. An unconfirmed "claimed" (above), one being locked or on its way back, and one locked
+ * to its link with nothing at the voucher service to return it (`not_armed`) once it has expired.
+ * Never throws on a bad row.
+ */
+export function strandedCashlinks(rows: readonly unknown[], nowMs = Date.now()): number {
+  const links: GiftLinkRecord[] = []
+  for (const row of rows) {
+    const r = row as Record<string, unknown> | null
+    if (!r || r.type !== 'sent') continue
+    const link = asGiftLinkRecord(r.link)
+    if (link) links.push(link)
+  }
+  const stranded = unconfirmedClaimLinks(links)
+  for (const l of links) {
+    if (l.status !== 'outstanding' || !l.arm) continue
+    if (l.arm.s === 'arming' || l.arm.s === 'returning' || (l.arm.s === 'not_armed' && nowMs / 1000 >= l.x)) stranded.add(l.k)
+  }
+  return stranded.size
 }
 
 /**

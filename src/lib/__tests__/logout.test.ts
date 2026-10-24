@@ -38,7 +38,7 @@ vi.mock('../wallet', () => ({
   wipeWallet: vi.fn(async () => {
     order.push('wipe')
   }),
-  openWallet: async () => ({ getAllVouchers: async () => [] }),
+  openWallet: async () => ({ getAllVouchers: async () => [], getAllTransactions: async () => [] }),
   voucherWriteCount: () => 0,
 }))
 
