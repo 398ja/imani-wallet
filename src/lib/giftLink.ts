@@ -244,6 +244,15 @@ const QUERY_PATH = '/api/v1/nostr/query'
  * attached to a query about somebody else's link.
  */
 export async function fetchGiftWraps(secret: Uint8Array, fetchImpl: typeof fetch = fetch): Promise<GiftWrap[]> {
+  return (await fetchGiftWrapsAnswer(secret, fetchImpl)).wraps
+}
+
+/**
+ * #381: the relay's answer for a link, with `emptyAnswer` true only when it was well formed (an
+ * `events` array) and held no event at all. Anything it could not decode, a partial chunked offer or
+ * an odd body is NOT "the relay holds no wrap".
+ */
+export async function fetchGiftWrapsAnswer(secret: Uint8Array, fetchImpl: typeof fetch = fetch): Promise<{ wraps: GiftWrap[]; emptyAnswer: boolean }> {
   const linkPub = linkPubOf(secret)
   const body = JSON.stringify({ kinds: [1059], pTags: [linkPub], limit: 50 })
   const authorization = await nip98Header(QUERY_PATH, 'POST', body, linkKeySigner(secret))
@@ -256,7 +265,8 @@ export async function fetchGiftWraps(secret: Uint8Array, fetchImpl: typeof fetch
   })
   if (!response.ok) throw new GiftUnreachableError(`nostr/query answered ${response.status}`)
   const json = (await response.json()) as { events?: Array<Record<string, unknown>> }
-  return (json.events ?? [])
+  const events = Array.isArray(json?.events) ? json.events : []
+  const wraps = events
     .map((e) => ({
       id: String(e.id ?? ''),
       kind: Number(e.kind),
@@ -267,6 +277,7 @@ export async function fetchGiftWraps(secret: Uint8Array, fetchImpl: typeof fetch
       sig: String(e.sig ?? ''),
     }))
     .filter((e) => e.kind === 1059 && e.tags.some((t) => t[0] === 'p' && t[1] === linkPub))
+  return { wraps, emptyAnswer: Array.isArray(json?.events) && json.events.length === 0 }
 }
 
 export class GiftUnreachableError extends Error {

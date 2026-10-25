@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An old Cashlink row from 0.39.0 (marked claimed while its return was being set up) whose gift
+  wraps the relay no longer holds no longer keeps logout off for ever. It still does until nothing
+  can be brought back: the relay's answer is really empty, the coupon is a week past its own expiry
+  (read from the lock this device kept, never from the link's expiry), and the mint says the locked
+  gift is spent. An unreachable or unreadable relay, a lock not kept here, an unspent gift or a mint
+  that cannot answer all leave it held (#381).
 - **A send retried after a lost answer is no longer sent twice** (#179, severity 2, money path).
   The person-to-person send's `Idempotency-Key` was rebuilt on every attempt from a 10-second
   clock window, so a retry more than ten seconds later, or after the app was reloaded, carried a

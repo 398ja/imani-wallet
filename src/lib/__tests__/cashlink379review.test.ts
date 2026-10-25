@@ -31,6 +31,10 @@ const h = vi.hoisted(() => ({
   state: (async () => 'UNSPENT') as (t: string) => Promise<string>,
   /** Make the identity key unreadable (a locked or lapsed session). */
   noKey: false,
+  /** Make the relay query fail (cannot ask), as opposed to answering with no wrap. */
+  relayDown: false,
+  /** The relay answers with events, none of which unwrap to a gift (malformed or partial). */
+  relayMalformed: false,
 }))
 
 vi.mock('../wallet', () => ({
@@ -80,7 +84,16 @@ vi.mock('../giftLink', async (orig) => {
   const real = await orig<typeof import('../giftLink')>()
   return {
     ...real,
-    fetchGiftWraps: async (secret: Uint8Array) => ((h.wraps.get(real.linkPubOf(secret)) ?? []).length ? [{ id: 'w' }] : []),
+    fetchGiftWraps: async (secret: Uint8Array) => {
+      if (h.relayDown) throw new real.GiftUnreachableError('nostr/query answered 503')
+      return (h.wraps.get(real.linkPubOf(secret)) ?? []).length ? [{ id: 'w' }] : []
+    },
+    // #381: the relay's raw answer. `malformed` stands for a reply with wraps this wallet cannot read.
+    fetchGiftWrapsAnswer: async (secret: Uint8Array) => {
+      if (h.relayDown) throw new real.GiftUnreachableError('nostr/query answered 503')
+      const n = (h.wraps.get(real.linkPubOf(secret)) ?? []).length
+      return { wraps: n ? [{ id: 'w' }] : [], emptyAnswer: n === 0 && !h.relayMalformed }
+    },
     giftTokensFrom: async (secret: Uint8Array) => (h.wraps.get(real.linkPubOf(secret)) ?? []).map((token) => ({ token, sentAt: 1_800_000_000 })),
     tokenState: async (t: string) => h.state(t),
   }
@@ -129,6 +142,8 @@ beforeEach(() => {
   h.redeemed = []
   h.state = async () => 'UNSPENT'
   h.noKey = false
+  h.relayDown = false
+  h.relayMalformed = false
   sent.beforeRow = undefined
   w = world(NOW)
   vi.useFakeTimers({ toFake: ['Date', 'setTimeout'], shouldAdvanceTime: true })
@@ -406,12 +421,132 @@ describe('review #380: repair when the older row sorts its adopted duplicate fir
     expect(links().every((l) => l.status === 'reclaimed' && l.x === locktimeOnLink())).toBe(true)
   })
 
-  it('the gift wraps are gone from the relay: left as it is, and logout stays held (documented liveness cost)', async () => {
+  // #381 (owner, option a; review of #388). An old 0.39.0 row (claimed, with an arm) whose gift
+  // wraps the relay no longer holds. It stops holding logout only when nothing can be brought back:
+  // the relay's answer is really empty, the coupon is a week past its OWN expiry (read from the lock
+  // this device kept), and the mint says the locked gift is spent.
+  const COUPON_EXP = 1_900_000_000 // bearerSecret's expiry: months after X
+  const HARD = giftLinks.COUPON_LAPSE_HARD_S
+  const lockedSecret = () => tokenProofs(lockedOnLink()[0])[0].secret
+  /** A real armed send (its lock kept on this device), then turned into the 0.39.0 row, wraps gone. */
+  const wrapless = async ({ spent }: { spent: boolean }) => {
+    await send()
+    const secret = lockedSecret()
+    if (spent) w.mint.spent.set(hashToCurve(new TextEncoder().encode(secret)).toHex(true), {})
     h.rows = [{ id: 'sent:t0', type: 'sent', timestamp: 1, link: { k: K(), i: 0, x: X, status: 'claimed', closedAt: NOW * 1000, arm: { s: 'arming' } } }]
     h.wraps.clear()
-    await giftLinks.reconcileGiftLinks(NOW * 1000, mintState)
+    Object.assign(giftLinks.cashlinkSeam, { mintUrl: async () => 'https://mint.example' })
+  }
+  const reconcileAt = async (s: number) => {
+    at(w, s)
+    vi.setSystemTime(s * 1000)
+    await giftLinks.reconcileGiftLinks(s * 1000, mintState)
+  }
+
+  it('#381: wraps gone, past x + one week but the coupon still live: left as it is, logout stays held', async () => {
+    // x + one week is not the coupon's expiry. This coupon lasts months longer and the locked gift
+    // can still be taken back with R, so the row must keep logout off.
+    await wrapless({ spent: true })
+    const t = X + HARD + 1
+    await reconcileAt(t)
+    expect(links()[0].verifiedAt).toBeUndefined()
+    expect(strandedCashlinks(h.rows, t * 1000)).toBe(1)
+  })
+
+  it('#381: wraps gone, one second short of the coupon\'s own expiry + one week: logout stays held', async () => {
+    await wrapless({ spent: true })
+    const t = COUPON_EXP + HARD
+    await reconcileAt(t)
+    expect(links()[0].verifiedAt).toBeUndefined()
+    expect(strandedCashlinks(h.rows, t * 1000)).toBe(1)
+  })
+
+  it('#381: wraps gone, a week past the coupon\'s own expiry, the mint says spent: settled, logout freed', async () => {
+    // Nothing can come back any more, and the mint confirms it, so the row stops blocking.
+    await wrapless({ spent: true })
+    const t = COUPON_EXP + HARD + 1
+    await reconcileAt(t)
+    expect(links()[0]).toMatchObject({ status: 'claimed', verifiedAt: t * 1000 })
+    expect(strandedCashlinks(h.rows, t * 1000)).toBe(0)
+  })
+
+  it('#381: wraps gone, past the coupon\'s expiry, but the locked gift is UNSPENT: logout stays held', async () => {
+    // The mint still holds the locked gift unspent: its value may be recoverable, so no confirm.
+    await wrapless({ spent: false })
+    const t = COUPON_EXP + HARD + 1
+    await reconcileAt(t)
+    expect(links()[0].verifiedAt).toBeUndefined()
+    expect(strandedCashlinks(h.rows, t * 1000)).toBe(1)
+  })
+
+  it('#381: wraps gone, past the coupon\'s expiry, the mint cannot answer: nothing is written', async () => {
+    await wrapless({ spent: true })
+    w.mint.down = true
+    const t = COUPON_EXP + HARD + 1
+    await reconcileAt(t)
+    expect(links()[0].verifiedAt).toBeUndefined()
+    expect(strandedCashlinks(h.rows, t * 1000)).toBe(1)
+  })
+
+  it('#381 (re-review): the mint answers for fewer proofs than asked: never confirmed', async () => {
+    // An empty or short NUT-07 answer must not read as "every proof SPENT" ([].every is true).
+    await wrapless({ spent: true })
+    vi.spyOn(w.mint, 'states').mockResolvedValue([])
+    const t = COUPON_EXP + HARD + 1
+    await reconcileAt(t)
+    expect(links()[0].verifiedAt).toBeUndefined()
+    expect(strandedCashlinks(h.rows, t * 1000)).toBe(1)
+  })
+
+  it('#381: the relay answers with wraps this wallet cannot read: never "no wraps", nothing is written', async () => {
+    // A malformed or partial reply is not an empty one: the gift may still be there.
+    await wrapless({ spent: true })
+    h.relayMalformed = true
+    const t = COUPON_EXP + HARD + 1
+    await reconcileAt(t)
+    expect(links()[0].verifiedAt).toBeUndefined()
+    expect(strandedCashlinks(h.rows, t * 1000)).toBe(1)
+  })
+
+  it('#381: no lock kept on this device, so no expiry can be read: never confirmed', async () => {
+    await wrapless({ spent: true })
+    localStorage.clear()
+    const t = COUPON_EXP + HARD + 1
+    await reconcileAt(t)
+    expect(links()[0].verifiedAt).toBeUndefined()
+    expect(strandedCashlinks(h.rows, t * 1000)).toBe(1)
+  })
+
+  it('#381: the relay cannot be read past the final expiry: nothing is written, logout stays held', async () => {
+    // "Could not ask" is not "no wrap": a relay that errors must never unblock the row.
+    await wrapless({ spent: true })
+    h.relayDown = true
+    const t = COUPON_EXP + HARD + 1
+    await reconcileAt(t)
+    expect(links()[0].verifiedAt).toBeUndefined()
+    expect(strandedCashlinks(h.rows, t * 1000)).toBe(1)
+  })
+
+  it('#381: wraps readable past the final expiry: unchanged, a still-unspent gift opens again', async () => {
+    // The new rule is only for wrap-less rows. A readable, unspent bearer gift is re-opened as before.
+    h.rows = [{ id: 'sent:t0', type: 'sent', timestamp: 1, link: { k: K(), i: 0, x: X, status: 'claimed', closedAt: NOW * 1000, arm: { s: 'arming' } } }]
+    h.wraps.set(linkPubOf(LINK), [sent.token])
+    const t = (X + HARD + 1) * 1000
+    await giftLinks.reconcileGiftLinks(t, mintState)
+    expect(links()[0].status).not.toBe('claimed')
+    expect(links()[0].verifiedAt).toBeUndefined()
+  })
+
+  it('#381: wraps readable past the final expiry, the mint answers unknown: left as it is, logout stays held', async () => {
+    // The final expiry is no reason to stop asking: with wraps to check and a mint that cannot say,
+    // the row is left unconfirmed and keeps logout off.
+    h.rows = [{ id: 'sent:t0', type: 'sent', timestamp: 1, link: { k: K(), i: 0, x: X, status: 'claimed', closedAt: NOW * 1000, arm: { s: 'arming' } } }]
+    h.wraps.set(linkPubOf(LINK), [sent.token])
+    w.mint.down = true
+    const t = (X + HARD + 1) * 1000
+    await giftLinks.reconcileGiftLinks(t, async () => 'UNKNOWN' as never)
     expect(links()[0]).toMatchObject({ status: 'claimed' })
     expect(links()[0].verifiedAt).toBeUndefined()
-    expect(strandedCashlinks(h.rows, NOW * 1000)).toBe(1)
+    expect(strandedCashlinks(h.rows, t)).toBe(1)
   })
 })
