@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.39.2] - 2026-10-25
+
+A **patch**: a Cashlink that comes back keeps its exact face value (#386, fixes #384); one
+`Idempotency-Key` per send intent, kept across retries and reloads (#387, fixes #179); an old
+wrap-less 0.39.0 claimed row stops blocking logout only after the coupon's own expiry plus 7 days
+(#388, fixes #381). Pairs with imani-gateway-customer 0.33.2 (#185, flag off). wallet-api is
+byte-identical to 0.39.1 over its image COPY paths, so it is not rebuilt. No configuration change,
+no migration.
+
 ### Fixed
 
 - An old Cashlink row from 0.39.0 (marked claimed while its return was being set up) whose gift
