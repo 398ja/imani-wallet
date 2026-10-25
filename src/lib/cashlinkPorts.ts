@@ -49,7 +49,8 @@ async function keep(coupon: KeptCoupon): Promise<void> {
     token: coupon.token,
     amount: parsed.tokenAmount,
     token_amount: parsed.tokenAmount,
-    face_value: creditableFaceValue(parsed).faceValue,
+    // #384: the proof's share of its gift (largest remainder), so a split gift sums to its face.
+    face_value: coupon.faceValue ?? creditableFaceValue(parsed).faceValue,
     face_unit: parsed.voucher.unit,
     face_decimals: parsed.voucher.faceDecimals,
     backing_strategy: parsed.voucher.backingStrategy,
