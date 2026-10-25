@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A Cashlink that comes back (take-back, relay refund, NUT-09 restore, kept as sats) or is claimed
+  now shows its full value: the gift's face is shared across its proofs by largest remainder, so
+  the coupons add up to what was sent. Before, each proof was rounded alone and a €0.20 gift of
+  256/16/4/1 sats came back as €0.19 (#384).
+
 ## [0.39.1] - 2026-10-24
 
 A **patch**: a Cashlink whose return could not be set up is never shown as "Claimed", its expiry
