@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A terminal credential DM reaching a personal wallet always says "Terminal setup request from <stall>" in the bell again (#393, E13 on staging). The unwrap fired the notice off without waiting, so dm-poll could mark the wrap processed while a page reload aborted the notice's chunk load, and the row was never written. The unwrap now waits for the notice before it returns.
+
 ## [0.39.2] - 2026-10-25
 
 A **patch**: a Cashlink that comes back keeps its exact face value (#386, fixes #384); one
