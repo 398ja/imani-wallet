@@ -1068,7 +1068,7 @@ export async function reconcileGiftLinks(
       // #379: a Cashlink an older build closed as "claimed" while it was being locked is checked again
       // by the mint, and opened again unless someone else really spent it.
       if (doubted) {
-        const verdict = await recheckClaim(snapshot, secret, tokens)
+        const verdict = await recheckClaim(snapshot, secret, tokens, nowMs)
         if (verdict === 'returned') reclaimed += 1
         if (verdict !== 'open') continue
       }
@@ -1205,12 +1205,21 @@ async function spentByOurBurn(link: Pick<GiftLinkRecord, 'i'>, gifts: GiftToken[
  *   so the arm is finished (or its value kept). Bearer still unspent: open again as an ordinary gift.
  * - Bearer spent by someone else: really claimed.
  */
-async function recheckClaim(rows: LinkRow[], linkSecret: Uint8Array, tokens: GiftToken[]): Promise<'open' | 'returned' | 'left'> {
+async function recheckClaim(rows: LinkRow[], linkSecret: Uint8Array, tokens: GiftToken[], nowMs = Date.now()): Promise<'open' | 'returned' | 'left'> {
   const link = openLinkOf(rows)
   const refundSecret = refundSecretFor(link)
   if (!refundSecret) return 'left'
   const pubkey = sessionAccount(getSigner) ?? ''
   try {
+    // #381 (owner, option a): the relay answered and holds no wrap for the link, so nothing here
+    // can be checked or taken back. It keeps logout off until the gift has passed its final expiry
+    // (the latest `x` of its rows plus COUPON_LAPSE_HARD_S, the week the take-back itself waits),
+    // and only then is the claim recorded as settled. A relay that could not be read never gets here.
+    if (tokens.length === 0) {
+      const lastX = Math.max(...rows.map((r) => r.link.x))
+      if (Math.floor(nowMs / 1000) > lastX + COUPON_LAPSE_HARD_S) await confirmClaim(rows, nowMs)
+      return 'left'
+    }
     const ports = await cashlinkSeam.ports()
     const locked = ownLockedOnLink(link, linkSecret, tokens)
     if (locked.length > 0) {

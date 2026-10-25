@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- An old Cashlink row from 0.39.0 (marked claimed while its return was being set up) whose gift
+  wraps the relay no longer holds no longer keeps logout off for ever. It still does until the gift
+  is past its final expiry (its expiry plus one week), when nothing can be taken back. Then the
+  claim is recorded as settled. A relay that cannot be reached, readable wraps, and a mint that
+  cannot answer leave it held as before (#381).
+
 ## [0.39.1] - 2026-10-24
 
 A **patch**: a Cashlink whose return could not be set up is never shown as "Claimed", its expiry
