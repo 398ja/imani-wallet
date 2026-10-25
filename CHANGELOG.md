@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Rollout:** ship this wallet first. imani-gateway-customer#185 adds a flag that makes the key
   required on `/wallet/send`; it stays off (optional) until this release is the minimum wallet in
   use. No configuration change, no migration.
+- A Cashlink that comes back (take-back, relay refund, NUT-09 restore, kept as sats) or is claimed
+  now shows its full value: the gift's face is shared across its proofs by largest remainder, so
+  the coupons add up to what was sent. Before, each proof was rounded alone and a €0.20 gift of
+  256/16/4/1 sats came back as €0.19 (#384).
 
 ## [0.39.1] - 2026-10-24
 
