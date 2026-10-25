@@ -12,10 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - An old Cashlink row from 0.39.0 (marked claimed while its return was being set up) whose gift
-  wraps the relay no longer holds no longer keeps logout off for ever. It still does until the gift
-  is past its final expiry (its expiry plus one week), when nothing can be taken back. Then the
-  claim is recorded as settled. A relay that cannot be reached, readable wraps, and a mint that
-  cannot answer leave it held as before (#381).
+  wraps the relay no longer holds no longer keeps logout off for ever. It still does until nothing
+  can be brought back: the relay's answer is really empty, the coupon is a week past its own expiry
+  (read from the lock this device kept, never from the link's expiry), and the mint says the locked
+  gift is spent. An unreachable or unreadable relay, a lock not kept here, an unspent gift or a mint
+  that cannot answer all leave it held (#381).
 
 ## [0.39.1] - 2026-10-24
 

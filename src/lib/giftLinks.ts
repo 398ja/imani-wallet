@@ -11,6 +11,7 @@ import {
   combinedState,
   deriveLinkSecret,
   fetchGiftWraps,
+  fetchGiftWrapsAnswer,
   formatGiftLink,
   giftCandidates,
   giftTokensFrom,
@@ -32,7 +33,7 @@ import { publishTx } from './txRecords'
 import { cashbackValidation } from './cashbackValidation'
 import { checkTokenBacking, loadTrustedMints } from './trustedMint'
 import { asGiftLinkRecord, buildSentTransaction, type GiftLinkRecord, type GiftLinkStatus } from './transactions'
-import { creditableFaceValue, parseVoucherToken, tokenProofs } from './voucherToken'
+import { creditableFaceValue, parseVoucherToken, tokenProofs, voucherOfSecret } from './voucherToken'
 import { getWallet, notifyWalletChanged } from './wallet'
 import type { Merchant } from './merchants'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
@@ -68,6 +69,8 @@ export const cashlinkSeam = {
   ports: async (): Promise<CashlinkPorts> => (await import('./cashlinkPorts')).appCashlinkPorts(),
   markMoving: async (pubkey: string, id: string): Promise<void> => (await import('./cashlinkPorts')).markMoving(pubkey, id),
   clearMoving: async (pubkey: string, id: string): Promise<void> => (await import('./cashlinkPorts')).clearMoving(pubkey, id),
+  /** #381: the mint gift coupons live at, for a NUT-07 check with no token in hand. */
+  mintUrl: async (): Promise<string> => (await (await import('./config')).gatewayMintConfig()).mintUrl.trim().replace(/\/+$/, ''),
   isMerchant: (pubkey: string): boolean => {
     try {
       return loadMerchant(pubkey) !== null
@@ -1211,13 +1214,9 @@ async function recheckClaim(rows: LinkRow[], linkSecret: Uint8Array, tokens: Gif
   if (!refundSecret) return 'left'
   const pubkey = sessionAccount(getSigner) ?? ''
   try {
-    // #381 (owner, option a): the relay answered and holds no wrap for the link, so nothing here
-    // can be checked or taken back. It keeps logout off until the gift has passed its final expiry
-    // (the latest `x` of its rows plus COUPON_LAPSE_HARD_S, the week the take-back itself waits),
-    // and only then is the claim recorded as settled. A relay that could not be read never gets here.
+    // #381 (owner, option a): no gift wrap to check. Settled only when nothing can be recovered.
     if (tokens.length === 0) {
-      const lastX = Math.max(...rows.map((r) => r.link.x))
-      if (Math.floor(nowMs / 1000) > lastX + COUPON_LAPSE_HARD_S) await confirmClaim(rows, nowMs)
+      if (await wraplessPastSaving(linkSecret, refundSecret, pubkey, nowMs)) await confirmClaim(rows, nowMs)
       return 'left'
     }
     const ports = await cashlinkSeam.ports()
@@ -1265,6 +1264,41 @@ async function recheckClaim(rows: LinkRow[], linkSecret: Uint8Array, tokens: Gif
   } finally {
     refundSecret.fill(0)
   }
+}
+
+/**
+ * #381 (owner, option a; review of #388): whether an old claimed row whose gift wraps are gone holds
+ * nothing this wallet could still bring back. All of these, or it keeps logout off:
+ * - the relay gave a well-formed answer with no event at all (not wraps it could not read, not an
+ *   error, not an odd body);
+ * - this device kept the signed lock(s) of the link (`knownLocks`), each with the coupon's OWN
+ *   expiry, and now is past every one by COUPON_LAPSE_HARD_S. The link's `x` is not that date: a
+ *   coupon may outlive it by months and stays refundable with R until it expires;
+ * - the mint answers for every locked proof, and none is UNSPENT.
+ */
+async function wraplessPastSaving(linkSecret: Uint8Array, refundSecret: Uint8Array, pubkey: string, nowMs: number): Promise<boolean> {
+  const answer = await giftLinksRelay.answer(linkSecret)
+  if (!answer.emptyAnswer) return false
+  const linkPub = linkPubOf(linkSecret)
+  const refundPub = xOnlyPub(refundSecret)
+  const locks = [...knownLocks(pubkey).values()].filter((s) => {
+    const lock = readLinkLock(s)
+    return lock?.linkPub === linkPub && lock.refundPub === refundPub
+  })
+  if (locks.length === 0) return false
+  const now = Math.floor(nowMs / 1000)
+  for (const s of locks) {
+    const exp = voucherOfSecret(s)?.expiresAt
+    if (typeof exp !== 'number' || !Number.isFinite(exp) || exp <= 0 || now <= exp + COUPON_LAPSE_HARD_S) return false
+  }
+  const ports = await cashlinkSeam.ports()
+  const states = await ports.mint.states(await cashlinkSeam.mintUrl(), locks)
+  return states.length === locks.length && states.every((s) => s === 'SPENT')
+}
+
+/** #381: the relay's raw answer for a link; a seam for tests. */
+export const giftLinksRelay = {
+  answer: (secret: Uint8Array) => fetchGiftWrapsAnswer(secret),
 }
 
 /**
