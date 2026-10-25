@@ -1785,6 +1785,180 @@ describe('sendVouchers and payRequest', () => {
 })
 
 /**
+ * #179: one Idempotency-Key per send INTENT, stable across retries and reloads.
+ *
+ * The fake gateway below dedupes exactly as gateway-core's AtomicSendService does: the same key
+ * with the same (recipient, amount, voucher, memo) replays the first send, the same key with any
+ * other of those is refused 409 SEND_IDEMPOTENCY_MISMATCH, and every new key is a new send that
+ * moves money. `moved` counts sends that really happened.
+ */
+describe('a send keeps one Idempotency-Key across retries (#179)', () => {
+  const PAYER = 'c'.repeat(64)
+  const FRIEND = 'd'.repeat(64)
+  const ISSUER = 'f'.repeat(64)
+  const merchant = { pubkey: ISSUER, name: 'Hill Farm', groups: [], voucherCount: 0 }
+  const row = () =>
+    ({
+      token_id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      token: `cashuB${'o'.repeat(30)}`,
+      voucher_id: 'v-1',
+      face_value: 1000,
+      face_unit: 'EUR',
+      face_decimals: 2,
+      token_amount: 1000,
+      amount: 1000,
+      issuer_id: ISSUER,
+      status: 'active',
+    }) as unknown as VoucherRow
+
+  function idempotentGateway({ loseFirstAnswer = false } = {}) {
+    const byKey = new Map<string, { hash: string; sendId: string }>()
+    const keys: Array<string | null | undefined> = []
+    const state = { moved: 0, lose: loseFirstAnswer }
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async (p: Record<string, unknown>, key?: string | null) => {
+        keys.push(key)
+        const hash = [p.recipientPubkey, p.amount, p.voucherId, p.memo ?? ''].join('|')
+        const seen = key ? byKey.get(key) : undefined
+        if (seen && seen.hash !== hash) {
+          throw Object.assign(new Error('Idempotency key already used with different request parameters'), {
+            status: 409,
+            code: 'SEND_IDEMPOTENCY_MISMATCH',
+          })
+        }
+        let sendId = seen?.sendId
+        if (!sendId) {
+          state.moved += 1
+          sendId = `as_${state.moved}`
+          if (key) byKey.set(key, { hash, sendId })
+        }
+        if (state.lose) {
+          // The send happened at the gateway; only the answer is lost on the way back.
+          state.lose = false
+          throw new TypeError('Failed to fetch')
+        }
+        return { send_id: sendId, status: 'COMPLETED' }
+      },
+      getAtomicSendStatus: async () => ({ status: 'COMPLETED' }),
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    return { keys, state }
+  }
+
+  function wallet() {
+    Object.assign(stubs.wallet, {
+      getVoucher: async (id: string) => (id === row().token_id ? row() : null),
+      removeVoucher: async () => true,
+      saveVoucher: async () => {},
+      addTransaction: async () => {},
+    })
+  }
+
+  const send = (amount = 250, memo?: string, pay: typeof sendVouchers = sendVouchers) =>
+    pay({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount, memo })
+
+  /** Moves the clock on, as the time it takes to read an error and press "Send" again does. */
+  function later(ms: number) {
+    const now = Date.now()
+    vi.spyOn(Date, 'now').mockReturnValue(now + ms)
+  }
+
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    // The device's storage: it survives a reload (vi.resetModules), module state does not.
+    const ls = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => ls.get(k) ?? null,
+      setItem: (k: string, v: string) => void ls.set(k, v),
+      removeItem: (k: string) => void ls.delete(k),
+    })
+    stubs.rows = [row()]
+    stubs.merchants.clear()
+    stubs.unreachable.clear()
+    wallet()
+  })
+
+  it('a retry after a lost answer replays the first send instead of sending twice', async () => {
+    // The gateway sends, then the answer is lost. Thirty seconds later the user presses Send
+    // again. Before #179 the key was rebuilt from a 10-second clock window, so the retry
+    // carried a NEW key and the gateway paid the friend a second time.
+    const { keys, state } = idempotentGateway({ loseFirstAnswer: true })
+    await expect(send()).rejects.toThrow(/Failed to fetch/)
+
+    later(30_000)
+    await send()
+
+    expect(keys).toHaveLength(2)
+    expect(keys[1]).toBe(keys[0])
+    expect(state.moved).toBe(1)
+  })
+
+  it('a reload keeps the key: the retry from a fresh page load is the same send', async () => {
+    // The answer is lost and the app is closed. On the next start the module state is gone and
+    // only localStorage remains; the key must come back from there, not be made up again.
+    const { keys, state } = idempotentGateway({ loseFirstAnswer: true })
+    await expect(send()).rejects.toThrow(/Failed to fetch/)
+
+    later(5 * 60_000)
+    vi.resetModules()
+    const reloaded = await import('../pay')
+    await send(250, undefined, reloaded.sendVouchers)
+
+    expect(keys[1]).toBe(keys[0])
+    expect(state.moved).toBe(1)
+  })
+
+  it('a different send never reuses the key, so the gateway does not refuse it as a reuse', async () => {
+    // Two different sends (another memo) inside the same 10 seconds shared one key before #179,
+    // so the gateway refused the second as "same key, different body" and the user could not
+    // send it. Each send intent now has its own key, and a finished send frees its key.
+    const { keys, state } = idempotentGateway()
+    await send(250, 'apples')
+    await send(250, 'pears')
+
+    expect(keys[1]).not.toBe(keys[0])
+    expect(state.moved).toBe(2)
+  })
+
+  it('concurrent duplicates of one send carry one key and send once, across a clock boundary', async () => {
+    // A slow gateway holds the first request open; the user taps again 2 ms later, which happens
+    // to be in the next 10-second window. Before #179 the second tap got a new key and the
+    // gateway ran a second send beside the first. Now both attempts of the one intent share the
+    // stored key, and the gateway replays the first.
+    const { keys, state } = idempotentGateway()
+    const initiate = stubs.api.initiateAtomicSend as (p: Record<string, unknown>, k?: string | null) => Promise<unknown>
+    let release!: () => void
+    const held = new Promise<void>((resolve) => (release = resolve))
+    stubs.api.initiateAtomicSend = async (p: Record<string, unknown>, k?: string | null) => {
+      const answer = initiate(p, k)
+      await held
+      return answer
+    }
+    const boundary = Math.ceil(Date.now() / 10_000) * 10_000 + 10_000
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(boundary - 1)
+
+    const first = send()
+    await vi.waitFor(() => expect(keys).toHaveLength(1))
+    clock.mockReturnValue(boundary + 1)
+    const second = send()
+    await vi.waitFor(() => expect(keys).toHaveLength(2))
+    release()
+    await Promise.allSettled([first, second])
+
+    expect(keys[1]).toBe(keys[0])
+    expect(state.moved).toBe(1)
+  })
+
+  it('the key is in the pending ledger logout reads while the answer is unknown', async () => {
+    const { moneyInFlight } = await import('../inFlightMoney')
+    idempotentGateway({ loseFirstAnswer: true })
+    await expect(send()).rejects.toThrow(/Failed to fetch/)
+    expect(moneyInFlight(PAYER).sends).toBeGreaterThan(0)
+  })
+})
+
+/**
  * cashu-mint#540 phase 2: the mint's redemption cap refused the coupon (90025), which gateway-core
  * reports as a FAILED send with `error_code = VOUCHER_FULLY_REDEEMED`. Terminal: the holder is told
  * the coupon is redeemed in full (design §2.13), it is NOT reclaimed (nothing moved), it is never

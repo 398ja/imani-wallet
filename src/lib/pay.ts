@@ -18,6 +18,7 @@ import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
 import { carryExpiryReminders } from './expiryReminders'
 import { withSpend } from './receiveGate'
 import { PENDING_SEND_LIFETIME_MS as SEND_LIFETIME, pendingSendsKey } from './inFlightMoney'
+import { forgetSendIntent, gatewayAnswered, keyForSend, pendingIntentVoucher } from './sendIntent'
 
 /**
  * The money decisions now live in `@imani/wallet-core`.
@@ -900,12 +901,24 @@ async function initiateOnFirstFree(
   rowOf: Map<Voucher, VoucherRow>,
   buildParams: (candidate: Voucher) => Record<string, unknown>,
   keyFor: (candidate: Voucher) => string,
+  /** Told when the gateway answered for a key (accepted, or refused before anything moved). */
+  answered: (key: string) => void = () => {},
 ): Promise<{ sendId: string; status?: string; voucher: Voucher; sourceRow: VoucherRow }> {
   let lastRefusal: Error | null = null
 
   for (const candidate of candidates) {
+    const key = keyFor(candidate)
     try {
-      const initiated = await api.initiateAtomicSend(buildParams(candidate), keyFor(candidate))
+      let initiated
+      try {
+        initiated = await api.initiateAtomicSend(buildParams(candidate), key)
+      } catch (error) {
+        // #179: only a definite refusal frees the key. A lost answer keeps it, so the retry
+        // (now, or after a reload) carries the SAME key and the gateway replays the first send.
+        if (gatewayAnswered(error)) answered(key)
+        throw error
+      }
+      answered(key)
       const sendId = initiated.send_id ?? initiated.sendId
       if (!sendId) throw new Error('Gateway accepted the send but returned no send id.')
       const sourceRow = rowOf.get(candidate)
@@ -1266,9 +1279,16 @@ async function sendPart(
   amount: number,
   bundle: BundleTag | null,
 ): Promise<string> {
+  // #179: a send whose answer was lost is retried on the coupon it was first drawn on, so the
+  // retry's body matches the stored key and the gateway replays it rather than refusing it.
+  const firstDrawnOn =
+    bundle || ctx.paymentRequestId ? undefined : pendingIntentVoucher(ctx.payer, ctx.recipient.pubkey, amount, ctx.memo)
+  const ordered = firstDrawnOn
+    ? [...candidates.filter((c) => c.voucher_id === firstDrawnOn), ...candidates.filter((c) => c.voucher_id !== firstDrawnOn)]
+    : candidates
   const { sendId, status, voucher, sourceRow } = await initiateOnFirstFree(
     ctx.api,
-    candidates,
+    ordered,
     ctx.rowOf,
     (candidate) =>
       buildSendParams(candidate, {
@@ -1294,16 +1314,24 @@ async function sendPart(
     // automatically" and the coupon looked permanently stuck. It was not; the
     // request simply never reached a new saga.
     //
-    // Ten seconds is comfortably longer than a double-tap and far shorter than
-    // the time it takes to read an error and press the button again.
-    (candidate) => {
-      const window = Math.floor(Date.now() / 10_000)
-      return bundle
+    // #179: the person-to-person key is now one random key per send INTENT, stored before the
+    // request goes out (sendIntent.ts) and reused until the gateway answers. The 10-second window
+    // it replaces gave a retry after a lost answer a NEW key once the window rolled over, or
+    // after a reload, and the gateway sent twice. The FAILED-send case above still gets a fresh
+    // key: a send the gateway answered for frees its intent, so pressing the button again is a
+    // new send.
+    (candidate) =>
+      bundle
         ? `bundle:${bundle.bundleId}:${bundle.index}:0`
         : ctx.paymentRequestId
           ? `pay_${ctx.paymentRequestId}_${candidate.voucher_id}`
-          : `c2c_${ctx.recipient.pubkey}_${amount}_${candidate.voucher_id}_${window}`
-    },
+          : keyForSend(ctx.payer, {
+              recipientPubkey: ctx.recipient.pubkey,
+              amount,
+              voucherId: candidate.voucher_id,
+              memo: ctx.memo,
+            }),
+    (key) => forgetSendIntent(ctx.payer, key),
   )
 
   await awaitAndSettle(

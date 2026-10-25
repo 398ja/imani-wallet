@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A send retried after a lost answer is no longer sent twice** (#179, severity 2, money path).
+  The person-to-person send's `Idempotency-Key` was rebuilt on every attempt from a 10-second
+  clock window, so a retry more than ten seconds later, or after the app was reloaded, carried a
+  new key and gateway-core ran the send again. The key is now one random key per send intent
+  (`src/lib/sendIntent.ts`), written to localStorage before the request goes out and reused by
+  every retry of that send, including after a reload, until the gateway answers. A send whose
+  answer is unknown counts as money in flight, so logout is refused while one is stored. A
+  different send always gets its own key. `shared/api.js` `send()` (`/api/v1/wallet/send`) takes
+  an optional key too and sends it as `Idempotency-Key`.
+- **Rollout:** ship this wallet first. imani-gateway-customer#185 adds a flag that makes the key
+  required on `/wallet/send`; it stays off (optional) until this release is the minimum wallet in
+  use. No configuration change, no migration.
 - A Cashlink that comes back (take-back, relay refund, NUT-09 restore, kept as sats) or is claimed
   now shows its full value: the gift's face is shared across its proofs by largest remainder, so
   the coupons add up to what was sent. Before, each proof was rounded alone and a €0.20 gift of
