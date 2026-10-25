@@ -9,6 +9,7 @@ import {
   combinedState,
   deriveLinkSecret,
   fetchGiftWraps,
+  fetchGiftWrapsAnswer,
   formatGiftLink,
   giftExclusion,
   giftExpiry,
@@ -155,6 +156,18 @@ describe('which expiry choices a coupon allows (#295 Q8)', () => {
 describe('fetching the gift (spec 3.3 claim step 2, pre-check build item 2)', () => {
   const secret = deriveLinkSecret(ID, 4)
   const linkPub = linkPubOf(secret)
+
+  it('#381: only a well-formed reply with no event is an empty answer; an odd body or unreadable events is not', async () => {
+    // Logout may be freed on "the relay holds no wrap", so a missing `events`, or events that are
+    // not wraps to this link, must never read as empty.
+    vi.stubGlobal('window', { location: { origin: 'https://wallet.example' } })
+    const reply = (body: unknown) => (async () => Response.json(body)) as unknown as typeof fetch
+    expect((await fetchGiftWrapsAnswer(secret, reply({ events: [] }))).emptyAnswer).toBe(true)
+    expect((await fetchGiftWrapsAnswer(secret, reply({}))).emptyAnswer).toBe(false)
+    expect((await fetchGiftWrapsAnswer(secret, reply({ events: 'x' }))).emptyAnswer).toBe(false)
+    const junk = await fetchGiftWrapsAnswer(secret, reply({ events: [{ kind: 1, tags: [] }] }))
+    expect(junk).toEqual({ wraps: [], emptyAnswer: false })
+  })
 
   it('queries wraps p-tagged to the link key, NO since, signed NIP-98 by the link key, no credentials', async () => {
     vi.stubGlobal('window', { location: { origin: 'https://wallet.example' } })
