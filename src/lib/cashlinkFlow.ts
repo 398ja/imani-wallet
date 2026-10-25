@@ -79,6 +79,7 @@ import { encodePlainTokenV4 } from './plainToken'
 import { parseVoucherToken, tokenProofs, voucherOfSecret, type TokenProof } from './voucherToken'
 import { splitIntoDenominations, unblindOutputs, type BlindSignatureResponse, type BlindedOutput, type UnblindedProof } from './walletSwap'
 import { cashlinkClaimsKey } from './inFlightMoney'
+import { faceShareOf } from './faceSplit'
 
 export { cashlinkClaimsKey }
 
@@ -131,6 +132,11 @@ export interface KeptCoupon {
   /** Set when only the sats came back: the value is kept as plain ecash in `satsToken`. */
   satsToken?: string
   sats?: number
+  /**
+   * This proof's whole share of its gift's face (#384), apportioned by largest remainder across the
+   * gift's proofs so the rows sum to the gift. Absent: the port rounds this proof on its own.
+   */
+  faceValue?: number
   /** Why it is being kept, for the History row. */
   why: 'claimed' | 'returned'
 }
@@ -208,6 +214,9 @@ async function signRoute(ports: CashlinkPorts, path: string, body: unknown): Pro
 
 const refusalOf = (a: GatewayAnswer): string => (typeof a.body?.refusal === 'string' ? a.body.refusal : `HTTP_${a.status}`)
 
+/** Spread into a KeptCoupon: the face share only when there is one (#384). */
+const faceOf = (faceValue: number | undefined): { faceValue?: number } => (faceValue === undefined ? {} : { faceValue })
+
 /** The token a set of proofs makes, carrying their DLEQs (the next holder proves the amount with them). */
 const tokenOf = (mintUrl: string, proofs: UnblindedProof[]): string => encodePlainTokenV4(mintUrl, 'sat', proofs)
 
@@ -219,9 +228,9 @@ const tokenOf = (mintUrl: string, proofs: UnblindedProof[]): string => encodePla
  * proofs of one gift kept under the same token would leave only the last proof's sats
  * (rev-wallet377 H1).
  */
-async function keepAsSats(ports: CashlinkPorts, mintUrl: string, source: TokenProof, proofs: UnblindedProof[], why: KeptCoupon['why']): Promise<void> {
+async function keepAsSats(ports: CashlinkPorts, mintUrl: string, source: TokenProof, proofs: UnblindedProof[], why: KeptCoupon['why'], faceValue?: number): Promise<void> {
   const couponToken = tokenOf(mintUrl, [{ amount: source.amount, id: source.id, secret: source.secret, C: source.C }])
-  await ports.keep({ token: couponToken, satsToken: tokenOf(mintUrl, proofs), sats: proofs.reduce((n, p) => n + p.amount, 0), why })
+  await ports.keep({ token: couponToken, satsToken: tokenOf(mintUrl, proofs), sats: proofs.reduce((n, p) => n + p.amount, 0), why, ...faceOf(faceValue) })
 }
 
 // --- Sending: arming --------------------------------------------------------
@@ -361,7 +370,7 @@ async function arm(ctx: ArmContext): Promise<ArmOutcome> {
   const locked: UnblindedProof[] = []
   let gone = 0
   let moved = 0
-  for (const { proof } of proofs) {
+  for (const { token, proof } of proofs) {
     const step = await lockOne(ctx, mintUrl, proof, burnKeyset, linkPub, refundPub)
     if (step.kind === 'unburnt') {
       // Nothing burnt yet on any proof: the link is exactly the ordinary gift it was, and must not
@@ -375,7 +384,7 @@ async function arm(ctx: ArmContext): Promise<ArmOutcome> {
     moved += 1
     if (step.kind === 'locked') locked.push(step.proof)
     else if (step.kind === 'gone') gone += 1
-    else await keepAsSats(ports, mintUrl, proof, step.proofs, 'returned')
+    else await keepAsSats(ports, mintUrl, proof, step.proofs, 'returned', faceShareOf(token, proof.secret))
   }
   if (locked.length === 0) return gone === proofs.length ? { kind: 'claimed' } : { kind: 'kept_as_sats' }
 
@@ -794,16 +803,18 @@ async function reform(
     burn_outputs: burnOutputsBody(spentInto),
   })
   const lockedVoucher = voucherOfSecret(locked.secret)!
+  // #384: this proof's share of the WHOLE gift, so the returned rows add up to what was sent.
+  const share = faceShareOf(ctx.lockedToken, locked.secret)
   const signed = answer.body?.signed_secret
   if (answer.status === 200 && typeof signed === 'string' && isTheSuccessorAskedFor(signed, lockedVoucher)) {
     const coupon = await mintCarrier(ports, mintUrl, plain, signed, ctx.refundSecret, pathway === 'refund' ? 'mint-refund' : 'mint-link', locked)
     if (!coupon) return 'pending'
-    await ports.keep({ token: tokenOf(mintUrl, [coupon]), why: 'returned' })
+    await ports.keep({ token: tokenOf(mintUrl, [coupon]), why: 'returned', ...faceOf(share) })
     return 'returned'
   }
   if (answer.status === 409 || answer.status >= 500) return 'pending'
   // A definite refusal after the sats came back (422, or 404: the routes are gone): keep them.
-  await keepAsSats(ports, mintUrl, locked, plain, 'returned')
+  await keepAsSats(ports, mintUrl, locked, plain, 'returned', share)
   return 'returned'
 }
 
@@ -843,6 +854,8 @@ export interface CashlinkClaim {
   nonce: string
   carrierR: string
   at: number
+  /** This proof's whole share of the gift's face (#384). Absent on claims written before. */
+  faceValue?: number
 }
 
 export function loadClaims(pubkey: string): CashlinkClaim[] {
@@ -914,6 +927,7 @@ export async function claimLockedGift(ctx: ClaimContext): Promise<ClaimOutcome> 
             nonce: bytesToHex(randomBytes(32)),
             carrierR: bytesToHex(randomBytes(32)),
             at: ctx.ports.now(),
+            ...faceOf(faceShareOf(token, proof.secret)),
           }
           // Written BEFORE the burn: from the burn on, these factors are the only way to the coupon.
           saveClaims(ctx.pubkey, [...loadClaims(ctx.pubkey), claim])
@@ -1003,13 +1017,13 @@ async function finishClaim(ports: CashlinkPorts, pubkey: string, linkSecret: Uin
       minted = done.kind === 'proofs' ? done.proofs[0] : undefined
     }
     if (!minted) return PARTLY
-    await ports.keep({ token: tokenOf(mintUrl, [minted]), why: 'claimed' })
+    await ports.keep({ token: tokenOf(mintUrl, [minted]), why: 'claimed', ...faceOf(claim.faceValue) })
     forget()
     return 'ok'
   }
   if (answer.status === 409 || answer.status >= 500) return PARTLY
   // A definite refusal after the burn: the value is kept as sats, in this wallet. Never lost.
-  await keepAsSats(ports, mintUrl, proof, plain, 'claimed')
+  await keepAsSats(ports, mintUrl, proof, plain, 'claimed', claim.faceValue)
   forget()
   return 'ok'
 }
@@ -1104,7 +1118,7 @@ export async function recoverOrphanBurn(ports: CashlinkPorts, refundSecret: Uint
       if (mine.length !== burn.length) continue
       const states = await ports.mint.states(mintUrl, mine.map((m) => m.secret))
       if (!states.every((s) => s === 'UNSPENT')) continue
-      await keepAsSats(ports, mintUrl, p, mine, 'returned')
+      await keepAsSats(ports, mintUrl, p, mine, 'returned', faceShareOf(bearer.token, p.secret))
       kept = true
     }
     return kept
