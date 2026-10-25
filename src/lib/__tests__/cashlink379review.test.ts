@@ -488,6 +488,16 @@ describe('review #380: repair when the older row sorts its adopted duplicate fir
     expect(strandedCashlinks(h.rows, t * 1000)).toBe(1)
   })
 
+  it('#381 (re-review): the mint answers for fewer proofs than asked: never confirmed', async () => {
+    // An empty or short NUT-07 answer must not read as "every proof SPENT" ([].every is true).
+    await wrapless({ spent: true })
+    vi.spyOn(w.mint, 'states').mockResolvedValue([])
+    const t = COUPON_EXP + HARD + 1
+    await reconcileAt(t)
+    expect(links()[0].verifiedAt).toBeUndefined()
+    expect(strandedCashlinks(h.rows, t * 1000)).toBe(1)
+  })
+
   it('#381: the relay answers with wraps this wallet cannot read: never "no wraps", nothing is written', async () => {
     // A malformed or partial reply is not an empty one: the gift may still be there.
     await wrapless({ spent: true })
