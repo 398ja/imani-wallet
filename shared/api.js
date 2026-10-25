@@ -1204,11 +1204,30 @@ class GatewayAPI {
     return this.request('GET', '/api/v1/wallet/balance');
   }
 
-  async send(amount, fromVoucherId) {
-    return this.request('POST', '/api/v1/wallet/send', {
+  /**
+   * POST /api/v1/wallet/send (imani-wallet#179).
+   *
+   * Pass the SAME `idempotencyKey` on every retry of one send (generate it once per user send
+   * intent and store it with the pending send), so a retry after a lost answer is replayed by
+   * the gateway instead of sending again. A new send gets a new key.
+   *
+   * Note: imani-gateway-customer refuses this route to every external caller (403, its #221); the
+   * wallet's real send path is `initiateAtomicSend` (POST /api/v1/atomic-send, see src/lib/pay.ts
+   * and src/lib/sendIntent.ts), which follows the same rule.
+   *
+   * @param {number} amount
+   * @param {string} fromVoucherId
+   * @param {string} [idempotencyKey]
+   */
+  async send(amount, fromVoucherId, idempotencyKey = null) {
+    const headers = {};
+    if (idempotencyKey) {
+      headers['Idempotency-Key'] = idempotencyKey;
+    }
+    return this.requestWithHeaders('POST', '/api/v1/wallet/send', {
       amount,
       from_voucher_id: fromVoucherId
-    });
+    }, headers);
   }
 
   /**

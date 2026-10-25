@@ -24,6 +24,11 @@
 export const pendingSendsKey = (pubkey: string) => `imani-wallet:pending-sends:${pubkey}`
 export const swapIntentsKey = (pubkey: string) => `imani-wallet:swap-intents:${pubkey}`
 /**
+ * #179: the Idempotency-Key of a send whose request went out and got no answer (sendIntent.ts).
+ * The send may have happened, so it counts as a send in flight until the retry learns the answer.
+ */
+export const sendIntentsKey = (pubkey: string) => `imani-wallet:send-intents:${pubkey}`
+/**
  * #295 phase 4: a Cashlink claim part way (the recipient's random blinding factors, written before
  * the burn), and the sender's Cashlinks whose value is moving (being locked to the link, or off the
  * link and not yet back as a voucher). Neither expires: the value does not, and the next run of
@@ -34,6 +39,8 @@ export const cashlinkMovingKey = (pubkey: string) => `imani-wallet:cashlink-movi
 
 /** pay.ts's own window: a send unanswered after this is never going to answer (#127). */
 export const PENDING_SEND_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000
+/** sendIntent.ts's own window: gateway-core keeps a send's key for longer than this. */
+export const SEND_INTENT_LIFETIME_MS = 24 * 60 * 60 * 1000
 /** swapIntent.ts's own window: past it the mint can no longer answer for the swap. */
 export const SWAP_INTENT_LIFETIME_MS = 60 * 60 * 1000
 
@@ -83,7 +90,9 @@ function allEntries(key: string): number {
 /** Live (unexpired) entries in each ledger. Never throws. */
 export function moneyInFlight(pubkey: string): { sends: number; swaps: number; cashlinks: number } {
   return {
-    sends: liveEntries(pendingSendsKey(pubkey), PENDING_SEND_LIFETIME_MS),
+    sends:
+      liveEntries(pendingSendsKey(pubkey), PENDING_SEND_LIFETIME_MS) +
+      liveEntries(sendIntentsKey(pubkey), SEND_INTENT_LIFETIME_MS),
     swaps: liveEntries(swapIntentsKey(pubkey), SWAP_INTENT_LIFETIME_MS),
     cashlinks: allEntries(cashlinkClaimsKey(pubkey)) + allEntries(cashlinkMovingKey(pubkey)),
   }
