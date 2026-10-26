@@ -209,8 +209,23 @@ async function signRoute(ports: CashlinkPorts, path: string, body: unknown): Pro
     await ports.sleep(800 * (attempt + 1))
     answer = await ports.gateway.call('POST', path, body)
   }
+  // #396: rate limited (20/min per key on the Cashlink routes): wait and ask again, a few times. The
+  // request is deterministic, so asking again is the identical request.
+  for (let attempt = 0; attempt < 3 && answer.status === 429; attempt++) {
+    await ports.sleep(5_000 * (attempt + 1))
+    answer = await ports.gateway.call('POST', path, body)
+  }
   return answer
 }
+
+/**
+ * #396: an answer that is NOT a refusal, only "not now": 409 (not spent yet, or the same request still
+ * running), 429 (gateway-customer's per-key rate limit on the Cashlink routes, 20/min) and 5xx. Each
+ * leaves the step for the next run. Read as a definite refusal, a 429 after the burn kept the value
+ * as plain sats and gave up on the coupon (the link then read "already added" and the take-back
+ * never re-formed the voucher).
+ */
+const notYet = (status: number): boolean => status === 409 || status === 429 || status >= 500
 
 const refusalOf = (a: GatewayAnswer): string => (typeof a.body?.refusal === 'string' ? a.body.refusal : `HTTP_${a.status}`)
 
@@ -535,7 +550,7 @@ async function lockOne(ctx: ArmContext, mintUrl: string, proof: TokenProof, burn
     if (minted.kind === 'proofs') return { kind: 'locked', proof: minted.proofs[0] }
     throw new Error(`the lock could not be minted (${minted.kind})`)
   }
-  if (answer.status === 409 || answer.status === 404 || answer.status >= 500) {
+  if (notYet(answer.status) || answer.status === 404) {
     throw new Error(`the lock is not available yet (${refusalOf(answer)})`)
   }
   // 422 after the burn: the coupon cannot be re-formed, so its value is kept as sats. Never lost.
@@ -812,7 +827,7 @@ async function reform(
     await ports.keep({ token: tokenOf(mintUrl, [coupon]), why: 'returned', ...faceOf(share) })
     return 'returned'
   }
-  if (answer.status === 409 || answer.status >= 500) return 'pending'
+  if (notYet(answer.status)) return 'pending'
   // A definite refusal after the sats came back (422, or 404: the routes are gone): keep them.
   await keepAsSats(ports, mintUrl, locked, plain, 'returned', share)
   return 'returned'
@@ -1021,7 +1036,7 @@ async function finishClaim(ports: CashlinkPorts, pubkey: string, linkSecret: Uin
     forget()
     return 'ok'
   }
-  if (answer.status === 409 || answer.status >= 500) return PARTLY
+  if (notYet(answer.status)) return PARTLY
   // A definite refusal after the burn: the value is kept as sats, in this wallet. Never lost.
   await keepAsSats(ports, mintUrl, proof, plain, 'claimed', claim.faceValue)
   forget()
