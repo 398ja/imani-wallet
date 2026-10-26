@@ -9,8 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.39.5] - 2026-10-26
+
+A **patch**: the #401 fix (#403) on top of 0.39.4.
+
 ### Fixed
 
+- **Two History checks no longer settle the same link at once** (#401). A second check now waits
+  for the one already settling a link and reads the link again, so it never redeems twice. Before,
+  two checks could settle an armed link together on a slow network, and the balance came up a
+  cent short.
 - **Cashlink "Take it back" and "Claimed" on a slow connection** (#401, staging R58). The History
   check walked every link one after another, so on a slow network a started take-back (and a claim
   on a later link) waited behind every other link. It sat at "Coming back" or "Waiting to be claimed".
