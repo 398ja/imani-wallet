@@ -251,6 +251,27 @@ describe('Take it back', () => {
     expect(giftStatusLabel(link() as never, NOW * 1000)).toBe('Taken back')
     expect(w.kept).toHaveLength(1)
   })
+
+  it('#396 review: the take-back swap itself did not reach the mint (proof still UNSPENT): the next reconcile before x finishes it, logout held meanwhile', async () => {
+    // The resume trigger proper: with the proof still UNSPENT, only `arm.s === "returning"` makes
+    // the next run take it back before x (otherwise it reads "waiting for x").
+    await send()
+    const swap = w.mint.swap.bind(w.mint)
+    w.mint.swap = async () => {
+      throw new Error('swap HTTP 502')
+    }
+    expect((await giftLinks.takeBack(link().k)).kind).not.toBe('ok')
+    w.mint.swap = swap
+    expect(link().arm?.s).toBe('returning')
+    expect(link().status).toBe('outstanding')
+    expect(giftStatusLabel(link() as never, NOW * 1000)).toBe('Coming back')
+    expect(w.kept).toHaveLength(0)
+    expect(moneyInFlight(PUB).cashlinks).toBeGreaterThan(0)
+    expect((await giftLinks.reconcileGiftLinks(NOW * 1000)).reclaimed).toBe(1)
+    expect(link().status).toBe('reclaimed')
+    expect(w.kept).toHaveLength(1)
+    expect(moneyInFlight(PUB).cashlinks).toBe(0)
+  })
 })
 
 describe('the link limit (stays 10)', () => {
