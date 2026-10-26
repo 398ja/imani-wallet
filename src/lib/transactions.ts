@@ -369,9 +369,13 @@ function asArm(value: unknown): GiftLinkArm | undefined {
 /** The words for a link's status in History (spec 4.2 step 6). */
 export function giftStatusLabel(link: Pick<GiftLinkRecord, 'status' | 'x' | 'arm'>, nowMs = Date.now()): string {
   if (link.status === 'claimed') return 'Claimed'
+  // "Taken back" means the mint swap is confirmed and the voucher is back in this wallet. Only
+  // `reclaimed` says that: it is written after the swap and the re-form, never before.
   if (link.status === 'reclaimed') return 'Taken back'
-  // #295 phase 4: off the link and on its way back. Safe, and only this wallet can finish it.
-  if (link.status === 'outstanding' && link.arm?.s === 'returning') return 'Taken back'
+  // #295 phase 4: the take-back has STARTED. `returning` is written by `onReturning`, before the
+  // swap is sent to the mint, so the value may still be on the link (#396: Q4 showed "Taken back"
+  // with every proof UNSPENT). Say it is coming back, never that it is back.
+  if (link.status === 'outstanding' && link.arm?.s === 'returning') return 'Coming back'
   if (link.status === 'expired' || nowMs / 1000 >= link.x) return 'Expired'
   return 'Waiting to be claimed'
 }

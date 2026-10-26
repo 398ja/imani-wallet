@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An armed Cashlink taken back read "Taken back" while its value was still on the link (#396,
+  severity 1).** Not a 0.39.2/0.39.3 regression: the local gate fails the same way on 0.39.1 with
+  the Cashlink refund relay ON, and both pass with it OFF. R55 was the first gift e2e with arming
+  live. Three causes, all on the armed (locked) path:
+  - History said **Taken back** as soon as a take-back *started* (`arm.s = returning`, written
+    before the swap goes to the mint). It now says **Coming back** until the swap and the re-form
+    are done (`reclaimed`); only then **Taken back**.
+  - A **429** from gateway-customer's per-key rate limit (20/min on the Cashlink lock and re-sign
+    routes) was read as a definite refusal. On the lock it is now retried; on the re-sign and the
+    claim it is "not now" (left for the next run) instead of keeping the value as plain sats. The
+    sign routes also wait and ask again a few times on 429.
+  - A take-back that stopped part way (some proofs back, some still on the link) was not finished
+    by the next run before `x`: the proofs still locked were read as "waiting for the expiry". A
+    row already `returning` now finishes the take-back on every run.
+- **The gift-link e2e handles armed gifts.** It checks the coupon now on the link (the locked
+  token, not the burnt bearer), waits for the arm to settle before a recipient opens the link,
+  checks that "Taken back" is backed by a SPENT gift at the mint, and, for an armed CL-EXP link
+  whose lock has not reached its own locktime, checks nothing is reclaimed early and then takes it
+  back by hand (the refund after the real locktime is covered by unit tests).
+
 ## [0.39.3] - 2026-10-26
 
 A **patch**: 0.39.2's fixes (#386 exact face value on return, #387 one `Idempotency-Key` per send

@@ -139,6 +139,25 @@ async function rumorsFor(k: string): Promise<{ types: string[]; tokens: string[]
   }
   return { types, tokens }
 }
+/**
+ * #396: the coupon that holds the gift NOW. With the refund relay on, Send by link ARMS the gift: the
+ * bearer token first wrapped to the link is burnt, and a token locked to the link key (P2PK_VOUCHER
+ * with a refund key) is wrapped after it. Reading the first token would see the burnt bearer as
+ * "spent" and the lock never. So: the newest locked token when there is one, else the bearer.
+ */
+function liveToken(tokens: string[]): { token: string; armed: boolean } {
+  const locked = tokens.filter((t) => tokenProofs(t).some((p) => p.secret.startsWith('["P2PK_VOUCHER"') && p.secret.includes('"refund"')))
+  return locked.length > 0 ? { token: locked[locked.length - 1], armed: true } : { token: tokens[0] ?? '', armed: false }
+}
+/** Wait (up to `ms`) until the link holds its locked token, or give up and take what is there. */
+async function liveGift(k: string, ms = 45_000): Promise<{ token: string; armed: boolean }> {
+  let live = liveToken((await rumorsFor(k)).tokens)
+  for (const end = Date.now() + ms; !live.armed && Date.now() < end;) {
+    await new Promise((ok) => setTimeout(ok, 3_000))
+    live = liveToken((await rumorsFor(k)).tokens)
+  }
+  return live
+}
 async function checkstate(token: string): Promise<string[]> {
   if (!MINT) return []
   const Ys = tokenProofs(token).map((p) => hashToCurve(new TextEncoder().encode(p.secret)).toHex(true))
@@ -179,7 +198,23 @@ async function sendByLink(s: Page, amount: string, days = '7 days', from?: strin
   const done = await text(s)
   check(`send ${amount}: "Cashlink ready" with Show QR, and Share or Copy link`, /Cashlink ready/.test(done) && /Show QR/.test(done) && /(Share|Copy) link/.test(done), done.slice(0, 300))
   if (!/Cashlink ready/.test(done)) return null
-  const row = await s.evaluate(async () => {
+  // #396: with the refund relay on, the gift is ARMED after "Cashlink ready": the bearer is burnt
+  // and the locked copy put on the link. Opening it in between reads the burnt bearer. A recipient
+  // a few seconds later never sees that, so wait until the arm has settled: `armed` or `not_armed`.
+  // A link that is never armed (relay off) keeps no arm state; it is given 25 s, then read as is.
+  const settled = (a?: string) => a !== undefined && a !== 'arming'
+  for (let end = Date.now() + 25_000, hard = Date.now() + 90_000, row = await readLinkRow(s); !settled(row?.arm) && (Date.now() < end || (row?.arm === 'arming' && Date.now() < hard)); row = await readLinkRow(s)) {
+    await s.waitForTimeout(2_000)
+  }
+  const row = await readLinkRow(s)
+  if (!row) return null
+  console.log(`  INFO  send ${amount}: link arm state ${row.arm ?? '(none)'}`)
+  return { k: row.k, x: row.x, rowId: row.rowId, link: `${BASE}/g#v=1&k=${row.k}&x=${row.x}` }
+}
+
+/** The newest link row on S's device. */
+async function readLinkRow(s: Page): Promise<{ k: string; x: number; rowId: string; arm?: string } | null> {
+  return s.evaluate(async () => {
     const dbs = await indexedDB.databases()
     const name = dbs.map((d) => d.name ?? '').find((n) => n.startsWith('imani-wallet-'))
     if (!name) return null
@@ -188,17 +223,15 @@ async function sendByLink(s: Page, amount: string, days = '7 days', from?: strin
       r.onsuccess = () => ok(r.result)
       r.onerror = () => ko(r.error)
     })
-    type Row = { id: string; timestamp: number; link?: { k: string; x: number } }
+    type Row = { id: string; timestamp: number; link?: { k: string; x: number; arm?: { s: string } } }
     const rows = await new Promise<Row[]>((ok) => {
       const r = db.transaction('wallet_transactions').objectStore('wallet_transactions').getAll()
       r.onsuccess = () => ok(r.result)
     })
     db.close()
     const linked = rows.filter((r) => r.link?.k).sort((a, b) => b.timestamp - a.timestamp)
-    return linked[0]?.link ? { k: linked[0].link.k, x: linked[0].link.x, rowId: linked[0].id } : null
+    return linked[0]?.link ? { k: linked[0].link.k, x: linked[0].link.x, rowId: linked[0].id, arm: linked[0].link.arm?.s } : null
   })
-  if (!row) return null
-  return { ...row, link: `${BASE}/g#v=1&k=${row.k}&x=${row.x}` }
 }
 
 /** The sender's own row, as History shows it. */
@@ -284,7 +317,9 @@ async function main() {
     await r.waitForFunction(() => /sent you a voucher from/.test(document.body.innerText), undefined, { timeout: 30_000 }).catch(() => {})
     const banner = await text(r)
     check('CL-C the banner says who sent it and the stall (spec 5.3 step 4)', /sent you a voucher from .*Create an account to add it to your wallet/.test(banner), banner.slice(0, 300) || t1.slice(0, 200))
-    check('CL-C nothing spent on the way', (await checkstate(before.tokens[0])).every((x) => x === 'UNSPENT'))
+    const cLive = await liveGift(c.k)
+    console.log(`  INFO  CL-C gift ${cLive.armed ? 'armed (locked to the link)' : 'not armed (bearer)'}`)
+    check('CL-C nothing spent on the way', (await checkstate(cLive.token)).every((x) => x === 'UNSPENT'))
     {
       // Claim-driven registration is customer-only: the merchant switch is not there.
       await r.getByRole('button', { name: /^Register$/ }).first().click()
@@ -300,12 +335,12 @@ async function main() {
     await r.waitForFunction(() => /Add to my wallet|Voucher unavailable/.test(document.body.innerText), undefined, { timeout: 60_000 }).catch(() => {})
     const prompt = await text(r)
     check('CL-C after registering, the prompt shows the token-verified gift', /✓ verified stall/.test(prompt) && /0\.50/.test(prompt) && /Cashlink from /.test(prompt), prompt.slice(0, 300))
-    check('CL-C still unspent while the prompt waits', (await checkstate(before.tokens[0])).every((x) => x === 'UNSPENT'))
+    check('CL-C still unspent while the prompt waits', (await checkstate(cLive.token)).every((x) => x === 'UNSPENT'))
     await r.getByRole('button', { name: 'Add to my wallet' }).click()
     await r.waitForFunction(() => /Voucher added|Voucher unavailable|Voucher waiting/.test(document.body.innerText), undefined, { timeout: 90_000 }).catch(() => {})
     const added = await text(r)
     check('CL-C "Voucher added"', /Voucher added/.test(added), added.slice(0, 200))
-    check('CL-C the gift proofs are now SPENT', (await checkstate(before.tokens[0])).every((x) => x === 'SPENT'))
+    check('CL-C the gift proofs are now SPENT', (await checkstate(cLive.token)).every((x) => x === 'SPENT'))
     const st = await rowStatus(s, c.rowId, /Claimed/)
     check('CL-C S sees Claimed (NUT-07)', /Status Claimed/.test(st), st.slice(0, 300))
     const issuerOfRow = (merchantOfGifts = await s.evaluate(async (rowId) => {
@@ -338,8 +373,8 @@ async function main() {
     const t = await openGift(dPage, d.link)
     check('CL-D a logged-in visitor goes straight to the prompt', /Add to my wallet/.test(t) && /Cashlink from /.test(t), t.slice(0, 300))
     check('CL-D the fragment is scrubbed', !dPage.url().includes(d.k), dPage.url())
-    const { tokens } = await rumorsFor(d.k)
-    check('CL-D opening spent nothing', (await checkstate(tokens[0])).every((x) => x === 'UNSPENT'))
+    const dLive = await liveGift(d.k)
+    check('CL-D opening spent nothing', (await checkstate(dLive.token)).every((x) => x === 'UNSPENT'))
     // Two quick taps: one spend.
     const add = dPage.getByRole('button', { name: 'Add to my wallet' })
     await add.dblclick().catch(() => add.click())
@@ -359,8 +394,9 @@ async function main() {
     const t = await openGift(mPage, gm.link)
     check("CL-MERCHANT the prompt refuses with the rule's copy, no Add",
       /Merchant accounts can only take their own stall's vouchers/.test(t) && !/Add to my wallet/.test(t), t.slice(0, 300))
-    const { tokens } = await rumorsFor(gm.k)
-    check('CL-MERCHANT the refusal spent nothing', tokens.length > 0 && (await checkstate(tokens[0])).every((x) => x === 'UNSPENT'))
+    const gmLive = await liveGift(gm.k)
+    const tokens = [gmLive.token]
+    check('CL-MERCHANT the refusal spent nothing', gmLive.token !== '' && (await checkstate(gmLive.token)).every((x) => x === 'UNSPENT'))
     // Bypass the wallet's own check: receive the token straight through the legacy redeem, which
     // goes to gateway-customer's wallet/receive signed as the merchant. The server must refuse.
     await mPage.goto(`${BASE}/`, { waitUntil: 'load' })
@@ -400,8 +436,8 @@ async function main() {
     const pastX = Math.floor(Date.now() / 1000) - 60
     const t = await openGift(ePage, `${BASE}/g#v=1&k=${e.k}&x=${pastX}`)
     check('CL-EXP a link past x is refused with the expired copy, no Add', /expired on .*send it again/.test(t) && !/Add to my wallet/.test(t), t.slice(0, 300))
-    const { tokens } = await rumorsFor(e.k)
-    check('CL-EXP nothing spent by the refusal', (await checkstate(tokens[0])).every((x) => x === 'UNSPENT'))
+    const eLive = await liveGift(e.k)
+    check('CL-EXP nothing spent by the refusal', (await checkstate(eLive.token)).every((x) => x === 'UNSPENT'))
     // The link passes its expiry on S's device: the stored x set back, then a fresh start.
     await s.evaluate(async (rowId) => {
       const dbs = await indexedDB.databases()
@@ -429,10 +465,27 @@ async function main() {
       window.history.pushState({}, '', path)
       window.dispatchEvent(new PopStateEvent('popstate'))
     }, `/transaction/${encodeURIComponent(e.rowId)}`)
-    await s.waitForFunction(() => /Status Taken back|Status Claimed/.test(document.body.innerText), undefined, { timeout: 90_000 }).catch(() => {})
-    const st = await text(s)
+    if (eLive.armed) {
+      // #396: an ARMED gift is locked to the link until the lock's own locktime (the real x). Setting
+      // the stored x back on this device does not move it: the mint refuses the refund until then,
+      // and the wallet reads the expiry back off the lock. So nothing may come back yet, and History
+      // must never say it did. (The refund after the real locktime is covered by the unit tests:
+      // this run cannot move the mint's clock.) The sender then takes it back by hand.
+      await s.waitForTimeout(15_000)
+      const early = await text(s)
+      check('CL-EXP armed, before the lock\'s locktime: not "Taken back" while nothing came back', !/Status Taken back/.test(early) || (await checkstate(eLive.token)).every((x) => x === 'SPENT'), early.slice(0, 300))
+      check('CL-EXP armed, before the lock\'s locktime: the locked gift is still UNSPENT', (await checkstate(eLive.token)).every((x) => x === 'UNSPENT'))
+      await s.goto(`${BASE}/transaction/${encodeURIComponent(e.rowId)}`, { waitUntil: 'load' })
+      await s.getByRole('button', { name: 'Take it back' }).click({ timeout: 30_000 })
+      await s.getByRole('button', { name: 'Take it back' }).click({ timeout: 10_000 })
+      await s.waitForFunction(() => !/Taking it back/.test(document.body.innerText), undefined, { timeout: 90_000 }).catch(() => {})
+    }
+    const st = eLive.armed ? await rowStatus(s, e.rowId, /Status Taken back|Status Claimed/) : await s
+      .waitForFunction(() => /Status Taken back|Status Claimed/.test(document.body.innerText), undefined, { timeout: 90_000 })
+      .catch(() => {})
+      .then(() => text(s))
     check('CL-EXP S reclaims after x when it opens History: Taken back', /Status Taken back/.test(st), st.slice(0, 300))
-    check('CL-EXP the gift proofs are SPENT (by the reclaim)', (await checkstate(tokens[0])).every((x) => x === 'SPENT'))
+    check('CL-EXP the gift proofs are SPENT (by the reclaim)', (await checkstate(eLive.token)).every((x) => x === 'SPENT'))
     const t2 = await openGift(ePage, e.link)
     check('CL-EXP the original link now reads already added', /already added to a wallet/.test(t2) && !/Add to my wallet/.test(t2), t2.slice(0, 300))
   }
@@ -445,8 +498,11 @@ async function main() {
     await s.getByRole('button', { name: 'Take it back' }).click({ timeout: 10_000 })
     await s.waitForFunction(() => !/Taking it back/.test(document.body.innerText), undefined, { timeout: 90_000 }).catch(() => {})
     console.log('  INFO  after Take it back:', (await text(s)).slice(0, 700))
-    const st = await rowStatus(s, f.rowId, /Taken back/)
+    const st = await rowStatus(s, f.rowId, /Status Taken back/)
     check('Q4 Take it back: Taken back', /Status Taken back/.test(st), `${st.slice(0, 600)} :: ${consoleOf('S', /^(?!.*DmPollService).*(gift|tokenRedemption|receive|error|refus)/i)}`)
+    // #396: "Taken back" must mean the mint swap happened. The gift that was on the link is SPENT.
+    const fLive = await liveGift(f.k, 0)
+    check('Q4 "Taken back" is backed by the mint: the gift on the link is SPENT', (await checkstate(fLive.token)).every((x) => x === 'SPENT'))
     const fPage = await (await context(browser, 'F')).newPage()
     await registerCustomer(fPage, BASE)
     const t = await openGift(fPage, f.link)
