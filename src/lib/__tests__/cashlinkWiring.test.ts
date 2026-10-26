@@ -84,6 +84,7 @@ const { deriveLinkSecret, linkPubOf, secretToText } = await import('../giftLink'
 const { tokenProofs } = await import('../voucherToken')
 const { attemptLogout } = await import('../logout')
 const { moneyInFlight } = await import('../inFlightMoney')
+const { giftStatusLabel } = await import('../transactions')
 
 const PUB = 'a'.repeat(64)
 const NOW = 1_800_000_000
@@ -230,6 +231,24 @@ describe('Take it back', () => {
     await send()
     expect(await giftLinks.takeBack(link().k)).toEqual({ kind: 'ok' })
     expect(link().status).toBe('reclaimed')
+    expect(w.kept).toHaveLength(1)
+  })
+
+  it('#396: a take-back that stopped part way (row "returning") is finished by the next reconcile, before x', async () => {
+    // Take it back is tapped, the re-sign is not answered this time: the row is "returning" and
+    // History says "Coming back", never "Taken back". The next run, still before x, must finish it.
+    // On v0.39.3 the next run treated the proof still on the link as "waiting for x" and it stayed
+    // part way until the link expired.
+    await send()
+    w.gateway.override.set('/api/v1/wallet/vouchers/cashlink/resign', { status: 503, body: null })
+    expect((await giftLinks.takeBack(link().k)).kind).toBe('failed')
+    expect(link().arm?.s).toBe('returning')
+    expect(link().status).toBe('outstanding')
+    expect(giftStatusLabel(link() as never, NOW * 1000)).toBe('Coming back')
+    expect(w.kept).toHaveLength(0)
+    expect((await giftLinks.reconcileGiftLinks(NOW * 1000)).reclaimed).toBe(1)
+    expect(link().status).toBe('reclaimed')
+    expect(giftStatusLabel(link() as never, NOW * 1000)).toBe('Taken back')
     expect(w.kept).toHaveLength(1)
   })
 })

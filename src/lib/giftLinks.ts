@@ -959,7 +959,10 @@ async function settleLocked(rows: LinkRow[], linkSecret: Uint8Array, lockedToken
       refundSecret,
       lockedToken,
       ...(link.arm?.ks ? { depositKeyset: link.arm.ks } : {}),
-      takeBackNow,
+      // #396: a take-back already started ("Take it back" before x, so the row is `returning`) is
+      // finished on every later run too. Without this, the next run read the proofs still on the link
+      // as "waiting for x", and a gift taken back part way stayed part way until its expiry.
+      takeBackNow: takeBackNow || link.arm?.s === 'returning',
       onReturning: async () => {
         // Before anything leaves the link: logout stays off until it is back as a voucher.
         await cashlinkSeam.markMoving(pubkey, rows[0].id)
