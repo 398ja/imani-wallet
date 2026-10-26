@@ -513,7 +513,9 @@ export function createDmCryptoAdapter(): CryptoAdapter {
          */
         if (isCredentialMessage(rumor.content)) {
           const me = getSigner().pubkey
-          void import('./notMoneyNotice').then((m) => m.announceTerminalDm(rumor.content, me)).catch(() => false)
+          // AWAITED (#393): once this unwrap returns, dm-poll marks the wrap processed. Fired and
+          // forgotten, a reload in between aborted the chunk load and the bell row was never written.
+          await import('./notMoneyNotice').then((m) => m.announceTerminalDm(rumor.content, me)).catch(() => false)
         }
 
         const transferSignature = parseTransferSignature(rumor.content)
