@@ -33,6 +33,7 @@ import { tokenProofs } from '../src/lib/voucherToken'
 const BASE = (process.env.E2E_BASE ?? '').replace(/\/+$/, '')
 const BUNDLE_DIR = process.env.E2E_BUNDLE_DIR
 const CLAIM_HOST_VIA = process.env.E2E_CLAIM_HOST_VIA ?? ''
+const LATENCY_MS = Number(process.env.E2E_LATENCY_MS ?? 0)
 const MINT = (process.env.E2E_MINT_URL ?? '').replace(/\/+$/, '')
 // The gate's mint is TLS with a throwaway CA; the harness's own NUT-07 reads accept it.
 if (MINT) process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
@@ -100,6 +101,13 @@ async function context(browser: Browser, who: string): Promise<BrowserContext> {
     }
   })
   ctx.on('page', (p) => {
+    // #401: E2E_LATENCY_MS adds a round-trip delay to every request (Chromium network emulation),
+    // so the gate shows staging's timing: there, a take-back took far longer than on a local gate.
+    if (LATENCY_MS > 0) {
+      void ctx.newCDPSession(p).then((cdp) =>
+        cdp.send('Network.emulateNetworkConditions', { offline: false, latency: LATENCY_MS, downloadThroughput: -1, uploadThroughput: -1 }),
+      ).catch(() => {})
+    }
     p.on('pageerror', (e) => errors.push(`${who}: ${e.message}`))
     // Kept for a failure's diagnosis; never printed with a link in it (see `consoleOf`).
     p.on('console', (m) => consoleLines.push(`${who}: ${m.text()}`))
@@ -236,13 +244,22 @@ async function readLinkRow(s: Page): Promise<{ k: string; x: number; rowId: stri
 
 /** The sender's own row, as History shows it. */
 async function rowStatus(s: Page, rowId: string, want: RegExp, ms = 60_000): Promise<string> {
+  // #401: a sender stays on the row while it is checked; the page updates itself when the check
+  // lands. The old loop reloaded every 7 s, which on a slow network killed each check part way,
+  // something no user does. Same overall deadline; a reload only every 20 s as a fallback.
   let t = ''
-  for (const end = Date.now() + ms; Date.now() < end;) {
+  const start = Date.now()
+  for (const end = start + ms; Date.now() < end;) {
     await s.goto(`${BASE}/transaction/${encodeURIComponent(rowId)}`, { waitUntil: 'load' })
-    await s.waitForTimeout(3_000)
+    const re = want.source
+    await s
+      .waitForFunction((r) => new RegExp(r).test(document.body.innerText), re, { timeout: Math.min(20_000, Math.max(1, end - Date.now())) })
+      .catch(() => {})
     t = await text(s)
-    if (want.test(t)) return t
-    await s.waitForTimeout(4_000)
+    if (want.test(t)) {
+      console.log(`  INFO  row reads ${want.source} after ${((Date.now() - start) / 1000).toFixed(1)} s`)
+      return t
+    }
   }
   return t
 }
@@ -342,7 +359,7 @@ async function main() {
     check('CL-C "Voucher added"', /Voucher added/.test(added), added.slice(0, 200))
     check('CL-C the gift proofs are now SPENT', (await checkstate(cLive.token)).every((x) => x === 'SPENT'))
     const st = await rowStatus(s, c.rowId, /Claimed/)
-    check('CL-C S sees Claimed (NUT-07)', /Status Claimed/.test(st), st.slice(0, 300))
+    check('CL-C S sees Claimed (NUT-07)', /Status Claimed/.test(st), `${st.slice(0, 300)} | console: ${consoleOf('S', /\[gift\]|\[app\]|cashlink/i)}`)
     const issuerOfRow = (merchantOfGifts = await s.evaluate(async (rowId) => {
       const name = (await indexedDB.databases()).map((d) => d.name ?? '').find((n) => n.startsWith('imani-wallet-'))!
       const db = await new Promise<IDBDatabase>((ok) => {
@@ -465,6 +482,7 @@ async function main() {
       window.history.pushState({}, '', path)
       window.dispatchEvent(new PopStateEvent('popstate'))
     }, `/transaction/${encodeURIComponent(e.rowId)}`)
+    let takeBackAt = 0
     if (eLive.armed) {
       // #396: an ARMED gift is locked to the link until the lock's own locktime (the real x). Setting
       // the stored x back on this device does not move it: the mint refuses the refund until then,
@@ -476,6 +494,7 @@ async function main() {
       check('CL-EXP armed, before the lock\'s locktime: not "Taken back" while nothing came back', !/Status Taken back/.test(early) || (await checkstate(eLive.token)).every((x) => x === 'SPENT'), early.slice(0, 300))
       check('CL-EXP armed, before the lock\'s locktime: the locked gift is still UNSPENT', (await checkstate(eLive.token)).every((x) => x === 'UNSPENT'))
       await s.goto(`${BASE}/transaction/${encodeURIComponent(e.rowId)}`, { waitUntil: 'load' })
+      takeBackAt = Date.now()
       await s.getByRole('button', { name: 'Take it back' }).click({ timeout: 30_000 })
       await s.getByRole('button', { name: 'Take it back' }).click({ timeout: 10_000 })
       await s.waitForFunction(() => !/Taking it back/.test(document.body.innerText), undefined, { timeout: 90_000 }).catch(() => {})
@@ -484,6 +503,8 @@ async function main() {
       .waitForFunction(() => /Status Taken back|Status Claimed/.test(document.body.innerText), undefined, { timeout: 90_000 })
       .catch(() => {})
       .then(() => text(s))
+    // #401: how long an armed take-back takes, from the tap to the row reading Taken back.
+    if (takeBackAt) console.log(`  INFO  CL-EXP armed take-back took ${((Date.now() - takeBackAt) / 1000).toFixed(1)} s`)
     check('CL-EXP S reclaims after x when it opens History: Taken back', /Status Taken back/.test(st), st.slice(0, 300))
     check('CL-EXP the gift proofs are SPENT (by the reclaim)', (await checkstate(eLive.token)).every((x) => x === 'SPENT'))
     const t2 = await openGift(ePage, e.link)
@@ -510,7 +531,11 @@ async function main() {
   }
 
   await s.goto(`${BASE}/`, { waitUntil: 'load' })
-  await s.waitForTimeout(4_000)
+  // #401: the home page updates itself as the last coupons settle; on a slow network a fixed 4 s
+  // read caught it part way. Wait (bounded) for the total; a wrong total still fails.
+  const balAt = Date.now()
+  await s.waitForFunction(() => /1\.15/.test(document.body.innerText), undefined, { timeout: 30_000 }).catch(() => {})
+  console.log(`  INFO  home balance settled after ${((Date.now() - balAt) / 1000).toFixed(1)} s`)
   const home = await text(s)
   check('S holds 1.15 after three claims (one the CL-MERCHANT gift) and two take-backs', /1\.15/.test(home), home.slice(0, 300))
 

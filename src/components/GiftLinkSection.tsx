@@ -29,8 +29,9 @@ export function GiftLinkSection({ link }: { link: GiftLinkRecord | undefined }) 
   const [message, setMessage] = useState<string | null>(null)
 
   useEffect(() => {
-    if (link?.status === 'outstanding') void reconcileGiftLinks()
-  }, [link?.status])
+    // #401: this row's own link is checked first, so a claim or take-back shows here promptly.
+    if (link?.status === 'outstanding') void reconcileGiftLinks(undefined, undefined, link.k)
+  }, [link?.status, link?.k])
 
   if (!link) return null
   const status: GiftLinkStatus = link.status
@@ -61,6 +62,13 @@ export function GiftLinkSection({ link }: { link: GiftLinkRecord | undefined }) 
       <DetailRow label="Status" value={giftStatusLabel(link)} />
       <DetailRow label="Expires" value={formatDate(link.x * 1000)} />
       {comesBack && <DetailRow label="If unclaimed" value={comesBack} />}
+      {/* #401: the row turns `returning` BEFORE the mint swap, which hides the panel below. While
+          this tap's take-back is still running, say so: leaving the page now stops it part way. */}
+      {returning && busy && (
+        <p role="status" aria-live="polite" className="p-4 text-sm text-mono-600 dark:text-mono-300">
+          Taking it back…
+        </p>
+      )}
       {open && url && (
         <div className="space-y-2 p-4">
           <ClaimLinkPanel link={url} expiresAt={link.x * 1000} qrAlt="QR code to claim this Cashlink" />
