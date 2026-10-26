@@ -88,6 +88,7 @@ import {
   tooManyExpiredMessage,
   nextLinkIndex,
   reconcileGiftLinks,
+  resetLinkSettlesForTests,
   restoreScan,
   sendGift,
   takeBack,
@@ -104,6 +105,7 @@ function linkRow(i: number, status = 'outstanding', x = 1_900_000_000) {
 }
 
 beforeEach(() => {
+  resetLinkSettlesForTests()
   store.clear()
   h.rows = []
   h.redeemed = []
@@ -541,7 +543,8 @@ describe('second check of #367', () => {
       },
     })
     await Promise.all([reconcileGiftLinks(NOW, async () => 'UNSPENT'), reconcileGiftLinks(NOW, async () => 'UNSPENT')])
-    expect(calls).toBe(2)
+    // #401: the second run waits for the first, re-reads the link as Taken back, and never redeems again.
+    expect(calls).toBe(1)
     expect((h.rows[0].link as { status: string }).status).toBe('reclaimed')
   })
   it('two settles at once, the loser answering first: Taken back still wins', async () => {

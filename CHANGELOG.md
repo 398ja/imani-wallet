@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Cashlink "Take it back" and "Claimed" on a slow connection** (#401, staging R58). The History
+  check walked every link one after another, so on a slow network a started take-back (and a claim
+  on a later link) waited behind every other link. It sat at "Coming back" or "Waiting to be claimed".
+  The check now settles the link on screen first, then a started take-back, then the newest links,
+  two at a time, so one slow link no longer holds up the rest. A History check now leaves alone a
+  link that a "Take it back" tap is still settling (before, two copies raced at the mint). "Taking it
+  back…" stays visible until the tap finishes. The gift-links e2e can add network latency
+  (`E2E_LATENCY_MS`), waits on the row instead of reloading it every 7 s (same 60 s deadline), and
+  logs how long claim detection and the take-back take.
+
 ## [0.39.4] - 2026-10-26
 
 A **patch**: the armed-path take-back fixes (#397, fixes #396) on top of 0.39.3 (#386 exact face
