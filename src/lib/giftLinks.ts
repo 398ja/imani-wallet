@@ -632,6 +632,23 @@ export async function sendGift({
  * scan, which cannot yet see the send's row, would adopt the link a second time with a made-up expiry.
  */
 const linksInFlight = new Set<string>()
+/**
+ * #401: the settle running for each link. Overlapping reconcile runs wait on it and re-read the
+ * link's rows, so two runs never settle the same link at once (that lost a cent under latency).
+ */
+const linkSettles = new Map<string, Promise<void>>()
+/** Tests only: forget settles a previous test left pending. */
+export function resetLinkSettlesForTests(): void {
+  linkSettles.clear()
+}
+/**
+ * #401: how many links one reconcile run checks at once. Two, so one slow take-back never holds up
+ * the others, without filling the browser's few connections to the gateway (start-up and the open
+ * History row can each run a check at the same time).
+ */
+export const RECONCILE_CONCURRENCY = 2
+/** The newest row time of a link (newest links are checked first). */
+const newestOf = (parts: LinkRow[]): number => Math.max(...parts.map((p) => Number(p.row.timestamp) || 0))
 
 /**
  * Arm (or resume arming) one link, recording each step on its row. Never throws.
@@ -910,7 +927,15 @@ export async function takeBack(k: string): Promise<TakeBackOutcome> {
   // #295 phase 4: a gift locked to its link comes back by this wallet's own swap.
   const locked = rows[0] ? ownLockedOnLink(openLinkOf(rows), secret, tokens) : []
   if (locked.length > 0 && rows[0]) {
-    const outcome = await settleLocked(rows, secret, locked[0].token, true)
+    // #401: while this tap's take-back runs, a History or start-up check leaves the link to it
+    // (as for a send or an arm): two runs of the same take-back only race each other at the gateway.
+    linksInFlight.add(k)
+    let outcome: ReturnOutcome
+    try {
+      outcome = await settleLocked(rows, secret, locked[0].token, true)
+    } finally {
+      linksInFlight.delete(k)
+    }
     if (outcome.kind === 'returned') return { kind: 'ok' }
     if (outcome.kind === 'claimed') return { kind: 'claimed' }
     return { kind: 'failed', message: 'Could not take it back just now. Try again.' }
@@ -1052,34 +1077,44 @@ function couponsLapsed(tokens: GiftToken[], nowMs: number, graceS = COUPON_LAPSE
 export async function reconcileGiftLinks(
   nowMs = Date.now(),
   state: (token: string) => Promise<ProofState> = tokenState,
+  /** #401: the link the sender is looking at (its History row): checked first, on its own. */
+  first?: string,
 ): Promise<{ claimed: number; reclaimed: number }> {
   let claimed = 0
   let reclaimed = 0
   try {
     const all = await linkRows()
     const doubtedLinks = unconfirmedClaimLinks(all.map((r) => r.link))
-    for (const [k, snapshot] of distinctLinks(all)) {
-      // #379: a link this tab is sending or arming is left to that run.
-      if (linksInFlight.has(k)) continue
+    // #401: on a slow network a walk over every link, one after another, took longer than the sender
+    // stayed on the page. A take-back already started (`returning`) goes first, the newest links next
+    // (the ones the sender is most likely looking at), and up to RECONCILE_CONCURRENCY links are
+    // checked at once, so one slow take-back never holds up the claim check of the others.
+    const ordered = [...distinctLinks(all)].sort(
+      ([ka, a], [kb, b]) =>
+        Number(kb === first) - Number(ka === first) ||
+        Number(b.some((p) => p.link.arm?.s === 'returning')) - Number(a.some((p) => p.link.arm?.s === 'returning')) ||
+        newestOf(b) - newestOf(a),
+    )
+    const reconcileOne = async (k: string, snapshot: LinkRow[]): Promise<void> => {
       const doubted = doubtedLinks.has(k)
-      if (!doubted && !snapshot.some((p) => p.link.status === 'outstanding')) continue
+      if (!doubted && !snapshot.some((p) => p.link.status === 'outstanding')) return
       const secret = secretFromText(k)
-      if (!secret) continue
+      if (!secret) return
       let tokens: GiftToken[]
       try {
         tokens = await giftTokensForSecret(secret)
       } catch {
-        continue
+        return
       }
       // #379: a Cashlink an older build closed as "claimed" while it was being locked is checked again
       // by the mint, and opened again unless someone else really spent it.
       if (doubted) {
         const verdict = await recheckClaim(snapshot, secret, tokens, nowMs)
         if (verdict === 'returned') reclaimed += 1
-        if (verdict !== 'open') continue
+        if (verdict !== 'open') return
       }
       const parts = doubted ? (await linkRows()).filter((r) => r.link.k === k) : snapshot
-      if (!parts.some((p) => p.link.status === 'outstanding')) continue
+      if (!parts.some((p) => p.link.status === 'outstanding')) return
       // #295 phase 4, first: a link part way through being locked is finished, and a link whose gift
       // is locked to it is settled by its own rules. Its original bearer gift, spent by the lock,
       // must never be read below as "claimed".
@@ -1087,7 +1122,7 @@ export async function reconcileGiftLinks(
       const locked = ownLockedOnLink(link, secret, tokens)
       if (link.arm?.s === 'arming' && link.i !== undefined && locked.length === 0) {
         await armLink(sessionAccount(getSigner) ?? '', k, secret, link.i, link.x)
-        continue
+        return
       }
       if (locked.length > 0) {
         // #379: the lock is the record. Its locktime is the link's expiry, and a link still marked
@@ -1100,34 +1135,34 @@ export async function reconcileGiftLinks(
           await cashlinkSeam.clearMoving(sessionAccount(getSigner) ?? '', parts[0].id)
         }
         const fresh = (await linkRows()).filter((r) => r.link.k === k && r.link.status === 'outstanding')
-        if (fresh.length === 0) continue
+        if (fresh.length === 0) return
         const outcome = await settleLocked(fresh, secret, locked[0].token)
         if (outcome.kind === 'returned') reclaimed += 1
         else if (outcome.kind === 'claimed') claimed += 1
-        continue
+        return
       }
-      if (link.arm) continue
+      if (link.arm) return
       // As in takeBack: a third party's wrap to the link key must not freeze it (review of #247, F1).
       tokens = giftCandidates(tokens)
-      if (tokens.length === 0) continue
+      if (tokens.length === 0) return
       const states = await Promise.all(tokens.map((t) => state(t.token)))
       const overall = combinedState(states)
       if (overall === 'SPENT') {
         // #379: spent by this wallet's own burn (an arm whose record is not on this row) is not a
         // claim: the link is finished as a resumed arm on the next run.
         const ours = await spentByOurBurn(link, tokens)
-        if (ours === 'unknown') continue
+        if (ours === 'unknown') return
         if (ours) {
           await cashlinkSeam.markMoving(sessionAccount(getSigner) ?? '', parts[0].id)
           await setLinkArm(parts, { s: 'arming' })
           if (link.i !== undefined) await armLink(sessionAccount(getSigner) ?? '', k, secret, link.i, link.x)
-          continue
+          return
         }
         await setLinkStatus(parts, 'claimed')
         claimed += 1
-        continue
+        return
       }
-      if (overall !== 'UNSPENT') continue
+      if (overall !== 'UNSPENT') return
       // Review of #380: the send's own row's expiry, never an adopted duplicate's 30-day guess.
       if (Math.floor(nowMs / 1000) >= link.x) {
         const unspent = tokens.filter((_, n) => states[n] === 'UNSPENT')
@@ -1151,6 +1186,35 @@ export async function reconcileGiftLinks(
         }
       }
     }
+    const one = async ([k, snapshot]: (typeof ordered)[number]): Promise<void> => {
+      // #379: a link this tab is sending, arming or (#401) taking back is left to that run.
+      if (linksInFlight.has(k)) return
+      const before = linkSettles.get(k)
+      const mine = (async () => {
+        if (before) await before
+        const parts = before ? (await linkRows()).filter((r) => r.link.k === k) : snapshot
+        try {
+          await reconcileOne(k, parts)
+        } catch (error) {
+          // One link's failure must not stop the others being checked.
+          console.warn('[gift] could not check a link', error instanceof Error ? error.message : String(error))
+        }
+      })()
+      linkSettles.set(k, mine)
+      try {
+        await mine
+      } finally {
+        if (linkSettles.get(k) === mine) linkSettles.delete(k)
+      }
+    }
+    let next = 0
+    // The link on screen is settled before the others start, so they never compete with it.
+    if (first !== undefined && ordered[0]?.[0] === first) await one(ordered[next++])
+    await Promise.all(
+      Array.from({ length: Math.min(RECONCILE_CONCURRENCY, ordered.length) }, async () => {
+        while (next < ordered.length) await one(ordered[next++])
+      }),
+    )
   } catch (error) {
     console.warn('[gift] could not check outstanding links', error instanceof Error ? error.message : String(error))
   }
