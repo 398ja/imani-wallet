@@ -633,6 +633,15 @@ export async function sendGift({
  */
 const linksInFlight = new Set<string>()
 /**
+ * #401: the settle running for each link. Overlapping reconcile runs wait on it and re-read the
+ * link's rows, so two runs never settle the same link at once (that lost a cent under latency).
+ */
+const linkSettles = new Map<string, Promise<void>>()
+/** Tests only: forget settles a previous test left pending. */
+export function resetLinkSettlesForTests(): void {
+  linkSettles.clear()
+}
+/**
  * #401: how many links one reconcile run checks at once. Two, so one slow take-back never holds up
  * the others, without filling the browser's few connections to the gateway (start-up and the open
  * History row can each run a check at the same time).
@@ -1086,16 +1095,6 @@ export async function reconcileGiftLinks(
         Number(b.some((p) => p.link.arm?.s === 'returning')) - Number(a.some((p) => p.link.arm?.s === 'returning')) ||
         newestOf(b) - newestOf(a),
     )
-    const one = async ([k, snapshot]: (typeof ordered)[number]): Promise<void> => {
-      // #379: a link this tab is sending, arming or (#401) taking back is left to that run.
-      if (linksInFlight.has(k)) return
-      try {
-        await reconcileOne(k, snapshot)
-      } catch (error) {
-        // One link's failure must not stop the others being checked.
-        console.warn('[gift] could not check a link', error instanceof Error ? error.message : String(error))
-      }
-    }
     const reconcileOne = async (k: string, snapshot: LinkRow[]): Promise<void> => {
       const doubted = doubtedLinks.has(k)
       if (!doubted && !snapshot.some((p) => p.link.status === 'outstanding')) return
@@ -1185,6 +1184,27 @@ export async function reconcileGiftLinks(
           // the link open until its own, later, expiry.
           await setLinkStatus(parts, 'expired', nowMs)
         }
+      }
+    }
+    const one = async ([k, snapshot]: (typeof ordered)[number]): Promise<void> => {
+      // #379: a link this tab is sending, arming or (#401) taking back is left to that run.
+      if (linksInFlight.has(k)) return
+      const before = linkSettles.get(k)
+      const mine = (async () => {
+        if (before) await before
+        const parts = before ? (await linkRows()).filter((r) => r.link.k === k) : snapshot
+        try {
+          await reconcileOne(k, parts)
+        } catch (error) {
+          // One link's failure must not stop the others being checked.
+          console.warn('[gift] could not check a link', error instanceof Error ? error.message : String(error))
+        }
+      })()
+      linkSettles.set(k, mine)
+      try {
+        await mine
+      } finally {
+        if (linkSettles.get(k) === mine) linkSettles.delete(k)
       }
     }
     let next = 0
