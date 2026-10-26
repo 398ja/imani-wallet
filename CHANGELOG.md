@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.39.4] - 2026-10-26
+
+A **patch**: the armed-path take-back fixes (#397, fixes #396) on top of 0.39.3 (#386 exact face
+value on return, #387 one `Idempotency-Key` per send intent, #388 the logout escape for old
+wrap-less rows, #394 the awaited bell notice). 0.39.3 was rolled back in Redeploy 55. Pairs with
+imani-gateway-customer 0.33.2 (#185, flag off, relay ON). wallet-api is byte-identical to 0.39.1
+over its image COPY paths, so it is not rebuilt. No configuration change, no migration.
+
 ### Fixed
 
 - **An armed Cashlink taken back read "Taken back" while its value was still on the link (#396,
