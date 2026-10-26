@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.39.3] - 2026-10-26
+
+A **patch**: 0.39.2's fixes (#386 exact face value on return, #387 one `Idempotency-Key` per send
+intent, #388 the logout escape for old wrap-less rows) plus the E13 regression fix (#394, fixes
+#393). 0.39.2 never reached staging (rolled back in Redeploy 54). Pairs with
+imani-gateway-customer 0.33.2 (#185, flag off). wallet-api is byte-identical to 0.39.1 over its
+image COPY paths, so it is not rebuilt. No configuration change, no migration.
+
 ### Fixed
 
 - A terminal credential DM reaching a personal wallet always says "Terminal setup request from <stall>" in the bell again (#393, E13 on staging). The unwrap fired the notice off without waiting, so dm-poll could mark the wrap processed while a page reload aborted the notice's chunk load, and the row was never written. The unwrap now waits for the notice before it returns.
