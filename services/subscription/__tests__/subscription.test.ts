@@ -237,6 +237,26 @@ describe('buying a plan', () => {
     expect(gateway.delivered).toHaveLength(1)
   })
 
+  it('reads the subscription from `parent.subscription_details` (Stripe API 2025-03-31+)', async () => {
+    const body = JSON.stringify({
+      type: 'invoice.paid',
+      data: {
+        object: {
+          id: 'in_basil',
+          customer: 'cus_1',
+          amount_paid: 1500,
+          currency: 'gbp',
+          parent: { type: 'subscription_details', subscription_details: { subscription: 'sub_basil', metadata: { stall_pubkey: STALL, tier: 'pro', term: 'annual' } } },
+          lines: { data: [{ period: { start: 1_800_000_000, end: 1_831_536_000 } }] },
+        },
+      },
+    })
+    const out = await app.handle({ method: 'POST', path: '/v1/stripe/webhook', body, headers: { 'stripe-signature': stripeSignatureHeader(body, WEBHOOK_SECRET) } })
+    expect(out.status).toBe(200)
+    expect((await ledger.all())[0]).toMatchObject({ stripeSubscriptionId: 'sub_basil', tier: 'pro' })
+    expect(licenceFromDelivery(gateway.delivered[0], 1_831_536_000)).toMatchObject({ tier: 'pro', features: ['terminals', 'api', 'ecommerce'] })
+  })
+
   it('refuses a webhook without a valid Stripe signature', async () => {
     const ev = invoicePaid('in_1', 1, 2)
     expect((await app.handle({ ...ev, headers: { 'stripe-signature': stripeSignatureHeader(ev.body, 'whsec_wrong') } })).status).toBe(400)
