@@ -1,6 +1,6 @@
 import type { LicenceLimits } from '@imani/licence'
 
-import { signedFetch, type Signer } from './signer'
+import { apiPath, signedFetch, type Signer } from './signer'
 
 export interface Plan {
   tier: string
@@ -33,7 +33,7 @@ async function read<T>(r: Response): Promise<T> {
 }
 
 export const api = {
-  plans: () => fetch('/v1/plans').then((r) => read<Plan[]>(r)),
+  plans: () => fetch(apiPath('/v1/plans')).then((r) => read<Plan[]>(r)),
   me: (s: Signer) => signedFetch(s, '/v1/me', 'GET').then((r) => read<Me>(r)),
   checkout: (s: Signer, tier: string, term: string) =>
     signedFetch(s, '/v1/checkout', 'POST', { tier, term }).then((r) => read<{ url: string }>(r)),

@@ -392,6 +392,10 @@ export const proxy = {
   // every authenticated wallet call fail with 401 AUTH_002 "URL mismatch" —
   // which reads as a credential problem, not a proxy one.
   '/api': { target: 'http://localhost:28082', changeOrigin: false },
+  // The subscription site (#407), served on the wallet's origin as in production so it can read
+  // the stall's key from this origin's localStorage. Container from deploy/subscription-local.
+  // changeOrigin false for the same NIP-98 reason as above.
+  '/subscription': { target: process.env.SUBSCRIPTION_DEV_URL ?? 'http://localhost:18910', changeOrigin: false },
 }
 
 /**
@@ -482,6 +486,8 @@ export default defineConfig({
     include: [
       'src/**/*.test.{ts,tsx}',
       'services/**/*.test.{ts,tsx}',
+      // The subscription site (#407): its key handling is tested against the wallet's own formats.
+      'apps/**/src/**/*.test.{ts,tsx}',
       'perf/**/*.test.{ts,tsx}',
       // `deploy/` ships the container's nginx.conf, and its CSP is application
       // behaviour, not decoration: `worker-src 'self'` there silently disabled

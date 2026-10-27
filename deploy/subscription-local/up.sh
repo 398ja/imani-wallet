@@ -29,11 +29,14 @@ INTERNAL_RELAY_URL=ws://nostr-relay:7777
 SUBSCRIPTION_AUTOMATIC_TAX=${SUBSCRIPTION_AUTOMATIC_TAX:-off}
 EOF
 
+export VITE_GOOGLE_CLIENT_ID=${VITE_GOOGLE_CLIENT_ID:-$(get WALLET_GOOGLE_CLIENT_ID)}
 docker compose up -d --build
 for i in $(seq 1 30); do curl -sf http://localhost:18910/health >/dev/null && break; sleep 1; done
 curl -sf http://localhost:18910/health >/dev/null || { docker compose logs --tail=40; exit 1; }
 echo
-echo "subscription.imani.casa is running at http://localhost:18910"
+echo "subscription service is up (container port 18910)"
+echo "  Run 'npm run dev' in the repo root, then open http://localhost:5173/subscription/"
+echo "  (same origin as the wallet, so the site finds the stall's key in this browser)"
 echo "  Stripe: test mode, webhooks forwarded by the 'stripe' container"
 echo "  Pay with card 4242 4242 4242 4242, any future date, any CVC"
 echo "  Licences are delivered by staging to the stall's wallet on wallet.staging.398ja.xyz"

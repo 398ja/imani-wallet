@@ -38,7 +38,7 @@ export function PlansPage({ signer, me }: { signer: Signer | null; me: Me | null
   }
 
   return (
-    <main className="mx-auto max-w-3xl p-5">
+    <div className="mx-auto max-w-3xl p-5">
       <h1 className="mt-6 text-3xl font-semibold">Plans for your stall</h1>
       <p className="mt-2 text-callout text-mono-500">
         Start free. Upgrade when you sell more or need more tills. Paid by card, cancel any time, and your plan arrives in your
@@ -102,6 +102,6 @@ export function PlansPage({ signer, me }: { signer: Signer | null; me: Me | null
         Prices include VAT where it applies; business customers can add a VAT number at checkout. You sign in with your stall’s
         key, so there is no account to create.
       </p>
-    </main>
+    </div>
   )
 }

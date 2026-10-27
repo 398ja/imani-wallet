@@ -1,11 +1,14 @@
-# subscription.imani.casa
+# The subscription site (`/subscription` on the wallet's origin)
 
 Where a stall buys a plan (#407). It is a single-page site (`apps/subscription`) plus this service,
-served from one origin. The site uses the wallet's stack and components: React, Vite, Tailwind,
+mounted at `/subscription` on the WALLET's origin (the wallet's "Upgrade my plan" button opens it in
+the same tab). The site uses the wallet's stack and components: React, Vite, Tailwind,
 react-router and `src/components/ui`.
 
-- **Sign in** with the stall's own key: a NIP-07 extension, a NIP-46 `bunker://`, or a pasted nsec
-  held in memory. Every API call is NIP-98 signed, so there is no account and no password.
+- **Sign in** with the stall's wallet key, opened with the wallet passphrase. The site finds it in
+  this origin's localStorage (where the wallet keeps it), or else in the stall's Google Drive
+  backup or an uploaded backup file. There is no extension, bunker or paste-your-nsec path. The
+  decrypted key stays in the tab's memory. Every API call is NIP-98 signed, so there is no account.
 - **Buy** a tier by card through Stripe Checkout, using Billing for renewals and Tax for VAT.
 - **On `invoice.paid`**, the service mints a licence through gateway-customer as the seller and DMs
   it to the stall. This happens once per invoice, and a replayed or retried event resumes rather
@@ -31,7 +34,9 @@ docker build -f services/subscription/Dockerfile -t imani-subscription .
 
 | Variable | |
 | --- | --- |
-| `SUBSCRIPTION_PUBLIC_ORIGIN` | e.g. `https://subscription.imani.casa`; NIP-98 `u` tags must match it |
+| `SUBSCRIPTION_PUBLIC_ORIGIN` | the wallet's origin, e.g. `https://wallet.imani.casa`; NIP-98 `u` tags must match it |
+| `SUBSCRIPTION_BASE_PATH` | `/subscription`: the path the edge proxies here (left on, so routes see it stripped) |
+| `VITE_GOOGLE_CLIENT_ID` (build arg) | the wallet's Google OAuth client, for the Drive backup sign-in |
 | `SUBSCRIPTION_WALLET_URL` | gateway-customer (mint, deliver, revoke) |
 | `EDGE_SECRET` | edge secret gateway-customer trusts |
 | `IMANI_SUBSCRIPTIONS_SELLER_NSEC` | the seller (`GATEWAY_CUSTOMER_LICENCE_SELLER_PUBKEYS`); also signs the catalog; wallets pin it as `VITE_LICENCE_SELLER_PUBKEY` |

@@ -62,11 +62,13 @@ export function createApp(deps: AppDeps) {
   const signedCatalog = signCatalog(deps.catalogBody, deps.seller)
 
   const json = (status: number, body: unknown): Response => ({ status, body })
+  /** The public URL of a path on this site: origin + mount path + path. */
+  const site = (path: string) => `${deps.config.publicOrigin}${deps.config.basePath ?? ''}${path}`
 
   function authenticate(req: Request): { pubkey: string } | Response {
     const auth = verifyNip98({
       header: req.headers.authorization,
-      url: `${deps.config.publicOrigin}${req.path}`,
+      url: site(req.path),
       method: req.method,
       body: req.body,
       now: now(),
@@ -294,8 +296,8 @@ export function createApp(deps: AppDeps) {
         stallPubkey: pubkey,
         tier,
         term,
-        successUrl: `${deps.config.publicOrigin}/done?session={CHECKOUT_SESSION_ID}`,
-        cancelUrl: `${deps.config.publicOrigin}/plans`,
+        successUrl: `${site('/done')}?session={CHECKOUT_SESSION_ID}`,
+        cancelUrl: site('/plans'),
         automaticTax: deps.config.automaticTax,
         customerId: existing?.stripeCustomerId,
       })
@@ -311,7 +313,7 @@ export function createApp(deps: AppDeps) {
   async function portal(pubkey: string): Promise<Response> {
     const customer = (await deps.ledger.forStall(pubkey)).find((r) => r.stripeCustomerId)?.stripeCustomerId
     if (!customer) return json(404, { error: 'no card subscription for this stall yet' })
-    return json(200, await deps.stripe.createPortal({ customerId: customer, returnUrl: `${deps.config.publicOrigin}/account` }))
+    return json(200, await deps.stripe.createPortal({ customerId: customer, returnUrl: site('/account') }))
   }
 
   /** Re-deliver every licence still in force (or retry one that failed): covers a lost DM. */

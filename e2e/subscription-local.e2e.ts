@@ -2,9 +2,12 @@
  * The LOCAL DEPLOYMENT (deploy/subscription-local) driven like a customer would, against REAL Stripe
  * test mode and STAGING gateway-customer:
  *
- *   ./deploy/subscription-local/up.sh && npx tsx e2e/subscription-local.e2e.ts
+ *   ./deploy/subscription-local/up.sh
+ *   npm run dev                       # the wallet origin, which proxies /subscription to it
+ *   npx tsx e2e/subscription-local.e2e.ts
  *
- * Signs in with a fresh stall key, chooses Basic monthly, pays on Stripe's hosted Checkout with the
+ * Signs in with a fresh stall's wallet key (left in localStorage, as the wallet would, then from a
+ * backup file), chooses Basic monthly, pays on Stripe's hosted Checkout with the
  * 4242 test card, waits for the forwarded invoice.paid, then reads the stall's staging inbox the
  * way the wallet does and verifies the licence with the wallet's own code.
  */
@@ -14,8 +17,12 @@ import { generateSecretKey, getPublicKey, nip17, nip19 } from 'nostr-tools'
 import { BUNDLED_CATALOG, entitlementOf, verifyLicence } from '../packages/licence/src/index.ts'
 import { licenceOf } from '../packages/licence/src/read.ts'
 import { parseVoucherToken, verifyVoucher } from '../src/lib/voucherToken.ts'
+import { walletBackupFile, walletKeyEnvelope, walletLocalStorage } from './walletKeyFixture.ts'
 
-const ORIGIN = process.env.SUB_ORIGIN ?? 'http://localhost:18910'
+// The WALLET's origin: the site is at /subscription on it and reads the wallet's key from there.
+const ORIGIN = process.env.SUB_ORIGIN ?? 'http://localhost:5173'
+const BASE = `${ORIGIN}/subscription`
+const PASSPHRASE = 'correct horse battery'
 const GATEWAY = process.env.GATEWAY ?? 'https://wallet.staging.398ja.xyz'
 const SELLER = '62dd912f098cb439e97e0bfe3e6513b27b0cecc9f262a1778635c6fe18545c01'
 const sk = generateSecretKey()
@@ -58,15 +65,20 @@ async function main() {
   const browser = await chromium.launch()
   const page = await browser.newPage()
   try {
-    await page.goto(`${ORIGIN}/sign-in?next=/plans`, { waitUntil: 'networkidle' })
-    await page.getByText('Use my secret key instead').click()
-    await page.getByLabel('Stall secret key').fill(nip19.nsecEncode(sk))
-    await page.getByRole('button', { name: 'Sign in' }).click()
-    await page.waitForURL(/\/plans/)
+    const envelope = await walletKeyEnvelope(sk, PASSPHRASE)
+    await page.goto(`${BASE}/health`)
+    await page.evaluate((items) => {
+      for (const [k, v] of Object.entries(items)) localStorage.setItem(k, v)
+    }, walletLocalStorage(stall, envelope, 'Test Stall'))
+    await page.goto(`${BASE}/sign-in?next=/plans`, { waitUntil: 'networkidle' })
+    await page.getByLabel('Wallet passphrase').fill(PASSPHRASE)
+    await page.getByRole('button', { name: 'Continue' }).click()
+    await page.waitForURL((u) => u.pathname === '/subscription/plans')
+    check('signed in with the wallet key from this browser', true)
     await page.getByRole('button', { name: 'Choose Basic' }).click()
     await fillStripe(page)
     check('real Stripe Checkout loaded and accepted the test card', true)
-    await page.waitForURL(new RegExp(`${ORIGIN.replace(/[/.]/g, '\\$&')}/done`), { timeout: 60_000 })
+    await page.waitForURL(new RegExp(`${BASE.replace(/[/.]/g, '\\$&')}/done`), { timeout: 60_000 })
     check('Stripe returned to the site', /you are subscribed/i.test(await page.locator('body').innerText()))
 
     // The webhook mints through staging (about 10 s): wait for it, up to two minutes.
@@ -91,9 +103,15 @@ async function main() {
     }
 
     await page.getByRole('link', { name: 'Sign in to see my plan' }).click()
-    await page.getByText('Use my secret key instead').click()
-    await page.getByLabel('Stall secret key').fill(nip19.nsecEncode(sk))
-    await page.getByRole('button', { name: 'Sign in' }).click()
+    await page.evaluate(() => localStorage.clear())
+    await page.reload({ waitUntil: 'networkidle' })
+    await page.getByLabel('Wallet backup file').setInputFiles({
+      name: 'imani-wallet-backup.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from(walletBackupFile(stall, envelope, 'Test Stall')),
+    })
+    await page.getByLabel('Wallet passphrase').fill(PASSPHRASE)
+    await page.getByRole('button', { name: 'Continue' }).click()
     await page.getByText('Active').waitFor({ timeout: 15_000 })
     const account = await page.locator('body').innerText()
     check('account page: Basic, active, sent', /Basic/.test(account) && /Active/.test(account) && /Sent/.test(account), account.slice(0, 300))
